@@ -171,7 +171,7 @@ which host holds a session, and this one where a session runs.
 
 **Container lease** (`services/container/`, ADR-0059 L5 to L7) — an *Execution lease*
 from `DockerExecutionBackend`, opt-in by the `containers` setting, for a change task
-of a runner proven there and for every script task. The host's worktree stays where
+of a runner proven there, Claude Code or Codex at Full access, and for every script task. The host's worktree stays where
 a task's result lives; a copy runs in one container per attempt, reached by exec. A
 script of the workspace root runs on a copy of what that root has committed, and
 nothing of it comes back. What a lease cannot be it refuses: nothing runs on the host
@@ -201,10 +201,11 @@ is where a key goes instead of the runner.
 **Credential broker** (`services/container/credentialBroker.ts`, ADR-0059 L7) —
 what hands a *Container lease* API keys and cloud-provider credentials, from this
 host's environment: an API key to its *Model gateway*, and what a cloud provider signs
-with to the runner by name. It never holds a Claude subscription's token. A person
-chooses a lease's login, `broker` or `own-sign-in`, the person's own sign-in made inside
-a container, in a volume no task mounts and this host never reads, of which each task
-gets its own copy, replaced only by a new sign-in, and it has no default.
+with to the runner by name, and a runner the key for its own model API alone. It never
+holds a Claude subscription's token. A person chooses a lease's login, `broker` or
+`own-sign-in`, the person's own sign-in made inside a container, in a volume no task
+mounts and this host never reads, of which each task gets its own copy, a Claude Code
+one replaced only by a new sign-in, and it has no default.
 *Avoid:* "login" for an API key held here, except as the setting names it.
 
 **Slot pool** (`services/SlotPool.ts`, ADR-0055 D18) — the Parallel limit across a
@@ -225,7 +226,9 @@ models discovery found for them, and the allowlist narrowing those. Built in
 planner's per-turn block (`queryCatalog`), its tools (`live`), a user's direct
 edit (`edit`, `runner`) and planning (`planning`) all read the same state —
 settings are read live at each call, never captured, so a runner enabled or an
-allowlist edited mid-session counts (#69). The per-runner discovered models are
+allowlist edited mid-session counts (#69). A child's reads the runners and models
+of its **Mandate** too, so settings can narrow what it assigns and never widen it
+(ADR-0056 M3). The per-runner discovered models are
 **merged into, never replaced**: discovering one runner must not forget
 another's, because coercion clamps thinking efforts against whatever was last
 found. `admit(runner, models)` is how an admitted runner keeps its models there
@@ -850,8 +853,10 @@ waits for input.
 of one paused on a usage limit (see *Usage-limit resume*), that resumes its
 saved runner session (Claude's `--resume`, Codex's `thread/resume`) with
 the user's message as the next turn. A **Delegated task**'s reopens its **Child
-plan** instead, stopped or failed but not landed: that plan acts as Execute, and
-its **Subplanner** replays its Model context with the message (ADR-0055 D17).
+plan** instead, stopped or failed but not landed: that plan acts as Execute, its
+own delegated tasks reopen the same way, and its **Subplanner** takes the message
+in its native session where its harness kept one, replaying its Model context
+where not (ADR-0055 D17).
 It is verified and landed like any attempt, is not offered on conflicts, and
 leaves dependents alone, as retry does. It starts once the runner of the
 attempt it continues has wound down (ADR-0018, L1), so a session never runs in
@@ -3229,7 +3234,7 @@ package ignores the variable.
 **Delegated task** (`type: 'delegated'`, `models/Delegation.ts`, ADR-0055) — a
 top-level task that holds a `goal`, not a prompt: its attempt is a **Child plan**. It
 carries a required `budget` and, unless it is `readOnly`, `protectedPaths`, the paths
-its child may not change, and it needs a check: a task that depends on it directly and
+its child may not change, relative to the repository and in any case (D7), and it needs a check: a task that depends on it directly and
 is a read-only AI task or a read-only **Script task**, which a new attempt takes back
 and which starts by itself once the task passes and it is ready, with no scheduler too.
 An AI task whose runner this host cannot read counts as one, so the merge hold fails closed.
@@ -3255,7 +3260,8 @@ stream any of them. A person may message a live subplanner, and may message a ta
 runner or answer a checkpoint the plan holds, by the task's exact id, as that plan's
 subplanner's own command: it can do nothing the subplanner could not, and nothing falls
 through to the root. One that has ended is view-only until its task is continued or
-retried. A Stop reaches all of it,
+retried. The TUI opens one with `enter` on its delegated task and `esc` goes back up a
+level. A Stop reaches all of it,
 tombstone first, and resolves when it has gone (D16). A Continue reopens it and any
 fresh attempt discards its run, its state staying under the root (D15, D17).
 

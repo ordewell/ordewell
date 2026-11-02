@@ -246,13 +246,14 @@ describe('containerStatus', () => {
     expect(text.indexOf('Not proven')).toBeLessThan(text.indexOf('Assumed'));
     expect(status.assumptions.join(' ')).toMatch(/share one kernel/);
     expect(status.assumptions.join(' ')).toMatch(/can read your sign-in/);
+    expect(status.assumptions.join(' ')).toMatch(/Codex.*no refresh token.*sign in again/);
   });
 
   it('owns up to what it cannot see of a sign-in: that it still works, and that every copy is one login', async () => {
     const status = await containerStatus(CHOSEN, { cli: docker(ALL_THERE), broker, platform: 'linux' });
 
     expect(status.assumptions.join(' ')).toMatch(/held, not that it still works/);
-    expect(status.assumptions.join(' ')).toMatch(/every copy is one login/i);
+    expect(status.assumptions.join(' ')).toMatch(/every copy of a Claude Code sign-in is one login/i);
   });
 
   it('owns up to a key handed over by name, which a runner can read, only under a broker login', async () => {

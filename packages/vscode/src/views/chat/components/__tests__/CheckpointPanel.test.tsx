@@ -80,4 +80,13 @@ describe('a delegated task\'s question (ADR-0056 M5, M8)', () => {
     expect(screen.queryByLabelText('Your answer')).toBeNull();
     expect(screen.queryByLabelText('Raise its budget by (tokens)')).toBeNull();
   });
+
+  it('offers no raise where none can be given, and still takes the answer', () => {
+    const approved: unknown[][] = [];
+    render(<CheckpointPanel {...props} summary="which rounding?" delegated raisable={false} onApprove={(...args) => approved.push(args)} />);
+    expect(screen.queryByLabelText('Raise its budget by (tokens)')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Your answer'), { target: { value: 'Floor.' } });
+    fireEvent.click(screen.getByText('Approve & Continue'));
+    expect(approved).toEqual([['Floor.', undefined]]);
+  });
 });

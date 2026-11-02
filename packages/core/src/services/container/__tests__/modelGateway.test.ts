@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createServer, request, type IncomingHttpHeaders, type IncomingMessage, type Server, type ServerResponse } from 'http';
 import type { AddressInfo } from 'net';
-import { ModelGateway } from '../modelGateway';
+import { ModelGateway, OPENAI_API } from '../modelGateway';
 
 const KEY = 'sk-ant-api03-the-real-key';
 
@@ -52,6 +52,59 @@ function ask(port: number, { path = '/v1/messages', method = 'POST', headers = {
     sent.end(method === 'POST' ? body : undefined);
   });
 }
+
+describe('the model gateway before the OpenAI API', () => {
+  const OPENAI_KEY = 'sk-proj-the-real-key';
+
+  async function gatewayToOpenAi(url: string) {
+    const gateway = new ModelGateway({ key: OPENAI_KEY, upstream: url, api: OPENAI_API });
+    const port = await gateway.listen();
+    open.push({ gateway });
+    return { gateway, port };
+  }
+
+  it('takes the token as a bearer, and sends the real key the same way', async () => {
+    const api = await upstream();
+    const { gateway, port } = await gatewayToOpenAi(`${api.url}/v1`);
+
+    const reply = await ask(port, { path: '/v1/responses', headers: { authorization: `Bearer ${gateway.token}` } });
+
+    expect(reply).toMatchObject({ status: 200 });
+    expect(api.heard[0]).toMatchObject({ method: 'POST', url: '/v1/responses' });
+    expect(api.heard[0].headers).toMatchObject({ authorization: `Bearer ${OPENAI_KEY}` });
+    expect(api.heard[0].headers['x-api-key']).toBeUndefined();
+  });
+
+  it('turns away a bearer that is not its token, and asks nothing upstream', async () => {
+    const api = await upstream();
+    const { port } = await gatewayToOpenAi(`${api.url}/v1`);
+
+    const reply = await ask(port, { path: '/v1/responses', headers: { authorization: `Bearer ${OPENAI_KEY}` } });
+
+    expect(reply.status).toBe(401);
+    expect(api.heard).toHaveLength(0);
+  });
+
+  it('carries the model routes and nothing else a key can do, such as listing files', async () => {
+    const api = await upstream();
+    const { gateway, port } = await gatewayToOpenAi(`${api.url}/v1`);
+    const headers = { authorization: `Bearer ${gateway.token}` };
+
+    expect((await ask(port, { path: '/v1/models', method: 'GET', headers })).status).toBe(200);
+    expect((await ask(port, { path: '/v1/files', method: 'GET', headers })).status).toBe(404);
+    expect((await ask(port, { path: '/v1/messages', headers })).status).toBe(404);
+    expect(api.heard.map(({ url }) => url)).toEqual(['/v1/models']);
+  });
+
+  it('keeps a proxy path the base URL names, under the /v1 such a URL ends in', async () => {
+    const api = await upstream();
+    const { gateway, port } = await gatewayToOpenAi(`${api.url}/proxy/openai/v1`);
+
+    await ask(port, { path: '/v1/responses?stream=true', headers: { authorization: `Bearer ${gateway.token}` } });
+
+    expect(api.heard[0].url).toBe('/proxy/openai/v1/responses?stream=true');
+  });
+});
 
 describe('the model gateway (ADR-0059 L7)', () => {
   it('carries a model request upstream under the real key, and the answer back', async () => {

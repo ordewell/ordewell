@@ -1,4 +1,4 @@
-import type { ApprovalRequestMessage, LegacyPlanState, SessionMessage } from '@ordewell/core';
+import type { ApprovalRequestMessage, LegacyPlanState, SurfacePlan, SessionMessage } from '@ordewell/core';
 // The browser-safe entry, so the webview's tests can run the host's view too.
 import {
   drainNext, EMPTY_CONVERSATION, EMPTY_HOLD, followTurn, fromTranscript, holdPrompt, NO_TURN, reconcileApprovals, stopTurn, takeAt, unsendAll, unsendLatest,
@@ -10,7 +10,7 @@ import type { HostToWebview } from './shared/protocol';
 
 const FLUSH_MS = 30;
 
-export type SavedConversation = Pick<LegacyPlanState, 'conversationHistory' | 'researchLog' | 'plannerUsage' | 'pendingTurns'>;
+export type SavedConversation = Pick<SurfacePlan, 'conversationHistory' | 'researchLog' | 'plannerUsage' | 'pendingTurns'> | Pick<LegacyPlanState, 'conversationHistory' | 'researchLog' | 'plannerUsage' | 'pendingTurns'>;
 
 /**
  * The planner conversation the chat webview draws (#53), held on the host:

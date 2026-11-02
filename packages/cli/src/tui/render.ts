@@ -16,7 +16,7 @@ import {
 import { chatEditorRoomFor, chatPromptLabel } from './geometry';
 import { currentHandoff, diffRoom, handoffActions } from './handoff';
 import { capConflictFiles, elapsedSince, handoffBaseLine, handoffBranchName, isRepoGroup, repoResultLines, taskLogCommands, titledTaskRef, titledTaskRefOf, type RunnerCommand } from '@ordewell/core';
-import { matchingItems, scriptTaskView, visibleItems, type Overlay, type PickerItem, type PickerState, type TuiState } from './state';
+import { matchingItems, scriptTaskView, rootFrame, viewOnly, visibleItems, type Overlay, type PickerItem, type PickerState, type TuiState } from './state';
 import type { StepperState } from './reducers/stepper';
 import { DELEGATION_OFFERED, SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
 import { composerTip } from '@ordewell/core/plan-utils';
@@ -366,6 +366,7 @@ function composerLines(state: TuiState, view: ComposerView | null, tip: boolean)
   if (scriptTaskView(state)) {
     return [style.bandGrey(`${chatPromptLabel(state)}  ·  this script task runs no model, so it takes no messages`)];
   }
+  if (viewOnly(state)) return [style.bandGrey(`${chatPromptLabel(state)}  ·  this plan has ended, so it takes no messages`)];
   const prompt = state.taskView
     ? style.accent(`${chatPromptLabel(state)} `)
     : state.focus === 'plan' ? style.bandGrey('❯ ') : style.brand('❯ ');
@@ -488,8 +489,8 @@ function renderBody(state: TuiState, { mode, chat: chatRect, plan: planRect }: B
   if (mode === 'stacked') return [...fit(chat, chatRect.rows, 'top'), ...plan];
 
   // The pane border takes the task view's accent, so the runner's pane is
-  // unmistakably not the planner's even at a glance.
-  const border = state.taskView ? style.accent('│') : style.grey('│');
+  // unmistakably not the planner's even at a glance, and a subplanner's not the root's.
+  const border = state.taskView || state.child ? style.accent('│') : style.grey('│');
   const divider = `${ERASE_TO_END}${atColumn(chatRect.cols + 1)}${border}`;
 
   return Array.from({ length: chatRect.rows }, (_, i) =>
@@ -535,7 +536,8 @@ function renderOverlay(state: TuiState, rows: number, cols: number): string[] {
       cols,
     );
   }
-  if (overlay.kind === 'handoff') return renderHandoff(state, overlay, rows, cols);
+  // Whichever plan is on screen, its keys land the root's run: it shows the root's branch.
+  if (overlay.kind === 'handoff') return renderHandoff(rootFrame(state), overlay, rows, cols);
   if (overlay.kind === 'stepper') return renderStepper(overlay.stepper, rows, cols);
   return renderPicker(overlay.picker, rows, cols);
 }

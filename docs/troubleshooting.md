@@ -72,6 +72,9 @@ Tasks planned while the modes were off keep the mode the plan gave them.
 Give the task Full access, or assign it to another runner. Full access means
 Codex runs with no sandbox at all.
 
+Inside a [container](containers.md) none of this applies: Codex's sandbox cannot start
+there, whatever this host allows, and a Codex change task runs at Full access.
+
 ## Planner shell not sandboxed
 
 Ordewell says **The planner's shell runs without an OS sandbox on this

@@ -875,7 +875,8 @@ describe('delegation in the planner prompt (ADR-0055 D4, D21)', () => {
     expect(off).not.toMatch(/"delegated"|DELEGATED TASKS/);
     const section = on.slice(on.indexOf('DELEGATED TASKS:'), on.indexOf('RULES:'));
     expect(section).toContain('"type": "delegated"');
-    expect(section).toContain('3000000 tokens');
+    expect(section).toContain('this plan has 3000000 tokens left');
+    expect(section).toMatch(/budgets of its delegated tasks still to run cannot together pass that/);
     expect(on.replace(section, '')).toBe(off);
   });
 
@@ -884,6 +885,7 @@ describe('delegation in the planner prompt (ADR-0055 D4, D21)', () => {
     expect(on).toMatch(/flat plan stays the default: delegate only a separable subdomain/);
     expect(on).toMatch(/One coherent feature, or a change with cross-cutting invariants, stays flat/);
     expect(on).toMatch(/"protectedPaths" is required unless "readOnly"/);
+    expect(on).toMatch(/from the repository's root, whatever their case/);
     expect(on).toMatch(/Every delegated task needs a check/);
   });
 

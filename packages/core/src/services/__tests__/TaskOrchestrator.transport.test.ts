@@ -111,7 +111,9 @@ describe('recording the runner session on the task', () => {
 
     const task = orchestrator.storeInstance.get('t1')!;
     expect(task.runnerSessionId).toBe('native-t1');
-    expect(surfacePlan({ tasks: [task], generatedAt: '', status: 'approved', runners: ['claude-code'], lastUpdated: '' }).tasks[0]).not.toHaveProperty('runnerSessionId');
+    const plan = { tasks: [task], generatedAt: '', status: 'approved' as const, runners: ['claude-code'], lastUpdated: '' };
+    expect(surfacePlan(plan).tasks[0]).not.toHaveProperty('runnerSessionId');
+    expect(surfacePlan({ ...plan, plannerSession: { runner: 'claude-code', sessionId: 'native-planner', cwd: '/repo', heard: 2 } })).not.toHaveProperty('plannerSession');
   });
 });
 

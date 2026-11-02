@@ -9,7 +9,7 @@ import type { IConfig } from '../../interfaces/IConfig';
 import type { ConversationRequest, PlannerToolsOffer } from '../AiService';
 import type { GuaranteeReport } from '../executionLease';
 import { TurnBudgets } from '../PlannerBudgets';
-import type { ResearchProgress, ResearchStep } from '../../models/Task';
+import type { PlannerNativeSession, ResearchProgress, ResearchStep } from '../../models/Task';
 import { fakeMcpServer, fakeSpawn, fixture, openCodeFixture, planJson, scriptedAdapter, sseResponse, type FakeAgentProcess, type FakeMcpServer, type FakeSpawnOptions, type ScriptedReply } from './harnessTestKit';
 import type { McpToolReply, SubmitPlanArgs } from '../mcp/tools';
 import type { SkillLookup } from '../taskSkills';
@@ -748,6 +748,117 @@ describe('CliAgentAiService — Claude Code', () => {
     expect(args[args.indexOf('--resume') + 1]).toBe('sess-claude-1');
   });
 
+  describe('a subplanner reopened in a new process (ADR-0055 D17, ADR-0009 T4)', () => {
+    const said = (role: 'user' | 'assistant', content: string) => ({ role, content, timestamp: '2026-11-02T00:00:00.000Z' });
+    const SEEN = [said('user', 'A note from while it was away')];
+    const WHOLE = [said('user', 'The goal'), said('assistant', 'The plan so far'), ...SEEN];
+    const reopen = (session: Partial<PlannerNativeSession> = {}) => request({
+      initialMessage: 'Carry on',
+      priorHistory: WHOLE,
+      resume: { session: { runner: 'claude-code', sessionId: 'sess-saved', cwd: '/repo', ...session }, since: SEEN },
+    });
+    /** The user turn a Claude Code process was sent, the way the CLI reads it back. */
+    const turnOf = (proc: FakeAgentProcess) => writes(proc).join('\n');
+
+    it('opens in its saved session and tells it only what it missed', async () => {
+      const { svc, spawned } = service('claude-code', [fixture('claude-code', 'prose')]);
+      await svc.startConversation(reopen());
+
+      const args = spawned.lastArgs();
+      expect(args[args.indexOf('--resume') + 1]).toBe('sess-saved');
+      const sent = turnOf(spawned.processes[0]);
+      expect(sent).toContain('A note from while it was away');
+      expect(sent).toContain('Carry on');
+      expect(sent).not.toContain('The plan so far');
+    });
+
+    it('replays the transcript in a new session when the runner says the saved one is gone', async () => {
+      const notFound = fixture('claude-code', 'task-resume-not-found');
+      const { svc, spawned } = service('claude-code', [fixture('claude-code', 'prose')], {}, {
+        beforeAnswering: (proc, args) => {
+          if (!args.includes('--resume')) return;
+          proc.emitStdout(notFound);
+          proc.exit(1);
+        },
+      });
+      const turn = await svc.startConversation(reopen());
+
+      expect(turn).not.toHaveProperty('failed', true);
+      expect(turn.text).toContain('in-process or Redis');
+      expect(spawned.processes).toHaveLength(2);
+      expect(spawned.lastArgs()).not.toContain('--resume');
+      const sent = turnOf(spawned.processes[1]);
+      expect(sent).toContain('The plan so far');
+      expect(sent).toContain('Carry on');
+    });
+
+    it('replays where the runner answers a turn without ever naming the saved session', async () => {
+      const { svc, spawned } = service('claude-code', [
+        (_written, proc) => proc.emitStdout(fixture('claude-code', 'task-resume-not-found')),
+        fixture('claude-code', 'prose'),
+      ]);
+      const turn = await svc.startConversation(reopen());
+
+      expect(turn).not.toHaveProperty('failed', true);
+      expect(spawned.processes).toHaveLength(2);
+      expect(turnOf(spawned.processes[1])).toContain('The plan so far');
+    });
+
+    it('leaves a failure in the session itself to the turn, replaying nothing', async () => {
+      const { svc, spawned } = service('claude-code', [(_written, proc) => {
+        proc.emitStdout(`${JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-saved', cwd: '/repo', permissionMode: 'plan' })}\n`);
+        proc.exit(1);
+      }]);
+      const turn = await svc.startConversation(reopen());
+
+      expect(turn).toMatchObject({ failed: true });
+      expect(spawned.processes).toHaveLength(1);
+      expect(svc.nativeSession()?.sessionId).toBe('sess-saved');
+    });
+
+    it('sends no replay after a Stop during the take-up', async () => {
+      const controller = new AbortController();
+      const { svc, spawned } = service('claude-code', [() => controller.abort()]);
+      const turn = await svc.startConversation({ ...reopen(), signal: controller.signal });
+
+      expect(turn).toMatchObject({ aborted: true });
+      expect(spawned.processes).toHaveLength(1);
+    });
+
+    it.each([
+      ['another runner', { runner: 'codex' }],
+      ['another folder', { cwd: '/elsewhere' }],
+      ['another model', { model: 'a-retired-model' }],
+      ['another effort', { effort: 'max' }],
+    ])('replays what was saved under %s', async (_name, saved) => {
+      const { svc, spawned } = service('claude-code', [fixture('claude-code', 'prose')]);
+      await svc.startConversation(reopen(saved));
+
+      expect(spawned.lastArgs()).not.toContain('--resume');
+      expect(turnOf(spawned.processes[0])).toContain('The plan so far');
+    });
+
+    it('hands on what it counted, so the next process counts from there (ADR-0056 M10)', async () => {
+      const paid = (total: number) => [
+        { type: 'system', subtype: 'init', session_id: 'sess-paid', cwd: '/repo', permissionMode: 'plan' },
+        { type: 'assistant', session_id: 'sess-paid', message: { id: `msg_${total}`, role: 'assistant', content: [{ type: 'text', text: 'Done.' }] } },
+        { type: 'result', subtype: 'success', session_id: 'sess-paid', total_cost_usd: total, modelUsage: { a: { costUSD: total, contextWindow: 100 } } },
+      ].map((line) => `${JSON.stringify(line)}\n`).join('');
+      const first = service('claude-code', [paid(1)]);
+      await first.svc.startConversation(request());
+      const session = first.svc.nativeSession();
+      expect(session).toMatchObject({ runner: 'claude-code', sessionId: 'sess-paid', cwd: '/repo', cost: { sessionId: 'sess-paid', usd: 1 } });
+
+      const { svc, spawned } = service('claude-code', [paid(3)]);
+      const { events, onProgress } = collector();
+      await svc.startConversation(request({ onProgress, initialMessage: 'Carry on', resume: { session: session!, since: [] } }));
+
+      expect(spawned.lastArgs()).toContain('--resume');
+      const counted = events.flatMap((e) => (e.type === 'usage' && e.record?.reportedCost ? [e.record.reportedCost.amount] : []));
+      expect(counted).toEqual([2]);
+    });
+  });
+
   it('starts its process where its lease opened, and waits for that (ADR-0059 L1)', async () => {
     const { svc, spawned } = service('claude-code', [fixture('claude-code', 'prose')], {}, {}, undefined, undefined, async () => ({ workspace: { cwd: '/leased', worktree: false }, guarantees: {} as GuaranteeReport, exportResult: (s) => ({ refs: {}, sessionState: s }) }));
     await svc.startConversation(request());
@@ -1472,6 +1583,43 @@ describe('CliAgentAiService — Codex', () => {
     expect(resume.params.threadId).toBe('thr-codex-1');
   });
 
+  describe('a subplanner reopened in a new process (ADR-0055 D17)', () => {
+    const said = (role: 'user' | 'assistant', content: string) => ({ role, content, timestamp: '2026-11-02T00:00:00.000Z' });
+    const reopen = () => request({
+      runners: ['codex'],
+      initialMessage: 'Carry on',
+      priorHistory: [said('user', 'The goal'), said('assistant', 'The plan so far')],
+      resume: { session: { runner: 'codex', sessionId: 'thr-codex-1', cwd: '/repo' }, since: [] },
+    });
+    const methods = (proc: FakeAgentProcess) => proc.written.map((line) => (JSON.parse(line) as { method?: string }).method);
+
+    it('reopens its saved thread and sends the message alone', async () => {
+      const { svc, spawned } = service('codex', [fixture('codex', 'handshake'), fixture('codex', 'new-conversation'), fixture('codex', 'tools')]);
+      await svc.startConversation(reopen());
+
+      expect(methods(spawned.processes[0])).toEqual(['initialize', 'thread/resume', 'turn/start']);
+      const sent = spawned.processes[0].written.at(-1)!;
+      expect(sent).toContain('Carry on');
+      expect(sent).not.toContain('The plan so far');
+    });
+
+    it('replays into a new process where Codex answered with a new thread, sending the old one nothing', async () => {
+      const { svc, spawned } = service('codex', [
+        fixture('codex', 'handshake'),
+        fixture('codex', 'resume-rejected'),
+        fixture('codex', 'new-conversation').replace('"id":2,', '"id":3,').replaceAll('thr-codex-1', 'thr-codex-new'),
+        fixture('codex', 'handshake'),
+        fixture('codex', 'new-conversation').replaceAll('thr-codex-1', 'thr-codex-fresh'),
+        fixture('codex', 'tools').replaceAll('thr-codex-1', 'thr-codex-fresh'),
+      ]);
+      await svc.startConversation(reopen());
+
+      expect(methods(spawned.processes[0])).toEqual(['initialize', 'thread/resume', 'thread/start']);
+      expect(methods(spawned.processes[1])).toEqual(['initialize', 'thread/start', 'turn/start']);
+      expect(spawned.processes[1].written.at(-1)).toContain('The plan so far');
+    });
+  });
+
   it('discards a rejected resume before sending into a fresh thread without its transcript', async () => {
     const controller = new AbortController();
     const { svc, spawned } = service('codex', [
@@ -1857,6 +2005,45 @@ describe('CliAgentAiService — OpenCode', () => {
     await svc.startConversation(request({ runners: ['opencode'] }));
 
     expect(posted.some((u) => u.includes('/permission'))).toBe(false);
+  });
+
+  describe('a subplanner reopened in a new process (ADR-0055 D17)', () => {
+    const said = (role: 'user' | 'assistant', content: string) => ({ role, content, timestamp: '2026-11-02T00:00:00.000Z' });
+    const reopen = () => request({
+      runners: ['opencode'],
+      initialMessage: 'Carry on',
+      priorHistory: [said('user', 'The goal'), said('assistant', 'The plan so far')],
+      resume: { session: { runner: 'opencode', sessionId: 'ses_saved', cwd: '/repo' }, since: [] },
+    });
+    const server = (has: boolean) => {
+      const sent: { path: string; body: string }[] = [];
+      return { sent, routes: (url: string, init?: RequestInit) => {
+        const path = new URL(url).pathname;
+        if (init?.method === 'POST') sent.push({ path, body: String(init.body ?? '') });
+        if (path === '/session' && init?.method === 'POST') return { id: 'ses_new' };
+        if (path === '/session/ses_saved') return has ? { id: 'ses_saved' } : null;
+        return { info: { id: 'msg_a' }, parts: [{ id: 'p1', messageID: 'msg_a', type: 'text', text: 'ok' }] };
+      } };
+    };
+
+    it('reopens the session its server still has and sends the message alone', async () => {
+      const { sent, routes } = server(true);
+      await openCodeService(routes).svc.startConversation(reopen());
+
+      const turn = sent.find((call) => call.path === '/session/ses_saved/message');
+      expect(turn?.body).toContain('Carry on');
+      expect(turn?.body).not.toContain('The plan so far');
+      expect(sent.some((call) => call.path === '/session')).toBe(false);
+    });
+
+    it('replays into a new session when its server has lost the saved one', async () => {
+      const { sent, routes } = server(false);
+      await openCodeService(routes).svc.startConversation(reopen());
+
+      const turn = sent.find((call) => call.path.endsWith('/message'));
+      expect(turn?.path).toBe('/session/ses_new/message');
+      expect(turn?.body).toContain('The plan so far');
+    });
   });
 
   it('reuses the agent session across a restart when the server still has it', async () => {

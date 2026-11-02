@@ -1,10 +1,10 @@
 import { taskServedModel } from './accountLimits';
 import { firstGrapheme, nextBoundary, pad, previousBoundary, sanitize, style, truncate, width, wrap, wrapLines, type WrapLine } from './ansi';
 import { cursorInLines, type CursorPosition } from './editor';
-import { assignmentFlagText, checkpointCardLines, conversationLines, tokenLine } from './blocks';
+import { assignmentFlagText, checkpointCardLines, conversationLines, subplannerCardLines, tokenLine } from './blocks';
 import { bodyMode, chatEditorRoomFor, chatPaneWidth, planPaneWidth, stackRows, type BodyMode, type PaneRect } from './geometry';
 import { slashCommandTable, type SlashCategory } from './slash';
-import { continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, queuedTarget, refFor, scriptTaskView, selectedPlanRow, signedOutWithLogin, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type Focus, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
+import { checkpointsBelow, continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, questionAbove, queuedTarget, refFor, rootFrame, scriptTaskView, selectedPlanRow, signedOutWithLogin, viewOnly, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type Focus, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
 import { DELEGATION_OFFERED, SUPERVISOR_LEVEL_LABEL, type DiscoveredModel } from '@ordewell/core';
 import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
@@ -66,8 +66,8 @@ export interface ComposerView {
  */
 export function composerView(state: TuiState): ComposerView | null {
   const active = state.focus === 'chat' && !state.overlay;
-  // A script's log is output only (ADR-0035): there is no composer to draw.
-  if (!active || scriptTaskView(state)) return null;
+  // A script's log is output only (ADR-0035), and an ended plan is read only: there is no composer to draw.
+  if (!active || scriptTaskView(state) || viewOnly(state)) return null;
 
   const { text, cursor } = state.editor;
   const room = chatEditorRoomFor(state, true);
@@ -122,7 +122,8 @@ export function footerHints(state: TuiState): string[] {
   // footer's height the moment the arm appeared.
   // The task view owns Esc while it is open, so the planner's turn-queue hint
   // would name a key behaviour that is not in force.
-  const planning = plannerInFlight(state) && !state.taskView;
+  // A subplanner's turn has no stop or queue here at all: only a message reaches it.
+  const planning = plannerInFlight(state) && !state.taskView && !state.child;
   // Revealed subtask rows keep Esc for themselves, so the planner's hint would be untrue.
   const escHint = !planning || planPaneOpen(state) ? null
     : state.queuedPrompts.length > 0 ? 'esc unsend'
@@ -133,14 +134,14 @@ export function footerHints(state: TuiState): string[] {
   // other way to send it, named while there is text it would send.
   const tv = state.taskView;
   const script = scriptTaskView(state);
-  const taskSends = !!tv && !script && tv.view.working && !!state.editor.text.trim() && !continuesTask(findTask(state.tasks, tv.taskId));
+  const taskSends = !!tv && !script && !state.child && tv.view.working && !!state.editor.text.trim() && !continuesTask(findTask(state.tasks, tv.taskId));
   const sendNowHint = planning || taskSends ? 'ctrl-s send now' : null;
   const stopRunnerHint = runnerStoppable(state) ? 'ctrl-x stop runner' : null;
   // The same choices the card lists, kept in reach while the question scrolls
   // away. A tool request waiting ahead answers first, and its card says how.
-  const checkpointHints = tv && !script && waitingCheckpoint(findTask(state.tasks, tv.taskId)) && !waitingApproval(tv)
-    ? ['enter reply', 'ctrl-y approve', 'ctrl-g reject']
-    : [];
+  const readOnly = viewOnly(state);
+  const asked = !readOnly && (tv ? !script && waitingCheckpoint(findTask(state.tasks, tv.taskId)) && !waitingApproval(tv) : questionAbove(state));
+  const checkpointHints = asked ? ['enter reply', 'ctrl-y approve', 'ctrl-g reject'] : [];
 
   if (state.focus === 'plan') {
     // `expandedTaskId` alone only means subtask rows are revealed — the editor
@@ -149,6 +150,7 @@ export function footerHints(state: TuiState): string[] {
     if (state.taskEditor) {
       return ['type to edit prompt', 'pgup/pgdn scroll', 'alt-enter newline', 'enter save', 'esc cancel'];
     }
+    if (state.child) return [...(planPaneOpen(state) ? [] : ['esc back']), ...planFooterHints(selected, rootFrame(state).status === 'executing', true)];
     return [...(escHint ? [escHint] : []), ...planFooterHints(selected, state.status === 'executing')];
   }
   // The detail-all toggle names the direction it will go, like `m done` does.
@@ -159,11 +161,13 @@ export function footerHints(state: TuiState): string[] {
     ? [state.detailAll ? 'ctrl-o collapse all' : 'ctrl-o expand all']
     : [];
   return [
-    '/help',
+    readOnly ? 'read-only' : '/help',
     ...checkpointHints,
     ...(stopRunnerHint ? [stopRunnerHint] : []),
     'tab plan',
     ...detailHint,
+    // A task view names its own Esc, in its header.
+    ...(state.child && !tv ? ['esc back'] : []),
     ...(escHint ? [escHint] : []),
     ...(sendNowHint ? [sendNowHint] : []),
     'ctrl-c quit',
@@ -307,10 +311,13 @@ function taskHeaderLines(state: TuiState, tv: NonNullable<TuiState['taskView']>,
     task ? inRow(header.state.label) : '',
     header.resumes ? inRow(header.resumes) : '',
   ].filter(Boolean);
-  const approval = waitingApproval(tv);
+  // Nobody answers a child's tool request: its allowlist does (ADR-0056 M8).
+  const approval = state.child ? undefined : waitingApproval(tv);
   // A script's log is read-only output (ADR-0035): no runner, queue or send keys.
   const hint = scriptTaskView(state)
     ? ['read-only output', 'esc back']
+    : state.child
+      ? childTaskKeys(state, task)
     : approval
       ? ['ctrl-y allow', ...(approval.allowForTask ? ['ctrl-t allow for task'] : []), 'ctrl-g deny (composer text is the note)']
       : waitingCheckpoint(task)
@@ -349,7 +356,8 @@ export function runnerStoppable(state: TuiState): boolean {
   const tv = state.taskView;
   const activity = chatActivity(state);
   // A quiet runner is still a live one: stopping it is what its row is for.
-  if (!tv || !(activity?.busy || activity?.quiet)) return false;
+  // Below the root there is no route to one (ADR-0056 M8).
+  if (!tv || state.child || !(activity?.busy || activity?.quiet)) return false;
   // A script runs no model: there is no turn to interrupt (ADR-0035).
   if (scriptTaskView(state)) return false;
   const task = findTask(state.tasks, tv.taskId);
@@ -422,7 +430,7 @@ export function runHints(state: TuiState): string[] {
   const waiting = state.tasks.filter((t) => t.status === 'awaiting_user').length;
   if (waiting > 0) return [waiting === 1 ? '1 task waits for you' : `${waiting} tasks wait for you`, `${waiting} waiting`];
   // As plain as a task that waits on the user: the run waits on a merge (ADR-0020).
-  return state.runMerge?.paused ? ['paused for Merge all: /handoff merge', 'paused · /handoff merge', 'merge paused'] : [];
+  return state.runMerge?.paused && !state.child ? ['paused for Merge all: /handoff merge', 'paused · /handoff merge', 'merge paused'] : [];
 }
 
 export const runHint = (state: TuiState): string => runHints(state)[0] ?? '';
@@ -511,23 +519,28 @@ export function chatLayout(state: TuiState, rows: number, cols: number): ChatLay
   // The welcome (logo, setup, hints) heads the transcript for the whole
   // planning conversation and only goes once a plan exists — from then on the
   // plan pane owns the screen and the chat column is too narrow for it.
-  const welcome = !tv && state.tasks.length === 0;
+  const welcome = !tv && state.tasks.length === 0 && !state.child;
   // Not a block of the runner's log, so it stays out of the memoised body.
-  const checkpoint = tv ? waitingCheckpoint(findTask(state.tasks, tv.taskId)) : undefined;
-  const card = tv && checkpoint ? checkpointCardLines(findTask(state.tasks, tv.taskId)?.order ?? 0, checkpoint, cols, waitingApproval(tv) !== undefined, findTask(state.tasks, tv.taskId)?.type === 'delegated') : [];
+  const checkpoint = tv && !viewOnly(state) ? waitingCheckpoint(findTask(state.tasks, tv.taskId)) : undefined;
+  // Only the root's route carries a raise (ADR-0056 M5).
+  const card = tv && checkpoint ? checkpointCardLines(findTask(state.tasks, tv.taskId)?.order ?? 0, checkpoint, cols, waitingApproval(tv) !== undefined, !state.child && findTask(state.tasks, tv.taskId)?.type === 'delegated') : [];
+  const above = tv ? null : questionAbove(state);
+  const asked = above ? subplannerCardLines(above.question, cols, !state.child?.parent.child) : [];
   const answering = chatBodyLines(blocks, cols, state.detailAll, tv ? waitingApproval(tv) : undefined);
-  const body = card.length > 0 ? [...answering, ...card] : answering;
+  const reading = state.child?.reading && answering.length === 0 ? [style.grey('Reading this plan…')] : [];
+  const body = [...answering, ...reading, ...card, ...asked];
   const transcript = !welcome ? body : body.length === 0 ? welcomeLines(state, rows, cols) : [...welcomeLines(state, rows, cols), '', ...body];
   // The queued prompts paint as part of the tail, newest last — they are the
   // turns that have not gone out yet, and they travel where a sent message
   // would have appeared. A task's queue is its own, taken back one at a time.
   const bubbles = tv ? taskQueuedRows(state, cols) : queuedPromptRows(state, cols);
   const content = [...transcript, ...(bubbles.length > 0 ? ['', ...bubbles] : [])];
-  const taskHeader = tv ? taskHeaderLines(state, tv, cols) : [];
+  const taskHeader = [...childHeaderLines(state, cols), ...(tv ? taskHeaderLines(state, tv, cols) : [])];
   // The usage rows are the session's (or the opened task's), not lines of the
   // transcript: they keep the pane's bottom rows while everything above them
   // scrolls — unless the pane is a single row, which belongs to the conversation.
-  const usage = rows <= 1 ? [] : tv ? taskUsageFooter(state, tv, cols) : [...plannerPauseRow(state, cols), ...plannerResendRow(state, cols), ...tokenRow(state, blocks, cols)];
+  // The pause and resend rows name commands of a whole session, which a child does not take.
+  const usage = rows <= 1 ? [] : tv ? taskUsageFooter(state, tv, cols) : [...(state.child ? [] : [...plannerPauseRow(state, cols), ...plannerResendRow(state, cols)]), ...tokenRow(state, blocks, cols)];
   // The per-model rows are the expendable part: they yield to the transcript
   // so a short pane never trades its last conversation row for a breakdown.
   const footer = usage.slice(0, Math.max(1, rows - taskHeader.length - 1));
@@ -535,6 +548,49 @@ export function chatLayout(state: TuiState, rows: number, cols: number): ChatLay
   // Content that fits hangs off the top so the welcome does not jump when the
   // first message lands; once it overflows the newest lines win the pane.
   return { lines: content, header: taskHeader, footer, anchor: content.length > space ? 'bottom' : 'top', maxScroll: Math.max(0, content.length - space) };
+}
+
+/** The widest a plan's name gets in the path, so a long goal leaves room for the plans under it. */
+const PATH_CRUMB_COLS = 24;
+
+/** The plans from the root down to the viewed one, the oldest giving way first, with the viewed plan's state always in view. */
+function childPathLine(state: TuiState, cols: number): string {
+  const crumbs: string[] = [];
+  for (let frame = state; frame.child; frame = frame.child.parent) crumbs.unshift(frame.child.entry.title);
+  crumbs.unshift(rootFrame(state).goal ?? 'Plan');
+  const names = crumbs.map((name) => truncate(sanitize(name).replace(/\s+/g, ' ').trim(), PATH_CRUMB_COLS));
+  const mark = '↳ ';
+  const end = ` · ${state.child?.entry.state ?? ''}`;
+  const room = Math.max(1, cols - width(mark) - width(end));
+  let path = names.join(' › ');
+  while (width(path) > room && names.length > 1) {
+    names.shift();
+    path = `… › ${names.join(' › ')}`;
+  }
+  return style.accent(`${mark}${truncate(path, room)}${end}`);
+}
+
+/**
+ * What a plan below the root pins over its transcript: where it is, and anything
+ * that changes what can be done here. Only the plan above can continue an ended
+ * child, and only the root's route does, so that is all that is ever offered.
+ */
+function childHeaderLines(state: TuiState, cols: number): string[] {
+  const { child } = state;
+  if (!child) return [];
+  const path = childPathLine(state, cols);
+  if (child.lost) return [path, style.yellow(truncate('Reconnecting to this plan…', cols))];
+  if (child.entry.state === 'ended') {
+    const task = child.entry.taskId && !child.parent.child ? findTask(child.parent.tasks, child.entry.taskId) : undefined;
+    return [path, style.grey(truncate(`Ended: read-only.${task?.continuable ? ' esc, then l continues it.' : ''}`, cols))];
+  }
+  return child.entry.refused ? [path, style.yellow(truncate(sanitize(child.entry.refused).replace(/\s+/g, ' ').trim(), cols))] : [path];
+}
+
+/** A child's runner takes messages and an answer: its stop and queue keys have no route. */
+function childTaskKeys(state: TuiState, task: TaskView | undefined): string[] {
+  if (viewOnly(state)) return ['read-only'];
+  return waitingCheckpoint(task) ? ['enter reply', 'ctrl-y approve', 'ctrl-g reject'] : ['enter messages its runner'];
 }
 
 /** The planner turn waiting on its usage limit, pinned beside the usage rows so it stays in view as the chat scrolls. */
@@ -1255,9 +1311,11 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   const skills = (task.skills ?? []).join(' · ');
   // A delegated task has no runner or model: its child's tasks and what is left of its budget take their place.
   const delegated = DELEGATION_OFFERED ? row.delegated : null;
+  const below = delegated && state.sessionId ? checkpointsBelow(state.childTree, state.sessionId, task.id) : 0;
+  const questions = below === 0 ? '' : `${below === 1 ? '1 question' : `${below} questions`} below: enter`;
   // A running row's tag says RUN, so the mark moves to the line beneath it.
   const meta = delegated
-    ? [activity, inRow(delegated.counts ?? ''), inRow(delegated.tokens ?? '')]
+    ? [questions, activity, inRow(delegated.counts ?? ''), inRow(delegated.tokens ?? '')]
     : [activity, ...(row.research && row.running ? [style.cyan('research')] : []), runner, model];
   // The variant rides on the meta line only when the whole line still fits;
   // when it does not, the effort gives way rather than truncating the model.
@@ -1347,7 +1405,7 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
       lines.push(...taskText('Research', 'Read-only: it lands nothing. Its report wakes the planner when it ends.', cols, bodyPad));
     }
     if (row.kind === 'delegated') {
-      lines.push(...taskText('Delegated', 'Runs as a child plan of its own, in one worktree. Its log shows what its tasks do, and its report what they found.', cols, bodyPad));
+      lines.push(...taskText('Delegated', 'Runs as a child plan of its own, in one worktree. Enter opens its subplanner and tasks; l opens its log, which shows what its tasks do, and its report what they found.', cols, bodyPad));
       if (task.goal) lines.push(...taskText('Goal', task.goal, cols, bodyPad));
     }
     if (row.kind === 'ops') {
@@ -1523,6 +1581,11 @@ function commandSheetBody(cols: number): string[] {
     style.grey('  ctrl-y allows a tool request (its keys sit under it) · ctrl-t allows it for the task · ctrl-g denies it, with the composer text as the note'),
     style.grey('  at a checkpoint, enter replies with what you typed, ctrl-y approves, ctrl-g rejects (the text is its reason) · /checkpoint <id> approve|reject [reason] from anywhere'),
     style.grey('  alt←/→ changes attempt · esc returns'),
+    '',
+    style.bold('In a subplanner (enter on a delegated task)'),
+    style.grey('  its chat and tasks replace the plan\'s · enter on a delegated task goes deeper · esc goes back one plan · l opens a delegated task\'s own log'),
+    style.grey('  the composer messages the subplanner, or the runner in a task chat · at a question, enter replies, ctrl-y approves, ctrl-g rejects (the text is its reason)'),
+    style.grey('  a plan that ended is read-only: continue or retry its task from the plan above · /stop stops the whole run: a plan below the root has no stop of its own'),
   );
   return body;
 }

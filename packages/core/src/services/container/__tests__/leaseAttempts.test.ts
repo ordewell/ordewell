@@ -20,6 +20,7 @@ function placement() {
       asked.push(launch);
       return { command: process.execPath, args: ['-e', ''], env: {}, stop: vi.fn(), ended: vi.fn() };
     }),
+    cwd: '/task/work/repo',
     reach: async (url) => url,
     blob: vi.fn(async () => 'c0ffee'.repeat(6) + 'c0ff'),
   };

@@ -6,6 +6,7 @@ import { join } from 'path';
 import { CredentialBroker } from '../credentialBroker';
 import { DockerExecutionBackend, whereItRuns } from '../dockerLease';
 import { LOGIN_VOLUME } from '../containerPreflight';
+import { CODEX_LOGIN_VOLUME } from '../containerRunners';
 import { parseContainerSettings } from '../containerSettings';
 import { EGRESS_ENTRY, type EgressRoute } from '../egressSidecar';
 import { RELAY_ENTRY } from '../leaseRelay';
@@ -185,7 +186,7 @@ describe('a lease that cannot be what was asked refuses, and runs nothing weaker
   it('refuses a runner no container has been proven with', async () => {
     const { backend, local } = backendWith();
 
-    await expect(opened(backend, { ...taskRequest, runner: 'codex' })).rejects.toThrow(/codex/);
+    await expect(opened(backend, { ...taskRequest, runner: 'some-other-agent' })).rejects.toThrow(/some-other-agent has not been proven in one: assign the task to claude-code, codex/);
     expect(local.opened).toEqual([]);
   });
 
@@ -1253,5 +1254,176 @@ describe('a probe that fails', () => {
     await expect(backend.probe()).rejects.toThrow(/fell over/);
 
     expect(closed).toHaveBeenCalledOnce();
+  });
+});
+
+/** A Codex change task, end to end at this seam: the real binary's half is codexContainer.e2e's. */
+describe('a Codex task in a container', () => {
+  const codexRequest: LeaseRequest = { ...taskRequest, runner: 'codex' };
+  const otherTask: LeaseRequest = { ...codexRequest, node: { sessionId: 'session-1', taskId: 'b' } };
+  const otherSpec: LeaseSpec = { ...changeSpec, task: { ...changeSpec.task!, id: 'b' } };
+  const KEY = 'sk-proj-test-key';
+  const BROKER = { settings: { image: 'ordewell-task', login: { kind: 'broker', variables: ['OPENAI_API_KEY'] } }, env: { OPENAI_API_KEY: KEY } };
+
+  it('holds a lease token for its API key, and the key stays on this host', async () => {
+    const { backend, cli } = backendWith(BROKER);
+    const lease = await opened(backend, codexRequest);
+
+    const placed = await lease.placement!.place({ command: 'codex', args: ['app-server'], env: {}, files: [] });
+
+    expect(placed.env.OPENAI_API_KEY).toMatch(/^ordewell-lease-/);
+    expect(JSON.stringify([placed, cli.calls, cli.entries.map(({ args }) => args), cli.sidecars.map(({ args }) => args)])).not.toContain(KEY);
+    placed.ended();
+    lease.lease.release('done');
+  });
+
+  it('gives two tasks at once a stand-in each for the one key, so neither holds what the other does', async () => {
+    const { backend, cli } = backendWith(BROKER);
+    const first = await opened(backend, codexRequest);
+    const second = await opened(backend, otherTask, otherSpec);
+
+    const [one, other] = await Promise.all([first, second].map(({ placement }) => placement!.place({ command: 'codex', args: ['app-server'], env: {}, files: [] })));
+
+    expect(other.env.OPENAI_API_KEY).toMatch(/^ordewell-lease-/);
+    expect(other.env.OPENAI_API_KEY).not.toBe(one.env.OPENAI_API_KEY);
+    expect(cli.entries).toHaveLength(2);
+    for (const placed of [one, other]) placed.ended();
+    for (const { lease } of [first, second]) lease.release('done');
+  });
+
+  it('points app-server at the gateway, which is the one way Codex takes a key: it ignores both variables', async () => {
+    const { backend } = backendWith(BROKER);
+    const lease = await opened(backend, codexRequest);
+
+    const placed = await lease.placement!.place({ command: 'codex', args: ['app-server', '-c', 'features.memories=false'], env: {}, files: [] });
+
+    const line = placed.args.join(' ');
+    expect(line).toMatch(/model_providers\.gateway=\{.*base_url="http:\/\/127\.0\.0\.1:\d+\/v1".*env_key="OPENAI_API_KEY".*wire_api="responses".*supports_websockets=false/);
+    expect(line).toContain('model_provider="gateway"');
+    placed.ended();
+    lease.lease.release('done');
+  });
+
+  it('names the working directory the runner sees, which is the one its launch runs in', async () => {
+    const { backend } = backendWith(BROKER);
+    const lease = await opened(backend, codexRequest);
+
+    const placed = await lease.placement!.place({ command: 'codex', args: ['app-server'], env: {}, files: [] });
+
+    expect(lease.placement!.cwd).toMatch(/^\/task\/work(\/|$)/);
+    expect(placed.args).toContain(lease.placement!.cwd);
+    placed.ended();
+    lease.lease.release('done');
+  });
+
+  it('refuses at start an image that holds no Codex, naming how to build one, and leaves nothing behind', async () => {
+    const cli = new RecordingCli();
+    cli.answers.push({ match: /^exec .*command -v/, result: { code: 1 } });
+    const { backend } = backendWith({ ...BROKER, cli });
+
+    await expect(opened(backend, codexRequest)).rejects.toThrow(/ordewell-task holds no codex.*docs\/containers\.md/s);
+
+    const name = cli.entries[0].args[cli.entries[0].args.indexOf('--name') + 1];
+    expect(cli.lines()).toContain(`rm -f ${name}`);
+  });
+
+  it('asks nothing of a script, which needs no runner in the image', async () => {
+    const { backend, cli } = backendWith(BROKER);
+    const lease = await opened(backend, scriptRequest);
+
+    expect(cli.lines().filter((line) => line.includes('command -v'))).toEqual([]);
+    lease.lease.release('done');
+  });
+
+  describe('on a person\'s own sign-in', () => {
+    const OWN = { settings: { image: 'ordewell-task', login: { kind: 'own-sign-in' } } };
+
+    it('never mounts the kept sign-in where a runner runs, or Claude\'s: it hands it a copy of its own', async () => {
+      const { backend, cli } = backendWith(OWN);
+      const lease = await opened(backend, codexRequest);
+
+      const entry = cli.entries[0].args.join(' ');
+      expect(entry).not.toContain(CODEX_LOGIN_VOLUME);
+      expect(entry).not.toContain('/login:');
+      expect(cli.lines().filter((line) => line.includes(LOGIN_VOLUME))).toEqual([]);
+      lease.lease.release('done');
+    });
+
+    it('copies it read-only, with no network, and before the runner has a container', async () => {
+      const { backend, cli } = backendWith(OWN);
+      const order: string[] = [];
+      cli.heard = (line) => { if (line.includes(CODEX_LOGIN_VOLUME) && line.startsWith('run')) order.push(`copy, entries ${cli.entries.length}`); };
+      const lease = await opened(backend, codexRequest);
+
+      const copy = cli.lines().find((line) => line.includes(CODEX_LOGIN_VOLUME) && line.startsWith('run'));
+      expect(copy).toContain(`${CODEX_LOGIN_VOLUME}:/login:ro`);
+      expect(copy).toContain('--network none');
+      expect(order).toEqual(['copy, entries 0']);
+      lease.lease.release('done');
+    });
+
+    it('copies it into each task\'s own volume, so two tasks at once share no credentials file', async () => {
+      const { backend, cli } = backendWith(OWN);
+      const leases = [await opened(backend, codexRequest), await opened(backend, otherTask, otherSpec)];
+
+      const copies = cli.lines().filter((line) => line.includes(CODEX_LOGIN_VOLUME) && line.startsWith('run'));
+      const volumes = copies.map((line) => /-v (\S+):\/task\b/.exec(line)?.[1]);
+      expect(volumes).toHaveLength(2);
+      expect(volumes.every(Boolean)).toBe(true);
+      expect(new Set(volumes).size).toBe(2);
+      for (const { lease } of leases) lease.release('done');
+    });
+
+    it('refuses a sign-in the copy turned down, in the copy\'s words and naming how to make one', async () => {
+      const cli = new RecordingCli();
+      cli.answers.push({ match: new RegExp(`^run .*${CODEX_LOGIN_VOLUME}`), result: { code: 3, stderr: 'the kept sign-in has expired\n' } });
+      const { backend } = backendWith({ ...OWN, cli });
+
+      await expect(opened(backend, codexRequest)).rejects.toThrow(/the kept sign-in has expired.*sign in as docs\/containers\.md shows/is);
+      expect(cli.entries).toEqual([]);
+    });
+
+    it('lets the sidecar reach the service a sign-in talks to, and not the one that would refresh it', async () => {
+      const { backend, cli } = backendWith(OWN);
+      const lease = await opened(backend, codexRequest);
+
+      const sidecar = cli.sidecars[0].args.join(' ');
+      expect(sidecar).toContain('chatgpt.com');
+      expect(sidecar).not.toContain('auth.openai.com');
+      lease.lease.release('done');
+    });
+
+    it('tells the probe where the copy is, so what it reports is of that', async () => {
+      const { backend, cli, told } = backendWith(OWN);
+      cli.probe = { loginReadable: true };
+      const lease = await opened(backend, codexRequest);
+
+      expect(cli.asked[0].login).toBe('/task/home/.codex/auth.json');
+      expect(told.some(({ text }) => text.includes('cred.unreadable'))).toBe(true);
+      lease.lease.release('done');
+    });
+
+    it('has Codex read the file it was handed, wherever that person keeps their own, and no gateway', async () => {
+      const { backend } = backendWith(OWN);
+      const lease = await opened(backend, codexRequest);
+
+      const placed = await lease.placement!.place({ command: 'codex', args: ['app-server'], env: {}, files: [] });
+
+      expect(placed.args.join(' ')).toContain('cli_auth_credentials_store="file"');
+      expect(placed.args.join(' ')).not.toContain('model_provider');
+      placed.ended();
+      lease.lease.release('done');
+    });
+  });
+
+  it('leaves a script step of the same lease as it was written', async () => {
+    const { backend } = backendWith(BROKER);
+    const lease = await opened(backend, codexRequest);
+
+    const placed = await lease.placement!.place({ command: 'sh', args: ['-c', 'codex app-server'], env: {}, files: [] });
+
+    expect(placed.args.join(' ')).not.toContain('model_provider');
+    placed.ended();
+    lease.lease.release('done');
   });
 });

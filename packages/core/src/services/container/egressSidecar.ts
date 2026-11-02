@@ -1,6 +1,6 @@
 import type { ChildProcess } from 'child_process';
 import { settleWithin } from '../harness/settleWithin';
-import { BASE_URL, GATED_KEY, type IssuedLogin } from './credentialBroker';
+import type { IssuedLogin } from './credentialBroker';
 import type { DockerCli } from './dockerCli';
 import { ModelGateway } from './modelGateway';
 
@@ -182,7 +182,7 @@ export class SidecarEgress implements EgressPath {
         runArgs: ['--network', network],
         env: proxyEnv(`http://${sidecar}:${EGRESS_PORT}`),
         proxied: true,
-        gateway: gateway && port !== undefined ? { port, env: { [GATED_KEY]: gateway.token, [BASE_URL]: `http://127.0.0.1:${port}` } } : null,
+        gateway: gateway && port !== undefined ? { port, env: { [gated!.api.keyVariable]: gateway.token, [gated!.api.baseUrlVariable]: `http://127.0.0.1:${port}${gated!.api.basePath}` } } : null,
         close,
       };
     } catch (err) {

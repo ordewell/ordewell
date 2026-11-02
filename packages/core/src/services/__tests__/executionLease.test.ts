@@ -275,7 +275,7 @@ describe('a merge passes the seam (ADR-0059)', () => {
 });
 
 describe('work that comes back from where it ran (ADR-0059 L2)', () => {
-  const placement = { place: vi.fn(), reach: vi.fn(), blob: vi.fn() };
+  const placement = { cwd: '/task/work/repo', place: vi.fn(), reach: vi.fn(), blob: vi.fn() };
   const running = async (taskId: string, env: ReturnType<typeof setup>) => {
     env.orchestrator.loadPlan([task(taskId)]);
     await env.orchestrator.forceStartTask(taskId);

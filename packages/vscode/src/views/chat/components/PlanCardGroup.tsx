@@ -60,6 +60,7 @@ interface PlanCardGroupProps {
   onSendMessageNow?: (taskId: string, text: string) => void;
   /** Open (or focus) a structured task's log tab (ADR-0018, V1). */
   onOpenLog?: (taskId: string) => void;
+  onOpenChild?: (taskId: string) => void;
   /** Owned by the host surface when it must close the open card itself (Esc). */
   expandedTaskId?: string | null;
   onExpandedTaskChange?: (taskId: string | null) => void;
@@ -106,6 +107,7 @@ export default function PlanCardGroup({
   onSendMessage,
   onSendMessageNow,
   onOpenLog,
+  onOpenChild,
   expandedTaskId: expandedTaskIdProp,
   onExpandedTaskChange,
 }: PlanCardGroupProps) {
@@ -228,6 +230,7 @@ export default function PlanCardGroup({
                 onSendMessage={onSendMessage}
                 onSendMessageNow={onSendMessageNow}
                 onOpenLog={onOpenLog}
+                onOpenChild={onOpenChild}
                 expanded={expandedTaskId === task.id}
                 onExpandedChange={(next) => setExpandedTaskId(next ? task.id : null)}
               />

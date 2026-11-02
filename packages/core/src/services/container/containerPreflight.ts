@@ -1,7 +1,9 @@
+import { CONTAINER_RUNNERS, signInRemedy, type ContainerRunner } from './containerRunners';
 import { helperArgs, parseContainerSettings, type ContainerSettings } from './containerSettings';
 import type { CredentialBroker } from './credentialBroker';
 import type { DockerCli, DockerResult } from './dockerCli';
-import { ASK_SIGN_IN } from './taskWorkspace';
+
+export { LOGIN_VOLUME } from './containerRunners';
 
 /** Why a container cannot be had yet, and what a person does about it. */
 export interface ContainerProblem {
@@ -34,6 +36,8 @@ export interface ReadinessDeps extends PreflightDeps {
   broker: CredentialBroker;
   /** False for a script, whose container holds no login at all. */
   agent?: boolean;
+  /** Whose login is asked for. Absent, a surface's question, with no task in mind: a sign-in of any runner's, and every variable there. */
+  runner?: ContainerRunner;
   setupCommand?: string;
 }
 
@@ -41,9 +45,6 @@ export interface Readiness extends EngineCheck {
   /** Absent for a setting that cannot be used as it stands. */
   settings?: ContainerSettings;
 }
-
-/** Where a person's own sign-in is kept: theirs, made in a container, and never read here (ADR-0059 L7). */
-export const LOGIN_VOLUME = 'ordewell-login-claude-code';
 
 /** A surface waits on this, and an engine that hangs is one to report, not to wait for. */
 const ASK_MS = 15_000;
@@ -120,10 +121,9 @@ export const CONTAINER_ASSUMPTIONS: readonly string[] = [
   'The engine behind a unix:// socket is on this machine: a socket forwarded from elsewhere looks the same.',
   'Containers on an engine share one kernel, this host\'s on Linux and the VM\'s on a Mac. kernel.separate means separate from this host, never from another task: a kernel flaw reaches every task on the engine.',
   'A task has limits on memory and processes, and none on CPU or disk.',
-  'Only Claude Code has been proven as a runner in a container: another runner\'s task refuses at start.',
+  'Only Claude Code and Codex have been proven as runners in a container: another runner\'s task refuses at start.',
+  'Codex runs in a container at Full access alone: its sandbox cannot start under this hardening, so a task at Codex\'s Guarded mode refuses at start.',
 ];
-
-export const SIGN_IN_REMEDY = `Sign in as docs/containers.md shows, so it is kept in the ${LOGIN_VOLUME} volume.`;
 
 const MEMORY_REMEDY: Partial<Record<NodeJS.Platform, string>> = {
   darwin: 'Give the engine more with `colima stop && colima start --memory 8`, or Docker Desktop\'s Settings > Resources, or lower containers.memory.',
@@ -142,27 +142,41 @@ function readSetting(raw: unknown): { problems: ContainerProblem[]; settings?: C
   return { problems: [], settings };
 }
 
-const NO_SIGN_IN = problem('sign-in-missing', 'The containers setting names your own sign-in, and none has been made.', SIGN_IN_REMEDY);
-
 /**
- * The volume first: a `docker run` naming it would make it. An image that cannot
- * answer is not a missing sign-in, which `claude auth status` reports as exit 1,
- * and a sign-in repeated for it would change nothing.
+ * What a runner's kept sign-in comes to: held, not held, or a problem that a new
+ * sign-in would not solve. The volume first: a `docker run` naming it would make
+ * it. An image that cannot answer is not a missing sign-in, which an `ask` reports
+ * as exit 1. A runner with no `ask` has what it holds judged by its `copy`, at a
+ * task's start.
  */
-async function signInProblems(settings: ContainerSettings, cli: DockerCli, imageThere: boolean): Promise<ContainerProblem[]> {
-  const kept = await cli.call(['volume', 'inspect', LOGIN_VOLUME], { timeoutMs: ASK_MS });
-  if (kept.code !== 0) return [NO_SIGN_IN];
-  if (!imageThere) return [];
-  const asked = await cli.call([...helperArgs(settings, [`${LOGIN_VOLUME}:/login:ro`]), 'sh', '-c', ASK_SIGN_IN], { timeoutMs: ASK_MS });
-  if (asked.code === 0) return [];
-  if (asked.code === 1) return [NO_SIGN_IN];
-  return [problem('sign-in-unasked', `The image ${settings.image} could not say whether your sign-in is there: ${asked.stderr.trim() || `\`claude auth status\` ended with ${asked.code}`}.`, 'Build the image with a current Claude Code, as docs/containers.md shows.')];
+async function signInHeld(settings: ContainerSettings, cli: DockerCli, { binary, signIn: { volume, ask } }: ContainerRunner, imageThere: boolean): Promise<boolean | ContainerProblem> {
+  const kept = await cli.call(['volume', 'inspect', volume], { timeoutMs: ASK_MS });
+  if (kept.code !== 0) return false;
+  if (!ask || !imageThere) return true;
+  const asked = await cli.call([...helperArgs(settings, [`${volume}:/login:ro`]), ...ask], { timeoutMs: ASK_MS });
+  if (asked.code === 0) return true;
+  if (asked.code === 1) return false;
+  return problem('sign-in-unasked', `The image ${settings.image} could not say whether your sign-in is there: ${asked.stderr.trim() || `\`${binary}\` ended with ${asked.code}`}.`, `Build the image with a current \`${binary}\`, as docs/containers.md shows.`);
 }
 
-async function loginProblems(settings: ContainerSettings, cli: DockerCli, broker: CredentialBroker, imageThere: boolean): Promise<ContainerProblem[]> {
-  if (settings.login.kind === 'own-sign-in') return signInProblems(settings, cli, imageThere);
+async function signInProblems(settings: ContainerSettings, cli: DockerCli, imageThere: boolean, runner?: ContainerRunner): Promise<ContainerProblem[]> {
+  const asked = runner ? [runner] : CONTAINER_RUNNERS;
+  const answers: (boolean | ContainerProblem)[] = [];
+  for (const each of asked) {
+    const held = await signInHeld(settings, cli, each, imageThere);
+    if (held === true) return [];
+    answers.push(held);
+  }
+  const unasked = answers.find((answer) => typeof answer === 'object');
+  if (typeof unasked === 'object') return [unasked];
+  return [problem('sign-in-missing', `The containers setting names your own sign-in, and none has been made${runner ? ` for ${runner.id}` : ''}.`, signInRemedy(asked[0].signIn))];
+}
+
+async function loginProblems(settings: ContainerSettings, cli: DockerCli, broker: CredentialBroker, imageThere: boolean, runner?: ContainerRunner): Promise<ContainerProblem[]> {
+  if (settings.login.kind === 'own-sign-in') return signInProblems(settings, cli, imageThere, runner);
   try {
-    broker.issue(settings.login.variables);
+    if (runner) broker.issue(settings.login.variables, runner.api);
+    else broker.check(settings.login.variables);
     return [];
   } catch (err) {
     return [problem('login-unavailable', err instanceof Error ? err.message : String(err), 'Correct what the login names and set it in the environment Ordewell starts from, or use the "own-sign-in" login.')];
@@ -178,7 +192,7 @@ async function loginProblems(settings: ContainerSettings, cli: DockerCli, broker
  * harness says whether it holds one, in a helper (`ASK_SIGN_IN`). Nothing here
  * pulls either: an image is what a person built.
  */
-export async function inspectReadiness(raw: unknown, { cli, platform, broker, agent = true, setupCommand }: ReadinessDeps): Promise<Readiness> {
+export async function inspectReadiness(raw: unknown, { cli, platform, broker, agent = true, runner, setupCommand }: ReadinessDeps): Promise<Readiness> {
   const { problems: engineProblems, engine } = await inspectEngine({ cli, ...(platform ? { platform } : {}) });
   const { problems: settingProblems, settings } = readSetting(raw);
   const setup = setupCommand ? [problem('setup-command', 'A worktree setup command is set: it would run on this host, in what a container wrote.', 'Unset worktreeSetupCommand and ORDEWELL_WORKTREE_SETUP for this session.')] : [];
@@ -189,7 +203,7 @@ export async function inspectReadiness(raw: unknown, { cli, platform, broker, ag
   }
   const image = await cli.call(['image', 'inspect', '--format', '{{.Id}}', settings.image], { timeoutMs: ASK_MS });
   if (image.code !== 0) problems.push(problem('image-missing', `The image ${settings.image} is not there.`, 'Ordewell publishes no image: build it as docs/containers.md shows.'));
-  if (agent) problems.push(...await loginProblems(settings, cli, broker, image.code === 0));
+  if (agent) problems.push(...await loginProblems(settings, cli, broker, image.code === 0, runner));
   return { problems, engine, ...(problems.length === 0 ? { settings } : {}) };
 }
 

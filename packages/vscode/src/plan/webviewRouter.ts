@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { latestTaskCommands } from '../shared/taskCommands';
 import type { RunnerId } from '@ordewell/core';
-import type { SettingsChange, WebviewToHost } from '../shared/protocol';
+import type { ChildCheckpointAnswer, SettingsChange, WebviewToHost } from '../shared/protocol';
 import { isKnownSlashCommand } from '../commands/SlashParser';
 import { handleIsolationAction } from './isolation';
 import {
@@ -18,6 +18,12 @@ export interface ExtensionHandlers {
   setPlannerModel(modelId: string, effort?: string): Promise<void>;
   /** Open (or focus) the on-demand task-log tab for a structured task (ADR-0018, V1). */
   openTaskLog(taskId: string): void;
+  openChild(childId: string): Promise<void>;
+  refreshChildren(): Promise<void>;
+  closeChild(): void;
+  messageChild(childId: string, text: string): Promise<void>;
+  answerChildCheckpoint(answer: ChildCheckpointAnswer): Promise<void>;
+  openChildTaskLog(childId: string, taskId: string): Promise<void>;
   /** Open a workspace-relative file Ordewell kept, such as a handoff's saved patch (ADR-0050). */
   openFile(path: string): void;
   setPlanDockHeight(height: number): void;
@@ -58,6 +64,24 @@ function reportFailure(what: string, err: unknown, deps: WebviewRouterDeps): voi
 
 async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDeps): Promise<void> {
   switch (msg.type) {
+    case 'refreshChildren':
+      await deps.extension.refreshChildren();
+      return;
+    case 'openChild':
+      await deps.extension.openChild(msg.childId);
+      return;
+    case 'closeChild':
+      deps.extension.closeChild();
+      return;
+    case 'messageChild':
+      await deps.extension.messageChild(msg.childId, msg.text);
+      return;
+    case 'answerChildCheckpoint':
+      await deps.extension.answerChildCheckpoint(msg);
+      return;
+    case 'openChildTaskLog':
+      await deps.extension.openChildTaskLog(msg.childId, msg.taskId);
+      return;
     case 'ready':
       deps.extension.ready();
       return;
@@ -173,6 +197,7 @@ async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDep
       return;
     case 'newSession':
       handleNewSession(deps);
+      await deps.extension.refreshChildren();
       return;
     default: {
       const exhaustive: never = msg;

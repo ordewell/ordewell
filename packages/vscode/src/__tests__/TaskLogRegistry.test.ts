@@ -334,7 +334,7 @@ describe('the task-log registry (ADR-0018, V1)', () => {
 
     __panels[0].__receive({ type: 'sendTaskMessage', text: 'hello' });
 
-    await vi.waitFor(() => expect(posted(__panels[0])).toContainEqual({ type: 'showError', error: 'Task is not running.' }));
+    await vi.waitFor(() => expect(posted(__panels[0])).toContainEqual({ type: 'showError', error: 'Task is not running.', draft: 'hello' }));
   });
 
   it('closing the tab never touches the task, and reopening loads it afresh', () => {

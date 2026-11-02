@@ -402,7 +402,7 @@ describe('a runner a lease placed elsewhere (ADR-0059 L5)', () => {
     const stop = vi.fn();
     const ended = vi.fn();
     const place = vi.fn(async (launch: RunnerLaunch): Promise<PlacedLaunch> => ({ command: 'docker', args: ['exec', 'box', launch.command, ...launch.args], env: { FROM_PLACEMENT: '1' }, stop, ended }));
-    return { place, stop, ended, reach: async (url: string) => url, blob: async () => undefined };
+    return { cwd: '/task/work/repo', place, stop, ended, reach: async (url: string) => url, blob: async () => undefined };
   }
 
   it('launches what the placement answers, with the host\'s workspace variables left behind', async () => {
