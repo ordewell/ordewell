@@ -19,6 +19,8 @@ export interface ModelApi {
   name: string;
   /** Its runner reaches a model by this key and in no other way, so cloud credentials are no login for it. */
   keyOnly: boolean;
+  /** What its runner uses over the key, by its documented precedence: beside one, a bearer the gateway drops or a cloud that never sees the gateway. */
+  outranksKey: readonly string[];
 }
 
 export const ANTHROPIC_API: ModelApi = {
@@ -30,6 +32,7 @@ export const ANTHROPIC_API: ModelApi = {
   basePath: '',
   name: 'the Anthropic API',
   keyOnly: false,
+  outranksKey: ['ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'],
 };
 
 export const OPENAI_API: ModelApi = {
@@ -41,6 +44,7 @@ export const OPENAI_API: ModelApi = {
   basePath: '/v1',
   name: 'the OpenAI API',
   keyOnly: true,
+  outranksKey: [],
 };
 
 export const MODEL_APIS: readonly ModelApi[] = [ANTHROPIC_API, OPENAI_API];

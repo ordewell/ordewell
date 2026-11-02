@@ -227,10 +227,14 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
     is a sealed command, a read-only task's or a planner's, over what landed: inside its seal (ADR-0036), not outside it.
   - What a tree leaves in the engine goes with it (`reclaim.ts`), by the label every container, network and task volume
     carries, since a session delete has no Session left to ask: `ExecutionBackend.reclaim` for a Clean up and a Discard,
-    `reclaimContainers` for a delete. Every mirror is read, since a landed task's pin outlives its volume. One it took the
-    last pin from goes whole, with any cache volume an earlier build left for its project, the one time nothing leans on
-    either; one it held none in is another project's, and stays. A person's sign-in volume is theirs. Without the setting,
-    Docker is not asked.
+    `reclaimContainers` for a delete, once the session has gone: a helper of a closing attempt that names a volume already
+    taken makes it again, with no label. Every mirror is read, since a landed task's pin outlives its volume. One it took
+    the last pin from goes whole, with any cache volume an earlier build left for its project, the one time nothing leans
+    on either. Every clean-up mounts every mirror, so one that overlaps holds it for a moment: the removal outlasts that,
+    reading the pins again between rounds and giving up the moment one appears, since what held it may be a new session's
+    first push. One still refused after that is told, and stays for a person to remove. One it held none in is another
+    project's, and stays, unless it holds nothing at all: that is what a helper made by naming a mirror another clean-up had
+    just taken. A person's sign-in volume is theirs. Without the setting, Docker is not asked.
   - A pin on the board (ADR-0057 R9) reads its file through the lease, since until `collect` the worktree here holds what
     the attempt was seeded with.
   - The Ordewell MCP server is reached with no network at all: the relay listens on the same port of the container's own
@@ -266,14 +270,33 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
     of another provider, or a person's own sign-in, is handed its key or its login and reaches its provider's hosts
     through the sidecar instead.
   - A person chooses the login, and it has no default: `broker`, API keys or cloud credentials from this host's
-    environment, or `own-sign-in`, made inside a container and kept in a volume no task mounts. Each runner has its own
+    environment, or `own-sign-in`, made inside a container and kept in a volume no task mounts. Each runner keeps its own
     sign-in volume and its own place the runner reads it from: Claude Code's config directory, OpenCode's data directory.
-    A helper in the engine, with that volume read-only, copies it into the task's own volume as the task starts, so
+    A helper in the engine, with that volume read-only, copies it into the task's own volume as the task first starts, so
     nothing a task writes reaches the original or another task, and this host never reads it. That stops writing and
-    nothing else: the runner can read its copy, and a token it refreshes stays there. Which login someone uses is up to them, API usage or their own subscription, and so are its terms: the maintainer decided so
-    on 2026-11-01. Ordewell's part is what it holds, which is below.
+    nothing else: the runner can read its copy. Which login someone uses is up to them, API usage or their own
+    subscription, and so are its terms: the maintainer decided so on 2026-11-01. Ordewell's part is what it holds, which
+    is below.
+  - The sign-in itself is `claude auth login`, the person's own, under `docker run -it`: the unmodified binary prints
+    Anthropic's address and takes back the code the person's browser is given, so Ordewell sees neither. Whether a login
+    is held is `claude auth status`'s to say (`ASK_SIGN_IN`), in readiness and at the hand-off: an abandoned sign-in
+    leaves files and no login. It answers from those files, with no network, and an expired login reads as held, so a
+    start proves a login is there and never that it works. A Claude Console sign-in with no API key is kept outside the
+    configuration directory, by Anthropic's page, so it does not survive into the volume. A runner with no such question
+    (`ContainerSignIn.ask`) has its volume found by readiness, and what the volume holds judged by its copy.
+  - Every copy is one login, and the task's copy is the task's to keep. A token it refreshes stays there, and a copy is
+    replaced only by a new sign-in (`COPY_SIGN_IN`), which keeps its sessions. Measured on Claude Code 2.1.316, 2026-11-02,
+    against a controlled provider whose refresh tokens work once: the refresh reached `platform.claude.com` through
+    `HTTPS_PROXY`, went into the task's copy and left the original byte for byte, and the next copy of the same token was
+    refused, failed `OAuth session expired and could not be refreshed`, and was cleared by the binary. So where a provider
+    rotates, the first refresh kills the original and every other copy. Anthropic does not document rotation; user reports
+    say it does ([#54443](https://github.com/anthropics/claude-code/issues/54443),
+    [#77130](https://github.com/anthropics/claude-code/issues/77130)). No real account has been run. A person who signs in
+    again gets the new login to a task at its next attempt, and this is told as the login's limit on a surface.
   - A broker holds API keys and cloud-provider credentials only (`CredentialBroker`). It never holds Claude subscription
-    tokens, and refuses one under any name it can recognise. What a cloud provider's client signs with has to reach it, so
+    tokens, and refuses one under any name it can recognise. Beside a key it refuses what that key's runner ranks over it
+    (`ModelApi.outranksKey`), since the task would not run on the login the person meant, and a task of another runner
+    is handed none of those. What a cloud provider's client signs with has to reach it, so
     those go by name, a runner can read them, and the lease reports `cred.unreadable` unproven. Anthropic's
     page says "developers may not collect, store, or intermediate Claude.ai credentials or session tokens — sign-in to
     a Claude account must complete through Anthropic's own flow". It keeps open an end user signing in to the unmodified
@@ -347,6 +370,15 @@ for model traffic first. The interface is kept free of anything that blocks thes
   bug in the proxy would then reach this host's loopback, where a sidecar's worst reach is the engine's.
 - **One writable sign-in volume mounted into every task.** Dropped: a task could rewrite what the next task signs in
   with, and concurrent tasks would share one refreshing credentials file.
+- **Copying a sign-in again at every attempt.** Dropped once measured: a Continue overwrote the token the task had
+  refreshed with one the refresh had killed.
+- **Writing a refreshed token back to the kept sign-in.** Rejected: it is a way for one task to write what the next signs
+  in with, which is why no task mounts that volume, and concurrent writers would race over one credentials file.
+- **Copying again when a task's copy no longer reads as a login.** Rejected: it would run the harness over config a task
+  wrote, in a helper that holds the kept sign-in.
+- **Refreshing in a helper before a hand-off, or leaving the token host off a task's list.** Not built. The binary has no
+  refresh command, and the second only moves the failure to the token's expiry; neither can be proven without a real
+  account.
 - **A package cache every task of a project shares.** Dropped: it is a way for one task's code to run in the next.
   Keeping the speed would take a cache no task can write, which nothing fills yet.
 - **Refusing containers until the image and login are set.** Rejected: an image is built after a person learns their
@@ -363,7 +395,9 @@ for model traffic first. The interface is kept free of anything that blocks thes
 - **Bringing a checkout script's writes back.** Rejected: only a landing brings container-written work to a checkout, and
   this would be one nobody reads, past the gate.
 - **Dropping any mirror with no pin.** Rejected: a project of another session may have made one a moment ago. A clean-up
-  takes only what it emptied.
+  takes only what it emptied, and a volume with nothing in it, which has nothing to lose and which a push makes again.
+- **Retrying a refused mirror for longer, without reading it again.** Rejected: what holds it may be a new session's first
+  push, and the removal that follows takes that session's pin.
 - **A person or counsel checking provider terms before a subscription path ships.** Dropped on 2026-11-01: which login
   someone uses is theirs to choose. What Ordewell holds stays as L7 says.
 - **`ttlMs`, `renew` and `revoked` on a lease.** Dropped once it met the engine. They were what keeps a container from
@@ -412,7 +446,9 @@ for model traffic first. The interface is kept free of anything that blocks thes
 - A lease takes a network of the engine, whose address pools are finite, and one a dead host left stays until a clean-up.
 - A sealed command over what landed still runs on this host, inside its seal.
 - A check held out of a child's reach (ADR-0055 D8) becomes a boundary only on a backend that proves `fs.hostHidden`.
-- A subscription user in a container has a weaker guarantee, and is told so.
+- A subscription user in a container has a weaker guarantee, and is told so: a runner can read its copy, and where the
+  provider rotates, tasks side by side can end each other's login.
+- A login a task lost is found only by that task failing: a start proves it held, and nothing can sign in for the person.
 - A Codex change task runs in a container at Full access alone. Under the default Guarded level a planned Codex task
   waits at its start until a person changes it. The runner catalog still offers Guarded, since its marks are host-wide
   and a lease is a session's.
@@ -431,4 +467,6 @@ for model traffic first. The interface is kept free of anything that blocks thes
 - 2026-11-01 — containers are experimental and off in published builds: `containersOffered` reads the `containers` setting only with `ORDEWELL_CONTAINERS=1` from a git checkout, as delegation is held.
 - 2026-11-02 — `changeContainers`, `inspectEngine` and `inspectReadiness`: on asks for a local Docker alone, and a task's start rechecks the raw setting. A task works from its own copy of a sign-in, and keeps its caches in its own volume. Shared caches and a sign-in volume mounted into tasks dropped.
 - 2026-11-02 — Codex change tasks run in containers at Full access: `containerRunners.ts`, a gateway per model API, a task's sign-in copy without a refresh token, and Guarded refused at start by the sandbox probe in the container.
+- 2026-11-02 — The sign-in is `claude auth login` and `claude auth status` says whether one is held; a task's copy is replaced only by a new sign-in, with refresh measured against a controlled provider; a broker refuses a variable that outranks the key. Copying at every attempt dropped.
+- 2026-11-02 — L6: overlapping clean-ups no longer strand a mirror, and a session delete waits for the session to have gone before it clears the engine.
 - 2026-11-02 — OpenCode runs a change task in a container: a per-runner sign-in volume and copy, the relay's reverse direction for its own server, and its Anthropic provider pointed at the lease gateway. A runner's binary is asked of the image before a worktree is made, and a model's provider hosts are opened where nothing gates its traffic.

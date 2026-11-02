@@ -48,6 +48,11 @@ function upstreamOf(url: string | undefined, api: ModelApi): string {
   return url;
 }
 
+function refuseOutranking(variables: readonly string[], { keyVariable, outranksKey }: ModelApi): void {
+  const outranking = variables.includes(keyVariable) ? outranksKey.find((variable) => variables.includes(variable)) : undefined;
+  if (outranking) throw new Error(`${outranking} outranks ${keyVariable} in the runner it serves, so the two do not make one login: name one or the other.`);
+}
+
 /**
  * Holds API keys and cloud-provider credentials for leases, and never a Claude
  * subscription's: Anthropic's terms forbid a product collecting, storing or
@@ -61,17 +66,21 @@ export class CredentialBroker {
   constructor(private readonly source: Record<string, string | undefined>) {}
 
   issue(variables: readonly string[], api: ModelApi = ANTHROPIC_API): IssuedLogin {
-    const others = MODEL_APIS.filter((other) => other !== api).flatMap(({ keyVariable, baseUrlVariable }) => [keyVariable, baseUrlVariable]);
+    const others = MODEL_APIS.filter((other) => other !== api).flatMap(({ keyVariable, baseUrlVariable, outranksKey }) => [keyVariable, baseUrlVariable, ...outranksKey]);
     const held = Object.fromEntries(variables.filter((variable) => !others.includes(variable)).map((variable) => [variable, this.hold(variable)]));
     const { [api.keyVariable]: key, [api.baseUrlVariable]: url, ...handed } = held;
-    if (key !== undefined) return { gated: { key, upstream: upstreamOf(url, api), api }, handed };
+    if (key !== undefined) {
+      refuseOutranking(variables, api);
+      return { gated: { key, upstream: upstreamOf(url, api), api }, handed };
+    }
     if (api.keyOnly || Object.keys(held).length === 0) throw new Error(`The container's login holds nothing for ${api.name}: name ${api.keyVariable} in it.`);
     return { gated: null, handed: held };
   }
 
-  /** That every variable is there, for a surface that asks with no runner in mind: which of them serves which runner waits for {@link issue}. */
+  /** That every variable is there and none undoes a key, for a surface that asks with no runner in mind: which of them serves which runner waits for {@link issue}. */
   check(variables: readonly string[]): void {
     for (const variable of variables) this.hold(variable);
+    for (const api of MODEL_APIS) refuseOutranking(variables, api);
   }
 
   private hold(variable: string): string {

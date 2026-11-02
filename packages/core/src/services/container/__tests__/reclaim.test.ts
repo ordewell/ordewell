@@ -19,6 +19,8 @@ class EngineHolding implements DockerCli {
   /** What each mirror's helper says: it held this tree's pins, and what it still holds of others'. */
   held = true;
   pinsLeft = '';
+  /** What a helper finds in a volume that holds no repository: one it made itself, by naming it. */
+  hollow = false;
   failing: RegExp | null = null;
   scripts: { args: readonly string[] }[] = [];
 
@@ -34,6 +36,7 @@ class EngineHolding implements DockerCli {
     if (line.includes('name=ordewell-cache-')) return said(this.caches);
     if (args[0] === 'run') {
       this.scripts.push({ args });
+      if (this.hollow) return said(['hollow']);
       return said([...(this.held ? ['mine'] : []), ...(this.pinsLeft ? [`left ${this.pinsLeft}`] : [])]);
     }
     return { code: 0, stdout: '', stderr: '' };
@@ -136,6 +139,68 @@ describe('what a tree leaves in the engine goes with it (ADR-0059 L6)', () => {
     await reclaimTree('session-1', engine, settings, (text) => told.push(text));
 
     expect(engine.calls.filter((line) => line === 'volume rm -f ordewell-task-1')).toHaveLength(3);
+    expect(told).toEqual([]);
+  });
+
+  const refusingMirror = (engine: EngineHolding, refusals: number, meanwhile: (refused: number) => void = () => undefined) => {
+    const call = engine.call.bind(engine);
+    let refused = 0;
+    engine.call = async (args, opts) => {
+      if (args.join(' ') === 'volume rm -f ordewell-mirror-aaaa' && refused < refusals) {
+        engine.calls.push(args.join(' '));
+        refused += 1;
+        meanwhile(refused);
+        return { code: 1, stdout: '', stderr: 'Error response from daemon: remove ordewell-mirror-aaaa: volume is in use - [bbbda4f6]' };
+      }
+      return call(args, opts);
+    };
+  };
+
+  it("outlasts another session's clean-up reading the mirror: no later clean-up would take one with no pin of its own", async () => {
+    const engine = new EngineHolding();
+    refusingMirror(engine, 10);
+    const told: string[] = [];
+
+    await reclaimTree('session-1', engine, settings, (text) => told.push(text));
+
+    expect(told).toEqual([]);
+    expect(engine.calls.filter((line) => line === 'volume rm -f ordewell-mirror-aaaa')).toHaveLength(11);
+    expect(engine.calls).toContain('volume rm -f ordewell-cache-aaaa-npm');
+  });
+
+  it('gives a refused mirror up as soon as a new session has pinned it: waiting must not take what has come to lean on it', async () => {
+    const engine = new EngineHolding();
+    refusingMirror(engine, 10, (refused) => { if (refused === 5) engine.pinsLeft = 'refs/ordewell/pins/other/x/head'; });
+    const told: string[] = [];
+
+    await reclaimTree('session-1', engine, settings, (text) => told.push(text));
+
+    expect(engine.calls.filter((line) => line === 'volume rm -f ordewell-mirror-aaaa')).toHaveLength(5);
+    expect(engine.calls.some((line) => line.includes('volume rm') && line.includes('ordewell-cache-'))).toBe(false);
+    expect(told).toEqual([]);
+  });
+
+  it('says so when a mirror it emptied will not go, and leaves the caches beside it', async () => {
+    const engine = new EngineHolding();
+    refusingMirror(engine, Number.MAX_SAFE_INTEGER);
+    const told: string[] = [];
+
+    await reclaimTree('session-1', engine, settings, (text) => told.push(text));
+
+    expect(told.join()).toContain('ordewell-mirror-aaaa');
+    expect(engine.calls.some((line) => line.includes('volume rm') && line.includes('ordewell-cache-'))).toBe(false);
+  });
+
+  it('takes a volume with no repository in it, once and without waiting: a helper makes one by naming a mirror another clean-up took', async () => {
+    const engine = new EngineHolding();
+    engine.hollow = true;
+    refusingMirror(engine, Number.MAX_SAFE_INTEGER);
+    const told: string[] = [];
+
+    await reclaimTree('session-1', engine, settings, (text) => told.push(text));
+
+    expect(engine.calls.filter((line) => line === 'volume rm -f ordewell-mirror-aaaa')).toHaveLength(1);
+    expect(engine.calls.some((line) => line.includes('volume rm') && line.includes('ordewell-cache-'))).toBe(false);
     expect(told).toEqual([]);
   });
 

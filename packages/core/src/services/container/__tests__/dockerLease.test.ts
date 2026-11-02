@@ -12,6 +12,7 @@ import { CODEX_LOGIN_VOLUME } from '../containerRunners';
 import { parseContainerSettings } from '../containerSettings';
 import { EGRESS_ENTRY, type EgressRoute } from '../egressSidecar';
 import { RELAY_ENTRY } from '../leaseRelay';
+import { COPY_SIGN_IN } from '../taskWorkspace';
 import type { DockerCall, DockerCli, DockerResult } from '../dockerCli';
 import type { ProbeAsked, ProbeFindings } from '../guaranteeProbe';
 import { KeptWorkError, LeaseGuaranteeError, type LeaseRepo, type LeaseRequest, type LeaseSpec, type OpenLease } from '../../executionLease';
@@ -1223,10 +1224,11 @@ describe('a person\'s own sign-in in a task', () => {
   it('copies it read-only, with no network, and before the runner has a container', async () => {
     const { backend, cli } = backendWith(OWN);
     const order: string[] = [];
-    cli.heard = (line) => { if (line.includes(LOGIN_VOLUME) && line.startsWith('run')) order.push(`copy, entries ${cli.entries.length}`); };
+    const isCopy = (line: string) => line.startsWith('run') && line.includes(LOGIN_VOLUME) && line.includes(COPY_SIGN_IN);
+    cli.heard = (line) => { if (isCopy(line)) order.push(`copy, entries ${cli.entries.length}`); };
     const lease = await opened(backend);
 
-    const copy = cli.lines().find((line) => line.includes(LOGIN_VOLUME) && line.startsWith('run'));
+    const copy = cli.lines().find(isCopy);
     expect(copy).toContain(`${LOGIN_VOLUME}:/login:ro`);
     expect(copy).toContain('--network none');
     expect(order).toEqual(['copy, entries 0']);
@@ -1235,7 +1237,7 @@ describe('a person\'s own sign-in in a task', () => {
 
   it('refuses a task it could not give the sign-in to, naming how to make one', async () => {
     const cli = new RecordingCli();
-    cli.answers.push({ match: new RegExp(`^run .*${LOGIN_VOLUME}`), result: { code: 3, stderr: 'no sign-in' } });
+    cli.answers.push({ match: new RegExp(`^run .*${LOGIN_VOLUME}[^]*cp -a`), result: { code: 3, stderr: 'no sign-in' } });
     const { backend } = backendWith({ ...OWN, cli });
 
     await expect(opened(backend)).rejects.toThrow(/sign in as docs\/containers\.md shows/i);

@@ -1,4 +1,4 @@
-import { containerLimits, parseContainerSettings, type ContainerSettings } from './containerSettings';
+import { containerLimits, helperArgs, parseContainerSettings, type ContainerSettings } from './containerSettings';
 import { CONTAINER_RUNNERS, signInRemedy, type ContainerRunner } from './containerRunners';
 import type { CredentialBroker } from './credentialBroker';
 import type { DockerCli, DockerResult } from './dockerCli';
@@ -143,22 +143,44 @@ function readSetting(raw: unknown): { problems: ContainerProblem[]; settings?: C
   return { problems: [], settings };
 }
 
-async function loginProblems(settings: ContainerSettings, cli: DockerCli, broker: CredentialBroker, runner?: ContainerRunner): Promise<ContainerProblem[]> {
-  if (settings.login.kind === 'own-sign-in') {
-    // A surface knows no task's runner, so any runner's kept sign-in satisfies it; a lease knows its own and asks only for that.
-    const asked = runner ? [runner] : CONTAINER_RUNNERS;
-    for (const { signIn } of asked) {
-      const kept = await cli.call(['volume', 'inspect', signIn.volume], { timeoutMs: ASK_MS });
-      if (kept.code === 0) return [];
-    }
-    return [problem('sign-in-missing', `The containers setting names your own sign-in, and none has been made${runner ? ` for ${runner.id}` : ''}.`, signInRemedy(asked[0].signIn))];
+/**
+ * What a runner's kept sign-in comes to: held, not held, or a problem that a new
+ * sign-in would not solve. The volume first: a `docker run` naming it would make
+ * it. An image that cannot answer is not a missing sign-in, which an `ask` reports
+ * as exit 1. A runner with no `ask` has what it holds judged by its `copy`, at a
+ * task's start.
+ */
+async function signInHeld(settings: ContainerSettings, cli: DockerCli, { binary, signIn: { volume, ask } }: ContainerRunner, imageThere: boolean): Promise<boolean | ContainerProblem> {
+  const kept = await cli.call(['volume', 'inspect', volume], { timeoutMs: ASK_MS });
+  if (kept.code !== 0) return false;
+  if (!ask || !imageThere) return true;
+  const asked = await cli.call([...helperArgs(settings, [`${volume}:/login:ro`]), ...ask], { timeoutMs: ASK_MS });
+  if (asked.code === 0) return true;
+  if (asked.code === 1) return false;
+  return problem('sign-in-unasked', `The image ${settings.image} could not say whether your sign-in is there: ${asked.stderr.trim() || `\`${binary}\` ended with ${asked.code}`}.`, `Build the image with a current \`${binary}\`, as docs/containers.md shows.`);
+}
+
+async function signInProblems(settings: ContainerSettings, cli: DockerCli, imageThere: boolean, runner?: ContainerRunner): Promise<ContainerProblem[]> {
+  const asked = runner ? [runner] : CONTAINER_RUNNERS;
+  const answers: (boolean | ContainerProblem)[] = [];
+  for (const each of asked) {
+    const held = await signInHeld(settings, cli, each, imageThere);
+    if (held === true) return [];
+    answers.push(held);
   }
+  const unasked = answers.find((answer) => typeof answer === 'object');
+  if (typeof unasked === 'object') return [unasked];
+  return [problem('sign-in-missing', `The containers setting names your own sign-in, and none has been made${runner ? ` for ${runner.id}` : ''}.`, signInRemedy(asked[0].signIn))];
+}
+
+async function loginProblems(settings: ContainerSettings, cli: DockerCli, broker: CredentialBroker, imageThere: boolean, runner?: ContainerRunner): Promise<ContainerProblem[]> {
+  if (settings.login.kind === 'own-sign-in') return signInProblems(settings, cli, imageThere, runner);
   try {
     if (runner) broker.issue(settings.login.variables, runner.api);
     else broker.check(settings.login.variables);
     return [];
   } catch (err) {
-    return [problem('login-unavailable', err instanceof Error ? err.message : String(err), 'Set it in the environment Ordewell starts from, or use the "own-sign-in" login.')];
+    return [problem('login-unavailable', err instanceof Error ? err.message : String(err), 'Correct what the login names and set it in the environment Ordewell starts from, or use the "own-sign-in" login.')];
   }
 }
 
@@ -178,9 +200,10 @@ async function runnerInImage(settings: ContainerSettings, cli: DockerCli, runner
  * only a start can know stays with the lease: its repositories' hooks, its
  * runner, and the guarantees a container proves (ADR-0059 L3). A surface and a
  * lease both ask this, so what one reports is what the other refuses. A script
- * is asked nothing of the login it never gets. Nothing here reads a sign-in, or
- * pulls: an image is what a person built. A lease that names its runner starts
- * the image once, with no network, to ask whether the runner is on it.
+ * is asked nothing of the login it never gets. Nothing here reads a sign-in: the
+ * harness says whether it holds one, in a helper (`ASK_SIGN_IN`). Nothing here
+ * pulls either: an image is what a person built. A lease that names its runner
+ * starts the image once, with no network, to ask whether the runner is on it.
  */
 export async function inspectReadiness(raw: unknown, { cli, platform, broker, agent = true, runner, setupCommand }: ReadinessDeps): Promise<Readiness> {
   const { problems: engineProblems, engine } = await inspectEngine({ cli, ...(platform ? { platform } : {}) });
@@ -194,7 +217,7 @@ export async function inspectReadiness(raw: unknown, { cli, platform, broker, ag
   const image = await cli.call(['image', 'inspect', '--format', '{{.Id}}', settings.image], { timeoutMs: ASK_MS });
   if (image.code !== 0) problems.push(problem('image-missing', `The image ${settings.image} is not there.`, 'Ordewell publishes no image: build it as docs/containers.md shows.'));
   if (agent) {
-    problems.push(...await loginProblems(settings, cli, broker, runner));
+    problems.push(...await loginProblems(settings, cli, broker, image.code === 0, runner));
     if (image.code === 0 && runner) problems.push(...await runnerInImage(settings, cli, runner));
   }
   return { problems, engine, ...(problems.length === 0 ? { settings } : {}) };
