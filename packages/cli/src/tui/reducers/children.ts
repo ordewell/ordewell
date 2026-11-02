@@ -4,7 +4,7 @@ import { initialState, questionAbove, rootFrame, viewOnly, type TuiState } from 
 import { say } from '../transcript';
 import { scrollChat, scrollDelta, settlePanes } from './pointer';
 import { answerCheckpoint, openTaskView } from './taskView';
-import { reportError, stale, step, type Action, type Effect, type Step } from './shared';
+import { answerWords, reportError, stale, step, type Action, type Effect, type Step } from './shared';
 
 /**
  * What every plan on screen has in common: the terminal, the daemon's catalogue
@@ -120,7 +120,11 @@ export function onParent(state: TuiState, act: (parent: TuiState) => Step): Step
   if (!state.child || !state.sessionId) return step(state);
   const { parent } = state.child;
   const out = act({ ...parent, ...shared(state) });
-  if (out.state.sessionId !== parent.sessionId) return { state: out.state, effects: [...out.effects, { type: 'closeChild', childId: state.sessionId }] };
+  if (out.state.sessionId !== parent.sessionId) {
+    // Another session is another conversation; a plan going from under the person leaves their words theirs.
+    const left = rootId(out.state) === rootId(state) ? carried(out.state, state.editor.text) : out.state;
+    return { state: left, effects: [...out.effects, { type: 'closeChild', childId: state.sessionId }] };
+  }
   return { state: { ...state, ...shared(out.state), child: { ...state.child, parent: out.state } }, effects: out.effects };
 }
 
@@ -132,7 +136,8 @@ function rawQuestion(tasks: readonly RunTask[], taskId: string): string | undefi
   return undefined;
 }
 
-type Routed = { effects: Effect[]; note?: string };
+/** `words`: what the person typed for an action refused here, which goes back to them with the `note`. */
+type Routed = { effects: Effect[]; note?: string; words?: string };
 
 /**
  * Where one effect of a child's frame goes. A child's id on a root route would
@@ -152,10 +157,11 @@ function routed(frame: TuiState, effect: Effect): Routed {
     case 'sendTaskMessage':
       return { effects: [{ type: 'messageChildTask', rootId: root, childId, taskId: effect.taskId, text: effect.text }] };
     case 'answerTaskCheckpoint': {
-      if (effect.raiseTokens !== undefined) return { effects: [], note: RAISE_ABOVE };
+      const words = answerWords(effect);
+      if (effect.raiseTokens !== undefined) return { effects: [], note: RAISE_ABOVE, words };
       // The daemon compares it exactly, so it is the run's own word, not the row's cleaned one.
       const question = rawQuestion(frame.run.tasks, effect.taskId);
-      if (!question) return { effects: [{ type: 'readChild', rootId: root, childId }], note: QUESTION_MOVED };
+      if (!question) return { effects: [{ type: 'readChild', rootId: root, childId }], note: QUESTION_MOVED, words };
       const { taskId, answer, reason } = effect;
       return { effects: [{ type: 'answerChildCheckpoint', rootId: root, childId, taskId, answer, question, ...(reason ? { reason } : {}) }] };
     }
@@ -181,7 +187,7 @@ export function routeChild(before: TuiState, action: Action, result: Step): Step
   if (!before.child) return result;
   const routes = result.effects.map((effect) => routed(before, effect));
   return {
-    state: action.type === 'key' ? routes.reduce((state, { note }) => (note ? reportError(state, note) : state), result.state) : result.state,
+    state: action.type === 'key' ? routes.reduce((state, { note, words }) => (note ? refused(state, note, words) : state), result.state) : result.state,
     effects: routes.flatMap((route) => route.effects),
   };
 }
@@ -196,8 +202,9 @@ function answerAbove(state: TuiState, answer: 'approve' | 'reject', reason: stri
   if (!state.child || !asked) return step(state);
   const above = { ...state.child.parent, ...shared(state) };
   const asking: Action = { type: 'key', key: { name: 'enter' } };
+  const { effects } = answerCheckpoint(above, above.sessionId ?? '', asked.task.id, answer, reason, raiseTokens);
   // Routed as the plan that holds the task, and a refusal said on the plan the person is reading.
-  return routeChild(above, asking, { ...answerCheckpoint(above, above.sessionId ?? '', asked.task.id, answer, reason, raiseTokens), state });
+  return routeChild(above, asking, { effects: effects.map((effect) => (effect.type === 'answerTaskCheckpoint' ? { ...effect, below: true } : effect)), state });
 }
 
 const emptied = (state: TuiState): TuiState => ({ ...state, editor: { ...state.editor, text: '', cursor: 0 } });
@@ -206,14 +213,10 @@ const emptied = (state: TuiState): TuiState => ({ ...state, editor: { ...state.e
 function answerKey(state: TuiState, key: Key): Step | null {
   if (state.taskView || !questionAbove(state)) return null;
   const draft = state.editor.text.trim();
-  if (key.name === 'ctrl-g') {
-    const answered = answerAbove(state, 'reject', draft);
-    return draft ? { ...answered, state: emptied(answered.state) } : answered;
-  }
+  if (key.name === 'ctrl-g') return answerAbove(draft ? emptied(state) : state, 'reject', draft);
   if (key.name !== 'ctrl-y') return null;
   const raiseTokens = state.child?.parent.child ? undefined : parseCount(draft, 1) ?? undefined;
-  const answered = answerAbove(state, 'approve', '', raiseTokens);
-  return raiseTokens === undefined ? answered : { ...answered, state: emptied(answered.state) };
+  return answerAbove(raiseTokens === undefined ? state : emptied(state), 'approve', '', raiseTokens);
 }
 
 const PLAN_LETTERS = new Set(['?', 'S', 'l']);
@@ -266,9 +269,16 @@ function givenBack(state: TuiState, text: string | undefined): TuiState {
   return { ...state, editor: { ...state.editor, text: draft, cursor: draft.length } };
 }
 
+/** Words the person did not leave behind, on a plan they were moved to. Where no composer shows them, they are told where they are. */
+function carried(state: TuiState, text: string): TuiState {
+  const back = givenBack(state, text);
+  return text && viewOnly(back) ? reportError(back, WORDS_KEPT) : back;
+}
+
 /** A refusal, and the words it sends back. Where no composer shows them, the person is told where they are. */
 function refused(state: TuiState, message: string, text: string | undefined): TuiState {
-  return reportError(givenBack(state, text), text && viewOnly(state) ? `${message} ${WORDS_KEPT}` : message);
+  const back = givenBack(state, text);
+  return reportError(back, back.editor.text && viewOnly(back) ? `${message} ${WORDS_KEPT}` : message);
 }
 
 function endedRow(state: TuiState): TuiState {
@@ -281,10 +291,10 @@ export function childLost(state: TuiState): TuiState {
   return say({ ...state, child: { ...state.child, reading: false, lost: true } }, 'system', 'Lost the connection to this plan; reconnecting.');
 }
 
-/** Leaves a plan the daemon no longer serves, saying so on the plan it lands on. */
+/** Leaves a plan the daemon no longer serves, saying so on the plan it lands on. A draft it held was not given up: `leaveChild` carries only an ended plan's. */
 export function childGone(state: TuiState, message: string, text?: string): Step {
   const left = leaveChild(state);
-  return { ...left, state: refused(left.state, message, text) };
+  return { ...left, state: refused(viewOnly(state) ? left.state : givenBack(left.state, state.editor.text), message, text) };
 }
 
 /**
@@ -294,11 +304,10 @@ export function childGone(state: TuiState, message: string, text?: string): Step
  */
 export function childFailed(state: TuiState, action: { sessionId: string; message: string; code?: DaemonErrorCode; text?: string }): Step {
   const { sessionId, message, code, text } = action;
-  if (stale(state, sessionId)) {
-    const reread: Effect[] = code === 'checkpoint_not_waiting' && heldAbove(state, sessionId) ? [{ type: 'readChild', rootId: rootId(state), childId: sessionId }] : [];
-    return step(refused(state, message, text), reread);
-  }
+  // No child route reads a root, and its own stream says what moved on it.
+  const reread = (childId: string): Effect[] => (code === 'checkpoint_not_waiting' && childId !== rootId(state) ? [{ type: 'readChild', rootId: rootId(state), childId }] : []);
+  if (stale(state, sessionId)) return step(refused(state, message, text), heldAbove(state, sessionId) ? reread(sessionId) : []);
   if (code === 'child_not_found') return childGone(state, message, text);
-  if (code === 'checkpoint_not_waiting' && state.sessionId) return step(refused(state, message, text), [{ type: 'readChild', rootId: rootId(state), childId: state.sessionId }]);
+  if (code === 'checkpoint_not_waiting') return step(refused(state, message, text), reread(sessionId));
   return step(refused(code === 'child_view_only' ? endedRow(state) : state, message, text));
 }

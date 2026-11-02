@@ -38,6 +38,8 @@ export interface ContainerRunner {
   binary: string;
   /** The model API its login is for: a key for any other stays on this host. */
   api: ModelApi;
+  /** By provider id, the APIs it picks from a model's id and no gateway carries for it, so no broker login reaches them. */
+  unbrokered?: Readonly<Record<string, ModelApi>>;
   signIn: ContainerSignIn;
   /** Its launch's arguments, for what it cannot be told by a variable. */
   args(launch: RunnerLaunch, placed: PlacedRunner): readonly string[];
@@ -98,6 +100,7 @@ export const CONTAINER_RUNNERS: readonly ContainerRunner[] = [
     binary: 'opencode',
     // Its own login is for whichever provider a person chose. An Anthropic key stops at the lease's gateway, an OpenAI key is Codex's and stays on this host, and any other is handed over (ADR-0059 L7).
     api: ANTHROPIC_API,
+    unbrokered: { openai: OPENAI_API },
     // The copy is the runner's data directory, which `XDG_DATA_HOME` names the parent of.
     signIn: { volume: OPENCODE_LOGIN_VOLUME, hosts: OPENCODE_HOSTS, copy: ['sh', '-c', COPY_OPENCODE_SIGN_IN], path: OPENCODE_SIGN_IN_COPY, env: { XDG_DATA_HOME: posix.join(TASK_ROOT, 'login') } },
     args: (launch) => launch.args,
@@ -139,6 +142,18 @@ const providerOf = (model: string): string | null => {
   const slash = model.indexOf('/');
   return slash > 0 && slash < model.length - 1 ? model.slice(0, slash) : null;
 };
+
+/**
+ * Why a broker login cannot serve this runner on this model, if it cannot. Such
+ * a task's key stays on this host (ADR-0059 L7), so it would start with no way
+ * to its model, and no other key in the login stands in for that one.
+ */
+export function brokerRefusal({ id, unbrokered }: ContainerRunner, model: string | undefined): string | null {
+  const provider = model ? providerOf(model) : null;
+  const api = provider ? unbrokered?.[provider] : undefined;
+  if (!api) return null;
+  return `${id} reaches ${model} through ${api.name}, and a broker login keeps ${api.keyVariable} from it, since no gateway carries that traffic here: assign the task another model or runner, or use the "own-sign-in" login.`;
+}
 
 /** What a model's traffic reaches directly, which a gateway or an allowlist may make unnecessary. */
 export function modelHosts(model: string | undefined): readonly string[] {

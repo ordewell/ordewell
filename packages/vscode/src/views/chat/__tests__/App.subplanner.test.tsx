@@ -121,6 +121,68 @@ describe('subplanner navigation', () => {
       expect(screen.getByLabelText('Your answer')).toHaveValue('Floor.');
       expect(screen.getByRole('status')).toHaveTextContent('The budget is spent.');
     });
+    describe('when the person leaves before the result', () => {
+      const nested = entry({ sessionId: 'nested', parent: 'child', title: 'Nested plan', depth: 2 });
+      const answerThenLeave = () => {
+        render(<App />);
+        post({ type: 'childView', view: asking(entry(), 'Which rounding?', 'delegated') });
+        fireEvent.change(screen.getByLabelText('Your answer'), { target: { value: 'Floor.' } });
+        fireEvent.click(screen.getByRole('button', { name: /Approve/ }));
+        post({ type: 'childView', view: { ...asking(nested), plan: null, run: noRun } as ChildPlanView });
+      };
+      const refused = (error = 'The child plan is no longer open.') => post({ type: 'childControlResult', childId: 'child', taskId: 'n', error });
+
+      it('tells of a refusal by name, and hands back the words on return', () => {
+        answerThenLeave();
+        refused();
+        expect(screen.getByRole('status')).toHaveTextContent('Not answered in Delegate: The child plan is no longer open.');
+        post({ type: 'childView', view: asking(entry(), 'Which rounding?', 'delegated') });
+        expect(screen.getByLabelText('Your answer')).toHaveValue('Floor.');
+        expect(screen.getByRole('button', { name: /Approve/ })).toBeEnabled();
+      });
+      it('tells of a refusal at the root, when the person went there', () => {
+        render(<App />);
+        post({ type: 'childView', view: asking(entry(), 'Which rounding?', 'delegated') });
+        fireEvent.click(screen.getByRole('button', { name: /Approve/ }));
+        fireEvent.click(screen.getByRole('button', { name: 'Back to parent' }));
+        refused();
+        expect(screen.getByRole('status')).toHaveTextContent('Not answered in Delegate');
+      });
+      it('holds the question shut for a person back while the answer is still out', () => {
+        answerThenLeave();
+        post({ type: 'childView', view: asking(entry(), 'Which rounding?', 'delegated') });
+        expect(screen.getByRole('button', { name: /Approve/ })).toBeDisabled();
+        expect(screen.getByLabelText('Your answer')).toHaveValue('Floor.');
+        refused('The budget is spent.');
+        expect(screen.getByRole('button', { name: /Approve/ })).toBeEnabled();
+        expect(screen.getByLabelText('Your answer')).toHaveValue('Floor.');
+      });
+      it('reopens a refused rejection with its reason', () => {
+        render(<App />);
+        post({ type: 'childView', view: asking(entry()) });
+        fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
+        fireEvent.change(screen.getByPlaceholderText(/Why are you rejecting/), { target: { value: 'Use floor.' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Send Rejection' }));
+        post({ type: 'childView', view: { ...asking(nested), plan: null, run: noRun } as ChildPlanView });
+        refused();
+        post({ type: 'childView', view: asking(entry()) });
+        expect(screen.getByPlaceholderText(/Why are you rejecting/)).toHaveValue('Use floor.');
+      });
+      it('keeps nothing of an answer that landed', () => {
+        answerThenLeave();
+        post({ type: 'childControlResult', childId: 'child', taskId: 'n' });
+        expect(screen.queryByRole('status')).toBeNull();
+        post({ type: 'childView', view: asking(entry(), 'Which rounding?', 'delegated') });
+        expect(screen.getByLabelText('Your answer')).toHaveValue('');
+        expect(screen.getByRole('button', { name: /Approve/ })).toBeEnabled();
+      });
+      it('does not hand a refused answer to the question that replaced it', () => {
+        answerThenLeave();
+        refused();
+        post({ type: 'childView', view: asking(entry(), 'Which currency?', 'delegated') });
+        expect(screen.getByLabelText('Your answer')).toHaveValue('');
+      });
+    });
     it('does not carry an answer over to the question that replaces it', () => {
       render(<App />);
       post({ type: 'childView', view: asking(entry(), 'Which rounding?', 'delegated') });

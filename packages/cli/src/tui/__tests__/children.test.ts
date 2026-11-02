@@ -254,22 +254,48 @@ describe('a subplanner\'s question', () => {
   it('enter replies on the root\'s route at depth one: the words are the answer', () => {
     const { state, effects } = reduce(typed(asking(), 'yes, go on'), key('enter'));
 
-    expect(effects).toEqual([{ type: 'answerTaskCheckpoint', sessionId: 'root', taskId: 'd', answer: 'approve', reason: 'yes, go on' }]);
+    expect(effects).toEqual([{ type: 'answerTaskCheckpoint', sessionId: 'root', taskId: 'd', answer: 'approve', reason: 'yes, go on', below: true }]);
     expect(state.editor.text).toBe('');
   });
 
   it('ctrl-y approves and ctrl-g rejects with the draft', () => {
-    expect(effectsOf(asking(), key('ctrl-y'))).toEqual([{ type: 'answerTaskCheckpoint', sessionId: 'root', taskId: 'd', answer: 'approve' }]);
+    expect(effectsOf(asking(), key('ctrl-y'))).toEqual([{ type: 'answerTaskCheckpoint', sessionId: 'root', taskId: 'd', answer: 'approve', below: true }]);
     expect(effectsOf(typed(asking(), 'not that table'), key('ctrl-g'))).toEqual([
-      { type: 'answerTaskCheckpoint', sessionId: 'root', taskId: 'd', answer: 'reject', reason: 'not that table' },
+      { type: 'answerTaskCheckpoint', sessionId: 'root', taskId: 'd', answer: 'reject', reason: 'not that table', below: true },
     ]);
   });
 
   it('ctrl-y with a count raises the budget at depth one, where the root holds it', () => {
     const { state, effects } = reduce(typed(asking(), '5000'), key('ctrl-y'));
 
-    expect(effects).toEqual([{ type: 'answerTaskCheckpoint', sessionId: 'root', taskId: 'd', answer: 'approve', raiseTokens: 5000 }]);
+    expect(effects).toEqual([{ type: 'answerTaskCheckpoint', sessionId: 'root', taskId: 'd', answer: 'approve', raiseTokens: 5000, below: true }]);
     expect(state.editor.text).toBe('');
+  });
+
+  describe('refused on the root\'s route', () => {
+    const refusal = { type: 'childFailed', sessionId: 'root', code: 'checkpoint_not_waiting', message: 'No longer waiting.', text: 'yes, go on' } as const;
+
+    it('gives the words back to the composer they left, and says so there', () => {
+      const answered = step(typed(asking(), 'yes, go on'), key('enter'));
+
+      const { state, effects } = reduce(answered, refusal);
+
+      expect(state.sessionId).toBe('c1');
+      expect(state.editor.text).toBe('yes, go on');
+      expect(said(state)).toMatch(/No longer waiting/);
+      expect(effects).toEqual([]);
+    });
+
+    it('finds a person who has gone back to the root, whose stream already says what moved', () => {
+      const answered = step(typed(asking(), 'yes, go on'), key('enter'));
+
+      const { state, effects } = reduce(step(answered, key('escape')), refusal);
+
+      expect(state.sessionId).toBe('root');
+      expect(state.editor.text).toBe('yes, go on');
+      expect(said(state)).toMatch(/No longer waiting/);
+      expect(effects).toEqual([]);
+    });
   });
 
   describe('two plans down', () => {
@@ -304,12 +330,22 @@ describe('a subplanner\'s question', () => {
       expect(effects).toEqual([{ type: 'readChild', rootId: 'root', childId: 'c1' }]);
     });
 
-    it('says a question that moved on where the person is looking, not on the plan held above', () => {
+    const movedOn = (): TuiState => {
       const held = deep();
       const parent = held.child!.parent;
-      const moved: TuiState = { ...held, child: { ...held.child!, parent: { ...parent, run: { ...parent.run, tasks: parent.run.tasks.map((t) => ({ ...t, checkpoint: undefined })) } } } };
+      return { ...held, child: { ...held.child!, parent: { ...parent, run: { ...parent.run, tasks: parent.run.tasks.map((t) => ({ ...t, checkpoint: undefined })) } } } };
+    };
 
-      const { state, effects } = reduce(moved, key('ctrl-y'));
+    it.each(['enter', 'ctrl-g'] as const)('keeps the words of an answer %s sent to a question that moved on', (name) => {
+      const { state, effects } = reduce(typed(movedOn(), 'carry on'), key(name));
+
+      expect(state.editor.text).toBe('carry on');
+      expect(said(state)).toMatch(/moved on/);
+      expect(effects).toEqual([{ type: 'readChild', rootId: 'root', childId: 'c1' }]);
+    });
+
+    it('says a question that moved on where the person is looking, not on the plan held above', () => {
+      const { state, effects } = reduce(movedOn(), key('ctrl-y'));
 
       expect(said(state)).toMatch(/moved on/);
       expect(said(state.child!.parent)).not.toMatch(/moved on/);
@@ -347,6 +383,24 @@ describe('a subplanner\'s question', () => {
 
     expect(effects).toEqual([{ type: 'readChild', rootId: 'root', childId: 'c1' }]);
     expect(after.taskView?.notice).toMatch(/moved on/);
+  });
+
+  it('a question gone from a child\'s task view keeps the words the answer carried', () => {
+    const inTask = step(step(step(inChild(), key('tab')), key('down')), key('enter'));
+    const state = asked(inTask, 'c1', 'r', QUESTION);
+    const moved = { ...state, run: { ...state.run, tasks: state.run.tasks.map((t) => ({ ...t, checkpoint: undefined })) } } as TuiState;
+
+    expect(step(typed(moved, 'the old one'), key('enter')).editor.text).toBe('the old one');
+  });
+
+  it('a raise refused in a child\'s task view stays typed, for the plan above to give', () => {
+    const state = step(step(asked(inChild(), 'c1', 'n', QUESTION), key('tab')), key('char', 'l'));
+
+    const { state: after, effects } = reduce(typed(state, '5000'), key('ctrl-y'));
+
+    expect(effects).toEqual([]);
+    expect(after.editor.text).toBe('5000');
+    expect(after.taskView?.notice).toMatch(/raise/);
   });
 
   it('a retried-away child does not offer its task\'s question', () => {
@@ -497,6 +551,78 @@ describe('what the daemon refuses', () => {
 
     expect(state.sessionId).toBe('root');
     expect(state.editor.text).toBe('hello');
+  });
+
+  it('a gone child\'s unsent draft goes to the plan the person lands on', () => {
+    const { state, effects } = reduce(typed(inChild(), 'half a thought'), { type: 'childGone', sessionId: 'c1', message: 'That plan is gone.' });
+
+    expect(state.sessionId).toBe('root');
+    expect(state.editor.text).toBe('half a thought');
+    expect(said(state)).toMatch(/That plan is gone/);
+    expect(effects).toEqual([{ type: 'closeChild', childId: 'c1' }]);
+  });
+
+  it('that draft goes ahead of the one waiting there, and behind any refused words', () => {
+    const child = entry({ sessionId: 'c1' });
+    const opened = step(typed(tree(atRoot(), child), 'root draft'), key('enter'));
+
+    const state = step(typed(opened, 'child draft'), { type: 'childFailed', sessionId: 'c1', code: 'child_not_found', message: 'No such plan.', text: 'refused words' });
+
+    expect(state.editor.text).toBe('refused words\nchild draft\nroot draft');
+  });
+
+  it('an ended child\'s draft goes up once, not twice', () => {
+    const ended = step(typed(inChild(), 'half a thought'), { type: 'childFailed', sessionId: 'c1', code: 'child_view_only', message: 'This plan has ended.' });
+
+    expect(step(ended, { type: 'childGone', sessionId: 'c1', message: 'That plan is gone.' }).editor.text).toBe('half a thought');
+  });
+
+  describe('when the plan above the viewed one goes', () => {
+    const grandchild = entry({ sessionId: 'c2', parent: 'c1', taskId: 'n', title: 'Nested', depth: 2 });
+    const deep = (): TuiState => {
+      const opened = step(step(inChild(grandchild), key('tab')), key('enter'));
+      return typed(step(opened, { type: 'childOpened', sessionId: 'c2', view: view(grandchild, { plan: plan({ id: 'x', title: 'Leaf' }) }) }), 'half a thought');
+    };
+
+    it('the viewed plan\'s draft goes with the person', () => {
+      const state = step(deep(), { type: 'childGone', sessionId: 'c1', message: 'That plan is gone.' });
+
+      expect(state.sessionId).toBe('root');
+      expect(state.editor.text).toBe('half a thought');
+    });
+
+    describe('onto a plan that has ended', () => {
+      const third = entry({ sessionId: 'c3', parent: 'c2', taskId: 'x', title: 'Third', depth: 3 });
+      const belowEnded = (): TuiState => {
+        const ended = step(step(tree(inChild(grandchild), entry({ sessionId: 'c1', state: 'ended' }), grandchild, third), key('tab')), key('enter'));
+        return step(ended, { type: 'childOpened', sessionId: 'c2', view: view(grandchild, { plan: plan({ id: 'x', title: 'Leaf', delegated: true }) }) });
+      };
+
+      it('says where the words wait, since no composer shows them', () => {
+        const state = step(typed(belowEnded(), 'half a thought'), { type: 'childGone', sessionId: 'c2', message: 'That plan is gone.' });
+
+        expect(state.sessionId).toBe('c1');
+        expect(state.editor.text).toBe('half a thought');
+        expect(said(state)).toMatch(/That plan is gone.*Your words are kept/);
+      });
+
+      it('says so too when the plan that went was above the viewed one', () => {
+        const opened = step(step(belowEnded(), key('tab')), key('enter'));
+
+        const state = step(typed(opened, 'half a thought'), { type: 'childGone', sessionId: 'c2', message: 'That plan is gone.' });
+
+        expect(state.sessionId).toBe('c1');
+        expect(state.editor.text).toBe('half a thought');
+        expect(said(state)).toMatch(/Your words are kept/);
+      });
+    });
+
+    it('another session is another conversation: the draft does not follow', () => {
+      const state = step(deep(), { type: 'sessionLoaded', sessionId: 'elsewhere', goal: 'Another' });
+
+      expect(state.sessionId).toBe('elsewhere');
+      expect(state.editor.text).toBe('');
+    });
   });
 
   it('a person who has left the plan gets the words back where they are now', () => {

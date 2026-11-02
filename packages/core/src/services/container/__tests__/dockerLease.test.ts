@@ -225,9 +225,48 @@ describe('what runs in a container (ADR-0059 L5)', () => {
       expect(await allowFor(['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY'], 'anthropic/claude-sonnet-4')).not.toContain('api.anthropic.com');
     });
 
-    it('opens no host for a key the broker keeps from this runner', async () => {
-      expect(await allowFor(['ANTHROPIC_API_KEY', 'OPENAI_API_KEY'], 'openai/gpt-5')).not.toContain('api.openai.com');
-      expect(await allowFor(['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY'], 'openai/gpt-5')).not.toContain('api.openai.com');
+    it.each([
+      ['beside the gated key', ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY']],
+      ['beside a handed key too', ['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY']],
+      ['or with no key of its own named', ['ANTHROPIC_API_KEY']],
+      ['or with only a handed key', ['OPENROUTER_API_KEY']],
+    ])('refuses an OpenAI model under OpenCode before a worktree, %s', async (_how, variables) => {
+      const { backend, local, cli } = backendWith({ settings: { image: 'ordewell-task', login: { kind: 'broker', variables }, allow: [] }, env: { ANTHROPIC_API_KEY: 'sk-ant-api03-test', OPENAI_API_KEY: 'sk-proj-test', OPENROUTER_API_KEY: 'sk-or-test' } });
+      const spec = { ...changeSpec, task: createTask({ id: 'a', order: 1, title: 'A', prompt: 'do a', assignedModel: { modelId: 'openai/gpt-5', modelLabel: 'GPT-5', availableVariants: [] } }) };
+
+      const start = opened(backend, { ...taskRequest, runner: 'opencode' }, spec);
+
+      await expect(start).rejects.toThrow(/cannot start in one.*openai\/gpt-5.*OPENAI_API_KEY.*"own-sign-in"/);
+      expect(local.opened).toEqual([]);
+      expect(cli.sidecars).toEqual([]);
+    });
+
+    it('leaves an OpenAI model to a person signed in to OpenCode, and opens its API', async () => {
+      const { backend, cli } = backendWith({ settings: { image: 'ordewell-task', login: { kind: 'own-sign-in' }, allow: [] } });
+      const spec = { ...changeSpec, task: createTask({ id: 'a', order: 1, title: 'A', prompt: 'do a', assignedModel: { modelId: 'openai/gpt-5', modelLabel: 'GPT-5', availableVariants: [] } }) };
+
+      const lease = await opened(backend, { ...taskRequest, runner: 'opencode' }, spec);
+
+      expect(JSON.parse(cli.sidecars[0].args.find((arg) => arg.startsWith('ORDEWELL_EGRESS='))!.slice('ORDEWELL_EGRESS='.length)).allow).toContain('api.openai.com');
+      lease.lease.release('done');
+    });
+
+    it('leaves OpenAI models to Codex, whose gateway carries that key', async () => {
+      const { backend } = backendWith({ settings: { image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY'] }, allow: [] }, env: { ANTHROPIC_API_KEY: 'sk-ant-api03-test', OPENAI_API_KEY: 'sk-proj-test' } });
+      const spec = { ...changeSpec, task: createTask({ id: 'a', order: 1, title: 'A', prompt: 'do a', assignedModel: { modelId: 'openai/gpt-5', modelLabel: 'GPT-5', availableVariants: [] } }) };
+
+      const lease = await opened(backend, { ...taskRequest, runner: 'codex' }, spec);
+
+      lease.lease.release('done');
+    });
+
+    it("leaves a model's id to a runner that does not read a provider from it", async () => {
+      const { backend } = backendWith({ settings: { image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL'] }, allow: [] }, env: { ANTHROPIC_API_KEY: 'sk-ant-api03-test', ANTHROPIC_BASE_URL: 'https://proxy.example' } });
+      const spec = { ...changeSpec, task: createTask({ id: 'a', order: 1, title: 'A', prompt: 'do a', assignedModel: { modelId: 'openai/gpt-5', modelLabel: 'GPT-5', availableVariants: [] } }) };
+
+      const lease = await opened(backend, taskRequest, spec);
+
+      lease.lease.release('done');
     });
 
     it('opens no provider when nothing was handed for it to take', async () => {

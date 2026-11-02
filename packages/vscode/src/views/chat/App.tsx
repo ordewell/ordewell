@@ -29,7 +29,7 @@ import { OpenPatchContext } from './openPatch';
 import { useFollowOutput } from './followOutput';
 import { INBOX_OFF_NOTE, useInboxPrefs } from './inboxView';
 import { useEscalationAnswers } from './components/escalationAnswers';
-import { useChildDrafts } from './childDrafts';
+import { useChildAnswers, useChildDrafts } from './childDrafts';
 import { isBuiltinSlashCommand, slashHelp } from '../../commands/slashCommands';
 import type { EscalationAnswer, HostToWebview, SettingsChange, WebviewToHost } from '../../shared/protocol';
 import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks } from '../../shared/conversationPatch';
@@ -83,6 +83,7 @@ export default function App() {
   const [childChoice, setChildChoice] = useState<string | null>(null);
   const [childNotice, setChildNotice] = useState<ChildNotice>(NO_CHILD_NOTICE);
   const childComposer = useChildDrafts((message) => vscode.postMessage(message), setChildNotice);
+  const childAnswers = useChildAnswers((message) => vscode.postMessage(message), setChildNotice);
   // A childView on its way when the person left, of any child, is one the host
   // has since closed, so none is drawn until they open one again.
   const childLeft = useRef(false);
@@ -980,13 +981,13 @@ export default function App() {
       conversation={childConversation}
       notice={childNotice}
       composer={childComposer(childView.child)}
+      answers={childAnswers(childView.child)}
       rootQuestion={checkpoint?.taskTitle}
       post={(message) => vscode.postMessage(message)}
       onOpen={openChild}
       // The depth, not the root id: the tree may not have been told yet.
       onBack={() => { if (childView.child.depth <= 1) leaveChild(); else openChild(childView.child.parent); }}
       onRootQuestion={() => { leaveChild(); setDockExpanded(true); }}
-      onNotice={setChildNotice}
     />}
     {/* Hidden, not unmounted: the composer's draft and the scroll position are the root's own. */}
     <div className="chat-container" tabIndex={-1} hidden={inChild}>

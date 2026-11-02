@@ -30,6 +30,8 @@ function harness(over: Record<string, unknown> = {}) {
     messageChild: vi.fn().mockResolvedValue({ status: 'queued' }),
     messageChildTask: vi.fn().mockResolvedValue({ status: 'queued' }),
     answerChildCheckpoint: vi.fn().mockResolvedValue({ ok: true }),
+    approveTaskCheckpoint: vi.fn().mockResolvedValue({ ok: true }),
+    rejectTaskCheckpoint: vi.fn().mockResolvedValue({ ok: true }),
     getChildTaskLogAttempts: vi.fn().mockResolvedValue({ attempts: [2], position: 3 }),
     getChildTaskLog: vi.fn().mockResolvedValue({ attempt: 2, events: [] }),
     getTaskLogAttempts: vi.fn().mockResolvedValue({ attempts: [] }),
@@ -44,6 +46,37 @@ const of = (actions: Action[], type: Action['type']) => actions.filter((a) => a.
 const open = (deps: EffectDeps) => runEffect({ type: 'followChild', rootId: ROOT, childId: CHILD }, deps);
 const REFUSED = new DaemonError('This plan has ended.', 409, 'child_view_only');
 const UNLISTED = new DaemonError('No such child.', 404, 'child_not_found');
+
+describe('a checkpoint answered from a plan below the one that holds it', () => {
+  const NOT_WAITING = new DaemonError('No longer waiting.', 409, 'checkpoint_not_waiting');
+
+  it('comes back as that plan\'s refusal, with the words it carried', async () => {
+    const h = harness({ rejectTaskCheckpoint: vi.fn().mockRejectedValue(NOT_WAITING) });
+
+    await runEffect({ type: 'answerTaskCheckpoint', sessionId: ROOT, taskId: 'd', answer: 'reject', reason: 'not yet', below: true }, h.deps);
+
+    expect(of(h.actions, 'childFailed')).toEqual([{ type: 'childFailed', sessionId: ROOT, code: 'checkpoint_not_waiting', message: 'No longer waiting.', text: 'not yet' }]);
+    expect(of(h.actions, 'failed')).toEqual([]);
+  });
+
+  it('gives a raise back as the number that was typed', async () => {
+    const h = harness({ approveTaskCheckpoint: vi.fn().mockRejectedValue(NOT_WAITING) });
+
+    await runEffect({ type: 'answerTaskCheckpoint', sessionId: ROOT, taskId: 'd', answer: 'approve', raiseTokens: 5000, below: true }, h.deps);
+
+    expect(h.api.approveTaskCheckpoint).toHaveBeenCalledWith(ROOT, 'd', { raiseTokens: 5000 });
+    expect(of(h.actions, 'childFailed')).toEqual([{ type: 'childFailed', sessionId: ROOT, code: 'checkpoint_not_waiting', message: 'No longer waiting.', text: '5000' }]);
+  });
+
+  it('leaves the root\'s own answer on the root\'s failure path', async () => {
+    const h = harness({ rejectTaskCheckpoint: vi.fn().mockRejectedValue(NOT_WAITING) });
+
+    await runEffect({ type: 'answerTaskCheckpoint', sessionId: ROOT, taskId: 'd', answer: 'reject', reason: 'not yet' }, h.deps);
+
+    expect(of(h.actions, 'childFailed')).toEqual([]);
+    expect(of(h.actions, 'failed')).toHaveLength(1);
+  });
+});
 
 describe('following a child plan', () => {
   beforeEach(() => { vi.useFakeTimers(); });
