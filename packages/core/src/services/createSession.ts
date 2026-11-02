@@ -1954,6 +1954,7 @@ export class Session {
     const here = this.budget?.path ?? ROOT_NODE;
     return new Subtree({
       here,
+      tasks: () => this.store.planTasks,
       nodes: () => tree.below(here),
       plan: ({ sessionId }) => loadChildSession({ baseDir, rootSessionId, sessionId })?.plan.tasks,
       logs: ({ sessionId }) => {
