@@ -241,6 +241,24 @@ describe('words a person typed after an answer went', () => {
     expect(text(notSent())).toContain('700000');
   });
 
+  it('lists words retyped to match an older refusal a later answer has replaced', () => {
+    asked();
+    type('foo');
+    const first = approve();
+    refused(first, 'First refusal.');
+    type('bar');
+    const second = approve();
+    ask(null);
+    ask();
+    type('foo');
+    refused(second, 'Second refusal.');
+    ask(null);
+
+    expect(text(notDelivered())).toContain('bar');
+    expect(text(notDelivered())).toContain('Second refusal.');
+    expect(text(notSent())).toContain('foo');
+  });
+
   it('claims nothing unsent for words retyped and given', () => {
     deliveredThenAskedAgain('Half up.');
     type('Half up.');
