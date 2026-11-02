@@ -246,6 +246,7 @@ describe('containerStatus', () => {
     expect(text.indexOf('Not proven')).toBeLessThan(text.indexOf('Assumed'));
     expect(status.assumptions.join(' ')).toMatch(/share one kernel/);
     expect(status.assumptions.join(' ')).toMatch(/can read your sign-in/);
+    expect(status.assumptions.join(' ')).toMatch(/Codex.*no refresh token.*sign in again/);
   });
 
   it('owns up to a key handed over by name, which a runner can read, only under a broker login', async () => {

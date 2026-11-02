@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CredentialBroker, parseLogin } from '../credentialBroker';
+import { ANTHROPIC_API, OPENAI_API } from '../modelGateway';
 
 const key = 'sk-ant-api03-not-a-real-key';
 
@@ -7,13 +8,13 @@ describe('the credential broker (ADR-0059 L7)', () => {
   it('keeps an API key back for the gateway, so no runner holds it', () => {
     const broker = new CredentialBroker({ ANTHROPIC_API_KEY: key });
 
-    expect(broker.issue(['ANTHROPIC_API_KEY'])).toEqual({ gated: { key, upstream: 'https://api.anthropic.com' }, handed: {} });
+    expect(broker.issue(['ANTHROPIC_API_KEY'])).toEqual({ gated: { key, upstream: 'https://api.anthropic.com', api: ANTHROPIC_API }, handed: {} });
   });
 
   it('sends model traffic where the login says, once it names a base URL', () => {
     const broker = new CredentialBroker({ ANTHROPIC_API_KEY: key, ANTHROPIC_BASE_URL: 'https://llm.example.com/anthropic' });
 
-    expect(broker.issue(['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL'])).toEqual({ gated: { key, upstream: 'https://llm.example.com/anthropic' }, handed: {} });
+    expect(broker.issue(['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL'])).toEqual({ gated: { key, upstream: 'https://llm.example.com/anthropic', api: ANTHROPIC_API }, handed: {} });
   });
 
   it('ignores a base URL the login does not name: a person chooses what a lease takes', () => {
@@ -44,6 +45,59 @@ describe('the credential broker (ADR-0059 L7)', () => {
     ['a credentials file pasted into a variable', 'ANYTHING', '{"claudeAiOauth":{"accessToken":"x"}}'],
   ])('never holds a Claude subscription token: %s', (_case, variable, value) => {
     expect(() => new CredentialBroker({ [variable]: value }).issue([variable])).toThrow(/subscription/);
+  });
+});
+
+describe('a login read for one runner', () => {
+  const BOTH = { ANTHROPIC_API_KEY: 'sk-ant-api03-a', OPENAI_API_KEY: 'sk-proj-b' };
+
+  it("gates that runner's key, with its API", () => {
+    const { gated, handed } = new CredentialBroker(BOTH).issue(['OPENAI_API_KEY'], OPENAI_API);
+
+    expect(gated).toEqual({ key: 'sk-proj-b', upstream: 'https://api.openai.com/v1', api: OPENAI_API });
+    expect(handed).toEqual({});
+  });
+
+  it("never hands a runner another runner's key in the clear", () => {
+    const issued = new CredentialBroker(BOTH).issue(['ANTHROPIC_API_KEY', 'OPENAI_API_KEY'], OPENAI_API);
+
+    expect(issued.gated?.key).toBe('sk-proj-b');
+    expect(JSON.stringify(issued.handed)).not.toContain('sk-ant-api03-a');
+  });
+
+  it("does not take a runner down over another runner's variable", () => {
+    const issued = new CredentialBroker({ OPENAI_API_KEY: 'sk-proj-b' }).issue(['ANTHROPIC_API_KEY', 'OPENAI_API_KEY'], OPENAI_API);
+
+    expect(issued.gated?.key).toBe('sk-proj-b');
+  });
+
+  it("does not send a runner where another runner's base URL says", () => {
+    const issued = new CredentialBroker({ ...BOTH, ANTHROPIC_BASE_URL: 'https://proxy.example' }).issue(['ANTHROPIC_BASE_URL', 'OPENAI_API_KEY'], OPENAI_API);
+
+    expect(issued).toEqual({ gated: { key: 'sk-proj-b', upstream: 'https://api.openai.com/v1', api: OPENAI_API }, handed: {} });
+  });
+
+  it("refuses a login that holds only another runner's key, and names what is missing", () => {
+    expect(() => new CredentialBroker(BOTH).issue(['ANTHROPIC_API_KEY'], OPENAI_API)).toThrow(/OPENAI_API_KEY/);
+    expect(() => new CredentialBroker(BOTH).issue(['OPENAI_API_KEY'], ANTHROPIC_API)).toThrow(/ANTHROPIC_API_KEY/);
+  });
+
+  it('refuses cloud credentials for a runner that reaches its model through a key alone', () => {
+    const source = { AWS_SECRET_ACCESS_KEY: 'aws' };
+
+    expect(() => new CredentialBroker(source).issue(['AWS_SECRET_ACCESS_KEY'], OPENAI_API)).toThrow(/OPENAI_API_KEY/);
+    expect(new CredentialBroker(source).issue(['AWS_SECRET_ACCESS_KEY'], ANTHROPIC_API).handed).toEqual({ AWS_SECRET_ACCESS_KEY: 'aws' });
+  });
+});
+
+describe('a login read for no one runner', () => {
+  it('asks only that each variable is there: which runner it serves is known at the start', () => {
+    expect(() => new CredentialBroker({ OPENAI_API_KEY: 'k' }).check(['OPENAI_API_KEY'])).not.toThrow();
+    expect(() => new CredentialBroker({}).check(['OPENAI_API_KEY'])).toThrow(/OPENAI_API_KEY is not set/);
+  });
+
+  it('still refuses a subscription token', () => {
+    expect(() => new CredentialBroker({ CLAUDE_CODE_OAUTH_TOKEN: 't' }).check(['CLAUDE_CODE_OAUTH_TOKEN'])).toThrow(/subscription/);
   });
 });
 
