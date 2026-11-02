@@ -11,7 +11,7 @@ import PlannerPauseBar from './components/PlannerPauseBar';
 import EscalationInbox from './components/EscalationInbox';
 import DockResizeHandle from './components/DockResizeHandle';
 import { ConversationBlocks } from './components/ChatMessage';
-import ChildPlanPanel, { ChildQuestions } from './components/ChildPlanPanel';
+import ChildPlanPanel, { ChildQuestions, NO_CHILD_NOTICE, type ChildNotice } from './components/ChildPlanPanel';
 import { reduceHost, runnersOn, INITIAL_HOST_STATE, type HostState } from './hostState';
 import ModelSelector, { API_PROVIDER_LABELS } from './components/ModelSelector';
 import PlanCardGroup from './components/PlanCardGroup';
@@ -29,6 +29,7 @@ import { OpenPatchContext } from './openPatch';
 import { useFollowOutput } from './followOutput';
 import { INBOX_OFF_NOTE, useInboxPrefs } from './inboxView';
 import { useEscalationAnswers } from './components/escalationAnswers';
+import { useChildDrafts } from './childDrafts';
 import { isBuiltinSlashCommand, slashHelp } from '../../commands/slashCommands';
 import type { EscalationAnswer, HostToWebview, SettingsChange, WebviewToHost } from '../../shared/protocol';
 import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks } from '../../shared/conversationPatch';
@@ -80,9 +81,11 @@ export default function App() {
   childViewRef.current = childView;
   const [childConversation, setChildConversation] = useState(EMPTY_PATCHED_VIEW);
   const [childChoice, setChildChoice] = useState<string | null>(null);
-  const [childNotice, setChildNotice] = useState('');
-  // A childView already on its way when the person left must not bring it back.
-  const childLeft = useRef<string | null>(null);
+  const [childNotice, setChildNotice] = useState<ChildNotice>(NO_CHILD_NOTICE);
+  const childComposer = useChildDrafts((message) => vscode.postMessage(message), setChildNotice);
+  // A childView on its way when the person left, of any child, is one the host
+  // has since closed, so none is drawn until they open one again.
+  const childLeft = useRef(false);
   const childOpener = useRef<HTMLElement | null>(null);
   const inChild = childView !== null;
   useEffect(() => {
@@ -187,9 +190,9 @@ export default function App() {
       if (msg.type === 'restoreChat' && childViewRef.current) vscode.postMessage({ type: 'refreshChildren' });
       if (msg.type === 'children') { setChildTree({ rootId: msg.rootId, children: msg.children }); return; }
       if (msg.type === 'childClosed') { setChildView(null); setChildChoice(null); setChildConversation(EMPTY_PATCHED_VIEW); return; }
-      if (msg.type === 'childView') { if (msg.view.child.sessionId !== childLeft.current) setChildView(msg.view); return; }
+      if (msg.type === 'childView') { if (!childLeft.current) setChildView(msg.view); return; }
       if (msg.type === 'childConversation') { setChildConversation((current) => applyConversationPatch(current, msg.message)); return; }
-      if (msg.type === 'childNotice') { setChildNotice(msg.message); return; }
+      if (msg.type === 'childNotice') { setChildNotice({ childId: msg.childId, message: msg.message }); return; }
       if (msg.type === 'childMessageResult' || msg.type === 'childControlResult') return;
       // The login is this surface's own state, not the session's: it ends here
       // rather than in the reducer that mirrors the host.
@@ -944,20 +947,20 @@ export default function App() {
   };
 
   const openChild = (childId: string) => {
-    childLeft.current = null;
+    childLeft.current = false;
     childOpener.current ??= document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setChildChoice(null);
     setChildConversation(EMPTY_PATCHED_VIEW);
-    setChildNotice('');
+    setChildNotice(NO_CHILD_NOTICE);
     vscode.postMessage({ type: 'openChild', childId });
   };
   const leaveChild = () => {
-    childLeft.current = childView?.child.sessionId ?? null;
+    childLeft.current = true;
     vscode.postMessage({ type: 'closeChild' });
     setChildView(null);
     setChildChoice(null);
     setChildConversation(EMPTY_PATCHED_VIEW);
-    setChildNotice('');
+    setChildNotice(NO_CHILD_NOTICE);
   };
 
   return (
@@ -976,6 +979,7 @@ export default function App() {
       tree={childTree.children}
       conversation={childConversation}
       notice={childNotice}
+      composer={childComposer(childView.child)}
       rootQuestion={checkpoint?.taskTitle}
       post={(message) => vscode.postMessage(message)}
       onOpen={openChild}
@@ -986,7 +990,7 @@ export default function App() {
     />}
     {/* Hidden, not unmounted: the composer's draft and the scroll position are the root's own. */}
     <div className="chat-container" tabIndex={-1} hidden={inChild}>
-      {!inChild && childNotice && <p role="status">{childNotice}</p>}
+      {!inChild && childNotice.message && <p role="status">{childNotice.message}</p>}
       <ChildQuestions tree={childTree.children} onOpen={openChild} />
       {childChoice && <div role="region" aria-label="Subplanner sessions">
         <button type="button" onClick={() => setChildChoice(null)}>Close</button>

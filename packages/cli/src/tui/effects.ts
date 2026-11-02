@@ -450,7 +450,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
     }
     case 'answerChildCheckpoint': {
       const { rootId, childId, taskId, answer, question, reason } = effect;
-      await refusable(deps, childId, () => api.answerChildCheckpoint(rootId, childId, taskId, { answer, question, ...(reason ? { reason } : {}) }));
+      await refusable(deps, childId, () => api.answerChildCheckpoint(rootId, childId, taskId, { answer, question, ...(reason ? { reason } : {}) }), reason);
       return;
     }
 
@@ -1157,6 +1157,8 @@ async function readChild(deps: EffectDeps, rootId: string, childId: string): Pro
 }
 
 function retryChildLink(deps: EffectDeps, link: ChildLink): void {
+  // A failed read and its socket's close can both ask, and one link holds one socket.
+  if (link.timer) return;
   const delay = Math.min(FOLLOW_RETRY_MS * 2 ** Math.min(link.failures, 4), FOLLOW_RETRY_MAX_MS);
   link.failures += 1;
   link.timer = setTimeout(() => {
@@ -1215,11 +1217,18 @@ async function connectChildLink(deps: EffectDeps, link: ChildLink): Promise<void
     read = true;
     link.failures = 0;
   } catch (err) {
+    if (link.closed || link.follow !== follow) return;
     if (err instanceof DaemonError && err.code === 'child_not_found') {
       closeChildLink(deps, childId);
       deps.dispatch({ type: 'childGone', sessionId: childId, message: NO_LONGER_LISTED });
       return;
     }
+    // An open socket never asks again, and its frames would land on a plan
+    // missing what this read held. `followLost` is said once by the reducer,
+    // and the close that led here may not have said it at all.
+    follow.close();
+    deps.dispatch({ type: 'followLost', sessionId: childId });
+    retryChildLink(deps, link);
     throw err;
   } finally {
     inbound.releaseSnapshot(read);

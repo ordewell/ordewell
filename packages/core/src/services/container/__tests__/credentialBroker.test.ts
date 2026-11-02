@@ -111,6 +111,18 @@ describe('a login read for one runner', () => {
     expect(() => new CredentialBroker(BOTH).issue(['OPENAI_API_KEY'], ANTHROPIC_API)).toThrow(/ANTHROPIC_API_KEY/);
   });
 
+  it("says what became of the key a person did name, so an OpenAI key on OpenCode is not told it was never there", () => {
+    const refusal = () => new CredentialBroker(BOTH).issue(['OPENAI_API_KEY'], ANTHROPIC_API);
+
+    expect(refusal).toThrow(/OPENAI_API_KEY is not handed/);
+    expect(refusal).toThrow(/own-sign-in/);
+    expect(refusal).toThrow(/ANTHROPIC_API_KEY/);
+  });
+
+  it('points nobody at a sign-in when no other key was named', () => {
+    expect(() => new CredentialBroker({ AWS_SECRET_ACCESS_KEY: 'aws' }).issue(['AWS_SECRET_ACCESS_KEY'], OPENAI_API)).not.toThrow(/own-sign-in/);
+  });
+
   it('refuses cloud credentials for a runner that reaches its model through a key alone', () => {
     const source = { AWS_SECRET_ACCESS_KEY: 'aws' };
 

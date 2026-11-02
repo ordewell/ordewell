@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import type { ChildPlanEntry, ChildPlanView, RunTask, SurfaceTask } from '@ordewell/core';
 import { patchedBlocks, type PatchedView } from '../../../shared/conversationPatch';
 import type { HostToWebview, WebviewToHost } from '../../../shared/protocol';
+import type { ChildComposer } from '../childDrafts';
 import { ConversationBlocks } from './ChatMessage';
 import CheckpointPanel from './CheckpointPanel';
 
@@ -26,6 +27,11 @@ export function ChildQuestions({ tree, current, onOpen }: { tree: readonly Child
     {waiting.map((entry) => <button type="button" key={entry.sessionId} onClick={() => onOpen(entry.sessionId)}>A question waits in {entry.title}</button>)}
   </div>;
 }
+
+/** Whose news it is: a panel shows only its own, and an empty id is nobody's in particular. */
+export interface ChildNotice { childId: string; message: string }
+
+export const NO_CHILD_NOTICE: ChildNotice = { childId: '', message: '' };
 
 interface AnswerableProps {
   title: string;
@@ -52,44 +58,36 @@ interface ChildPlanPanelProps {
   view: ChildPlanView;
   tree: readonly ChildPlanEntry[];
   conversation: PatchedView;
-  notice: string;
+  notice: ChildNotice;
+  composer: ChildComposer;
   /** The root plan's own waiting question, kept in reach while a child is read. */
   rootQuestion?: string;
   post: (message: WebviewToHost) => void;
   onOpen: (childId: string) => void;
   onBack: () => void;
   onRootQuestion: () => void;
-  onNotice: (message: string) => void;
+  onNotice: (notice: ChildNotice) => void;
 }
 
-/** One child plan. App keys it by session, so another child starts clean. */
-export default function ChildPlanPanel({ view, tree, conversation, notice, rootQuestion, post, onOpen, onBack, onRootQuestion, onNotice }: ChildPlanPanelProps) {
+/** One child plan. App keys it by session, so another child starts clean, and holds what is written to it. */
+export default function ChildPlanPanel({ view, tree, conversation, notice, composer, rootQuestion, post, onOpen, onBack, onRootQuestion, onNotice }: ChildPlanPanelProps) {
   const { child } = view;
   const childId = child.sessionId;
-  const [text, setText] = useState('');
-  const [sending, setSending] = useState(false);
-  const sent = useRef<string | null>(null);
   const [answering, setAnswering] = useState<readonly string[]>([]);
   const [unstarted, setUnstarted] = useState<string | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const tasks = useRef<HTMLHeadingElement>(null);
-  const listening = !child.refused && child.state !== 'ended';
+  // Not child.refused: that is a message's refusal, and an answer opens no turn.
+  const answerable = child.state !== 'ended';
 
   useEffect(() => { heading.current?.focus(); }, []);
 
   useEffect(() => {
     const handler = (event: MessageEvent<HostToWebview>) => {
       const msg = event.data;
-      if (msg.type === 'childMessageResult' && msg.childId === childId) {
-        const words = sent.current;
-        if (words === null) return;
-        sent.current = null;
-        setSending(false);
-        if (!msg.error) setText((current) => (current === words ? '' : current));
-        onNotice(msg.error ?? (msg.status === 'queued' ? 'Message queued.' : 'Message sent.'));
-      } else if (msg.type === 'childControlResult' && msg.childId === childId) {
+      if (msg.type === 'childControlResult' && msg.childId === childId) {
         setAnswering((current) => current.filter((taskId) => taskId !== msg.taskId));
-        if (msg.error) onNotice(msg.error);
+        if (msg.error) onNotice({ childId, message: msg.error });
       }
     };
     window.addEventListener('message', handler);
@@ -108,7 +106,7 @@ export default function ChildPlanPanel({ view, tree, conversation, notice, rootQ
     const descendants = tree.filter((entry) => entry.parent === childId && entry.taskId === task.id);
     return <div className="child-task" key={task.id}>
       <span>{task.title} · {live?.status ?? task.status}</span>
-      {question && (listening
+      {question && (answerable
         ? <AnswerableQuestion key={question} title={task.title} question={question} delegated={task.type === 'delegated'} answering={answering.includes(task.id)} onAnswer={(decision, words) => answer(task, question, decision, words)} />
         : <p>{question}</p>)}
       {(task.attempted || live?.attempted) && <button type="button" onClick={() => post({ type: 'openChildTaskLog', childId, taskId: task.id })}>Open chat</button>}
@@ -133,11 +131,8 @@ export default function ChildPlanPanel({ view, tree, conversation, notice, rootQ
     {view.plan?.tasks.map(drawTask)}
     {child.state === 'ended' ? <p>View only</p> : child.refused ? <p>{child.refused}</p> : <form onSubmit={(event) => {
       event.preventDefault();
-      if (!text.trim() || sending) return;
-      sent.current = text;
-      setSending(true);
-      post({ type: 'messageChild', childId, text });
-    }}><label>Message subplanner<textarea value={text} onChange={(event) => setText(event.target.value)} /></label><button type="submit" disabled={sending}>Send</button></form>}
-    {notice && <p role="status">{notice}</p>}
+      composer.send();
+    }}><label>Message subplanner<textarea value={composer.text} onChange={(event) => composer.write(event.target.value)} /></label><button type="submit" disabled={composer.sending}>Send</button></form>}
+    {(!notice.childId || notice.childId === childId) && notice.message && <p role="status">{notice.message}</p>}
   </div>;
 }

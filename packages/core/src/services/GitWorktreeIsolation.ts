@@ -1,4 +1,4 @@
-import { readTaskDiff, type TaskDiffRead, type TaskDiffResult } from './taskDiffRead';
+import { changeNames, readTaskDiff, type TaskDiffRead, type TaskDiffResult } from './taskDiffRead';
 import { randomBytes } from 'crypto';
 import { spawnSync } from 'child_process';
 import * as fs from 'fs';
@@ -626,8 +626,13 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       // What the record did not name: a crash between `worktree add` and the save, or a record lost to another save, leaves a registration, a
       // directory or a branch that would fail the add below, or be reset by it.
       const leftover = await this.clearLeftovers(run, task, { branch, dir });
+      // Its child's run is tied to this path and its path to this run, so a Continue that cannot open leaves the next one what to reopen by, and the work to restore (ADR-0055 D17).
+      const keepChild = (work: PreservedWork[]): void => {
+        if (intent === 'restore' && previous?.childSession) run.tasks[task.id] = { ...previous, status: 'kept', repos: {}, continuationWork: work };
+      };
       const [stuck] = leftover.refused;
       if (stuck) {
+        keepChild([...replaced.preserved, ...leftover.preserved, ...(previous?.continuationWork ?? [])]);
         throw new Error(`The worktree of its last attempt (${stuck.worktree}) holds work Ordewell could not keep (${stuck.reason}). Save or remove it by hand, then start the task again`);
       }
       const preserved = intent === 'restore'
@@ -714,6 +719,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       } catch (err) {
         record.status = 'failed';
         await this.removeTask(run, record, { dropRecord: false, preserve: false });
+        keepChild(preserved);
         // The attempt this one replaced is gone with its record; where its work went is the one thing left to say.
         throw preserved.length > 0 ? new PrepareFailedError(err, preserved) : err;
       }
@@ -867,8 +873,9 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       const from = record?.repairBase?.[repo.path] ?? record?.repos[repo.path]?.taskTip;
       if (from === undefined) continue;
       const prefix = await this.prefixOf(repo);
-      const listed = await this.git(repo.root, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', `--relative=${prefix}`, '--name-only', '-z', from, record.branch]);
-      paths.push(...listed.split('\0').filter(Boolean).map((file) => (repo.path === SELF_REPO ? file : `${repo.path}/${file}`)));
+      const listed = await this.git(repo.root, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--relative=', '--name-only', '-z', from, record.branch]);
+      const names = listed.split('\0').filter(Boolean).flatMap((file) => changeNames(file, prefix, true));
+      paths.push(...names.map((file) => (repo.path === SELF_REPO ? file : `${repo.path}/${file}`)));
     }
     return paths;
   }

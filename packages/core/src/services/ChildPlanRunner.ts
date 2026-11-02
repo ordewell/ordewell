@@ -72,6 +72,8 @@ export interface SubplannerLink {
   changed(): void;
   /** A Stop stands over this node, its own or an ancestor's (ADR-0055 D16). */
   stopped(): boolean;
+  /** Its report is taken: it can still hear a person, but no work starts (ADR-0055 D7). */
+  reported(): boolean;
   /** What its planner or a task spent, as it arrives: charged where it was spent, and rolled up to each level for its row (ADR-0055 D20). */
   usage(record: UsageRecord): void;
   /** The attempt is still open, so a person's message has a turn to reach (D20). */
@@ -88,15 +90,18 @@ export interface ChildHost {
    * naming the level, for what cannot be carved.
    */
   openChild(task: Task, cwd: string, link: SubplannerLink, reopening?: string): Promise<ChildNode>;
-  /** What the delegated task's branch changed since its base, relative to the workspace root. */
-  changedPaths(taskId: string): Promise<string[]>;
-  /** A Stop stands over this node: what its children read of their ancestors (D16). */
+  /** What the delegated task's branch changed since its base, as `changeNames` calls it; `both` asks for both names, where a protected path may use either. */
+  changedPaths(taskId: string, names?: 'both'): Promise<string[]>;
+  /** A Stop stands over this node, or its report is taken: what its children read of their ancestors (D16). */
   stopped(): boolean;
   /** Usage on its way up the tree, past this level's row. */
   passUp(record: UsageRecord): void;
   /** A child's tasks moved, so the row of its delegated task is stale (ADR-0055 D20). */
   moved(): void;
 }
+
+/** What `setTimeout` can hold. */
+const LONGEST_TIMER_MS = 2 ** 31 - 1;
 
 /** Once per attempt: a subplanner told this has no second turn to end without the call (ADR-0055 D6). */
 const COMPLETION_REMINDER = 'Your turn ended with nothing running and no `task_complete` call. If your child plan reached the goal, call `task_complete` with status `done`; if it cannot, call it with status `blocked` or `failed` and the reason. If work is left, start it now. A second turn that ends like this fails the delegated task.';
@@ -156,6 +161,8 @@ export class ChildPlanSession extends AbstractRunnerSession {
   private reminded = false;
   /** The accepted call, until it is published. */
   private accepted: { report: TaskCompleteArgs; refuted?: VerificationCheck } | null = null;
+  /** The last read of the branch is under way: the grace and a check can both reach it. */
+  private publishing = false;
   /** How the attempt raises a question: as a runner's `checkpoint` does, so the parent's task waits as any task at one. */
   private ask: ((question: string, signal: AbortSignal) => Promise<CheckpointAnswer>) | null = null;
   /** A question went up and has no answer: nothing is stuck, and only the wall clock ends the wait (ADR-0056 M8). */
@@ -195,6 +202,7 @@ export class ChildPlanSession extends AbstractRunnerSession {
         checkpoint: (question) => this.checkpoint(question),
         changed: () => this.queueCheck(),
         stopped: () => this.tombstone || this.halting !== null || host.stopped(),
+        reported: () => this.accepted !== null,
         usage: (record) => {
           this.emitEvent({ type: 'usage', record: rolledUp(record) });
           host.passUp(record);
@@ -220,7 +228,8 @@ export class ChildPlanSession extends AbstractRunnerSession {
       this.haltFor(`its time of ${node.wallClockMs} ms ran out`);
       return;
     }
-    this.wallClock = setTimeout(() => this.watchClock(node, started), left);
+    // Past a timer's limit Node fires at once, so a longer clock waits in steps.
+    this.wallClock = setTimeout(() => this.watchClock(node, started), Math.min(left, LONGEST_TIMER_MS));
     this.wallClock.unref?.();
   }
 
@@ -279,7 +288,7 @@ export class ChildPlanSession extends AbstractRunnerSession {
     const state = node.state();
     this.say(state);
     if (this.accepted) {
-      if (!state.plannerBusy) this.publish();
+      if (!state.plannerBusy) void this.publish();
       return;
     }
     // A stop that came while a question waits waits with it: the answer is what can bring room, and M8 gives that wait only the wall clock.
@@ -368,7 +377,7 @@ export class ChildPlanSession extends AbstractRunnerSession {
     this.accepted = { report: taken, ...(refuted ? { refuted } : {}) };
     this.emitEvent({ type: 'completion_received', status: checked.handoff.status });
     // The runner ends its turn on this reply; one that keeps it open is published at this grace.
-    this.graceTimer = setTimeout(() => this.publish(), COMPLETION_GRACE_MS);
+    this.graceTimer = setTimeout(() => void this.publish(), COMPLETION_GRACE_MS);
     this.graceTimer.unref?.();
     return { text: 'Recorded. End your turn now.' };
   }
@@ -382,10 +391,14 @@ export class ChildPlanSession extends AbstractRunnerSession {
     if (this.ended || this.accepted || this.tombstone || !this.ask) return { text: 'This attempt has ended: nobody will answer.', isError: true };
     if (this.asking) return { text: QUESTION_WAITS, isError: true };
     this.asking = true;
-    void this.ask(question, new AbortController().signal).then((answer) => {
+    this.ask(question, new AbortController().signal).then((answer) => {
       this.asking = false;
       if (answer.kind === 'withdrawn' || !this.node || this.ended || this.tombstone) this.queueCheck();
       else this.opened(this.node.continueConversation(answerText(answer)));
+    }, () => {
+      // No answer can come, so nothing may read this question as waiting: only the wall clock ends that wait.
+      this.asking = false;
+      this.queueCheck();
     });
     return { text: QUESTION_ASKED };
   }
@@ -406,7 +419,7 @@ export class ChildPlanSession extends AbstractRunnerSession {
   private async protectedPathsTouched(): Promise<VerificationCheck | undefined> {
     const paths = this.node?.protectedPaths ?? this.setup.task.protectedPaths ?? [];
     if (paths.length === 0 || this.setup.task.readOnly) return undefined;
-    const changed = await this.setup.host.changedPaths(this.taskId);
+    const changed = await this.setup.host.changedPaths(this.taskId, 'both');
     const touched = changed.filter((file) => paths.some((rule) => underProtectedPath(file, rule)));
     if (touched.length === 0) return undefined;
     return { name: 'protected_paths', passed: false, skipped: false, detail: `The child plan changed protected paths, so its work does not land: ${touched.map(onOneLine).join(', ')}.` };
@@ -426,13 +439,29 @@ export class ChildPlanSession extends AbstractRunnerSession {
     return outside.length > 0 ? { paths: outside.slice(0, OUTSIDE_SCOPE_PATHS), count: outside.length } : undefined;
   }
 
-  private publish(): void {
+  /**
+   * The read a landing goes by. Nothing starts once a report is taken, but a
+   * start that raced the call can still be running, so it winds down first and
+   * its merge cannot land behind this read. An unread branch does not land.
+   */
+  private async lastRead(): Promise<VerificationCheck | undefined> {
+    if (this.node?.state().live) await this.node.halt().catch(() => undefined);
+    return this.protectedPathsTouched().catch((err: unknown) => ({
+      name: 'protected_paths', passed: false, skipped: false,
+      detail: `Its branch could not be read against its protected paths, so its work does not land: ${err instanceof Error ? err.message : String(err)}`,
+    }));
+  }
+
+  private async publish(): Promise<void> {
     const accepted = this.accepted;
-    if (!accepted || this.ended) return;
-    this.ended = true;
+    if (!accepted || this.ended || this.publishing) return;
+    this.publishing = true;
     clearTimeout(this.graceTimer);
     clearTimeout(this.wallClock);
-    for (const listener of this.completes) listener(accepted.report, accepted.refuted);
+    const refuted = accepted.refuted ?? (accepted.report.status === 'done' ? await this.lastRead() : undefined);
+    if (this.ended || this.tombstone) return;
+    this.ended = true;
+    for (const listener of this.completes) listener(accepted.report, refuted);
     for (const listener of this.turnEnds) listener('completed');
   }
 
@@ -442,7 +471,7 @@ export class ChildPlanSession extends AbstractRunnerSession {
     const report: TaskCompleteArgs = { status, summary: why.slice(0, 1500), reason: why };
     const taken = this.node?.takeReport(report);
     this.accepted = { report: taken?.ok ? taken.handoff : report };
-    this.publish();
+    void this.publish();
   }
 
   private emitEvent(event: StructuredEvent): void {

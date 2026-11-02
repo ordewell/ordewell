@@ -3,7 +3,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { CODEX_SIGN_IN_FILE, COPY_CODEX_SIGN_IN, COPY_OPENCODE_SIGN_IN, COPY_SIGN_IN, HOME_DIR, mirrorDir, repoDir } from '../taskWorkspace';
+import { CODEX_SIGN_IN_FILE, COPY_CODEX_SIGN_IN, COPY_OPENCODE_SIGN_IN, COPY_SIGN_IN, EXPORT_SCRIPT, HOME_DIR, mirrorDir, repoDir } from '../taskWorkspace';
 
 describe('where a repository is in a container', () => {
   it('keeps a lone repository at the workspace', () => {
@@ -22,6 +22,74 @@ describe('where a repository is in a container', () => {
 
   it('writes a mirror path a shell and git take as it is', () => {
     expect(mirrorDir({ path: "it's a/repo $HOME" })).toMatch(/^\/mirror\/[0-9a-f]+\.git$/);
+  });
+});
+
+/**
+ * The export as a shell runs it, on real git, over a repository an attempt has
+ * left: everything in `.git` is the attempt's to write.
+ */
+describe('reading what an attempt left', () => {
+  let root: string;
+  let work: string;
+
+  const inWork = (...args: string[]) => {
+    const ran = spawnSync('git', args, { cwd: work, encoding: 'utf8' });
+    if (ran.status !== 0) throw new Error(ran.stderr);
+    return ran.stdout.trim();
+  };
+  const exported = () => spawnSync('sh', ['-c', EXPORT_SCRIPT.replace('/tmp/ordewell-export-index', join(root, 'index'))], {
+    env: { ...process.env, ORDEWELL_REPO_DIR: work, ORDEWELL_REF: 'refs/ordewell/export/one', ORDEWELL_BASE: inWork('rev-parse', 'HEAD') },
+    timeout: 10_000,
+  });
+  /** Leaves an executable in the repository that says so if it is ever run. */
+  const planted = (file: string, mark: string) => {
+    writeFileSync(file, `#!/bin/sh\ntouch "${join(root, mark)}"\n`);
+    chmodSync(file, 0o755);
+  };
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'ordewell-export-'));
+    work = join(root, 'work');
+    mkdirSync(work);
+    inWork('init', '-q');
+    inWork('config', 'user.name', 'A');
+    inWork('config', 'user.email', 'a@example.com');
+    writeFileSync(join(work, 'kept.txt'), 'kept\n');
+    inWork('add', '.');
+    inWork('commit', '-q', '-m', 'start');
+  });
+
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it('takes the work left uncommitted, and leaves the attempt its index', () => {
+    writeFileSync(join(work, 'new.txt'), 'new\n');
+
+    const ran = exported();
+
+    expect(ran.status).toBe(0);
+    expect(ran.stdout.toString('latin1')).toMatch(/^# v\d git bundle/);
+    expect(inWork('show', 'refs/ordewell/export/one:new.txt')).toBe('new');
+    expect(inWork('status', '--porcelain')).toBe('?? new.txt');
+  });
+
+  it.each(['post-index-change', 'reference-transaction', 'pre-commit', 'post-commit'])('runs no %s hook the attempt left', (hook) => {
+    planted(join(work, '.git', 'hooks', hook), 'ran');
+    writeFileSync(join(work, 'new.txt'), 'new\n');
+
+    expect(exported().status).toBe(0);
+
+    expect(existsSync(join(root, 'ran'))).toBe(false);
+  });
+
+  it('runs no fsmonitor the attempt named', () => {
+    planted(join(root, 'monitor'), 'ran');
+    inWork('config', 'core.fsmonitor', join(root, 'monitor'));
+    writeFileSync(join(work, 'new.txt'), 'new\n');
+
+    expect(exported().status).toBe(0);
+
+    expect(existsSync(join(root, 'ran'))).toBe(false);
   });
 });
 

@@ -60,6 +60,30 @@ describe('what a tree leaves in the engine goes with it (ADR-0059 L6)', () => {
     expect(order).toEqual([...order].sort((a, b) => a - b));
   });
 
+  it('takes what a check left when its host died, which names no tree, and only what nothing uses and no live check just made', async () => {
+    const engine = new EngineHolding();
+
+    await reclaimTree('session-1', engine, settings, () => undefined);
+
+    expect(engine.calls).toEqual(expect.arrayContaining([
+      'container prune -f --filter label=ordewell.probe=1 --filter until=1h',
+      'network prune -f --filter label=ordewell.probe=1 --filter until=1h',
+    ]));
+    expect(engine.calls.indexOf('container prune -f --filter label=ordewell.probe=1 --filter until=1h'))
+      .toBeLessThan(engine.calls.indexOf('network prune -f --filter label=ordewell.probe=1 --filter until=1h'));
+  });
+
+  it('does not give up a clean-up over what a check left', async () => {
+    const engine = new EngineHolding();
+    engine.failing = /prune/;
+    const told: string[] = [];
+
+    await reclaimTree('session-1', engine, settings, (text) => told.push(text));
+
+    expect(engine.calls).toContain('volume rm -f ordewell-task-1');
+    expect(told).toEqual([]);
+  });
+
   it('takes its pins out of every mirror, in a helper held to the limits of any container, with no network', async () => {
     const engine = new EngineHolding();
     engine.pinsLeft = 'refs/ordewell/pins/other/x/head';

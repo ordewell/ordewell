@@ -206,11 +206,29 @@ describe('containerStatus', () => {
     expect(status.problems[0]).toMatchObject({ code: 'proof-failed', message: expect.stringContaining('its probe said nothing readable') });
   });
 
-  it('leaves a required `cred.unreadable` to the lease: only a container holding the login can prove it', async () => {
-    const status = await containerStatus({ ...CHOSEN, required: ['cred.unreadable'] }, { cli: docker(ALL_THERE), broker, platform: 'linux', proof: async () => proofOf([]) });
+  it('leaves a required `cred.unreadable` to the lease when the lease can prove it: a gated key, all the login holds', async () => {
+    const gated = { ...CHOSEN, login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL', 'OPENAI_API_KEY'] }, required: ['cred.unreadable'] };
+    const held = new CredentialBroker({ ANTHROPIC_API_KEY: 'a', ANTHROPIC_BASE_URL: 'https://llm.example.com', OPENAI_API_KEY: 'b' });
+
+    const status = await containerStatus(gated, { cli: docker(ALL_THERE), broker: held, platform: 'linux', proof: async () => proofOf([]) });
 
     expect(status.ready).toBe(true);
     expect(status.guarantees?.find(({ guarantee }) => guarantee === 'cred.unreadable')).toMatchObject({ proven: false, required: true });
+  });
+
+  it.each([
+    ['a person\'s own sign-in', { kind: 'own-sign-in' }],
+    ['a key handed over by name', { kind: 'broker', variables: ['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY'] }],
+    ['cloud credentials', { kind: 'broker', variables: ['AWS_SECRET_ACCESS_KEY'] }],
+    ['an address with no key to gate', { kind: 'broker', variables: ['ANTHROPIC_BASE_URL'] }],
+  ])('is not ready when `cred.unreadable` is required of a login no lease can prove it under: %s', async (_case, login) => {
+    const held = new CredentialBroker({ ANTHROPIC_API_KEY: 'a', OPENROUTER_API_KEY: 'c', AWS_SECRET_ACCESS_KEY: 'd', ANTHROPIC_BASE_URL: 'https://llm.example.com' });
+
+    const status = await containerStatus({ ...CHOSEN, login, required: ['cred.unreadable'] }, { cli: docker(ALL_THERE), broker: held, platform: 'linux', proof: async () => proofOf([]) });
+
+    expect(status.ready).toBe(false);
+    expect(status.problems[0]).toMatchObject({ code: 'guarantee-unproven', message: expect.stringContaining('cred.unreadable') });
+    expect(status.problems[0].message).not.toMatch(/held no login/);
   });
 
   it('runs no proof over a setting that is not ready', async () => {

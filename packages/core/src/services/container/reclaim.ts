@@ -6,6 +6,12 @@ import { MIRROR_ROOT } from './taskWorkspace';
 /** The label every container, network and task volume of a lease carries: all a session delete has left to find them by. */
 export const TREE_LABEL = 'ordewell.tree';
 
+/** What a surface's check carries. It belongs to no tree, so this is all a clean-up has to find it by. */
+export const CHECK_LABEL = 'ordewell.probe=1';
+
+/** A prune takes only what is unused, and this age keeps it off a network a live check has made and not yet joined. */
+const LEFT_BY_A_CHECK = ['--filter', `label=${CHECK_LABEL}`, '--filter', 'until=1h'];
+
 /** Where a tree's pins sit in a mirror: its own folder of refs, since a mirror serves every session of a project. */
 export const treePins = (tree: string): string => createHash('sha256').update(tree).digest('hex').slice(0, 16);
 
@@ -71,7 +77,8 @@ async function removeEmptied(cli: DockerCli, mirror: string, read: () => Promise
 
 /**
  * What a tree leaves in the engine (ADR-0059 L6): whatever a host that died left
- * running, its networks, its task volumes, and its pins in each mirror. Every
+ * running, its networks, its task volumes, and its pins in each mirror, and, with
+ * them, whatever a check of any surface left when its host died. Every
  * mirror is read, since a landed task's pin outlives its volume and nothing else
  * names it, and one this took its last pin from goes whole, with any cache volume
  * an earlier build left for its project, the one time nothing leans on either: a
@@ -96,6 +103,7 @@ export async function reclaimTree(tree: string, cli: DockerCli, settings: Contai
   }
   for (const container of names(containers.stdout)) await cli.call(['rm', '-f', container]);
   for (const network of await list(['network', 'ls', '-q', '--filter', label]) ?? []) await cli.call(['network', 'rm', network]);
+  for (const kind of ['container', 'network']) await cli.call([kind, 'prune', '-f', ...LEFT_BY_A_CHECK]);
   for (const volume of await list(['volume', 'ls', '-q', '--filter', label]) ?? []) await removeVolume(cli, volume, tell);
   if (settings) await unpin(tree, cli, settings, tell, list);
 }

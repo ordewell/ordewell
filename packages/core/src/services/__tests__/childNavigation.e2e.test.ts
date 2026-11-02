@@ -712,6 +712,22 @@ describe('a person\'s controls on a child plan\'s tasks', () => {
     parent.destroy();
   });
 
+  // An answer opens no turn, so a node short of one still owes its runner the answer it waits on.
+  it('takes an answer once the budget cannot cover another planner turn', async () => {
+    const { parent, sessions, release } = await running(['a'], { d: [SUBMIT([childTask('a', 1)]), REPLY, DONE] });
+    const { child, answer } = await asks(parent, sessions.get('a')!, 1, 'a', 'May I drop the table?');
+    const ledger = await parent.ledger();
+    ledger.nodeOf(child.entry().sessionId)!.spent({ source: 'claude-code', model: 'opus', inputTokens: 1_701_000, outputTokens: 0 } as never, { taskId: 'a', attempt: 1 });
+    expect(child.entry().refused).toMatch(/refused this turn/);
+
+    const done = await child.control('a', { kind: 'checkpoint', answer: 'approve', question: 'May I drop the table?' });
+
+    expect(done).toMatchObject({ ok: true });
+    await expect(answer).resolves.toMatchObject({ kind: 'continue' });
+    release('a');
+    parent.destroy();
+  });
+
   it('tells a runner why, and a rejection with no reason asks for one and leaves it waiting', async () => {
     const { parent, sessions, release } = await running(['a'], { d: [SUBMIT([childTask('a', 1)]), REPLY, DONE] });
     const { child, answer } = await asks(parent, sessions.get('a')!, 1, 'a', 'Which schema?');

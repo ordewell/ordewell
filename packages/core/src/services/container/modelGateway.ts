@@ -9,8 +9,8 @@ export interface ModelApi {
   keyVariable: string;
   baseUrlVariable: string;
   upstream: string;
-  /** Model traffic, and nothing else a key can do at this API. */
-  paths: RegExp;
+  /** Model traffic by method, and nothing else a key can do at this API. A route that reads what a key holds is out, however close its path sits to one that is in. */
+  routes: Readonly<Record<'GET' | 'POST', RegExp>>;
   /** The header its key travels in; a runner's token comes the same way. */
   auth: 'x-api-key' | 'bearer';
   /** What a base URL of this API already ends in, so the path a runner asks under does not repeat it. */
@@ -23,11 +23,16 @@ export interface ModelApi {
   outranksKey: readonly string[];
 }
 
+/** A list of models, or one of them, which says nothing of what a key has done. Claude Code and Codex may each ask. No `%`: an upstream that decodes one could read a path out of it. */
+const MODEL_CATALOG = /^\/v1\/models(\/[\w.:-]+)?$/;
+
 export const ANTHROPIC_API: ModelApi = {
   keyVariable: 'ANTHROPIC_API_KEY',
   baseUrlVariable: 'ANTHROPIC_BASE_URL',
   upstream: 'https://api.anthropic.com',
-  paths: /^\/v1\/(messages|models)(\/|$)/,
+  // A turn, and counting one: Claude Code may count before it sends, and that reads
+  // only what it is sent. Batches stay out, since their routes serve a whole workspace.
+  routes: { POST: /^\/v1\/messages(\/count_tokens)?$/, GET: MODEL_CATALOG },
   auth: 'x-api-key',
   basePath: '',
   name: 'the Anthropic API',
@@ -39,7 +44,10 @@ export const OPENAI_API: ModelApi = {
   keyVariable: 'OPENAI_API_KEY',
   baseUrlVariable: 'OPENAI_BASE_URL',
   upstream: 'https://api.openai.com/v1',
-  paths: /^\/v1\/(responses|models)(\/|$)/,
+  // Codex's turn alone: it sends each whole, with `store=false`, compaction included,
+  // and never read one back (codex-cli 0.166.0, measured 2026-11-02). A stored
+  // response is the key's own record, so no route to one is carried.
+  routes: { POST: /^\/v1\/responses$/, GET: MODEL_CATALOG },
   auth: 'bearer',
   basePath: '/v1',
   name: 'the OpenAI API',
@@ -48,8 +56,6 @@ export const OPENAI_API: ModelApi = {
 };
 
 export const MODEL_APIS: readonly ModelApi[] = [ANTHROPIC_API, OPENAI_API];
-
-const MODEL_METHODS: ReadonlySet<string> = new Set(['GET', 'POST']);
 
 /** What ends at this hop, what names it, and any credential a client sent, which would be a way out under a key of its own. */
 const NOT_FORWARDED: ReadonlySet<string> = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'host', 'x-api-key', 'authorization']);
@@ -116,11 +122,15 @@ export class ModelGateway {
     return this.api.auth === 'bearer' ? { authorization: `Bearer ${this.options.key}` } : { 'x-api-key': this.options.key };
   }
 
+  private isModelTraffic(method: string | undefined, path: string): boolean {
+    return (method === 'GET' || method === 'POST') && this.api.routes[method].test(path);
+  }
+
   private carry(req: IncomingMessage, res: ServerResponse): void {
     if (req.headers.host !== this.host) return this.refuse(res, 403, 'This gateway answers only on its own address.');
     if (!this.carries(req)) return this.refuse(res, 401, "This gateway takes its lease's token, and no other key.");
     const asked = new URL(req.url ?? '/', 'http://gateway');
-    if (!MODEL_METHODS.has(req.method ?? '') || !this.api.paths.test(asked.pathname)) return this.refuse(res, 404, 'This gateway carries model traffic and nothing else.');
+    if (!this.isModelTraffic(req.method, asked.pathname)) return this.refuse(res, 404, 'This gateway carries model traffic and nothing else.');
     const target = new URL(this.options.upstream);
     const send = target.protocol === 'https:' ? tlsRequest : plainRequest;
     const out = send({

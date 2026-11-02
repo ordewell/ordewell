@@ -231,6 +231,13 @@ describe('stopping from below the root', () => {
     expect(effects).toEqual([{ type: 'stopExecution', sessionId: 'root' }]);
     expect(said(state)).toMatch(/whole run/);
   });
+
+  it('/stop leaves the composer as the root\'s does, so a second Enter stops nothing', () => {
+    const { state } = reduce(typed(inChild(), '/stop'), key('enter'));
+
+    expect(state.editor.text).toBe('');
+    expect(effectsOf(state, key('enter'))).toEqual([]);
+  });
 });
 
 const QUESTION = 'Drop the users table?\nIt holds 40k rows.';
@@ -284,6 +291,30 @@ describe('a subplanner\'s question', () => {
       expect(effects).toEqual([{ type: 'answerChildCheckpoint', rootId: 'root', childId: 'c1', taskId: 'n', answer: 'approve', question: QUESTION }]);
       expect(state.editor.text).toBe('5000');
     });
+
+    it('a refused answer comes back to the composer it was typed in, and the plan that held the question is read again', () => {
+      const answered = step(typed(deep(), 'carry on'), key('enter'));
+      expect(answered.editor.text).toBe('');
+
+      const { state, effects } = reduce(answered, { type: 'childFailed', sessionId: 'c1', code: 'checkpoint_not_waiting', message: 'No longer waiting.', text: 'carry on' });
+
+      expect(state.sessionId).toBe('c2');
+      expect(state.editor.text).toBe('carry on');
+      expect(said(state)).toMatch(/No longer waiting/);
+      expect(effects).toEqual([{ type: 'readChild', rootId: 'root', childId: 'c1' }]);
+    });
+
+    it('says a question that moved on where the person is looking, not on the plan held above', () => {
+      const held = deep();
+      const parent = held.child!.parent;
+      const moved: TuiState = { ...held, child: { ...held.child!, parent: { ...parent, run: { ...parent.run, tasks: parent.run.tasks.map((t) => ({ ...t, checkpoint: undefined })) } } } };
+
+      const { state, effects } = reduce(moved, key('ctrl-y'));
+
+      expect(said(state)).toMatch(/moved on/);
+      expect(said(state.child!.parent)).not.toMatch(/moved on/);
+      expect(effects).toEqual([{ type: 'readChild', rootId: 'root', childId: 'c1' }]);
+    });
   });
 
   it('a child\'s runner\'s question is answered on the child\'s route with its raw words', () => {
@@ -293,6 +324,18 @@ describe('a subplanner\'s question', () => {
     expect(effectsOf(typed(state, 'the old one'), key('enter'))).toEqual([
       { type: 'answerChildCheckpoint', rootId: 'root', childId: 'c1', taskId: 'r', answer: 'reject', question: QUESTION, reason: 'the old one' },
     ]);
+  });
+
+  it('a refused answer to a child\'s runner gives the words back, however the daemon refused it', () => {
+    const inTask = step(step(step(inChild(), key('tab')), key('down')), key('enter'));
+    const answered = step(typed(asked(inTask, 'c1', 'r', QUESTION), 'the old one'), key('enter'));
+    expect(answered.editor.text).toBe('');
+
+    const { state, effects } = reduce(answered, { type: 'childFailed', sessionId: 'c1', code: 'checkpoint_not_waiting', message: 'No longer waiting.', text: 'the old one' });
+
+    expect(state.editor.text).toBe('the old one');
+    expect(state.taskView?.notice).toMatch(/No longer waiting/);
+    expect(effects).toEqual([{ type: 'readChild', rootId: 'root', childId: 'c1' }]);
   });
 
   it('a question the run no longer holds re-reads the plan instead of guessing', () => {
@@ -355,6 +398,66 @@ describe('an ended subplanner', () => {
     expect(said(state)).toMatch(/This plan has ended/);
   });
 
+  describe('words left where no composer is drawn', () => {
+    const refused = (): TuiState => step(inChild(), { type: 'childFailed', sessionId: 'c1', code: 'child_view_only', message: 'This plan has ended.', text: 'hello' });
+
+    it('says where they wait, since the plan on screen cannot show them', () => {
+      expect(composerView(refused())).toBeNull();
+      expect(said(refused())).toMatch(/Esc takes them to the composer of the plan above/);
+    });
+
+    it('one Esc lands on the plan above with the words in its composer, ahead of its draft', () => {
+      const above = typed(atRoot(), 'mine');
+      const child = entry({ sessionId: 'c1' });
+      const opened = step(tree(above, child), key('enter'));
+      const held = step(opened, { type: 'childFailed', sessionId: 'c1', code: 'child_view_only', message: 'This plan has ended.', text: 'hello' });
+
+      const { state, effects } = reduce(held, key('escape'));
+
+      expect(state.sessionId).toBe('root');
+      expect(state.editor.text).toBe('hello\nmine');
+      expect(screen(state)).toContain('hello');
+      expect(effects).toEqual([{ type: 'closeChild', childId: 'c1' }]);
+    });
+
+    it('ctrl-c leaves with them too, rather than clearing what cannot be seen', () => {
+      const state = step(refused(), key('ctrl-c'));
+
+      expect(state.sessionId).toBe('root');
+      expect(state.editor.text).toBe('hello');
+    });
+
+    it('a task\'s log closes first and the words stay, then the plan above takes them', () => {
+      const inTask = step(step(step(refused(), key('tab')), key('down')), key('enter'));
+      expect(inTask.taskView?.taskId).toBe('r');
+
+      const closed = step(inTask, key('escape'));
+      expect(closed.taskView).toBeNull();
+      expect(closed.editor.text).toBe('hello');
+
+      const up = step(closed, key('escape'));
+      expect(up.sessionId).toBe('root');
+      expect(up.editor.text).toBe('hello');
+    });
+
+    it('a draft the tree ended under goes the same way', () => {
+      const lived = typed(inChild(), 'half a thought');
+      const state = step(lived, { type: 'childTree', sessionId: 'root', children: [entry({ sessionId: 'c1', state: 'ended' })] });
+
+      const up = step(state, key('escape'));
+
+      expect(up.sessionId).toBe('root');
+      expect(up.editor.text).toBe('half a thought');
+    });
+
+    it('a live plan\'s Esc still clears its draft first: it is on screen to be cleared', () => {
+      const state = step(typed(inChild(), 'half a thought'), key('escape'));
+
+      expect(state.sessionId).toBe('c1');
+      expect(state.editor.text).toBe('');
+    });
+  });
+
   it('Continue stays on the plan above, on the task\'s own log key', () => {
     const state = step(tree(atRoot(), entry({ sessionId: 'c1', state: 'ended' })), statuses('root', { id: 'd', status: 'failed' }));
 
@@ -388,6 +491,21 @@ describe('what the daemon refuses', () => {
     expect(said(state)).toMatch(/No such plan/);
     expect(effects).toEqual([{ type: 'closeChild', childId: 'c1' }]);
   });
+
+  it('a child that is gone hands the words to the plan the person lands on', () => {
+    const state = step(inChild(), { type: 'childFailed', sessionId: 'c1', code: 'child_not_found', message: 'No such plan.', text: 'hello' });
+
+    expect(state.sessionId).toBe('root');
+    expect(state.editor.text).toBe('hello');
+  });
+
+  it('a person who has left the plan gets the words back where they are now', () => {
+    const left = step(step(inChild(), key('escape')), { type: 'childFailed', sessionId: 'c1', code: 'child_refused', message: 'Paused for a budget.', text: 'hello' });
+
+    expect(left.sessionId).toBe('root');
+    expect(left.editor.text).toBe('hello');
+    expect(said(left)).toMatch(/Paused for a budget/);
+  });
 });
 
 describe('the connection', () => {
@@ -401,6 +519,16 @@ describe('the connection', () => {
 
     expect(back.child?.lost).toBe(false);
     expect(said(back)).toMatch(/Reconnected/);
+  });
+
+  it('a first read that failed stops claiming to read, and says it is coming back', () => {
+    const opened = step(tree(atRoot(), entry({ sessionId: 'c1' })), key('enter'));
+
+    const state = step(opened, { type: 'followLost', sessionId: 'c1' });
+
+    expect(state.child?.reading).toBe(false);
+    expect(screen(state)).not.toContain('Reading this plan');
+    expect(screen(state)).toContain('Reconnecting to this plan');
   });
 
   it('a question survives a re-read, which does not carry one', () => {

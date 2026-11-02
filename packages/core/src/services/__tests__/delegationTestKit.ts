@@ -52,6 +52,16 @@ function repo(): string {
   return root;
 }
 
+/** A workspace that is a folder of its repository, committed so that its worktree has it. */
+function workspaceIn(root: string, folder: string): string {
+  const workspace = join(root, folder);
+  mkdirSync(workspace, { recursive: true });
+  writeFileSync(join(workspace, 'README.md'), 'a package\n');
+  git(root, 'add', '-A');
+  git(root, 'commit', '-q', '-m', 'a package');
+  return workspace;
+}
+
 export interface WorkerReport { status?: 'done' | 'blocked' | 'failed'; summary?: string; reason?: string; findings?: { severity: 'blocker' | 'major' | 'minor' | 'info'; title: string; detail?: string }[] }
 
 /** Writes each task's files in the worktree it was handed, then reports as `reports` says; `usage` tokens are reported first. */
@@ -110,6 +120,8 @@ export interface Tree {
 }
 
 export interface TreeOptions {
+  /** The workspace is this folder of the repository, not its root. */
+  folder?: string;
   runner?: IRunner;
   tasks?: Task[];
   settings?: Partial<ReturnType<SessionDeps['settings']>>;
@@ -127,8 +139,8 @@ export interface TreeOptions {
   rootTurns?: Turn[];
 }
 
-export function tree(turns: Turn[], { runner = writingRunner({ a: ['a.txt'], b: ['b.txt'] }), tasks = [delegated(), check()], settings = {}, below = {}, parallel = 3, config, scriptRunner, seals = false, rootTurns }: TreeOptions = {}): Tree {
-  const root = repo();
+export function tree(turns: Turn[], { runner = writingRunner({ a: ['a.txt'], b: ['b.txt'] }), tasks = [delegated(), check()], settings = {}, below = {}, parallel = 3, config, scriptRunner, seals = false, rootTurns, folder }: TreeOptions = {}): Tree {
+  const root = folder ? workspaceIn(repo(), folder) : repo();
   const rootConfig = config ?? fakeConfig({ maxParallelSessions: parallel });
   const planner = scriptedPlanner(turns);
   const lower = Object.fromEntries(Object.entries(below).map(([id, script]) => [id, scriptedPlanner(script)]));

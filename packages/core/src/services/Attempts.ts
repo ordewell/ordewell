@@ -9,7 +9,7 @@ import type { TaskShell, TaskShellSite } from '../interfaces/IFileSystem';
 import type { LiveTail, LiveTailOptions, TaskOutputSource } from '../interfaces/TaskOutputSource';
 import type { PreviousWork, TreeSnapshot } from '../interfaces/IWorktreeIsolation';
 import { countedSessionCost, resumedSessionWindow } from '../models/Usage';
-import { summarizeOutput } from './promptAugment';
+import { delegatedWorkNote, summarizeOutput } from './promptAugment';
 import { endedByExit, VerdictEngine } from './VerdictEngine';
 import type { PlanStore } from './PlanStore';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
@@ -804,7 +804,7 @@ export class Attempts {
       const session = attempt.script
         ? await this.spawnScript(task, attempt, cwd, writable)
         : attempt.delegated
-          ? await this.spawnChildPlan(task, attempt, cwd)
+          ? await this.spawnChildPlan(task, attempt, cwd, previousWork)
           : await this.spawnRunner(task, attempt, cwd, writable, previousWork);
 
       // Stop/load/cancel can end the attempt while the async adapter is
@@ -906,7 +906,8 @@ export class Attempts {
       const refused = err instanceof RunnerStartupExit;
       const reason = unresumedMessage(task, refused ? `${attempt.runner} could not find its saved session` : `could not start: ${message}`);
       if (refused) this.deps.store.setTaskRunnerSessionId(task.id, undefined);
-      return failed({ leaves: 'failed', summary: summarizeOutput(reason, refused ? message : ''), keepWorktree: false, notice: { level: 'error', text: reason, toastOnly: true } });
+      // A child stays until a fresh attempt gives it up: its record is what the next Continue reopens it by (ADR-0055 D17).
+      return failed({ leaves: 'failed', summary: summarizeOutput(reason, refused ? message : ''), keepWorktree: task.type === 'delegated', notice: { level: 'error', text: reason, toastOnly: true } });
     }
     if (attempt.kind.kind === 'repair') return failed({ leaves: 'conflict', why: `could not start: ${message}` });
     if (attachTimeout) {
@@ -1142,11 +1143,12 @@ export class Attempts {
   }
 
   /** A delegated task's start (ADR-0055 D3): its child plan, in the worktree this attempt opened. A subplanner reads its goal, or a Continue's message. */
-  private spawnChildPlan(task: Task, attempt: TaskAttempt, cwd: string): Promise<IRunnerSession> {
+  private spawnChildPlan(task: Task, attempt: TaskAttempt, cwd: string, previousWork: PreviousWork | undefined): Promise<IRunnerSession> {
+    const moved = delegatedWorkNote(task.title, previousWork);
     return this.deps.childPlanRunner.spawn({
       taskId: task.id,
       runner: attempt.runner,
-      prompt: attempt.kind.kind === 'continuation' ? attempt.kind.message : task.goal ?? '',
+      prompt: attempt.kind.kind === 'continuation' ? [attempt.kind.message, ...(moved ? [moved] : [])].join('\n\n') : task.goal ?? '',
       cwd,
       order: task.order,
       title: task.title,

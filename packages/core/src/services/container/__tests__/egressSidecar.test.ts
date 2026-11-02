@@ -22,7 +22,7 @@ const { names, echoPort, dialed } = JSON.parse(process.env.ORDEWELL_TEST_WORLD);
 os.networkInterfaces = () => ({ lo: [{ address: '127.0.0.2', family: 'IPv4', internal: true }], eth0: [{ address: '127.0.0.1', family: 'IPv4', internal: false }] });
 const realLookup = dns.lookup;
 dns.lookup = (name, options, done) => {
-  if (net.isIP(name)) return realLookup(name, options, done);
+  if (net.isIP(name) || name.includes('\0')) return realLookup(name, options, done);
   const addresses = names[name];
   if (!addresses) return done(Object.assign(new Error('not found'), { code: 'ENOTFOUND' }));
   done(null, addresses.map((address) => ({ address, family: address.includes(':') ? 6 : 4 })));
@@ -61,6 +61,8 @@ const RESOLVES: Record<string, string[]> = {
   'link.example.org': ['fe80::1'],
   'unique.example.org': ['fd00::1'],
   'mapped.example.org': ['::ffff:127.0.0.1'],
+  'teredo.example.org': ['2001:0:a00:1::1'],
+  'v6-beside-teredo.example.org': ['2001:4860:4860::8888'],
   'mixed.example.org': ['93.184.216.34', '127.0.0.1'],
 };
 
@@ -130,6 +132,21 @@ describe('the egress sidecar (ADR-0059 L7)', () => {
 
     expect(await asked(port, connectTo('v6.example.org:443'))).toMatch(/^HTTP\/1\.1 200 /);
     expect(dialed()).toEqual(['2606:4700::6810:84e5:443']);
+  });
+
+  it('holds a public address beside the range Teredo takes', async () => {
+    const { port, dialed } = await sidecar(['v6-beside-teredo.example.org']);
+
+    expect(await asked(port, connectTo('v6-beside-teredo.example.org:443'))).toMatch(/^HTTP\/1\.1 200 /);
+    expect(dialed()).toEqual(['2001:4860:4860::8888:443']);
+  });
+
+  it('refuses a NUL in a host with a plain answer, and lives to answer the next request', async () => {
+    const { port, dialed } = await sidecar(['*.example.com']);
+
+    expect(await asked(port, connectTo('a\0.example.com:443'))).toMatch(/^HTTP\/1\.1 403 /);
+    expect(await asked(port, connectTo('a.example.com:443'))).toMatch(/^HTTP\/1\.1 200 /);
+    expect(dialed()).toEqual(['93.184.216.34:443']);
   });
 
   it.each([

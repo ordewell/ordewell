@@ -215,6 +215,8 @@ interface UserTurn {
   repaired?: boolean;
   /** Its message was force sent. */
   forced?: boolean;
+  /** Which of its wake-ups are asides, not run updates. */
+  asides?: readonly string[];
   /**
    * The pause it retries, and whether it carries on the live context's held
    * input — whose calls the chat still holds — or starts again from the
@@ -551,6 +553,8 @@ export interface ReplyOptions {
   onCommit?: () => void;
   /** Wake-up digests delivered with this turn (ADR-0029), oldest first, ahead of the user's message if there is one. */
   wakeUps?: readonly string[];
+  /** Which of `wakeUps` are asides read with the user's message, which the cap on run updates leaves alone. */
+  asides?: readonly string[];
   /** Set when the turn is a wake-up's alone. */
   wakeUp?: WakeUpTurn;
   /** The user's message was force sent: the turn replaces the one it stopped (ADR-0023). */
@@ -1156,6 +1160,7 @@ export class PlannerConversation {
     // appends, and each would settle on the other's open turn.
     return this.userTurn({ refuseAs: 'send a message' }, sent, options.signal, (userTurn) => {
       userTurn.onCommit = options.onCommit;
+      userTurn.asides = options.asides;
       return this.replyTurn(sent, wakeUps, userTurn);
     }, { wakeUps, wakeUp: options.wakeUp, forced: options.forced, recovery: options.recovery });
   }
@@ -1205,7 +1210,9 @@ export class PlannerConversation {
     userTurn.blocks = this.blocks.next();
     const contextBlock = [...userTurn.blocks.blocks, ...userTurn.briefing.blocks].join('\n\n');
     const said = fromUser ? plannerMessage(message.text, message.skills) : '';
-    const outgoing = plannerInput([contextBlock, ...boundedWakeUps(wakeUps), userTurn.briefing.wakeBrief, said]);
+    const asides = userTurn.asides ?? [];
+    const updates = wakeUps.filter((wakeUp) => !asides.includes(wakeUp));
+    const outgoing = plannerInput([contextBlock, ...asides, ...boundedWakeUps(updates), userTurn.briefing.wakeBrief, said]);
     return reopened
       ? this.resume(reopened, outgoing, priorHistory, signal, userTurn.stream.sink(), native)
       : this.host.aiService().continueConversation(outgoing, userTurn.stream.sink(), signal);

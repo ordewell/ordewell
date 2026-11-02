@@ -140,6 +140,13 @@ async function opened(backend: DockerExecutionBackend, request = taskRequest, sp
   return Object.assign(await reserved.lease.open(spec, signal), { lease: reserved.lease });
 }
 
+/** The task volume a start made, which fails a test if it made none. */
+function madeTaskVolume(cli: RecordingCli): string {
+  const made = cli.lines().find((line) => line.startsWith('volume create') && line.includes('ordewell-task-'));
+  if (!made) throw new Error('no task volume was made');
+  return made.split(' ').at(-1)!;
+}
+
 describe('what runs in a container (ADR-0059 L5)', () => {
   it('refuses a runner no container has been proven with, naming the ones that have', async () => {
     const { backend, cli } = backendWith();
@@ -196,6 +203,36 @@ describe('what runs in a container (ADR-0059 L5)', () => {
     expect(allowOf(gated.cli)).not.toContain('api.anthropic.com');
     open.lease.release('done');
     closed.lease.release('done');
+  });
+
+  describe('a login that gates one key and names another', () => {
+    const allowFor = async (variables: string[], modelId: string) => {
+      const { backend, cli } = backendWith({ settings: { image: 'ordewell-task', login: { kind: 'broker', variables }, allow: [] }, env: { ANTHROPIC_API_KEY: 'sk-ant-api03-test', OPENAI_API_KEY: 'sk-proj-test', OPENROUTER_API_KEY: 'sk-or-test' } });
+      const spec = { ...changeSpec, task: createTask({ id: 'a', order: 1, title: 'A', prompt: 'do a', assignedModel: { modelId, modelLabel: modelId, availableVariants: [] } }) };
+      const lease = await opened(backend, { ...taskRequest, runner: 'opencode' }, spec);
+      lease.lease.release('done');
+      return JSON.parse(cli.sidecars[0].args.find((arg) => arg.startsWith('ORDEWELL_EGRESS='))!.slice('ORDEWELL_EGRESS='.length)).allow as string[];
+    };
+
+    it('opens the handed key its provider, and leaves the gated key behind its gateway', async () => {
+      const hosts = await allowFor(['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY'], 'openrouter/anthropic/claude-sonnet-4');
+
+      expect(hosts).toContain('openrouter.ai');
+      expect(hosts).not.toContain('api.anthropic.com');
+    });
+
+    it("does not open the gated key's own API for a model of that provider", async () => {
+      expect(await allowFor(['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY'], 'anthropic/claude-sonnet-4')).not.toContain('api.anthropic.com');
+    });
+
+    it('opens no host for a key the broker keeps from this runner', async () => {
+      expect(await allowFor(['ANTHROPIC_API_KEY', 'OPENAI_API_KEY'], 'openai/gpt-5')).not.toContain('api.openai.com');
+      expect(await allowFor(['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY'], 'openai/gpt-5')).not.toContain('api.openai.com');
+    });
+
+    it('opens no provider when nothing was handed for it to take', async () => {
+      expect(await allowFor(['ANTHROPIC_API_KEY'], 'openrouter/anthropic/claude-sonnet-4')).not.toContain('openrouter.ai');
+    });
   });
 
   it("reaches a server the runner starts inside, over the relay, and nowhere else", async () => {
@@ -762,6 +799,16 @@ describe('a script in a container', () => {
       void backend;
     });
 
+    it('leaves no volume behind when it cannot get a network', async () => {
+      const cli = new RecordingCli();
+      cli.answers.push({ match: /^network create/, result: { code: 1, stderr: 'no address pool' } });
+      const { backend } = backendWith({ cli });
+
+      await expect(opened(backend, scriptRequest, checkoutSpec)).rejects.toThrow(/no address pool/);
+
+      expect(cli.lines()).toContain(`volume rm -f ${madeTaskVolume(cli)}`);
+    });
+
     it('still refuses a task of the checkout: a runner there has work to bring back', async () => {
       const { backend } = backendWith();
 
@@ -810,6 +857,22 @@ describe('a script in a container', () => {
 
       const made = cli.lines().find((line) => line.startsWith('volume create') && line.includes('ordewell-task-'))!.split(' ').at(-1);
       expect(cli.lines()).toContain(`volume rm -f ${made}`);
+    });
+
+    it('leaves no volume behind when git cannot name what it would run on', async () => {
+      const failingGit: GitInvoker = {
+        exec: async (_file, args) => {
+          if (args.includes('HEAD')) throw Object.assign(new Error('bad HEAD'), { stderr: 'fatal: bad HEAD' });
+          return { stdout: 'abc123\n', stderr: '' };
+        },
+        resolvePath: async () => '/usr/bin',
+      };
+      const cli = new RecordingCli();
+      const { backend } = backendWith({ cli, git: failingGit });
+
+      await expect(opened(backend, scriptRequest, readOnlySpec)).rejects.toThrow(/bad HEAD/);
+
+      expect(cli.lines()).toContain(`volume rm -f ${madeTaskVolume(cli)}`);
     });
 
     it('keeps nothing: its volume goes with its attempt, and a retry gets its own', async () => {

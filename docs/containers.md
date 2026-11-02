@@ -115,9 +115,14 @@ Name one login. `ANTHROPIC_API_KEY` beside `ANTHROPIC_AUTH_TOKEN`,
 refused: Claude Code ranks those over the key, so a task would not run on the login
 you meant.
 
-Only an Anthropic key takes the gateway. An OpenCode task on another provider — an
-OpenRouter key, say — has that key handed to the runner, so it can read it, and its
-provider's hosts are opened for it. A model id whose provider Ordewell does not know
+The gateway carries a turn and a read of the model list, and nothing else a key can
+do: no Message Batches, which serve a whole workspace, no stored responses, no files.
+
+For OpenCode, only an Anthropic key takes the gateway. `OPENAI_API_KEY` is Codex's: it
+stays on your machine, so an OpenCode task on an `openai/*` model does not get it, and
+needs OpenCode's own sign-in instead. Any other provider's key — an OpenRouter key,
+say — is handed to the runner, so it can read it, and its provider's hosts are opened
+for it, beside an Anthropic key too. A model id whose provider Ordewell does not know
 needs its hosts in `allow`.
 
 Ordewell never carries a Claude subscription's token, and refuses one that reaches it
@@ -186,9 +191,10 @@ through the lease's relay: it listens on the container's own loopback and no por
 published. Three things differ from Claude Code:
 
 - **Only an Anthropic key is gated.** A broker login with `ANTHROPIC_API_KEY` points
-  OpenCode's `anthropic` provider at the lease gateway. Any other provider's key is
-  handed to the runner, and that provider's hosts are opened; a provider Ordewell does
-  not know needs them in `allow`.
+  OpenCode's `anthropic` provider at the lease gateway. `OPENAI_API_KEY` is not handed
+  to OpenCode, whose `openai/*` models need its own sign-in. Any other provider's key
+  is handed to the runner, and that provider's hosts are opened; a provider Ordewell
+  does not know needs them in `allow`.
 - **Its own sign-in is its whole data directory**, copied to the task's volume as it
   first starts. Every provider login it holds travels with it, and the hosts its login
   flow offers are opened. A provider outside that list needs its hosts in `allow`.
@@ -279,7 +285,7 @@ first container proved:
 | `net.allowlist` | Tries to reach the internet and a listener on your machine's loopback, directly and through the sidecar, and to resolve a name outside. All of it must fail. |
 | `net.noMetadata` | Tries to reach a cloud metadata address, directly and through the sidecar. |
 | `kernel.separate` | Compares the container's kernel with your machine's: true in a VM, not on Linux itself. |
-| `cred.unreadable` | Looks for an API key the gateway holds in every environment the container can read. Not proven for `own-sign-in` of any runner, for anything handed to a runner by name, or by `check`, which holds no login. |
+| `cred.unreadable` | Looks for an API key the gateway holds in every environment the container can read. Not proven for `own-sign-in` of any runner, for anything handed to a runner by name, or by `check`, which holds no login: when a login no lease could prove it under requires it, `check` says not ready. |
 
 ## What nothing here proves
 
@@ -322,9 +328,12 @@ It ends by saying one of three things, and exits non-zero on the last two:
 
 | Outcome | What it means |
 | --- | --- |
-| `VERIFIED` | Every test ran and passed, on this engine, and each harness's real binary was proven. |
-| `FAILED` | A test failed. |
-| `UNVERIFIED` | No engine answered, a test was skipped, or a real binary was not proven. A skipped test is never a pass, so nothing here reads as passing. |
+| `VERIFIED` | Every suite ran, every test passed, vitest ended clean, on this engine, and each harness's real binary was proven. |
+| `FAILED` | A test failed, or vitest did not end clean, whatever its tests say. |
+| `UNVERIFIED` | No engine answered, a suite did not run, a test was skipped, or a real binary was not proven. A skipped test is never a pass, so nothing here reads as passing. |
+
+An engine this Linux host reaches by anything but a `unix://` socket is reported as
+`other`, never as native Linux, since nothing says where it is.
 
 CI runs this on Linux, in the `real-engine` job. It does not run on a Mac there, so on
 a Mac it is yours to run. With Colima:
@@ -472,7 +481,9 @@ and keeps each task's volume for a Continue.
 Clean up, Discard and deleting a session take away what that session left in the
 engine: its containers, networks and task volumes, and its pins in the repository's
 mirror. Once no session of the project holds a pin, the mirror goes too, with any cache
-volume an earlier build left. Your own sign-in volume is never touched.
+volume an earlier build left. Your own sign-in volume is never touched. Each clean-up
+also takes what a `containers check` left when its machine died, once that is an hour
+old and nothing uses it.
 
 A mirror that stays busy through a clean-up is reported and left in place, and no later
 clean-up takes it: remove it yourself with `docker volume rm` once nothing uses it.

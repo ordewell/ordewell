@@ -3,9 +3,10 @@ import { containersOffered } from '../runSettingsText';
 import { CONTAINER_ASSUMPTIONS, inspectEngine, inspectReadiness, type ContainerProblem, type EngineFacts, type PreflightDeps, type ReadinessDeps } from './containerPreflight';
 import { proveEngine } from './containerProof';
 import { isImage, parseContainerSettings, type ContainerSettings } from './containerSettings';
-import { CredentialBroker, parseLogin, type LeaseLogin } from './credentialBroker';
+import { CredentialBroker, parseLogin, staysOnThisHost, type LeaseLogin } from './credentialBroker';
 import { SpawnedDockerCli, type DockerCli } from './dockerCli';
 import { SidecarEgress } from './egressSidecar';
+import { CHECK_LABEL } from './reclaim';
 
 /** One change a surface can make: the rest of the setting stays in the file. */
 export type ContainerChange = { on: boolean } | { image: string } | { login: unknown };
@@ -53,7 +54,7 @@ export interface StatusDeps extends Partial<ReadinessDeps> {
 }
 
 /** Whose a surface's check is, for a clean-up to find what a host that died left of it. */
-const CHECK_LABELS = ['--label', 'ordewell.probe=1'];
+const CHECK_LABELS = ['--label', CHECK_LABEL];
 
 const proveHere = (cli: DockerCli) => (settings: ContainerSettings): Promise<GuaranteeReport> => proveEngine(settings, { cli, egress: new SidecarEgress(cli), labels: CHECK_LABELS });
 
@@ -118,11 +119,11 @@ function chosen(raw: unknown): Pick<ContainerStatus, 'image' | 'login' | 'memory
   return { image: settings.image, login: nameLogin(settings.login), memory: settings.memory, allow: settings.allow };
 }
 
-function unprovenProblem(required: readonly Guarantee[], report: GuaranteeReport): ContainerProblem[] {
-  // Only a container that holds the lease's login can answer for it, and this one holds none.
-  const unproven = required.filter((guarantee) => guarantee !== 'cred.unreadable' && !report[guarantee].proven);
+function unprovenProblem(required: readonly Guarantee[], report: GuaranteeReport, login: LeaseLogin): ContainerProblem[] {
+  // This container holds no login, so of `cred.unreadable` only the login can say: a lease proves a key it keeps, and never what a runner reads.
+  const unproven = required.filter((guarantee) => (guarantee === 'cred.unreadable' ? !staysOnThisHost(login) : !report[guarantee].proven));
   if (unproven.length === 0) return [];
-  const said = unproven.map((guarantee) => `${guarantee} (${report[guarantee].by})`).join('; ');
+  const said = unproven.map((guarantee) => `${guarantee} (${guarantee === 'cred.unreadable' ? 'a runner can read what this login holds' : report[guarantee].by})`).join('; ');
   return [refusal('guarantee-unproven', `Required of a container, and not proven here: ${said}.`, 'Every task refuses until it can be, or take it out of containers.required if you accept that.')];
 }
 
@@ -145,7 +146,7 @@ export async function containerStatus(raw: unknown, { prove, proof, cli = new Sp
   if (!settings || !measure) return { ...base, ready: problems.length === 0, problems, assumptions };
   try {
     const report = await measure(settings);
-    const proofProblems = unprovenProblem(settings.required, report);
+    const proofProblems = unprovenProblem(settings.required, report, settings.login);
     const guarantees = GUARANTEES.map((guarantee) => ({ guarantee, proven: report[guarantee].proven, by: report[guarantee].by, required: settings.required.includes(guarantee) }));
     return { ...base, ready: proofProblems.length === 0, problems: proofProblems, guarantees, assumptions };
   } catch (err) {
