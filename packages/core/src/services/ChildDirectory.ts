@@ -7,6 +7,9 @@ import { EMPTY_RUN, reduceRun } from './runView';
 
 export const CHILD_ENDED = { ok: false, code: 'view_only', message: 'This child plan has ended, so it only reads. Continue its task to speak to it.' } as const;
 
+/** A fresh retry let this one go or its task left the plan, so a Continue would not reach it. */
+const CHILD_LET_GO = { ok: false, code: 'view_only', message: 'This child plan has ended and its task no longer leads to it, so it only reads.' } as const;
+
 export type ChildFrame = SessionMessage | SessionNotice;
 type ChildListener = (frame: ChildFrame) => void;
 
@@ -120,10 +123,15 @@ export class ChildDirectory {
       entry,
       view: () => this.view(sessionId, entry()),
       watch: (listener) => this.watch(sessionId, listener),
-      message: (text) => this.seats.get(sessionId)?.hear(text) ?? CHILD_ENDED,
-      control: async (taskId, control) => (await this.seats.get(sessionId)?.control(taskId, control)) ?? CHILD_ENDED,
+      message: (text) => this.seats.get(sessionId)?.hear(text) ?? this.ended(entry()),
+      control: async (taskId, control) => (await this.seats.get(sessionId)?.control(taskId, control)) ?? this.ended(entry()),
       logLocation: () => this.host.logLocation(sessionId),
     };
+  }
+
+  private ended(child: ChildPlanEntry): typeof CHILD_ENDED | typeof CHILD_LET_GO {
+    const task = child.taskId ? this.taskAbove(child.taskId, child.parent) : undefined;
+    return task?.runnerSessionId === child.sessionId ? CHILD_ENDED : CHILD_LET_GO;
   }
 
   private view(sessionId: string, child: ChildPlanEntry): ChildPlanView {

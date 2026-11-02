@@ -110,6 +110,20 @@ supervisor's wake-ups, the task logs and the MCP server cost against plan size
 and live sessions, with fake runners. Bundles core's source itself, so it needs
 no build. See [its README](scale/README.md) for the commands and how to read them.
 
+## Real-engine check (`bench/containers/`)
+
+What makes `npm run test:containers` a verdict and not a test run. That command
+(`scripts/container-e2e.mjs`) builds an image holding all three real harnesses, runs
+the container suites against the engine `docker` talks to, with a stand-in model
+in place of each provider, and asks `verdict.mjs` what the run proved. A skipped
+test, or a harness whose real binary was not proven, reads as `UNVERIFIED`, not a
+pass. CI's `real-engine` job runs it on Linux; on a Mac it is yours to run, as
+[docs/containers.md](../docs/containers.md#checking-it-yourself) says.
+
+- `verdict.mjs` — pure: counts vitest's JSON report and names the outcome, the
+  engine it ran on and each harness's proof.
+- `verdict.test.mjs` — its tests, under `npm run test:bench`.
+
 ## Runner-detection lab (`bench/lab/`)
 
 A throwaway `HOME` and a shim bin dir that decide, for one run, which

@@ -20,6 +20,11 @@ export function treeEventLogFile(rootSessionId: string, baseDir: string): string
   return path.join(sessionDataDir(rootSessionId, baseDir), LOG_FILE);
 }
 
+/** Whether this root ever opened a tree: a read that asks first opens none of its own. */
+export function hasTreeEventLog(rootSessionId: string, baseDir: string): boolean {
+  return fs.existsSync(treeEventLogFile(rootSessionId, baseDir));
+}
+
 interface Batch {
   events: TreeEvent[];
   /** The offset just past this line. */

@@ -93,7 +93,9 @@ export function childrenRoute(pool: OrchestratorPool) {
   router.post('/:id/children/:childId/message', async (c) => {
     try {
       const child = await childOf(c);
-      const { message } = await jsonObject<{ message?: unknown }>(c);
+      const body = await jsonObject<{ message?: unknown }>(c);
+      if (asksAboveItsPlan(body)) return refuse(c, 400, ABOVE_THIS_PLAN, 'refused');
+      const { message } = body;
       if (typeof message !== 'string' || !message.trim()) return refuse(c, 400, 'message must be a non-empty string');
       const outcome = child.message(message);
       if (!outcome.ok) return refuse(c, 409, outcome.message, outcome.code === 'view_only' ? 'child_view_only' : 'child_refused');

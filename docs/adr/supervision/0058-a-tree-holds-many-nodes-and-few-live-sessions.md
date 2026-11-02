@@ -101,7 +101,9 @@ The port is tested through an in-memory fake and the JSONL backend against the s
 cursor and at a path. The JSONL backend alone is tested for a batch whole, a torn last line dropped on read and cut
 off before an append, a failed write, and damage before the end. The fold is a pure function, tested by replaying
 a log into the state a live tree held. `treeLedger.flatRun.test.ts` holds a flat run to no log and no ledger, with a
-carve as its control. The scale harness is an offline bench, and no CI test asserts a rate.
+carve as its control. The scale harness is an offline bench, and no CI test asserts a rate: `bench/scale/target.mjs`
+runs the target above as one command and `--compare` lays two runs side by side, with figures and no threshold, and
+those figures stay in a handoff rather than in anything a user reads.
 
 ## Out of scope
 
@@ -140,3 +142,4 @@ stays possible behind the port or the lease.
 - 2026-10-31 — S4's admission implemented: the pool of ADR-0055 D18, at `reserve`.
 - 2026-10-31 — S3 implemented in `EventStore` and `jsonlEventStore`, opened by a tree's first carve: a batch is one line, the store numbers events, so `append` takes facts, and an event carries its node's path.
 - 2026-11-01 — board entries join the log (ADR-0057 R8), whole.
+- 2026-11-02 — `bench/scale/target.mjs` makes the target one repeatable run, with a before and after and no threshold.

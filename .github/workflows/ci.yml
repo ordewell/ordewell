@@ -185,3 +185,29 @@ jobs:
           name: ordewell-vsix
           path: packages/vscode/*.vsix
           if-no-files-found: error
+
+  # The container suites on a real Linux engine, with real Claude Code, Codex and
+  # OpenCode in the image and a controlled model behind each: no key, no account.
+  # `build-and-test` skips them, as its `CI` says to, so this job is what runs
+  # them. A test that skips here fails the job (bench/containers/verdict.mjs).
+  real-engine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    env:
+      ORDEWELL_NO_VERSION_CHECK: '1'
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Real engine — every harness in a real container
+        run: npm run test:containers

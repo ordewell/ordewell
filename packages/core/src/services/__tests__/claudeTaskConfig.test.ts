@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { ClaudeCodeAdapter } from '../harness/ClaudeCodeAdapter';
 import type { AgentProcessDeps, TaskStartOptions } from '../harness/AgentAdapter';
 import { fakeSpawn } from './harnessTestKit';
@@ -55,7 +55,10 @@ describe('a Claude task runner\'s compaction window', () => {
   });
 
   it('is never set for a planner, whose conversation is the user\'s', async () => {
+    // Ordewell sets none here, and passes on what the user's own shell set.
+    vi.stubEnv('CLAUDE_CODE_AUTO_COMPACT_WINDOW', undefined);
     const { env } = await started({ kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN' });
+    vi.unstubAllEnvs();
     expect(env).not.toHaveProperty('CLAUDE_CODE_AUTO_COMPACT_WINDOW');
   });
 });

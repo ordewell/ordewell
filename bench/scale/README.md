@@ -6,6 +6,9 @@ included, with esbuild. The results these were written for are in the handoff
 of the task that wrote them; rerun them rather than trusting old numbers.
 
 ```bash
+node bench/scale/target.mjs --out after.json        # the whole laptop-scale target of ADR-0058, repeated
+node bench/scale/target.mjs --checkout ../base --out before.json   # the same, measured on another checkout
+node bench/scale/target.mjs --compare before.json after.json       # two runs side by side
 node bench/scale/build.mjs                          # after any change to core
 node bench/scale/ops.mjs                            # one operation against plan size
 node --expose-gc bench/scale/live.mjs --sessions 100 --rate 1.6 --events 180 --heap
@@ -19,6 +22,8 @@ node bench/scale/real.mjs .ordewell/sessions        # what real runs left, as ag
 
 | File | What it measures |
 | --- | --- |
+| `target.mjs` | ADR-0058's target as one command: `live.mjs` at tens of sessions and thousands of tasks, repeated and taken by the median, then `ops.mjs`. It exits non-zero if a repeat left tasks unfinished or `ops.mjs` broke, keeping what it measured, and runs a checkout's own scripts, so a before and an after come from one command. |
+| `compare.mjs` | What `target.mjs --compare` says: figures and a ratio, and a warning where two runs had another machine or target. It gives no verdict, since no test asserts a rate. |
 | `ops.mjs` | The tick, a mutation, a save, the view, a wake-up, a tree's ledger and log, and a start's prompt at each plan size. `--only` picks sections; past 5,000 tasks each runs once. |
 | `live.mjs` | N sessions live in one Session through the whole pipeline but for the processes. One JSON line out. |
 | `swarm.mjs` | The fake processes: `Swarm.spawn` stands where `spawn` does in `StructuredRunnerDeps.process`, so the real Claude adapter and everything above it run. |
@@ -28,9 +33,14 @@ node bench/scale/real.mjs .ordewell/sessions        # what real runs left, as ag
 | `logs.mjs` | `openTaskLog`, appends and whole-file reads. |
 | `procs.mjs` | Real child processes, for the spawn, the pipes and the attach. |
 | `real.mjs` | Sizes and rates from a sessions folder, the calibration for the rest. |
-| `scale.test.mjs` | Runs `ops.mjs` and `live.mjs` small under `npm run test:bench`, since a change to core's internals breaks them with no type error. |
+| `scale.test.mjs` | Runs `ops.mjs`, `live.mjs` and `target.mjs` small under `npm run test:bench`, since a change to core's internals breaks them with no type error. |
+| `compare.test.mjs` | `compare.mjs`, with no run at all. |
 
 ## Reading the numbers
+
+A figure from here belongs in a handoff or a review, not in anything a user reads:
+it describes one machine on one day, and ADR-0058 calls its target a design target
+and no promise.
 
 - **Calibration.** Task sizes and the event mix come from this repository's saved
   sessions: `real.mjs` prints them. `--rate 1.6` makes 0.09 usage events a second

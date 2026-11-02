@@ -150,6 +150,7 @@ const CI_ONLY = {
   'Append coverage summaries to the job summary': 'a GitHub job summary',
   'Upload coverage reports': 'reports stay in packages/*/coverage/',
   'Upload .vsix': 'the .vsix stays in packages/vscode/',
+  'Real engine — every harness in a real container': 'it needs an engine and a large image: run `npm run test:containers`',
 };
 
 const workflow = readFileSync('.github/workflows/ci.yml', 'utf8');

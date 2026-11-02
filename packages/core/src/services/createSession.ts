@@ -38,7 +38,7 @@ import { SCRIPT_PAST_THE_RULES, autonomousAt, delegatedRequest, heldMandate, man
 import { TreeLedger, type Carved, type NodeBudget } from './TreeLedger';
 import type { EventStore } from './eventStore';
 import { ROOT_NODE, type NodePath } from '../models/TreeEvent';
-import { jsonlEventStore, treeEventLogFile } from '../utils/treeEventLog';
+import { hasTreeEventLog, jsonlEventStore, treeEventLogFile } from '../utils/treeEventLog';
 import { ensureStateDirIgnored } from '../utils/fsHelpers';
 import { PendingApprovals, type PendingApproval } from './PendingApprovals';
 import { RunnerApprovals } from './RunnerApprovals';
@@ -370,10 +370,12 @@ function reportingUp(budget: NodeBudget, link: SubplannerLink | undefined): Node
 /** Who the message of a turn came from, since a subplanner otherwise reads every message as the plan above's. */
 const PERSON_SPOKE = 'A message in this turn comes from a person watching this child plan, not from the plan above. It stays here: nothing reaches the plan above unless you pass up what it needs in your own report or question.';
 
+const STOPPED_UNANSWERED = 'This child plan stopped before its subplanner answered your message.';
+
 /** What a person hears of a message nothing answered, nobody else holding the call. The child's report ending the turn that read it is no news. */
 function personUnanswered(err: unknown): string | null {
   if (err instanceof PlannerTurnDiscardedError && !err.unread) return null;
-  if (err instanceof PlannerTurnDiscardedError || err instanceof PlannerTurnStoppedError) return 'This child plan stopped before its subplanner answered your message.';
+  if (err instanceof PlannerTurnDiscardedError || err instanceof PlannerTurnStoppedError) return STOPPED_UNANSWERED;
   return `Your message to this child plan went unanswered: ${err instanceof Error ? err.message : String(err)}`;
 }
 
@@ -1709,7 +1711,8 @@ export class Session {
     this.ownChildren ??= new ChildDirectory({
       rootSessionId: () => this.rootSessionId,
       // A read opens no tree of its own: that would fix the root's limit before its run does.
-      ledger: async () => (this.tree || flattenTasks(this.store.planTasks).some((task) => task.type === 'delegated' && task.runnerSessionId) ? this.ledger() : null),
+      // The log answers for a tree whose every child was let go, so no task names one.
+      ledger: async () => (this.tree || hasTreeEventLog(this.rootSessionId, this.stateRoot) ? this.ledger() : null),
       rootTask: (taskId) => this.store.get(taskId),
       saved: (sessionId) => loadChildSession({ baseDir: this.stateRoot, rootSessionId: this.rootSessionId, sessionId }),
       logLocation: (sessionId) => ({ baseDir: this.stateRoot, sessionId, rootSessionId: this.rootSessionId }),
@@ -1971,6 +1974,7 @@ export class Session {
   /** This session as its parent's attempt drives it, `pins` what it is told as it starts (ADR-0057 R10). */
   private asNode(task: Task, mandate: Mandate, pins: readonly string[]): ChildNode {
     const told = (goal: string) => (pins.length > 0 ? `${goal}\n\n${pins.join('\n')}` : goal);
+    let toldOfHeld = false;
     const leave = this.placement?.directory.seat({
       sessionId: this.sessionId,
       taskId: task.id,
@@ -1993,7 +1997,15 @@ export class Session {
       hear: (line) => { void this.turns.enqueue({ source: 'supervisor', text: line, rides: true }).catch(() => undefined); },
       state: () => this.nodeState(),
       takeReport: (report) => this.takeReport(report),
-      halt: () => this.stopSubtree(),
+      // Before the stop, which drops what a context pause held; halting closes the
+      // seat first, so no message comes in behind this and one notice covers them all.
+      halt: () => {
+        if (!toldOfHeld && this.turns.heldWithoutCaller().some((t) => t.aside === PERSON_SPOKE)) {
+          toldOfHeld = true;
+          this.notice('warn', STOPPED_UNANSWERED);
+        }
+        return this.stopSubtree();
+      },
       close: async () => {
         this.destroy();
         await this.departed;

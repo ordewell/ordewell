@@ -239,8 +239,50 @@ describe('selecting a child plan', () => {
     const old = (await parent.children.find(first.sessionId))!;
     expect(old.view().plan?.tasks.map((task) => task.title)).toEqual(['Write a']);
     expect(old.message('and you?')).toMatchObject({ ok: false, code: 'view_only' });
+    expect(old.message('and you?')).not.toMatchObject({ message: expect.stringContaining('Continue') });
+    await expect(old.control('a', { kind: 'message', text: 'and you?' })).resolves.not.toMatchObject({ message: expect.stringContaining('Continue') });
     release('a');
     parent.destroy();
+  });
+
+  it('still tells a person to Continue the task of a child that task still names', async () => {
+    const { runner, release } = heldTasks(['a']);
+    const { parent } = tree({ d: [SUBMIT([childTask('a', 1)]), DONE] }, { runner });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(runner.spawned).toEqual(['a']), WAIT);
+    const [first] = await parent.children.list();
+    await parent.execute({ command: 'stop_run' }, { kind: 'user' });
+    await vi.waitFor(() => expect(parent.planTasks[0].status).not.toBe('in_progress'), WAIT);
+
+    const ended = (await parent.children.find(first.sessionId))!;
+    await vi.waitFor(() => expect(ended.entry().state).toBe('ended'), WAIT);
+    expect(ended.message('and you?')).toMatchObject({ ok: false, code: 'view_only', message: expect.stringContaining('Continue its task') });
+    release('a');
+    parent.destroy();
+  });
+
+  it('after a restart, still lists a child no task names any more, from the tree\'s own log', async () => {
+    const { runner } = heldTasks(['a']);
+    const { parent, root } = tree({ d: [SUBMIT([childTask('a', 1)]), DONE] }, { runner });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(runner.spawned).toEqual(['a']), WAIT);
+    const [first] = await parent.children.list();
+    await parent.execute({ command: 'stop_run' }, { kind: 'user' });
+    await vi.waitFor(() => expect(parent.planTasks[0].status).not.toBe('in_progress'), WAIT);
+    await parent.discardChild(parent.planTasks[0]);
+    parent.destroy();
+    await parent.gone;
+
+    const reopened = makeSession({
+      runner, isolation: isolation(), workspaceRoot: () => root, saveSession, openTaskLog, leaseHost: new LeaseHost(), sessionId: 'session-root',
+      settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', delegationTokens: 5_000_000 } }), delegationOffered: true,
+    });
+    closing.push(reopened);
+    const saved = loadSession('session-root', root);
+    reopened.loadPlan(saved!.plan, saved!.meta.goal, root, { sessionId: 'session-root', persist: false });
+
+    expect((await reopened.children.list()).map((entry) => [entry.sessionId, entry.state])).toEqual([[first.sessionId, 'ended']]);
+    reopened.destroy();
   });
 
   it('after a restart, shows every child of the tree as ended, nothing reseated by reading it', async () => {
@@ -528,6 +570,22 @@ describe('what becomes of a message', () => {
     expect(notices(frames).filter((notice) => /your message/.test(notice.message))).toHaveLength(1);
     expect(planners.d.asked.join('\n')).not.toContain('also do b');
     gate.resolve();
+    release('a');
+    parent.destroy();
+  });
+
+  it('tells whoever watches when a Stop ends the child with a message held on its usage limit', async () => {
+    const limited: Turn = async () => ({ kind: 'message', text: 'You have hit your usage limit', researchLog: [], failed: true, usageLimit: { resetsAt: Date.now() + 3_600_000 } });
+    const { parent, child, frames, planners, release } = await held(['a'], { d: [SUBMIT([childTask('a', 1)]), limited] });
+    expect(child.message('first')).toEqual({ ok: true, status: 'woken' });
+    await vi.waitFor(() => expect(child.view().plan?.plannerResend?.at).toBeDefined(), WAIT);
+    expect(child.message('also do b')).toEqual({ ok: true, status: 'queued' });
+
+    await parent.execute({ command: 'stop_run' }, { kind: 'user' });
+
+    await vi.waitFor(() => expect(notices(frames).map((notice) => notice.message)).toContainEqual(expect.stringMatching(/before its subplanner answered your message/)), WAIT);
+    expect(notices(frames).filter((notice) => /your message/.test(notice.message))).toHaveLength(1);
+    expect(planners.d.asked.join('\n')).not.toContain('also do b');
     release('a');
     parent.destroy();
   });

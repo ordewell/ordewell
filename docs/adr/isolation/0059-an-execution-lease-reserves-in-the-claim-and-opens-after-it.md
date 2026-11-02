@@ -327,7 +327,10 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
 - `LocalWorktreeLease` passes the suites the code passes today, unchanged, and `executionLease.flatRun.test.ts` is a table
   over Parallel limits that passed on the scheduler before the lease went in. That is what "no change in behaviour" means.
 - `dockerLease.e2e.test.ts` runs against a real engine, off CI's default path, as the sandbox's end-to-end runs do: it
-  skips where no engine answers and on CI unless `ORDEWELL_REQUIRE_DOCKER=1`, and is one suite, so one at a time. A fake
+  skips where no engine answers and on CI unless `ORDEWELL_REQUIRE_DOCKER=1`, and is one suite, so one at a time. CI's
+  `real-engine` job, and `npm run test:containers` on a Mac, run these suites against every real binary through
+  `scripts/container-e2e.mjs`, whose verdict (`bench/containers/verdict.mjs`) counts a skip as unverified, never as a pass.
+  A fake
   harness runs in a real container through the real adapter, MCP server and Landing, a delegated child plan and its
   repair included. `ORDEWELL_E2E_HARNESS_IMAGE` adds the real binary, from an image built as `docker/task.Dockerfile` says,
   through a turn of a scripted model behind the gateway. `ORDEWELL_E2E_OPENCODE_IMAGE` does the same for OpenCode: the
@@ -470,3 +473,4 @@ for model traffic first. The interface is kept free of anything that blocks thes
 - 2026-11-02 — The sign-in is `claude auth login` and `claude auth status` says whether one is held; a task's copy is replaced only by a new sign-in, with refresh measured against a controlled provider; a broker refuses a variable that outranks the key. Copying at every attempt dropped.
 - 2026-11-02 — L6: overlapping clean-ups no longer strand a mirror, and a session delete waits for the session to have gone before it clears the engine.
 - 2026-11-02 — OpenCode runs a change task in a container: a per-runner sign-in volume and copy, the relay's reverse direction for its own server, and its Anthropic provider pointed at the lease gateway. A runner's binary is asked of the image before a worktree is made, and a model's provider hosts are opened where nothing gates its traffic.
+- 2026-11-02 — The real-engine suites run in CI as the `real-engine` job and by hand as `npm run test:containers`, where a skip fails the run rather than passing it.
