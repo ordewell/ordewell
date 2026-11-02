@@ -47,6 +47,7 @@ function setup(tasks: Task[], opts: {
   // How many timeline records the disk held as each one was announced.
   let savedRecords = 0;
   const recordsAtAnnounce: number[] = [];
+  const shown = new Map<string, { id: string; status: string }>();
   const session = makeSession({
     runner,
     isolation: opts.isolation ?? new FakeWorktreeIsolation(),
@@ -61,7 +62,11 @@ function setup(tasks: Task[], opts: {
       events.push(m.type);
       messages.push(m);
       if (m.type === 'execution_action') recordsAtAnnounce.push(savedRecords);
-      if (m.type === 'status_update') seen.push({ kind: 'status', statuses: statuses(m.tasks) });
+      if (m.type === 'status_update') {
+        // An update carries what moved: what a surface shows is what it has held.
+        for (const t of m.tasks) shown.set(t.id, t);
+        seen.push({ kind: 'status', statuses: statuses([...shown.values()]) });
+      }
     },
   });
   session.loadPlan(plan(tasks), 'goal', '/repo', { persist: false });

@@ -56,7 +56,12 @@ so no surface is told or has to act.
 The Session adds to the relay's observer only the saves some events owe, each
 made before the event is announced: a task that settles on its own
 (`onTaskSettled` — completed, failed or awaiting the user) is saved as it
-settles, so a shared run does not wait for its end to record a verdict.
+settles, in one save with what supervision took from it, so a shared run does
+not wait for its end to record a verdict. Any other changed status is saved
+within a second, and at once when no save came in the second before: a save
+writes the whole plan, so a burst of starts shares one. A crash inside that
+second loads such a start as not yet started, which is why a script's start,
+whose effects do not wait, is saved before the script runs.
 Any save may land in the middle of a planner turn, and none settles it: the
 turn holds what it writes until the mutation that lands it (see
 *PlannerConversation*), so there is nothing of it for another save to write.
@@ -2790,7 +2795,8 @@ bounded buffer fed by the session and answers `finalText` (the completion
 call's summary, falling back to clean plain output for the current turn) and
 `liveTail` (a bounded diagnostic window with an absolute `nextOffset`). A new
 turn or a message read mid-turn clears the earlier summary and advances the
-output boundary. It does not discover transcripts or render a runner's PTY.
+output boundary. Once an attempt ends it keeps the attempt's completion and the
+end of its output. It does not discover transcripts or render a runner's PTY.
 *Avoid:* "the output buffer", "transcript capture" as the owner — a transcript
 is a separate artifact, not completion evidence.
 
@@ -2905,10 +2911,13 @@ that decides what a plan refresh keeps: plan fields (title, dependencies,
 fields (verdict, `idleSince`, isolation, checkpoint, queued messages,
 `continuable`, `awaitingApproval`, merge gate, `forcedPastGate`) stay as the
 last status update said, the checkpoint question only while the task still
-waits at it. A status update replaces every status field it covers. The daemon
-sends `Session.runSnapshot()` as a `run_snapshot` frame right after
-`connected`, so a client that joins mid-run has the run before the next update;
-the session routes' load and read answers carry it too. Whether the run is
+waits at it. A status update replaces every status field of each task it
+carries, and carries only the tasks that moved, with every task again every
+half minute so that a surface a change missed comes right; what it says of the
+run is whole each time. The daemon sends `Session.runSnapshot()`, always whole,
+as a `run_snapshot` frame right after `connected`, so a client that joins
+mid-run has the run before the next update; the session routes' load and read
+answers carry it too. Whether the run is
 closed is the Session's word, `run_closed` (a Merge all that left nothing to
 hand over, or a discard), which `reduceRun` folds into dropping the marks,
 the handoff and the merge view; a merge that leaves the run going keeps them.

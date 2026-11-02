@@ -9,6 +9,7 @@ of the task that wrote them; rerun them rather than trusting old numbers.
 node bench/scale/build.mjs                          # after any change to core
 node bench/scale/ops.mjs                            # one operation against plan size
 node --expose-gc bench/scale/live.mjs --sessions 100 --rate 1.6 --events 180 --heap
+node --expose-gc bench/scale/live.mjs --sessions 30 --tasks 2000 --rate 200 --events 8 --budget 400 --heap  # a tree's lifetime
 node bench/scale/mcpload.mjs                        # the MCP server alone
 node --expose-gc bench/scale/memory.mjs             # heap per task and Session, lease heartbeat
 node bench/scale/logs.mjs                           # task log writes and reads
@@ -18,7 +19,7 @@ node bench/scale/real.mjs .ordewell/sessions        # what real runs left, as ag
 
 | File | What it measures |
 | --- | --- |
-| `ops.mjs` | The tick, a mutation, a save, the view, a wake-up and a start's prompt at each plan size. `--only` picks sections; past 5,000 tasks each runs once. |
+| `ops.mjs` | The tick, a mutation, a save, the view, a wake-up, a tree's ledger and log, and a start's prompt at each plan size. `--only` picks sections; past 5,000 tasks each runs once. |
 | `live.mjs` | N sessions live in one Session through the whole pipeline but for the processes. One JSON line out. |
 | `swarm.mjs` | The fake processes: `Swarm.spawn` stands where `spawn` does in `StructuredRunnerDeps.process`, so the real Claude adapter and everything above it run. |
 | `mcp.mjs`, `loadgen.mjs` | The real `OrdewellMcpServer` with connections held by other processes. |
@@ -27,6 +28,7 @@ node bench/scale/real.mjs .ordewell/sessions        # what real runs left, as ag
 | `logs.mjs` | `openTaskLog`, appends and whole-file reads. |
 | `procs.mjs` | Real child processes, for the spawn, the pipes and the attach. |
 | `real.mjs` | Sizes and rates from a sessions folder, the calibration for the rest. |
+| `scale.test.mjs` | Runs `ops.mjs` and `live.mjs` small under `npm run test:bench`, since a change to core's internals breaks them with no type error. |
 
 ## Reading the numbers
 
@@ -44,6 +46,12 @@ node bench/scale/real.mjs .ordewell/sessions        # what real runs left, as ag
 - **The clients use `http`, not `fetch`.** `fetch` needs WebAssembly, which a
   sealed run's address-space limit aborts, so `bench/pipeline/fake-claude`
   cannot call `task_complete` there: `procs.mjs` ends each turn with `noComplete`.
+- **A lifetime.** `--tasks` ends a run at that many tasks with `--sessions` of them
+  live at a time, so `saves`, `status` and the heap show what a long tree pays
+  rather than a burst. The saves write whole plans to disk: thousands of tasks
+  write gigabytes, so mind the volume before raising it.
+- **`ORDEWELL_DIRENV=false`** leaves direnv out of each spawn. A workspace with
+  direnv evaluates it per spawn by design, and that shows in a CPU profile.
 - **Sessions move in step.** The swarm paces every session alike, so a thousand
   usage events can land together. A rate over a run means what it says; a single
   stall (`lag.max`) past a few hundred sessions is worse than real runners, whose
