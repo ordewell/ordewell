@@ -44,12 +44,12 @@ async function removeVolume(cli: DockerCli, volume: string, tell: (text: string)
  * What a tree leaves in the engine (ADR-0059 L6): whatever a host that died left
  * running, its networks, its task volumes, and its pins in each mirror. Every
  * mirror is read, since a landed task's pin outlives its volume and nothing else
- * names it, and one this took its last pin from goes whole with its project's
- * caches, the one time nothing leans on either: a mirror is never pruned under a
- * pin. One it held none in stays, however empty, as a project of another
- * session's. A person's own sign-in is theirs, and is not touched. A clean-up that
- * cannot finish leaves what is left for the next one and says so: a stale volume
- * is no reason to fail one.
+ * names it, and one this took its last pin from goes whole, with any cache volume
+ * an earlier build left for its project, the one time nothing leans on either: a
+ * mirror is never pruned under a pin. One it held none in stays, however empty,
+ * as a project of another session's. A person's own sign-in is theirs, and is not
+ * touched. A clean-up that cannot finish leaves what is left for the next one and
+ * says so: a stale volume is no reason to fail one.
  */
 export async function reclaimTree(tree: string, cli: DockerCli, settings: ContainerSettings | null, tell: (text: string) => void): Promise<void> {
   const label = `label=${TREE_LABEL}=${tree}`;

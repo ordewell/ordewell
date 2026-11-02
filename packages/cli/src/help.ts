@@ -1,4 +1,4 @@
-import { DELEGATION_OFFERED } from '@ordewell/core';
+import { DELEGATION_OFFERED, containersOffered } from '@ordewell/core';
 import { runnerIdList } from './runnerNames';
 
 // The `web_search:` provider names further down are search providers, named as
@@ -66,7 +66,7 @@ Planner, models and runners:
   ordewell trailer [on|off]       (headless) End Ordewell's commits with "Planned-with: Ordewell"; set only here or in settings.json
   ordewell autorun [on|off]       (headless) Start each plan the planner submits, without review; /settings covers it
 ${DELEGATION_OFFERED ? "  ordewell delegation [on|off|<tokens>]  (headless) Subplanners on or off, and a tree's token budget; /settings covers it\n" : ''}  ordewell parallel [<n>]         (headless) How many AI tasks run at once, a live run included; /settings covers it
-  ordewell refresh                Re-check runners; reread settings and cached models
+${containersOffered() ? "  ordewell containers [status|check|on|off|image <name>|login ...]  (experimental) Run tasks in containers; on needs a local Docker\n" : ''}  ordewell refresh                Re-check runners; reread settings and cached models
   ordewell models                 List every provider's catalog (works without a server)
 
 Other:

@@ -126,8 +126,8 @@ export interface UserSettings {
   /**
    * Run tasks in containers (ADR-0059 L5), as `containerSettings` reads it:
    * absent means local worktrees. Kept as written, since one it cannot use must
-   * refuse a task, not fall back to the host. Set in the file only: no surface
-   * offers it.
+   * refuse a task, not fall back to the host. Only a checkout's surfaces offer
+   * it, through `changeContainers`.
    */
   containers?: unknown;
 }
@@ -345,6 +345,15 @@ export class SettingsService {
 
   getEnabledRunners(): string[] | undefined {
     return this.getAll().enabledRunners;
+  }
+
+  /** From what the file holds at this moment, as {@link updateEnabledRunners}; undefined takes it off the file. */
+  updateContainers(change: (saved: unknown) => unknown): void {
+    this.save(() => {
+      const next = change(this.cache!.containers);
+      if (next === undefined) delete this.cache!.containers;
+      else this.cache!.containers = next;
+    });
   }
 
   setEnabledRunners(ids: string[]): void {
