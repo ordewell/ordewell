@@ -22,7 +22,7 @@ export type ExecutionActor =
   | { kind: 'supervisor'; level: SupervisorLevel }
   /** The user's standing instruction to start each plan the planner submits (ADR-0030); `leavesFailed` is what failed in that reply, which it does not run again. */
   | { kind: 'autorun'; leavesFailed?: ReadonlySet<string> }
-  /** Every turn of a child plan's planner (ADR-0056 M6): no person is there, so its grants alone answer. `depth` is its level, the root being 0. */
+  /** Every turn of a child plan's planner (ADR-0056 M6), a person's message opening it or not (ADR-0055 D20): its grants alone answer. `depth` is its level, the root being 0. */
   | { kind: 'subplanner'; depth: number };
 
 /** Whose authority an actor's work runs under: a child has no user, so a subplanner's is a supervisor's (ADR-0056 M6). */

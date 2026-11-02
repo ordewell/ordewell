@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { Server } from 'http';
 import type { Duplex } from 'stream';
+import { childrenRoute } from './routes/children';
 import { sessionsRoute } from './routes/sessions';
 import { plansRoute } from './routes/plans';
 import { runnersRoute } from './routes/runners';
@@ -43,6 +44,7 @@ export function createApp(pool: OrchestratorPool, admission: AdmissionContext) {
   app.get('/api/server', (c) => c.json({ pid: process.pid, port: admission.port } satisfies ServerInfoResponse));
 
   app.route('/api/sessions', sessionsRoute(pool));
+  app.route('/api/sessions', childrenRoute(pool));
   app.route('/api/plans', plansRoute(pool));
   app.route('/api/runners', runnersRoute(pool));
   app.route('/api/models', modelsRoute(pool));
