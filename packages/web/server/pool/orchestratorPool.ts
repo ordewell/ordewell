@@ -548,6 +548,9 @@ export class OrchestratorPool {
       // to render the current level; without it the picker shows "default"
       // for a planner that is running at "high".
       plannerThinkingEffort: config.plannerThinkingEffort ?? '',
+      // The saved level, read through the service so an environment override
+      // is reported the way the next plan will read it (ADR-0001, ADR-0030).
+      autonomousMode: this.settingsService.autonomousMode(),
       maxParallel: config.maxParallelSessions,
       modelAllowlist: userSettings.modelAllowlist,
       // The model remembered per planner backend (this task), so a surface can
@@ -758,6 +761,12 @@ export class OrchestratorPool {
           this.settingsService.setModelAllowlist(runner, undefined);
         }
       }
+    }
+
+    // Full/Guarded is a saved user setting (ADR-0030), not an environment
+    // write: ORDEWELL_AUTONOMOUS_MODE is refused below on purpose.
+    if (typeof changes.autonomousMode === 'boolean') {
+      this.settingsService.setAutonomousMode(changes.autonomousMode);
     }
 
     if (envChanges) for (const monitor of this.accountLimits.values()) monitor.refresh();

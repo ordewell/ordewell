@@ -1,10 +1,11 @@
 import { spawn } from 'node:child_process';
 import { BrowserWindow, dialog, ipcMain, nativeTheme, shell, type IpcMainInvokeEvent, type WebContents } from 'electron';
-import { CHANNELS, EVENTS, type AppInfo, type ConfirmSpec, type StreamDelivery, type StreamEvent, type TerminalDelivery } from '../shared/bridge';
+import { CHANNELS, EVENTS, type AppInfo, type ConfirmSpec, type NotificationClick, type NotificationRequest, type StreamDelivery, type StreamEvent, type TerminalDelivery } from '../shared/bridge';
 import { isAppPage } from '../shared/csp';
 import { buildRequest, childStreamPath, sessionStreamPath, type BuildResult } from '../shared/routes';
 import type { DaemonManager } from './daemon/DaemonManager';
 import type { DaemonProxy } from './daemon/proxy';
+import type { AttentionNotifier } from './notifications';
 import { validPref, type PrefsStore } from './prefs';
 import type { RecentsStore } from './recents';
 import { Shell } from './shell';
@@ -24,6 +25,7 @@ export interface IpcDeps {
   recents: RecentsStore;
   prefs: PrefsStore;
   updates: UpdateController;
+  notifications: AttentionNotifier;
   terminals: { channel: TerminalChannel; host: TerminalHost };
 }
 
@@ -38,6 +40,21 @@ function confirmSpec(value: unknown): ConfirmSpec | undefined {
   if (detail !== undefined && typeof detail !== 'string') return undefined;
   if (cancelLabel !== undefined && typeof cancelLabel !== 'string') return undefined;
   return { message, confirmLabel, ...(detail !== undefined ? { detail } : {}), ...(cancelLabel !== undefined ? { cancelLabel } : {}) };
+}
+
+function notificationRequest(value: unknown): NotificationRequest | undefined {
+  if (!isRecord(value)) return undefined;
+  const { id, title, body, sessionId, taskId } = value;
+  if (typeof id !== 'string' || !id || typeof title !== 'string' || typeof body !== 'string') return undefined;
+  if (sessionId !== undefined && typeof sessionId !== 'string') return undefined;
+  if (taskId !== undefined && typeof taskId !== 'string') return undefined;
+  return {
+    id,
+    title,
+    body,
+    ...(sessionId !== undefined ? { sessionId } : {}),
+    ...(taskId !== undefined ? { taskId } : {}),
+  };
 }
 
 export function currentTheme(): AppInfo['theme'] {
@@ -181,6 +198,31 @@ export function registerIpc(deps: IpcDeps): void {
     return next;
   });
   handle(CHANNELS.updateState, () => ({ state: deps.updates.state() }));
+
+  handle(CHANNELS.notifyShow, (event, raw) => {
+    const request = notificationRequest(raw);
+    if (!request) return { ok: false, message: 'A notification needs an id, a title and a body.' };
+    return deps.notifications.show(request, () => {
+      const win = BrowserWindow.fromWebContents(event.sender);
+      if (win && !win.isDestroyed()) {
+        if (win.isMinimized()) win.restore();
+        win.show();
+        win.focus();
+      } else {
+        // The window that asked is gone: the user still asked for the item, so the app comes forward.
+        windows.show();
+      }
+      if (event.sender.isDestroyed()) return;
+      const click: NotificationClick = {
+        ...(request.sessionId !== undefined ? { sessionId: request.sessionId } : {}),
+        ...(request.taskId !== undefined ? { taskId: request.taskId } : {}),
+      };
+      event.sender.send(EVENTS.notifyClick, click);
+    });
+  });
+  handle(CHANNELS.notifySetBadge, (_event, count) => {
+    deps.notifications.setBadge(typeof count === 'number' ? count : 0);
+  });
 
   const files = new Shell(
     {

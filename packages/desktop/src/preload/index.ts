@@ -4,6 +4,8 @@ import {
   EVENTS,
   type AppInfo,
   type DaemonStatus,
+  type NotificationClick,
+  type NotificationRequest,
   type OrdewellBridge,
   type StreamDelivery,
   type TerminalDelivery,
@@ -93,6 +95,11 @@ const bridge: OrdewellBridge = {
   },
   update: {
     state: () => ipcRenderer.invoke(CHANNELS.updateState),
+  },
+  notify: {
+    show: (request: NotificationRequest) => ipcRenderer.invoke(CHANNELS.notifyShow, request),
+    setBadge: (count) => ipcRenderer.invoke(CHANNELS.notifySetBadge, count),
+    onClick: (cb) => listen<NotificationClick>(EVENTS.notifyClick, cb),
   },
   shell: {
     openInEditor: (target) => ipcRenderer.invoke(CHANNELS.shellOpenInEditor, target),

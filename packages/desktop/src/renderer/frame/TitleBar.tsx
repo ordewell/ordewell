@@ -57,6 +57,7 @@ export function TitleBar(): JSX.Element {
           icon={NeedsYouGlyph}
           label={needsYou > 0 ? `Needs you: ${needsYou}` : 'Needs you'}
           badge={needsYou > 0 ? needsYou : undefined}
+          className={needsYou > 0 ? 'frame-needs-attention' : undefined}
           aria-haspopup="dialog"
           aria-expanded={overlay === 'needsYou'}
           active={overlay === 'needsYou'}
