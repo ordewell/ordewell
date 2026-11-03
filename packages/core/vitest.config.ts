@@ -27,6 +27,8 @@ export default defineConfig({
         'src/services/PlanEditor.ts': floor(100, 92, 100),
         'src/services/TaskAssignment.ts': floor(100, 97, 100),
         'src/services/attemptKind.ts': floor(100, 100, 100),
+        'src/services/harness/acpEvents.ts': floor(100, 100, 100),
+        'src/services/harness/acpSchema.ts': floor(100, 100, 100),
         'src/services/harness/claudeOrdewell.ts': floor(100, 83, 100),
         'src/services/harness/codexOrdewell.ts': floor(100, 94, 100),
         'src/services/harness/connectors.ts': floor(100, 87, 100),
