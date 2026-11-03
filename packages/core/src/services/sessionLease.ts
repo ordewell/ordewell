@@ -346,6 +346,16 @@ export class LeaseHost {
     }
   }
 
+  /**
+   * Who holds a session's lease, read without taking it: null when no host
+   * other than this one does. What a reader that must never take a lease
+   * judges another host's run by (ADR-0062 G7).
+   */
+  peek(sessionId: string, workspace: string): SessionHeld | null {
+    const record = readRecord(leaseFile(sessionId, workspace));
+    return record && record.hostId !== this.id ? this.judge(record) : null;
+  }
+
   /** Null for a holder another host may take over from; otherwise why it may not. */
   private judge(record: SessionLeaseRecord): SessionHeld | null {
     if (this.lives(record)) return { holder: record };

@@ -1002,7 +1002,7 @@ have today, with the ADR that governs it; the rest exist.
 | POST | `/api/git/discard` | `paths` or `hunks`, `confirm { files }` | **new** — ADR-0062 G3 |
 | POST | `/api/git/branch`, `/api/git/switch` | `name`, `from?` / `branch` | **new** — ADR-0062 G1, G7 |
 | POST | `/api/git/branch-delete` | `branch`, `confirm { branch, unmerged }` | **new** — ADR-0062 G3, G7 |
-| POST | `/api/git/stash`, `/api/git/stash-pop` | `paths?`, `message?` / `stash` | **new** — ADR-0062 |
+| POST | `/api/git/stash`, `/api/git/stash-pop`, `/api/git/stash-drop` | `paths?`, `message?` / `stash` | **new** — ADR-0062 |
 | POST | `/api/git/fetch`, `/api/git/pull`, `/api/git/push` | `confirm { remote, branch }` for pull and push | **new** — ADR-0062 G3, G5 |
 | GET | `/api/plans/:sessionId/isolation/merge-preflight` | per repo: `repo`, `branch`, `overlap[]`, `otherDirty` | **new** — ADR-0062 G8 |
 

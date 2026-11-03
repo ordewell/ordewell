@@ -76,6 +76,7 @@ import { plannerContextFill } from '../models/Usage';
 import { TurnBudgets, contextLine, taskReadsLine, webReadsLine } from './PlannerBudgets';
 import { mintSessionId } from '../utils/sessionId';
 import { savePrdMarkdown, extractPrdBlock } from '../utils/prdStore';
+import { takeUserActions } from '../utils/userActionLog';
 import { approvalRecordOf, flattenTasks, keepExecutionState, migrateLoadedPlan, stampOrigin, type LegacyPlanState, type PlanState, type Task, type TaskReportTo, type TaskSnapshot, type RunnerId } from '../models/Task';
 import { AlreadyExecutingError, NoPlanError } from './SessionErrors';
 import { childLease, describeHeld, describeLost, processLeaseHost, SessionHeldError, UNLEASED, type LeaseHost, type SessionHeld, type SessionLease } from './sessionLease';
@@ -1251,7 +1252,7 @@ export class Session {
         merge: this.runMergeView(),
         mergeHold: this.mergeHold(),
         id: this.runs.planIsolation?.run.id ?? null,
-        blocked: this.runs.blocked ? this.runs.blockedStarts : null,
+        blocked: this.runs.blocked ? { start: this.runs.blockedStarts, repos: this.runs.blockedIn } : null,
       },
     });
   }
@@ -2200,7 +2201,7 @@ export class Session {
     const planTasks = this.store.planTasks;
     const tasks = flattenTasks(planTasks);
     const label = (task: Task) => `${taskRefOf(planTasks, task.id) ?? `#${task.order}`} "${task.title}"`;
-    const live = this.runOpening !== null || this.orchestrator.movesUnasked || this.orchestrator.isMerging;
+    const live = this.runIsLive;
     const open = tasks.filter((task) => task.status !== 'completed' && task.status !== 'skipped');
     return {
       unfinished: [
@@ -2725,6 +2726,29 @@ export class Session {
    * {@link TaskOrchestrator.hasLiveWork}: a spawned runner, not merely an armed scheduler.
    */
   get isExecuting(): boolean { return this.orchestrator.hasLiveWork; }
+  /**
+   * The run has not settled: an attempt at work, a start pending, or a landing
+   * or Merge all under way. While it holds, so does its landing branch (ADR-0062 G7).
+   */
+  get runIsLive(): boolean { return this.runOpening !== null || this.orchestrator.movesUnasked || this.orchestrator.isMerging; }
+
+  /**
+   * A person's git action on this run's landing branch, as one line of the
+   * timeline (ADR-0062 G6). The action has happened by now, so a failed save
+   * is said rather than thrown.
+   */
+  recordUserAction(text: string, at: string = new Date().toISOString()): void {
+    this.mutatePlan(() => {
+      this.conversation.recordUserAction(text, at);
+      return true;
+    }, undefined, () => this.tryPersist());
+  }
+
+  /** The lines a host that does not hold this session left for it, folded into the timeline (ADR-0062 G6). */
+  foldUserActions(): void {
+    if (!this.plan) return;
+    for (const line of takeUserActions(this.currentSessionId, this.stateRoot)) this.recordUserAction(line.text, line.at);
+  }
   get status(): 'approved' | 'running' | 'completed' { return this.orchestrator.status; }
 
   /**

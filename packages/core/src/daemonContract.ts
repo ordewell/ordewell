@@ -75,7 +75,21 @@ export type DaemonErrorCode =
   /** A user read named a path outside its scope: absolute, `..`, `.git`, Ordewell's state, or a link out of the root (ADR-0061 R3). */
   | 'path_refused'
   /** A user read named a path, ref or commit its scope does not hold. */
-  | 'path_not_found';
+  | 'path_not_found'
+  /** A user git action would move a live run's repository off its landing branch, or delete it; `landingBranchHeld` names the run (ADR-0062 G7). */
+  | 'landing_branch_held'
+  /** A user git action's `confirm` no longer matches the repository; `confirmStale` names the difference (ADR-0062 G3). */
+  | 'confirm_stale'
+  /** A save's `baseHash` is not the file's content on disk now, or a named stash is gone (ADR-0062 G10). */
+  | 'stale'
+  /** A user git action named a task worktree or another tree that is not the user's checkout (ADR-0062 G1). */
+  | 'not_checkout'
+  /** A user git action named, or would act on, a branch Ordewell made (`ordewell/*`) (ADR-0062 G1). */
+  | 'ordewell_branch'
+  /** An amend of a commit a remote-tracking branch already holds (ADR-0062 G4). */
+  | 'pushed'
+  /** The user's own git refused the action; the message is git's text (ADR-0062 G5). */
+  | 'git_failed';
 
 /** The body of every non-2xx answer a route gives. */
 export interface ErrorBody {
@@ -89,6 +103,10 @@ export interface ErrorBody {
   sessionHeld?: SessionHeld;
   /** Set on a command the seam refused after the act ran and stopped: the Merge all git would not take. */
   payload?: CommandPayload;
+  /** Set with `landing_branch_held`: the live run that lands on the branch (ADR-0062 G7). */
+  landingBranchHeld?: LandingBranchHeld;
+  /** Set with `confirm_stale`: what the person was shown against what is there now (ADR-0062 G3). */
+  confirmStale?: ConfirmDifference;
 }
 
 /**
@@ -680,3 +698,122 @@ export interface GitBranchesResponse {
 
 /** `GET /api/plans/:sessionId/tasks/:taskId/diff`: a task's diff as `readTaskDiff` reads it for VS Code, from the saved run. */
 export type TaskDiffResponse = TaskDiffResult;
+
+/*
+ * The user's git actions on their checkout (ADR-0062). Every request names its
+ * workspace and repository in the body, and every answer is the repository's
+ * new state as `GET /api/git/repos` rows it.
+ */
+
+/** The run that holds a repository on its landing branch while it is live (ADR-0062 G7). */
+export interface LandingBranchHeld {
+  sessionId: string;
+  runId: string;
+  repo: string;
+  branch: string;
+}
+
+export type ConfirmValue = string | boolean | string[] | null;
+
+/** One field of a `confirm` that no longer matches: what the person was shown, and what is there now. */
+export interface ConfirmDifference {
+  field: string;
+  shown: ConfirmValue;
+  now: ConfirmValue;
+}
+
+export interface UserGitTarget {
+  /** The daemon's working directory when absent, as for a read. */
+  workspace?: string;
+  /** Required when the workspace holds more than one repository. */
+  repo?: string;
+}
+
+/** `PUT /api/files/content`: `baseHash` is the `hash` the file was read at, or null for a file that must not exist yet (ADR-0062 G10). */
+export interface FileSaveRequest extends UserGitTarget {
+  path: string;
+  text: string;
+  baseHash: string | null;
+}
+
+/**
+ * Stage, unstage and discard name whole files in `paths`, or hunks in `hunks`:
+ * a unified diff holding only the chosen hunks, cut from what `GET /api/git/diff`
+ * showed (staged hunks to unstage, unstaged hunks otherwise).
+ */
+export interface GitChangesRequest extends UserGitTarget {
+  paths?: string[];
+  hunks?: string;
+}
+
+export interface GitDiscardRequest extends GitChangesRequest {
+  /** The files the person was shown as discarded. */
+  confirm: { files: string[] };
+}
+
+export interface GitCommitRequest extends UserGitTarget {
+  message: string;
+  amend?: boolean;
+  /** Required with `amend`: the commit the person saw as the one amended. */
+  confirm?: { head: string };
+}
+
+export interface GitBranchCreateRequest extends UserGitTarget {
+  name: string;
+  /** The commit or branch it starts at; `HEAD` when absent. */
+  from?: string;
+  switch?: boolean;
+}
+
+export interface GitSwitchRequest extends UserGitTarget {
+  branch: string;
+}
+
+export interface GitBranchDeleteRequest extends UserGitTarget {
+  branch: string;
+  /** `unmerged`: whether the person was told the branch holds commits its upstream, or else `HEAD`, does not. */
+  confirm: { branch: string; unmerged: boolean };
+}
+
+export interface GitStashRequest extends UserGitTarget {
+  /** Only these paths; every change, untracked files included, when absent. */
+  paths?: string[];
+  message?: string;
+}
+
+/** `stash-pop` and `stash-drop`: a stash by the commit `stash` answered with or the branches read listed, never by its place in the stack. */
+export interface GitStashRefRequest extends UserGitTarget {
+  stash: string;
+}
+
+/** `pull` and `push`: always the checked-out branch's tracking remote and branch, as the person was shown them. */
+export interface GitRemoteRequest extends UserGitTarget {
+  confirm: { remote: string; branch: string };
+}
+
+export interface GitActionResponse {
+  repo: GitRepoInfo;
+  /** Said with an action that is allowed but has a cost: a switch away from a settled run's landing branch (ADR-0062 G7). */
+  warning?: string;
+  /** Set by `stash`: the stash it made, by the name `stash-pop` takes. */
+  stash?: { sha: string; message: string };
+}
+
+/** One repository a run lands in, as Merge all would find it now (ADR-0062 G8). */
+export interface MergePreflightRepo {
+  repo: string;
+  /** The branch Merge all lands on; null for a run that started detached. */
+  branch: string | null;
+  /** The user's uncommitted files that the incoming work also changes. */
+  overlap: string[];
+  /** Whether other uncommitted files exist beside the overlap. */
+  otherDirty: boolean;
+}
+
+/** `GET /api/plans/:sessionId/isolation/merge-preflight`. */
+export interface MergePreflightResponse {
+  runId: string;
+  repos: MergePreflightRepo[];
+  /** The message a Stash choice gives `POST /api/git/stash` with the overlapping paths. */
+  stashMessage: string;
+}

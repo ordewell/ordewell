@@ -104,7 +104,12 @@ export type { HandoffForkRepo, MergeWordingHandoff } from './services/mergeWordi
 export type { Adr0013PlanIsolation, Adr0013IsolationRun, Adr0013TaskRecord } from './services/isolationRecord';
 export type { WorktreeIsolationDeps, GitExecFn } from './services/GitWorktreeIsolation';
 export { createWorkspaceReader, userPath, WorkspaceReadError } from './services/workspaceReader';
-export type { DiffOptions, FindOptions, LogOptions, WorkspaceReader, WorkspaceReadErrorCode, WorkspaceReaderDeps } from './services/workspaceReader';
+export type { CheckoutScope, DiffOptions, FindOptions, LogOptions, WorkspaceReader, WorkspaceReadErrorCode, WorkspaceReaderDeps } from './services/workspaceReader';
+export { createUserGit, UserGitError } from './services/userGitActions';
+export type { UserGit, UserGitDeps, UserGitErrorCode, UserGitScope } from './services/userGitActions';
+export { interlock, landingRuns, savedRunLooksLive } from './services/landingInterlock';
+export type { InterlockAnswer, LandingMove, LandingRun } from './services/landingInterlock';
+export { appendUserAction, takeUserActions, type UserActionLine } from './utils/userActionLog';
 export * from './interfaces/ILogger';
 export { BaseAiService } from './services/BaseAiService';
 export type { ResearchChat, ResearchTurn, ToolCall, ToolResult } from './services/BaseAiService';

@@ -1109,6 +1109,15 @@ export class PlannerConversation {
   }
 
   /**
+   * A person's own git action on a live run's landing branch (ADR-0062 G6):
+   * not the plan's, so not an execution record, but part of the run's story.
+   * Call inside the host's mutation ritual.
+   */
+  recordUserAction(text: string, timestamp: string): void {
+    this.append('assistant', text, { kind: 'system', timestamp });
+  }
+
+  /**
    * A call at the command seam (ADR-0029), kept where it happened in the
    * dialogue: a reload shows it, and a planner replayed from the transcript
    * knows what was started or stopped, and by whom. Call inside the host's
