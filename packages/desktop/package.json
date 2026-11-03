@@ -13,7 +13,7 @@
   },
   "main": "dist/main/index.js",
   "scripts": {
-    "build": "tsup && vite build",
+    "build": "tsup && vite build && node ../../scripts/generate-third-party-notices.mjs desktop",
     "dev": "node scripts/dev.mjs",
     "package": "node scripts/package.mjs",
     "lint": "eslint src e2e playwright.config.ts --ext .ts,.tsx",

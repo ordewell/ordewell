@@ -6,6 +6,12 @@
 // tree and writes THIRD-PARTY-NOTICES.md next to the package. It runs from each
 // package's build, which is also what `npm publish` and `vsce package` run
 // first, so the file can never describe a previous dependency tree.
+//
+// The desktop app is the same problem in a different shape: Vite bundles the
+// renderer's dependencies into its chunks and the daemon's closure is unpacked
+// beside app.asar, so the installer carries the file electron-builder.yml names.
+// packages/ui is private and has no artifact of its own, but it is bundled into
+// both hosts and keeps its own copy so a change to its dependencies is visible.
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,11 +23,47 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
  * packages/cli/tsup.config.ts — everything else there is external and arrives
  * through npm with its own licence. vscode bundles all of `@ordewell/core` plus
  * React for the webviews; `@ordewell/*` itself is first-party and covered by
- * LICENSE, but is walked for the dependencies it brings.
+ * LICENSE, but is walked for the dependencies it brings. desktop's list is what
+ * its Vite build and its daemon closure carry: the renderer's UI, editor,
+ * graph, terminal and fonts, and the daemon's own production tree. Electron and
+ * Chromium are not here: electron-builder copies their licence files beside the
+ * app, and they are a build-time dependency, not a bundled package.
  */
 const TARGETS = {
   cli: { dir: 'packages/cli', roots: ['string-width'] },
   vscode: { dir: 'packages/vscode', roots: ['@ordewell/core', 'react', 'react-dom'] },
+  ui: {
+    dir: 'packages/ui',
+    roots: ['lucide-react'],
+    notes: [
+      'This package is private and has no artifact of its own: it is bundled into the',
+      'desktop app and the VS Code extension, whose notices carry these packages too.',
+      'React comes from whichever host draws it, and is listed by that host.',
+    ],
+  },
+  desktop: {
+    dir: 'packages/desktop',
+    roots: [
+      '@ordewell/web',
+      'electron-updater',
+      'node-pty',
+      'monaco-editor',
+      'lucide-react',
+      '@xyflow/react',
+      '@dagrejs/dagre',
+      '@xterm/xterm',
+      '@xterm/addon-fit',
+      '@fontsource-variable/inter',
+      '@fontsource-variable/jetbrains-mono',
+      'react',
+      'react-dom',
+    ],
+    notes: [
+      'Electron and Chromium ship their own licence files beside the app —',
+      '`LICENSE.electron.txt` and `LICENSES.chromium.html`, which electron-builder copies —',
+      'and are a build-time dependency rather than one of the packages below.',
+    ],
+  },
 };
 
 const target = TARGETS[process.argv[2]];
@@ -41,7 +83,9 @@ function findPackageDir(name, fromDir) {
   }
 }
 
-const LICENSE_FILES = /^(licen[cs]e|copying)(\.[a-z]+)?$/i;
+// Monaco ships `ThirdPartyNotices.txt` for the code it inlines, and a notice
+// that reproduces only `LICENSE` would leave that code unattributed.
+const LICENSE_FILES = /^((licen[cs]e|copying)(\.[a-z]+)?|third[- ]?party[- ]?notices(\.(txt|md))?)$/i;
 
 function licenseFiles(dir) {
   return fs
@@ -82,6 +126,7 @@ out.push(
   'tree; do not edit by hand.',
   '',
 );
+if (target.notes) out.push(...target.notes, '');
 for (const { pkg, dir } of entries) {
   out.push('---', '', `## ${pkg.name} ${pkg.version}`, '');
   const license = typeof pkg.license === 'string' ? pkg.license : JSON.stringify(pkg.license ?? 'UNKNOWN');

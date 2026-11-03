@@ -99,7 +99,7 @@ export function checkResources(resources, exists = existsSync, platform = proces
     if (!exists(path)) failures.push(`${resources}: app.asar.unpacked/${entry} is missing, so the terminal could not start (npmRebuild, asarUnpack)`);
     else if (entry.endsWith('spawn-helper') && (modeOf(path) & 0o111) === 0) failures.push(`${resources}: app.asar.unpacked/${entry} is not executable, so no shell could be forked`);
   }
-  for (const notice of ['LICENSE', 'NOTICE', 'AUTHORS.md']) {
+  for (const notice of ['LICENSE', 'NOTICE', 'AUTHORS.md', 'THIRD-PARTY-NOTICES.md']) {
     if (!exists(join(resources, notice))) failures.push(`${resources}: ${notice} is not shipped (extraResources)`);
   }
   return failures;

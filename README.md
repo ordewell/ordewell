@@ -56,7 +56,7 @@ Ordewell is pre-1.0, so minor releases can include breaking changes. Read the
   <tr><td><b>Run controls</b></td><td>Watch tasks live, review their reports and choose whether to automate execution or merging.</td></tr>
   <tr><td><b>Usage limits</b></td><td>Tasks pause when an agent hits its account limit. Resume later or move unfinished work to another agent.</td></tr>
   <tr><td><b>Planner choices</b></td><td>Plan with a supported coding agent without an extra API key, or use an API provider. The planner reads your repository; changes run through tasks in the plan.</td></tr>
-  <tr><td><b>Interfaces</b></td><td>Use the terminal UI, VS Code extension, CLI or local API.</td></tr>
+  <tr><td><b>Interfaces</b></td><td>Use the terminal UI, desktop app, VS Code extension, CLI or local API.</td></tr>
   <tr><td><b>Skills</b></td><td>Share your team's instructions in repository skills that the planner attaches to tasks across runners.</td></tr>
 </table>
 
@@ -95,6 +95,17 @@ Ordewell also supports [command-line workflows](https://ordewell.ai/docs#first-p
 for scripting.
 
 Tried it? [Tell us how your first run went](https://github.com/ordewell/ordewell/discussions/115).
+
+## Desktop app
+
+Ordewell also runs as a desktop app for macOS, Windows and Linux: the planner,
+the plan and its tasks, your repository's files, diffs and git, and a terminal,
+in one window. It is a client of the same local daemon, so a run started there
+is the one `ordewell status` reports. Each
+[release](https://github.com/ordewell/ordewell/releases) attaches the
+installers. They are unsigned, so on macOS or Windows the first launch asks you
+to allow the app. The [desktop guide](docs/desktop/README.md) covers installing
+it, running it from source and what the window holds.
 
 ## See it in action
 

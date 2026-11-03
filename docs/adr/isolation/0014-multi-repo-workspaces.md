@@ -7,8 +7,6 @@ folds:
 
 # 0014 — Multi-repo workspaces: isolate a repo group, land it atomically
 
-*Pending:* [ADR-0062](0062-user-git-actions-are-confirmed-at-a-host-and-a-live-run-holds-only-its-landing-branch.md) — a host switches, commits on and discards in a user's branch at their confirmed request; *never resets a user branch* stays a rule about Ordewell's own account.
-
 ## Problem
 
 Worktree isolation (ADR-0013) assumed the workspace is one git repository. Many
@@ -230,7 +228,10 @@ only by a partial landing or by being on the wrong branch.
 Session broadcasts the answer as `isolation_merge`, so every surface can show
 it. During a run, the same Merge all merges what has landed so far and the run
 goes on (ADR-0020). Ordewell never resets a user branch — the rollback under *Atomic
-integration* is only ever applied to branches Ordewell created.
+integration* is only ever applied to branches Ordewell created. A person
+switching, committing on or discarding in their own branch, at their own request
+through a host, is [ADR-0062](0062-user-git-actions-are-confirmed-at-a-host-and-a-live-run-holds-only-its-landing-branch.md)'s
+and is not Ordewell acting on its own account.
 
 Whether an integration branch is deleted once merged is decided per repo,
 against that repo's checked-out HEAD (ADR-0013). A full Merge all merges every
@@ -393,3 +394,4 @@ Core, daemon, TUI, CLI and VS Code.
 - 2026-10-17 — ADR-0019 folded in as *Nested repositories*.
 - 2026-10-17 — Merge all refuses unless every repo is on the branch the run started on ([ADR-0042](0042-merge-all-lands-only-on-the-branch-the-run-started-on.md)).
 - 2026-10-24 — Merge all's preflight also refuses over untracked collisions and staged changes, a failed merge says what git said, and a task workspace is cut between landings.
+- 2026-11-03 — *never resets a user branch* is about Ordewell's own account: a person's switch, commit or discard in their own branch through a host is ADR-0062's.

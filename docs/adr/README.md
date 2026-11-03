@@ -335,7 +335,7 @@ Worktrees, repo groups, conflicts, ops tasks and merge gates.
 | [0049](isolation/0049-a-session-has-one-live-host.md) | A session has one live host: the session lease | accepted | [0013](isolation/0013-worktree-isolation.md) | [0055](supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md), [0061](surfaces/0061-a-host-reads-files-and-git-for-the-user-confined-to-the-workspace.md), [0062](isolation/0062-user-git-actions-are-confirmed-at-a-host-and-a-live-run-holds-only-its-landing-branch.md) |
 | [0054](isolation/0054-a-landed-task-reverts-on-the-integration-branch-before-merge-all.md) | A landed task reverts on the integration branch, before Merge all | accepted | [0013](isolation/0013-worktree-isolation.md) | [0055](supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) |
 | [0059](isolation/0059-an-execution-lease-reserves-in-the-claim-and-opens-after-it.md) | An execution lease reserves in the claim, opens after it, and proves what it guarantees | accepted, partly implemented | [0013](isolation/0013-worktree-isolation.md), [0022](runners/0022-ordewell-mcp-server.md), [0035](supervision/0035-effects-are-consented-and-recorded.md), [0036](planner-envelope/0036-the-planners-shell-sealed-runs-and-native-opt-in.md), [0056](supervision/0056-a-mandate-narrows-down-the-tree.md) | — |
-| [0062](isolation/0062-user-git-actions-are-confirmed-at-a-host-and-a-live-run-holds-only-its-landing-branch.md) | User git actions are confirmed at a host, and a live run holds only its landing branch | accepted, partly implemented | [0013](isolation/0013-worktree-isolation.md), [0014](isolation/0014-multi-repo-workspaces.md), [0042](isolation/0042-merge-all-lands-only-on-the-branch-the-run-started-on.md), [0049](isolation/0049-a-session-has-one-live-host.md) | — |
+| [0062](isolation/0062-user-git-actions-are-confirmed-at-a-host-and-a-live-run-holds-only-its-landing-branch.md) | User git actions are confirmed at a host, and a live run holds only its landing branch | accepted | [0013](isolation/0013-worktree-isolation.md), [0014](isolation/0014-multi-repo-workspaces.md), [0042](isolation/0042-merge-all-lands-only-on-the-branch-the-run-started-on.md), [0049](isolation/0049-a-session-has-one-live-host.md) | — |
 
 ### supervision/
 
@@ -364,7 +364,7 @@ The TUI and the shared conversation view.
 |---|---|---|---|---|
 | [0006](surfaces/0006-tui-pure-core-thin-driver.md) | Terminal UI as a pure core behind a thin driver | accepted | — | — |
 | [0017](surfaces/0017-shared-conversation-view.md) | The shared conversation view, drawn once in core | accepted | — | — |
-| [0060](surfaces/0060-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md) | The desktop app is an Electron client of the shared daemon, and its renderer never holds the token | accepted, partly implemented | — | — |
+| [0060](surfaces/0060-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md) | The desktop app is an Electron client of the shared daemon, and its renderer never holds the token | accepted | — | — |
 | [0061](surfaces/0061-a-host-reads-files-and-git-for-the-user-confined-to-the-workspace.md) | A host reads files and git for the user, confined to the workspace and needing no lease | accepted | [0049](isolation/0049-a-session-has-one-live-host.md) | — |
 
 ### platform/

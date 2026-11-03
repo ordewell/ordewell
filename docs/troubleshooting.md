@@ -389,7 +389,8 @@ One session is run by one host at a time
 a daemon of its own, and a VS Code window is a host too, so a second one in the
 same checkout could otherwise run a session again beside the first, in the same
 worktrees. The message names the host that has it: its kind, its pid, and since
-when.
+when. The desktop app shows the same thing as a banner over a read-only session,
+with **Take over…** when you want it there instead.
 
 ### Fix
 
@@ -405,3 +406,107 @@ them before loading again:
 ps -eo pid,pgid,command | awk '$2 == <group>'   # what is still running in that group
 kill -TERM -- -<group>
 ```
+
+## The desktop app will not open
+
+The desktop app's installers are unsigned: not notarized by Apple and without a
+Windows code-signing certificate. Gatekeeper and SmartScreen refuse the first
+launch. The macOS build is signed ad hoc, so the system can start it once you
+allow it.
+
+### Fix
+
+- **macOS.** Right-click (or Control-click) Ordewell in Applications, choose
+  **Open**, then **Open** again. If you already double-clicked, allow it from
+  **System Settings › Privacy & Security › Open Anyway**, or clear the download
+  flag:
+
+  ```bash
+  xattr -d com.apple.quarantine /Applications/Ordewell.app
+  ```
+
+  A dialog that says the app is **damaged** is the same quarantine flag; the
+  command above fixes it.
+- **Windows.** In SmartScreen, choose **More info**, then **Run anyway**.
+- **Linux, from the AppImage.** Make it executable (`chmod +x Ordewell-*.AppImage`)
+  and start it. On a distribution without FUSE 2, install `libfuse2`, or run it
+  with `--appimage-extract-and-run`.
+
+Signing and notarization are out of scope for these builds
+([ADR-0060](adr/surfaces/0060-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)).
+
+## The desktop app cannot reach its daemon
+
+The window shows a card over its content: **Port 3742 is taken**, **The daemon
+refused this app**, **The daemon could not start**, or **Reconnecting to the
+daemon…**.
+
+### Cause
+
+The app is a client of the local daemon on `127.0.0.1:3742`, and it either
+attaches to one that already runs or starts the one it bundles
+([ADR-0060](adr/surfaces/0060-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)).
+Each message names a different problem:
+
+| Card | What happened |
+|---|---|
+| Port 3742 is taken | Something that is not an Ordewell daemon holds the port. |
+| The daemon refused this app | No token file for that port, or one the daemon did not accept. The daemon may belong to another user or install. |
+| The daemon could not start | Starting the bundled daemon failed; the card quotes why and names the log. |
+| Reconnecting to the daemon… | An attached daemon went away. Nothing is restarted silently. |
+
+### Fix
+
+- **Another port.** Set `ORDEWELL_PORT` before launching the app, which is the
+  same variable the CLI reads. A daemon the app starts then uses it too.
+- **The token.** The daemon mints its token at startup in
+  `~/.ordewell/server-<port>.token`. If that file belongs to another user, run
+  the app as that user, or stop that daemon and let the app start its own.
+- **The start failure.** Read `~/.ordewell/server.log`; the card names it too.
+  Quitting the app and opening it again retries the probe.
+- **Reconnecting.** Press **Retry now**, or **Start a daemon** when the port is
+  free and the app did not own the one that went away. Runs in a daemon the app
+  owned stop with it; a CLI daemon keeps them.
+
+## The desktop app says the daemon is another version
+
+The card reads **The running daemon is another version**, with both contract
+numbers and versions.
+
+### Cause
+
+A daemon and a surface exchange a version and a contract number on
+`GET /api/server` before the surface drives them
+([ADR-0060](adr/surfaces/0060-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)).
+The same contract attaches whatever the patch version; a different one means the
+daemon or the app is from another release, and the app will not drive it.
+
+### Fix
+
+Press **Restart daemon**: the app stops that daemon and starts the bundled one,
+which it then owns. The restart is refused while the daemon has a live run, and
+the card names it; stop the run, or finish it from the CLI, and restart after.
+If the daemon is one you want to keep, run the same release's CLI for it instead
+of restarting: `ordewell stop --server` stops it in the same way the app does.
+
+## The desktop app's terminal does not open
+
+The terminal panel shows **Could not start …** with the shell's error, and no
+prompt.
+
+### Cause
+
+The panel's PTY is `node-pty`, a native addon built for the app's Electron. A
+build made without the rebuild — or a package whose unpacked copy is missing —
+cannot load it, while the rest of the app works
+([ADR-0062](adr/isolation/0062-user-git-actions-are-confirmed-at-a-host-and-a-live-run-holds-only-its-landing-branch.md),
+G11).
+
+### Fix
+
+Use an installer from a release, or build one with `npm run desktop:package`:
+electron-builder rebuilds `node-pty` for the app once per architecture. On
+Linux that build needs `make`, `g++` and `python`. A development run
+(`npm run desktop:dev`) uses the copy in `node_modules`, so run `npm install`
+there if the package is missing.
+

@@ -1,7 +1,6 @@
 ---
 status: accepted
-implemented: partial
-note: "Settles the host half of #129 and #136; the design is docs/desktop/design.md. packages/desktop holds the shell: the daemon manager, the token-holding proxy, the hardened windows, the tray and quit rules. It is packaged for macOS, Windows and Linux (electron-builder.yml) and built in CI and attached to each release. The workspace view beyond its session list, signing, notarization and enabled updates wait on the later slices that design lists."
+note: "Settles the host half of #129 and #136; the design is docs/desktop/design.md. packages/desktop holds the app: the daemon manager, the token-holding proxy, the hardened windows, the tray and quit rules, and every view the design lists. It is packaged for macOS, Windows and Linux (electron-builder.yml), built in CI and attached to each release. Signing, notarization and enabled updates stay out of scope."
 ---
 
 # 0060 — The desktop app is an Electron client of the shared daemon, and its renderer never holds the token
@@ -204,3 +203,4 @@ allows script only from the app's own bundle, with no inline script.
 - 2026-11-03 — partly implemented: the Electron shell in packages/desktop.
 - 2026-11-03 — partly implemented: packaging and CI (electron-builder.yml, the desktop job in release.yml, updates wired and held off by `AUTO_UPDATE_ENABLED`).
 - 2026-11-03 — the IPC proxy names what the bridge does not guard: a page that runs script acts as the user, so rendering is the boundary.
+- 2026-11-03 — implemented: every view in docs/desktop/design.md, from the welcome window to Merge all through the preflight; signing, notarization and enabled updates remain out of scope.

@@ -4,8 +4,6 @@ status: accepted
 
 # 0013 — Worktree isolation: one checkout per task, one branch per run
 
-*Pending:* [ADR-0062](0062-user-git-actions-are-confirmed-at-a-host-and-a-live-run-holds-only-its-landing-branch.md) — fetch, pull and push to the tracking remote at a person's request through a host; *no remote operation* stays a rule about Ordewell's own account.
-
 ## Problem
 
 Every AI task ran in the same working directory — the workspace root. With
@@ -430,7 +428,10 @@ literal git command lines or private fields.
   ([ADR-0057](../supervision/0057-information-moves-by-reference.md) R6).
   File-scope-gated scheduling is the obvious follow-up if conflicts prove
   frequent.
-- Pushing, pull requests, or any remote operation.
+- Pushing, pull requests, or any remote operation on Ordewell's own account. A
+  person's fetch, pull and push to the tracking remote, at their own request
+  through a host, is [ADR-0062](0062-user-git-actions-are-confirmed-at-a-host-and-a-live-run-holds-only-its-landing-branch.md)'s;
+  no run starts one.
 - OS-level sandboxing of runners. A runner is scoped by its mode
   ([ADR-0001](../routing/0001-autonomous-mode-resolution.md));
   [ADR-0011](../planner-envelope/0011-sandboxing-the-planners-shell.md)
@@ -563,3 +564,4 @@ literal git command lines or private fields.
 - 2026-11-01 — a subplanner starts in its delegated task's worktree (ADR-0055 D5).
 - 2026-11-01 — landed work whose check has not passed holds the automatic merges (ADR-0055 D9).
 - 2026-11-01 — a delegated task may declare an advisory scope: overlap is answered at plan time, and a landing that touches one sends one line (ADR-0057 R6).
+- 2026-11-03 — *no remote operation* is about Ordewell's own account: a person's fetch, pull and push through a host is ADR-0062's.
