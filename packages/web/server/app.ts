@@ -11,6 +11,7 @@ import { approvalsRoute } from './routes/approvals';
 import { settingsRoute } from './routes/settings';
 import { commandsRoute } from './routes/commands';
 import { filesRoute, gitRoute, taskDiffRoute } from './routes/workspaceRead';
+import { fileWriteRoute, gitWriteRoute, mergePreflightRoute } from './routes/workspaceWrite';
 import { WebConfig } from './adapters/WebConfig';
 import { createWsHandler } from './ws/stream';
 import {
@@ -21,16 +22,32 @@ import {
 import { OrchestratorPool } from './pool/orchestratorPool';
 import {
   DAEMON_CONTRACT,
+  createUserGit,
   createWorkspaceReader,
+  landingRuns,
   type ServerInfoResponse,
+  type UserGit,
   type WorkspaceReader,
 } from '@ordewell/core';
 import { serverVersion } from './utils/serverVersion';
+
+/**
+ * The user's git actions (ADR-0062). The pool answers only whether a run is
+ * live and where its timeline is: an action never takes a session's lease.
+ */
+export function userGitFor(pool: OrchestratorPool, reader: WorkspaceReader): UserGit {
+  return createUserGit({
+    reader,
+    landingRuns: (workspace) => landingRuns(workspace, (sessionId, plan) => pool.userRunIsLive(sessionId, workspace, plan)),
+    record: (workspace, held, text) => pool.recordUserAction(held.sessionId, workspace, text),
+  });
+}
 
 export function createApp(
   pool: OrchestratorPool,
   admission: AdmissionContext,
   reader: WorkspaceReader = createWorkspaceReader({ config: new WebConfig() }),
+  userGit: UserGit = userGitFor(pool, reader),
 ) {
   const app = new Hono();
 
@@ -66,6 +83,7 @@ export function createApp(
   app.route('/api/sessions', childrenRoute(pool));
   app.route('/api/plans', plansRoute(pool));
   app.route('/api/plans', taskDiffRoute(reader));
+  app.route('/api/plans', mergePreflightRoute(reader));
   app.route('/api/runners', runnersRoute(pool));
   app.route('/api/models', modelsRoute(pool));
   app.route('/api/settings', settingsRoute(pool));
@@ -75,6 +93,9 @@ export function createApp(
   // The user's reads of files and git (ADR-0061): the reader, never the pool.
   app.route('/api/files', filesRoute(reader));
   app.route('/api/git', gitRoute(reader));
+  // The user's actions on their own checkout (ADR-0062), beside those reads.
+  app.route('/api/files', fileWriteRoute(userGit));
+  app.route('/api/git', gitWriteRoute(userGit));
 
   return app;
 }

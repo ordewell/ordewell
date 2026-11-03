@@ -87,6 +87,12 @@ export interface Escalation {
   approval?: string;
   /** The task out to resolve it, for a `conflict` nothing is starting that task for. */
   resolver?: string;
+  /**
+   * For `blocked-run`, the repositories whose tracked changes turned the run
+   * away, `.` for the workspace's own: what Stash and continue stashes, so a
+   * card can list each one's changes (ADR-0062 G9).
+   */
+  repos?: string[];
   reason: string;
   options: EscalationOption[];
 }
@@ -109,8 +115,11 @@ export interface EscalationRun {
   mergeHold: readonly string[];
   /** The isolated run's id. */
   id: string | null;
-  /** Which of the session's starts a dirty checkout turned away, when one waits on it; null when none does. */
-  blocked: number | null;
+  /**
+   * Which of the session's starts a dirty checkout turned away, and the dirty
+   * repositories (`.` for the workspace's own), when one waits on it; null when none does.
+   */
+  blocked: { start: number; repos: readonly string[] } | null;
 }
 
 /** What the list is derived from: nothing here is kept for it. */
@@ -451,10 +460,12 @@ export function escalations(input: EscalationInput): Escalation[] {
   const rows: Rows = new Map(flattenTasksWithParents(input.tasks).map((row) => [row.task.id, row]));
   const tasks = [...rows.values()].flatMap((row) => ofTask(row, input, rows));
   const { run } = input;
+  const named = run.blocked?.repos.filter((repo) => repo !== '.') ?? [];
   const blocked: Escalation[] = run.blocked === null ? [] : [{
-    id: `blocked-run:${run.blocked}`,
+    id: `blocked-run:${run.blocked.start}`,
     kind: 'blocked-run',
-    reason: 'Tracked files have uncommitted changes, so tasks cannot run in isolated worktrees.',
+    reason: `Tracked files have uncommitted changes${named.length > 0 ? ` in ${named.join(', ')}` : ''}, so tasks cannot run in isolated worktrees.`,
+    repos: [...run.blocked.repos],
     options: [{ id: 'stash', label: 'Stash and continue' }, { id: 'run-without-isolation', label: 'Run without isolation' }],
   }];
   // A gate's own escalation offers the same Merge all, and work still moving may land more.

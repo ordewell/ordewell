@@ -6,7 +6,7 @@ import { promisify } from 'util';
 import type {
   FileChangeStatus, FileContentResponse, FileFindMatch, FileFindResponse, FileTreeEntry, FileTreeResponse, GitDiffFile, GitDiffResponse,
   GitBranchesResponse, GitBranchInfo, GitCommitResponse, GitCommitSummary, GitLogResponse, GitRepoInfo, GitReposResponse,
-  GitStatusChange, GitStatusResponse, GitWorktreeInfo, OrdewellRefOwner, ReadAt, ReadTarget, ViewScopeKind,
+  GitStatusChange, GitStatusResponse, GitWorktreeInfo, MergePreflightRepo, MergePreflightResponse, OrdewellRefOwner, ReadAt, ReadTarget, ViewScopeKind,
 } from '../daemonContract';
 import type { IConfig } from '../interfaces/IConfig';
 import type { IsolationRun } from '../interfaces/IWorktreeIsolation';
@@ -321,7 +321,7 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
   }
 
   /** The real path of `file` on a disk scope, refused when it leaves the scope root or resolves onto a refused path. */
-  function onDisk(scope: Scope & { root: string }, file: string, allowed: (rel: string) => boolean = userPath): string {
+  function onDisk(scope: { root: string }, file: string, allowed: (rel: string) => boolean = userPath): string {
     const full = path.join(scope.root, file);
     let real: string;
     try {
@@ -744,7 +744,73 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
     return { available: true, text: read.text.split('\0').filter((name) => name && userPath(name)).join('\0') };
   }
 
-  return { repos, tree, content, find, status, diff, log, commit, branches, taskDiff };
+  /**
+   * The user's checkout of a target's repository, resolved as a read resolves
+   * it: what a write to it starts from (ADR-0062 G1).
+   */
+  async function checkout(target: Pick<ReadTarget, 'workspace' | 'repo'>): Promise<CheckoutScope> {
+    const repo = repoOf(target);
+    const scope = await checkoutScope(target, repo);
+    return { repo, root: scope.root as string, prefix: scope.prefix, at: scope.at };
+  }
+
+  /**
+   * Where a write of `file` lands in a checkout, confined as a read is (R3):
+   * the file may not exist yet, so the nearest directory that does is what
+   * must resolve inside the checkout (ADR-0062 G10).
+   */
+  function writable(root: string, file: string): string {
+    const rel = checked(file);
+    if (fs.existsSync(path.join(root, rel))) return onDisk({ root }, rel);
+    let existing = path.dirname(path.join(root, rel));
+    while (!fs.existsSync(existing)) existing = path.dirname(existing);
+    const real = path.join(fs.realpathSync(existing), path.relative(existing, path.join(root, rel)));
+    const relReal = path.relative(root, real).split(path.sep).join('/');
+    if (!inside(root, real) || relReal === '' || !userPath(relReal)) refusePath(file);
+    return real;
+  }
+
+  /**
+   * What stands in Merge all's way in each repository (ADR-0062 G8): the
+   * person's uncommitted files the merge would bring in, which a stash of
+   * those files alone clears, and whether anything else is uncommitted.
+   */
+  async function mergePreflight(workspace: string, sessionId: string): Promise<MergePreflightResponse> {
+    const { run } = savedRun(workspace, sessionId);
+    if (!run) gone(`Session "${sessionId}" has no isolated run, so nothing to merge.`);
+    const repos: MergePreflightRepo[] = [];
+    for (const entry of run.repos) {
+      // The record is on disk: a repository it names must still be one of the workspace's.
+      const target = { workspace, repo: repoOf({ workspace, repo: entry.path }) };
+      const scope = await checkoutScope(target, target.repo);
+      const tip = await branchTip(scope.cwd, entry.integrationBranch);
+      const incoming = new Set<string>();
+      if (tip !== null) {
+        const fork = await tryGit(invoker, scope.cwd, ['merge-base', 'HEAD', tip]);
+        const from = fork.ok ? fork.stdout.trim() : EMPTY_TREE;
+        for (const file of nulList(await gitOut(scope.cwd, ['diff', '--no-ext-diff', '--no-renames', '--relative', '--name-only', '-z', from, tip]))) incoming.add(file);
+      }
+      const now = await status(target);
+      const dirty = new Set<string>([...now.untracked, ...now.conflicted]);
+      for (const change of [...now.staged, ...now.unstaged]) {
+        dirty.add(change.path);
+        if (change.from) dirty.add(change.from);
+      }
+      const overlap = [...dirty].filter((file) => incoming.has(file)).sort();
+      repos.push({ repo: target.repo, branch: entry.startedDetached ? null : entry.baseBranch ?? null, overlap, otherDirty: dirty.size > overlap.length });
+    }
+    return { runId: run.id, repos, stashMessage: `ordewell: before Merge all of ${run.id}` };
+  }
+
+  return { repos, tree, content, find, status, diff, log, commit, branches, taskDiff, checkout, writable, mergePreflight };
+}
+
+/** A repository's checkout, resolved for a write: `root` is real, `prefix` the root's place in its repository. */
+export interface CheckoutScope {
+  repo: string;
+  root: string;
+  prefix: string;
+  at: ReadAt;
 }
 
 export type WorkspaceReader = ReturnType<typeof createWorkspaceReader>;

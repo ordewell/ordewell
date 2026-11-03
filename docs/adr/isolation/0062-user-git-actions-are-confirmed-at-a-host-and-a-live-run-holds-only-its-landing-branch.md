@@ -1,8 +1,8 @@
 ---
 status: accepted
-implemented: none
+implemented: partial
 amends: ["0013", "0014", "0042", "0049"]
-note: "The write half of the desktop app's file and git views (docs/desktop/design.md). The daemon git-action routes and interlock slice implements G1 to G9, the checkout changes and terminal slices G10 and G11."
+note: "The write half of the desktop app's file and git views (docs/desktop/design.md). The daemon's routes implement G1 to G9 and G10's save; the surfaces that offer them and the terminal (G11) are the desktop app's to build."
 ---
 
 # 0062 — User git actions are confirmed at a host, and a live run holds only its landing branch
@@ -233,3 +233,4 @@ top by position: it names the stash it made, and pop takes that name.
 ## History
 
 - 2026-11-03 — accepted.
+- 2026-11-03 — the daemon's action routes, interlock, preflight and save implemented (G1 to G10).
