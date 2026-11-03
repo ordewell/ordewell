@@ -23,20 +23,21 @@ const workspaces = readWorkspaces();
 const CORE = 'packages/core';
 const CLI = 'packages/cli';
 const WEB = 'packages/web';
+const UI = 'packages/ui';
 const VSCODE = 'packages/vscode';
 const selected = (...paths) => selectScope(paths, workspaces);
 const offChecks = (scope) => Object.entries(scope.checks).filter(([, on]) => !on).map(([check]) => check).sort();
 
 describe('the workspace graph', () => {
-  it('comes from the manifests: web and cli on core, cli on web, vscode on core', () => {
+  it('comes from the manifests: web, cli and ui on core, cli on web, vscode on core and ui', () => {
     const edges = Object.fromEntries(workspaces.map((w) => [w.dir, [...w.deps].sort()]));
-    assert.deepEqual(edges, { [CORE]: [], [VSCODE]: [CORE], [CLI]: [CORE, WEB], [WEB]: [CORE] });
+    assert.deepEqual(edges, { [CORE]: [], [UI]: [CORE], [VSCODE]: [CORE, UI], [CLI]: [CORE, WEB], [WEB]: [CORE] });
   });
 
   it('holds every package a source file reaches by a relative path', () => {
     // vitest mocks @ordewell/core with core's source and cli reaches into web
     // the same way, so a manifest could understate what a test imports.
-    const reach = /(?:from |import\(|require\()['"](?:\.\.\/)+(core|cli|web|vscode)\//g;
+    const reach = /(?:from |import\(|require\()['"](?:\.\.\/)+(core|cli|web|ui|vscode)\//g;
     const scan = (dir, owner) => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         const path = join(dir, entry.name);
@@ -57,7 +58,7 @@ describe('a change inside workspaces', () => {
   it('takes core\'s dependents with core: vitest cannot follow them through dist', () => {
     const scope = selected('packages/core/src/services/createSession.ts');
     assert.equal(scope.mode, 'selected');
-    assert.deepEqual([...scope.workspaces].sort(), [CLI, CORE, VSCODE, WEB]);
+    assert.deepEqual([...scope.workspaces].sort(), [CLI, CORE, UI, VSCODE, WEB]);
     assert.deepEqual(offChecks(scope), []);
   });
 
@@ -73,6 +74,12 @@ describe('a change inside workspaces', () => {
     assert.deepEqual(offChecks(scope), ['engine', 'integration', 'planner', 'sandbox']);
   });
 
+  it('takes vscode with ui, and runs the real VS Code for it: the webview is drawn from ui\'s dist', () => {
+    const scope = selected('packages/ui/src/chat/App.tsx');
+    assert.deepEqual(scope.workspaces, [UI, VSCODE]);
+    assert.deepEqual(offChecks(scope), ['engine', 'planner', 'sandbox']);
+  });
+
   it('runs the real VS Code for a vscode change, and no container', () => {
     const scope = selected('packages/vscode/src/extension.ts');
     assert.deepEqual(scope.workspaces, [VSCODE]);
@@ -81,7 +88,7 @@ describe('a change inside workspaces', () => {
 
   it('treats a package\'s own build or test config as that package', () => {
     assert.deepEqual([...selected('packages/web/vitest.config.ts').workspaces].sort(), [CLI, WEB]);
-    assert.deepEqual([...selected('packages/core/vitest.config.ts').workspaces].sort(), [CLI, CORE, VSCODE, WEB]);
+    assert.deepEqual([...selected('packages/core/vitest.config.ts').workspaces].sort(), [CLI, CORE, UI, VSCODE, WEB]);
   });
 
   it('unions what several changes need, docs among them', () => {
@@ -134,7 +141,7 @@ describe('the full fallback', () => {
       assert.equal(scope.mode, 'full');
       assert.ok(scope.reason.includes(path), scope.reason);
       assert.deepEqual(offChecks(scope), []);
-      assert.deepEqual([...scope.workspaces].sort(), [CLI, CORE, VSCODE, WEB]);
+      assert.deepEqual([...scope.workspaces].sort(), [CLI, CORE, UI, VSCODE, WEB]);
     });
   }
 
@@ -271,7 +278,7 @@ describe('the local inner loop', () => {
     const plan = runs('packages/core/src/index.ts');
     assert.deepEqual(plan.rebuild, [CORE]);
     assert.equal(script(plan, CORE), 'test:changed');
-    for (const dependent of [CLI, VSCODE, WEB]) assert.equal(script(plan, dependent), 'test:quick');
+    for (const dependent of [CLI, UI, VSCODE, WEB]) assert.equal(script(plan, dependent), 'test:quick');
   });
 
   it('rebuilds web for a web change, and runs the cli whole', () => {
@@ -281,6 +288,14 @@ describe('the local inner loop', () => {
     assert.equal(script(plan, CLI), 'test:quick');
     assert.equal(script(plan, CORE), undefined);
     assert.equal(script(plan, VSCODE), undefined);
+  });
+
+  it('rebuilds ui for a ui change, and runs vscode whole', () => {
+    const plan = runs('packages/ui/src/chat/hostState.ts');
+    assert.deepEqual(plan.rebuild, [UI]);
+    assert.equal(script(plan, UI), 'test:changed');
+    assert.equal(script(plan, VSCODE), 'test:quick');
+    assert.equal(script(plan, CORE), undefined);
   });
 
   it('rebuilds nothing for a package nothing depends on', () => {
@@ -299,8 +314,8 @@ describe('the local inner loop', () => {
 
   it('runs every quick suite on the full fallback, building what is depended on, in order', () => {
     const plan = runs('scripts/verify-skills.mjs');
-    assert.deepEqual(plan.rebuild, [CORE, WEB]);
-    for (const dir of [CORE, CLI, VSCODE, WEB]) assert.equal(script(plan, dir), 'test:quick');
+    assert.deepEqual(plan.rebuild, [CORE, UI, WEB]);
+    for (const dir of [CORE, CLI, UI, VSCODE, WEB]) assert.equal(script(plan, dir), 'test:quick');
     assert.match(plan.note, /scripts\/verify-skills\.mjs/);
   });
 
@@ -401,7 +416,7 @@ describe('the repository-wide guards', () => {
       ['packages/core/src/services/__tests__/fakeSecretsGuard.test.ts', 'guard'],
       ['packages/core/src/services/__tests__/gitExec.test.ts', 'guard'],
       ['packages/core/src/services/__tests__/worktreeLinksIgnored.test.ts', '.gitignore is a full fallback'],
-      ['packages/vscode/src/views/__tests__/webviewImports.lint.test.ts', '.eslintrc.js is a full fallback'],
+      ['packages/ui/src/__tests__/webviewImports.lint.test.ts', '.eslintrc.js is a full fallback'],
     ]);
     const climbing = /\b(?:resolve|join)\(__dirname,\s*((?:'[^']*'(?:,\s*)?)+)\)/g;
     const found = new Set();

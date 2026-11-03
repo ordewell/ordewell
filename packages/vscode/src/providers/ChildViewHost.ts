@@ -1,6 +1,6 @@
 import type { ChildDirectory, ChildPlanHandle } from '@ordewell/core';
 import { ConversationViewHost } from '../ConversationViewHost';
-import type { ChildCheckpointAnswer, HostToWebview } from '../shared/protocol';
+import type { ChildCheckpointAnswer, HostToWebview } from '@ordewell/ui/protocol';
 
 const NOT_OPEN = 'The child plan is no longer open.';
 

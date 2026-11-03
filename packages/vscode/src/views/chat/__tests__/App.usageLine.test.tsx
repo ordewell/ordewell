@@ -251,7 +251,7 @@ describe('account limits under the planner', () => {
     host.planner([{ id: 'codex', label: 'Codex', kind: 'harness', runner: 'codex', usable: true }], 'codex', 'codex');
     host.provider.setAccountLimits([codexLimits()]);
     const style = document.createElement('style');
-    style.textContent = readFileSync(resolve(process.cwd(), 'src/views/chat/styles.css'), 'utf8');
+    style.textContent = readFileSync(resolve(process.cwd(), '../ui/src/styles.css'), 'utf8');
     document.head.append(style);
     const row = document.querySelector<HTMLElement>('.account-limit')!;
     const details = document.getElementById(row.getAttribute('aria-describedby')!)!;
@@ -274,7 +274,7 @@ describe('account limits under the planner', () => {
     host.planner([{ id: 'codex', label: 'Codex', kind: 'harness', runner: 'codex', usable: true }], 'codex', 'codex');
     host.provider.setAccountLimits([codexLimits()]);
     const style = document.createElement('style');
-    style.textContent = readFileSync(resolve(process.cwd(), 'src/views/chat/styles.css'), 'utf8');
+    style.textContent = readFileSync(resolve(process.cwd(), '../ui/src/styles.css'), 'utf8');
     document.head.append(style);
     const row = document.querySelector<HTMLElement>('.account-limit')!;
     expect(getComputedStyle(row).textOverflow).toBe('ellipsis');
@@ -286,7 +286,7 @@ describe('account limits under the planner', () => {
     host.planner([{ id: 'codex', label: 'Codex', kind: 'harness', runner: 'codex', usable: true }], 'codex', 'codex');
     host.provider.setAccountLimits([codexLimits()]);
     const style = document.createElement('style');
-    style.textContent = readFileSync(resolve(process.cwd(), 'src/views/chat/styles.css'), 'utf8');
+    style.textContent = readFileSync(resolve(process.cwd(), '../ui/src/styles.css'), 'utf8');
     document.head.append(style);
     const row = document.querySelector<HTMLElement>('.account-limit')!;
     fireEvent.focus(row);
@@ -304,7 +304,7 @@ describe('account limits under the planner', () => {
     host.planner([{ id: 'codex', label: 'Codex', kind: 'harness', runner: 'codex', usable: true }], 'codex', 'codex');
     host.provider.setAccountLimits([codexLimits()]);
     const style = document.createElement('style');
-    style.textContent = readFileSync(resolve(process.cwd(), 'src/views/chat/styles.css'), 'utf8');
+    style.textContent = readFileSync(resolve(process.cwd(), '../ui/src/styles.css'), 'utf8');
     document.head.append(style);
     document.querySelector<HTMLElement>('.account-limit')!.focus();
     host.provider.setAccountLimits([codexLimits({ status: 'stale' })]);

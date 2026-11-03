@@ -1,8 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { DisplayBlock, SessionMessage } from '@ordewell/core';
 import { ConversationViewHost } from '../ConversationViewHost';
-import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks, type PatchedView } from '../shared/conversationPatch';
-import type { ConversationPatch, HostToWebview } from '../shared/protocol';
+import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks, type ConversationPatch, type HostToWebview, type PatchedView } from '@ordewell/ui/protocol';
 
 /** A webview stand-in: it keeps only what the host posted, the way App does. */
 function webview() {

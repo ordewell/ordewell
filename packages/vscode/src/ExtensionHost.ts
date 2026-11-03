@@ -18,7 +18,7 @@ import { ModelDiscovery, sendModelConfig } from './ModelDiscovery';
 import { PlannerSelection } from './PlannerSelection';
 import { recallPlannerModel } from './plan/PlannerModelSwitch';
 import type { ChatViewProvider } from './providers/ChatViewProvider';
-import type { SettingsChange } from './shared/protocol';
+import type { SettingsChange } from '@ordewell/ui/protocol';
 import { TaskLogRegistry } from './providers/TaskLogRegistry';
 import { SecretStore } from './adapters/SecretStore';
 import type { VsCodeConfig } from './adapters/VsCodeConfig';

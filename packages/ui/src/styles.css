@@ -1,0 +1,7167 @@
+/* Every host colour and font comes in through the --ow-* tokens (tokens.css). */
+:root {
+  --bg-primary: var(--ow-bg, #0d1117);
+  --bg-secondary: var(--ow-bg-sidebar, #161b22);
+  --bg-tertiary: var(--ow-bg-widget, var(--bg-secondary));
+  --bg-elevated: var(--ow-bg-overlay, var(--bg-secondary));
+  --bg-hover: var(--ow-bg-hover, var(--bg-secondary));
+  --bg-input: var(--ow-bg-input, var(--bg-primary));
+  /* Task cards sit on the plan's --bg-secondary, which light themes paint the
+     same near-white as everything else; a little foreground lifts them in
+     either direction, so one formula serves dark and light alike. */
+  --bg-card: color-mix(in srgb, var(--text-primary) 4%, var(--bg-secondary));
+  --bg-card-raised: color-mix(in srgb, var(--text-primary) 7%, var(--bg-secondary));
+  --bg-card-row-hover: color-mix(in srgb, var(--text-primary) 4%, transparent);
+  /* A card that sits on --bg-primary, not on the plan's --bg-secondary: mixed
+     from the page it sits on, the same quiet step works in either theme. Light
+     overrides the share, because white has no room left to darken into. */
+  --bg-card-page: color-mix(in srgb, var(--text-primary) 4%, var(--bg-primary));
+  --card-border: var(--border-subtle);
+  /* A separator inside a card: the panel hairline is invisible on the card's
+     own tint in light; the share is raised there to the step dark already has. */
+  --card-hairline: var(--border-muted);
+  --border-color: var(--ow-border, #30363d);
+  --border-muted: var(--ow-border-widget, var(--border-color));
+  --border-subtle: color-mix(in srgb, var(--border-color) 60%, transparent);
+  --text-primary: var(--ow-fg, #e6edf3);
+  --text-secondary: var(--ow-fg-secondary, #8b949e);
+  --text-muted: color-mix(in srgb, var(--text-secondary) 70%, transparent);
+  --text-placeholder: var(--ow-fg-placeholder, var(--text-muted));
+  /* Small secondary text that still has to clear AA on a tinted or input background. */
+  --text-hint: color-mix(in srgb, var(--text-secondary) 70%, var(--text-primary));
+  /* Warning text, as opposed to a warning marker: a light theme's
+     editorWarning.foreground is an icon colour (~3:1 on white) while the list's
+     warning colour is the one it makes readable. Dark themes set both the same,
+     so this changes nothing there. */
+  --warning-text: var(--ow-status-warning-text, var(--ow-status-warning, #d2991d));
+  --accent: var(--ow-accent, #58a6ff);
+  /* The label on an accent fill. Dark accents are light enough for black; the
+     light themes' darker blues need white (WCAG AA at 11px, #1e1e1e was 3.96). */
+  --on-accent: #000;
+  --accent-emphasis: var(--ow-accent-emphasis, #1f6feb);
+  --accent-subtle: color-mix(in srgb, var(--accent) 8%, transparent);
+  --accent-glow: color-mix(in srgb, var(--accent) 15%, transparent);
+  --green: var(--ow-status-passed, #3fb950);
+  --green-subtle: color-mix(in srgb, var(--green) 12%, transparent);
+  --green-emphasis: var(--ow-status-passed, #238636);
+  --red: var(--ow-status-failed, #f85149);
+  --red-subtle: color-mix(in srgb, var(--red) 12%, transparent);
+  /* The edge and the segment divider a signed-out capsule draws in red. On a
+     dark page a light tint is already a 2:1 edge; on white the same mix nearly
+     disappears, so the light themes raise it (see below). */
+  --red-boundary: color-mix(in srgb, var(--red) 45%, transparent);
+  --red-divider: color-mix(in srgb, var(--red) 35%, var(--border-color));
+  --orange: #d2991d;
+  --orange-subtle: rgba(210, 153, 29, 0.12);
+  --purple: #a371f7;
+  --purple-subtle: rgba(163, 113, 247, 0.12);
+  --cyan: #39c5cf;
+  --cyan-subtle: rgba(57, 197, 207, 0.1);
+  --radius-sm: 5px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+  --font-sans: var(--ow-font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'SF Pro Text', Helvetica, Arial, sans-serif);
+  --font-mono: var(--ow-font-mono, 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.4);
+  --transition-fast: 120ms ease;
+  --transition-normal: 180ms ease;
+  --slash-token-bg: var(--ow-bg-code, color-mix(in srgb, var(--accent) 16%, transparent));
+  --slash-token-fg: var(--ow-fg-link, #58a6ff);
+}
+
+/* The fixed hues above are tuned for dark backgrounds and fall well short of
+   AA as text on white; high-contrast-light has the same white page, so it takes
+   the same ones. */
+body.vscode-light,
+body.vscode-high-contrast-light {
+  --on-accent: #fff;
+  --orange: #7d4e00;
+  --purple: #6639ba;
+  --cyan: #075e66;
+  /* 45% of the light theme's red is a 2.3:1 edge on white; 62% puts the
+     signed-out capsule's boundary over 3:1, and its divider gets the same
+     strengthening (a divider is reinforcement, not the state's only cue). */
+  --red-boundary: color-mix(in srgb, var(--red) 62%, transparent);
+  --red-divider: color-mix(in srgb, var(--red) 60%, var(--border-color));
+}
+
+/* A light theme's focusBorder is often too pale to read; the theme's link
+   colour is the accent it guarantees legible. A white page also needs its cards
+   drawn by a hairline and a 7% step, not the sidebar's grey block. */
+body.vscode-light {
+  --accent: var(--ow-fg-link, #005fb8);
+  --bg-card-page: color-mix(in srgb, var(--text-primary) 7%, var(--bg-primary));
+  --card-border: color-mix(in srgb, var(--text-primary) 16%, transparent);
+  --card-hairline: color-mix(in srgb, var(--text-primary) 12%, transparent);
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  line-height: 1.55;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.01em;
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(139, 148, 158, 0.18); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(139, 148, 158, 0.32); }
+
+.chat-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.chat-container[hidden] { display: none; }
+
+.child-plan-view {
+  overflow-y: auto;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+}
+
+.child-plan-view > nav button,
+.child-plan-view > form button,
+.child-plan-view > form textarea,
+.child-questions button,
+.child-task button:not(.checkpoint-panel *) {
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  font: inherit;
+}
+
+.child-plan-view form,
+.child-plan-view label {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+}
+
+.child-plan-view textarea { width: 100%; min-height: 60px; }
+.child-plan-view > nav { display: flex; flex-wrap: wrap; gap: 6px; }
+.child-task { width: 100%; }
+.child-question { border: 0; padding: 0; margin: 0; min-width: 0; }
+.child-questions { display: flex; flex-direction: column; gap: 4px; }
+
+/* Mouse focus targets only (App.tsx); a ring around the whole view would be noise. */
+.chat-container:focus,
+.message-list:focus {
+  outline: none;
+}
+
+/* ---- New Session Confirm ---- */
+.new-session-confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--orange-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+  animation: fadeSlideIn var(--transition-normal);
+}
+
+.new-session-confirm-text {
+  font-size: 13px;
+  color: var(--text-primary);
+  flex: 1;
+}
+
+.new-session-confirm-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.new-session-confirm-actions .btn-accept {
+  padding: 4px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--orange);
+  background: var(--orange);
+  color: #0d1117;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.new-session-confirm-actions .btn-accept:hover {
+  opacity: 0.85;
+}
+
+.new-session-confirm-actions .btn-reject {
+  padding: 4px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.new-session-confirm-actions .btn-reject:hover {
+  background: var(--bg-hover);
+}
+
+/* ---- Chat Messages ---- */
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0;
+}
+
+/* ---- ChatMessage ---- */
+
+.message-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+  /* `flex: 1` is `flex: 1 1 0%`, so the list will shrink to nothing when the
+     setup panel and a tall plan dock both want room — which clipped the newest
+     revision chip, the one thing that says the plan just changed. Capping the
+     dock is not enough on its own; the conversation needs its own floor. It is
+     one chip row and no more, because a dragged dock may cover the rest. */
+  min-height: 56px;
+}
+
+.chat-msg {
+  padding: 6px 14px;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-msg-user {
+  align-items: stretch;
+}
+
+.chat-msg-planner {
+  align-items: stretch;
+}
+
+.chat-msg-system {
+  align-items: center;
+  padding: 4px 14px;
+}
+
+.chat-msg-system .chat-msg-content {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* `.plan-dock-body` shares this box (and the planner variant below) rather than
+   restyling: the plan moved out of the chat bubble into the dock, and
+   `.plan-card-group`'s own padding is calibrated against these exact values. */
+.chat-msg-bubble,
+.plan-dock-body {
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  line-height: 1.55;
+  word-break: break-word;
+  width: 100%;
+}
+
+.chat-msg-user .chat-msg-bubble {
+  background: var(--accent-emphasis);
+  color: #fff;
+}
+
+.chat-msg-planner .chat-msg-bubble,
+.plan-dock-body {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+}
+
+/* The content is markdown-it's HTML (#82): the newline it writes between
+   blocks must not draw as a blank line, so only a <pre> keeps whitespace. */
+.chat-msg-planner .chat-msg-content {
+  color: var(--text-primary);
+  white-space: normal;
+}
+
+.chat-msg-planner .chat-msg-content :is(p, ul, ol, pre, blockquote, .md-table) {
+  margin: 0 0 6px;
+}
+
+.chat-msg-planner .chat-msg-content > :first-child {
+  margin-top: 0;
+}
+
+.chat-msg-planner .chat-msg-content > :last-child,
+.chat-msg-planner .chat-msg-content :is(li, blockquote) > :last-child {
+  margin-bottom: 0;
+}
+
+.chat-msg-planner .chat-msg-content :is(h1, h2, h3, h4, h5, h6) {
+  margin: 12px 0 4px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.chat-msg-planner .chat-msg-content h1 { font-size: 16px; }
+.chat-msg-planner .chat-msg-content h2 { font-size: 15px; }
+.chat-msg-planner .chat-msg-content h3 { font-size: 14px; }
+.chat-msg-planner .chat-msg-content :is(h4, h5, h6) { font-size: 13px; }
+.chat-msg-planner .chat-msg-content :is(h5, h6) { color: var(--text-secondary); }
+
+.chat-msg-planner .chat-msg-content :is(ul, ol) {
+  padding-left: 20px;
+}
+
+.chat-msg-planner .chat-msg-content li > :is(ul, ol) {
+  margin: 2px 0 0;
+}
+
+.chat-msg-planner .chat-msg-content li + li {
+  margin-top: 2px;
+}
+
+.chat-msg-planner .chat-msg-content pre {
+  padding: 6px 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  white-space: pre;
+  word-break: normal;
+}
+
+.chat-msg-planner .chat-msg-content pre code {
+  padding: 0;
+  background: none;
+  border-radius: 0;
+}
+
+.chat-msg-planner .chat-msg-content blockquote {
+  padding-left: 10px;
+  border-left: 3px solid var(--border-color);
+  color: var(--text-secondary);
+}
+
+.chat-msg-planner .chat-msg-content hr {
+  margin: 10px 0;
+  border: none;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* A wide table scrolls sideways in core's .md-table box at its natural width;
+   only a long cell wraps, at a cap that keeps a row readable. */
+.chat-msg-planner .chat-msg-content .md-table {
+  overflow-x: auto;
+}
+
+.chat-msg-planner .chat-msg-content table {
+  width: max-content;
+  border-collapse: collapse;
+}
+
+.chat-msg-planner .chat-msg-content :is(th, td) {
+  max-width: 32ch;
+  padding: 3px 8px;
+  border: 1px solid var(--border-subtle);
+  text-align: left;
+  vertical-align: top;
+}
+
+.chat-msg-planner .chat-msg-content th {
+  background: var(--bg-tertiary);
+  font-weight: 600;
+}
+
+.chat-msg-planner .chat-msg-content code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--bg-tertiary);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.chat-msg-planner .chat-msg-content strong {
+  font-weight: 600;
+}
+
+.chat-msg-planner .chat-msg-content a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.chat-msg-planner .chat-msg-content a:hover {
+  text-decoration: underline;
+}
+
+.chat-msg-user .chat-msg-content {
+  color: #fff;
+}
+
+/* A force-sent line (ADR-0023, F5): it stopped the turn before it, so it is
+   marked apart from an ordinary reply. */
+.chat-msg-forced {
+  display: inline-block;
+  margin-bottom: 3px;
+  padding: 0 5px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: color-mix(in srgb, #fff 25%, transparent);
+  color: #fff;
+}
+
+/* The supervisor (ADR-0029) speaks in the planner's bubble, marked so its
+   notes read apart from replies to the user, and so does what woke it. */
+.chat-msg-supervisor .chat-msg-bubble {
+  border-left: 3px solid var(--orange);
+}
+
+.chat-msg-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--orange);
+  margin-bottom: 2px;
+}
+
+.chat-msg-wake-up {
+  padding: 6px 12px;
+  margin: 0 14px;
+  border-left: 3px solid var(--orange);
+  background: var(--orange-subtle);
+  border-radius: var(--radius-md);
+}
+
+.chat-msg-wake-up .chat-msg-content {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* A research report in a run update (ADR-0037): text to read, set apart from Ordewell's own lines */
+.chat-report {
+  margin: 4px 0;
+}
+
+.chat-report-head {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.chat-report-body {
+  margin: 2px 0 0;
+  padding: 4px 8px;
+  border-left: 2px solid var(--cyan);
+  font: inherit;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.plan-supervisor-stopped {
+  color: var(--orange);
+}
+
+.chat-msg-user .chat-msg-content mark.skill-token {
+  background: color-mix(in srgb, #fff 22%, transparent);
+  color: inherit;
+  font-weight: 600;
+  border-radius: 4px;
+  padding: 0 2px;
+}
+
+/* Sits right under the bubble of the message that loaded it. */
+.chat-msg-skill-load {
+  padding-top: 0;
+  margin-top: -4px;
+}
+
+.chat-msg-skill-load .skill-load-mark {
+  color: var(--green);
+}
+
+.chat-msg-skill-load .skill-load-path {
+  font-family: var(--font-mono);
+}
+
+.chat-msg-content {
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ---- Planner working indicator: spinner, and the row pinned above the composer ---- */
+
+.chat-msg-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border-subtle);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: chat-spin 0.6s linear infinite;
+  margin-right: 6px;
+  flex-shrink: 0;
+  vertical-align: -2px;
+}
+
+@keyframes chat-spin {
+  to { transform: rotate(360deg); }
+}
+
+.chat-msg-working {
+  flex-shrink: 0;
+  padding: 4px 14px;
+  font-size: 12px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+}
+
+.chat-msg-working-time {
+  margin-left: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Conversation blocks (#51): thinking, command rows, subagent cards ---- */
+
+.chat-msg-error {
+  align-items: center;
+  padding: 4px 14px;
+}
+
+.chat-msg-error .chat-msg-content {
+  font-size: 11px;
+  color: var(--ow-status-error, var(--red));
+  text-align: center;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* The reply is still arriving. */
+.chat-msg-cursor {
+  display: inline-block;
+  width: 6px;
+  height: 12px;
+  margin-left: 2px;
+  vertical-align: -1px;
+  background: var(--text-secondary);
+  animation: chat-cursor-blink 1s steps(2, start) infinite;
+}
+
+@keyframes chat-cursor-blink {
+  to { visibility: hidden; }
+}
+
+.activity-think,
+.cmd-row,
+.subagent-card {
+  margin: 2px 14px;
+  font-size: 11px;
+}
+
+.activity-think-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-muted);
+}
+
+.activity-think-label {
+  flex-shrink: 0;
+  font-style: italic;
+}
+
+.activity-think-line {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.activity-think-pre,
+.cmd-row-preview,
+.cmd-row-args,
+.cmd-row-output {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+.activity-think-pre {
+  margin-top: 2px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border-muted);
+}
+
+.cmd-row-header {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cmd-row-icon {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+/* `flex: 1; min-width: 0` is what makes the ellipsis engage: a nowrap element
+   defaults to min-width:auto and refuses to shrink below its text, pushing the
+   outcome out of the row instead of clipping the argument. The name and the
+   closing parenthesis never shrink, so only the argument gives way. */
+.cmd-row-head {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.cmd-row-name {
+  flex-shrink: 0;
+}
+
+.cmd-row-arg {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A path is cut from the left, so the file it names stays in view: in a
+   right-to-left box the ellipsis takes the start, and the isolated
+   left-to-right text inside still reads the right way round. */
+.cmd-row-arg.path {
+  direction: rtl;
+}
+
+.cmd-row-arg > bdi {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+/* Refused / denied / failed / cut-short calls read as an exception, not a
+   result — the glyph alone was too quiet, so the status drives colour too. */
+.cmd-row-outcome {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--orange);
+}
+
+/* A sealed run is a fact about where the command ran, not an exception. */
+.cmd-row-sealed {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.cmd-row[data-status='pending'] .cmd-row-icon {
+  animation: cmd-row-pulse 1.4s ease-in-out infinite;
+}
+
+.cmd-row[data-status='ok'] .cmd-row-icon {
+  color: var(--green);
+}
+
+/* The command ran and failed — an error. Distinct from refused/denied, which
+   are envelope boundaries and keep the default orange. */
+.cmd-row[data-status='error'] .cmd-row-icon,
+.cmd-row[data-status='error'] .cmd-row-outcome {
+  color: var(--red);
+}
+
+.cmd-row[data-status='denied'] .cmd-row-icon {
+  color: var(--orange);
+}
+
+/* Never finished, so it is absence rather than failure. */
+.cmd-row[data-status='interrupted'] .cmd-row-icon,
+.cmd-row[data-status='interrupted'] .cmd-row-outcome {
+  color: var(--text-muted);
+}
+
+@keyframes cmd-row-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.cmd-row-preview,
+.cmd-row-args,
+.cmd-row-output {
+  margin: 2px 0 0 17px;
+  padding-left: 8px;
+  border-left: 2px solid var(--border-muted);
+}
+
+.cmd-row-args {
+  color: var(--text-muted);
+}
+
+.cmd-row-output {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.cmd-row-more {
+  display: block;
+  margin-left: 27px;
+  font-size: 10px;
+  color: var(--text-hint);
+}
+
+.subagent-card {
+  padding: 5px 10px;
+  border: 1px solid var(--border-muted);
+  border-left: 2px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+}
+
+.subagent-card[data-status='failed'] {
+  border-left-color: var(--red);
+}
+
+.subagent-card[data-status='stopped'] {
+  border-left-color: var(--text-muted);
+}
+
+.subagent-card-header {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.subagent-card-title {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.subagent-card-brief {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-hint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.subagent-card-model,
+.subagent-card-status {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.subagent-card-steps {
+  margin: 4px 0;
+}
+
+/* Nested rows sit inside the card's own padding. */
+.subagent-card-steps .activity-think,
+.subagent-card-steps .cmd-row,
+.subagent-card-steps .chat-msg {
+  margin: 2px 0;
+  padding: 0;
+}
+
+.subagent-card-digest {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ---- Activity disclosures (ADR-0017, X1) ----
+   Each run of activity between two messages is one quiet line saying what it
+   did; opening it shows its rows as previews, and each row opens on its own.
+   Every switch is a native button, so the theme's focus ring, Enter and Space
+   come with it; the chevron is the only mark that it opens. */
+.disclosure {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  padding: 1px 4px;
+  margin: 0 -4px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  /* A header is still text a reader may want to copy: a click that ends a
+     selection does not toggle (ChatMessage's `selecting`). */
+  user-select: text;
+}
+
+.disclosure:hover {
+  background: var(--bg-card-row-hover);
+}
+
+.disclosure:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.disclosure-chevron {
+  flex-shrink: 0;
+  align-self: center;
+  color: var(--text-muted);
+  transition: transform var(--transition-fast);
+}
+
+.disclosure[aria-expanded='true'] > .disclosure-chevron {
+  transform: rotate(90deg);
+}
+
+.disclosure:hover > .disclosure-chevron {
+  color: var(--text-primary);
+}
+
+.activity-group {
+  margin: 1px 14px;
+  font-size: 11px;
+}
+
+.activity-group-toggle {
+  width: calc(100% + 8px);
+  color: var(--text-secondary);
+}
+
+.activity-group-toggle:hover {
+  color: var(--text-primary);
+}
+
+.activity-group-summary {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.activity-group[data-state='running'] .activity-group-toggle > .disclosure-chevron {
+  color: var(--accent);
+  animation: cmd-row-pulse 1.4s ease-in-out infinite;
+}
+
+/* A run with something in it failed, denied or cut short reads as an
+   exception while folded, as the row it hides does (.cmd-row-outcome). */
+.activity-group[data-state='failed'] .activity-group-toggle,
+.activity-group[data-state='failed'] .activity-group-toggle > .disclosure-chevron {
+  color: var(--orange);
+}
+
+/* The fixed orange is tuned for ordinary themes; a high-contrast one names
+   its own warning colour. */
+body.vscode-high-contrast .activity-group[data-state='failed'] .activity-group-toggle,
+body.vscode-high-contrast .activity-group[data-state='failed'] .activity-group-toggle > .disclosure-chevron,
+body.vscode-high-contrast-light .activity-group[data-state='failed'] .activity-group-toggle,
+body.vscode-high-contrast-light .activity-group[data-state='failed'] .activity-group-toggle > .disclosure-chevron {
+  color: var(--ow-status-warning, var(--text-primary));
+}
+
+/* The rows hang off the line that summarised them, a step in. */
+.activity-group-body {
+  margin: 1px 0 4px 4px;
+  padding-left: 9px;
+  border-left: 1px solid var(--border-subtle);
+}
+
+.activity-group-body > .activity-think,
+.activity-group-body > .cmd-row,
+.activity-group-body > .subagent-card,
+.activity-group-body > .approval-card {
+  margin: 3px 0;
+}
+
+/* Notices inside a group read as rows, not as centred lines between messages. */
+.activity-group-body > .chat-msg-system {
+  align-items: stretch;
+  padding: 2px 0;
+}
+
+.activity-group-body > .chat-msg-system > .chat-msg-content,
+.activity-group-body > .chat-msg-system {
+  text-align: left;
+}
+
+.activity-think-head.disclosure,
+.cmd-row-toggle,
+.runner-loaded-head.disclosure {
+  flex: 1;
+}
+
+/* A row drawn whole with nothing to open (a script task's log) keeps the
+   head a button would have: its glyph beside the command, not above it. */
+.cmd-row-toggle:not(.disclosure) {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.activity-think-head.disclosure {
+  width: calc(100% + 8px);
+}
+
+.subagent-card-header.disclosure {
+  width: calc(100% + 8px);
+}
+
+.runner-loaded-head.disclosure {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+/* What a row opens lines up under its head, past the chevron. */
+.cmd-row-body,
+.activity-think-pre {
+  margin-left: 16px;
+}
+
+/* A report's fold opens it; quiet until pointed at. */
+.report-toggle {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 10px;
+  color: var(--text-hint);
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-report .report-toggle {
+  margin-left: 0;
+}
+
+.report-toggle:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.report-toggle:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+body.vscode-high-contrast .disclosure:hover,
+body.vscode-high-contrast-light .disclosure:hover {
+  border-color: var(--ow-border-contrast-active, var(--accent));
+  border-style: dashed;
+}
+
+.plan-revision-chip:disabled {
+  cursor: default;
+  opacity: 0.75;
+}
+
+/* ---- Old chat-message (keep for backward compat during transition) ---- */
+
+.chat-message {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.chat-message-role {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.chat-message-user {
+  background: var(--bg-primary);
+}
+
+/* ---- Setup panel: Planner block, then Runners block ---- */
+.setup-panel {
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-muted);
+  /* When the column is over-full (settings open, plan docked), the space comes
+     from here — settings are the least urgent thing on screen, and the
+     alternative is the conversation or the input losing its room. The factor
+     is large so the plan dock's, which must add up to more than one to take a
+     whole shortfall once this is at its floor, stays small beside it. */
+  flex-shrink: 100;
+  /* Its toggle row (8px padding either side of a 12px label) is the one thing
+     that never gives way: squeezed to nothing, the Run settings could not be
+     reached to be opened. */
+  min-height: 28px;
+  display: flex;
+  flex-direction: column;
+  /* Only .setup-panel-body scrolls, so the Settings toggle stays reachable. */
+  overflow: hidden;
+}
+
+.setup-panel-toggle {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  /* One row now, so the band matches the plan-dock bar's weight; the open
+     state's inset rule still draws over the header's own bottom edge. */
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  cursor: pointer;
+  text-align: center;
+}
+
+/* While open, settings take their room from the chat, plan and composer below,
+   so the toggle reads as the panel's active header. The inset rule draws over
+   the header's own bottom edge rather than adding height, and the label keeps
+   its colour and its contrast; hover below keeps its background cue. */
+.setup-panel-toggle.open {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.setup-panel-toggle.open .setup-panel-chevron {
+  color: var(--accent);
+}
+
+.setup-panel-toggle:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+/* Inset so the panel's own overflow: hidden cannot clip it. */
+.setup-panel-toggle:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.setup-panel-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.setup-panel-toggle-label {
+  display: flex;
+  align-items: center;
+  height: 11px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+
+.setup-panel-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 11px;
+  height: 11px;
+  transition: transform var(--transition-fast);
+  transform: rotate(180deg);
+}
+
+.setup-panel-chevron.collapsed {
+  transform: rotate(0deg);
+}
+
+.setup-panel-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+/* A signed-out planner rides in the Settings row as the same red dot its pill
+   carries: the row's own gap supplies the spacing. */
+.setup-panel-toggle-row .planner-auth-dot {
+  display: block;
+}
+
+.setup-panel-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 70vh;
+  opacity: 1;
+  overflow-y: auto;
+  transition: max-height var(--transition-fast), opacity var(--transition-fast);
+}
+
+.setup-panel-body.collapsed {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+}
+
+.setup-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px 10px;
+}
+
+.setup-block + .setup-block {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.setup-block-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+
+.run-settings-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.run-settings-toggle:hover {
+  color: var(--text-primary);
+}
+
+.run-settings-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.run-settings-summary {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+}
+
+.setup-block-hint {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  margin-top: -2px;
+}
+
+/* The Run block's second quiet line: which of its choices are machine-wide. */
+.run-settings-scope-note {
+  margin-top: 1px;
+}
+
+.setup-block-empty {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.setup-block-empty code {
+  font-size: 10px;
+}
+
+/* Capsules hang from the top edge: an item with a login reserves a failure
+   line below it, and centring would push every shorter capsule half a line
+   down. */
+.runner-pills {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* One runner is one capsule: its name toggles the runner, and a signed-out
+   agent's own login is a segment of it, never a second pill beside it. */
+.runner-pill-item {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  min-width: 0;
+}
+
+.runner-pill-group {
+  display: inline-flex;
+  align-items: stretch;
+  min-width: 0;
+  border-radius: var(--radius-full);
+  border: 1px solid transparent;
+  background: transparent;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.runner-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 11px;
+  border: 0;
+  /* A standalone pill keeps both round ends; only a capsule's first segment
+     squares its right edge against the login. */
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+  font-family: inherit;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  outline: none;
+}
+
+.runner-pill-group > .runner-pill {
+  border-radius: var(--radius-full) 0 0 var(--radius-full);
+}
+
+/* No login segment: the name is the whole capsule, so it keeps both round ends. */
+.runner-pill-group > .runner-pill:only-child {
+  border-radius: var(--radius-full);
+}
+
+.runner-pill .runner-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transition: background var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.runner-pill-group.on {
+  border-color: color-mix(in srgb, var(--cyan) 35%, transparent);
+  background: var(--cyan-subtle);
+}
+
+.runner-pill.on {
+  color: var(--cyan);
+}
+
+.runner-pill.on .runner-dot {
+  background: var(--cyan);
+}
+
+/* Clicked, until the host's runner list says what it saved. */
+.runner-pill-group.pending {
+  opacity: 0.7;
+}
+
+.runner-pill.pending {
+  opacity: 0.7;
+}
+
+/* Installed but off: dashed rather than filled, so it reads as offered rather than chosen. */
+.runner-pill-group.disabled {
+  border-style: dashed;
+  border-color: var(--border-color);
+}
+
+.runner-pill.disabled {
+  color: var(--text-muted);
+}
+
+.runner-pill.disabled .runner-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--text-muted);
+}
+
+.runner-pill:hover {
+  background: var(--bg-hover);
+}
+
+.runner-pill.on:hover {
+  background: rgba(57, 197, 207, 0.14);
+}
+
+.runner-pill.disabled:hover {
+  color: var(--cyan);
+}
+
+.runner-pill.disabled:hover .runner-dot {
+  box-shadow: inset 0 0 0 1px var(--cyan);
+}
+
+/* Signed out is its own flag and composes with the on/off state: auth chooses
+   the palette, never which capsule shape the runner has. The capsule owns the
+   red tint and border, so the login segment is visibly part of the same
+   object. */
+.runner-pill-group.signed-out.on {
+  border-style: solid;
+  border-color: var(--red-boundary);
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+}
+
+/* Still offered, still off: the dashed boundary and the hollow dot survive the
+   red, and only the tint is weaker than a signed-out runner that is on. */
+.runner-pill-group.signed-out.disabled {
+  border-style: dashed;
+  border-color: var(--red-boundary);
+  background: color-mix(in srgb, var(--red) 4%, transparent);
+}
+
+.runner-pill.on.signed-out {
+  color: var(--text-primary);
+}
+
+.runner-pill.disabled.signed-out {
+  color: var(--text-secondary);
+}
+
+/* Later and more specific than the cyan .on dot: signing in, not switching
+   the runner on, is what clears this red. */
+.runner-pill.on.signed-out .runner-dot {
+  background: var(--red);
+  box-shadow: none;
+}
+
+.runner-pill.disabled.signed-out .runner-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--red);
+}
+
+.runner-pill.on.signed-out:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+}
+
+.runner-pill.disabled.signed-out:hover {
+  color: var(--text-primary);
+}
+
+.runner-pill.disabled.signed-out:hover .runner-dot {
+  box-shadow: inset 0 0 0 1px var(--red);
+}
+
+.planner-backends {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+/* One planner is one capsule: the name selects it, and a signed-out agent's
+   own login is a segment of that capsule, never a second chip beside it. */
+.planner-pill-item {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  min-width: 0;
+}
+
+/* The group owns the one border, tint and radius. Both segments sit inside
+   it, so a login never means also choosing that agent as planner (ADR-0009). */
+.planner-pill-group {
+  display: inline-flex;
+  align-items: stretch;
+  min-width: 0;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-full);
+  background: var(--bg-secondary);
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.planner-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 0;
+  /* Un-grouped, the pill is a pill: the Run rows draw their own segmented
+     container, and a standalone planner chip keeps both round ends. */
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  font-family: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+  outline: none;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.planner-pill-group > .planner-pill {
+  border-radius: var(--radius-full) 0 0 var(--radius-full);
+}
+
+/* No login segment: the name is the whole capsule, so it keeps both round ends. */
+.planner-pill-group > .planner-pill:only-child {
+  border-radius: var(--radius-full);
+}
+
+/* One hover surface per segment: the group's border never changes on hover,
+   which is what used to make the login look like a separate chip. */
+.planner-pill:hover:not(:disabled):not(.active) {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+}
+
+/* Picked, but the host has not confirmed it yet — it resolves the target's
+   model catalog first, which can be a cold CLI spawn (ADR-0009). */
+.planner-pill.pending {
+  opacity: 0.7;
+}
+
+/* A signed-out agent is offered, not blocked: the login is the fix. The dot
+   says it quietly; the capsule's tint and border say it at a glance. */
+.planner-pill.signed-out {
+  color: var(--text-primary);
+}
+
+.planner-pill-group.signed-out {
+  border-color: var(--red-boundary);
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+}
+
+.planner-pill.signed-out:not(.active):hover:not(:disabled) {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+}
+
+.planner-pill.active {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.planner-pill-group.active {
+  border-color: var(--accent);
+}
+
+/* Still the selected planner, so the name carries a stronger tint of the same
+   red. The accent fill stays reserved for a signed-in planner: a signed-out
+   selection never looks like an accent chip, and the login beside it never
+   looks like a second selection. */
+.planner-pill-group.signed-out .planner-pill.active {
+  background: color-mix(in srgb, var(--red) 30%, transparent);
+  color: var(--text-primary);
+}
+
+/* The signed-out capsule keeps its red boundary even when selected; the name
+   tint above is what marks the selection. */
+.planner-pill-group.active.signed-out {
+  border-color: var(--red-boundary);
+}
+
+/* Keyboard focus stays inside the capsule: an inset ring cannot be mistaken
+   for the group's border or spill outside the segment it belongs to. */
+.planner-pill:focus-visible,
+.runner-pill:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* An active segment is filled with the accent, so the accent ring disappears
+   into it. The label's own colour is the one guaranteed to stand off that fill. */
+.planner-pill.active:not(.signed-out):focus-visible {
+  outline-color: var(--on-accent);
+}
+
+.planner-auth-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--red);
+  flex-shrink: 0;
+}
+
+/* One login look in both places: the row's variant below is only larger. Same
+   fill, weight and colour, so both read as the same action. */
+.planner-login {
+  display: inline-grid;
+  align-items: center;
+  justify-items: center;
+  border: 0;
+  background: color-mix(in srgb, var(--red) 16%, transparent);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+  outline: none;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+/* The visible label and the wider pending label share one cell: the hidden
+   generated copy reserves the width, so a login never reflows its capsule or
+   its row when "Log in" becomes "Signing in…". */
+.planner-login-state {
+  grid-area: 1 / 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.planner-login::after {
+  grid-area: 1 / 1;
+  content: 'Signing in…';
+  padding-left: 14px; /* the spinner and its gap in the pending state */
+  visibility: hidden;
+}
+
+.planner-login:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 24%, transparent);
+}
+
+.planner-login:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.planner-login:disabled {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  cursor: default;
+}
+
+/* The menu's login segment: flush with the name, its divider inset from the
+   capsule's top and bottom and owned by this segment, not a second border. */
+.planner-pill-login {
+  position: relative;
+  /* As tight as the name segment's rhythm: the divider is this segment's own
+     edge, so the label does not need a second inset on top of it. */
+  padding: 4px 8px;
+  border-radius: 0 var(--radius-full) var(--radius-full) 0;
+  font-size: 10.5px;
+}
+
+/* A capsule reserves the resting label only: once the wait starts the words
+   leave and the spinner alone holds the slot, so the capsule never grows for
+   a pending state it may never show. The row's action below keeps its wider
+   "Signing in…" reservation. */
+.planner-pill-login::after {
+  content: 'Log in';
+  padding-left: 0;
+}
+
+.planner-pill-login .planner-login-pending-label {
+  display: none;
+}
+
+.planner-pill-login::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 25%;
+  bottom: 25%;
+  width: 1px;
+  background: var(--red-divider);
+}
+
+.planner-pill-login:focus-visible {
+  outline-offset: -2px;
+}
+
+/* The row's variant: the same tonal action, sized for the text line it shares. */
+.planner-login-btn {
+  justify-self: end;
+  padding: 4px 12px;
+  border-radius: var(--radius-full);
+  font-size: 11.5px;
+}
+
+/* Why a login did not finish, under the capsule that asked: one line, no
+   dialog. The slot is always there so the line appearing cannot move the pills
+   below it (or the first screen under the settings panel), and it never widens
+   the capsule it belongs to: an overlong reason is elided rather than wrapped. */
+.planner-pill-item.has-login,
+.runner-pill-item.has-login {
+  position: relative;
+  padding-bottom: calc(1.45em + 3px);
+}
+
+.planner-pill-failure-slot {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1.45em;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.planner-pill-login-failure {
+  display: block;
+  max-width: 100%;
+  padding-left: 2px;
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-hint);
+}
+
+/* High contrast trades the tint for the theme's own boundary: the capsule and
+   its divider stay visible on black and on white. */
+body.vscode-high-contrast .planner-pill-group.signed-out,
+body.vscode-high-contrast-light .planner-pill-group.signed-out,
+body.vscode-high-contrast .runner-pill-group.signed-out,
+body.vscode-high-contrast-light .runner-pill-group.signed-out {
+  border-color: var(--ow-border-contrast, var(--red));
+}
+
+body.vscode-high-contrast .planner-login,
+body.vscode-high-contrast-light .planner-login {
+  background: color-mix(in srgb, var(--red) 20%, transparent);
+}
+
+body.vscode-high-contrast .planner-pill-login::before,
+body.vscode-high-contrast-light .planner-pill-login::before {
+  background: var(--ow-border-contrast, var(--red));
+}
+
+/* ---- Run settings (Settings panel) ---- */
+.run-settings:focus {
+  outline: none;
+}
+
+.run-setting {
+  display: grid;
+  grid-template-columns: 8.5em 1fr;
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 2px;
+}
+
+.run-setting-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* One segmented control per row: the container owns the border, the options
+   after the first own the dividers, and the ends alone are rounded. */
+.run-setting-pills {
+  display: inline-flex;
+  align-items: stretch;
+  justify-self: start;
+  width: fit-content;
+  max-width: 100%;
+  border-width: 1px;
+  border-style: solid;
+  border-color: var(--border-color);
+  border-radius: var(--radius-full);
+  background: var(--bg-secondary);
+  overflow: hidden;
+}
+
+.run-setting-pills > .planner-pill {
+  border-radius: 0;
+}
+
+.run-setting-pills > .planner-pill + .planner-pill {
+  border-left-width: 1px;
+  border-left-style: solid;
+  border-left-color: var(--border-color);
+}
+
+.run-setting-pills > .planner-pill:first-child {
+  border-radius: var(--radius-full) 0 0 var(--radius-full);
+}
+
+.run-setting-pills > .planner-pill:last-child {
+  border-radius: 0 var(--radius-full) var(--radius-full) 0;
+}
+
+.run-setting-pills > .planner-pill:only-child {
+  border-radius: var(--radius-full);
+}
+
+.run-setting-hint {
+  grid-column: 2;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.run-setting-number {
+  width: 64px;
+  padding: 2px 6px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: inherit;
+  outline: none;
+}
+
+.run-setting-number:focus {
+  border-color: var(--accent);
+}
+
+.run-setting-number[aria-invalid='true'] {
+  border-color: var(--red);
+  background: var(--red-subtle);
+}
+
+.run-setting:has([aria-invalid='true']) .run-setting-hint {
+  color: var(--red);
+}
+
+/* ---- Empty State ---- */
+/* The first screen is one column: the hero, the autorun note, the repositories
+   card and the setup rows share one 380px edge, so it reads as a stack rather
+   than as centred blocks of different widths. */
+.empty-state {
+  --first-screen-column: 380px;
+  flex: 1;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  /* Centred while it fits the pane, and starting at its hero when it does not
+     (`safe`), so a short sidebar never loses the wordmark above the fold. */
+  justify-content: safe center;
+  padding: 44px 28px;
+  text-align: center;
+  gap: 12px;
+}
+
+.empty-state-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  color: var(--text-primary);
+}
+
+.empty-state-logo svg:first-child {
+  width: 55px;
+  height: 55px;
+  flex-shrink: 0;
+}
+
+.empty-state-wordmark {
+  height: 38px;
+  width: auto;
+}
+
+.empty-state-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  max-width: var(--first-screen-column);
+}
+
+.empty-state h2 {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+  margin-bottom: 6px;
+}
+
+/* One description in two lines: the question the user answers, then what
+   Ordewell does with the answer. Balance keeps the second line from orphaning
+   its last word. Three sizes on the screen: the question, this copy, and the
+   card's captions. */
+.empty-state-lead {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--text-primary);
+  max-width: var(--first-screen-column);
+  text-wrap: balance;
+}
+
+.empty-state-support {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  max-width: var(--first-screen-column);
+  text-wrap: balance;
+}
+
+/* What starting a plan costs, as one margin note: a rule in the gutter carries
+   the state's colour, the sentence carries the meaning. */
+.plan-approval-note {
+  width: 100%;
+  max-width: var(--first-screen-column);
+  padding-left: 10px;
+  border-left: 2px solid var(--border-muted);
+  text-align: left;
+}
+
+.plan-approval-note.warn {
+  border-left-color: var(--ow-status-warning);
+}
+
+.plan-approval-text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.plan-approval-note.warn .plan-approval-text {
+  color: var(--text-primary);
+}
+
+/* A command the user can type, set apart from prose: the fill the composer
+   marks a slash command with, in the mono face, at the caption size the setup
+   rows and the card already use. */
+.command-token {
+  display: inline-block;
+  padding: 0 5px;
+  border-radius: var(--radius-sm);
+  background: var(--slash-token-bg);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.empty-state-setup {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  max-width: var(--first-screen-column);
+  margin: 2px 0;
+  font-size: 12px;
+  text-align: left;
+}
+
+.empty-state-setup-row {
+  display: grid;
+  grid-template-columns: 72px 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.empty-state-setup-label {
+  color: var(--ow-fg-secondary);
+}
+
+.empty-state-setup .warn {
+  color: var(--warning-text);
+}
+
+/* Not a banner: one status line per signed-out agent on the first screen, the
+   dot carrying the colour and each sentence carrying its meaning. No tint or
+   box, so the rows sit with the setup rows instead of interrupting them. The
+   column is the setup column, so every row in the first screen shares an edge. */
+.planner-auth-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-width: var(--first-screen-column);
+  margin: 0;
+}
+
+/* The row is one line: the dot, the sentence and the action share it. The dot
+   is positioned out of flow so the body's baseline is the sentence's own. */
+.planner-auth-row {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  padding: 0 0 0 16px;
+  border: 0;
+  background: none;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+  color: var(--text-secondary);
+}
+
+/* On the first line's centre. The row is one line high, so the middle of the
+   row is the middle of that line in every state. */
+.planner-auth-row .planner-auth-dot {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.planner-auth-warning-text {
+  min-width: 0;
+}
+
+/* One line in every state: the sentence or, after a failed attempt, the
+   reason. Replacing it rather than adding a line keeps the row and the action
+   beside it exactly where they were. */
+.planner-auth-warning-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.planner-auth-failure {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-hint);
+}
+
+/* The row's action is the menu segment, one size up: .planner-login supplies
+   the fill, weight and colour both share. */
+
+/* The only motion in the login: the ring says the row is waiting on the
+   terminal. The text says it too, for a reader who asked for less motion; see
+   the reduced-motion block at the end of this file. */
+.planner-login-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: planner-login-spin 700ms linear infinite;
+}
+
+@keyframes planner-login-spin {
+  to { transform: rotate(360deg); }
+}
+
+.planner-auth-warning-agent {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+/* Repositories and branches on the first screens: a card on the page, so the
+   one block that describes the workspace reads as a thing rather than as more
+   prose. Rows stack and wrap, so a long path or branch stays whole in a narrow
+   sidebar, and the text is selectable to copy. */
+section.isolation-notice {
+  width: 100%;
+  max-width: var(--first-screen-column);
+  padding: 12px 14px;
+  background: var(--bg-card-page);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  text-align: left;
+  user-select: text;
+  overflow-wrap: anywhere;
+}
+
+/* Before the first answer there is nothing to put in a card: a bare line, so
+   an empty one never looks like a finding. */
+.isolation-notice-checking {
+  font-size: 12px;
+  color: var(--ow-fg-secondary);
+}
+
+/* A card lifts off the page, so its small text needs the token that clears AA
+   on a tint: --text-secondary is tuned for the page behind it. */
+.isolation-notice-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-hint);
+  margin-bottom: 4px;
+}
+
+.isolation-notice-summary {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-hint);
+  margin-bottom: 10px;
+}
+
+.isolation-notice[data-status='failed'] .isolation-notice-summary,
+.isolation-notice[data-status='dirty'] .isolation-notice-summary {
+  color: var(--warning-text);
+}
+
+.isolation-repos {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+}
+
+/* One row per repository, left-aligned in the card: the name, then the branch
+   with its commit set apart, then anything the row warns about. The hairline
+   separates the rows the way a list does, never before the first. */
+.isolation-repo {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.isolation-repo + .isolation-repo {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--card-hairline);
+}
+
+.isolation-repo-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+/* A group's rows are named by their workspace-relative path, and a path is
+   monospace; the one repository of a workspace is named, so it is set in the
+   page's own face. */
+.isolation-repo-name.path {
+  font-family: var(--font-mono);
+}
+
+.isolation-repo-detail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.isolation-repo-head {
+  min-width: 0;
+  color: var(--cyan);
+  overflow-wrap: anywhere;
+}
+
+/* The commit, quiet beside the branch it belongs to: mono, muted, and a chip
+   tight enough to read as a token rather than as a second sentence. */
+.isolation-repo-commit {
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-card-row-hover);
+  color: var(--text-hint);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.isolation-repo-flag {
+  color: var(--warning-text);
+}
+
+/* What the card leaves to the end: what tasks share, and the ops/spread note.
+   A hairline is the whole separation — the card is quiet. */
+.isolation-notice-footer {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--card-hairline);
+}
+
+.isolation-notice-shared,
+.isolation-notice-note {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-hint);
+}
+
+.isolation-notice-shared + .isolation-notice-note {
+  margin-top: 2px;
+}
+
+.load-session-btn {
+  margin-top: 14px;
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: var(--radius-md);
+  padding: 6px 16px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  transition: all var(--transition-fast);
+}
+
+.load-session-btn:hover {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+}
+
+/* ---- Get Started (first-run key setup) ---- */
+.get-started-copy {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  max-width: var(--first-screen-column);
+  text-wrap: balance;
+}
+
+.get-started-alt {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  max-width: var(--first-screen-column);
+}
+
+.get-started-actions {
+  margin-top: 18px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.get-started-btn {
+  background: var(--accent);
+  color: var(--bg, #0d1117);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  padding: 8px 18px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  transition: all var(--transition-fast);
+}
+
+.get-started-btn:hover {
+  filter: brightness(1.1);
+}
+
+/* ---- Loading State ---- */
+.loading-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  gap: 12px;
+}
+
+.loading-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { transform: scale(0.6); opacity: 0.3; }
+  50% { transform: scale(1.4); opacity: 1; }
+}
+
+.loading-state p {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ---- Research Stream ---- */
+.research-stream {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0;
+}
+
+.rs-header-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-secondary);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.rs-pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1.8s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+.rs-pulse.done {
+  background: var(--green);
+  animation: none;
+}
+
+.rs-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.rs-step-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.rs-timeline {
+  padding: 4px 0;
+}
+
+.rs-phase {
+  padding: 10px 14px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+
+.rs-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 32px 14px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.rs-loading-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1.8s ease-in-out infinite;
+}
+
+/* ---- Research Step Card ---- */
+.rs-card {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.rs-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 14px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  transition: background var(--transition-fast);
+}
+
+.rs-header:hover {
+  background: var(--bg-hover);
+}
+
+.rs-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+.rs-dot.active {
+  opacity: 1;
+  box-shadow: 0 0 4px currentColor;
+}
+
+.rs-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+.rs-summary {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.rs-size {
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.rs-result {
+  padding: 0 14px 10px 34px;
+}
+
+.rs-pre {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+  line-height: 1.5;
+}
+
+/* ---- User Prompt Card ---- */
+
+.up-card {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.up-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+}
+
+.up-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--accent);
+  opacity: 0.8;
+}
+
+.up-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+.up-content {
+  padding: 0 14px 10px 27px;
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+/* ---- Thinking Panel ---- */
+.think-panel {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.think-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 14px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--text-muted);
+  transition: background var(--transition-fast);
+}
+
+.think-toggle:hover {
+  background: var(--bg-hover);
+}
+
+.think-chevron {
+  width: 12px;
+  font-size: 8px;
+  transition: transform var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.think-chevron.open {
+  transform: rotate(90deg);
+}
+
+.think-content {
+  padding: 0 14px 10px 32px;
+}
+
+.think-pre {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+/* ---- Plan Generation Panel ---- */
+.plan-gen {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-secondary);
+}
+
+.plan-gen-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.plan-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  flex-shrink: 0;
+}
+
+.plan-dot.active {
+  background: var(--accent);
+  animation: pulse 1.8s ease-in-out infinite;
+}
+
+.plan-hint {
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.plan-gen-tasks {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.plan-gen-task {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 2px;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.plan-gen-task.streaming {
+  color: var(--text-secondary);
+}
+
+.pgt-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--green);
+}
+
+.pgt-icon.streaming {
+  border: 1.5px solid var(--accent);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.pgt-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pgt-pending {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.pgt-chip {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+
+.pgt-model {
+  color: var(--purple);
+  background: var(--purple-subtle);
+}
+
+.pgt-mode {
+  color: var(--cyan);
+  background: var(--cyan-subtle);
+}
+
+.pgt-mode-plan {
+  color: var(--orange);
+  background: var(--orange-subtle);
+}
+
+.plan-gen-waiting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.rs-phase-plan {
+  margin-top: 10px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ---- Stream Output (retained for web client) ---- */
+.stream-output {
+  width: 100%;
+  max-width: 100%;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--bg-secondary);
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  border: 1px solid var(--border-muted);
+}
+
+/* ---- Error State ---- */
+.error-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  gap: 12px;
+}
+
+.error-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--red-subtle);
+  color: var(--red);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.error-message {
+  color: var(--red);
+  font-size: 13px;
+  text-align: center;
+  max-width: 380px;
+  line-height: 1.5;
+}
+
+.error-state button {
+  background: var(--accent-emphasis);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-md);
+  padding: 7px 18px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  transition: background var(--transition-fast);
+}
+
+.error-state button:hover {
+  background: var(--accent);
+}
+
+/* ---- Warning State ---- */
+.warning-state {
+  display: flex;
+  gap: 12px;
+  padding: 12px 16px;
+  margin: 10px 16px;
+  background: var(--orange-subtle);
+  border: 1px solid rgba(210, 153, 29, 0.25);
+  border-radius: var(--radius-lg);
+  align-items: flex-start;
+}
+
+.warning-icon {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(210, 153, 29, 0.18);
+  border-radius: 50%;
+  color: var(--orange);
+  font-size: 14px;
+  font-weight: bold;
+}
+
+.warning-content {
+  flex: 1;
+}
+
+.warning-content h4 {
+  margin: 0 0 6px 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--orange);
+  letter-spacing: -0.01em;
+}
+
+.warning-text {
+  margin: 0 0 12px 0;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  line-height: 1.5;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.warning-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.warning-actions button {
+  padding: 6px 14px;
+  border: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  transition: all var(--transition-fast);
+}
+
+.warning-actions .btn-accept {
+  background: var(--accent-emphasis);
+  color: #fff;
+}
+
+.warning-actions .btn-accept:hover {
+  background: var(--accent);
+}
+
+.warning-actions .btn-reject {
+  background: transparent;
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+}
+
+.warning-actions .btn-reject:hover {
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
+/* ---- Plan Draft ---- */
+.plan-draft {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px 14px 0;
+}
+
+.plan-draft-header {
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.plan-draft-header h3 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.plan-draft-header .plan-meta {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  align-items: center;
+}
+
+.plan-draft-header .plan-meta span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.plan-draft-header .generated-at {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-export {
+  font-size: 10px;
+  padding: 2px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: inherit;
+  transition: all var(--transition-fast);
+}
+
+.btn-export:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Every child of .plan-card-group sits flush to the same left edge — the action
+   bar, the banners, the cards and the add-task button all share one outline.
+   The 4px tops up the enclosing bubble's 8px so the gap above the action bar
+   matches the 12px the same bubble leaves at its sides. */
+.plan-card-group {
+  padding-top: 4px;
+  padding-bottom: 14px;
+}
+
+.task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* ---- Plan Research Log ---- */
+.plan-research-log {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 10px;
+  padding-bottom: 14px;
+}
+
+.plan-research-log-toggle {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 4px 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-family: inherit;
+}
+
+.plan-research-log-toggle:hover {
+  color: var(--text-primary);
+}
+
+.plan-research-log-chevron {
+  font-size: 10px;
+  transition: transform 0.15s;
+  display: inline-block;
+}
+
+.plan-research-log-chevron.expanded {
+  transform: rotate(90deg);
+}
+
+.plan-research-log-body {
+  margin-top: 6px;
+}
+
+/* ---- Task Card ---- */
+.task-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-md);
+  transition: border-color var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast);
+  overflow: hidden;
+}
+
+.task-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 20%, transparent);
+  background: var(--bg-card-raised);
+}
+
+.task-card.expanded {
+  border-color: var(--border-color);
+  background: var(--bg-card-raised);
+  box-shadow: var(--shadow-sm);
+}
+
+/* High contrast themes draw edges, not tints. */
+body.vscode-high-contrast,
+body.vscode-high-contrast-light {
+  --bg-card: transparent;
+  --bg-card-raised: transparent;
+  --bg-card-page: transparent;
+  /* A tintless card keeps its boundary at the theme's full contrast colour. */
+  --card-border: var(--ow-border-contrast, var(--border-color));
+}
+
+body.vscode-high-contrast .task-card:hover,
+body.vscode-high-contrast-light .task-card:hover,
+body.vscode-high-contrast .task-card.expanded,
+body.vscode-high-contrast-light .task-card.expanded {
+  border-color: var(--ow-border-contrast-active, var(--accent));
+}
+
+.task-card-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  cursor: pointer;
+  user-select: none;
+  min-height: 40px;
+  transition: background var(--transition-fast);
+}
+
+.task-card-header:hover {
+  background: var(--bg-card-row-hover);
+}
+
+.task-order {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ow-fg-link, var(--accent));
+  background: var(--accent-subtle);
+  border-radius: 4px;
+  padding: 2px 7px;
+  min-width: 22px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.task-type-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  flex-shrink: 0;
+}
+
+.task-type-badge.ai {
+  background: var(--cyan-subtle);
+  color: var(--cyan);
+}
+
+.task-type-badge.user {
+  background: var(--orange-subtle);
+  color: var(--orange);
+}
+
+.task-title-text {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: -0.01em;
+}
+
+.task-heading {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  flex: 1 1 110px;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.task-with-controls {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.task-footer-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  max-width: 100%;
+  margin-top: 2px;
+  padding: 3px 14px 6px;
+}
+
+.subtask-with-controls > .task-footer-controls {
+  padding-inline: 10px;
+}
+
+.task-footer-controls .task-log-open-btn {
+  margin-left: 0;
+}
+
+.task-footer-controls:empty {
+  display: none;
+}
+
+/* A top-level card shares its column lines with the row below it, so the
+   footer starts where the title does however wide the lead badges are. */
+.task-with-controls-top {
+  display: grid;
+  grid-template-columns: [lead-start] auto [main-start] minmax(0, 1fr) [main-end];
+  column-gap: 8px;
+}
+
+.task-with-controls-top > .task-card {
+  grid-column: lead-start / main-end;
+  display: grid;
+  grid-template-columns: subgrid;
+}
+
+.task-with-controls-top > .task-card > * {
+  grid-column: 1 / -1;
+}
+
+.task-with-controls-top > .task-card > .task-card-header {
+  display: grid;
+  grid-template-columns: subgrid;
+}
+
+.task-with-controls-top > .task-footer-controls {
+  grid-column: main-start / main-end;
+  padding-left: 0;
+}
+
+.task-card-lead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-heading-block {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "title"
+    "meta";
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 3px;
+  min-width: 0;
+}
+
+/* The button spans both rows, so the title and assignment lines end at its
+   edge instead of running under it. */
+.task-heading-block-with-log {
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "title actions"
+    "meta actions";
+}
+
+.task-heading-block > .task-heading {
+  grid-area: title;
+}
+
+.task-heading-block > .task-assignment {
+  grid-area: meta;
+  overflow: hidden;
+}
+
+.task-heading-block > .task-delegated-meta {
+  grid-area: meta;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--ow-fg-secondary, var(--text-muted));
+}
+
+.task-delegated-stopping {
+  color: var(--ow-status-warning, var(--text-muted));
+}
+
+.task-delegated-goal {
+  margin: 4px 0;
+  font-size: 12px;
+}
+
+.task-heading-block > .task-log-open-btn {
+  grid-area: actions;
+  align-self: stretch;
+  margin-left: 0;
+}
+
+.task-with-controls-top > .task-footer-controls > .task-remove-btn {
+  margin-left: auto;
+}
+
+.task-with-controls-top:hover > .task-footer-controls > .task-remove-btn {
+  opacity: 0.7;
+}
+
+.task-heading:focus-visible {
+  outline: 1px solid var(--ow-accent, var(--accent));
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+.task-assignment {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--ow-fg-secondary, var(--text-muted));
+  white-space: nowrap;
+}
+
+.task-assignment-runner,
+.task-assignment-model {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Shrink weights make the model give way before the runner. */
+.task-assignment-runner {
+  flex: 0 1 auto;
+  max-width: 50%;
+}
+
+.task-assignment-model {
+  flex: 0 4 auto;
+}
+
+.task-assignment-effort {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.task-card-body {
+  padding: 0 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid var(--border-muted);
+  padding-top: 10px;
+  margin: 0 14px;
+}
+
+.task-description {
+  color: var(--text-hint);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.task-output-peek {
+  display: block;
+  padding: 3px 14px 6px 14px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.task-output-peek:hover {
+  color: var(--text-secondary);
+}
+
+.task-handoff {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.task-handoff-heading,
+.task-handoff-finding-heading {
+  font-weight: 600;
+}
+
+.task-handoff-commit,
+.task-handoff-summary,
+.task-handoff-artifacts,
+.task-handoff .chat-report {
+  margin-top: 6px;
+}
+
+.task-handoff-finding {
+  margin-top: 8px;
+  padding-left: 8px;
+  border-left: 2px solid var(--border-subtle);
+}
+
+.task-handoff-finding[data-severity="blocker"] {
+  border-color: var(--red);
+}
+
+.task-handoff-finding[data-severity="major"] {
+  border-color: var(--orange);
+}
+
+.task-handoff-evidence,
+.task-handoff-more {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.task-handoff-patch {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-left: 2px solid var(--purple);
+  background: var(--bg-secondary);
+}
+
+.task-handoff-patch-saved,
+.task-handoff-patch-base,
+.task-handoff-patch-flag {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.task-handoff-patch-saved {
+  font-family: var(--font-mono, monospace);
+  word-break: break-all;
+}
+
+.task-handoff-patch .task-log-open-btn {
+  margin-top: 6px;
+}
+
+.task-handoff > .task-log-open-btn {
+  margin-top: 8px;
+}
+
+.task-output {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  overflow: hidden;
+}
+
+.task-output-header {
+  padding: 4px 10px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.task-output-pre {
+  margin: 0;
+  padding: 8px 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.task-deps {
+  font-size: 11px;
+  color: var(--orange);
+  padding: 6px 12px;
+  background: var(--orange-subtle);
+  border-radius: var(--radius-sm);
+  font-weight: 500;
+}
+
+.task-prompt {
+  font-size: 12px;
+  color: var(--text-primary);
+  padding: 10px 14px;
+  background: var(--bg-primary);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  line-height: 1.65;
+  border-left: 2px solid var(--accent);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ---- Task Card Type Borders ---- */
+.task-card.ai {
+  border-left: 2px solid transparent;
+}
+
+.task-card.ai:hover, .task-card.ai.expanded {
+  border-left: 2px solid var(--accent);
+}
+
+.task-card.user {
+  border-left: 2px solid transparent;
+}
+
+.task-card.user:hover, .task-card.user.expanded {
+  border-left: 2px solid var(--orange);
+}
+
+/* ---- User Step Guide ---- */
+.user-step-guide {
+  margin-top: 2px;
+  border: 1px solid rgba(210, 153, 29, 0.18);
+  border-radius: var(--radius-sm);
+  background: var(--orange-subtle);
+  padding: 10px 14px;
+}
+
+.user-step-guide-header {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--orange);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.user-step-item {
+  display: flex;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid rgba(210, 153, 29, 0.08);
+  align-items: flex-start;
+}
+
+.user-step-item:last-child {
+  border-bottom: none;
+}
+
+.user-step-number {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--orange);
+  background: rgba(210, 153, 29, 0.18);
+  border-radius: 50%;
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.user-step-text {
+  font-size: 12px;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+/* ---- Model Selector ---- */
+.model-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.model-selector label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.task-assignment-readonly {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.task-assignment-readonly-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.model-selector select {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 5px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+  width: 100%;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%238b949e' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px;
+}
+
+.model-selector select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.model-selector-row {
+  display: flex;
+  gap: 8px;
+}
+
+.model-selector-row > .model-picker {
+  flex: 1;
+}
+
+/* Model Picker (replaces select) */
+.model-picker {
+  position: relative;
+  flex: 1;
+}
+
+.model-picker-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 5px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  min-height: 30px;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.model-picker-trigger:hover {
+  border-color: var(--accent);
+}
+
+.model-picker-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Named families */
+.model-picker-label.model-sonnet { color: var(--accent); }
+.model-picker-label.model-opus { color: var(--purple); }
+.model-picker-label.model-haiku { color: var(--orange); }
+.model-picker-label.model-fable { color: var(--accent); }
+.model-picker-label.model-deepseek { color: var(--cyan); }
+.model-picker-label.model-kimi { color: var(--green); }
+.model-picker-label.model-gpt { color: #10a37f; }
+.model-picker-label.model-gemini { color: #4285f4; }
+.model-picker-label.model-qwen { color: #ff9500; }
+.model-picker-label.model-glm { color: #af52de; }
+.model-picker-label.model-minimax { color: #ff3b30; }
+.model-picker-label.model-mimo { color: #5ac8fa; }
+/* Hash palette */
+.model-picker-label.model-hash-0 { color: var(--accent); }
+.model-picker-label.model-hash-1 { color: var(--purple); }
+.model-picker-label.model-hash-2 { color: var(--cyan); }
+.model-picker-label.model-hash-3 { color: var(--green); }
+.model-picker-label.model-hash-4 { color: var(--orange); }
+.model-picker-label.model-hash-5 { color: #10a37f; }
+.model-picker-label.model-hash-6 { color: #af52de; }
+.model-picker-label.model-hash-7 { color: #ff3b30; }
+/* Legacy */
+.model-picker-label.sonnet { color: var(--accent); }
+.model-picker-label.opus { color: var(--purple); }
+.model-picker-label.deepseek { color: var(--cyan); }
+.model-picker-label.kimi { color: var(--green); }
+
+.model-picker-arrow {
+  font-size: 8px;
+  margin-left: 8px;
+  transition: transform var(--transition-fast);
+}
+
+.model-picker-arrow.open {
+  transform: rotate(180deg);
+}
+
+.model-picker-dropdown {
+  /* position/top/left/width are set as inline fixed styles by ModelSelector */
+  z-index: 9999;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  max-height: 320px;
+  min-width: 280px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.model-picker-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.provider-pill {
+  padding: 3px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.provider-pill:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.provider-pill.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg-primary);
+}
+
+.model-picker-search {
+  padding: 6px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.model-picker-search input {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.model-picker-search input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-glow);
+}
+
+.model-picker-list {
+  overflow-y: auto;
+  flex: 1;
+  overscroll-behavior: contain;
+}
+
+.model-picker-group-header {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 6px 10px 2px;
+}
+
+.model-picker-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 5px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.model-picker-item:hover {
+  background: var(--bg-hover);
+}
+
+.model-picker-item.selected {
+  background: var(--accent-glow);
+}
+
+.model-picker-item-label {
+  font-weight: 500;
+}
+
+.model-picker-item-id {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  margin-left: 8px;
+  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 180px;
+}
+
+.model-picker-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.model-selector-row .variant-select {
+  flex: none;
+  width: 80px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%238b949e' stroke-width='1.5' stroke-cap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  padding-right: 22px;
+}
+
+/* ---- Subtasks ---- */
+.subtasks {
+  margin-top: 4px;
+  margin-left: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border-left: 1px solid var(--border-muted);
+  padding-left: 14px;
+}
+
+.subtask-card {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  transition: border-color var(--transition-fast);
+}
+
+.subtask-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.subtask-card.expanded {
+  border-color: var(--border-color);
+}
+
+.subtask-card-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+
+.subtask-card-header:hover {
+  background: var(--bg-card-row-hover);
+}
+
+.subtask-order {
+  font-size: 10px;
+  color: var(--text-hint);
+  min-width: 18px;
+}
+
+.subtask-title-text {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.subtask-card-body {
+  padding: 0 10px 10px;
+  border-top: 1px solid var(--border-muted);
+  padding-top: 8px;
+  margin: 0 10px;
+}
+
+.subtask-prompt {
+  font-size: 11px;
+  color: var(--text-hint);
+  font-family: var(--font-mono);
+  padding: 8px 10px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+/* ---- Editable Prompt ---- */
+.task-prompt-editable {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-left: 2px solid var(--accent);
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: text;
+  position: relative;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.task-prompt-editable:hover {
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.task-prompt-edit-icon {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.task-prompt-editable:hover .task-prompt-edit-icon {
+  opacity: 0.5;
+}
+
+.subtask-prompt-editable {
+  display: block;
+  width: 100%;
+  border: 0;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: text;
+  position: relative;
+  transition: border-color var(--transition-fast);
+}
+
+.subtask-prompt-editable:hover {
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.task-prompt-edit-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.task-prompt-textarea {
+  width: 100%;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.65;
+  resize: vertical;
+  outline: none;
+  min-height: 80px;
+}
+
+.task-prompt-textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.task-prompt-edit-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.task-prompt-edit-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.task-prompt-save-btn {
+  background: var(--accent-emphasis);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 4px 12px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+  font-family: inherit;
+  transition: background var(--transition-fast);
+}
+
+.task-prompt-save-btn:hover {
+  background: var(--accent);
+}
+
+/* ---- Chat Input ---- */
+.chat-input {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border-muted);
+  background: var(--bg-primary);
+}
+
+.chat-input.disabled .chat-input-inner textarea {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.chat-input-wrapper {
+  padding: 10px 14px 12px;
+}
+
+.chat-input-inner {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-input);
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-lg);
+  padding: 0 2px 0 4px;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast), background var(--transition-fast);
+}
+
+.chat-input-inner:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.chat-input-row {
+  display: flex;
+  align-items: flex-end;
+  width: 100%;
+}
+
+.chat-input-highlight-wrap {
+  position: relative;
+  display: flex;
+  flex: 1;
+}
+
+/*
+ * Mirrors the textarea's box exactly (font, padding, wrapping) and sits behind
+ * it — the textarea keeps a transparent background, so only the <mark>'s
+ * highlight color shows through, in register with the real (opaque) glyphs
+ * the textarea renders on top. A plain <textarea> can't color a substring on
+ * its own; this overlay is the standard workaround.
+ */
+.chat-input-highlight-backdrop {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  letter-spacing: -0.01em;
+  padding: 9px 6px 9px 12px;
+  color: transparent;
+}
+
+.chat-input-highlight-backdrop mark {
+  background: var(--slash-token-bg);
+  color: transparent;
+  border-radius: 4px;
+  padding: 0 1px;
+  margin: 0 -1px;
+}
+
+.chat-input-inner textarea {
+  position: relative;
+  flex: 1;
+  background: transparent;
+  color: var(--text-primary);
+  border: none;
+  padding: 9px 6px 9px 12px;
+  resize: none;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  outline: none;
+  min-height: 36px;
+  max-height: 180px;
+  letter-spacing: -0.01em;
+}
+
+.chat-input-inner textarea::placeholder {
+  color: var(--text-placeholder);
+  font-size: 13px;
+}
+
+/* The host's reply cue (#137), under the input as the send-key hint is. */
+.chat-input-hint {
+  padding: 0 10px 6px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-hint);
+}
+
+.slash-suggestion-item.skill .slash-suggestion-label {
+  color: var(--slash-token-fg);
+}
+
+.send-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  margin: 3px;
+  transition: all var(--transition-fast);
+}
+
+.send-btn:hover:not(:disabled) {
+  background: var(--accent-emphasis);
+  color: #fff;
+}
+
+.send-btn:disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+
+.send-btn.processing {
+  border-radius: 8px;
+  color: var(--text-secondary);
+}
+
+.send-btn.processing:hover:not(:disabled) {
+  background: var(--red);
+  color: #fff;
+}
+
+/* ---- Approval Bar ---- */
+.approval-bar {
+  display: flex;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border-subtle);
+  flex-wrap: wrap;
+  align-items: center;
+  background: var(--bg-secondary);
+}
+
+.approve-btn {
+  background: var(--green-emphasis);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-md);
+  padding: 7px 18px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  transition: background var(--transition-fast);
+  letter-spacing: -0.01em;
+}
+
+.approve-btn:hover {
+  background: var(--green);
+}
+
+.regenerate-btn {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 7px 18px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  transition: all var(--transition-fast);
+}
+
+.regenerate-btn:hover {
+  border-color: var(--text-secondary);
+  color: var(--text-primary);
+}
+
+.regenerate-feedback {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.regenerate-feedback textarea {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  resize: none;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  outline: none;
+}
+
+.regenerate-feedback textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.feedback-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.feedback-actions button {
+  background: var(--accent-emphasis);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-md);
+  padding: 6px 14px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  transition: background var(--transition-fast);
+}
+
+.feedback-actions button:hover {
+  background: var(--accent);
+}
+
+.cancel-btn {
+  background: transparent !important;
+  border: 1px solid var(--border-color) !important;
+  color: var(--text-secondary) !important;
+}
+
+.cancel-btn:hover {
+  color: var(--text-primary) !important;
+  border-color: var(--text-secondary) !important;
+}
+
+/* ---- Queue Badge ---- */
+.queue-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  background: var(--cyan-subtle);
+  border: 1px solid rgba(57, 197, 207, 0.25);
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  color: var(--cyan);
+  font-weight: 500;
+}
+
+.queue-dot {
+  width: 6px;
+  height: 6px;
+  background: var(--cyan);
+  border-radius: 50%;
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* ---- Remove Task Button ---- */
+.task-remove-btn {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0;
+  margin: 0;
+  opacity: 0;
+  transition: all var(--transition-fast);
+}
+
+.task-card-header:hover .task-remove-btn,
+.subtask-card-header:hover .task-remove-btn {
+  opacity: 0.7;
+}
+
+.task-remove-btn:hover {
+  opacity: 1 !important;
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 30%, transparent);
+  background: var(--red-subtle);
+}
+
+/* ---- Execution Status Badges ---- */
+/* The slot takes the row's free space with a zero basis, so a long reason
+   stays on the line with the dependency badges instead of wrapping below them. */
+.task-status-slot {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+}
+
+.task-status-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-status-badge.toggles {
+  cursor: pointer;
+}
+
+.task-status-badge.expanded {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.task-status-badge.toggles:focus-visible {
+  outline: 1px solid var(--ow-accent, var(--accent));
+}
+
+.task-status-badge.status-completed {
+  background: var(--green-subtle);
+  color: var(--green);
+}
+
+.task-status-badge.status-running {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.task-status-badge.status-failed {
+  background: var(--red-subtle);
+  color: color-mix(in srgb, var(--red) 80%, var(--text-primary));
+}
+
+.task-status-badge.status-blocked {
+  background: var(--orange-subtle);
+  color: var(--orange);
+}
+
+.task-status-badge.status-pending {
+  background: rgba(139, 148, 158, 0.1);
+  color: var(--text-muted);
+}
+
+/* Muted and outlined, never green: nothing of a skipped task landed, so it must not read as done. */
+.task-status-badge.status-skipped {
+  background: transparent;
+  border: 1px dashed var(--text-muted);
+  color: var(--text-muted);
+}
+
+.task-status-badge.status-stalled {
+  background: var(--purple-subtle);
+  color: var(--purple);
+}
+
+/* ---- Execution Review ---- */
+.task-review {
+  font-size: 11px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+
+.review-pass {
+  background: var(--green-subtle);
+  color: var(--green);
+}
+
+.review-fail {
+  background: var(--red-subtle);
+  color: var(--red);
+}
+
+/* Session finished but evidence-based verification didn't confirm — neutral, not an error */
+.review-neutral {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+/* ---- To-do / Done indicator ---- */
+.task-check {
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  border-radius: var(--radius-full);
+  border: 1.5px solid var(--border-color);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  transition: background var(--transition-normal), border-color var(--transition-normal);
+}
+
+/* The arc is a masked conic-gradient on a pseudo-element, so the running state
+   needs no extra DOM and the ring never changes size. */
+@property --check-arc-start {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@property --check-arc-end {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.task-check.running {
+  position: relative;
+  border-color: color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.task-check.running::before {
+  content: '';
+  position: absolute;
+  inset: -1.5px;
+  border-radius: inherit;
+  background: conic-gradient(
+    transparent var(--check-arc-start),
+    var(--accent) var(--check-arc-start) var(--check-arc-end),
+    transparent var(--check-arc-end)
+  );
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1.5px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1.5px));
+  animation: task-check-sweep 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-check.running {
+    border-color: var(--accent);
+  }
+
+  .task-check.running::before {
+    inset: 50% auto auto 50%;
+    width: 5px;
+    height: 5px;
+    margin: -2.5px 0 0 -2.5px;
+    border-radius: var(--radius-full);
+    background: var(--accent);
+    -webkit-mask: none;
+    mask: none;
+    animation: none;
+  }
+}
+
+/* No pulse: a stalled task is defined by the absence of fresh activity, so an
+   animated ring here would contradict the state it's signaling. */
+.task-check.stalled {
+  border-color: var(--purple);
+}
+
+/* The same pair of reds as the Failed badge, so the ring and the badge read as one state. */
+.task-check.failed {
+  border-color: color-mix(in srgb, var(--red) 80%, var(--text-primary));
+  background: var(--red-subtle);
+}
+
+/* Hollowed to the editor background: unlike an empty to-do ring, nothing is coming. */
+.task-check.skipped {
+  border-style: dotted;
+  border-color: var(--text-muted);
+  background: var(--bg-primary);
+}
+
+.task-check.done {
+  background: var(--green);
+  border-color: var(--green);
+  animation: task-check-pop 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.task-check.done svg {
+  width: 10px;
+  height: 10px;
+  stroke: #fff;
+  stroke-width: 2.4;
+}
+
+.task-check.done svg path {
+  stroke-dasharray: 14;
+  stroke-dashoffset: 14;
+  animation: task-check-draw 240ms ease-out 100ms forwards;
+}
+
+@keyframes task-check-pop {
+  0% { transform: scale(0.6); }
+  60% { transform: scale(1.18); }
+  100% { transform: scale(1); }
+}
+
+@keyframes task-check-draw {
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes task-check-sweep {
+  0% { --check-arc-start: 0deg; --check-arc-end: 0deg; }
+  50% { --check-arc-start: 0deg; --check-arc-end: 360deg; }
+  100% { --check-arc-start: 360deg; --check-arc-end: 360deg; }
+}
+
+.queue-badge.done-counter {
+  color: var(--green);
+}
+
+.done-counter-check {
+  font-weight: 700;
+}
+
+.task-review-summary {
+  margin-bottom: 6px;
+}
+
+.task-review-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.check-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 3px;
+  font-size: 10px;
+  flex-wrap: wrap;
+}
+
+.check-item.check-passed {
+  background: color-mix(in srgb, var(--green) 10%, transparent);
+  color: var(--green);
+}
+
+.check-item.check-failed {
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+  color: var(--red);
+}
+
+.check-item.check-skipped {
+  background: rgba(128, 128, 128, 0.08);
+  color: var(--text-muted);
+}
+
+.check-icon {
+  font-weight: 700;
+  width: 14px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.check-name {
+  font-weight: 500;
+}
+
+.check-status {
+  font-size: 9px;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+.check-detail {
+  font-size: 10px;
+  opacity: 0.7;
+  margin-left: 20px;
+  width: 100%;
+  line-height: 1.4;
+  margin-top: 1px;
+}
+
+/* ---- Execution Prompt (read-only) ---- */
+.task-prompt-readonly {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.subtask-prompt-readonly {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  margin-bottom: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+/* ---- Execution Actions ---- */
+.task-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-muted);
+}
+
+.task-action-btn {
+  font-size: 11px;
+  padding: 3px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 500;
+  transition: all var(--transition-fast);
+}
+
+.task-action-btn:hover {
+  border-color: var(--text-muted);
+  color: var(--text-primary);
+}
+
+.task-action-btn.retry:hover { border-color: var(--green); color: var(--green); }
+.task-action-btn.cancel:hover { border-color: var(--red); color: var(--red); }
+.task-action-btn.start:hover { border-color: var(--accent); color: var(--accent); }
+.task-action-btn.skip:hover { border-color: var(--orange); color: var(--orange); }
+
+/* ---- Steps Section ---- */
+.steps-section {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-sm);
+}
+
+.steps-section-header {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.steps-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.step-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 4px 0;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-secondary);
+  transition: color var(--transition-fast);
+}
+
+.step-item:hover {
+  color: var(--text-primary);
+}
+
+.step-item.completed {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.step-checkbox {
+  flex-shrink: 0;
+  width: 14px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.step-item.completed .step-checkbox {
+  color: var(--green);
+}
+
+.step-text { flex: 1; }
+
+/* Mark complete / Mark not done: the last thing in a card's expanded details. */
+.task-mark-control {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-mark-btn {
+  font-size: 11px;
+  padding: 2px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-family: inherit;
+  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.task-mark-btn:hover:not(:disabled) {
+  border-color: var(--green);
+  color: var(--green);
+  background: var(--green-subtle);
+}
+
+.task-mark-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.task-mark-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+/* ---- Failed Task Archive ---- */
+.failed-task-archive {
+  margin: 0 14px 4px;
+  border: 1px solid var(--red);
+  border-radius: var(--radius-md);
+  background: var(--red-subtle);
+  overflow: hidden;
+  animation: fadeIn 0.2s ease-out;
+}
+
+.failed-task-archive-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 14px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--red);
+  transition: background var(--transition-fast);
+}
+
+.failed-task-archive-toggle:hover {
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+}
+
+.failed-task-archive-icon {
+  font-size: 14px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.failed-task-archive-count {
+  font-weight: 600;
+  flex: 1;
+  text-align: left;
+}
+
+.failed-task-archive-chevron {
+  font-size: 9px;
+  transition: transform var(--transition-fast);
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.failed-task-archive-chevron.open {
+  transform: rotate(90deg);
+}
+
+.failed-task-archive-body {
+  border-top: 1px solid color-mix(in srgb, var(--red) 20%, transparent);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.failed-task-archive-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 14px;
+  border: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--red) 8%, transparent);
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  transition: background var(--transition-fast);
+}
+
+.failed-task-archive-item:last-child {
+  border-bottom: none;
+}
+
+.failed-task-archive-item:hover {
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+}
+
+.failed-task-archive-item-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.failed-task-archive-item-reason {
+  font-size: 11px;
+  color: var(--red);
+  opacity: 0.85;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.failed-task-archive-item-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.failed-task-archive-item-model {
+  color: var(--text-secondary);
+}
+
+.failed-task-archive-item-time {
+  color: var(--text-muted);
+}
+
+/* ---- Plan Action Bar ---- */
+.plan-action-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 0 10px;
+}
+
+.plan-action-btn {
+  font-size: 12px;
+  padding: 5px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 600;
+  transition: all var(--transition-fast);
+}
+
+.plan-action-btn.execute {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.plan-action-btn.execute:hover {
+  opacity: 0.85;
+}
+
+.plan-action-btn.stop {
+  color: var(--red);
+  border-color: var(--red);
+}
+
+.plan-action-btn.stop:hover {
+  background: var(--red-subtle);
+}
+
+/* A start is on its way: the spinner says so, and a disabled button refuses a second one. */
+.plan-action-btn.starting {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.plan-action-spinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--border-subtle);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: chat-spin 0.6s linear infinite;
+  flex-shrink: 0;
+}
+
+/* The colour of the waiting card's badge, so the button reads as its answer. */
+.plan-action-btn.approve {
+  color: var(--orange);
+  border-color: var(--orange);
+}
+
+.plan-action-btn.approve:hover {
+  background: var(--orange-subtle);
+}
+
+/* ---- Run Task (pre-execution) ---- */
+.task-run-btn-wrapper {
+  margin-top: 8px;
+}
+
+.task-action-btn.run {
+  font-size: 11px;
+  padding: 3px 10px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 600;
+  transition: all var(--transition-fast);
+}
+
+.task-action-btn.run:hover {
+  background: var(--accent-subtle);
+}
+
+/* ---- Executing Footer ---- */
+.executing-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+}
+
+.executing-status {
+  flex: 1;
+}
+
+.queue-badge.executing {
+  background: var(--accent-subtle);
+  border-color: color-mix(in srgb, var(--accent) 25%, transparent);
+  color: var(--accent);
+}
+
+.queue-dot.running {
+  background: var(--accent);
+}
+
+@keyframes task-card-highlight-anim {
+  0% { background: var(--red-subtle); }
+  100% { background: transparent; }
+}
+
+.task-card-highlight {
+  animation: task-card-highlight-anim 2s ease-out;
+}
+
+/* ---- Slash Command Popup ---- */
+.slash-suggestions {
+  position: relative;
+  margin-bottom: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow-md);
+  z-index: 10;
+  margin: 0 14px;
+}
+
+.slash-suggestions-header {
+  padding: 7px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  border-bottom: 1px solid var(--border-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.slash-suggestions-footer {
+  padding: 4px 12px;
+  font-size: 10px;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border-muted);
+}
+
+.slash-suggestion-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 12px;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+  font-size: 12px;
+}
+
+.slash-suggestion-item:hover,
+.slash-suggestion-item.selected {
+  background: var(--accent-subtle);
+}
+
+.slash-suggestion-label {
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.slash-suggestion-detail {
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.model-discovery-error {
+  font-size: 11px;
+  color: var(--orange, #ffa657);
+  background: rgba(210, 153, 29, 0.08);
+  border: 1px solid rgba(210, 153, 29, 0.2);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+}
+
+/* ---- Slash Command Output ---- */
+.slash-output {
+  margin: 8px 14px;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+  border-radius: var(--radius-md);
+  background: var(--accent-subtle);
+  font-size: 12px;
+  color: var(--text-primary);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  animation: fadeIn 0.2s ease-out;
+}
+
+/* ---- Checkpoint Panel ---- */
+.checkpoint-panel {
+  margin: 10px 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--orange);
+  border-radius: var(--radius-md);
+  background: var(--orange-subtle);
+  animation: fadeIn 0.25s ease-out;
+}
+
+.checkpoint-panel.checkpoint-timeout {
+  border-color: var(--red);
+  background: var(--red-subtle);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--red) 15%, transparent);
+}
+
+.checkpoint-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.checkpoint-icon {
+  font-size: 16px;
+  color: var(--orange);
+  flex-shrink: 0;
+}
+
+.checkpoint-timeout .checkpoint-icon {
+  color: var(--red);
+}
+
+.checkpoint-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--orange);
+  letter-spacing: -0.01em;
+}
+
+.checkpoint-timeout .checkpoint-title {
+  color: var(--red);
+}
+
+.checkpoint-elapsed {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.checkpoint-timeout-badge {
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--red);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+.checkpoint-task {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+.checkpoint-summary-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.checkpoint-summary {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.checkpoint-summary-toggle {
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.checkpoint-summary-toggle:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.checkpoint-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.checkpoint-approve-btn {
+  padding: 6px 16px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--green-emphasis);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background var(--transition-fast);
+}
+
+.checkpoint-approve-btn:hover {
+  background: var(--green);
+}
+
+.checkpoint-reject-btn {
+  padding: 6px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all var(--transition-fast);
+}
+
+.checkpoint-reject-btn:hover {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.checkpoint-reject-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.checkpoint-reject-form textarea,
+.checkpoint-delegated textarea,
+.checkpoint-delegated input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  resize: none;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  outline: none;
+}
+
+.checkpoint-reject-form textarea:focus,
+.checkpoint-delegated textarea:focus,
+.checkpoint-delegated input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.checkpoint-reject-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.checkpoint-reject-actions button {
+  padding: 5px 14px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--accent-emphasis);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background var(--transition-fast);
+}
+
+.checkpoint-reject-actions button:hover {
+  background: var(--accent);
+}
+
+.checkpoint-reject-actions button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.checkpoint-reject-actions .cancel-btn {
+  background: transparent;
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+}
+
+.checkpoint-reject-actions .cancel-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
+/* ---- Plan Review: Task Card Shell ---- */
+.task-card-with-actions {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---- Dependency Badges (inline in header) ---- */
+.task-dep-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  letter-spacing: 0.3px;
+}
+
+.task-dep-badge.dep-in {
+  background: var(--orange-subtle);
+  color: var(--orange);
+}
+
+.task-dep-badge.dep-out {
+  background: var(--cyan-subtle);
+  color: var(--cyan);
+}
+
+.task-dep-badge-btn {
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.task-dep-badge-btn:hover {
+  border-color: var(--orange);
+}
+
+/* ---- Dependency Editor ---- */
+.task-deps-label {
+  cursor: pointer;
+}
+
+.task-dep-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.task-dep-editor-empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.task-dep-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  color: var(--text-primary);
+  font-weight: 400;
+}
+
+.task-dep-option-order {
+  color: var(--text-muted);
+  min-width: 22px;
+}
+
+.task-dep-done {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 2px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+/* ---- Add Task ---- */
+.task-add-btn {
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.task-add-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--text-muted);
+}
+
+.task-add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+}
+
+.task-add-title {
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.task-add-deps {
+  font-size: 11px;
+}
+
+.task-add-deps > label {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.task-add-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* ---- Dependency Connectors ---- */
+.task-dep-connectors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 2px 14px 0;
+  font-size: 10px;
+}
+
+.task-dep-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  background: var(--orange-subtle);
+  border: 1px solid rgba(210, 153, 29, 0.15);
+  border-radius: var(--radius-sm);
+  color: var(--orange);
+  font-weight: 500;
+}
+
+/* ---- Dependency Summary ---- */
+.plan-dependency-summary {
+  margin-top: 10px;
+  padding: 10px 14px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-md);
+}
+
+.dependency-summary-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  display: block;
+  margin-bottom: 8px;
+}
+
+.dependency-summary-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.dependency-edge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  padding: 3px 0;
+}
+
+.dep-from {
+  color: var(--text-secondary);
+  font-weight: 500;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dep-arrow {
+  color: var(--orange);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.dep-to {
+  color: var(--text-primary);
+  font-weight: 500;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- PRD Panel ---- */
+.prd-panel {
+  margin: 12px 14px;
+  padding: 14px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  animation: fadeIn 0.25s ease-out;
+}
+
+.prd-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.prd-icon {
+  font-size: 16px;
+}
+
+.prd-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.prd-section {
+  margin-bottom: 10px;
+}
+
+.prd-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-bottom: 4px;
+}
+
+.prd-text {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.prd-list {
+  margin: 0;
+  padding-left: 18px;
+  list-style: disc;
+}
+
+.prd-list li {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-bottom: 2px;
+}
+
+.prd-questions {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.prd-question-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 10px;
+  margin-top: 6px;
+  background: var(--orange-subtle);
+  border: 1px solid rgba(210, 153, 29, 0.15);
+  border-radius: var(--radius-sm);
+}
+
+.prd-question-icon {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--orange);
+  flex-shrink: 0;
+}
+
+.prd-question-text {
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.prd-question-text strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.prd-question-text code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bg-tertiary);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--accent);
+}
+
+.prd-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.prd-approve-btn {
+  padding: 6px 18px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--green-emphasis);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background var(--transition-fast);
+}
+
+.prd-approve-btn:hover {
+  background: var(--green);
+}
+
+.prd-reject-btn {
+  padding: 6px 18px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all var(--transition-fast);
+}
+
+.prd-reject-btn:hover {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.prd-answer-input {
+  width: 100%;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 10px 12px;
+  resize: vertical;
+  margin-bottom: 12px;
+  box-sizing: border-box;
+  line-height: 1.5;
+}
+
+.prd-answer-input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.prd-answer-input::placeholder {
+  color: var(--text-muted);
+}
+
+/* ---- Modal Actions ---- */
+.btn-accept {
+  padding: 6px 18px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--green-emphasis);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background var(--transition-fast);
+}
+
+.btn-accept:hover {
+  background: var(--green);
+}
+
+.btn-reject {
+  padding: 6px 18px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all var(--transition-fast);
+}
+
+.btn-reject:hover {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+/* ---- Plan dock ----
+   The plan is a live, editable artifact, so it is mounted once here instead of
+   rendered as a chat message frozen where it was first generated. It sits
+   between the transcript and the input: that is where the user is looking when
+   they type a modification, and it keeps its own scroll so a long plan never
+   pushes the conversation off screen. */
+.plan-dock {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  /* A dragged height is in px, so a panel resized smaller would otherwise push
+     the input off screen. The settings panel's far larger factor makes it the
+     first to give way; once it is at its floor the dock takes the rest, and
+     only its body gives, so the bar stays. (A factor below one would take only
+     that fraction of the shortfall, which is how the composer was left over the
+     edge.) */
+  flex-shrink: 1;
+  min-height: 36px;
+  border-top: 1px solid var(--border-muted);
+  background: var(--bg-primary);
+}
+
+/* Sits over the border instead of adding height, so the bar does not move
+   between the expanded and collapsed dock. */
+.plan-dock-resize {
+  position: absolute;
+  top: -3px;
+  left: 0;
+  right: 0;
+  height: 6px;
+  z-index: 1;
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.plan-dock-resize:hover,
+.plan-dock-resize:focus-visible,
+.plan-dock-resize.dragging {
+  outline: none;
+  background: linear-gradient(var(--ow-sash-hover, var(--accent-emphasis)), var(--ow-sash-hover, var(--accent-emphasis))) center / 100% 2px no-repeat;
+}
+
+.plan-dock-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 14px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  text-align: left;
+  flex-shrink: 0;
+}
+
+.plan-dock-bar:hover {
+  background: var(--bg-hover);
+}
+
+.plan-dock-title {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+.plan-dock-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+/* A collapse is always honoured, including mid-run, so this is the only thing
+   that can tell the user a task is blocked on them. It has to read as urgent. */
+.plan-dock-approval {
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  background: var(--orange-subtle);
+  color: var(--orange);
+  font-weight: 600;
+}
+
+.plan-dock-chevron {
+  display: flex;
+  flex-shrink: 0;
+  transition: transform var(--transition-fast);
+}
+
+.plan-dock-chevron.collapsed {
+  transform: rotate(-90deg);
+}
+
+/* Capped rather than fixed: the dock takes what a short plan needs and no more,
+   and stops at 45% of the panel so the conversation always keeps a share. The
+   floor on `.message-list` is the other half of that bargain. A height the user
+   dragged replaces the 45% inline and stays a cap. */
+.plan-dock-body {
+  overflow-y: auto;
+  min-height: 0;
+  max-height: 45vh;
+  margin: 0 14px 8px;
+  width: auto;
+  /* The outline that separates the live plan from the conversation and the
+     composer; it shares the chat bubble's box, so only the edge changes. */
+  border-color: var(--border-muted);
+}
+
+/* The panel's own 14px side margin was calibrated against the message list,
+   where it sat at panel level. Inside the dock that insets a second time and the
+   approval is the one element not lined up with the tasks it belongs to. */
+.plan-dock-body > .checkpoint-panel {
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.plan-merge-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: var(--ow-fg-secondary);
+  font-size: 12px;
+}
+
+/* ---- Plan revision chip ----
+   The transcript's record that the plan changed at this point in the
+   conversation, and the way back to it. Styled like a system line, not a
+   message: it is a marker, and the artifact itself lives in the dock. */
+.plan-revision-chip-row {
+  display: flex;
+  justify-content: center;
+  padding: 4px 14px;
+}
+
+.plan-revision-chip {
+  padding: 2px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  background: var(--bg-secondary);
+  /* --text-muted (30% transparent on top of --text-secondary) falls below
+     WCAG AA (4.5:1) at this font-size in both themes, and --text-secondary
+     alone still falls short against this chip's --bg-secondary in the light
+     theme — this chip is a clickable control, not de-emphasized aside text. */
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.plan-revision-chip:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* ---- Worktree isolation (ADR-0013) ----
+   A conflict is the one isolation state that needs a decision, so it earns a
+   header badge; the branch and worktree are inspection detail and live in the
+   expanded body. */
+.task-isolation-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin-left: 6px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.task-isolation-badge.conflict {
+  background: var(--red-subtle);
+  color: var(--red);
+}
+
+/* A repair in flight (ADR-0015) is still running, so it reads as progress,
+   not a blocker like `.conflict` above. */
+.task-isolation-badge.repairing {
+  background: var(--orange-subtle);
+  color: var(--orange);
+}
+
+.task-isolation-repaired-note {
+  color: var(--orange);
+}
+
+.task-isolation {
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  font-size: 11px;
+}
+
+.task-isolation-row {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  margin-bottom: 3px;
+}
+
+.task-isolation-label {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  width: 58px;
+}
+
+.task-isolation code {
+  font-family: var(--font-mono, monospace);
+  word-break: break-all;
+}
+
+.task-isolation-resolve {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.isolation-handoff {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+}
+
+.isolation-handoff-header {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.isolation-handoff-title {
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.isolation-handoff-branch {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--accent);
+}
+
+/* So the reviewer knows where to look (ADR-0015). */
+.isolation-handoff-repaired {
+  color: var(--orange);
+}
+
+.isolation-handoff-deferred {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.isolation-handoff-base {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.isolation-handoff-landed {
+  margin: 6px 0;
+  padding-left: 18px;
+  font-size: 11px;
+}
+
+.isolation-handoff-order {
+  display: inline-block;
+  min-width: 16px;
+  color: var(--text-muted);
+}
+
+.isolation-handoff-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+/* ---- Repo groups (ADR-0014) ----
+   A group reports per repository and merges all-or-nothing; a group of one
+   never renders these. */
+.isolation-handoff-repos {
+  margin: 6px 0;
+}
+
+.isolation-handoff-repo {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+.isolation-handoff-repo-path {
+  font-family: var(--font-mono, monospace);
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.isolation-handoff-repo-base {
+  color: var(--text-muted);
+}
+
+.isolation-handoff-repo .isolation-handoff-landed {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+}
+
+.isolation-merge-result {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+}
+
+.isolation-merge-result.merged {
+  color: var(--green, var(--text-muted));
+}
+
+.isolation-merge-result.blocked {
+  background: var(--orange-subtle, rgba(210, 153, 29, 0.12));
+  color: var(--orange);
+}
+
+.isolation-merge-result.conflict,
+.isolation-merge-result.failed {
+  background: var(--red-subtle);
+  color: var(--red);
+}
+
+.task-isolation-conflict-repo code {
+  color: var(--red);
+}
+
+/* ---- Pending messages ----
+   Typed during a turn and not yet read: a compact stack above the composer in
+   the user bubble's shape, tinted and dashed because it has not gone yet.
+   Shared by the planner chat and the task log. */
+.pending-messages {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  gap: 4px;
+  max-height: 40vh;
+  overflow-y: auto;
+  padding: 8px 14px 0;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-primary);
+}
+
+/* A planner turn waiting on the planner's usage limit, above the composer it would otherwise be typed into again. */
+.planner-resend {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 14px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* A narrow panel wraps the actions under the words rather than squeezing them. */
+.planner-pause {
+  flex-wrap: wrap;
+}
+
+.planner-pause .planner-resend-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.planner-pause-actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* The stack and the composer read as one block. */
+.pending-messages + .chat-input,
+.pending-messages + .task-log-composer {
+  border-top-color: transparent;
+}
+
+.pending-message {
+  padding: 5px 10px 3px;
+  border: 1px dashed color-mix(in srgb, var(--accent-emphasis) 60%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent-emphasis) 8%, var(--bg-primary));
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.pending-message-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.pending-message-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 20px;
+  font-size: 11px;
+  color: var(--text-hint);
+}
+
+.pending-message-state {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pending-message.sending {
+  border-style: solid;
+}
+
+/* High contrast themes draw edges, not tints. */
+body.vscode-high-contrast .pending-message,
+body.vscode-high-contrast-light .pending-message {
+  border-color: var(--ow-border-contrast);
+  background: transparent;
+}
+
+.pending-message.sending .pending-message-state {
+  color: var(--slash-token-fg);
+}
+
+/* Out of the way until wanted, but never out of the tab order or the
+   accessibility tree: opacity, not display. */
+.pending-message-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.pending-message:hover .pending-message-actions,
+.pending-message:focus-within .pending-message-actions {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .pending-message-actions { opacity: 1; }
+}
+
+.pending-message-now,
+.pending-message-remove {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-hint);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.pending-message-remove {
+  font-size: 13px;
+}
+
+.pending-message-now:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.pending-message-remove:hover {
+  background: var(--red-subtle);
+  color: var(--red);
+}
+
+.pending-message-now:focus-visible,
+.pending-message-remove:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* The composer's key hint while a turn runs and something is typed: one
+   quiet line under the input, in place of a second button. */
+.send-key-hint {
+  flex: 0 0 100%;
+  text-align: right;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-hint);
+}
+
+.chat-input-inner .send-key-hint {
+  padding: 0 10px 6px;
+}
+
+.task-log-composer .send-key-hint {
+  margin-top: -4px;
+}
+
+.task-message-box .send-key-hint {
+  margin-top: -2px;
+}
+
+.send-key-hint kbd,
+.pending-message-now kbd {
+  padding: 0 3px;
+  border: 1px solid var(--border-muted);
+  border-radius: 3px;
+  font-family: inherit;
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.stop-hint {
+  padding: 4px 14px 0;
+  font-size: 11px;
+  color: var(--red);
+}
+
+/* ---- Approval card (#53) ----
+   The planner's request as a chat card: the same question, scope disclosure
+   and Allow/Deny the modal offered, answered through the same resolution. */
+.approval-card {
+  margin: 4px 14px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-muted);
+  border-left: 2px solid var(--orange);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  font-size: 11px;
+}
+
+.approval-card[data-status='granted'] {
+  border-left-color: var(--green);
+}
+
+.approval-card[data-status='denied'] {
+  border-left-color: var(--red);
+}
+
+.approval-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.approval-card-kind {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.approval-card-status {
+  margin-left: auto;
+  color: var(--text-muted);
+}
+
+.approval-card[data-status='granted'] .approval-card-status {
+  color: var(--green);
+}
+
+.approval-card[data-status='denied'] .approval-card-status {
+  color: var(--red);
+}
+
+.approval-card-subject {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.approval-card-detail {
+  margin-top: 4px;
+  color: var(--text-secondary);
+}
+
+.approval-card-scope {
+  margin-top: 4px;
+  color: var(--text-muted);
+}
+
+.approval-card-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.approval-card-allow,
+.approval-card-deny {
+  padding: 4px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.approval-card-allow {
+  border: 1px solid var(--green-emphasis);
+  background: var(--green-emphasis);
+  color: #fff;
+}
+
+.approval-card-allow:hover {
+  background: var(--green);
+}
+
+.approval-card-deny {
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.approval-card-deny:hover {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+/* A task runner's request (ADR-0018, A1): a third answer, and a note the
+   agent reads when it is denied. */
+.approval-card[data-status='withdrawn'] {
+  border-left-color: var(--border-color);
+}
+
+.approval-card-allow-task {
+  padding: 4px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid var(--green-emphasis);
+  background: transparent;
+  color: var(--green);
+}
+
+.approval-card-allow-task:hover {
+  background: var(--green-subtle);
+}
+
+.approval-card-note {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 8px;
+  padding: 4px 6px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 11px;
+}
+
+/* A structured task stopped on its runner's request: on the card, and in the
+   task log's header. */
+.task-approval-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin-left: 6px;
+  font-weight: 500;
+  border: none;
+  font-family: inherit;
+  cursor: pointer;
+  background: var(--orange-subtle);
+  color: var(--orange);
+}
+
+.task-log-state.approval {
+  background: var(--orange-subtle);
+  color: var(--orange);
+}
+
+/* ---- Token line (#53) ----
+   Pinned below the conversation, above the input: a session fact, not a
+   message that scrolls away. */
+.usage-line {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  min-width: 0;
+  /* The inbox's list opens from here over the conversation, so the line cannot
+     clip it; every measure inside ellipsises on its own. */
+  position: relative;
+  white-space: nowrap;
+  padding: 3px 14px;
+  font-size: 10px;
+  /* --text-muted falls below WCAG AA (4.5:1) at this font-size in both
+     themes — this is a persistent status readout, not de-emphasized aside text. */
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.usage-line-measures {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.usage-line-subagents {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: var(--bg-secondary);
+}
+
+/* The task total sits under an earlier attempt's own line, so only the pair
+   has one rule above it. */
+.usage-line.usage-line-total {
+  border-top: none;
+}
+
+/* Full details stay in the description and hover, so polling never changes
+   the footer's height, even while a label is focused. */
+.account-limits {
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.account-limit {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-limit.stale {
+  font-style: italic;
+}
+
+.account-limit:focus-visible {
+  outline: 1px solid var(--ow-accent, var(--accent));
+  outline-offset: -1px;
+  border-radius: 2px;
+}
+
+.account-limit-details {
+  display: none;
+}
+
+/* The keyboard hover lives outside the clipped footer, so it takes no space
+   from context or limits. Mouse users have the same text in the native title. */
+.account-limit-tooltip {
+  position: fixed;
+  left: 8px;
+  z-index: 1000;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: calc(100vw - 16px);
+  padding: 6px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+
+/* ---- Task log tab (ADR-0018, V1) ---- */
+/* The on-demand editor tab a structured task opens. It reuses the chat's
+   ConversationBlocks classes above; these are only what a task adds: the
+   header, the queue and the composer, all on the same theme variables. */
+
+.task-log-open-btn {
+  font-size: 10px;
+  padding: 1px 8px;
+  margin-left: 6px;
+  border-radius: 3px;
+  font-weight: 500;
+  flex-shrink: 0;
+  cursor: pointer;
+  font-family: inherit;
+  background: var(--purple-subtle);
+  color: color-mix(in srgb, var(--purple) 80%, var(--text-primary));
+  border: 1px solid color-mix(in srgb, var(--purple) 40%, transparent);
+}
+
+.task-log-open-btn-stacked {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  line-height: 1.15;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.task-log-open-btn:hover {
+  background: color-mix(in srgb, var(--purple) 22%, transparent);
+}
+
+.task-log-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.task-log-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-secondary);
+}
+
+.task-log-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-log-runner {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.task-log-state {
+  font-size: 10px;
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.task-log-state.working {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.task-log-state.waiting {
+  background: var(--orange-subtle);
+  color: var(--orange);
+}
+
+.task-log-state.checkpoint {
+  background: var(--orange-subtle);
+  color: var(--orange);
+}
+
+.task-log-state.done {
+  background: var(--green-subtle);
+  color: var(--green);
+}
+
+.task-log-state.failed {
+  background: var(--red-subtle);
+  color: var(--red);
+}
+
+.task-log-state.idle {
+  background: rgba(139, 148, 158, 0.1);
+  color: var(--text-muted);
+}
+
+.task-log-spacer {
+  flex: 1;
+}
+
+.task-log-detail,
+.task-log-attempt {
+  font-family: inherit;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.task-log-detail {
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.task-log-detail:hover {
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+
+.task-log-attempt {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-muted);
+}
+
+.task-log-attempt select {
+  font-family: inherit;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+
+.task-log-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-shrink: 0;
+  padding: 6px 14px;
+  font-size: 12px;
+  background: var(--red-subtle);
+  color: var(--red);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.task-log-error button {
+  font-family: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--red);
+  background: transparent;
+  color: var(--red);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.task-log-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+/* Pinned between the log body and the composer, so it never scrolls away. */
+.task-log-activity {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  min-width: 0;
+  padding: 4px 14px 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.task-log-activity-mark {
+  width: 12px;
+  margin-right: 6px;
+  text-align: center;
+  color: var(--accent);
+}
+
+.task-log-activity-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The label gives way before the time does: the time is what says how long. */
+.task-log-activity-time {
+  flex-shrink: 0;
+  margin-left: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-log-activity .chat-msg-spinner {
+    animation: none;
+  }
+}
+
+.task-log-empty {
+  padding: 16px 14px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.task-log-composer {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  flex-shrink: 0;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border-muted);
+  background: var(--bg-primary);
+}
+
+.task-log-readonly {
+  flex-shrink: 0;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border-muted);
+  background: var(--bg-primary);
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.task-log-input {
+  flex: 1;
+  resize: none;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+
+.task-log-input::placeholder {
+  color: var(--text-placeholder);
+}
+
+.task-log-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* A task card's compact message box (ADR-0018, M1; ADR-0023, F1): the same
+   Send and Ctrl+Enter the task log offers, without leaving the plan dock. */
+.task-message-box {
+  display: flex;
+  gap: 6px;
+  align-items: flex-end;
+  margin-top: 8px;
+}
+
+.task-message-input {
+  flex: 1;
+  resize: none;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+
+.task-message-input::placeholder {
+  color: var(--text-placeholder);
+}
+
+.task-message-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.task-message-send {
+  font-family: inherit;
+  font-size: 11px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.task-message-send:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--text-muted);
+}
+
+.task-message-send:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Ops tasks and merge gates (ADR-0020) */
+.task-type-badge.ops {
+  background: var(--purple-subtle);
+  color: var(--purple);
+}
+
+/* A research task (ADR-0037): read-only, its report returns to the planner */
+.task-type-badge.research {
+  background: var(--cyan-subtle);
+  color: var(--cyan);
+}
+
+/* A script task (ADR-0035): an ops task by nature, drawn with its body */
+.task-type-badge.delegated,
+.task-type-badge.script {
+  background: var(--purple-subtle);
+  color: var(--purple);
+}
+
+.task-script-body,
+.approval-card-body {
+  margin: 6px 0;
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.plan-supervisor-lower {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.task-isolation-badge.gate,
+.task-isolation-badge.approval {
+  background: var(--orange-subtle);
+  color: var(--orange);
+}
+
+/* A loop's check and body (ADR-0045): progress while it goes on, a failure only
+   when it ends or stops. */
+.task-isolation-badge.loop {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.task-isolation-badge.loop.repeating {
+  background: var(--orange-subtle);
+  color: var(--orange);
+}
+
+.task-isolation-badge.loop.passed {
+  background: var(--green-subtle);
+  color: var(--green);
+}
+
+.task-isolation-badge.loop.stopped,
+.task-isolation-badge.loop.out-of-rounds,
+.task-isolation-badge.loop.failed {
+  background: var(--red-subtle);
+  color: var(--red);
+}
+
+.task-ops-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.task-ops-note {
+  margin: 6px 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.task-ops-note.warn {
+  color: var(--orange);
+}
+
+/* A file edit's diff: what it changed, then its lines numbered and marked —
+   an addition green, a removal red, as the editor's own diff view tints them. */
+.diff-summary,
+.diff-view {
+  margin: 2px 0 0 17px;
+  padding-left: 8px;
+  border-left: 2px solid var(--border-muted);
+  font-size: 11px;
+}
+
+.diff-summary {
+  color: var(--text-secondary);
+}
+
+.diff-view {
+  margin-top: 0;
+  font-family: var(--font-mono);
+  line-height: 1.5;
+}
+
+.diff-line {
+  display: flex;
+  color: var(--text-secondary);
+}
+
+.diff-num,
+.diff-sign {
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.diff-num {
+  min-width: 3ch;
+  padding-right: 1ch;
+  text-align: right;
+  color: var(--text-muted);
+}
+
+.diff-sign {
+  width: 2ch;
+}
+
+.diff-text {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.diff-line[data-kind='added'] {
+  background: var(--ow-diff-inserted, var(--green-subtle));
+}
+
+.diff-line[data-kind='added'] .diff-sign,
+.diff-line[data-kind='added'] .diff-text {
+  color: var(--green);
+}
+
+.diff-line[data-kind='removed'] {
+  background: var(--ow-diff-removed, var(--red-subtle));
+}
+
+.diff-line[data-kind='removed'] .diff-sign,
+.diff-line[data-kind='removed'] .diff-text {
+  color: var(--red);
+}
+
+.diff-gap {
+  padding-left: 4ch;
+  color: var(--text-muted);
+}
+
+.task-skill-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.task-skill-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.task-skill-chip-remove {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.plan-usage {
+  color: var(--ow-fg-secondary);
+  font-size: 11px;
+  padding: 4px 8px;
+}
+
+.runner-notice {
+  margin: 6px 0;
+  padding: 6px 8px;
+  font-size: 0.9em;
+  border-left: 3px solid var(--ow-status-warning);
+  color: var(--ow-fg-secondary);
+}
+
+.task-log-composer,
+.task-message-box {
+  flex-wrap: wrap;
+}
+
+.runner-commands {
+  flex: 0 0 100%;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+}
+
+.runner-commands button {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: transparent;
+  cursor: pointer;
+}
+
+.runner-commands button:hover,
+.runner-commands button[aria-selected="true"] {
+  background: var(--accent-subtle);
+}
+
+.runner-commands span {
+  flex: 1 1 100%;
+  color: var(--text-secondary);
+}
+
+.task-command-error {
+  flex: 0 0 100%;
+  color: var(--red);
+}
+
+.runner-loaded {
+  display: block;
+}
+
+.runner-loaded-detail {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.task-handoff-commit-subject {
+  font-weight: 600;
+}
+
+.task-handoff-commit-body {
+  white-space: pre-wrap;
+}
+
+/* What moves for progress — the activity disclosures' chevrons, the login
+   spinner — holds still for a reader who asked for less motion. */
+@media (prefers-reduced-motion: reduce) {
+  .disclosure-chevron {
+    transition: none;
+  }
+
+  .activity-group[data-state='running'] .activity-group-toggle > .disclosure-chevron {
+    animation: none;
+  }
+
+  .planner-login-spinner {
+    animation: none;
+  }
+
+  /* With the spinner still, a capsule that showed only the ring would have no
+     visible text: give the pending words the slot the resting label occupied. */
+  .planner-pill-login:disabled::after {
+    content: '';
+    padding-left: 0;
+  }
+
+  .planner-pill-login .planner-login-pending-label {
+    display: inline;
+  }
+
+  .planner-pill,
+  .planner-pill-login,
+  .planner-login,
+  .planner-login-btn,
+  .planner-pill-group,
+  .runner-pill,
+  .runner-pill-group {
+    transition: none;
+  }
+}
+
+/* The planner's compaction (ADR-0017): one quiet muted line where it
+   happened, centred like a notice; its summary opens under it and wraps in a
+   narrow panel rather than widening it. */
+.compaction-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+}
+
+.compaction-row-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.compaction-row-head .chat-msg-spinner {
+  margin-right: 0;
+}
+
+.compaction-row-summary {
+  margin-top: 4px;
+  max-width: 100%;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Read by assistive technology, never drawn: a live region with nothing to show. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The escalation inbox (ADR-0053): a control pinned to the right end of the
+   usage line, and its list as a dropdown upward from there, over the
+   conversation. Nothing here takes height from the column, so the composer, the
+   usage line and the Settings bar stay in the panel whatever else is open. */
+.escalation-inbox {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* The measures give way before the control does; the colour (as the plan dock's
+   "awaiting approval") is what marks it out against the muted 10px text, and
+   holds its contrast in both themes. */
+.escalation-inbox-bar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 7px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: var(--orange-subtle);
+  color: var(--orange);
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.escalation-inbox-bar:hover {
+  filter: brightness(1.15);
+}
+
+.escalation-inbox-bar:focus-visible,
+.escalation-inbox-body button:focus-visible,
+.escalation-inbox-body textarea:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.escalation-inbox-chevron {
+  display: flex;
+  transition: transform var(--transition-fast);
+}
+
+/* Closed it points up, where the list will open. */
+.escalation-inbox-chevron.collapsed {
+  transform: rotate(180deg);
+}
+
+/* Anchored to the usage line's top edge. Half the panel is the cap: the line sits
+   above the composer, so the list stays below the panel's top at any height the
+   composer leaves it, and a long list scrolls inside. */
+.escalation-inbox-body {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 100%;
+  z-index: 5;
+  max-height: 50vh;
+  overflow-y: auto;
+  padding: 6px 8px;
+  white-space: normal;
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  box-shadow: 0 -4px 14px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.escalation-inbox-body[hidden] {
+  display: none;
+}
+
+.escalation-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.escalation-entry {
+  padding: 6px 8px;
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--warning-text);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  font-size: 12px;
+}
+
+.escalation-entry-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.escalation-entry-task {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.escalation-entry-reason {
+  margin: 2px 0 6px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.escalation-entry-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.escalation-entry-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.escalation-entry-confirm {
+  margin: 0;
+}
+
+.escalation-entry-note {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.escalation-entry-note textarea {
+  resize: vertical;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+}
+
+.escalation-entry-sending {
+  color: var(--text-secondary);
+}
+
+/* The refusal leads with words, not colour: the border only echoes them. */
+.escalation-refusal {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--red-boundary);
+  border-radius: var(--radius-md);
+  background: var(--red-subtle);
+  font-size: 12px;
+}
+
+.escalation-refusal-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.checkpoint-delegated {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+  font-size: 12px;
+}
+
+.checkpoint-delegated label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.checkpoint-delegated-error {
+  color: var(--ow-status-error, var(--text-muted));
+}

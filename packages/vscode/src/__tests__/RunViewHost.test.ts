@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { EMPTY_RUN, type RunView, type SerializedTask } from '@ordewell/core';
 import { RunViewHost } from '../RunViewHost';
-import type { HostToWebview } from '../shared/protocol';
+import type { HostToWebview } from '@ordewell/ui/protocol';
 
 function planned(id: string, order: number): SerializedTask {
   return {

@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, fireEvent, screen, act } from '@testing-library/react';
 import App from '../App';
 import { api, hostBridge, post } from './hostBridge';
-import type { HostToWebview } from '../../../shared/protocol';
+import type { HostToWebview } from '@ordewell/ui/protocol';
 import type { RunView } from '@ordewell/core';
 
 /**

@@ -7,7 +7,7 @@ import { createSession, flattenTasks, loadSession, RunnerRegistry, BufferedTaskO
 import type { IAiService, IRunner, LegacyPlanState, ModelResolver, Session, SessionMessage } from '@ordewell/core';
 import { fakeConfig, fakeFileSystem } from '@ordewell/core/testing';
 import { ChatViewProvider } from '../../providers/ChatViewProvider';
-import type { HostToWebview, WebviewToHost } from '../../shared/protocol';
+import type { HostToWebview, WebviewToHost } from '@ordewell/ui/protocol';
 import { routeWebviewMessage, type WebviewRouterDeps } from '../webviewRouter';
 
 const showWarningMessage = vscode.window.showWarningMessage as unknown as ReturnType<typeof vi.fn>;

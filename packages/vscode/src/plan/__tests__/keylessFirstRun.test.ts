@@ -32,7 +32,7 @@ import { VsCodeConfig } from '../../adapters/VsCodeConfig';
 import { SecretStore } from '../../adapters/SecretStore';
 import { PlannerSelection } from '../../PlannerSelection';
 import { ChatViewProvider } from '../../providers/ChatViewProvider';
-import type { HostToWebview } from '../../shared/protocol';
+import type { HostToWebview } from '@ordewell/ui/protocol';
 import { handleStartPlanning, handleContinueConversation, handleStopPlanning, handleSendMessageNow, type PlanManagerDeps } from '../PlanManager';
 
 interface FakeAgentProcess extends ChildProcess { emitStdout(chunk: string): void }

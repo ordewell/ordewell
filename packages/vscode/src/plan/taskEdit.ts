@@ -1,6 +1,6 @@
 import { dependentsNotice, dependentsOf, flattenTasks, loopLeaveNotice, newTaskFields } from '@ordewell/core';
 import type { Task } from '@ordewell/core';
-import type { TaskDraft } from '../shared/protocol';
+import type { TaskDraft } from '@ordewell/ui/protocol';
 
 /**
  * What to ask before removing a task.

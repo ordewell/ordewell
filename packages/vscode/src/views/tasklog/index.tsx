@@ -1,7 +1,12 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import TaskLogApp from './TaskLogApp';
-import '../chat/styles.css';
+import { TaskLogApp, TaskLogBridgeContext } from '@ordewell/ui';
+import { vscodeBridge } from '../vscodeBridge';
+import '../styles.css';
 
 const root = ReactDOM.createRoot(document.getElementById('root')!);
-root.render(<TaskLogApp />);
+root.render(
+  <TaskLogBridgeContext.Provider value={vscodeBridge()}>
+    <TaskLogApp />
+  </TaskLogBridgeContext.Provider>,
+);

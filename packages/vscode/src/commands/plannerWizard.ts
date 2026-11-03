@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import type { PlannerBackendId, DiscoveredModel, PlannerModelRecall } from '@ordewell/core';
-import type { PlannerBackend } from '../shared/protocol';
+import type { PlannerBackend } from '@ordewell/ui/protocol';
 import type { VendorModelOption } from '../plan/PlannerModelSwitch';
 
 export interface PlannerVendorModel extends VendorModelOption {
