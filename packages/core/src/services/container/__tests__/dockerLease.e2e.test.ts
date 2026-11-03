@@ -639,12 +639,21 @@ describe.skipIf(skip)('a task in a real container', () => {
   ])('goes with its host: the container ends when %s', async (label, end) => {
     const name = `ordewell-e2e-entry-${process.pid}-${label.length}`;
     const entry = await new SpawnedDockerCli().entry(['run', '-i', '--rm', '--name', name, '--init', '--pids-limit', '8192', '--memory', '256m', '--memory-swap', '256m', IMAGE, 'node', '-e', RELAY_ENTRY]);
-    await new LeaseRelay(entry).ready;
-    expect(docker('ps', '--filter', `name=${name}`, '--format', '{{.Names}}')).toBe(name);
+    try {
+      await new LeaseRelay(entry).ready;
+      // The engine lists a container as running only after its process has
+      // started, so the entry's READY can arrive first.
+      await vi.waitFor(() => expect(docker('ps', '--filter', `name=${name}`, '--format', '{{.Names}}')).toBe(name), { interval: 100 });
 
-    end(entry);
+      end(entry);
 
-    await vi.waitFor(() => expect(docker('ps', '-a', '--filter', `name=${name}`, '--format', '{{.Names}}')).toBe(''), { timeout: 30_000, interval: 200 });
+      await vi.waitFor(() => expect(docker('ps', '-a', '--filter', `name=${name}`, '--format', '{{.Names}}')).toBe(''), { timeout: 30_000, interval: 200 });
+    } finally {
+      // A failure above leaves the entry holding its container open, and every
+      // later test that counts this suite's containers would count it too.
+      entry.kill('SIGKILL');
+      spawnSync('docker', ['rm', '-f', name]);
+    }
   }, 60_000);
 
   const leaseOver = (taskId: string, repos: LeaseRepo[], memory = '512m') => leaseWith(taskId, repos, settingsOf({ memory }));
