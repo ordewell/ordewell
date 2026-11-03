@@ -203,3 +203,24 @@ describe('the Changes view routes', () => {
     expect(refused(buildRequest('git.stashPop', { stash: 'abc' }, {}))).toContain('unknown param stash');
   });
 });
+
+describe('the checkout group routes', () => {
+  it('read the checkout status, with the repo and scope in the query', () => {
+    expect(buildRequest('git.status', { workspace: '/w', repo: 'web', scope: 'checkout' })).toEqual({
+      ok: true,
+      request: { method: 'GET', path: '/api/git/status?workspace=%2Fw&repo=web&scope=checkout' },
+    });
+    expect(refused(buildRequest('git.status', { workspace: '/w', path: 'a.ts' }))).toContain('unknown param path');
+  });
+
+  it('send stage, unstage, commit and discard as bodies so nothing enters the URL', () => {
+    const stage = { workspace: '/w', repo: '.', paths: ['a.ts'] };
+    expect(buildRequest('git.stage', {}, stage)).toEqual({ ok: true, request: { method: 'POST', path: '/api/git/stage', body: JSON.stringify(stage) } });
+    const hunks = { workspace: '/w', repo: '.', hunks: '@@ -1 +1 @@\n-a\n+b\n' };
+    expect(buildRequest('git.unstage', {}, hunks)).toEqual({ ok: true, request: { method: 'POST', path: '/api/git/unstage', body: JSON.stringify(hunks) } });
+    const commit = { workspace: '/w', repo: '.', message: 'Fix it', amend: true, confirm: { head: 'abc' } };
+    expect(buildRequest('git.commit', {}, commit)).toEqual({ ok: true, request: { method: 'POST', path: '/api/git/commit', body: JSON.stringify(commit) } });
+    const discard = { workspace: '/w', repo: '.', paths: ['a.ts'], confirm: { files: ['a.ts'] } };
+    expect(buildRequest('git.discard', {}, discard)).toEqual({ ok: true, request: { method: 'POST', path: '/api/git/discard', body: JSON.stringify(discard) } });
+  });
+});

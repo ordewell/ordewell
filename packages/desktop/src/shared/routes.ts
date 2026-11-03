@@ -105,12 +105,18 @@ export const ROUTES = {
   'files.save': { method: 'PUT', path: '/api/files/content' },
 
   'git.repos': { method: 'GET', path: '/api/git/repos', query: WS },
+  'git.status': { method: 'GET', path: '/api/git/status', query: [...WS, 'repo', 'scope'] },
   // Read by main, to find the worktree a task's terminal opens in.
   'git.branches': { method: 'GET', path: '/api/git/branches', query: AT },
   'git.diff': { method: 'GET', path: '/api/git/diff', query: [...AT, 'kind', 'from', 'to', 'path'] },
   // Merge all's preflight sets the user's overlapping files aside and offers them back (ADR-0062 G8).
   'git.stash': { method: 'POST', path: '/api/git/stash' },
   'git.stashPop': { method: 'POST', path: '/api/git/stash-pop' },
+  // The user's own actions on their checkout (ADR-0062 G1-G5): the Changes activity's checkout group.
+  'git.stage': { method: 'POST', path: '/api/git/stage' },
+  'git.unstage': { method: 'POST', path: '/api/git/unstage' },
+  'git.commit': { method: 'POST', path: '/api/git/commit' },
+  'git.discard': { method: 'POST', path: '/api/git/discard' },
 
   'settings.get': { method: 'GET', path: '/api/settings', query: ['workspace', 'sessionId'] },
   'settings.update': { method: 'PATCH', path: '/api/settings' },
