@@ -1,5 +1,6 @@
-import { EMPTY_RUN, reduceRun, type RunView, type SessionMessage } from '@ordewell/core';
-import type { HostToWebview } from '@ordewell/ui/protocol';
+import type { RunView, SessionMessage } from '@ordewell/core';
+import { EMPTY_RUN, reduceRun } from '@ordewell/core/plan-utils';
+import type { HostToWebview } from '../shared/protocol';
 
 /**
  * The run the chat webview draws (#S8c), held on the host: every

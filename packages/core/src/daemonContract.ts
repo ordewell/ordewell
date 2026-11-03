@@ -19,6 +19,7 @@ import type { Escalation } from './services/escalations';
 import type { TaskRevertPreview } from './services/taskRevert';
 import type { ContainerStatus } from './services/container/containerSetup';
 import type { ContainerProblem } from './services/container/containerPreflight';
+import type { TaskDiffResult } from './services/taskDiffRead';
 
 /**
  * The daemon contract: every HTTP body the local daemon sends, in one place.
@@ -69,7 +70,13 @@ export type DaemonErrorCode =
   /** That child plan holds no such task: a task's id, exactly. Nothing falls back to the root (ADR-0055 D20). */
   | 'child_task_not_found'
   /** The child plan is open, but its mandate, its grants, the tree's budget or the task's state refuses this now; the message says which. */
-  | 'child_refused';
+  | 'child_refused'
+  /** A user read's view scope no longer exists, or cannot be read: the message says why. It never falls back to another scope (ADR-0061 R2). */
+  | 'gone'
+  /** A user read named a path outside its scope: absolute, `..`, `.git`, Ordewell's state, or a link out of the root (ADR-0061 R3). */
+  | 'path_refused'
+  /** A user read named a path, ref or commit its scope does not hold. */
+  | 'path_not_found';
 
 /** The body of every non-2xx answer a route gives. */
 export interface ErrorBody {
@@ -466,3 +473,219 @@ export interface AccountLimitsFrame extends AccountLimitsMessage {
   stream: string;
   revision: number;
 }
+
+/**
+ * Which tree a user read looks at, per repository (ADR-0061 R2): the user's
+ * checkout on disk, a run's integration branch from git objects, or a task's
+ * worktree on disk while it exists and its branch after.
+ */
+export type ViewScopeKind = 'checkout' | 'integration' | 'task';
+
+/**
+ * The query every file and git read takes. `repo` is a repository of the
+ * workspace relative to it, `.` for the root; `scope` defaults to the checkout.
+ * An integration scope names its session, a task scope its session and task.
+ */
+export interface ReadTarget {
+  workspace: string;
+  repo?: string;
+  scope?: ViewScopeKind;
+  sessionId?: string;
+  taskId?: string;
+}
+
+/**
+ * What an answer was read at (ADR-0061 R5), so a later write can say what it
+ * saw: the files on disk over `commit` (null for a repository with none yet),
+ * or the tree of `commit` alone. `branch` is the scope's branch, for the
+ * breadcrumb: the checkout's, the integration branch or the task's.
+ */
+export interface ReadAt {
+  repo: string;
+  scope: ViewScopeKind;
+  source: 'disk' | 'commit';
+  commit: string | null;
+  branch: string | null;
+}
+
+/**
+ * A path's change in its scope: against HEAD in the checkout, against the
+ * run's base on the integration branch, against the task's start in a task.
+ * `?` untracked, `U` conflicted.
+ */
+export type FileChangeStatus = 'M' | 'A' | 'D' | '?' | 'U';
+
+export interface FileTreeEntry {
+  name: string;
+  /** From the repository's scope root, `/`-separated: what every other read takes. */
+  path: string;
+  /** A link is listed as one and never followed (ADR-0061 R3); a nested repository is a `repository`. */
+  kind: 'file' | 'directory' | 'symlink' | 'repository';
+  ignored: boolean;
+  /** A directory's is `M` when anything below it changed, or `?` when all of it is untracked. */
+  status?: FileChangeStatus;
+  /** The task whose work changed it: the task itself in its own scope, the task that landed it on an integration branch. */
+  taskId?: string;
+}
+
+/** `GET /api/files/tree`: one directory's entries, `dir` `''` for the root. */
+export interface FileTreeResponse {
+  at: ReadAt;
+  dir: string;
+  entries: FileTreeEntry[];
+}
+
+/** `GET /api/files/content`: a file's text and the sha256 of its bytes, or why there is none (ADR-0061 R5). */
+export type FileContentResponse =
+  | { at: ReadAt; path: string; kind: 'text'; text: string; hash: string; size: number }
+  | { at: ReadAt; path: string; kind: 'binary'; size: number }
+  | { at: ReadAt; path: string; kind: 'too-large'; size: number; limit: number };
+
+export interface FileFindMatch {
+  path: string;
+  /** Set on a text match: its 1-based line and the line itself, trimmed to a preview. */
+  line?: number;
+  preview?: string;
+}
+
+/** `GET /api/files/find`: paths whose name holds `query`, or lines holding it with `text`; `truncated` once the cap is hit. */
+export interface FileFindResponse {
+  at: ReadAt;
+  query: string;
+  mode: 'name' | 'text';
+  matches: FileFindMatch[];
+  truncated: boolean;
+}
+
+export interface GitRepoInfo {
+  repo: string;
+  /** Null on a detached HEAD. */
+  branch: string | null;
+  detached: boolean;
+  /** Null in a repository with no commit yet. */
+  head: string | null;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+}
+
+/** `GET /api/git/repos`: the workspace's repositories (ADR-0014), as the checkout has them. */
+export interface GitReposResponse {
+  repos: GitRepoInfo[];
+}
+
+export interface GitStatusChange {
+  path: string;
+  /** git's letter: `M`, `A`, `D`, `R`, `C` or `T`. */
+  status: string;
+  /** A rename's or copy's old path. */
+  from?: string;
+}
+
+/** `GET /api/git/status`: the checkout's own changes, as `git status` sorts them. */
+export interface GitStatusResponse {
+  at: ReadAt;
+  staged: GitStatusChange[];
+  unstaged: GitStatusChange[];
+  untracked: string[];
+  conflicted: string[];
+}
+
+export interface GitDiffFile {
+  path: string;
+  status: string;
+  /** Null for a binary change. */
+  added: number | null;
+  removed: number | null;
+}
+
+/**
+ * `GET /api/git/diff`: the changed files first, and with `path` that one file's
+ * patch (ADR-0061 R5). `from` and `to` name what was compared, null for the
+ * index or the working tree.
+ */
+export interface GitDiffResponse {
+  at: ReadAt;
+  from: string | null;
+  to: string | null;
+  files: GitDiffFile[];
+  patch?: string;
+}
+
+export interface GitCommitSummary {
+  sha: string;
+  parents: string[];
+  /** The refs pointing at it, as `git log --decorate` names them (`HEAD -> main`, `tag: v1`, `origin/main`). */
+  refs: string[];
+  subject: string;
+  author: string;
+  email: string;
+  /** ISO 8601, the author date. */
+  date: string;
+}
+
+/** `GET /api/git/log`: one page of commits, newest first, with parents for the graph; `cursor` fetches the next, null at the end. */
+export interface GitLogResponse {
+  repo: string;
+  ref: string;
+  commits: GitCommitSummary[];
+  cursor: string | null;
+}
+
+/** `GET /api/git/commit`: one commit and the files it changed against its first parent; with `path`, that file's patch. */
+export interface GitCommitResponse {
+  repo: string;
+  commit: GitCommitSummary & { body: string };
+  files: GitDiffFile[];
+  patch?: string;
+}
+
+/** The session, run and task a branch or worktree of Ordewell's belongs to, as the saved isolation records name them. */
+export interface OrdewellRefOwner {
+  sessionId: string;
+  runId: string;
+  /** Absent on a run's integration branch. */
+  taskId?: string;
+}
+
+export interface GitBranchInfo {
+  name: string;
+  sha: string;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  current: boolean;
+  /** Set on a branch Ordewell made, when a saved run still names it. */
+  owner?: OrdewellRefOwner;
+  /** The saved runs that land on this branch at Merge all: their landing branch (ADR-0062 G7). */
+  landingFor?: Array<{ sessionId: string; runId: string }>;
+}
+
+export interface GitWorktreeInfo {
+  /** Absolute, as git lists it. */
+  path: string;
+  branch: string | null;
+  head: string | null;
+  /** The user's own checkout, which every linked worktree hangs off. */
+  main: boolean;
+  owner?: OrdewellRefOwner;
+}
+
+/**
+ * `GET /api/git/branches`: the repository's local branches, Ordewell's in their
+ * own group (`ordewell/` and `ordewell-preserved/`), remote-tracking branches as
+ * of the last fetch, its stashes and its worktrees.
+ */
+export interface GitBranchesResponse {
+  repo: string;
+  current: string | null;
+  detached: boolean;
+  local: GitBranchInfo[];
+  ordewell: GitBranchInfo[];
+  remote: GitBranchInfo[];
+  stashes: Array<{ ref: string; sha: string; message: string }>;
+  worktrees: GitWorktreeInfo[];
+}
+
+/** `GET /api/plans/:sessionId/tasks/:taskId/diff`: a task's diff as `readTaskDiff` reads it for VS Code, from the saved run. */
+export type TaskDiffResponse = TaskDiffResult;

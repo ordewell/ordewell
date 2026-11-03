@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import { handleSessionMessage } from '../PlanManager';
 import type { PlanManagerDeps } from '../PlanManager';
 import type { SessionMessage } from '@ordewell/core';
+import { SessionView } from '@ordewell/ui/host';
 
 const showQuickPick = vscode.window.showQuickPick as unknown as ReturnType<typeof vi.fn>;
 
@@ -18,7 +19,7 @@ const SHELL_REQUEST: Extract<SessionMessage, { type: 'approval_request' }> = {
 function minimalDeps(): PlanManagerDeps {
   return {
     session: { resolveApproval: vi.fn().mockReturnValue(true) } as unknown as PlanManagerDeps['session'],
-    chatProvider: { conversation: { receive: vi.fn(), note: vi.fn() }, run: { receive: vi.fn() }, reveal: vi.fn() } as unknown as PlanManagerDeps['chatProvider'],
+    chatProvider: { view: new SessionView(vi.fn()), reveal: vi.fn() } as unknown as PlanManagerDeps['chatProvider'],
     isGeneratingPlan: () => false,
   } as unknown as PlanManagerDeps;
 }
@@ -43,8 +44,9 @@ describe('approval requests in the VS Code chat (#53)', () => {
 
   it('draws the request into the conversation view, where the card answers it', () => {
     const deps = minimalDeps();
+    const receive = vi.spyOn(deps.chatProvider.view.conversation, 'receive');
     handleSessionMessage(SHELL_REQUEST, deps);
 
-    expect(deps.chatProvider.conversation.receive).toHaveBeenCalledWith(SHELL_REQUEST);
+    expect(receive).toHaveBeenCalledWith(SHELL_REQUEST);
   });
 });

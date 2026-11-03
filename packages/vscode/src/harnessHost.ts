@@ -4,7 +4,7 @@
  * its own tsup entry (see tsup.config.ts) so importing it never pulls in
  * `require('vscode')`, which only `extension.ts`'s bundle can resolve.
  *
- * `ConversationViewHost` is already vscode-free (see its own comment); this
- * entry exists to give that a stable, non-extension import path.
+ * `ConversationViewHost` lives in `@ordewell/ui/host`, vscode-free by design;
+ * this entry exists to give the harness a stable, non-extension import path.
  */
-export { ConversationViewHost, type SavedConversation } from './ConversationViewHost';
+export { ConversationViewHost, type SavedConversation } from '@ordewell/ui/host';

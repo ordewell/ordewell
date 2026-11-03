@@ -989,7 +989,7 @@ have today, with the ADR that governs it; the rest exist.
 | GET | `/api/plans/:sessionId/tasks/:taskId/diff` | `names?`, `repo?`, `path?` → `TaskDiffResult` | **new** — ADR-0061 R2, R3 |
 | GET | `/api/files/tree` | `repo`, `scope`, `sessionId?`, `taskId?`, `dir` → entries with kind, ignored, git status | **new** — ADR-0061 |
 | GET | `/api/files/content` | `repo`, `scope`, `path` → `text` + `hash`, or `binary` / `too-large` / `gone` | **new** — ADR-0061 R5 |
-| GET | `/api/files/find` | `repo`, `scope`, `query` → paths | **new** — ADR-0061 |
+| GET | `/api/files/find` | `repo`, `scope`, `query`, `text?`, `limit?` → paths, or matching lines; capped | **new** — ADR-0061 |
 | GET | `/api/git/repos` | branch, upstream, ahead/behind, detached | **new** — ADR-0061 |
 | GET | `/api/git/status` | staged, unstaged, untracked, conflicted | **new** — ADR-0061 R6 |
 | GET | `/api/git/diff` | `staged` / `unstaged` / `from`,`to`; `path?` | **new** — ADR-0061 R5 |
@@ -1036,7 +1036,7 @@ that Electron main owns; the daemon never starts a shell.
   other than the tracking remote.
 - Moving the TUI onto the shared daemon.
 - A mobile app; a browser preview of the UI.
-- File create, rename and delete in the Explorer; search in file contents.
+- File create, rename and delete in the Explorer.
 - Holding a landing branch against the terminal or other git clients.
 
 ## Slices
