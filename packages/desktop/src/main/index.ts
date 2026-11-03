@@ -18,6 +18,7 @@ import { registerIpc } from './ipc';
 import { onLastWindowClosed, quitPrompt } from './lifecycle';
 import { PrefsStore } from './prefs';
 import { RecentsStore } from './recents';
+import { AUTO_UPDATE_ENABLED, UpdateController, type UpdaterPort } from './updater';
 import { lockSession, lockWebContents, registerAppScheme, serveRenderer } from './security';
 import { WindowManager } from './windows';
 import { APP_ORIGIN } from '../shared/csp';
@@ -84,6 +85,16 @@ async function main(): Promise<void> {
   });
   late.windows = wm;
 
+  const updates = new UpdateController({
+    enabled: AUTO_UPDATE_ENABLED,
+    packaged: app.isPackaged,
+    // Imported here, not at the top: a build with updates off never
+    // evaluates the module. It reads the GitHub feed electron-builder wrote
+    // into app-update.yml (publish in electron-builder.yml).
+    load: async (): Promise<UpdaterPort> => (await import('electron-updater')).autoUpdater,
+    log: (message) => console.warn(message),
+  });
+
   registerIpc({
     appVersion: app.getVersion(),
     contract: DAEMON_CONTRACT,
@@ -93,6 +104,7 @@ async function main(): Promise<void> {
     proxy,
     recents,
     prefs,
+    updates,
   });
 
   /** Live runs, or [] when no daemon answers: nothing can be running that this app could lose. */
@@ -166,5 +178,6 @@ async function main(): Promise<void> {
   app.on('activate', () => wm.show());
 
   wm.openWelcome();
+  void updates.start();
   await daemon.connect();
 }

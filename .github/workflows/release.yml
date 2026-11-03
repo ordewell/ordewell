@@ -129,3 +129,63 @@ jobs:
           else
             gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --notes-from-tag
           fi
+
+  # The desktop installers, one runner per OS: an installer is built where it
+  # runs (Windows and macOS cannot be cross-built from Linux), and each runner
+  # checks the app it just packaged. They are attached to the Release
+  # github-release made, so this waits for it. The installers are unsigned
+  # (macOS: ad hoc) and auto-update is off until signing exists (ADR-0060).
+  desktop:
+    needs: github-release
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    # Nothing here may reach ordewell.ai (ADR-0048); the daemon smoke starts.
+    env:
+      ORDEWELL_NO_VERSION_CHECK: '1'
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.x
+          cache: 'npm'
+
+      - name: Verify tag matches package versions
+        run: node .github/workflows/verify-release-tag.mjs "${{ github.ref_name }}"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Package the desktop app
+        run: npm run desktop:package
+
+      - name: Verify the installers and the unpacked app
+        run: node scripts/desktop-package-check.mjs
+
+      # --clobber: a re-run replaces the file it uploaded before. latest*.yml is
+      # the feed electron-updater reads once updates are on; blockmaps let it
+      # download a difference.
+      - name: Attach installers to the GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd packages/desktop/release
+          # A glob with no match stays literal in bash; only this OS's files exist.
+          shopt -s nullglob
+          files=(Ordewell-*.dmg Ordewell-*.zip Ordewell-*.exe Ordewell-*.AppImage Ordewell-*.deb Ordewell-*.blockmap latest*.yml)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::no installers in packages/desktop/release"
+            exit 1
+          fi
+          gh release upload "${{ github.ref_name }}" "${files[@]}" --clobber --repo "${{ github.repository }}"

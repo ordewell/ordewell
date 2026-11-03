@@ -22,6 +22,8 @@ const packages = [
   'packages/cli/package.json',
   'packages/cli-alias/package.json',
   'packages/vscode/package.json',
+  // The installers are named for this version (electron-builder's artifactName).
+  'packages/desktop/package.json',
 ];
 
 const failures = [];

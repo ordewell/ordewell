@@ -10,10 +10,11 @@ export default defineConfig({
   target: 'node22',
   // Electron is the host. The daemon is not bundled into main: main forks
   // @ordewell/web's own built entry (ADR-0060 H2), so web stays a package.
-  external: ['electron', '@ordewell/web'],
-  // Everything else main imports is bundled, so the packaged app needs no
-  // node_modules beside the daemon's.
-  noExternal: [/^(?!electron$|@ordewell\/web)/],
+  external: ['electron', 'electron-updater', 'node-pty', '@ordewell/web'],
+  // Everything else main imports is bundled, so the packaged app's
+  // node_modules hold only the daemon's closure, electron-updater (which reads
+  // its own package metadata at run time) and node-pty (a native addon).
+  noExternal: [/^(?!electron$|electron-updater$|node-pty$|@ordewell\/web)/],
   clean: false,
   splitting: false,
   sourcemap: true,
