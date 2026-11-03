@@ -34,6 +34,12 @@ export interface SessionNavigator {
   openFile(path: string): void;
 }
 
+/** What the Changes view does for the session: show the run's review, and Merge all behind its preflight. */
+export interface Reviewer {
+  open(): void;
+  mergeAll(): Promise<void>;
+}
+
 export type Confirm = <C extends string>(request: ConfirmationRequest<C>) => Promise<C | null>;
 
 // The last of each of these says all there is: a chat that mounts after it was sent is given it again.
@@ -153,6 +159,11 @@ export class DaemonHost {
   private rejoin: (() => void) | null = null;
   private rejoinDelay = REJOIN_MIN_MS;
   private navigator: SessionNavigator | null = null;
+  /** The Changes view's review of the run and its preflighted Merge all (#19); absent while that view is not registered. */
+  private reviewer: Reviewer | null = null;
+  /** Text for the planner's composer that no planner chat was mounted to take yet. */
+  private prefill: string | null = null;
+  private plannerChats = 0;
   /** The last status a plan cue gave the dock, kept over re-reads until the next one: a stop is a draft at once. */
   private dock: 'draft' | null = null;
 
@@ -177,6 +188,25 @@ export class DaemonHost {
     this.navigator = navigator;
   }
 
+  setReviewer(reviewer: Reviewer | null): void {
+    this.reviewer = reviewer;
+  }
+
+  /** Whether a review of the run can be shown, so Review & Merge all has a review step to take. */
+  get reviewing(): boolean {
+    return this.reviewer !== null;
+  }
+
+  /**
+   * Put text in the planner's composer ahead of the draft, unsent, as a
+   * queued prompt taken back is: the person reads it and sends it. A planner
+   * chat that mounts later is given it on its `ready`.
+   */
+  askPlanner(text: string): void {
+    if (this.plannerChats > 0) { this.emit({ type: 'promptUnsent', text }); return; }
+    this.prefill = text;
+  }
+
   /** Show a task's tab on a view, the way a card's "Open chat" does; nothing while no task tab kind is registered. */
   openTask(taskId: string, view: 'chat' | 'details'): void {
     this.navigator?.openTask(taskId, view);
@@ -191,13 +221,21 @@ export class DaemonHost {
     let listener: ((msg: HostToWebview) => void) | null = null;
     return {
       post: (msg) => {
-        if (msg.type === 'ready' && listener) this.replay(listener);
+        if (msg.type === 'ready' && listener) {
+          this.replay(listener);
+          if (place === 'conversation' && this.prefill !== null) { listener({ type: 'promptUnsent', text: this.prefill }); this.prefill = null; }
+        }
         void this.handle(msg);
       },
       subscribe: (next) => {
         listener = next;
         this.ports.add(next);
-        return () => { this.ports.delete(next); if (listener === next) listener = null; };
+        if (place === 'conversation') this.plannerChats++;
+        return () => {
+          this.ports.delete(next);
+          if (place === 'conversation') this.plannerChats--;
+          if (listener === next) listener = null;
+        };
       },
       getState: () => this.savedStates.get(place),
       setState: (state) => { this.savedStates.set(place, state); },
@@ -551,22 +589,18 @@ export class DaemonHost {
     try {
       switch (action) {
         case 'reviewDiff':
-          // The run's diff is the Changes view's to draw (#19); until then the daemon's read is what it says.
+          // The run's diff is the Changes view's to draw (#19); without it, the daemon's read is what it says.
+          if (this.reviewer) { this.reviewer.open(); return; }
           await callDaemon('plans.isolationDiff', { sessionId });
           return;
         case 'merge': {
+          // Every Merge all, the plan card's too, goes through the preflight where the Changes view is there to ask it (ADR-0062 G8).
+          if (this.reviewer) { await this.reviewer.mergeAll(); return; }
+          const target = this.mergeTarget();
           const handoff = this.view.run.current.handoff ?? this.view.run.current.runMerge;
-          const target = handoff ? mergeTarget(handoff) : 'the branch you have checked out';
           const rule = handoff ? checkoutRule(handoff) : '';
           if (await this.ask(mergeAllConfirmation(target, rule, this.snapshot.state.isExecuting)) !== 'merge') return;
-          try {
-            await callDaemon('plans.isolationMerge', { sessionId }, {});
-          } catch (error) {
-            // Work whose check has not passed is the seam's to name; the yes goes with the next call (ADR-0055 D9).
-            if (!(error instanceof DaemonError && error.code === 'merge_past_check')) throw error;
-            if (await this.ask(mergePastChecksQuestion(error.message, target)) !== 'merge') return;
-            await callDaemon('plans.isolationMerge', { sessionId }, { pastChecks: true });
-          }
+          await this.mergeAsked(target);
           break;
         }
         case 'discard':
@@ -588,6 +622,41 @@ export class DaemonHost {
     } finally {
       this.refreshPlan();
     }
+  }
+
+  /** Where Merge all lands, as its confirmation names it. */
+  mergeTarget(): string {
+    const handoff = this.view.run.current.handoff ?? this.view.run.current.runMerge;
+    return handoff ? mergeTarget(handoff) : 'the branch you have checked out';
+  }
+
+  /**
+   * Merge all once the person has said yes elsewhere: the Changes view's
+   * preflight asks its own question (ADR-0062 G8). False when it did not merge,
+   * the refusal already shown.
+   */
+  async mergeConfirmed(): Promise<boolean> {
+    try {
+      return await this.mergeAsked(this.mergeTarget());
+    } catch (error) {
+      this.showError(new Error(`Isolation action failed: ${messageOf(error)}`));
+      return false;
+    } finally {
+      this.refreshPlan();
+    }
+  }
+
+  private async mergeAsked(target: string): Promise<boolean> {
+    const sessionId = this.sessionId;
+    try {
+      await callDaemon('plans.isolationMerge', { sessionId }, {});
+    } catch (error) {
+      // Work whose check has not passed is the seam's to name; the yes goes with the next call (ADR-0055 D9).
+      if (!(error instanceof DaemonError && error.code === 'merge_past_check')) throw error;
+      if (await this.ask(mergePastChecksQuestion(error.message, target)) !== 'merge') return false;
+      await callDaemon('plans.isolationMerge', { sessionId }, { pastChecks: true });
+    }
+    return true;
   }
 
   private async execute(command: ExecutionCommand): Promise<void> {

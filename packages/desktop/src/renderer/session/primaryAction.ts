@@ -7,9 +7,8 @@ export const RUN_ACTION_LABEL: Record<RunAction, string> = {
   approve: 'Approve plan',
   run: 'Run',
   stop: 'Stop',
-  // Until the Changes view's preflight lands (#19), Review & Merge all is the
-  // merge the plan's handoff card offers, asked behind the same confirmation.
-  merge: 'Merge all',
+  // The review comes first: the action opens the run's changes, whose Merge all asks the preflight (ADR-0062 G8).
+  merge: 'Review & Merge all',
 };
 
 const SETTLED: ReadonlySet<string> = new Set(['completed', 'skipped']);

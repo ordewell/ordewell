@@ -73,7 +73,7 @@ describe('the view stubs', () => {
     expect(after.tabKinds).toEqual({});
   });
 
-  it('fill the frame: sessions in the Plan sidebar, the planner, the scope, and a stub per tab kind', async () => {
+  it('fill the frame: sessions in the Plan sidebar, the planner, the scope, and a diff tab naming its scope', async () => {
     stubBridge(CONNECTED);
     const store = mount(CONNECTED);
     expect(await screen.findByText('Ship the frame')).toBeInTheDocument();
@@ -84,7 +84,7 @@ describe('the view stubs', () => {
 
     act(() => store.api.openTab({ kind: 'diff', id: 'src/a.ts', title: 'a.ts', scope: { kind: 'integration', sessionId: 's1' } }));
     expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', expect.stringContaining('diff'));
-    expect(screen.getByRole('tabpanel').querySelector('[data-stub-slice]')).toHaveAttribute('data-stub-slice', '12');
+    expect(within(screen.getByRole('tabpanel')).getByText('Integration vs base')).toBeInTheDocument();
   });
 
   it('show the daemon as a banner while it is away, and say a refused retry', async () => {

@@ -62,6 +62,9 @@ export const ROUTES = {
   'plans.mergeGate': { method: 'GET', path: '/api/plans/:sessionId/tasks/:taskId/merge-gate' },
   'plans.revertPreview': { method: 'GET', path: '/api/plans/:sessionId/tasks/:taskId/revert-preview' },
   'plans.isolationDiff': { method: 'GET', path: '/api/plans/:sessionId/isolation/diff' },
+  // Reads of the saved run (ADR-0061, ADR-0062 G8): neither needs the session open here.
+  'plans.taskDiff': { method: 'GET', path: '/api/plans/:sessionId/tasks/:taskId/diff', query: ['workspace', 'repo', 'path', 'names'] },
+  'plans.mergePreflight': { method: 'GET', path: '/api/plans/:sessionId/isolation/merge-preflight', query: WS },
   'plans.isolationMerge': { method: 'POST', path: '/api/plans/:sessionId/isolation/merge' },
   'plans.isolationDiscard': { method: 'POST', path: '/api/plans/:sessionId/isolation/discard' },
   'plans.isolationCleanup': { method: 'POST', path: '/api/plans/:sessionId/isolation/cleanup' },
@@ -104,6 +107,10 @@ export const ROUTES = {
   'git.repos': { method: 'GET', path: '/api/git/repos', query: WS },
   // Read by main, to find the worktree a task's terminal opens in.
   'git.branches': { method: 'GET', path: '/api/git/branches', query: AT },
+  'git.diff': { method: 'GET', path: '/api/git/diff', query: [...AT, 'kind', 'from', 'to', 'path'] },
+  // Merge all's preflight sets the user's overlapping files aside and offers them back (ADR-0062 G8).
+  'git.stash': { method: 'POST', path: '/api/git/stash' },
+  'git.stashPop': { method: 'POST', path: '/api/git/stash-pop' },
 
   'settings.get': { method: 'GET', path: '/api/settings', query: ['workspace', 'sessionId'] },
   'settings.update': { method: 'PATCH', path: '/api/settings' },

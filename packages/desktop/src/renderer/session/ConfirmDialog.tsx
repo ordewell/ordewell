@@ -1,13 +1,14 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { ConfirmationRequest } from '@ordewell/ui/host';
 
 interface DialogProps<C extends string> {
   request: ConfirmationRequest<C>;
+  body?: ReactNode;
   answer(choice: C | null): void;
 }
 
-function ConfirmDialog<C extends string>({ request, answer }: DialogProps<C>): JSX.Element {
+function ConfirmDialog<C extends string>({ request, body, answer }: DialogProps<C>): JSX.Element {
   const panel = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const before = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -34,6 +35,7 @@ function ConfirmDialog<C extends string>({ request, answer }: DialogProps<C>): J
         }}
       >
         <p id="session-confirm-message" className="session-confirm-message">{request.message}</p>
+        {body}
         {request.detail && <p className="session-confirm-detail">{request.detail}</p>}
         <div className="session-confirm-actions">
           <button type="button" className="session-confirm-cancel" onClick={() => answer(null)}>Cancel</button>
@@ -54,6 +56,11 @@ function ConfirmDialog<C extends string>({ request, answer }: DialogProps<C>): J
  * which every caller reads as no.
  */
 export function confirm<C extends string>(request: ConfirmationRequest<C>): Promise<C | null> {
+  return confirmWith(request, undefined);
+}
+
+/** {@link confirm} with more than words to show, as Merge all's preflight lists the files in the way. */
+export function confirmWith<C extends string>(request: ConfirmationRequest<C>, body: ReactNode): Promise<C | null> {
   return new Promise((resolve) => {
     const container = document.createElement('div');
     document.body.appendChild(container);
@@ -63,6 +70,6 @@ export function confirm<C extends string>(request: ConfirmationRequest<C>): Prom
       container.remove();
       resolve(choice);
     };
-    root.render(<ConfirmDialog request={request} answer={answer} />);
+    root.render(<ConfirmDialog request={request} body={body} answer={answer} />);
   });
 }

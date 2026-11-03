@@ -180,3 +180,26 @@ describe('the file routes', () => {
     expect(buildRequest('git.repos', { workspace: '/w' })).toEqual({ ok: true, request: { method: 'GET', path: '/api/git/repos?workspace=%2Fw' } });
   });
 });
+
+describe('the Changes view routes', () => {
+  it('read a task diff and the merge preflight from the saved run', () => {
+    expect(buildRequest('plans.taskDiff', { sessionId: 's1', taskId: 't3', workspace: '/w', repo: '.', path: 'a.ts' })).toEqual({
+      ok: true,
+      request: { method: 'GET', path: '/api/plans/s1/tasks/t3/diff?workspace=%2Fw&repo=.&path=a.ts' },
+    });
+    expect(buildRequest('plans.mergePreflight', { sessionId: 's1', workspace: '/w' })).toEqual({
+      ok: true,
+      request: { method: 'GET', path: '/api/plans/s1/isolation/merge-preflight?workspace=%2Fw' },
+    });
+  });
+
+  it('read a scope diff and stash with a body, never a query', () => {
+    expect(buildRequest('git.diff', { workspace: '/w', repo: '.', scope: 'integration', sessionId: 's1', path: 'a.ts' })).toEqual({
+      ok: true,
+      request: { method: 'GET', path: '/api/git/diff?workspace=%2Fw&repo=.&scope=integration&sessionId=s1&path=a.ts' },
+    });
+    const body = { workspace: '/w', repo: '.', paths: ['a.ts'], message: 'm' };
+    expect(buildRequest('git.stash', {}, body)).toEqual({ ok: true, request: { method: 'POST', path: '/api/git/stash', body: JSON.stringify(body) } });
+    expect(refused(buildRequest('git.stashPop', { stash: 'abc' }, {}))).toContain('unknown param stash');
+  });
+});
