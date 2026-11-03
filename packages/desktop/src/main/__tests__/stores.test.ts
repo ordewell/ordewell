@@ -84,6 +84,13 @@ describe('prefs', () => {
     expect(validPref('__proto__', 'dark')).toBeUndefined();
   });
 
+  it('accepts the two desktop attention preferences only as booleans', () => {
+    expect(validPref('notifications', false)).toEqual({ notifications: false });
+    expect(validPref('keepRunningInTray', true)).toEqual({ keepRunningInTray: true });
+    expect(validPref('notifications', 'no')).toBeUndefined();
+    expect(validPref('keepRunningInTray', 1)).toBeUndefined();
+  });
+
   it('accepts pane sizes only as three sane numbers', () => {
     expect(validPref('panes', { sidebar: 300.4, right: 320, bottom: 0 })).toEqual({ panes: { sidebar: 300, right: 320, bottom: 0 } });
     expect(validPref('panes', { sidebar: 300, right: 320 })).toBeUndefined();

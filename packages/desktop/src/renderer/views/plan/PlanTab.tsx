@@ -56,11 +56,14 @@ const COMMAND_IDS: Record<RunAction, string> = {
  */
 function followRunActions(api: FrameApi, host: DaemonHost): Unregister {
   let shown: RunAction | undefined;
+  let shownDisabled = false;
   const sync = (): void => {
     const next = primaryAction(runActions(host.getSnapshot().state));
-    if (next === shown) return;
+    const disabled = host.getSnapshot().readOnly;
+    if (next === shown && disabled === shownDisabled) return;
     shown = next;
-    api.setPrimaryAction(next ? { label: RUN_ACTION_LABEL[next], run: () => perform(host, next) } : undefined);
+    shownDisabled = disabled;
+    api.setPrimaryAction(next ? { label: RUN_ACTION_LABEL[next], disabled, run: () => perform(host, next) } : undefined);
   };
   sync();
   const offSession = host.subscribe(sync);
@@ -69,6 +72,7 @@ function followRunActions(api: FrameApi, host: DaemonHost): Unregister {
     title: action === 'run' ? 'Run plan' : action === 'stop' ? 'Stop run' : RUN_ACTION_LABEL[action],
     more: true,
     enabled: () => {
+      if (host.getSnapshot().readOnly) return false;
       const offered = runActions(host.getSnapshot().state);
       return offered.has(action) && primaryAction(offered) !== action;
     },
@@ -79,6 +83,7 @@ function followRunActions(api: FrameApi, host: DaemonHost): Unregister {
     title: 'Discard run',
     more: true,
     enabled: () => {
+      if (host.getSnapshot().readOnly) return false;
       const { run, isExecuting } = host.getSnapshot().state;
       return run.handoff !== null && !isExecuting;
     },

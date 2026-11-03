@@ -54,6 +54,7 @@ export * from './models/AccountLimits';
 
 export { walkPlan, taskPlacement, subtreeIds } from './services/PlanTree';
 export type { TreeTask, TaskPlacement } from './services/PlanTree';
+export { rejoinPlanTree } from './models/Task';
 
 // The one rule for the effort a model change keeps, so a surface's model
 // picker lands where core's resolver would.

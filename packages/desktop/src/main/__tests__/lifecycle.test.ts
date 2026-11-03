@@ -17,6 +17,13 @@ describe('onLastWindowClosed (ADR-0060 H5)', () => {
     expect(onLastWindowClosed([], 'win32')).toBe('quit');
     expect(onLastWindowClosed([], 'darwin')).toBe('stay');
   });
+
+  it('keeps the app in the tray when the user asked it to, even with nothing live', () => {
+    expect(onLastWindowClosed([], 'linux', true)).toBe('tray');
+    expect(onLastWindowClosed([], 'win32', true)).toBe('tray');
+    expect(onLastWindowClosed([], 'darwin', true)).toBe('stay');
+    expect(onLastWindowClosed([run], 'linux', false)).toBe('tray');
+  });
 });
 
 describe('quitPrompt (ADR-0060 H5)', () => {

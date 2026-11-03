@@ -1,7 +1,8 @@
 import type { LiveRun } from './daemon/liveRuns';
 
-/** What closing the last window does: a live run keeps the app in the tray, so its windows can come back to it. */
-export function onLastWindowClosed(liveRuns: readonly LiveRun[] | undefined, platform: NodeJS.Platform): 'tray' | 'quit' | 'stay' {
+/** What closing the last window does: a live run — or the user's tray choice — keeps the app, so its windows can come back to it. */
+export function onLastWindowClosed(liveRuns: readonly LiveRun[] | undefined, platform: NodeJS.Platform, keepInTray = false): 'tray' | 'quit' | 'stay' {
+  if (keepInTray) return platform === 'darwin' ? 'stay' : 'tray';
   if (liveRuns === undefined || liveRuns.length > 0) return 'tray';
   // A macOS app stays in the Dock with no window, as every app there does.
   return platform === 'darwin' ? 'stay' : 'quit';

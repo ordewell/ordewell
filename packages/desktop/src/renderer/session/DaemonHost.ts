@@ -1,10 +1,10 @@
 import type {
-  AdoptSessionResponse, AnswerEscalationRequest, ExecutionCommand, MergeGateResponse, ModelsResponse, PlanResponse, RunTask, SessionHeld, SessionMessage,
-  StreamStamp, SurfacePlan, Task, TaskRevertPreviewResponse,
+  AdoptSessionResponse, AnswerEscalationRequest, ExecutionCommand, MergeGateResponse, ModelsResponse, PlanResponse, RunTask, RunView, SessionHeld, SessionMessage,
+  SessionResponse, StreamStamp, SurfacePlan, SurfacePlanState, Task, TaskRevertPreviewResponse,
 } from '@ordewell/core';
 import {
   checkoutRule, confirmedOverride, loopRemovalRefusal, manualOverrideStopFirst, mergeTarget, overrideNeedsConfirmation,
-  taskActionCommand, titledRefs, titledTaskRefOf, walkPlan, type OverrideDirection,
+  rejoinPlanTree, taskActionCommand, titledRefs, titledTaskRefOf, walkPlan, type OverrideDirection,
 } from '@ordewell/core/plan-utils';
 import { INITIAL_HOST_STATE, reduceHost, type ChatBridge, type HostState } from '@ordewell/ui';
 import {
@@ -26,6 +26,10 @@ export interface SessionSnapshotView {
   state: HostState;
   /** Set when the daemon refused the lease: another host holds the session (#16 draws the banner). */
   held: SessionHeld | null;
+  /** A saved session adopted from disk whose run was not live when this daemon opened it (W17). */
+  restored: boolean;
+  /** The saved state of a session another host holds: drawn, and nothing writes (W16). */
+  readOnly: boolean;
 }
 
 /** What only the frame can do for the session: open a tab, a file. */
@@ -53,6 +57,11 @@ const SYSTEM_TASK_ACTIONS = {
   skip: 'skip',
 } as const;
 
+/** What a read-only view may still ask: local navigation, the catalog, and leaving for a new session. */
+const READ_ONLY_ALLOWED: ReadonlySet<WebviewToHost['type']> = new Set<WebviewToHost['type']>([
+  'ready', 'refreshModels', 'openTaskLog', 'openFile', 'getTaskCommands', 'newSession',
+]);
+
 function mintSessionId(): string {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
@@ -61,6 +70,23 @@ function mintSessionId(): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** A saved session's phase-tagged plan as the chat draws a plan: its pending tasks and its execution log, joined. */
+function planOfSaved(state: SurfacePlanState): SurfacePlan {
+  const saved = state as unknown as { phase?: string; pendingTasks?: Task[]; executionLog?: Task[] };
+  const tasks = rejoinPlanTree(saved.pendingTasks ?? [], saved.phase === 'executing' ? saved.executionLog ?? [] : []);
+  const rest = { ...(state as unknown as Record<string, unknown>) };
+  delete rest.pendingTasks;
+  delete rest.executionLog;
+  delete rest.phase;
+  return { ...rest, tasks } as unknown as SurfacePlan;
+}
+
+/** Whether anything has happened in this plan: a run, or a task that left `pending`. */
+function hasRunHistory(plan: SurfacePlan): boolean {
+  if (plan.status === 'running' || plan.status === 'completed') return true;
+  return [...walkPlan(plan.tasks)].some(({ task }) => task.status !== 'pending' && task.status !== 'approved');
 }
 
 function isFrame(value: unknown): value is DaemonFrame {
@@ -159,7 +185,7 @@ export class DaemonHost {
   constructor(readonly workspace: string, private readonly ask: Confirm = askInWindow) {
     this.view = new SessionView((msg) => this.emit(msg));
     const sessionId = mintSessionId();
-    this.snapshot = { sessionId, goal: '', state: INITIAL_HOST_STATE, held: null };
+    this.snapshot = { sessionId, goal: '', state: INITIAL_HOST_STATE, held: null, restored: false, readOnly: false };
     this.follow(sessionId);
   }
 
@@ -230,16 +256,22 @@ export class DaemonHost {
 
   /**
    * Open a saved session, taking its lease (ADR-0060). A session another host
-   * holds is refused with that host named, and nothing here changes but the
-   * held state: the frame offers what to do about it.
+   * holds is refused with that host named: the saved state is shown read-only,
+   * and the frame offers what to do about it (W16).
    */
   async open(sessionId: string): Promise<void> {
+    // Read before the load: a session this daemon already holds is live, and a
+    // load of a saved one always answers with a run. This is what tells a
+    // restored session (W17) from one that was already at work.
+    const wasLive = await this.savedIsLive(sessionId);
     let adopted: AdoptSessionResponse;
     try {
       adopted = await callDaemon('sessions.load', { id: sessionId, workspace: this.workspace }) as AdoptSessionResponse;
     } catch (error) {
       if (error instanceof DaemonError && error.code === 'session_held' && isRecord(error.body) && isRecord(error.body.sessionHeld)) {
-        this.update({ held: error.body.sessionHeld as unknown as SessionHeld });
+        const held = error.body.sessionHeld as unknown as SessionHeld;
+        this.update({ held });
+        await this.viewHeld(sessionId);
         return;
       }
       this.showError(error);
@@ -247,6 +279,52 @@ export class DaemonHost {
     }
     this.switchTo(sessionId, false, adopted.goal);
     this.showLoaded(adopted);
+    this.update({ restored: !wasLive && hasRunHistory(adopted.plan) });
+  }
+
+  /** Whether the daemon already holds this session live, read before a load adopts it. */
+  private async savedIsLive(sessionId: string): Promise<boolean> {
+    if (sessionId === this.sessionId && !this.fresh) return true;
+    try {
+      const saved = await callDaemon('sessions.get', { id: sessionId, workspace: this.workspace }) as SessionResponse;
+      return saved.run !== undefined;
+    } catch {
+      // The load will answer with the refusal that matters.
+      return false;
+    }
+  }
+
+  /**
+   * Show what the daemon serves of a session another host holds, from its file
+   * (W16). Every write is refused while it is drawn; taking the session over
+   * is the way out (ADR-0049).
+   */
+  async viewHeld(sessionId: string): Promise<void> {
+    try {
+      const saved = await callDaemon('sessions.get', { id: sessionId, workspace: this.workspace }) as SessionResponse;
+      this.showReadOnly(sessionId, saved.meta.goal, planOfSaved(saved.plan), saved.run);
+    } catch (error) {
+      this.showError(error);
+    }
+  }
+
+  /** Try the lease again: refused while the holder lives, allowed once it and its runners are gone (ADR-0049 L3). */
+  async takeOver(): Promise<void> {
+    if (!this.snapshot.held) return;
+    await this.open(this.sessionId);
+  }
+
+  /**
+   * Rejoin the session's socket and take its fresh `run_snapshot`, so a view
+   * that outlived a disconnected daemon never infers progress it did not see.
+   */
+  resync(): void {
+    if (this.snapshot.readOnly) return;
+    const sessionId = this.sessionId;
+    this.cancelRejoin();
+    this.dispose();
+    this.follow(sessionId);
+    this.refreshPlan();
   }
 
   /** A blank session: nothing is created on the daemon until the first message starts the planner. */
@@ -257,7 +335,31 @@ export class DaemonHost {
 
   /** Re-read the plan now, as after a command whose result the socket may not carry. */
   refreshPlan(): void {
-    if (!this.fresh) this.reread.request();
+    if (!this.fresh && !this.snapshot.readOnly) this.reread.request();
+  }
+
+  /** What a held session's saved state draws: the plan, its run if the file carries one, and no socket. */
+  private showReadOnly(sessionId: string, goal: string, plan: SurfacePlan, run: RunView | undefined): void {
+    this.dispose();
+    this.cancelRejoin();
+    for (const log of this.taskLogs.values()) log.setState(undefined);
+    this.taskLogs.clear();
+    this.fresh = false;
+    this.turns = 0;
+    this.dock = null;
+    this.emit({ type: 'restoreChat' });
+    this.view.conversation.reset();
+    this.view.run.reset();
+    this.sticky.clear();
+    this.update({
+      sessionId,
+      goal,
+      restored: false,
+      readOnly: true,
+      state: reduceHost(this.snapshot.state, { type: 'restoreChat', now: Date.now() }),
+    });
+    this.showPlan(plan);
+    if (run) this.emit({ type: 'runView', view: run });
   }
 
   /** Every message a chat instance posts, answered as the extension host answers it (PlanManager). */
@@ -278,6 +380,9 @@ export class DaemonHost {
   }
 
   private async dispatch(msg: WebviewToHost): Promise<void> {
+    if (this.snapshot.readOnly && !READ_ONLY_ALLOWED.has(msg.type)) {
+      throw new Error('This session is open in another Ordewell host, so this view is read-only. Take it over to make changes here.');
+    }
     switch (msg.type) {
       case 'ready':
         this.view.conversation.resync();
@@ -691,7 +796,7 @@ export class DaemonHost {
     this.sticky.delete('planUpdated');
     this.sticky.delete('runView');
     this.sticky.delete('children');
-    this.update({ sessionId, goal, held: null, state: reduceHost(this.snapshot.state, { type: 'restoreChat', now: Date.now() }) });
+    this.update({ sessionId, goal, held: null, restored: false, readOnly: false, state: reduceHost(this.snapshot.state, { type: 'restoreChat', now: Date.now() }) });
     this.follow(sessionId);
   }
 
@@ -705,6 +810,7 @@ export class DaemonHost {
     this.stream = stream;
     this.unsubscribe = window.ordewell.daemon.subscribe(sessionId, (event) => {
       if (this.stream !== stream) return;
+      if (!event) return;
       if (event.kind === 'closed') { this.reconnect(sessionId); return; }
       if (!isFrame(event.frame)) return;
       this.rejoinDelay = REJOIN_MIN_MS;

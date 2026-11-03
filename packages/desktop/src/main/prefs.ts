@@ -1,7 +1,13 @@
 import type { PaneSizes, Prefs } from '../shared/bridge';
 import { readJsonFile, writeJsonFile } from './jsonFile';
 
-export const DEFAULT_PREFS: Prefs = { theme: 'system', panes: { sidebar: 260, right: 360, bottom: 240 }, editorCommand: '' };
+export const DEFAULT_PREFS: Prefs = {
+  theme: 'system',
+  panes: { sidebar: 260, right: 360, bottom: 240 },
+  notifications: true,
+  keepRunningInTray: false,
+  editorCommand: '',
+};
 
 const THEMES: ReadonlySet<string> = new Set(['system', 'light', 'dark']);
 
@@ -25,6 +31,8 @@ const FILE_ONLY: ReadonlySet<string> = new Set(['editorCommand']);
 /** A key and value as a renderer sent them, checked before anything is written. */
 export function validPref(key: unknown, value: unknown): Partial<Prefs> | undefined {
   if (key === 'theme' && typeof value === 'string' && THEMES.has(value)) return { theme: value as Prefs['theme'] };
+  if (key === 'notifications' && typeof value === 'boolean') return { notifications: value };
+  if (key === 'keepRunningInTray' && typeof value === 'boolean') return { keepRunningInTray: value };
   if (key === 'panes') {
     const panes = paneSizes(value);
     return panes ? { panes } : undefined;

@@ -18,6 +18,7 @@ export interface FrameState {
   commands: readonly Command[];
   primary: PrimaryAction | undefined;
   needsYou: number;
+  readOnly: boolean;
   banners: readonly Banner[];
   /** `serial` changes with each message, so the same words said twice are said twice. */
   announcement: { text: string; serial: number };
@@ -57,6 +58,7 @@ export class FrameStore {
       commands: [],
       primary: undefined,
       needsYou: 0,
+      readOnly: false,
       banners: [],
       announcement: { text: '', serial: 0 },
       overlay: undefined,
@@ -166,10 +168,15 @@ export class FrameStore {
         const needsYou = Math.max(0, Math.floor(count));
         if (needsYou !== this.state.needsYou) this.set({ needsYou });
       },
+      setReadOnly: (readOnly: boolean) => {
+        if (readOnly !== this.state.readOnly) this.set({ readOnly });
+      },
       showBanner: (banner: Banner) => {
+        const existing = this.state.banners.find((other) => other.id === banner.id);
         const banners = [...this.state.banners.filter((other) => other.id !== banner.id), banner];
         this.set({ banners });
-        this.api.announce(banner.title);
+        // A body that changes as time passes is the same banner: only a new title is said again.
+        if (existing?.title !== banner.title) this.api.announce(banner.title);
         return () => {
           if (this.state.banners.includes(banner)) this.set({ banners: this.state.banners.filter((other) => other !== banner) });
         };

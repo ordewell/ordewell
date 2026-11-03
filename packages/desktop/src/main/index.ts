@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
-import { app, dialog, Menu, nativeImage, nativeTheme, Tray } from 'electron';
+import { app, dialog, Menu, nativeImage, nativeTheme, Notification, Tray } from 'electron';
 import {
   augmentedPath,
   DAEMON_CONTRACT,
@@ -23,6 +23,7 @@ import { shellName } from './terminal/shellChoice';
 import { TerminalHost, type PtySpawn } from './terminal/TerminalHost';
 import { onLastWindowClosed, quitPrompt } from './lifecycle';
 import { menuTemplate } from './menu';
+import { AttentionNotifier } from './notifications';
 import { PrefsStore } from './prefs';
 import { RecentsStore } from './recents';
 import { AUTO_UPDATE_ENABLED, UpdateController, type UpdaterPort } from './updater';
@@ -119,6 +120,29 @@ async function main(): Promise<void> {
     env: async () => withPath(process.env, await augmentedPath()),
   });
 
+  // A red disc drawn over a taskbar button on Windows, where no numeric badge exists.
+  const attentionIcon = nativeImage.createFromDataURL(
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAANElEQVR4nGNgoAU4aWP+HxsmWyNRBhGrGachFBlAqmYMQ0YNoIIBA58OqJKUiTGIoEZyAAADr23cbXlsxQAAAABJRU5ErkJggg==',
+  );
+  const notifications = new AttentionNotifier({
+    muted: () => !prefs.get().notifications,
+    present: (title, body, onClick) => {
+      if (!Notification.isSupported()) return;
+      const item = new Notification({ title, body });
+      item.on('click', onClick);
+      item.show();
+    },
+    // The Dock and the Linux launcher take a count; Windows takes a mark, and the count lives in its description.
+    badge: (count) => {
+      app.setBadgeCount(count);
+      app.dock?.setBadge(count > 0 ? String(count) : '');
+      if (process.platform !== 'win32') return;
+      for (const win of wm.all()) {
+        win.setOverlayIcon(count > 0 ? attentionIcon : null, count > 0 ? `${count} need${count === 1 ? 's' : ''} you` : '');
+      }
+    },
+  });
+
   registerIpc({
     appVersion: app.getVersion(),
     contract: DAEMON_CONTRACT,
@@ -129,6 +153,7 @@ async function main(): Promise<void> {
     recents,
     prefs,
     updates,
+    notifications,
     terminals: { channel: terminalChannel, host: terminalHost },
   });
 
@@ -141,7 +166,7 @@ async function main(): Promise<void> {
     const icon = nativeImage.createFromPath(join(__dirname, '..', '..', 'resources', 'trayTemplate.png'));
     icon.setTemplateImage(true);
     tray = new Tray(icon);
-    tray.setToolTip('Ordewell: a run is in progress');
+    tray.setToolTip('Ordewell');
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: 'Show Ordewell', click: () => wm.show() },
       { type: 'separator' },
@@ -159,7 +184,7 @@ async function main(): Promise<void> {
   // that can show it again, behind; the tray is how the user gets back.
   app.on('window-all-closed', () => {
     void liveRuns().then((live) => {
-      const next = onLastWindowClosed(live, process.platform);
+      const next = onLastWindowClosed(live, process.platform, prefs.get().keepRunningInTray);
       if (next === 'tray') showTray();
       else if (next === 'quit') app.quit();
     });

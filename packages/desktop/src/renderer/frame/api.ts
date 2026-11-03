@@ -116,6 +116,12 @@ export interface FrameApi {
   setPrimaryAction(action: PrimaryAction | undefined): void;
   /** The title bar's Needs you badge; 0 hides it. */
   setNeedsYouCount(count: number): void;
+  /**
+   * The plan and every control become read-only while the daemon is away. The
+   * frame keeps the last known state drawn, dimmed, and stops the keyboard
+   * reaching it.
+   */
+  setReadOnly(readOnly: boolean): void;
   /** Shows above the main area until the returned function, or another banner with its id, replaces it. */
   showBanner(banner: Banner): () => void;
   /** Said once by the window's one polite live region. */

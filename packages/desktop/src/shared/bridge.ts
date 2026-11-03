@@ -81,12 +81,33 @@ export interface PaneSizes {
 export interface Prefs {
   theme: 'system' | 'light' | 'dark';
   panes: PaneSizes;
+  /** Desktop notifications when something needs the user or a run ends. */
+  notifications: boolean;
+  /** Keep the app running in the tray when its last window closes and no run is live (H5). */
+  keepRunningInTray: boolean;
   /**
    * The command "Open in editor" runs instead of the OS default, such as
    * `code --goto {file}:{line}`; empty uses the default. Main reads it from the
    * prefs file only: a page can never set it, since it names a program to run.
    */
   editorCommand: string;
+}
+
+/** One OS notification. The id is how the same wait is shown once, however often a view re-reads it. */
+export interface NotificationRequest {
+  id: string;
+  title: string;
+  body: string;
+  /** The session the item belongs to; the window that asked is focused on click. */
+  sessionId?: string;
+  /** The task tab to open when the notification is clicked; absent opens the plan. */
+  taskId?: string;
+}
+
+/** What a clicked notification asks the renderer to open. */
+export interface NotificationClick {
+  sessionId?: string;
+  taskId?: string;
 }
 
 /** A file in the user's checkout, named the way the read routes name it. */
@@ -158,6 +179,18 @@ export interface OrdewellBridge {
     state(): Promise<UpdateState>;
   };
   /**
+   * What the OS shows attention with: a desktop notification for a new wait or
+   * a run's end, and the count on the Dock, the taskbar or the launcher badge.
+   * Main decides whether the user has muted notifications; the renderer never
+   * does (the setting is app-local, like the theme).
+   */
+  notify: {
+    show(request: NotificationRequest): Promise<ActionResult>;
+    setBadge(count: number): Promise<void>;
+    /** A click on a notification this app showed: focus comes first, then this. */
+    onClick(cb: (click: NotificationClick) => void): Unsubscribe;
+  };
+  /**
    * What the OS does with a file of the user's checkout. Main knows the window's
    * workspace and resolves the path inside it, so a page names a repo and a
    * path and never an absolute one. Only the checkout has files on disk (W8).
@@ -201,6 +234,8 @@ export const CHANNELS = {
   prefsGet: 'ordewell:prefs.get',
   prefsSet: 'ordewell:prefs.set',
   updateState: 'ordewell:update.state',
+  notifyShow: 'ordewell:notify.show',
+  notifySetBadge: 'ordewell:notify.setBadge',
   shellOpenInEditor: 'ordewell:shell.openInEditor',
   shellReveal: 'ordewell:shell.reveal',
   terminalOpen: 'ordewell:terminal.open',
@@ -215,6 +250,7 @@ export const EVENTS = {
   daemonStatus: 'ordewell:event.daemonStatus',
   stream: 'ordewell:event.stream',
   terminal: 'ordewell:event.terminal',
+  notifyClick: 'ordewell:event.notifyClick',
 } as const;
 
 /** What `daemonSubscribe` takes: a session's socket, or one of its child plans'. */
