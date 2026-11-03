@@ -30,8 +30,15 @@
       "import": "./dist/host.mjs",
       "require": "./dist/host.js"
     },
+    "./design": {
+      "types": "./dist/design.d.ts",
+      "import": "./dist/design.mjs",
+      "require": "./dist/design.js"
+    },
     "./styles.css": "./src/styles.css",
     "./tokens.css": "./src/tokens.css",
+    "./scale.css": "./src/scale.css",
+    "./design.css": "./src/design.css",
     "./package.json": "./package.json"
   },
   "typesVersions": {
@@ -41,6 +48,9 @@
       ],
       "host": [
         "./dist/host.d.ts"
+      ],
+      "design": [
+        "./dist/design.d.ts"
       ]
     }
   },
@@ -57,7 +67,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.build.json"
   },
   "dependencies": {
-    "@ordewell/core": "^0.12.3"
+    "@ordewell/core": "^0.12.3",
+    "lucide-react": "^1.67.0"
   },
   "peerDependencies": {
     "react": "^18.3.0",

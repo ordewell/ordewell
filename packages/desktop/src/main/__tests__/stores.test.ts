@@ -84,13 +84,22 @@ describe('prefs', () => {
     expect(validPref('__proto__', 'dark')).toBeUndefined();
   });
 
+  it('accepts pane sizes only as three sane numbers', () => {
+    expect(validPref('panes', { sidebar: 300.4, right: 320, bottom: 0 })).toEqual({ panes: { sidebar: 300, right: 320, bottom: 0 } });
+    expect(validPref('panes', { sidebar: 300, right: 320 })).toBeUndefined();
+    expect(validPref('panes', { sidebar: -1, right: 320, bottom: 200 })).toBeUndefined();
+    expect(validPref('panes', { sidebar: Infinity, right: 320, bottom: 200 })).toBeUndefined();
+    expect(validPref('panes', { sidebar: 1e9, right: 320, bottom: 200 })).toBeUndefined();
+    expect(validPref('panes', '300')).toBeUndefined();
+  });
+
   it('reads defaults, keeps a set value and drops unknown keys from the file', () => {
     const file = join(dir, 'prefs.json');
     const store = new PrefsStore(file);
     expect(store.get()).toEqual(DEFAULT_PREFS);
-    expect(store.set({ theme: 'light' })).toEqual({ theme: 'light' });
+    expect(store.set({ theme: 'light' })).toEqual({ ...DEFAULT_PREFS, theme: 'light' });
     writeFileSync(file, JSON.stringify({ theme: 'light', injected: true }));
-    expect(new PrefsStore(file).get()).toEqual({ theme: 'light' });
+    expect(new PrefsStore(file).get()).toEqual({ ...DEFAULT_PREFS, theme: 'light' });
     writeFileSync(file, JSON.stringify({ theme: 'neon' }));
     expect(new PrefsStore(file).get()).toEqual(DEFAULT_PREFS);
     expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ theme: 'neon' });

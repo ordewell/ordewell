@@ -70,8 +70,16 @@ export interface ConfirmSpec {
   cancelLabel?: string;
 }
 
+/** The sizes of the frame's resizable panes, in CSS pixels. */
+export interface PaneSizes {
+  sidebar: number;
+  right: number;
+  bottom: number;
+}
+
 export interface Prefs {
   theme: 'system' | 'light' | 'dark';
+  panes: PaneSizes;
 }
 
 export interface UpdateState {

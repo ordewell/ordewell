@@ -15,6 +15,7 @@
   --ow-bg-hover: var(--vscode-list-hoverBackground);
   --ow-bg-input: var(--vscode-input-background);
   --ow-bg-code: var(--vscode-textPreformat-background);
+  --ow-bg-selected: var(--vscode-list-activeSelectionBackground);
   --ow-border: var(--vscode-panel-border);
   --ow-border-widget: var(--vscode-widget-border);
   --ow-border-contrast: var(--vscode-contrastBorder);
@@ -26,13 +27,24 @@
   --ow-fg-link: var(--vscode-textLink-foreground);
   --ow-accent: var(--vscode-focusBorder);
   --ow-accent-emphasis: var(--vscode-button-background);
+  --ow-accent-tint: var(--vscode-list-inactiveSelectionBackground);
+  --ow-accent-on: var(--vscode-button-foreground);
+  --ow-focus-ring: var(--vscode-focusBorder);
   --ow-status-passed: var(--vscode-testing-iconPassed);
   --ow-status-failed: var(--vscode-testing-iconFailed);
+  --ow-status-idle: var(--vscode-disabledForeground);
+  --ow-status-running: var(--vscode-progressBar-background);
+  --ow-status-attention: var(--vscode-editorWarning-foreground);
+  --ow-status-blocked: var(--vscode-charts-orange);
+  --ow-status-merge: var(--vscode-charts-purple);
   --ow-status-warning: var(--vscode-editorWarning-foreground);
   --ow-status-warning-text: var(--vscode-list-warningForeground);
   --ow-status-error: var(--vscode-errorForeground);
   --ow-diff-inserted: var(--vscode-diffEditor-insertedLineBackground);
   --ow-diff-removed: var(--vscode-diffEditor-removedLineBackground);
+  --ow-diff-inserted-word: var(--vscode-diffEditor-insertedTextBackground);
+  --ow-diff-removed-word: var(--vscode-diffEditor-removedTextBackground);
+  --ow-shadow-color: var(--vscode-widget-shadow);
   --ow-font-sans: var(--vscode-font-family);
   --ow-font-mono: var(--vscode-editor-font-family);
 }

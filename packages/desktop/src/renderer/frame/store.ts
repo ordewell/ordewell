@@ -1,0 +1,202 @@
+import { createContext, useContext, useSyncExternalStore } from 'react';
+import type { PaneSizes } from '../../shared/bridge';
+import type {
+  ActivityId, Banner, Command, FrameApi, OpenTabOptions, PanelView, PrimaryAction, SidebarSection, SlotId, SlotView,
+  TabKind, TabRef, Unregister,
+} from './api';
+import { besideGroup, initialLayout, reduceLayout, tabKey, type Layout, type LayoutAction } from './layout';
+
+/** The frame's own overlays: one at a time, so opening one closes another. */
+export type Overlay = 'palette' | 'needsYou' | 'more' | undefined;
+
+export interface FrameState {
+  layout: Layout;
+  sidebars: readonly SidebarSection[];
+  tabKinds: Readonly<Record<string, TabKind>>;
+  panels: readonly PanelView[];
+  slots: readonly SlotView[];
+  commands: readonly Command[];
+  primary: PrimaryAction | undefined;
+  needsYou: number;
+  banners: readonly Banner[];
+  /** `serial` changes with each message, so the same words said twice are said twice. */
+  announcement: { text: string; serial: number };
+  overlay: Overlay;
+}
+
+export interface FrameOptions {
+  workspace: string;
+  platform: string;
+  sizes: PaneSizes;
+  /** Where the pane sizes go once a drag or a key settles them; the prefs store in the app. */
+  persistSizes?(sizes: PaneSizes): void;
+}
+
+function byOrder<T extends { order?: number }>(items: readonly T[]): T[] {
+  // Array.prototype.sort is stable, so equal orders keep registration order.
+  return items.slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+}
+
+/**
+ * Everything the frame draws, and the one place that changes it: the layout
+ * through reduceLayout, the registrations through the FrameApi it hands view
+ * modules. React reads it through useSyncExternalStore.
+ */
+export class FrameStore {
+  readonly api: FrameApi;
+  private state: FrameState;
+  private readonly listeners = new Set<() => void>();
+
+  constructor(private readonly options: FrameOptions) {
+    this.state = {
+      layout: initialLayout(options.sizes),
+      sidebars: [],
+      tabKinds: {},
+      panels: [],
+      slots: [],
+      commands: [],
+      primary: undefined,
+      needsYou: 0,
+      banners: [],
+      announcement: { text: '', serial: 0 },
+      overlay: undefined,
+    };
+    this.api = this.makeApi();
+  }
+
+  readonly subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  };
+
+  readonly getSnapshot = (): FrameState => this.state;
+
+  get platform(): string { return this.options.platform; }
+
+  dispatch(action: LayoutAction): void {
+    const layout = reduceLayout(this.state.layout, action);
+    if (layout !== this.state.layout) this.set({ layout });
+  }
+
+  setOverlay(overlay: Overlay): void {
+    if (overlay !== this.state.overlay) this.set({ overlay });
+  }
+
+  /** A drag or key has let go of a sash: the sizes it left are kept for the next window. */
+  commitSizes(): void {
+    this.options.persistSizes?.(this.state.layout.sizes);
+  }
+
+  /** The commands the palette lists and the keyboard reaches now. */
+  enabledCommands(): Command[] {
+    return this.state.commands.filter((command) => command.enabled?.() ?? true);
+  }
+
+  private set(patch: Partial<FrameState>): void {
+    this.state = { ...this.state, ...patch };
+    for (const listener of this.listeners) listener();
+  }
+
+  /**
+   * Adds to a list, replacing an entry with the same identity: a module that
+   * registers twice (React's strict effects do) leaves one. The returned undo
+   * removes only that entry, so it cannot take out a later replacement.
+   */
+  private register<K extends 'sidebars' | 'panels' | 'slots' | 'commands', T extends FrameState[K][number]>(
+    key: K, item: T, same: (other: T) => boolean, sort: (items: T[]) => T[] = (items) => items,
+  ): Unregister {
+    const current = this.state[key] as readonly T[];
+    this.set({ [key]: sort([...current.filter((other) => !same(other)), item]) });
+    return () => {
+      const now = this.state[key] as readonly T[];
+      if (now.includes(item)) this.set({ [key]: now.filter((other) => other !== item) });
+    };
+  }
+
+  private makeApi(): FrameApi {
+    return {
+      workspace: this.options.workspace,
+      platform: this.options.platform,
+
+      registerSidebar: (section: SidebarSection) => {
+        return this.register('sidebars', section, (o) => o.activity === section.activity && o.id === section.id, byOrder);
+      },
+      registerTabKind: (kind: TabKind) => {
+        this.set({ tabKinds: { ...this.state.tabKinds, [kind.kind]: kind } });
+        return () => {
+          if (this.state.tabKinds[kind.kind] !== kind) return;
+          const rest = { ...this.state.tabKinds };
+          delete rest[kind.kind];
+          this.set({ tabKinds: rest });
+        };
+      },
+      registerPanel: (panel: PanelView) => {
+        return this.register('panels', panel, (o) => o.region === panel.region && o.id === panel.id);
+      },
+      registerSlot: (slot: SlotView) => {
+        return this.register('slots', slot, (o) => o.slot === slot.slot && o.id === slot.id, byOrder);
+      },
+      registerCommand: (command: Command) => {
+        return this.register('commands', command, (o) => o.id === command.id);
+      },
+
+      openTab: (tab: TabRef, options: OpenTabOptions = {}) => {
+        const { layout } = this.state;
+        const group = options.beside ? besideGroup(layout) : layout.focusedGroup;
+        this.dispatch({ type: 'open', tab, preview: options.preview ?? false, group });
+      },
+      closeTab: (tab) => {
+        const key = tabKey(tab);
+        this.state.layout.groups.forEach((group, index) => {
+          if (group.tabs.some((candidate) => candidate.key === key)) this.dispatch({ type: 'close', group: index, key });
+        });
+      },
+      showActivity: (activity: ActivityId) => {
+        this.dispatch({ type: 'activity', activity });
+      },
+      runCommand: (id: string) => {
+        const command = this.enabledCommands().find((candidate) => candidate.id === id);
+        command?.run();
+      },
+
+      setPrimaryAction: (action: PrimaryAction | undefined) => {
+        this.set({ primary: action });
+      },
+      setNeedsYouCount: (count: number) => {
+        const needsYou = Math.max(0, Math.floor(count));
+        if (needsYou !== this.state.needsYou) this.set({ needsYou });
+      },
+      showBanner: (banner: Banner) => {
+        const banners = [...this.state.banners.filter((other) => other.id !== banner.id), banner];
+        this.set({ banners });
+        this.api.announce(banner.title);
+        return () => {
+          if (this.state.banners.includes(banner)) this.set({ banners: this.state.banners.filter((other) => other !== banner) });
+        };
+      },
+      announce: (message: string) => {
+        this.set({ announcement: { text: message, serial: this.state.announcement.serial + 1 } });
+      },
+    };
+  }
+}
+
+/** The slot views a place in the chrome draws, in order. */
+export function slotsFor(state: FrameState, slot: SlotId): SlotView[] {
+  return state.slots.filter((view) => view.slot === slot);
+}
+
+const FrameContext = createContext<FrameStore | undefined>(undefined);
+
+export const FrameProvider = FrameContext.Provider;
+
+export function useFrameStore(): FrameStore {
+  const store = useContext(FrameContext);
+  if (!store) throw new Error('useFrameStore needs a FrameProvider above it.');
+  return store;
+}
+
+export function useFrameState(): FrameState {
+  const store = useFrameStore();
+  return useSyncExternalStore(store.subscribe, store.getSnapshot);
+}
