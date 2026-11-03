@@ -59,7 +59,9 @@ const git = (...a) => execFileSync('git', ['-C', root, ...a], { encoding: 'utf8'
 const files = [...new Set(git('ls-files', '-z', '--cached', '--others', '--exclude-standard').split('\0'))]
   .filter(Boolean)
   .filter((p) => fs.existsSync(path.join(root, p)));
-const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
+// A Windows checkout under core.autocrlf has CRLF endings, and every rule below
+// reads LF: the front matter alone failed in every ADR.
+const read = (p) => fs.readFileSync(path.join(root, p), 'utf8').replace(/\r\n/g, '\n');
 const isTextFile = (p) => !/\.(png|jpe?g|gif|ico|webp|vsix|woff2?|ttf|zip|gz)$/i.test(p) && !/(^|\/)package-lock\.json$/.test(p);
 
 // ---------------------------------------------------------------- front matter

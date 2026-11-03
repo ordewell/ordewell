@@ -15,6 +15,9 @@ function check(cond, message) {
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-migration-'));
 process.env.HOME = home;
+// os.homedir() reads USERPROFILE on Windows, so HOME alone left these checks
+// on the real home: failing, and writing into the real ~/.ordewell.
+process.env.USERPROFILE = home;
 
 const settingsContent = '{"tddEnabled":true,"verificationEnabled":false,"model":"claude-sonnet-4-5"}';
 const oldDir = path.join(home, '.config', 'ordewell');

@@ -3,13 +3,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { delimiter, dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { RUNNERS, SCENARIOS, makeLab, installOnly, writeShim, removeShim, makeWorkspace, cleanLab } from './lab.mjs';
 
 // The real probe against the real PATH machinery; needs core built first
 // (`npm run build:core`), like bench/pipeline.
 const here = dirname(fileURLToPath(import.meta.url));
-const core = await import(join(here, '../../packages/core/dist/index.mjs'));
+const core = await import(pathToFileURL(join(here, '../../packages/core/dist/index.mjs')).href);
 
 function installation() {
   return new core.RunnerInstallation(new core.RunnerRegistry());

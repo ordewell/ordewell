@@ -4,10 +4,10 @@ import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-export const core = await import(path.join(here, '.build', 'core.mjs')).catch((err) => {
+export const core = await import(pathToFileURL(path.join(here, '.build', 'core.mjs')).href).catch((err) => {
   console.error(`Run \`node bench/scale/build.mjs\` first (${err.message}).`);
   process.exit(2);
 });
