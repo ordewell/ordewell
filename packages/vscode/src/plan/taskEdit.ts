@@ -1,21 +1,16 @@
-import { dependentsNotice, dependentsOf, flattenTasks, loopLeaveNotice, newTaskFields } from '@ordewell/core';
+import { newTaskFields } from '@ordewell/core';
 import type { Task } from '@ordewell/core';
 import type { TaskDraft } from '@ordewell/ui/protocol';
 
 /**
- * What to ask before removing a task.
+ * What to ask before removing a task. Worded with the other confirmations in
+ * `@ordewell/ui/host`, so every host asks it the same way.
  *
  * Dependents are named, not just counted, because the removal rewrites them:
  * `removeTaskFromPlan` strips the dead id from every dependency list, so a user
  * who is not told loses edges they never edited.
  */
-export function removalPrompt(tasks: readonly Task[], taskId: string): string {
-  const all = flattenTasks(tasks);
-  const title = all.find((t) => t.id === taskId)?.title;
-  const question = title ? `Remove "${title}"?` : 'Remove this task?';
-  const notice = [dependentsNotice(dependentsOf(tasks, taskId), tasks), loopLeaveNotice(tasks, taskId)].filter(Boolean).join(' ');
-  return notice ? `${question}\n\n${notice}` : question;
-}
+export { removalPrompt } from '@ordewell/ui/host';
 
 /**
  * A hand-written task from the webview's add form. Only what a user can

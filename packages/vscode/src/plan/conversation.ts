@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import { CHAT_COMMANDS, describePlannerNotReady, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, type Session } from '@ordewell/core';
+import { forkStopsRunConfirmation } from '@ordewell/ui/host';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
+import { confirm } from './confirm';
 import { recheckSignedOutPlanner, type PlanManagerDeps } from './PlanManager';
 
 export interface ConversationDeps {
@@ -38,12 +40,7 @@ function plannerIsAnswering(deps: ConversationDeps): boolean {
  */
 async function confirmLeavingRun(session: ConversationDeps['session']): Promise<boolean> {
   if (!session.isExecuting) return true;
-  const choice = await vscode.window.showWarningMessage(
-    'A run is executing. Switching to the fork stops it; the original session is kept as it is.',
-    { modal: true },
-    'Fork and stop the run',
-  );
-  return choice === 'Fork and stop the run';
+  return (await confirm(forkStopsRunConfirmation())) === 'fork';
 }
 
 export async function forkConversation(deps: ConversationDeps): Promise<void> {
