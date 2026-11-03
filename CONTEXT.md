@@ -2232,6 +2232,50 @@ is broadcast from inside the call that starts the run, so every surface opens it
 execution stream before making that call — one opened after it never hears the
 block.
 
+**User's checkout** — a repository of the workspace in its own working tree,
+on whatever branch the user has checked out: the one place a person edits files
+and runs git through a host (ADR-0062 G1, G10). Task worktrees and integration
+branches are a run's, read-only to a person. A run's tasks never work here
+unless the run runs without isolation.
+*Avoid:* "workspace" for one repository of it, "main checkout", "local branch".
+
+**Landing branch** (ADR-0062 G7) — in one repository, the *base branch* of an
+open isolation run: the branch Merge all will land on. A run that started
+detached has none. A *live run* holds its landing branch: a host refuses to
+switch that repository away from it, detach it or delete it
+(`landing_branch_held`), and allows everything else.
+*Avoid:* "target branch", "protected branch" (nothing else about it is
+protected), "base ref" (that is a commit, ADR-0014).
+
+**Live run** (ADR-0062 G7) — an isolation run with an attempt in progress, a
+start pending, or a landing or Merge all under way. A run that has settled with
+work not yet merged is open but not live: switching away from its landing
+branch is allowed with a warning that Merge all will refuse until the branch is
+back.
+*Avoid:* "active run" for this (the desktop app's tray and quit confirm say
+*active* for any run in progress, which is wider), "running plan".
+
+**Merge all preflight** (`GET /api/plans/:sessionId/isolation/merge-preflight`;
+ADR-0062 G8) — what a surface asks before Merge all: per repository, the branch
+it lands on, the user's uncommitted files that overlap the incoming work, and
+whether other uncommitted files exist. With an overlap the surface offers Commit,
+Stash (only the overlapping paths, named `ordewell: before Merge all of <run>`)
+or Cancel. Merge all's own preflight, which aborts on a dirty overlap, stays the
+backstop.
+*Avoid:* "Merge all's preflight" for this (that one is inside `mergeRun` and
+changes nothing), "dry run".
+
+**User git action** (ADR-0062) — a git action or file save a host performs on the
+*user's checkout* at a person's request: save, stage, unstage, commit, amend
+while unpushed, discard, branch create, switch and delete, stash and pop, fetch,
+pull and push to the tracking remote. It runs the user's own git with their
+hooks and credentials. A destructive or remote one carries a `confirm` echoing
+what the person saw, refused as `confirm_stale` when the state has moved. One
+that touches a live run's landing branch is a line in that session's timeline.
+No plan, planner, supervisor or script reaches one.
+*Avoid:* "effect" (an *Effect* is the plan's, ADR-0035), "git command" (an
+execution command is the plan's seam), "Ordewell commits".
+
 **The plan** — the typed, editable, diffable artifact the planner emits: an ordered
 list of tasks with per-task model, thinking effort, runner, and mode. It is data,
 not a running agent's internal state.
@@ -3580,12 +3624,13 @@ accepted; each tripped guard posts a supervisor message to the user, once.
 ## Surfaces
 
 **Surface** — a client that drives Ordewell: the **VS Code extension**
-(webview), the per-command **CLI**, and the **TUI**. All of them consume the same
+(webview), the per-command **CLI**, the **TUI**, and the **desktop app**. All of them consume the same
 `SessionMessage` union and none holds orchestration logic, but they reach a
 `Session` two ways. The CLI and the TUI talk to the **local daemon**
 (`packages/web`, HTTP + WebSocket on `127.0.0.1`, with no frontend of its own);
 the VS Code extension runs core's `Session` in-process and never connects to the
-daemon. A session planned on one surface opens unchanged on another through the
+daemon. The desktop app drives the same shared daemon as the CLI
+(ADR-0060). A session planned on one surface opens unchanged on another through the
 saved-session store in `.ordewell/sessions/`, not through a shared transport
 (ADR-0006).
 *Avoid:* "web UI" — there is none; the web package is the daemon.
@@ -3736,6 +3781,49 @@ is already live is a no-op — the in-memory session wins over the file, because
 `Session.loadPlan` would otherwise clear its execution log (ADR-0006).
 *Avoid:* "load" alone for this — the TUI's `/sessions` and `ordewell sessions
 load` both *read* and *adopt*, and the distinction is what the bug was.
+
+**Desktop app** (`packages/desktop`; ADR-0060) — the Electron surface: a client
+of the shared local daemon on port 3742, which it attaches to or starts and
+owns. It is not a host and holds no session lease. One window shows one
+workspace, and its UI is the one in `packages/ui` that the VS Code webview also
+draws. Its design is `docs/desktop/design.md`.
+*Avoid:* "Electron host" (the daemon is the host), "GUI", "web UI".
+
+**Daemon bridge** (`window.ordewell`, the preload; ADR-0060 H4) — the desktop
+app's one channel from its renderer to anything outside it: a fixed set of named
+calls that its main process checks and turns into daemon requests carrying the
+bearer token, plus frame subscriptions, the terminal, dialogs and the folder
+picker. The renderer never holds the token and never names a URL.
+*Avoid:* "IPC" alone (it is one fixed bridge, not a general channel), "API
+client".
+
+**Version handshake** (`GET /api/server`'s `version` and `contract`; ADR-0060
+H3) — the check a desktop app makes before driving a daemon: the same `contract`
+number attaches whatever the patch version, and a different one, or none, is
+not driven and offers a restart with the app's own daemon.
+*Avoid:* "version check" (that is the daily check for a newer release,
+ADR-0048).
+
+**Needs you** — the label the shared UI gives the *inbox* of escalations: the
+title-bar badge and its popover, and the head of the Plan sidebar. Each entry is
+one *Escalation*, answered through `answerEscalation` like everywhere else.
+*Avoid:* "notifications", "alerts", "inbox" in the UI's own text (it is the
+word for the list, not the label).
+
+**View scope** (ADR-0061 R2) — which tree a host's file and git reads look at,
+per repository: `checkout` (the *user's checkout* on disk), `integration` (a
+run's integration branch, read from git objects) or `task` (a task's worktree
+while it exists, otherwise its branch). Only the checkout is editable. A scope
+that no longer exists answers `gone`. The desktop app's *scope switcher* in the
+title bar picks it.
+*Avoid:* "scope" alone (a *Scope* is a delegated task's declared paths,
+ADR-0057), "context", "view mode".
+
+**User principal** (ADR-0061 R1) — the person at a surface, holding the
+daemon's bearer token, for whom the daemon reads files and git (ADR-0061) and
+performs *user git actions* (ADR-0062). Their reads are bounded by confinement
+to the workspace, not by the planner envelope, which bounds a model.
+*Avoid:* "the user's planner", "unsandboxed".
 
 ## Platform
 
