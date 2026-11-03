@@ -47,6 +47,8 @@ export interface DockerBackendOptions {
   git?: GitInvoker;
   broker?: CredentialBroker;
   egress?: EgressPath;
+  /** The host the engine is judged on. Absent, this one: a test pins it to try the lease where containers run. */
+  platform?: NodeJS.Platform;
 }
 
 /** What a container starts from, once the lease's checks have passed. */
@@ -211,7 +213,7 @@ export class DockerExecutionBackend implements ExecutionBackend {
    */
   private async preflight(runner: ContainerRunner | null, model?: string): Promise<ContainerSettings> {
     const setupCommand = this.options.setupCommand?.();
-    const { problems, settings } = await inspectReadiness(this.options.settings, { cli: this.cli, broker: this.broker, agent: runner !== null, ...(runner ? { runner } : {}), ...(setupCommand ? { setupCommand } : {}) });
+    const { problems, settings } = await inspectReadiness(this.options.settings, { cli: this.cli, broker: this.broker, ...(this.options.platform ? { platform: this.options.platform } : {}), agent: runner !== null, ...(runner ? { runner } : {}), ...(setupCommand ? { setupCommand } : {}) });
     if (!settings) throw new Error(`This session runs tasks in containers, and this task cannot start in one. ${describeProblems(problems)}`);
     // A task's model is the one thing here no surface could have asked about.
     const refusal = runner && settings.login.kind === 'broker' ? brokerRefusal(runner, model) : null;

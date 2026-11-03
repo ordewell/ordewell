@@ -111,12 +111,16 @@ const takingGit = (cli: RecordingCli): GitInvoker => ({
   resolvePath: async () => '/usr/bin',
 });
 
+/** The lease is tried where containers run: on Windows the engine check refuses it before any of what is tested here (containerPreflight). */
+const WHERE_CONTAINERS_RUN = { platform: 'linux' } as const;
+
 function backendWith(over: { settings?: unknown; cli?: RecordingCli; env?: Record<string, string>; hooks?: string; setupCommand?: string; git?: GitInvoker } = {}) {
   const local = new FakeExecutionBackend();
   local.repos = [repo];
   const cli = over.cli ?? new RecordingCli();
   const told: { level: string; text: string }[] = [];
   const backend = new DockerExecutionBackend(local, {
+    ...WHERE_CONTAINERS_RUN,
     settings: over.settings ?? { image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] } },
     cli,
     git: over.git ?? git(over.hooks),
@@ -831,7 +835,7 @@ describe('a script in a container', () => {
       const { backend, local, cli } = backendWith();
       local.repos = [];
       const refusing: GitInvoker = { exec: async () => { throw Object.assign(new Error('not a git repository'), { stderr: 'fatal: not a git repository' }); }, resolvePath: async () => '/usr/bin' };
-      const lone = new DockerExecutionBackend(local, { settings: { image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] } }, cli, git: refusing, broker: new CredentialBroker({ ANTHROPIC_API_KEY: 'k' }), sessionId: () => 'session-1', tell: () => undefined });
+      const lone = new DockerExecutionBackend(local, { ...WHERE_CONTAINERS_RUN, settings: { image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] } }, cli, git: refusing, broker: new CredentialBroker({ ANTHROPIC_API_KEY: 'k' }), sessionId: () => 'session-1', tell: () => undefined });
 
       await expect(opened(lone, scriptRequest, checkoutSpec)).rejects.toThrow(/git repository/);
       expect(cli.entries).toEqual([]);
@@ -1200,6 +1204,7 @@ describe('work that did not come back (L2)', () => {
   it('holds past this Session: what says so is in the engine, where no container reaches it', async () => {
     const { cli, local } = await refused();
     const later = new DockerExecutionBackend(local, {
+      ...WHERE_CONTAINERS_RUN,
       settings: { image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] } },
       cli, git: git(), broker: new CredentialBroker({ ANTHROPIC_API_KEY: 'sk-ant-api03-test' }), sessionId: () => 'session-1', tell: () => undefined,
     });
@@ -1426,6 +1431,7 @@ describe('a probe that fails', () => {
       return RecordingCli.prototype.call.call(this, args, opts);
     };
     const backend = new DockerExecutionBackend(new FakeExecutionBackend(), {
+      ...WHERE_CONTAINERS_RUN,
       settings: { image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] } }, cli, git: git(), egress: { open: async () => route },
       broker: new CredentialBroker({ ANTHROPIC_API_KEY: 'k' }), sessionId: () => 'session-1', tell: () => undefined,
     });
