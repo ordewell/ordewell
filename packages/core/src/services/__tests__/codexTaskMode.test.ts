@@ -1,4 +1,5 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
+import { join, resolve } from 'path';
 import { CodexAdapter } from '../harness/CodexAdapter';
 import type { AgentEvent, AgentProcessDeps, AgentStartOptions, TaskStartOptions, TaskModeAgentAdapter } from '../harness/AgentAdapter';
 import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
@@ -58,6 +59,12 @@ const handshake = (): ScriptedReply[] => [fixture('codex', 'handshake'), codexAn
 function line(msg: RpcLine): string {
   return `${JSON.stringify({ jsonrpc: '2.0', ...msg })}\n`;
 }
+
+/** A changed file as an unplaced task shows it: relative to the worktree, in this host's separators. */
+const shownPath = (...parts: string[]): string => join(...parts);
+
+/** The workspace and every directory above it, as this host resolves them (ADR-0028). */
+const untrustedRepo = () => ({ [resolve('/repo')]: { trust_level: 'untrusted' }, [resolve('/')]: { trust_level: 'untrusted' } });
 
 function written(lines: string[]): RpcLine[] {
   return lines.map((line) => JSON.parse(line) as RpcLine);
@@ -626,7 +633,7 @@ describe('CodexAdapter task channels', () => {
     expect(events).toEqual([
       { type: 'tool_call', id: 'item_c1', name: 'shell', args: { command: 'npm test', cwd: '/repo' } },
       { type: 'tool_result', id: 'item_c1', name: 'shell', output: '1 failing\n', success: false },
-      { type: 'tool_call', id: 'item_f1', name: 'Update', args: { path: 'src/sum.ts' } },
+      { type: 'tool_call', id: 'item_f1', name: 'Update', args: { path: shownPath('src', 'sum.ts') } },
       { type: 'tool_result', id: 'item_f1', name: 'Update', output: '-return a - b;\n+return a + b;\n', success: true },
       { type: 'usage', record: { source: 'codex', model: 'gpt-5.5', inputTokens: 9000, outputTokens: 100, cachedInputTokens: 4000, contextWindow: 258400, contextTokens: 9100 } },
       { type: 'assistant_text_delta', runId: 'item_m1', text: 'Fixed the sign in sum.ts.\n<<<ORDE' },
@@ -719,11 +726,11 @@ describe('CodexAdapter task channels', () => {
     const { adapter, events } = await openTurn([fileChangeStarted('item_f1', changes), fileChangeDone('item_f1', 'completed', changes)]);
 
     expect(events).toEqual([
-      { type: 'tool_call', id: 'item_f1', name: 'Add', args: { path: 'src/new.ts' } },
-      { type: 'tool_call', id: 'item_f1:src/sum.ts', name: 'Update', args: { path: 'src/sum.ts' } },
+      { type: 'tool_call', id: 'item_f1', name: 'Add', args: { path: shownPath('src', 'new.ts') } },
+      { type: 'tool_call', id: `item_f1:${shownPath('src', 'sum.ts')}`, name: 'Update', args: { path: shownPath('src', 'sum.ts') } },
       { type: 'tool_call', id: 'item_f1:old.ts', name: 'Delete', args: { path: 'old.ts' } },
       { type: 'tool_result', id: 'item_f1', name: 'Add', output: '+export const a = 1;\n', success: true },
-      { type: 'tool_result', id: 'item_f1:src/sum.ts', name: 'Update', output: '@@ -1 +1 @@\n-a - b\n+a + b\n', success: true },
+      { type: 'tool_result', id: `item_f1:${shownPath('src', 'sum.ts')}`, name: 'Update', output: '@@ -1 +1 @@\n-a - b\n+a + b\n', success: true },
       { type: 'tool_result', id: 'item_f1:old.ts', name: 'Delete', output: '-gone\n-for good\n', success: true },
     ]);
     adapter.dispose();
@@ -749,7 +756,7 @@ describe('CodexAdapter task channels', () => {
     const { adapter, events } = await openTurn([fileChangeStarted('item_f1', changes)]);
 
     expect(events).toEqual([
-      { type: 'tool_call', id: 'item_f1', name: 'Update', args: { path: 'src/a.ts → lib/a.ts' } },
+      { type: 'tool_call', id: 'item_f1', name: 'Update', args: { path: `${shownPath('src', 'a.ts')} → ${shownPath('lib', 'a.ts')}` } },
       { type: 'tool_call', id: 'item_f1:/etc/hosts', name: 'Update', args: { path: '/etc/hosts' } },
     ]);
     adapter.dispose();
@@ -779,7 +786,7 @@ describe('CodexAdapter planner boundary (ADR-0008/0009)', () => {
       sandbox: 'read-only',
       approvalPolicy: 'on-request',
       // The repository's own config never loads for a planner (ADR-0028).
-      config: { web_search: 'disabled', projects: { '/repo': { trust_level: 'untrusted' }, '/': { trust_level: 'untrusted' } } },
+      config: { web_search: 'disabled', projects: untrustedRepo() },
       developerInstructions: 'PLAN',
     });
     adapter.dispose();
@@ -898,7 +905,7 @@ describe('a Codex task on the structured transport', () => {
 
     const [turnStart] = sentNamed(spawned.processes[0].written, 'turn/start');
     expect(turnStart.params).toEqual({ threadId: 'thr-task-1', input: [{ type: 'text', text: 'Fix sum' }], effort: 'high' });
-    expect(session.getOutput()).toBe('› shell(npm test)\n› Update(src/sum.ts)\nFixed the sign in sum.ts.\n<<<ORDEWELL_DONE>>>\n');
+    expect(session.getOutput()).toBe(`› shell(npm test)\n› Update(${shownPath('src', 'sum.ts')})\nFixed the sign in sum.ts.\n<<<ORDEWELL_DONE>>>\n`);
     expect(chunks.some((chunk) => chunk.includes('<<<ORDEWELL_DONE>>>'))).toBe(true);
     expect(session.nativeSessionId()).toBe('thr-task-1');
     session.kill();
@@ -1029,7 +1036,7 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
       cwd: '/repo',
       sandbox: 'read-only',
       approvalPolicy: 'on-request',
-      config: { mcp_servers: { ordewell: ordewellServer }, web_search: 'disabled', projects: { '/repo': { trust_level: 'untrusted' }, '/': { trust_level: 'untrusted' } } },
+      config: { mcp_servers: { ordewell: ordewellServer }, web_search: 'disabled', projects: untrustedRepo() },
       developerInstructions: `PLAN\n\n${CODEX_ORDEWELL.plannerInstructions(false)}`,
     });
     // Codex lists MCP tools only behind its own discovery, and its shell has no network (ADR-0026).
@@ -1070,7 +1077,8 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
 
       expect(tokenNames(spawned.lastEnv())).toEqual([]);
       expect(spawned.lastEnv().ORDEWELL_TEST_KEPT).toBe('yes');
-      expect(spawned.lastEnv().PATH).toBe('/usr/bin');
+      // Windows spells the one PATH key `Path` (withPath).
+      expect(Object.entries(spawned.lastEnv()).filter(([name]) => name.toUpperCase() === 'PATH').map(([, value]) => value)).toEqual(['/usr/bin']);
       adapter.dispose();
     });
 

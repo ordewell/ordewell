@@ -30,7 +30,8 @@ function installedOnly(...commands: string[]): ExecImpl {
 const quietAuth: RunnerAuthExec = async () => ({ code: -1, stdout: '', stderr: '' });
 
 function installation(manifests: Array<{ name: string; runner: { command: string } }>, exec: ExecImpl): RunnerInstallation {
-  return new RunnerInstallation(registryWith(...manifests), exec, Date.now, { authExec: quietAuth });
+  // Off Windows' PATH lookup: `exec` alone says what is installed here.
+  return new RunnerInstallation(registryWith(...manifests), exec, Date.now, { authExec: quietAuth, launch: { platform: 'linux' } });
 }
 
 describe('findInstalledPlanner', () => {

@@ -1,7 +1,6 @@
 import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { devNull } from 'os';
 import type { IsolationRun } from '../interfaces/IWorktreeIsolation';
 import { git, tryGit, type GitInvoker } from './gitExec';
 import { stateRootOf } from './stateRoot';
@@ -230,8 +229,9 @@ export async function readTaskDiff(invoker: GitInvoker, run: IsolationRun, taskI
         for (const file of others.split('\0').filter((f) => f && allowed(f))) {
           const full = path.join(workspace, file);
           if (!inside(fs.realpathSync(workspace), fs.realpathSync(path.dirname(full)))) continue;
+          // Git's own name for the empty side, on every platform: it cannot open Windows' `os.devNull`.
           const untracked = async (numstat: boolean): Promise<string> => {
-            const result = await tryGit(reader, workspace, [...common, 'diff', '--no-index', '--no-renames', '--no-ext-diff', '--no-textconv', ...(numstat ? ['--numstat', '-z'] : []), '--', devNull, file]);
+            const result = await tryGit(reader, workspace, [...common, 'diff', '--no-index', '--no-renames', '--no-ext-diff', '--no-textconv', ...(numstat ? ['--numstat', '-z'] : []), '--', '/dev/null', file]);
             if (!result.ok && result.code !== 1) throw new Error(result.stderr.trim() || 'Could not read an untracked file diff.');
             return result.stdout;
           };

@@ -127,10 +127,12 @@ export class RunnerProcess {
     const PATH = await resolvePath();
     // On POSIX this hands back the command untouched; on Windows it resolves
     // the real `.exe` (or routes a `.cmd` shim through cmd.exe), because
-    // CreateProcess performs no PATHEXT lookup of its own.
+    // CreateProcess performs no PATHEXT lookup of its own. `exists` goes to
+    // both: on Windows the lookup here is the only one the check below trusts.
     const launch = await planDirectLaunch(command.command, command.args, {
       platform: this.deps.platform,
       resolvePath,
+      exists: this.deps.exists,
     });
     if (!isExecutableResolved(command.command, launch, PATH, { platform: this.deps.platform, exists: this.deps.exists })) {
       throw new ExecutableNotFoundError(command.command, PATH);

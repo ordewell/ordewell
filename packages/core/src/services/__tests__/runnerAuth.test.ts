@@ -45,11 +45,14 @@ const AZURE_PROVIDER = [
   '',
 ].join('\n');
 
+/** The status command as named, off Windows' PATH lookup: the routes it takes there are pinned under 'on Windows'. */
+const POSIX: LaunchDeps = { platform: 'linux' };
+
 describe('readRunnerAuth', () => {
   it('asks the runner its own status command and reads Claude signed in from a clean exit', async () => {
     const exec = execAnswering({ code: 0, stdout: '{"loggedIn":true,"authMethod":"claude.ai"}' });
 
-    expect(await readRunnerAuth(CLAUDE_CODE_MANIFEST, { exec })).toEqual({
+    expect(await readRunnerAuth(CLAUDE_CODE_MANIFEST, { exec, launch: POSIX })).toEqual({
       state: 'signed-in',
       loginCommand: ['claude', 'auth', 'login'],
     });
@@ -99,7 +102,7 @@ describe('readRunnerAuth', () => {
     // `codex login status` prints this and exits 1 on a signed-out host.
     const exec = execAnswering({ code: 1, stdout: 'Not logged in\n' });
 
-    expect(await readRunnerAuth(CODEX_MANIFEST, { exec })).toEqual({
+    expect(await readRunnerAuth(CODEX_MANIFEST, { exec, launch: POSIX })).toEqual({
       state: 'signed-out',
       loginCommand: ['codex', 'login'],
       detail: 'not logged in',
@@ -134,7 +137,8 @@ describe('readRunnerAuth', () => {
 
     const options = vi.mocked(exec).mock.calls[0][2];
     expect(options.env.CLAUDE_CONFIG_DIR).toBe('/home/me/.claude-b');
-    expect(options.env.PATH).toBeTruthy();
+    // Windows spells the one PATH key `Path` (withPath).
+    expect(Object.entries(options.env).find(([name]) => name.toUpperCase() === 'PATH')?.[1]).toBeTruthy();
     expect(options.timeout).toBeGreaterThan(0);
   });
 

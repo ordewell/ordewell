@@ -521,13 +521,22 @@ describe('CliAgentAiService — Claude Code', () => {
   });
 
   it('asks before a read outside the workspace, and not for one inside it', async () => {
-    const outside = approvalSpy(false);
-    const { svc: outsideSvc, spawned: outsideSpawn } = service('claude-code', reachingFor('Read', { file_path: '/etc/hosts' }));
-    await outsideSvc.startConversation(request({ approval: outside }));
-    // Judged where the path points (ADR-0028): on macOS /etc is a symlink to
-    // /private/etc, on Linux it is not, so resolve the expectation the same way.
-    expect(outside.request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', subject: realpathSync.native('/etc/hosts') }));
-    expect(controlAnswer(outsideSpawn.processes[0])).toMatchObject({ behavior: 'deny' });
+    // A real file, so every host has one outside the workspace to point at.
+    const elsewhere = mkdtempSync(join(tmpdir(), 'ordewell-outside-'));
+    const hosts = join(elsewhere, 'hosts');
+    writeFileSync(hosts, '127.0.0.1 localhost\n');
+    try {
+      const outside = approvalSpy(false);
+      const { svc: outsideSvc, spawned: outsideSpawn } = service('claude-code', reachingFor('Read', { file_path: hosts }));
+      await outsideSvc.startConversation(request({ approval: outside }));
+      // Judged where the path points (ADR-0028): macOS's temp directory sits
+      // behind a symlink and Windows' can be a short name, so resolve the
+      // expectation the same way.
+      expect(outside.request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', subject: realpathSync.native(hosts) }));
+      expect(controlAnswer(outsideSpawn.processes[0])).toMatchObject({ behavior: 'deny' });
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
 
     const inside = approvalSpy(false);
     const { svc: insideSvc, spawned: insideSpawn } = service('claude-code', reachingFor('Read', { file_path: '/repo/src/a.ts' }));

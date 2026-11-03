@@ -1,6 +1,6 @@
 import { readOnlyTask } from './plannerPermissions';
 import { randomUUID } from 'crypto';
-import { isAbsolute, relative, sep } from 'path';
+import * as hostPath from 'path';
 import type { AgentEvent, AgentProcessDeps, AgentStartOptions, TaskModeAgentAdapter } from './AgentAdapter';
 import type { SubagentOutcome } from '../../models/Task';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
@@ -1299,6 +1299,8 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
 
   /** Relative to the task's worktree, where every path but a stray one lies; a move names both ends. */
   private shownChangePath(change: FileUpdateChange): string {
+    // A placed runner reports its container's paths, which are POSIX whatever this host is.
+    const { isAbsolute, relative, sep } = this.deps.placement ? hostPath.posix : hostPath;
     const shown = (path: string): string => {
       const cwd = this.startOpts && this.runnerCwd(this.startOpts);
       const rel = cwd ? relative(cwd, path) : path;

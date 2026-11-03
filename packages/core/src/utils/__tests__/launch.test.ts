@@ -390,6 +390,18 @@ describe('isExecutableResolved', () => {
     const plan = await planDirectLaunch('nosuchcli', ['-x'], win([]));
     expect(isExecutableResolved('nosuchcli', plan, PATH, { platform: 'win32' })).toBe(false);
   });
+
+  it('is true on Windows when the command names its own file, which the plan resolves to itself', async () => {
+    const deps = win(['C:\\tools\\claude.exe']);
+    const plan = await planDirectLaunch('C:\\tools\\claude.exe', ['-p'], deps);
+    expect(isExecutableResolved('C:\\tools\\claude.exe', plan, PATH, deps)).toBe(true);
+  });
+
+  it('is false on Windows when the file a command names is not there', async () => {
+    const deps = win([]);
+    const plan = await planDirectLaunch('C:\\tools\\claude.exe', ['-p'], deps);
+    expect(isExecutableResolved('C:\\tools\\claude.exe', plan, PATH, deps)).toBe(false);
+  });
 });
 
 describe('ExecutableNotFoundError', () => {

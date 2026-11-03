@@ -77,8 +77,15 @@ function disallowedOf(spawned: FakeSpawnResult): string[] {
   return args[args.indexOf('--disallowedTools') + 1].split(',');
 }
 
+/**
+ * A start that builds the launcher: a `/bin/sh` script with its short temp
+ * folder under `/tmp`. The native shell is offered on macOS only (ADR-0036 N5),
+ * and a Windows host has neither.
+ */
+const launcherIt = it.skipIf(process.platform === 'win32');
+
 describe('Claude Code with its own shell under Ordewell\'s sandbox (ADR-0036 N2)', () => {
-  it('keeps both shell tools on a subplanner\'s narrowed list, with the user\'s opt-in (ADR-0057 R11)', async () => {
+  launcherIt('keeps both shell tools on a subplanner\'s narrowed list, with the user\'s opt-in (ADR-0057 R11)', async () => {
     const spawned = fakeSpawn([]);
     const adapter = new ClaudeCodeAdapter(deps(spawned, nativeSandbox([])));
     try {
@@ -92,7 +99,7 @@ describe('Claude Code with its own shell under Ordewell\'s sandbox (ADR-0036 N2)
     }
   });
 
-  it('names the launcher and its short temp folder in --settings env, with Claude\'s own sandbox off and both shell tools let through', async () => {
+  launcherIt('names the launcher and its short temp folder in --settings env, with Claude\'s own sandbox off and both shell tools let through', async () => {
     const spawned = fakeSpawn([]);
     const profiles: SandboxProfile[] = [];
     const cwd = workspace();
@@ -153,7 +160,7 @@ describe('Claude Code with its own shell under Ordewell\'s sandbox (ADR-0036 N2)
     }
   });
 
-  it('starts Claude Code without the user\'s credential variables and keeps its own login (N2.2, N3)', async () => {
+  launcherIt('starts Claude Code without the user\'s credential variables and keeps its own login (N2.2, N3)', async () => {
     vi.stubEnv('GITHUB_TOKEN', 'ghp_secret');
     vi.stubEnv('AWS_SECRET_ACCESS_KEY', 'aws-secret');
     vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-login');
@@ -175,7 +182,7 @@ describe('Claude Code with its own shell under Ordewell\'s sandbox (ADR-0036 N2)
     }
   });
 
-  it('routes Bash and Monitor requests to the native-shell kind and allows them', async () => {
+  launcherIt('routes Bash and Monitor requests to the native-shell kind and allows them', async () => {
     const spawned = fakeSpawn([]);
     const adapter = new ClaudeCodeAdapter(deps(spawned));
     try {

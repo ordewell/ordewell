@@ -53,7 +53,9 @@ lines.on('line', (line) => {
     expect(models?.map((m) => m.id)).toEqual(['/accounts/work/codex']);
   });
 
-  it('answers null, instead of crashing the host, when the server stops reading its input', async () => {
+  // Not on Windows: libuv never closes fds 0-2 there, so a Node stub cannot
+  // close its input and the write that should meet EPIPE never fails.
+  it.skipIf(process.platform === 'win32')('answers null, instead of crashing the host, when the server stops reading its input', async () => {
     const script = stub(`
 lines.on('line', (line) => {
   const msg = JSON.parse(line);

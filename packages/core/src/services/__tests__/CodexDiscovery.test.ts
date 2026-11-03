@@ -9,6 +9,7 @@ import {
 } from '../ModelDiscovery';
 import type { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { CODEX_MANIFEST } from '../../plugins/builtin/codex.manifest';
+import { homeEnv } from '../../testing';
 
 function registryWith(...manifests: Array<{ name: string }>): RunnerRegistry {
   const byName = new Map(manifests.map((m) => [m.name, m]));
@@ -95,7 +96,8 @@ describe('ModelDiscovery — Codex (app-server → cache file → fallback)', ()
   it('falls back to the on-disk cache file when the app-server call fails', async () => {
     const client: AppServerClientImpl = vi.fn(async () => null);
     const readFile = vi.fn(() => CACHE_FILE);
-    const env = async () => ({ HOME: '/home/work' });
+    // The runner's home under whichever variable this platform reads it from.
+    const env = async () => homeEnv('/home/work');
     const discovery = new ModelDiscovery(registryWith(CODEX_MANIFEST), noExec, undefined, client, readFile, undefined, env);
     const models = await discovery.discover('codex');
     expect(models.map((m) => m.modelId)).toEqual(['gpt-5.6-terra']);

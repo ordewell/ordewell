@@ -4,6 +4,7 @@ import { execFileSync, spawn, type ChildProcess } from 'child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { pathToFileURL } from 'url';
 import { killTree, spawnInOwnGroup, type KillTreeDeps } from '../processTree';
 
 class FakeChild extends EventEmitter {
@@ -346,7 +347,8 @@ describe('onHostTeardown', () => {
     const host = join(dir, 'host.mts');
     writeFileSync(host, [
       `import { appendFileSync } from 'node:fs';`,
-      `import { onHostTeardown, runnerGroups } from ${JSON.stringify(join(__dirname, '..', 'processTree.ts'))};`,
+      // A URL rather than a path: an ESM import reads a Windows drive letter as a scheme.
+      `import { onHostTeardown, runnerGroups } from ${JSON.stringify(pathToFileURL(join(__dirname, '..', 'processTree.ts')).href)};`,
       `const said = (word) => () => appendFileSync(${JSON.stringify(join(dir, 'said'))}, word + ' ');`,
       ...body,
     ].join('\n'));
