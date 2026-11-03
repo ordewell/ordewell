@@ -4,7 +4,7 @@
  */
 .frame {
   display: grid;
-  grid-template-rows: var(--frame-title-height, 38px) minmax(0, 1fr) auto;
+  grid-template-rows: var(--frame-title-height, 38px) auto minmax(0, 1fr) auto;
   height: 100%;
   background: var(--ow-bg);
   color: var(--ow-fg);
@@ -26,6 +26,7 @@
 
 /* Title bar: the window drags by it, except by anything that takes a click. */
 .frame-title {
+  grid-row: 1;
   display: flex;
   align-items: center;
   gap: var(--ow-space-3);
@@ -42,6 +43,9 @@
 .frame-title-overlay { padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + var(--ow-space-4)); }
 .frame-title-drag { flex: 1; align-self: stretch; }
 .frame-title-anchor { position: relative; }
+/* Something waits on a person: the count reads as the attention state, not as the accent. */
+.frame-needs-attention .ow-icon-badge { background: var(--ow-status-attention); color: var(--ow-bg); }
+.frame-needs-attention .ow-icon { color: var(--ow-status-attention); }
 
 .frame-breadcrumb ol { display: flex; align-items: center; gap: var(--ow-space-2); margin: 0; padding: 0; list-style: none; }
 .frame-breadcrumb li { display: flex; align-items: center; gap: var(--ow-space-2); color: var(--ow-fg-secondary); white-space: nowrap; }
@@ -89,7 +93,10 @@
 .frame-menu button:hover, .frame-menu button:focus-visible { background: var(--ow-bg-hover); }
 
 /* Body: activity bar, sidebar, editor and panels side by side. */
-.frame-body { display: flex; min-height: 0; }
+.frame-body { grid-row: 3; display: flex; min-height: 0; }
+/* A daemon that is away, or a session another host holds: last known state, nothing pressable. */
+.frame-body[inert] { opacity: 0.6; }
+.frame-body[inert] * { cursor: default; }
 
 .frame-activity {
   display: flex;
@@ -158,7 +165,7 @@
 .frame-tabpanel:focus { outline: none; }
 
 /* Banners. */
-.frame-banners { display: flex; flex-direction: column; gap: var(--ow-space-3); padding: var(--ow-space-4) var(--ow-space-5) 0; }
+.frame-banners { grid-row: 2; display: flex; flex-direction: column; gap: var(--ow-space-3); padding: var(--ow-space-4) var(--ow-space-5) 0; }
 .frame-banner {
   padding: var(--ow-space-4) var(--ow-space-5);
   border: 1px solid var(--ow-border-widget);
@@ -175,6 +182,7 @@
 
 /* Status bar. */
 .frame-status {
+  grid-row: 4;
   display: flex;
   align-items: center;
   gap: var(--ow-space-6);
@@ -194,6 +202,7 @@
 .frame-status-slot { display: inline-flex; align-items: center; gap: var(--ow-space-4); }
 .frame-status-slot:empty { display: none; }
 .frame-status-slot:last-child { margin-left: auto; }
+.frame-status-text { color: var(--ow-fg-secondary); white-space: nowrap; }
 
 /* Command palette. */
 .frame-scrim { position: fixed; inset: 0; z-index: 30; display: flex; justify-content: center; align-items: flex-start; padding-top: 12vh; background: rgb(0 0 0 / 0.2); }

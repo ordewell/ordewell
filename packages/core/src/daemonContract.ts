@@ -374,6 +374,8 @@ export interface SettingsResponse {
   /** Who plans (ADR-0009) — a vendor id, or a runner serving as a harness planner. */
   aiProvider: PlannerBackendId;
   plannerThinkingEffort: string;
+  /** Full (true) or Guarded (false), ADR-0001; the user's saved level (ADR-0030). */
+  autonomousMode: boolean;
   maxParallel: number;
   modelAllowlist: UserSettings['modelAllowlist'];
   plannerModels: UserSettings['plannerModels'];

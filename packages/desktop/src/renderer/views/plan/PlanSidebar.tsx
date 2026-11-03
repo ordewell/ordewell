@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { taskStatusKind, walkPlan } from '@ordewell/core/plan-utils';
 import { IconButton, StatusIndicator, statusOf } from '@ordewell/ui/design';
@@ -62,9 +62,34 @@ function Sessions({ host }: { host: DaemonHost }): JSX.Element {
   );
 }
 
+/** A live task's "last seen" while the daemon is away: the view never infers progress it did not see. */
+function useAgo(connected: boolean): number {
+  const lastConnected = useRef(Date.now());
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (connected) {
+      lastConnected.current = Date.now();
+      return;
+    }
+    const timer = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, [connected]);
+  return connected ? 0 : Math.max(0, now - lastConnected.current);
+}
+
+function ago(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 2) return 'just now';
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${seconds % 60}s ago`;
+}
+
 /** The plan as a compact tree: each task's status and title, opening its tab. */
 function Tasks({ host }: { host: DaemonHost }): JSX.Element {
   const { state } = useSession(host);
+  const connected = useDaemonStatus()?.state === 'connected';
+  const elapsed = useAgo(connected);
   const tasks = state.plan?.tasks ?? [];
   if (tasks.length === 0) return <p className="frame-empty">No plan yet: tell the planner the goal.</p>;
   // The run carries each task's live status; the plan, what a task is when nothing has run it.
@@ -72,13 +97,15 @@ function Tasks({ host }: { host: DaemonHost }): JSX.Element {
   return (
     <ul className="session-tree" aria-label="Tasks">
       {[...walkPlan(tasks)].map(({ task, label, ancestors }) => {
-        const status = statusOf(taskStatusKind(live.get(task.id) ?? task));
+        const running = live.get(task.id);
+        const status = statusOf(taskStatusKind(running ?? task));
         return (
           <li key={task.id} style={{ paddingInlineStart: `${ancestors.length * 12}px` }}>
             <button type="button" className="session-tree-row" onClick={() => host.openTask(task.id, 'details')}>
               <StatusIndicator status={status.id} size={12} />
               <span className="session-tree-label">#{label}</span>
               <span className="session-tree-title">{task.title}</span>
+              {!connected && running?.status === 'in_progress' && <span className="muted">last seen {ago(elapsed)}</span>}
             </button>
           </li>
         );

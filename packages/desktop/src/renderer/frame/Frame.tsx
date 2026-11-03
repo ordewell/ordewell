@@ -62,13 +62,14 @@ function useShortcuts(store: FrameStore): void {
  */
 export function Frame({ daemon }: { daemon: DaemonStatus | undefined }): JSX.Element {
   const store = useFrameStore();
-  const { layout, overlay, announcement } = useFrameState();
+  const { layout, overlay, announcement, readOnly } = useFrameState();
   useShortcuts(store);
 
   return (
     <div className="frame">
       <TitleBar />
-      <div className="frame-body">
+      <Banners />
+      <div className="frame-body" {...(readOnly ? { inert: '' } : {})}>
         <ActivityBar />
         {layout.sidebarOpen && (
           <>
@@ -78,7 +79,6 @@ export function Frame({ daemon }: { daemon: DaemonStatus | undefined }): JSX.Ele
         )}
         <div className="frame-center">
           <main className="frame-main" aria-label="Editor">
-            <Banners />
             <TabArea />
           </main>
           {layout.bottomOpen && (

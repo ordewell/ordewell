@@ -121,6 +121,14 @@ describe('OrchestratorPool.updateSettings — environment allowlist', () => {
     expect(result.rejectedEnvKeys).toBeUndefined();
   });
 
+  it('saves the autonomy level where the next plan reads it, never through the environment', () => {
+    delete process.env.ORDEWELL_AUTONOMOUS_MODE;
+    pool.updateSettings({ autonomousMode: true });
+
+    expect(pool.getSettings().autonomousMode).toBe(true);
+    expect(process.env.ORDEWELL_AUTONOMOUS_MODE).toBeUndefined();
+  });
+
   it('invalidates the model catalog on a credential or endpoint change', () => {
     const resolver = new ModelResolver(
       { getManifest: () => undefined } as never,
