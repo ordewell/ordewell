@@ -107,6 +107,31 @@ try {
         ok(label);
       }
     }
+
+    // Subplanners and containers are held out of every published build
+    // (ADR-0055 D21, ADR-0059 L5): the variables only count in a git checkout,
+    // so a user who exports them still gets neither command. Prove that
+    // against the artifact users install, and prove the same variables still
+    // open both in the checkout's build, which is the gate development uses.
+    console.log('\nfeature gates');
+    const gatedEnv = { ...process.env, ORDEWELL_DELEGATION: '1', ORDEWELL_CONTAINERS: '1' };
+    const helpWith = (entry) =>
+      spawnSync(process.execPath, ['--no-experimental-require-module', entry, '--help'], { encoding: 'utf8', env: gatedEnv });
+    const checkGate = (label, run, offered) => {
+      if (run.status !== 0) {
+        fail(`${label} --help exited ${run.status} with the feature variables set: ${(run.stderr || run.stdout).trim().split('\n').slice(-3).join(' | ')}`);
+        return;
+      }
+      const delegation = /ordewell delegation/.test(run.stdout);
+      const containers = /ordewell containers/.test(run.stdout);
+      if (offered ? delegation && containers : !delegation && !containers) {
+        ok(`${label} --help ${offered ? 'offers' : 'hides'} subplanners and containers with the feature variables set`);
+      } else {
+        fail(`${label} --help ${delegation ? 'offers' : 'hides'} subplanners and ${containers ? 'offers' : 'hides'} containers with the feature variables set, expected both ${offered ? 'offered' : 'hidden'}`);
+      }
+    };
+    checkGate('packed CLI', helpWith(join(consumer, 'node_modules/@ordewell/cli/dist/main.js')), false);
+    checkGate('checkout CLI', helpWith(join(root, 'packages/cli/dist/main.js')), true);
   }
 
   // The VSIX, after "Package VS Code Extension". vsce renames LICENSE to
@@ -134,6 +159,23 @@ try {
       if (!has(pattern)) fail(`${vsix}: ${label} is not in the VSIX (check .vscodeignore)`);
     }
     if (failures === before) ok(`${vsix} carries the bundle, LICENSE, NOTICE and third-party notices`);
+
+    // The extension ships the containers command but must never show it without
+    // the context key its activation sets only when containersOffered() is true
+    // (ADR-0059 L5). The packaged manifest is the last place that gate can be
+    // lost while every unit test still passes.
+    const manifest = JSON.parse(
+      execFileSync('unzip', ['-p', join(vscodeDir, vsix), 'extension/package.json'], { encoding: 'utf8' }),
+    );
+    const containerCommand = manifest.contributes?.commands?.find((command) => command.command === 'ordewell.containers');
+    const containerMenu = manifest.contributes?.menus?.commandPalette?.find((item) => item.command === 'ordewell.containers');
+    if (!containerCommand) {
+      fail(`${vsix}: the containers command is missing, so the experiment cannot be reached in a checkout`);
+    } else if (containerMenu?.when !== 'ordewell.containersOffered') {
+      fail(`${vsix}: the containers command is not held behind ordewell.containersOffered, so a published extension would offer it`);
+    } else {
+      ok(`${vsix} keeps containers behind ordewell.containersOffered`);
+    }
   }
 } finally {
   rmSync(packDir, { recursive: true, force: true });

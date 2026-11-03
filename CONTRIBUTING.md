@@ -171,8 +171,10 @@ what a VS Code user sees), commit as `release: X.Y.Z`, then:
 git tag v0.4.6 && git push origin v0.4.6
 ```
 
-The tag triggers `.github/workflows/release.yml`, which verifies the tag
-matches every `package.json`, builds and tests, then:
+The tag triggers `.github/workflows/release.yml`, which first runs the full CI
+workflow — every check, the real engine included — so a tag cannot publish a
+commit that has not passed all of them. The publish jobs then verify the tag
+matches every `package.json`, build and test, then:
 
 - **npm**: publishes in dependency order — `core`, `web`, `cli`, then
   `cli-alias` (not a workspace — see Layout) — each one's `dependencies` must
