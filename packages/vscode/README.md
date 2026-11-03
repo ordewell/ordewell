@@ -6,7 +6,7 @@ By default, submitted build plans wait for your approval. Run settings let you
 automate execution and merging. Research tasks and consented script tasks can
 start during planning.
 
-This README describes 0.12.2. See the [published releases](https://github.com/ordewell/ordewell/releases)
+This README describes 0.12.3. See the [published releases](https://github.com/ordewell/ordewell/releases)
 for versions available to install and their release notes.
 
 ## Features

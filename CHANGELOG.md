@@ -8,6 +8,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.12.3] - 2026-11-03
+
 ### Fixed
 
 - **A checkpoint answer in VS Code is told by its own result.** An answer that was
@@ -38,6 +40,15 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **A planner with no `read` spends its read budget on a board.** A board read
   through `task_output` counts as a read, as a report's later pages do, and an
   ended report says where its listing is.
+
+### Experimental
+
+Subplanners and running a task in a container are built and remain experimental,
+and both are still off in published versions: a published Ordewell ignores the
+settings that would turn them on, and neither this package nor the VS Code
+extension can. A build run from a git checkout of this repository can turn them
+on for development, with `ORDEWELL_DELEGATION=1` and `ORDEWELL_CONTAINERS=1`.
+They need more review before they are offered.
 
 ## [0.12.2] - 2026-11-01
 
@@ -3874,7 +3885,8 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.12.2...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.12.3...HEAD
+[0.12.3]: https://github.com/ordewell/ordewell/compare/v0.12.2...v0.12.3
 [0.12.2]: https://github.com/ordewell/ordewell/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/ordewell/ordewell/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/ordewell/ordewell/compare/v0.11.3...v0.12.0
