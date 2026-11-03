@@ -36,7 +36,7 @@ export class DaemonProxy {
 
     return new Promise((resolve) => {
       const req = http.request(
-        { host: '127.0.0.1', port, method: request.method, path: request.path, headers, timeout: this.deps.timeoutMs ?? 30_000 },
+        { host: '127.0.0.1', port, method: request.method, path: request.path, headers, timeout: request.turn ? 0 : this.deps.timeoutMs ?? 30_000 },
         (res) => {
           const chunks: Buffer[] = [];
           res.on('data', (chunk: Buffer) => { chunks.push(chunk); });

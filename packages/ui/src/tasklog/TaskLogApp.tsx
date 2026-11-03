@@ -60,7 +60,10 @@ const STATE_CLASS: Record<TaskLogHeaderView['state']['kind'], string> = {
  * box that also stops the turn, the pending messages, and an attempt switcher. The host
  * reduces the log and patches blocks in; nothing here knows the event format.
  */
-export default function TaskLogApp() {
+export default function TaskLogApp({ composerLabel }: {
+  /** Who a message goes to, as a surface names it: the composer's accessible name and its placeholder's start. */
+  composerLabel?: string;
+} = {}) {
   const bridge = useTaskLogBridge();
   const [view, setView] = useState<PatchedView>(EMPTY_PATCHED_VIEW);
   const [status, setStatus] = useState<TaskLogStatus | null>(null);
@@ -279,8 +282,8 @@ export default function TaskLogApp() {
       ) : (
         <div className="task-log-composer">
           {completion.palette}
-          <textarea className="task-log-input" value={text} rows={2}
-            placeholder={`${resumes ? 'The limit has reset? A message to resume it with…' : continues ? 'Continue the task in its saved session…' : 'Message the task…'} (Enter to send, Shift+Enter for a new line)`}
+          <textarea className="task-log-input" value={text} rows={2} aria-label={composerLabel}
+            placeholder={`${composerLabel ? `${composerLabel}: ` : ''}${resumes ? 'The limit has reset? A message to resume it with…' : continues ? 'Continue the task in its saved session…' : 'Message the task…'} (Enter to send, Shift+Enter for a new line)`}
             onChange={(e) => completion.change(e.target.value)} onKeyDown={onComposerKeyDown} />
           <button type="button" className={`send-btn${stops ? ' processing' : ''}`}
             disabled={!stops && !canSend}

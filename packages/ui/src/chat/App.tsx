@@ -64,7 +64,15 @@ function runSettingsSummary(run: GlobalRunSettings | undefined, runSettings: Run
 
 const DETECTING = 'Detecting coding agents…';
 
-export default function App() {
+/**
+ * Which part of the chat a surface draws. `chat` is the one-column webview;
+ * a surface with room for both (the desktop app) mounts two instances over one
+ * bridge, `conversation` without the plan dock and `plan` as the dock's body
+ * alone.
+ */
+export type ChatLayout = 'chat' | 'conversation' | 'plan';
+
+export default function App({ layout = 'chat' }: { layout?: ChatLayout } = {}) {
   const bridge = useChatBridge();
   const [host, dispatch] = useReducer(reduceHost, INITIAL_HOST_STATE);
   const [childTree, setChildTree] = useState<{ rootId: string; children: ChildPlanEntry[] }>({ rootId: '', children: [] });
@@ -794,6 +802,117 @@ export default function App() {
   /** The one usage block, drawn pinned below the conversation rather than scrolling in it. */
   const usageBlock = useMemo(() => blocks.find((b) => b.type === 'usage'), [blocks]);
 
+  /** The plan's cards and run controls: the dock's body, or a surface's whole plan view. */
+  const renderPlanBody = () => {
+    if (!plan) return null;
+    return (
+      <>
+      {checkpoint && (
+        <CheckpointPanel
+          taskTitle={checkpoint.taskTitle}
+          summary={checkpoint.summary}
+          pausedAt={checkpoint.pausedAt}
+          delegated={delegationOffered && checkpoint.delegated}
+          draft={rootAnswers.draft(checkpoint.taskId, checkpoint.summary)}
+          onDraft={(draft) => rootAnswers.edit(checkpoint.taskId, checkpoint.summary, draft)}
+          onApprove={handleApproveCheckpoint}
+          onReject={handleRejectCheckpoint}
+        />
+      )}
+      {run.runMerge && !run.runMerge.waitingAtGate && isExecuting && (
+        <div className="plan-merge-actions">
+          <span>{run.runMerge.landed.length} landed task{run.runMerge.landed.length === 1 ? '' : 's'} not merged</span>
+          <button className="task-action-btn run" onClick={() => handleIsolationAction('merge')}>Merge all</button>
+        </div>
+      )}
+      {runnerNotice && (
+        <div className="runner-notice" role="note">
+          {runnerNotice.line}: <a href={runnerNotice.docs}>how to fix it</a>
+        </div>
+      )}
+      <PlanCardGroup
+        expandedTaskId={expandedTaskId}
+        onExpandedTaskChange={setExpandedTaskId}
+        // A surface task carries its skills as notices, without bodies. No
+        // card reads them, but the cards and core's row helpers still type
+        // their argument as a whole Task.
+        tasks={plan.tasks as Task[]}
+        run={run}
+        models={models}
+        modelsByRunner={modelsByRunner}
+        modesByRunner={modesByRunner}
+        isExecuting={isExecuting}
+        isStarting={isStarting}
+        runActive={isExecuting || starting || activity.advancesOnItsOwn}
+        taskOutput={taskOutput}
+        runnerLabels={runnerLabelMap}
+        runners={runnerList}
+        runnerScope={runnerScope}
+        onRunnerChange={handleRunnerChange}
+        onDependenciesChange={handleDependenciesChange}
+        onAddTask={handleAddTask}
+        onModelChange={handleModelChange}
+        onModelsRefreshNeeded={handleModelsRefreshNeeded}
+        onModeChange={handleModeChange}
+        onOpsChange={handleOpsChange}
+        taskSkills={taskSkills}
+        onSkillsChange={handleSkillsChange}
+        onRemoveTask={handleRemoveTask}
+        onPromptChange={handlePromptChange}
+        onRetry={handleRetry}
+        onSkip={handleSkip}
+        onCancel={handleCancel}
+        onCancelResume={handleCancelResume}
+        onResumeNow={handleResumeNow}
+        onForceStart={handleForceStart}
+        onMarkComplete={handleMarkComplete}
+        onMarkIncomplete={handleMarkIncomplete}
+        onRevert={handleRevert}
+        onExecutePlan={handleExecutePlan}
+        onStopExecution={handleStopExecution}
+        onApproveAll={handleApproveAll}
+        onRunTask={handleRunTask}
+        onSendMessage={handleTaskMessage}
+        onSendMessageNow={handleTaskMessageNow}
+        onResolveConflict={handleResolveConflict}
+        onOpenLog={handleOpenTaskLog}
+        onOpenChild={(taskId) => setChildChoice(taskId)}
+      />
+      {run.handoff && !isExecuting && !run.runMerge?.waitingAtGate && (
+        <HandoffCard
+          repos={run.handoff.repos}
+          landed={run.handoff.landed}
+          deferredTo={run.handoff.deferredTo}
+          mergeResult={run.mergeResult}
+          onAction={(action) => handleIsolationAction(action)}
+        />
+      )}
+      {run.runMerge?.waitingAtGate && (
+        <HandoffCard
+          repos={run.runMerge.repos}
+          landed={run.runMerge.landed}
+          mergeResult={run.mergeResult}
+          midRun={{ paused: run.runMerge.paused }}
+          onAction={(action) => handleIsolationAction(action)}
+        />
+      )}
+      {isExecuting && (
+        <div className="executing-footer">
+          <div className="queue-badge done-counter">
+            <span className="done-counter-check">✓</span> {doneCount}/{plan.tasks.length} done
+          </div>
+          {runningCount > 0 && (
+            <div className="queue-badge executing">
+              <span className="queue-dot running" /> {runningCount} running
+            </div>
+          )}
+          <div className="executing-status">Tasks active: messages reach the planner now; new tasks wait while it replies</div>
+        </div>
+      )}
+      </>
+    );
+  };
+
   /**
    * The plan, mounted once. Not a timeline entry: it is the live control surface
    * (status, streaming output, checkpoint approval, Execute/Stop), and a control
@@ -835,108 +954,7 @@ export default function App() {
           ref={dockBodyRef}
           style={dockHeight === undefined ? undefined : { maxHeight: dockHeight }}
         >
-          {checkpoint && (
-            <CheckpointPanel
-              taskTitle={checkpoint.taskTitle}
-              summary={checkpoint.summary}
-              pausedAt={checkpoint.pausedAt}
-              delegated={delegationOffered && checkpoint.delegated}
-              draft={rootAnswers.draft(checkpoint.taskId, checkpoint.summary)}
-              onDraft={(draft) => rootAnswers.edit(checkpoint.taskId, checkpoint.summary, draft)}
-              onApprove={handleApproveCheckpoint}
-              onReject={handleRejectCheckpoint}
-            />
-          )}
-          {run.runMerge && !run.runMerge.waitingAtGate && isExecuting && (
-            <div className="plan-merge-actions">
-              <span>{run.runMerge.landed.length} landed task{run.runMerge.landed.length === 1 ? '' : 's'} not merged</span>
-              <button className="task-action-btn run" onClick={() => handleIsolationAction('merge')}>Merge all</button>
-            </div>
-          )}
-          {runnerNotice && (
-            <div className="runner-notice" role="note">
-              {runnerNotice.line}: <a href={runnerNotice.docs}>how to fix it</a>
-            </div>
-          )}
-          <PlanCardGroup
-            expandedTaskId={expandedTaskId}
-            onExpandedTaskChange={setExpandedTaskId}
-            // A surface task carries its skills as notices, without bodies. No
-            // card reads them, but the cards and core's row helpers still type
-            // their argument as a whole Task.
-            tasks={plan.tasks as Task[]}
-            run={run}
-            models={models}
-            modelsByRunner={modelsByRunner}
-            modesByRunner={modesByRunner}
-            isExecuting={isExecuting}
-            isStarting={isStarting}
-            runActive={isExecuting || starting || activity.advancesOnItsOwn}
-            taskOutput={taskOutput}
-            runnerLabels={runnerLabelMap}
-            runners={runnerList}
-            runnerScope={runnerScope}
-            onRunnerChange={handleRunnerChange}
-            onDependenciesChange={handleDependenciesChange}
-            onAddTask={handleAddTask}
-            onModelChange={handleModelChange}
-            onModelsRefreshNeeded={handleModelsRefreshNeeded}
-            onModeChange={handleModeChange}
-            onOpsChange={handleOpsChange}
-            taskSkills={taskSkills}
-            onSkillsChange={handleSkillsChange}
-            onRemoveTask={handleRemoveTask}
-            onPromptChange={handlePromptChange}
-            onRetry={handleRetry}
-            onSkip={handleSkip}
-            onCancel={handleCancel}
-            onCancelResume={handleCancelResume}
-            onResumeNow={handleResumeNow}
-            onForceStart={handleForceStart}
-            onMarkComplete={handleMarkComplete}
-            onMarkIncomplete={handleMarkIncomplete}
-            onRevert={handleRevert}
-            onExecutePlan={handleExecutePlan}
-            onStopExecution={handleStopExecution}
-            onApproveAll={handleApproveAll}
-            onRunTask={handleRunTask}
-            onSendMessage={handleTaskMessage}
-            onSendMessageNow={handleTaskMessageNow}
-            onResolveConflict={handleResolveConflict}
-            onOpenLog={handleOpenTaskLog}
-            onOpenChild={(taskId) => setChildChoice(taskId)}
-          />
-          {run.handoff && !isExecuting && !run.runMerge?.waitingAtGate && (
-            <HandoffCard
-              repos={run.handoff.repos}
-              landed={run.handoff.landed}
-              deferredTo={run.handoff.deferredTo}
-              mergeResult={run.mergeResult}
-              onAction={(action) => handleIsolationAction(action)}
-            />
-          )}
-          {run.runMerge?.waitingAtGate && (
-            <HandoffCard
-              repos={run.runMerge.repos}
-              landed={run.runMerge.landed}
-              mergeResult={run.mergeResult}
-              midRun={{ paused: run.runMerge.paused }}
-              onAction={(action) => handleIsolationAction(action)}
-            />
-          )}
-          {isExecuting && (
-            <div className="executing-footer">
-              <div className="queue-badge done-counter">
-                <span className="done-counter-check">✓</span> {doneCount}/{plan.tasks.length} done
-              </div>
-              {runningCount > 0 && (
-                <div className="queue-badge executing">
-                  <span className="queue-dot running" /> {runningCount} running
-                </div>
-              )}
-              <div className="executing-status">Tasks active: messages reach the planner now; new tasks wait while it replies</div>
-            </div>
-          )}
+          {renderPlanBody()}
         </div>
       </div>
     );
@@ -958,6 +976,20 @@ export default function App() {
     setChildConversation(EMPTY_PATCHED_VIEW);
     setChildNotice(NO_CHILD_NOTICE);
   };
+
+  if (layout === 'plan') {
+    return (
+      <DelegationOfferedContext.Provider value={delegationOffered}>
+      <OpenPatchContext.Provider value={handleOpenPatch}>
+      <div className="plan-list">
+        {plan && plan.tasks.length > 0
+          ? renderPlanBody()
+          : <p className="plan-list-empty">No plan yet: describe a goal to the planner.</p>}
+      </div>
+      </OpenPatchContext.Provider>
+      </DelegationOfferedContext.Provider>
+    );
+  }
 
   return (
     <DelegationOfferedContext.Provider value={delegationOffered}>
@@ -1246,7 +1278,7 @@ export default function App() {
         />
       </div>
 
-      {renderPlanDock()}
+      {layout === 'chat' && renderPlanDock()}
 
       <UsageLine
         block={usageBlock}

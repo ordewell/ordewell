@@ -16,6 +16,12 @@ interface RouteSpec {
   path: string;
   /** Query parameters the route reads; any other param is refused. */
   query?: readonly string[];
+  /**
+   * A planner turn: the daemon answers when the turn ends, which can be long
+   * after the socket last carried a byte, so main sets it no idle bound. The
+   * turn's progress reaches the view over the session socket meanwhile.
+   */
+  turn?: true;
 }
 
 const WS = ['workspace'] as const;
@@ -43,7 +49,7 @@ export const ROUTES = {
   'children.message': { method: 'POST', path: '/api/sessions/:id/children/:childId/message' },
   'children.taskMessage': { method: 'POST', path: '/api/sessions/:id/children/:childId/tasks/:taskId/message' },
 
-  'plans.generate': { method: 'POST', path: '/api/plans/:sessionId/generate', query: ['workspace', 'runners'] },
+  'plans.generate': { method: 'POST', path: '/api/plans/:sessionId/generate', query: ['workspace', 'runners'], turn: true },
   'plans.execute': { method: 'POST', path: '/api/plans/:sessionId/execute' },
   'plans.stop': { method: 'POST', path: '/api/plans/:sessionId/stop' },
   'plans.stopPlanning': { method: 'POST', path: '/api/plans/:sessionId/planning/stop' },
@@ -55,20 +61,26 @@ export const ROUTES = {
   'plans.revertPreview': { method: 'GET', path: '/api/plans/:sessionId/tasks/:taskId/revert-preview' },
   'plans.isolationDiff': { method: 'GET', path: '/api/plans/:sessionId/isolation/diff' },
   'plans.isolationMerge': { method: 'POST', path: '/api/plans/:sessionId/isolation/merge' },
+  'plans.isolationDiscard': { method: 'POST', path: '/api/plans/:sessionId/isolation/discard' },
+  'plans.isolationCleanup': { method: 'POST', path: '/api/plans/:sessionId/isolation/cleanup' },
+  'plans.isolationStash': { method: 'POST', path: '/api/plans/:sessionId/isolation/stash-and-continue' },
+  'plans.isolationRunWithout': { method: 'POST', path: '/api/plans/:sessionId/isolation/run-without' },
+  'plans.checkpointApprove': { method: 'POST', path: '/api/plans/:sessionId/tasks/:taskId/checkpoint/approve' },
+  'plans.checkpointReject': { method: 'POST', path: '/api/plans/:sessionId/tasks/:taskId/checkpoint/reject' },
   'plans.resolveConflict': { method: 'POST', path: '/api/plans/:sessionId/tasks/:taskId/resolve-conflict' },
   'plans.addTask': { method: 'POST', path: '/api/plans/:sessionId/tasks' },
   'plans.updateTask': { method: 'PUT', path: '/api/plans/:sessionId/tasks/:taskId' },
   'plans.deleteTask': { method: 'DELETE', path: '/api/plans/:sessionId/tasks/:taskId' },
   'plans.approveReview': { method: 'POST', path: '/api/plans/:sessionId/review/approve' },
-  'plans.converseStart': { method: 'POST', path: '/api/plans/:sessionId/converse/start', query: WS },
-  'plans.converseMessage': { method: 'POST', path: '/api/plans/:sessionId/converse/message' },
-  'plans.converseMessageNow': { method: 'POST', path: '/api/plans/:sessionId/converse/message/now' },
+  'plans.converseStart': { method: 'POST', path: '/api/plans/:sessionId/converse/start', query: WS, turn: true },
+  'plans.converseMessage': { method: 'POST', path: '/api/plans/:sessionId/converse/message', turn: true },
+  'plans.converseMessageNow': { method: 'POST', path: '/api/plans/:sessionId/converse/message/now', turn: true },
   'plans.cancelResend': { method: 'POST', path: '/api/plans/:sessionId/converse/resend/cancel' },
   'plans.fork': { method: 'POST', path: '/api/plans/:sessionId/conversation/fork' },
   'plans.rewindTargets': { method: 'GET', path: '/api/plans/:sessionId/conversation/rewind-targets' },
   'plans.rewind': { method: 'POST', path: '/api/plans/:sessionId/conversation/rewind' },
-  'plans.compact': { method: 'POST', path: '/api/plans/:sessionId/conversation/compact' },
-  'plans.retryCompact': { method: 'POST', path: '/api/plans/:sessionId/conversation/compact/retry' },
+  'plans.compact': { method: 'POST', path: '/api/plans/:sessionId/conversation/compact', turn: true },
+  'plans.retryCompact': { method: 'POST', path: '/api/plans/:sessionId/conversation/compact/retry', turn: true },
   'plans.prd': { method: 'GET', path: '/api/plans/:sessionId/prd' },
 
   'approvals.list': { method: 'GET', path: '/api/approvals/:sessionId' },
@@ -99,6 +111,8 @@ export interface DaemonRequest {
   path: string;
   /** JSON text; absent when the call carried no body. */
   body?: string;
+  /** A planner turn, which main waits on with no idle bound. */
+  turn?: true;
 }
 
 export type BuildResult = { ok: true; request: DaemonRequest } | { ok: false; error: string };
@@ -165,7 +179,12 @@ export function buildRequest(routeId: unknown, params: unknown, body?: unknown):
 
   return {
     ok: true,
-    request: { method: spec.method, path: search ? `${path}?${search}` : path, ...(text !== undefined ? { body: text } : {}) },
+    request: {
+      method: spec.method,
+      path: search ? `${path}?${search}` : path,
+      ...(text !== undefined ? { body: text } : {}),
+      ...(spec.turn ? { turn: true } : {}),
+    },
   };
 }
 

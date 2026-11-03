@@ -44,6 +44,28 @@ describe('buildRequest: the IPC allowlist', () => {
     });
   });
 
+  it('reaches the checkpoint answers and every isolation outcome the session view sends', () => {
+    expect(buildRequest('plans.checkpointReject', { sessionId: 's', taskId: 't' }, { reason: 'no' })).toEqual({
+      ok: true,
+      request: { method: 'POST', path: '/api/plans/s/tasks/t/checkpoint/reject', body: '{"reason":"no"}' },
+    });
+    const paths = (['plans.isolationDiscard', 'plans.isolationCleanup', 'plans.isolationStash', 'plans.isolationRunWithout'] as const)
+      .map((id) => { const built = buildRequest(id, { sessionId: 's' }); return built.ok ? built.request.path : built.error; });
+    expect(paths).toEqual([
+      '/api/plans/s/isolation/discard',
+      '/api/plans/s/isolation/cleanup',
+      '/api/plans/s/isolation/stash-and-continue',
+      '/api/plans/s/isolation/run-without',
+    ]);
+  });
+
+  it('marks a planner turn, which main waits on with no idle bound, and nothing else', () => {
+    const built = buildRequest('plans.converseMessage', { sessionId: 's' }, { message: 'hi' });
+    expect(built).toEqual({ ok: true, request: { method: 'POST', path: '/api/plans/s/converse/message', body: '{"message":"hi"}', turn: true } });
+    const stop = buildRequest('plans.stop', { sessionId: 's' });
+    expect(stop.ok && stop.request.turn).toBeFalsy();
+  });
+
   it('builds a route with no params at all', () => {
     expect(buildRequest('server.info', undefined)).toEqual({ ok: true, request: { method: 'GET', path: '/api/server' } });
   });
