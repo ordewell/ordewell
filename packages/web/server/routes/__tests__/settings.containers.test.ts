@@ -23,6 +23,10 @@ function dockerAnswering(answers: Record<string, string>): DockerCli {
 const LOCAL_ENGINE = { 'context inspect': 'unix:///var/run/docker.sock\n', version: '29.5.2\n', info: `linux|2|${16 * 1024 ** 3}\n` };
 const NOT_INSTALLED: DockerCli = { call: async () => ({ code: -1, stdout: '', stderr: 'spawn docker ENOENT' }), entry: async () => { throw new Error('not installed'); } };
 
+// Containers are proven on Linux and macOS alone, so a Windows host is refused
+// them before Docker is asked anything (containerPreflight).
+const dockerIsNotAsked = process.platform === 'win32';
+
 describe('the containers setting over the daemon', () => {
   let dir: string;
   let file: string;
@@ -52,7 +56,7 @@ describe('the containers setting over the daemon', () => {
   const patch = (app: Hono, body: unknown) => app.request('/api/settings/containers', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const saved = (): unknown => (fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {});
 
-  it('turns containers on through to the file, and then wants the image and login', async () => {
+  it.skipIf(dockerIsNotAsked)('turns containers on through to the file, and then wants the image and login', async () => {
     const response = await patch(daemon(dockerAnswering(LOCAL_ENGINE)), { on: true, workspace: dir });
 
     const { refused, status } = await response.json() as ContainerChangeResponse;
@@ -62,7 +66,7 @@ describe('the containers setting over the daemon', () => {
     expect(status.problems.map(({ code }) => code)).toEqual(['image-unset', 'login-unset']);
   });
 
-  it('refuses to turn on without Docker, with the remedy, and writes nothing', async () => {
+  it.skipIf(dockerIsNotAsked)('refuses to turn on without Docker, with the remedy, and writes nothing', async () => {
     const response = await patch(daemon(NOT_INSTALLED), { on: true });
 
     const { refused, status } = await response.json() as ContainerChangeResponse;
@@ -78,7 +82,7 @@ describe('the containers setting over the daemon', () => {
     expect(saved()).toEqual({});
   });
 
-  it('reports the status a surface shows', async () => {
+  it.skipIf(dockerIsNotAsked)('reports the status a surface shows', async () => {
     fs.writeFileSync(file, JSON.stringify({ containers: {} }));
 
     const response = await daemon(dockerAnswering(LOCAL_ENGINE)).request('/api/settings/containers');

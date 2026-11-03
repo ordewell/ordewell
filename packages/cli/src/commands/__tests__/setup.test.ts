@@ -2,33 +2,20 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { homeEnv, setEnv } from '@ordewell/core/testing';
 import { handleSetup } from '../setup';
-
-const KEYS = ['OPENROUTER_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY'] as const;
 
 describe('ordewell setup', () => {
   let home = '';
-  let realHome: string | undefined;
-  const saved = new Map<string, string | undefined>();
+  let restoreEnv: () => void;
 
   beforeEach(() => {
-    realHome = process.env.HOME;
     home = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-setup-'));
-    process.env.HOME = home;
-    for (const key of KEYS) {
-      saved.set(key, process.env[key]);
-      delete process.env[key];
-    }
+    restoreEnv = setEnv({ ...homeEnv(home), OPENROUTER_API_KEY: undefined, OPENAI_API_KEY: undefined, GEMINI_API_KEY: undefined });
   });
 
   afterEach(() => {
-    if (realHome === undefined) delete process.env.HOME;
-    else process.env.HOME = realHome;
-    for (const key of KEYS) {
-      const value = saved.get(key);
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
+    restoreEnv();
     fs.rmSync(home, { recursive: true, force: true });
   });
 

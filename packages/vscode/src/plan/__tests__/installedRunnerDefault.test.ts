@@ -13,8 +13,9 @@ const AGENTS = ['claude', 'codex', 'opencode'];
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
   const spawn = ((command: string, args: string[], options: Parameters<SpawnFn>[2]) => {
-    if (!AGENTS.includes(basename(command))) return actual.spawn(command, args, options);
-    boundary.spawned.push(basename(command));
+    const agent = basename(command, '.exe');
+    if (!AGENTS.includes(agent)) return actual.spawn(command, args, options);
+    boundary.spawned.push(agent);
     throw new Error('stopped at the process boundary');
   }) as typeof actual.spawn;
   return { ...actual, spawn, default: { ...actual, spawn } };
@@ -25,12 +26,23 @@ import {
   PROVIDER_DETECT_PRIORITY, resetInstalledPlanner, RUN_SETTINGS_DEFAULTS, RunnerRegistry, SettingsService,
   type ModelResolver, type IRunner, type RunnerId,
 } from '@ordewell/core';
-import { fakeFileSystem } from '@ordewell/core/testing';
+import { fakeFileSystem, homeEnv, setEnv } from '@ordewell/core/testing';
 import { __resetConfig, __setConfig, configUpdates } from '../../test/vscode.mock';
 import { VsCodeConfig } from '../../adapters/VsCodeConfig';
 import { ChatViewProvider } from '../../providers/ChatViewProvider';
 import type { HostToWebview } from '../../shared/protocol';
 import { handleStartPlanning, type PlanManagerDeps } from '../PlanManager';
+
+/**
+ * What `name` resolves to on PATH; never run, since the spawn is faked. Windows
+ * starts a native executable ahead of anything else on PATH (ADR-0010), so
+ * there the stand-in is one.
+ */
+function standIn(bin: string, name: string): void {
+  const file = join(bin, process.platform === 'win32' ? `${name}.exe` : name);
+  writeFileSync(file, '#!/bin/sh\nexit 1\n');
+  chmodSync(file, 0o755);
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -43,17 +55,15 @@ function deferred<T>() {
 describe('VS Code with no saved runner choice enables the installed agents', () => {
   let dir: string;
   let env: NodeJS.ProcessEnv;
+  let restoreHome: () => void;
 
   beforeEach(() => {
     env = { ...process.env };
     dir = mkdtempSync(join(tmpdir(), 'ordewell-vscode-installed-runners-'));
     mkdirSync(join(dir, '.git'));
     mkdirSync(join(dir, 'bin'));
-    for (const agent of AGENTS) {
-      writeFileSync(join(dir, 'bin', agent), '#!/bin/sh\nexit 1\n');
-      chmodSync(join(dir, 'bin', agent), 0o755);
-    }
-    process.env.HOME = dir;
+    for (const agent of AGENTS) standIn(join(dir, 'bin'), agent);
+    restoreHome = setEnv(homeEnv(dir));
     process.env.PATH = `${join(dir, 'bin')}${delimiter}${process.env.PATH ?? ''}`;
     process.env.ORDEWELL_SETTINGS_PATH = join(dir, 'settings.json');
     delete process.env.AI_PROVIDER;
@@ -75,6 +85,8 @@ describe('VS Code with no saved runner choice enables the installed agents', () 
     resetInstalledPlanner();
     clearAugmentedPathCache();
     __resetConfig();
+    // First, on the environment it was set on, which the copy below replaces.
+    restoreHome();
     process.env = env;
     vi.unstubAllGlobals();
     vi.restoreAllMocks();

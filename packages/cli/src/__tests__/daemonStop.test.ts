@@ -5,6 +5,7 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mintDaemonToken, readDaemonToken } from '@ordewell/core';
+import { homeEnv, setEnv } from '@ordewell/core/testing';
 import { DEFAULT_PORT, findFreePort, stopDaemon } from '../daemon';
 
 /**
@@ -13,7 +14,7 @@ import { DEFAULT_PORT, findFreePort, stopDaemon } from '../daemon';
  */
 describe('stopDaemon', () => {
   let home = '';
-  let realHome: string | undefined;
+  let restoreHome: () => void;
   const children: ChildProcess[] = [];
   const servers: http.Server[] = [];
 
@@ -49,14 +50,12 @@ describe('stopDaemon', () => {
   }
 
   beforeEach(() => {
-    realHome = process.env.HOME;
     home = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-stop-daemon-'));
-    process.env.HOME = home;
+    restoreHome = setEnv(homeEnv(home));
   });
 
   afterEach(() => {
-    if (realHome === undefined) delete process.env.HOME;
-    else process.env.HOME = realHome;
+    restoreHome();
     for (const child of children.splice(0)) if (alive(child)) child.kill('SIGKILL');
     for (const server of servers.splice(0)) server.close();
     fs.rmSync(home, { recursive: true, force: true });

@@ -15,7 +15,7 @@ const boundary = vi.hoisted(() => ({ claude: null as SpawnFn | null }));
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
   const spawn = ((command: string, args: string[], options: Parameters<SpawnFn>[2]) =>
-    boundary.claude && basename(command) === 'claude'
+    boundary.claude && basename(command, '.exe') === 'claude'
       ? boundary.claude(command, args, options)
       : actual.spawn(command, args, options)) as typeof actual.spawn;
   return { ...actual, spawn, default: { ...actual, spawn } };
@@ -34,6 +34,18 @@ import { createRequestListener } from '../../../../web/server/nodeAdapter';
 import { OrchestratorPool } from '../../../../web/server/pool/orchestratorPool';
 import { ApiClient } from '../../apiClient';
 import { handlePlan } from '../plan';
+import { homeEnv, setEnv } from '@ordewell/core/testing';
+
+/**
+ * What `name` resolves to on PATH; never run, since the spawn is faked. Windows
+ * starts a native executable ahead of anything else on PATH (ADR-0010), so
+ * there the stand-in is one.
+ */
+function standIn(bin: string, name: string): void {
+  const file = join(bin, process.platform === 'win32' ? `${name}.exe` : name);
+  writeFileSync(file, '#!/bin/sh\nexit 1\n');
+  chmodSync(file, 0o755);
+}
 
 /** Discovery that never spawns a CLI or reaches the network. */
 function inertResolver(): ModelResolver {
@@ -98,8 +110,9 @@ function claudePlans(argv: string[]) {
  * `claude --model` nor be saved as the agent's model.
  */
 describe('ordewell plan with an inherited planner model', () => {
-  const keys = ['HOME', 'PATH', 'ORDEWELL_SETTINGS_PATH', 'AI_PROVIDER', 'ORCHESTRATOR_MODEL', 'ORDEWELL_PLANNER_EFFORT'];
+  const keys = ['PATH', 'ORDEWELL_SETTINGS_PATH', 'AI_PROVIDER', 'ORCHESTRATOR_MODEL', 'ORDEWELL_PLANNER_EFFORT'];
   const saved: Record<string, string | undefined> = {};
+  let restoreHome: () => void;
   let dir: string;
   let workspace: string;
   let pool: OrchestratorPool;
@@ -121,7 +134,7 @@ describe('ordewell plan with an inherited planner model', () => {
         delete process.env[key];
       }
     }
-    process.env.HOME = dir;
+    restoreHome = setEnv(homeEnv(dir));
     process.env.ORDEWELL_SETTINGS_PATH = join(dir, 'settings.json');
     delete process.env.AI_PROVIDER;
     delete process.env.ORDEWELL_PLANNER_EFFORT;
@@ -130,8 +143,7 @@ describe('ordewell plan with an inherited planner model', () => {
     // The spawn is faked, but the binary must still resolve on PATH first.
     const bin = join(dir, 'bin');
     mkdirSync(bin);
-    writeFileSync(join(bin, 'claude'), '#!/bin/sh\nexit 1\n');
-    chmodSync(join(bin, 'claude'), 0o755);
+    standIn(bin, 'claude');
     process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ''}`;
     clearAugmentedPathCache();
 
@@ -179,6 +191,7 @@ describe('ordewell plan with an inherited planner model', () => {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+    restoreHome();
     rmSync(dir, { recursive: true, force: true });
     vi.restoreAllMocks();
   });
