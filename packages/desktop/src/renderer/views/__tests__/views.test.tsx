@@ -4,7 +4,9 @@ import type { DaemonCallResult, DaemonStatus } from '../../../shared/bridge';
 import { registerFrameCommands } from '../../frame/commands';
 import { Frame } from '../../frame/Frame';
 import { FrameProvider, FrameStore } from '../../frame/store';
+import { resetDaemonHosts } from '../../session/DaemonHost';
 import { registerViews } from '../index';
+import { resetTaskViews } from '../task/taskView';
 
 // Monaco needs a browser; the stubs here never open a file.
 vi.mock('../../monaco', async () => (await import('../../test/monacoMock')).fakeMonacoModule());
@@ -27,6 +29,8 @@ function stubBridge(first: DaemonStatus): { push(status: DaemonStatus): void; re
         onStatus: (cb: (status: DaemonStatus) => void) => { listeners.add(cb); return () => listeners.delete(cb); },
         call,
         retry,
+        subscribe: () => () => undefined,
+        subscribeChild: () => () => undefined,
       },
     },
   });
@@ -35,7 +39,11 @@ function stubBridge(first: DaemonStatus): { push(status: DaemonStatus): void; re
 
 let offs: Array<() => void> = [];
 beforeEach(() => { offs = []; });
-afterEach(() => { for (const off of offs) off(); });
+afterEach(() => {
+  for (const off of offs) off();
+  resetDaemonHosts();
+  resetTaskViews();
+});
 
 function mount(daemon: DaemonStatus): FrameStore {
   const store = new FrameStore({ workspace: '/work/acme', platform: 'linux', sizes: SIZES });
@@ -51,7 +59,7 @@ describe('the view stubs', () => {
     const off = registerViews(store.api);
     const state = store.getSnapshot();
     expect(state.sidebars.map((s) => `${s.activity}/${s.id}`).sort()).toEqual([
-      'changes/checkout', 'changes/review', 'explorer/files', 'git/branches', 'plan/needs-you', 'plan/sessions',
+      'changes/checkout', 'changes/review', 'explorer/files', 'git/branches', 'plan/needs-you', 'plan/sessions', 'plan/tasks',
     ]);
     expect(Object.keys(state.tabKinds).sort()).toEqual(['commits', 'diff', 'file', 'plan', 'settings', 'task']);
     expect(state.panels.map((p) => `${p.region}/${p.id}`).sort()).toEqual(['bottom/terminal', 'right/planner']);

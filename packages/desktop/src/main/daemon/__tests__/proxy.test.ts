@@ -103,6 +103,15 @@ describe('DaemonProxy.call', () => {
     expect(await proxy.call({ method: 'GET', path: '/api/server' })).toEqual({ ok: false, error: 'The daemon is not running.' });
     expect(onUnreachable).toHaveBeenCalledTimes(1);
   });
+
+  it('gives up on a silent call, but waits out a planner turn however long it says nothing', async () => {
+    const d = await daemon((_seen, res) => {
+      setTimeout(() => { if (!res.destroyed) res.writeHead(200, { 'Content-Type': 'application/json' }).end('{"plan":{}}'); }, 120);
+    });
+    const proxy = new DaemonProxy({ port: () => d.port, token: () => 't', timeoutMs: 40 });
+    expect(await proxy.call({ method: 'GET', path: '/api/server' })).toEqual({ ok: false, error: 'The daemon did not answer in time.' });
+    expect(await proxy.call({ method: 'POST', path: '/api/plans/s/converse/message', body: '{}', turn: true })).toEqual({ ok: true, status: 200, data: { plan: {} } });
+  });
 });
 
 describe('DaemonProxy.stream', () => {

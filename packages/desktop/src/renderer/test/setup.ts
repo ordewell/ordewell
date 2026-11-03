@@ -8,3 +8,6 @@ afterEach(async () => {
     cleanup();
   }
 });
+
+// jsdom draws no layout, so the chat's scroll-to-latest has nothing to call.
+if (typeof Element !== 'undefined') Element.prototype.scrollIntoView ??= () => {};
