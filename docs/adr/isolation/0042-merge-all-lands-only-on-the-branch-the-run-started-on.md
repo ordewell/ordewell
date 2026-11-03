@@ -5,8 +5,6 @@ amends: ["0013", "0014"]
 
 # 0042 — Merge all lands only on the branch the run started on
 
-*Pending:* [ADR-0062](0062-user-git-actions-are-confirmed-at-a-host-and-a-live-run-holds-only-its-landing-branch.md) — a live run refuses a host's switch away from its landing branch, and Merge all is preceded by a preflight offering to commit or stash overlapping edits; `wrong-branch` stays the backstop.
-
 ## Problem
 
 Merge all merges each repo's integration branch into whatever that repo has
@@ -48,6 +46,18 @@ and every surface names that branch.**
   wrong branch keeps the others from merging.
 - The base ref is still the commit the review diff is taken against; the branch
   is only where the merge goes.
+- A live run keeps its repositories where it lands them
+  ([ADR-0062](0062-user-git-actions-are-confirmed-at-a-host-and-a-live-run-holds-only-its-landing-branch.md)
+  G7): a host refuses to switch a repository away from its landing branch, to
+  detach it, or to delete that branch while an attempt is in progress, a start
+  is pending, or a landing or Merge all is under way, and names the run. A run
+  that settles with work unmerged no longer holds it; a switch is then allowed
+  with a warning, and this check is what catches it.
+- A preflight precedes Merge all (G8): it names each repository's branch and the
+  user's uncommitted files the merge also changes, and offers to commit or stash
+  those first. `wrong-branch` stays the backstop for anything that changes
+  between the preflight and the merge, and for a terminal or another git client,
+  which no host sees.
 
 ## Considered options
 
@@ -65,3 +75,4 @@ and every surface names that branch.**
 
 - 2026-10-17 — accepted and implemented: the `wrong-branch` block, the rebase case, and the branch named in the handoff, the confirmations, `ordewell status` and VS Code.
 - 2026-10-31 — a run with no base branch merges with a merge commit, never a fast-forward (ADR-0054).
+- 2026-11-03 — a live run holds its landing branch against a host's switch, detach or delete, and Merge all is preceded by a preflight over overlapping uncommitted work (ADR-0062 G7, G8).

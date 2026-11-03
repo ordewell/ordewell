@@ -1,8 +1,7 @@
 ---
 status: accepted
-implemented: partial
 amends: ["0013", "0014", "0042", "0049"]
-note: "The write half of the desktop app's file and git views (docs/desktop/design.md). The daemon's routes implement G1 to G9 and G10's save; the terminal (G11) is built in the desktop app; the other surfaces that offer them are the desktop app's to build."
+note: "The write half of the desktop app's file and git views (docs/desktop/design.md): the daemon's routes implement G1 to G10 and the desktop app's terminal G11."
 ---
 
 # 0062 — User git actions are confirmed at a host, and a live run holds only its landing branch
@@ -46,9 +45,9 @@ start stays the existing escalation (G9). Editing is confined to the checkout
 (G10), and a terminal is a person's own shell, outside the interlock (G11).**
 
 - The v1 action set: save a file; stage and unstage files and hunks; commit, and
-  amend while unpushed; discard; create, switch and delete a branch; stash and
-  pop; fetch, pull and push to the tracking remote. Arbitrary merge, rebase and
-  pull requests are later.
+  amend while unpushed; discard; create, switch and delete a branch; stash, pop
+  and drop; fetch, pull and push to the tracking remote. Arbitrary merge, rebase
+  and pull requests are later.
 - Nothing here is forced: no force push, no `reset --hard`, no `branch -D` of
   unmerged work without its confirmation naming it, no `clean`.
 
@@ -160,6 +159,7 @@ state (ADR-0061's `GET /api/git/repos` row for it).
 | `POST /api/git/branch-delete` | `branch` | `{ branch, unmerged }` |
 | `POST /api/git/stash` | `paths?`, `message?` | — |
 | `POST /api/git/stash-pop` | `stash` | — |
+| `POST /api/git/stash-drop` | `stash` | — |
 | `POST /api/git/fetch` | — | — |
 | `POST /api/git/pull` | — | `{ remote, branch }` |
 | `POST /api/git/push` | — | `{ remote, branch }` |
@@ -168,7 +168,8 @@ state (ADR-0061's `GET /api/git/repos` row for it).
 A refusal is one of `landing_branch_held`, `confirm_stale`, `stale`,
 `not_checkout`, `ordewell_branch`, `pushed` (an amend of a pushed commit), or
 `git_failed` with git's text. The stash route never stashes the whole stack's
-top by position: it names the stash it made, and pop takes that name.
+top by position: it names the stash it made, and pop and drop take that name, so
+a stash that has moved is refused `stale` rather than taking another's changes.
 
 ## Testing decisions
 
@@ -243,3 +244,4 @@ top by position: it names the stash it made, and pop takes that name.
 - 2026-11-03 — the desktop terminal panel implemented (G11).
 - 2026-11-03 — G7 reads a run's liveness from its holder's lease record: a non-holder judging by the saved plan missed a start pending and a Merge all.
 - 2026-11-03 — G7 counts the runs of enclosing workspaces that land in the same checkout: a checkout opened on its own missed them.
+- 2026-11-03 — implemented in full: the routes, interlock, preflight, save and terminal above are built, and dropping a stash is in the action set and the route table.

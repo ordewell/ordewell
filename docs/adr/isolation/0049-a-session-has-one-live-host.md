@@ -5,8 +5,6 @@ amends: ["0013"]
 
 # 0049 — A session has one live host: the session lease
 
-*Pending:* [ADR-0062](0062-user-git-actions-are-confirmed-at-a-host-and-a-live-run-holds-only-its-landing-branch.md) — a host that does not hold a session appends user-action lines to its `user-actions.jsonl` under the lock, for the holder to fold in.
-
 ## Problem
 
 Nothing stopped two Ordewell processes from running one session at once.
@@ -101,7 +99,10 @@ lets go of nothing.
   nodes close. A child's turns go by its root's hold. A new goal is judged by the
   session it writes: under a host's fixed id that is the held session, and
   under a minted id it is a new one, so a Session that lost its lease may still
-  plan.
+  plan. One write is the exception: a host that does not hold a session may
+  append one line to its `user-actions.jsonl` under the file lock, naming the
+  user's action on the run's landing branch, for the holder to fold into the
+  timeline ([ADR-0062](0062-user-git-actions-are-confirmed-at-a-host-and-a-live-run-holds-only-its-landing-branch.md) G6).
 - **A lost lease stays lost (L6).** A holder whose heartbeat finds another host
   in its lease file has lost the session: it is told so, stops its run, and
   saves nothing more. What it holds is older than what the new holder has saved,
@@ -214,3 +215,4 @@ throwaway HTTP server, the TUI effect and the CLI command against a refusal.
 - 2026-11-01 — L7 waits out what the run has under way: a release still in git as a Session closed ran with the lease let go, in a tree a next host could hold.
 - 2026-11-03 — L5 lets a host read a held session's run files, diffs and branches without the lease (ADR-0061).
 - 2026-11-03 — the record carries `runLive`, for ADR-0062 G7's interlock in another host.
+- 2026-11-03 — L5's one exception: a non-holder appends a user-action line to `user-actions.jsonl` under the lock (ADR-0062 G6).

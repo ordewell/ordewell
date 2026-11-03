@@ -15,7 +15,9 @@ The vocabulary is [CONTEXT.md](../../CONTEXT.md)'s. The terms this design adds
 there are *Desktop app*, *Daemon bridge*, *Version handshake*, *Needs you*,
 *View scope*, *User principal*, *User's checkout*, *Landing branch*, *Live run*,
 *Merge all preflight* and *User git action*. A word this spec uses in a
-different sense from CONTEXT.md is a bug in this spec.
+different sense from CONTEXT.md is a bug in this spec. For how to install the
+app, run it from source and find your way around it, see
+[the user guide](README.md).
 
 ## Contents
 
@@ -514,10 +516,10 @@ bar, so no region claims a failure of its own.
   the run. The commit graph is a tab, paged by cursor (`GET /api/git/log`); a
   commit opens its message and files (`GET /api/git/commit`), and a file its
   patch.
-- **Actions.** Create, switch and delete a branch; pop or drop a stash (drop is
-  later); fetch. Switching away from, or deleting, a locked branch is refused
-  with the run named (W12). An Ordewell branch can be viewed and diffed, never
-  switched to or deleted here.
+- **Actions.** Create, switch and delete a branch; pop or drop a stash, each
+  asking first; fetch. Switching away from, or deleting, a locked branch is
+  refused with the run named (W12). An Ordewell branch can be viewed and diffed,
+  never switched to or deleted here.
 - **Loading.** The first page of the graph, then more on scroll.
 - **Empty.** A repository with no commits says so.
 - **Error.** A `git_failed` action shows git's text in place.

@@ -2253,7 +2253,8 @@ work not yet merged is open but not live: switching away from its landing
 branch is allowed with a warning that Merge all will refuse until the branch is
 back.
 *Avoid:* "active run" for this (the desktop app's tray and quit confirm say
-*active* for any run in progress, which is wider), "running plan".
+*in progress* for any run its daemon would stop, which is wider), "running
+plan".
 
 **Merge all preflight** (`GET /api/plans/:sessionId/isolation/merge-preflight`;
 ADR-0062 G8) — what a surface asks before Merge all: per repository, the branch
@@ -2267,12 +2268,12 @@ changes nothing), "dry run".
 
 **User git action** (ADR-0062) — a git action or file save a host performs on the
 *user's checkout* at a person's request: save, stage, unstage, commit, amend
-while unpushed, discard, branch create, switch and delete, stash and pop, fetch,
-pull and push to the tracking remote. It runs the user's own git with their
-hooks and credentials. A destructive or remote one carries a `confirm` echoing
-what the person saw, refused as `confirm_stale` when the state has moved. One
-that touches a live run's landing branch is a line in that session's timeline.
-No plan, planner, supervisor or script reaches one.
+while unpushed, discard, branch create, switch and delete, stash, pop and drop,
+fetch, pull and push to the tracking remote. It runs the user's own git with
+their hooks and credentials. A destructive or remote one carries a `confirm`
+echoing what the person saw, refused as `confirm_stale` when the state has
+moved. One that touches a live run's landing branch is a line in that session's
+timeline. No plan, planner, supervisor or script reaches one.
 *Avoid:* "effect" (an *Effect* is the plan's, ADR-0035), "git command" (an
 execution command is the plan's seam), "Ordewell commits".
 

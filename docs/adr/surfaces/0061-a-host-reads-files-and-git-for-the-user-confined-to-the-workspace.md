@@ -157,3 +157,4 @@ The run's whole diff stays on the existing `GET /api/plans/:sessionId/isolation/
 
 - 2026-11-03 — accepted.
 - 2026-11-03 — implemented; `find` also searches file contents with `text`, capped like a name search, which the desktop's quick open had left out.
+- 2026-11-03 — the desktop app draws every read here: the Explorer and its Monaco editor, quick open, the task and run diff review, and the commit graph.

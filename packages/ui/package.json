@@ -58,7 +58,7 @@
     "*.css"
   ],
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && node ../../scripts/generate-third-party-notices.mjs ui",
     "lint": "eslint src --ext .ts,.tsx",
     "test": "vitest run",
     "test:quick": "vitest run",

@@ -79,6 +79,10 @@ function main() {
   run(process.execPath, [require.resolve('tsup/dist/cli-default.js')]);
   run(process.execPath, [join(dirname(require.resolve('vite/package.json')), 'bin', 'vite.js'), 'build']);
 
+  // extraResources names it, so a package built without this would ship a
+  // notice describing a previous dependency tree, or none at all.
+  run(process.execPath, [join(root, '..', '..', 'scripts', 'generate-third-party-notices.mjs'), 'desktop']);
+
   // node-pty is rebuilt for Electron by electron-builder itself, per target
   // architecture (npmRebuild in electron-builder.yml): a single rebuild here
   // would be the host's architecture, wrong for a macOS x64 build on arm64.

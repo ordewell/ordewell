@@ -58,7 +58,7 @@ describe('checkResources', () => {
     touch(join(resources, 'app.asar'));
     for (const entry of [...UNPACKED_ENTRIES, ...ptyEntries()]) touch(join(resources, 'app.asar.unpacked', entry), 'x');
     if (process.platform === 'darwin') chmodSync(join(resources, 'app.asar.unpacked', ptyEntries()[1]), 0o755);
-    for (const notice of ['LICENSE', 'NOTICE', 'AUTHORS.md']) touch(join(resources, notice));
+    for (const notice of ['LICENSE', 'NOTICE', 'AUTHORS.md', 'THIRD-PARTY-NOTICES.md']) touch(join(resources, notice));
   };
 
   it('accepts a resources directory with the archive, the daemon closure and the notices', () => {

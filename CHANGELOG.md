@@ -8,6 +8,27 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **A desktop app.** An orchestration-first window for macOS, Windows and Linux:
+  the planner, the plan and its tasks, your checkout's files, diffs and git, and
+  a terminal, with one session at a time and one window per workspace. It is a
+  client of the local daemon, so a run started there is the one the CLI and
+  `ordewell status` see. Closing a window during a run keeps the app in the tray,
+  and quitting asks first, saying whether the run stops with it. The installers
+  are unsigned, so on macOS or Windows the first launch asks you to allow the
+  app, and they are attached to each release (#129, #136). The
+  [desktop guide](docs/desktop/README.md) covers installing it, running it from
+  source, the views and the shortcuts.
+- **Your repository's files, diffs and git actions in the app.** The daemon
+  reads your checkout, a run's integration branch and a task's worktree, and
+  performs the git actions you ask for on your own checkout with your own git:
+  stage and unstage by file or hunk, commit and amend, discard, branches, stash,
+  fetch, pull and push. A destructive or remote action confirms what it is about
+  to do, a live run refuses only a switch away from or a delete of its landing
+  branch, and Merge all asks about your overlapping uncommitted work before it
+  merges.
+
 ## [0.12.3] - 2026-11-03
 
 ### Fixed
