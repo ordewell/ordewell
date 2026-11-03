@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import http from 'http';
 import { AddressInfo } from 'net';
 import WebSocket from 'ws';
-import { bearerHeaderValue, tokenSubprotocols } from '@ordewell/core';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+import { bearerHeaderValue, DAEMON_CONTRACT, tokenSubprotocols } from '@ordewell/core';
 import { createApp, attachWsHandler } from '../app';
 import { createRequestListener } from '../nodeAdapter';
 import type { OrchestratorPool } from '../pool/orchestratorPool';
@@ -168,6 +170,18 @@ describe('daemon admission control', () => {
       );
       expect(result.outcome === 'open' && result.protocol).toBe('ordewell.v1');
       expect(result.outcome === 'open' && result.protocol).not.toContain(TOKEN);
+    });
+
+    it('learns which process, package version and contract owns the port', async () => {
+      const res = await request(daemon.port, '/api/server', { headers: AUTH });
+      const manifest = JSON.parse(readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf8')) as { version: string };
+      expect(res.status).toBe(200);
+      expect(JSON.parse(res.body)).toEqual({
+        pid: process.pid,
+        port: daemon.port,
+        version: manifest.version,
+        contract: DAEMON_CONTRACT,
+      });
     });
 
     it('reaches the API when it dials localhost by name', async () => {
