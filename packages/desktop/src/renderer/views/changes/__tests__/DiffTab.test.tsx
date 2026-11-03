@@ -8,6 +8,7 @@ import { daemonHost, resetDaemonHosts, type DaemonHost } from '../../../session/
 import { fakeDaemon, ok, surfacePlan, surfaceTask } from '../../../session/__tests__/fakeDaemon';
 import { diffEditors } from '../../../test/monacoMock';
 import { fileTabId } from '../../explorer/fileTabs';
+import { checkoutDiffTabId } from '../../checkout/checkoutTabs';
 import { clearComments } from '../comments';
 import { register } from '../DiffTab';
 import { HANDOFF, runTask, runView, worktree } from './fixtures';
@@ -51,6 +52,7 @@ async function mount(): Promise<{ daemon: ReturnType<typeof fakeDaemon>; host: D
   const daemon = fakeDaemon({
     'sessions.load': ok({ ok: true, plan: surfacePlan(TASKS.map(({ id, order, title, status }) => surfaceTask({ id, order, title, status })), 'running'), goal: 'Ship SSO' }),
     'plans.taskDiff': () => ok({ available: true, text: `[repo .] src/sso.ts: +1 -1\n${PATCH}` }),
+    'git.diff': () => ok({ files: [{ path: 'src/sso.ts', status: 'M', added: 1, removed: 1 }], patch: PATCH }),
     'files.content': () => ok({ kind: 'text', text: AFTER, hash: 'h1', size: AFTER.length }),
   });
   const host = daemonHost(WORKSPACE);
@@ -152,9 +154,21 @@ describe('a diff tab', () => {
     expect(await screen.findByRole('note', { name: 'Comment on src/sso.ts, lines 1–2' })).toHaveTextContent('Put in the planner’s composer');
   });
 
-  it('leaves the checkout\'s own changes to the checkout group', async () => {
-    await mount();
-    act(() => store.api.openTab({ kind: 'diff', id: fileTabId('.', 'src/sso.ts'), title: 'sso.ts', scope: { kind: 'checkout' } }));
-    expect(screen.getByRole('tabpanel')).toHaveTextContent('Your checkout’s changes are under Your changes, in the Changes view.');
+  it('draws the checkout\'s own change from the index against the working tree', async () => {
+    const { daemon } = await mount();
+    act(() => store.api.openTab({
+      kind: 'diff',
+      id: checkoutDiffTabId('.', 'src/sso.ts', 'unstaged'),
+      title: 'sso.ts (Changes)',
+      scope: { kind: 'checkout' },
+    }));
+    await waitFor(() => expect(diffEditors).toHaveLength(1));
+    expect(diffEditors[0]!.options.original.text).toBe('export function login() {\n  return null;\n}\n');
+    expect(diffEditors[0]!.options.modified.text).toBe(AFTER);
+    expect(daemon.calls('git.diff').at(-1)).toEqual([
+      { workspace: WORKSPACE, repo: '.', scope: 'checkout', kind: 'unstaged', path: 'src/sso.ts' },
+      undefined,
+    ]);
+    expect(screen.getByRole('tabpanel')).toHaveTextContent('Working tree');
   });
 });

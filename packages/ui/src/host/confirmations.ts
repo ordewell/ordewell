@@ -29,7 +29,7 @@ export interface ConfirmationRequest<C extends string = string> {
 export type ConfirmationKind =
   | 'remove_task' | 'start_past_gate' | 'manual_override' | 'revert_task'
   | 'isolation_blocked' | 'merge_all' | 'merge_past_checks' | 'discard_run'
-  | 'run_setting_risk' | 'fork_stops_run';
+  | 'run_setting_risk' | 'fork_stops_run' | 'discard_changes';
 
 function yes<C extends string>(kind: ConfirmationKind, message: string, id: C, label: string, detail?: string): ConfirmationRequest<C> {
   return { kind, message, ...(detail !== undefined ? { detail } : {}), choices: [{ id, label }] };
@@ -110,6 +110,12 @@ export function mergePastChecksQuestion(held: string, target: string): Confirmat
 
 export function discardRunConfirmation(): ConfirmationRequest<'discard'> {
   return yes('discard_run', 'Discard the whole run? Its worktrees, task branches and integration branch are removed. Tasks it completed stay completed.', 'discard', 'Discard');
+}
+
+/** The user's own uncommitted changes (ADR-0062 G3): the files shown are echoed back with the action. */
+export function discardChangesConfirmation(files: readonly string[]): ConfirmationRequest<'discard'> {
+  const what = files.length === 1 ? files[0]! : `${files.length} files`;
+  return yes('discard_changes', `Discard the changes to ${what}?`, 'discard', 'Discard', files.join('\n'));
 }
 
 /**

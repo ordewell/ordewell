@@ -8,6 +8,7 @@ import { daemonHost, type DaemonHost } from '../../session/DaemonHost';
 import { messageOf } from '../../session/daemon';
 import { useSession } from '../../session/useSession';
 import { all } from '../Stub';
+import { CheckoutDiff } from '../checkout/CheckoutDiff';
 import { parseFileTabId } from '../explorer/fileTabs';
 import { messageTask, readFileDiff, type FileDiff, type ReviewScope } from './changesData';
 import { commentMessage, commentPlace, isFinished, type DiffSides, type LineComment } from './changesModel';
@@ -310,10 +311,11 @@ function ReviewDiff({ api, tab, scope, repo, path }: { api: FrameApi; tab: Tab; 
 
 /** A diff tab: a file in a task's or the run's scope, its id the file tab's (fileTabs.ts). */
 function DiffTab({ api, tab }: { api: FrameApi; tab: Tab }): JSX.Element {
-  const { repo, path } = parseFileTabId(tab.id);
   const scope = tab.scope;
+  if (!scope) return <p className="frame-empty">This diff does not name the scope it reads.</p>;
   // The checkout's own changes are the checkout group's to show (design slice 13).
-  if (!scope || scope.kind === 'checkout') return <p className="frame-empty">Your checkout’s changes are under Your changes, in the Changes view.</p>;
+  if (scope.kind === 'checkout') return <CheckoutDiff api={api} tab={tab} />;
+  const { repo, path } = parseFileTabId(tab.id);
   return <ReviewDiff key={tab.key} api={api} tab={tab} scope={scope} repo={repo} path={path} />;
 }
 
