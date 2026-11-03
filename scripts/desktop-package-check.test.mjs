@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -11,8 +11,10 @@ import {
   fuseDrift,
   fuseTarget,
   missingInstallers,
+  ptyEntries,
   resourcesDirs,
   smokeDaemon,
+  smokePty,
 } from './desktop-package-check.mjs';
 
 const temp = [];
@@ -54,7 +56,8 @@ describe('missingInstallers', () => {
 describe('checkResources', () => {
   const fill = (resources) => {
     touch(join(resources, 'app.asar'));
-    for (const entry of UNPACKED_ENTRIES) touch(join(resources, 'app.asar.unpacked', entry));
+    for (const entry of [...UNPACKED_ENTRIES, ...ptyEntries()]) touch(join(resources, 'app.asar.unpacked', entry), 'x');
+    if (process.platform === 'darwin') chmodSync(join(resources, 'app.asar.unpacked', ptyEntries()[1]), 0o755);
     for (const notice of ['LICENSE', 'NOTICE', 'AUTHORS.md']) touch(join(resources, notice));
   };
 
@@ -71,6 +74,21 @@ describe('checkResources', () => {
     const failures = checkResources(resources);
     assert.equal(failures.length, 1);
     assert.match(failures[0], /app\.asar\.unpacked\/node_modules\/ws\/package\.json is missing/);
+  });
+
+  it('names a pty addon that was not rebuilt or was left inside the archive', () => {
+    const resources = scratch();
+    fill(resources);
+    rmSync(join(resources, 'app.asar.unpacked', 'node_modules/node-pty'), { recursive: true });
+    assert.match(checkResources(resources).join('\n'), /node-pty\/build\/Release\/pty\.node is missing, so the terminal could not start/);
+  });
+
+  it('names a macOS spawn-helper that lost its executable bit', () => {
+    const resources = scratch();
+    fill(resources);
+    const failures = checkResources(resources, undefined, 'darwin', () => 0o644);
+    assert.match(failures.join('\n'), /spawn-helper is not executable/);
+    assert.deepEqual(checkResources(resources, undefined, 'darwin', () => 0o755).filter((f) => f.includes('spawn-helper')), []);
   });
 
   it('names a missing notice', () => {
@@ -143,5 +161,41 @@ describe('smokeDaemon', () => {
     const result = await smokeDaemon(entry);
     assert.equal(result.ok, false);
     assert.match(result.message, /exited early.*hono/s);
+  });
+});
+
+describe('ptyEntries', () => {
+  it('asks for the helper on macOS only', () => {
+    assert.deepEqual(ptyEntries('darwin'), ['node_modules/node-pty/build/Release/pty.node', 'node_modules/node-pty/build/Release/spawn-helper']);
+    assert.deepEqual(ptyEntries('linux'), ['node_modules/node-pty/build/Release/pty.node']);
+    assert.deepEqual(ptyEntries('win32'), ['node_modules/node-pty/build/Release/pty.node']);
+  });
+});
+
+describe('smokePty', () => {
+  // A stand-in for node-pty, so the test needs no native addon of its own.
+  const fake = (spawnBody) => {
+    const modules = scratch();
+    touch(join(modules, 'node-pty', 'index.js'), `exports.spawn = ${spawnBody};`);
+    return modules;
+  };
+
+  it('passes when the shell\'s output comes back through the pty', () => {
+    const modules = fake(`() => ({ onData: (cb) => setImmediate(() => cb('ow-pty-ok\\r\\n')), onExit: () => {} })`);
+    assert.deepEqual(smokePty(modules), { ok: true });
+  });
+
+  it('fails when the pty ends without the output', () => {
+    const modules = fake(`() => ({ onData: () => {}, onExit: (cb) => setImmediate(cb) })`);
+    assert.equal(smokePty(modules).ok, false);
+  });
+
+  it('fails, and says why, when the addon cannot be loaded', () => {
+    const modules = fake(`() => { throw new Error('posix_spawnp failed.') }`);
+    assert.match(smokePty(modules).message, /posix_spawnp failed/);
+  });
+
+  it('reports a directory with no node-pty', () => {
+    assert.equal(smokePty(scratch()).ok, false);
   });
 });

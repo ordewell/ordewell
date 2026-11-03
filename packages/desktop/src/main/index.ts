@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { app, dialog, Menu, nativeImage, nativeTheme, Tray } from 'electron';
 import {
@@ -8,6 +9,7 @@ import {
   readDaemonToken,
   resolveDaemonPort,
   stopDaemonAt,
+  withPath,
 } from '@ordewell/core/daemon-client';
 import { buildRequest, type RouteId, type RouteParams } from '../shared/routes';
 import { DaemonManager } from './daemon/DaemonManager';
@@ -15,6 +17,10 @@ import { forkBundledDaemon } from './daemon/forkDaemon';
 import { findLiveRuns, type LiveRun } from './daemon/liveRuns';
 import { DaemonProxy } from './daemon/proxy';
 import { registerIpc } from './ipc';
+import { TerminalChannel } from './terminal/TerminalChannel';
+import { fileSystemPlacement } from './terminal/placement';
+import { shellName } from './terminal/shellChoice';
+import { TerminalHost, type PtySpawn } from './terminal/TerminalHost';
 import { onLastWindowClosed, quitPrompt } from './lifecycle';
 import { menuTemplate } from './menu';
 import { PrefsStore } from './prefs';
@@ -98,6 +104,21 @@ async function main(): Promise<void> {
     log: (message) => console.warn(message),
   });
 
+  // node-pty is a native addon: it loads on the first terminal, so a build
+  // where it is missing still opens windows and only that terminal fails.
+  const nodeRequire = createRequire(__filename);
+  const spawnPty: PtySpawn = (file, args, options) => (nodeRequire('node-pty') as typeof import('node-pty')).spawn(file, args, options);
+  const terminalHost = new TerminalHost(spawnPty);
+  // Whatever ends this process, no shell outlives it.
+  process.on('exit', () => terminalHost.killAll());
+  const terminalChannel = new TerminalChannel({
+    host: terminalHost,
+    placement: { ...fileSystemPlacement, call: get },
+    platform: process.platform,
+    // The same PATH the daemon and its runners get, not the GUI launch's.
+    env: async () => withPath(process.env, await augmentedPath()),
+  });
+
   registerIpc({
     appVersion: app.getVersion(),
     contract: DAEMON_CONTRACT,
@@ -108,6 +129,7 @@ async function main(): Promise<void> {
     recents,
     prefs,
     updates,
+    terminals: { channel: terminalChannel, host: terminalHost },
   });
 
   /** Live runs, or [] when no daemon answers: nothing can be running that this app could lose. */
@@ -149,7 +171,7 @@ async function main(): Promise<void> {
     event.preventDefault();
     void (async () => {
       const live = await liveRuns();
-      const prompt = quitPrompt(live, daemon.owned);
+      const prompt = quitPrompt(live, daemon.owned, terminalHost.busy(shellName));
       if (prompt) {
         const answer = await dialog.showMessageBox({
           type: 'warning',
@@ -173,6 +195,7 @@ async function main(): Promise<void> {
         }
       }
       hideTray();
+      terminalHost.killAll();
       await daemon.shutdown();
       app.exit(0);
     })();

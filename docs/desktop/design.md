@@ -949,9 +949,9 @@ table; the renderer never gives a URL, a header or a method.
 | `shell.openInEditor(workspace, repo, path, line?)` | Hands a checkout file to the user's editor (G10) |
 | `shell.reveal(workspace, repo, path?)` | Reveal in Finder / Explorer |
 | `shell.openExternal(url)` | `https:` only |
-| `terminal.open({ workspace, repo, scope })` → `id` | Starts a PTY ([terminal rule](#the-terminal-rule)) |
+| `terminal.open({ repo, scope, cols, rows }, onEvent)` → `{ id, shell, cwd }` | Starts a PTY ([terminal rule](#the-terminal-rule)); the window's workspace is implied, and `onEvent` receives the PTY's output and exit |
 | `terminal.write(id, data)` / `terminal.resize(id, cols, rows)` / `terminal.close(id)` | PTY input and size |
-| `terminal.onData(id, cb)` / `terminal.onExit(id, cb)` / `terminal.onBanner(id, cb)` | PTY output, exit, "task #N started" banner |
+| `terminal.openLink(url)` | Opens an `http:` or `https:` address the terminal printed; any other scheme is refused in main |
 | `prefs.get()` / `prefs.set(key, value)` | App-local preferences: window bounds, panel sizes, List or Graph |
 | `update.state()` | Always "disabled" until signing (out of scope) |
 
@@ -1027,6 +1027,33 @@ that Electron main owns; the daemon never starts a shell.
   backstop at Merge all.
 - Terminals close with their window. Quitting with a terminal running a
   process asks first, alongside the run question (H5).
+
+How it is built:
+
+- **Main owns the PTY.** `src/main/terminal/` spawns the shell (`SHELL`, or
+  PowerShell on Windows) with the `PATH` that `packages/core/src/utils/shellPath.ts`
+  repairs, works out the working directory itself from the scope and the repo,
+  and applies the scope rule again: the renderer's menu only previews it
+  (`src/shared/terminalScope.ts`). A PTY is closed with its window, on quit, and
+  on exit of the shell. The renderer gets bytes over four narrow channels and
+  one event stream, never a handle.
+- **The panel keeps its terminals while hidden.** The frame unmounts a hidden
+  bottom panel, so the xterm instances and their tabs live in a store outside
+  React and are re-parented when the panel opens again. Ctrl+\` is passed
+  through xterm to the frame's shortcut.
+- **Tabs** are new, close and rename, each labelled with its scope: *Your
+  checkout*, *Task #N worktree*, or the repository. The banner for a task that
+  starts under an open shell is derived from the scope store, which follows the
+  session stream, and is also announced to screen readers.
+- **Copy and paste** use Cmd+C / Cmd+V on macOS and Ctrl+Shift+C / Ctrl+Shift+V
+  elsewhere, so Ctrl+C stays an interrupt; the context menu copies a selection
+  and otherwise pastes. A web address on a line opens with Cmd (macOS) or Ctrl
+  and a click, through `terminal.openLink`.
+- **Packaging.** node-pty is a native addon. electron-builder rebuilds it for
+  the app's Electron once per target architecture (`npmRebuild`), it is
+  unpacked from the archive, and `scripts/desktop-package-check.mjs` loads the
+  unpacked copy and runs a shell through it. Linux has no prebuilt binary, so
+  its build needs make, g++ and python.
 
 ## Out of scope
 

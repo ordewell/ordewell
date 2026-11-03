@@ -66,3 +66,22 @@ describe('isInside', () => {
     expect(isInside(root, join(root, '..hidden'))).toBe(true);
   });
 });
+
+describe('quitPrompt with terminals (ADR-0062 G11)', () => {
+  it('does not ask for a terminal sitting at its prompt', () => {
+    expect(quitPrompt([], true, 0)).toBeUndefined();
+  });
+
+  it('asks when a terminal is running a process, with no run live', () => {
+    const one = quitPrompt([], false, 1);
+    expect(one?.message).toBe('A terminal is running a process. Quit Ordewell?');
+    expect(quitPrompt([], false, 3)?.message).toBe('3 terminals are running a process. Quit Ordewell?');
+  });
+
+  it('asks the run question and the terminal one together', () => {
+    const prompt = quitPrompt([run], true, 2);
+    expect(prompt?.message).toBe('A run is in progress. Quit and stop it?');
+    expect(prompt?.detail).toContain('2 terminals are running a process');
+    expect(prompt?.confirmLabel).toBe('Stop and quit');
+  });
+});

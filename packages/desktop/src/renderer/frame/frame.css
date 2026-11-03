@@ -113,6 +113,9 @@
 }
 .frame-sidebar > .frame-pane-title { padding: var(--ow-space-4) var(--ow-space-5); }
 .frame-sidebar-body, .frame-panel-body { flex: 1; overflow: auto; }
+/* The terminal fills the bottom panel; the planner scrolls in the right one. */
+.frame-panel-bottom .frame-panel-body { display: flex; flex-direction: column; overflow: hidden; }
+.frame-panel-bottom .frame-panel-body > div { display: flex; flex: 1; min-height: 0; }
 .frame-panel-head { display: flex; align-items: center; justify-content: space-between; padding: var(--ow-space-2) var(--ow-space-3) var(--ow-space-2) var(--ow-space-5); }
 
 .frame-center { display: flex; flex-direction: column; flex: 1; min-width: 0; }

@@ -6,6 +6,7 @@
  */
 
 import type { RouteId, RouteParams } from './routes';
+import type { TerminalScope } from './terminalScope';
 
 export interface AppInfo {
   version: string;
@@ -102,6 +103,28 @@ export interface UpdateState {
   state: 'disabled' | 'checking';
 }
 
+/** Where a terminal opens: a repo of the window's workspace, and the scope the view is in. */
+export interface TerminalOpenSpec {
+  repo: string;
+  scope: TerminalScope;
+  cols: number;
+  rows: number;
+}
+
+export type TerminalOpenResult =
+  /** `id` names the terminal in every later call; `cwd` is the directory the shell started in. */
+  | { ok: true; id: number; cwd: string; shell: string }
+  | { ok: false; message: string };
+
+export type TerminalEvent =
+  | { kind: 'data'; data: string }
+  | { kind: 'exit'; exitCode: number; signal?: number };
+
+export interface TerminalDelivery {
+  id: number;
+  event: TerminalEvent;
+}
+
 export type Unsubscribe = () => void;
 
 export interface OrdewellBridge {
@@ -143,6 +166,21 @@ export interface OrdewellBridge {
     openInEditor(target: ShellTarget): Promise<ActionResult>;
     reveal(target: ShellTarget): Promise<ActionResult>;
   };
+  /**
+   * The built-in terminal (ADR-0062 G11). The shells are main's: a page asks
+   * for one by repo and scope and main picks the directory, so it cannot start a
+   * shell anywhere else. Output and the exit come back on one event channel to
+   * the callback given to `open`; the listener exists before the shell does, so
+   * its first bytes are not lost.
+   */
+  terminal: {
+    open(spec: TerminalOpenSpec, onEvent: (event: TerminalEvent) => void): Promise<TerminalOpenResult>;
+    write(id: number, data: string): Promise<void>;
+    resize(id: number, cols: number, rows: number): Promise<void>;
+    close(id: number): Promise<void>;
+    /** Opens an http(s) address in the OS browser; anything else is refused. The page has no other way out (security.ts). */
+    openLink(url: string): Promise<ActionResult>;
+  };
 }
 
 /** Invoke channels, one per bridge call; `event` channels flow main → renderer. */
@@ -165,12 +203,18 @@ export const CHANNELS = {
   updateState: 'ordewell:update.state',
   shellOpenInEditor: 'ordewell:shell.openInEditor',
   shellReveal: 'ordewell:shell.reveal',
+  terminalOpen: 'ordewell:terminal.open',
+  terminalWrite: 'ordewell:terminal.write',
+  terminalResize: 'ordewell:terminal.resize',
+  terminalClose: 'ordewell:terminal.close',
+  terminalOpenLink: 'ordewell:terminal.openLink',
 } as const;
 
 export const EVENTS = {
   theme: 'ordewell:event.theme',
   daemonStatus: 'ordewell:event.daemonStatus',
   stream: 'ordewell:event.stream',
+  terminal: 'ordewell:event.terminal',
 } as const;
 
 /** What `daemonSubscribe` takes: a session's socket, or one of its child plans'. */

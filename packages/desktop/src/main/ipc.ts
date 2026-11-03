@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { BrowserWindow, dialog, ipcMain, nativeTheme, shell, type IpcMainInvokeEvent, type WebContents } from 'electron';
-import { CHANNELS, EVENTS, type AppInfo, type ConfirmSpec, type StreamDelivery, type StreamEvent } from '../shared/bridge';
+import { CHANNELS, EVENTS, type AppInfo, type ConfirmSpec, type StreamDelivery, type StreamEvent, type TerminalDelivery } from '../shared/bridge';
 import { isAppPage } from '../shared/csp';
 import { buildRequest, childStreamPath, sessionStreamPath, type BuildResult } from '../shared/routes';
 import type { DaemonManager } from './daemon/DaemonManager';
@@ -8,6 +8,9 @@ import type { DaemonProxy } from './daemon/proxy';
 import { validPref, type PrefsStore } from './prefs';
 import type { RecentsStore } from './recents';
 import { Shell } from './shell';
+import { webLink } from './terminal/link';
+import type { TerminalChannel } from './terminal/TerminalChannel';
+import type { TerminalHost } from './terminal/TerminalHost';
 import type { UpdateController } from './updater';
 import type { WindowManager } from './windows';
 
@@ -21,6 +24,7 @@ export interface IpcDeps {
   recents: RecentsStore;
   prefs: PrefsStore;
   updates: UpdateController;
+  terminals: { channel: TerminalChannel; host: TerminalHost };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -198,6 +202,37 @@ export function registerIpc(deps: IpcDeps): void {
   };
   handle(CHANNELS.shellOpenInEditor, (event, target) => files.openInEditor(workspaceOfCaller(event), target));
   handle(CHANNELS.shellReveal, (event, target) => files.reveal(workspaceOfCaller(event), target));
+
+  // A window that reloads or closes leaves no shell running behind it (ADR-0062 G11).
+  const terminalWatched = new Set<number>();
+  const callerOf = (event: IpcMainInvokeEvent): Parameters<TerminalChannel['open']>[0] => {
+    const contents = event.sender;
+    if (!terminalWatched.has(contents.id)) {
+      const id = contents.id;
+      terminalWatched.add(id);
+      contents.on('destroyed', () => { deps.terminals.host.closeOwner(id); terminalWatched.delete(id); });
+      contents.on('did-start-navigation', (details) => {
+        if (details.isMainFrame && !details.isSameDocument) deps.terminals.host.closeOwner(id);
+      });
+    }
+    return {
+      owner: contents.id,
+      workspace: workspaceOfCaller(event),
+      send: (terminal, terminalEvent) => {
+        if (!contents.isDestroyed()) contents.send(EVENTS.terminal, { id: terminal, event: terminalEvent } satisfies TerminalDelivery);
+      },
+    };
+  };
+  handle(CHANNELS.terminalOpen, (event, spec) => deps.terminals.channel.open(callerOf(event), spec));
+  handle(CHANNELS.terminalWrite, (event, id, data) => { deps.terminals.channel.write(callerOf(event), id, data); });
+  handle(CHANNELS.terminalResize, (event, id, cols, rows) => { deps.terminals.channel.resize(callerOf(event), id, cols, rows); });
+  handle(CHANNELS.terminalOpenLink, async (_event, url) => {
+    const link = webLink(url);
+    if (!link) return { ok: false, message: 'Only http and https links open from the terminal.' };
+    await shell.openExternal(link);
+    return { ok: true };
+  });
+  handle(CHANNELS.terminalClose, (event, id) => { deps.terminals.channel.close(callerOf(event), id); });
 
   daemon.onStatus((status) => windows.broadcast(EVENTS.daemonStatus, status));
   nativeTheme.on('updated', () => windows.broadcast(EVENTS.theme, currentTheme()));

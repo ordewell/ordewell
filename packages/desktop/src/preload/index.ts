@@ -6,6 +6,8 @@ import {
   type DaemonStatus,
   type OrdewellBridge,
   type StreamDelivery,
+  type TerminalDelivery,
+  type TerminalEvent,
   type StreamEvent,
   type SubscribeTarget,
   type Unsubscribe,
@@ -54,6 +56,15 @@ function subscribe(target: SubscribeTarget, cb: (event: StreamEvent) => void): U
   };
 }
 
+const terminalListeners = new Map<number, (event: TerminalEvent) => void>();
+ipcRenderer.on(EVENTS.terminal, (_event, delivery: TerminalDelivery) => {
+  const cb = terminalListeners.get(delivery.id);
+  if (!cb) return;
+  if (delivery.event.kind === 'exit') terminalListeners.delete(delivery.id);
+  cb(delivery.event);
+});
+let nextTerminal = 1;
+
 const bridge: OrdewellBridge = {
   app: {
     info: () => ipcRenderer.invoke(CHANNELS.appInfo),
@@ -86,6 +97,30 @@ const bridge: OrdewellBridge = {
   shell: {
     openInEditor: (target) => ipcRenderer.invoke(CHANNELS.shellOpenInEditor, target),
     reveal: (target) => ipcRenderer.invoke(CHANNELS.shellReveal, target),
+  },
+  terminal: {
+    async open(spec, onEvent) {
+      // The number is chosen here so the listener is in place before main
+      // starts the shell: the prompt's first bytes may be sent before the
+      // reply to this call arrives.
+      const id = nextTerminal++;
+      terminalListeners.set(id, onEvent);
+      try {
+        const result = (await ipcRenderer.invoke(CHANNELS.terminalOpen, { ...spec, id })) as Awaited<ReturnType<OrdewellBridge['terminal']['open']>>;
+        if (!result.ok) terminalListeners.delete(id);
+        return result;
+      } catch (err) {
+        terminalListeners.delete(id);
+        throw err;
+      }
+    },
+    write: (id, data) => ipcRenderer.invoke(CHANNELS.terminalWrite, id, data),
+    resize: (id, cols, rows) => ipcRenderer.invoke(CHANNELS.terminalResize, id, cols, rows),
+    async close(id) {
+      terminalListeners.delete(id);
+      await ipcRenderer.invoke(CHANNELS.terminalClose, id);
+    },
+    openLink: (url) => ipcRenderer.invoke(CHANNELS.terminalOpenLink, url),
   },
 };
 
