@@ -133,7 +133,8 @@ function someMandate(r: Random): Mandate {
     depth: r.int(0, SHAPE_LIMITS.depth.hard),
     delegatedTasks: r.int(0, SHAPE_LIMITS.delegatedTasks.hard),
     tasksPerPlan: r.int(0, SHAPE_LIMITS.tasksPerPlan.hard),
-    runners: r.some(RUNNERS),
+    // Mostly one at least, or any set asked of it would keep nothing.
+    runners: r.chance(0.9) ? [...new Set([RUNNERS[0], ...r.some(RUNNERS)])] : r.some(RUNNERS),
     models: someModels(r),
   };
   // Mostly enough to hand on, or almost nothing would get past the floor.
@@ -149,6 +150,9 @@ function someMandate(r: Random): Mandate {
   };
 }
 
+const overlapping = (asked: MandateLimits['models'], held: MandateLimits['models']) =>
+  Object.fromEntries(Object.entries(asked).map(([runner, models]) => [runner, [...models, ...held[runner] ?? [], MODELS[0]]]));
+
 function someRequest(r: Random, parent: Mandate): MandateRequest {
   const maybe = <T>(value: () => T): T | undefined => (r.chance() ? value() : undefined);
   return {
@@ -161,8 +165,9 @@ function someRequest(r: Random, parent: Mandate): MandateRequest {
     depth: maybe(() => r.int(0, SHAPE_LIMITS.depth.hard + 1)),
     delegatedTasks: maybe(() => r.int(0, SHAPE_LIMITS.delegatedTasks.hard + 1)),
     tasksPerPlan: maybe(() => r.int(0, SHAPE_LIMITS.tasksPerPlan.hard + 1)),
-    runners: maybe(() => r.some(RUNNERS)),
-    models: maybe(() => someModels(r)),
+    // Mostly overlapping what the parent holds, since a set that keeps nothing is refused.
+    runners: maybe(() => [...r.chance(0.95) ? parent.limits.runners : [], ...r.some(RUNNERS)]),
+    models: maybe(() => (r.chance(0.95) ? overlapping(someModels(r), parent.limits.models) : someModels(r))),
     protectedPaths: maybe(() => r.some(PATHS)),
     effectRules: maybe(() => EFFECTS[r.int(0, EFFECTS.length - 1)]),
   };
@@ -180,7 +185,8 @@ const NOT_WIDER_LIMIT: { [K in keyof MandateLimits]: (child: MandateLimits, pare
   delegatedTasks: (c, p) => c.delegatedTasks <= p.delegatedTasks,
   tasksPerPlan: (c, p) => c.tasksPerPlan <= p.tasksPerPlan,
   runners: (c, p) => within(c.runners, p.runners),
-  models: (c, p) => Object.entries(p.models).every(([runner, models]) => c.models[runner] !== undefined && within(c.models[runner], models)),
+  // An empty list allows any model, as the user's allowlist reads: under a list, it is the widest answer there is.
+  models: (c, p) => Object.entries(p.models).every(([runner, models]) => models.length === 0 || (c.models[runner]?.length > 0 && within(c.models[runner], models))),
 };
 
 /** Keyed as the type is, so a new field fails to compile here too until it says what wider means for it. */
@@ -321,6 +327,20 @@ describe('narrow, each rule on its own (ADR-0056 M4)', () => {
     expect(child({ runners: ['codex', 'opencode'] }).limits.runners).toEqual(['codex']);
     expect(child({ models: { 'claude-code': ['m2', 'm3'], codex: ['g1'] } }).limits.models).toEqual({ 'claude-code': ['m2'], codex: ['g1'] });
     expect(child().limits.models).toEqual({ 'claude-code': ['m1', 'm2'] });
+  });
+
+  it('holds a runner a parent left open to what is asked of it', () => {
+    const open = root({ delegationTokens: 1000, effects: RULES, models: { codex: [] } });
+    const result = narrow(open, { level: 1, tokens: 1, models: { codex: ['g1'] } });
+    expect(result.ok && result.mandate.limits.models).toEqual({ codex: ['g1'] });
+  });
+
+  it('refuses a set that keeps nothing, which a list reads as no restriction at all', () => {
+    expect(refusal(delegating, { models: { 'claude-code': ['m9'] } })).toEqual({ level: 1, field: 'limits.models', asked: 'claude-code: m9', there: 'claude-code: m1, m2' });
+    expect(refusal(delegating, { models: { 'claude-code': [] } })).toEqual({ level: 1, field: 'limits.models', asked: 'claude-code: nothing', there: 'claude-code: m1, m2' });
+    expect(refusal(delegating, { models: { codex: [] } })).toEqual({ level: 1, field: 'limits.models', asked: 'codex: nothing', there: 'codex: any' });
+    expect(refusal(delegating, { runners: ['opencode'] })).toEqual({ level: 1, field: 'limits.runners', asked: 'opencode', there: 'claude-code, codex' });
+    expect(refusal(delegating, { runners: [] })).toEqual({ level: 1, field: 'limits.runners', asked: 'nothing', there: 'claude-code, codex' });
   });
 
   it('accumulates exclusions', () => {

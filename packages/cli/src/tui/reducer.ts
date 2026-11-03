@@ -1,11 +1,11 @@
-import { blockingFailures, DEFAULT_RUNNERS, EMPTY_HOLD, EMPTY_RUN, NO_TURN, closeTurn, fromTranscript, holdPrompt, taskLogCommands, taskStartedNotice, type RunnerId, type SerializedPlan } from '@ordewell/core';
+import { blockingFailures, DEFAULT_RUNNERS, EMPTY_HOLD, EMPTY_RUN, NO_TURN, closeTurn, fromTranscript, holdPrompt, taskLogCommands, taskStartedNotice, type ChildPlanView, type RunnerId, type SerializedPlan } from '@ordewell/core';
 import { bodyMode, chatEditorRoomFor } from './geometry';
 import { SPINNER_CYCLE, chatScrollMax } from './layout';
 import { activeToken, composerCompletions, findCommand, parseRunnerCommand, parseSlash, runnerCommandFor, type ParsedCommand } from './slash';
 import { applyKey, commit } from './editor';
 import { endRunningCompactions, hear, say, wiped } from './transcript';
 import { askMergePastChecks, blockedPicker, handoffArrived, showDiff } from './handoff';
-import { continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, scriptTaskView, waitingApproval, waitingCheckpoint, type RunStatus, type TaskView, type TuiState } from './state';
+import { continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, scriptTaskView, viewOnly, waitingApproval, waitingCheckpoint, type RunStatus, type TaskView, type TuiState } from './state';
 import type { Key } from './keys';
 import { handleOverlayKey } from './reducers/overlays';
 import { syncApprovals } from './reducers/approvals';
@@ -22,6 +22,7 @@ import {
   handleMouseSelect, isMouseSelect, isScrollKey, isWheel, scrollChat, scrollDelta, scrollPointed, settlePanes, settlePlan, toggleDetail,
 } from './reducers/pointer';
 import { clamp, clampSelection, clearNotice, reportError, stale, step, type Action, type Effect, type Step } from './reducers/shared';
+import { belongsAbove, childFailed, childGone, childKey, childLost, childMessaged, childTreeArrived, childrenListed, commandInChild, leaveChild, onParent, readLanded, routeChild, speakToChild } from './reducers/children';
 
 export { initialState } from './state';
 export { resolveTaskId } from './reducers/taskEdits';
@@ -55,7 +56,17 @@ function holdPlanInView(after: TuiState): TuiState {
 }
 
 export function reduce(state: TuiState, action: Action): Step {
-  const result = nextTip(state, reduceAction(state, action));
+  if (belongsAbove(state, action)) return onParent(state, (parent) => reduce(parent, action));
+  return forgetTree(state, routeChild(state, action, heldInPlace(state, action, nextTip(state, reduceAction(state, action)))));
+}
+
+/** A session with no child plan sends no tree, so the last session's must not outlive it. */
+function forgetTree(before: TuiState, result: Step): Step {
+  if (before.child || result.state.child || result.state.sessionId === before.sessionId || before.childTree.length === 0) return result;
+  return { ...result, state: { ...result.state, childTree: [] } };
+}
+
+function heldInPlace(state: TuiState, action: Action, result: Step): Step {
   // A notice normally sets `scroll` to 0, which `holdReadingPlace` leaves
   // alone; one that holds the reader's place grows the content below them
   // exactly as live output does.
@@ -244,6 +255,8 @@ function reduceAction(state: TuiState, action: Action): Step {
       if (action.message.type === 'planner_compaction') return followCompaction(state, action.message);
       if (action.message.type === 'planner_detection') return step({ ...state, plannerDetecting: action.message.waiting });
       const next = followSession(state, action.message);
+      // A child's turns start on the daemon, so no call here has told the status.
+      if (state.child && action.message.type === 'planner_turn_started') return step({ ...next, planner: 'joined' });
       const { sessionId } = state;
       const gateClosed = action.message.type === 'planner_turn_ended' && next.turnGate.open === null;
       if (gateClosed && state.planner === 'joined') {
@@ -329,6 +342,7 @@ function reduceAction(state: TuiState, action: Action): Step {
 
     case 'isolationBlocked': {
       if (stale(state, action.sessionId)) return step(state);
+      if (state.child) return step(reportError(state, action.message));
       return step(blockedPicker(state, action.message, action.repos));
     }
 
@@ -336,8 +350,10 @@ function reduceAction(state: TuiState, action: Action): Step {
       if (stale(state, action.sessionId)) return step(state);
       // Announce against the handoff the pane already held — a deferred one for
       // the same run words the follow-up as the supervisor leaving it — then
-      // fold the fresh handoff into the run view.
-      const announced = handoffArrived(state, action.handoff);
+      // fold the fresh handoff into the run view. A child's branch is not the
+      // person's to land: it comes in through its task in the plan above, and
+      // `/handoff` here would act on the root.
+      const announced = state.child ? state : handoffArrived(state, action.handoff);
       return step(foldRun(announced, { type: 'isolation_handoff', ...action.handoff }));
     }
 
@@ -399,6 +415,7 @@ function reduceAction(state: TuiState, action: Action): Step {
     // without sending this notice again until a reconnect opens.
     case 'followLost': {
       if (stale(state, action.sessionId)) return step(state);
+      if (state.child) return step(childLost(state));
       if (state.status === 'executing' || state.status === 'starting') return reduceAction(state, { type: 'executionLost', sessionId: action.sessionId });
       return step(say(state, 'system', 'Lost the connection to the daemon; reconnecting to follow this session.'));
     }
@@ -623,6 +640,27 @@ function reduceAction(state: TuiState, action: Action): Step {
       if (stale(state, action.sessionId)) return step(state);
       return step(say(state, action.level === 'error' ? 'error' : 'system', action.message, !action.holdPlace));
 
+    case 'childTree':
+      return step(childTreeArrived(state, action.sessionId, action.children));
+
+    case 'childrenListed':
+      return childrenListed(state, action);
+
+    case 'childOpened':
+      if (stale(state, action.sessionId)) return step(state);
+      return step(childRead(state, action.view));
+
+    case 'childMessaged':
+      if (stale(state, action.sessionId)) return step(state);
+      return step(childMessaged(state, action.status));
+
+    case 'childFailed':
+      return childFailed(state, action);
+
+    case 'childGone':
+      if (stale(state, action.sessionId)) return step(state);
+      return childGone(state, action.message);
+
     case 'resize': {
       // A grown pane can leave both offsets pointing past the end of content
       // that now fits; re-clamping here keeps "the offset is always reachable"
@@ -699,6 +737,23 @@ function plannerPauseOf(plan: unknown): TuiState['plannerPause'] {
   return saved ? { model: typeof saved.model === 'string' ? saved.model : 'the planner model' } : null;
 }
 
+/** A child plan as the daemon holds it: the chat is the plan's own transcript, since a child's stream starts with the socket. */
+function childRead(state: TuiState, view: ChildPlanView): TuiState {
+  const { plan } = view;
+  const back = state.child?.lost;
+  const read: TuiState = {
+    ...readLanded(state, view),
+    conversation: fromTranscript(plan?.conversationHistory, plan?.researchLog, plan?.plannerUsage, plan?.pendingTurns),
+    planner: view.plannerTurnId ? 'joined' : 'idle',
+    turnGate: view.plannerTurnId ? { open: view.plannerTurnId, stopped: null } : NO_TURN,
+  };
+  // Folded, not replaced: a read has no status-only fields, and the question a task waits on is one.
+  const run = plan ? showPlan(read, plan) : withRun(read, view.run);
+  const status = { ...run, status: runStatus(run, run.tasks) };
+  const shown = view.plannerCompaction ? adoptCompaction(status, view.plannerCompaction) : status;
+  return back ? say(shown, 'system', 'Reconnected to this plan.') : shown;
+}
+
 function runStatus(state: TuiState, tasks: TaskView[]): RunStatus {
   // The run's own authoritative word first: an admitted start that has not
   // claimed is "starting", never "executing", and a claimed one is running
@@ -714,10 +769,14 @@ function runStatus(state: TuiState, tasks: TaskView[]): RunStatus {
   return 'idle';
 }
 
+/** What a key may clear. An ended plan draws no composer, so what it holds is not cleared unseen: leaving takes it up. */
+const draftOnScreen = (state: TuiState): boolean => !!state.editor.text && !viewOnly(state);
+
 /** Ctrl-C backs out one layer at a time; it only quits when there is nothing to back out of. */
 function interrupt(state: TuiState): Step {
   if (state.overlay) return step({ ...state, overlay: null });
-  if (state.editor.text) return step({ ...state, editor: { ...state.editor, text: '', cursor: 0 } });
+  if (draftOnScreen(state)) return step({ ...state, editor: { ...state.editor, text: '', cursor: 0 } });
+  if (state.child) return leaveChild(state);
   return step({ ...state, exiting: true }, [{ type: 'exit' }]);
 }
 
@@ -750,17 +809,22 @@ function handleKey(state: TuiState, key: Key): Step {
   // closes the view onto the plan with the cursor on that task. An open overlay
   // still owns Esc ahead of both, so /help closes before either.
   if (key.name === 'escape' && state.taskView && !state.overlay && !planPaneOpen(state)) {
-    if (state.editor.text) return step({ ...state, editor: { ...state.editor, text: '', cursor: 0 } });
+    if (draftOnScreen(state)) return step({ ...state, editor: { ...state.editor, text: '', cursor: 0 } });
     return step(returnToPlan(state, state.taskView.taskId));
   }
 
   // Esc during a planner turn is the turn queue's (take back a prompt, arm a
   // stop, commit it); every other Esc belongs to the overlay or pane below.
-  if (key.name === 'escape') {
+  if (key.name === 'escape' && !state.child) {
     const stopped = plannerEscape(state);
     if (stopped) return stopped;
   }
   if (state.overlay) return handleOverlayKey(state, state.overlay, key);
+  // Below the root, Esc is the way back up from either pane: a draft goes
+  // first, as it does in a task view, and an open row stays the pane's own.
+  if (key.name === 'escape' && state.child && !planPaneOpen(state)) {
+    return draftOnScreen(state) ? step({ ...state, editor: { ...state.editor, text: '', cursor: 0 } }) : leaveChild(state);
+  }
   // Above the focus split, because a wheel notch is aimed, not focused. A drag
   // is aimed too, and for the same reason it never reaches the line editor or
   // the plan pane's letter shortcuts below.
@@ -782,6 +846,8 @@ function handleKey(state: TuiState, key: Key): Step {
     if (state.focus === 'chat' && state.tasks.length === 0) return step(state);
     return step(settlePanes({ ...state, focus: state.focus === 'chat' ? 'plan' : 'chat' }));
   }
+  const inChild = childKey(state, key);
+  if (inChild) return inChild;
   if (state.focus === 'plan') return handlePlanKey(state, key);
 
   // The task view's own keys (attempts, queued messages, interrupt) sit ahead
@@ -803,6 +869,7 @@ function handleKey(state: TuiState, key: Key): Step {
   // no turn in flight it is the plain send enter is. A TUI command in the
   // composer is not a message to send, so it runs as it does on enter.
   if (key.name === 'ctrl-s') {
+    if (state.child) return submit(state);
     return (plannerInFlight(state) || state.turnGate.open !== null) && !builtInCommand(state.editor.text) ? forceSendPlanner(state) : submit(state);
   }
   if (key.name === 'escape') return step({ ...state, editor: { ...state.editor, text: '', cursor: 0 } });
@@ -853,6 +920,10 @@ function submit(state: TuiState): Step {
       return step({ ...cleared, taskView: { ...state.taskView, notice } });
     }
     if (state.taskView.notice) cleared.taskView = { ...state.taskView, notice: undefined };
+    // Neither has a route below the root; the draft stays for the plan above.
+    if (state.child && !waitingCheckpoint(task) && (continuesTask(task) || (command && offered.length > 0))) {
+      return step(reportError(state, 'A plan below the root takes plain messages: continue this task, or run its commands, from the plan above.'));
+    }
     // At a checkpoint a plain message is refused by the daemon, so enter is the
     // answer: the text is the reason a rejection carries, and the runner goes
     // on in the same session following it. A tool request ahead of it is
@@ -870,7 +941,9 @@ function submit(state: TuiState): Step {
   }
 
   const builtIn = builtInCommand(text);
-  if (builtIn) return runCommand(cleared, builtIn);
+  if (builtIn) return commandInChild(cleared, builtIn.name) ?? runCommand(cleared, builtIn);
+  // No planner state here: the daemon holds what a busy subplanner has not read, and its stream shows the turn.
+  if (state.child) return speakToChild(state, cleared, text);
 
   // A prompt while a turn answers is held, not sent: the transcript would
   // otherwise show a message the daemon has not even received yet, and the

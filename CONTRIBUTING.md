@@ -171,8 +171,10 @@ what a VS Code user sees), commit as `release: X.Y.Z`, then:
 git tag v0.4.6 && git push origin v0.4.6
 ```
 
-The tag triggers `.github/workflows/release.yml`, which verifies the tag
-matches every `package.json`, builds and tests, then:
+The tag triggers `.github/workflows/release.yml`, which first runs the full CI
+workflow — every check, the real engine included — so a tag cannot publish a
+commit that has not passed all of them. The publish jobs then verify the tag
+matches every `package.json`, build and test, then:
 
 - **npm**: publishes in dependency order — `core`, `web`, `cli`, then
   `cli-alias` (not a workspace — see Layout) — each one's `dependencies` must
@@ -210,6 +212,16 @@ carefully, and keep all versions in lockstep.
   Neither replaces the full suite: make sure
   `npm run ci` passes before pushing. It runs every step of CI's workflow
   locally, the full suite with its per-file coverage floors included.
+- CI on a pull request runs what the change can reach (`scripts/change-scope.mjs`):
+  a package and those built on it, and everything for a path it cannot judge. A
+  docs-only change runs the verify scripts and repository-wide guards. A push to
+  `main` and a release tag always run everything. `Required checks` is the one status
+  to look at: it fails if a job skipped anything the change owed.
+- If you changed anything a container runs, `npm run test:containers` runs the real
+  harnesses in a real engine. It needs Docker and builds a large image, so `npm run ci`
+  leaves it out and CI's `real-engine` job runs it, on a pull request whenever core
+  changed. A skipped test there is not a pass:
+  [docs/containers.md](docs/containers.md#checking-it-yourself) says what it reports.
 - Describe what you changed and why. If it changes behaviour a user can see, say
   what they'll notice.
 

@@ -2,7 +2,7 @@
 status: accepted
 implemented: partial
 amends: ["0009", "0013", "0015", "0018", "0020", "0022", "0029", "0030", "0035", "0045", "0046", "0049", "0054"]
-note: "Settles #33. Built: D1 to D19 and D21, so a child plan runs end to end behind the build's switch, asks up a level, stops as a subtree and comes back on a Continue, its conflicts and merges with it. Not built: a subplanner's native resume, so a reopened one replays its Model context. D20 is built for the TUI and VS Code: a row with its goal, budget left and live counts, D16's stopping row, a log of what its child's tasks become, and a report's open and promoted findings; a tree view is later."
+note: "Settles #33. Built: D1 to D19 and D21, so a child plan runs end to end behind the build's switch, asks up a level, stops as a subtree and comes back on a Continue, its conflicts and merges with it, a reopened subplanner taking its native session up where its harness keeps one. D20 is built for the TUI and VS Code: a row with its goal, budget left and live counts, D16's stopping row, a log of what its child's tasks become, and a report's open and promoted findings. The core and daemon let a surface list a tree, read and stream any child, message a live subplanner, message a child's runner and answer a checkpoint a child plan holds; VS Code draws all of that, and the TUI walks a tree with them, a plan at a time."
 ---
 
 # 0055 — A delegated task is a child plan behind the runner seam
@@ -163,9 +163,25 @@ the child cannot reach follows it in the parent's plan.**
   it is whole: a path it leaves out is the child's to change, and a pass rests on
   that list. A landing never fails a task
   ([ADR-0013](../isolation/0013-worktree-isolation.md)), so the check sits in the
-  last step before one, on the same diff. A repair lands after that step, and is
+  last step before one, on the same diff. `task_complete` is the attempt's end: no
+  task starts and no plan changes behind a report, though a turn still reads a
+  person's message, and the branch is read once more when the report is published,
+  anything still running wound down first. A branch that cannot be read does not
+  land. A repair lands after that step, and is
   held to the same paths there (D14). Paths accumulate down the tree
   (ADR-0056 M4): a nested delegated task is held to its ancestors' too.
+  A rule is relative to the repository root, and in a workspace that is a folder of
+  its repository a planner, who reads the workspace, may name a change in that folder
+  by its place there too, so a change there is held under either name. A landing takes
+  the whole worktree, so a change beside that folder is read as well, from the root.
+  A rule is read whatever its case and however
+  its characters are composed, since a case-insensitive checkout writes one file under
+  either name: a name covers that path and what is under it, `*` crosses no `/` and
+  `**` does, and a pattern with no `/` matches a name at any depth. A rule outside the
+  repository, one with another wildcard, and one that covers the whole of it are
+  refused with the rest (`protectedPathFault`), since each would pass a diff it was
+  meant to stop or leave a child nothing to land. A saved plan's whole-repository rule
+  matches everything, so the matcher errs by refusing the work.
 - **A check is a task (D8).** `delegationErrors`, in `checkPlanInvariants`, refuses
   on every route a delegated task with no check directly depending on it, as
   `loopErrors` holds a loop. A check is a read-only AI task or a script task
@@ -362,7 +378,7 @@ the child cannot reach follows it in the parent's plan.**
   attempt is fresh by any route, Execute, a force start, a retry, or Mark not done
   then a start, its child run is discarded as `discardRun` does, grandchildren first,
   and a new child starts on what is left of its budget (ADR-0056 M10). A Continue
-  never discards it: D17 reopens that child. A delegated task removed from the plan,
+  never discards it, at any depth: D17 reopens that child. A delegated task removed from the plan,
   by a person or a planner's edit, has its child run discarded too, or its worktrees
   and branches would outlive the only record that names them (D11), and a run's own
   Clean up and Discard take its children's with them. Merge and split refuse a
@@ -399,9 +415,26 @@ the child cannot reach follows it in the parent's plan.**
   which is written as the child is seated, and is listed. Continue reopens the child
   and acts as Execute there: its plan loads, in-progress tasks fail, and
   `PlanStore.resetForRun` readies what failed, so they are retried, and its
-  subplanner replays its Model context with the message: a planner's native session
-  is held in memory and saved nowhere, so a new process has none to resume. A child
-  whose plan never reached the disk plans its goal again, and one with nothing left to
+  subplanner takes the message. A delegated task of that plan is no task Execute may
+  start over: `TaskOrchestrator.owesChildren` marks it, and the scheduler claims it
+  as a Continue with the same message when its dependencies allow, so a Continue
+  reaches every level with nothing below it discarded. One whose child cannot be
+  reopened, its session on another runner say, is held with its child kept and its
+  subplanner told why, which decides as for any task of its plan. A worktree that
+  cannot open leaves the child for the next Continue, and a restore that falls back
+  tells the subplanner so and where what the task left is kept. A subplanner saves
+  its harness's native session on its plan at each turn's end, a hint
+  ([ADR-0009](../planner/0009-coding-agents-as-planners.md) T4) with how much of the
+  Model context it heard, and what the session's running cost had reached, so a new
+  process counts nothing twice (ADR-0056 M10). A reopened subplanner takes that session up, and
+  hears only what came since, under the runner, model, effort and folder it was opened
+  with, when nothing has moved behind it: a compaction drops the hint, and a recovery
+  turn never reads it. Where the harness has no session to give (a vendor API planner),
+  refuses this one, or names another, the same turn replays the Model context instead,
+  which with the plan block, the board and `read` is all a subplanner needs (ADR-0057),
+  so nothing is lost but warm context. A root planner saves no hint: a person's next
+  message replays, as ever. A
+  child whose plan never reached the disk plans its goal again, and one with nothing left to
   run goes straight to that turn: it may owe only its report. A delegated task parked
   at its subplanner's question reloads waiting, with no answer left to wait for: what
   would hear one is held in memory, so the question is lost. It says so, in its row
@@ -481,14 +514,53 @@ the child cannot reach follows it in the parent's plan.**
   to any task's: Ordewell's counts, what the plan above must decide (`open`), and what
   its subplanner passed up (`promoted`), each by the reference that names it
   (ADR-0057 R2). A surface draws none of it unless delegation is offered, and a webview,
-  which cannot read the checkout it was built from, is told by its host. A child's `broadcast` carries nothing to a surface: its planner messages, cards
-  and status never reach the user directly. Usage rolls up: each record its planner or
+  which cannot read the checkout it was built from, is told by its host. A child's `broadcast` goes to the root only as its row and its log,
+  and a surface reads a child by asking for it. `ChildDirectory`, on the root, answers for
+  every plan below it, at any depth: the ledger says which ids are in this tree, so an
+  id from elsewhere is refused before anything is read under it, and a child reads as
+  `working`, `parked` or `ended`, by the same session id across a Continue and with a
+  list that keeps a child a fresh attempt let go. Its conversation, tasks and runner
+  logs are the daemon's to serve (`/api/sessions/:id/children`, and
+  `/ws/session/:id/child/:childId`, a stream with its own sequence that a reconnect takes
+  a snapshot from). A surface never answers for a child as a whole: its approvals are
+  its allowlist's, a subplanner's own checkpoint goes up (ADR-0056 M8) and is answered on
+  the plan above, and a raise stays there too. A person may message a parked or working
+  subplanner: the message wakes it, or queues behind its turn, and holds a slot under
+  the same limit as any turn (D18). It is words only, under the actor and grants that
+  child already holds, so it raises no budget, widens no Mandate and approves no
+  effect, and the verdict's protected-path and merge checks ask what they always did; a
+  message that asks for a raise or a force is refused aloud, never read as words. It
+  stays with the child: nothing tells the plan above unless the subplanner passes it up
+  itself. A failed turn is told only on that child's stream, and so is a message held
+  for a usage limit or a pause that a Stop ends before its subplanner read it, since
+  nobody is left waiting on its answer. A person may also act on a
+  task of an open child: message its runner, or answer the checkpoint it waits at, a
+  subplanner's question included where that plan's delegated task holds it. The
+  checkpoints waiting are listed with the child, so a surface need not open it to know.
+  Each is that plan's own command under its subplanner's actor and grants, kept on its
+  record as a person's, so it can do nothing the subplanner could not, and carries no
+  raise and no force, which are refused aloud. It names the plan's task by its exact id:
+  nothing resolves a reference, and nothing falls through to the root. An answer carries
+  the question the person read, so it never lands on a later one. The subplanner hears
+  of it on its next turn, which this does not open. VS Code holds the Session itself, so
+  it asks `ChildDirectory` where the TUI asks the daemon, finding the child again for every
+  action, and a child runner's tab reopens after a reload only if the tree still holds
+  that child and its task. An ended child is view-only until its task is continued, and
+  one a fresh retry let go stays so, its refusal saying that no Continue leads back to it.
+  The list reads the tree's own log, so a child no task names any more is still listed
+  after a restart, as it was before. The TUI walks a tree a plan at a time: Enter
+  on a delegated task opens its subplanner beside its tasks, Esc goes back to the plan
+  above, and the plans above stay held and current, each on its own socket, so Esc is
+  never a reload. Its root's run keeps its keys: an overlay the root raises shows over a
+  child and answers on the root, and a Stop reaches the whole run from any depth. A
+  child's branch comes in through its task, so nothing below the root offers a merge.
+  The subplanner's own question shows on its conversation and is answered from there, on
+  the route of the plan that holds it, and only a root's carries a raise. Usage rolls up: each record its planner or
   a task spends goes up as it arrives, a level at a time, onto the delegated task's
   attempt, so `planUsage` and the row add it as they add any task's. It was charged
   where it was spent (ADR-0056 M5), so an attempt of a delegated task charges nothing,
   and the row has no context meter: no one session's context is a subtree's. A child
-  session is never offered: `listSessions` does not see it (D11). A full tree view is
-  later.
+  session is never offered: `listSessions` does not see it (D11).
 - **Off unless turned on (D21).** Delegation is a run setting, off by default
   ([ADR-0030](0030-global-run-settings.md)), and turning it on sets the tree's token
   budget (ADR-0056 M5). While the rest of this ADR is unbuilt a build holds it back
@@ -713,3 +785,11 @@ the child cannot reach follows it in the parent's plan.**
 - 2026-11-01 — from review and a real run: a ready check starts by itself once its delegated task passes, on every route (D8, D9); a check whose runner cannot be read holds as any does; a restart says a parked question is lost, and Continue picks the child up (D17).
 - 2026-11-01 — from review: a repair is charged to the ledger and leaves the child's names and the report as they stood (D14).
 - 2026-11-01 — from real runs: a surface's composer continues a stopped delegated task and one whose question was lost (D17), and its row counts raises and says no budget it has not read (D20).
+- 2026-11-02 — D17: a Continue reaches every level with nothing below it discarded, and a reopened subplanner takes up its saved native session where its harness keeps one, replaying its Model context where not; a reopened child's budget counts every opening of its parent's session (ADR-0056 M10).
+- 2026-11-02 — from an audit: D7 says what a protected path covers, one matcher reads it on every use, and a rule the matcher would not honour is refused as it is written.
+- 2026-11-02 — D20 opens a child to a surface: `ChildDirectory` and the daemon's routes and stream read any plan in a tree, and a person may message a live subplanner within what it already holds.
+- 2026-11-02 — D20 lets a person message a child plan's runner and answer a checkpoint that plan holds, as its subplanner's commands, where a surface only watched.
+- 2026-11-02 — D20 on VS Code: nested child plans, their questions and runner tabs, each action found again through `ChildDirectory`.
+- 2026-11-02 — D20's TUI walks a tree: Enter and Esc move a plan at a time, a child stays followed on its own socket, and the root's run keeps its keys and overlays from any depth.
+- 2026-11-02 — D20: the daemon's message route refuses a raise or a force aloud, a held message a Stop ends is told on its child's stream, a child a retry let go says no Continue reaches it, and the list reads the tree's log after a restart.
+- 2026-11-02 — from review: D7's list holds every path a branch changes, beside a folder workspace too, and nothing starts behind a report, whose branch is read again as it is published. D17: a Continue whose worktree cannot open keeps the child, and one whose restore falls back says so.

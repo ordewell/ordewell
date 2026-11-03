@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
+import { randomUUID } from 'crypto';
 import { execFileSync } from 'child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
@@ -17,7 +18,7 @@ import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import { fakeConfig, FakeRunnerSession } from '../../testing';
 import { listChildSessions, listSessions, loadChildSession, loadSession, saveChildSession, saveSession } from '../../utils/sessionStore';
 import { openTaskLog } from '../../utils/taskLogStore';
-import { fakeFs, makeSession, type PlannerTurn as Turn } from './sessionTestKit';
+import { closeSessions, fakeFs, makeSession, type PlannerTurn as Turn } from './sessionTestKit';
 
 /*
  * What ends a child and what brings it back, on real repositories (ADR-0055
@@ -34,7 +35,10 @@ const env = () => {
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, env: env(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
 const roots: string[] = [];
-afterEach(() => { while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
+afterEach(async () => {
+  await closeSessions();
+  while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+});
 
 function repo(): string {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-child-run-')));
@@ -105,6 +109,26 @@ function fakeRunner(files: Record<string, string[]>, { held = [], heldOnce = [],
 }
 
 const isolation = (): IWorktreeIsolation => createWorktreeIsolation({ resolvePath: async () => process.env.PATH ?? '', config: fakeConfig({ worktreeIsolation: true }) });
+
+/** What a run changes in git: the calls `leasedIsolation` waits out as a Session closes. */
+const CHANGES = new Set(['stash', 'startRun', 'prepare', 'reopen', 'integrate', 'revert', 'release', 'handoff', 'pruneOrphans', 'mergeIntoCheckedOut', 'discard', 'sweep']);
+
+/** Real git, telling each change to the run as it goes in, each held back until `before` resolves. */
+function watchedIsolation(changing: (change: string, ended: Promise<unknown>) => void, before: (change: string, args: unknown[]) => Promise<void> | void = () => undefined): IWorktreeIsolation {
+  return new Proxy(isolation(), {
+    get(target, key, receiver) {
+      const member = Reflect.get(target, key, receiver) as unknown;
+      const change = String(key);
+      if (typeof member !== 'function' || !CHANGES.has(change)) return member;
+      return (...args: unknown[]) => {
+        const ended = Promise.resolve(before(change, args)).then(() => member.apply(target, args) as unknown);
+        changing(change, ended);
+        return ended;
+      };
+    },
+  });
+}
+
 const planOf = (tasks: Task[]): LegacyPlanState => ({ tasks, runners: ['claude-code'], status: 'approved', generatedAt: '2026-11-01T10:00:00.000Z' } as unknown as LegacyPlanState);
 
 const delegated = (over: Partial<Task> = {}) => createTask({
@@ -134,6 +158,7 @@ const BLOCKED: Turn = async (tools) => {
 
 interface TreeOptions {
   runner?: IRunner;
+  isolated?: IWorktreeIsolation;
   tasks?: Task[];
   tokens?: () => number;
   /** The root's repository, for a second Session over the same files. */
@@ -144,17 +169,23 @@ interface TreeOptions {
   /** What the root's own planner does, for a test of its edits. */
   rootTurns?: Turn[];
   notifications?: SessionDeps['notifications'];
+  /** The root's Parallel limit, which holds across the tree (ADR-0055 D18). */
+  parallel?: number;
+  /** Its subplanners' harness keeps no session, as an API planner does. */
+  sessionless?: boolean;
 }
 
 /**
  * A scripted planner, one service per child as a real Session builds one, so a
  * reopened child starts on its own token. A stop of the turn in flight ends it.
  */
-function stoppablePlanner(turns: Turn[]) {
+function stoppablePlanner(turns: Turn[], { sessionless = false } = {}) {
   const asked: string[] = [];
   const requests: ConversationRequest[] = [];
+  const natives: string[] = [];
   const service = () => {
     let handler: PlannerToolHandler | undefined;
+    const native = `native-${randomUUID()}`;
     const next = async (text: string, signal: AbortSignal | undefined): Promise<ConversationTurn> => {
       asked.push(text);
       const turn = turns.shift();
@@ -169,24 +200,26 @@ function stoppablePlanner(turns: Turn[]) {
       hasActiveConversation: () => handler !== undefined,
       plannerToolsAttached: () => true,
       restart: () => undefined,
+      ...(sessionless ? {} : { nativeSession: () => (handler ? { runner: 'claude-code', sessionId: native, cwd: '/worktree' } : null) }),
       startConversation: async (req: ConversationRequest) => {
         requests.push(req);
         handler = req.plannerTools?.handler;
+        natives.push(native);
         return next(req.initialMessage ?? req.goal, req.signal);
       },
       continueConversation: (text: string, _progress?: unknown, signal?: AbortSignal) => next(text, signal),
     } as unknown as IAiService;
   };
-  return { asked, requests, service };
+  return { asked, requests, natives, service };
 }
 
-function tree(turns: Turn[], { runner = fakeRunner({ a: ['a.txt'], b: ['b.txt'] }), tasks = [delegated(), check()], tokens = () => 5_000_000, root = repo(), leaseHost = new LeaseHost(), plan, sessionId = 'session-root', rootTurns, notifications }: TreeOptions = {}) {
-  const planner = stoppablePlanner(turns);
+function tree(turns: Turn[], { runner = fakeRunner({ a: ['a.txt'], b: ['b.txt'] }), isolated = isolation(), tasks = [delegated(), check()], tokens = () => 5_000_000, root = repo(), leaseHost = new LeaseHost(), plan, sessionId = 'session-root', rootTurns, notifications, parallel = 3, sessionless }: TreeOptions = {}) {
+  const planner = stoppablePlanner(turns, { sessionless });
   const parent = makeSession({
-    runner, isolation: isolation(), workspaceRoot: () => root, saveSession, openTaskLog, leaseHost, sessionId,
+    runner, isolation: isolated, workspaceRoot: () => root, saveSession, openTaskLog, leaseHost, sessionId,
     ...(rootTurns ? { aiService: stoppablePlanner(rootTurns).service() } : {}),
     ...(notifications ? { notifications } : {}),
-    config: fakeConfig({ maxParallelSessions: 3 }),
+    config: fakeConfig({ maxParallelSessions: parallel }),
     settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', delegationTokens: tokens() } }),
     delegationOffered: true,
     childDeps: () => ({ aiService: planner.service(), fsAdapter: { ...fakeFs(), canSeal: async () => true, getWorkspaceRoot: () => root } }),
@@ -197,6 +230,38 @@ function tree(turns: Turn[], { runner = fakeRunner({ a: ['a.txt'], b: ['b.txt'] 
 
 const statusOf = (session: Session, id: string) => session.planTasks.find((t) => t.id === id)?.status;
 const taskOf = (session: Session, id: string) => session.planTasks.find((t) => t.id === id)!;
+
+describe('a close with git at work', () => {
+  /*
+   * CI lost a test this way: `d` completed, the scheduler was opening `c`'s
+   * worktree, and the test destroyed its Session and removed the repository.
+   * `git worktree add` recreated `.ordewell` behind the removal, so the root
+   * stayed non-empty, and `rmSync`'s retries only call rmdir again.
+   */
+  it('waits out the worktree opening for the next task, so nothing writes behind the repository going', async () => {
+    let letGitGo = () => undefined as void;
+    const git = new Promise<void>((resolve) => { letGitGo = resolve; });
+    let opening: Promise<unknown> | undefined;
+    const isolated = watchedIsolation(
+      (change, ended) => { if (change === 'prepare' && !opening && statusOf(parent, 'd') === 'completed') opening = ended; },
+      (change) => (change === 'prepare' && statusOf(parent, 'd') === 'completed' ? git : undefined),
+    );
+    const { parent, root } = tree([SUBMIT([childTask('a', 1)]), DONE], { isolated });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(opening).toBeDefined(), { timeout: 20_000 });
+
+    let closed = false;
+    const closing = closeSessions().then(() => { closed = true; });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(closed).toBe(false);
+
+    letGitGo();
+    await closing;
+    // No retries: nothing may be left that could write here.
+    rmSync(root, { recursive: true, force: true });
+    expect(existsSync(root)).toBe(false);
+  });
+});
 
 describe('a Stop (ADR-0055 D16)', () => {
   it('reaches a live planner turn, and resolves only once the subtree has gone', async () => {
@@ -265,7 +330,7 @@ describe('a Stop, read below it', () => {
     const runner = fakeRunner({ a: ['a.txt'] }, { held: ['a'] });
     const nested = [
       { id: 'n', order: 1, title: 'Nested', description: 'n', type: 'delegated', goal: 'Write a', budget: { tokens: 800_000 }, protectedPaths: ['tests/'], sliceType: 'AFK', assignedRunner: 'claude-code', dependencies: [] },
-      { id: 'nc', order: 2, title: 'Check nested', description: 'nc', type: 'script', commands: [['true']], readOnly: true, sliceType: 'AFK', dependencies: ['n'] },
+      { id: 'nc', order: 2, title: 'Check nested', description: 'nc', type: 'ai', prompt: 'read it', readOnly: true, sliceType: 'AFK', autonomy: 'AFK', dependencies: ['n'] },
     ];
     const { parent } = tree([SUBMIT(nested), SUBMIT([childTask('a', 1)])], { runner, tasks: [delegated({ grants: ['delegate'] }), check()] });
     await parent.execute({ command: 'run_plan' }, { kind: 'user' });
@@ -558,9 +623,68 @@ describe('a Continue (ADR-0055 D17)', () => {
     parent.destroy();
   });
 
+  it('keeps the child through a Continue whose worktree could not open, so the next one reopens it', async () => {
+    const runner = fakeRunner({ a: ['a.txt'], b: ['b.txt'] }, { held: ['b'] });
+    const { root, parent } = tree([SUBMIT([childTask('a', 1), childTask('b', 2, ['a'])]), NOTHING, DONE], { runner });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(runner.spawned).toContain('b'), { timeout: 20_000 });
+    const child = childIdOf(parent, 'd')!;
+    parent.stopExecution();
+    await parent.stopSubtree();
+    await vi.waitFor(() => expect(parent.planState?.isolation?.run.tasks.d.status).toBe('kept'));
+    // What a Continue opens on is gone for now, as a person's or a tool's branch surgery leaves it.
+    const integration = parent.planState?.isolation?.run.repos[0].integrationBranch ?? '';
+    git(root, 'branch', '-m', integration, 'parked');
+
+    expect(await parent.execute({ command: 'retry_task', task: 'd', from: 'session', message: 'go on' }, { kind: 'user' })).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('failed'), { timeout: 20_000 });
+    expect(childIdOf(parent, 'd')).toBe(child);
+    git(root, 'branch', '-m', 'parked', integration);
+
+    expect(await parent.execute({ command: 'retry_task', task: 'd', from: 'session', message: 'go on' }, { kind: 'user' })).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(runner.spawned.filter((id) => id === 'b')).toHaveLength(2), { timeout: 20_000 });
+    expect(runner.spawned.filter((id) => id === 'a')).toHaveLength(1);
+    expect(childIdOf(parent, 'd')).toBe(child);
+    runner.release('b');
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    expect(git(root, 'ls-tree', '-r', '--name-only', integration).split('\n')).toEqual(expect.arrayContaining(['a.txt', 'b.txt']));
+    parent.destroy();
+  });
+
+  it('tells the subplanner when what the task left could not be restored, and where it is kept', async () => {
+    const runner = fakeRunner({ a: ['a.txt'], b: ['b.txt'] }, { held: ['b'] });
+    const { root, parent, planner } = tree([SUBMIT([childTask('a', 1), childTask('b', 2, ['a'])]), NOTHING, DONE], { runner });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(runner.spawned).toContain('b'), { timeout: 20_000 });
+    parent.stopExecution();
+    await parent.stopSubtree();
+    await vi.waitFor(() => expect(parent.planState?.isolation?.run.tasks.d.status).toBe('kept'));
+    const record = parent.planState?.isolation?.run.tasks.d;
+    writeFileSync(join(Object.values(record!.repos)[0].worktree, 'shared.txt'), 'the task left this\n');
+    const integration = parent.planState?.isolation?.run.repos[0].integrationBranch ?? '';
+    const elsewhere = join(root, '..', `elsewhere-${Date.now()}`);
+    git(root, 'worktree', 'add', elsewhere, integration);
+    writeFileSync(join(elsewhere, 'shared.txt'), 'the tip has this\n');
+    git(elsewhere, 'add', '-A');
+    git(elsewhere, 'commit', '-m', 'moved');
+    git(root, 'worktree', 'remove', '--force', elsewhere);
+
+    expect(await parent.execute({ command: 'retry_task', task: 'd', from: 'session', message: 'go on' }, { kind: 'user' })).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(runner.spawned.filter((id) => id === 'b')).toHaveLength(2), { timeout: 20_000 });
+    const told = planner.asked.at(-1);
+    expect(told).toContain('go on');
+    expect(told).toContain('conflicted with the integration tip');
+    const kept = /kept on branch `([^`]+)`/.exec(told ?? '')?.[1] ?? '';
+    expect(git(root, 'show', `${kept}:shared.txt`)).toBe('the task left this');
+    runner.release('b');
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    parent.destroy();
+  });
+
   it('refuses a child whose worktree has moved, rather than lose what it landed', async () => {
     const runner = fakeRunner({ a: ['a.txt'] }, { held: ['a'] });
-    const { root, parent, planner } = tree([SUBMIT([childTask('a', 1)])], { runner });
+    const errors = vi.fn();
+    const { root, parent, planner } = tree([SUBMIT([childTask('a', 1)])], { runner, notifications: { info: vi.fn(), warn: vi.fn(), error: errors, confirm: vi.fn().mockResolvedValue(undefined) } });
     await parent.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(runner.spawned).toContain('a'), { timeout: 20_000 });
     parent.stopExecution();
@@ -574,6 +698,7 @@ describe('a Continue (ADR-0055 D17)', () => {
     expect(await parent.execute({ command: 'retry_task', task: 'd', from: 'session', message: 'go on' }, { kind: 'user' })).toMatchObject({ ok: true });
     await vi.waitFor(() => expect(taskOf(parent, 'd').verdict).toMatchObject({ reported: 'blocked', reason: expect.stringContaining('has moved') }), { timeout: 20_000 });
     expect(planner.asked).toHaveLength(asked);
+    await vi.waitFor(() => expect(errors).toHaveBeenCalledWith(expect.stringContaining('has moved')), { timeout: 20_000 });
     parent.destroy();
   });
 
@@ -642,6 +767,7 @@ describe('a Continue (ADR-0055 D17)', () => {
 describe('a reopened child, read from above (ADR-0057 R1)', () => {
   const reopened = new Subtree({
     here: 'root',
+    tasks: () => [{ ...delegated(), runnerSessionId: 'child' }],
     nodes: () => [{ path: 'root/1', sessionId: 'child', taskId: 'd' }, { path: 'root/2', sessionId: 'child', taskId: 'd' }],
     plan: () => [delegated()],
     logs: () => ({ attempts: () => [], events: () => [] }),
@@ -721,7 +847,7 @@ describe('a crash in the middle of a child run (ADR-0055 D17)', () => {
     expect(taskOf(parent, 'd')).toMatchObject({ status: 'failed', runnerSessionId: child });
     expect(parent.escalations().map((e) => e.task?.id)).toContain('d');
     // Its worktree is the child's code root, so the adoption's prune left it.
-    expect(parent.planState?.isolation?.run.tasks.d.status).toBe('kept');
+    await vi.waitFor(() => expect(parent.planState?.isolation?.run.tasks.d.status).toBe('kept'));
     parent.destroy();
   });
 
@@ -776,6 +902,219 @@ describe('a crash in the middle of a child run (ADR-0055 D17)', () => {
     await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
     expect(worktreesOf(root, run)).toEqual([]);
     expect((await parent.ledger()).numbers('root').committed).toBe(0);
+    parent.destroy();
+  });
+});
+
+describe('a Continue below a Continue (ADR-0055 D15, D17)', () => {
+  const NESTED = [
+    { id: 'n', order: 1, title: 'Nested', description: 'n', type: 'delegated', goal: 'Write a and b', budget: { tokens: 800_000 }, protectedPaths: ['tests/'], sliceType: 'AFK', assignedRunner: 'claude-code', dependencies: [] },
+    { id: 'nc', order: 2, title: 'Check nested', description: 'nc', type: 'ai', prompt: 'read it', readOnly: true, sliceType: 'AFK', autonomy: 'AFK', dependencies: ['n'] },
+  ];
+  /** Whichever subplanner it reaches ends, once it may: levels wake in no fixed order, and a report too soon is refused. */
+  const REPORT: Turn = async (tools) => { await tools.taskComplete!({ status: 'done', summary: 'It is written.', commit: { subject: 'Write it' } }, { signal: SIGNAL }); };
+  const reports = (count: number): Turn[] => Array.from({ length: count }, () => REPORT);
+  const childPlan = (root: string, sessionId: string) => loadChildSession({ baseDir: root, rootSessionId: 'session-root', sessionId })?.plan;
+
+  function imageOf(root: string): string {
+    const image = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-crash-image-')));
+    roots.push(image);
+    cpSync(join(root, '.ordewell', 'sessions'), image, { recursive: true });
+    return image;
+  }
+
+  function restarted(root: string, image: string, turns: Turn[], runner: IRunner, { parallel, sessionless }: Pick<TreeOptions, 'parallel' | 'sessionless'> = {}) {
+    rmSync(join(root, '.ordewell', 'sessions'), { recursive: true, force: true });
+    cpSync(image, join(root, '.ordewell', 'sessions'), { recursive: true, filter: (from) => !from.endsWith('lease.json') });
+    return tree(turns, { root, plan: loadSession('session-root', root)!.plan, runner, leaseHost: new LeaseHost(), parallel, sessionless });
+  }
+
+  const nestedTree = (turns: Turn[], runner: IRunner, over: Pick<TreeOptions, 'sessionless'> = {}) => tree([SUBMIT(NESTED), ...turns], { runner, tasks: [delegated({ grants: ['delegate'] }), check()], ...over });
+  const grandchildOf = (root: string, child: string) => childPlan(root, child)!.tasks.find((t) => t.id === 'n')!;
+
+  /** The process dies here, as `tree.parent` runs. */
+  async function crashed({ root, parent }: ReturnType<typeof tree>) {
+    await wait(50);
+    const image = imageOf(root);
+    const child = childIdOf(parent, 'd')!;
+    parent.destroy();
+    await parent.gone;
+    return { root, image, child, grandchild: grandchildOf(root, child).runnerSessionId! };
+  }
+
+  async function midGrandchild(usage = 0, tasks = [childTask('a', 1), childTask('b', 2, ['a'])], over: Pick<TreeOptions, 'sessionless'> & { before?: (parent: Session) => Promise<unknown> } = {}) {
+    const held = tasks.slice(1).map((t) => t.id);
+    const first = fakeRunner({ a: ['a.txt'] }, { held, usage });
+    const dead = nestedTree([SUBMIT(tasks)], first, over);
+    await dead.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(first.spawned).toEqual(expect.arrayContaining(held)), { timeout: 20_000 });
+    await over.before?.(dead.parent);
+    return crashed(dead);
+  }
+
+  const goOn = (parent: Session) => parent.execute({ command: 'retry_task', task: 'd', from: 'session', message: 'pick it up' }, { kind: 'user' });
+  const workers = (runner: Runner) => runner.spawned.filter((id) => id !== 'c' && id !== 'nc');
+
+  it('takes each subplanner\'s native session up again, and leaves the transcript whole for a harness that refuses', async () => {
+    const first = fakeRunner({ a: ['a.txt'] }, { held: ['a'] });
+    const dead = nestedTree([SUBMIT([childTask('a', 1)])], first);
+    await dead.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(first.spawned).toContain('a'), { timeout: 20_000 });
+    const before = [...dead.planner.natives];
+    const { root, image } = await crashed(dead);
+
+    const { parent, planner } = restarted(root, image, reports(8), fakeRunner({ a: ['a.txt'] }));
+    expect(await goOn(parent)).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    expect(planner.requests.map((request) => request.resume?.session.sessionId).sort()).toEqual([...before].sort());
+    for (const request of planner.requests) expect(request.priorHistory?.length).toBeGreaterThan(0);
+    parent.destroy();
+  });
+
+  it('keeps a grandchild\'s work: what it finished does not run again, and its run lands', async () => {
+    const { root, image, child, grandchild } = await midGrandchild();
+    const runner = fakeRunner({ b: ['b.txt'] });
+    const { parent } = restarted(root, image, reports(8), runner);
+    expect(await goOn(parent)).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    expect(workers(runner)).toEqual(['b']);
+    expect(grandchildOf(root, child).runnerSessionId).toBe(grandchild);
+    const integration = parent.planState?.isolation?.run.repos[0].integrationBranch ?? '';
+    expect(git(root, 'ls-tree', '-r', '--name-only', integration).split('\n')).toEqual(expect.arrayContaining(['a.txt', 'b.txt']));
+    expect((await parent.ledger()).numbers('root').committed).toBe(0);
+    parent.destroy();
+  });
+
+  it('never mints budget at any depth: a grandchild reopens on what its task has left, and each token counts once', async () => {
+    const { root, image } = await midGrandchild(300_000);
+    const { parent } = restarted(root, image, reports(8), fakeRunner({ b: ['b.txt'] }));
+    const ledger = await parent.ledger();
+    const carves = vi.spyOn(ledger, 'carve');
+    expect(await goOn(parent)).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    expect(carves.mock.calls.map(([, , request]) => request.tokens)).toEqual([2_000_000 - 300_000, 800_000 - 300_000]);
+    expect(ledger.spentOn('root', 'd')).toBe(300_000);
+    parent.destroy();
+  });
+
+  it('goes on after a Stop in the same process: the grandchild the Stop reached reopens', async () => {
+    const runner = fakeRunner({ a: ['a.txt'], b: ['b.txt'] }, { heldOnce: ['b'] });
+    const { root, parent } = nestedTree([SUBMIT([childTask('a', 1), childTask('b', 2, ['a'])]), ...reports(8)], runner);
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(runner.spawned).toContain('b'), { timeout: 20_000 });
+    parent.stopExecution();
+    await parent.stopSubtree();
+    const child = childIdOf(parent, 'd')!;
+    const grandchild = grandchildOf(root, child).runnerSessionId;
+    expect(grandchild).toBeTruthy();
+
+    expect(await goOn(parent)).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    expect(workers(runner)).toEqual(['a', 'b', 'b']);
+    expect(grandchildOf(root, child).runnerSessionId).toBe(grandchild);
+    parent.destroy();
+  });
+
+  it('keeps a question a restart lost: its subplanner hears it again, and what it finished stands', async () => {
+    const ASK: Turn = async (tools) => { await tools.checkpoint!({ question: 'Which schema?' }, { signal: SIGNAL }); };
+    const first = fakeRunner({ a: ['a.txt'] });
+    const dead = nestedTree([SUBMIT([childTask('a', 1)]), ASK], first);
+    await dead.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(grandchildOf(dead.root, childIdOf(dead.parent, 'd')!)).toMatchObject({ status: 'awaiting_user', parkedQuestion: 'Which schema?' }), { timeout: 20_000 });
+    const { root, image, child, grandchild } = await crashed(dead);
+
+    const runner = fakeRunner({});
+    const { parent, planner } = restarted(root, image, reports(8), runner);
+    expect(await goOn(parent)).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(planner.asked.join('\n')).toContain('Which schema?'), { timeout: 20_000 });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    expect(workers(runner)).toEqual([]);
+    expect(grandchildOf(root, child).runnerSessionId).toBe(grandchild);
+    parent.destroy();
+  });
+
+  it('starts a grandchild over only when asked: a fresh retry takes the subtree, and what it spent stays spent', async () => {
+    const { root, image, child, grandchild } = await midGrandchild(300_000);
+    const runner = fakeRunner({ a: ['a.txt'], b: ['b.txt'] });
+    const { parent, planner } = restarted(root, image, [SUBMIT(NESTED), SUBMIT([childTask('a', 1), childTask('b', 2, ['a'])]), ...reports(8)], runner);
+    const ledger = await parent.ledger();
+    const carves = vi.spyOn(ledger, 'carve');
+    expect(await parent.execute({ command: 'retry_task', task: 'd', from: 'fresh' }, { kind: 'user' })).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    expect(workers(runner)).toEqual(['a', 'b']);
+    // A new child is a new session: nothing of the old one rides along (ADR-0008).
+    for (const request of planner.requests) expect(request.resume).toBeUndefined();
+    expect(taskOf(parent, 'd').runnerSessionId).not.toBe(child);
+    expect(grandchildOf(root, taskOf(parent, 'd').runnerSessionId!).runnerSessionId).not.toBe(grandchild);
+    expect(carves.mock.calls.map(([, , request]) => request.tokens)).toEqual([2_000_000 - 300_000, 800_000]);
+    expect(ledger.spentOn('root', 'd')).toBe(300_000);
+    parent.destroy();
+  });
+
+  it('holds the tree\'s one Parallel limit as it goes on: no reopened level brings slots of its own', async () => {
+    const { root, image } = await midGrandchild(0, [childTask('a', 1), childTask('b', 2, ['a']), childTask('e', 3, ['a'])]);
+    const runner = fakeRunner({ b: ['b.txt'], e: ['e.txt'] }, { heldOnce: ['b', 'e'] });
+    const { parent } = restarted(root, image, reports(8), runner, { parallel: 1 });
+    expect(await goOn(parent)).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(workers(runner).length).toBeGreaterThan(0), { timeout: 20_000 });
+    await wait(150);
+    expect(workers(runner)).toHaveLength(1);
+    runner.release(workers(runner)[0]);
+    await vi.waitFor(() => expect(workers(runner)).toHaveLength(2), { timeout: 20_000 });
+    runner.release(workers(runner)[1]);
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    parent.destroy();
+  });
+
+  it('rebuilds a subplanner whose harness keeps no session from its transcript, its plan, the board and its references', async () => {
+    const pin = (parent: Session) => parent.postOnBoard({ type: 'pin', title: 'Keep the v1 routes' });
+    const { root, image } = await midGrandchild(0, undefined, { sessionless: true, before: pin });
+    const read: string[] = [];
+    const READING: Turn = async (tools, text) => {
+      for (const task of ['board', 'a']) read.push((await tools.readTask!({ task }, { signal: SIGNAL })).text);
+      await REPORT(tools, text);
+    };
+    const { parent, planner } = restarted(root, image, Array.from({ length: 8 }, () => READING), fakeRunner({ b: ['b.txt'] }), { sessionless: true });
+
+    expect(await goOn(parent)).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    expect(planner.requests).toHaveLength(2);
+    for (const request of planner.requests) {
+      expect(request.resume).toBeUndefined();
+      expect(request.priorHistory?.length).toBeGreaterThan(0);
+      expect(request.initialMessage).toContain('pick it up');
+      expect(request.initialMessage).toContain('Keep the v1 routes');
+    }
+    expect(planner.requests.map((request) => request.initialMessage).join('\n')).toContain('Write a');
+    expect(read.join('\n')).toContain('Keep the v1 routes');
+    expect(read.join('\n')).toContain('Done.');
+    parent.destroy();
+  });
+
+  it('tells a grandchild\'s subplanner a pin once, though its message passes through every level', async () => {
+    const { root, image } = await midGrandchild(0, undefined, { before: (parent) => parent.postOnBoard({ type: 'pin', title: 'Keep the v1 routes' }) });
+    const { parent, planner } = restarted(root, image, reports(8), fakeRunner({ b: ['b.txt'] }));
+
+    expect(await goOn(parent)).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    for (const request of planner.requests) expect(request.initialMessage?.split('Keep the v1 routes')).toHaveLength(2);
+    parent.destroy();
+  });
+
+  it('leaves a grandchild it cannot reopen as it stands, and tells its subplanner why', async () => {
+    const { root, image, child, grandchild } = await midGrandchild();
+    const runner = fakeRunner({ b: ['b.txt'] });
+    const { parent, planner } = restarted(root, image, [BLOCKED, ...reports(8)], runner);
+    const saved = loadChildSession({ baseDir: root, rootSessionId: 'session-root', sessionId: child })!;
+    Object.assign(saved.plan.tasks.find((t) => t.id === 'n')!, { assignedRunner: 'codex', runnerSessionOwner: 'claude-code' });
+    saved.plan.runners = ['claude-code', 'codex'];
+    saveChildSession(saved.plan, saved.meta.goal, { baseDir: root, rootSessionId: 'session-root', sessionId: child });
+
+    expect(await goOn(parent)).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(planner.asked.join('\n')).toContain('its saved session belongs to claude-code'), { timeout: 20_000 });
+    await vi.waitFor(() => expect(parent.isExecuting).toBe(false), { timeout: 20_000 });
+    expect(workers(runner)).toEqual([]);
+    expect(grandchildOf(root, child).runnerSessionId).toBe(grandchild);
     parent.destroy();
   });
 });

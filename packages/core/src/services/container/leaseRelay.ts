@@ -1,10 +1,11 @@
 import type { ChildProcess } from 'child_process';
-import { connect, type Socket } from 'net';
+import { connect, createServer, type AddressInfo, type Server, type Socket } from 'net';
 
 /*
  * One frame, either way: its kind, its connection and its length, then that
- * many bytes. READY and LISTENING go up from the entry; LISTEN goes down to it;
- * the rest go both ways, for one connection.
+ * many bytes. READY, LISTENING and OPEN go up from the entry; LISTEN and
+ * CONNECT go down to it; OPENED answers a CONNECT; the rest go both ways, for
+ * one connection.
  */
 const HEADER_BYTES = 9;
 const READY = 1;
@@ -13,6 +14,14 @@ const DATA = 3;
 const CLOSE = 4;
 const LISTEN = 5;
 const LISTENING = 6;
+const CONNECT = 7;
+const OPENED = 8;
+
+/**
+ * Where a reverse connection's ids start. The entry allocates a forward one
+ * from 1, so the two directions cannot collide while either is under 2^30.
+ */
+const REVERSE_FIRST = 0x4000_0000;
 
 /** Past any chunk a socket reads. Anything longer is a process in the container writing to the entry's stdout. */
 const MAX_FRAME_BYTES = 16 * 1024 * 1024;
@@ -23,13 +32,15 @@ const STDERR_TAIL_CHARS = 2000;
  * What a lease's container runs as its one idle process (ADR-0059 L5), handed
  * to `node -e`, so an image needs node and no file of Ordewell's. It listens on
  * the container's own loopback for each port the host asks for and carries every
- * connection over its stdin and stdout. Its stdin is what keeps the container:
- * when the host goes, by any death, the pipe closes, this exits and `--rm` takes
- * the container with everything in it, so nothing needs a timer to renew.
+ * connection over its stdin and stdout. It also dials one there when the host
+ * asks, which is how the host reaches a server of the container's: no network
+ * either way. Its stdin is what keeps the container: when the host goes, by any
+ * death, the pipe closes, this exits and `--rm` takes the container with
+ * everything in it, so nothing needs a timer to renew.
  */
 export const RELAY_ENTRY = String.raw`
 const net = require('net');
-const [READY, OPEN, DATA, CLOSE, LISTEN, LISTENING] = [1, 2, 3, 4, 5, 6];
+const [READY, OPEN, DATA, CLOSE, LISTEN, LISTENING, CONNECT, OPENED] = [1, 2, 3, 4, 5, 6, 7, 8];
 const conns = new Map();
 let nextConn = 1;
 let inbound = Buffer.alloc(0);
@@ -52,8 +63,18 @@ function listen(port) {
     socket.on('error', closed);
   }).listen(port, '127.0.0.1', () => send(LISTENING, 0, port16(port)));
 }
+function dial(conn, port) {
+  const socket = net.connect(port, '127.0.0.1');
+  conns.set(conn, socket);
+  socket.on('connect', () => send(OPENED, conn));
+  socket.on('data', (chunk) => send(DATA, conn, chunk));
+  const closed = () => { if (conns.delete(conn)) send(CLOSE, conn); };
+  socket.on('close', closed);
+  socket.on('error', closed);
+}
 function frame(kind, conn, payload) {
   if (kind === LISTEN) listen(payload.readUInt16BE(0));
+  else if (kind === CONNECT) dial(conn, payload.readUInt16BE(0));
   else if (kind === DATA) conns.get(conn)?.write(payload);
   else if (kind === CLOSE) { const socket = conns.get(conn); conns.delete(conn); socket?.destroy(); }
 }
@@ -87,6 +108,10 @@ export class LeaseRelay {
   private inbound = Buffer.alloc(0);
   private readonly sockets = new Map<number, Socket>();
   private readonly forwards = new Map<number, { hostPort: number; listening: Promise<void>; heard: () => void; failed: (err: Error) => void }>();
+  /** This host's listeners, each carrying into the container on the port it was asked for. */
+  private readonly exposed = new Set<Server>();
+  private readonly waiting = new Set<number>();
+  private nextReverse = REVERSE_FIRST;
   private stderrTail = '';
   private markReady!: () => void;
   private failReady!: (err: Error) => void;
@@ -124,6 +149,51 @@ export class LeaseRelay {
     return listening;
   }
 
+  /**
+   * Have a listener on this host's loopback carry into the container's
+   * `containerPort`, and answer the port it took here. What a runner's own
+   * server listens on inside is reached this way, as the MCP server is by
+   * {@link forward} the other way. Nothing is routed: the bytes cross the
+   * relay's pipes, so any engine and any egress carry them. A process in the
+   * container can write the entry's stdout, so only an OPENED for a connection
+   * this host opened is believed.
+   */
+  async expose(containerPort: number): Promise<number> {
+    const server = createServer((socket) => {
+      const conn = this.nextReverse++;
+      this.sockets.set(conn, socket);
+      this.waiting.add(conn);
+      // Paused until the entry says it dialled: what the client sends waits in
+      // its socket rather than in this process, and a container that never
+      // dials never takes it.
+      socket.pause();
+      const closed = () => {
+        this.waiting.delete(conn);
+        if (this.sockets.delete(conn)) this.send(CLOSE, conn);
+      };
+      socket.on('close', closed);
+      socket.on('error', closed);
+      const port = Buffer.alloc(2);
+      port.writeUInt16BE(containerPort);
+      this.send(CONNECT, conn, port);
+    });
+    this.exposed.add(server);
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', () => resolve());
+    });
+    return (server.address() as AddressInfo).port;
+  }
+
+  /** The entry dialled a connection this host opened: from here its bytes are the client's. */
+  private opened(conn: number): void {
+    if (!this.waiting.delete(conn)) return;
+    const socket = this.sockets.get(conn);
+    if (!socket) return;
+    socket.on('data', (chunk: Buffer) => this.send(DATA, conn, chunk));
+    socket.resume();
+  }
+
   private send(kind: number, conn: number, payload: Buffer = Buffer.alloc(0)): void {
     const header = Buffer.alloc(HEADER_BYTES);
     header[0] = kind;
@@ -149,6 +219,7 @@ export class LeaseRelay {
   private frame(kind: number, conn: number, payload: Buffer): void {
     if (kind === READY) this.markReady();
     else if (kind === OPEN) this.open(conn, payload);
+    else if (kind === OPENED) this.opened(conn);
     else if (kind === LISTENING && payload.length === 2) this.forwards.get(payload.readUInt16BE(0))?.heard();
     else if (kind === DATA) this.sockets.get(conn)?.write(payload);
     else if (kind === CLOSE) this.close(conn);
@@ -171,6 +242,7 @@ export class LeaseRelay {
   }
 
   private close(conn: number): void {
+    this.waiting.delete(conn);
     const socket = this.sockets.get(conn);
     this.sockets.delete(conn);
     socket?.destroy();
@@ -178,6 +250,8 @@ export class LeaseRelay {
 
   private gone(): void {
     for (const conn of [...this.sockets.keys()]) this.close(conn);
+    for (const server of this.exposed) server.close();
+    this.exposed.clear();
     const failure = new Error(`The container's entry ended${this.lastWords ? `: ${this.lastWords}` : '.'}`);
     this.failReady(failure);
     for (const forward of this.forwards.values()) forward.failed(failure);

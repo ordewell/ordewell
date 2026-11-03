@@ -1,6 +1,6 @@
 import React, { forwardRef, useEffect, useId, useState } from 'react';
 import type { GlobalRunSettings, SupervisorLevel } from '@ordewell/core';
-import { SUPERVISOR_LEVEL_LABEL, parseCount } from '@ordewell/core/plan-utils';
+import { SUBPLANNER_ACCOUNTING, SUBPLANNER_CHILD, SUBPLANNER_SCOPE, SUPERVISOR_LEVEL_LABEL, keptDelegationBudget, parseCount } from '@ordewell/core/plan-utils';
 import { useDelegationOffered } from '../delegationOffered';
 import type { SettingsChange } from '../../../shared/protocol';
 
@@ -76,6 +76,40 @@ function NumberRow({ label, value, min, hint, host, onCommit }: { label: string;
   );
 }
 
+/**
+ * The first Subplanners budget, which only the user can say: an empty box and
+ * two explicit buttons, with no blur or default that could send one. Nothing
+ * leaves the webview until Turn on; Cancel leaves the setting Off.
+ */
+function FirstBudget({ onTurnOn, onCancel }: { onTurnOn(tokens: number): void; onCancel(): void }) {
+  const id = useId();
+  const [draft, setDraft] = useState('');
+  const parsed = parseCount(draft.trim(), 1);
+  const turnOn = (): void => { if (parsed !== null) onTurnOn(parsed); };
+  return (
+    <div className="run-setting">
+      <label className="run-setting-label" htmlFor={id}>Tree budget</label>
+      <div>
+        <input
+          id={id}
+          type="number"
+          className="run-setting-number"
+          min={1}
+          step={1}
+          value={draft}
+          placeholder="tokens"
+          aria-invalid={draft.trim() !== '' && parsed === null}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') turnOn(); else if (e.key === 'Escape') onCancel(); }}
+        />
+        <button type="button" className="planner-pill" disabled={parsed === null} onClick={turnOn}>Turn on</button>
+        <button type="button" className="planner-pill" onClick={onCancel}>Cancel</button>
+      </div>
+      <div className="run-setting-hint">{parsed === null && draft.trim() !== '' ? 'A whole number of 1 or more.' : `Enter the tokens the whole tree may spend. ${SUBPLANNER_ACCOUNTING}`}</div>
+    </div>
+  );
+}
+
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 
 const AUTONOMY: PillOption<boolean>[] = [
@@ -96,6 +130,13 @@ const AUTOMERGE: PillOption<boolean>[] = [
   { label: 'Off', value: false, hint: 'Wait for you at every merge.' },
 ];
 
+// Both sides say what the setting is, so the hint does not change under the click; the host asks to confirm turning it on.
+const SUBPLANNER_HINT = `${SUBPLANNER_SCOPE} ${SUBPLANNER_CHILD} Turning it on asks you to confirm.`;
+const SUBPLANNERS: PillOption<boolean>[] = [
+  { label: 'On', value: true, hint: SUBPLANNER_HINT },
+  { label: 'Off', value: false, hint: SUBPLANNER_HINT },
+];
+
 const AUTORUN: PillOption<boolean>[] = [
   { label: 'On', value: true, hint: 'A plan the planner submits starts at once.' },
   { label: 'Off', value: false, hint: 'Each plan waits for you to press Execute.' },
@@ -111,7 +152,7 @@ const RunSettingsBlock = forwardRef<HTMLElement, { value: RunSettingsValue; expa
     `Automerge ${run.mergeAtGatesAutomatically ? 'on' : 'off'}`,
     `Autorun ${run.autorun ? 'on' : 'off'}`,
     `${value.maxParallel} parallel`,
-    ...(DELEGATION_OFFERED && run.delegationTokens > 0 ? ['Delegation on'] : []),
+    ...(DELEGATION_OFFERED && run.delegationTokens > 0 ? ['Subplanners on'] : []),
   ].join(' · ');
   return (
     <section ref={ref} tabIndex={-1} className="setup-block run-settings" aria-label="Run">
@@ -135,9 +176,12 @@ const RunSettingsBlock = forwardRef<HTMLElement, { value: RunSettingsValue; expa
 function RunSettingsRows({ value, onChange }: { value: RunSettingsValue; onChange(change: SettingsChange): void }) {
   const DELEGATION_OFFERED = useDelegationOffered();
   const { run } = value;
+  const on = run.delegationTokens > 0;
+  const kept = keptDelegationBudget(run);
+  const [firstBudget, setFirstBudget] = useState(false);
   return (
     <>
-      <div className="setup-block-hint">{DELEGATION_OFFERED ? 'Supervisor, automerge, autorun and delegation' : 'Supervisor, automerge and autorun'} apply to this session; your last change is the default for new ones.</div>
+      <div className="setup-block-hint">{DELEGATION_OFFERED ? 'Supervisor, automerge, autorun and subplanners' : 'Supervisor, automerge and autorun'} apply to this session; your last change is the default for new ones.</div>
       <div className="setup-block-hint run-settings-scope-note">Autonomy and Parallel tasks apply to every session.</div>
       <PillRow label="Autonomy" options={AUTONOMY} current={value.autonomous} onPick={(autonomous) => onChange({ autonomous })} />
       <PillRow label="Supervisor" options={SUPERVISOR} current={run.supervisorLevel} onPick={(supervisorLevel) => onChange({ run: { supervisorLevel } })} />
@@ -157,11 +201,32 @@ function RunSettingsRows({ value, onChange }: { value: RunSettingsValue; onChang
       />
       {/* Not offered until a delegated task exists (ADR-0055 D21). */}
       {DELEGATION_OFFERED && (
-        <NumberRow
-          label="Delegation budget" value={run.delegationTokens} min={0} host={value}
-          hint={(n) => (n === 0 ? 'Delegation is off: plans stay flat.' : `A tree of plans may spend up to ${plural(n, 'token', 'tokens')}.`)}
-          onCommit={(delegationTokens) => onChange({ run: { delegationTokens } })}
-        />
+        <>
+          <PillRow
+            label="Subplanners" options={SUBPLANNERS} current={firstBudget || on}
+            onPick={(turnOn) => {
+              if (!turnOn) return firstBudget ? setFirstBudget(false) : onChange({ run: { delegationTokens: 0 } });
+              // The budget the user kept brings it back; with none kept, only the user can say one.
+              return kept === null ? setFirstBudget(true) : onChange({ run: { delegationTokens: kept } });
+            }}
+          />
+          {!on && !firstBudget && kept !== null && (
+            <div className="run-setting-hint">Turning it on again uses the {plural(kept, 'token', 'tokens')} you kept for a tree.</div>
+          )}
+          {firstBudget && !on && (
+            <FirstBudget
+              onCancel={() => setFirstBudget(false)}
+              onTurnOn={(delegationTokens) => { setFirstBudget(false); onChange({ run: { delegationTokens } }); }}
+            />
+          )}
+          {on && (
+            <NumberRow
+              label="Tree budget" value={run.delegationTokens} min={1} host={value}
+              hint={(n) => `A tree of plans may spend up to ${plural(n, 'token', 'tokens')}. ${SUBPLANNER_ACCOUNTING}`}
+              onCommit={(delegationTokens) => onChange({ run: { delegationTokens } })}
+            />
+          )}
+        </>
       )}
     </>
   );

@@ -4,10 +4,10 @@ import type { FindingSeverity, HandoffCommit, HandoffDigest } from '../models/Ha
 import { savedPatchView, worstSeverity, type PatchView } from '../models/Handoff';
 import type { TaskLoop } from '../models/Loop';
 import type { RepairWait, TaskIsolationState } from '../interfaces/IWorktreeIsolation';
-import { taskOrderLabel, taskRefOf } from '../services/TaskRefs';
+import { taskOrderLabel, taskRefsOf } from '../services/TaskRefs';
 import { capConflictFiles } from '../services/conflictFiles';
 import { planBlocks, type BlockingSubject, type PlanBlocks } from '../services/blocking';
-import { checkOf, loopRoundOf, type LoopSubject } from '../models/Loop';
+import { checksOfBodies, loopRoundOf, type LoopSubject } from '../models/Loop';
 import { assignedRunnerOf, assignmentConsequence, assignmentIssue, assignmentIssueText, type AssignmentScope } from '../services/AssignmentScope';
 import { approvalLabel, attachingLabel, awaitingLabel, isTaskRunning, NOT_STARTED, receiptLabel, repairWaitLabel, resumeLabel, taskStatusKind, WAITS_FOR_APPROVAL_LABEL, type TaskStatusKind } from './status';
 import { markAction, opsEditable, taskRowActions, type TaskRowAction, type TaskRowPlacement } from './actions';
@@ -248,8 +248,8 @@ export function taskChatAvailable(task: { type?: string; attempted?: boolean; at
   return task.attempted === true || (task.attemptUsage?.length ?? 0) > 0;
 }
 
-const refsOf = (ids: readonly string[], tasks: readonly PlanRefTask[] | undefined): string[] =>
-  ids.map((id) => (tasks?.length ? taskRefOf(tasks, id) ?? id : id));
+const refsOf = (ids: readonly string[], reading: PlanReading | null): string[] =>
+  ids.map((id) => reading?.refs.get(id) ?? id);
 
 /** A lone repository at the workspace root is not named: a group of one reads as it did before repo groups. */
 const namedRepo = (repo: string | undefined): string | null => (repo && repo !== '.' ? repo : null);
@@ -265,10 +265,39 @@ const asBlocking = (tasks: readonly PlanRefTask[]): BlockingSubject[] =>
     ...(t.loop ? { loop: t.loop, loopRound: t.loopRound, ...(t.verdict ? { verdict: t.verdict } : {}) } : {}),
   }));
 
-/** A plan tree that carries statuses, read once: who it blocks, and which loops go on. */
+/** A plan tree that carries statuses, read once: who it blocks, which loops go on, and what names each task. */
 interface PlanReading {
-  tasks: readonly PlanRefTask[];
   blocks: PlanBlocks;
+  refs: ReadonlyMap<string, string>;
+  /** The top-level tasks, by id: a loop's check and its body stand there. */
+  byId: ReadonlyMap<string, PlanRefTask>;
+  checks: ReadonlyMap<string, PlanRefTask>;
+}
+
+function readPlan(tasks: readonly PlanRefTask[]): PlanReading {
+  return {
+    blocks: planBlocks(asBlocking(tasks)),
+    refs: taskRefsOf(tasks),
+    byId: new Map(tasks.map((t) => [t.id, t])),
+    checks: checksOfBodies(tasks),
+  };
+}
+
+/**
+ * A surface draws every row of a plan on each frame, so the rows of one plan
+ * array share one reading. No surface edits that array in place: a new plan is
+ * a new array, which is read anew.
+ */
+const readings = new WeakMap<readonly PlanRefTask[], PlanReading>();
+
+function readingOf(task: TaskRowSubject, tasks: readonly PlanRefTask[] | undefined): PlanReading | null {
+  if (!tasks?.length) return null;
+  const plan = readings.get(tasks) ?? readPlan(tasks);
+  readings.set(tasks, plan);
+  const own = task.loop && plan.byId.get(task.id);
+  if (!own || (own.status === task.status && own.loopRound === task.loopRound && own.verdict === task.verdict)) return plan;
+  // A check's own row is the newest word on it: the plan beside it may hold its verdict from before.
+  return readPlan(tasks.map((t) => (t.id === task.id ? { ...t, status: task.status, loopRound: task.loopRound, verdict: task.verdict } : t)));
 }
 
 /** What blocks a task not started, read off the plan tree; empty without one that carries statuses. */
@@ -279,22 +308,21 @@ function blockedBy(task: TaskRowSubject, reading: PlanReading | null): string[] 
 
 /** What moves a check on that nothing will run: a start of it once its body landed and its dependencies finished, Execute before that (ADR-0045 L5, L7). */
 function strandedDetail(check: LoopCheckFacts, dependencies: readonly string[], reading: PlanReading | null): string {
-  const status = (id: string) => reading?.tasks.find((t) => t.id === id)?.status;
+  const status = (id: string) => reading?.byId.get(id)?.status;
   const landed = reading && check.loop.body.every((id) => status(id) === 'completed');
   const finished = dependencies.every((id) => [undefined, 'completed', 'skipped'].includes(status(id)));
   return landed && finished ? `Nothing runs it now: start it for round ${loopRoundOf(check) + 1} of ${check.loop.maxRounds}` : 'Nothing runs it now: execute the plan and the loop goes on';
 }
 
 function loopOf(task: TaskRowSubject, reading: PlanReading | null): TaskRowLoop | null {
-  const tasks = reading?.tasks;
   if (task.loop) {
     const check: LoopSubject & { loop: TaskLoop } = { id: task.id, status: task.status, loop: task.loop, loopRound: task.loopRound, ...(task.verdict ? { verdict: task.verdict } : {}) };
     // With no plan to read the body from, a check between rounds is taken to be going on.
     const state = loopCheckState(check, !task.loopStranded && (reading ? reading.blocks.repeating.has(task.id) : true));
-    const body = refsOf(task.loop.body, tasks);
+    const body = refsOf(task.loop.body, reading);
     // What stops a loop: a body task that failed, was skipped or is blocked (ADR-0045 L7).
     const halted = reading ? task.loop.body.filter((id) => {
-      const status = reading.tasks.find((t) => t.id === id)?.status;
+      const status = reading.byId.get(id)?.status;
       return status === 'failed' || status === 'skipped' || reading.blocks.blocked.has(id);
     }) : [];
     const detail = state === 'repeating'
@@ -302,13 +330,13 @@ function loopOf(task: TaskRowSubject, reading: PlanReading | null): TaskRowLoop 
       : state === 'stopped'
         ? task.loopStranded
           ? strandedDetail(check, task.dependencies, reading)
-          : `${refsOf(halted, tasks).join(', ')} did not pass: retry ${halted.length === 1 ? 'it' : 'them'} and the loop goes on`
+          : `${refsOf(halted, reading).join(', ')} did not pass: retry ${halted.length === 1 ? 'it' : 'them'} and the loop goes on`
         : null;
     return { role: 'check', state, label: loopCheckLabel(check, state), detail, body };
   }
-  const owner = reading && checkOf(reading.tasks, task.id);
+  const owner = reading?.checks.get(task.id);
   if (!owner?.loop) return null;
-  const [check] = refsOf([owner.id], tasks);
+  const [check] = refsOf([owner.id], reading);
   const round = loopBodyRound({ status: owner.status ?? '', loopRound: owner.loopRound }, task.status);
   return { role: 'body', label: loopBodyLabel(check, round, owner.loop.maxRounds), check, round };
 }
@@ -342,9 +370,7 @@ export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}):
   const isolation = task.isolation && task.isolation.state !== 'none' ? task.isolation : null;
   const spend = taskUsageSummary(task);
   const latestAttempt = task.attemptUsage?.at(-1);
-  // A check's own row is the newest word on it: the plan beside it may hold its verdict from before.
-  const tasks = task.loop ? context.tasks?.map((t) => (t.id === task.id ? { ...t, status: task.status, loopRound: task.loopRound, verdict: task.verdict } : t)) : context.tasks;
-  const reading = tasks?.length ? { tasks, blocks: planBlocks(asBlocking(tasks)) } : null;
+  const reading = readingOf(task, context.tasks);
   const blocked = blockedBy(task, reading);
   const loop = loopOf(task, reading);
   return {
@@ -369,7 +395,7 @@ export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}):
     autonomous: task.type === 'ai' && context.modes?.find((m) => m.id === task.taskMode)?.autonomous === true,
     repos: namedRepos(isolation?.repos),
     conflict: isolation?.state === 'conflict' && !isolation.repairWaits
-      ? { repo: namedRepo(isolation.conflictRepo), files: filesOf(isolation.conflictFiles), resolver: isolation.resolver ? refsOf([isolation.resolver], context.tasks)[0] : null }
+      ? { repo: namedRepo(isolation.conflictRepo), files: filesOf(isolation.conflictFiles), resolver: isolation.resolver ? refsOf([isolation.resolver], reading)[0] : null }
       : null,
     repairWaiting: isolation?.state === 'conflict' && isolation.repairWaits
       ? { label: repairWaitLabel(isolation.repairWaits), files: filesOf(isolation.conflictFiles) }
@@ -380,14 +406,14 @@ export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}):
     repaired: isolation?.repairedFiles?.length
       ? { files: capConflictFiles(isolation.repairedFiles), landed: isolation.state === 'integrated' }
       : null,
-    mergeGate: task.mergeGate?.length ? refsOf(task.mergeGate, context.tasks) : null,
-    blockedBy: blocked.length > 0 ? refsOf(blocked, context.tasks) : null,
+    mergeGate: task.mergeGate?.length ? refsOf(task.mergeGate, reading) : null,
+    blockedBy: blocked.length > 0 ? refsOf(blocked, reading) : null,
     skipReason: task.status === 'skipped' ? task.skipReason ?? null : null,
     opsChangedFiles: task.status === 'awaiting_user' && task.awaitingReason === 'files-changed',
     forcedPastGate: task.forcedPastGate?.length ? task.forcedPastGate : null,
     loop,
     handoff: handoffOf(task),
-    dependencies: refsOf(task.dependencies, context.tasks),
+    dependencies: refsOf(task.dependencies, reading),
     // A block read off the plan offers what a stored one does: Skip among them.
     actions: taskRowActions({ ...task, ...(blocked.length > 0 ? { status: 'blocked' } : {}), ...(isolation?.repairWaits ? { repairWaits: isolation.repairWaits } : {}) }, context.placement ?? (parent ? 'subtask' : 'task')),
     // Read off the mark itself: a task with merges left and no record has state `none`.

@@ -6,4 +6,7 @@ export const sharedTest = {
   // vitest's five-second default would end a test before the setup's longer
   // vi.waitFor default could, which would put the flake back.
   testTimeout: 30_000,
+  // An afterEach waits out real git before it removes a repository
+  // (closeSessions), so a hook needs the same room on a loaded machine.
+  hookTimeout: 30_000,
 };

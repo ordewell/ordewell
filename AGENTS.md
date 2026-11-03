@@ -30,18 +30,30 @@ npm run test:coverage   # same tests, plus the per-file coverage floors CI enfor
 npm run ci              # every ci.yml step, in its order: run this before pushing
 npm run test:changed    # while iterating: only tests affected by uncommitted changes
 npm run test:quick      # every test except the real-git e2e files (*.e2e.test.ts, GitWorktreeIsolation)
+npm run test:containers # every harness's real binary in a real Docker engine; a skip is UNVERIFIED, not a pass
 ```
 
-`test:changed` is the inner loop. When `packages/core` changed it rebuilds
-core's `dist/` and runs the quick suites of cli, vscode and web in full, because
-they consume core through `dist/` and vitest cannot see the dependency. It skips
-the e2e files, so run the full suite before pushing; CI always runs it.
+`test:changed` is the inner loop. When a package others depend on changed it
+rebuilds that package's `dist/` and runs its dependents' quick suites in full,
+because they consume it through `dist/` and vitest cannot see the dependency. A
+path it cannot judge runs every quick suite. It skips the e2e files, so run the
+full suite before pushing.
+
+`scripts/change-scope.mjs` holds what a change has to prove, for `test:changed`
+and for CI alike. Only a pull request is narrowed: a push to main and a release
+tag always run everything, and a path outside `docs/`, the root docs and the four
+workspaces' files means the full run. A new root config, a new package or a test
+that reads past its own package belongs in that file's decisions and its tests.
+`Required checks` is the status to require on main: a skipped job reads as a pass
+to GitHub, so that job judges the others by what the change owed them.
+
 Before pushing, run `npm run ci`. It runs what `.github/workflows/ci.yml`
 runs: beyond lint, typecheck and `test:coverage` (whose per-file floors in
 `packages/core/vitest.config.ts` plain `npm test` never checks), the verify
 scripts, the offline planner e2e, the VS Code integration test and packaging.
 It refuses to start when ci.yml has a step it does not know, so add any new
-step to `scripts/ci.mjs` too. The integration test downloads VS Code into
+step to `scripts/ci.mjs` too, and give a step a verdict rests on an `id` in
+`scripts/change-scope.mjs`. The integration test downloads VS Code into
 `packages/vscode/.vscode-test` on its first run.
 
 A test that depends on the time of day (a usage-limit "resets 8:10pm") fails

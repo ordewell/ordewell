@@ -419,19 +419,27 @@ function showRefusal(err: unknown): void {
   void vscode.window.showWarningMessage(err instanceof Error ? err.message : String(err));
 }
 
+type CheckpointAnswer = Extract<WebviewToHost, { type: 'answerCheckpoint' }>;
+
 /**
  * A rejection resumes the paused agent with the reason, rather than cancelling
  * the task. A delegated task's approval carries words and a raise of its budget
  * too (ADR-0056 M5, M8); the seam refuses them for any other task.
  */
-export async function handleCheckpointAnswer(taskId: string, approved: boolean, reason: string | undefined, deps: Pick<PlanManagerDeps, 'session'>, raiseTokens?: number): Promise<void> {
+export async function handleCheckpointAnswer({ answerId, taskId, approved, reason, raiseTokens }: CheckpointAnswer, deps: Pick<PlanManagerDeps, 'session' | 'chatProvider'>): Promise<void> {
+  const result = (error?: string) => deps.chatProvider.postMessage({ type: 'checkpointResult', answerId, ...(error !== undefined ? { error } : {}) });
   try {
     await executeUserCommand(deps.session, approved
       ? { command: 'answer_checkpoint', task: taskId, answer: 'approve', ...(reason ? { reason } : {}), ...(raiseTokens !== undefined ? { raiseTokens } : {}) }
       : { command: 'answer_checkpoint', task: taskId, answer: 'reject', ...(reason ? { reason } : {}) });
   } catch (err) {
     showRefusal(err);
+    // The card closed when the answer was given; a refused one leaves the question waiting.
+    result(err instanceof Error ? err.message : String(err));
+    return;
   }
+  // Said too, for the same question can be asked again: the webview must know this answer is no longer in doubt.
+  result();
 }
 
 /**

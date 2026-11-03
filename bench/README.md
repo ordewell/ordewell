@@ -97,6 +97,11 @@ still runs a single goal the old way.
   (`packages/vscode/src/test-integration/`) use the same fake via `PATH`.
 - `pipeline.test.mjs` — runs the driver under `node:test`. Needs core built
   first (`npm run build:core`).
+- `fake-provider/` — a stand-in for Anthropic's token endpoint and Messages API,
+  for the real Claude Code binary: TLS under a test CA, reached only through a
+  CONNECT proxy of its own, with refresh tokens that work once. It involves no
+  account and no real token. `dockerLease.e2e.test.ts` runs it in a container
+  when `ORDEWELL_E2E_HARNESS_IMAGE` names an image with Claude Code in it.
 
 ## Scale benchmark (`bench/scale/`)
 
@@ -104,6 +109,20 @@ Where one daemon breaks: what the scheduler, the store, the saves, the view, the
 supervisor's wake-ups, the task logs and the MCP server cost against plan size
 and live sessions, with fake runners. Bundles core's source itself, so it needs
 no build. See [its README](scale/README.md) for the commands and how to read them.
+
+## Real-engine check (`bench/containers/`)
+
+What makes `npm run test:containers` a verdict and not a test run. That command
+(`scripts/container-e2e.mjs`) builds an image holding all three real harnesses, runs
+the container suites against the engine `docker` talks to, with a stand-in model
+in place of each provider, and asks `verdict.mjs` what the run proved. A skipped
+test, or a harness whose real binary was not proven, reads as `UNVERIFIED`, not a
+pass. CI's `real-engine` job runs it on Linux; on a Mac it is yours to run, as
+[docs/containers.md](../docs/containers.md#checking-it-yourself) says.
+
+- `verdict.mjs` — pure: counts vitest's JSON report and names the outcome, the
+  engine it ran on and each harness's proof.
+- `verdict.test.mjs` — its tests, under `npm run test:bench`.
 
 ## Runner-detection lab (`bench/lab/`)
 

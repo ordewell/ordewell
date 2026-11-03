@@ -48,15 +48,54 @@ export const OUTPUT_LINES_MAX = 400;
 
 /**
  * Character budget the rendered answer converges to. A running output tail is
- * the only part with no natural bound — a runner may print for minutes — so
- * the tail absorbs the clamp; everything else (task bodies, the catalog cap)
- * is bounded upstream.
+ * trimmed to what is left of it, and the tasks asked for stop where it runs out
+ * ({@link readsInCap}); the catalog is bounded upstream. One task is the
+ * exception: it is read whole, so a task with a long prompt can pass this.
  */
 export const TASK_QUERY_ANSWER_MAX_CHARS = 20_000;
 /** Room for the closing instruction and whatever follows a task's tail. */
 const ANSWER_TAIL_RESERVE = 4_000;
 /** The most an output read returns; what a read of one task's tail gets when nothing else is in the answer. */
 export const OUTPUT_TAIL_MAX_CHARS = TASK_QUERY_ANSWER_MAX_CHARS - ANSWER_TAIL_RESERVE;
+/** How many references a stopped answer names before it counts the rest. */
+const UNREAD_NAMED_MAX = 50;
+
+/**
+ * What one query reads, for both channels: each task once however it was named,
+ * in the order asked, stopping before the one that would pass the budget. The
+ * first is read whole at any length, since a planner rewrites what it reads and
+ * a cut prompt would be rewritten as if it were all. `unread` says what stopped
+ * the answer, so a long read costs another query and loses nothing.
+ */
+export function readsInCap<R>(
+  refs: readonly string[],
+  tasks: readonly Task[],
+  read: (ref: string, task: Task | undefined) => R,
+  chars: (one: R) => number,
+): { reads: R[]; unread?: string } {
+  const seen = new Set<string>();
+  const reads: R[] = [];
+  const left: string[] = [];
+  let used = 0;
+  for (const ref of refs) {
+    const task = resolveTaskRef(tasks, ref);
+    const key = task?.id ?? ref;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (left.length > 0) {
+      left.push(ref);
+      continue;
+    }
+    const one = read(ref, task);
+    used += chars(one);
+    if (used > OUTPUT_TAIL_MAX_CHARS && reads.length > 0) left.push(ref);
+    else reads.push(one);
+  }
+  if (left.length === 0) return { reads };
+  const more = left.length - UNREAD_NAMED_MAX;
+  const named = [...left.slice(0, UNREAD_NAMED_MAX), ...(more > 0 ? [`+${more} more`] : [])].join(', ');
+  return { reads, unread: `Not read, to keep this answer bounded: ${named}. Ask for them in another query.` };
+}
 
 export interface TaskQuery {
   /** Task references to read in full, as {@link resolveTaskRef} reads them. */
@@ -541,18 +580,15 @@ export function renderTaskQueryAnswer(
   const blocks: string[] = [];
 
   if (query.tasks.length > 0) {
-    const body: string[] = [];
-    for (const ref of query.tasks) {
-      const task = resolveTaskRef(tasks, ref);
+    const { reads, unread } = readsInCap(
+      query.tasks,
+      tasks,
       // A miss is answered, not swallowed: silence reads to the planner as a
       // transport failure and it asks again, burning the same budget twice.
-      if (!task) {
-        body.push(`${ref}: no task matches this reference in the current plan.`, '');
-        continue;
-      }
-      body.push(...renderTask(readTask(tasks, task, fields), ctx));
-    }
-    blocks.push(['<task_detail>', ...body, '</task_detail>'].join('\n'));
+      (ref, task) => (task ? renderTask(readTask(tasks, task, fields), ctx) : [`${ref}: no task matches this reference in the current plan.`, '']),
+      (lines) => lines.reduce((n, line) => n + line.length + 1, 0),
+    );
+    blocks.push(['<task_detail>', ...reads.flat(), ...(unread ? [unread] : []), '</task_detail>'].join('\n'));
   }
 
   if (query.catalog) {

@@ -21,18 +21,18 @@ describe('delegation, as the host tells the webview', () => {
     expect(DELEGATION_OFFERED).toBe(false);
   });
 
-  it('shows the Delegation budget and the summary once the host says it is offered', () => {
+  it('shows the Tree budget and the summary once the host says it is offered', () => {
     render(<App />);
     settings(true);
     fireEvent.click(screen.getByRole('button', { name: 'Run' }));
-    expect(screen.getByRole('spinbutton', { name: 'Delegation budget' })).toBeInTheDocument();
+    expect(screen.getByRole('spinbutton', { name: 'Tree budget' })).toBeInTheDocument();
   });
 
   it('shows nothing of it when the host does not say so, or says it is not offered', () => {
     const { unmount } = render(<App />);
     settings();
     fireEvent.click(screen.getByRole('button', { name: 'Run' }));
-    expect(screen.queryByRole('spinbutton', { name: 'Delegation budget' })).toBeNull();
+    expect(screen.queryByRole('spinbutton', { name: 'Tree budget' })).toBeNull();
     unmount();
 
     render(<App />);

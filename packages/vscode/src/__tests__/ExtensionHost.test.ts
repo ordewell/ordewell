@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { RUN_SETTINGS_DEFAULTS,
+import { openTaskLog, RUN_SETTINGS_DEFAULTS, SUBPLANNER_ACCOUNTING, SUBPLANNER_CHILD,
   createTask, defaultEnabledRunners, saveState, RunnerRegistry, recordedInstalledPlanner, resetInstalledPlanner,
   type AiProvider, type DiscoveredModel, type GlobalRunSettings, type IRunner, type LegacyPlanState, type PlannerUsability,
   type ModelResolver, type PlannerModelMemory, type RunnerInstallation,
@@ -29,6 +29,7 @@ import type { VsCodeConfig } from '../adapters/VsCodeConfig';
 import type { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
 import type { VsCodeNotification } from '../adapters/VsCodeNotification';
 import type { HostToWebview, WebviewToHost } from '../shared/protocol';
+import type { ChildPlanHandle } from '@ordewell/core';
 import { __panels, __resetPanels, commands, createFakeWebviewPanel, window } from '../test/vscode.mock';
 
 const models: DiscoveredModel[] = [
@@ -170,6 +171,8 @@ function fakeSession() {
   let runSettingsValue: GlobalRunSettings = { ...RUN_SETTINGS_DEFAULTS };
   const spies = {
     sessionId: 's1',
+    rootSessionId: 's1',
+    children: { list: vi.fn(async () => []), find: vi.fn(async (_id: string): Promise<import('@ordewell/core').ChildPlanHandle | null> => null), onChange: vi.fn(() => () => {}) },
     plannerSettingsChanged: vi.fn(),
     reschedule: vi.fn(async () => {}),
     applyRunSettings: vi.fn((changes: Partial<GlobalRunSettings>) => {
@@ -335,6 +338,146 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
   });
   afterEach(() => {
     fs.rmSync(h.workspace, { recursive: true, force: true });
+  });
+
+  it('routes a child message through its directory handle, never through the root Session', async () => {
+    const child = { sessionId: 'child', parent: 's1', node: '0/1', title: 'Delegate', depth: 1, state: 'parked' as const };
+    const message = vi.fn(() => ({ ok: true as const, status: 'queued' as const }));
+    h.session.spies.children.find.mockResolvedValue({ entry: () => child, view: () => ({ child, plan: null, run: { tasks: [], runMerge: null, handoff: null, mergeResult: null } }), watch: () => () => {}, message } as unknown as import('@ordewell/core').ChildPlanHandle);
+    await h.host.start();
+    h.chat.messages.fire({ type: 'openChild', childId: 'child' });
+    await vi.waitFor(() => expect(h.chat.provider.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'childView' })));
+    h.chat.messages.fire({ type: 'messageChild', childId: 'child', text: 'Check rounding' });
+    await vi.waitFor(() => expect(message).toHaveBeenCalledWith('Check rounding'));
+    expect(h.session.spies.execute).not.toHaveBeenCalled();
+    h.host.dispose();
+  });
+
+  describe('child plans', () => {
+    const child = { sessionId: 'nested', parent: 'child', node: '0/1/1', taskId: 'n', title: 'Nested', depth: 2, state: 'parked' as const };
+    const control = vi.fn(async () => ({ ok: true as const, message: 'Sent.' }));
+
+    function seatChild(): void {
+      const location = { baseDir: h.workspace, sessionId: 'nested', rootSessionId: 's1' };
+      openTaskLog(location, 'runner').append([{ type: 'turn_start', message: 'do it' }]);
+      h.session.spies.children.find.mockImplementation(async (id: string) => id === 'nested' ? {
+        entry: () => child,
+        view: () => ({ child, plan: { tasks: [{ id: 'runner', order: 1, title: 'Runner', type: 'structured', status: 'in_progress', subtasks: [] }] }, run: { tasks: [], runMerge: null, handoff: null, mergeResult: null } }),
+        watch: () => () => {},
+        control,
+        logLocation: () => location,
+      } as unknown as ChildPlanHandle : null);
+    }
+
+    async function openedTab() {
+      seatChild();
+      await h.host.start();
+      h.chat.messages.fire({ type: 'openChildTaskLog', childId: 'nested', taskId: 'runner' });
+      await vi.waitFor(() => expect(__panels).toHaveLength(1));
+      __panels[0].__receive({ type: 'ready' });
+      return __panels[0];
+    }
+
+    beforeEach(() => {
+      __resetPanels();
+      control.mockClear();
+    });
+
+    it('answers a question on the child that holds it, never through the root Session', async () => {
+      seatChild();
+      await h.host.start();
+      h.chat.messages.fire({ type: 'openChild', childId: 'nested' });
+      await vi.waitFor(() => expect(h.chat.provider.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'childView' })));
+
+      h.chat.messages.fire({ type: 'answerChildCheckpoint', answerId: 'a1', childId: 'nested', taskId: 'runner', question: 'Which rounding?', answer: 'approve' });
+
+      await vi.waitFor(() => expect(control).toHaveBeenCalledWith('runner', { kind: 'checkpoint', answer: 'approve', question: 'Which rounding?' }));
+      expect(h.session.spies.execute).not.toHaveBeenCalled();
+      h.host.dispose();
+    });
+
+    it('sends a tab\'s message down the tree, never through the root Session', async () => {
+      const panel = await openedTab();
+
+      panel.__receive({ type: 'sendTaskMessage', text: 'Check rounding.' });
+
+      await vi.waitFor(() => expect(control).toHaveBeenCalledWith('runner', { kind: 'message', text: 'Check rounding.' }));
+      expect(h.session.spies.execute).not.toHaveBeenCalled();
+      h.host.dispose();
+    });
+
+    it('says in the chat why a runner chat did not open', async () => {
+      await h.host.start();
+
+      h.chat.messages.fire({ type: 'openChildTaskLog', childId: 'gone', taskId: 'runner' });
+
+      await vi.waitFor(() => expect(h.chat.provider.postMessage).toHaveBeenCalledWith({ type: 'childNotice', childId: 'gone', message: 'This child plan is no longer in this session.' }));
+      expect(__panels).toHaveLength(0);
+      h.host.dispose();
+    });
+
+    it('leaves open tabs alone when another child fails to open', async () => {
+      const panel = await openedTab();
+
+      h.chat.messages.fire({ type: 'openChild', childId: 'gone' });
+
+      await vi.waitFor(() => expect(h.chat.provider.postMessage).toHaveBeenCalledWith({ type: 'childClosed' }));
+      expect(panel.dispose).not.toHaveBeenCalled();
+      h.host.dispose();
+    });
+
+    it('closes what belonged to the old tree when the session changes', async () => {
+      const panel = await openedTab();
+      h.chat.messages.fire({ type: 'openChild', childId: 'nested' });
+      await vi.waitFor(() => expect(h.chat.provider.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'childView' })));
+      (h.chat.provider.postMessage as unknown as ReturnType<typeof vi.fn>).mockClear();
+      h.session.spies.reset.mockImplementation(() => { h.session.spies.rootSessionId = 's2'; });
+
+      h.chat.messages.fire({ type: 'newSession' });
+
+      await vi.waitFor(() => expect(h.chat.provider.postMessage).toHaveBeenCalledWith({ type: 'childClosed' }));
+      expect(panel.dispose).toHaveBeenCalled();
+      expect(h.chat.provider.postMessage).toHaveBeenCalledWith({ type: 'children', rootId: 's2', children: [] });
+      h.host.dispose();
+    });
+
+    it('leaves tabs open when the plan changes under the same session', async () => {
+      const panel = await openedTab();
+
+      h.session.spies.reset.mockImplementation(() => {});
+      h.chat.messages.fire({ type: 'newSession' });
+
+      expect(panel.dispose).not.toHaveBeenCalled();
+      h.host.dispose();
+    });
+
+    it('brings a reloaded child tab back through the tree', async () => {
+      seatChild();
+      await h.host.start();
+      const registered = (window.registerWebviewPanelSerializer as unknown as ReturnType<typeof vi.fn>).mock.calls;
+      const revive = registered.filter(([viewType]) => viewType === 'ordewellChildTaskLog').at(-1)?.[1] as vscode.WebviewPanelSerializer | undefined;
+      const panel = createFakeWebviewPanel('ordewellChildTaskLog', 'Task 1 · Runner');
+
+      await revive?.deserializeWebviewPanel(panel as unknown as vscode.WebviewPanel, { childId: 'nested', taskId: 'runner' });
+      panel.__receive({ type: 'sendTaskMessage', text: 'Back again.' });
+
+      await vi.waitFor(() => expect(control).toHaveBeenCalledWith('runner', { kind: 'message', text: 'Back again.' }));
+      expect(panel.dispose).not.toHaveBeenCalled();
+      h.host.dispose();
+    });
+
+    it('shows a reconnecting chat the child it had open', async () => {
+      seatChild();
+      await h.host.start();
+      h.chat.messages.fire({ type: 'openChild', childId: 'nested' });
+      await vi.waitFor(() => expect(h.chat.provider.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'childView' })));
+      (h.chat.provider.postMessage as unknown as ReturnType<typeof vi.fn>).mockClear();
+
+      h.chat.messages.fire({ type: 'ready' });
+
+      await vi.waitFor(() => expect(h.chat.provider.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'childView' })));
+      h.host.dispose();
+    });
   });
 
   it('hands the session the shared settings as they are, enabled runners included, read at each call', () => {
@@ -658,8 +801,8 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     const panel = createFakeWebviewPanel('ordewellTaskLog', 'Task log');
     // VS Code revives the tab while activation is still running, so the
     // serializer must already see the task the reloaded plan holds.
-    register.mockImplementation((_viewType: string, serializer: { deserializeWebviewPanel: (p: unknown, state: unknown) => Promise<void> }) => {
-      void serializer.deserializeWebviewPanel(panel, { taskId: 't1' });
+    register.mockImplementation((viewType: string, serializer: { deserializeWebviewPanel: (p: unknown, state: unknown) => Promise<void> }) => {
+      if (viewType === 'ordewellTaskLog') void serializer.deserializeWebviewPanel(panel, { taskId: 't1' });
       return { dispose: vi.fn() };
     });
 
@@ -801,6 +944,29 @@ describe("the Settings panel's Run block", () => {
     warning.mockReset().mockImplementation(async (...args: unknown[]) => args.at(-1));
     h.chat.messages.fire({ type: 'changeSettings', change: { run } });
     await vi.waitFor(() => expect(h.settings.updateRunSettings).toHaveBeenCalledWith(run));
+  });
+
+  it('words the confirmation as Subplanners: the budget, the approximate count, and what runs unread', async () => {
+    delegation.offered = true;
+    warning.mockResolvedValue(undefined);
+    h.chat.messages.fire({ type: 'changeSettings', change: { run: { delegationTokens: 5000000 } } });
+
+    await vi.waitFor(() => expect(warning).toHaveBeenCalled());
+    const [title, options, confirm] = warning.mock.calls[0] as [string, { detail: string }, string];
+    expect(title).toBe('Turn Subplanners on?');
+    expect(confirm).toBe('Turn Subplanners on');
+    expect(options.detail).toContain('5000000 tokens');
+    expect(options.detail).toContain(SUBPLANNER_ACCOUNTING);
+    expect(options.detail).toContain(SUBPLANNER_CHILD);
+    expect(h.settings.updateRunSettings).not.toHaveBeenCalled();
+  });
+
+  it('keeps the budget the panel cannot set: a kept budget is never a change of its own', async () => {
+    delegation.offered = true;
+    warning.mockImplementation(async (...args: unknown[]) => args.at(-1));
+    h.chat.messages.fire({ type: 'changeSettings', change: { run: { delegationTokens: 5000000, delegationBudget: 1, supervisorLevel: 'off' } } });
+
+    await vi.waitFor(() => expect(h.settings.updateRunSettings).toHaveBeenCalledWith({ delegationTokens: 5000000, supervisorLevel: 'off' }));
   });
 
   it('does not accept a delegation budget while delegation is not offered, and saves the rest of the change', async () => {

@@ -153,7 +153,8 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
     killed `docker exec` leaves its process running, so a runner is stopped by its pid inside. A Session that closes
     stops its run, and is `gone` once its runners have and `settle` has taken its containers, relays and gateways: what a
     close waits on, so a session adopted next finds nothing of it at work. A task's volume stays for a Continue.
-  - A change task of a runner proven in a container runs there: Claude Code, today. So does every script, whatever its
+  - A change task of a runner proven in a container runs there: Claude Code, Codex at Full access, and OpenCode, which
+    `containerRunners.ts` lists with what a lease needs of each. So does every script, whatever its
     runner: a body is a person's or a planner's, but what it runs over is what containers wrote, so `npm test` on the host
     would run that code outside the boundary. Read-only tasks and planners stay out, under their envelope and their seal,
     as does a subplanner ([ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md)). A
@@ -168,6 +169,19 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
     login, and the workspace's variables stay here. So a script that needs this host's credentials fails, saying why, and
     uncommitted changes do not reach it; the user is told once. A read-only script runs likewise on its throwaway worktree
     with no network at all, which is what ADR-0056 M9's seal holds a child's script to, and needs no sandbox on this host.
+  - Turning containers on asks one thing, a Docker this product can use (`inspectEngine`): a local engine, by a `unix://`
+    endpoint from `docker context inspect`, that answers, runs Linux containers on cgroup v2, on a Linux or Mac host. An
+    engine elsewhere is refused and never warned of, since this host's paths and loopback, which the proofs try, are not
+    its own. The image and login can follow: `{}` is on, and refuses every task, never the host (`changeContainers`, the
+    one way a surface changes the setting). `inspectReadiness` is what a surface and a lease both ask, so what one reports
+    the other refuses, and a lease asks it again from the raw setting at each start, as a Docker that stopped or a
+    sign-in that went is only found there. A surface's check (`containerStatus`, `proveEngine`) proves what a throwaway
+    container can, and holds no login, so it never proves `cred.unreadable`: a lease proves its own, and a check refuses
+    only a required one no lease could, under a login a runner can read.
+    What was measured and what is taken on trust are shown apart (`CONTAINER_ASSUMPTIONS`): a forwarded socket looks like a
+    local one, `kernel.separate` means separate from this host and never from another task, as one engine has one kernel
+    (one VM, on a Mac), and a task has no limit on CPU or disk. A `containers.memory` above what the engine has is refused,
+    as Docker accepts it and it limits nothing. Rootless Docker is not refused: the proofs decide.
   - Measured on Colima with Docker 29.5, 2026-11-01: a container's start, `docker run` to its entry ready, took 179 to 224
     ms over eleven; a lease's whole open, with mirror, seed and probe, 303 to 909 ms over thirty, by how busy the machine
     was, and 441 to 489 ms over ten once it opened a sidecar. Claude Code 2.1.316 at rest, attached to its tools and past a
@@ -179,16 +193,29 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
   preinstalling or running Claude Code in a product or service needs its Commercial Terms and an unmodified binary
   ([legal and compliance](https://code.claude.com/docs/en/legal-and-compliance), read 2026-10-31). A user's own build
   is their own install: that is a reading, and needs counsel before it is relied on.
+
+  Codex's Guarded mode does not run in a container, and a task at it is refused, not moved. `codex sandbox` was run in
+  this lease's container on codex 0.166.0: bubblewrap fails, `use_legacy_landlock` panics with `filesystem-restricted
+  execution requires bubblewrap`, and with seccomp and AppArmor off bubblewrap still fails at `Failed RTM_NEWADDR`. So
+  what it lacks is past those two profiles, in what this hardening withholds, and the adapter's probe, put to the
+  container's own binary, is what refuses, at the handshake and before a model turn. The task is held with the reason, nothing lands,
+  and its mode stays as planned
+  ([ADR-0001](../routing/0001-autonomous-mode-resolution.md)). At Full access the container is what holds the runner,
+  which is the point of a lease: Codex's sandbox is off, and the guarantees here are not. A level left at Guarded, the
+  default, plans such tasks, and each waits for a person to change it.
 - **Workspace, mirror and caches (L6).** Inside a Mac they live in the VM, in named volumes: a host path, a host socket
   and an APFS clone do not cross it, so no mount reaches this host. A repository's mirror is seeded by git over a helper
   with no network, so only what it lacks crosses. It pins each task's refs for as long as that task's clone leans on it,
   with `gc.pruneExpire=never` and `gc.auto=0`, and never prunes under one: on git 2.56 a pruned mirror broke a `--shared`
   clone with `bad object HEAD` (measured 2026-10-31). Its pins sit under their tree's name. An attempt only ever mounts it read-only: a writable bare repository
   lets an agent plant hooks and config that later run on the host. Its volume holds the task's clone, put back on what the
-  host holds at each attempt, and the runner's home.
+  host holds at each attempt, the runner's home, and its package caches: a cache tasks share lets one task's code run in
+  the next, so a task's stay its own, and a retry keeps them.
   - Work leaves through a ref-scoped gate on the host (`pushGate.ts`), with the attempt's container already gone, so no
-    process of it can change what is read. A helper bundles a snapshot of the workspace on one ref. The gate takes that
-    ref alone, named for the attempt, under git's object checks, which it runs itself over a pack of what the ref brings,
+    process of it is alive. A helper bundles a snapshot of the workspace on one ref. That helper's git reads a repository
+    the attempt wrote: it stops the attempt's hooks and fsmonitor, and no flag reaches a clean filter, whose name the
+    attempt chose, so one it configured runs there and can change what is read. It has no network and the mirror
+    read-only, so the gate is the boundary, not the helper. The gate takes that ref alone, named for the attempt, under git's object checks, which it runs itself over a pack of what the ref brings,
     since a fetch from a bundle skips them on an older git (2.40 skips them, 2.47 does not), only on the attempt's base, moving no ref of the
     repository, and never believes what the bundle says of itself. There is no listener: the bundle comes over the helper's
     stdout. The snapshot then goes into the host's worktree as a local attempt would have left it, its commits on the
@@ -203,16 +230,25 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
     is a sealed command, a read-only task's or a planner's, over what landed: inside its seal (ADR-0036), not outside it.
   - What a tree leaves in the engine goes with it (`reclaim.ts`), by the label every container, network and task volume
     carries, since a session delete has no Session left to ask: `ExecutionBackend.reclaim` for a Clean up and a Discard,
-    `reclaimContainers` for a delete. Every mirror is read, since a landed task's pin outlives its volume. One it took the
-    last pin from goes whole with its project's caches, the one time nothing leans on either; one it held none in is
-    another project's, and stays. A person's sign-in volume is theirs. Without the setting, Docker is not asked.
+    `reclaimContainers` for a delete, once the session has gone: a helper of a closing attempt that names a volume already
+    taken makes it again, with no label. A surface's check names no tree, so its leftovers go by its own label, in the
+    same clean-up, by a prune: that takes only what is unused and an hour old, so a live check keeps its network. Every
+    mirror is read, since a landed task's pin outlives its volume. One it took
+    the last pin from goes whole, with any cache volume an earlier build left for its project, the one time nothing leans
+    on either. Every clean-up mounts every mirror, so one that overlaps holds it for a moment: the removal outlasts that,
+    reading the pins again between rounds and giving up the moment one appears, since what held it may be a new session's
+    first push. One still refused after that is told, and stays for a person to remove. One it held none in is another
+    project's, and stays, unless it holds nothing at all: that is what a helper made by naming a mirror another clean-up had
+    just taken. A person's sign-in volume is theirs. Without the setting, Docker is not asked.
   - A pin on the board (ADR-0057 R9) reads its file through the lease, since until `collect` the worktree here holds what
     the attempt was seeded with.
   - The Ordewell MCP server is reached with no network at all: the relay listens on the same port of the container's own
     loopback and carries each connection over its stdio, so the URL is unchanged and
     [ADR-0022](../runners/0022-ordewell-mcp-server.md) T2's Host check still holds, on any engine and under any egress. It
     connects only to what was forwarded, whatever a frame says, since a process in the container can write the relay's
-    stdout. `apply_patch` is refused in a container: it merges into a worktree the runner does not work in.
+    stdout. The same pipe carries the other way for a runner whose own server the host must speak to, as OpenCode's is: the
+    host listens on its own loopback and the relay dials the container's, so no port is published and no network is used.
+    `apply_patch` is refused in a container: it merges into a worktree the runner does not work in.
 - **Credentials and egress (L7).** An egress sidecar per lease, and a base-URL gateway for model traffic, behind
   `EgressPath`. A bridge container was measured to reach 1.1.1.1:443 and this host's loopback through
   `host.docker.internal`; on an `--internal` network neither answers, no name outside resolves, and there is no route.
@@ -221,21 +257,55 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
     does, and listens on the lease's network alone: the bridge joins after it has. It opens a CONNECT to port 443 of a host on the lease's list and nothing else, and reads none of what
     passes. A name is resolved there and its answer checked and dialed as it stands, so one that answers with a private
     address is turned down however it is listed: this sidecar's other network reaches the engine's host. The list is
-    `containers.allow`, or the registries of the caches named, and an `own-sign-in` lease adds where it talks to Anthropic.
-    A broker's lease lists no model host: under a key of its own, the model API would be a way out. Any host on a list is a
+    `containers.allow`, or the registries of the caches named, and an `own-sign-in` lease adds where its runner talks to
+    its service. A broker's lease lists no host of a model API whose key it keeps: under a key of its own, that API would be
+    a way out. It lists the provider of a model whose key it hands over, beside a gated key too. Any host on a list is a
     way out for what can use it, and a client can name a listed host and be served another by a shared CDN: a list says
     where a connection goes, and no more.
   - The gateway (`modelGateway.ts`) runs on this host and is reached through the relay, with no network. An API key
     stays here, and the runner holds a token that means nothing past that listener, so `cred.unreadable` is provable for a
-    broker's lease. It carries model traffic alone, to the one upstream, under the real key whatever a client sent: a
-    process in the container can spend the key and cannot read it, send it elsewhere or use the API under its own. TLS
-    ends there, for that one host, which is the only interception a lease does.
+    broker's lease. A lease has a token of its own, so concurrent tasks on one key hold nothing in common. It carries model
+    traffic alone, by exact method and path: a turn, Anthropic's `count_tokens`, which reads only what it is sent, and a
+    read of the model list. A route that reads what a key has done is refused whatever its method: Message Batches serve a
+    whole workspace, and Codex sends each turn whole and never reads a stored response (`codex-cli` 0.166.0, measured
+    2026-11-02). It goes to the one upstream, under the real key whatever a client sent: a process in the container can spend the key and cannot read it, send it elsewhere or use the API under its own. TLS
+    ends there, for that one host, which is the only interception a lease does. Each runner names its `ModelApi`: Codex's
+    is the Responses API, under a bearer key. Claude Code reads the address from its environment; OpenCode is given a
+    provider block in its own configuration, pointing `anthropic` at the gateway with the stand-in, since it does not read
+    `ANTHROPIC_BASE_URL` for a provider's base. `app-server` reads neither `OPENAI_API_KEY` nor `OPENAI_BASE_URL`, so it is
+    pointed at the gateway by a provider of its own in `-c`, over HTTP alone, which the gateway carries. A task's key is
+    its own runner's, and a login's other keys stay here, so a two-key login does not hand one over in the clear: that
+    is `OPENAI_API_KEY` under OpenCode, whose `openai/*` models take its own sign-in: a broker login refuses such a task
+    before a worktree is made, since the model is known only to a start, and it would have no way to its model. A model of any other provider, or a
+    person's own sign-in, is handed its key or its login and reaches its provider's hosts through the sidecar instead.
   - A person chooses the login, and it has no default: `broker`, API keys or cloud credentials from this host's
-    environment, or `own-sign-in`, made inside a container and kept in a volume Ordewell mounts and never reads. Which
-    login someone uses is up to them, API usage or their own subscription, and so are its terms: the maintainer decided so
-    on 2026-11-01. Ordewell's part is what it holds, which is below.
+    environment, or `own-sign-in`, made inside a container and kept in a volume no task mounts. Each runner keeps its own
+    sign-in volume and its own place the runner reads it from: Claude Code's config directory, OpenCode's data directory.
+    A helper in the engine, with that volume read-only, copies it into the task's own volume as the task first starts, so
+    nothing a task writes reaches the original or another task, and this host never reads it. That stops writing and
+    nothing else: the runner can read its copy. Which login someone uses is up to them, API usage or their own
+    subscription, and so are its terms: the maintainer decided so on 2026-11-01. Ordewell's part is what it holds, which
+    is below.
+  - The sign-in itself is `claude auth login`, the person's own, under `docker run -it`: the unmodified binary prints
+    Anthropic's address and takes back the code the person's browser is given, so Ordewell sees neither. Whether a login
+    is held is `claude auth status`'s to say (`ASK_SIGN_IN`), in readiness and at the hand-off: an abandoned sign-in
+    leaves files and no login. It answers from those files, with no network, and an expired login reads as held, so a
+    start proves a login is there and never that it works. A Claude Console sign-in with no API key is kept outside the
+    configuration directory, by Anthropic's page, so it does not survive into the volume. A runner with no such question
+    (`ContainerSignIn.ask`) has its volume found by readiness, and what the volume holds judged by its copy.
+  - Every copy is one login, and the task's copy is the task's to keep. A token it refreshes stays there, and a copy is
+    replaced only by a new sign-in (`COPY_SIGN_IN`), which keeps its sessions. Measured on Claude Code 2.1.316, 2026-11-02,
+    against a controlled provider whose refresh tokens work once: the refresh reached `platform.claude.com` through
+    `HTTPS_PROXY`, went into the task's copy and left the original byte for byte, and the next copy of the same token was
+    refused, failed `OAuth session expired and could not be refreshed`, and was cleared by the binary. So where a provider
+    rotates, the first refresh kills the original and every other copy. Anthropic does not document rotation; user reports
+    say it does ([#54443](https://github.com/anthropics/claude-code/issues/54443),
+    [#77130](https://github.com/anthropics/claude-code/issues/77130)). No real account has been run. A person who signs in
+    again gets the new login to a task at its next attempt, and this is told as the login's limit on a surface.
   - A broker holds API keys and cloud-provider credentials only (`CredentialBroker`). It never holds Claude subscription
-    tokens, and refuses one under any name it can recognise. What a cloud provider's client signs with has to reach it, so
+    tokens, and refuses one under any name it can recognise. Beside a key it refuses what that key's runner ranks over it
+    (`ModelApi.outranksKey`), since the task would not run on the login the person meant, and a task of another runner
+    is handed none of those. What a cloud provider's client signs with has to reach it, so
     those go by name, a runner can read them, and the lease reports `cred.unreadable` unproven. Anthropic's
     page says "developers may not collect, store, or intermediate Claude.ai credentials or session tokens — sign-in to
     a Claude account must complete through Anthropic's own flow". It keeps open an end user signing in to the unmodified
@@ -243,7 +313,14 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
     unread, and that lease reports `cred.unreadable` as not proven.
   - One Codex `auth.json` never serves concurrent attempts. OpenAI: "Do not share the same file across concurrent jobs
     or multiple machines", and not on public or open-source repositories
-    ([CI/CD auth](https://developers.openai.com/codex/auth/ci-cd-auth)). A copy per container is that shape.
+    ([CI/CD auth](https://learn.chatgpt.com/docs/auth/ci-cd-auth)). A plain copy per task is not that shape, since
+    refresh tokens rotate and each copy would spend the same one. So a task's copy (`COPY_CODEX_SIGN_IN`) holds the access
+    token and the account, with no refresh token and a fresh `last_refresh`, and a helper refuses a kept file that is an
+    API key, has expired, or holds no tokens. `auth.openai.com` stays off the list: nothing in a task can refresh, so the
+    kept sign-in is not spent, and it lasts as long as its access token. A person signs in again when it ends. With a
+    refresh token empty and `exp` valid, codex 0.166.0 starts and calls with the access token, and past `exp` it fails
+    cleanly, by fake tokens over HTTP. A turn on a ChatGPT account is not measured: its backend takes HTTPS alone, and no
+    account is spent here. OpenAI's guide does not describe this copy, and which login someone uses stays up to them.
   - Passing a user's own OAuth token through Ordewell, into a lease or a gateway, is treated as not allowed until
     Anthropic says otherwise. A runner on the local backend inherits the user's own environment as it does today (L4):
     Ordewell carries nothing there.
@@ -259,10 +336,17 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
 - `LocalWorktreeLease` passes the suites the code passes today, unchanged, and `executionLease.flatRun.test.ts` is a table
   over Parallel limits that passed on the scheduler before the lease went in. That is what "no change in behaviour" means.
 - `dockerLease.e2e.test.ts` runs against a real engine, off CI's default path, as the sandbox's end-to-end runs do: it
-  skips where no engine answers and on CI unless `ORDEWELL_REQUIRE_DOCKER=1`, and is one suite, so one at a time. A fake
+  skips where no engine answers and on CI unless `ORDEWELL_REQUIRE_DOCKER=1`, and is one suite, so one at a time. CI's
+  `real-engine` job, and `npm run test:containers` on a Mac, run these suites against every real binary through
+  `scripts/container-e2e.mjs`, whose verdict (`bench/containers/verdict.mjs`) counts a skip as unverified, never as a pass.
+  A fake
   harness runs in a real container through the real adapter, MCP server and Landing, a delegated child plan and its
   repair included. `ORDEWELL_E2E_HARNESS_IMAGE` adds the real binary, from an image built as `docker/task.Dockerfile` says,
-  through a turn of a scripted model behind the gateway.
+  through a turn of a scripted model behind the gateway. `ORDEWELL_E2E_OPENCODE_IMAGE` does the same for OpenCode: the
+  real `opencode serve` in a container, its own server reached through the relay, and a controlled Anthropic model on this
+  host behind the lease gateway that writes a file and calls `task_complete`. `codexContainer.e2e.test.ts` does the same for
+  Codex under `ORDEWELL_E2E_CODEX_IMAGE`: two tasks at once through the gateway, the relay's MCP and the gate, and the real
+  sandbox refusing Guarded.
 - A guarantee's probe is tested by a backend built to fail it: an open that requires it refuses, and the engine's default
   network is what `net.allowlist` must catch. The relay, the sidecar and the gate need no engine: the relay and the sidecar
   run as themselves on this host's node, a preload standing in for the world's DNS and sockets, and the gate takes real
@@ -296,6 +380,22 @@ for model traffic first. The interface is kept free of anything that blocks thes
   for what the relay reaches with no network at all.
 - **`--network none` and the proxy on this host, through the relay.** Rejected: the probe's proof would be simpler, but a
   bug in the proxy would then reach this host's loopback, where a sidecar's worst reach is the engine's.
+- **One writable sign-in volume mounted into every task.** Dropped: a task could rewrite what the next task signs in
+  with, and concurrent tasks would share one refreshing credentials file.
+- **Copying a sign-in again at every attempt.** Dropped once measured: a Continue overwrote the token the task had
+  refreshed with one the refresh had killed.
+- **Writing a refreshed token back to the kept sign-in.** Rejected: it is a way for one task to write what the next signs
+  in with, which is why no task mounts that volume, and concurrent writers would race over one credentials file.
+- **Copying again when a task's copy no longer reads as a login.** Rejected: it would run the harness over config a task
+  wrote, in a helper that holds the kept sign-in.
+- **Refreshing in a helper before a hand-off, or leaving the token host off a task's list.** Not built. The binary has no
+  refresh command, and the second only moves the failure to the token's expiry; neither can be proven without a real
+  account.
+- **A package cache every task of a project shares.** Dropped: it is a way for one task's code to run in the next.
+  Keeping the speed would take a cache no task can write, which nothing fills yet.
+- **Refusing containers until the image and login are set.** Rejected: an image is built after a person learns their
+  Docker works, and being on with nothing chosen refuses every task.
+- **Warning of a remote engine and going on.** Rejected: a probe on another machine proves nothing of this one.
 - **`api.anthropic.com` on a broker lease's list.** Rejected: a process in the container could then send anything there
   under a key of its own. It stays on an `own-sign-in` list, which cannot avoid it, and that lease proves less.
 - **An empty list unless `allow` names hosts.** Rejected: naming a cache says a task installs from there, and nothing
@@ -307,7 +407,9 @@ for model traffic first. The interface is kept free of anything that blocks thes
 - **Bringing a checkout script's writes back.** Rejected: only a landing brings container-written work to a checkout, and
   this would be one nobody reads, past the gate.
 - **Dropping any mirror with no pin.** Rejected: a project of another session may have made one a moment ago. A clean-up
-  takes only what it emptied.
+  takes only what it emptied, and a volume with nothing in it, which has nothing to lose and which a push makes again.
+- **Retrying a refused mirror for longer, without reading it again.** Rejected: what holds it may be a new session's first
+  push, and the removal that follows takes that session's pin.
 - **A person or counsel checking provider terms before a subscription path ships.** Dropped on 2026-11-01: which login
   someone uses is theirs to choose. What Ordewell holds stays as L7 says.
 - **`ttlMs`, `renew` and `revoked` on a lease.** Dropped once it met the engine. They were what keeps a container from
@@ -325,6 +427,15 @@ for model traffic first. The interface is kept free of anything that blocks thes
   it missed `post-index-change`. Hooks off closes it as a kind, and the refusal stays so that no check goes silently.
 - **Hooks off with no refusal.** Rejected: it would silently drop a check the user set up, such as a secret scan.
 - **Falling back to the host when a container cannot start.** Rejected: that is running weaker with nobody told.
+- **Codex's Guarded mode in a container, by loosening it.** Rejected: its sandbox fails with seccomp and AppArmor off as
+  well, which leaves the hardening L3 proves, given up for a boundary inside one that already holds.
+- **A Guarded Codex task moved to Full access at spawn.** Rejected: modes are never silently rewritten (ADR-0001).
+- **A plain copy of Codex's `auth.json` per task, or refreshing it for them.** Rejected: rotation makes every copy but one
+  stale, and refreshing would put a person's tokens through this host, which never reads them.
+- **`chatgptAuthTokens`, or a gateway for a ChatGPT token.** Rejected: Ordewell would hold and pass a person's sign-in,
+  which L7 keeps it from for a subscription, and such a gateway would stand in front of a private backend.
+- **Codex access tokens now.** Not built: they are for ChatGPT Enterprise workspaces and nothing here can prove one. It
+  would reach the runner by name, as a cloud credential does, with `chatgpt.com` on the list.
 - **One container per attempt as the unit at scale.** Rejected: a container per attempt pays setup every time. It is
   right for one laptop, where the unit and the trust domain coincide.
 - **A published image.** Rejected: see L5.
@@ -339,14 +450,21 @@ for model traffic first. The interface is kept free of anything that blocks thes
 - `Attempts` and `CliAgentAiService` open a lease where they make a workspace and start an adapter.
 - A task's reach can be stated, and only a proven entry relaxes anything. On the local backend that is nothing.
 - A repository with git hooks, a worktree setup command, and a runner's ops task do not run under containers yet, and each
-  says so. A project's dependencies are the runner's to install, in a volume cache, since a host's setup does not reach a
-  container, and a script's to install too, since it has a task volume of its own.
+  says so. A project's dependencies are the runner's to install, in its task volume's cache, since a host's setup does not
+  reach a container, and a script's to install too, since it has a task volume of its own. Each task downloads them
+  for itself.
 - A script that needs this host's credentials or writes to the checkout does not do so under containers: a `git push` fails,
   and a script's writes stay in its container. The setting is session-wide, so such a step runs in a session without it.
 - A lease takes a network of the engine, whose address pools are finite, and one a dead host left stays until a clean-up.
 - A sealed command over what landed still runs on this host, inside its seal.
 - A check held out of a child's reach (ADR-0055 D8) becomes a boundary only on a backend that proves `fs.hostHidden`.
-- A subscription user in a container has a weaker guarantee, and is told so.
+- A subscription user in a container has a weaker guarantee, and is told so: a runner can read its copy, and where the
+  provider rotates, tasks side by side can end each other's login.
+- A login a task lost is found only by that task failing: a start proves it held, and nothing can sign in for the person.
+- A Codex change task runs in a container at Full access alone. Under the default Guarded level a planned Codex task
+  waits at its start until a person changes it. The runner catalog still offers Guarded, since its marks are host-wide
+  and a lease is a session's.
+- A ChatGPT sign-in for Codex ends with its access token, and a person renews it by hand.
 
 ## History
 
@@ -359,3 +477,11 @@ for model traffic first. The interface is kept free of anything that blocks thes
 - 2026-11-01 — A container session's git runs with hooks off and the gate takes nothing in a tracked hooks folder; work not brought back stops a next attempt; a close waits on `settle`; a child takes its root's backend; a probe reports `cred.unreadable` unproven. Refusing hooks alone dropped.
 - 2026-11-01 — the gate runs git's object checks itself, since a fetch from a bundle does not on an older git.
 - 2026-11-01 — containers are experimental and off in published builds: `containersOffered` reads the `containers` setting only with `ORDEWELL_CONTAINERS=1` from a git checkout, as delegation is held.
+- 2026-11-02 — `changeContainers`, `inspectEngine` and `inspectReadiness`: on asks for a local Docker alone, and a task's start rechecks the raw setting. A task works from its own copy of a sign-in, and keeps its caches in its own volume. Shared caches and a sign-in volume mounted into tasks dropped.
+- 2026-11-02 — Codex change tasks run in containers at Full access: `containerRunners.ts`, a gateway per model API, a task's sign-in copy without a refresh token, and Guarded refused at start by the sandbox probe in the container.
+- 2026-11-02 — The sign-in is `claude auth login` and `claude auth status` says whether one is held; a task's copy is replaced only by a new sign-in, with refresh measured against a controlled provider; a broker refuses a variable that outranks the key. Copying at every attempt dropped.
+- 2026-11-02 — L6: overlapping clean-ups no longer strand a mirror, and a session delete waits for the session to have gone before it clears the engine.
+- 2026-11-02 — OpenCode runs a change task in a container: a per-runner sign-in volume and copy, the relay's reverse direction for its own server, and its Anthropic provider pointed at the lease gateway. A runner's binary is asked of the image before a worktree is made, and a model's provider hosts are opened where nothing gates its traffic.
+- 2026-11-02 — The real-engine suites run in CI as the `real-engine` job and by hand as `npm run test:containers`, where a skip fails the run rather than passing it.
+- 2026-11-02 — Review fixes: the gateway carries exact routes, batches and stored responses out; a login with a gated key opens a handed key's provider; a check says not ready when a required guarantee no lease could prove; an export stops an attempt's hooks and fsmonitor, a filter still runs; a clean-up takes what a dead host's check left.
+- 2026-11-02 — L7: a broker login refuses an OpenCode task on an `openai/*` model before a worktree is made, where it had started with no way to its model.

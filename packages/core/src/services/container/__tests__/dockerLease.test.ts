@@ -1,13 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
 import { spawn, type ChildProcess } from 'child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
+import { type AddressInfo } from 'net';
+import { createServer as createHttpServer } from 'http';
+import { release, tmpdir, type as osType } from 'os';
 import { join } from 'path';
 import { CredentialBroker } from '../credentialBroker';
 import { DockerExecutionBackend, whereItRuns } from '../dockerLease';
+import { LOGIN_VOLUME } from '../containerPreflight';
+import { CODEX_LOGIN_VOLUME } from '../containerRunners';
 import { parseContainerSettings } from '../containerSettings';
-import { EGRESS_ENTRY } from '../egressSidecar';
+import { EGRESS_ENTRY, type EgressRoute } from '../egressSidecar';
 import { RELAY_ENTRY } from '../leaseRelay';
+import { COPY_SIGN_IN } from '../taskWorkspace';
 import type { DockerCall, DockerCli, DockerResult } from '../dockerCli';
 import type { ProbeAsked, ProbeFindings } from '../guaranteeProbe';
 import { KeptWorkError, LeaseGuaranteeError, type LeaseRepo, type LeaseRequest, type LeaseSpec, type OpenLease } from '../../executionLease';
@@ -68,6 +73,8 @@ class RecordingCli implements DockerCli {
     this.heard(line);
     const set = this.answers.find(({ match }) => match.test(line));
     if (set) return { ...OK, ...set.result };
+    if (line.startsWith('context inspect')) return { ...OK, stdout: 'unix:///var/run/docker.sock\n' };
+    if (line.startsWith('info')) return { ...OK, stdout: `linux|2|${16 * 1024 ** 3}\n` };
     if (args.includes('rm') && args[0] === 'rm') for (const entry of this.entries) entry.process.kill('SIGKILL');
     const told = args.find((arg) => arg.startsWith('ORDEWELL_PROBE='));
     if (told) {
@@ -109,9 +116,8 @@ function backendWith(over: { settings?: unknown; cli?: RecordingCli; env?: Recor
   local.repos = [repo];
   const cli = over.cli ?? new RecordingCli();
   const told: { level: string; text: string }[] = [];
-  const settings = parseContainerSettings(over.settings ?? { image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] } });
   const backend = new DockerExecutionBackend(local, {
-    settings,
+    settings: over.settings ?? { image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] } },
     cli,
     git: over.git ?? git(over.hooks),
     ...(over.setupCommand ? { setupCommand: () => over.setupCommand } : {}),
@@ -134,7 +140,158 @@ async function opened(backend: DockerExecutionBackend, request = taskRequest, sp
   return Object.assign(await reserved.lease.open(spec, signal), { lease: reserved.lease });
 }
 
+/** The task volume a start made, which fails a test if it made none. */
+function madeTaskVolume(cli: RecordingCli): string {
+  const made = cli.lines().find((line) => line.startsWith('volume create') && line.includes('ordewell-task-'));
+  if (!made) throw new Error('no task volume was made');
+  return made.split(' ').at(-1)!;
+}
+
 describe('what runs in a container (ADR-0059 L5)', () => {
+  it('refuses a runner no container has been proven with, naming the ones that have', async () => {
+    const { backend, cli } = backendWith();
+
+    await expect(opened(backend, { ...taskRequest, runner: 'gemini' })).rejects.toThrow(/gemini has not been proven in one.*claude-code, codex, opencode/);
+    expect(cli.entries).toEqual([]);
+  });
+
+  it('runs an OpenCode change task there', async () => {
+    const { backend, cli } = backendWith();
+
+    const lease = await opened(backend, { ...taskRequest, runner: 'opencode' });
+
+    expect(cli.entries).toHaveLength(1);
+    expect(lease.placement).toBeDefined();
+    lease.lease.release('done');
+  });
+
+  it('gives an OpenCode own sign-in its own copy, and points the runner at it', async () => {
+    const { backend, cli } = backendWith({ settings: { image: 'ordewell-task', login: { kind: 'own-sign-in' } } });
+
+    const lease = await opened(backend, { ...taskRequest, runner: 'opencode' });
+
+    const copy = cli.lines().find((line) => line.includes('ordewell-login-opencode') && line.startsWith('run'));
+    expect(copy).toContain('ordewell-login-opencode:/login:ro');
+    expect(copy).toContain('/task/login/opencode');
+    expect(cli.entries[0].args.join(' ')).toContain('XDG_DATA_HOME=/task/login');
+    expect(cli.entries[0].args.join(' ')).not.toContain('CLAUDE_CONFIG_DIR');
+    lease.lease.release('done');
+  });
+
+  it("opens an OpenCode sign-in's providers and the model's own API, which nothing gates", async () => {
+    const { backend, cli } = backendWith({ settings: { image: 'ordewell-task', login: { kind: 'own-sign-in' }, allow: [] } });
+    const spec = { ...changeSpec, task: createTask({ id: 'a', order: 1, title: 'A', prompt: 'do a', assignedModel: { modelId: 'opencode/claude-sonnet-4', modelLabel: 'claude-sonnet-4', availableVariants: [] } }) };
+
+    const lease = await opened(backend, { ...taskRequest, runner: 'opencode' }, spec);
+
+    const egress = cli.sidecars[0].args.find((arg) => arg.startsWith('ORDEWELL_EGRESS='))!;
+    const allow = JSON.parse(egress.slice('ORDEWELL_EGRESS='.length)).allow as string[];
+    expect(allow).toEqual(expect.arrayContaining(['api.anthropic.com', 'opencode.ai']));
+    lease.lease.release('done');
+  });
+
+  it("opens a handed key's provider hosts, and no model host behind the gateway", async () => {
+    const handed = backendWith({ settings: { image: 'ordewell-task', login: { kind: 'broker', variables: ['OPENROUTER_API_KEY'] }, allow: [] }, env: { OPENROUTER_API_KEY: 'sk-or-test' } });
+    const gated = backendWith({ settings: { image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] }, allow: [] } });
+    const model = (id: string) => ({ ...changeSpec, task: createTask({ id: 'a', order: 1, title: 'A', prompt: 'do a', assignedModel: { modelId: id, modelLabel: id.split('/').at(-1)!, availableVariants: [] } }) });
+
+    const open = await opened(handed.backend, { ...taskRequest, runner: 'opencode' }, model('openrouter/anthropic/claude-sonnet-4'));
+    const closed = await opened(gated.backend, { ...taskRequest, runner: 'opencode' }, model('anthropic/claude-sonnet-4'));
+    const allowOf = (cli: RecordingCli) => JSON.parse(cli.sidecars[0].args.find((arg) => arg.startsWith('ORDEWELL_EGRESS='))!.slice('ORDEWELL_EGRESS='.length)).allow as string[];
+
+    expect(allowOf(handed.cli)).toContain('openrouter.ai');
+    expect(allowOf(gated.cli)).not.toContain('api.anthropic.com');
+    open.lease.release('done');
+    closed.lease.release('done');
+  });
+
+  describe('a login that gates one key and names another', () => {
+    const allowFor = async (variables: string[], modelId: string) => {
+      const { backend, cli } = backendWith({ settings: { image: 'ordewell-task', login: { kind: 'broker', variables }, allow: [] }, env: { ANTHROPIC_API_KEY: 'sk-ant-api03-test', OPENAI_API_KEY: 'sk-proj-test', OPENROUTER_API_KEY: 'sk-or-test' } });
+      const spec = { ...changeSpec, task: createTask({ id: 'a', order: 1, title: 'A', prompt: 'do a', assignedModel: { modelId, modelLabel: modelId, availableVariants: [] } }) };
+      const lease = await opened(backend, { ...taskRequest, runner: 'opencode' }, spec);
+      lease.lease.release('done');
+      return JSON.parse(cli.sidecars[0].args.find((arg) => arg.startsWith('ORDEWELL_EGRESS='))!.slice('ORDEWELL_EGRESS='.length)).allow as string[];
+    };
+
+    it('opens the handed key its provider, and leaves the gated key behind its gateway', async () => {
+      const hosts = await allowFor(['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY'], 'openrouter/anthropic/claude-sonnet-4');
+
+      expect(hosts).toContain('openrouter.ai');
+      expect(hosts).not.toContain('api.anthropic.com');
+    });
+
+    it("does not open the gated key's own API for a model of that provider", async () => {
+      expect(await allowFor(['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY'], 'anthropic/claude-sonnet-4')).not.toContain('api.anthropic.com');
+    });
+
+    it.each([
+      ['beside the gated key', ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY']],
+      ['beside a handed key too', ['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY']],
+      ['or with no key of its own named', ['ANTHROPIC_API_KEY']],
+      ['or with only a handed key', ['OPENROUTER_API_KEY']],
+    ])('refuses an OpenAI model under OpenCode before a worktree, %s', async (_how, variables) => {
+      const { backend, local, cli } = backendWith({ settings: { image: 'ordewell-task', login: { kind: 'broker', variables }, allow: [] }, env: { ANTHROPIC_API_KEY: 'sk-ant-api03-test', OPENAI_API_KEY: 'sk-proj-test', OPENROUTER_API_KEY: 'sk-or-test' } });
+      const spec = { ...changeSpec, task: createTask({ id: 'a', order: 1, title: 'A', prompt: 'do a', assignedModel: { modelId: 'openai/gpt-5', modelLabel: 'GPT-5', availableVariants: [] } }) };
+
+      const start = opened(backend, { ...taskRequest, runner: 'opencode' }, spec);
+
+      await expect(start).rejects.toThrow(/cannot start in one.*openai\/gpt-5.*OPENAI_API_KEY.*"own-sign-in"/);
+      expect(local.opened).toEqual([]);
+      expect(cli.sidecars).toEqual([]);
+    });
+
+    it('leaves an OpenAI model to a person signed in to OpenCode, and opens its API', async () => {
+      const { backend, cli } = backendWith({ settings: { image: 'ordewell-task', login: { kind: 'own-sign-in' }, allow: [] } });
+      const spec = { ...changeSpec, task: createTask({ id: 'a', order: 1, title: 'A', prompt: 'do a', assignedModel: { modelId: 'openai/gpt-5', modelLabel: 'GPT-5', availableVariants: [] } }) };
+
+      const lease = await opened(backend, { ...taskRequest, runner: 'opencode' }, spec);
+
+      expect(JSON.parse(cli.sidecars[0].args.find((arg) => arg.startsWith('ORDEWELL_EGRESS='))!.slice('ORDEWELL_EGRESS='.length)).allow).toContain('api.openai.com');
+      lease.lease.release('done');
+    });
+
+    it('leaves OpenAI models to Codex, whose gateway carries that key', async () => {
+      const { backend } = backendWith({ settings: { image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY'] }, allow: [] }, env: { ANTHROPIC_API_KEY: 'sk-ant-api03-test', OPENAI_API_KEY: 'sk-proj-test' } });
+      const spec = { ...changeSpec, task: createTask({ id: 'a', order: 1, title: 'A', prompt: 'do a', assignedModel: { modelId: 'openai/gpt-5', modelLabel: 'GPT-5', availableVariants: [] } }) };
+
+      const lease = await opened(backend, { ...taskRequest, runner: 'codex' }, spec);
+
+      lease.lease.release('done');
+    });
+
+    it("leaves a model's id to a runner that does not read a provider from it", async () => {
+      const { backend } = backendWith({ settings: { image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL'] }, allow: [] }, env: { ANTHROPIC_API_KEY: 'sk-ant-api03-test', ANTHROPIC_BASE_URL: 'https://proxy.example' } });
+      const spec = { ...changeSpec, task: createTask({ id: 'a', order: 1, title: 'A', prompt: 'do a', assignedModel: { modelId: 'openai/gpt-5', modelLabel: 'GPT-5', availableVariants: [] } }) };
+
+      const lease = await opened(backend, taskRequest, spec);
+
+      lease.lease.release('done');
+    });
+
+    it('opens no provider when nothing was handed for it to take', async () => {
+      expect(await allowFor(['ANTHROPIC_API_KEY'], 'openrouter/anthropic/claude-sonnet-4')).not.toContain('openrouter.ai');
+    });
+  });
+
+  it("reaches a server the runner starts inside, over the relay, and nowhere else", async () => {
+    const { backend, cli } = backendWith();
+    const lease = await opened(backend, { ...taskRequest, runner: 'opencode' });
+    const inside = createHttpServer((req, res) => res.end(`inside ${req.url}`));
+    await new Promise<void>((done) => inside.listen(0, '127.0.0.1', done));
+    const insidePort = (inside.address() as AddressInfo).port;
+
+    const reached = await lease.placement!.reachIn!(`http://127.0.0.1:${insidePort}`);
+    const reply = await (await fetch(`${reached}/api/info`)).text();
+
+    expect(reached).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(reached).not.toContain(String(insidePort));
+    expect(reply).toBe('inside /api/info');
+    inside.close();
+    lease.lease.release('done');
+    expect(cli.entries).toHaveLength(1);
+  });
+
   it('runs a change task there', () => {
     expect(whereItRuns(taskRequest, changeSpec)).toBe('container');
   });
@@ -175,14 +332,14 @@ describe('a lease that cannot be what was asked refuses, and runs nothing weaker
   it('refuses when no login was chosen: a person chooses it', async () => {
     const { backend, local } = backendWith({ settings: { image: 'ordewell-task' } });
 
-    await expect(opened(backend)).rejects.toThrow(/choose/);
+    await expect(opened(backend)).rejects.toThrow(/No login has been chosen/);
     expect(local.opened).toEqual([]);
   });
 
   it('refuses a runner no container has been proven with', async () => {
     const { backend, local } = backendWith();
 
-    await expect(opened(backend, { ...taskRequest, runner: 'codex' })).rejects.toThrow(/codex/);
+    await expect(opened(backend, { ...taskRequest, runner: 'some-other-agent' })).rejects.toThrow(/some-other-agent has not been proven in one: assign the task to claude-code, codex/);
     expect(local.opened).toEqual([]);
   });
 
@@ -329,7 +486,7 @@ describe('every container', () => {
     await opened(backend);
     await backend.collect('a').catch(() => undefined);
 
-    const helper = cli.calls.find(({ args }) => args[0] === 'run' && args.join(' ').includes('--network none'));
+    const helper = cli.calls.find(({ args }) => args[0] === 'run' && args.join(' ').includes('--network none') && args.includes('--pids-limit'));
     expect(helper?.args.join(' ')).toContain('--pids-limit 8192');
     expect(helper?.args).toContain('--init');
     expect(helper?.args.join(' ')).toContain('--memory 4g');
@@ -674,11 +831,21 @@ describe('a script in a container', () => {
       const { backend, local, cli } = backendWith();
       local.repos = [];
       const refusing: GitInvoker = { exec: async () => { throw Object.assign(new Error('not a git repository'), { stderr: 'fatal: not a git repository' }); }, resolvePath: async () => '/usr/bin' };
-      const lone = new DockerExecutionBackend(local, { settings: parseContainerSettings({ image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] } }), cli, git: refusing, broker: new CredentialBroker({ ANTHROPIC_API_KEY: 'k' }), sessionId: () => 'session-1', tell: () => undefined });
+      const lone = new DockerExecutionBackend(local, { settings: { image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] } }, cli, git: refusing, broker: new CredentialBroker({ ANTHROPIC_API_KEY: 'k' }), sessionId: () => 'session-1', tell: () => undefined });
 
       await expect(opened(lone, scriptRequest, checkoutSpec)).rejects.toThrow(/git repository/);
       expect(cli.entries).toEqual([]);
       void backend;
+    });
+
+    it('leaves no volume behind when it cannot get a network', async () => {
+      const cli = new RecordingCli();
+      cli.answers.push({ match: /^network create/, result: { code: 1, stderr: 'no address pool' } });
+      const { backend } = backendWith({ cli });
+
+      await expect(opened(backend, scriptRequest, checkoutSpec)).rejects.toThrow(/no address pool/);
+
+      expect(cli.lines()).toContain(`volume rm -f ${madeTaskVolume(cli)}`);
     });
 
     it('still refuses a task of the checkout: a runner there has work to bring back', async () => {
@@ -729,6 +896,22 @@ describe('a script in a container', () => {
 
       const made = cli.lines().find((line) => line.startsWith('volume create') && line.includes('ordewell-task-'))!.split(' ').at(-1);
       expect(cli.lines()).toContain(`volume rm -f ${made}`);
+    });
+
+    it('leaves no volume behind when git cannot name what it would run on', async () => {
+      const failingGit: GitInvoker = {
+        exec: async (_file, args) => {
+          if (args.includes('HEAD')) throw Object.assign(new Error('bad HEAD'), { stderr: 'fatal: bad HEAD' });
+          return { stdout: 'abc123\n', stderr: '' };
+        },
+        resolvePath: async () => '/usr/bin',
+      };
+      const cli = new RecordingCli();
+      const { backend } = backendWith({ cli, git: failingGit });
+
+      await expect(opened(backend, scriptRequest, readOnlySpec)).rejects.toThrow(/bad HEAD/);
+
+      expect(cli.lines()).toContain(`volume rm -f ${madeTaskVolume(cli)}`);
     });
 
     it('keeps nothing: its volume goes with its attempt, and a retry gets its own', async () => {
@@ -1017,7 +1200,7 @@ describe('work that did not come back (L2)', () => {
   it('holds past this Session: what says so is in the engine, where no container reaches it', async () => {
     const { cli, local } = await refused();
     const later = new DockerExecutionBackend(local, {
-      settings: parseContainerSettings({ image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] } }),
+      settings: { image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] } },
       cli, git: git(), broker: new CredentialBroker({ ANTHROPIC_API_KEY: 'sk-ant-api03-test' }), sessionId: () => 'session-1', tell: () => undefined,
     });
 
@@ -1093,5 +1276,333 @@ describe('a Session closing (ADR-0059 L5)', () => {
 
     bring();
     await vi.waitFor(() => expect(settled).toBe(true));
+  });
+});
+
+/** What a person fixed or broke between two starts counts, and a check that passed once proves nothing of the next start. */
+describe('the check at every task start', () => {
+  it('refuses a start after the engine moved off this machine, though an earlier one passed', async () => {
+    const { backend, cli } = backendWith();
+    const first = await opened(backend);
+    first.lease.release('done');
+    cli.answers.push({ match: /^context inspect/, result: { stdout: 'tcp://build-box.example:2376\n' } });
+
+    await expect(opened(backend, { ...taskRequest, node: { sessionId: 'session-1', taskId: 'b' } }, { ...changeSpec, task: { ...changeSpec.task!, id: 'b' } })).rejects.toThrow(/not on this machine/);
+    expect(cli.entries).toHaveLength(1);
+  });
+
+  it('tells a person the remedy, not only the fault', async () => {
+    const cli = new RecordingCli();
+    cli.answers.push({ match: /^version/, result: { code: 1, stderr: 'Cannot connect to the Docker daemon' } });
+    const { backend } = backendWith({ cli });
+
+    await expect(opened(backend)).rejects.toThrow(/does not answer: Cannot connect to the Docker daemon\. .*(colima start|systemctl start docker)/);
+  });
+
+  it('turns a task down on a setting that is on and not yet configured, and never the host in its place', async () => {
+    const { backend, cli, local } = backendWith({ settings: {} });
+
+    await expect(opened(backend)).rejects.toThrow(/No image has been chosen.*No login has been chosen/);
+    expect(local.opened).toEqual([]);
+    expect(cli.entries).toEqual([]);
+  });
+});
+
+/** A sign-in one task could write is a sign-in the next one loads: one task's code would run in the next (ADR-0059 L7). */
+describe('a person\'s own sign-in in a task', () => {
+  const OWN = { settings: { image: 'ordewell-task', login: { kind: 'own-sign-in' } } };
+
+  it('never mounts the kept sign-in where a runner runs, and hands it a copy of its own', async () => {
+    const { backend, cli } = backendWith(OWN);
+    const lease = await opened(backend);
+
+    const entry = cli.entries[0].args.join(' ');
+    expect(entry).not.toContain(LOGIN_VOLUME);
+    expect(entry).not.toContain('/login:');
+    expect(entry).toContain('CLAUDE_CONFIG_DIR=/task/login/claude');
+    lease.lease.release('done');
+  });
+
+  it('copies it read-only, with no network, and before the runner has a container', async () => {
+    const { backend, cli } = backendWith(OWN);
+    const order: string[] = [];
+    const isCopy = (line: string) => line.startsWith('run') && line.includes(LOGIN_VOLUME) && line.includes(COPY_SIGN_IN);
+    cli.heard = (line) => { if (isCopy(line)) order.push(`copy, entries ${cli.entries.length}`); };
+    const lease = await opened(backend);
+
+    const copy = cli.lines().find(isCopy);
+    expect(copy).toContain(`${LOGIN_VOLUME}:/login:ro`);
+    expect(copy).toContain('--network none');
+    expect(order).toEqual(['copy, entries 0']);
+    lease.lease.release('done');
+  });
+
+  it('refuses a task it could not give the sign-in to, naming how to make one', async () => {
+    const cli = new RecordingCli();
+    cli.answers.push({ match: new RegExp(`^run .*${LOGIN_VOLUME}[^]*cp -a`), result: { code: 3, stderr: 'no sign-in' } });
+    const { backend } = backendWith({ ...OWN, cli });
+
+    await expect(opened(backend)).rejects.toThrow(/sign in as docs\/containers\.md shows/i);
+    expect(cli.entries).toEqual([]);
+  });
+
+  it('copies nothing for a script, which holds no login', async () => {
+    const { backend, cli } = backendWith(OWN);
+    const lease = await opened(backend, scriptRequest);
+
+    expect(cli.lines().filter((line) => line.includes(LOGIN_VOLUME))).toEqual([]);
+    lease.lease.release('done');
+  });
+
+  it('tells the probe where the copy is, so what it reports is of that', async () => {
+    const { backend, cli, told } = backendWith(OWN);
+    cli.probe = { loginReadable: true };
+    const lease = await opened(backend);
+
+    expect(cli.asked[0].login).toBe('/task/login/claude');
+    expect(told.some(({ text }) => text.includes('cred.unreadable'))).toBe(true);
+    lease.lease.release('done');
+  });
+});
+
+/** A cache every task writes is a way for one task's code to run in the next. */
+describe('package caches', () => {
+  it('stay in the task\'s own volume, shared with no other task', async () => {
+    const { backend, cli } = backendWith();
+    const lease = await opened(backend);
+
+    const entry = cli.entries[0].args.join(' ');
+    expect(entry).not.toContain('ordewell-cache-');
+    expect(entry).toContain('npm_config_cache=/task/caches/npm');
+    lease.lease.release('done');
+  });
+
+  it('are no mounts the probe would call strange', async () => {
+    const { backend } = backendWith({ settings: { image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] }, caches: ['npm', 'pip'] } });
+
+    const lease = await opened(backend);
+
+    expect(lease.guarantees['fs.hostHidden'].proven).toBe(true);
+    lease.lease.release('done');
+  });
+});
+
+describe('what a person is told of a lease\'s guarantees', () => {
+  it('names what was not proven, once for a session', async () => {
+    const { backend, cli, told } = backendWith();
+    cli.probe = { kernel: `${osType()} ${release()}` };
+    const first = await opened(backend);
+    first.lease.release('done');
+    const second = await opened(backend, { ...taskRequest, node: { sessionId: 'session-1', taskId: 'b' } }, { ...changeSpec, task: { ...changeSpec.task!, id: 'b' } });
+    second.lease.release('done');
+
+    const about = told.filter(({ text }) => text.includes('kernel.separate'));
+    expect(about).toHaveLength(1);
+    expect(about[0].text).not.toContain('fs.hostHidden');
+  });
+});
+
+describe('a probe that fails', () => {
+  it('leaves no container behind when its CLI gives up on it', async () => {
+    const { backend, cli } = backendWith();
+    cli.answers.push({ match: /ORDEWELL_PROBE=/, result: { code: 137, stdout: '', stderr: '' } });
+
+    await expect(backend.probe()).rejects.toThrow(/probe/);
+
+    const run = cli.calls.find(({ args }) => args.some((arg) => arg.startsWith('ORDEWELL_PROBE=')))!.args;
+    const name = run[run.indexOf('--name') + 1];
+    expect(run.join(' ')).toContain('ordewell.tree=');
+    const lines = cli.lines();
+    expect(lines.indexOf(`rm -f ${name}`)).toBeGreaterThan(-1);
+    expect(lines.indexOf(`rm -f ${name}`)).toBeLessThan(lines.findIndex((line) => line.startsWith('network rm')));
+  });
+
+  it('gives its way out back whatever the probe threw', async () => {
+    const closed = vi.fn(async () => undefined);
+    const route: EgressRoute = { runArgs: [], env: {}, proxied: true, gateway: null, close: closed };
+    const cli = new RecordingCli();
+    cli.call = async function call(args, opts) {
+      if (args.some((arg) => arg.startsWith('ORDEWELL_PROBE='))) throw new Error('the CLI fell over');
+      return RecordingCli.prototype.call.call(this, args, opts);
+    };
+    const backend = new DockerExecutionBackend(new FakeExecutionBackend(), {
+      settings: { image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] } }, cli, git: git(), egress: { open: async () => route },
+      broker: new CredentialBroker({ ANTHROPIC_API_KEY: 'k' }), sessionId: () => 'session-1', tell: () => undefined,
+    });
+
+    await expect(backend.probe()).rejects.toThrow(/fell over/);
+
+    expect(closed).toHaveBeenCalledOnce();
+  });
+});
+
+/** A Codex change task, end to end at this seam: the real binary's half is codexContainer.e2e's. */
+describe('a Codex task in a container', () => {
+  const codexRequest: LeaseRequest = { ...taskRequest, runner: 'codex' };
+  const otherTask: LeaseRequest = { ...codexRequest, node: { sessionId: 'session-1', taskId: 'b' } };
+  const otherSpec: LeaseSpec = { ...changeSpec, task: { ...changeSpec.task!, id: 'b' } };
+  const KEY = 'sk-proj-test-key';
+  const BROKER = { settings: { image: 'ordewell-task', login: { kind: 'broker', variables: ['OPENAI_API_KEY'] } }, env: { OPENAI_API_KEY: KEY } };
+
+  it('holds a lease token for its API key, and the key stays on this host', async () => {
+    const { backend, cli } = backendWith(BROKER);
+    const lease = await opened(backend, codexRequest);
+
+    const placed = await lease.placement!.place({ command: 'codex', args: ['app-server'], env: {}, files: [] });
+
+    expect(placed.env.OPENAI_API_KEY).toMatch(/^ordewell-lease-/);
+    expect(JSON.stringify([placed, cli.calls, cli.entries.map(({ args }) => args), cli.sidecars.map(({ args }) => args)])).not.toContain(KEY);
+    placed.ended();
+    lease.lease.release('done');
+  });
+
+  it('gives two tasks at once a stand-in each for the one key, so neither holds what the other does', async () => {
+    const { backend, cli } = backendWith(BROKER);
+    const first = await opened(backend, codexRequest);
+    const second = await opened(backend, otherTask, otherSpec);
+
+    const [one, other] = await Promise.all([first, second].map(({ placement }) => placement!.place({ command: 'codex', args: ['app-server'], env: {}, files: [] })));
+
+    expect(other.env.OPENAI_API_KEY).toMatch(/^ordewell-lease-/);
+    expect(other.env.OPENAI_API_KEY).not.toBe(one.env.OPENAI_API_KEY);
+    expect(cli.entries).toHaveLength(2);
+    for (const placed of [one, other]) placed.ended();
+    for (const { lease } of [first, second]) lease.release('done');
+  });
+
+  it('points app-server at the gateway, which is the one way Codex takes a key: it ignores both variables', async () => {
+    const { backend } = backendWith(BROKER);
+    const lease = await opened(backend, codexRequest);
+
+    const placed = await lease.placement!.place({ command: 'codex', args: ['app-server', '-c', 'features.memories=false'], env: {}, files: [] });
+
+    const line = placed.args.join(' ');
+    expect(line).toMatch(/model_providers\.gateway=\{.*base_url="http:\/\/127\.0\.0\.1:\d+\/v1".*env_key="OPENAI_API_KEY".*wire_api="responses".*supports_websockets=false/);
+    expect(line).toContain('model_provider="gateway"');
+    placed.ended();
+    lease.lease.release('done');
+  });
+
+  it('names the working directory the runner sees, which is the one its launch runs in', async () => {
+    const { backend } = backendWith(BROKER);
+    const lease = await opened(backend, codexRequest);
+
+    const placed = await lease.placement!.place({ command: 'codex', args: ['app-server'], env: {}, files: [] });
+
+    expect(lease.placement!.cwd).toMatch(/^\/task\/work(\/|$)/);
+    expect(placed.args).toContain(lease.placement!.cwd);
+    placed.ended();
+    lease.lease.release('done');
+  });
+
+  it('refuses at start an image that holds no Codex, naming how to build one, and leaves nothing behind', async () => {
+    const cli = new RecordingCli();
+    cli.answers.push({ match: /^exec .*command -v/, result: { code: 1 } });
+    const { backend } = backendWith({ ...BROKER, cli });
+
+    await expect(opened(backend, codexRequest)).rejects.toThrow(/ordewell-task holds no codex.*docs\/containers\.md/s);
+
+    const name = cli.entries[0].args[cli.entries[0].args.indexOf('--name') + 1];
+    expect(cli.lines()).toContain(`rm -f ${name}`);
+  });
+
+  it('asks nothing of a script, which needs no runner in the image', async () => {
+    const { backend, cli } = backendWith(BROKER);
+    const lease = await opened(backend, scriptRequest);
+
+    expect(cli.lines().filter((line) => line.includes('command -v'))).toEqual([]);
+    lease.lease.release('done');
+  });
+
+  describe('on a person\'s own sign-in', () => {
+    const OWN = { settings: { image: 'ordewell-task', login: { kind: 'own-sign-in' } } };
+
+    it('never mounts the kept sign-in where a runner runs, or Claude\'s: it hands it a copy of its own', async () => {
+      const { backend, cli } = backendWith(OWN);
+      const lease = await opened(backend, codexRequest);
+
+      const entry = cli.entries[0].args.join(' ');
+      expect(entry).not.toContain(CODEX_LOGIN_VOLUME);
+      expect(entry).not.toContain('/login:');
+      expect(cli.lines().filter((line) => line.includes(LOGIN_VOLUME))).toEqual([]);
+      lease.lease.release('done');
+    });
+
+    it('copies it read-only, with no network, and before the runner has a container', async () => {
+      const { backend, cli } = backendWith(OWN);
+      const order: string[] = [];
+      cli.heard = (line) => { if (line.includes(CODEX_LOGIN_VOLUME) && line.startsWith('run')) order.push(`copy, entries ${cli.entries.length}`); };
+      const lease = await opened(backend, codexRequest);
+
+      const copy = cli.lines().find((line) => line.includes(CODEX_LOGIN_VOLUME) && line.startsWith('run'));
+      expect(copy).toContain(`${CODEX_LOGIN_VOLUME}:/login:ro`);
+      expect(copy).toContain('--network none');
+      expect(order).toEqual(['copy, entries 0']);
+      lease.lease.release('done');
+    });
+
+    it('copies it into each task\'s own volume, so two tasks at once share no credentials file', async () => {
+      const { backend, cli } = backendWith(OWN);
+      const leases = [await opened(backend, codexRequest), await opened(backend, otherTask, otherSpec)];
+
+      const copies = cli.lines().filter((line) => line.includes(CODEX_LOGIN_VOLUME) && line.startsWith('run'));
+      const volumes = copies.map((line) => /-v (\S+):\/task\b/.exec(line)?.[1]);
+      expect(volumes).toHaveLength(2);
+      expect(volumes.every(Boolean)).toBe(true);
+      expect(new Set(volumes).size).toBe(2);
+      for (const { lease } of leases) lease.release('done');
+    });
+
+    it('refuses a sign-in the copy turned down, in the copy\'s words and naming how to make one', async () => {
+      const cli = new RecordingCli();
+      cli.answers.push({ match: new RegExp(`^run .*${CODEX_LOGIN_VOLUME}`), result: { code: 3, stderr: 'the kept sign-in has expired\n' } });
+      const { backend } = backendWith({ ...OWN, cli });
+
+      await expect(opened(backend, codexRequest)).rejects.toThrow(/the kept sign-in has expired.*sign in as docs\/containers\.md shows/is);
+      expect(cli.entries).toEqual([]);
+    });
+
+    it('lets the sidecar reach the service a sign-in talks to, and not the one that would refresh it', async () => {
+      const { backend, cli } = backendWith(OWN);
+      const lease = await opened(backend, codexRequest);
+
+      const sidecar = cli.sidecars[0].args.join(' ');
+      expect(sidecar).toContain('chatgpt.com');
+      expect(sidecar).not.toContain('auth.openai.com');
+      lease.lease.release('done');
+    });
+
+    it('tells the probe where the copy is, so what it reports is of that', async () => {
+      const { backend, cli, told } = backendWith(OWN);
+      cli.probe = { loginReadable: true };
+      const lease = await opened(backend, codexRequest);
+
+      expect(cli.asked[0].login).toBe('/task/home/.codex/auth.json');
+      expect(told.some(({ text }) => text.includes('cred.unreadable'))).toBe(true);
+      lease.lease.release('done');
+    });
+
+    it('has Codex read the file it was handed, wherever that person keeps their own, and no gateway', async () => {
+      const { backend } = backendWith(OWN);
+      const lease = await opened(backend, codexRequest);
+
+      const placed = await lease.placement!.place({ command: 'codex', args: ['app-server'], env: {}, files: [] });
+
+      expect(placed.args.join(' ')).toContain('cli_auth_credentials_store="file"');
+      expect(placed.args.join(' ')).not.toContain('model_provider');
+      placed.ended();
+      lease.lease.release('done');
+    });
+  });
+
+  it('leaves a script step of the same lease as it was written', async () => {
+    const { backend } = backendWith(BROKER);
+    const lease = await opened(backend, codexRequest);
+
+    const placed = await lease.placement!.place({ command: 'sh', args: ['-c', 'codex app-server'], env: {}, files: [] });
+
+    expect(placed.args.join(' ')).not.toContain('model_provider');
+    placed.ended();
+    lease.lease.release('done');
   });
 });

@@ -99,7 +99,8 @@ There is no per-plan value and no per-workspace override.
 | Planned-with line in commits Ordewell writes (not in the panels) | on, off | **on** |
 | supervisor retry limit | whole number ≥ 0 | 2 |
 | wake-up read budget (not in the panels) | whole number ≥ 1 | 12 |
-| delegation (ADR-0055 D21) | off, or a tree's budget in tokens | **off** |
+| delegation (ADR-0055 D21), shown as Subplanners | off, or a tree's budget in tokens | **off** |
+| kept tree budget (`delegationBudget`, not in the panels) | whole number ≥ 0; 0 is none entered | 0 |
 
 Watch becomes the default because it only reads and writes notes to the user:
 it never acts, and it makes the planner's watching of a run something a new
@@ -124,7 +125,7 @@ row.
 | `ordewell automerge [on\|off]` | merge at gates automatically |
 | `ordewell trailer [on\|off]` | Planned-with line in commits Ordewell writes |
 | `ordewell autorun [on\|off]` | autorun |
-| `ordewell delegation [off\|<tokens>]` | delegation, and a tree's token budget |
+| `ordewell delegation [on\|off\|<tokens>]` | Subplanners on or off (`on` uses the kept budget), and a tree's token budget |
 | `ordewell parallel [<n>]` | tasks that run at once |
 
 Parallel is the exception to the one store: the TUI keeps it in `.env` and
@@ -138,7 +139,11 @@ what it accepts below the root
 ([ADR-0056](0056-a-mandate-narrows-down-the-tree.md) M9); a change to the budget
 of a tree already on accepts nothing new, so it does not. One value holds both, the
 budget in tokens with 0 for off, so delegation is never on with no budget. The
-plan pane's `G`, `W` and `L` and VS
+surfaces show it as a Subplanners switch with the budget as a row only while on.
+The budget last entered is kept while off and across restarts, in its own field
+that turns nothing on and that the mandate never reads: turning on again uses it,
+and with none ever entered the user must type one, so no default stands in for it
+and cancelling saves nothing. The plan pane's `G`, `W` and `L` and VS
 Code's plan-card controls are removed: one route per setting. `L` had no job
 left, since lowering the supervisor now lowers the run at once.
 
@@ -495,3 +500,4 @@ the daemon reads it from there at generation.
 - 2026-10-31 — a planner's `run_plan` leaves what failed as it is, in Full with autorun as anywhere ([ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).
 - 2026-10-31 — delegation joins the run settings, off by default, with `ordewell delegation`, a `/settings` step after Parallel and a VS Code row; it changes nothing until something can delegate (ADR-0055 D21).
 - 2026-10-31 — Parallel counts a whole tree (ADR-0055 D18).
+- 2026-11-02 — Subplanners is a compact on/off control: the tree budget shows only while on, is entered by the user the first time, and is kept while off and across restarts.

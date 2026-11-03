@@ -27,11 +27,17 @@ export const PLAN_KEYS = {
   expand: { keys: '→', meaning: "reveal a task's subtasks, then edit its prompt, or show a script task's body", group: 'Navigation', hint: '→ expand' },
   log: {
     keys: 'enter',
-    meaning: "open the task's log: its output for a script task, or the chat with its runner (and, at a checkpoint, its answer)",
+    meaning: "open the task: its output for a script task, its subplanner for a delegated task, or the chat with its runner (and, at a checkpoint, its answer)",
     group: 'Navigation',
-    hint: (task) => (task?.type === 'script' ? 'enter output' : task?.status === 'awaiting_user' && task.awaitingReason === 'checkpoint' ? 'enter answer' : task?.type === 'delegated' && task.status === 'pending' && task.continuable ? 'enter continue' : 'enter chat'),
+    hint: (task) => (task?.type === 'script' ? 'enter output' : task?.status === 'awaiting_user' && task.awaitingReason === 'checkpoint' ? 'enter answer' : task?.type === 'delegated' ? 'enter subplanner' : 'enter chat'),
   },
-  back: { keys: 'esc', meaning: "collapse the task, or leave a task's chat for the plan", group: 'Navigation' },
+  delegatedLog: {
+    keys: 'l',
+    meaning: "open a delegated task's own log, where a task a Stop left with its child is continued",
+    group: 'Navigation',
+    hint: (task) => (task?.status === 'pending' && task.continuable ? 'l continue' : 'l log'),
+  },
+  back: { keys: 'esc', meaning: "collapse the task, leave a task's chat for the plan, or leave a subplanner for the plan above it", group: 'Navigation' },
 
   runner: { keys: 'R', meaning: "pick the task's runner", group: 'Assign' },
   model: { keys: 'o', meaning: "pick the task's model", group: 'Assign', hint: 'o model' },
@@ -126,8 +132,13 @@ function taskKeyIds(task: TaskView | undefined, runActive: boolean): PlanKeyId[]
   }
 }
 
+/** A plan below the root is read here, not edited: these are the keys that do anything there, and no route continues a task. */
+const CHILD_PLAN_KEYS: ReadonlySet<PlanKeyId> = new Set<PlanKeyId>(['log', 'delegatedLog', 'stop', 'expand', 'keys', 'chat']);
+
 /** The plan footer's hints for the selected task, ending in the keys that are always there. */
-export function planFooterHints(task: TaskView | undefined, runActive: boolean): string[] {
-  const ids: PlanKeyId[] = [...taskKeyIds(task, runActive), 'expand', 'keys', 'chat'];
-  return ids.map((id) => hintOf(id, task));
+export function planFooterHints(task: TaskView | undefined, runActive: boolean, belowRoot = false): string[] {
+  const ids = taskKeyIds(task, runActive).flatMap((id): PlanKeyId[] => (id === 'log' && task?.type === 'delegated' ? ['log', 'delegatedLog'] : [id]));
+  const all: PlanKeyId[] = [...ids, 'expand', 'keys', 'chat'];
+  if (!belowRoot) return all.map((id) => hintOf(id, task));
+  return all.filter((id) => CHILD_PLAN_KEYS.has(id)).map((id) => (id === 'delegatedLog' ? 'l log' : hintOf(id, task)));
 }

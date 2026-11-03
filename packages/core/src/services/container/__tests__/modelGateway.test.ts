@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createServer, request, type IncomingHttpHeaders, type IncomingMessage, type Server, type ServerResponse } from 'http';
 import type { AddressInfo } from 'net';
-import { ModelGateway } from '../modelGateway';
+import { ModelGateway, OPENAI_API } from '../modelGateway';
 
 const KEY = 'sk-ant-api03-the-real-key';
 
@@ -52,6 +52,94 @@ function ask(port: number, { path = '/v1/messages', method = 'POST', headers = {
     sent.end(method === 'POST' ? body : undefined);
   });
 }
+
+describe('the model gateway before the OpenAI API', () => {
+  const OPENAI_KEY = 'sk-proj-the-real-key';
+
+  async function gatewayToOpenAi(url: string) {
+    const gateway = new ModelGateway({ key: OPENAI_KEY, upstream: url, api: OPENAI_API });
+    const port = await gateway.listen();
+    open.push({ gateway });
+    return { gateway, port };
+  }
+
+  it('takes the token as a bearer, and sends the real key the same way', async () => {
+    const api = await upstream();
+    const { gateway, port } = await gatewayToOpenAi(`${api.url}/v1`);
+
+    const reply = await ask(port, { path: '/v1/responses', headers: { authorization: `Bearer ${gateway.token}` } });
+
+    expect(reply).toMatchObject({ status: 200 });
+    expect(api.heard[0]).toMatchObject({ method: 'POST', url: '/v1/responses' });
+    expect(api.heard[0].headers).toMatchObject({ authorization: `Bearer ${OPENAI_KEY}` });
+    expect(api.heard[0].headers['x-api-key']).toBeUndefined();
+  });
+
+  it('turns away a bearer that is not its token, and asks nothing upstream', async () => {
+    const api = await upstream();
+    const { port } = await gatewayToOpenAi(`${api.url}/v1`);
+
+    const reply = await ask(port, { path: '/v1/responses', headers: { authorization: `Bearer ${OPENAI_KEY}` } });
+
+    expect(reply.status).toBe(401);
+    expect(api.heard).toHaveLength(0);
+  });
+
+  it('carries the model routes and nothing else a key can do, such as listing files', async () => {
+    const api = await upstream();
+    const { gateway, port } = await gatewayToOpenAi(`${api.url}/v1`);
+    const headers = { authorization: `Bearer ${gateway.token}` };
+
+    expect((await ask(port, { path: '/v1/models', method: 'GET', headers })).status).toBe(200);
+    expect((await ask(port, { path: '/v1/files', method: 'GET', headers })).status).toBe(404);
+    expect((await ask(port, { path: '/v1/messages', headers })).status).toBe(404);
+    expect(api.heard.map(({ url }) => url)).toEqual(['/v1/models']);
+  });
+
+  // Codex 0.166.0 against a recorder on this host, a compaction forced, by `exec` and by
+  // `app-server`: only ever POST /v1/responses, a whole turn on each, nothing stored.
+  it.each([
+    ['a stored response', 'GET', '/v1/responses/resp_1'],
+    ['the input of a stored response', 'GET', '/v1/responses/resp_1/input_items'],
+    ['the end of a stored response', 'DELETE', '/v1/responses/resp_1'],
+    ['a stored response, by POST', 'POST', '/v1/responses/resp_1'],
+    ['a cancel of a stored response', 'POST', '/v1/responses/resp_1/cancel'],
+    ['a read of the route that runs a turn', 'GET', '/v1/responses'],
+    ['a write to the catalog', 'POST', '/v1/models'],
+    ['the end of a fine-tuned model', 'DELETE', '/v1/models/ft:gpt-4:acme:1'],
+    ['an encoded way out of the catalog', 'GET', '/v1/models/..%2Ffiles'],
+  ])('does not carry %s', async (_case, method, path) => {
+    const api = await upstream();
+    const { gateway, port } = await gatewayToOpenAi(`${api.url}/v1`);
+
+    expect((await ask(port, { method, path, headers: { authorization: `Bearer ${gateway.token}` } })).status).toBe(404);
+    expect(api.heard).toEqual([]);
+  });
+
+  it('carries a turn, and a read of the catalog with what a client asks of it', async () => {
+    const api = await upstream();
+    const { gateway, port } = await gatewayToOpenAi(`${api.url}/v1`);
+    const headers = { authorization: `Bearer ${gateway.token}` };
+
+    expect((await ask(port, { path: '/v1/responses', headers })).status).toBe(200);
+    expect((await ask(port, { path: '/v1/models?client_version=0.166.0', method: 'GET', headers })).status).toBe(200);
+    expect((await ask(port, { path: '/v1/models/gpt-5.1', method: 'GET', headers })).status).toBe(200);
+    expect(api.heard.map(({ method, url }) => `${method} ${url}`)).toEqual([
+      'POST /v1/responses',
+      'GET /v1/models?client_version=0.166.0',
+      'GET /v1/models/gpt-5.1',
+    ]);
+  });
+
+  it('keeps a proxy path the base URL names, under the /v1 such a URL ends in', async () => {
+    const api = await upstream();
+    const { gateway, port } = await gatewayToOpenAi(`${api.url}/proxy/openai/v1`);
+
+    await ask(port, { path: '/v1/responses?stream=true', headers: { authorization: `Bearer ${gateway.token}` } });
+
+    expect(api.heard[0].url).toBe('/proxy/openai/v1/responses?stream=true');
+  });
+});
 
 describe('the model gateway (ADR-0059 L7)', () => {
   it('carries a model request upstream under the real key, and the answer back', async () => {
@@ -124,6 +212,20 @@ describe('the model gateway (ADR-0059 L7)', () => {
     ['the way out of a path', 'POST', '/v1/messages/../files'],
     ['an encoded way out of a path', 'POST', '/v1/messages/%2e%2e/files'],
     ['a method the model API has no use for', 'DELETE', '/v1/messages'],
+    ['the list of the whole workspace\'s batches', 'GET', '/v1/messages/batches'],
+    ['a new batch', 'POST', '/v1/messages/batches'],
+    ['a batch', 'GET', '/v1/messages/batches/msgbatch_1'],
+    ['the results of a batch', 'GET', '/v1/messages/batches/msgbatch_1/results'],
+    ['the cancel of a batch', 'POST', '/v1/messages/batches/msgbatch_1/cancel'],
+    ['the end of a batch', 'DELETE', '/v1/messages/batches/msgbatch_1'],
+    ['an encoded way to the batches', 'GET', '/v1/messages%2Fbatches'],
+    ['an encoded way to the batches, by the catalog', 'GET', '/v1/models/..%2Fmessages%2Fbatches'],
+    ['a trailing slash on the batches', 'GET', '/v1/messages/batches/'],
+    ['a read of the route that runs a turn', 'GET', '/v1/messages'],
+    ['a read of the route that counts', 'GET', '/v1/messages/count_tokens'],
+    ['a write to the catalog', 'POST', '/v1/models'],
+    ['a write to a model', 'POST', '/v1/models/claude-x'],
+    ['what is past a model in the catalog', 'GET', '/v1/models/claude-x/anything'],
   ])('carries model traffic and nothing else: %s', async (_case, method, path) => {
     const api = await upstream();
     const { gateway, port } = await gatewayTo(api.url);
@@ -132,11 +234,19 @@ describe('the model gateway (ADR-0059 L7)', () => {
     expect(api.heard).toEqual([]);
   });
 
-  it.each([['/v1/messages'], ['/v1/messages/count_tokens'], ['/v1/messages?beta=true']])('carries %s', async (path) => {
+  it.each([
+    ['POST', '/v1/messages'],
+    ['POST', '/v1/messages/count_tokens'],
+    ['POST', '/v1/messages/count_tokens?beta=true'],
+    ['POST', '/v1/messages?beta=true'],
+    ['GET', '/v1/models'],
+    ['GET', '/v1/models?limit=1000'],
+    ['GET', '/v1/models/claude-sonnet-4-5'],
+  ])('carries %s %s', async (method, path) => {
     const api = await upstream();
     const { gateway, port } = await gatewayTo(api.url);
 
-    expect((await ask(port, { path, headers: { 'x-api-key': gateway.token } })).status).toBe(200);
+    expect((await ask(port, { method, path, headers: { 'x-api-key': gateway.token } })).status).toBe(200);
     expect(api.heard[0].url).toBe(path);
   });
 

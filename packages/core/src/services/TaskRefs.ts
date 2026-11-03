@@ -57,6 +57,13 @@ export function taskRefOf<T extends RefTask<T>>(tasks: readonly T[], id: string)
   return found && `#${found.label}`;
 }
 
+/** {@link taskRefOf} for a whole plan tree at once: each task's reference, by id. */
+export function taskRefsOf<T extends RefTask<T>>(tasks: readonly T[]): Map<string, string> {
+  const refs = new Map<string, string>();
+  for (const { task, label } of walkPlan(tasks)) if (!refs.has(task.id)) refs.set(task.id, `#${label}`);
+  return refs;
+}
+
 /**
  * The reference and title {@link titledTaskRef} renders for the task a plan
  * tree holds, by id — its full path, dotted, for a subtask. Undefined when the

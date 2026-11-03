@@ -176,6 +176,9 @@ export {
 export type { TaskQuery, TaskQueryField, TaskQueryCatalog, LiveOutputLookup } from './services/TaskQuery';
 export { Session, createSession, sessionRuntimeSettings } from './services/createSession';
 export { reclaimContainers } from './services/container/reclaim';
+export { changeContainers, containerStatus, describeContainers, type ContainerChange, type ContainerGuaranteeLine, type ContainerStatus } from './services/container/containerSetup';
+export { describeProblems, type ContainerProblem } from './services/container/containerPreflight';
+export type { DockerCli } from './services/container/dockerCli';
 export { abbreviateHome, resolveSkillInvocation, plannerMessage, plannerTranscript, type SkillInvocation } from './services/skillInvocation';
 export { PlanEditError } from './services/PlanEditError';
 export type * from './daemonContract';
@@ -227,8 +230,14 @@ export type {
   RunTaskStatus,
   RunView,
   RunActivity,
+  ChildPlanEntry,
+  ChildPlanView,
+  ChildMessageOutcome,
+  ChildTaskControl,
+  ChildControlOutcome,
 } from './services/SessionMessage';
 export { EMPTY_RUN, reduceRun } from './services/runView';
+export { ChildDirectory, type ChildFrame, type ChildPlanHandle } from './services/ChildDirectory';
 export { IDLE_ACTIVITY } from './services/SessionMessage';
 export { serializeTask, serializeTaskStatus, serializePlan, surfacePlan, surfacePlanState, executionSummary, truncateCheckpointSummary, CHECKPOINT_TRUNCATE_LENGTH, type ExecutionSummary } from './services/SessionMessage';
 export { blockingFailures, repeatingChecks, planBlocks, type BlockingSubject, type PlanBlocks } from './services/blocking';
@@ -311,7 +320,7 @@ export * from './utils/taskLogStore';
 export { mintSessionId } from './utils/sessionId';
 export { extractPrdBlock, savePrdMarkdown, sanitizeSlug } from './utils/prdStore';
 export type { PrdBlock } from './utils/prdStore';
-export { ACT_RISK, AUTORUN_RISK, DELEGATION_OFFERED, DELEGATION_RISK, PLANNED_WITH_LABEL, SUPERVISOR_LEVEL_LABEL, automergeSummary, autorunSummary, delegationSummary, parseCount, parseDelegation, parseSwitch, supervisorSummary, trailerSummary } from './services/runSettingsText';
+export { ACT_RISK, AUTORUN_RISK, DELEGATION_OFFERED, containersOffered, DELEGATION_RISK, PLANNED_WITH_LABEL, SUPERVISOR_LEVEL_LABEL, automergeSummary, autorunSummary, delegationSummary, keptDelegationBudget, rememberDelegationBudget, SUBPLANNER_ACCOUNTING, SUBPLANNER_CHILD, SUBPLANNER_SCOPE, parseCount, parseDelegation, parseSwitch, supervisorSummary, trailerSummary } from './services/runSettingsText';
 export { SettingsService, getSettingsPath, runSettingsOf, RUN_SETTINGS_DEFAULTS, RunSettingsError, type GlobalRunSettings, type UserSettings } from './services/SettingsService';
 export {
   PlannerModelMemory,

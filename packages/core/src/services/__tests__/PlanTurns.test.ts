@@ -440,6 +440,29 @@ describe('PlanTurns: wake-ups (ADR-0029)', () => {
   });
 });
 
+describe('a message nobody is left waiting on', () => {
+  it('counts one a context pause answered at once, and none a caller still waits on or a turn read', async () => {
+    const current = { plan: plan() as LegacyPlanState | null };
+    const { host, turns } = fakeHost(current);
+    const queue = new PlanTurns(host);
+
+    const read = queue.enqueue({ source: 'user', text: 'read by the turn' });
+    const waiting = queue.follow({ source: 'user', text: 'behind it' });
+    expect(queue.heldWithoutCaller()).toEqual([]);
+    turns[0].land();
+    await read;
+    expect(turns).toHaveLength(2);
+    turns[1].land();
+    await waiting;
+
+    current.plan!.plannerContextPause = { model: 'm', at: '2026-10-11T00:00:00Z', reason: 'full', inputs: [] };
+    await queue.follow({ source: 'user', text: 'held on the pause' });
+    await queue.enqueue({ source: 'supervisor', text: 'a wake-up has no person to tell', rides: true });
+
+    expect(queue.heldWithoutCaller().map((t) => t.text)).toEqual(['held on the pause']);
+  });
+});
+
 describe('turnPrompt', () => {
   it('joins a batch in order and keeps every skill it loaded', () => {
     const skill = { name: 'tdd', source: 'global' as const, path: '/s/tdd/SKILL.md', content: 'body', invokedBy: 'user' as const };

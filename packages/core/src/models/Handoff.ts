@@ -1,7 +1,7 @@
 import { flattenTasks, type Task } from './Task';
 import { checkOf } from './Loop';
 import { onOneLine, splitLines } from './lineBreaks';
-import { resolveTaskRef, taskRefOf, titledTaskRefOf } from '../services/TaskRefs';
+import { resolveTaskRef, taskRefOf, taskRefsOf, titledTaskRefOf } from '../services/TaskRefs';
 
 /*
  * A task's handoff (ADR-0047): what it tells the tasks that read it, as its
@@ -290,7 +290,8 @@ export type HandoffTaskName = (taskId: string) => string | undefined;
 
 /** A handoff with the tasks it cites named by their references in `plan`, as a reader names them. */
 export function namedHandoff<H extends HandoffDigest>(plan: readonly Task[], handoff: H): H {
-  const named = <R extends HandoffArtifact>(refs: readonly R[]) => refs.map((r) => (r.kind === 'task' && r.label === undefined ? { ...r, task: taskRefOf(plan, r.task) ?? r.task } : r));
+  let taskRefs: Map<string, string> | undefined;
+  const named = <R extends HandoffArtifact>(refs: readonly R[]) => refs.map((r) => (r.kind === 'task' && r.label === undefined ? { ...r, task: (taskRefs ??= taskRefsOf(plan)).get(r.task) ?? r.task } : r));
   return {
     ...handoff,
     findings: handoff.findings.map((f) => (f.evidence ? { ...f, evidence: named(f.evidence) } : f)),
@@ -313,6 +314,14 @@ const PLAN_PATH = /^([1-9][0-9]*(?:\/[1-9][0-9]*)*):(.+)$/s;
 export function parsePlanPath(written: string): { path: string; rest: string } | undefined {
   const [, path, rest] = PLAN_PATH.exec(written) ?? [];
   return path === undefined ? undefined : { path, rest };
+}
+
+const LISTING_PAGE = /^(.+)\/from:([1-9][0-9]*)$/s;
+
+/** A later page of what a report left out, `#4@2/from:101`: the task as a plan reads it, and the entry the page starts at (ADR-0057 R2). A caller tries the text whole first, since a title may end in anything. */
+export function parseListingPage(written: string): { rest: string; from: number } | undefined {
+  const [, rest, from] = LISTING_PAGE.exec(written) ?? [];
+  return rest === undefined ? undefined : { rest, from: Number(from) };
 }
 
 /** A node's path as a reader writes it: `root/3/2` is `3/2`. */
@@ -760,6 +769,19 @@ interface ReferenceScope {
   crossing: boolean;
 }
 
+/** What a reference with no attempt means: the plan's digest, or the newest log's where a retry cleared that digest and kept the logs (ADR-0057 R1). */
+function latestHandoff(task: Task, logs: HandoffLogs | undefined): { latest?: number; digest?: HandoffDigest } {
+  if (task.handoff) {
+    const latest = task.handoff.attempt ?? logs?.attempts(task.id).at(-1);
+    return { digest: task.handoff, ...(latest !== undefined ? { latest } : {}) };
+  }
+  for (const attempt of [...logs?.attempts(task.id) ?? []].reverse()) {
+    const digest = logs?.handoff(task.id, attempt);
+    if (digest) return { latest: attempt, digest };
+  }
+  return {};
+}
+
 /** A reference pinned, or nothing where the refusal said why. */
 function pinIn(scope: ReferenceScope, producer: { id: string; attempt?: number; findings: number }, ref: TaskEvidence, written: string, field: string, refuse: (why: string) => void): TaskEvidence | undefined {
   const { plan, readable, logs, node, crossing } = scope;
@@ -800,11 +822,11 @@ function pinIn(scope: ReferenceScope, producer: { id: string; attempt?: number; 
   const given = oneFinding(resolved.finding);
   if (!given) return undefined;
   const { finding } = given;
-  const latest = target.handoff?.attempt ?? (target.handoff ? logs?.attempts(target.id).at(-1) : undefined);
+  const { latest, digest } = latestHandoff(target, logs);
   // A task naming itself means the attempt making the call and the handoff it is writing, whatever an earlier one left on the plan.
   const own = target.id === producer.id && producer.attempt !== undefined && (resolved.attempt ?? producer.attempt) === producer.attempt;
   const attempt = own ? producer.attempt : resolved.attempt ?? latest;
-  const held = resolved.attempt === undefined || resolved.attempt === latest ? target.handoff : logs?.handoff(target.id, resolved.attempt);
+  const held = resolved.attempt === undefined || resolved.attempt === latest ? digest : logs?.handoff(target.id, resolved.attempt);
   if (!own && resolved.attempt !== undefined && resolved.attempt !== latest && !logs?.attempts(target.id).includes(resolved.attempt)) {
     refuse(`${field}.task: ${named} has no saved attempt ${resolved.attempt}.`);
     return undefined;

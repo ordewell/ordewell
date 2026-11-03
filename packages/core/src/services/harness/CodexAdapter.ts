@@ -438,14 +438,16 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     // Before the protocol, the machine: a Codex whose sandbox cannot start runs
     // no command and works from imagination instead of from the repository.
     const readOnly = readOnlyTask(opts);
-    this.sandbox = readOnly ? 'default' : await probeCodexSandbox(this.deps, opts.cwd, this.spawnEnv);
     // A full-access task asks for no sandbox, so a host without one is no reason to refuse it.
     const needsSandbox = opts.kind === 'planner' || opts.flags.permissionMode !== 'danger-full-access';
+    // Placed, it is the container that holds such a task: nothing would read the answer.
+    const nothingToAsk = readOnly || (this.deps.placement !== undefined && !needsSandbox);
+    this.sandbox = nothingToAsk ? 'default' : await probeCodexSandbox(this.deps, opts.cwd, this.spawnEnv);
     // A planner still reads through Ordewell's `run_command`, so it plans with
     // its own shell off instead of not at all. Read-only tasks always use
     // that profile (ADR-0046); change tasks keep their planned mode (ADR-0001).
     this.ownShellOff = readOnly || (this.sandbox === 'unavailable' && opts.kind === 'planner' && !!opts.mcp);
-    if (this.sandbox === 'unavailable' && needsSandbox && !this.ownShellOff) throw new Error(codexSandboxUnavailableMessage(opts.kind));
+    if (this.sandbox === 'unavailable' && needsSandbox && !this.ownShellOff) throw new Error(codexSandboxUnavailableMessage(this.deps.placement ? 'container' : opts.kind));
     if (this.ownShellOff && !readOnly) this.announce({ type: 'thinking', text: codexShellOffNote() });
 
     // A binary that rejects `app-server` outright dies immediately; waiting
@@ -484,7 +486,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     this.threadId = opened.id;
     this.sessionId = opened.id;
     this.threadModel = opened.model;
-    if (opts.kind === 'task') await this.loadCommands(opts.cwd);
+    if (opts.kind === 'task') await this.loadCommands(this.runnerCwd(opts));
   }
 
   commands(): RunnerCommand[] { return this.nativeCommands.map((command) => ({ ...command })); }
@@ -504,6 +506,11 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
   }
 
   // codex-cli 0.162.1 exposes skills and compaction, but no custom-prompt or TUI-command discovery/invocation.
+  /** The path the runner knows its work by: placed, this host's means nothing to it (ADR-0059 L5). */
+  private runnerCwd({ cwd }: AgentStartOptions): string {
+    return this.deps.placement?.cwd ?? cwd;
+  }
+
   private async loadCommands(cwd: string): Promise<void> {
     const skills = await this.rpc.call('skills/list', { cwds: [cwd] });
     if (skills.ok && Array.isArray(skills.result.data)) {
@@ -564,7 +571,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
   private threadParams(): Record<string, unknown> {
     const opts = this.startOpts;
     const common = {
-      cwd: opts?.cwd,
+      cwd: opts && this.runnerCwd(opts),
       ...(opts?.model ? { model: opts.model } : {}),
     };
     const features = {
@@ -893,7 +900,8 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
           return;
         }
         // The shell-off note already said this, with what it means for planning.
-        if (this.ownShellOff && /bubblewrap|user namespace/i.test(text)) return;
+        // Nor is it news in a container: its hardening is what stops a sandbox, and a task that needed one did not get this far.
+        if ((this.ownShellOff || this.deps.placement) && /bubblewrap|user namespace/i.test(text)) return;
         if (text) emit({ type: 'thinking', text: `Codex configuration warning: ${text}` });
         return;
       }
@@ -1292,7 +1300,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
   /** Relative to the task's worktree, where every path but a stray one lies; a move names both ends. */
   private shownChangePath(change: FileUpdateChange): string {
     const shown = (path: string): string => {
-      const cwd = this.startOpts?.cwd;
+      const cwd = this.startOpts && this.runnerCwd(this.startOpts);
       const rel = cwd ? relative(cwd, path) : path;
       return rel && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel) ? rel : path;
     };

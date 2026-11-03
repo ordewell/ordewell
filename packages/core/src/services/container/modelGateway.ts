@@ -3,9 +3,59 @@ import { createServer, request as plainRequest, type IncomingHttpHeaders, type I
 import { request as tlsRequest } from 'https';
 import type { AddressInfo } from 'net';
 
-/** Model traffic, and nothing else a key can do at the API. */
-const MODEL_PATH = /^\/v1\/(messages|models)(\/|$)/;
-const MODEL_METHODS: ReadonlySet<string> = new Set(['GET', 'POST']);
+/** One model API, as a gateway stands in front of it and a broker holds its key. */
+export interface ModelApi {
+  /** The variable that holds its key, and the one that names another address for it. */
+  keyVariable: string;
+  baseUrlVariable: string;
+  upstream: string;
+  /** Model traffic by method, and nothing else a key can do at this API. A route that reads what a key holds is out, however close its path sits to one that is in. */
+  routes: Readonly<Record<'GET' | 'POST', RegExp>>;
+  /** The header its key travels in; a runner's token comes the same way. */
+  auth: 'x-api-key' | 'bearer';
+  /** What a base URL of this API already ends in, so the path a runner asks under does not repeat it. */
+  basePath: string;
+  /** What a person is told it is. */
+  name: string;
+  /** Its runner reaches a model by this key and in no other way, so cloud credentials are no login for it. */
+  keyOnly: boolean;
+  /** What its runner uses over the key, by its documented precedence: beside one, a bearer the gateway drops or a cloud that never sees the gateway. */
+  outranksKey: readonly string[];
+}
+
+/** A list of models, or one of them, which says nothing of what a key has done. Claude Code and Codex may each ask. No `%`: an upstream that decodes one could read a path out of it. */
+const MODEL_CATALOG = /^\/v1\/models(\/[\w.:-]+)?$/;
+
+export const ANTHROPIC_API: ModelApi = {
+  keyVariable: 'ANTHROPIC_API_KEY',
+  baseUrlVariable: 'ANTHROPIC_BASE_URL',
+  upstream: 'https://api.anthropic.com',
+  // A turn, and counting one: Claude Code may count before it sends, and that reads
+  // only what it is sent. Batches stay out, since their routes serve a whole workspace.
+  routes: { POST: /^\/v1\/messages(\/count_tokens)?$/, GET: MODEL_CATALOG },
+  auth: 'x-api-key',
+  basePath: '',
+  name: 'the Anthropic API',
+  keyOnly: false,
+  outranksKey: ['ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'],
+};
+
+export const OPENAI_API: ModelApi = {
+  keyVariable: 'OPENAI_API_KEY',
+  baseUrlVariable: 'OPENAI_BASE_URL',
+  upstream: 'https://api.openai.com/v1',
+  // Codex's turn alone: it sends each whole, with `store=false`, compaction included,
+  // and never read one back (codex-cli 0.166.0, measured 2026-11-02). A stored
+  // response is the key's own record, so no route to one is carried.
+  routes: { POST: /^\/v1\/responses$/, GET: MODEL_CATALOG },
+  auth: 'bearer',
+  basePath: '/v1',
+  name: 'the OpenAI API',
+  keyOnly: true,
+  outranksKey: [],
+};
+
+export const MODEL_APIS: readonly ModelApi[] = [ANTHROPIC_API, OPENAI_API];
 
 /** What ends at this hop, what names it, and any credential a client sent, which would be a way out under a key of its own. */
 const NOT_FORWARDED: ReadonlySet<string> = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'host', 'x-api-key', 'authorization']);
@@ -19,6 +69,8 @@ export interface ModelGatewayOptions {
   key: string;
   /** Where model traffic goes. */
   upstream: string;
+  /** Which API that is. Absent, Anthropic's. */
+  api?: ModelApi;
 }
 
 /**
@@ -38,8 +90,11 @@ export class ModelGateway {
   readonly token = `ordewell-lease-${randomBytes(24).toString('hex')}`;
   private readonly server: Server = createServer((req, res) => this.carry(req, res));
   private host = '';
+  private readonly api: ModelApi;
 
-  constructor(private readonly options: ModelGatewayOptions) {}
+  constructor(private readonly options: ModelGatewayOptions) {
+    this.api = options.api ?? ANTHROPIC_API;
+  }
 
   /** The port it took on this host's loopback. */
   listen(): Promise<number> {
@@ -58,23 +113,32 @@ export class ModelGateway {
     await new Promise<void>((resolve) => { this.server.close(() => resolve()); });
   }
 
-  private carries(given: string | string[] | undefined): boolean {
+  private carries({ headers }: IncomingMessage): boolean {
+    const given = this.api.auth === 'bearer' ? headers.authorization?.replace(/^Bearer /i, '') : headers['x-api-key'];
     return typeof given === 'string' && timingSafeEqual(digest(given), digest(this.token));
+  }
+
+  private keyHeader(): Record<string, string> {
+    return this.api.auth === 'bearer' ? { authorization: `Bearer ${this.options.key}` } : { 'x-api-key': this.options.key };
+  }
+
+  private isModelTraffic(method: string | undefined, path: string): boolean {
+    return (method === 'GET' || method === 'POST') && this.api.routes[method].test(path);
   }
 
   private carry(req: IncomingMessage, res: ServerResponse): void {
     if (req.headers.host !== this.host) return this.refuse(res, 403, 'This gateway answers only on its own address.');
-    if (!this.carries(req.headers['x-api-key'])) return this.refuse(res, 401, "This gateway takes its lease's token, and no other key.");
+    if (!this.carries(req)) return this.refuse(res, 401, "This gateway takes its lease's token, and no other key.");
     const asked = new URL(req.url ?? '/', 'http://gateway');
-    if (!MODEL_METHODS.has(req.method ?? '') || !MODEL_PATH.test(asked.pathname)) return this.refuse(res, 404, 'This gateway carries model traffic and nothing else.');
+    if (!this.isModelTraffic(req.method, asked.pathname)) return this.refuse(res, 404, 'This gateway carries model traffic and nothing else.');
     const target = new URL(this.options.upstream);
     const send = target.protocol === 'https:' ? tlsRequest : plainRequest;
     const out = send({
       hostname: target.hostname,
       port: target.port,
       method: req.method,
-      path: `${target.pathname.replace(/\/$/, '')}${asked.pathname}${asked.search}`,
-      headers: { ...forwarded(req.headers), host: target.host, 'x-api-key': this.options.key },
+      path: `${target.pathname.replace(/\/$/, '')}${asked.pathname.slice(this.api.basePath.length)}${asked.search}`,
+      headers: { ...forwarded(req.headers), host: target.host, ...this.keyHeader() },
     }, (answer) => {
       res.writeHead(answer.statusCode ?? 502, forwarded(answer.headers));
       answer.pipe(res);

@@ -15,7 +15,7 @@ import { fakeConfig, FakeRunnerSession } from '../../testing';
 import { STATE_DIR_IGNORE } from '../../utils/fsHelpers';
 import { deleteSession, listChildSessions, listSessions, loadChildSession, loadSession, saveChildSession, saveSession } from '../../utils/sessionStore';
 import { openTaskLog } from '../../utils/taskLogStore';
-import { makeSession } from './sessionTestKit';
+import { closeSessions, makeSession } from './sessionTestKit';
 
 /*
  * A child run rooted in a delegated task's worktree (ADR-0055 D10, D11, D12),
@@ -31,7 +31,10 @@ const env = () => {
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, env: env(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
 const roots: string[] = [];
-afterEach(() => { while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true }); });
+afterEach(async () => {
+  await closeSessions();
+  while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+});
 
 function tempDir(): string {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-nested-')));

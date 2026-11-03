@@ -3549,6 +3549,46 @@ describe.skipIf(!hasGit)('task diff reads keep the workspace boundary', () => {
     expect(await iso.taskDiff!(run, t.id, { path: 'outside.txt' })).toMatchObject({ available: false });
   });
 
+  it('names for a verdict what a commit would take beside that subdirectory, as no diff a person reads does', async () => {
+    const root = repo({ 'outside.txt': 'outside\n', 'inside/file.txt': 'inside\n' });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(join(root, 'inside'));
+    const t = task(1, 'Inside');
+    const { cwd } = await iso.prepare(t, run);
+    writeFileSync(join(cwd, '..', 'outside.txt'), 'outside changed\n');
+    writeFileSync(join(cwd, 'file.txt'), 'inside changed\n');
+    mkdirSync(join(cwd, '..', 'ci'));
+    writeFileSync(join(cwd, '..', 'ci', 'new.yml'), 'new\n');
+    const names = async (mode: true | 'both') => {
+      const read = await iso.taskDiff!(run, t.id, { names: mode });
+      return read.available ? read.text.split('\0').sort() : read.reason;
+    };
+    expect(await names(true)).toEqual(['ci/new.yml', 'file.txt', 'outside.txt']);
+    expect(await names('both')).toEqual(['ci/new.yml', 'file.txt', 'inside/file.txt', 'outside.txt']);
+  });
+
+  it('lists what a repair brings beside that subdirectory, by each name a protected path may give it', async () => {
+    const root = repo({ 'outside.txt': 'outside\n', 'inside/shared.txt': 'base\n' });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(join(root, 'inside'));
+    const [first, second] = [task(1, 'First'), task(2, 'Second')];
+    const a = await iso.prepare(first, run);
+    const b = await iso.prepare(second, run);
+    writeFileSync(join(a.cwd, 'shared.txt'), 'first\n');
+    writeFileSync(join(b.cwd, 'shared.txt'), 'second\n');
+    expect(await iso.integrate(first, run)).toBe('merged');
+    expect(await iso.integrate(second, run)).toBe('conflict');
+    await iso.reopen(second, run);
+    expect(() => git(b.cwd, 'merge', '--no-edit', `ordewell/${run.id}/integration`)).toThrow();
+    writeFileSync(join(b.cwd, 'shared.txt'), 'first and second\n');
+    writeFileSync(join(b.cwd, '..', 'outside.txt'), 'edited by the repair\n');
+    git(b.cwd, 'add', '-A', '--', ':/');
+    git(b.cwd, 'commit', '-q', '--no-edit');
+
+    expect(await iso.verifyRepair(second, run)).toEqual({ ok: true });
+    expect((await iso.repairPaths?.(second, run))?.sort()).toEqual(['inside/shared.txt', 'outside.txt', 'shared.txt']);
+  });
+
   it('reads a symlink as a link without reading its outside target, and excludes linked artifacts', async () => {
     const root = repo();
     mkdirSync(join(root, 'node_modules'));

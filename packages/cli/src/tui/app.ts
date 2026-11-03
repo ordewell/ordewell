@@ -2,6 +2,7 @@ import { render } from './render';
 import { initialState, reduce, type Action, type Effect } from './reducer';
 import { activityTime, animating } from './layout';
 import type { TuiState } from './state';
+import { rootId } from './reducers/children';
 
 export interface AppDeps {
   initial?: Partial<TuiState>;
@@ -103,9 +104,11 @@ export function createApp(deps: AppDeps): App {
     if (exited) return;
 
     const result = reduce(state, action);
-    const previousSession = state.sessionId;
+    // A child plan is a place in its root's session, never a session to resume.
+    const previousSession = rootId(state);
     state = result.state;
-    if (state.sessionId && state.sessionId !== previousSession) deps.onSessionChange?.(state.sessionId, state);
+    const session = rootId(state);
+    if (session && session !== previousSession) deps.onSessionChange?.(session, state);
 
     if (state.exiting) {
       exited = true;

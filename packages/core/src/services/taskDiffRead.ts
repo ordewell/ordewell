@@ -8,8 +8,16 @@ import { stateRootOf } from './stateRoot';
 import type { HandoffPatch } from '../models/Handoff';
 
 export interface TaskDiffRead {
-  /** Only the changed paths, joined by NUL: what a verdict reads (ADR-0055 D6). */
-  names?: boolean;
+  /**
+   * Only the changed paths, joined by NUL: what a verdict reads (ADR-0055 D6). It
+   * holds every path the task's work changes, Ordewell state and `.git`-named
+   * paths included, as a landing takes them: `allowedPath` decides what a person
+   * is shown, and a path hidden from a verdict would land past a protected path.
+   * A commit takes the whole worktree, so that reaches past a workspace that is a
+   * folder of its repository: see {@link changeNames}. `'both'` asks for both of a
+   * path's names, for a read that goes by a protected path alone (D7).
+   */
+  names?: boolean | 'both';
   repo?: string;
   path?: string;
 }
@@ -29,6 +37,19 @@ interface DiffFile {
 export function allowedPath(file: string): boolean {
   return file.length > 0 && !path.isAbsolute(file) && !/^[A-Za-z]:/.test(file)
     && !file.split(/[\\/]/).some((part) => part === '..' || part === '.git' || part === '.ordewell');
+}
+
+/**
+ * What a change is called, given its path from the repository's root and the
+ * folder of the repository the workspace is: its place in the workspace, or its
+ * path from the root where it lies beside that folder. A planner reads the
+ * workspace and D7 says a rule is read from the root, so a rule may name a change
+ * in the folder either way, and `both` gives each name.
+ */
+export function changeNames(file: string, prefix: string, both: boolean): string[] {
+  if (!file.startsWith(prefix)) return [file];
+  const place = file.slice(prefix.length);
+  return both && prefix ? [place, file] : [place];
 }
 
 function stats(raw: string): Array<{ path: string; added: string; removed: string }> {
@@ -181,18 +202,29 @@ export async function readTaskDiff(invoker: GitInvoker, run: IsolationRun, taskI
         if (!/^[a-f0-9]{40,64}$/.test(tip)) throw new Error('Invalid task commit.');
         target = [tip];
       }
+      const ordewells = (file: string) => entry.linked.some((linked) => file === linked || file.startsWith(`${linked}/`))
+        || run.shared.some((shared) => repo.path === '.' && (file === shared || file.startsWith(`${shared}/`)));
+      if (options.names) {
+        const tracked = stats(await git(reader, cwd, [...common, 'diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--relative=', entry.baseRef, ...target, '--numstat', '-z']));
+        const fresh = live ? (await git(reader, cwd, [...common, 'ls-files', '--others', '--exclude-standard', '-z'])).split('\0').filter(Boolean) : [];
+        const work = fresh.filter((f) => !(f.startsWith(prefix) && ordewells(f.slice(prefix.length))));
+        for (const file of [...tracked.map((f) => f.path), ...work]) {
+          for (const name of changeNames(file, prefix, options.names === 'both')) files.push({ repo: repo.path, path: name, added: '-', removed: '-', patch: async () => '' });
+        }
+        continue;
+      }
       const scope = prefix ? [`:(top,literal)${prefix.replace(/\/$/, '')}`] : [];
       const diffArgs = [...common, 'diff', '--no-ext-diff', '--no-textconv', '--no-renames', `--relative=${prefix}`, entry.baseRef, ...target];
       const listed = stats(await git(reader, cwd, [...diffArgs, '--numstat', '-z', '--', ...scope]));
-      const allowed = (file: string) => allowedPath(file) && !entry.linked.some((linked) => file === linked || file.startsWith(`${linked}/`))
-        && !run.shared.some((shared) => repo.path === '.' && (file === shared || file.startsWith(`${shared}/`)));
+      const allowed = (file: string) => allowedPath(file) && !ordewells(file);
+      // A tracked path is in the diff only because the task put it there: Ordewell's links are never committed.
       for (const file of listed.filter((f) => allowed(f.path))) {
         files.push({ ...file, repo: repo.path, patch: () => git(reader, cwd, [...diffArgs, '--', `:(top,literal)${prefix}${file.path}`]) });
       }
       if (live) {
         const workspace = path.join(entry.worktree, prefix);
         const others = await git(reader, workspace, [...common, 'ls-files', '--others', '--exclude-standard', '-z', '--', '.']);
-        for (const file of others.split('\0').filter((f) => allowed(f))) {
+        for (const file of others.split('\0').filter((f) => f && allowed(f))) {
           const full = path.join(workspace, file);
           if (!inside(fs.realpathSync(workspace), fs.realpathSync(path.dirname(full)))) continue;
           const untracked = async (numstat: boolean): Promise<string> => {

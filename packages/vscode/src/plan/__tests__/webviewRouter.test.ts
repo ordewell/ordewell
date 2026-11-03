@@ -79,7 +79,7 @@ function harness(aiService: Partial<IAiService> = { hasActiveConversation: () =>
     sendRunSettings: vi.fn(),
     log: () => {},
     extension: {
-      ready: vi.fn(),
+      ready: vi.fn(), refreshChildren: vi.fn(async () => {}), openChild: vi.fn(async () => {}), closeChild: vi.fn(), messageChild: vi.fn(async () => {}), answerChildCheckpoint: vi.fn(async () => {}), openChildTaskLog: vi.fn(async () => {}),
       refreshModels: vi.fn(),
       runSlashCommand: vi.fn(async () => {}),
       setPlanner: vi.fn(async () => {}),
@@ -283,8 +283,8 @@ describe('webview messages reach the session through one entry point each', () =
     it('answers a checkpoint either way through the seam, a rejection carrying its reason', async () => {
       const execute = vi.spyOn(h.session, 'execute').mockResolvedValue({ ok: true, message: 'done' });
 
-      await h.route({ type: 'answerCheckpoint', taskId: 't1', approved: true });
-      await h.route({ type: 'answerCheckpoint', taskId: 't2', approved: false, reason: 'wrong approach' });
+      await h.route({ type: 'answerCheckpoint', answerId: 'a-t1', taskId: 't1', approved: true });
+      await h.route({ type: 'answerCheckpoint', answerId: 'a-t2', taskId: 't2', approved: false, reason: 'wrong approach' });
 
       expect(execute.mock.calls).toEqual([
         [{ command: 'answer_checkpoint', task: 't1', answer: 'approve' }, { kind: 'user' }],
@@ -292,11 +292,29 @@ describe('webview messages reach the session through one entry point each', () =
       ]);
     });
 
+    it('tells the webview when the seam refuses a checkpoint answer, so the question is its to show again', async () => {
+      vi.spyOn(h.session, 'execute').mockResolvedValue({ ok: false, outcome: 'refused', message: 'The budget is spent.' });
+
+      await h.route({ type: 'answerCheckpoint', answerId: 'a-t1', taskId: 't1', approved: true, reason: 'Round half up.' });
+
+      expect(showWarningMessage).toHaveBeenCalledWith('The budget is spent.');
+      // The answer's id travels back, so a refusal that comes after the question moved on still finds its words.
+      expect(h.posts).toContainEqual({ type: 'checkpointResult', answerId: 'a-t1', error: 'The budget is spent.' });
+    });
+
+    it('tells the webview when the answer was taken, as no refusal', async () => {
+      vi.spyOn(h.session, 'execute').mockResolvedValue({ ok: true, message: 'done' });
+
+      await h.route({ type: 'answerCheckpoint', answerId: 'a-t1', taskId: 't1', approved: true });
+
+      expect(h.posts.filter((m) => m.type === 'checkpointResult')).toEqual([{ type: 'checkpointResult', answerId: 'a-t1' }]);
+    });
+
     it('approves a delegated task\'s question with words and a raise, as the TUI and the daemon do', async () => {
       const execute = vi.spyOn(h.session, 'execute').mockResolvedValue({ ok: true, message: 'done' });
 
-      await h.route({ type: 'answerCheckpoint', taskId: 't1', approved: true, reason: 'Round half up.', raiseTokens: 700_000 });
-      await h.route({ type: 'answerCheckpoint', taskId: 't2', approved: true, raiseTokens: 5 });
+      await h.route({ type: 'answerCheckpoint', answerId: 'a-t1', taskId: 't1', approved: true, reason: 'Round half up.', raiseTokens: 700_000 });
+      await h.route({ type: 'answerCheckpoint', answerId: 'a-t2', taskId: 't2', approved: true, raiseTokens: 5 });
 
       expect(execute.mock.calls).toEqual([
         [{ command: 'answer_checkpoint', task: 't1', answer: 'approve', reason: 'Round half up.', raiseTokens: 700_000 }, { kind: 'user' }],

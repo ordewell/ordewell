@@ -175,7 +175,7 @@ describe('reduceHost runView', () => {
 
   it('forgets the answered question with the session, and re-opens a different one', () => {
     const asked = reduceHost(INITIAL_HOST_STATE, msg({ type: 'runView', view: runWith([checkpointTask]) }));
-    const answered = reduceHost(asked, { type: 'checkpointAnswered' });
+    const answered = reduceHost(asked, { type: 'checkpointAnswered', answerId: 'a1' });
     expect(answered.checkpoint).toBeNull();
     expect(reduceHost(answered, msg({ type: 'runView', view: runWith([checkpointTask]) })).checkpoint).toBeNull();
 
@@ -183,6 +183,41 @@ describe('reduceHost runView', () => {
 
     const different = reduceHost(answered, msg({ type: 'runView', view: runWith([{ ...checkpointTask, checkpoint: 'another review' }]) }));
     expect(different.checkpoint?.summary).toBe('another review');
+  });
+
+  describe('checkpointResult', () => {
+    const asked = () => reduceHost(INITIAL_HOST_STATE, msg({ type: 'runView', view: runWith([checkpointTask]) }));
+    const answer = () => reduceHost(asked(), { type: 'checkpointAnswered', answerId: 'a1' });
+    const refused = (answerId = 'a1') => msg({ type: 'checkpointResult', answerId, error: 'Refused.' });
+
+    it('gives an answered question back as it was asked, and lets a run view carry it again', () => {
+      const before = asked();
+      const answered = reduceHost(before, { type: 'checkpointAnswered', answerId: 'a1' });
+      const back = reduceHost(answered, refused());
+      expect(back.checkpoint).toEqual(before.checkpoint);
+      expect(back.answeredCheckpoint).toBeNull();
+      expect(reduceHost(back, msg({ type: 'runView', view: runWith([checkpointTask]) })).checkpoint?.pausedAt).toBe(before.checkpoint?.pausedAt);
+    });
+
+    it('changes nothing for an answer that was not the last one given', () => {
+      const answered = answer();
+      expect(reduceHost(answered, refused('a0'))).toBe(answered);
+    });
+
+    it('leaves a delivered answer to the run view, which says what comes next', () => {
+      const answered = answer();
+      expect(reduceHost(answered, msg({ type: 'checkpointResult', answerId: 'a1' }))).toBe(answered);
+    });
+
+    it('changes nothing once the run has dropped the question', () => {
+      const gone = reduceHost(answer(), msg({ type: 'runView', view: EMPTY_RUN }));
+      expect(reduceHost(gone, refused())).toBe(gone);
+    });
+
+    it('brings back no question of another session', () => {
+      const switched = resetSession(answer(), 'restore');
+      expect(reduceHost(switched, refused())).toBe(switched);
+    });
   });
 });
 

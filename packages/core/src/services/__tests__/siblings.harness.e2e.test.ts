@@ -12,7 +12,7 @@ import { fakeConfig } from '../../testing';
 import { loadChildSession, saveSession } from '../../utils/sessionStore';
 import { openTaskLog } from '../../utils/taskLogStore';
 import { nodeOfTask } from './delegationTestKit';
-import { fakeFs, makeSession } from './sessionTestKit';
+import { closeSessions, fakeFs, makeSession } from './sessionTestKit';
 
 /*
  * Two siblings coordinate with nothing of the harness faked but its binary: the
@@ -32,12 +32,13 @@ const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd,
 
 const dirs: string[] = [];
 const saved = { PATH: process.env.PATH, FAKE_CLAUDE_STATE: process.env.FAKE_CLAUDE_STATE, FAKE_CLAUDE_LOG: process.env.FAKE_CLAUDE_LOG };
-afterEach(() => {
+afterEach(async () => {
+  await closeSessions();
   for (const [name, value] of Object.entries(saved)) {
     if (value === undefined) delete process.env[name];
     else process.env[name] = value;
   }
-  while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true });
+  while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 });
 
 function tempDir(): string {

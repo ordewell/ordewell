@@ -5,11 +5,11 @@ import {
   type RunnersResponse,
 } from '@ordewell/core';
 import { describeConnectionRefused, isConnectionRefused } from '../daemon';
-import { DaemonError, RequestTimeoutError, UnreadableResponseError, WorkspaceInitNeededError, deliveryOf, type ApiClient, type SessionFollow } from '../apiClient';
+import { DaemonError, RequestTimeoutError, UnreadableResponseError, WorkspaceInitNeededError, deliveryOf, type ApiClient, type ChildFollow, type SessionFollow } from '../apiClient';
 import { normalizeCatalog } from '../catalog';
 import { plannerSwitchRecall, uninstalledPlannerRefusal } from '../plannerModelSwitch';
 import type { Action, Effect } from './reducer';
-import type { ChatRestored } from './reducers/shared';
+import { answerWords, type ChatRestored } from './reducers/shared';
 import type { SessionView } from './state';
 import { inboundFor, forgetInbound } from './inbound';
 
@@ -31,6 +31,7 @@ export type OrdewellApi = Pick<ApiClient,
   | 'getSettings' | 'updateSettings' | 'updateRunSettings'
   | 'getRunners' | 'setRunnerEnabled' | 'getModels'
   | 'streamPlanning' | 'respondToApproval' | 'streamExecution' | 'closeExecutionStream' | 'followSession'
+  | 'listChildren' | 'getChild' | 'getChildTaskLogAttempts' | 'getChildTaskLog' | 'messageChild' | 'messageChildTask' | 'answerChildCheckpoint' | 'followChild'
 >;
 
 export interface EffectDeps {
@@ -386,33 +387,76 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
     // The card goes when the daemon's next status says the task left the
     // checkpoint; a refusal (settled elsewhere, withdrawn) surfaces as the
     // failure the daemon words.
-    case 'answerTaskCheckpoint':
-      if (effect.answer === 'approve') await api.approveTaskCheckpoint(effect.sessionId, effect.taskId, { ...(effect.reason ? { reason: effect.reason } : {}), ...(effect.raiseTokens !== undefined ? { raiseTokens: effect.raiseTokens } : {}) });
-      else await api.rejectTaskCheckpoint(effect.sessionId, effect.taskId, effect.reason);
+    case 'answerTaskCheckpoint': {
+      const answering = () => (effect.answer === 'approve'
+        ? api.approveTaskCheckpoint(effect.sessionId, effect.taskId, { ...(effect.reason ? { reason: effect.reason } : {}), ...(effect.raiseTokens !== undefined ? { raiseTokens: effect.raiseTokens } : {}) })
+        : api.rejectTaskCheckpoint(effect.sessionId, effect.taskId, effect.reason));
+      await (effect.below ? refusable(deps, effect.sessionId, answering, answerWords(effect)) : answering());
       return;
+    }
 
     // The saved log is read off disk (ADR-0018, P1) so the view opens with the
     // task's history; the live `task_log` stream then catches it up in place.
     case 'openTaskLog': {
-      const { attempts, position } = await api.getTaskLogAttempts(effect.sessionId, effect.taskId, workspace);
+      const { rootId } = effect;
+      const logOf = (attempt: number) => rootId
+        ? api.getChildTaskLog(rootId, effect.sessionId, effect.taskId, attempt)
+        : api.getTaskLog(effect.sessionId, effect.taskId, attempt, workspace);
+      const { attempts, position } = await (rootId
+        ? api.getChildTaskLogAttempts(rootId, effect.sessionId, effect.taskId)
+        : api.getTaskLogAttempts(effect.sessionId, effect.taskId, workspace));
       if (attempts.length === 0) {
         dispatch({ type: 'taskLogLoaded', taskId: effect.taskId, attempts: [], attempt: 0, events: [], position, sessionId: effect.sessionId });
         return;
       }
-      const attempt = attempts[attempts.length - 1];
-      const log = await api.getTaskLog(effect.sessionId, effect.taskId, attempt, workspace);
+      const log = await logOf(attempts[attempts.length - 1]);
       dispatch({ type: 'taskLogLoaded', taskId: effect.taskId, attempts, ...log, sessionId: effect.sessionId });
       return;
     }
 
     case 'loadTaskAttempt': {
-      const log = await api.getTaskLog(effect.sessionId, effect.taskId, effect.attempt, workspace);
+      const log = await (effect.rootId
+        ? api.getChildTaskLog(effect.rootId, effect.sessionId, effect.taskId, effect.attempt)
+        : api.getTaskLog(effect.sessionId, effect.taskId, effect.attempt, workspace));
       dispatch({ type: 'taskLogLoaded', taskId: effect.taskId, ...log, sessionId: effect.sessionId });
       return;
     }
 
     // The daemon queues the message (or delivers it to a waiting task) and
     // broadcasts the `task_log` event that shows it; nothing to dispatch here.
+    case 'followChild':
+      await openChildLink(deps, effect.rootId, effect.childId);
+      return;
+    case 'closeChild':
+      closeChildLink(deps, effect.childId);
+      return;
+    case 'readChild':
+      await readChild(deps, effect.rootId, effect.childId);
+      return;
+    case 'listChildren': {
+      const { children } = await api.listChildren(effect.rootId);
+      dispatch({ type: 'childrenListed', sessionId: effect.rootId, children, ...(effect.open ? { open: effect.open } : {}) });
+      return;
+    }
+    case 'messageChild': {
+      const { rootId, childId, text } = effect;
+      await refusable(deps, childId, async () => {
+        const { status } = await api.messageChild(rootId, childId, text);
+        dispatch({ type: 'childMessaged', sessionId: childId, status });
+      }, text);
+      return;
+    }
+    case 'messageChildTask': {
+      const { rootId, childId, taskId, text } = effect;
+      await refusable(deps, childId, () => api.messageChildTask(rootId, childId, taskId, text), text);
+      return;
+    }
+    case 'answerChildCheckpoint': {
+      const { rootId, childId, taskId, answer, question, reason } = effect;
+      await refusable(deps, childId, () => api.answerChildCheckpoint(rootId, childId, taskId, { answer, question, ...(reason ? { reason } : {}) }), reason);
+      return;
+    }
+
     case 'sendTaskMessage':
       await api.execute(effect.sessionId, { command: 'message_task', task: effect.taskId, text: effect.text });
       return;
@@ -1067,6 +1111,150 @@ function unfollow(deps: EffectDeps, sessionId: string): void {
   follows.delete(deps.api);
   followFailures.delete(deps.api);
   current.follow.close();
+}
+
+const WENT_WITH_ITS_ROOT = 'The session above this plan closed, so this plan closed with it.';
+const NO_LONGER_LISTED = 'That plan is no longer in this session.';
+
+/** The socket of one child plan on screen. */
+interface ChildLink {
+  rootId: string;
+  childId: string;
+  follow: ChildFollow | null;
+  timer: ReturnType<typeof setTimeout> | null;
+  closed: boolean;
+  failures: number;
+}
+
+/**
+ * The plans on screen follow one socket each, not one standing `follow`: a plan
+ * a person went down from keeps its socket, so Esc lands on one that kept up.
+ * Anchored to the client, like `inboundFor`, so a new daemon connection starts clean.
+ */
+const childLinks = new WeakMap<object, Map<string, ChildLink>>();
+
+function childLinksOf(api: object): Map<string, ChildLink> {
+  let links = childLinks.get(api);
+  if (!links) {
+    links = new Map();
+    childLinks.set(api, links);
+  }
+  return links;
+}
+
+async function refusable(deps: EffectDeps, childId: string, call: () => Promise<unknown>, text?: string): Promise<void> {
+  try {
+    await call();
+  } catch (err) {
+    // Anything else is the daemon being away, which `runEffect` revives; a
+    // refusal is the daemon's word on this plan, and the person's text is theirs.
+    if (!(err instanceof DaemonError)) throw err;
+    deps.dispatch({ type: 'childFailed', sessionId: childId, message: err.message, ...(err.code ? { code: err.code } : {}), ...(text ? { text } : {}) });
+  }
+}
+
+async function readChild(deps: EffectDeps, rootId: string, childId: string): Promise<void> {
+  await refusable(deps, childId, async () => {
+    deps.dispatch({ type: 'childOpened', sessionId: childId, view: await deps.api.getChild(rootId, childId) });
+  });
+}
+
+function retryChildLink(deps: EffectDeps, link: ChildLink): void {
+  // A failed read and its socket's close can both ask, and one link holds one socket.
+  if (link.timer) return;
+  const delay = Math.min(FOLLOW_RETRY_MS * 2 ** Math.min(link.failures, 4), FOLLOW_RETRY_MAX_MS);
+  link.failures += 1;
+  link.timer = setTimeout(() => {
+    link.timer = null;
+    if (!link.closed) void connectChildLink(deps, link).catch(() => {});
+  }, delay);
+  link.timer.unref?.();
+}
+
+/**
+ * What each close asks for. 4404 is an unknown child or a root the daemon has
+ * not loaded, which only a read tells apart: the client's read loads the root.
+ */
+async function childLinkEnded(deps: EffectDeps, link: ChildLink, code: number | null): Promise<void> {
+  if (link.closed || code === null) return;
+  const { dispatch } = deps;
+  const { rootId, childId } = link;
+  const gone = (message: string) => { closeChildLink(deps, childId); dispatch({ type: 'childGone', sessionId: childId, message }); };
+  if (code === 1001) {
+    gone(WENT_WITH_ITS_ROOT);
+    return;
+  }
+  if (code === 4404) {
+    const read = await deps.api.getChild(rootId, childId).then(() => 'there' as const, (err: unknown) => err);
+    if (read instanceof DaemonError && read.code === 'child_not_found') {
+      gone(NO_LONGER_LISTED);
+      return;
+    }
+  } else if (code !== 1012 && link.failures === 0) {
+    // One notice per outage, as `follow` does. A replaced root is back at once.
+    dispatch({ type: 'followLost', sessionId: childId });
+  }
+  if (!link.closed) retryChildLink(deps, link);
+}
+
+/**
+ * Socket first, then the read, as `loadSession` orders them: nothing the plan
+ * does between the two is missed, and the read lands before any frame after it.
+ */
+async function connectChildLink(deps: EffectDeps, link: ChildLink): Promise<void> {
+  const { rootId, childId } = link;
+  const inbound = inboundFor(deps.api, deps.dispatch, childId);
+  inbound.holdSnapshot();
+  const follow = deps.api.followChild(rootId, childId, inbound.planning());
+  link.follow = follow;
+  void follow.ended.then((code) => childLinkEnded(deps, link, code)).catch(() => {});
+  if (!(await follow.ready)) {
+    inbound.releaseSnapshot(false);
+    return;
+  }
+  let read = false;
+  try {
+    const view = await deps.api.getChild(rootId, childId);
+    if (link.closed) return;
+    deps.dispatch({ type: 'childOpened', sessionId: childId, view });
+    read = true;
+    link.failures = 0;
+  } catch (err) {
+    if (link.closed || link.follow !== follow) return;
+    if (err instanceof DaemonError && err.code === 'child_not_found') {
+      closeChildLink(deps, childId);
+      deps.dispatch({ type: 'childGone', sessionId: childId, message: NO_LONGER_LISTED });
+      return;
+    }
+    // An open socket never asks again, and its frames would land on a plan
+    // missing what this read held. `followLost` is said once by the reducer,
+    // and the close that led here may not have said it at all.
+    follow.close();
+    deps.dispatch({ type: 'followLost', sessionId: childId });
+    retryChildLink(deps, link);
+    throw err;
+  } finally {
+    inbound.releaseSnapshot(read);
+  }
+}
+
+async function openChildLink(deps: EffectDeps, rootId: string, childId: string): Promise<void> {
+  const links = childLinksOf(deps.api);
+  if (links.has(childId)) return;
+  const link: ChildLink = { rootId, childId, follow: null, timer: null, closed: false, failures: 0 };
+  links.set(childId, link);
+  await connectChildLink(deps, link);
+}
+
+function closeChildLink(deps: EffectDeps, childId: string): void {
+  const links = childLinksOf(deps.api);
+  const link = links.get(childId);
+  if (!link) return;
+  link.closed = true;
+  if (link.timer) clearTimeout(link.timer);
+  link.follow?.close();
+  links.delete(childId);
+  forgetInbound(deps.api, childId);
 }
 
 /**

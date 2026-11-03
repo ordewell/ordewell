@@ -256,10 +256,10 @@ describe('DELETE /api/sessions/:id', () => {
 
   it('stops the live session before removing its files, or its next save writes them back', async () => {
     const meta = saveSession(savedPlan as never, 'g', ws, 's1');
-    const filesWhenDestroyed: boolean[] = [];
+    const filesWhenClosed: boolean[] = [];
     const pool = fakePool({
       stopTree: vi.fn(async () => undefined),
-      destroy: vi.fn(() => { filesWhenDestroyed.push(listSessions(ws).some((s) => s.id === meta.id)); }),
+      close: vi.fn(async () => { filesWhenClosed.push(listSessions(ws).some((s) => s.id === meta.id)); }),
     } as Partial<OrchestratorPool>);
     const app = new Hono();
     app.route('/api/sessions', sessionsRoute(pool));
@@ -267,17 +267,21 @@ describe('DELETE /api/sessions/:id', () => {
     const res = await app.request(`/api/sessions/${meta.id}?workspace=${encodeURIComponent(ws)}`, { method: 'DELETE' });
 
     expect(await res.json()).toEqual({ ok: true });
-    expect(pool.destroy).toHaveBeenCalledWith(meta.id, { notifyClients: true });
-    expect(filesWhenDestroyed).toEqual([true]);
+    expect(pool.close).toHaveBeenCalledWith(meta.id);
+    expect(filesWhenClosed).toEqual([true]);
     expect(listSessions(ws)).toEqual([]);
   });
 
-  it('clears what its tree left in an engine once nothing of it runs, with its record still there to fall back on', async () => {
+  it('clears what its tree left in an engine once all of it has gone, with its record still there to fall back on', async () => {
     const meta = saveSession(savedPlan as never, 'g', ws, 's1');
     const order: string[] = [];
     const pool = fakePool({
       stopTree: vi.fn(async () => { order.push('stopped'); }),
-      destroy: vi.fn(() => { order.push('closed'); }),
+      // A closing session's helper started after a volume went would make it again, with no label to find it by.
+      close: vi.fn(async () => {
+        await new Promise((resolve) => { setTimeout(resolve, 5); });
+        order.push('closed');
+      }),
       reclaim: vi.fn(async () => { order.push(listSessions(ws).length > 0 ? 'cleared' : 'cleared too late'); }),
     } as Partial<OrchestratorPool>);
     const app = new Hono();

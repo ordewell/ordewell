@@ -2,7 +2,7 @@
   "name": "ordewell",
   "displayName": "Ordewell",
   "description": "Plan once, run it across Claude Code, Codex and OpenCode, and review one branch.",
-  "version": "0.12.2",
+  "version": "0.12.3",
   "private": true,
   "publisher": "ordewell",
   "license": "Apache-2.0",
@@ -40,7 +40,8 @@
   ],
   "activationEvents": [
     "onStartupFinished",
-    "onWebviewPanel:ordewellTaskLog"
+    "onWebviewPanel:ordewellTaskLog",
+    "onWebviewPanel:ordewellChildTaskLog"
   ],
   "main": "./dist/extension.js",
   "scripts": {
@@ -166,9 +167,19 @@
       {
         "command": "ordewell.configureModelAllowlist",
         "title": "Ordewell: Configure Model Allowlist"
+      },
+      {
+        "command": "ordewell.containers",
+        "title": "Ordewell: Containers (experimental)"
       }
     ],
     "menus": {
+      "commandPalette": [
+        {
+          "command": "ordewell.containers",
+          "when": "ordewell.containersOffered"
+        }
+      ],
       "view/title": [
         {
           "command": "ordewell.loadSession",
@@ -329,7 +340,7 @@
     }
   },
   "dependencies": {
-    "@ordewell/core": "^0.12.2"
+    "@ordewell/core": "^0.12.3"
   },
   "devDependencies": {
     "@testing-library/dom": "^10.4.1",

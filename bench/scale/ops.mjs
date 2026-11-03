@@ -4,7 +4,7 @@
  * the view the surfaces get, a wake-up, a start's prompt.
  *
  *   node bench/scale/ops.mjs [--sizes 100,1000,10000] [--shape dag] [--slots 100]
- *     [--only scheduler,store,saves,view,wake-up,start]
+ *     [--only scheduler,store,saves,view,wake-up,tree,start]
  *
  * In-process, no runner: every number here is core's own work on one thread.
  */
@@ -39,7 +39,7 @@ const put = (name, i, value) => {
 };
 const bytes = (v) => (v >= 1048576 ? `${(v / 1048576).toFixed(2)} MB` : v >= 1024 ? `${(v / 1024).toFixed(1)} KB` : `${v} B`);
 
-async function scheduler(i, n) {
+const orchestratorOver = (tasks, n) => {
   const store = new core.PlanStore();
   const orchestrator = core.TaskOrchestrator.compose({
     config: core.fakeConfig({ maxParallelSessions: Math.min(SLOTS, n), worktreeIsolation: false }),
@@ -49,7 +49,12 @@ async function scheduler(i, n) {
     workspaceRoot: tempWorkspace,
     workspaceEnv: async () => ({ env: {}, refused: [] }),
   });
-  orchestrator.loadPlan(makeTasks(n, { shape, done: Math.floor(n / 2) }), ['claude-code']);
+  orchestrator.loadPlan(tasks, ['claude-code']);
+  return { store, orchestrator };
+};
+
+async function scheduler(i, n) {
+  const { store, orchestrator } = orchestratorOver(makeTasks(n, { shape, done: Math.floor(n / 2) }), n);
   const t = now();
   await orchestrator.approveReview();
   put('run start, every ready task claimed (ms)', i, ms(t));
@@ -68,6 +73,8 @@ async function scheduler(i, n) {
   const rule = orchestrator.startRule();
   put('  selectReadyTasks (ms)', i, (await timed(() => core.selectReadyTasks({ ...rule, active: 0, maxParallel: 100 }), budget(n))).ms);
   put('  checkOf over every task (ms)', i, (await timed(() => { for (const task of store.allTasks) core.checkOf(store.allTasks, task.id); }, budget(n))).ms);
+  // A fresh array each time, as a frame after any change has: rows share one reading of an array.
+  put('  a row for every task (ms)', i, (await timed(() => { const tasks = [...store.allTasks]; for (const task of tasks) core.taskRowView(task, { tasks }); }, budget(n))).ms);
   put('  planBlocks, once (ms)', i, (await timed(() => core.planBlocks(store.allTasks))).ms);
   put('  startWaits, one task (ms)', i, (await timed(() => orchestrator.startWaits(store.allTasks[n - 1]))).ms);
   orchestrator.stop('restart');
@@ -142,10 +149,14 @@ async function view(i, n) {
 async function wakeUps(i, n) {
   const tasks = makeTasks(n, { shape: 'chain', done: 0 });
   tasks[0].status = 'failed';
+  const { orchestrator } = orchestratorOver(tasks, n);
   const hostOf = (deliver) => ({
     plan: () => ({ runSettings: { supervisorLevel: 'act', mergeAtGatesAutomatically: false, supervisorRetryLimit: 2, wakeUpReadBudget: 12 } }),
     userSettings: () => core.RUN_SETTINGS_DEFAULTS,
     tasks: () => tasks,
+    subplanner: () => false,
+    startWaits: () => orchestrator.planStartWaits(),
+    plannerCache: () => ({ requestAt: null }),
     checkpointQuestion: () => undefined,
     landedWork: () => null,
     recentOutput: () => undefined,
@@ -182,6 +193,9 @@ async function wakeUps(i, n) {
   supervision.runStarted('user');
   const task = plain[Math.floor(n / 2) - 1];
   put('taskSettled, the wake decision (ms)', i, (await timed(() => supervision.taskSettled(task))).ms);
+  put('100 failures in one window (ms)', i, (await timed(() => {
+    for (const failed of plain.slice(0, 100)) supervision.observe({ kind: 'task_failed', taskId: failed.id, detail: 'no task_complete call' });
+  })).ms);
   supervision.reset();
 }
 
@@ -194,12 +208,55 @@ async function prompts(i, n) {
   put('prompt a runner is sent (bytes)', i, prompt.length);
 }
 
+/** A flat run's tree: `n` children opened over its life, tens still open and spending. */
+async function tree(i, n) {
+  const OPEN = 30;
+  const dir = fs.mkdtempSync(path.join(tempWorkspace(), 'tree-'));
+  const log = path.join(dir, 'tree-events.jsonl');
+  const limit = 1e12;
+  const mandate = core.rootMandate({ level: 'act', autorun: true, autonomous: true, delegationTokens: limit, runners: ['claude-code'], models: {} });
+  const ledger = await core.TreeLedger.open(core.jsonlEventStore(log), { sessionId: 'root', limit });
+  const carve = (at) => {
+    const carved = ledger.carve(core.ROOT_NODE, mandate, { level: 0, tokens: 1e6 }, { sessionId: `child-${at}`, taskId: `task-${at}` });
+    if (!carved.ok) throw new Error(JSON.stringify(carved.refusal));
+    return carved.budget;
+  };
+  const t = now();
+  for (let at = 0; at < n; at++) {
+    const child = carve(at);
+    child.spent({ source: 'claude-code', inputTokens: 100 }, { taskId: `task-${at}`, attempt: 1 });
+    ledger.close(child.path);
+  }
+  await ledger.flushed();
+  put('open, spend and close every child (ms)', i, ms(t));
+  const open = Array.from({ length: OPEN }, (_, at) => carve(n + at));
+  const one = open[0];
+  for (const child of open) child.hold();
+  put(`a usage record, ${OPEN} children open (ms)`, i, (await timed(() => { one.spent({ source: 'claude-code', inputTokens: 1 }, { taskId: `task-${n}`, attempt: 1 }); })).ms);
+  await ledger.flushed();
+  put('nodeOf, a session (ms)', i, (await timed(() => ledger.nodeOf(`child-${n}`))).ms);
+  put('spentOn, a task (ms)', i, (await timed(() => ledger.spentOn(core.ROOT_NODE, `task-${n}`))).ms);
+  put('board of a node (ms)', i, (await timed(() => ledger.board(one.path))).ms);
+  put('below the root (ms)', i, (await timed(() => ledger.below(core.ROOT_NODE))).ms);
+  await ledger.shutdown();
+  put('tree log (bytes)', i, fs.statSync(log).size);
+  const reopened = now();
+  const again = await core.TreeLedger.open(core.jsonlEventStore(log), { sessionId: 'root', limit });
+  put('replay the log on open (ms)', i, ms(reopened));
+  const first = now();
+  again.setRootLimit(limit + 1);
+  await again.shutdown();
+  put('first append after open (ms)', i, ms(first));
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 const sections = [
   ['Scheduler', scheduler],
   ['Store', mutations],
   ['Saves', saves],
   ['View', view],
   ['Wake-up', wakeUps],
+  ['Tree', tree],
   ['Start', prompts],
 ];
 say(`# ops: shape=${shape}, half the plan done, ${SLOTS} slots, node ${process.version}, load ${loadAverage()}`);

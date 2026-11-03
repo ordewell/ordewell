@@ -217,7 +217,7 @@ export function judgeProbe(found: ProbeFindings, expected: ProbeExpected, at: st
               : expected.gated ? "the key stays at this host's gateway, and its value is in no environment the container can read"
                 : 'this lease carries no credential',
     ),
-    'kernel.separate': proof(found.kernel !== expected.hostKernel, `the container runs ${found.kernel}, this host ${expected.hostKernel}`),
+    'kernel.separate': proof(found.kernel !== expected.hostKernel, `the container runs ${found.kernel}, this host ${expected.hostKernel}: separate from this host, and shared with every other container on this engine`),
     'limits.memory': proof(
       found.memoryMax === String(expected.memoryBytes) && found.swapMax === '0' && found.pidsMax === String(expected.pids),
       `the container's cgroup says memory ${found.memoryMax}, swap ${found.swapMax}, processes ${found.pidsMax}`,

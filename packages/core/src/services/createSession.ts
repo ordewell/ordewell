@@ -6,12 +6,12 @@ import { createAiService, type IAiService } from './AiService';
 import type { PlannerContextDeps } from './plannerContextBudget';
 import { PlannerBackend } from './PlannerBackend';
 import type { TaskOp } from './TaskOps';
-import { PlanChangeCheck, runsSealed, type PlanChangeScope } from './PlanChangeCheck';
+import { PlanChangeCheck, runsSealed, type NodeFunds, type PlanChangeScope } from './PlanChangeCheck';
 import { carryPlannedModes } from './ModeResolver';
 import { ApprovalRecord } from './ApprovalRecord';
 import type { TaskQueryCatalog } from './TaskQuery';
 import { SessionCatalog } from './SessionCatalog';
-import { plannerToolHandler, runnersOf, PLANNER_TURN_ENDED, type PlanEditOutcome, type TaskHead } from './plannerTools';
+import { plannerToolHandler, runnersOf, NODE_REPORTED, PLANNER_TURN_ENDED, type PlanEditOutcome, type TaskHead } from './plannerTools';
 import { sharedMcpServer, type McpToolReply, type OrdewellMcpServer, type PlannerToolHandler, type PostArgs, type ReadTaskArgs, type TaskCompleteArgs } from './mcp';
 import { ConversationEditError, PlannerContextPausedError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnStoppedError, PlannerUsageLimitError, type ConversationCompaction, type ConversationOpening, type PlannerConversationHost, type RewindTarget, type WakeUpTurn } from './PlannerConversation';
 import { forkPlanState, type ForkedDialogue } from './conversationFork';
@@ -19,13 +19,14 @@ import { PlanTurns, type PlanTurnInput } from './PlanTurns';
 import { RunSupervision, runOrigin } from './RunSupervision';
 import { Planner } from './Planner';
 import { TaskControlError, TaskOrchestrator, type OrchestratorObserver, type RunOrigin, type TaskOrchestratorOptions } from './TaskOrchestrator';
+import { CHILD_ENDED, ChildDirectory } from './ChildDirectory';
 import { ChildPlanRunner, ownedRunner, type ChildHost, type ChildNode, type NodeEnd, type NodeState, type SubplannerLink, type TakenReport } from './ChildPlanRunner';
 import { readTask, type TaskLogReader } from './readTask';
 import { Subtree, takeReport } from './Subtree';
 import { blobsIn, NodeBoard } from './Board';
 import { ScopeLines } from './ScopeLines';
 import { isBoardRef } from '../models/Board';
-import { DELEGATION_OFFERED } from './runSettingsText';
+import { DELEGATION_OFFERED, rememberDelegationBudget } from './runSettingsText';
 import { checkWords, checksDelegatedTask, type DelegatedRow } from '../models/Delegation';
 import type { SlotPool } from './SlotPool';
 import type { OpenLease, ReservedLease } from './executionLease';
@@ -37,7 +38,7 @@ import { SCRIPT_PAST_THE_RULES, autonomousAt, delegatedRequest, heldMandate, man
 import { TreeLedger, type Carved, type NodeBudget } from './TreeLedger';
 import type { EventStore } from './eventStore';
 import { ROOT_NODE, type NodePath } from '../models/TreeEvent';
-import { jsonlEventStore, treeEventLogFile } from '../utils/treeEventLog';
+import { hasTreeEventLog, jsonlEventStore, treeEventLogFile } from '../utils/treeEventLog';
 import { ensureStateDirIgnored } from '../utils/fsHelpers';
 import { PendingApprovals, type PendingApproval } from './PendingApprovals';
 import { RunnerApprovals } from './RunnerApprovals';
@@ -55,7 +56,7 @@ import { RUN_SETTINGS_DEFAULTS, runSettingsOf, type GlobalRunSettings, type User
 import { SkillsService } from './SkillsService';
 import { resolveSkillInvocation, type SkillInvocation } from './skillInvocation';
 import { plannedSkillLookup, type SkillCatalogLookup } from './taskSkills';
-import { surfacePlan, type RunActivity, type RunMergeView, type RunView, type SessionBroadcaster, type SessionMessage, type SessionNotice } from './SessionMessage';
+import { surfacePlan, type ChildControlOutcome, type ChildMessageOutcome, type ChildPlanView, type ChildTaskControl, type RunActivity, type RunMergeView, type RunView, type SessionBroadcaster, type SessionMessage, type SessionNotice } from './SessionMessage';
 import { EMPTY_RUN, reduceRun } from './runView';
 import { SessionEventRelay } from './SessionEventRelay';
 import { SubagentRuns } from './SubagentRuns';
@@ -184,6 +185,8 @@ export interface ConversationRewind extends ConversationFork {
  * plan's size multiplies.
  */
 const SAVE_INTERVAL_MS = 5000;
+/** The closest two saves of a changed status come, as a burst of starts would otherwise write the plan once each. */
+const STATUS_SAVE_INTERVAL_MS = 1000;
 
 /** Writes one plan to the saved-session store: {@link saveSession}'s shape, injected so tests never touch disk. `workspace` is the state root. */
 export type SaveSession = (plan: LegacyPlanState, goal: string, workspace: string, sessionId: string) => void;
@@ -206,6 +209,8 @@ export interface ChildPlacement {
   isolation: IWorktreeIsolation;
   /** The root's, so the tree shares one Parallel limit (D18). */
   pool: SlotPool;
+  /** The root's, which a surface finds this child through (D20). */
+  directory: ChildDirectory;
   /** Its side of the tree's ledger, once a carve gave it one (ADR-0056 M5). */
   budget?: NodeBudget;
 }
@@ -362,11 +367,23 @@ function reportingUp(budget: NodeBudget, link: SubplannerLink | undefined): Node
   };
 }
 
+/** Who the message of a turn came from, since a subplanner otherwise reads every message as the plan above's. */
+const PERSON_SPOKE = 'A message in this turn comes from a person watching this child plan, not from the plan above. It stays here: nothing reaches the plan above unless you pass up what it needs in your own report or question.';
+
+const STOPPED_UNANSWERED = 'This child plan stopped before its subplanner answered your message.';
+
+/** What a person hears of a message nothing answered, nobody else holding the call. The child's report ending the turn that read it is no news. */
+function personUnanswered(err: unknown): string | null {
+  if (err instanceof PlannerTurnDiscardedError && !err.unread) return null;
+  if (err instanceof PlannerTurnDiscardedError || err instanceof PlannerTurnStoppedError) return STOPPED_UNANSWERED;
+  return `Your message to this child plan went unanswered: ${err instanceof Error ? err.message : String(err)}`;
+}
+
 /**
  * What a child is built from: what its tree shares, and what is its own. It
  * takes its parent's isolation through its placement and never one of its own
- * (ADR-0055 D11), a broadcast that reaches no surface (D20), and a runner view
- * that stops only what it started.
+ * (ADR-0055 D11), a broadcast only a surface that selected it hears (D20), and
+ * a runner view that stops only what it started.
  */
 function childSessionDeps(deps: SessionDeps, { task, cwd, placement, authority, brief, link }: ChildSpec): SessionDeps {
   const given = deps.childDeps?.(task) ?? {};
@@ -383,8 +400,14 @@ function childSessionDeps(deps: SessionDeps, { task, cwd, placement, authority, 
     ...(deps.childDeps ? { childDeps: deps.childDeps } : {}),
     config: subplannerConfig(deps.config, task),
     notifications: SILENT,
-    broadcast: () => link.changed(),
-    onNotice: () => link.changed(),
+    broadcast: (message) => {
+      link.changed();
+      placement.directory.publish(placement.sessionId, message);
+    },
+    onNotice: (notice) => {
+      link.changed();
+      placement.directory.publish(placement.sessionId, notice);
+    },
     runner: ownedRunner(deps.runner),
     ...(deps.scriptRunner ? { scriptRunner: ownedRunner(deps.scriptRunner) } : {}),
     workspaceRoot: () => cwd,
@@ -464,8 +487,8 @@ export function createSession(deps: SessionDeps): Session {
     : { fullOutputFile: (taskId, attempt) => prepareTaskOutputFile(session.taskLogLocation, taskId, attempt) };
   const childHost: ChildHost = {
     openChild: (...open) => session.openChild(...open),
-    changedPaths: (taskId) => session.changedPaths(taskId),
-    stopped: () => session.underStop,
+    changedPaths: (taskId, names) => session.changedPaths(taskId, names),
+    stopped: () => session.underStop || session.reported,
     passUp: (record) => deps.subplanner?.usage(record),
     moved: () => events.rowsMoved(session.planState),
   };
@@ -536,7 +559,7 @@ export function createSession(deps: SessionDeps): Session {
     autonomous: () => autonomousAt(deps.child, deps.config.autonomousMode),
     ...(deps.subplanner ? { decided: () => deps.subplanner?.changed() } : {}),
     ...(deps.child ? { inheritedProtectedPaths: () => deps.child?.mandate('off').exclusions.protectedPaths ?? [], unsealedRefusal: (task: Readonly<Task>) => session.unsealedRefusal(task) } : {}),
-    ...(deps.subplanner ? { nodeRefusal: () => session.nodeRefusal() } : {}),
+    ...(deps.subplanner ? { nodeRefusal: () => session.startRefusal() } : {}),
     discardChild: (task) => session.discardChild(task),
     subtree: () => session.subtree(),
     ...(deps.placement?.budget ? { planNode: () => deps.placement!.budget!.path } : {}),
@@ -642,6 +665,7 @@ export function createSession(deps: SessionDeps): Session {
   const catalog = new SessionCatalog({
     config: deps.config,
     autonomous: () => autonomousAt(deps.child, deps.config.autonomousMode),
+    ...(deps.child ? { held: () => deps.child!.mandate('off').limits } : {}),
     registry: deps.registry,
     modelResolver: deps.modelResolver,
     settings: deps.settings,
@@ -846,6 +870,10 @@ export class Session {
   private saveTimer: ReturnType<typeof setTimeout> | undefined;
   /** The store's status mark as last saved, or as loaded. */
   private savedStatuses: string | undefined;
+  private savedRevision: number | undefined;
+  private savedAt = 0;
+  private saveDue = 0;
+  private savesHeld = false;
   /** The user was told the disk is refusing this session's saves, and none has landed since. */
   private saveFailureSaid = false;
   /** A whole-plan start opening; a second Execute joins it rather than resetting the run under it. */
@@ -868,6 +896,7 @@ export class Session {
   private readonly budget: NodeBudget | undefined;
   /** The tree's ledger, once something asked: a flat run never does, so it has none and writes no log (ADR-0058 S3). */
   private tree: TreeLedger | null = null;
+  private ownChildren: ChildDirectory | undefined;
   /** The lines this plan's landings owe its running tasks (ADR-0057 R6). */
   private readonly scopeLines = new ScopeLines({
     running: () => this.store.planTasks.filter((task) => task.type === 'delegated' && task.scope && (task.status === 'in_progress' || task.status === 'awaiting_user')),
@@ -1094,7 +1123,7 @@ export class Session {
       },
       run: async (prompt, { taken, signal }) => {
         const reply = (turnSignal: AbortSignal | undefined, wakeUp?: WakeUpTurn) => this.conversation.reply(prompt, {
-          signal: turnSignal, onCommit: taken, wakeUps: prompt.wakeUps, forced: prompt.forced, ...(wakeUp ? { wakeUp } : {}), ...(prompt.recovery ? { recovery: prompt.recovery } : {}),
+          signal: turnSignal, onCommit: taken, wakeUps: prompt.wakeUps, asides: prompt.asides, forced: prompt.forced, ...(wakeUp ? { wakeUp } : {}), ...(prompt.recovery ? { recovery: prompt.recovery } : {}),
         });
         // Wake-ups that ride with a user's message are context for the user's turn.
         const { landed, effects } = await this.openTurn(() => (prompt.source === 'supervisor'
@@ -1482,7 +1511,11 @@ export class Session {
       handles: () => this.conversation.turnHandles(),
       guard: (before, after) => (guarded() ? this.supervision.checkEdit(before, after)?.refusal : undefined),
       // Read only where the build offers delegation, so a flat session's change meets what it always met (ADR-0055 D21).
-      node: () => (this.delegationOffered ? { mandate: this.mandate(), level: this.authority.depth } : undefined),
+      node: () => {
+        if (!this.delegationOffered) return undefined;
+        const budget = this.heldFunds();
+        return { mandate: this.mandate(), level: this.authority.depth, ...(budget ? { budget } : {}) };
+      },
       canSeal: async () => (await this.fsAdapter.canSeal?.()) ?? false,
     };
   }
@@ -1667,8 +1700,24 @@ export class Session {
       held: () => this.heldElsewhere(),
       isolation: this.runs.childIsolation,
       pool: this.orchestrator.slotPool,
+      directory: this.children,
       ...(budget ? { budget } : {}),
     };
+  }
+
+  /** The tree's plans as a surface reaches them, one directory at every depth (ADR-0055 D20). */
+  get children(): ChildDirectory {
+    if (this.placement) return this.placement.directory;
+    this.ownChildren ??= new ChildDirectory({
+      rootSessionId: () => this.rootSessionId,
+      // A read opens no tree of its own: that would fix the root's limit before its run does.
+      // The log answers for a tree whose every child was let go, so no task names one.
+      ledger: async () => (this.tree || hasTreeEventLog(this.rootSessionId, this.stateRoot) ? this.ledger() : null),
+      rootTask: (taskId) => this.store.get(taskId),
+      saved: (sessionId) => loadChildSession({ baseDir: this.stateRoot, rootSessionId: this.rootSessionId, sessionId }),
+      logLocation: (sessionId) => ({ baseDir: this.stateRoot, sessionId, rootSessionId: this.rootSessionId }),
+    });
+    return this.ownChildren;
   }
 
   /** The root Session's id, under which a tree's state sits (ADR-0055 D11). */
@@ -1777,6 +1826,23 @@ export class Session {
   }
 
   /**
+   * What the ledger says of this node's budget, in the tick a check reads it: a
+   * check has no wait to open one with, and a root with no ledger open has
+   * carved nothing yet in this process.
+   */
+  private heldFunds(): NodeFunds | undefined {
+    const tree = this.budget?.tree ?? this.tree;
+    if (!tree) return undefined;
+    if (!this.placement) tree.setRootLimit(this.userRunSettings().delegationTokens);
+    const { nodePath } = this;
+    return {
+      limit: tree.numbers(nodePath).limit,
+      left: tree.left(nodePath),
+      stillAsks: (task) => tree.stillAsks(nodePath, task.id, task.budget?.tokens ?? 0),
+    };
+  }
+
+  /**
    * A child's mandate and budget, carved from what this node has left
    * (ADR-0056 M4, M5). At the root, what can never pass is refused before a
    * log is opened: the first carve is what makes a run a tree. A child's limit
@@ -1864,7 +1930,7 @@ export class Session {
       if (saved?.plan.isolation && saved.plan.isolation.run.workspaceRoot !== cwd) throw new Error(`Task "${task.title}" cannot reopen its child: its worktree has moved. Retry it fresh, which starts a new child.`);
       const child = this.childSession({ task, cwd, placement, authority, brief, link });
       if (saved) child.loadPlan(pickedUp(saved.plan), saved.meta.goal, cwd, { sessionId: placement.sessionId });
-      return child.asNode(mandate, (await this.board())?.pins() ?? []);
+      return child.asNode(task, mandate, (await this.board())?.pins() ?? []);
     } catch (err) {
       budget.tree.close(budget.path);
       throw err;
@@ -1906,8 +1972,20 @@ export class Session {
   }
 
   /** This session as its parent's attempt drives it, `pins` what it is told as it starts (ADR-0057 R10). */
-  private asNode(mandate: Mandate, pins: readonly string[]): ChildNode {
+  private asNode(task: Task, mandate: Mandate, pins: readonly string[]): ChildNode {
     const told = (goal: string) => (pins.length > 0 ? `${goal}\n\n${pins.join('\n')}` : goal);
+    let toldOfHeld = false;
+    const leave = this.placement?.directory.seat({
+      sessionId: this.sessionId,
+      taskId: task.id,
+      title: task.title,
+      working: () => this.isPlannerBusy || this.turns.turnRunning,
+      refusal: () => this.personRefused(),
+      view: () => this.seenFromAbove(),
+      hear: (text) => this.hearPerson(text),
+      checkpoints: () => flattenTasks(this.store.planTasks).filter((held) => this.awaitsCheckpoint(held.id)).map((held) => held.id),
+      control: (taskId, control) => this.controlledByPerson(taskId, control),
+    });
     return {
       sessionId: this.sessionId,
       protectedPaths: mandate.exclusions.protectedPaths,
@@ -1915,32 +1993,117 @@ export class Session {
       heldSince: (since) => this.placement?.pool.heldSince(since) ?? 0,
       startPlanning: (goal) => this.startPlanning(told(goal)),
       continueConversation: (text) => this.continueConversation(text),
-      goOn: (text, goal) => this.goOn(text, told(goal)),
+      goOn: (text, goal) => this.goOn(text, goal, told),
       hear: (line) => { void this.turns.enqueue({ source: 'supervisor', text: line, rides: true }).catch(() => undefined); },
       state: () => this.nodeState(),
       takeReport: (report) => this.takeReport(report),
-      halt: () => this.stopSubtree(),
+      // Before the stop, which drops what a context pause held; halting closes the
+      // seat first, so no message comes in behind this and one notice covers them all.
+      halt: () => {
+        if (!toldOfHeld && this.turns.heldWithoutCaller().some((t) => t.aside === PERSON_SPOKE)) {
+          toldOfHeld = true;
+          this.notice('warn', STOPPED_UNANSWERED);
+        }
+        return this.stopSubtree();
+      },
       close: async () => {
         this.destroy();
         await this.departed;
+        leave?.();
         this.budget?.tree.close(this.budget.path);
       },
     };
   }
 
+  /** This child as a surface that selected it opens it, the same shape a joining client reads of any session. */
+  private seenFromAbove(): Omit<ChildPlanView, 'child'> {
+    const plannerTurnId = this.plannerTurnId;
+    const plannerCompaction = this.plannerCompaction();
+    return {
+      goal: this.goal,
+      plan: this.plan ? surfacePlan({ ...this.plan, tasks: this.store.snapshot() }) : null,
+      run: this.runSnapshot(),
+      ...(plannerTurnId ? { plannerTurnId } : {}),
+      ...(plannerCompaction ? { plannerCompaction } : {}),
+    };
+  }
+
+  /** `opensTurn`: an answer does not, and a runner must not stay parked at its question for want of a turn nobody takes. */
+  private personRefused({ opensTurn = true }: { opensTurn?: boolean } = {}): Extract<ChildMessageOutcome, { ok: false }> | null {
+    if (!this.subplanner?.listening()) return CHILD_ENDED;
+    const refused = this.nodeRefusal() ?? (opensTurn ? this.budget?.turnRefusal() : null) ?? (this.plan || this.opening ? null : 'This child plan has not started its conversation yet.');
+    return refused ? { ok: false, code: 'refused', message: refused } : null;
+  }
+
   /**
-   * Reopened (ADR-0055 D17): as Execute, so what failed is retried, and then its
-   * subplanner goes on. One whose plan never reached the disk plans its goal, and
-   * one with nothing left to run goes straight to its turn: it may owe only its report.
+   * A person's message to this child (ADR-0055 D20): a turn of its subplanner
+   * as any other, its actor and mandate unchanged, so no budget, grant or
+   * effect moves here. Skills are not resolved, which would be a person
+   * loading them past the allowlist. It goes no higher: what the plan above
+   * hears of it is what the subplanner chooses to pass up.
    */
-  private async goOn(text: string, goal: string): Promise<unknown> {
-    if (this.store.planTasks.length === 0) return this.startPlanning(goal);
-    const left = flattenTasks(this.store.planTasks).some((task) => task.type !== 'user' && task.status !== 'completed' && task.status !== 'skipped');
-    if (left) {
-      const run = await this.execute({ command: 'run_plan' }, this.turnActor());
-      if (!run.ok) throw new Error(run.message);
+  private hearPerson(text: string): ChildMessageOutcome {
+    const refused = this.personRefused();
+    if (refused) return refused;
+    // Beside the message, not in it: their words stay as they wrote them in the transcript.
+    const input: PlanTurnInput = { source: 'user', text, aside: PERSON_SPOKE };
+    const taken = this.turns.turnRunning;
+    this.subplanner?.spoken(async () => {
+      try {
+        await (this.behindOpening(input) ?? this.turns.follow(input));
+      } catch (err) {
+        const told = personUnanswered(err);
+        if (told) this.notice('warn', told);
+      }
+    });
+    return { ok: true, status: !taken && this.turns.turnRunning ? 'woken' : 'queued' };
+  }
+
+  /**
+   * A person's control on this plan's own task (ADR-0055 D20): the command its
+   * subplanner could call, as its subplanner, so its held mandate decides and
+   * no budget, grant or effect moves here. An id this plan does not hold is
+   * refused rather than resolved, and the question is compared in the same
+   * tick the seam checks and answers it, so no answer lands on a later one.
+   * The subplanner hears of it on its next turn, and none is opened to tell it.
+   */
+  private async controlledByPerson(taskId: string, control: ChildTaskControl): Promise<ChildControlOutcome> {
+    const refused = this.personRefused({ opensTurn: control.kind !== 'checkpoint' });
+    if (refused || !this.child) return refused ?? CHILD_ENDED;
+    if (!flattenTasks(this.store.planTasks).some((task) => task.id === taskId)) {
+      return { ok: false, code: 'no_task', message: `This child plan has no task "${taskId}".` };
     }
-    return this.continueConversation(text);
+    if (control.kind === 'checkpoint' && !(this.awaitsCheckpoint(taskId) && this.orchestrator.getCheckpointQuestion(taskId) === control.question)) {
+      return { ok: false, code: 'not_waiting', message: 'That checkpoint is not waiting any more: it was answered, withdrawn or replaced by another question.' };
+    }
+    const outcome = await this.execute(
+      control.kind === 'message'
+        ? { command: 'message_task', task: taskId, text: control.text }
+        : { command: 'answer_checkpoint', task: taskId, answer: control.answer, ...(control.reason ? { reason: control.reason } : {}) },
+      { kind: 'subplanner', depth: this.child.depth, person: true },
+    );
+    if (!outcome.ok) return { ok: false, code: 'refused', message: outcome.message };
+    const said = control.kind === 'message' ? control.text : control.reason;
+    void this.turns.enqueue({ source: 'supervisor', text: `A person acted on your plan: ${outcome.message}${said ? ` They said: ${said}` : ''}`, rides: true }).catch(() => undefined);
+    return { ok: true, message: outcome.message, ...(outcome.payload?.kind === 'message' ? { id: outcome.payload.id } : {}) };
+  }
+
+  /**
+   * Reopened (ADR-0055 D17): as Execute, so what failed is retried, but for its
+   * own children, which go on under this same Continue, and then its subplanner
+   * goes on. One whose plan never reached the disk plans its goal, and one with
+   * nothing left to run goes straight to its turn: it may owe only its report.
+   * `told` adds the pins of now, posted since it opened or not (ADR-0057 R10);
+   * its children hear the message without them, and add their own.
+   */
+  private async goOn(text: string, goal: string, told: (said: string) => string): Promise<unknown> {
+    if (this.store.planTasks.length === 0) return this.startPlanning(told(goal));
+    const left = flattenTasks(this.store.planTasks).some((task) => task.type !== 'user' && task.status !== 'completed' && task.status !== 'skipped');
+    if (!left) return this.continueConversation(told(text));
+    const held = this.orchestrator.owesChildren(text);
+    const run = await this.execute({ command: 'run_plan' }, this.turnActor());
+    if (!run.ok) throw new Error(run.message);
+    return this.continueConversation(told([text, ...held].join('\n\n')));
   }
 
   private get taskLogReader(): TaskLogReader {
@@ -1954,6 +2117,7 @@ export class Session {
     const here = this.budget?.path ?? ROOT_NODE;
     return new Subtree({
       here,
+      tasks: () => this.store.planTasks,
       nodes: () => tree.below(here),
       plan: ({ sessionId }) => loadChildSession({ baseDir, rootSessionId, sessionId })?.plan.tasks,
       logs: ({ sessionId }) => {
@@ -2082,6 +2246,16 @@ export class Session {
     return this.withdrawn();
   }
 
+  /** Its report is what its verdict and landing go by: work behind it would land past both (ADR-0055 D7). */
+  get reported(): boolean {
+    return this.subplanner?.reported() === true;
+  }
+
+  /** {@link nodeRefusal}, and a report: a turn can still read a person's message, but no task may start from it. */
+  startRefusal(): string | null {
+    return this.nodeRefusal() ?? (this.reported ? NODE_REPORTED : null);
+  }
+
   /**
    * Everything under this node stops, leaves first, its planner turn and any
    * turn waiting included, and this resolves once it has all gone: with no
@@ -2118,8 +2292,8 @@ export class Session {
   }
 
   /** What a delegated task's branch changed since its base. */
-  changedPaths(taskId: string): Promise<string[]> {
-    return this.runs.changedPaths(taskId);
+  changedPaths(taskId: string, names?: 'both'): Promise<string[]> {
+    return this.runs.changedPaths(taskId, names);
   }
 
   /** Why this node stopped for its budget, or null: a parent's reason for ending it `blocked`. */
@@ -2156,8 +2330,9 @@ export class Session {
 
   /**
    * The relay announces every orchestrator event; this adds the saves some of
-   * them owe, each made before the announcement so no surface sees state the
-   * disk lacks.
+   * them owe, each made before the announcement so no surface sees a decision
+   * the disk lacks. A status that decides nothing may lead the disk by up to
+   * {@link STATUS_SAVE_INTERVAL_MS}.
    */
   private observer(): OrchestratorObserver {
     const relay = this.events.observer(() => this.plan);
@@ -2195,6 +2370,9 @@ export class Session {
         this.saveChange();
         relay.onTaskChanged();
       },
+      // A script's effects do not wait for a save, and a reload that finds it
+      // unstarted would offer to run them again as if they never ran (ADR-0035).
+      onScriptClaimed: () => this.persist(),
       onTick: () => {
         this.saveChange();
         relay.onTick();
@@ -2204,8 +2382,7 @@ export class Session {
       // last Session operation.
       onTaskSettled: ({ taskId }) => {
         const task = this.store.get(taskId);
-        if (task) this.supervision.taskSettled(task);
-        this.persist();
+        this.savingOnce(() => { if (task) this.supervision.taskSettled(task); });
       },
       onUsageLimitWait: ({ taskId, runner, resumeAt, cancelled }) => {
         if (!cancelled) this.supervision.observe({ kind: 'usage_limit', taskId, runner, resumeAt });
@@ -2253,6 +2430,7 @@ export class Session {
    * write: a turn holds what it writes until the mutation that lands it.
    */
   private persist(): void {
+    if (this.savesHeld) return;
     // A save that settles after destroy would claim the lease again, and hold
     // the session from every other host until this process exits (ADR-0049 L7).
     if (!this.plan || this.leaseReleased) return;
@@ -2275,31 +2453,55 @@ export class Session {
     this.plan.supervision = this.supervision.snapshot();
     this.plan.lastUpdated = new Date().toISOString();
     this.save(this.plan, this.goal, this.stateRoot, this.currentSessionId);
+    this.savedAt = Date.now();
+    this.savedRevision = this.store.revision;
     this.savedStatuses = this.store.statusMark();
     this.saveFailureSaid = false;
   }
 
+  /** One save for all `act` asks of it, made as it ends, however it ends: the plan is written whole, so each save is what a plan's size multiplies. */
+  private savingOnce(act: () => void): void {
+    this.savesHeld = true;
+    try {
+      act();
+    } finally {
+      this.savesHeld = false;
+      this.persist();
+    }
+  }
+
   /**
    * What a change to the plan owes the disk. A task's status is what a
-   * decision and a reload read, so a changed one is saved at once, and what
-   * changed beside it goes with it; anything else can wait for the timer.
+   * decision and a reload read, so a changed one is saved within the second,
+   * and at once if no save came in the one before: a save writes the whole
+   * plan, and a wide run starts tasks far faster than that is worth. A
+   * settled task and a user's control are not paced, and neither is a script,
+   * saved as it starts (see {@link observer}). What changed beside a status
+   * goes with it; anything else can wait for the timer.
    */
   private saveChange(): void {
     if (this.controlsInFlight > 0) return this.persist();
     // Saved as it ends, or not at all if it aborts.
     if (this.events.holdingStatus) return;
-    if (this.store.statusMark() !== this.savedStatuses) this.persist();
-    else this.saveSoon();
+    if (this.store.revision === this.savedRevision) return;
+    if (this.store.statusMark() === this.savedStatuses) return this.saveSoon();
+    const sinceSaved = Date.now() - this.savedAt;
+    if (sinceSaved >= STATUS_SAVE_INTERVAL_MS) this.persist();
+    else this.saveSoon(STATUS_SAVE_INTERVAL_MS - sinceSaved);
   }
 
-  /** Owe a save, made once however often this is called before it comes. */
-  private saveSoon(): void {
-    if (this.saveTimer || !this.plan) return;
+  /** Owe a save, made once, by the soonest it was asked for, however often this is called before it comes. */
+  private saveSoon(within = SAVE_INTERVAL_MS): void {
+    if (!this.plan) return;
+    const due = Date.now() + within;
+    if (this.saveTimer && this.saveDue <= due) return;
+    clearTimeout(this.saveTimer);
+    this.saveDue = due;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = undefined;
       // Outside any observer, whose throw the orchestrator would catch.
       this.tryPersist();
-    }, SAVE_INTERVAL_MS);
+    }, within);
     // A process with nothing else to do does not wait for this: settling and destroy save.
     this.saveTimer.unref?.();
   }
@@ -2717,7 +2919,6 @@ export class Session {
 
     const generated = await this.conversation.hold(options?.signal, async (turn) => {
       const { modelsByRunner, runnerModes } = await this.catalog.planning(chosenRunners);
-      const settings = this.settingsFn();
       const modes = { ...plannerModesFrom(this.autonomous()), isolatedExecution: await this.runs.plannerLayout(), taskSkills: this.workspaceSkills() };
       const subagents = new SubagentRuns();
 
@@ -2734,7 +2935,7 @@ export class Session {
           this.events.progress(p);
         },
         signal: turn.signal,
-        perRunnerAllowlist: settings.modelAllowlist,
+        perRunnerAllowlist: this.catalog.allowlist(),
         modes,
       });
       if (turn.abandoned) throw new PlannerTurnDiscardedError();
@@ -2938,6 +3139,7 @@ export class Session {
    */
   private async submitPlanFromTool(tasks: Task[], turn: string | undefined): Promise<PlanEditOutcome> {
     if (!this.plan) return { ok: false, errors: [{ field: 'tasks', message: 'No planning turn is open to take the plan.' }] };
+    if (this.reported) return { ok: false, errors: [{ field: 'tasks', message: NODE_REPORTED }] };
     const committed = await this.conversation.commitFromTool({ kind: 'plan', tasks }, turn);
     if (!committed.ok) return committed;
     const { adjustments, warnings } = committed.passed;
@@ -2956,6 +3158,7 @@ export class Session {
     const refuse = (message: string): PlanEditOutcome => ({ ok: false, errors: [{ message }] });
     await this.liveCatalog();
     if (this.conversation.currentTurnId !== turn) return refuse(PLANNER_TURN_ENDED);
+    if (this.reported) return refuse(NODE_REPORTED);
     if (!this.plan || this.store.planTasks.length === 0) return refuse('There is no plan to edit yet: submit one with submit_plan.');
     const committed = await this.conversation.commitFromTool({ kind: 'task_ops', ops }, turn);
     if (!committed.ok) return committed;
@@ -3043,10 +3246,10 @@ export class Session {
     return { ...this.plannerTools, taskComplete: (report) => subplanner.taskComplete(report), checkpoint: ({ question }) => Promise.resolve(subplanner.checkpoint(question)) };
   }
 
-  /** What the prompt says of this node's limits, as it stands when the planner starts (ADR-0055 D19). */
+  /** What the prompt says of this node's limits, as it stands when the planner starts (ADR-0055 D19): what a carve could take then, which a child's limit overstates by what it keeps for its own turns. */
   private delegationBrief(): PlannerDelegation {
     const { limits, grants } = this.mandate();
-    return { tokens: limits.tokens, delegatedTasks: limits.delegatedTasks, grantable: [...grants].filter((grant) => grant === 'research' || grant === 'delegate' || grant === 'effect') };
+    return { tokens: this.heldFunds()?.left ?? limits.tokens, delegatedTasks: limits.delegatedTasks, grantable: [...grants].filter((grant) => grant === 'research' || grant === 'delegate' || grant === 'effect') };
   }
 
   /**
@@ -3129,7 +3332,8 @@ export class Session {
   }
 
   /** Merge the run settings this session owns, ignoring a field it does not know from a client's body. */
-  private mergeRunSettings(changes: Partial<GlobalRunSettings>): void {
+  private mergeRunSettings(given: Partial<GlobalRunSettings>): void {
+    const changes = rememberDelegationBudget(given);
     const next: GlobalRunSettings = { ...this.runSettingsValue };
     for (const key of Object.keys(next) as (keyof GlobalRunSettings)[]) {
       const value = (changes as Partial<Record<keyof GlobalRunSettings, unknown>>)[key];
@@ -3685,6 +3889,7 @@ export class Session {
     if (adopting) this.creditLoggedAttempts(plan.tasks);
     // Held, so a task the load puts back is not saved here: whether a load saves is the caller's to say.
     this.events.holdStatus(() => this.orchestrator.loadPlan(plan.tasks, plan.runners));
+    this.savedRevision = this.store.revision;
     this.savedStatuses = this.store.statusMark();
     // Loading normalizes statuses (a stored `blocked` goes) on the store's
     // copy; the adopted plan shows that result, not the caller's input.

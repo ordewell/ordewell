@@ -6,7 +6,7 @@ import type { DiscoveredModel } from './models/Task';
 import type { PlannerNotReady } from './services/plannerReadiness';
 import type { SessionHeld } from './services/sessionLease';
 import type { PendingApproval } from './services/PendingApprovals';
-import type { AccountLimitsMessage, RunView, SessionMessage, SessionNotice, SurfacePlan, SurfacePlanState } from './services/SessionMessage';
+import type { AccountLimitsMessage, ChildMessageOutcome, ChildPlanEntry, ChildPlanView, RunView, SessionMessage, SessionNotice, SurfacePlan, SurfacePlanState } from './services/SessionMessage';
 import type { ConversationCompaction, RewindTarget } from './services/PlannerConversation';
 import type { PlannerModelRecall } from './services/PlannerModelMemory';
 import type { OrchestratorOption } from './services/ProviderRouting';
@@ -17,6 +17,8 @@ import type { CommandPayload } from './services/ExecutionCommands';
 import type { RunnerAuth } from './services/runnerAuth';
 import type { Escalation } from './services/escalations';
 import type { TaskRevertPreview } from './services/taskRevert';
+import type { ContainerStatus } from './services/container/containerSetup';
+import type { ContainerProblem } from './services/container/containerPreflight';
 
 /**
  * The daemon contract: every HTTP body the local daemon sends, in one place.
@@ -58,7 +60,15 @@ export type DaemonErrorCode =
   | 'merge_past_check'
   | 'approval_not_outstanding'
   /** Another live Ordewell host runs this session (ADR-0049); `sessionHeld` names it. */
-  | 'session_held';
+  | 'session_held'
+  /** The tree does not hold that child plan: one id is refused like any other outside it (ADR-0055 D20). */
+  | 'child_not_found'
+  /** The child plan's attempt has ended: it reads, and Continue on its task is what speaks to it. */
+  | 'child_view_only'
+  /** That child plan holds no such task: a task's id, exactly. Nothing falls back to the root (ADR-0055 D20). */
+  | 'child_task_not_found'
+  /** The child plan is open, but its mandate, its grants, the tree's budget or the task's state refuses this now; the message says which. */
+  | 'child_refused';
 
 /** The body of every non-2xx answer a route gives. */
 export interface ErrorBody {
@@ -290,6 +300,39 @@ export interface TaskLogResponse {
   events: TaskLogEvent[];
 }
 
+/** `GET /api/sessions/:id/children`: every plan below the root, parents before their children. */
+export interface ChildListResponse {
+  children: ChildPlanEntry[];
+}
+
+/**
+ * `GET /api/sessions/:id/children/:childId`. Taken with `position`, which is
+ * the last frame of the child's socket it accounts for. The numbering counts
+ * only what a socket was watching, so a surface opens the socket first and
+ * reads this and the child's logs after it.
+ */
+export type ChildPlanResponse = ChildPlanView & { position: StreamStamp };
+
+/** `POST /api/sessions/:id/children/:childId/message`: `woken` opened a turn, `queued` goes with the next one the slots allow. */
+export interface ChildMessageResponse {
+  status: Extract<ChildMessageOutcome, { ok: true }>['status'];
+}
+
+/**
+ * `POST /api/sessions/:id/children/:childId/tasks/:taskId/message`, body
+ * `{ message }`, and `.../checkpoint/approve|reject`, body `{ question, reason? }`:
+ * what the child's runner was told. `question` is the words the person read
+ * (`ChildPlanEntry.checkpoints` names the tasks, `tasks[].checkpoint` of the view
+ * holds them), so an answer can never reach a later question. `id` is the message
+ * delivered, which a watching surface sees again on the child's socket; absent
+ * for an answer, and for a message that resumed a paused task rather than reach
+ * a running one.
+ */
+export interface ChildTaskControlResponse {
+  message: string;
+  id?: string;
+}
+
 export type SessionListResponse = SessionMeta[];
 
 export interface SettingsResponse {
@@ -305,6 +348,12 @@ export interface SettingsResponse {
    * asked about, else the file's values, each at its default until set.
    */
   run: GlobalRunSettings;
+}
+
+/** What `PATCH /api/settings/containers` answers: why the change was refused, if it was, and where the setting stands. */
+export interface ContainerChangeResponse {
+  refused: ContainerProblem[];
+  status: ContainerStatus;
 }
 
 /** What `PATCH /api/settings` answers: the settings as they now stand, plus what the write itself decided. */
@@ -383,6 +432,23 @@ export interface RunSnapshotFrame extends Partial<StreamStamp> {
   view: RunView;
   /** Absent from a daemon older than the field: nothing is known, not "none waiting". */
   approvals?: ApprovalRequestMessage[];
+}
+
+/**
+ * The tree below a root, on the root's socket, whole each time: unstamped, so
+ * it replaces what a surface holds. Sent after the greeting and whenever a
+ * child opens, ends or changes state; a session with no child plan sends none.
+ *
+ * A child's own socket is `/ws/session/:root/child/:childId`: `connected`, then
+ * a `run_snapshot` under the child's id and frames numbered on its own count,
+ * with no approvals (ADR-0056 M8) and no account limits. It closes with 4404
+ * for what this root does not hold, or a root no longer loaded; 1012 when the
+ * root is replaced, so reconnect; 1001 when the root is closed.
+ */
+export interface ChildTreeFrame {
+  type: 'child_tree';
+  sessionId: string;
+  children: ChildPlanEntry[];
 }
 
 /** Independent of run snapshot stamps: quota reads have their own revision. */

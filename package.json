@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "ordewell-monorepo",
-  "version": "0.12.2",
+  "version": "0.12.3",
   "description": "Turn one goal into an ordered plan of coding-agent tasks, then execute and verify it.",
   "license": "Apache-2.0",
   "author": "Alessandro Costanzo Ciano",
@@ -32,7 +32,9 @@
     "test:quick": "npm run test:quick -ws --if-present",
     "test:changed": "node scripts/test-changed.mjs",
     "test:coverage": "npm run test:coverage -ws --if-present",
-    "test:bench": "node --test \"bench/**/*.test.mjs\"",
+    "test:bench": "node --test \"bench/**/*.test.mjs\" \"scripts/**/*.test.mjs\"",
+    "test:guards": "npm exec -w packages/core -- vitest run src/services/__tests__/fakeSecretsGuard.test.ts src/services/__tests__/gitExec.test.ts",
+    "test:containers": "node scripts/container-e2e.mjs",
     "ci": "node scripts/ci.mjs",
     "build:web": "npm run build -w packages/web",
     "start": "node packages/cli/dist/main.js tui"

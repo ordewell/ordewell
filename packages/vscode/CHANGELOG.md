@@ -2,6 +2,45 @@
 
 ## [Unreleased]
 
+## [0.12.3] - 2026-11-03
+
+### Fixed
+
+- **A checkpoint answer is told by its own result.** An answer that was delivered
+  is no longer called refused when the same question comes back, words retyped to
+  match it stay readable when the question goes, and a refused or unsent budget
+  raise is listed with the answer and the refusal.
+- **A message to a child plan is no longer lost in silence.** A message held for a
+  usage limit or a pause says so on that child's stream when a Stop ends the child
+  before its subplanner read it.
+- **A message to a subplanner cannot carry a raise or a force.** The daemon refuses
+  one that asks for either, rather than ignoring the request and reading the words.
+- **A child plan's list survives a restart.** A child no task names any more, after
+  a fresh retry or a discard, is still listed from the tree's own log, and its
+  refusal no longer sends you to a Continue that would not reach it.
+- **A Continue reaches every level of a tree.** Nothing below it is discarded, and a
+  reopened subplanner takes up its saved session where its harness keeps one.
+- **A subplanner's report counts the tree as it stands.** A child a fresh retry
+  or a removal discarded no longer adds to the counts and findings of a report,
+  and what hung from it goes with it. A read of the old child's own report still
+  lists what stood on it.
+- **A reference to a finding survives a retry.** With a task's digest cleared,
+  `#4/F1` pins against the attempts its log holds rather than being refused.
+- **Long reads go on rather than stop.** A report's listing and a board's map
+  hold one page and say how to read the next, `#4@2/from:101` and `board:101`.
+  A `task_query` answer stops at a task and names the tasks it did not read, and
+  a task named twice is read once. A removed task's report lists what it left
+  out as a standing task's does.
+- **A planner with no `read` spends its read budget on a board.** A board read
+  through `task_output` counts as a read, as a report's later pages do, and an
+  ended report says where its listing is.
+
+### Experimental
+
+Subplanners and running a task in a container are built and remain experimental.
+They are off in published versions, this extension cannot turn either on, and
+they need more review.
+
 ## [0.12.2] - 2026-11-01
 
 ### Added
@@ -1396,7 +1435,8 @@ First public release.
 Full project changelog:
 https://github.com/ordewell/ordewell/blob/main/CHANGELOG.md
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.12.2...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.12.3...HEAD
+[0.12.3]: https://github.com/ordewell/ordewell/compare/v0.12.2...v0.12.3
 [0.12.2]: https://github.com/ordewell/ordewell/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/ordewell/ordewell/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/ordewell/ordewell/compare/v0.11.3...v0.12.0

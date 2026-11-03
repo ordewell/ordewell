@@ -9,6 +9,8 @@ import { setRunnerEnabled } from './commands/enabledRunners';
 import { handleSlashCommand, type SlashDeps } from './commands/SlashParser';
 import { confirmRisks } from './commands/runSettings';
 import { handleApprovePlan, handleSessionMessage, handleStartPlanning, type PlanManagerDeps } from './plan/PlanManager';
+import { ChildViewHost } from './providers/ChildViewHost';
+import { ChildTaskLogs } from './providers/ChildTaskLogs';
 import { routeWebviewMessage, sendNextHeldPrompt, type WebviewRouterDeps } from './plan/webviewRouter';
 import { loginPlanner } from './plan/PlannerLogin';
 import { saveCurrentSession, restoreState, persistState, type PersistenceDeps } from './state/StatePersistence';
@@ -126,11 +128,31 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     return sessionCell.current;
   };
 
+  const rootId = (): string => requireSession().rootSessionId;
+  const childDirectory = (): Session['children'] => requireSession().children;
+  const childTaskLogs = new ChildTaskLogs({
+    extensionUri: services.context.extensionUri,
+    directory: childDirectory,
+    rootId,
+    openFile: (path) => { void openWorkspaceFile(path); },
+    log,
+  });
+  const childViews = new ChildViewHost(childDirectory, (message) => services.chatProvider.postMessage(message), rootId);
+
+  // Every way to another session ends by setting its plan, with the id already
+  // moved, so what the old tree held is let go here rather than at each of them.
+  const setCurrentPlan = (plan: LegacyPlanState): void => {
+    state.plan = plan;
+    if (!sessionCell.current) return;
+    childViews.rootChanged();
+    childTaskLogs.rootChanged();
+  };
+
   const persistenceDeps = (): PersistenceDeps => ({
     session: requireSession(),
     chatProvider: services.chatProvider,
     getCurrentPlan: () => state.plan,
-    setCurrentPlan: (plan) => { state.plan = plan; },
+    setCurrentPlan,
     getCurrentGoal: () => state.goal,
     setCurrentGoal: (goal) => { state.goal = goal; },
     workspaceRoot: () => services.fsAdapter.getWorkspaceRoot(),
@@ -151,7 +173,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     runnerInstallation: services.runnerInstallation,
     notifications: services.notifications,
     getCurrentPlan: () => state.plan,
-    setCurrentPlan: (plan) => { state.plan = plan; },
+    setCurrentPlan,
     getCurrentGoal: () => state.goal,
     setCurrentGoal: (goal) => { state.goal = goal; },
     isGeneratingPlan: () => requireSession().isPlannerBusy,
@@ -204,6 +226,8 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     modelResolver: services.modelResolver,
     settings: () => sessionRuntimeSettings(services.settingsService.getAll()),
   });
+
+  childViews.start();
 
   const planner = new PlannerSelection({
     config: services.config,
@@ -275,6 +299,14 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       setPlanner: (provider) => planner.apply(provider),
       setPlannerModel: (modelId, effort) => planner.setModel(modelId, effort),
       openTaskLog: (taskId) => taskLogs.open(taskId),
+      openChild: (childId) => childViews.open(childId),
+      refreshChildren: () => childViews.refresh(),
+      closeChild: () => childViews.close(),
+      messageChild: (childId, text) => childViews.message(childId, text),
+      answerChildCheckpoint: (answer) => childViews.answer(answer),
+      openChildTaskLog: (childId, taskId) => childTaskLogs.open(childId, taskId).catch((error: unknown) => {
+        services.chatProvider.postMessage({ type: 'childNotice', childId, message: error instanceof Error ? error.message : String(error) });
+      }),
       openFile: (path) => { void openWorkspaceFile(path); },
       setPlanDockHeight: (height) => { void services.context.globalState.update(PLAN_DOCK_HEIGHT_KEY, height); },
       changeSettings,
@@ -369,15 +401,17 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
 
   /**
    * A click in the Settings panel's Run block. Pushed back whatever happens, so
-   * a declined Act, autorun or delegation, or a refused number, shows its old
+   * a declined Act, autorun or Subplanners, or a refused number, shows its old
    * value again.
    */
   async function changeSettings(change: SettingsChange): Promise<void> {
     if (change.autonomous !== undefined) saveAutonomy(change.autonomous);
     // The panel shows no delegation row until it is offered (ADR-0055 D21), so
-    // a change that carries one did not come from it.
+    // a change that carries one did not come from it. It never sets the kept
+    // budget either: that follows the budget it turns Subplanners on at.
     const run = change.run && { ...change.run };
     if (run && !DELEGATION_OFFERED) delete run.delegationTokens;
+    if (run) delete run.delegationBudget;
     if (run && await confirmRisks(run, shownRunSettings().delegationTokens)) changeRunSettings(run);
     const limit = change.maxParallel === undefined ? null : parseMaxParallel(change.maxParallel);
     if (limit !== null) await services.config.update('maxParallelSessions', limit);
@@ -406,8 +440,10 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
   }
 
   function onWebviewReady(): void {
+    void childViews.refresh().catch((error: unknown) => log(`Could not read child plans: ${error}`));
     refreshIsolationPreview({ clear: true });
     services.chatProvider.resendAllState();
+    childViews.resend();
     services.chatProvider.setPlanDockHeight(services.context.globalState.get<number>(PLAN_DOCK_HEIGHT_KEY));
     sendRunSettings();
     sendSkills();
@@ -515,7 +551,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     // Open task-log tabs survive a window reload or an extension update. VS Code
     // asks the serializer during activation, so the plan must be restored first
     // or a restored tab would find no task and close itself.
-    services.context.subscriptions.push(taskLogs.register());
+    services.context.subscriptions.push(taskLogs.register(), childTaskLogs.register());
     checkPlannerSetting();
 
     refreshIsolationPreview();
@@ -575,6 +611,8 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     // turns once the host has stopped its runners.
     sessionCell.current?.abortPlannerTurn();
     taskLogs.dispose();
+    childViews.dispose();
+    childTaskLogs.dispose();
     accountLimits.dispose();
     persistState(persistenceDeps());
     services.runner.stopAll();

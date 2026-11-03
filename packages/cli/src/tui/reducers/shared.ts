@@ -1,5 +1,5 @@
 import type { AccountLimitSnapshot } from '@ordewell/core';
-import type { AiProvider, Escalation, ApprovalDecision, ApprovalRequestMessage, DaemonErrorCode, IsolationPreview, PlanUsage, PlannerUsage, ResearchLogEntry, RunActivity, RunMergeView, RunView, SerializedConversationMessage, SerializedPendingTurn, SerializedTaskStatus, SessionMessage, SettingsResponse, GlobalRunSettings, IsolationMergeResult, StreamStamp, TaskAction, TaskRevertPreview, TaskLogEvent, TaskStatus } from '@ordewell/core';
+import type { AiProvider, ChildPlanEntry, ChildPlanView, Escalation, ApprovalDecision, ApprovalRequestMessage, DaemonErrorCode, IsolationPreview, PlanUsage, PlannerUsage, ResearchLogEntry, RunActivity, RunMergeView, RunView, SerializedConversationMessage, SerializedPendingTurn, SerializedTaskStatus, SessionMessage, SettingsResponse, GlobalRunSettings, IsolationMergeResult, StreamStamp, TaskAction, TaskRevertPreview, TaskLogEvent, TaskStatus } from '@ordewell/core';
 import type { Key } from '../keys';
 import type {
   HandoffView, LandedTaskView, ModelView, ModeView, RewindTargetView, RunnerView, SessionView,
@@ -71,10 +71,10 @@ export type Effect =
   | { type: 'saveSettings'; run: Partial<GlobalRunSettings>; autonomous?: boolean; maxParallel?: number; message: string; sessionId?: string }
   | { type: 'updateTask'; sessionId: string; taskId: string; changes: Record<string, unknown>; message: string }
   | { type: 'removeTask'; sessionId: string; taskId: string }
-  /** Reads a structured task's saved log (ADR-0018, P1) so its view opens with its history. */
-  | { type: 'openTaskLog'; sessionId: string; taskId: string }
+  /** Reads a structured task's saved log (ADR-0018, P1) so its view opens with its history. `rootId`: the session is a child plan, read through this root. */
+  | { type: 'openTaskLog'; sessionId: string; taskId: string; rootId?: string }
   /** Reads one saved attempt, for switching to an earlier one. */
-  | { type: 'loadTaskAttempt'; sessionId: string; taskId: string; attempt: number }
+  | { type: 'loadTaskAttempt'; sessionId: string; taskId: string; attempt: number; rootId?: string }
   /** A user message to a structured task. */
   | { type: 'sendTaskMessage'; sessionId: string; taskId: string; text: string }
   /** The task runner's own command (#66), never one of Ordewell's. */
@@ -93,8 +93,12 @@ export type Effect =
   | { type: 'respondApproval'; sessionId: string; approvalId: string; granted: boolean }
   /** A task runner's tool request, answered from its task view (ADR-0018, A1). */
   | { type: 'answerTaskApproval'; sessionId: string; approvalId: string; answer: ApprovalDecision }
-  /** The checkpoint a task waits at, answered; only a rejection carries a reason. */
-  | { type: 'answerTaskCheckpoint'; sessionId: string; taskId: string; answer: 'approve' | 'reject'; reason?: string; raiseTokens?: number }
+  /**
+   * The checkpoint a task waits at, answered; only a rejection carries a reason.
+   * `below`: given from a plan below the one that holds the task, so a refusal
+   * has to find that person, and their words, rather than the plan it was sent to.
+   */
+  | { type: 'answerTaskCheckpoint'; sessionId: string; taskId: string; answer: 'approve' | 'reject'; reason?: string; raiseTokens?: number; below?: true }
   /** Startup refreshes silently; only a typed `/refresh` sets `announce`. */
   | { type: 'refresh'; announce?: boolean; sessionId?: string }
   /** The runners alone, as the daemon has them saved. */
@@ -103,7 +107,21 @@ export type Effect =
   | { type: 'loadScope'; sessionId?: string }
   /** A read-only look at this workspace's repositories, branches and isolation, for the welcome. */
   | { type: 'loadIsolationPreview' }
+  /** Opens a child plan's own socket, then reads it (ADR-0055 D20). A child that has one keeps it. */
+  | { type: 'followChild'; rootId: string; childId: string }
+  | { type: 'closeChild'; childId: string }
+  /** The child read again over the socket it already has: a reply that cannot be trusted to have reached the stream. */
+  | { type: 'readChild'; rootId: string; childId: string }
+  /** `open`: the delegated task whose child should open once the tree is known. */
+  | { type: 'listChildren'; rootId: string; open?: ChildToOpen }
+  | { type: 'messageChild'; rootId: string; childId: string; text: string }
+  | { type: 'messageChildTask'; rootId: string; childId: string; taskId: string; text: string }
+  /** `question` is the whole of what the task waits on, as the daemon compares it. */
+  | { type: 'answerChildCheckpoint'; rootId: string; childId: string; taskId: string; answer: 'approve' | 'reject'; question: string; reason?: string }
   | { type: 'exit' };
+
+/** A delegated task, named by the plan that holds it: a task's id means nothing outside its plan. */
+export type ChildToOpen = { parent: string; taskId: string };
 
 export type ChatRestored = { type: 'chatRestored'; history: SerializedConversationMessage[]; researchLog?: ResearchLogEntry[]; plannerUsage?: PlannerUsage; pendingTurns?: SerializedPendingTurn[]; sessionId?: string };
 
@@ -223,6 +241,18 @@ export type Action =
   /** `sessionId` names the session a notice is about, so one the user has left is not shown on another. */
   | { type: 'notice'; message: string; level?: 'info' | 'warn' | 'error'; holdPlace?: boolean; sessionId?: string }
   | { type: 'resize'; rows: number; cols: number }
+  /** Every plan below `sessionId`, the root, whole: the list replaces the one held (ADR-0055 D20). */
+  | { type: 'childTree'; sessionId: string; children: ChildPlanEntry[] }
+  /** The same list, read on request; `open` is the delegated task waiting on it. */
+  | { type: 'childrenListed'; sessionId: string; children: ChildPlanEntry[]; open?: ChildToOpen }
+  /** A child plan as the daemon holds it, on opening and on every read after. */
+  | { type: 'childOpened'; sessionId: string; view: ChildPlanView }
+  /** The subplanner has the message: `queued`, it reads it when its turn ends. */
+  | { type: 'childMessaged'; sessionId: string; status: 'woken' | 'queued' }
+  /** A child route refused; `text` is what was being sent, to give back. */
+  | { type: 'childFailed'; sessionId: string; message: string; code?: DaemonErrorCode; text?: string }
+  /** The daemon no longer serves this child: the plans at and below it leave the screen. */
+  | { type: 'childGone'; sessionId: string; message: string }
   | { type: 'spinnerTick' };
 
 export interface Step {
@@ -265,6 +295,10 @@ export function clearNotice(state: TuiState): TuiState {
  */
 export const stale = (state: TuiState, sessionId: string | undefined): boolean =>
   sessionId !== undefined && sessionId !== state.sessionId;
+
+/** What a person typed for an answer, which is theirs again if it is refused: a raise is typed as its number. */
+export const answerWords = ({ reason, raiseTokens }: { reason?: string; raiseTokens?: number }): string | undefined =>
+  reason ?? (raiseTokens === undefined ? undefined : String(raiseTokens));
 
 /** Keeps a value inside `0..max`, where every offset this package clamps shares its zero. */
 export function clamp(value: number, max: number): number {

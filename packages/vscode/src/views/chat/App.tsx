@@ -11,6 +11,7 @@ import PlannerPauseBar from './components/PlannerPauseBar';
 import EscalationInbox from './components/EscalationInbox';
 import DockResizeHandle from './components/DockResizeHandle';
 import { ConversationBlocks } from './components/ChatMessage';
+import ChildPlanPanel, { ChildQuestions, NO_CHILD_NOTICE, UndeliveredAnswers, type ChildNotice } from './components/ChildPlanPanel';
 import { reduceHost, runnersOn, INITIAL_HOST_STATE, type HostState } from './hostState';
 import ModelSelector, { API_PROVIDER_LABELS } from './components/ModelSelector';
 import PlanCardGroup from './components/PlanCardGroup';
@@ -20,7 +21,7 @@ import HandoffCard from './components/HandoffCard';
 import CheckpointPanel from './components/CheckpointPanel';
 import RunSettingsBlock from './components/RunSettingsBlock';
 import type { TaskDraft } from './components/NewTaskCard';
-import type { CompactionBlock, GlobalRunSettings, RunSettings, Task, TaskModelAssignment, RunnerId, RunnerAuth } from '@ordewell/core';
+import type { ChildPlanEntry, ChildPlanView, CompactionBlock, GlobalRunSettings, RunSettings, Task, TaskModelAssignment, RunnerId, RunnerAuth } from '@ordewell/core';
 import { accountLimitsOf, compactionText, SUPERVISOR_LEVEL_LABEL } from '@ordewell/core/plan-utils';
 import { DelegationOfferedContext, useDelegationOffered } from './delegationOffered';
 import { planSummaryLabel, nextDock } from './planDock';
@@ -28,9 +29,10 @@ import { OpenPatchContext } from './openPatch';
 import { useFollowOutput } from './followOutput';
 import { INBOX_OFF_NOTE, useInboxPrefs } from './inboxView';
 import { useEscalationAnswers } from './components/escalationAnswers';
+import { ROOT_ANSWERS, useChildAnswers, useChildDrafts } from './childDrafts';
 import { isBuiltinSlashCommand, slashHelp } from '../../commands/slashCommands';
 import type { EscalationAnswer, HostToWebview, SettingsChange, WebviewToHost } from '../../shared/protocol';
-import { patchedBlocks } from '../../shared/conversationPatch';
+import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks } from '../../shared/conversationPatch';
 
 declare function acquireVsCodeApi(): {
   postMessage(message: WebviewToHost): void;
@@ -73,6 +75,25 @@ const DETECTING = 'Detecting coding agents…';
 
 export default function App() {
   const [host, dispatch] = useReducer(reduceHost, INITIAL_HOST_STATE);
+  const [childTree, setChildTree] = useState<{ rootId: string; children: ChildPlanEntry[] }>({ rootId: '', children: [] });
+  const [childView, setChildView] = useState<ChildPlanView | null>(null);
+  const childViewRef = useRef<ChildPlanView | null>(null);
+  childViewRef.current = childView;
+  const [childConversation, setChildConversation] = useState(EMPTY_PATCHED_VIEW);
+  const [childChoice, setChildChoice] = useState<string | null>(null);
+  const [childNotice, setChildNotice] = useState<ChildNotice>(NO_CHILD_NOTICE);
+  const childComposer = useChildDrafts((message) => vscode.postMessage(message), setChildNotice);
+  const childAnswers = useChildAnswers((message) => vscode.postMessage(message), setChildNotice);
+  // A childView on its way when the person left, of any child, is one the host
+  // has since closed, so none is drawn until they open one again.
+  const childLeft = useRef(false);
+  const childOpener = useRef<HTMLElement | null>(null);
+  const inChild = childView !== null;
+  useEffect(() => {
+    if (inChild) return;
+    childOpener.current?.focus();
+    childOpener.current = null;
+  }, [inChild]);
   // The webview's own switch is false in any build; the host says (ADR-0055 D21).
   const told = host.runSettings?.delegationOffered === true;
   const delegationOffered = useDelegationOffered() || told;
@@ -88,6 +109,9 @@ export default function App() {
   const setDockHeight = useCallback((v: number | undefined) => dispatch({ type: 'patchDockHeight', height: v }), []);
   const setDockExpanded = useCallback((v: Updatable<boolean>) => dispatch({ type: 'patchDockExpanded', expanded: v }), []);
   const blocks = useMemo(() => patchedBlocks(conversation), [conversation]);
+  useEffect(() => {
+    if (delegationOffered && plan?.tasks.some((task) => task.type === 'delegated')) vscode.postMessage({ type: 'refreshChildren' });
+  }, [delegationOffered, plan]);
   const runners = useMemo(
     () => runnersOn({ runnerList, enabledRunnerIds, pendingRunners }),
     [runnerList, enabledRunnerIds, pendingRunners],
@@ -164,6 +188,13 @@ export default function App() {
     const handler = (event: MessageEvent<HostToWebview>) => {
       lastActivityRef.current = Date.now();
       const msg = event.data;
+      if (msg.type === 'restoreChat' && childViewRef.current) vscode.postMessage({ type: 'refreshChildren' });
+      if (msg.type === 'children') { setChildTree({ rootId: msg.rootId, children: msg.children }); return; }
+      if (msg.type === 'childClosed') { setChildView(null); setChildChoice(null); setChildConversation(EMPTY_PATCHED_VIEW); return; }
+      if (msg.type === 'childView') { if (!childLeft.current) setChildView(msg.view); return; }
+      if (msg.type === 'childConversation') { setChildConversation((current) => applyConversationPatch(current, msg.message)); return; }
+      if (msg.type === 'childNotice') { setChildNotice({ childId: msg.childId, message: msg.message }); return; }
+      if (msg.type === 'childMessageResult') return;
       // The login is this surface's own state, not the session's: it ends here
       // rather than in the reducer that mirrors the host.
       if (msg.type === 'plannerLoginEnded') {
@@ -572,20 +603,22 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [stopArmed, plannerBusy]);
 
-  const handleApproveCheckpoint = useCallback((words?: string, raiseTokens?: number) => {
-    if (!checkpoint) return;
-    vscode.postMessage({ type: 'answerCheckpoint', taskId: checkpoint.taskId, approved: true, ...(words ? { reason: words } : {}), ...(raiseTokens !== undefined ? { raiseTokens } : {}) });
-    dispatch({ type: 'checkpointAnswered' });
-  }, [checkpoint]);
+  // Kept with the children's answers, not in the card: the card closes when an
+  // answer is given, and a refusal can come when the question has moved on.
+  const rootAnswers = childAnswers.of({ sessionId: ROOT_ANSWERS, title: checkpoint?.taskTitle ?? '' });
 
-  const handleRejectCheckpoint = useCallback((reason: string) => {
+  const handleApproveCheckpoint = (words?: string, raiseTokens?: number) => {
+    if (!checkpoint) return;
+    dispatch({ type: 'checkpointAnswered', answerId: rootAnswers.give(checkpoint.taskId, { question: checkpoint.summary, answer: 'approve', words, raiseTokens }) });
+  };
+
+  const handleRejectCheckpoint = (reason: string) => {
     if (!checkpoint) return;
     // Reject resumes the paused agent with the reason (rather than cancelling
     // the task), and the panel is torn down immediately — leaving a decision
     // box on screen after the decision is made asks the user to answer twice.
-    vscode.postMessage({ type: 'answerCheckpoint', taskId: checkpoint.taskId, approved: false, reason });
-    dispatch({ type: 'checkpointAnswered' });
-  }, [checkpoint]);
+    dispatch({ type: 'checkpointAnswered', answerId: rootAnswers.give(checkpoint.taskId, { question: checkpoint.summary, answer: 'reject', words: reason }) });
+  };
 
   // The host owns every isolation action: opening the diff, and the merge,
   // discard and cleanup that touch the user's real branches.
@@ -818,6 +851,8 @@ export default function App() {
               summary={checkpoint.summary}
               pausedAt={checkpoint.pausedAt}
               delegated={delegationOffered && checkpoint.delegated}
+              draft={rootAnswers.draft(checkpoint.taskId, checkpoint.summary)}
+              onDraft={(draft) => rootAnswers.edit(checkpoint.taskId, checkpoint.summary, draft)}
               onApprove={handleApproveCheckpoint}
               onReject={handleRejectCheckpoint}
             />
@@ -877,6 +912,7 @@ export default function App() {
               onSendMessageNow={handleTaskMessageNow}
               onResolveConflict={handleResolveConflict}
               onOpenLog={handleOpenTaskLog}
+              onOpenChild={(taskId) => setChildChoice(taskId)}
             />
           </TaskCommandsBridge.Provider>
           {run.handoff && !isExecuting && !run.runMerge?.waitingAtGate && (
@@ -915,6 +951,23 @@ export default function App() {
     );
   };
 
+  const openChild = (childId: string) => {
+    childLeft.current = false;
+    childOpener.current ??= document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setChildChoice(null);
+    setChildConversation(EMPTY_PATCHED_VIEW);
+    setChildNotice(NO_CHILD_NOTICE);
+    vscode.postMessage({ type: 'openChild', childId });
+  };
+  const leaveChild = () => {
+    childLeft.current = true;
+    vscode.postMessage({ type: 'closeChild' });
+    setChildView(null);
+    setChildChoice(null);
+    setChildConversation(EMPTY_PATCHED_VIEW);
+    setChildNotice(NO_CHILD_NOTICE);
+  };
+
   return (
     <DelegationOfferedContext.Provider value={delegationOffered}>
     <OpenPatchContext.Provider value={handleOpenPatch}>
@@ -925,7 +978,40 @@ export default function App() {
         conversation or the footer now focuses one of these instead, so focus
         never rests on <body>. The list is its own target so arrow keys and
         Page Down still scroll it after a click. */}
-    <div className="chat-container" tabIndex={-1}>
+    {childView && <ChildPlanPanel
+      key={childView.child.sessionId}
+      view={childView}
+      tree={childTree.children}
+      conversation={childConversation}
+      notice={childNotice}
+      composer={childComposer(childView.child)}
+      answers={childAnswers.of(childView.child)}
+      rootQuestion={checkpoint?.taskTitle}
+      post={(message) => vscode.postMessage(message)}
+      onOpen={openChild}
+      // The depth, not the root id: the tree may not have been told yet.
+      onBack={() => { if (childView.child.depth <= 1) leaveChild(); else openChild(childView.child.parent); }}
+      onRootQuestion={() => { leaveChild(); setDockExpanded(true); }}
+    />}
+    {/* Hidden, not unmounted: the composer's draft and the scroll position are the root's own. */}
+    <div className="chat-container" tabIndex={-1} hidden={inChild}>
+      {!inChild && childNotice.message && <p role="status">{childNotice.message}</p>}
+      <ChildQuestions tree={childTree.children} onOpen={openChild} />
+      {/* A refusal can come after the child plan has closed, with no panel left to read the words in. */}
+      {!inChild && <UndeliveredAnswers
+        items={childAnswers.stranded({
+          inTree: (childId) => childTree.children.some((entry) => entry.sessionId === childId),
+          offered: (taskId, question) => checkpoint?.taskId === taskId && checkpoint.summary === question,
+        })}
+        named
+        onDismiss={childAnswers.dismiss}
+      />}
+      {childChoice && <div role="region" aria-label="Subplanner sessions">
+        <button type="button" onClick={() => setChildChoice(null)}>Close</button>
+        {childTree.children.filter((entry) => entry.parent === childTree.rootId && entry.taskId === childChoice).map((entry) =>
+          <button type="button" key={entry.sessionId} onClick={() => openChild(entry.sessionId)}>{entry.title} · {entry.state}</button>)}
+        {!childTree.children.some((entry) => entry.parent === childTree.rootId && entry.taskId === childChoice) && <p>No child plan has started.</p>}
+      </div>}
       <div className="setup-panel">
         <button
           type="button"

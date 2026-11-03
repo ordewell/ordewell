@@ -132,7 +132,8 @@ export async function liveDaemon(accountLimitCollectors: (workspace: string) => 
     socket.once('close', () => sockets.delete(socket));
   });
 
-  const tui = (): Tui => {
+  /** `wholeLoop`: a dispatched action's effects run too, as `createApp`'s loop runs them. */
+  const tui = ({ wholeLoop = false }: { wholeLoop?: boolean } = {}): Tui => {
     const api = new ApiClient(port, workspace);
     let state = initialState({ rows: 30, cols: 100 });
     const actions: Action[] = [];
@@ -142,7 +143,9 @@ export async function liveDaemon(accountLimitCollectors: (workspace: string) => 
       port,
       dispatch: (action) => {
         actions.push(action);
-        state = reduce(state, action).state;
+        const next = reduce(state, action);
+        state = next.state;
+        if (wholeLoop) for (const effect of next.effects) void runEffect(effect, deps);
       },
       newSessionId: () => 'session-new',
       setEnvVar: () => {},

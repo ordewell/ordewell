@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { PlanIsolation } from '../interfaces/IWorktreeIsolation';
-import type { AttemptUsage, PlannerUsage, ReportedWindow, UsageRecord, UsageTotals } from './Usage';
+import type { AttemptUsage, PlannerUsage, ReportedWindow, RunnerSessionCost, UsageRecord, UsageTotals } from './Usage';
 import type { ExecutionRecord, ScriptConsent, SupervisorLevel } from './Execution';
 import type { SkillSource } from '../services/SkillsService';
 import type { SupervisionMemorySnapshot } from '../services/LoopGuards';
@@ -770,6 +770,8 @@ export interface PendingPlanTurn {
   tasks?: string[];
   /** It goes with the next turn and opens none (ADR-0057 R6). */
   rides?: true;
+  /** Who a message comes from where the conversation cannot tell (ADR-0055 D20): it stands or falls with its message, and a turn says it once. */
+  aside?: string;
 }
 
 /**
@@ -839,6 +841,21 @@ export interface PlannerContextPause {
   doneTruncated?: true;
 }
 
+/**
+ * A harness planner's own session, as far as a later process needs it: a hint,
+ * taken up only under the runner, model, effort and folder it was opened with.
+ * The transcript stays authoritative (ADR-0009 T4).
+ */
+export interface PlannerNativeSession {
+  runner: string;
+  sessionId: string;
+  cwd: string;
+  model?: string;
+  effort?: string;
+  /** What was counted of its running cost, so taking it up counts nothing twice (ADR-0056 M10). */
+  cost?: RunnerSessionCost;
+}
+
 export interface LegacyPlanState {
   /** Research profiles the planner approved as they landed: lifting one withdraws its approval (ADR-0037 R4). */
   researchApprovals?: string[];
@@ -853,6 +870,8 @@ export interface LegacyPlanState {
   researchLog?: ResearchLogEntry[];
   /** The planner dialogue — user messages and assistant messages, in order (ADR-0002). */
   conversationHistory?: ConversationMessage[];
+  /** The subplanner's native session, for a Continue to take up (ADR-0055 D17): `heard` is how much of the Model context it holds. Absent on a root plan. */
+  plannerSession?: PlannerNativeSession & { heard: number };
   /** Full markdown PRD once written by the planner (PRD mode), also saved to .scratch/<slug>/PRD.md. */
   prdMarkdown?: string;
   /** Planner turn inputs no turn has answered yet (ADR-0029); a reload replays them. */

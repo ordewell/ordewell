@@ -4,7 +4,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { connect, createServer, type AddressInfo, type Server } from 'net';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { EGRESS_ENTRY } from '../egressSidecar';
+import type { DockerCall, DockerCli, DockerResult } from '../dockerCli';
+import { EGRESS_ENTRY, SidecarEgress } from '../egressSidecar';
 
 /*
  * The sidecar as itself, on this host's node. A preload stands in for the
@@ -21,7 +22,7 @@ const { names, echoPort, dialed } = JSON.parse(process.env.ORDEWELL_TEST_WORLD);
 os.networkInterfaces = () => ({ lo: [{ address: '127.0.0.2', family: 'IPv4', internal: true }], eth0: [{ address: '127.0.0.1', family: 'IPv4', internal: false }] });
 const realLookup = dns.lookup;
 dns.lookup = (name, options, done) => {
-  if (net.isIP(name)) return realLookup(name, options, done);
+  if (net.isIP(name) || name.includes('\0')) return realLookup(name, options, done);
   const addresses = names[name];
   if (!addresses) return done(Object.assign(new Error('not found'), { code: 'ENOTFOUND' }));
   done(null, addresses.map((address) => ({ address, family: address.includes(':') ? 6 : 4 })));
@@ -60,6 +61,8 @@ const RESOLVES: Record<string, string[]> = {
   'link.example.org': ['fe80::1'],
   'unique.example.org': ['fd00::1'],
   'mapped.example.org': ['::ffff:127.0.0.1'],
+  'teredo.example.org': ['2001:0:a00:1::1'],
+  'v6-beside-teredo.example.org': ['2001:4860:4860::8888'],
   'mixed.example.org': ['93.184.216.34', '127.0.0.1'],
 };
 
@@ -131,6 +134,21 @@ describe('the egress sidecar (ADR-0059 L7)', () => {
     expect(dialed()).toEqual(['2606:4700::6810:84e5:443']);
   });
 
+  it('holds a public address beside the range Teredo takes', async () => {
+    const { port, dialed } = await sidecar(['v6-beside-teredo.example.org']);
+
+    expect(await asked(port, connectTo('v6-beside-teredo.example.org:443'))).toMatch(/^HTTP\/1\.1 200 /);
+    expect(dialed()).toEqual(['2001:4860:4860::8888:443']);
+  });
+
+  it('refuses a NUL in a host with a plain answer, and lives to answer the next request', async () => {
+    const { port, dialed } = await sidecar(['*.example.com']);
+
+    expect(await asked(port, connectTo('a\0.example.com:443'))).toMatch(/^HTTP\/1\.1 403 /);
+    expect(await asked(port, connectTo('a.example.com:443'))).toMatch(/^HTTP\/1\.1 200 /);
+    expect(dialed()).toEqual(['93.184.216.34:443']);
+  });
+
   it.each([
     ['a host off the list', 'example.com:443'],
     ['an address, which is on no list', '1.1.1.1:443'],
@@ -199,5 +217,22 @@ describe('the egress sidecar (ADR-0059 L7)', () => {
     child.stdin?.end();
 
     await vi.waitFor(() => expect(child.exitCode).toBe(0));
+  });
+});
+
+describe('a route that could not be opened', () => {
+  it('takes down the network it made when the sidecar never starts, so a failed probe leaves nothing', async () => {
+    const calls: string[] = [];
+    const cli: DockerCli = {
+      call: async (args: readonly string[], _opts?: DockerCall): Promise<DockerResult> => {
+        calls.push(args.join(' '));
+        return { code: 0, stdout: '', stderr: '' };
+      },
+      entry: async () => { throw new Error('docker would not start'); },
+    };
+
+    await expect(new SidecarEgress(cli).open({ name: 'ordewell-probe-x', labels: [], limits: [], image: 'img', allow: [], gated: null })).rejects.toThrow('docker would not start');
+
+    expect(calls).toEqual(['network create --internal ordewell-probe-x-net', 'network rm ordewell-probe-x-net']);
   });
 });

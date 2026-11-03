@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, within, fireEvent, cleanup } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { RUN_SETTINGS_DEFAULTS, type GlobalRunSettings } from '@ordewell/core';
+import { RUN_SETTINGS_DEFAULTS, SUBPLANNER_ACCOUNTING, SUBPLANNER_CHILD, SUBPLANNER_SCOPE, type GlobalRunSettings } from '@ordewell/core';
 vi.mock('@ordewell/core/plan-utils', async (importOriginal) => ({ ...await importOriginal<typeof import('@ordewell/core/plan-utils')>(), DELEGATION_OFFERED: true }));
 
 import App from '../App';
@@ -112,12 +112,75 @@ describe('run settings in the Settings panel', () => {
     expect(block).toHaveTextContent(/Autonomy and Parallel tasks apply to every session\./);
   });
 
-  it('sets delegation\'s budget as a number, off at 0', () => {
-    const budget = screen.getByRole('spinbutton', { name: 'Delegation budget' });
-    expect(budget).toHaveValue(0);
-    fireEvent.change(budget, { target: { value: '5000000' } });
-    fireEvent.keyDown(budget, { key: 'Enter' });
-    expect(api.postMessage).toHaveBeenCalledWith({ type: 'changeSettings', change: { run: { delegationTokens: 5000000 } } });
+  describe('Subplanners', () => {
+    const budgetBox = () => screen.getByRole('spinbutton', { name: 'Tree budget' });
+    const enable = () => fireEvent.click(row('Subplanners').getByRole('button', { name: 'On' }));
+
+    it('is a switch, Off by default, with no budget row and the scope and child stated', () => {
+      expect(row('Subplanners').getByRole('button', { name: 'Off' })).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.queryByRole('spinbutton', { name: 'Tree budget' })).toBeNull();
+      const block = screen.getByRole('region', { name: 'Run' });
+      expect(block).toHaveTextContent(SUBPLANNER_SCOPE);
+      expect(block).toHaveTextContent(SUBPLANNER_CHILD);
+      expect(block).not.toHaveTextContent(SUBPLANNER_ACCOUNTING);
+    });
+
+    it('asks for a budget the first time, empty, and sends nothing until one is entered', () => {
+      enable();
+      expect(api.postMessage).not.toHaveBeenCalled();
+      expect(budgetBox()).toHaveValue(null);
+      expect(screen.getByRole('region', { name: 'Run' })).toHaveTextContent(SUBPLANNER_ACCOUNTING);
+
+      fireEvent.keyDown(budgetBox(), { key: 'Enter' });
+      fireEvent.click(screen.getByRole('button', { name: 'Turn on' }));
+      fireEvent.change(budgetBox(), { target: { value: '0' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Turn on' }));
+      fireEvent.blur(budgetBox());
+      expect(api.postMessage).not.toHaveBeenCalled();
+      expect(budgetBox()).toHaveAttribute('aria-invalid', 'true');
+
+      fireEvent.change(budgetBox(), { target: { value: '5000000' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Turn on' }));
+      expect(api.postMessage).toHaveBeenCalledTimes(1);
+      expect(api.postMessage).toHaveBeenCalledWith({ type: 'changeSettings', change: { run: { delegationTokens: 5000000 } } });
+    });
+
+    it('sends nothing and goes back to Off when the first enable is cancelled', () => {
+      enable();
+      fireEvent.change(budgetBox(), { target: { value: '5000000' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(api.postMessage).not.toHaveBeenCalled();
+      expect(screen.queryByRole('spinbutton', { name: 'Tree budget' })).toBeNull();
+      expect(row('Subplanners').getByRole('button', { name: 'Off' })).toHaveAttribute('aria-pressed', 'true');
+
+      enable();
+      expect(budgetBox()).toHaveValue(null);
+    });
+
+    it('turns back on at the kept budget without asking for one', () => {
+      settings({ delegationTokens: 0, delegationBudget: 750000 });
+      expect(screen.getByRole('region', { name: 'Run' })).toHaveTextContent('750000');
+      enable();
+      expect(api.postMessage).toHaveBeenCalledWith({ type: 'changeSettings', change: { run: { delegationTokens: 750000 } } });
+      expect(screen.queryByRole('spinbutton', { name: 'Tree budget' })).toBeNull();
+    });
+
+    it('shows the budget while on, changes it, and turns off keeping it', () => {
+      settings({ delegationTokens: 100, delegationBudget: 100 });
+      expect(budgetBox()).toHaveValue(100);
+      fireEvent.change(budgetBox(), { target: { value: '200' } });
+      fireEvent.keyDown(budgetBox(), { key: 'Enter' });
+      expect(api.postMessage).toHaveBeenLastCalledWith({ type: 'changeSettings', change: { run: { delegationTokens: 200 } } });
+
+      fireEvent.click(row('Subplanners').getByRole('button', { name: 'Off' }));
+      expect(api.postMessage).toHaveBeenLastCalledWith({ type: 'changeSettings', change: { run: { delegationTokens: 0 } } });
+    });
+
+    it('summarises as Subplanners on', () => {
+      fireEvent.click(runToggle());
+      settings({ delegationTokens: 100, delegationBudget: 100 });
+      expect(screen.getByText(/Subplanners on/)).toBeInTheDocument();
+    });
   });
 
   it('a number commits on Enter, any whole number at or above its floor', () => {

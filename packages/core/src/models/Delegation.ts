@@ -147,6 +147,11 @@ export function delegationErrors(tasks: readonly Task[], rules: DelegationRules 
     const paths = task.protectedPaths;
     if (!task.readOnly && (!Array.isArray(paths) || paths.length === 0 || !paths.every((p) => typeof p === 'string' && p.trim()))) {
       fail(task, 'protectedPaths', `${where} is a delegated task that lands, with no "protectedPaths": name the paths its child may not change, what its check runs and the configuration that runs it`);
+    } else if (!task.readOnly) {
+      for (const rule of paths ?? []) {
+        const fault = protectedPathFault(rule);
+        if (fault) fail(task, 'protectedPaths', `${where} protects "${rule}", which ${fault}`);
+      }
     }
     if (task.scope !== undefined && !scopeOk(task.scope)) fail(task, 'scope', `${where} has a "scope" that is not lists of text: "paths", "provides" and "consumes", at most ${SCOPE_LIMITS.items} items of one line and ${SCOPE_LIMITS.item} characters each`);
     const unknown = (task.grants ?? []).filter((grant) => !GRANTS.includes(grant as Grant));
@@ -251,30 +256,63 @@ export function planSize(tasks: readonly Task[]): number {
   return flattenTasks(tasks).length;
 }
 
+/** A path's steps, as both ends of a comparison read them: separators and `.` steps say nothing. */
+function pathSteps(path: string): string[] {
+  return path.trim().replace(/\\/g, '/').split('/').filter((step) => step !== '' && step !== '.');
+}
+
+/**
+ * A path as it is compared (ADR-0055 D7). A case-insensitive checkout holds
+ * `Tests/a.ts` and `tests/a.ts` as one file, and git prints the name the branch
+ * wrote, so the check ignores case and composition everywhere: on a
+ * case-sensitive repository it refuses too much, which is the side to err on.
+ * Upper then lower folds what lower alone leaves apart (`ß`, `ſ`, a final `ς`).
+ */
+function foldedPath(path: string): string {
+  return pathSteps(path).join('/').normalize('NFC').toUpperCase().toLowerCase();
+}
+
+/**
+ * Why a planner may not write `rule` as a protected path, or null where it may
+ * (ADR-0055 D7): each of these would pass a list that protects nothing, or
+ * leave a task that can never land.
+ */
+export function protectedPathFault(rule: string): string | null {
+  const path = rule.trim().replace(/\\/g, '/');
+  if (path.startsWith('/') || /^[a-z]:\//i.test(path)) return 'is not relative to the repository, and a diff lists nothing else: name it from the repository\'s root';
+  const steps = pathSteps(path);
+  if (steps.includes('..')) return 'is outside the repository: name a path inside it';
+  if (steps.every((step) => /^\*+$/.test(step))) return 'covers the whole repository, so its child could land nothing: name what it may not change, or make the task "readOnly"';
+  if (/[?{}]|^!/.test(path) || (path.includes('*') && /[[\]]/.test(path))) return 'reads as a wildcard, and only `*` is a wildcard here, with `**` for any depth: name each path';
+  return null;
+}
+
 /**
  * Whether one path of a repository falls under a protected path: a file it
  * names, a directory it names with or without a trailing slash, or a `*`
- * pattern. Case and separators as git prints them; nothing resolves a link,
- * since a diff lists what the branch changed by name.
+ * pattern, in which `**` crosses directories and one with no slash reads a name
+ * at any depth. Nothing resolves a link, since a diff lists what the branch
+ * changed by name. A rule {@link protectedPathFault} refuses can still reach
+ * here from a saved plan, so one for the whole repository holds all of it.
  */
 export function underProtectedPath(file: string, protectedPath: string): boolean {
-  const rule = protectedPath.trim().replace(/^\.\//, '').replace(/\\/g, '/');
-  if (!rule) return false;
-  if (rule.includes('*')) return globRegExp(rule).test(file);
-  const bare = rule.replace(/\/+$/, '');
-  return file === bare || file.startsWith(`${bare}/`);
+  if (!protectedPath.trim()) return false;
+  const rule = foldedPath(protectedPath).replace(/(?:\/\*\*)+$/, '');
+  const path = foldedPath(file);
+  if (rule.includes('*')) return globRegExp(rule).test(path);
+  return !rule || path === rule || path.startsWith(`${rule}/`);
 }
 
 /** What comes before a rule's first `*`: all two patterns can be told apart by without matching one against the other. */
 function fixedStart(rule: string): string {
-  const bare = rule.trim().replace(/^\.\//, '').replace(/\\/g, '/');
+  const bare = foldedPath(rule);
   const star = bare.indexOf('*');
   return star === -1 ? bare : bare.slice(0, star);
 }
 
 /** Whether two declared paths can name one file. Advisory, so two patterns are read generously: what they start with decides it. */
 export function pathsMeet(a: string, b: string): boolean {
-  if (underProtectedPath(a.replace(/\/+$/, ''), b) || underProtectedPath(b.replace(/\/+$/, ''), a)) return true;
+  if (underProtectedPath(a, b) || underProtectedPath(b, a)) return true;
   if (!a.includes('*') || !b.includes('*')) return false;
   const [one, other] = [fixedStart(a), fixedStart(b)];
   return one.startsWith(other) || other.startsWith(one);
@@ -316,7 +354,10 @@ export function scopeOverlaps(tasks: readonly Task[]): string[] {
   return said;
 }
 
+const GLOB_STARS: Record<string, string> = { '*': '[^/]*', '**': '.*', '**/': '(?:.*/)?' };
+
 function globRegExp(rule: string): RegExp {
-  const pattern = rule.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*\*\/?|\*/g, (star) => (star === '*' ? '[^/]*' : '(?:.*/)?'));
-  return new RegExp(`^${pattern}(?:/.*)?$`);
+  const pattern = rule.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*\*\/|\*\*|\*/g, (star) => GLOB_STARS[star]);
+  // `s`: a line break is a legal character of a file name, and `.` must walk over it.
+  return new RegExp(`^${rule.includes('/') ? '' : '(?:.*/)?'}${pattern}(?:/.*)?$`, 's');
 }

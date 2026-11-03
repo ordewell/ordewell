@@ -9,6 +9,8 @@ import type { TaskCompleteArgs } from './mcp/tools';
 /** Enough output for a summary tail and a live read, without holding a long run's whole log. */
 const DEFAULT_MAX_BUFFER_CHARS = 256 * 1024;
 const CUT_SEARCH_CHARS = 4096;
+/** What an ended attempt keeps: its verdict has read the rest, and a plan outlives thousands of them. */
+const ENDED_TAIL_CHARS = 16 * 1024;
 
 interface Capture {
   raw: string;
@@ -66,7 +68,11 @@ export class BufferedTaskOutputSource implements TaskOutputSource {
 
   detach(taskId: string): void {
     const capture = this.captures.get(taskId);
-    if (capture) capture.attached = false;
+    if (!capture) return;
+    capture.attached = false;
+    this.cutTo(capture, ENDED_TAIL_CHARS);
+    // A slice keeps the string it was cut from alive, so only a copy frees the buffer.
+    capture.raw = Buffer.from(capture.raw).toString();
   }
 
   reset(): void {
@@ -108,7 +114,11 @@ export class BufferedTaskOutputSource implements TaskOutputSource {
 
   private append(capture: Capture, text: string): void {
     capture.raw += text;
-    const excess = capture.raw.length - this.maxBufferChars;
+    this.cutTo(capture, this.maxBufferChars);
+  }
+
+  private cutTo(capture: Capture, maxChars: number): void {
+    const excess = capture.raw.length - maxChars;
     if (excess <= 0) return;
     // Cut on a nearby line boundary, so the oldest line kept is whole. Output
     // that rarely breaks lines must not cost most of the buffer, hence the

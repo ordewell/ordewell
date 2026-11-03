@@ -20,6 +20,11 @@ export function treeEventLogFile(rootSessionId: string, baseDir: string): string
   return path.join(sessionDataDir(rootSessionId, baseDir), LOG_FILE);
 }
 
+/** Whether this root ever opened a tree: a read that asks first opens none of its own. */
+export function hasTreeEventLog(rootSessionId: string, baseDir: string): boolean {
+  return fs.existsSync(treeEventLogFile(rootSessionId, baseDir));
+}
+
 interface Batch {
   events: TreeEvent[];
   /** The offset just past this line. */
@@ -67,6 +72,17 @@ async function* landed(file: string): AsyncGenerator<Batch> {
   }
 }
 
+interface LogEnd {
+  /** The offset a next line goes at. */
+  end: number;
+  /** The number the next event takes. */
+  next: number;
+}
+
+function pastBatch({ next }: LogEnd, batch: Batch): LogEnd {
+  return { end: batch.end, next: (batch.events.at(-1)?.seq ?? next - 1) + 1 };
+}
+
 function logged(events: readonly TreeFact[], next: number): TreeEvent[] {
   return events.map((event, i) => ({ ...event, seq: next + i }));
 }
@@ -76,30 +92,39 @@ export function jsonlEventStore(file: string): EventStore {
   let writer: { handle: fs.promises.FileHandle; next: number } | null = null;
   let turn: Promise<unknown> = Promise.resolve();
   let closed = false;
+  /** Where the last whole read ended. A tree is folded from its log just before its first append. */
+  let walked: LogEnd | null = null;
+  /** A line whose write reported a failure, and the number it would have started at: only the next read of the file says whether it landed. */
+  let doubted: { events: readonly TreeFact[]; next: number } | null = null;
 
   /** The file ready to take a line: its tail clean, and the next number known. */
   async function open(): Promise<NonNullable<typeof writer>> {
     await fs.promises.mkdir(path.dirname(file), { recursive: true });
-    let end = 0;
-    let next = 1;
-    for await (const batch of landed(file)) {
-      end = batch.end;
-      next = (batch.events.at(-1)?.seq ?? next - 1) + 1;
-    }
     const size = await fs.promises.stat(file).then(({ size }) => size, () => 0);
-    if (size > end) await fs.promises.truncate(file, end);
-    return { handle: await fs.promises.open(file, 'a'), next };
+    // The file only grows, so one the same size as the read is the file that read walked.
+    let found = walked?.end === size ? walked : null;
+    if (!found) {
+      found = { end: 0, next: 1 };
+      for await (const batch of landed(file)) found = pastBatch(found, batch);
+    }
+    if (size > found.end) await fs.promises.truncate(file, found.end);
+    return { handle: await fs.promises.open(file, 'a'), next: found.next };
   }
 
   async function write(events: readonly TreeFact[]): Promise<void> {
     writer ??= await open();
     const { handle, next } = writer;
-    const numbered = logged(events, next);
+    // A failed write can land whole on a network drive, and what is offered again is then spend counted twice.
+    const owed = doubted && next > doubted.next ? events.filter((event) => !doubted?.events.includes(event)) : events;
+    doubted = null;
+    if (owed.length === 0) return;
+    const numbered = logged(owed, next);
     try {
       await handle.appendFile(`${JSON.stringify(numbered)}\n`);
       writer.next = next + numbered.length;
     } catch (err) {
       // Part of the line may be there: the next append cuts it off as it would a crash's.
+      doubted = { events: owed, next };
       writer = null;
       await handle.close().catch(() => undefined);
       throw err;
@@ -117,11 +142,14 @@ export function jsonlEventStore(file: string): EventStore {
     async *read(after, node?: NodePath) {
       // Behind the writes already asked for, so a reader finds what it just appended.
       await turn;
-      for await (const { events } of landed(file)) {
-        for (const event of events) {
+      let found: LogEnd = { end: 0, next: 1 };
+      for await (const batch of landed(file)) {
+        found = pastBatch(found, batch);
+        for (const event of batch.events) {
           if (event.seq > after && (node === undefined || isWithin(event.node, node))) yield event;
         }
       }
+      walked = found;
     },
     async close() {
       closed = true;

@@ -72,6 +72,9 @@ Tasks planned while the modes were off keep the mode the plan gave them.
 Give the task Full access, or assign it to another runner. Full access means
 Codex runs with no sandbox at all.
 
+Inside a [container](containers.md) none of this applies: Codex's sandbox cannot start
+there, whatever this host allows, and a Codex change task runs at Full access.
+
 ## Planner shell not sandboxed
 
 Ordewell says **The planner's shell runs without an OS sandbox on this
@@ -237,6 +240,23 @@ highest source that sets one, such a list also replaces a file's list in
 Claude Code's own `/model` picker while Ordewell still offers the file's.
 Ordewell ignores a row's `behavesAs` and the list's `replaceBuiltInOptions`
 too: it offers the listed models beside Anthropic's own either way.
+
+## A task in a container says to run /login
+
+A task on the `own-sign-in` login fails with **Please run /login**, or **OAuth
+session expired and could not be refreshed**.
+
+`/login` cannot help here: a task's container takes no input from you, and
+Ordewell's own `/login` signs in on your machine, which no container reads. The
+copy of your sign-in that the task holds has expired, been revoked, or lost its
+refresh token to another copy; [Choose a
+login](containers.md#choose-a-login) says how that happens.
+
+Sign in again with the `docker run` command on that page, then Continue the task.
+It takes the new sign-in and keeps its conversation.
+
+`ordewell containers` can still read as ready meanwhile: it shows a sign-in is
+held, not that it still works.
 
 ## A runner shows as switched off, and tasks are flagged
 

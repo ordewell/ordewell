@@ -1,6 +1,6 @@
 import type { AccountLimitSnapshot, GlobalRunSettings, IsolationPreview,
   AiProvider, RunnerAuth, RunnerCommand, DisplayBlock, DiscoveredModel, PromptHold, RunnerId, RunActivity, RunView, SurfacePlan,
-  TaskModelAssignment,
+  TaskModelAssignment, ChildPlanEntry, ChildPlanView,
 } from '@ordewell/core';
 
 /*
@@ -99,6 +99,17 @@ export interface ConversationPatch {
   replaced?: true;
 }
 
+/** A person's answer to a question held by a task in a child plan: its text echoed as read, so a later one is not answered (ADR-0055 D20). */
+export interface ChildCheckpointAnswer {
+  /** This answer's own identity, which its `checkpointResult` names back. */
+  answerId: string;
+  childId: string;
+  taskId: string;
+  question: string;
+  answer: 'approve' | 'reject';
+  reason?: string;
+}
+
 /** One answer to an escalation (ADR-0053); `requestId` is what the host's `escalationAnswered` replies to. */
 export interface EscalationAnswer {
   requestId: string;
@@ -109,6 +120,12 @@ export interface EscalationAnswer {
 }
 
 export type WebviewToHost =
+  | { type: 'refreshChildren' }
+  | { type: 'openChild'; childId: string }
+  | { type: 'closeChild' }
+  | { type: 'messageChild'; childId: string; text: string }
+  | ({ type: 'answerChildCheckpoint' } & ChildCheckpointAnswer)
+  | { type: 'openChildTaskLog'; childId: string; taskId: string }
   | { type: 'getTaskCommands'; taskId: string }
   | { type: 'invokeTaskCommand'; taskId: string; name: string; args: string }
   /** Chat input: a message for the planner, or a slash command. */
@@ -125,7 +142,7 @@ export type WebviewToHost =
   | { type: 'removeTask'; taskId: string }
   | { type: 'addTask'; draft: TaskDraft }
   /** The user's answer to a task paused at a checkpoint; a rejection resumes the agent with the reason. A delegated task's approval may carry words and a raise of its budget (ADR-0056 M5, M8). */
-  | { type: 'answerCheckpoint'; taskId: string; approved: boolean; reason?: string; raiseTokens?: number }
+  | { type: 'answerCheckpoint'; /** This answer's own identity, which its `checkpointResult` names back. */ answerId: string; taskId: string; approved: boolean; reason?: string; raiseTokens?: number }
   /** A user message to a structured task (ADR-0018): queued behind its turn, or delivered at once if it waits for input. */
   | { type: 'sendTaskMessage'; taskId: string; text: string }
   /** Take back a message still queued behind a structured task's turn. */
@@ -208,6 +225,12 @@ export interface SettingsChange {
 }
 
 export type HostToWebview =
+  | { type: 'children'; children: ChildPlanEntry[]; rootId: string }
+  | { type: 'childView'; view: ChildPlanView }
+  | { type: 'childClosed' }
+  | { type: 'childConversation'; childId: string; message: ConversationPatch }
+  | { type: 'childMessageResult'; childId: string; status?: 'queued' | 'woken'; error?: string }
+  | { type: 'childNotice'; childId: string; message: string }
   | { type: 'taskCommands'; taskId: string; commands: readonly RunnerCommand[] }
   | { type: 'setState'; state: ChatState }
   | ConversationPatch
@@ -236,6 +259,9 @@ export type HostToWebview =
    * same message.
    */
   | { type: 'runView'; view: RunView }
+  /** The seam refused a checkpoint answer, so the question still waits: the card comes back with its words. */
+  /** What became of one answer, at the root or in a child: taken with no `error`, refused with one. */
+  | { type: 'checkpointResult'; answerId: string; error?: string }
   /**
    * What the scheduler is doing after an Execute settled: the authoritative
    * word that ends the webview's own "Starting…" and starts the run's real

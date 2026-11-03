@@ -787,7 +787,7 @@ const delegatingPlanTask = planTask.extend({
   budget: z.looseObject({ tokens: z.number(), wallClockMs: z.number().optional() }).optional()
     .describe('A delegated task\'s budget, required: tokens, and a time limit in milliseconds if it has one. Carved from what this plan has left.'),
   protectedPaths: z.array(z.string()).optional()
-    .describe('The paths a delegated task\'s child may not change: what its check runs and the configuration that runs it. Required unless it is readOnly.'),
+    .describe('The paths a delegated task\'s child may not change: what its check runs and the configuration that runs it. Relative to the repository; `*` is the one wildcard. Required unless it is readOnly.'),
   grants: z.array(z.string()).optional().describe('What a delegated task asks for past the floor, by name: research, delegate or effect.'),
   scope: z.looseObject({ paths: z.array(z.string()).optional(), provides: z.array(z.string()).optional(), consumes: z.array(z.string()).optional() }).optional()
     .describe('What a delegated task declares it works on. Advisory.'),

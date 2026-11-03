@@ -10,7 +10,7 @@ import { createTask, type LegacyPlanState } from '../../models/Task';
 import { fakeConfig, FakeRunnerSession } from '../../testing';
 import { saveSession } from '../../utils/sessionStore';
 import { openTaskLog } from '../../utils/taskLogStore';
-import { makeSession } from './sessionTestKit';
+import { closeSessions, makeSession } from './sessionTestKit';
 
 /*
  * What a session with no parent leaves on disk, spelled out: the state root
@@ -26,7 +26,10 @@ const env = () => {
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, env: env(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
 const roots: string[] = [];
-afterEach(() => { while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true }); });
+afterEach(async () => {
+  await closeSessions();
+  while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+});
 
 function repo(): string {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-flat-')));

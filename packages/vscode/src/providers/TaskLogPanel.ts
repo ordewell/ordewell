@@ -23,6 +23,8 @@ export interface TaskLogSession {
 
 export interface TaskLogPanelDeps {
   session: TaskLogSession;
+  /** A child runner's tab: which child it speaks to, and why it cannot now. Asked afresh with each status, as both move with the tree. */
+  child?: () => NonNullable<TaskLogStatus['child']>;
   getTask: (taskId: string) => Task | undefined;
   /** The task's dotted reference ("2", "2.1"): a subtask's own order restarts at 1. */
   orderLabel?: (taskId: string) => string | undefined;
@@ -36,6 +38,9 @@ export interface TaskLogPanelDeps {
 }
 
 const NO_LIMITS = JSON.stringify([]);
+
+// A child's seam takes a person's message and nothing that forces (ADR-0056 M8).
+const CHILD_TAB_MESSAGES: ReadonlySet<TaskLogToHost['type']> = new Set(['ready', 'selectAttempt', 'openFile', 'sendTaskMessage']);
 
 // A plan event that can change the task the header describes. Everything else
 // the panel hears is ignored, so a planner's text deltas cost it nothing.
@@ -110,7 +115,11 @@ export class TaskLogPanel {
       else this.push();
       return;
     }
-    if (msg.type === 'status_update') this.idleSince = msg.tasks.find((t) => t.id === this.taskId)?.idleSince ?? null;
+    if (msg.type === 'status_update') {
+      // An update leaves out a task that has not moved.
+      const task = msg.tasks.find((t) => t.id === this.taskId);
+      if (task) this.idleSince = task.idleSince ?? null;
+    }
     if (TASK_STATE_EVENTS.has(msg.type)) {
       this.pushStatus();
       // A reassigned task draws its new runner's account.
@@ -151,6 +160,7 @@ export class TaskLogPanel {
   }
 
   private handle(msg: TaskLogToHost): void {
+    if (this.deps.child && !CHILD_TAB_MESSAGES.has(msg.type)) return;
     switch (msg.type) {
       case 'ready':
         this.ready = true;
@@ -168,7 +178,7 @@ export class TaskLogPanel {
         this.control(() => { this.deps.session.invokeTaskCommand(this.taskId, msg.name, msg.args); });
         return;
       case 'sendTaskMessage':
-        this.controlAsync(() => this.userCommand({ command: 'message_task', task: this.taskId, text: msg.text }));
+        this.controlAsync(() => this.userCommand({ command: 'message_task', task: this.taskId, text: msg.text }), msg.text);
         return;
       case 'removeQueuedTaskMessage':
         this.controlAsync(() => this.userCommand({ command: 'remove_queued', task: this.taskId, id: msg.id }));
@@ -255,6 +265,9 @@ export class TaskLogPanel {
     this.pushStatus();
   }
 
+  /** Something outside the session's stream moved what the header says: a child's tree does. */
+  statusChanged(): void { this.pushStatus(); }
+
   private pushStatus(): void {
     if (!this.ready) return;
     const status = this.status();
@@ -277,6 +290,7 @@ export class TaskLogPanel {
       title: task?.title ?? '',
       runner: (task && assignedRunnerOf(task)) ?? '',
       script: task?.type === 'script',
+      ...(this.deps.child ? { child: this.deps.child() } : {}),
       header: taskLogHeaderView({
         status: task?.status ?? '',
         ...(task ? { type: task.type } : {}),
@@ -313,14 +327,15 @@ export class TaskLogPanel {
     if (!outcome.ok) throw new Error(outcome.message);
   }
 
-  private controlAsync(run: () => Promise<void>): void {
-    run().catch((err: unknown) => this.showError(err));
+  /** `draft` is what the box gives up to send: a refusal hands it back, as only the host knows it was refused. */
+  private controlAsync(run: () => Promise<void>, draft?: string): void {
+    run().catch((err: unknown) => this.showError(err, draft));
   }
 
-  private showError(err: unknown): void {
+  private showError(err: unknown, draft?: string): void {
     const error = err instanceof Error ? err.message : String(err);
     this.deps.log(`Task log control failed: ${error}`);
-    this.panel.webview.postMessage({ type: 'showError', error } satisfies HostToTaskLog);
+    this.panel.webview.postMessage({ type: 'showError', error, ...(draft ? { draft } : {}) } satisfies HostToTaskLog);
   }
 }
 

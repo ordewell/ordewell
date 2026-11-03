@@ -200,6 +200,43 @@ describe('rendering the output read', () => {
   });
 });
 
+describe('an answer too long for one read', () => {
+  const long = 'x'.repeat(6_000);
+  const planOf = (count: number) => Array.from({ length: count }, (_, i) => createTask({ id: `t${i + 1}`, order: i + 1, title: `Task ${i + 1}`, prompt: `${i + 1}:${long}`, assignedRunner: 'claude-code' }));
+
+  it('stops before a task that does not fit, and names what it left out', () => {
+    const answer = renderTaskQueryAnswer({ tasks: ['#1', '#2', '#3', '#4', '#5'], fields: ['prompt'], catalog: false }, planOf(5), catalog);
+    expect(answer.length).toBeLessThanOrEqual(TASK_QUERY_ANSWER_MAX_CHARS);
+    expect(answer).toContain(`2:${long}`);
+    expect(answer).not.toContain(`3:${long}`);
+    expect(answer).toContain('Not read, to keep this answer bounded: #3, #4, #5. Ask for them in another query.');
+  });
+
+  it('reads each task once, however it was named', () => {
+    const answer = renderTaskQueryAnswer({ tasks: ['#1', 't1', 'Task 1', '#2'], fields: ['prompt'], catalog: false }, planOf(2), catalog);
+    expect(answer.match(/prompt:/g)).toHaveLength(2);
+    expect(answer).not.toContain('Not read');
+  });
+
+  it('never cuts a prompt: one task is read whole, however long, as a planner rewrites what it reads', () => {
+    const plan = [createTask({ id: 'big', order: 1, title: 'Big', prompt: 'y'.repeat(30_000) }), ...planOf(1).map((t) => ({ ...t, order: 2 }))];
+    const answer = renderTaskQueryAnswer({ tasks: ['#1', '#2'], fields: ['prompt'], catalog: false }, plan, catalog);
+    expect(answer).toContain('y'.repeat(30_000));
+    expect(answer).toContain('Not read, to keep this answer bounded: #2.');
+  });
+
+  it('counts what it does not name past the first fifty', () => {
+    const answer = renderTaskQueryAnswer({ tasks: planOf(60).map((t) => t.id), fields: ['prompt'], catalog: false }, planOf(60), catalog);
+    expect(answer.length).toBeLessThanOrEqual(TASK_QUERY_ANSWER_MAX_CHARS);
+    expect(answer).toContain('t52, +8 more. Ask for them');
+  });
+
+  it('still answers a reference that matches nothing', () => {
+    const answer = renderTaskQueryAnswer({ tasks: ['#1', '#2', '#3', '#9'], fields: ['prompt'], catalog: false }, planOf(3), catalog);
+    expect(answer).toContain('Not read, to keep this answer bounded: #3, #9.');
+  });
+});
+
 describe('one read of a task, for both channels', () => {
   function loopPlan(): Task[] {
     return [

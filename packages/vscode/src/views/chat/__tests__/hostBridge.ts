@@ -49,3 +49,11 @@ export function openActivity(): void {
 export function activityRows(): string[] {
   return [...document.querySelectorAll('.activity-group-body > *')].map((el) => el.className.split(' ')[0]);
 }
+
+/** The identity of the latest checkpoint answer the webview sent, which the host's result names back. */
+export function lastAnswerId(): string {
+  const sent = api.postMessage.mock.calls.map(([message]) => message as { type: string; answerId?: string });
+  const answer = sent.reverse().find((message) => message.type === 'answerCheckpoint' || message.type === 'answerChildCheckpoint');
+  if (!answer?.answerId) throw new Error('No checkpoint answer was sent.');
+  return answer.answerId;
+}

@@ -56,7 +56,12 @@ so no surface is told or has to act.
 The Session adds to the relay's observer only the saves some events owe, each
 made before the event is announced: a task that settles on its own
 (`onTaskSettled` — completed, failed or awaiting the user) is saved as it
-settles, so a shared run does not wait for its end to record a verdict.
+settles, in one save with what supervision took from it, so a shared run does
+not wait for its end to record a verdict. Any other changed status is saved
+within a second, and at once when no save came in the second before: a save
+writes the whole plan, so a burst of starts shares one. A crash inside that
+second loads such a start as not yet started, which is why a script's start,
+whose effects do not wait, is saved before the script runs.
 Any save may land in the middle of a planner turn, and none settles it: the
 turn holds what it writes until the mutation that lands it (see
 *PlannerConversation*), so there is nothing of it for another save to write.
@@ -166,19 +171,29 @@ which host holds a session, and this one where a session runs.
 
 **Container lease** (`services/container/`, ADR-0059 L5 to L7) — an *Execution lease*
 from `DockerExecutionBackend`, opt-in by the `containers` setting, for a change task
-of a runner proven there and for every script task. The host's worktree stays where
+of a runner proven there, Claude Code, Codex at Full access or OpenCode, and for every script task. The host's worktree stays where
 a task's result lives; a copy runs in one container per attempt, reached by exec. A
 script of the workspace root runs on a copy of what that root has committed, and
 nothing of it comes back. What a lease cannot be it refuses: nothing runs on the host
 in a container's place. Its parts: a **mirror**, one bare repository per repo in a
 volume of the engine, read-only to an attempt; a **task volume**, which keeps the
-task's clone and the runner's home across attempts; a **relay**, the container's idle
-entry, which carries connections to this host over its stdio and ends the container
-when its host goes; an **egress sidecar**, a lease's one way out; a **model gateway**,
-which holds its API key; and a **push gate**, the only way work comes back, which
-takes one ref of one attempt as a bundle.
+task's clone, its package caches and the runner's home across attempts; a **relay**,
+the container's idle entry, which carries connections over its stdio both ways — this
+host's listeners reached from the container, and a server the runner starts there
+reached from here — and ends the container when its host goes; an **egress sidecar**,
+a lease's one way out; a **model gateway**, which holds its API key; and a **push
+gate**, the only way work comes back, which takes one ref of one attempt as a bundle.
 *Avoid:* "sandbox" (a *Sealed run*'s word: that holds a read-only process on this
 host, and this moves a writing one off it), "push" for anything but the gate.
+
+**Container runner** (`services/container/containerRunners.ts`, ADR-0059 L5, L7) — a
+runner whose change tasks have been proven in a container: its id, the binary its
+image must carry, and its **sign-in**: the volume a person signs in to, where a helper
+mounts it, the copy a task gets, what tells the runner to read that copy, and the
+hosts its own login talks to. Claude Code, Codex and OpenCode are the three; a task on
+another runner refuses rather than running with a login or a home it was not given.
+*Avoid:* "supported runner" (every runner is supported; this is the narrower fact that
+it has been proven in a container).
 
 **Egress sidecar** (`services/container/egressSidecar.ts`, ADR-0059 L7) — the one
 container of a lease on both its internal network and the bridge: a proxy that opens
@@ -189,16 +204,20 @@ that ignores it reaches nothing, which the probe proves as `net.allowlist`.
 **Model gateway** (`services/container/modelGateway.ts`, ADR-0059 L7) — the listener
 on this host, reached through the relay, that carries a broker lease's model traffic
 under the real key. The runner holds a token that means nothing past it, so an API
-key never enters the engine. A subscription's token never reaches it.
+key never enters the engine. Claude Code reads its address from `ANTHROPIC_BASE_URL`;
+OpenCode is given a provider block in its own configuration, since it does not read
+that variable for a provider's base. A subscription's token never reaches it.
 *Avoid:* "broker" for it: the *Credential broker* decides what a lease gets, and this
 is where a key goes instead of the runner.
 
 **Credential broker** (`services/container/credentialBroker.ts`, ADR-0059 L7) —
 what hands a *Container lease* API keys and cloud-provider credentials, from this
 host's environment: an API key to its *Model gateway*, and what a cloud provider signs
-with to the runner by name. It never holds a Claude subscription's token. A person
-chooses a lease's login, `broker` or `own-sign-in`, the person's own sign-in inside a
-container in a volume Ordewell never reads, and it has no default.
+with to the runner by name, and a runner the key for its own model API alone. It never
+holds a Claude subscription's token. A person chooses a lease's login, `broker` or
+`own-sign-in`, the person's own sign-in made inside a container, in a volume no task
+mounts and this host never reads, of which each task gets its own copy, a Claude Code
+one replaced only by a new sign-in, and it has no default.
 *Avoid:* "login" for an API key held here, except as the setting names it.
 
 **Slot pool** (`services/SlotPool.ts`, ADR-0055 D18) — the Parallel limit across a
@@ -219,7 +238,9 @@ models discovery found for them, and the allowlist narrowing those. Built in
 planner's per-turn block (`queryCatalog`), its tools (`live`), a user's direct
 edit (`edit`, `runner`) and planning (`planning`) all read the same state —
 settings are read live at each call, never captured, so a runner enabled or an
-allowlist edited mid-session counts (#69). The per-runner discovered models are
+allowlist edited mid-session counts (#69). A child's reads the runners and models
+of its **Mandate** too, so settings can narrow what it assigns and never widen it
+(ADR-0056 M3). The per-runner discovered models are
 **merged into, never replaced**: discovering one runner must not forget
 another's, because coercion clamps thinking efforts against whatever was last
 found. `admit(runner, models)` is how an admitted runner keeps its models there
@@ -844,8 +865,10 @@ waits for input.
 of one paused on a usage limit (see *Usage-limit resume*), that resumes its
 saved runner session (Claude's `--resume`, Codex's `thread/resume`) with
 the user's message as the next turn. A **Delegated task**'s reopens its **Child
-plan** instead, stopped or failed but not landed: that plan acts as Execute, and
-its **Subplanner** replays its Model context with the message (ADR-0055 D17).
+plan** instead, stopped or failed but not landed: that plan acts as Execute, its
+own delegated tasks reopen the same way, and its **Subplanner** takes the message
+in its native session where its harness kept one, replaying its Model context
+where not (ADR-0055 D17).
 It is verified and landed like any attempt, is not offered on conflicts, and
 leaves dependents alone, as retry does. It starts once the runner of the
 attempt it continues has wound down (ADR-0018, L1), so a session never runs in
@@ -2790,7 +2813,8 @@ bounded buffer fed by the session and answers `finalText` (the completion
 call's summary, falling back to clean plain output for the current turn) and
 `liveTail` (a bounded diagnostic window with an absolute `nextOffset`). A new
 turn or a message read mid-turn clears the earlier summary and advances the
-output boundary. It does not discover transcripts or render a runner's PTY.
+output boundary. Once an attempt ends it keeps the attempt's completion and the
+end of its output. It does not discover transcripts or render a runner's PTY.
 *Avoid:* "the output buffer", "transcript capture" as the owner — a transcript
 is a separate artifact, not completion evidence.
 
@@ -2905,10 +2929,13 @@ that decides what a plan refresh keeps: plan fields (title, dependencies,
 fields (verdict, `idleSince`, isolation, checkpoint, queued messages,
 `continuable`, `awaitingApproval`, merge gate, `forcedPastGate`) stay as the
 last status update said, the checkpoint question only while the task still
-waits at it. A status update replaces every status field it covers. The daemon
-sends `Session.runSnapshot()` as a `run_snapshot` frame right after
-`connected`, so a client that joins mid-run has the run before the next update;
-the session routes' load and read answers carry it too. Whether the run is
+waits at it. A status update replaces every status field of each task it
+carries, and carries only the tasks that moved, with every task again every
+half minute so that a surface a change missed comes right; what it says of the
+run is whole each time. The daemon sends `Session.runSnapshot()`, always whole,
+as a `run_snapshot` frame right after `connected`, so a client that joins
+mid-run has the run before the next update; the session routes' load and read
+answers carry it too. Whether the run is
 closed is the Session's word, `run_closed` (a Merge all that left nothing to
 hand over, or a discard), which `reduceRun` folds into dropping the marks,
 the handoff and the merge view; a merge that leaves the run going keeps them.
@@ -3205,14 +3232,21 @@ plan rewrites no history.
 **Delegation** — the **Run setting** that lets a plan hand a separable part of
 its goal to a child plan (ADR-0055 D21): `delegationTokens`, a tree's token budget,
 0 being off. Off by default, and read from the session's copy at each check, so a
-run keeps no copy of it. A build offers it only with `ORDEWELL_DELEGATION=1` when it
+run keeps no copy of it. Surfaces call the control **Subplanners**: an on/off
+switch with the budget as a row only while it is on. `delegationBudget` is the budget
+the user last entered, kept while off and across restarts; it turns nothing on, and
+the mandate reads `delegationTokens` only. The first time there is no kept budget, so
+turning on asks the user to enter one; it is never defaulted, and cancelling saves
+nothing. Turning on always asks for a confirmation that says a subplanner plans in Act
+with autorun and no person reads its plan, and that the budget is counted
+approximately. A build offers it only with `ORDEWELL_DELEGATION=1` when it
 runs from a git checkout of this repository (`DELEGATION_OFFERED`), so a published
 package ignores the variable.
 
 **Delegated task** (`type: 'delegated'`, `models/Delegation.ts`, ADR-0055) — a
 top-level task that holds a `goal`, not a prompt: its attempt is a **Child plan**. It
 carries a required `budget` and, unless it is `readOnly`, `protectedPaths`, the paths
-its child may not change, and it needs a check: a task that depends on it directly and
+its child may not change, relative to the repository and in any case (D7), and it needs a check: a task that depends on it directly and
 is a read-only AI task or a read-only **Script task**, which a new attempt takes back
 and which starts by itself once the task passes and it is ready, with no scheduler too.
 An AI task whose runner this host cannot read counts as one, so the merge hold fails closed.
@@ -3231,7 +3265,15 @@ already reads as not started (D16, D20).
 worktree, its state under the root's (`ChildPlanSession` behind `ChildPlanRunner`, the
 runner seam, ADR-0055 D3). Its plan is approved as it lands, and it merges into the
 delegated task's branch by itself at its run's end, so only the root touches the
-user's branch. Nothing of it reaches a surface directly. A Stop reaches all of it,
+user's branch. A surface reaches it only through its root: `ChildDirectory` answers
+for every plan below one, by the stable session id the tree's ledger names, and an id
+it does not name is refused before anything is read (D20). A surface may read and
+stream any of them. A person may message a live subplanner, and may message a task's
+runner or answer a checkpoint the plan holds, by the task's exact id, as that plan's
+subplanner's own command: it can do nothing the subplanner could not, and nothing falls
+through to the root. One that has ended is view-only until its task is continued or
+retried. The TUI opens one with `enter` on its delegated task and `esc` goes back up a
+level. A Stop reaches all of it,
 tombstone first, and resolves when it has gone (D16). A Continue reopens it and any
 fresh attempt discards its run, its state staying under the root (D15, D17).
 
@@ -3241,9 +3283,12 @@ delegated task names, in that task's worktree, Act with autorun inside its
 and `checkpoint`, on a token bound to the attempt, and it is parked between turns. Its
 harness's own subagents are withheld unless its delegated task named `research`. Its
 `checkpoint` answers at once and goes up one level as its delegated task's checkpoint,
-where a person sees it only at the root, and the answer opens its next turn (ADR-0056
-M8). A turn that ends with nothing running and no call gets one reminder, and a second
-fails the attempt with a derived report. *Avoid:* "worker", "child agent" (a task's
+which the root's inbox lists at depth one and a person may answer on the plan that holds
+it, and the answer opens its next turn (ADR-0056 M8). A person's message wakes it or queues behind its turn, under the shared slot
+limit, and carries nothing with it: it holds the actor and grants it had, and raises
+no budget and approves no effect. The message stays with it unless it passes what is
+relevant up itself (D20). A turn that ends with nothing running and no call gets one
+reminder, and a second fails the attempt with a derived report. *Avoid:* "worker", "child agent" (a task's
 runner is neither planner nor node); a subplanner never implements.
 
 **Protected paths** — what a **Delegated task** names its child may not change,

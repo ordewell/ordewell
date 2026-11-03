@@ -14,6 +14,7 @@ import {
   Session,
   createSession,
   type ConversationCompaction,
+  type ChildTreeFrame,
   type ConversationFork,
   type RunView,
   type SessionMessage,
@@ -30,6 +31,12 @@ import {
   loadSession,
   deleteSession,
   reclaimContainers,
+  changeContainers,
+  containerStatus,
+  type ContainerChange,
+  type ContainerChangeResponse,
+  type ContainerStatus,
+  type DockerCli,
   SettingsService,
   sessionRuntimeSettings,
   type GlobalRunSettings,
@@ -74,6 +81,7 @@ import {
   type IIsolationPreview,
   type IsolationPreview,
 } from '@ordewell/core';
+import { ChildStreams } from './childStreams';
 import { WebConfig, type PlannerPick } from '../adapters/WebConfig';
 import { scanWorkspaces as scanWorkspacesImpl } from '../utils/workspaceScanner';
 import { PoolFileSystem } from '../adapters/PoolFileSystem';
@@ -108,6 +116,8 @@ export interface OrchestratorPoolDeps {
    * planner-switch catalog lookup can be seeded without spawning real CLIs.
    */
   modelResolver?: ModelResolver;
+  /** Overrides the docker CLI a containers status or change asks; tests inject one so no engine is needed. */
+  dockerCli?: DockerCli;
   /** Overrides the pool's Codex sandbox probe; tests inject one so no real `codex` is started. */
   codexSandbox?: Pick<CodexSandboxAvailability, 'ensure' | 'refresh'>;
   /** Overrides the pool's installation checks; tests inject one so no real agent binary is asked. */
@@ -141,6 +151,7 @@ export class OrchestratorPool {
    */
   private readonly stream = randomUUID();
   private sequence = new Map<string, number>();
+  private readonly childStreams = new ChildStreams(this.stream);
   private registry: CoreRunnerRegistry = new RunnerRegistry();
   private modelResolver: ModelResolver;
   /** A host that supplied its own resolver answers for every workspace, as a supplied probe does. */
@@ -175,10 +186,12 @@ export class OrchestratorPool {
   private codexSandbox: Pick<CodexSandboxAvailability, 'ensure' | 'refresh'>;
   private readonly leaseHost: LeaseHost | undefined;
   private readonly isolationPreview: IIsolationPreview;
+  private readonly suppliedDockerCli: DockerCli | undefined;
 
   constructor(deps: OrchestratorPoolDeps = {}) {
     const pluginNotice = removedPluginNotice();
     if (pluginNotice) console.warn(pluginNotice);
+    this.suppliedDockerCli = deps.dockerCli;
     this.runner = deps.runner ?? new StructuredRunner();
     // The login probe must ask the account the planner will use (ADR-0016).
     // This installation is the daemon's own cwd for detection; a runner list
@@ -265,6 +278,8 @@ export class OrchestratorPool {
     if (!this.clients.has(sessionId)) this.clients.set(sessionId, new Set());
     this.clients.get(sessionId)!.add(ws);
     this.connectAccountLimits(sessionId, ws);
+    const session = this.sessions.get(sessionId);
+    if (session) void this.tellTree(sessionId, session, [ws]);
   }
 
   unsubscribe(sessionId: string, ws: WebSocket): void {
@@ -312,7 +327,31 @@ export class OrchestratorPool {
     this.sessions.set(sessionId, session);
     this.sessionWorkspaces.set(sessionId, workspace);
     for (const ws of this.clients.get(sessionId) ?? []) this.connectAccountLimits(sessionId, ws);
+    session.children.onChange(() => void this.tellTree(sessionId, session));
   }
+
+  /** The tree as it stands. A failed read tells nothing: the list route is where a surface hears why. */
+  private async tellTree(sessionId: string, session: Session, sockets?: WebSocket[]): Promise<void> {
+    const children = await session.children.list().catch(() => []);
+    if (children.length === 0 || this.sessions.get(sessionId) !== session) return;
+    const payload = JSON.stringify({ type: 'child_tree', sessionId, children } satisfies ChildTreeFrame);
+    for (const ws of sockets ?? this.clients.get(sessionId) ?? []) {
+      if (ws.readyState === ws.OPEN) ws.send(payload);
+    }
+  }
+
+  /** False for a child this root does not hold, or a root no longer loaded (ADR-0055 D20). */
+  async watchChild(rootId: string, childId: string, ws: WebSocket): Promise<boolean> {
+    const session = this.sessions.get(rootId);
+    const child = await session?.children.find(childId);
+    if (!child || this.sessions.get(rootId) !== session) return false;
+    this.childStreams.join(rootId, childId, child, ws);
+    return true;
+  }
+
+  unwatchChild(rootId: string, childId: string, ws: WebSocket): void { this.childStreams.leave(rootId, childId, ws); }
+  /** What a read of the child taken now accounts for on its socket. */
+  childPosition(rootId: string, childId: string): StreamStamp { return this.childStreams.position(rootId, childId); }
 
   private broadcast(sessionId: string, msg: SessionMessage | SessionNotice): void {
     const workspace = this.sessionWorkspaces.get(sessionId);
@@ -498,6 +537,22 @@ export class OrchestratorPool {
     this.settingsService.updateRunSettings(changes);
     if (sessionId) this.sessions.get(sessionId)?.applyRunSettings(changes);
     return this.getSettings(sessionId, workspace);
+  }
+
+  /** The `containers` setting as a surface shows it: `prove` starts a throwaway container to measure (ADR-0059 L3). */
+  containerStatus(prove: boolean, workspace?: string): Promise<ContainerStatus> {
+    const { worktreeSetupCommand: setupCommand } = this.plannerConfig(undefined, workspace);
+    return containerStatus(this.settingsService.getAll().containers, { prove, ...this.docker(), ...(setupCommand ? { setupCommand } : {}) });
+  }
+
+  /** The way a surface changes that setting, and where it then stands; a running Session keeps what it opened with. */
+  async changeContainers(change: ContainerChange, workspace?: string): Promise<ContainerChangeResponse> {
+    const refused = await changeContainers(change, { settings: this.settingsService, ...this.docker() });
+    return { refused, status: await this.containerStatus(false, workspace) };
+  }
+
+  private docker(): { cli?: DockerCli } {
+    return this.suppliedDockerCli ? { cli: this.suppliedDockerCli } : {};
   }
 
   /**
@@ -1045,6 +1100,9 @@ export class OrchestratorPool {
     this.sessions.delete(sessionId);
     this.sessionWorkspaces.delete(sessionId);
     this.releaseUnusedAccountLimits();
+    // A root's socket outlives a replacement, its broadcasts arriving on it. A
+    // child's cannot: it reads a directory that went with the old Session.
+    this.childStreams.closeRoot(sessionId, options?.notifyClients ? 1001 : 1012);
     if (!options?.notifyClients) return;
     const clients = this.clients.get(sessionId);
     if (!clients) return;
@@ -1087,13 +1145,16 @@ export function getSession(sessionId: string, workspace: string) { return loadSe
  * their worktrees and branches (D11). What git could not let go stops the
  * delete, with the records still in place and `close` not called, and is named
  * in the error. What the tree left in an engine goes last: its volumes are
- * nothing a person could go back to once its records have gone.
+ * nothing a person could go back to once its records have gone. That waits for
+ * the session to have gone, not only stopped: a closing attempt still brings its
+ * work back, and a helper that names a volume already taken makes it again, with
+ * no label for anything to find it by.
  */
-export async function removeSession(sessionId: string, workspace: string, stop: () => Promise<void>, close: () => void, reclaim: () => Promise<void>): Promise<boolean> {
+export async function removeSession(sessionId: string, workspace: string, stop: () => Promise<void>, close: () => Promise<void>, reclaim: () => Promise<void>): Promise<boolean> {
   await stop();
   const { refused } = await discardChildRuns(sessionId, workspace, createWorktreeIsolation({ config: new WebConfig() }));
   if (refused.length > 0) throw new Error(`The session was kept: ${refused.map(({ worktree, reason }) => `${worktree} (${reason})`).join(', ')}`);
-  close();
+  await close();
   await reclaim();
   return deleteSession(sessionId, workspace);
 }

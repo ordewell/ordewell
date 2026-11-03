@@ -23,6 +23,8 @@ export interface PlanTurnInput {
   idle?: true;
   /** Goes with the next turn and opens none: a line Ordewell owes, which is no reason to wake a model (ADR-0057 R6). */
   rides?: true;
+  /** Read with this input, never shown as its words; see {@link PendingPlanTurn.aside}. */
+  aside?: string;
   /** Stops the turn that takes this input. Not saved: a replayed input has no caller left to stop it. */
   signal?: AbortSignal;
 }
@@ -35,6 +37,8 @@ export interface PlanTurnInput {
 export interface TurnPrompt extends SkillInvocation {
   source: PlanTurnSource;
   wakeUps: string[];
+  /** Which of `wakeUps` are asides, not run updates: nothing may bound them away from the words they explain. */
+  asides?: string[];
   /**
    * A wake-up turn's: who it acts for (ADR-0037, R3) — the supervisor, or the
    * user's turn whose report it delivers. Absent on the user's own turn.
@@ -121,11 +125,13 @@ type Outcome = { ok: true; plan: LegacyPlanState } | { ok: false; err: unknown }
 /** One planner message for a batch: the inputs in the order they came, each with the skills it loaded. */
 export function turnPrompt(batch: readonly PendingPlanTurn[]): TurnPrompt {
   const fromUser = batch.filter((t) => t.source === 'user');
+  const asides = [...new Set(fromUser.flatMap((t) => t.aside ?? []))];
   return {
     source: fromUser.length > 0 ? 'user' : 'supervisor',
     text: fromUser.map((t) => t.text).join('\n\n'),
     skills: fromUser.flatMap((t) => t.skills ?? []),
-    wakeUps: batch.filter((t) => t.source === 'supervisor').map((t) => t.text),
+    wakeUps: [...asides, ...batch.filter((t) => t.source === 'supervisor').map((t) => t.text)],
+    ...(asides.length > 0 ? { asides } : {}),
     ...(fromUser.length === 0 ? { authority: authorityOf(batch[0]) } : {}),
     ...(batch.some((t) => t.forced) ? { forced: true } : {}),
   };
@@ -305,6 +311,15 @@ export class PlanTurns {
     }, 0);
   }
 
+  /**
+   * What waits with nobody left to tell if it is lost: a usage limit or a
+   * context pause answered these senders at once (see {@link admit}), so no
+   * rejection reaches them, and a Stop or a discard would pass in silence.
+   */
+  heldWithoutCaller(): readonly PendingPlanTurn[] {
+    return (this.host.plan()?.pendingTurns ?? []).filter((t) => t.source === 'user' && !this.waiters.has(t.id) && !this.running?.ids.has(t.id));
+  }
+
   /** Whether a turn this module opened is in flight. */
   get busy(): boolean {
     return this.running !== null;
@@ -390,6 +405,7 @@ export class PlanTurns {
       ...(input.report ? { report: input.report } : {}),
       ...(input.tasks?.length ? { tasks: [...input.tasks] } : {}),
       ...(input.rides ? { rides: true } : {}),
+      ...(input.aside ? { aside: input.aside } : {}),
     };
   }
 
@@ -515,12 +531,13 @@ export class PlanTurns {
     this.resend.reset();
     if (this.reportWake) clearTimeout(this.reportWake);
     this.reportWake = null;
+    const read = this.running?.ids;
     this.running?.release();
     this.running = null;
     this.host.turnSettled?.();
     this.quiet = false;
     this.restored = false;
-    for (const waiter of this.waiters.values()) waiter.reject(new PlannerTurnDiscardedError());
+    for (const [id, waiter] of this.waiters) waiter.reject(new PlannerTurnDiscardedError({ unread: !read?.has(id) }));
     this.waiters.clear();
   }
 

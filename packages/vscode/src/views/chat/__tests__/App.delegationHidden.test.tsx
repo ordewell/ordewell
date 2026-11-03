@@ -24,7 +24,7 @@ describe('delegation in the VS Code views, until a delegated task exists (ADR-00
     fireEvent.click(screen.getByRole('button', { name: 'Run' }));
 
     expect(screen.getByRole('group', { name: 'Autonomy' })).toBeInTheDocument();
-    expect(screen.queryByRole('spinbutton', { name: 'Delegation budget' })).toBeNull();
+    expect(screen.queryByRole('spinbutton', { name: 'Tree budget' })).toBeNull();
     expect(screen.queryByText(/delegation/i)).toBeNull();
     expect(screen.getByText(/Supervisor, automerge and autorun apply to this session/)).toBeInTheDocument();
   });

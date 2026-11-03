@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { execFile, execFileSync, spawnSync, type ChildProcess } from 'child_process';
+import { createHash } from 'crypto';
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
@@ -19,13 +20,16 @@ import { createTask, type LegacyPlanState, type Task } from '../../../models/Tas
 import { fakeConfig, FakeExecutionBackend } from '../../../testing';
 import { saveSession } from '../../../utils/sessionStore';
 import { openTaskLog } from '../../../utils/taskLogStore';
-import { CredentialBroker } from '../credentialBroker';
+import { LOGIN_VOLUME } from '../containerPreflight';
+import { helperArgs, parseContainerSettings, type ContainerSettings } from '../containerSettings';
+import { containerStatus, describeContainers } from '../containerSetup';
+import { CredentialBroker, SIGN_IN_HOSTS } from '../credentialBroker';
 import { DockerExecutionBackend } from '../dockerLease';
-import { parseContainerSettings } from '../containerSettings';
-import { SpawnedDockerCli } from '../dockerCli';
-import type { EgressPath } from '../egressSidecar';
+import { SpawnedDockerCli, type DockerCli } from '../dockerCli';
+import type { EgressLease, EgressPath } from '../egressSidecar';
 import { LeaseRelay, RELAY_ENTRY } from '../leaseRelay';
-import { reclaimContainers } from '../reclaim';
+import { reclaimContainers, TREE_LABEL } from '../reclaim';
+import { ASK_SIGN_IN, COPY_SIGN_IN, SIGN_IN_COPY } from '../taskWorkspace';
 
 /*
  * A real task in a real container (ADR-0059 L5, L6). Nothing is faked but the
@@ -33,7 +37,7 @@ import { reclaimContainers } from '../reclaim';
  * image: the real adapter, `docker exec`, the real MCP server through the relay,
  * the gate, and Landing with real git. Off CI's default path, like the sandbox's
  * end-to-end runs: it skips where no engine answers, and where CI has one unless
- * ORDEWELL_REQUIRE_DOCKER=1 asks for it. One suite, so one at a time.
+ * ORDEWELL_REQUIRE_DOCKER=1 asks for it.
  */
 
 const REQUIRE_DOCKER = process.env.ORDEWELL_REQUIRE_DOCKER === '1';
@@ -42,11 +46,15 @@ const skip = (!engineAnswers || process.env.CI !== undefined) && !REQUIRE_DOCKER
 
 const IMAGE = `ordewell-e2e-fake:${process.pid}`;
 const FAKE_CLAUDE = resolve(__dirname, '../../../../../../bench/pipeline/fake-claude/fake-claude.mjs');
+const FAKE_OPENCODE = resolve(__dirname, '../../../../../../bench/pipeline/fake-opencode/fake-opencode.mjs');
+const FAKE_PROVIDER = resolve(__dirname, '../../../../../../bench/pipeline/fake-provider/fake-provider.mjs');
 const DOCKERFILE = `FROM node:22-slim
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends git >/dev/null
-RUN mkdir -p /task /mirror /login /caches/npm && chown -R node:node /task /mirror /login /caches
+RUN mkdir -p /task /mirror /login && chown -R node:node /task /mirror /login
 COPY fake-claude.mjs /opt/fake-claude.mjs
+COPY fake-opencode.mjs /opt/fake-opencode.mjs
 COPY claude /usr/local/bin/claude
+COPY opencode /usr/local/bin/opencode
 USER node
 `;
 /**
@@ -56,6 +64,7 @@ USER node
  * repair's merge, which fake-claude cannot do.
  */
 const FAKE_LAUNCHER = `#!/bin/sh
+if [ "$1 $2" = 'auth status' ]; then [ -s "$CLAUDE_CONFIG_DIR/.credentials.json" ]; exit $?; fi
 echo "$(uname -s) $(id -u) $HOME" > where-i-ran.txt
 echo run >> "$HOME/runs"
 wc -l < "$HOME/runs" | tr -d ' ' > runs-of-this-home.txt
@@ -63,6 +72,12 @@ for branch in $(git for-each-ref --format='%(refname:short)' refs/heads/); do
   git merge -q -X ours --no-edit "$branch" >/dev/null 2>&1 || true
 done
 exec node /opt/fake-claude.mjs "$@"
+`;
+
+/** The OpenCode stand-in says where it ran the same way, then serves. */
+const FAKE_OPENCODE_LAUNCHER = `#!/bin/sh
+echo "$(uname -s) $(id -u) $HOME" > where-i-ran.txt
+exec node /opt/fake-opencode.mjs "$@"
 `;
 
 /** The engine's default network, which limits nothing: what a guarantee was measured to have to stop. */
@@ -75,9 +90,26 @@ const env = () => {
 };
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, env: env(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const docker = (...args: string[]) => execFileSync('docker', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+/** Mirrors and caches carry no label. They are named for the checkout, as `mirrorVolume` names them. */
+const projects = new Set<string>();
+/** A sign-in is a person's, and no run's to count or to sweep up, whatever made it. */
+const notThisRuns = (name: string) => {
+  if (name.startsWith('ordewell-login-')) return true;
+  const project = /^ordewell-(?:mirror|cache)-([0-9a-f]{16})/.exec(name)?.[1];
+  return project !== undefined && !projects.has(project);
+};
+const THIS_RUN = new RegExp(`(^|-)${process.pid}(-|$)`);
+/**
+ * What this run has in the engine. Other checkouts run this file on the same
+ * engine, and the teardown removes what this lists, so it leaves out only what is
+ * provably another run's: anything it cannot place still counts as left behind.
+ */
 const ours = (kind: 'container' | 'volume' | 'network') => (kind === 'container'
-  ? docker('container', 'ls', '-a', '--filter', 'name=ordewell-', '--format', '{{.Names}}')
-  : docker(kind, 'ls', '--filter', 'name=ordewell-', '--format', '{{.Name}}')).split('\n').filter(Boolean);
+  ? docker('container', 'ls', '-a', '--filter', 'name=ordewell-', '--format', `{{.Names}}\t{{.Label "${TREE_LABEL}"}}`)
+  : docker(kind, 'ls', '--filter', 'name=ordewell-', '--format', `{{.Name}}\t{{.Label "${TREE_LABEL}"}}`)).split('\n').filter(Boolean)
+  .map((line) => line.split('\t'))
+  .filter(([name, tree]) => (tree ? THIS_RUN.test(tree) : !notThisRuns(name)))
+  .map(([name]) => name);
 const isAttempt = (name: string) => !name.endsWith('-egress');
 
 const dirs: string[] = [];
@@ -97,11 +129,13 @@ function repo(): string {
   writeFileSync(join(root, 'README.md'), 'hello\n');
   git(root, 'add', '-A');
   git(root, 'commit', '-q', '-m', 'initial');
+  projects.add(createHash('sha256').update(git(root, 'rev-parse', '--path-format=absolute', '--git-common-dir')).digest('hex').slice(0, 16));
   return root;
 }
 
 const cue = (spec: unknown) => `<fake-claude>${JSON.stringify(spec)}</fake-claude>`;
-const settingsOf = (over: Record<string, unknown> = {}) => parseContainerSettings({ image: IMAGE, memory: '512m', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] }, ...over });
+const openCue = (spec: unknown) => `<fake-opencode>${JSON.stringify(spec)}</fake-opencode>`;
+const settingsOf = (over: Record<string, unknown> = {}) => ({ image: IMAGE, memory: '512m', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] }, ...over });
 
 interface SessionOptions {
   egress?: EgressPath;
@@ -109,9 +143,11 @@ interface SessionOptions {
   /** Turns of a delegated task's subplanner, which runs on this host in any case. */
   subplanner?: PlannerTurn[];
   repairs?: number;
+  /** The runners the plan is for: an OpenCode task needs it named. */
+  runners?: string[];
 }
 
-function session(root: string, tasks: Task[], settings = settingsOf(), { egress, key, subplanner, repairs = 0 }: SessionOptions = {}) {
+function session(root: string, tasks: Task[], settings = settingsOf(), { egress, key, subplanner, repairs = 0, runners = ['claude-code'] }: SessionOptions = {}) {
   const told: string[] = [];
   const planner = subplanner && scriptedPlanner(subplanner);
   const notifications = fakeNotification();
@@ -135,11 +171,63 @@ function session(root: string, tasks: Task[], settings = settingsOf(), { egress,
       tell: (level, text) => { told.push(`${level}: ${text}`); context.tell(level, text); },
     }),
   });
-  parent.loadPlan({ tasks, runners: ['claude-code'], status: 'approved', generatedAt: '2026-11-01T10:00:00.000Z' } as unknown as LegacyPlanState, 'the goal', root, { sessionId: `docker-e2e-${process.pid}-${tasks[0].id}` });
+  parent.loadPlan({ tasks, runners, status: 'approved', generatedAt: '2026-11-01T10:00:00.000Z' } as unknown as LegacyPlanState, 'the goal', root, { sessionId: `docker-e2e-${process.pid}-${tasks[0].id}` });
   return { parent, told, notifications, taskOutput, integration: () => parent.planState?.isolation?.run.repos[0].integrationBranch ?? '' };
 }
 
 const settled = (s: ReturnType<typeof session>['parent'], index = 0) => vi.waitFor(() => expect(s.planTasks[index].status).not.toMatch(/approved|pending|in_progress/), { timeout: 60_000, interval: 100 });
+
+/**
+ * A controlled Anthropic model: no network, no key, and a scripted turn. It
+ * writes one file, asks Ordewell's own `task_complete` through the relayed MCP
+ * server, then ends. That is the whole of what a containerised OpenCode task
+ * does with a model, without a provider or a bill.
+ */
+function controlledModel() {
+  const asked: string[] = [];
+  let writes = 0;
+  const sse = (res: import('http').ServerResponse, blocks: readonly Record<string, unknown>[]) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    const event = (payload: unknown) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    event({ type: 'message_start', message: { id: `msg_${asked.length}`, type: 'message', role: 'assistant', model: 'controlled', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 1 } } });
+    blocks.forEach((block, index) => {
+      if (block.type === 'text') {
+        event({ type: 'content_block_start', index, content_block: { type: 'text', text: '' } });
+        event({ type: 'content_block_delta', index, delta: { type: 'text_delta', text: block.text } });
+      } else {
+        event({ type: 'content_block_start', index, content_block: { type: 'tool_use', id: `toolu_${asked.length}_${index}`, name: block.name, input: {} } });
+        event({ type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: JSON.stringify(block.input) } });
+      }
+      event({ type: 'content_block_stop', index });
+    });
+    event({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 5 } });
+    event({ type: 'message_stop' });
+    res.end();
+  };
+  const server = createHttpServer((req, res) => {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', () => {
+      const parsed = (() => { try { return JSON.parse(body) as { system?: unknown; messages?: { content?: unknown }[] }; } catch { return {}; } })();
+      const system = JSON.stringify(parsed.system ?? '');
+      const last = parsed.messages?.at(-1)?.content;
+      const text = Array.isArray(last)
+        ? last.map((block: { type?: string; text?: string; content?: unknown }) => (block.type === 'text' ? block.text ?? '' : block.type === 'tool_result' ? JSON.stringify(block.content) : '')).join(' ')
+        : String(last ?? '');
+      asked.push(text.slice(0, 120));
+      // A title is asked for before the turn, with a prompt of its own.
+      if (system.includes('name conversations')) return sse(res, [{ type: 'text', text: 'A containerised task' }]);
+      if (text.includes('Recorded')) return sse(res, [{ type: 'text', text: 'Done.' }]);
+      if (text.includes('Wrote file') || text.includes('Created file')) {
+        return sse(res, [{ type: 'tool_use', name: 'ordewell_task_complete', input: { status: 'done', summary: 'The controlled model wrote it.' } }]);
+      }
+      // A schema change in a later OpenCode would make the same call fail forever; one retry, then the turn ends without a completion.
+      if (writes++ > 0) return sse(res, [{ type: 'text', text: 'The write tool was refused.' }]);
+      return sse(res, [{ type: 'tool_use', name: 'write', input: { path: 'provider.txt', content: 'from the controlled model\n' } }]);
+    });
+  });
+  return { server, asked };
+}
 
 describe.skipIf(skip)('a task in a real container', () => {
   const before: Record<'container' | 'volume' | 'network', string[]> = { container: [], volume: [], network: [] };
@@ -151,8 +239,11 @@ describe.skipIf(skip)('a task in a real container', () => {
     const context = tempDir('ordewell-image-');
     writeFileSync(join(context, 'Dockerfile'), DOCKERFILE);
     copyFileSync(FAKE_CLAUDE, join(context, 'fake-claude.mjs'));
+    copyFileSync(FAKE_OPENCODE, join(context, 'fake-opencode.mjs'));
     writeFileSync(join(context, 'claude'), FAKE_LAUNCHER);
     chmodSync(join(context, 'claude'), 0o755);
+    writeFileSync(join(context, 'opencode'), FAKE_OPENCODE_LAUNCHER);
+    chmodSync(join(context, 'opencode'), 0o755);
     docker('build', '-q', '-t', IMAGE, context);
   }, 180_000);
 
@@ -188,6 +279,95 @@ describe.skipIf(skip)('a task in a real container', () => {
     expect(await env.parent.execute({ command: 'merge_all' }, { kind: 'user' })).toMatchObject({ ok: true });
     expect(readFileSync(join(root, 'a.txt'), 'utf8')).toBe('written in the container\n');
     env.parent.destroy();
+  }, 120_000);
+
+  it('runs an OpenCode change task in the container, and lands its work', async () => {
+    const root = repo();
+    const tasks = [createTask({ id: 'o', order: 1, title: 'OpenCode o', prompt: openCue({ write: { 'o.txt': 'written by opencode\n' }, summary: 'Wrote o.' }), assignedRunner: 'opencode' })];
+    const env = session(root, tasks, settingsOf(), { runners: ['claude-code', 'opencode'] });
+
+    await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await settled(env.parent);
+
+    expect(env.parent.planTasks[0]).toMatchObject({ status: 'completed', verdict: { outcome: 'pass', reported: 'done' } });
+    const integration = env.integration();
+    expect(git(root, 'show', `${integration}:o.txt`)).toBe('written by opencode');
+    expect(git(root, 'show', `${integration}:where-i-ran.txt`)).toBe('Linux 1000 /task/home');
+    await vi.waitFor(() => expect(ours('container').filter((n) => !before.container.includes(n))).toEqual([]), { timeout: 30_000 });
+    env.parent.destroy();
+  }, 120_000);
+
+  it.skipIf(!process.env.ORDEWELL_E2E_OPENCODE_IMAGE)('runs a real OpenCode task in a container against a controlled model, through the lease gateway', async () => {
+    // Build an image with `npm install -g @opencode/cli` and `git`, as `docker/task.Dockerfile` shows, and name it in ORDEWELL_E2E_OPENCODE_IMAGE.
+    const model = controlledModel();
+    await new Promise<void>((done) => model.server.listen(0, '127.0.0.1', done));
+    const modelPort = (model.server.address() as AddressInfo).port;
+    try {
+      const root = repo();
+      const tasks = [createTask({
+        id: 'r', order: 1, title: 'Real OpenCode', prompt: 'Write provider.txt and complete the task.', assignedRunner: 'opencode',
+        assignedModel: { modelId: 'anthropic/claude-sonnet-5', modelLabel: 'claude-sonnet-5', availableVariants: [] },
+      })];
+      const env = session(root, tasks, settingsOf({
+        image: process.env.ORDEWELL_E2E_OPENCODE_IMAGE, memory: '2g',
+        login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL'] },
+        required: ['fs.hostHidden', 'fs.writeScope', 'limits.memory', 'net.allowlist', 'net.noMetadata', 'cred.unreadable'],
+      }), { runners: ['claude-code', 'opencode'], key: { ANTHROPIC_API_KEY: 'sk-ant-api03-not-a-real-key', ANTHROPIC_BASE_URL: `http://127.0.0.1:${modelPort}` } });
+
+      await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+      await settled(env.parent);
+
+      expect(env.parent.planTasks[0]).toMatchObject({ status: 'completed', verdict: { outcome: 'pass', reported: 'done' } });
+      expect(git(root, 'show', `${env.integration()}:provider.txt`)).toBe('from the controlled model');
+      // The real binary reached Ordewell's server through the relay, and the model's traffic reached this host's gateway.
+      expect(model.asked.some((line) => line.includes('Recorded'))).toBe(true);
+      env.parent.destroy();
+    } finally {
+      model.server.close();
+    }
+  }, 180_000);
+
+  it('a Continue resumes an OpenCode session in the home its volume kept (ADR-0059 L2)', async () => {
+    const root = repo();
+    const tasks = [createTask({ id: 'c', order: 1, title: 'Continue c', prompt: openCue({ write: { 'partial.txt': 'half done\n' }, status: 'blocked', reason: 'stuck' }), assignedRunner: 'opencode' })];
+    const env = session(root, tasks, settingsOf(), { runners: ['claude-code', 'opencode'] });
+
+    await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await settled(env.parent);
+    expect(env.parent.planTasks[0].status).toBe('failed');
+    const resumed = env.parent.planTasks[0].runnerSessionId;
+    expect(resumed).toMatch(/^ses_/);
+
+    const continued = await env.parent.execute({ command: 'retry_task', task: 'c', from: 'session', message: openCue({ write: { 'c.txt': 'continued\n' }, summary: 'Went on.' }) }, { kind: 'user' });
+    expect(continued).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(env.parent.planTasks[0].status).toBe('completed'), { timeout: 60_000, interval: 100 });
+
+    const integration = env.integration();
+    expect(git(root, 'show', `${integration}:c.txt`)).toBe('continued');
+    expect(git(root, 'show', `${integration}:partial.txt`)).toBe('half done');
+    expect(env.parent.planTasks[0].attemptUsage?.map((usage) => usage.sessionId)).toEqual([resumed, resumed]);
+    env.parent.destroy();
+  }, 120_000);
+
+  it("gives an OpenCode task its own copy of a person's sign-in, which reaches neither the original nor the next task", async () => {
+    const hadLogin = spawnSync('docker', ['volume', 'inspect', 'ordewell-login-opencode']).status === 0;
+    docker('volume', 'create', 'ordewell-login-opencode');
+    docker('run', '--rm', '--network', 'none', '-v', 'ordewell-login-opencode:/login', IMAGE, 'sh', '-c', 'mkdir -p /login/opencode && echo original > /login/opencode/auth.json');
+    try {
+      const root = repo();
+      const tasks = [createTask({ id: 'p', order: 1, title: 'Sign-in p', prompt: openCue({ readSignIn: true, forgeSignIn: true, write: { 'p.txt': 'read it\n' }, summary: 'Read the sign-in.' }), assignedRunner: 'opencode' })];
+      const env = session(root, tasks, settingsOf({ login: { kind: 'own-sign-in' } }), { runners: ['claude-code', 'opencode'] });
+
+      await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+      await settled(env.parent);
+
+      expect(env.parent.planTasks[0].status).toBe('completed');
+      expect(git(root, 'show', `${env.integration()}:sign-in-read.txt`)).toBe('original');
+      expect(docker('run', '--rm', '--network', 'none', '-v', 'ordewell-login-opencode:/login:ro', IMAGE, 'cat', '/login/opencode/auth.json')).toBe('original');
+      env.parent.destroy();
+    } finally {
+      if (!hadLogin) docker('volume', 'rm', '-f', 'ordewell-login-opencode');
+    }
   }, 120_000);
 
   it("keeps a failed attempt's work in its worktree, as a local attempt's stays", async () => {
@@ -367,7 +547,7 @@ describe.skipIf(skip)('a task in a real container', () => {
   }, 120_000);
 
   it('proves on a real engine what it says it proves, the network with it', async () => {
-    const backend = new DockerExecutionBackend(new FakeExecutionBackend(), { settings: settingsOf(), sessionId: () => 'probe', tell: () => undefined });
+    const backend = new DockerExecutionBackend(new FakeExecutionBackend(), { settings: settingsOf(), sessionId: () => `probe-${process.pid}`, tell: () => undefined });
 
     const report = await backend.probe();
 
@@ -379,8 +559,72 @@ describe.skipIf(skip)('a task in a real container', () => {
     await vi.waitFor(() => expect(ours('network').filter((n) => !before.network.includes(n))).toEqual([]), { timeout: 30_000 });
   }, 60_000);
 
+  it('reports on a real engine what a check proved apart from what it assumes, and leaves nothing', async () => {
+    const status = await containerStatus(settingsOf(), { prove: true, broker: new CredentialBroker({ ANTHROPIC_API_KEY: 'sk-ant-api03-x' }) });
+
+    expect(status, JSON.stringify(status.problems)).toMatchObject({ on: true, ready: true, problems: [] });
+    expect(Object.fromEntries(status.guarantees!.filter(({ required }) => required).map(({ guarantee, proven }) => [guarantee, proven]))).toEqual({ 'fs.hostHidden': true, 'fs.writeScope': true, 'limits.memory': true, 'net.allowlist': true, 'net.noMetadata': true });
+    expect(status.guarantees!.find(({ guarantee }) => guarantee === 'cred.unreadable')).toMatchObject({ proven: false });
+    expect(describeContainers(status).join('\n')).toContain('Assumed or left uncovered, and never proven:');
+    await vi.waitFor(() => {
+      expect(ours('container').filter((n) => !before.container.includes(n))).toEqual([]);
+      expect(ours('network').filter((n) => !before.network.includes(n))).toEqual([]);
+    }, { timeout: 30_000 });
+  }, 60_000);
+
+  it('names an image that was never built, on a real engine, and starts nothing to find out', async () => {
+    const status = await containerStatus(settingsOf({ image: `ordewell-never-built:${process.pid}` }), { prove: true, broker: new CredentialBroker({ ANTHROPIC_API_KEY: 'sk-ant-api03-x' }) });
+
+    expect(status.ready).toBe(false);
+    expect(status.problems.map(({ code }) => code)).toEqual(['image-missing']);
+    expect(status.guarantees).toBeUndefined();
+  }, 30_000);
+
+  it('hands a task a copy of the sign-in: what it forges stops there, for the original and the next task', async (test) => {
+    const hadLogin = spawnSync('docker', ['volume', 'inspect', LOGIN_VOLUME]).status === 0;
+    if (hadLogin) test.skip();
+    docker('volume', 'create', LOGIN_VOLUME);
+    try {
+      docker('run', '--rm', '--network', 'none', '-v', `${LOGIN_VOLUME}:/login`, IMAGE, 'sh', '-c', 'mkdir -p /login/claude && echo original > /login/claude/.credentials.json');
+      const first = leaseWith('forger', [worktreeOf(repo(), 'ordewell/forger')], settingsOf({ login: { kind: 'own-sign-in' } }));
+      const second = leaseWith('heir', [worktreeOf(repo(), 'ordewell/heir')], settingsOf({ login: { kind: 'own-sign-in' } }));
+
+      const forger = await first.open();
+      const forged = await forger.run('echo forged > "$CLAUDE_CONFIG_DIR/.credentials.json"; cat "$CLAUDE_CONFIG_DIR/.credentials.json"; cat /login/claude/.credentials.json; echo "original $?"');
+      const heir = await second.open();
+      const inherited = await heir.run('cat "$CLAUDE_CONFIG_DIR/.credentials.json"');
+
+      expect(forged.stdout.trim().split('\n')).toEqual(['forged', 'original 1']);
+      expect(inherited.stdout.trim()).toBe('original');
+      expect(docker('run', '--rm', '--network', 'none', '-v', `${LOGIN_VOLUME}:/login:ro`, IMAGE, 'cat', '/login/claude/.credentials.json')).toBe('original');
+      forger.lease.release('done');
+      heir.lease.release('done');
+      await first.backend.letGo('forger', { keep: false, reason: 'done' });
+      await second.backend.letGo('heir', { keep: false, reason: 'done' });
+    } finally {
+      docker('volume', 'rm', '-f', LOGIN_VOLUME);
+    }
+  }, 120_000);
+
+  it('keeps what one task leaves in its package cache from the next task on the same project', async () => {
+    const root = repo();
+    const first = leaseOver('poisoner', [worktreeOf(root, 'ordewell/poisoner')]);
+    const second = leaseOver('reader', [worktreeOf(root, 'ordewell/reader')]);
+
+    const poisoner = await first.open();
+    await poisoner.run('mkdir -p "$npm_config_cache" && echo poison > "$npm_config_cache/_cacache"');
+    const reader = await second.open();
+    const found = await reader.run('ls "$npm_config_cache/_cacache" 2>/dev/null; echo "cache $?"');
+
+    expect(found.stdout.trim()).toBe('cache 2');
+    poisoner.lease.release('done');
+    reader.lease.release('done');
+    await first.backend.letGo('poisoner', { keep: false, reason: 'done' });
+    await second.backend.letGo('reader', { keep: false, reason: 'done' });
+  }, 90_000);
+
   it('catches, by that probe, what the default network was measured to let through', async () => {
-    const backend = new DockerExecutionBackend(new FakeExecutionBackend(), { settings: settingsOf(), egress: BRIDGE, sessionId: () => 'probe', tell: () => undefined });
+    const backend = new DockerExecutionBackend(new FakeExecutionBackend(), { settings: settingsOf(), egress: BRIDGE, sessionId: () => `probe-${process.pid}`, tell: () => undefined });
 
     const report = await backend.probe();
 
@@ -675,10 +919,12 @@ describe.skipIf(skip)('a task in a real container', () => {
   describe('what a session leaves in the engine (ADR-0059 L6)', () => {
     const LOGIN = { image: IMAGE, memory: '512m', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] } };
     const leftBy = (volumes: readonly string[]) => ours('volume').filter((name) => !volumes.includes(name));
+    /** Docker lists a volume it is removing with no label for a moment, so another run's can pass for one left here. */
+    const nothingLeftBy = (volumes: readonly string[]) => vi.waitFor(() => expect(leftBy(volumes)).toEqual([]));
     const pinsIn = (mirror: string) => docker('run', '--rm', '--init', '--pids-limit', '8192', '--memory', '256m', '--network', 'none', '-v', `${mirror}:/mirror:ro`, IMAGE, 'sh', '-c', 'for m in /mirror/*.git; do git -C "$m" for-each-ref refs/ordewell/pins; done').split('\n').filter(Boolean);
     const failing = (id: string) => [createTask({ id, order: 1, title: 'Leave work', prompt: cue({ write: { 'partial.txt': 'half done\n' }, status: 'blocked', reason: 'stuck' }), assignedRunner: 'claude-code' })];
 
-    it('goes with a Clean up: its volumes, and a mirror and caches nothing else leans on', async () => {
+    it('goes with a Clean up: its volumes, and a mirror nothing else leans on', async () => {
       const volumes = ours('volume');
       const root = repo();
       const env = session(root, failing('q'));
@@ -686,12 +932,11 @@ describe.skipIf(skip)('a task in a real container', () => {
       await settled(env.parent);
       await vi.waitFor(() => expect(leftBy(volumes).filter((name) => name.startsWith('ordewell-task-'))).toHaveLength(1), { timeout: 30_000 });
       expect(leftBy(volumes).some((name) => name.startsWith('ordewell-mirror-'))).toBe(true);
-      expect(leftBy(volumes).some((name) => name.startsWith('ordewell-cache-'))).toBe(true);
 
       await env.parent.execute({ command: 'stop_run' }, { kind: 'user' });
       await env.parent.cleanupRun();
 
-      expect(leftBy(volumes)).toEqual([]);
+      await nothingLeftBy(volumes);
       env.parent.destroy();
     }, 120_000);
 
@@ -702,7 +947,9 @@ describe.skipIf(skip)('a task in a real container', () => {
       await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
       await settled(env.parent);
       await vi.waitFor(() => expect(leftBy(volumes).filter((name) => name.startsWith('ordewell-task-'))).toHaveLength(1), { timeout: 30_000 });
+      await env.parent.stopSubtree();
       env.parent.destroy();
+      await env.parent.gone;
       // What a host that died leaves: its network, which nothing took down.
       const tree = `docker-e2e-${process.pid}-z`;
       const stranded = `ordewell-stranded-${process.pid}-net`;
@@ -710,7 +957,7 @@ describe.skipIf(skip)('a task in a real container', () => {
 
       await reclaimContainers(tree, LOGIN);
 
-      expect(leftBy(volumes)).toEqual([]);
+      await nothingLeftBy(volumes);
       expect(ours('network')).not.toContain(stranded);
     }, 120_000);
 
@@ -727,6 +974,7 @@ describe.skipIf(skip)('a task in a real container', () => {
       expect(pinsIn(mirror).length).toBeGreaterThan(2);
       first.parent.destroy();
       second.parent.destroy();
+      await Promise.all([first.parent.gone, second.parent.gone]);
 
       await reclaimContainers(`docker-e2e-${process.pid}-p1`, LOGIN);
 
@@ -735,7 +983,42 @@ describe.skipIf(skip)('a task in a real container', () => {
 
       await reclaimContainers(`docker-e2e-${process.pid}-p2`, LOGIN);
 
-      expect(leftBy(volumes)).toEqual([]);
+      await nothingLeftBy(volumes);
+    }, 120_000);
+
+    it("leaves nothing when another session's clean-up reads the mirror after this one took it: naming a volume makes it again", async () => {
+      const volumes = ours('volume');
+      const root = repo();
+      const env = session(root, failing('o'));
+      await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+      await settled(env.parent);
+      await vi.waitFor(() => expect(leftBy(volumes).filter((name) => name.startsWith('ordewell-task-'))).toHaveLength(1), { timeout: 30_000 });
+      const [mirror] = leftBy(volumes).filter((name) => name.startsWith('ordewell-mirror-'));
+      env.parent.destroy();
+      await env.parent.gone;
+      const real = new SpawnedDockerCli();
+      let tookIt = () => {};
+      const taken = new Promise<void>((resolve) => { tookIt = resolve; });
+      // Both listed the mirrors before either read one, as any two that overlap do.
+      const listing = (hold: () => Promise<void>): DockerCli => ({
+        entry: (args) => real.entry(args),
+        call: async (args, opts) => {
+          if (args.includes('name=ordewell-mirror-')) return { code: 0, stdout: `${mirror}\n`, stderr: '' };
+          if (args[0] === 'run') await hold();
+          return real.call(args, opts);
+        },
+      });
+      const told: string[] = [];
+      const tell = (text: string) => { told.push(text); };
+
+      const reading = reclaimContainers(`docker-e2e-${process.pid}-elsewhere`, LOGIN, { cli: listing(() => taken), tell });
+      await reclaimContainers(`docker-e2e-${process.pid}-o`, LOGIN, { cli: listing(() => Promise.resolve()), tell });
+      expect(ours('volume')).not.toContain(mirror);
+      tookIt();
+      await reading;
+
+      expect(told).toEqual([]);
+      await nothingLeftBy(volumes);
     }, 120_000);
   });
 
@@ -822,26 +1105,29 @@ describe.skipIf(skip)('a task in a real container', () => {
 
   /*
    * The real binary, in an image built from docker/task.Dockerfile: set
-   * ORDEWELL_E2E_HARNESS_IMAGE to one. It is given an empty sign-in, so no key
-   * goes anywhere and no model answers: what this proves is its launch, its
-   * protocol through `docker exec` and its attach to Ordewell's server through
-   * the relay. What it says of memory is a harness at rest, not one at work.
+   * ORDEWELL_E2E_HARNESS_IMAGE to one. Its gateway leads to a listener here that
+   * refuses every key and says not to retry, as the harness otherwise does for
+   * minutes. So no key goes anywhere and no model answers: what this
+   * proves is its launch, its protocol through `docker exec` and its attach to
+   * Ordewell's server through the relay. What it says of memory is a harness at rest, not one at work.
    */
   const HARNESS_IMAGE = process.env.ORDEWELL_E2E_HARNESS_IMAGE;
   it.skipIf(!HARNESS_IMAGE)('attaches the real harness to its tools through the relay, and measures it', async () => {
-    const login = 'ordewell-login-claude-code';
-    const hadLogin = spawnSync('docker', ['volume', 'inspect', login]).status === 0;
-    if (!hadLogin) docker('volume', 'create', login);
     const root = repo();
+    const refusing = createHttpServer((_req, res) => {
+      res.writeHead(401, { 'content-type': 'application/json', 'x-should-retry': 'false' });
+      res.end(JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' } }));
+    });
+    await new Promise<void>((listening) => refusing.listen(0, '127.0.0.1', listening));
     const tasks = [createTask({ id: 'h', order: 1, title: 'Real harness', prompt: 'Say hello.', assignedRunner: 'claude-code' })];
-    const env = session(root, tasks, parseContainerSettings({ image: HARNESS_IMAGE, memory: '2g', login: { kind: 'own-sign-in' } }));
+    const env = session(root, tasks, settingsOf({ image: HARNESS_IMAGE, memory: '2g', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL'] } }), { key: { ANTHROPIC_API_KEY: 'sk-ant-api03-goes-nowhere', ANTHROPIC_BASE_URL: `http://127.0.0.1:${(refusing.address() as AddressInfo).port}` } });
 
     await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(attempts()).toHaveLength(1), { timeout: 60_000, interval: 100 });
     const [box] = attempts();
     const memory = (file: string) => Number(spawnSync('docker', ['exec', box, 'cat', `/sys/fs/cgroup/${file}`], { encoding: 'utf8' }).stdout.trim());
 
-    // Attached: only then is it sent a turn, and without a login that turn ends it waiting on the user.
+    // Attached: only then is it sent a turn, and with no model that turn ends it waiting on the user.
     await vi.waitFor(() => expect(env.parent.planTasks[0].status).toBe('awaiting_user'), { timeout: 120_000, interval: 200 });
     expect(vi.mocked(env.notifications.warn).mock.calls.join()).not.toContain("started without Ordewell's tools");
     expect(env.parent.planTasks[0].awaitingReason).toBe('input');
@@ -852,7 +1138,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     await env.parent.execute({ command: 'stop_run' }, { kind: 'user' });
     await vi.waitFor(() => expect(ours('container').filter((n) => !before.container.includes(n))).toEqual([]), { timeout: 45_000, interval: 200 });
     env.parent.destroy();
-    if (!hadLogin) docker('volume', 'rm', '-f', login);
+    refusing.close();
 
     const lease = leaseOverImage('timing', [worktreeOf(repo(), 'ordewell/timing')], HARNESS_IMAGE!);
     const opens: number[] = [];
@@ -920,7 +1206,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     const key = 'sk-ant-api03-a-real-turn-through-the-gateway';
     const root = repo();
     const tasks = [createTask({ id: 'turn', order: 1, title: 'A real turn', prompt: 'Write the file.', assignedRunner: 'claude-code' })];
-    const env = session(root, tasks, parseContainerSettings({ image: HARNESS_IMAGE, memory: '2g', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL'] }, required: ['fs.hostHidden', 'fs.writeScope', 'limits.memory', 'net.allowlist', 'net.noMetadata', 'cred.unreadable'] }), { key: { ANTHROPIC_API_KEY: key, ANTHROPIC_BASE_URL: url } });
+    const env = session(root, tasks, settingsOf({ image: HARNESS_IMAGE, memory: '2g', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL'] }, required: ['fs.hostHidden', 'fs.writeScope', 'limits.memory', 'net.allowlist', 'net.noMetadata', 'cred.unreadable'] }), { key: { ANTHROPIC_API_KEY: key, ANTHROPIC_BASE_URL: url } });
 
     await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(attempts()).toHaveLength(1), { timeout: 60_000, interval: 100 });
@@ -948,11 +1234,207 @@ describe.skipIf(skip)('a task in a real container', () => {
     const lease = leaseOver('reach', [worktreeOf(root, 'ordewell/reach')]);
     const { run, lease: reserved } = await lease.open();
 
-    const tried = await run(`touch /mirror/self.git/hooks/post-receive; echo "mirror $?"; touch /usr/bin/x; echo "root $?"; ls ${root} 2>&1; echo "host $?"; ls /var/run/docker.sock 2>&1; echo "socket $?"; touch /caches/npm/x; echo "cache $?"; touch "$HOME/x"; echo "home $?"`);
+    const tried = await run(`touch /mirror/self.git/hooks/post-receive; echo "mirror $?"; touch /usr/bin/x; echo "root $?"; ls ${root} 2>&1; echo "host $?"; ls /var/run/docker.sock 2>&1; echo "socket $?"; mkdir -p "$npm_config_cache" && touch "$npm_config_cache/x"; echo "cache $?"; ls -d /caches /login 2>&1; echo "shared $?"; touch "$HOME/x"; echo "home $?"`);
 
     const lines = tried.stdout.trim().split('\n');
-    for (const [where, code] of [['mirror', '1'], ['root', '1'], ['host', '2'], ['socket', '2'], ['cache', '0'], ['home', '0']]) expect(lines).toContain(`${where} ${code}`);
+    for (const [where, code] of [['mirror', '1'], ['root', '1'], ['host', '2'], ['socket', '2'], ['cache', '0'], ['shared', '2'], ['home', '0']]) expect(lines).toContain(`${where} ${code}`);
     reserved.release('done');
     await lease.backend.letGo('reach', { keep: false, reason: 'done' });
   }, 60_000);
+});
+
+/*
+ * The unmodified binary on a sign-in, against bench/pipeline/fake-provider: its
+ * token endpoint and Messages API, behind a CONNECT proxy, on an internal network
+ * with no other way out. Every credential here is made up and expired on purpose,
+ * and none can leave that network. It takes ORDEWELL_E2E_HARNESS_IMAGE, and proves
+ * what a refresh does to a copy: that the provider rotates tokens is what users
+ * report, and no account was signed in to here.
+ */
+const SIGNED_IN_HARNESS = process.env.ORDEWELL_E2E_HARNESS_IMAGE;
+describe.skipIf(skip || !SIGNED_IN_HARNESS)("a person's own sign-in, on the real harness", () => {
+  const name = `e2e-sign-in-${process.pid}`;
+  const proxy = `http://${name}:3128`;
+  const PROXY_ENV = { HTTPS_PROXY: proxy, https_proxy: proxy, HTTP_PROXY: proxy, http_proxy: proxy, NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost' };
+  const volumes: string[] = [];
+  let settings: ContainerSettings;
+
+  const openssl = (cwd: string, ...args: string[]) => execFileSync('openssl', args, { cwd, stdio: 'ignore' });
+
+  beforeAll(() => {
+    const context = tempDir('ordewell-provider-');
+    writeFileSync(join(context, 'names'), `subjectAltName=${SIGN_IN_HOSTS.map((host) => `DNS:${host}`).join(',')}\n`);
+    openssl(context, 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'ca.key', '-out', 'ca.pem', '-subj', '/CN=sign-in e2e', '-days', '2');
+    openssl(context, 'req', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'srv.key', '-out', 'srv.csr', '-subj', '/CN=provider');
+    openssl(context, 'x509', '-req', '-in', 'srv.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-out', 'srv.pem', '-days', '2', '-extfile', 'names');
+    chmodSync(join(context, 'srv.key'), 0o644);
+    copyFileSync(FAKE_PROVIDER, join(context, 'fake-provider.mjs'));
+    writeFileSync(join(context, 'Dockerfile'), `FROM ${SIGNED_IN_HARNESS}\nCOPY ca.pem srv.key srv.pem fake-provider.mjs /opt/e2e/\nENV NODE_EXTRA_CA_CERTS=/opt/e2e/ca.pem\n`);
+    docker('build', '-q', '-t', name, context);
+    docker('network', 'create', '--internal', name);
+    docker('run', '-d', '--name', name, '--network', name, '-e', 'FAKE_PROVIDER_KEY=/opt/e2e/srv.key', '-e', 'FAKE_PROVIDER_CERT=/opt/e2e/srv.pem', '-e', `FAKE_PROVIDER_ALLOW=${SIGN_IN_HOSTS.join(',')}`, name, 'node', '/opt/e2e/fake-provider.mjs');
+    const parsed = parseContainerSettings({ image: name, memory: '2g', login: { kind: 'own-sign-in' } });
+    if ('refused' in parsed) throw new Error(parsed.refused);
+    settings = parsed;
+  }, 120_000);
+
+  afterAll(() => {
+    spawnSync('docker', ['rm', '-f', name]);
+    for (const volume of volumes) spawnSync('docker', ['volume', 'rm', '-f', volume]);
+    spawnSync('docker', ['network', 'rm', name]);
+    spawnSync('docker', ['image', 'rm', '-f', name]);
+  }, 60_000);
+
+  const volume = (tag: string) => {
+    const made = `${name}-${tag}`;
+    docker('volume', 'create', made);
+    volumes.push(made);
+    return made;
+  };
+  const inHelper = (mounts: string[], script: string, input = '') => spawnSync('docker', [...helperArgs(settings, mounts), 'sh', '-c', script], { encoding: 'utf8', input, timeout: 60_000 });
+  /** As a lease's container runs a runner, on a network that leads to the proxy and nowhere else. */
+  const inTask = (task: string, script: string, variables: Record<string, string> = {}) => {
+    const args = helperArgs(settings, [`${task}:/task`], { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', CLAUDE_CONFIG_DIR: SIGN_IN_COPY, ...PROXY_ENV, ...variables });
+    args[args.indexOf('none')] = name;
+    return spawnSync('docker', [...args, 'sh', '-c', `mkdir -p "$HOME" && cd /tmp && ${script}`], { encoding: 'utf8', input: '', timeout: 90_000 });
+  };
+  const credentials = (refreshToken: string) => JSON.stringify({ claudeAiOauth: { accessToken: 'access-expired', refreshToken, expiresAt: 1000, scopes: ['user:inference', 'user:profile'], subscriptionType: 'pro' } });
+  const signIn = (login: string, refreshToken: string) => inHelper([`${login}:/login`], 'mkdir -p /login/claude && cat > /login/claude/.credentials.json', credentials(refreshToken));
+  const kept = (login: string) => inHelper([`${login}:/login:ro`], 'cat /login/claude/.credentials.json').stdout;
+  const hand = (login: string, task: string) => inHelper([`${task}:/task`, `${login}:/login:ro`], COPY_SIGN_IN);
+  const copyOf = (task: string) => (JSON.parse(inHelper([`${task}:/task`], 'cat /task/login/claude/.credentials.json').stdout) as { claudeAiOauth: { refreshToken: string; accessToken: string } }).claudeAiOauth;
+  const heard = () => docker('logs', name).split('\n').filter(Boolean).map((line) => JSON.parse(line) as { at: string; host?: string; opened?: boolean; url?: string; grant?: string; refresh?: string; authorization?: string; key?: string });
+  const refreshesOf = (token: string) => heard().filter(({ grant, refresh }) => grant === 'refresh_token' && refresh === token);
+  const ASK = 'claude -p hello';
+
+  it("takes a refresh into the task's copy, leaves the original as it was, and keeps it across a Continue", () => {
+    const login = volume('kept');
+    const task = volume('task');
+    signIn(login, 'refresh-kept');
+    const original = kept(login);
+    expect(hand(login, task).status).toBe(0);
+
+    const first = inTask(task, ASK);
+
+    expect(first.stdout + first.stderr).toContain('answered');
+    expect(first.status).toBe(0);
+    expect(refreshesOf('refresh-kept')).toHaveLength(1);
+    const refreshed = copyOf(task);
+    expect(refreshed.refreshToken).toMatch(/^refresh-issued-/);
+    expect(kept(login)).toBe(original);
+
+    expect(hand(login, task).status).toBe(0);
+    const second = inTask(task, ASK);
+
+    expect(second.status).toBe(0);
+    expect(copyOf(task)).toMatchObject(refreshed);
+    expect(refreshesOf('refresh-kept')).toHaveLength(1);
+    expect(refreshesOf(refreshed.refreshToken)).toHaveLength(0);
+  }, 240_000);
+
+  it('goes to the provider only through the proxy, to the hosts a sign-in opens', () => {
+    const login = volume('routed');
+    const task = volume('routed-task');
+    signIn(login, 'refresh-routed');
+    hand(login, task);
+    const before = heard().length;
+
+    expect(inTask(task, ASK).status).toBe(0);
+
+    const proxied = heard().slice(before).filter(({ at }) => at === 'proxy');
+    expect(proxied.map(({ host }) => host)).toContain('platform.claude.com');
+    expect(proxied.map(({ host }) => host)).toContain('api.anthropic.com');
+    expect(proxied.filter(({ opened }) => !opened)).toEqual([]);
+  }, 120_000);
+
+  it('fails a task whose refresh token another used, says so, and takes a new sign-in at its next hand-off', () => {
+    const login = volume('shared');
+    const taken = volume('taken');
+    const left = volume('left');
+    signIn(login, 'refresh-shared');
+    hand(login, taken);
+    hand(login, left);
+    expect(inTask(taken, ASK).status).toBe(0);
+
+    const refused = inTask(left, ASK);
+
+    expect(refused.status).not.toBe(0);
+    expect(refused.stdout + refused.stderr).toMatch(/could not be refreshed|Please run \/login/i);
+    expect(refused.stdout + refused.stderr).not.toContain('answered');
+    expect(copyOf(left).refreshToken).toBe('');
+
+    expect(hand(login, left).status).toBe(0);
+    expect(copyOf(left).refreshToken).toBe('');
+
+    signIn(login, 'refresh-again');
+    expect(hand(login, left).status).toBe(0);
+    const again = inTask(left, ASK);
+
+    expect(again.status).toBe(0);
+    expect(again.stdout + again.stderr).toContain('answered');
+  }, 240_000);
+
+  it('says what a sign-in volume holds in the harness\'s own words, and refuses to hand on what is no login', () => {
+    const asked = (login: string) => inHelper([`${login}:/login:ro`], ASK_SIGN_IN).status;
+    const empty = volume('empty');
+    const abandoned = volume('abandoned');
+    const held = volume('held');
+    const consoleKey = volume('console-key');
+    const task = volume('refused');
+    inHelper([`${abandoned}:/login`], `mkdir -p /login/claude/backups && echo '{"numStartups":1}' > /login/claude/.claude.json`);
+    signIn(held, 'refresh-held');
+    inHelper([`${consoleKey}:/login`], `mkdir -p /login/claude && echo '{"primaryApiKey":"sk-ant-api03-made-up"}' > /login/claude/.claude.json`);
+
+    expect([asked(empty), asked(abandoned), asked(held), asked(consoleKey)]).toEqual([1, 1, 0, 0]);
+    expect(hand(abandoned, task).status).toBe(3);
+    expect(inHelper([`${task}:/task`], 'ls /task/login 2>/dev/null').stdout).toBe('');
+  }, 120_000);
+
+  it('sends ANTHROPIC_AUTH_TOKEN as its bearer beside a key, which is why the broker refuses the pair', () => {
+    const task = volume('precedence');
+    const before = heard().length;
+
+    inTask(task, ASK, { ANTHROPIC_API_KEY: 'sk-ant-api03-made-up', ANTHROPIC_AUTH_TOKEN: 'made-up-bearer' });
+
+    const sent = heard().slice(before).filter(({ url }) => url?.startsWith('/v1/messages'));
+    expect(sent.length).toBeGreaterThan(0);
+    for (const { authorization } of sent) expect(authorization).toBe('Bearer made-up-bearer');
+  }, 120_000);
+
+  it('runs a whole task on the sign-in, by the allowed hosts, with the kept volume out of the task', async (test) => {
+    if (spawnSync('docker', ['volume', 'inspect', LOGIN_VOLUME]).status === 0) test.skip();
+    docker('volume', 'create', LOGIN_VOLUME);
+    try {
+      signIn(LOGIN_VOLUME, 'refresh-whole');
+      const original = kept(LOGIN_VOLUME);
+      const leases: EgressLease[] = [];
+      const egress: EgressPath = { open: async (lease) => { leases.push(lease); return { runArgs: ['--network', name], env: PROXY_ENV, proxied: true, gateway: null, close: async () => undefined }; } };
+      const root = repo();
+      const tasks = [createTask({ id: 'signed', order: 1, title: 'On a sign-in', prompt: 'Write the file.', assignedRunner: 'claude-code' })];
+      const env = session(root, tasks, settingsOf({ image: name, memory: '2g', login: { kind: 'own-sign-in' }, required: ['fs.hostHidden', 'fs.writeScope', 'limits.memory'] }), { egress });
+      const before = heard().length;
+
+      await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+      await vi.waitFor(() => expect(env.parent.planTasks[0].status).not.toMatch(/approved|pending|in_progress/), { timeout: 150_000, interval: 200 });
+
+      expect(env.parent.planTasks[0], JSON.stringify(env.parent.planTasks[0].outputSummary)).toMatchObject({ status: 'completed', verdict: { outcome: 'pass', reported: 'done' } });
+      expect(git(root, 'show', `${env.integration()}:from-the-model.txt`)).toBe('written on a sign-in');
+      expect(refreshesOf('refresh-whole')).toHaveLength(1);
+      const turn = heard().slice(before);
+      const messages = turn.filter(({ url }) => url?.startsWith('/v1/messages'));
+      expect(messages.length).toBeGreaterThan(0);
+      for (const { authorization, key } of messages) {
+        expect(authorization).toMatch(/^Bearer access-\d+$/);
+        expect(key).toBeUndefined();
+      }
+      expect(leases[0].allow).toEqual(expect.arrayContaining([...SIGN_IN_HOSTS]));
+      expect(leases[0].gated).toBeNull();
+      // The probe asks the proxy for what it must turn down, before the runner starts.
+      expect(turn.slice(turn.findIndex(({ opened }) => opened)).filter(({ at, opened }) => at === 'proxy' && !opened)).toEqual([]);
+      expect(kept(LOGIN_VOLUME)).toBe(original);
+      env.parent.destroy();
+    } finally {
+      docker('volume', 'rm', '-f', LOGIN_VOLUME);
+    }
+  }, 240_000);
 });

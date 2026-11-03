@@ -1,7 +1,7 @@
 import { flattenTasks, type Task } from '../models/Task';
 import { checkHandoff, handoffReferenceText, pinReference, type BelowPlan, type FindingSeverity, type Handoff, type HandoffCheck, type HandoffDigest, type HandoffEvidence, type HandoffFinding, type HandoffPins, type ReportItem, type SubtreeReport, type TaskEvidence } from '../models/Handoff';
 import { onOneLine } from '../models/lineBreaks';
-import { isWithin, ROOT_NODE, type NodePath } from '../models/TreeEvent';
+import { isWithin, parentPath, ROOT_NODE, type NodePath } from '../models/TreeEvent';
 import { handoffAttempt, handoffLogs, loggedHandoff, type TaskLogReader } from './readTask';
 import { taskRefOf } from './TaskRefs';
 
@@ -23,6 +23,8 @@ export interface NodePlan {
 export interface SubtreeSource {
   /** The node reading: what is below it is what this reads. */
   here: NodePath;
+  /** The plan of `here`: its delegated tasks name the children that stand. */
+  tasks(): readonly Task[];
   /** Every node ever opened below `here`, closed ones too: a reference outlives the child it names (ADR-0057 R1). */
   nodes(): readonly SubtreeNode[];
   /** What a node's session file holds of its plan, which is read only when asked for (ADR-0055 D17). */
@@ -65,10 +67,42 @@ export class Subtree {
     return tasks && { node: node.path, tasks, logs: this.source.logs(node) };
   }
 
-  /** Every plan below that has been saved, nearest first, each once: a Continue opens a new node for the same child and its one plan (ADR-0055 D17). */
-  plans(): NodePlan[] {
-    const latest = new Map(this.nodes().map((node) => [node.sessionId, node]));
+  /**
+   * Whether a node is of the tree as it stands: its delegated task names its
+   * session, as does each task above it, up to `session` or to here. A discard
+   * clears that name and leaves the node, for the references that outlive it
+   * (ADR-0055 D15). A plan that cannot be read says nothing against a child.
+   */
+  private stands(node: SubtreeNode, nodes: ReadonlyMap<NodePath, SubtreeNode>, session?: string): boolean {
+    if (node.sessionId === session) return true;
+    const above = nodes.get(parentPath(node.path) ?? '');
+    if (!above && session !== undefined) return false;
+    const tasks = above ? this.source.plan(above) : this.source.tasks();
+    const named = !tasks || node.taskId === undefined || flattenTasks(tasks).some((task) => task.id === node.taskId && task.runnerSessionId === node.sessionId);
+    return named && (!above || this.stands(above, nodes, session));
+  }
+
+  /** Each session's plan once, from its latest node: a Continue opens a new node for the same child and its one plan (ADR-0055 D17). */
+  private plansOf(nodes: readonly SubtreeNode[]): NodePlan[] {
+    const latest = new Map(nodes.map((node) => [node.sessionId, node]));
     return [...latest.values()].flatMap((node) => this.planOf(node) ?? []);
+  }
+
+  private indexed(): ReadonlyMap<NodePath, SubtreeNode> {
+    return new Map(this.source.nodes().map((node) => [node.path, node]));
+  }
+
+  /** Every plan the tree stands on that has been saved, nearest first. */
+  plans(): NodePlan[] {
+    const nodes = this.indexed();
+    return this.plansOf(this.nodes().filter((node) => this.stands(node, nodes)));
+  }
+
+  /** The plans a report from `node` stood on, whether or not that child still stands: a reference to the report means what it meant (ADR-0057 R1). */
+  plansFrom(node: NodePath): NodePlan[] {
+    const nodes = this.indexed();
+    const session = nodes.get(node)?.sessionId;
+    return session === undefined ? [] : this.plansOf(this.nodes().filter((one) => this.stands(one, nodes, session)));
   }
 
   /** The plan a pinned reference names, whichever of a child's nodes it was pinned against. */
@@ -182,17 +216,19 @@ export function takeReport<H extends Handoff & { promote?: string[]; open?: stri
   return { ok: true, handoff: { ...checked.handoff, subtree: { node: plan.node, ...countsOf([plan, ...below], tokens), open, promoted } } };
 }
 
-/** How many findings a listing holds before it counts the rest. */
+/** How many findings one page of a listing holds. */
 const LISTED_MAX = 100;
 
 /**
  * What a report left out, each by its reference (ADR-0057 R2): every finding
- * of the subtree it did not show, so a reader can pull the one it wants.
+ * of the subtree it did not show, so a reader can pull the one it wants. One
+ * page of it, from entry `from`; `at` is the report as this reader names it,
+ * which is how the next page is asked for.
  */
-export function subtreeListing(subtree: SubtreeReport, plans: readonly NodePlan[]): string[] {
-  const shown = new Set([...subtree.open, ...subtree.promoted].flatMap((item) => (item.ref ? [handoffReferenceText(item.ref)] : [])));
+export function subtreeListing(report: SubtreeReport, tree: Subtree | null, at: string, from: number): string[] {
+  const shown = new Set([...report.open, ...report.promoted].flatMap((item) => (item.ref ? [handoffReferenceText(item.ref)] : [])));
   const listed: string[] = [];
-  for (const plan of plans.filter(({ node }) => isWithin(node, subtree.node))) {
+  for (const plan of tree?.plansFrom(report.node) ?? []) {
     for (const task of flattenTasks(plan.tasks)) {
       const handoff = handoffOf(plan, task.id, undefined);
       const label = taskRefOf(plan.tasks, task.id) ?? task.id;
@@ -203,6 +239,13 @@ export function subtreeListing(subtree: SubtreeReport, plans: readonly NodePlan[
     }
   }
   if (listed.length === 0) return [];
-  const more = listed.length - LISTED_MAX;
-  return ['', 'The rest of its subtree (each in its author\'s words):', ...listed.slice(0, LISTED_MAX), ...(more > 0 ? [`+${more} more`] : [])];
+  const page = listed.slice(from - 1, from - 1 + LISTED_MAX);
+  const next = from + page.length;
+  const more = listed.length - next + 1;
+  return [
+    '',
+    'The rest of its subtree (each in its author\'s words):',
+    ...(page.length > 0 ? page : [`(nothing past entry ${listed.length})`]),
+    ...(page.length > 0 && more > 0 ? [`+${more} more: read ${JSON.stringify(`${at}/from:${next}`)}.`] : []),
+  ];
 }

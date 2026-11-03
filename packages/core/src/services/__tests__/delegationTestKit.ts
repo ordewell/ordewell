@@ -17,7 +17,7 @@ import { saveSession } from '../../utils/sessionStore';
 import { openTaskLog } from '../../utils/taskLogStore';
 import { treeEventLogFile } from '../../utils/treeEventLog';
 import type { NodePath, TreeEvent } from '../../models/TreeEvent';
-import { fakeFs, makeSession, sealingFs, scriptedPlanner, type PlannerTurn as Turn } from './sessionTestKit';
+import { closeSessions, fakeFs, makeSession, sealingFs, scriptedPlanner, type PlannerTurn as Turn } from './sessionTestKit';
 
 /** One real repository, one root Session and a scripted subplanner: a delegated task as a test drives it. */
 
@@ -29,11 +29,10 @@ const env = () => {
 export const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, env: env(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
 const roots: string[] = [];
-const closing: Session[] = [];
 
-/** Call from `afterEach`: a Session's `destroy` returns with its release of a worktree still in git, and `gone` is what says it ended. */
+/** Call from `afterEach`. */
 export async function removeRepos(): Promise<void> {
-  await Promise.all(closing.splice(0).map((session) => session.gone));
+  await closeSessions();
   while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 }
 
@@ -50,6 +49,16 @@ function repo(): string {
   git(root, 'add', '-A');
   git(root, 'commit', '-q', '-m', 'initial');
   return root;
+}
+
+/** A workspace that is a folder of its repository, committed so that its worktree has it. */
+function workspaceIn(root: string, folder: string): string {
+  const workspace = join(root, folder);
+  mkdirSync(workspace, { recursive: true });
+  writeFileSync(join(workspace, 'README.md'), 'a package\n');
+  git(root, 'add', '-A');
+  git(root, 'commit', '-q', '-m', 'a package');
+  return workspace;
 }
 
 export interface WorkerReport { status?: 'done' | 'blocked' | 'failed'; summary?: string; reason?: string; findings?: { severity: 'blocker' | 'major' | 'minor' | 'info'; title: string; detail?: string }[] }
@@ -110,6 +119,8 @@ export interface Tree {
 }
 
 export interface TreeOptions {
+  /** The workspace is this folder of the repository, not its root. */
+  folder?: string;
   runner?: IRunner;
   tasks?: Task[];
   settings?: Partial<ReturnType<SessionDeps['settings']>>;
@@ -123,15 +134,18 @@ export interface TreeOptions {
   scriptRunner?: IRunner;
   /** Whether a child can seal a script. */
   seals?: boolean;
+  /** Turns of the root's own planner, as a test talks to it with a child running. */
+  rootTurns?: Turn[];
 }
 
-export function tree(turns: Turn[], { runner = writingRunner({ a: ['a.txt'], b: ['b.txt'] }), tasks = [delegated(), check()], settings = {}, below = {}, parallel = 3, config, scriptRunner, seals = false }: TreeOptions = {}): Tree {
-  const root = repo();
+export function tree(turns: Turn[], { runner = writingRunner({ a: ['a.txt'], b: ['b.txt'] }), tasks = [delegated(), check()], settings = {}, below = {}, parallel = 3, config, scriptRunner, seals = false, rootTurns, folder }: TreeOptions = {}): Tree {
+  const root = folder ? workspaceIn(repo(), folder) : repo();
   const rootConfig = config ?? fakeConfig({ maxParallelSessions: parallel });
   const planner = scriptedPlanner(turns);
   const lower = Object.fromEntries(Object.entries(below).map(([id, script]) => [id, scriptedPlanner(script)]));
   const isolation = createWorktreeIsolation({ resolvePath: async () => process.env.PATH ?? '', config: fakeConfig({ worktreeIsolation: true }) });
   const parent = makeSession({
+    ...(rootTurns ? { aiService: { reset: vi.fn(), ...scriptedPlanner(rootTurns).service } as unknown as IAiService } : {}),
     runner, scriptRunner, isolation, workspaceRoot: () => root, saveSession, openTaskLog, leaseHost: new LeaseHost(), sessionId: 'session-root',
     config: rootConfig,
     settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', delegationTokens: 5_000_000 }, ...settings }),
@@ -140,7 +154,6 @@ export function tree(turns: Turn[], { runner = writingRunner({ a: ['a.txt'], b: 
   });
   const plan = { tasks, runners: ['claude-code'], status: 'approved', generatedAt: '2026-11-01T10:00:00.000Z' } as unknown as LegacyPlanState;
   parent.loadPlan(plan, 'the root goal', root, { sessionId: 'session-root' });
-  closing.push(parent);
   return { root, parent, planner, lower, config: rootConfig };
 }
 
