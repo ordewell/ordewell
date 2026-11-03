@@ -39,4 +39,14 @@ describe('buildTheme', () => {
       expect(theme.colors['editorCursor.foreground']).toBe(values.get('--ow-accent'));
     }
   });
+
+  it('gives the light and dark editors different palettes', () => {
+    const light = scheme('light');
+    const dark = scheme('dark');
+    const lightTheme = buildTheme((token) => light.get(token) ?? '', false);
+    const darkTheme = buildTheme((token) => dark.get(token) ?? '', true);
+    expect(lightTheme.base).not.toBe(darkTheme.base);
+    expect(lightTheme.colors['editor.background']).not.toBe(darkTheme.colors['editor.background']);
+    expect(lightTheme.colors['editor.foreground']).not.toBe(darkTheme.colors['editor.foreground']);
+  });
 });

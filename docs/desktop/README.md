@@ -261,6 +261,12 @@ tasks, merge at gates), and this app's own preferences — theme, desktop
 notifications, and keeping the app in the tray. The run rules are the shared
 ones; the app's preferences stay on this machine.
 
+The app starts dark. The Theme control sits under Appearance at the top of
+Settings (Dark, Light, System); System follows your computer's light or dark
+setting. The command palette has the same choice as `Theme: Dark`,
+`Theme: Light` and `Theme: System`. A choice applies at once and is kept; a
+theme you saved earlier, including System, is never rewritten.
+
 ### Command palette and status bar
 
 `⌘K`/`Ctrl+K` lists every enabled command by name, with its shortcut. The

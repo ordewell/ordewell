@@ -190,6 +190,20 @@ describe('the command palette', () => {
     expect(screen.queryByRole('dialog', { name: 'Command palette' })).not.toBeInTheDocument();
   });
 
+  it('lists a command for each theme and saves the one chosen', async () => {
+    const set = vi.fn(async () => ({}));
+    Object.defineProperty(window, 'ordewell', { configurable: true, value: { prefs: { get: vi.fn(), set } } });
+    mount();
+    fireEvent.keyDown(window, { key: 'k', code: 'KeyK', ctrlKey: true });
+    const input = screen.getByRole('combobox', { name: 'Search commands' });
+    fireEvent.change(input, { target: { value: 'theme' } });
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual(['Theme: Dark', 'Theme: Light', 'Theme: System']);
+
+    fireEvent.change(input, { target: { value: 'theme: light' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(set).toHaveBeenCalledWith('theme', 'light'));
+  });
+
   it('moves the choice with the arrows and says when nothing matches', () => {
     mount();
     fireEvent.keyDown(window, { key: 'k', code: 'KeyK', ctrlKey: true });

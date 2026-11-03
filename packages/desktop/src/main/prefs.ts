@@ -2,7 +2,8 @@ import type { PaneSizes, Prefs } from '../shared/bridge';
 import { readJsonFile, writeJsonFile } from './jsonFile';
 
 export const DEFAULT_PREFS: Prefs = {
-  theme: 'system',
+  /** Dark until the user chooses: VS Code opens dark, and "system" is a choice they make, not a default we assume. */
+  theme: 'dark',
   panes: { sidebar: 260, right: 360, bottom: 240 },
   notifications: true,
   keepRunningInTray: false,

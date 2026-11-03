@@ -84,6 +84,27 @@ describe('prefs', () => {
     expect(validPref('__proto__', 'dark')).toBeUndefined();
   });
 
+  it('starts dark, and keeps a theme the user already saved', () => {
+    expect(DEFAULT_PREFS.theme).toBe('dark');
+    const file = join(dir, 'prefs.json');
+    expect(new PrefsStore(file).get().theme).toBe('dark');
+    writeFileSync(file, JSON.stringify({ notifications: false }));
+    expect(new PrefsStore(file).get().theme).toBe('dark');
+    for (const saved of ['system', 'light', 'dark'] as const) {
+      writeFileSync(file, JSON.stringify({ theme: saved }));
+      expect(new PrefsStore(file).get().theme).toBe(saved);
+    }
+    // A later write of something else (a dragged pane) leaves the saved theme alone.
+    writeFileSync(file, JSON.stringify({ theme: 'system' }));
+    expect(new PrefsStore(file).set({ panes: { sidebar: 300, right: 320, bottom: 200 } }).theme).toBe('system');
+  });
+
+  it('accepts all three themes and refuses a non-string one', () => {
+    for (const theme of ['system', 'light', 'dark'] as const) expect(validPref('theme', theme)).toEqual({ theme });
+    expect(validPref('theme', 1)).toBeUndefined();
+    expect(validPref('theme', undefined)).toBeUndefined();
+  });
+
   it('accepts the two desktop attention preferences only as booleans', () => {
     expect(validPref('notifications', false)).toEqual({ notifications: false });
     expect(validPref('keepRunningInTray', true)).toEqual({ keepRunningInTray: true });

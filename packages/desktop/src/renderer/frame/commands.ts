@@ -1,6 +1,7 @@
 import type { Command, Unregister } from './api';
 import { ACTIVITIES, type ActivityId } from './layout';
 import type { FrameStore } from './store';
+import { THEME_CHOICES, setThemePref } from './themePref';
 
 const ACTIVITY_TITLES: Readonly<Record<ActivityId, string>> = {
   plan: 'Plan',
@@ -44,6 +45,12 @@ export function registerFrameCommands(store: FrameStore): Unregister {
       run: () => api.showActivity(activity),
     })),
     { id: 'settings.open', title: 'Open Settings', keys: 'Mod+,', run: () => api.openTab(SETTINGS_TAB) },
+    ...THEME_CHOICES.map(({ value, label }): Command => ({
+      id: `theme.${value}`,
+      title: `Theme: ${label}`,
+      // Main refuses only a value outside the three, which these never are.
+      run: () => { void setThemePref(value).catch(() => undefined); },
+    })),
     { id: 'sidebar.toggle', title: 'Toggle sidebar', keys: 'Mod+B', run: () => store.dispatch({ type: 'toggleSidebar' }) },
     {
       id: 'planner.toggle',

@@ -42,7 +42,7 @@ holds the token.**
   reports.
 - The app and the VS Code extension share one UI package, `packages/ui`, and one
   host-neutral view-assembly layer; only the transport under them differs.
-- Light and dark follow the OS, chrome is native (inset traffic lights on
+- The app starts dark and the user picks Dark, Light or System (which follows the OS), chrome is native (inset traffic lights on
   macOS, a title-bar overlay on Windows), and one window shows one workspace.
 - Installers are built unsigned in CI and attached to the GitHub Release.
   Auto-update is wired but disabled.
@@ -204,3 +204,4 @@ allows script only from the app's own bundle, with no inline script.
 - 2026-11-03 — partly implemented: packaging and CI (electron-builder.yml, the desktop job in release.yml, updates wired and held off by `AUTO_UPDATE_ENABLED`).
 - 2026-11-03 — the IPC proxy names what the bridge does not guard: a page that runs script acts as the user, so rendering is the boundary.
 - 2026-11-03 — implemented: every view in docs/desktop/design.md, from the welcome window to Merge all through the preflight; signing, notarization and enabled updates remain out of scope.
+- 2026-11-03 — the app starts dark rather than following the OS; System stays a choice.

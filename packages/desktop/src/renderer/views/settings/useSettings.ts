@@ -3,6 +3,7 @@ import type { GlobalRunSettings, ModelsResponse, RunnersResponse, SettingsRespon
 import type { Prefs } from '../../../shared/bridge';
 import type { RouteParams } from '../../../shared/routes';
 import type { DaemonHost } from '../../session/DaemonHost';
+import { onThemePref, setThemePref, type ThemePref } from '../../frame/themePref';
 import { callDaemon, messageOf } from '../../session/daemon';
 
 export type RunnerSetting = RunnersResponse['runners'][number];
@@ -18,7 +19,7 @@ export interface SettingsView {
 }
 
 const EMPTY_PREFS: Prefs = {
-  theme: 'system',
+  theme: 'dark',
   panes: { sidebar: 260, right: 360, bottom: 240 },
   notifications: true,
   keepRunningInTray: false,
@@ -38,6 +39,7 @@ export function useSettings(host: DaemonHost, sessionId: string): {
   updateRun(change: Partial<GlobalRunSettings>): Promise<void>;
   setRunner(id: string, enabled: boolean): Promise<void>;
   savePref<K extends keyof Prefs>(key: K, value: Prefs[K]): Promise<void>;
+  setTheme(theme: ThemePref): Promise<void>;
 } {
   const [view, setView] = useState<SettingsView>({
     loading: true,
@@ -65,6 +67,10 @@ export function useSettings(host: DaemonHost, sessionId: string): {
   }, [host.workspace, sessionParam]);
 
   useEffect(() => { void refresh(); }, [refresh]);
+  // The palette can change the theme while this tab is open.
+  useEffect(() => onThemePref((theme) => {
+    setView((current) => (current.prefs ? { ...current, prefs: { ...current.prefs, theme } } : current));
+  }), []);
 
   const update = useCallback(async (body: Record<string, unknown>): Promise<void> => {
     setView((current) => ({ ...current, busy: true, error: undefined }));
@@ -100,5 +106,13 @@ export function useSettings(host: DaemonHost, sessionId: string): {
     }
   }, []);
 
-  return { view, refresh, update, updateRun, setRunner, savePref };
+  const setTheme = useCallback(async (theme: ThemePref): Promise<void> => {
+    try {
+      await setThemePref(theme);
+    } catch (error) {
+      setView((current) => ({ ...current, error: messageOf(error) }));
+    }
+  }, []);
+
+  return { view, refresh, update, updateRun, setRunner, savePref, setTheme };
 }
