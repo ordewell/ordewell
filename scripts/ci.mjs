@@ -101,7 +101,7 @@ function installedMatchesLockfile() {
   if (!drifted.length) return true;
   console.error('node_modules does not match package-lock.json, so this run would not test what CI installs:');
   for (const d of drifted) console.error(`  ${d}`);
-  console.error('Reinstall them: `npm ci`, or off Linux, where ci.yml explains why that fails, delete each directory above and run `npm install`.');
+  console.error('Reinstall them: `npm ci`.');
   return false;
 }
 
@@ -145,8 +145,7 @@ const CI_ONLY = {
   'Confirm every step this change owed ran': 'nothing is skipped here for it to confirm',
   'Require every check this change owed': 'a GitHub required status',
   'Use Node.js 22.x': 'the local Node is what you have',
-  // ci.yml explains why the lockfile does not install cleanly off Linux, and
-  // `npm ci` would also wipe the node_modules you are working in.
+  // `npm ci` would wipe the node_modules you are working in.
   'Install dependencies': 'run `npm ci` yourself after a lockfile change',
   'Cache the VS Code download': 'packages/vscode/.vscode-test is already kept between runs',
   'Resolve the VS Code version under test': 'the workflow asks the update service which stable it will download; a local run keeps the .vscode-test it has',
@@ -155,6 +154,14 @@ const CI_ONLY = {
   'Upload coverage reports': 'reports stay in packages/*/coverage/',
   'Upload .vsix': 'the .vsix stays in packages/vscode/',
   'Real engine — every harness in a real container': 'it needs an engine and a large image: run `npm run test:containers`',
+  // The Windows jobs run on this host what the steps above run, so a local run
+  // on Windows has run them already, and one elsewhere cannot.
+  'Build every package': 'the two build steps above build the same packages',
+  'Test on Windows': '`Test with coverage` runs the same suites on this host',
+  'Verify scripts on Windows': 'the verify step above runs them on this host',
+  'Bench harness tests on Windows': 'the bench step above runs them on this host',
+  'Planner conversation loop on Windows': 'the planner loop step above runs it on this host',
+  'VS Code integration test on Windows': 'the integration step above runs it on this host',
 };
 
 const workflow = readFileSync('.github/workflows/ci.yml', 'utf8');
