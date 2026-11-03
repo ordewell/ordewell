@@ -2,8 +2,15 @@ import { useEffect, useRef, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { ConfirmationRequest } from '@ordewell/ui/host';
 
+/**
+ * A confirmation, with a kind this window may name beyond ui's own: the
+ * checkout's and the Git view's questions are asked only here, and ui's
+ * words are not theirs to decide.
+ */
+export type WindowConfirmation<C extends string> = Omit<ConfirmationRequest<C>, 'kind'> & { kind: string };
+
 interface DialogProps<C extends string> {
-  request: ConfirmationRequest<C>;
+  request: WindowConfirmation<C>;
   body?: ReactNode;
   answer(choice: C | null): void;
 }
@@ -55,12 +62,12 @@ function ConfirmDialog<C extends string>({ request, body, answer }: DialogProps<
  * dialog is drawn here from the request as it stands. Null is no answer,
  * which every caller reads as no.
  */
-export function confirm<C extends string>(request: ConfirmationRequest<C>): Promise<C | null> {
+export function confirm<C extends string>(request: WindowConfirmation<C>): Promise<C | null> {
   return confirmWith(request, undefined);
 }
 
 /** {@link confirm} with more than words to show, as Merge all's preflight lists the files in the way. */
-export function confirmWith<C extends string>(request: ConfirmationRequest<C>, body: ReactNode): Promise<C | null> {
+export function confirmWith<C extends string>(request: WindowConfirmation<C>, body: ReactNode): Promise<C | null> {
   return new Promise((resolve) => {
     const container = document.createElement('div');
     document.body.appendChild(container);
