@@ -1,0 +1,48 @@
+.changes { display: flex; flex-direction: column; gap: var(--ow-space-3); padding-bottom: var(--ow-space-5); }
+.changes-search { display: flex; align-items: center; gap: var(--ow-space-3); padding: var(--ow-space-3) var(--ow-space-5) 0; }
+.changes-search .frame-input { padding: var(--ow-space-2) var(--ow-space-4); }
+.changes-heading { margin: 0; padding: var(--ow-space-2) var(--ow-space-5); font: var(--ow-type-body-strong); color: var(--ow-fg-secondary); }
+.changes-note { margin: 0; padding: var(--ow-space-2) var(--ow-space-5); color: var(--ow-fg-secondary); font: var(--ow-type-body); }
+.changes-note.error { color: var(--ow-status-error, var(--ow-fg)); }
+.changes-link { border: 0; background: transparent; color: var(--ow-accent); padding: 0; font: inherit; cursor: pointer; text-align: left; }
+.changes-link:hover { text-decoration: underline; }
+
+.changes-conflicts ul, .changes-gates ul, .changes-files { margin: 0; padding: 0; list-style: none; }
+.changes-conflict, .changes-gate { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ow-space-3); padding: var(--ow-space-2) var(--ow-space-5); }
+.changes-conflict { background: var(--ow-bg-overlay); }
+
+.changes-group-head { display: flex; align-items: center; gap: var(--ow-space-3); width: 100%; border: 0; background: transparent; color: var(--ow-fg); padding: var(--ow-space-2) var(--ow-space-5); text-align: left; cursor: pointer; font: var(--ow-type-body-strong); }
+.changes-group-head:hover { background: var(--ow-bg-hover); }
+.changes-group-static { cursor: default; }
+.changes-group-static:hover { background: transparent; }
+.changes-group-label { color: var(--ow-fg-secondary); font: var(--ow-type-code); }
+.changes-group-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.changes-task-actions { display: flex; gap: var(--ow-space-3); padding: 0 var(--ow-space-5) var(--ow-space-2); }
+
+.changes-file { display: flex; align-items: center; gap: var(--ow-space-3); width: 100%; border: 0; background: transparent; color: var(--ow-fg); padding: var(--ow-space-1) var(--ow-space-5) var(--ow-space-1) calc(var(--ow-space-5) * 2); text-align: left; cursor: pointer; white-space: nowrap; }
+.changes-file:hover, .changes-file:focus-visible { background: var(--ow-bg-hover); outline: none; }
+.changes-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.changes-file-dir { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font: var(--ow-type-body); }
+.changes-counts { margin-left: auto; font: var(--ow-type-code); font-size: 11px; }
+.changes-added { color: var(--ow-status-passed, var(--ow-fg-secondary)); }
+.changes-removed { color: var(--ow-status-failed, var(--ow-fg-secondary)); }
+.changes-merge { padding: var(--ow-space-3) var(--ow-space-5); }
+.changes-merge .ft-button { display: inline-flex; align-items: center; gap: var(--ow-space-2); }
+
+.changes-scope { display: inline-flex; align-items: center; gap: var(--ow-space-3); color: var(--ow-fg-secondary); white-space: nowrap; min-width: 0; }
+.changes-toggle { display: inline-flex; }
+.changes-toggle .ft-button[aria-pressed='true'] { background: var(--ow-bg-selected); }
+.changes-toggle .ft-button + .ft-button { margin-left: -1px; }
+.changes-diff { flex: 1; min-height: 0; }
+.changes-unplaced { margin: 0; padding: var(--ow-space-2) var(--ow-space-5); list-style: none; border-bottom: 1px solid var(--ow-border); }
+
+.changes-zone { padding: var(--ow-space-2) var(--ow-space-4); font: var(--ow-type-body); color: var(--ow-fg); }
+.changes-comment-box, .changes-comment { display: flex; flex-direction: column; gap: var(--ow-space-2); padding: var(--ow-space-3) var(--ow-space-4); border: 1px solid var(--ow-border-widget); border-radius: var(--ow-radius-md); background: var(--ow-bg-overlay); }
+.changes-comment-box textarea { min-height: 3.5em; resize: vertical; font: var(--ow-type-body); }
+.changes-comment-place, .changes-comment-to { color: var(--ow-fg-secondary); }
+.changes-comment-note { margin: 0; color: var(--ow-fg-secondary); }
+.changes-comment-actions { display: flex; justify-content: flex-end; gap: var(--ow-space-3); }
+.changes-comment p { margin: 0; white-space: pre-wrap; }
+
+.changes-preflight { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--ow-space-2); }
+.changes-preflight-files { margin: var(--ow-space-1) 0 0; padding-left: var(--ow-space-5); }

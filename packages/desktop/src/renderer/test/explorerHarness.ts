@@ -37,6 +37,9 @@ export function installBridge(handlers: Partial<Record<RouteId, Handler>>): Harn
         status: async () => CONNECTED,
         onStatus: () => () => undefined,
         retry: async () => ({ ok: true }),
+        // The Session view's host follows a session's socket from the start; no frame ever arrives here.
+        subscribe: () => () => undefined,
+        subscribeChild: () => () => undefined,
         call: vi.fn(async (route: RouteId, params: Record<string, string | undefined>, body?: unknown): Promise<DaemonCallResult> => {
           const call = { route, params, body };
           calls.push(call);

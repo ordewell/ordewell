@@ -133,6 +133,17 @@ export function createEditor(monaco: MonacoApi, host: HTMLElement, options: Edit
   };
 }
 
+export type DiffSide = 'original' | 'modified';
+
+/** The lines the cursor or a selection covers on one side of a diff, 1-based and inclusive. */
+export interface DiffLines {
+  side: DiffSide;
+  startLine: number;
+  endLine: number;
+  /** Those lines' text, whole. */
+  text: string;
+}
+
 export interface DiffEditorOptions {
   original: ModelSource;
   modified: ModelSource;
@@ -141,13 +152,87 @@ export interface DiffEditorOptions {
   /** The modified side is editable, as in the checkout; the Changes slice decides. */
   editable?: boolean;
   onChange?(text: string): void;
+  /** The lines the user is on, as they move: what a line comment quotes. */
+  onLines?(lines: DiffLines): void;
+}
+
+/** A block of the page's own drawn between two lines of one side, as a comment widget is. */
+export interface DiffZone {
+  remove(): void;
 }
 
 export interface DiffEditorHandle {
   getModifiedText(): string;
   setSideBySide(sideBySide: boolean): void;
+  /** Moves to the next or previous change, wrapping as Monaco's F7 does. */
+  goToChange(direction: 'next' | 'previous'): void;
+  /**
+   * Shows `node` below `afterLine` of `side`, the lines below moving down to
+   * make room; its height follows the node's own as it changes.
+   */
+  addZone(side: DiffSide, afterLine: number, node: HTMLElement): DiffZone;
+  focus(): void;
   dispose(): void;
 }
+
+function linesOf(side: DiffSide, editor: Monaco.editor.ICodeEditor): DiffLines | undefined {
+  const model = editor.getModel();
+  const selection = editor.getSelection();
+  if (!model || !selection) return undefined;
+  // A selection that ends at column 1 of a line took none of it, as an editor's own line commands read it.
+  const endLine = selection.endLineNumber > selection.startLineNumber && selection.endColumn === 1 ? selection.endLineNumber - 1 : selection.endLineNumber;
+  const lines: string[] = [];
+  for (let line = selection.startLineNumber; line <= endLine; line++) lines.push(model.getLineContent(line));
+  return { side, startLine: selection.startLineNumber, endLine, text: lines.join('\n') };
+}
+
+/**
+ * A view zone reserves the room and an overlay widget holds the node, as
+ * Monaco's own peek view does: the editor treats a click inside a view zone as
+ * a click on its text, so a text box there could not keep the focus.
+ */
+function zoneIn(editor: Monaco.editor.ICodeEditor, afterLine: number, node: HTMLElement, id: string): DiffZone {
+  const spacer = document.createElement('div');
+  node.style.position = 'absolute';
+  node.style.zIndex = '5';
+  const place = (): void => {
+    const layout = editor.getLayoutInfo();
+    node.style.left = `${layout.contentLeft}px`;
+    node.style.width = `${Math.max(0, layout.contentWidth - layout.verticalScrollbarWidth)}px`;
+  };
+  const widget: Monaco.editor.IOverlayWidget = { getId: () => id, getDomNode: () => node, getPosition: () => null };
+  editor.addOverlayWidget(widget);
+  place();
+  let zoneId = '';
+  const zone: Monaco.editor.IViewZone = {
+    afterLineNumber: afterLine,
+    heightInPx: Math.max(node.offsetHeight, 24),
+    domNode: spacer,
+    onDomNodeTop: (top) => {
+      node.style.top = `${top}px`;
+      node.style.visibility = top + node.offsetHeight < 0 || top > editor.getLayoutInfo().height ? 'hidden' : 'visible';
+    },
+  };
+  editor.changeViewZones((accessor) => { zoneId = accessor.addZone(zone); });
+  const resized = new ResizeObserver(() => {
+    const height = Math.max(node.offsetHeight, 24);
+    if (height === zone.heightInPx) return;
+    zone.heightInPx = height;
+    editor.changeViewZones((accessor) => { accessor.layoutZone(zoneId); });
+  });
+  resized.observe(node);
+  const laidOut = editor.onDidLayoutChange(place);
+  return {
+    remove: () => {
+      resized.disconnect();
+      laidOut.dispose();
+      editor.changeViewZones((accessor) => { accessor.removeZone(zoneId); });
+      editor.removeOverlayWidget(widget);
+    },
+  };
+}
+
+let zoneCount = 0;
 
 /** A diff of two texts, for the Changes and Git slices. */
 export function createDiffEditor(monaco: MonacoApi, host: HTMLElement, options: DiffEditorOptions): DiffEditorHandle {
@@ -161,10 +246,30 @@ export function createDiffEditor(monaco: MonacoApi, host: HTMLElement, options: 
     useInlineViewWhenSpaceIsLimited: true,
   });
   editor.setModel({ original, modified });
-  const subscription = modified.onDidChangeContent(() => { options.onChange?.(modified.getValue()); });
+  const sides = { original: editor.getOriginalEditor(), modified: editor.getModifiedEditor() };
+  const subscriptions = [
+    modified.onDidChangeContent(() => { options.onChange?.(modified.getValue()); }),
+    ...(['original', 'modified'] as const).map((side) => sides[side].onDidChangeCursorSelection(() => {
+      const lines = linesOf(side, sides[side]);
+      if (lines) options.onLines?.(lines);
+    })),
+  ];
+  const zones = new Set<DiffZone>();
   return {
     getModifiedText: () => modified.getValue(),
     setSideBySide: (sideBySide) => { editor.updateOptions({ renderSideBySide: sideBySide }); },
-    dispose: () => { subscription.dispose(); editor.dispose(); original.dispose(); modified.dispose(); },
+    goToChange: (direction) => { editor.goToDiff(direction); },
+    addZone: (side, afterLine, node) => {
+      const zone = zoneIn(sides[side], afterLine, node, `ordewell.zone.${++zoneCount}`);
+      const tracked: DiffZone = { remove: () => { if (zones.delete(tracked)) zone.remove(); } };
+      zones.add(tracked);
+      return tracked;
+    },
+    focus: () => { sides.modified.focus(); },
+    dispose: () => {
+      for (const zone of [...zones]) zone.remove();
+      for (const subscription of subscriptions) subscription.dispose();
+      editor.dispose(); original.dispose(); modified.dispose();
+    },
   };
 }

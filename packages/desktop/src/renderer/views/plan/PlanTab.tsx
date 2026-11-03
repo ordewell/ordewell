@@ -36,7 +36,8 @@ function perform(host: DaemonHost, action: RunAction): void {
       void host.handle({ type: 'sendSystemCommand', command: 'stopExecution' });
       return;
     case 'merge':
-      void host.handle({ type: 'isolationAction', action: 'merge' });
+      // Review & Merge all: the review step, where the Changes view is there to show it; it merges otherwise.
+      void host.handle({ type: 'isolationAction', action: host.reviewing ? 'reviewDiff' : 'merge' });
       return;
   }
 }
