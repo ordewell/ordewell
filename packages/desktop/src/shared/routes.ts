@@ -112,6 +112,17 @@ export const ROUTES = {
   // Merge all's preflight sets the user's overlapping files aside and offers them back (ADR-0062 G8).
   'git.stash': { method: 'POST', path: '/api/git/stash' },
   'git.stashPop': { method: 'POST', path: '/api/git/stash-pop' },
+  // The Git view (ADR-0062): history to draw, and the actions on the user's checkout of one repository.
+  'git.log': { method: 'GET', path: '/api/git/log', query: [...AT, 'ref', 'cursor', 'limit'] },
+  // `git.show` reads a commit, leaving `git.commit` free for the POST that makes one.
+  'git.show': { method: 'GET', path: '/api/git/commit', query: [...AT, 'sha', 'path'] },
+  'git.branch': { method: 'POST', path: '/api/git/branch' },
+  'git.switch': { method: 'POST', path: '/api/git/switch' },
+  'git.branchDelete': { method: 'POST', path: '/api/git/branch-delete' },
+  'git.stashDrop': { method: 'POST', path: '/api/git/stash-drop' },
+  'git.fetch': { method: 'POST', path: '/api/git/fetch' },
+  'git.pull': { method: 'POST', path: '/api/git/pull' },
+  'git.push': { method: 'POST', path: '/api/git/push' },
   // The user's own actions on their checkout (ADR-0062 G1-G5): the Changes activity's checkout group.
   'git.stage': { method: 'POST', path: '/api/git/stage' },
   'git.unstage': { method: 'POST', path: '/api/git/unstage' },

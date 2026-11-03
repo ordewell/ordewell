@@ -46,8 +46,6 @@ export function installBridge(handlers: Partial<Record<RouteId, Handler>>): Harn
           const handler = handlers[route];
           return handler ? toResult(handler(call)) : { ok: false, status: 404, error: `no stub for ${route}` };
         }),
-        subscribe: () => () => undefined,
-        subscribeChild: () => () => undefined,
       },
       shell,
     },

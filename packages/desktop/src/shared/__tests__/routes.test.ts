@@ -204,6 +204,28 @@ describe('the Changes view routes', () => {
   });
 });
 
+describe('the Git view routes', () => {
+  it('page the history by ref and cursor, and read one commit and one of its files', () => {
+    expect(buildRequest('git.log', { workspace: '/w', repo: 'web', ref: 'feature/x', cursor: 'abc', limit: '100' })).toEqual({
+      ok: true,
+      request: { method: 'GET', path: '/api/git/log?workspace=%2Fw&repo=web&ref=feature%2Fx&cursor=abc&limit=100' },
+    });
+    expect(buildRequest('git.show', { workspace: '/w', repo: '.', sha: 'abc123', path: 'a b.ts' })).toEqual({
+      ok: true,
+      request: { method: 'GET', path: '/api/git/commit?workspace=%2Fw&repo=.&sha=abc123&path=a+b.ts' },
+    });
+  });
+
+  it('send every action as a body, which names the repository and the confirmed target', () => {
+    for (const route of ['git.branch', 'git.switch', 'git.branchDelete', 'git.stashDrop', 'git.fetch', 'git.pull', 'git.push'] as const) {
+      expect(ROUTES[route].method, route).toBe('POST');
+    }
+    const body = { workspace: '/w', repo: '.', branch: 'old', confirm: { branch: 'old', unmerged: false } };
+    expect(buildRequest('git.branchDelete', {}, body)).toEqual({ ok: true, request: { method: 'POST', path: '/api/git/branch-delete', body: JSON.stringify(body) } });
+    expect(refused(buildRequest('git.pull', { branch: 'main' }, {}))).toContain('unknown param branch');
+  });
+});
+
 describe('the checkout group routes', () => {
   it('read the checkout status, with the repo and scope in the query', () => {
     expect(buildRequest('git.status', { workspace: '/w', repo: 'web', scope: 'checkout' })).toEqual({

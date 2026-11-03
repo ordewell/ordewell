@@ -5,6 +5,7 @@ import * as checkoutGroup from './checkout/CheckoutGroup';
 import * as connectionBanners from './connection/ConnectionBanners';
 import * as explorerSidebar from './explorer/ExplorerSidebar';
 import * as fileTab from './explorer/FileTab';
+import * as commitDiffTab from './git/CommitDiffTab';
 import * as commitGraphTab from './git/CommitGraphTab';
 import * as gitSidebar from './git/GitSidebar';
 import * as needsYou from './needsYou/NeedsYou';
@@ -26,7 +27,7 @@ const VIEWS: ReadonlyArray<{ register(api: FrameApi): Unregister }> = [
   needsYou, connectionBanners, settingsTab, statusSlots,
   explorerSidebar, fileTab, scopeSwitcher,
   changesSidebar, diffTab, checkoutGroup,
-  gitSidebar, commitGraphTab,
+  gitSidebar, commitGraphTab, commitDiffTab,
   terminalPanel,
 ];
 
