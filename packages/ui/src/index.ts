@@ -1,4 +1,4 @@
-export { default as ChatApp, type ChatLayout } from './chat/App';
+export { default as ChatApp, type ChatLayout, type TaskSelection } from './chat/App';
 export { INITIAL_HOST_STATE, reduceHost, runnersOn, type HostAction, type HostState } from './chat/hostState';
 export { planSummaryLabel } from './chat/planDock';
 export { default as TaskLogApp } from './tasklog/TaskLogApp';

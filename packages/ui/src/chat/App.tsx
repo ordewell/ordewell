@@ -72,7 +72,13 @@ const DETECTING = 'Detecting coding agents…';
  */
 export type ChatLayout = 'chat' | 'conversation' | 'plan';
 
-export default function App({ layout = 'chat' }: { layout?: ChatLayout } = {}) {
+/** A host that keeps the open card elsewhere (the desktop's Graph shares it with this list). */
+export interface TaskSelection {
+  taskId: string | null;
+  onChange(taskId: string | null): void;
+}
+
+export default function App({ layout = 'chat', selection }: { layout?: ChatLayout; selection?: TaskSelection } = {}) {
   const bridge = useChatBridge();
   const [host, dispatch] = useReducer(reduceHost, INITIAL_HOST_STATE);
   const [childTree, setChildTree] = useState<{ rootId: string; children: ChildPlanEntry[] }>({ rootId: '', children: [] });
@@ -136,7 +142,14 @@ export default function App({ layout = 'chat' }: { layout?: ChatLayout } = {}) {
   const compactionNews = compaction && seenRunning.current.has(compaction.id) ? compactionText(compaction) : '';
   /** A first Esc during a planner turn: one more within `STOP_ARM_MS` stops it. */
   const [stopArmed, setStopArmed] = useState(false);
-  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
+  const [ownExpandedTaskId, setOwnExpandedTaskId] = useState<string | null>(null);
+  const expandedTaskId = selection ? selection.taskId : ownExpandedTaskId;
+  const onSelectionChange = useRef(selection?.onChange);
+  onSelectionChange.current = selection?.onChange;
+  const setExpandedTaskId = useCallback((taskId: string | null): void => {
+    if (onSelectionChange.current) onSelectionChange.current(taskId);
+    else setOwnExpandedTaskId(taskId);
+  }, []);
   const [slashOutput, setSlashOutput] = useState('');
   const [showNewSessionConfirm, setShowNewSessionConfirm] = useState(false);
   const [setupCollapsed, setSetupCollapsed] = useState(false);

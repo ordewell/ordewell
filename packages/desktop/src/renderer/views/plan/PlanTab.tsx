@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { List, Network } from 'lucide-react';
 import { IconButton, PlanGlyph } from '@ordewell/ui/design';
 import type { FrameApi, Unregister } from '../../frame/api';
@@ -12,15 +12,32 @@ import { PlanList } from './PlanList';
  * The pinned Plan tab, with its List and Graph views. Design slice 8 owns this
  * file and the list; slice 10 owns the graph it switches to.
  */
-function PlanTab({ host }: { host: DaemonHost }): JSX.Element {
+export function PlanTab({ host, api }: { host: DaemonHost; api: FrameApi }): JSX.Element {
   const [view, setView] = useState<'list' | 'graph'>('list');
+  const banner = useRef<Unregister | null>(null);
+  useEffect(() => () => banner.current?.(), []);
+
+  // A dependency loop has no layers to draw: say so and show the List, which can still show it (design W5).
+  const cannotDraw = useCallback((reason: string) => {
+    setView('list');
+    banner.current?.();
+    banner.current = api.showBanner({ id: 'plan.graph.cycle', tone: 'warning', title: 'The graph cannot draw this plan', body: reason });
+  }, [api]);
+
+  const onKeyDown = (event: KeyboardEvent): void => {
+    if (event.key.toLowerCase() !== 'v' || event.ctrlKey || event.metaKey || event.altKey) return;
+    const target = event.target as HTMLElement;
+    if (target.closest('input, textarea, select, [contenteditable="true"]')) return;
+    setView((v) => (v === 'list' ? 'graph' : 'list'));
+  };
+
   return (
-    <div className="session-plan">
+    <div className="session-plan" onKeyDown={onKeyDown}>
       <div className="frame-toolbar" role="group" aria-label="Plan view">
         <IconButton icon={List} label="List" active={view === 'list'} aria-pressed={view === 'list'} onClick={() => setView('list')} />
         <IconButton icon={Network} label="Graph" active={view === 'graph'} aria-pressed={view === 'graph'} onClick={() => setView('graph')} />
       </div>
-      {view === 'list' ? <PlanList host={host} /> : <PlanGraph />}
+      {view === 'list' ? <PlanList host={host} /> : <PlanGraph host={host} api={api} onCannotDraw={cannotDraw} />}
     </div>
   );
 }
@@ -90,7 +107,7 @@ function followRunActions(api: FrameApi, host: DaemonHost): Unregister {
 export function register(api: FrameApi): Unregister {
   const host = daemonHost(api.workspace);
   return all(
-    api.registerTabKind({ kind: 'plan', icon: PlanGlyph, render: () => <PlanTab host={host} /> }),
+    api.registerTabKind({ kind: 'plan', icon: PlanGlyph, render: () => <PlanTab host={host} api={api} /> }),
     followRunActions(api, host),
   );
 }

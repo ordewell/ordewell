@@ -1,0 +1,69 @@
+/* The Plan graph: a React Flow canvas of task nodes. Colours are the status tokens, so no state rests on colour alone. */
+
+.plan-graph { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.plan-graph-toolbar { display: flex; align-items: center; gap: var(--ow-space-3); padding: var(--ow-space-2) var(--ow-space-5); border-bottom: 1px solid var(--ow-border); font: var(--ow-type-small); color: var(--ow-fg-secondary); }
+.plan-graph-toolbar .plan-graph-note { margin-inline-start: auto; }
+.plan-graph-canvas { position: relative; flex: 1; min-height: 0; background: var(--ow-bg); }
+.plan-graph-legend { display: flex; flex-wrap: wrap; gap: var(--ow-space-5); padding: var(--ow-space-2) var(--ow-space-5); border-top: 1px solid var(--ow-border); font: var(--ow-type-small); color: var(--ow-fg-secondary); }
+.plan-graph-legend span { display: inline-flex; align-items: center; gap: var(--ow-space-2); }
+.plan-graph-legend svg { width: 28px; height: 8px; }
+
+.plan-graph .react-flow { --xy-background-color: var(--ow-bg); --xy-edge-stroke-default: var(--ow-fg-secondary); }
+.plan-graph .react-flow__node { padding: 0; border: 0; background: transparent; width: auto; }
+.plan-graph .react-flow__attribution { display: none; }
+.graph-handle { opacity: 0; pointer-events: none; }
+
+.graph-node { position: relative; width: 264px; border: 1px solid var(--ow-border-widget); border-radius: var(--ow-radius-md); background: var(--ow-bg-widget); color: var(--ow-fg); font: var(--ow-type-small); }
+.graph-node[data-selected='true'] { border-color: var(--ow-accent); background: var(--ow-bg-selected); }
+.graph-node[data-critical='true'] { border-color: var(--ow-status-running); }
+.graph-node[data-status='failed'] { border-color: var(--ow-status-failed); }
+.graph-node[data-status='needs-you'] { border-color: var(--ow-status-attention); }
+.graph-node[data-status='skipped'] .graph-node-title, .graph-node[data-status='not-started'] .graph-node-title { color: var(--ow-fg-secondary); }
+
+.graph-node-face { display: flex; flex-direction: column; gap: 2px; width: 100%; box-sizing: border-box; height: 78px; padding: var(--ow-space-3) var(--ow-space-4); padding-inline-end: 64px; border: 0; border-radius: var(--ow-radius-md); background: transparent; color: inherit; font: inherit; text-align: start; cursor: pointer; overflow: hidden; }
+.graph-node-face:focus-visible { outline: var(--ow-focus-width) solid var(--ow-focus-ring); outline-offset: var(--ow-focus-offset); }
+.graph-node-head { display: flex; align-items: center; gap: var(--ow-space-3); min-width: 0; font: var(--ow-type-body-strong); }
+.graph-node-order { color: var(--ow-fg-secondary); font-variant-numeric: tabular-nums; }
+.graph-node-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.graph-node-meta { display: flex; align-items: center; gap: var(--ow-space-2); min-width: 0; color: var(--ow-fg-secondary); white-space: nowrap; overflow: hidden; }
+.graph-node-status { color: var(--ow-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.graph-badge { padding: 0 var(--ow-space-3); border: 1px solid var(--ow-border-widget); border-radius: var(--ow-radius-pill); font: var(--ow-type-caption); color: var(--ow-fg-secondary); }
+.graph-badge[data-flag='approval'], .graph-badge[data-flag='waits-for-approval'], .graph-badge[data-flag='checkpoint'], .graph-badge[data-flag='usage-limit'] { color: var(--ow-status-attention); border-color: var(--ow-status-attention); }
+.graph-badge[data-flag='conflict'], .graph-badge[data-flag='repair'] { color: var(--ow-status-failed); border-color: var(--ow-status-failed); }
+.graph-badge[data-flag='merge-gate'] { color: var(--ow-status-merge); border-color: var(--ow-status-merge); }
+.graph-badge[data-flag='hold'] { color: var(--ow-status-blocked); border-color: var(--ow-status-blocked); }
+.graph-badge[data-loop] { color: var(--ow-fg); }
+
+.graph-node-chat { position: absolute; top: var(--ow-space-2); inset-inline-end: var(--ow-space-2); padding: 0 var(--ow-space-3); border: 1px solid var(--ow-border-widget); border-radius: var(--ow-radius-sm); background: var(--ow-bg-widget); color: var(--ow-fg); font: var(--ow-type-caption); cursor: pointer; }
+.graph-node-chat:hover { background: var(--ow-bg-hover); }
+.graph-node-fold { display: flex; align-items: center; gap: var(--ow-space-2); width: 100%; padding: var(--ow-space-1) var(--ow-space-4); border: 0; border-top: 1px solid var(--ow-border); border-radius: 0 0 var(--ow-radius-md) var(--ow-radius-md); background: transparent; color: var(--ow-fg-secondary); font: var(--ow-type-caption); text-align: start; cursor: pointer; }
+.graph-node-fold:hover { background: var(--ow-bg-hover); }
+.graph-node-subtasks { margin: 0; padding: 0 var(--ow-space-4) var(--ow-space-2); list-style: none; }
+.graph-node-subtasks li { display: flex; align-items: center; gap: var(--ow-space-3); height: 20px; min-width: 0; color: var(--ow-fg-secondary); }
+.graph-node-subtasks li > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.graph-peek { position: absolute; z-index: 10; top: calc(100% + var(--ow-space-2)); inset-inline-start: 0; width: 320px; padding: var(--ow-space-3) var(--ow-space-4); background: var(--ow-bg-overlay); border: 1px solid var(--ow-border-widget); border-radius: var(--ow-radius-lg); box-shadow: var(--ow-elevation-raised); pointer-events: none; }
+.graph-peek pre { margin: var(--ow-space-2) 0 0; max-height: 8.5em; overflow: hidden; font: var(--ow-type-code); white-space: pre-wrap; word-break: break-word; }
+.graph-peek ul { margin: 0; padding-inline-start: var(--ow-space-5); }
+
+.plan-graph .react-flow__edge-path { stroke: var(--ow-border-contrast); stroke-width: 1.5; }
+.plan-graph .graph-edge--satisfied .react-flow__edge-path { stroke: var(--ow-status-passed); }
+.plan-graph .graph-edge--active .react-flow__edge-path { stroke: var(--ow-status-running); stroke-dasharray: 6 4; animation: graph-edge-flow 1s linear infinite; }
+.plan-graph .graph-edge--failed .react-flow__edge-path { stroke: var(--ow-status-failed); stroke-dasharray: 2 3; }
+.plan-graph .graph-edge--blocked .react-flow__edge-path { stroke: var(--ow-status-blocked); stroke-dasharray: 8 4; }
+.plan-graph .graph-edge--merge .react-flow__edge-path { stroke: var(--ow-status-merge); stroke-dasharray: 10 3 2 3; }
+.plan-graph .graph-edge--pending .react-flow__edge-path { stroke: var(--ow-border-contrast); }
+.plan-graph .graph-edge--critical .react-flow__edge-path { stroke-width: 3.5; }
+@keyframes graph-edge-flow { to { stroke-dashoffset: -20; } }
+
+.graph-menu { position: fixed; z-index: 30; min-width: 180px; margin: 0; padding: var(--ow-space-2) 0; list-style: none; background: var(--ow-bg-overlay); border: 1px solid var(--ow-border-widget); border-radius: var(--ow-radius-lg); box-shadow: var(--ow-elevation-raised); }
+.graph-menu button { width: 100%; padding: var(--ow-space-3) var(--ow-space-5); border: 0; background: transparent; color: var(--ow-fg); font: var(--ow-type-body); text-align: start; cursor: pointer; }
+.graph-menu button:hover, .graph-menu button:focus-visible { background: var(--ow-bg-hover); }
+
+@media (prefers-reduced-motion: reduce) {
+  .plan-graph .graph-edge--active .react-flow__edge-path { animation: none; }
+  .plan-graph .react-flow__viewport { transition: none !important; }
+}
+
+.plan-graph .react-flow__arrowhead polyline { stroke: var(--ow-border-contrast); fill: var(--ow-border-contrast); }
+.plan-graph-note[role='alert'] { padding: var(--ow-space-5); }

@@ -11,6 +11,8 @@ import './theme.css';
 import './app.css';
 import './frame/frame.css';
 import './session/session.css';
+import '@xyflow/react/dist/style.css';
+import './views/graph/graph.css';
 import { App } from './App';
 
 const root = document.getElementById('root');

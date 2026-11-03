@@ -1,6 +1,7 @@
 import { useMemo, useSyncExternalStore } from 'react';
 import { ChatApp, ChatBridgeContext, type ChatLayout } from '@ordewell/ui';
 import type { DaemonHost, SessionSnapshotView } from './DaemonHost';
+import { useTaskSelection } from './selection';
 
 export function useSession(host: DaemonHost): SessionSnapshotView {
   return useSyncExternalStore(host.subscribe, host.getSnapshot);
@@ -13,9 +14,11 @@ export function useSession(host: DaemonHost): SessionSnapshotView {
  */
 export function ChatSurface({ host, layout }: { host: DaemonHost; layout: Exclude<ChatLayout, 'chat'> }): JSX.Element {
   const bridge = useMemo(() => host.port(layout), [host, layout]);
+  // Only the plan's list shares its open card; the planner's chat has none to share.
+  const selection = useTaskSelection(host);
   return (
     <ChatBridgeContext.Provider value={bridge}>
-      <ChatApp layout={layout} />
+      <ChatApp layout={layout} selection={layout === 'plan' ? selection : undefined} />
     </ChatBridgeContext.Provider>
   );
 }
