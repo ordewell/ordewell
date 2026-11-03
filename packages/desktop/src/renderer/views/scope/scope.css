@@ -1,0 +1,9 @@
+.scope-chip { border: 0; background: transparent; font: var(--ow-type-body); cursor: pointer; }
+.scope-chip:hover, .scope-chip[aria-expanded='true'] { background: var(--ow-bg-hover); color: var(--ow-fg); }
+.scope-menu { left: 0; right: auto; min-width: 320px; }
+.scope-menu .scope-repo { padding: var(--ow-space-3) var(--ow-space-5) 0; }
+.scope-menu button { display: flex; align-items: baseline; gap: var(--ow-space-4); }
+.scope-mark { width: 1ch; color: var(--ow-fg-secondary); }
+.scope-detail { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ow-fg-secondary); font: var(--ow-type-code); }
+.scope-state { color: var(--ow-fg-secondary); }
+.scope-branch { font: var(--ow-type-code); }

@@ -80,6 +80,21 @@ export interface PaneSizes {
 export interface Prefs {
   theme: 'system' | 'light' | 'dark';
   panes: PaneSizes;
+  /**
+   * The command "Open in editor" runs instead of the OS default, such as
+   * `code --goto {file}:{line}`; empty uses the default. Main reads it from the
+   * prefs file only: a page can never set it, since it names a program to run.
+   */
+  editorCommand: string;
+}
+
+/** A file in the user's checkout, named the way the read routes name it. */
+export interface ShellTarget {
+  /** The repository, `.` for the workspace root. */
+  repo: string;
+  /** From the repository root; absent reveals the repository itself. */
+  path?: string;
+  line?: number;
 }
 
 export interface UpdateState {
@@ -119,6 +134,15 @@ export interface OrdewellBridge {
   update: {
     state(): Promise<UpdateState>;
   };
+  /**
+   * What the OS does with a file of the user's checkout. Main knows the window's
+   * workspace and resolves the path inside it, so a page names a repo and a
+   * path and never an absolute one. Only the checkout has files on disk (W8).
+   */
+  shell: {
+    openInEditor(target: ShellTarget): Promise<ActionResult>;
+    reveal(target: ShellTarget): Promise<ActionResult>;
+  };
 }
 
 /** Invoke channels, one per bridge call; `event` channels flow main → renderer. */
@@ -139,6 +163,8 @@ export const CHANNELS = {
   prefsGet: 'ordewell:prefs.get',
   prefsSet: 'ordewell:prefs.set',
   updateState: 'ordewell:update.state',
+  shellOpenInEditor: 'ordewell:shell.openInEditor',
+  shellReveal: 'ordewell:shell.reveal',
 } as const;
 
 export const EVENTS = {

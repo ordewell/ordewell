@@ -9,9 +9,18 @@ describe('productionCsp', () => {
     expect(csp).toContain("default-src 'none'");
     expect(csp).toContain("connect-src 'none'");
     expect(csp).toContain("script-src 'self'");
-    expect(csp).not.toContain('unsafe-inline');
     expect(csp).not.toContain('unsafe-eval');
     expect(csp).not.toMatch(/https?:/);
+  });
+
+  it('lets only styles be inline, for Monaco, and serves its workers from the app', () => {
+    const directives = new Map(productionCsp().split('; ').map((d) => [d.split(' ')[0], d] as const));
+    expect(directives.get('style-src')).toContain("'unsafe-inline'");
+    for (const name of ['default-src', 'script-src', 'img-src', 'font-src', 'connect-src']) {
+      expect(directives.get(name), name).not.toContain('unsafe-inline');
+    }
+    expect(directives.has('worker-src')).toBe(false);
+    expect(directives.get('script-src')).toBe("script-src 'self'");
   });
 });
 
