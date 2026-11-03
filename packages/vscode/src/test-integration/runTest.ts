@@ -3,6 +3,8 @@ import * as os from 'os';
 import * as path from 'path';
 import { runTests } from '@vscode/test-electron';
 
+const PATH_KEY = Object.keys(process.env).find((key) => key.toUpperCase() === 'PATH') ?? 'PATH';
+
 async function main(): Promise<void> {
   const workspace = process.env.ORDEWELL_TEST_WORKSPACE;
   if (!workspace) throw new Error('ORDEWELL_TEST_WORKSPACE must point at a scratch directory');
@@ -39,7 +41,10 @@ async function run(workspace: string, userData: string): Promise<void> {
       VSCODE_CLI: '1',
       // In the host's environment from launch: the PATH Ordewell spawns runners
       // under is resolved once per process, so setting it later can be too late.
-      PATH: [path.resolve(__dirname, '../../../bench/pipeline/fake-claude'), process.env.PATH].filter(Boolean).join(path.delimiter),
+      // Under the key the environment already uses: this merges over
+      // process.env, where Windows spells it `Path`, and a second `PATH` beside
+      // it lost to the original.
+      [PATH_KEY]: [path.resolve(__dirname, '../../../bench/pipeline/fake-claude'), process.env.PATH].filter(Boolean).join(path.delimiter),
       ORDEWELL_TEST_MODEL: process.env.ORDEWELL_TEST_MODEL,
       OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
     },

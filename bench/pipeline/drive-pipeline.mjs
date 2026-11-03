@@ -22,10 +22,10 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const core = await import(path.join(__dirname, '../../packages/core/dist/index.mjs'));
+const core = await import(pathToFileURL(path.join(__dirname, '../../packages/core/dist/index.mjs')).href);
 
 // ---------- CLI args ----------
 function arg(name, fallback) {

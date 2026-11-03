@@ -7,6 +7,7 @@ import { plannerNotReadyFor } from '../plannerReadiness';
 import { CLAUDE_CODE_MANIFEST } from '../../plugins/builtin/claude-code.manifest';
 import { CODEX_MANIFEST } from '../../plugins/builtin/codex.manifest';
 import { OPENCODE_MANIFEST } from '../../plugins/builtin/opencode.manifest';
+import type { LaunchDeps } from '../../utils/launch';
 
 type Answer = { code: number; stdout?: string; stderr?: string };
 
@@ -379,6 +380,66 @@ describe('readRunnerAuth', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  // An npm install on Windows is a `.cmd` shim, which a bare execFile cannot
+  // find or start, so the probe has to be started the way the planner is.
+  describe('on Windows', () => {
+    const NPM = 'C:\\Users\\me\\AppData\\Roaming\\npm';
+    const windows = (files: string[]): LaunchDeps => {
+      const present = new Set(files.map((f) => f.toLowerCase()));
+      return {
+        platform: 'win32',
+        resolvePath: async () => `C:\\tools;${NPM}`,
+        exists: (candidate) => present.has(candidate.toLowerCase()),
+        comSpec: () => 'C:\\Windows\\System32\\cmd.exe',
+        powerShell: () => 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+        pathExt: () => '.COM;.EXE;.BAT;.CMD',
+      };
+    };
+
+    it('asks an npm-installed agent through cmd.exe, with the line passed verbatim', async () => {
+      const exec = execAnswering({ code: 1, stdout: 'Not logged in\n' });
+      const home = codexHome('');
+      try {
+        const auth = await readRunnerAuth(CODEX_MANIFEST, {
+          exec, env: { CODEX_HOME: home }, launch: windows([`${NPM}\\codex.cmd`, `${NPM}\\codex.ps1`]),
+        });
+
+        expect(auth.state).toBe('signed-out');
+        expect(exec).toHaveBeenCalledWith(
+          'C:\\Windows\\System32\\cmd.exe',
+          ['/d', '/s', '/c', `"${NPM}\\codex.cmd login status"`],
+          expect.objectContaining({ verbatim: true }),
+        );
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it('starts a native executable directly', async () => {
+      const exec = execAnswering({ code: 0, stdout: '{"loggedIn":true}' });
+
+      await readRunnerAuth(CLAUDE_CODE_MANIFEST, { exec, launch: windows(['C:\\tools\\claude.exe']) });
+
+      expect(exec).toHaveBeenCalledWith('C:\\tools\\claude.exe', ['auth', 'status'], expect.not.objectContaining({ verbatim: true }));
+    });
+
+    it.runIf(process.platform === 'win32')('reads a real .cmd shim signed out', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'ordewell-auth-shim-'));
+      const home = codexHome('');
+      writeFileSync(join(dir, 'codex.cmd'), '@echo off\r\necho Not logged in\r\nexit /b 1\r\n');
+      try {
+        const auth = await readRunnerAuth(CODEX_MANIFEST, {
+          env: { CODEX_HOME: home }, launch: { resolvePath: async () => dir },
+        });
+
+        expect(auth).toEqual({ state: 'signed-out', loginCommand: ['codex', 'login'], detail: 'not logged in' });
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
   });
 });
 

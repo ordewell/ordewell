@@ -250,7 +250,10 @@ hazard this route avoids too.
 
 The Windows branches are tested on Linux through injected seams. The batch
 route's line-break failure and the PowerShell route's fidelity were found and
-measured on a Windows host; the rest has not been run on one.
+measured on a Windows host. So was the VS Code extension's first run: activation,
+runner detection, the login probe and Log in, with Claude Code as its native
+`.exe` and Codex and OpenCode as npm `.cmd` shims, and a Codex planner
+conversation. The rest has not been run on one.
 
 ## History
 
@@ -262,3 +265,4 @@ measured on a Windows host; the rest has not been run on one.
 - 2026-10-13 — a group whose leader has exited is asked for members before each signal, and dropped once empty.
 - 2026-10-17 — Codex's approvals on Windows read `on-request`, as ADR-0026 made them on 2026-10-10; the text still said `never`.
 - 2026-10-24 — a spawn throw is held through the one spawn-failure path in `Attempts`; the text named a `TaskOrchestrator.startTask` that no longer exists.
+- 2026-11-03 — the VS Code extension's activation, runner detection and login run on a Windows host.

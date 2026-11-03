@@ -4,7 +4,7 @@ import { RunnerRegistry, type RunnerAuth } from '@ordewell/core';
 import { commandLine, loginPlanner, type PlannerLoginDeps } from '../PlannerLogin';
 
 interface FakeTerminal {
-  options: { name?: string; cwd?: string; env?: Record<string, string> };
+  options: { name?: string; cwd?: string; shellPath?: string; env?: Record<string, string> };
   sent: string[];
   shown: number;
   exitStatus: { code: number | undefined } | undefined;
@@ -20,6 +20,8 @@ interface HarnessOptions {
   /** Runs right after each probe answers, so a test can close the terminal mid-flow. */
   afterProbe?: (probe: number, close: () => void) => void;
   timeoutMs?: number;
+  /** POSIX unless a case is about Windows, so the terminal options read the same on every host. */
+  platform?: NodeJS.Platform;
 }
 
 const SIGNED_OUT_CLAUDE: RunnerAuth = { state: 'signed-out', loginCommand: ['claude', 'auth', 'login'] };
@@ -75,6 +77,7 @@ function harness(options: HarnessOptions = {}) {
     sleep: async (ms: number) => { clock += ms; },
     now: () => clock,
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+    platform: options.platform ?? 'linux',
     log: vi.fn(),
   } as unknown as PlannerLoginDeps;
 
@@ -128,6 +131,31 @@ describe('loginPlanner', () => {
     for (const dir of (process.env.PATH ?? '').split(delimiter).filter(Boolean)) expect(segments).toContain(dir);
     // The workspace's own account still rides along (ADR-0016).
     expect(env.CLAUDE_CONFIG_DIR).toBe('/accounts/other');
+  });
+
+  it('runs the login in cmd.exe on Windows, whatever the default terminal is', async () => {
+    // Windows PowerShell picks npm's codex.ps1 over codex.cmd and, under the
+    // default Restricted policy, refuses to run it.
+    const h = harness({
+      platform: 'win32',
+      verdict: (probe) => (probe >= 3
+        ? { state: 'signed-in', loginCommand: ['codex', 'login'] }
+        : { state: 'signed-out', loginCommand: ['codex', 'login'] }),
+    });
+
+    await loginPlanner(h.deps, 'codex');
+
+    expect(h.terminal.options.shellPath).toMatch(/cmd\.exe$/i);
+    expect(h.terminal.sent).toEqual(['codex login']);
+    expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner: 'codex', ok: true });
+  });
+
+  it('leaves the shell to the user default off Windows', async () => {
+    const h = harness({ verdict: (probe) => (probe >= 3 ? { ...SIGNED_OUT_CLAUDE, state: 'signed-in' } : SIGNED_OUT_CLAUDE) });
+
+    await loginPlanner(h.deps);
+
+    expect(h.terminal.options).not.toHaveProperty('shellPath');
   });
 
   it('signs in a named runner without making it the planner', async () => {
@@ -288,7 +316,13 @@ describe('loginPlanner', () => {
 
 describe('commandLine', () => {
   it('quotes only what the shell would split', () => {
-    expect(commandLine(['claude', 'auth', 'login'])).toBe('claude auth login');
-    expect(commandLine(['/opt/My Agent/bin', '--config', '/a b/c'])).toBe(`'/opt/My Agent/bin' --config '/a b/c'`);
+    expect(commandLine(['claude', 'auth', 'login'], 'linux')).toBe('claude auth login');
+    expect(commandLine(['/opt/My Agent/bin', '--config', '/a b/c'], 'linux')).toBe(`'/opt/My Agent/bin' --config '/a b/c'`);
+  });
+
+  it("quotes for cmd.exe on Windows, the login terminal's shell there", () => {
+    expect(commandLine(['codex', 'login'], 'win32')).toBe('codex login');
+    expect(commandLine(['C:\\Program Files\\Agent\\agent.exe', 'auth', 'login'], 'win32'))
+      .toBe('"C:\\Program Files\\Agent\\agent.exe" auth login');
   });
 });

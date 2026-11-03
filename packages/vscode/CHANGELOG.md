@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **An npm-installed agent's login is read on Windows.** Codex, OpenCode or Claude
+  Code installed as a `.cmd` shim no longer reads as an unknown login: when it is
+  signed out, its pill is flagged and offers Log in.
+- **Log in works on a stock Windows PowerShell.** On Windows the login terminal is
+  cmd.exe, so PowerShell's default Restricted execution policy no longer refuses
+  an npm-installed agent's `.ps1` shim and leaves the sign-in waiting until it
+  times out.
+
 ## [0.12.3] - 2026-11-03
 
 ### Fixed

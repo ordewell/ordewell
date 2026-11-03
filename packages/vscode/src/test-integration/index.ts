@@ -50,8 +50,11 @@ function waitFor(predicate: () => boolean, timeoutMs: number, what: string): Pro
 }
 
 async function fakeClaudeCompletesThroughTheTool(): Promise<void> {
+  const first = process.env.PATH?.split(path.delimiter)[0];
+  // path.relative, not ===: Windows names the same drive f:\ in the extension
+  // host and F:\ in the runner that built this PATH.
   assert.ok(
-    process.env.PATH?.split(path.delimiter)[0] === FAKE_CLAUDE_DIR,
+    first !== undefined && path.relative(first, FAKE_CLAUDE_DIR) === '',
     `${FAKE_CLAUDE_DIR} is not first on the host's PATH; the real claude would run`,
   );
 
