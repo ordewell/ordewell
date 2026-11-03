@@ -17,7 +17,9 @@ import { MEMORY_LIMIT_SIGNAL, type SandboxProfile } from '../SandboxBackend';
 const SHELLS = ['/bin/dash', '/bin/bash'].filter((shell) => existsSync(shell));
 const LIMIT_KB = 100 * 1024;
 
-describe.each(SHELLS)('the bubblewrap memory watcher, under %s', (shell) => {
+// Windows has neither shell, and a `describe.each` over none registers no suite
+// at all, which vitest reports as a failed file rather than a skip.
+describe.skipIf(SHELLS.length === 0).each(SHELLS.length > 0 ? SHELLS : ['/bin/sh'])('the bubblewrap memory watcher, under %s', (shell) => {
   let proc: string;
 
   beforeEach(() => {

@@ -189,7 +189,9 @@ describe('ScriptRunner: ending early', () => {
 
     const exit = await run.exit;
     expect(exit).toMatchObject({ outcome: 'timed-out', timeoutMs: 300 });
-    expect(ofType(run.events, 'script_exit')).toEqual([expect.objectContaining({ timedOut: true, signal: 'SIGTERM' })]);
+    // Windows ends the tree with taskkill, which leaves an exit code and no signal.
+    const ended = process.platform === 'win32' ? {} : { signal: 'SIGTERM' };
+    expect(ofType(run.events, 'script_exit')).toEqual([expect.objectContaining({ timedOut: true, ...ended })]);
     expect(fs.existsSync(path.join(run.cwd, 'after'))).toBe(false);
   }, 15_000);
 

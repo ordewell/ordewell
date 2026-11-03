@@ -7,6 +7,7 @@ import { ScriptRunner } from '../ScriptRunner';
 import { renderTaskLog, TASK_LOG_KINDS } from '../taskLogRead';
 import { EMPTY_TASK_LOG, reduceTaskLog } from '../../conversation/taskLog';
 import { coalesceTaskLog, digestTaskLog, type TaskLogEvent } from '../../models/TaskLog';
+import { commandLine } from '../../models/ScriptTask';
 import { listTaskLogAttempts, prepareTaskOutputFile, type TaskLogFile } from '../../utils/taskLogStore';
 import type { SessionMessage } from '../SessionMessage';
 
@@ -74,7 +75,8 @@ describe('a script task\'s log', () => {
     const { saved } = await recorded([[node, '-e', "console.log('pushed')"]]);
 
     const text = renderTaskLog(saved);
-    expect(text).toContain(`[1 script_run] $ ${node} -e 'console.log('\\''pushed'\\'')'\n`);
+    // The host's node may live under a path with a space (`Program Files`), which is quoted.
+    expect(text).toContain(`[1 script_run] $ ${commandLine([node])} -e 'console.log('\\''pushed'\\'')'\n`);
     expect(text).toContain('[2 script_output] pushed\n');
     expect(text).toMatch(/\[3 script_exit\] exited 0 after \d+(\.\d)? s\n/);
     expect(renderTaskLog(saved, ['script_exit'])).toMatch(/^\[3 script_exit\] exited 0 after/);
