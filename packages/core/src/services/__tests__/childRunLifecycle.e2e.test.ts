@@ -18,7 +18,7 @@ import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import { fakeConfig, FakeRunnerSession } from '../../testing';
 import { listChildSessions, listSessions, loadChildSession, loadSession, saveChildSession, saveSession } from '../../utils/sessionStore';
 import { openTaskLog } from '../../utils/taskLogStore';
-import { fakeFs, makeSession, type PlannerTurn as Turn } from './sessionTestKit';
+import { closeSessions, fakeFs, makeSession, type PlannerTurn as Turn } from './sessionTestKit';
 
 /*
  * What ends a child and what brings it back, on real repositories (ADR-0055
@@ -35,7 +35,10 @@ const env = () => {
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, env: env(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
 const roots: string[] = [];
-afterEach(() => { while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
+afterEach(async () => {
+  await closeSessions();
+  while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+});
 
 function repo(): string {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-child-run-')));
@@ -106,6 +109,26 @@ function fakeRunner(files: Record<string, string[]>, { held = [], heldOnce = [],
 }
 
 const isolation = (): IWorktreeIsolation => createWorktreeIsolation({ resolvePath: async () => process.env.PATH ?? '', config: fakeConfig({ worktreeIsolation: true }) });
+
+/** What a run changes in git: the calls `leasedIsolation` waits out as a Session closes. */
+const CHANGES = new Set(['stash', 'startRun', 'prepare', 'reopen', 'integrate', 'revert', 'release', 'handoff', 'pruneOrphans', 'mergeIntoCheckedOut', 'discard', 'sweep']);
+
+/** Real git, telling each change to the run as it goes in, each held back until `before` resolves. */
+function watchedIsolation(changing: (change: string, ended: Promise<unknown>) => void, before: (change: string, args: unknown[]) => Promise<void> | void = () => undefined): IWorktreeIsolation {
+  return new Proxy(isolation(), {
+    get(target, key, receiver) {
+      const member = Reflect.get(target, key, receiver) as unknown;
+      const change = String(key);
+      if (typeof member !== 'function' || !CHANGES.has(change)) return member;
+      return (...args: unknown[]) => {
+        const ended = Promise.resolve(before(change, args)).then(() => member.apply(target, args) as unknown);
+        changing(change, ended);
+        return ended;
+      };
+    },
+  });
+}
+
 const planOf = (tasks: Task[]): LegacyPlanState => ({ tasks, runners: ['claude-code'], status: 'approved', generatedAt: '2026-11-01T10:00:00.000Z' } as unknown as LegacyPlanState);
 
 const delegated = (over: Partial<Task> = {}) => createTask({
@@ -135,6 +158,7 @@ const BLOCKED: Turn = async (tools) => {
 
 interface TreeOptions {
   runner?: IRunner;
+  isolated?: IWorktreeIsolation;
   tasks?: Task[];
   tokens?: () => number;
   /** The root's repository, for a second Session over the same files. */
@@ -189,10 +213,10 @@ function stoppablePlanner(turns: Turn[], { sessionless = false } = {}) {
   return { asked, requests, natives, service };
 }
 
-function tree(turns: Turn[], { runner = fakeRunner({ a: ['a.txt'], b: ['b.txt'] }), tasks = [delegated(), check()], tokens = () => 5_000_000, root = repo(), leaseHost = new LeaseHost(), plan, sessionId = 'session-root', rootTurns, notifications, parallel = 3, sessionless }: TreeOptions = {}) {
+function tree(turns: Turn[], { runner = fakeRunner({ a: ['a.txt'], b: ['b.txt'] }), isolated = isolation(), tasks = [delegated(), check()], tokens = () => 5_000_000, root = repo(), leaseHost = new LeaseHost(), plan, sessionId = 'session-root', rootTurns, notifications, parallel = 3, sessionless }: TreeOptions = {}) {
   const planner = stoppablePlanner(turns, { sessionless });
   const parent = makeSession({
-    runner, isolation: isolation(), workspaceRoot: () => root, saveSession, openTaskLog, leaseHost, sessionId,
+    runner, isolation: isolated, workspaceRoot: () => root, saveSession, openTaskLog, leaseHost, sessionId,
     ...(rootTurns ? { aiService: stoppablePlanner(rootTurns).service() } : {}),
     ...(notifications ? { notifications } : {}),
     config: fakeConfig({ maxParallelSessions: parallel }),
@@ -206,6 +230,38 @@ function tree(turns: Turn[], { runner = fakeRunner({ a: ['a.txt'], b: ['b.txt'] 
 
 const statusOf = (session: Session, id: string) => session.planTasks.find((t) => t.id === id)?.status;
 const taskOf = (session: Session, id: string) => session.planTasks.find((t) => t.id === id)!;
+
+describe('a close with git at work', () => {
+  /*
+   * CI lost a test this way: `d` completed, the scheduler was opening `c`'s
+   * worktree, and the test destroyed its Session and removed the repository.
+   * `git worktree add` recreated `.ordewell` behind the removal, so the root
+   * stayed non-empty, and `rmSync`'s retries only call rmdir again.
+   */
+  it('waits out the worktree opening for the next task, so nothing writes behind the repository going', async () => {
+    let letGitGo = () => undefined as void;
+    const git = new Promise<void>((resolve) => { letGitGo = resolve; });
+    let opening: Promise<unknown> | undefined;
+    const isolated = watchedIsolation(
+      (change, ended) => { if (change === 'prepare' && !opening && statusOf(parent, 'd') === 'completed') opening = ended; },
+      (change) => (change === 'prepare' && statusOf(parent, 'd') === 'completed' ? git : undefined),
+    );
+    const { parent, root } = tree([SUBMIT([childTask('a', 1)]), DONE], { isolated });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(opening).toBeDefined(), { timeout: 20_000 });
+
+    let closed = false;
+    const closing = closeSessions().then(() => { closed = true; });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(closed).toBe(false);
+
+    letGitGo();
+    await closing;
+    // No retries: nothing may be left that could write here.
+    rmSync(root, { recursive: true, force: true });
+    expect(existsSync(root)).toBe(false);
+  });
+});
 
 describe('a Stop (ADR-0055 D16)', () => {
   it('reaches a live planner turn, and resolves only once the subtree has gone', async () => {

@@ -20,7 +20,7 @@ import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import { fakeConfig, FakeRunnerSession } from '../../testing';
 import { saveSession } from '../../utils/sessionStore';
 import { openTaskLog } from '../../utils/taskLogStore';
-import { fakeFs, makeSession, scriptedPlanner, type PlannerTurn as Turn } from './sessionTestKit';
+import { closeSessions, fakeFs, makeSession, scriptedPlanner, type PlannerTurn as Turn } from './sessionTestKit';
 
 /*
  * A delegated task end to end, on real repositories (ADR-0055): a root plan
@@ -36,10 +36,8 @@ const env = () => {
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, env: env(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
 const roots: string[] = [];
-const closing: Session[] = [];
-// What a closing child still saves may land a moment after its parent's `destroy`.
 afterEach(async () => {
-  await Promise.all(closing.splice(0).map((session) => session.gone));
+  await closeSessions();
   while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 });
 
@@ -200,7 +198,6 @@ function tree(turns: Turn[], { runner = writingRunner({ a: ['a.txt'], b: ['b.txt
     childDeps: () => ({ aiService: { reset: vi.fn(), ...planner.service } as unknown as IAiService, fsAdapter: fsAdapter ?? { ...fakeFs(), getWorkspaceRoot: () => root } }),
   });
   parent.loadPlan({ ...planOf(tasks), runners }, 'the root goal', root, { sessionId: 'session-root' });
-  closing.push(parent);
   return { root, parent, planner };
 }
 

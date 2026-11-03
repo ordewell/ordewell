@@ -152,6 +152,21 @@ export function scriptedPlanner(turns: PlannerTurn[]): { service: Partial<IAiSer
   };
 }
 
+const made: Session[] = [];
+
+/**
+ * Call from `afterEach`, before a real repository goes. `destroy` returns with
+ * git still running, and a `git worktree add` recreates `.ordewell` behind
+ * `rmSync`, whose retries never list the directory again: ENOTEMPTY. A test
+ * that ended, or failed, with its run at work is closed here as well.
+ */
+export async function closeSessions(): Promise<void> {
+  await Promise.all(made.splice(0).map((session) => {
+    session.destroy();
+    return session.gone;
+  }));
+}
+
 /** A Session over fully faked deps, built through the real composition root. */
 export function makeSession(overrides: SessionOverrides = {}): Session {
   const runner = overrides.runner ?? {
@@ -203,6 +218,7 @@ export function makeSession(overrides: SessionOverrides = {}): Session {
     childDeps: overrides.childDeps,
   });
   if (!overrides.saveSession && !overrides.placement) saveFakes.set(session, save);
+  made.push(session);
   return session;
 }
 

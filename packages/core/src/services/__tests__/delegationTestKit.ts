@@ -17,7 +17,7 @@ import { saveSession } from '../../utils/sessionStore';
 import { openTaskLog } from '../../utils/taskLogStore';
 import { treeEventLogFile } from '../../utils/treeEventLog';
 import type { NodePath, TreeEvent } from '../../models/TreeEvent';
-import { fakeFs, makeSession, sealingFs, scriptedPlanner, type PlannerTurn as Turn } from './sessionTestKit';
+import { closeSessions, fakeFs, makeSession, sealingFs, scriptedPlanner, type PlannerTurn as Turn } from './sessionTestKit';
 
 /** One real repository, one root Session and a scripted subplanner: a delegated task as a test drives it. */
 
@@ -29,11 +29,10 @@ const env = () => {
 export const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, env: env(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
 const roots: string[] = [];
-const closing: Session[] = [];
 
-/** Call from `afterEach`: a Session's `destroy` returns with its release of a worktree still in git, and `gone` is what says it ended. */
+/** Call from `afterEach`. */
 export async function removeRepos(): Promise<void> {
-  await Promise.all(closing.splice(0).map((session) => session.gone));
+  await closeSessions();
   while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 }
 
@@ -155,7 +154,6 @@ export function tree(turns: Turn[], { runner = writingRunner({ a: ['a.txt'], b: 
   });
   const plan = { tasks, runners: ['claude-code'], status: 'approved', generatedAt: '2026-11-01T10:00:00.000Z' } as unknown as LegacyPlanState;
   parent.loadPlan(plan, 'the root goal', root, { sessionId: 'session-root' });
-  closing.push(parent);
   return { root, parent, planner, lower, config: rootConfig };
 }
 

@@ -9,7 +9,14 @@ on:
 # no cancel-in-progress here: a second push is a different release.
 
 jobs:
+  # Coverage floors, the integration test, the artifact checks and the real
+  # engine are what main's CI proves, and a tag is not always a commit main
+  # proved. Nothing publishes until the tagged commit has passed all of them.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
   npm-publish:
+    needs: ci
     runs-on: ubuntu-latest
 
     steps:
@@ -59,6 +66,7 @@ jobs:
           node .github/workflows/wait-for-npm.mjs ordewell "$v"
 
   vscode-publish:
+    needs: ci
     runs-on: ubuntu-latest
 
     steps:

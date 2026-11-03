@@ -15,7 +15,7 @@ import { createTask, flattenTasks, type LegacyPlanState, type Task } from '../..
 import { fakeConfig, FakeRunnerSession } from '../../testing';
 import { loadSession, saveSession } from '../../utils/sessionStore';
 import { openTaskLog } from '../../utils/taskLogStore';
-import { fakeFs, makeSession, scriptedPlanner, type PlannerTurn as Turn } from './sessionTestKit';
+import { closeSessions, fakeFs, makeSession, scriptedPlanner, type PlannerTurn as Turn } from './sessionTestKit';
 
 /*
  * Reaching into a delegated tree from a surface (ADR-0055 D20), on real
@@ -31,9 +31,8 @@ const env = () => {
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, env: env(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
 const roots: string[] = [];
-const closing: Session[] = [];
 afterEach(async () => {
-  await Promise.all(closing.splice(0).map((session) => session.gone));
+  await closeSessions();
   while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 });
 
@@ -118,7 +117,6 @@ function tree(turns: Record<string, Turn[]>, { runner, tasks = [delegated({ gran
     childDeps: (task) => ({ aiService: { reset: vi.fn(), ...planners[task.id].service } as unknown as IAiService, fsAdapter: { ...fakeFs(), getWorkspaceRoot: () => root } }),
   });
   parent.loadPlan(planOf(tasks), 'the root goal', root, { sessionId: 'session-root' });
-  closing.push(parent);
   return { root, parent, planners, frames };
 }
 
@@ -277,7 +275,6 @@ describe('selecting a child plan', () => {
       runner, isolation: isolation(), workspaceRoot: () => root, saveSession, openTaskLog, leaseHost: new LeaseHost(), sessionId: 'session-root',
       settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', delegationTokens: 5_000_000 } }), delegationOffered: true,
     });
-    closing.push(reopened);
     const saved = loadSession('session-root', root);
     reopened.loadPlan(saved!.plan, saved!.meta.goal, root, { sessionId: 'session-root', persist: false });
 
@@ -300,7 +297,6 @@ describe('selecting a child plan', () => {
       runner, isolation: isolation(), workspaceRoot: () => root, saveSession, openTaskLog, leaseHost: new LeaseHost(), sessionId: 'session-root',
       settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', delegationTokens: 5_000_000 } }), delegationOffered: true,
     });
-    closing.push(reopened);
     const saved = loadSession('session-root', root);
     reopened.loadPlan(saved!.plan, saved!.meta.goal, root, { sessionId: 'session-root', persist: false });
 
