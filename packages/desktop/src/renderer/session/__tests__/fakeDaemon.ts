@@ -5,7 +5,8 @@ import type { RouteId, RouteParams } from '../../../shared/routes';
 
 const CONNECTED: DaemonStatus = { state: 'connected', port: 3700, owned: true, daemon: { version: '0.12.3', contract: 1 } };
 
-type Answer = DaemonCallResult | ((params: RouteParams | undefined, body: unknown) => DaemonCallResult);
+type Result = DaemonCallResult | Promise<DaemonCallResult>;
+type Answer = Result | ((params: RouteParams | undefined, body: unknown) => Result);
 
 /** A plan task as the daemon sends it. */
 export function surfaceTask(fields: Partial<SurfaceTask> & { id: string; order: number; title: string }): SurfaceTask {

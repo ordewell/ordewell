@@ -7,7 +7,7 @@ import { cardEditable, pausedOnLimit, taskRefOf, taskRowView } from '@ordewell/c
 import type { Task, DiscoveredModel, TaskModelAssignment, TaskRowAction, AssignmentScope } from '@ordewell/core';
 import { AssignmentFlag, IsolationBadges, StatusBadge, TaskActions, TaskCheck, TaskMarkControl, TaskRevertControl, UsageLimitControls, runnerOptionsFor, statusBadge } from './TaskCard';
 import type { RunnerMode, RunnerOption, TaskCardRun } from './TaskCard';
-import { checkLabel } from '../checkLabel';
+import { checkLabel, verdictSummary } from '../checkLabel';
 
 interface SubTaskCardProps {
   task: Task;
@@ -218,7 +218,7 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
             {task.verdict && (
               <div className={`task-review ${task.verdict.outcome === 'pass' ? 'review-pass' : 'review-neutral'}`}>
                 <div className="task-review-summary">
-                  {task.verdict.outcome === 'pass' ? 'Verified' : 'Failed verification'}: {task.verdict.reason}
+                  {verdictSummary(task.verdict)}
                 </div>
                 {task.verdict.checks.length > 0 && (
                   <div className="task-review-checks">

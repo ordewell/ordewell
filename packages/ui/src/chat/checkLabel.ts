@@ -1,4 +1,4 @@
-import type { VerificationCheck } from '@ordewell/core';
+import type { Task, VerificationCheck } from '@ordewell/core';
 
 /**
  * What a card calls one verification check. Exhaustive over the check names,
@@ -16,4 +16,13 @@ const CHECK_LABELS: Record<VerificationCheck['name'], string> = {
 
 export function checkLabel(name: VerificationCheck['name']): string {
   return CHECK_LABELS[name];
+}
+
+/**
+ * The verdict's line on a card. Some of VerdictEngine's reasons already open
+ * with the outcome ("Verified: …") and some do not, so the outcome is said once.
+ */
+export function verdictSummary(verdict: Pick<NonNullable<Task['verdict']>, 'outcome' | 'reason'>): string {
+  const outcome = verdict.outcome === 'pass' ? 'Verified' : 'Failed verification';
+  return verdict.reason.startsWith(`${outcome}:`) ? verdict.reason : `${outcome}: ${verdict.reason}`;
 }

@@ -10,12 +10,15 @@ import { useDaemonStatus } from '../../useDaemonStatus';
 import { all } from '../Stub';
 
 /** The workspace's sessions, newest first: a click opens one, taking its lease; New session starts a blank one. */
-function Sessions({ host }: { host: DaemonHost }): JSX.Element {
+export function Sessions({ host }: { host: DaemonHost }): JSX.Element {
   const connected = useDaemonStatus()?.state === 'connected';
-  const { sessionId, goal } = useSession(host);
+  const { sessionId, goal, state } = useSession(host);
+  const planStatus = state.plan?.status;
   const [sessions, setSessions] = useState<SessionRow[] | string>();
 
-  // Read again when the session changes or the planner names a new one's goal: either is a row this list lacks.
+  // Read again when the session changes, the planner names a new one's goal, or
+  // the open plan moves on (approved, running, done): each is a row this list
+  // lacks or shows stale.
   useEffect(() => {
     if (!connected) return;
     let live = true;
@@ -25,7 +28,7 @@ function Sessions({ host }: { host: DaemonHost }): JSX.Element {
       setSessions(parseSessions(result.data) ?? 'The daemon sent a session list this app cannot read.');
     });
     return () => { live = false; };
-  }, [host, connected, sessionId, goal]);
+  }, [host, connected, sessionId, goal, planStatus]);
 
   const list = (): JSX.Element => {
     if (!connected) return <p className="frame-empty">Waiting for the daemon…</p>;

@@ -30,6 +30,7 @@ jobs:
       sandbox: ${{ steps.select.outputs.sandbox }}
       planner: ${{ steps.select.outputs.planner }}
       integration: ${{ steps.select.outputs.integration }}
+      desktop: ${{ steps.select.outputs.desktop }}
       engine: ${{ steps.select.outputs.engine }}
       coverage_args: ${{ steps.select.outputs.coverage_args }}
 
@@ -167,7 +168,7 @@ jobs:
           key: vscode-test-${{ runner.os }}-${{ steps.vscode-version.outputs.version }}
 
       - name: Install xvfb if the image lacks it
-        if: needs.scope.outputs.integration != 'false'
+        if: needs.scope.outputs.integration != 'false' || needs.scope.outputs.desktop != 'false'
         run: |
           if ! command -v xvfb-run >/dev/null 2>&1; then
             sudo apt-get update
@@ -182,6 +183,24 @@ jobs:
         run: |
           mkdir -p "$ORDEWELL_TEST_WORKSPACE"
           xvfb-run -a npm run test:integration -w ordewell
+
+      # The built Electron app, walked from its welcome window to a merge on the
+      # checkout's branch: the planner is bench/live's mock provider and the
+      # runner bench/pipeline's fake-claude, so it needs no key and no network.
+      - name: Desktop app — offline e2e (mock planner, fake runner)
+        id: desktop-e2e
+        if: needs.scope.outputs.desktop != 'false'
+        run: xvfb-run -a npm run test:desktop-e2e
+
+      - name: Upload the desktop e2e report
+        if: ${{ failure() && needs.scope.outputs.desktop != 'false' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-e2e-report
+          path: |
+            packages/desktop/test-results
+            packages/desktop/playwright-report
+          if-no-files-found: ignore
 
       - name: Typecheck
         id: typecheck

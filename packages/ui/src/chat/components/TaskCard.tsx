@@ -9,7 +9,7 @@ import TaskHandoff from './TaskHandoff';
 import { QUEUE_TITLE, SendKeyHint, isSendNowKey } from './PendingMessages';
 import { lastLine } from '../taskOutput';
 import { useDelegationOffered } from '../delegationOffered';
-import { checkLabel } from '../checkLabel';
+import { checkLabel, verdictSummary } from '../checkLabel';
 import { useFollowOutput } from '../followOutput';
 import { blockedByLabel, dependencyCandidates, capConflictFiles, cardEditable, holdLabel, loopRowParts, pausedOnLimit, scriptTaskText, skippedLabel, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, RunTask, TaskRowAction, TaskRowView, TaskStatusKind, AssignmentScope } from '@ordewell/core';
@@ -701,7 +701,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
             {task.verdict && (
               <div className={`task-review ${task.verdict.outcome === 'pass' ? 'review-pass' : 'review-neutral'}`}>
                 <div className="task-review-summary">
-                  {task.verdict.outcome === 'pass' ? 'Verified' : 'Failed verification'}: {task.verdict.reason}
+                  {verdictSummary(task.verdict)}
                 </div>
                 {task.verdict.checks.length > 0 && (
                   <div className="task-review-checks">

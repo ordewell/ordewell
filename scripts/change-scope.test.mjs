@@ -63,7 +63,7 @@ describe('a change inside workspaces', () => {
     assert.deepEqual(offChecks(scope), []);
   });
 
-  it('takes the cli and desktop with web, and leaves core, vscode and what only they prove', () => {
+  it('takes the cli and desktop with web, drives the app on the daemon, and leaves core, vscode and what only they prove', () => {
     const scope = selected('packages/web/server/routes/settings.ts');
     assert.deepEqual([...scope.workspaces].sort(), [CLI, DESKTOP, WEB]);
     assert.deepEqual(offChecks(scope), ['engine', 'integration', 'planner', 'sandbox']);
@@ -72,25 +72,34 @@ describe('a change inside workspaces', () => {
   it('keeps a cli change to the cli', () => {
     const scope = selected('packages/cli/src/tui/view.ts');
     assert.deepEqual(scope.workspaces, [CLI]);
-    assert.deepEqual(offChecks(scope), ['engine', 'integration', 'planner', 'sandbox']);
+    assert.deepEqual(offChecks(scope), ['desktop', 'engine', 'integration', 'planner', 'sandbox']);
   });
 
-  it('takes vscode and desktop with ui, and runs the real VS Code for it: the webview is drawn from ui\'s dist', () => {
+  it('takes vscode and desktop with ui, and runs the real VS Code and the app for it: both draw from ui\'s dist', () => {
     const scope = selected('packages/ui/src/chat/App.tsx');
     assert.deepEqual(scope.workspaces, [UI, VSCODE, DESKTOP]);
     assert.deepEqual(offChecks(scope), ['engine', 'planner', 'sandbox']);
   });
 
-  it('runs the real VS Code for a vscode change, and no container', () => {
+  it('runs the real VS Code for a vscode change, and no container or app', () => {
     const scope = selected('packages/vscode/src/extension.ts');
     assert.deepEqual(scope.workspaces, [VSCODE]);
-    assert.deepEqual(offChecks(scope), ['engine', 'planner', 'sandbox']);
+    assert.deepEqual(offChecks(scope), ['desktop', 'engine', 'planner', 'sandbox']);
   });
 
-  it('keeps a desktop change to desktop: nothing is built on it, and no container or VS Code proves it', () => {
+  it('keeps a desktop change to desktop and drives the app for it: nothing is built on it, and no container or VS Code proves it', () => {
     const scope = selected('packages/desktop/src/main/daemon/DaemonManager.ts');
     assert.deepEqual(scope.workspaces, [DESKTOP]);
     assert.deepEqual(offChecks(scope), ['engine', 'integration', 'planner', 'sandbox']);
+    assert.equal(scope.checks.desktop, true);
+  });
+
+  it('drives the app for a change to the fakes and mock it runs on: bench/ means the full run', () => {
+    for (const path of ['bench/live/mock-provider.mjs', 'bench/pipeline/fake-claude/fake-claude.mjs']) {
+      const scope = selected(path);
+      assert.equal(scope.mode, 'full', path);
+      assert.equal(scope.checks.desktop, true, path);
+    }
   });
 
   it('treats a package\'s own build or test config as that package', () => {
@@ -347,6 +356,13 @@ describe('the steps a run owes', () => {
     assert.deepEqual(missedSteps(scope, ran(scope)), []);
   });
 
+  it('owes the app\'s drive for a desktop change', () => {
+    const scope = selected('packages/desktop/src/renderer/views/task/TaskTab.tsx');
+    const steps = ran(scope);
+    delete steps['desktop-e2e'];
+    assert.deepEqual(missedSteps(scope, steps), ['desktop-e2e: did not run']);
+  });
+
   it('names a required step that was skipped', () => {
     const scope = fullScope('a push', workspaces);
     const steps = { ...ran(scope), coverage: { outcome: 'skipped', conclusion: 'skipped' } };
@@ -479,7 +495,7 @@ describe('ci-scope.mjs, as ci.yml runs it', () => {
     const { status, outputs } = run('select', { EVENT: 'push' });
     assert.equal(status, 0);
     assert.equal(outputs.coverage_args, '');
-    for (const check of ['packages', 'sandbox', 'planner', 'integration', 'engine']) assert.equal(outputs[check], 'true', check);
+    for (const check of ['packages', 'sandbox', 'planner', 'integration', 'desktop', 'engine']) assert.equal(outputs[check], 'true', check);
     assert.equal(JSON.parse(outputs.scope).mode, 'full');
   });
 
@@ -513,6 +529,7 @@ describe('ci-scope.mjs, as ci.yml runs it', () => {
     assert.equal(outputs.packages, 'true');
     assert.equal(outputs.engine, 'false');
     assert.equal(outputs.integration, 'false');
+    assert.equal(outputs.desktop, 'false');
   });
 
   it('confirms a run that did what it owed', () => {
@@ -581,6 +598,12 @@ describe('ci.yml', () => {
       for (const id of ids) {
         assert.ok(stepOf(id).includes(`if: needs.scope.outputs.${check} != 'false'`), `step ${id} is not gated on ${check} as a default-run`);
       }
+    }
+  });
+
+  it('hands every check on from the scope job: a missing output reads as empty, and the step would run on every change', () => {
+    for (const check of Object.keys(STEPS_BY_CHECK)) {
+      assert.ok(jobBlock('scope').includes(`${check}: \${{ steps.select.outputs.${check} }}`), `the scope job does not output ${check}`);
     }
   });
 

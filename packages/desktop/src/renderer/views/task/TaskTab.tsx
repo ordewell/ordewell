@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { AttemptUsage, SurfaceTask } from '@ordewell/core';
 import { taskStatusKind, titledRefs, titledTaskRefOf, usageText, walkPlan } from '@ordewell/core/plan-utils';
-import { checkLabel, TaskHandoff, TaskLogApp, TaskLogBridgeContext } from '@ordewell/ui';
+import { checkLabel, TaskHandoff, TaskLogApp, TaskLogBridgeContext, verdictSummary } from '@ordewell/ui';
 import { RunnerGlyph, StatusIndicator, statusOf } from '@ordewell/ui/design';
 import type { FrameApi, Tab, Unregister } from '../../frame/api';
 import { RUNNER_NAMES } from '../../runners';
@@ -26,7 +26,7 @@ function VerdictSection({ verdict }: { verdict: SurfaceTask['verdict'] }): JSX.E
   if (!verdict) return <p className="muted">No verdict yet.</p>;
   return (
     <div className={`task-review ${verdict.outcome === 'pass' ? 'review-pass' : 'review-neutral'}`}>
-      <div className="task-review-summary">{verdict.outcome === 'pass' ? 'Verified' : 'Failed verification'}: {verdict.reason}</div>
+      <div className="task-review-summary">{verdictSummary(verdict)}</div>
       {verdict.checks.length > 0 && (
         <ul className="task-review-checks">
           {verdict.checks.map((check) => (
