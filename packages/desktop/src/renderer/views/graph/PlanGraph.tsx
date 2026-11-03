@@ -317,7 +317,7 @@ function Canvas({ host, api, onCannotDraw }: PlanGraphProps): JSX.Element {
       </div>
       <div className="plan-graph-legend" aria-hidden="true">
         <span><svg viewBox="0 0 28 8"><line x1="0" y1="4" x2="28" y2="4" stroke="var(--ow-status-running)" strokeWidth="3.5" /></svg>Critical path</span>
-        <span><svg viewBox="0 0 28 8"><line x1="0" y1="4" x2="28" y2="4" stroke="var(--ow-border-contrast)" strokeWidth="1.5" /></svg>Dependency</span>
+        <span><svg viewBox="0 0 28 8"><line x1="0" y1="4" x2="28" y2="4" stroke="var(--ow-border-contrast, var(--ow-fg-secondary))" strokeWidth="1.5" /></svg>Dependency</span>
         <span>⟲ n/max Loop round</span>
       </div>
     </div>

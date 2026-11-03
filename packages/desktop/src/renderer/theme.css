@@ -1,8 +1,9 @@
 /*
  * The desktop's values for @ordewell/ui's tokens, light and dark, from
- * docs/desktop/design.md (Design tokens). The OS picks the scheme, or the
- * user's theme preference does: main sets nativeTheme.themeSource from it,
- * and prefers-color-scheme follows.
+ * docs/desktop/design.md (Design tokens). The user's theme preference picks
+ * the scheme (dark until they choose otherwise, or "system" to follow the OS):
+ * main sets nativeTheme.themeSource from it, and prefers-color-scheme
+ * follows, so a change repaints every window with no reload.
  *
  * Every token tokens.css declares is set in both schemes, so nothing falls
  * back to tokens.css's dark default in a light window. The two contrast
@@ -68,6 +69,22 @@
     --ow-diff-removed-word: #f4c2bf;
 
     --ow-shadow-color: rgb(0 0 0 / 0.12);
+
+    /* @ordewell/ui keys its light-page tuning on body.vscode-light, a class
+       only the VS Code webview has. This is that block for the desktop's light
+       scheme: without it the dark-tuned hues, the black label on an accent
+       fill and the cards that need a hairline on white all carry over. */
+    --on-accent: #fff;
+    --orange: #7d4e00;
+    --on-orange: #fff;
+    --purple: #6639ba;
+    --cyan: #075e66;
+    --red-boundary: color-mix(in srgb, var(--red) 62%, transparent);
+    --red-divider: color-mix(in srgb, var(--red) 60%, var(--border-color));
+    --accent: var(--ow-fg-link);
+    --bg-card-page: color-mix(in srgb, var(--text-primary) 7%, var(--bg-primary));
+    --card-border: color-mix(in srgb, var(--text-primary) 16%, transparent);
+    --card-hairline: color-mix(in srgb, var(--text-primary) 12%, transparent);
   }
 }
 

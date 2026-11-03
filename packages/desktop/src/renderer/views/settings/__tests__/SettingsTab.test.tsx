@@ -56,7 +56,7 @@ interface World {
   prefs: { get: ReturnType<typeof vi.fn>; set: ReturnType<typeof vi.fn> };
 }
 
-function world(): World {
+function world(theme: 'system' | 'light' | 'dark' = 'dark'): World {
   let settings = { ...SETTINGS };
   const daemon = fakeDaemon({
     'settings.get': () => ok({ ...settings }),
@@ -74,7 +74,7 @@ function world(): World {
     },
     'runners.setEnabled': () => ok({ ok: true }),
   });
-  let prefs = { theme: 'system' as const, panes: SIZES, notifications: true, keepRunningInTray: false, editorCommand: '' };
+  let prefs = { theme, panes: SIZES, notifications: true, keepRunningInTray: false, editorCommand: '' };
   const get = vi.fn(async () => prefs);
   const set = vi.fn(async (key: string, value: unknown) => {
     prefs = { ...prefs, [key]: value };
@@ -84,8 +84,8 @@ function world(): World {
   return { daemon, prefs: { get, set } };
 }
 
-async function mount(): Promise<{ store: FrameStore; w: World }> {
-  const w = world();
+async function mount(theme: 'system' | 'light' | 'dark' = 'dark'): Promise<{ store: FrameStore; w: World }> {
+  const w = world(theme);
   const store = new FrameStore({ workspace: WORKSPACE, platform: 'linux', sizes: SIZES });
   offs.push(registerFrameCommands(store), register(store.api));
   render(<FrameProvider value={store}><Frame daemon={{ state: 'connected', port: 3700, owned: true, daemon: { version: '0.12.3', contract: 1 } }} /></FrameProvider>);
@@ -134,13 +134,30 @@ describe('the Settings view', () => {
     const { w } = await mount();
     await screen.findByRole('heading', { name: 'This app' });
 
-    fireEvent.change(screen.getByRole('combobox', { name: 'Theme' }), { target: { value: 'dark' } });
-    await waitFor(() => expect(w.prefs.set).toHaveBeenCalledWith('theme', 'dark'));
+    fireEvent.change(screen.getByRole('combobox', { name: /^Theme/ }), { target: { value: 'light' } });
+    await waitFor(() => expect(w.prefs.set).toHaveBeenCalledWith('theme', 'light'));
 
     fireEvent.click(screen.getByRole('checkbox', { name: /Desktop notifications/ }));
     await waitFor(() => expect(w.prefs.set).toHaveBeenCalledWith('notifications', false));
 
     fireEvent.click(screen.getByRole('checkbox', { name: /Keep running in the tray/ }));
     await waitFor(() => expect(w.prefs.set).toHaveBeenCalledWith('keepRunningInTray', true));
+  });
+
+  it.each(['dark', 'light', 'system'] as const)('shows the theme the preference holds: %s', async (theme) => {
+    await mount(theme);
+    await screen.findByRole('heading', { name: 'Appearance' });
+    await waitFor(() => expect(screen.getByRole('combobox', { name: /^Theme/ })).toHaveValue(theme));
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual(expect.arrayContaining(['Dark', 'Light', 'System']));
+  });
+
+  it('follows a theme chosen in the command palette', async () => {
+    const { store, w } = await mount('dark');
+    await screen.findByRole('heading', { name: 'Appearance' });
+    await waitFor(() => expect(screen.getByRole('combobox', { name: /^Theme/ })).toHaveValue('dark'));
+
+    await act(async () => { await store.enabledCommands().find((command) => command.id === 'theme.light')?.run(); });
+    expect(w.prefs.set).toHaveBeenCalledWith('theme', 'light');
+    await waitFor(() => expect(screen.getByRole('combobox', { name: /^Theme/ })).toHaveValue('light'));
   });
 });

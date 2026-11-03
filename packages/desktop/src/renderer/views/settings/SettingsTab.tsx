@@ -1,8 +1,8 @@
 import { useEffect, useId, useState } from 'react';
 import type { DiscoveredModel, SettingsResponse, SupervisorLevel } from '@ordewell/core';
 import { SUPERVISOR_LEVEL_LABEL, parseCount } from '@ordewell/core/plan-utils';
-import type { Prefs } from '../../../shared/bridge';
 import type { FrameApi, Unregister } from '../../frame/api';
+import { THEME_CHOICES, type ThemePref } from '../../frame/themePref';
 import { daemonHost, type DaemonHost } from '../../session/DaemonHost';
 import { useSession } from '../../session/useSession';
 import { useSettings, type RunnerSetting } from './useSettings';
@@ -179,7 +179,7 @@ function Planner({ settings, runners, providers, models, busy, onPlanner, onMode
  */
 function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
   const { sessionId } = useSession(host);
-  const { view, refresh, update, updateRun, setRunner, savePref } = useSettings(host, sessionId);
+  const { view, refresh, update, updateRun, setRunner, savePref, setTheme } = useSettings(host, sessionId);
   const { settings, runners, models, prefs, busy, loading, error } = view;
   if (loading) return <p className="frame-empty">Loading settings…</p>;
   if (!settings) {
@@ -207,6 +207,17 @@ function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
       </header>
       {error && <p className="settings-error" role="alert">{error}</p>}
       {busy && <p className="settings-saving" role="status">Saving…</p>}
+
+      <section className="settings-section" aria-labelledby="settings-appearance">
+        <h3 id="settings-appearance">Appearance</h3>
+        <label className="settings-field">
+          <span className="settings-label">Theme</span>
+          <select value={prefs?.theme ?? 'dark'} onChange={(event) => { void setTheme(event.target.value as ThemePref); }}>
+            {THEME_CHOICES.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
+          </select>
+          <span className="settings-hint">Dark is the default. System follows your computer's light or dark setting. Also in the command palette (⌘K, then "Theme").</span>
+        </label>
+      </section>
 
       <section className="settings-section" aria-labelledby="settings-planner">
         <h3 id="settings-planner">Planner</h3>
@@ -303,14 +314,6 @@ function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
 
       <section className="settings-section" aria-labelledby="settings-desktop">
         <h3 id="settings-desktop">This app</h3>
-        <label className="settings-field">
-          <span className="settings-label">Theme</span>
-          <select value={prefs?.theme ?? 'system'} onChange={(event) => { void savePref('theme', event.target.value as Prefs['theme']); }}>
-            <option value="system">Follow the system</option>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-          </select>
-        </label>
         <Toggle
           label="Desktop notifications"
           checked={prefs?.notifications ?? true}

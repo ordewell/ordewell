@@ -754,8 +754,10 @@ Three qualifiers keep "done" honest:
 
 Semantic names only: a component never names a hex value. Tokens are CSS custom
 properties in `packages/ui`. VS Code maps them onto its theme variables, the
-desktop app onto the values below. Light and dark follow the OS
-(`nativeTheme`). Greys are neutral; colour is for states, the accent and diffs.
+desktop app onto the values below. The app starts dark; the user's theme
+preference (Dark, Light or System) sets `nativeTheme.themeSource`, and the page's
+`prefers-color-scheme` follows it, so a change repaints every surface without a
+reload. Only System follows the OS. Greys are neutral; colour is for states, the accent and diffs.
 Each text and state colour must reach WCAG AA contrast on the backgrounds it is
 drawn on; the design-system slice checks the pairs in a test.
 
@@ -939,7 +941,7 @@ table; the renderer never gives a URL, a header or a method.
 | Name | Does |
 |---|---|
 | `app.info()` | App version, contract, platform, theme |
-| `app.onThemeChange(cb)` | OS light/dark changes |
+| `app.onThemeChange(cb)` | The effective light/dark scheme changes (a preference change or the OS, under System) |
 | `app.openWorkspace()` / `app.recentWorkspaces()` / `app.forgetWorkspace(path)` | Folder picker, recent list (focuses an already-open window, H6) |
 | `app.setTitleBarOverlay(colors)` | Windows/Linux overlay colours on theme change |
 | `daemon.status()` / `daemon.onStatus(cb)` | Attached or owned, version, contract, connection state |

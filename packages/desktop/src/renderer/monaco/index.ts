@@ -56,7 +56,7 @@ export function loadMonaco(): Promise<MonacoApi> {
     await installWorkers();
     const monaco = await import('monaco-editor');
     applyTheme(monaco);
-    // The theme follows the OS, or the user's preference main hands the OS (prefs.theme).
+    // Main sets nativeTheme.themeSource from the theme preference, so this media query is the effective scheme, not only the OS's.
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => applyTheme(monaco));
     return monaco;
   })();

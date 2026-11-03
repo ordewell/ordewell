@@ -82,10 +82,16 @@ export class WindowManager {
     for (const win of this.all()) win.webContents.send(channel, payload);
   }
 
-  /** Repaint what main draws itself, the window controls' overlay, when the theme changes. */
+  /**
+   * Repaint what main draws itself when the theme changes: every window's
+   * canvas (the colour a resize or a reload shows before the page paints) and
+   * the window controls' overlay.
+   */
   retheme(): void {
+    const dark = this.options.dark();
+    for (const win of this.all()) win.setBackgroundColor(canvasColour(dark));
     if (process.platform === 'darwin') return;
-    const overlay = titleBarOverlay(this.options.dark());
+    const overlay = titleBarOverlay(dark);
     for (const win of this.workspaces.values()) if (!win.isDestroyed()) win.setTitleBarOverlay(overlay);
   }
 

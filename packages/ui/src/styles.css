@@ -39,6 +39,8 @@
      light themes' darker blues need white (WCAG AA at 11px, #1e1e1e was 3.96). */
   --on-accent: #000;
   --accent-emphasis: var(--ow-accent-emphasis, #1f6feb);
+  /* The label on an accent-emphasis fill: a host whose emphasis is a light tint (the desktop's dark theme) maps its own. */
+  --on-accent-emphasis: var(--ow-accent-on, #fff);
   --accent-subtle: color-mix(in srgb, var(--accent) 8%, transparent);
   --accent-glow: color-mix(in srgb, var(--accent) 15%, transparent);
   --green: var(--ow-status-passed, #3fb950);
@@ -52,6 +54,7 @@
   --red-boundary: color-mix(in srgb, var(--red) 45%, transparent);
   --red-divider: color-mix(in srgb, var(--red) 35%, var(--border-color));
   --orange: #d2991d;
+  --on-orange: #0d1117;
   --orange-subtle: rgba(210, 153, 29, 0.12);
   --purple: #a371f7;
   --purple-subtle: rgba(163, 113, 247, 0.12);
@@ -80,6 +83,7 @@ body.vscode-light,
 body.vscode-high-contrast-light {
   --on-accent: #fff;
   --orange: #7d4e00;
+  --on-orange: #fff;
   --purple: #6639ba;
   --cyan: #075e66;
   /* 45% of the light theme's red is a 2.3:1 edge on white; 62% puts the
@@ -201,7 +205,7 @@ body {
   border-radius: var(--radius-sm);
   border: 1px solid var(--orange);
   background: var(--orange);
-  color: #0d1117;
+  color: var(--on-orange);
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
@@ -290,7 +294,7 @@ body {
 
 .chat-msg-user .chat-msg-bubble {
   background: var(--accent-emphasis);
-  color: #fff;
+  color: var(--on-accent-emphasis);
 }
 
 .chat-msg-planner .chat-msg-bubble,
@@ -417,7 +421,7 @@ body {
 }
 
 .chat-msg-user .chat-msg-content {
-  color: #fff;
+  color: var(--on-accent-emphasis);
 }
 
 /* A force-sent line (ADR-0023, F5): it stopped the turn before it, so it is
@@ -431,8 +435,8 @@ body {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  background: color-mix(in srgb, #fff 25%, transparent);
-  color: #fff;
+  background: color-mix(in srgb, var(--on-accent-emphasis) 25%, transparent);
+  color: var(--on-accent-emphasis);
 }
 
 /* The supervisor (ADR-0029) speaks in the planner's bubble, marked so its
@@ -491,7 +495,7 @@ body {
 }
 
 .chat-msg-user .chat-msg-content mark.skill-token {
-  background: color-mix(in srgb, #fff 22%, transparent);
+  background: color-mix(in srgb, var(--on-accent-emphasis) 22%, transparent);
   color: inherit;
   font-weight: 600;
   border-radius: 4px;
@@ -2640,7 +2644,7 @@ section.isolation-notice {
 
 .error-state button {
   background: var(--accent-emphasis);
-  color: #fff;
+  color: var(--on-accent-emphasis);
   border: none;
   border-radius: var(--radius-md);
   padding: 7px 18px;
@@ -2725,7 +2729,7 @@ section.isolation-notice {
 
 .warning-actions .btn-accept {
   background: var(--accent-emphasis);
-  color: #fff;
+  color: var(--on-accent-emphasis);
 }
 
 .warning-actions .btn-accept:hover {
@@ -3800,7 +3804,7 @@ body.vscode-high-contrast-light .task-card.expanded {
 
 .task-prompt-save-btn {
   background: var(--accent-emphasis);
-  color: #fff;
+  color: var(--on-accent-emphasis);
   border: none;
   border-radius: var(--radius-sm);
   padding: 4px 12px;
@@ -3940,7 +3944,7 @@ body.vscode-high-contrast-light .task-card.expanded {
 
 .send-btn:hover:not(:disabled) {
   background: var(--accent-emphasis);
-  color: #fff;
+  color: var(--on-accent-emphasis);
 }
 
 .send-btn:disabled {
@@ -4038,7 +4042,7 @@ body.vscode-high-contrast-light .task-card.expanded {
 
 .feedback-actions button {
   background: var(--accent-emphasis);
-  color: #fff;
+  color: var(--on-accent-emphasis);
   border: none;
   border-radius: var(--radius-md);
   padding: 6px 14px;
@@ -5072,7 +5076,7 @@ body.vscode-high-contrast-light .task-card.expanded {
   border: none;
   border-radius: var(--radius-md);
   background: var(--accent-emphasis);
-  color: #fff;
+  color: var(--on-accent-emphasis);
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;

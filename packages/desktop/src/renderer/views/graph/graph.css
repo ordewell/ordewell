@@ -8,7 +8,23 @@
 .plan-graph-legend span { display: inline-flex; align-items: center; gap: var(--ow-space-2); }
 .plan-graph-legend svg { width: 28px; height: 8px; }
 
-.plan-graph .react-flow { --xy-background-color: var(--ow-bg); --xy-edge-stroke-default: var(--ow-fg-secondary); }
+/* React Flow ships a light palette and a .dark class this app never sets, so its controls, minimap and
+   background dots would stay white in a dark window; every one is pointed at a token instead. */
+.plan-graph .react-flow {
+  --ow-graph-line: var(--ow-border-contrast, var(--ow-fg-secondary));
+  --xy-background-color: var(--ow-bg);
+  --xy-edge-stroke-default: var(--ow-fg-secondary);
+  --xy-background-pattern-color: var(--ow-border-widget);
+  --xy-controls-button-background-color: var(--ow-bg-widget);
+  --xy-controls-button-background-color-hover: var(--ow-bg-hover);
+  --xy-controls-button-color: var(--ow-fg);
+  --xy-controls-button-color-hover: var(--ow-fg);
+  --xy-controls-button-border-color: var(--ow-border);
+  --xy-controls-box-shadow: 0 0 2px 1px var(--ow-shadow-color, rgb(0 0 0 / 0.2));
+  --xy-minimap-background-color: var(--ow-bg-sidebar);
+  --xy-minimap-mask-background-color: color-mix(in srgb, var(--ow-bg) 70%, transparent);
+  --xy-minimap-node-background-color: var(--ow-border-widget);
+}
 .plan-graph .react-flow__node { padding: 0; border: 0; background: transparent; width: auto; }
 .plan-graph .react-flow__attribution { display: none; }
 .graph-handle { opacity: 0; pointer-events: none; }
@@ -46,13 +62,13 @@
 .graph-peek pre { margin: var(--ow-space-2) 0 0; max-height: 8.5em; overflow: hidden; font: var(--ow-type-code); white-space: pre-wrap; word-break: break-word; }
 .graph-peek ul { margin: 0; padding-inline-start: var(--ow-space-5); }
 
-.plan-graph .react-flow__edge-path { stroke: var(--ow-border-contrast); stroke-width: 1.5; }
+.plan-graph .react-flow__edge-path { stroke: var(--ow-graph-line); stroke-width: 1.5; }
 .plan-graph .graph-edge--satisfied .react-flow__edge-path { stroke: var(--ow-status-passed); }
 .plan-graph .graph-edge--active .react-flow__edge-path { stroke: var(--ow-status-running); stroke-dasharray: 6 4; animation: graph-edge-flow 1s linear infinite; }
 .plan-graph .graph-edge--failed .react-flow__edge-path { stroke: var(--ow-status-failed); stroke-dasharray: 2 3; }
 .plan-graph .graph-edge--blocked .react-flow__edge-path { stroke: var(--ow-status-blocked); stroke-dasharray: 8 4; }
 .plan-graph .graph-edge--merge .react-flow__edge-path { stroke: var(--ow-status-merge); stroke-dasharray: 10 3 2 3; }
-.plan-graph .graph-edge--pending .react-flow__edge-path { stroke: var(--ow-border-contrast); }
+.plan-graph .graph-edge--pending .react-flow__edge-path { stroke: var(--ow-graph-line); }
 .plan-graph .graph-edge--critical .react-flow__edge-path { stroke-width: 3.5; }
 @keyframes graph-edge-flow { to { stroke-dashoffset: -20; } }
 
@@ -65,5 +81,5 @@
   .plan-graph .react-flow__viewport { transition: none !important; }
 }
 
-.plan-graph .react-flow__arrowhead polyline { stroke: var(--ow-border-contrast); fill: var(--ow-border-contrast); }
+.plan-graph .react-flow__arrowhead polyline { stroke: var(--ow-graph-line); fill: var(--ow-graph-line); }
 .plan-graph-note[role='alert'] { padding: var(--ow-space-5); }
