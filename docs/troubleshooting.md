@@ -510,3 +510,9 @@ Linux that build needs `make`, `g++` and `python`. A development run
 (`npm run desktop:dev`) uses the copy in `node_modules`, so run `npm install`
 there if the package is missing.
 
+The copy in `node_modules` is rebuilt in place, once per installer, so after a
+`npm run desktop:package` it is the one for the last architecture packaged: on
+Apple Silicon the build above leaves an x64 `pty.node`, and the next
+`npm run desktop:dev` cannot load it. Rebuild it for the host's Electron with
+`npx electron-rebuild -f -w node-pty`.
+
