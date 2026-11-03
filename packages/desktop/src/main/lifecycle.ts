@@ -34,6 +34,44 @@ export function quitPrompt(liveRuns: readonly LiveRun[] | undefined, owned: bool
   return busyTerminals > 0 ? { ...runs, detail: `${runs.detail}\n\n${terminals}` } : runs;
 }
 
+/** Whether closing one window asks first: it ends that window's terminals, and a busy one has work to lose (ADR-0062 G11). */
+export function closePrompt(busyTerminals: number): QuitPrompt | undefined {
+  if (busyTerminals <= 0) return undefined;
+  return {
+    message: busyTerminals === 1 ? 'A terminal is running a process. Close this window?' : `${busyTerminals} terminals are running a process. Close this window?`,
+    detail: busyTerminals === 1 ? 'Closing the window ends it.' : 'Closing the window ends them.',
+    confirmLabel: 'Close',
+  };
+}
+
+/**
+ * A window's `close` handler that holds the close while `ask` waits for an
+ * answer, and closes once it is yes. `ask` answers undefined when there is
+ * nothing to ask. A close made by the yes is let through, and a click while
+ * the question is up asks nothing more.
+ */
+export function guardClose(
+  ask: () => Promise<boolean> | undefined,
+  close: () => void,
+): (event: { preventDefault(): void }) => void {
+  let asking = false;
+  let agreed = false;
+  return (event) => {
+    if (agreed) return;
+    if (asking) { event.preventDefault(); return; }
+    const answer = ask();
+    if (!answer) return;
+    event.preventDefault();
+    asking = true;
+    void answer.then((yes) => {
+      asking = false;
+      if (!yes) return;
+      agreed = true;
+      close();
+    }, () => { asking = false; });
+  };
+}
+
 function runPrompt(liveRuns: readonly LiveRun[] | undefined, owned: boolean): QuitPrompt | undefined {
   if (liveRuns !== undefined && liveRuns.length === 0) return undefined;
   const names = liveRuns && liveRuns.length > 0

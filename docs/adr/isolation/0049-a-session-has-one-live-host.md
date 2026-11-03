@@ -129,6 +129,7 @@ lets go of nothing.
 | `since` | When this host took the lease. |
 | `heartbeatAt` | Refreshed every `LEASE_HEARTBEAT_MS` by a timer that never keeps the host up. |
 | `runnerGroups` | `runnerGroups()` from `processTree`: the groups this host leads that still have members, refreshed with every heartbeat and as each runner starts. |
+| `runLive` | Whether the holder's run is live (ADR-0062 G7), written with every heartbeat and as a run starts or merges; a Session that cannot say counts as live. Absent from a holder that predates it. |
 
 A record naming this very pid under another host id is a host that died and
 whose pid this process was given, unless that id is another `LeaseHost` alive
@@ -212,3 +213,4 @@ throwaway HTTP server, the TUI effect and the CLI command against a refusal.
 - 2026-11-01 — from a real run: L3's runners no longer wait for a next host, a small shell stops a group whose host has gone.
 - 2026-11-01 — L7 waits out what the run has under way: a release still in git as a Session closed ran with the lease let go, in a tree a next host could hold.
 - 2026-11-03 — L5 lets a host read a held session's run files, diffs and branches without the lease (ADR-0061).
+- 2026-11-03 — the record carries `runLive`, for ADR-0062 G7's interlock in another host.

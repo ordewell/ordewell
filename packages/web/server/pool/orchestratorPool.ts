@@ -384,13 +384,14 @@ export class OrchestratorPool {
   /**
    * Whether a session's run holds its landing branch (ADR-0062 G7): this
    * host's own word for a session open here; for one another live host holds,
-   * the saved record, which is all a non-holder can read; and for one nobody
-   * holds, nothing is at work.
+   * that host's word in its lease record, or the saved record where the holder
+   * says nothing; and for one nobody holds, nothing is at work.
    */
   userRunIsLive(sessionId: string, workspace: string, plan: LegacyPlanState): boolean {
     const session = this.heldHere(sessionId, workspace);
     if (session) return session.runIsLive;
-    return (this.leaseHost ?? processLeaseHost()).peek(sessionId, workspace) !== null && savedRunLooksLive(plan);
+    const held = (this.leaseHost ?? processLeaseHost()).peek(sessionId, workspace);
+    return held !== null && (held.holder.runLive === true || savedRunLooksLive(plan));
   }
 
   /**

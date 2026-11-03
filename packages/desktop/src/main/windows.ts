@@ -3,6 +3,7 @@ import { basename } from 'node:path';
 import { BrowserWindow, type BrowserWindowConstructorOptions, type WebContents } from 'electron';
 import type { WindowContext } from '../shared/bridge';
 import { canvasColour, titleBarOverlay, workspaceChrome } from './chrome';
+import { guardClose } from './lifecycle';
 
 export interface WindowManagerOptions {
   preloadPath: string;
@@ -11,6 +12,11 @@ export interface WindowManagerOptions {
   devTools: boolean;
   /** Whether the OS, or the user's theme preference, has the app dark. */
   dark(): boolean;
+  /**
+   * Whether closing this window may go ahead, asked before it closes; it
+   * answers undefined when there is nothing to ask (ADR-0062 G11).
+   */
+  confirmClose?(win: BrowserWindow): Promise<boolean> | undefined;
 }
 
 /** The key a workspace's window is found by: its real path, so a symlink and its target are one workspace (H6). */
@@ -125,6 +131,8 @@ export class WindowManager {
     const id = win.webContents.id;
     this.contexts.set(id, context);
     win.on('closed', () => { this.contexts.delete(id); });
+    const confirmClose = this.options.confirmClose;
+    if (confirmClose) win.on('close', guardClose(() => confirmClose(win), () => win.close()));
     win.once('ready-to-show', () => win.show());
     void win.loadURL(this.options.pageUrl);
     return win;

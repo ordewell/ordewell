@@ -47,6 +47,13 @@ export interface SessionLeaseRecord {
    * the session's worktrees, so a takeover waits for them.
    */
   runnerGroups: number[];
+  /**
+   * Whether the holder's run is live: an attempt at work, a start pending, a
+   * landing or Merge all under way. Much of that is only in the holder's
+   * memory, so it says it here, for another host's landing interlock
+   * (ADR-0062 G7). Absent from a holder that predates it.
+   */
+  runLive?: boolean;
 }
 
 /** Who holds a session: a live host, or one that is gone while runners it started still run. */
@@ -121,6 +128,11 @@ export interface SessionLease {
    */
   hold(sessionId: string, workspace: string): SessionHeld | null;
   release(): void;
+  /**
+   * Write the held record again now, with whether the run is live: a run that
+   * starts or merges says so before it moves, not at the next heartbeat.
+   */
+  publish(): void;
 }
 
 /** For a Session whose saves go nowhere on disk (a test's): there is no shared state to own. */
@@ -128,6 +140,7 @@ export const UNLEASED: SessionLease = {
   claim(_sessionId, _workspace, commit) { commit?.(); },
   hold: () => null,
   release() {},
+  publish() {},
 };
 
 /**
@@ -146,6 +159,8 @@ export function childLease(held: () => SessionHeld | null): SessionLease {
     },
     hold: () => held(),
     release() {},
+    // The root's record speaks for the tree: its run is what another host sees.
+    publish() {},
   };
 }
 
@@ -238,9 +253,12 @@ export class LeaseHost {
     this.kindOf = () => kind;
   }
 
-  /** A Session's handle. `onLost` hears, once, that another host took a lease this one held. */
-  lease(onLost: (held: SessionHeld) => void): SessionLease {
-    return new HostedLease(this, onLost);
+  /**
+   * A Session's handle. `onLost` hears, once, that another host took a lease
+   * this one held; `runLive` is what each write of the record says of its run.
+   */
+  lease(onLost: (held: SessionHeld) => void, runLive: () => boolean = () => false): SessionLease {
+    return new HostedLease(this, onLost, runLive);
   }
 
   /**
@@ -249,21 +267,30 @@ export class LeaseHost {
    * starts. A file that cannot be refreshed now is tried again at the next.
    */
   beat(): void {
-    for (const [file, entry] of [...this.held]) {
-      let taker: SessionLeaseRecord | null = null;
-      try {
-        taker = withFileLock(file, () => {
-          const current = readRecord(file);
-          if (current && current.hostId !== this.id) return current;
-          entry.record = this.refreshed(entry.record);
-          writeRecord(file, entry.record);
-          return null;
-        }, 'refresh a session lease');
-      } catch {
-        continue;
-      }
-      if (taker) this.lose(file, entry, { holder: taker });
+    for (const [file, entry] of [...this.held]) this.refresh(file, entry);
+  }
+
+  /** @internal Write `file`'s record again now, as {@link beat} does for each. */
+  publish(file: string): void {
+    const entry = this.held.get(file);
+    if (entry) this.refresh(file, entry);
+  }
+
+  private refresh(file: string, entry: HeldLease): void {
+    let taker: SessionLeaseRecord | null = null;
+    try {
+      taker = withFileLock(file, () => {
+        const current = readRecord(file);
+        if (current && current.hostId !== this.id) return current;
+        entry.record = this.refreshed(entry.record, entry.holders);
+        writeRecord(file, entry.record);
+        return null;
+      }, 'refresh a session lease');
+    } catch {
+      // Tried again at the next beat.
+      return;
     }
+    if (taker) this.lose(file, entry, { holder: taker });
   }
 
   /** Let every lease go: the host is shutting down. */
@@ -287,7 +314,8 @@ export class LeaseHost {
       const taken = current !== null && current.hostId !== this.id ? current : null;
       const refusal = taken ? this.judge(taken) : null;
       if (refusal) return { taken, refusal };
-      const record = current && !taken ? this.refreshed(current) : this.fresh();
+      const holders = [...(this.held.get(file)?.holders ?? []), holder];
+      const record = current && !taken ? this.refreshed(current, holders) : this.fresh(holders);
       writeRecord(file, record);
       return { taken, record };
     }, 'take a session lease');
@@ -379,15 +407,21 @@ export class LeaseHost {
     for (const holder of entry.holders) holder.lost(file, held);
   }
 
-  private fresh(): SessionLeaseRecord {
+  private fresh(holders: Iterable<HostedLease>): SessionLeaseRecord {
     const now = new Date(this.now()).toISOString();
     const kind = this.kindOf();
-    return { hostId: this.id, pid: this.pid, ...(kind ? { host: kind } : {}), since: now, heartbeatAt: now, runnerGroups: this.runnerGroups() };
+    return {
+      hostId: this.id, pid: this.pid, ...(kind ? { host: kind } : {}), since: now, heartbeatAt: now,
+      runnerGroups: this.runnerGroups(), runLive: anyRunLive(holders),
+    };
   }
 
-  private refreshed(record: SessionLeaseRecord): SessionLeaseRecord {
+  private refreshed(record: SessionLeaseRecord, holders: Iterable<HostedLease>): SessionLeaseRecord {
     const kind = this.kindOf();
-    return { ...record, ...(kind ? { host: kind } : {}), heartbeatAt: new Date(this.now()).toISOString(), runnerGroups: this.runnerGroups() };
+    return {
+      ...record, ...(kind ? { host: kind } : {}), heartbeatAt: new Date(this.now()).toISOString(),
+      runnerGroups: this.runnerGroups(), runLive: anyRunLive(holders),
+    };
   }
 
   private startHeartbeat(): void {
@@ -403,13 +437,29 @@ export class LeaseHost {
   }
 }
 
+/** A Session whose run cannot say is counted live: the interlock errs toward holding the branch. */
+function anyRunLive(holders: Iterable<HostedLease>): boolean {
+  for (const holder of holders) {
+    try {
+      if (holder.runLive()) return true;
+    } catch {
+      return true;
+    }
+  }
+  return false;
+}
+
 class HostedLease implements SessionLease {
   private file: string | null = null;
   /** The workspace of the lease being claimed or held, for a lease file that has to be written again. */
   workspace = '';
   private lostLease: { file: string; held: SessionHeld } | null = null;
 
-  constructor(private readonly host: LeaseHost, private readonly onLost: (held: SessionHeld) => void) {}
+  constructor(
+    private readonly host: LeaseHost,
+    private readonly onLost: (held: SessionHeld) => void,
+    /** @internal */ readonly runLive: () => boolean,
+  ) {}
 
   claim(sessionId: string, workspace: string, commit?: () => void): void {
     const file = leaseFile(sessionId, workspace);
@@ -450,6 +500,10 @@ class HostedLease implements SessionLease {
     if (this.file) this.host.release(this.file, this);
     this.file = null;
     this.lostLease = null;
+  }
+
+  publish(): void {
+    if (this.file) this.host.publish(this.file);
   }
 
   /** @internal Another host took `file`'s lease from this one. */

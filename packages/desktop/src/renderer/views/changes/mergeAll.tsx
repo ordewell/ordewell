@@ -64,6 +64,25 @@ function offerRestore(api: FrameApi, stashes: Array<{ repo: string; sha: string 
 }
 
 /**
+ * Commit first opens the commit box with the overlapping files staged (G8). A
+ * file that will not stage is said, and the box opens regardless: committing
+ * is still the person's to do, by hand.
+ */
+async function stageOverlap(api: FrameApi, plan: Array<{ repo: string; paths: string[] }>): Promise<void> {
+  const problems: string[] = [];
+  for (const { repo, paths } of plan) {
+    try {
+      await callDaemon('git.stage', {}, { workspace: api.workspace, repo, paths });
+    } catch (error) {
+      problems.push(`${repoName(repo)}: ${messageOf(error)}`);
+    }
+  }
+  if (problems.length > 0) {
+    api.showBanner({ id: 'changes.mergeAll', tone: 'warning', title: 'Your overlapping files could not be staged', body: problems.join('\n') });
+  }
+}
+
+/**
  * Merge all, preflight first (ADR-0062 G8): the daemon names the user's
  * uncommitted files the run also changed, and the person chooses before
  * anything moves. A Stash sets aside only those files, under the message the
@@ -90,6 +109,7 @@ export async function mergeAll(api: FrameApi, host: DaemonHost, ask: Ask = confi
     case null:
       return;
     case 'commit':
+      await stageOverlap(api, plan);
       api.showActivity('changes');
       api.runCommand(FOCUS_COMMIT_COMMAND);
       return;

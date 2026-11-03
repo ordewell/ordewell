@@ -9,7 +9,7 @@ import type {
 import { augmentedPath } from '../utils/shellPath';
 import { defaultExecFile, isAncestor, tryGit, type GitExecFn, type GitInvoker, type GitResult } from './gitExec';
 import { SELF_REPO } from './isolationRecord';
-import { interlock, type LandingMove, type LandingRun } from './landingInterlock';
+import { interlock, type LandingCheckout, type LandingMove, type LandingRun } from './landingInterlock';
 import { type CheckoutScope, type WorkspaceReader } from './workspaceReader';
 
 /**
@@ -33,9 +33,9 @@ export interface UserGitDeps {
   reader: WorkspaceReader;
   resolvePath?: () => Promise<string>;
   exec?: GitExecFn;
-  /** Every open run's landing branches in a workspace, each judged live or settled by its host. */
-  landingRuns: (workspace: string) => LandingRun[];
-  /** One line in the session's timeline for an action on its live run's landing branch (G6). */
+  /** Every open run's landing branch in a checkout, each judged live or settled by its host. */
+  landingRuns: (checkout: LandingCheckout) => LandingRun[];
+  /** One line in the timeline of the session, saved in `workspace`, for an action on its live run's landing branch (G6). */
   record: (workspace: string, held: LandingBranchHeld, text: string) => void;
 }
 
@@ -152,15 +152,15 @@ export function createUserGit(deps: UserGitDeps) {
     const branch = checkout.at.branch;
     if (branch === null) return;
     const where = checkout.repo === SELF_REPO ? '' : ` in ${checkout.repo}`;
-    for (const landing of deps.landingRuns(scope.workspace)) {
+    for (const landing of deps.landingRuns({ workspace: scope.workspace, repo: checkout.repo, root: checkout.root })) {
       if (!landing.live || landing.repo !== checkout.repo || landing.branch !== branch) continue;
-      deps.record(scope.workspace, { sessionId: landing.sessionId, runId: landing.runId, repo: landing.repo, branch }, `You ${did} on ${branch}${where}.`);
+      deps.record(landing.workspace, { sessionId: landing.sessionId, runId: landing.runId, repo: landing.repo, branch }, `You ${did} on ${branch}${where}.`);
     }
   }
 
   /** The interlock's word on a move: refused while a live run lands there, warned while a settled one does (G7). */
-  function interlocked(scope: UserGitScope, move: LandingMove): string | undefined {
-    const { held, warnings } = interlock(deps.landingRuns(scope.workspace), move);
+  function interlocked(scope: UserGitScope, checkout: CheckoutScope, move: LandingMove): string | undefined {
+    const { held, warnings } = interlock(deps.landingRuns({ workspace: scope.workspace, repo: checkout.repo, root: checkout.root }), move);
     if (held) {
       throw new UserGitError('landing_branch_held', `Session ${held.sessionId} is running ${held.runId}, which lands on ${held.branch}: ${move.kind === 'delete' ? 'deleting' : 'switching away from'} it waits until the run settles.`, { held });
     }
@@ -287,7 +287,7 @@ export function createUserGit(deps: UserGitDeps) {
       const from = request.from === undefined ? [] : [refName(request.from, 'start point')];
       let warning: string | undefined;
       if (request.switch) {
-        warning = interlocked(scope, { kind: 'switch', repo: checkout.repo, from: checkout.at.branch, to: name });
+        warning = interlocked(scope, checkout, { kind: 'switch', repo: checkout.repo, from: checkout.at.branch, to: name });
         await run(checkout.root, ['switch', '-c', name, ...from]);
       } else {
         await run(checkout.root, ['branch', name, ...from]);
@@ -299,7 +299,7 @@ export function createUserGit(deps: UserGitDeps) {
       const checkout = await open(scope);
       const branch = refName(request.branch, 'branch');
       ownBranch(branch, 'switch to');
-      const warning = interlocked(scope, { kind: 'switch', repo: checkout.repo, from: checkout.at.branch, to: branch });
+      const warning = interlocked(scope, checkout, { kind: 'switch', repo: checkout.repo, from: checkout.at.branch, to: branch });
       await run(checkout.root, ['switch', branch]);
       return answer(checkout, scope.workspace, warning ? { warning } : {});
     },
@@ -316,7 +316,7 @@ export function createUserGit(deps: UserGitDeps) {
       const upstream = await maybe(checkout.root, ['for-each-ref', '--format=%(upstream)', `refs/heads/${branch}`]);
       const unmerged = (await isAncestor(invoker, checkout.root, tip, upstream || 'HEAD')) !== 'yes';
       if (request.confirm.unmerged !== unmerged) stale('unmerged', request.confirm.unmerged, unmerged);
-      const warning = interlocked(scope, { kind: 'delete', repo: checkout.repo, branch });
+      const warning = interlocked(scope, checkout, { kind: 'delete', repo: checkout.repo, branch });
       await run(checkout.root, ['branch', unmerged ? '-D' : '-d', '--', branch]);
       return answer(checkout, scope.workspace, warning ? { warning } : {});
     },

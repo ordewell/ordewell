@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import type { LandingBranchHeld } from '../daemonContract';
 import type { IsolationRun } from '../interfaces/IWorktreeIsolation';
 import type { LegacyPlanState } from '../models/Task';
@@ -10,6 +12,8 @@ import { listSessions, loadSession } from '../utils/sessionStore';
 
 /** An open isolation run's landing branch in one repository. */
 export interface LandingRun {
+  /** The workspace the session is saved in: the acting one, or one enclosing its checkout. */
+  workspace: string;
   sessionId: string;
   runId: string;
   repo: string;
@@ -44,25 +48,65 @@ export function interlock(runs: readonly LandingRun[], move: LandingMove): Inter
   };
 }
 
+/** The checkout an action is on: its workspace, the repository's name there, and its real root. */
+export interface LandingCheckout {
+  workspace: string;
+  repo: string;
+  root: string;
+}
+
 /**
- * Every open run's landing branches in a workspace, from each session's saved
+ * Every open run's landing branch in one checkout, from each session's saved
  * record: a run that started detached names no branch and holds nothing.
+ * Sessions are read from the acting workspace and from every directory above
+ * the checkout, since a workspace opened at a repository inside another, or at
+ * a folder of one, shares its checkout with the enclosing workspace's runs.
  * `isLive` judges each, since only a host can say whether its run is at work.
  */
-export function landingRuns(workspace: string, isLive: (sessionId: string, plan: LegacyPlanState) => boolean): LandingRun[] {
+export function landingRuns(
+  checkout: LandingCheckout,
+  isLive: (workspace: string, sessionId: string, plan: LegacyPlanState) => boolean,
+): LandingRun[] {
+  const target = checkoutOf(checkout.root);
+  const own = realPath(checkout.workspace);
   const runs: LandingRun[] = [];
-  for (const meta of listSessions(workspace)) {
-    const plan = loadSession(meta.id, workspace)?.plan;
-    const run = plan?.isolation?.run;
-    if (!plan || !run) continue;
-    const entries = run.repos.filter((entry) => entry.baseBranch && !entry.startedDetached);
-    if (entries.length === 0) continue;
-    const live = isLive(meta.id, plan);
-    for (const entry of entries) {
-      runs.push({ sessionId: meta.id, runId: run.id, repo: entry.path, branch: entry.baseBranch as string, live, unmerged: landedIn(run, entry.path) });
+  for (let dir = realPath(checkout.root); ; dir = path.dirname(dir)) {
+    // The acting workspace keeps the name it was given: the pool knows its sessions by it.
+    const workspace = dir === own ? checkout.workspace : dir;
+    const lands = (entry: IsolationRun['repos'][number]): boolean =>
+      (dir === own && entry.path === checkout.repo) || (target !== null && checkoutOf(entry.root) === target);
+    for (const meta of listSessions(workspace)) {
+      const plan = loadSession(meta.id, workspace)?.plan;
+      const run = plan?.isolation?.run;
+      if (!plan || !run) continue;
+      const entries = run.repos.filter((entry) => entry.baseBranch && !entry.startedDetached && lands(entry));
+      if (entries.length === 0) continue;
+      const live = isLive(workspace, meta.id, plan);
+      for (const entry of entries) {
+        runs.push({ workspace, sessionId: meta.id, runId: run.id, repo: checkout.repo, branch: entry.baseBranch as string, live, unmerged: landedIn(run, entry.path) });
+      }
     }
+    if (path.dirname(dir) === dir) return runs;
   }
-  return runs;
+}
+
+/** A path with its links resolved as far as it exists, so a missing folder still compares with its parent's real path. */
+function realPath(file: string): string {
+  try {
+    return fs.realpathSync(file);
+  } catch {
+    const resolved = path.resolve(file);
+    const parent = path.dirname(resolved);
+    return parent === resolved ? resolved : path.join(realPath(parent), path.basename(resolved));
+  }
+}
+
+/** The working tree a path is in: the nearest directory, itself or above, that holds `.git`. */
+function checkoutOf(file: string): string | null {
+  for (let dir = realPath(file); ; dir = path.dirname(dir)) {
+    if (fs.existsSync(path.join(dir, '.git'))) return dir;
+    if (path.dirname(dir) === dir) return null;
+  }
 }
 
 function landedIn(run: IsolationRun, repo: string): boolean {
@@ -73,8 +117,9 @@ function landedIn(run: IsolationRun, repo: string): boolean {
 /**
  * Whether a run another host holds is live, judged from its saved record: an
  * attempt in progress or a landing under way. What a host knows only in
- * memory (a start pending, a Merge all) it cannot see from here, so the
- * holder's own record is the best evidence a non-holder has.
+ * memory (a start pending, a Merge all) it says in its lease record's
+ * `runLive`; this is the evidence beside it, and all there is from a holder
+ * that predates it.
  */
 export function savedRunLooksLive(plan: LegacyPlanState): boolean {
   const run = plan.isolation?.run;

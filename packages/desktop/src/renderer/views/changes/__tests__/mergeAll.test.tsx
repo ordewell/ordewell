@@ -88,13 +88,23 @@ describe('Merge all', () => {
     expect(banner(store, 'changes.mergeAll')?.title).toBe('Merge all stopped: your changes could not be stashed');
   });
 
-  it('hands Commit first over to the checkout\'s commit box', async () => {
-    const { daemon, store, run } = await setup(OVERLAP, 'commit');
+  it('hands Commit first over to the checkout\'s commit box with the overlapping files staged', async () => {
+    const { daemon, store, run } = await setup(OVERLAP, 'commit', { 'git.stage': ok({ repo: { repo: '.', branch: 'main' } }) });
     const runCommand = vi.spyOn(store.api, 'runCommand');
     const showActivity = vi.spyOn(store.api, 'showActivity');
     await run();
+    expect(daemon.calls('git.stage')).toEqual([[{}, { workspace: WORKSPACE, repo: '.', paths: ['src/login.tsx'] }]]);
     expect(showActivity).toHaveBeenCalledWith('changes');
     expect(runCommand).toHaveBeenCalledWith(FOCUS_COMMIT_COMMAND);
+    expect(daemon.calls('plans.isolationMerge')).toEqual([]);
+  });
+
+  it('still opens the commit box when staging fails, and says what is not staged', async () => {
+    const { daemon, store, run } = await setup(OVERLAP, 'commit', { 'git.stage': { ok: false, status: 500, error: 'index.lock exists' } });
+    const runCommand = vi.spyOn(store.api, 'runCommand');
+    await run();
+    expect(runCommand).toHaveBeenCalledWith(FOCUS_COMMIT_COMMAND);
+    expect(banner(store, 'changes.mergeAll')?.title).toBe('Your overlapping files could not be staged');
     expect(daemon.calls('plans.isolationMerge')).toEqual([]);
   });
 

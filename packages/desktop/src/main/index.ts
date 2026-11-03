@@ -21,7 +21,7 @@ import { TerminalChannel } from './terminal/TerminalChannel';
 import { fileSystemPlacement } from './terminal/placement';
 import { shellName } from './terminal/shellChoice';
 import { TerminalHost, type PtySpawn } from './terminal/TerminalHost';
-import { onLastWindowClosed, quitPrompt } from './lifecycle';
+import { closePrompt, onLastWindowClosed, quitPrompt } from './lifecycle';
 import { menuTemplate } from './menu';
 import { AttentionNotifier } from './notifications';
 import { PrefsStore } from './prefs';
@@ -91,6 +91,22 @@ async function main(): Promise<void> {
     pageUrl: devUrl ?? `${APP_ORIGIN}/index.html`,
     devTools: !app.isPackaged,
     dark: () => nativeTheme.shouldUseDarkColors,
+    // Closing a window ends its terminals (ADR-0062 G11), so a busy one is
+    // asked about as quitting asks. Quitting itself exits without closing
+    // windows one by one, so it never asks twice.
+    confirmClose: (win) => {
+      const prompt = closePrompt(terminalHost.busy(shellName, win.webContents.id));
+      if (!prompt) return undefined;
+      return dialog.showMessageBox(win, {
+        type: 'warning',
+        message: prompt.message,
+        detail: prompt.detail,
+        buttons: [prompt.confirmLabel, 'Cancel'],
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true,
+      }).then((answer) => answer.response === 0);
+    },
   });
   late.windows = wm;
   nativeTheme.on('updated', () => wm.retheme());

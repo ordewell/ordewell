@@ -8,7 +8,7 @@ import { saveSession } from '../../utils/sessionStore';
 import { interlock, landingRuns, savedRunLooksLive, type LandingMove, type LandingRun } from '../landingInterlock';
 
 const run = (over: Partial<LandingRun> = {}): LandingRun => ({
-  sessionId: 's1', runId: 'r1', repo: 'api', branch: 'main', live: true, unmerged: true, ...over,
+  workspace: '/ws', sessionId: 's1', runId: 'r1', repo: 'api', branch: 'main', live: true, unmerged: true, ...over,
 });
 
 const held = { sessionId: 's1', runId: 'r1', repo: 'api', branch: 'main' };
@@ -46,6 +46,26 @@ describe('landing runs from saved sessions (ADR-0062 G7)', () => {
   beforeEach(() => { workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-landing-')); });
   afterEach(() => { fs.rmSync(workspace, { recursive: true, force: true }); });
 
+  const at = (repo: string) => ({ workspace, repo, root: path.join(workspace, repo) });
+
+  it('finds the run of an enclosing workspace that lands in the same checkout, opened as a workspace of its own', () => {
+    // The enclosing workspace's run lands in api; the person opened api by itself.
+    fs.mkdirSync(path.join(workspace, 'api', '.git'), { recursive: true });
+    fs.mkdirSync(path.join(workspace, 'web', '.git'), { recursive: true });
+    saveSession(plan(isolationRun('r1')), 'goal', workspace, 's1');
+    const inner = path.join(workspace, 'api');
+    const judged: string[] = [];
+    const isLive = (where: string, sessionId: string) => { judged.push(`${where}:${sessionId}`); return true; };
+
+    expect(landingRuns({ workspace: inner, repo: '.', root: inner }, isLive)).toEqual([
+      { workspace: fs.realpathSync(workspace), sessionId: 's1', runId: 'r1', repo: '.', branch: 'main', live: true, unmerged: false },
+    ]);
+    expect(judged).toEqual([`${fs.realpathSync(workspace)}:s1`]);
+    // web is another checkout: the run holds nothing there.
+    const web = path.join(workspace, 'web');
+    expect(landingRuns({ workspace: web, repo: '.', root: web }, isLive)).toEqual([]);
+  });
+
   function isolationRun(id: string, over: Partial<IsolationRun> = {}): IsolationRun {
     return {
       id,
@@ -77,15 +97,15 @@ describe('landing runs from saved sessions (ADR-0062 G7)', () => {
     saveSession(plan(undefined), 'goal', workspace, 's2');
     const asked: string[] = [];
 
-    const runs = landingRuns(workspace, (sessionId) => { asked.push(sessionId); return true; });
+    const runs = landingRuns(at('api'), (_workspace, sessionId) => { asked.push(sessionId); return true; });
 
-    expect(runs).toEqual([{ sessionId: 's1', runId: 'r1', repo: 'api', branch: 'main', live: true, unmerged: true }]);
+    expect(runs).toEqual([{ workspace, sessionId: 's1', runId: 'r1', repo: 'api', branch: 'main', live: true, unmerged: true }]);
     expect(asked).toEqual(['s1']);
   });
 
   it('reads a run with nothing landed as holding no unmerged work', () => {
     saveSession(plan(isolationRun('r1')), 'goal', workspace, 's1');
-    expect(landingRuns(workspace, () => false)).toEqual([{ sessionId: 's1', runId: 'r1', repo: 'api', branch: 'main', live: false, unmerged: false }]);
+    expect(landingRuns(at('api'), () => false)).toEqual([{ workspace, sessionId: 's1', runId: 'r1', repo: 'api', branch: 'main', live: false, unmerged: false }]);
   });
 
   it('judges a saved run live by an attempt in progress or a landing under way', () => {

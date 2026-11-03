@@ -38,7 +38,7 @@ import { serverVersion } from './utils/serverVersion';
 export function userGitFor(pool: OrchestratorPool, reader: WorkspaceReader): UserGit {
   return createUserGit({
     reader,
-    landingRuns: (workspace) => landingRuns(workspace, (sessionId, plan) => pool.userRunIsLive(sessionId, workspace, plan)),
+    landingRuns: (checkout) => landingRuns(checkout, (workspace, sessionId, plan) => pool.userRunIsLive(sessionId, workspace, plan)),
     record: (workspace, held, text) => pool.recordUserAction(held.sessionId, workspace, text),
   });
 }
