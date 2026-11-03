@@ -47,8 +47,11 @@ declare:
 | OpenCode | — | — | none declared, so always unknown |
 
 `readRunnerAuth` runs the status args over the same augmented PATH and the
-workspace's own variables a spawn would use (ADR-0016), within a budget, and a
-hard timer kills a status command that ignores SIGTERM. A non-zero exit is an
+workspace's own variables a spawn would use (ADR-0016), started the way a spawn
+starts the runner (`planDirectLaunch`,
+[ADR-0010](../platform/0010-windows-support.md)) so an npm-installed agent's
+`.cmd` shim answers on Windows, within a budget, and a hard timer kills a status
+command that ignores SIGTERM. A non-zero exit is an
 answer, not an exception. The probe reads no credential and reports only the
 runner's short wording, never its output. The verdict is `signed-in`,
 `signed-out` or `unknown`; a timeout, a failed spawn, an unparseable answer, a
@@ -135,7 +138,11 @@ behind. Ctrl-C belongs to the child while it runs. VS Code's Log in, on any pill
 or empty-state row, opens an integrated terminal named `<Label> login` with the
 workspace's cwd and environment, sends the argv once, and polls the runner's
 status verdict every two seconds for up to five minutes; a login the probe does
-not confirm, or whose terminal closes, ends as a visible failure.
+not confirm, or whose terminal closes, ends as a visible failure. On Windows that
+terminal is cmd.exe whatever the user's default: Windows PowerShell prefers an
+npm-installed agent's `.ps1` shim to the `.cmd` beside it, and its default
+Restricted execution policy refuses to run it, so the login died before the
+agent started.
 
 Neither path writes the planner choice: signing a named agent in leaves
 `aiProvider` alone, so "Claude plans while Codex signs in" works. Success is
@@ -269,3 +276,6 @@ art for the TTL and the refresh trigger.
 - 2026-10-27 — Codex's status answer is only the user's when the setup signs in
   through Codex itself: `OPENAI_API_KEY` or a custom provider that does not
   delegate to that login leaves it unknown.
+- 2026-11-03 — the status probe starts the runner through `planDirectLaunch`,
+  and VS Code's login terminal is cmd.exe on Windows: an npm `.cmd` shim read
+  unknown, and Windows PowerShell refused its `.ps1` sibling.

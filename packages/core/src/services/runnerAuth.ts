@@ -2,6 +2,7 @@ import { execFile } from 'child_process';
 import { resolve } from 'path';
 import type { RunnerManifest, RunnerAuthSpec, RunnerAuthStatus } from '../plugins/types';
 import { augmentedPath, withPath } from '../utils/shellPath';
+import { planDirectLaunch, type LaunchDeps } from '../utils/launch';
 
 /**
  * What a runner's own status command answered (ADR-0009). A surface flags a
@@ -26,6 +27,8 @@ export interface RunnerAuthExecResult {
 export interface RunnerAuthExecOptions {
   timeout: number;
   env: NodeJS.ProcessEnv;
+  /** The args are one cmd.exe command line already quoted, as `planDirectLaunch`'s batch route hands back. */
+  verbatim?: boolean;
 }
 
 export type RunnerAuthExec = (
@@ -39,6 +42,8 @@ export interface ReadRunnerAuthOptions {
   /** The workspace's own variables (ADR-0016), merged over the daemon's for the probe. */
   env?: Record<string, string>;
   timeoutMs?: number;
+  /** How the status command is located and started; a test pins the Windows routes from any host. */
+  launch?: LaunchDeps;
 }
 
 const AUTH_TIMEOUT_MS = 8000;
@@ -59,7 +64,7 @@ const defaultExec: RunnerAuthExec = (command, args, options) =>
       clearTimeout(timer);
       resolve(result);
     };
-    const child = execFile(command, args, { timeout: options.timeout, env: options.env, encoding: 'utf8' }, (err, stdout, stderr) => {
+    const child = execFile(command, args, { timeout: options.timeout, env: options.env, encoding: 'utf8', windowsVerbatimArguments: options.verbatim }, (err, stdout, stderr) => {
       const raw = (err as { code?: unknown } | null)?.code;
       // A signal or a spawn failure has no numeric code; either way nothing
       // trustworthy came back, so it is not an exit status to read.
@@ -92,9 +97,14 @@ export async function readRunnerAuth(manifest: RunnerManifest, options: ReadRunn
   let env: NodeJS.ProcessEnv;
   try {
     env = withPath(process.env, await augmentedPath(), options.env ?? {});
-    answer = await (options.exec ?? defaultExec)(command, spec.statusArgs, {
+    // Started the way the planner starts it (ADR-0010): a bare execFile finds
+    // only a native .exe on Windows, so an npm-installed agent's .cmd shim was
+    // ENOENT here and its login always read unknown, never signed out.
+    const launch = await planDirectLaunch(command, spec.statusArgs, options.launch);
+    answer = await (options.exec ?? defaultExec)(launch.file, launch.args, {
       timeout: options.timeoutMs ?? AUTH_TIMEOUT_MS,
       env,
+      ...(launch.verbatim ? { verbatim: true } : {}),
     });
   } catch {
     return { state: 'unknown', loginCommand };
