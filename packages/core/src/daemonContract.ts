@@ -33,6 +33,7 @@ import type { TaskDiffResult } from './services/taskDiffRead';
  *
  * Types only. Core is the one package both the daemon and its clients already
  * depend on; importing from the daemon would pull its runtime into the CLI.
+ * An incompatible change here raises `DAEMON_CONTRACT` (utils/daemonProcess.ts).
  */
 
 /**
@@ -104,10 +105,18 @@ export interface OkResponse extends Worded {
   ok: boolean;
 }
 
-/** `GET /api/server`: which process owns the port, so a stop can be verified before it signals one. */
+/**
+ * `GET /api/server`: which process owns the port, so a stop can be verified
+ * before it signals one, and which daemon it is, so a client it did not start
+ * can tell whether it speaks the same contract (ADR-0060 H3).
+ */
 export interface ServerInfoResponse {
   pid: number;
   port: number;
+  /** The daemon's `@ordewell/web` package version. */
+  version: string;
+  /** `DAEMON_CONTRACT` as the daemon was built. */
+  contract: number;
 }
 
 /**

@@ -1,0 +1,30 @@
+# Packaging for the desktop app. Signing, notarization and the update feed
+# arrive with their own slices; this file fixes what every build must have.
+appId: ai.ordewell.desktop
+productName: Ordewell
+directories:
+  output: release
+  buildResources: resources
+files:
+  - dist/**/*
+  - resources/**/*
+  - package.json
+asar: true
+# ADR-0060 H4: the binary itself refuses the ways a packaged Electron app can
+# be made to run code that is not its own.
+electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableCookieEncryption: true
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  grantFileProtocolExtraPrivileges: false
+  loadBrowserProcessSpecificV8Snapshot: false
+mac:
+  category: public.app-category.developer-tools
+  target: dir
+linux:
+  target: dir
+win:
+  target: dir

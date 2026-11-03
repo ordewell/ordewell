@@ -25,19 +25,20 @@ const CLI = 'packages/cli';
 const WEB = 'packages/web';
 const UI = 'packages/ui';
 const VSCODE = 'packages/vscode';
+const DESKTOP = 'packages/desktop';
 const selected = (...paths) => selectScope(paths, workspaces);
 const offChecks = (scope) => Object.entries(scope.checks).filter(([, on]) => !on).map(([check]) => check).sort();
 
 describe('the workspace graph', () => {
-  it('comes from the manifests: web, cli and ui on core, cli on web, vscode on core and ui', () => {
+  it('comes from the manifests: web, cli and ui on core, cli on web, vscode on core and ui, desktop on core, ui and web', () => {
     const edges = Object.fromEntries(workspaces.map((w) => [w.dir, [...w.deps].sort()]));
-    assert.deepEqual(edges, { [CORE]: [], [UI]: [CORE], [VSCODE]: [CORE, UI], [CLI]: [CORE, WEB], [WEB]: [CORE] });
+    assert.deepEqual(edges, { [CORE]: [], [UI]: [CORE], [VSCODE]: [CORE, UI], [CLI]: [CORE, WEB], [WEB]: [CORE], [DESKTOP]: [CORE, UI, WEB] });
   });
 
   it('holds every package a source file reaches by a relative path', () => {
     // vitest mocks @ordewell/core with core's source and cli reaches into web
     // the same way, so a manifest could understate what a test imports.
-    const reach = /(?:from |import\(|require\()['"](?:\.\.\/)+(core|cli|web|ui|vscode)\//g;
+    const reach = /(?:from |import\(|require\()['"](?:\.\.\/)+(core|cli|web|ui|vscode|desktop)\//g;
     const scan = (dir, owner) => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         const path = join(dir, entry.name);
@@ -58,13 +59,13 @@ describe('a change inside workspaces', () => {
   it('takes core\'s dependents with core: vitest cannot follow them through dist', () => {
     const scope = selected('packages/core/src/services/createSession.ts');
     assert.equal(scope.mode, 'selected');
-    assert.deepEqual([...scope.workspaces].sort(), [CLI, CORE, UI, VSCODE, WEB]);
+    assert.deepEqual([...scope.workspaces].sort(), [CLI, CORE, DESKTOP, UI, VSCODE, WEB]);
     assert.deepEqual(offChecks(scope), []);
   });
 
-  it('takes the cli with web, and leaves core, vscode and what only they prove', () => {
+  it('takes the cli and desktop with web, and leaves core, vscode and what only they prove', () => {
     const scope = selected('packages/web/server/routes/settings.ts');
-    assert.deepEqual([...scope.workspaces].sort(), [CLI, WEB]);
+    assert.deepEqual([...scope.workspaces].sort(), [CLI, DESKTOP, WEB]);
     assert.deepEqual(offChecks(scope), ['engine', 'integration', 'planner', 'sandbox']);
   });
 
@@ -74,9 +75,9 @@ describe('a change inside workspaces', () => {
     assert.deepEqual(offChecks(scope), ['engine', 'integration', 'planner', 'sandbox']);
   });
 
-  it('takes vscode with ui, and runs the real VS Code for it: the webview is drawn from ui\'s dist', () => {
+  it('takes vscode and desktop with ui, and runs the real VS Code for it: the webview is drawn from ui\'s dist', () => {
     const scope = selected('packages/ui/src/chat/App.tsx');
-    assert.deepEqual(scope.workspaces, [UI, VSCODE]);
+    assert.deepEqual(scope.workspaces, [UI, VSCODE, DESKTOP]);
     assert.deepEqual(offChecks(scope), ['engine', 'planner', 'sandbox']);
   });
 
@@ -86,15 +87,22 @@ describe('a change inside workspaces', () => {
     assert.deepEqual(offChecks(scope), ['engine', 'planner', 'sandbox']);
   });
 
+  it('keeps a desktop change to desktop: nothing is built on it, and no container or VS Code proves it', () => {
+    const scope = selected('packages/desktop/src/main/daemon/DaemonManager.ts');
+    assert.deepEqual(scope.workspaces, [DESKTOP]);
+    assert.deepEqual(offChecks(scope), ['engine', 'integration', 'planner', 'sandbox']);
+  });
+
   it('treats a package\'s own build or test config as that package', () => {
-    assert.deepEqual([...selected('packages/web/vitest.config.ts').workspaces].sort(), [CLI, WEB]);
-    assert.deepEqual([...selected('packages/core/vitest.config.ts').workspaces].sort(), [CLI, CORE, UI, VSCODE, WEB]);
+    assert.deepEqual([...selected('packages/web/vitest.config.ts').workspaces].sort(), [CLI, DESKTOP, WEB]);
+    assert.deepEqual([...selected('packages/core/vitest.config.ts').workspaces].sort(), [CLI, CORE, DESKTOP, UI, VSCODE, WEB]);
+    assert.deepEqual(selected('packages/desktop/electron-builder.yml').workspaces, [DESKTOP]);
   });
 
   it('unions what several changes need, docs among them', () => {
     const scope = selected('docs/containers.md', 'packages/vscode/src/extension.ts', 'packages/web/server/main.ts');
     assert.equal(scope.mode, 'selected');
-    assert.deepEqual([...scope.workspaces].sort(), [CLI, VSCODE, WEB]);
+    assert.deepEqual([...scope.workspaces].sort(), [CLI, DESKTOP, VSCODE, WEB]);
   });
 });
 
@@ -141,7 +149,7 @@ describe('the full fallback', () => {
       assert.equal(scope.mode, 'full');
       assert.ok(scope.reason.includes(path), scope.reason);
       assert.deepEqual(offChecks(scope), []);
-      assert.deepEqual([...scope.workspaces].sort(), [CLI, CORE, UI, VSCODE, WEB]);
+      assert.deepEqual([...scope.workspaces].sort(), [CLI, CORE, DESKTOP, UI, VSCODE, WEB]);
     });
   }
 
@@ -278,29 +286,32 @@ describe('the local inner loop', () => {
     const plan = runs('packages/core/src/index.ts');
     assert.deepEqual(plan.rebuild, [CORE]);
     assert.equal(script(plan, CORE), 'test:changed');
-    for (const dependent of [CLI, UI, VSCODE, WEB]) assert.equal(script(plan, dependent), 'test:quick');
+    for (const dependent of [CLI, DESKTOP, UI, VSCODE, WEB]) assert.equal(script(plan, dependent), 'test:quick');
   });
 
-  it('rebuilds web for a web change, and runs the cli whole', () => {
+  it('rebuilds web for a web change, and runs the cli and desktop whole', () => {
     const plan = runs('packages/web/server/main.ts');
     assert.deepEqual(plan.rebuild, [WEB]);
     assert.equal(script(plan, WEB), 'test:changed');
     assert.equal(script(plan, CLI), 'test:quick');
+    assert.equal(script(plan, DESKTOP), 'test:quick');
     assert.equal(script(plan, CORE), undefined);
     assert.equal(script(plan, VSCODE), undefined);
   });
 
-  it('rebuilds ui for a ui change, and runs vscode whole', () => {
+  it('rebuilds ui for a ui change, and runs vscode and desktop whole', () => {
     const plan = runs('packages/ui/src/chat/hostState.ts');
     assert.deepEqual(plan.rebuild, [UI]);
     assert.equal(script(plan, UI), 'test:changed');
     assert.equal(script(plan, VSCODE), 'test:quick');
+    assert.equal(script(plan, DESKTOP), 'test:quick');
     assert.equal(script(plan, CORE), undefined);
   });
 
   it('rebuilds nothing for a package nothing depends on', () => {
     assert.deepEqual(runs('packages/vscode/src/extension.ts').rebuild, []);
     assert.deepEqual(runs('packages/cli/src/main.ts').rebuild, []);
+    assert.deepEqual(runs('packages/desktop/src/main/index.ts').rebuild, []);
   });
 
   it('runs a package whole when what changed is no source vitest can follow', () => {
@@ -315,7 +326,7 @@ describe('the local inner loop', () => {
   it('runs every quick suite on the full fallback, building what is depended on, in order', () => {
     const plan = runs('scripts/verify-skills.mjs');
     assert.deepEqual(plan.rebuild, [CORE, UI, WEB]);
-    for (const dir of [CORE, CLI, UI, VSCODE, WEB]) assert.equal(script(plan, dir), 'test:quick');
+    for (const dir of [CORE, CLI, UI, VSCODE, WEB, DESKTOP]) assert.equal(script(plan, dir), 'test:quick');
     assert.match(plan.note, /scripts\/verify-skills\.mjs/);
   });
 

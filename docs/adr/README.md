@@ -364,7 +364,7 @@ The TUI and the shared conversation view.
 |---|---|---|---|---|
 | [0006](surfaces/0006-tui-pure-core-thin-driver.md) | Terminal UI as a pure core behind a thin driver | accepted | — | — |
 | [0017](surfaces/0017-shared-conversation-view.md) | The shared conversation view, drawn once in core | accepted | — | — |
-| [0060](surfaces/0060-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md) | The desktop app is an Electron client of the shared daemon, and its renderer never holds the token | accepted, not yet implemented | — | — |
+| [0060](surfaces/0060-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md) | The desktop app is an Electron client of the shared daemon, and its renderer never holds the token | accepted, partly implemented | — | — |
 | [0061](surfaces/0061-a-host-reads-files-and-git-for-the-user-confined-to-the-workspace.md) | A host reads files and git for the user, confined to the workspace and needing no lease | accepted | [0049](isolation/0049-a-session-has-one-live-host.md) | — |
 
 ### platform/

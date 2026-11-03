@@ -292,6 +292,21 @@ export {
   DAEMON_TOKEN_SUBPROTOCOL_PREFIX,
 } from './utils/daemonToken';
 export type { TokenCarriers } from './utils/daemonToken';
+export {
+  DEFAULT_DAEMON_PORT,
+  DAEMON_CONTRACT,
+  daemonPidFilePath,
+  legacyDaemonPidFilePath,
+  daemonLogPath,
+  readPidFile,
+  resolveDaemonPort,
+  isConnectionRefused,
+  daemonHttpGet,
+  isDaemonRunning,
+  probeDaemon,
+  stopDaemonAt,
+} from './utils/daemonProcess';
+export type { DaemonHttpResponse, DaemonIdentity, DaemonProbe, DaemonStopOutcome } from './utils/daemonProcess';
 export { killTree } from './utils/processTree';
 export type { KillTreeDeps } from './utils/processTree';
 export { augmentedPath, clearAugmentedPathCache, withPath, wellKnownBinDirs } from './utils/shellPath';

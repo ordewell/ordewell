@@ -130,7 +130,7 @@ const STEPS = {
   'Repository-wide guards': () => npm('run', 'test:guards'),
   'Planner conversation loop — offline e2e (mock model, no API key)': plannerE2e,
   'Bench harness tests (offline, against the built core)': () => npm('run', 'test:bench'),
-  'Build (ui, vscode, cli & web)': () => npm('run', 'build', '-w', 'packages/ui', '-w', 'packages/vscode', '-w', 'packages/cli', '-w', 'packages/web', '--if-present'),
+  'Build (ui, vscode, cli, web & desktop)': () => npm('run', 'build', '-w', 'packages/ui', '-w', 'packages/vscode', '-w', 'packages/cli', '-w', 'packages/web', '-w', 'packages/desktop', '--if-present'),
   'VS Code integration test (synthetic runner — no API key)': integrationTest,
   'Typecheck': () => npm('run', 'typecheck'),
   'Test with coverage': testWithCoverage,
