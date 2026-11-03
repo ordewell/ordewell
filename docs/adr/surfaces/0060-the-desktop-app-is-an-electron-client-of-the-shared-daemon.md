@@ -1,7 +1,7 @@
 ---
 status: accepted
 implemented: partial
-note: "Settles the host half of #129 and #136; the design is docs/desktop/design.md. packages/desktop holds the shell: the daemon manager, the token-holding proxy, the hardened windows, the tray and quit rules. The workspace view beyond its session list, packaging, signing and updates wait on the later slices that design lists."
+note: "Settles the host half of #129 and #136; the design is docs/desktop/design.md. packages/desktop holds the shell: the daemon manager, the token-holding proxy, the hardened windows, the tray and quit rules. It is packaged for macOS, Windows and Linux (electron-builder.yml) and built in CI and attached to each release. The workspace view beyond its session list, signing, notarization and enabled updates wait on the later slices that design lists."
 ---
 
 # 0060 — The desktop app is an Electron client of the shared daemon, and its renderer never holds the token
@@ -193,3 +193,4 @@ same bridge.
 
 - 2026-11-03 — accepted.
 - 2026-11-03 — partly implemented: the Electron shell in packages/desktop.
+- 2026-11-03 — partly implemented: packaging and CI (electron-builder.yml, the desktop job in release.yml, updates wired and held off by `AUTO_UPDATE_ENABLED`).

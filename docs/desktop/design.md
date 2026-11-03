@@ -1075,11 +1075,14 @@ existing surface working. "Done" means what the slice's own task proves.
    the activity bar, sidebar, tabs (preview, pin, split), title bar with native
    chrome, planner panel, status bar, command palette, light and dark. Done:
    the frame with empty views; token contrast pairs tested.
-7. **Packaging and CI.** electron-builder for dmg (arm64, x64), NSIS (x64),
-   AppImage and deb (x64), unsigned; a desktop job in `release.yml` attaching
-   them to the GitHub Release; auto-update wired and disabled; the build in
-   `scripts/ci.mjs` and `change-scope.mjs`. Done: a tag build produces the five
-   installers.
+7. **Packaging and CI.** electron-builder for dmg and zip (arm64, x64), NSIS
+   (x64), AppImage and deb (x64), unsigned (macOS ad hoc: the fuses rewrite the
+   executable, and an arm64 Mac refuses one whose seal is broken); a desktop job
+   in `release.yml` attaching them to the GitHub Release; auto-update wired and
+   disabled; the build in `scripts/ci.mjs` and `change-scope.mjs`. Done: a tag
+   build produces the seven installers. node-pty's native rebuild is left to
+   the slice that needs a terminal (the `REBUILD NODE-PTY` marker in
+   `packages/desktop/scripts/package.mjs`).
 8. **Session view.** W2, W3, W4, W6, W14, W17: planning, approval, the List
    with full row parity, the task tab, restored and failed states, one window
    per workspace (H6), welcome (W1).

@@ -6,6 +6,7 @@ import type { DaemonManager } from './daemon/DaemonManager';
 import type { DaemonProxy } from './daemon/proxy';
 import { validPref, type PrefsStore } from './prefs';
 import type { RecentsStore } from './recents';
+import type { UpdateController } from './updater';
 import type { WindowManager } from './windows';
 
 export interface IpcDeps {
@@ -17,6 +18,7 @@ export interface IpcDeps {
   proxy: DaemonProxy;
   recents: RecentsStore;
   prefs: PrefsStore;
+  updates: UpdateController;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -172,7 +174,7 @@ export function registerIpc(deps: IpcDeps): void {
     if (change.theme) nativeTheme.themeSource = change.theme;
     return next;
   });
-  handle(CHANNELS.updateState, () => ({ state: 'disabled' as const }));
+  handle(CHANNELS.updateState, () => ({ state: deps.updates.state() }));
 
   daemon.onStatus((status) => windows.broadcast(EVENTS.daemonStatus, status));
   nativeTheme.on('updated', () => windows.broadcast(EVENTS.theme, currentTheme()));

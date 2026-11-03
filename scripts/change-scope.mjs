@@ -30,7 +30,7 @@ export const ALWAYS_STEPS = ['build-core', 'verify-scripts', 'repo-guards'];
  * fails the step they serve, or costs nothing a verdict rests on.
  */
 export const STEPS_BY_CHECK = {
-  packages: ['bench', 'build-rest', 'typecheck', 'coverage', 'lint', 'package-vscode', 'verify-artifacts', 'upload-vsix'],
+  packages: ['bench', 'build-rest', 'typecheck', 'coverage', 'lint', 'package-vscode', 'package-desktop', 'verify-artifacts', 'upload-vsix'],
   sandbox: ['sandbox'],
   planner: ['planner-loop'],
   integration: ['vscode-integration'],

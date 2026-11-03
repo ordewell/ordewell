@@ -247,9 +247,18 @@ jobs:
         if: needs.scope.outputs.packages != 'false'
         run: npm run package -w packages/vscode
 
-      # What a user installs: the four npm tarballs and this VSIX. This fails on
-      # a missing entry target, a LICENSE or NOTICE npm left out of `files`, a
-      # bundle that cannot start, and a third-party notice the VSIX dropped.
+      # The desktop app's Linux installers (AppImage and deb) and its unpacked
+      # app, unsigned: proof the packaging config builds on every change. The
+      # other two platforms are built by release.yml's desktop job, on a tag.
+      - name: Package the desktop app
+        id: package-desktop
+        if: needs.scope.outputs.packages != 'false'
+        run: npm run desktop:package
+
+      # What a user installs: the four npm tarballs, this VSIX and the desktop
+      # installers. This fails on a missing entry target, a LICENSE or NOTICE npm
+      # left out of `files`, a bundle that cannot start, a third-party notice the
+      # VSIX dropped, and a desktop daemon closure left inside app.asar.
       - name: Verify packaged npm and VS Code artifacts
         id: verify-artifacts
         if: needs.scope.outputs.packages != 'false'

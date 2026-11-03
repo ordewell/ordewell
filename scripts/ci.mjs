@@ -136,6 +136,7 @@ const STEPS = {
   'Test with coverage': testWithCoverage,
   'Lint': () => npm('run', 'lint'),
   'Package VS Code Extension': () => npm('run', 'package', '-w', 'packages/vscode'),
+  'Package the desktop app': () => npm('run', 'desktop:package'),
   'Verify packaged npm and VS Code artifacts': () => sh('node', ['scripts/package-check.mjs']),
 };
 
