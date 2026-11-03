@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Run what .github/workflows/ci.yml runs, in its order, so a local pass means
 // CI passes. `npm run lint && npm run typecheck && npm run test:coverage` left
-// out the verify scripts, the planner e2e, the VS Code integration test and
-// packaging, and each of those can fail a push on its own.
+// out the verify scripts, the planner e2e, the VS Code integration test, the
+// desktop e2e and packaging, and each of those can fail a push on its own.
 //
 // Every named step of ci.yml must appear below, either run here or listed as
 // CI-only with the reason: a step added to the workflow and not here fails
@@ -66,18 +66,22 @@ function linuxSandboxE2e() {
   return sh('bash', ['scripts/linux-sandbox-e2e.sh']);
 }
 
-function integrationTest() {
-  const workspace = mkdtempSync(join(tmpdir(), 'ordewell-integration-workspace-'));
-  const env = { ORDEWELL_TEST_WORKSPACE: workspace };
-  // VS Code needs a display; a headless Linux box gets a virtual one, as CI does.
+/**
+ * Electron needs a display: a headless Linux box gets a virtual one, as CI
+ * does. `what` names the test in the message when xvfb is missing.
+ */
+function withDisplay(what, args, env) {
   const headlessLinux = process.platform === 'linux' && !process.env.DISPLAY;
   if (headlessLinux && sh('sh', ['-c', 'command -v xvfb-run >/dev/null']) !== 0) {
-    console.error('No display and no xvfb-run: install xvfb to run the VS Code integration test.');
+    console.error(`No display and no xvfb-run: install xvfb to run ${what}.`);
     return 1;
   }
-  return headlessLinux
-    ? sh('xvfb-run', ['-a', 'npm', 'run', 'test:integration', '-w', 'ordewell'], env)
-    : sh('npm', ['run', 'test:integration', '-w', 'ordewell'], env);
+  return headlessLinux ? sh('xvfb-run', ['-a', 'npm', ...args], env) : sh('npm', args, env);
+}
+
+function integrationTest() {
+  const workspace = mkdtempSync(join(tmpdir(), 'ordewell-integration-workspace-'));
+  return withDisplay('the VS Code integration test', ['run', 'test:integration', '-w', 'ordewell'], { ORDEWELL_TEST_WORKSPACE: workspace });
 }
 
 /**
@@ -132,6 +136,7 @@ const STEPS = {
   'Bench harness tests (offline, against the built core)': () => npm('run', 'test:bench'),
   'Build (ui, vscode, cli, web & desktop)': () => npm('run', 'build', '-w', 'packages/ui', '-w', 'packages/vscode', '-w', 'packages/cli', '-w', 'packages/web', '-w', 'packages/desktop', '--if-present'),
   'VS Code integration test (synthetic runner — no API key)': integrationTest,
+  'Desktop app — offline e2e (mock planner, fake runner)': () => withDisplay('the desktop e2e', ['run', 'test:desktop-e2e']),
   'Typecheck': () => npm('run', 'typecheck'),
   'Test with coverage': testWithCoverage,
   'Lint': () => npm('run', 'lint'),
@@ -151,7 +156,8 @@ const CI_ONLY = {
   'Install dependencies': 'run `npm ci` yourself after a lockfile change',
   'Cache the VS Code download': 'packages/vscode/.vscode-test is already kept between runs',
   'Resolve the VS Code version under test': 'the workflow asks the update service which stable it will download; a local run keeps the .vscode-test it has',
-  'Install xvfb if the image lacks it': 'the integration step checks for a display itself',
+  'Install xvfb if the image lacks it': 'the VS Code and desktop steps check for a display themselves',
+  'Upload the desktop e2e report': 'a failed run leaves it in packages/desktop/test-results/',
   'Append coverage summaries to the job summary': 'a GitHub job summary',
   'Upload coverage reports': 'reports stay in packages/*/coverage/',
   'Upload .vsix': 'the .vsix stays in packages/vscode/',

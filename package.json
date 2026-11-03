@@ -38,6 +38,7 @@
     "test:bench": "node --test \"bench/**/*.test.mjs\" \"scripts/**/*.test.mjs\"",
     "test:guards": "npm exec -w packages/core -- vitest run src/services/__tests__/fakeSecretsGuard.test.ts src/services/__tests__/gitExec.test.ts",
     "test:containers": "node scripts/container-e2e.mjs",
+    "test:desktop-e2e": "npm run test:desktop-e2e -w packages/desktop",
     "ci": "node scripts/ci.mjs",
     "build:web": "npm run build -w packages/web",
     "build:desktop": "npm run build -w packages/desktop",

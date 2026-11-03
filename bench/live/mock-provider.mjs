@@ -21,6 +21,9 @@
  *   mock/visibility    one parallel round mixing allowed, refused and out-of-scope calls
  *   mock/task-query-editor  reads a task's prompt via taskQuery, then edits it
  *                       from what the answer actually contained
+ *   mock/desktop-e2e   a two-task plan on turn one whose prompts steer
+ *                       bench/pipeline's fake-claude (the desktop app's
+ *                       acceptance test, packages/desktop/e2e)
  *
  * The five `mock/goal-*` personas are the kinds of goal the strategy step
  * teaches (#108), each replying with the plumbing its kind calls for:
@@ -165,6 +168,37 @@ const OPEN_PLAN = {
   ],
 };
 
+/**
+ * The desktop acceptance plan, steering bench/pipeline's fake-claude by cue:
+ * the first task writes a file, then holds its turn open until a message
+ * reaches it (the test's line comment on that file) and passes; the second,
+ * once it has, raises a checkpoint, so the run has a Needs you item to answer,
+ * then writes its own.
+ */
+const fakeClaude = (cue) => `<fake-claude>${JSON.stringify(cue)}</fake-claude>`;
+const DESKTOP_E2E_PLAN = {
+  tasks: [
+    aiTask({
+      id: 'desktop-greeting', order: 1, title: 'Add a greeting module',
+      description: 'Adds src/greeting.ts', dependencies: [], taskMode: 'acceptEdits',
+      prompt: 'Add src/greeting.ts exporting a greeting.\n' + fakeClaude({
+        write: { 'src/greeting.ts': "export const greeting = 'hello from the desktop e2e';\n" },
+        awaitMessage: true,
+        summary: 'Added src/greeting.ts exporting a greeting.',
+      }),
+    }),
+    aiTask({
+      id: 'desktop-farewell', order: 2, title: 'Add a farewell module',
+      description: 'Adds src/farewell.ts after asking first', dependencies: ['desktop-greeting'], taskMode: 'acceptEdits',
+      prompt: 'Ask before you add src/farewell.ts exporting a farewell.\n' + fakeClaude({
+        calls: [['checkpoint', { question: 'Write the farewell module now?' }]],
+        write: { 'src/farewell.ts': "export const farewell = 'goodbye from the desktop e2e';\n" },
+        summary: 'Added src/farewell.ts exporting a farewell.',
+      }),
+    }),
+  ],
+};
+
 function toolCallTurn(name, args) {
   return { toolCalls: [{ id: `call_${Math.random().toString(36).slice(2, 10)}`, name, args: JSON.stringify(args) }] };
 }
@@ -190,6 +224,12 @@ function scriptTurn(model, messages) {
   if (persona === 'eager-planner') {
     // Ignores the grilling instructions entirely — commits a plan turn one.
     return { reasoning: 'The goal seems clear enough, skipping questions. ', content: FENCED_PLAN('Eagerly planned slice') };
+  }
+
+  if (persona === 'desktop-e2e') {
+    // Only the goal gets the plan: a supervisor's wake-up turn refuses plan edits.
+    if (messages.some((m) => m.role === 'assistant')) return { content: 'Noted. Nothing to change.' };
+    return { reasoning: 'Two small slices. ', content: fence(DESKTOP_E2E_PLAN) };
   }
 
   if (persona === 'empty-turn') {

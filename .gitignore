@@ -63,3 +63,7 @@ __pycache__/
 Thumbs.db
 
 *.tsbuildinfo
+
+# Playwright output of the desktop app's offline acceptance test
+packages/desktop/test-results/
+packages/desktop/playwright-report/

@@ -618,9 +618,8 @@ export class DaemonHost {
       if (this.snapshot.state.isExecuting) {
         await this.execute({ command: 'run_plan' });
       } else {
-        await callDaemon('plans.execute', { sessionId: this.sessionId });
+        await this.startingRun(() => callDaemon('plans.execute', { sessionId: this.sessionId }));
         this.emit({ type: 'setState', state: 'approved' });
-        this.view.run.clearIsolation();
       }
     } finally {
       // The click showed "Starting…" before this answered: the activity settles it either way.
@@ -662,10 +661,26 @@ export class DaemonHost {
     await this.start(taskActionCommand('force-start', taskId));
   }
 
-  /** A start reopens the run whose cards its last end left up, once the seam accepts it. */
+  /** A start reopens the run whose cards its last end left up. */
   private async start(command: ExecutionCommand): Promise<void> {
-    await this.execute(command);
+    await this.startingRun(() => this.execute(command));
+  }
+
+  /**
+   * The last run's cards go before the call, not after it: the new run's first
+   * status reaches the socket before the call answers, and clearing then would
+   * wipe the worktree it reported, which later updates, carrying only the tasks
+   * that moved, do not send again. A start the daemon refused takes the run
+   * back from a fresh snapshot.
+   */
+  private async startingRun(call: () => Promise<unknown>): Promise<void> {
     this.view.run.clearIsolation();
+    try {
+      await call();
+    } catch (err) {
+      this.resync();
+      throw err;
+    }
   }
 
   /** The plan's own task, as the chat's cards were drawn from it: the run view's copy carries less. */
@@ -778,11 +793,12 @@ export class DaemonHost {
   }
 
   private async readCatalog(): Promise<void> {
-    const [runners, models] = await Promise.allSettled([
-      callDaemon('runners.list', { workspace: this.workspace }),
+    // The runners go up as soon as they answer: the models wait on every
+    // runner's own discovery, and one slow CLI there must not hold the list.
+    const [, models] = await Promise.allSettled([
+      callDaemon('runners.list', { workspace: this.workspace }).then((runners) => this.emit({ type: 'setRunners', runners: runnerMeta(runners) })),
       callDaemon('models.list', { workspace: this.workspace }) as Promise<ModelsResponse>,
     ]);
-    if (runners.status === 'fulfilled') this.emit({ type: 'setRunners', runners: runnerMeta(runners.value) });
     if (models.status === 'fulfilled') {
       const m = models.value;
       this.emit({ type: 'setModels', models: m.models });

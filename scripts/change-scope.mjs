@@ -18,7 +18,7 @@ const DOCS = /^(docs\/.+|(README|CHANGELOG|CONTEXT|CONTRIBUTING|AGENTS|CLAUDE|SE
 const SOURCE = /^(src|server)\/.+\.tsx?$/;
 
 /** Each is a check a scope turns on or off; ci.yml reads them as job outputs. */
-export const CHECKS = ['packages', 'sandbox', 'planner', 'integration', 'engine'];
+export const CHECKS = ['packages', 'sandbox', 'planner', 'integration', 'desktop', 'engine'];
 
 /** Step ids in ci.yml's build-and-test that every change owes. */
 export const ALWAYS_STEPS = ['build-core', 'verify-scripts', 'repo-guards'];
@@ -34,6 +34,7 @@ export const STEPS_BY_CHECK = {
   sandbox: ['sandbox'],
   planner: ['planner-loop'],
   integration: ['vscode-integration'],
+  desktop: ['desktop-e2e'],
 };
 
 /**
@@ -105,6 +106,9 @@ export function selectScope(paths, workspaces) {
     sandbox: core,
     planner: core,
     integration: affected.has('packages/vscode'),
+    // The app's acceptance test drives bench/, but bench/ is outside every
+    // workspace, so a change there already means the full run.
+    desktop: affected.has('packages/desktop'),
     engine: core,
   };
   return {

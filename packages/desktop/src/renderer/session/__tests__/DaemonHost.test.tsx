@@ -82,6 +82,36 @@ describe('DaemonHost', () => {
     expect(daemon.calls('approvals.decide')).toEqual([[{ sessionId: 's1', approvalId: 'a1' }, { granted: true }]]);
   });
 
+  it('keeps the worktree a run\'s first status reported before its start answered', async () => {
+    const worktree = { state: 'active' as const, branch: 'ordewell/r1/1-parse', worktree: '/work/acme/.ordewell/worktrees/r1/1-parse', repos: [] };
+    const daemon = fakeDaemon({
+      'sessions.load': ok({ ok: true, plan: surfacePlan(PLAN.tasks, 'draft'), goal: 'Ship the parser' }),
+      // The socket outruns the call's answer, as it does against a real daemon.
+      'plans.execute': () => {
+        daemon.push('s1', { type: 'status_update', tasks: [{ id: 't1', status: 'in_progress', verdict: null, isolation: worktree }], stream: 'd1', seq: 1 });
+        return ok({ ok: true });
+      },
+    });
+    const host = hostWith();
+    await opened(daemon, host);
+
+    await act(() => host.handle({ type: 'sendSystemCommand', command: 'executePlan' }));
+    expect(host.getSnapshot().state.run.tasks.find((t) => t.id === 't1')?.isolation).toEqual(worktree);
+  });
+
+  it('lists the runners while the model catalog is still being discovered', async () => {
+    // A runner CLI slow to list its models holds models.list, never runners.list's answer.
+    const daemon = fakeDaemon({
+      'runners.list': ok({ runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }] }),
+      'models.list': new Promise<never>(() => undefined),
+    });
+    const host = hostWith();
+    void host.handle({ type: 'ready' });
+    await waitFor(() => expect(host.getSnapshot().state.runnersKnown).toBe(true));
+    expect(host.getSnapshot().state.enabledRunnerIds).toEqual(['claude-code']);
+    expect(daemon.calls('models.list')).toHaveLength(1);
+  });
+
   it('asks before a removal, in ui\'s words, and removes only on a yes', async () => {
     const daemon = fakeDaemon({ 'sessions.load': ok({ ok: true, plan: PLAN, goal: 'g' }) });
     const asked: ConfirmationRequest<string>[] = [];
