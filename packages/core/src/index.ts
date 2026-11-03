@@ -108,7 +108,7 @@ export type { CheckoutScope, DiffOptions, FindOptions, LogOptions, WorkspaceRead
 export { createUserGit, UserGitError } from './services/userGitActions';
 export type { UserGit, UserGitDeps, UserGitErrorCode, UserGitScope } from './services/userGitActions';
 export { interlock, landingRuns, savedRunLooksLive } from './services/landingInterlock';
-export type { InterlockAnswer, LandingMove, LandingRun } from './services/landingInterlock';
+export type { InterlockAnswer, LandingCheckout, LandingMove, LandingRun } from './services/landingInterlock';
 export { appendUserAction, takeUserActions, type UserActionLine } from './utils/userActionLog';
 export * from './interfaces/ILogger';
 export { BaseAiService } from './services/BaseAiService';

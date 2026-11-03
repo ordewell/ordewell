@@ -147,6 +147,38 @@ describe('the session lease (ADR-0049)', () => {
     expect(err.held.orphanedRunners).toEqual([5151]);
   });
 
+  it('says in its record whether the holder\'s run is live, at each heartbeat and as soon as it publishes', () => {
+    const first = host({ id: 'host-a' });
+    let live = false;
+    const lease = first.lease(() => undefined, () => live);
+    lease.claim(SESSION, workspace);
+    const reader = host({ id: 'host-b' });
+    expect(reader.peek(SESSION, workspace)?.holder.runLive).toBe(false);
+
+    live = true;
+    lease.publish();
+    expect(reader.peek(SESSION, workspace)?.holder.runLive).toBe(true);
+
+    live = false;
+    first.beat();
+    expect(reader.peek(SESSION, workspace)?.holder.runLive).toBe(false);
+  });
+
+  it('publishes a start the moment it is pending, before any attempt is saved in progress (ADR-0062 G7)', async () => {
+    const session = sessionOn(host({ id: 'host-a' }));
+    adopt(session);
+    const reader = host({ id: 'host-b' });
+    expect(reader.peek(SESSION, workspace)?.holder.runLive).toBe(false);
+
+    const starting = session.execute({ command: 'run_plan' }, { kind: 'user' });
+
+    // Nothing of the start is in the saved plan yet: only the lease record says it.
+    expect(sessionStore.loadSession(SESSION, workspace)!.plan.tasks.some((t) => t.status === 'in_progress')).toBe(false);
+    expect(reader.peek(SESSION, workspace)?.holder.runLive).toBe(true);
+    await starting.catch(() => undefined);
+    session.destroy();
+  });
+
   it('lets the lease go when the session closes', () => {
     const first = sessionOn(host({ id: 'host-a', pid: 37797, alive: () => true }));
     adopt(first);

@@ -79,6 +79,19 @@ describe('a user git action against the pool', () => {
     expect(other.userRunIsLive(SESSION, workspace, savedPlan())).toBe(false);
   });
 
+  it('takes the holder\'s word that its run is live where the saved record shows nothing at work: a start pending, a Merge all', () => {
+    // Another host's Session, its run live only in its memory.
+    let live = true;
+    hostA.lease(() => undefined, () => live).claim(SESSION, workspace);
+    const settledPlan = { ...savedPlan(), tasks: [] };
+
+    expect(other.userRunIsLive(SESSION, workspace, settledPlan)).toBe(true);
+
+    live = false;
+    hostA.beat();
+    expect(other.userRunIsLive(SESSION, workspace, settledPlan)).toBe(false);
+  });
+
   it('records into the held session\'s timeline straight away', () => {
     holder.adoptSavedSession(SESSION, workspace);
     holder.recordUserAction(SESSION, workspace, 'You committed "fix" on main.');

@@ -303,7 +303,7 @@ describe.skipIf(!hasGit)('user git actions (ADR-0062)', () => {
   });
 
   describe('the interlock (G7)', () => {
-    const live = (over: Partial<LandingRun> = {}): LandingRun => ({ sessionId: 's1', runId: 'r1', repo: '.', branch: 'main', live: true, unmerged: true, ...over });
+    const live = (over: Partial<LandingRun> = {}): LandingRun => ({ workspace, sessionId: 's1', runId: 'r1', repo: '.', branch: 'main', live: true, unmerged: true, ...over });
 
     beforeEach(() => git(workspace, 'branch', 'feature'));
 
@@ -343,7 +343,7 @@ describe.skipIf(!hasGit)('user git actions (ADR-0062)', () => {
   });
 
   describe('timeline recording (G6)', () => {
-    const live: LandingRun = { sessionId: 's1', runId: 'r1', repo: '.', branch: 'main', live: true, unmerged: false };
+    const live: LandingRun = { workspace, sessionId: 's1', runId: 'r1', repo: '.', branch: 'main', live: true, unmerged: false };
     const held = { sessionId: 's1', runId: 'r1', repo: '.', branch: 'main' };
 
     it('records a commit, a stash, a discard and a save on a live run\'s landing branch', async () => {
@@ -457,7 +457,7 @@ describe.skipIf(!hasGit)('user git actions (ADR-0062)', () => {
     });
 
     it('records a pull on a live run\'s landing branch', async () => {
-      runs = [{ sessionId: 's1', runId: 'r1', repo: '.', branch: 'main', live: true, unmerged: false }];
+      runs = [{ workspace, sessionId: 's1', runId: 'r1', repo: '.', branch: 'main', live: true, unmerged: false }];
       await userGit().pull(at(), { confirm: { remote: 'origin', branch: 'main' } });
       expect(recorded.map((r) => r.text)).toEqual(['You pulled from origin/main on main.']);
     });
@@ -473,7 +473,7 @@ describe.skipIf(!hasGit)('user git actions (ADR-0062)', () => {
       fs.rmSync(workspace, { recursive: true, force: true });
       repo(path.join(workspace, 'api'), { 'a.txt': 'a\n' });
       repo(path.join(workspace, 'web'), { 'w.txt': 'w\n' });
-      runs = [{ sessionId: 's1', runId: 'r1', repo: 'api', branch: 'main', live: true, unmerged: false }];
+      runs = [{ workspace, sessionId: 's1', runId: 'r1', repo: 'api', branch: 'main', live: true, unmerged: false }];
       write(path.join(workspace, 'api'), { 'a.txt': 'A\n' });
       await userGit().stage({ workspace, repo: 'api' }, { paths: ['a.txt'] });
       await userGit().commit({ workspace, repo: 'api' }, { message: 'api work' });

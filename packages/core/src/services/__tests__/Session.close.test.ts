@@ -26,7 +26,7 @@ describe('a Session closing with a change still in git', () => {
       return real(...args);
     };
     const letGo = vi.fn();
-    const lease: SessionLease = { claim: () => undefined, hold: () => null, release: letGo };
+    const lease: SessionLease = { claim: () => undefined, hold: () => null, release: letGo, publish: () => undefined };
     const env = await supervised([task('t1', 1)], { isolation, leaseHost: { lease: () => lease } as unknown as LeaseHost, settings: { supervisorLevel: 'off' } });
     await until(() => env.run.spawnedIds().includes('t1'));
     await until(() => env.session.planTasks[0].status === 'in_progress');

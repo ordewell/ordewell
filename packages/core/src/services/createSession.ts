@@ -701,10 +701,10 @@ export function createSession(deps: SessionDeps): Session {
     fetcher,
     skillsService: deps.skillsService ?? new SkillsService(deps.workspaceRoot()),
     saveSession: deps.saveSession ?? (deps.placement ? saveUnder(deps.placement) : saveSession),
-    lease: (onLost) => {
+    lease: (onLost, runLive) => {
       if (deps.placement) return childLease(deps.placement.held);
       const host = deps.leaseHost ?? (deps.saveSession ? undefined : processLeaseHost());
-      return host ? host.lease(onLost) : UNLEASED;
+      return host ? host.lease(onLost, runLive) : UNLEASED;
     },
     conversation: (host) => (conversation = new PlannerConversation(host)),
     child: deps.child,
@@ -780,8 +780,8 @@ export interface SessionParts {
   fetcher: IWebFetcher;
   skillsService: Pick<SkillsService, 'findSkill' | 'listSkills' | 'searchedDirs' | 'forRoot'>;
   saveSession: SaveSession;
-  /** Its lease, told by the Session what to do when another host takes it (ADR-0049). */
-  lease: (onLost: (held: SessionHeld) => void) => SessionLease;
+  /** Its lease, told by the Session what to do when another host takes it (ADR-0049), and whether its run is live (ADR-0062 G7). */
+  lease: (onLost: (held: SessionHeld) => void, runLive: () => boolean) => SessionLease;
   /** The conversation's host is the Session itself, so only the Session can make it. */
   conversation: (host: PlannerConversationHost) => PlannerConversation;
   /** The node this session is, below the root. */
@@ -1042,7 +1042,7 @@ export class Session {
     this.fetcher = parts.fetcher;
     this.skillsService = parts.skillsService;
     this.save = parts.saveSession;
-    this.lease = parts.lease((held) => this.leaseLost(held));
+    this.lease = parts.lease((held) => this.leaseLost(held), () => this.runIsLive);
 
     this.conversation = parts.conversation({
       plan: () => this.plan,
@@ -3400,8 +3400,13 @@ export class Session {
       await this.orchestrator.beginRun(origin, keepFailed);
     });
     this.runOpening = opening;
+    // Another host's interlock reads the start in the lease record (ADR-0062 G7),
+    // and a start that came to nothing there too, not a heartbeat later.
+    this.lease.publish();
     return opening.finally(() => {
-      if (this.runOpening === opening) this.runOpening = null;
+      if (this.runOpening !== opening) return;
+      this.runOpening = null;
+      this.lease.publish();
     });
   }
 
@@ -3642,7 +3647,11 @@ export class Session {
   private async mergeAll(): Promise<IsolationMergeResult> {
     // Ahead of the ops refusal: with no run there is nothing to merge once the ops task ends either.
     this.runs.requireRun();
-    const result = await this.withSave(() => this.orchestrator.mergeRun());
+    const merging = this.withSave(() => this.orchestrator.mergeRun());
+    // The merge has begun by now: another host's interlock reads it in the lease
+    // record (ADR-0062 G7), and reads its end there too, not a heartbeat later.
+    this.lease.publish();
+    const result = await merging.finally(() => this.lease.publish());
     this.broadcast({ type: 'isolation_merge', result });
     this.announceClosed();
     return result;

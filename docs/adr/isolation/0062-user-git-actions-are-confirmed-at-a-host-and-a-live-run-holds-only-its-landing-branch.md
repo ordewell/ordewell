@@ -104,8 +104,14 @@ start stays the existing escalation (G9). Editing is confined to the checkout
   the branch is back (ADR-0042's `wrong-branch` stays the backstop). A run that
   started detached names no branch and so holds nothing. The judgement spans
   hosts: the daemon reads every session's lease and isolation record on disk,
-  as well as its own pool. It cannot hold against a terminal or another git
-  client, which ADR-0042 still catches at Merge all.
+  as well as its own pool. It spans workspaces too: a checkout may be opened as
+  a workspace of its own inside one whose runs land in it, so the sessions of
+  every directory above the checkout count wherever they land in that same
+  working tree. A start pending and a Merge all live only in their
+  host's memory, so a holder says in its lease record whether its run is live,
+  as the run starts or merges and at each heartbeat (ADR-0049). It cannot hold
+  against a terminal or another git client, which ADR-0042 still catches at
+  Merge all.
 - **A preflight before Merge all (G8).** Before Merge all a surface asks for the
   preflight. For each repository it lists the branch it lands on, the user's
   uncommitted files that overlap the incoming work, and whether other
@@ -235,3 +241,5 @@ top by position: it names the stash it made, and pop takes that name.
 - 2026-11-03 — accepted.
 - 2026-11-03 — the daemon's action routes, interlock, preflight and save implemented (G1 to G10).
 - 2026-11-03 — the desktop terminal panel implemented (G11).
+- 2026-11-03 — G7 reads a run's liveness from its holder's lease record: a non-holder judging by the saved plan missed a start pending and a Merge all.
+- 2026-11-03 — G7 counts the runs of enclosing workspaces that land in the same checkout: a checkout opened on its own missed them.

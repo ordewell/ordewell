@@ -121,6 +121,17 @@ describe('TerminalHost', () => {
     expect(host.busy(name)).toBe(1);
   });
 
+  it('counts one window\'s busy terminals apart from another\'s, for closing that window', () => {
+    const { host, fake, options } = setup();
+    host.start(options(1));
+    host.start({ ...options(1), owner: 9 });
+    const name = (file: string): string => file.split('/').pop() ?? file;
+    fake.ptys[1]!.process = 'npm';
+    expect(host.busy(name, 9)).toBe(1);
+    expect(host.busy(name, options(1).owner)).toBe(0);
+    expect(host.busy(name)).toBe(1);
+  });
+
   it('lets a failing spawn through to the caller and leaves nothing behind', () => {
     const host = new TerminalHost(vi.fn(() => { throw new Error('no pty'); }));
     expect(() => host.start({ id: 1, owner: 1, file: 'x', args: [], cwd: '/', env: {}, cols: 1, rows: 1, send: vi.fn() })).toThrow('no pty');

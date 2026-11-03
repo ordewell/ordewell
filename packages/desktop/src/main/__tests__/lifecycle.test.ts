@@ -1,6 +1,6 @@
 import { join, resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { onLastWindowClosed, quitPrompt } from '../lifecycle';
+import { describe, expect, it, vi } from 'vitest';
+import { closePrompt, guardClose, onLastWindowClosed, quitPrompt } from '../lifecycle';
 import { isInside } from '../paths';
 
 const run = { sessionId: 's1', goal: 'Ship it', workspace: '/w' };
@@ -90,5 +90,55 @@ describe('quitPrompt with terminals (ADR-0062 G11)', () => {
     expect(prompt?.message).toBe('A run is in progress. Quit and stop it?');
     expect(prompt?.detail).toContain('2 terminals are running a process');
     expect(prompt?.confirmLabel).toBe('Stop and quit');
+  });
+});
+
+describe('closing a window with a terminal at work (ADR-0062 G11)', () => {
+  it('asks only when one of the window\'s terminals is running a process', () => {
+    expect(closePrompt(0)).toBeUndefined();
+    expect(closePrompt(1)).toEqual({
+      message: 'A terminal is running a process. Close this window?',
+      detail: 'Closing the window ends it.',
+      confirmLabel: 'Close',
+    });
+    expect(closePrompt(2)?.message).toBe('2 terminals are running a process. Close this window?');
+  });
+
+  function closing(answers: Array<boolean | undefined>) {
+    let answer: (ok: boolean) => void = () => undefined;
+    const asked = vi.fn(() => {
+      const next = answers.shift();
+      return next === undefined ? undefined : new Promise<boolean>((resolve) => { answer = resolve; });
+    });
+    const close = vi.fn();
+    const onClose = guardClose(asked, close);
+    const attempt = () => { const event = { preventDefault: vi.fn() }; onClose(event); return event; };
+    return { asked, close, attempt, answer: (ok: boolean) => answer(ok) };
+  }
+
+  it('lets a window with nothing to lose close at once', () => {
+    const { attempt } = closing([undefined]);
+    expect(attempt().preventDefault).not.toHaveBeenCalled();
+  });
+
+  it('holds the close for the answer, and closes once the person agrees', async () => {
+    const { attempt, answer, close } = closing([true]);
+    expect(attempt().preventDefault).toHaveBeenCalled();
+    // A second click while the question is up asks nothing more.
+    expect(attempt().preventDefault).toHaveBeenCalled();
+    answer(true);
+    await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1));
+    // The close it makes is not asked about again.
+    expect(attempt().preventDefault).not.toHaveBeenCalled();
+  });
+
+  it('keeps the window and its terminals on Cancel, and asks again next time', async () => {
+    const { attempt, answer, close, asked } = closing([true, true]);
+    attempt();
+    answer(false);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(close).not.toHaveBeenCalled();
+    expect(attempt().preventDefault).toHaveBeenCalled();
+    expect(asked).toHaveBeenCalledTimes(2);
   });
 });

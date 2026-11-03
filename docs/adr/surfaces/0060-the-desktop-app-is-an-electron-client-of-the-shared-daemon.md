@@ -128,6 +128,15 @@ renderer per subscription. The terminal, native dialogs, the folder picker and
 handing a file to the user's editor live in main and are reached through the
 same bridge.
 
+What the bridge keeps out of the page is the token and arbitrary URLs: a page
+cannot reach another origin, or the daemon in a way the table does not name.
+It does not make a page that runs script harmless. The bridge exists to act for
+the user, so such a page can do what the user can: run a script task through
+the plan routes, or type into a terminal. The boundary that keeps model text
+from becoming script is therefore the rendering itself: markdown is rendered
+with raw HTML off and only safe link schemes, and the content security policy
+allows script only from the app's own bundle, with no inline script.
+
 ## Testing decisions
 
 - The attach-or-own choice is a pure function of the probe, the token read and
@@ -194,3 +203,4 @@ same bridge.
 - 2026-11-03 — accepted.
 - 2026-11-03 — partly implemented: the Electron shell in packages/desktop.
 - 2026-11-03 — partly implemented: packaging and CI (electron-builder.yml, the desktop job in release.yml, updates wired and held off by `AUTO_UPDATE_ENABLED`).
+- 2026-11-03 — the IPC proxy names what the bridge does not guard: a page that runs script acts as the user, so rendering is the boundary.

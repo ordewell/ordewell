@@ -138,12 +138,17 @@ export class TerminalHost {
     this.entries.clear();
   }
 
-  /** Terminals with something other than their shell in the foreground: quitting would end that work (ADR-0060 H5). */
-  busy(shellNameOf: (file: string) => string): number {
+  /**
+   * Terminals with something other than their shell in the foreground:
+   * quitting would end that work (ADR-0060 H5), and closing the window that
+   * owns them, when `owner` names it.
+   */
+  busy(shellNameOf: (file: string) => string, owner?: number): number {
     // A login shell may report itself as `-zsh`, and Windows as `powershell.exe`.
     const plain = (name: string): string => name.replace(/^-/, '').replace(/\.exe$/i, '').toLowerCase();
     let count = 0;
     for (const entry of this.entries.values()) {
+      if (owner !== undefined && entry.owner !== owner) continue;
       if (plain(entry.pty.process) !== plain(shellNameOf(entry.shell))) count += 1;
     }
     return count;
