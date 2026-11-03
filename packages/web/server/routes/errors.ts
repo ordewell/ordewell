@@ -14,6 +14,7 @@ import {
   TaskControlError,
   WorkspaceNotAProjectError,
   WorkspaceNotFoundError,
+  WorkspaceReadError,
   type DaemonErrorCode,
   type ErrorBody,
 } from '@ordewell/core';
@@ -83,6 +84,14 @@ function classify(err: unknown): Classified | undefined {
   if (err instanceof PlannerTurnStoppedError) return { status: 409, code: 'planner_turn_stopped' };
   if (err instanceof PlannerTurnDiscardedError) return { status: 409, code: 'planner_turn_discarded' };
   if (err instanceof ConversationBusyError) return { status: 409, code: 'conversation_busy' };
+  // A user read (ADR-0061): a scope that no longer exists is gone (410), never
+  // answered from another; a path outside the scope is forbidden, not missing.
+  if (err instanceof WorkspaceReadError) {
+    if (err.code === 'gone') return { status: 410, code: 'gone' };
+    if (err.code === 'path_refused') return { status: 403, code: 'path_refused' };
+    if (err.code === 'path_not_found') return { status: 404, code: 'path_not_found' };
+    return { status: 400, code: 'refused' };
+  }
   if (err instanceof ConversationEditError || err instanceof PlanEditError || err instanceof TaskControlError) {
     return { status: 400, code: 'refused' };
   }

@@ -10,6 +10,8 @@ import { workspacesRoute } from './routes/workspaces';
 import { approvalsRoute } from './routes/approvals';
 import { settingsRoute } from './routes/settings';
 import { commandsRoute } from './routes/commands';
+import { filesRoute, gitRoute, taskDiffRoute } from './routes/workspaceRead';
+import { WebConfig } from './adapters/WebConfig';
 import { createWsHandler } from './ws/stream';
 import {
   decideAdmission,
@@ -17,9 +19,13 @@ import {
   type AdmissionDecision,
 } from './security/admission';
 import { OrchestratorPool } from './pool/orchestratorPool';
-import type { ServerInfoResponse } from '@ordewell/core';
+import { createWorkspaceReader, type ServerInfoResponse, type WorkspaceReader } from '@ordewell/core';
 
-export function createApp(pool: OrchestratorPool, admission: AdmissionContext) {
+export function createApp(
+  pool: OrchestratorPool,
+  admission: AdmissionContext,
+  reader: WorkspaceReader = createWorkspaceReader({ config: new WebConfig() }),
+) {
   const app = new Hono();
 
   // There is no CORS allowlist: the daemon ships no browser front end, so a
@@ -46,12 +52,16 @@ export function createApp(pool: OrchestratorPool, admission: AdmissionContext) {
   app.route('/api/sessions', sessionsRoute(pool));
   app.route('/api/sessions', childrenRoute(pool));
   app.route('/api/plans', plansRoute(pool));
+  app.route('/api/plans', taskDiffRoute(reader));
   app.route('/api/runners', runnersRoute(pool));
   app.route('/api/models', modelsRoute(pool));
   app.route('/api/settings', settingsRoute(pool));
   app.route('/api/commands', commandsRoute());
   app.route('/api/workspaces', workspacesRoute(pool));
   app.route('/api/approvals', approvalsRoute(pool));
+  // The user's reads of files and git (ADR-0061): the reader, never the pool.
+  app.route('/api/files', filesRoute(reader));
+  app.route('/api/git', gitRoute(reader));
 
   return app;
 }

@@ -1,8 +1,7 @@
 ---
 status: accepted
-implemented: none
 amends: ["0049"]
-note: "The read half of the desktop app's file and git views (docs/desktop/design.md). The daemon read routes slice implements it."
+note: "The read half of the desktop app's file and git views (docs/desktop/design.md)."
 ---
 
 # 0061 — A host reads files and git for the user, confined to the workspace and needing no lease
@@ -92,7 +91,7 @@ relative to the workspace, `.` for the root) and the view scope (`scope`, with
 |---|---|
 | `GET /api/files/tree` | One directory's entries: name, kind, ignored, git status. |
 | `GET /api/files/content` | A file's text and its hash, or `binary` / `too-large` / `gone`. |
-| `GET /api/files/find` | Paths matching a name query, for quick open. |
+| `GET /api/files/find` | Paths whose name holds a query, for quick open, or with `text` the lines that hold it; capped, and marked `truncated` past the cap. |
 | `GET /api/git/repos` | The workspace's repositories, with each one's branch, upstream, ahead and behind, and whether it is detached. |
 | `GET /api/git/status` | The checkout's staged, unstaged, untracked and conflicted files. |
 | `GET /api/git/diff` | A file list, or one file's patch: staged, unstaged, or between two refs. |
@@ -118,7 +117,6 @@ The run's whole diff stays on the existing `GET /api/plans/:sessionId/isolation/
 
 ## Out of scope
 
-- Search across file contents. Quick open matches names only.
 - Watching the file system and pushing changes. A surface reads again on a
   run's frames and on focus.
 - Anything that writes: that is
@@ -158,3 +156,4 @@ The run's whole diff stays on the existing `GET /api/plans/:sessionId/isolation/
 ## History
 
 - 2026-11-03 — accepted.
+- 2026-11-03 — implemented; `find` also searches file contents with `text`, capped like a name search, which the desktop's quick open had left out.

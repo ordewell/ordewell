@@ -26,6 +26,17 @@ import type {
   ExecuteCommandResponse,
   ExecuteResponse,
   ExecutionCommand,
+  FileContentResponse,
+  FileFindResponse,
+  FileTreeResponse,
+  GitBranchesResponse,
+  GitCommitResponse,
+  GitDiffResponse,
+  GitLogResponse,
+  GitReposResponse,
+  GitStatusResponse,
+  ReadTarget,
+  TaskDiffResponse,
   GeneratePlanResponse,
   IsolationDiffResponse,
   IsolationMergeResponse,
@@ -219,6 +230,9 @@ function daemonError(status: number, data: unknown, fallback: string): DaemonErr
   if (code === 'workspace_not_a_project') return new WorkspaceInitNeededError(error || 'Not a project directory', workspace ?? '');
   return new DaemonError(error || fallback, status, code, plannerNotReady, sessionHeld);
 }
+
+/** A read's target (ADR-0061), its workspace the client's own unless named. */
+export type ReadQuery = Partial<ReadTarget>;
 
 export class ApiClient {
   /** Where a CLI invocation's sessions live, when a client is built without one: `--workspace`, else the cwd. */
@@ -545,6 +559,60 @@ export class ApiClient {
   async reviewRunDiff(sessionId: string): Promise<string> {
     const res = await this.call<IsolationDiffResponse>('GET', `/api/plans/${sessionId}/isolation/diff`, 'Could not read the diff');
     return res.diff;
+  }
+
+  /** A directory of one view scope (ADR-0061), `dir` `''` for its root. */
+  getFileTree(target: ReadQuery, dir = ''): Promise<FileTreeResponse> {
+    return this.read('/api/files/tree', target, { dir }, 'Could not read the folder');
+  }
+
+  getFileContent(target: ReadQuery, path: string): Promise<FileContentResponse> {
+    return this.read('/api/files/content', target, { path }, 'Could not read the file');
+  }
+
+  /** Paths whose name holds `query`, or with `text` lines that do; `truncated` once the cap is hit. */
+  findFiles(target: ReadQuery, options: { query: string; text?: boolean; limit?: number }): Promise<FileFindResponse> {
+    return this.read('/api/files/find', target, { query: options.query, text: options.text ? '1' : undefined, limit: options.limit?.toString() }, 'Could not search the files');
+  }
+
+  getGitRepos(workspace?: string): Promise<GitReposResponse> {
+    return this.read('/api/git/repos', { workspace }, {}, 'Could not read the repositories');
+  }
+
+  getGitStatus(target: ReadQuery): Promise<GitStatusResponse> {
+    return this.read('/api/git/status', target, {}, 'Could not read the status');
+  }
+
+  getGitDiff(target: ReadQuery, options: { kind?: 'staged' | 'unstaged'; from?: string; to?: string; path?: string } = {}): Promise<GitDiffResponse> {
+    return this.read('/api/git/diff', target, options, 'Could not read the diff');
+  }
+
+  /** One page of history; pass back the page's `cursor` for the next. */
+  getGitLog(target: ReadQuery, options: { ref?: string; cursor?: string; limit?: number } = {}): Promise<GitLogResponse> {
+    return this.read('/api/git/log', target, { ref: options.ref, cursor: options.cursor, limit: options.limit?.toString() }, 'Could not read the history');
+  }
+
+  getGitCommit(target: ReadQuery, sha: string, path?: string): Promise<GitCommitResponse> {
+    return this.read('/api/git/commit', target, { sha, path }, 'Could not read the commit');
+  }
+
+  getGitBranches(target: ReadQuery): Promise<GitBranchesResponse> {
+    return this.read('/api/git/branches', target, {}, 'Could not read the branches');
+  }
+
+  /** One task's diff from its saved run: the changed names with `names`, one file's patch with `path`. */
+  getTaskDiff(sessionId: string, taskId: string, options: { workspace?: string; repo?: string; path?: string; names?: boolean } = {}): Promise<TaskDiffResponse> {
+    const { workspace, repo, path, names } = options;
+    return this.read(`/api/plans/${sessionId}/tasks/${encodeURIComponent(taskId)}/diff`, { workspace, repo }, { path, names: names ? '1' : undefined }, 'Could not read the task\'s diff');
+  }
+
+  /** A user read's query: the target first, as every read route takes it, then the route's own parameters. */
+  private read<T>(route: string, target: ReadQuery, extra: Record<string, string | undefined>, fallback: string): Promise<T> {
+    const query = new URLSearchParams({ workspace: target.workspace ?? this.workspace });
+    for (const [key, value] of Object.entries({ repo: target.repo, scope: target.scope, sessionId: target.sessionId, taskId: target.taskId, ...extra })) {
+      if (value !== undefined) query.set(key, value);
+    }
+    return this.call('GET', `${route}?${query.toString()}`, fallback);
   }
 
   /**

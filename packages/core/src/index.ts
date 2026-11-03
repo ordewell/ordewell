@@ -103,6 +103,8 @@ export { checkoutRule, handoffBaseLine, handoffBranchName, isRepoGroup, mergePas
 export type { HandoffForkRepo, MergeWordingHandoff } from './services/mergeWording';
 export type { Adr0013PlanIsolation, Adr0013IsolationRun, Adr0013TaskRecord } from './services/isolationRecord';
 export type { WorktreeIsolationDeps, GitExecFn } from './services/GitWorktreeIsolation';
+export { createWorkspaceReader, userPath, WorkspaceReadError } from './services/workspaceReader';
+export type { DiffOptions, FindOptions, LogOptions, WorkspaceReader, WorkspaceReadErrorCode, WorkspaceReaderDeps } from './services/workspaceReader';
 export * from './interfaces/ILogger';
 export { BaseAiService } from './services/BaseAiService';
 export type { ResearchChat, ResearchTurn, ToolCall, ToolResult } from './services/BaseAiService';
