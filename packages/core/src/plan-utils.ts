@@ -20,7 +20,7 @@ export type { HandoffForkRepo } from './services/mergeWording';
 export { blockingFailures, repeatingChecks, planBlocks, type BlockingSubject, type PlanBlocks } from './services/blocking';
 // What a loop's rows say (ADR-0045) is read the way the scheduler reads it.
 export { betweenRounds, outOfRounds, loopRoundOf, checkOf, loopRemovalRefusal, type TaskLoop } from './models/Loop';
-export { DELEGATION_OFFERED, containersOffered, PLANNED_WITH_LABEL, SUBPLANNER_ACCOUNTING, SUBPLANNER_CHILD, SUBPLANNER_SCOPE, SUPERVISOR_LEVEL_LABEL, keptDelegationBudget, parseCount, rememberDelegationBudget } from './services/runSettingsText';
+export { ACT_RISK, AUTORUN_RISK, DELEGATION_OFFERED, DELEGATION_RISK, containersOffered, PLANNED_WITH_LABEL, SUBPLANNER_ACCOUNTING, SUBPLANNER_CHILD, SUBPLANNER_SCOPE, SUPERVISOR_LEVEL_LABEL, keptDelegationBudget, parseCount, rememberDelegationBudget } from './services/runSettingsText';
 // The empty planner composer's tips (#137), one table for both planner chats.
 export { COMPOSER_TIPS, composerTip, type ComposerTip } from './services/composerTips';
 // The shared conversation view (#51) is pure too, so every surface — a webview
@@ -42,8 +42,8 @@ export { DEFAULT_RUNNERS, pausedOnLimit } from './models/Task';
 // A script task's body as its card and the approval card show it (ADR-0035).
 export { scriptTaskText } from './models/ScriptTask';
 // The run view is pure too: a surface seeds its state from the one empty run
-// rather than re-declaring the shape.
-export { EMPTY_RUN } from './services/runView';
+// rather than re-declaring the shape, and a host in a renderer folds it the same way.
+export { EMPTY_RUN, reduceRun } from './services/runView';
 
 export * from './models/Usage';
 // An account's limits are worded once too, for the planner footer and each task log alike.

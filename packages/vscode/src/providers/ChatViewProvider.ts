@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import { DELEGATION_OFFERED, type AccountLimitSnapshot, type GlobalRunSettings, type IsolationPreview, surfacePlan, type AiProvider, type LegacyPlanState, type DiscoveredModel, type PlanStatus, type RunnerId, type RunActivity, type RunView } from '@ordewell/core';
-import { ConversationViewHost, type SavedConversation } from '../ConversationViewHost';
-import { RunViewHost } from '../RunViewHost';
+import { SessionView, type SavedConversation } from '@ordewell/ui/host';
 import { renderWebviewHtml } from './webviewHtml';
 import type { ChatState, HostToWebview, ModelOption, PlannerBackend, RunnerMeta, RunnerModeMeta, WebviewToHost } from '@ordewell/ui/protocol';
 
@@ -16,10 +15,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _viewDisposables: { dispose(): unknown }[] = [];
   private _onMessage = new vscode.EventEmitter<WebviewToHost>();
   readonly onMessage = this._onMessage.event;
-  /** The planner conversation as the webview draws it; every planner event and local notice goes through here. */
-  readonly conversation = new ConversationViewHost((msg) => this.postMessage(msg));
-  /** The run as the webview draws it; every session event and adopted snapshot goes through here (#S8c). */
-  readonly run = new RunViewHost((msg) => this.postMessage(msg));
+  /**
+   * The session as the webview draws it, assembled the way a daemon client
+   * assembles it from frames: every session event goes through `view.receive`,
+   * and what it cues back is the host's to do.
+   */
+  readonly view = new SessionView((msg) => this.postMessage(msg));
+  /** The planner conversation; a local notice or a held prompt goes to it directly. */
+  readonly conversation = this.view.conversation;
+  /** The run (#S8c); an adopted snapshot goes to it directly. */
+  readonly run = this.view.run;
   /**
    * What the dock shows as each plan's status, kept here rather than written
    * onto the plan: the plan object is the Session's own, and its status once
@@ -74,8 +79,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
   /** What a webview that joined mid-run is owed: the run as folding every message would show it. */
   adoptRun(view: RunView): void { this.run.adopt(view); }
-  /** Live runner output for one task; the webview keeps the tail and renders it in that task's card. */
-  sendTaskOutput(taskId: string, text: string): void { this.postMessage({ type: 'taskOutput', taskId, text }); }
   setModels(models: DiscoveredModel[]): void {
     this.postMessage({ type: 'setModels', models });
   }

@@ -21,6 +21,7 @@ vi.mock('@ordewell/core', async (importOriginal) => ({
   get DELEGATION_OFFERED() { return delegation.offered; },
 }));
 
+import { SessionView } from '@ordewell/ui/host';
 import { ChatViewProvider as RealChatViewProvider } from '../providers/ChatViewProvider';
 import { createExtension, type ExtensionServices } from '../ExtensionHost';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
@@ -49,13 +50,19 @@ function planWithOneTask(goal: string): LegacyPlanState {
 
 function fakeChat() {
   const messages = new vscode.EventEmitter<WebviewToHost>();
+  const conversation = {
+    receive: vi.fn(), note: vi.fn(), holdPrompt: vi.fn(), unsendPrompt: vi.fn(),
+    nextPrompt: vi.fn(() => undefined), stop: vi.fn(), reset: vi.fn(), reload: vi.fn(), resync: vi.fn(), waiting: vi.fn(),
+  };
+  const run = { receive: vi.fn(), adopt: vi.fn(), reset: vi.fn(), clearIsolation: vi.fn() };
+  // The real fold's cues over spied folds: what the host does with a message
+  // is under test, and every message still reaches the two spies.
+  const view = Object.assign(new SessionView(() => {}), { conversation, run });
   const provider = {
     onMessage: messages.event,
-    conversation: {
-      receive: vi.fn(), note: vi.fn(), holdPrompt: vi.fn(), unsendPrompt: vi.fn(),
-      nextPrompt: vi.fn(() => undefined), stop: vi.fn(), reset: vi.fn(), reload: vi.fn(), resync: vi.fn(), waiting: vi.fn(),
-    },
-    run: { receive: vi.fn(), adopt: vi.fn(), reset: vi.fn(), clearIsolation: vi.fn() },
+    view,
+    conversation,
+    run,
     resendAllState: vi.fn(),
     restoreChat: vi.fn(),
     replaceConversation: vi.fn(),
@@ -80,7 +87,6 @@ function fakeChat() {
     setModelDiscoveryErrors: vi.fn(),
     setPlannerBackends: vi.fn(),
     clearIsolationHandoff: vi.fn(),
-    sendTaskOutput: vi.fn(),
     reveal: vi.fn(),
     setAccountLimits: vi.fn(),
     postMessage: vi.fn(),

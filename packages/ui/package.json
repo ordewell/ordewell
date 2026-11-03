@@ -25,6 +25,11 @@
       "import": "./dist/protocol.mjs",
       "require": "./dist/protocol.js"
     },
+    "./host": {
+      "types": "./dist/host.d.ts",
+      "import": "./dist/host.mjs",
+      "require": "./dist/host.js"
+    },
     "./styles.css": "./src/styles.css",
     "./tokens.css": "./src/tokens.css",
     "./package.json": "./package.json"
@@ -33,6 +38,9 @@
     "*": {
       "protocol": [
         "./dist/protocol.d.ts"
+      ],
+      "host": [
+        "./dist/host.d.ts"
       ]
     }
   },

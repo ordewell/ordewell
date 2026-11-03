@@ -1,11 +1,12 @@
 import type { ApprovalRequestMessage, LegacyPlanState, SurfacePlan, SessionMessage } from '@ordewell/core';
-// The browser-safe entry, so the webview's tests can run the host's view too.
+// The browser-safe entry: a host that runs in a renderer (the desktop app) folds the same view.
 import {
   drainNext, EMPTY_CONVERSATION, EMPTY_HOLD, followTurn, fromTranscript, holdPrompt, NO_TURN, reconcileApprovals, stopTurn, takeAt, unsendAll, unsendLatest,
   type ConversationInput, type ConversationView, type DisplayBlock, type GatedConversation, type LocalEntry, type PromptHold,
   type TurnGate,
 } from '@ordewell/core/plan-utils';
-import { diffConversation, type HostToWebview } from '@ordewell/ui/protocol';
+import { diffConversation } from '../shared/conversationPatch';
+import type { HostToWebview } from '../shared/protocol';
 
 const FLUSH_MS = 30;
 
