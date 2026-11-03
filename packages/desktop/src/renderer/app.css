@@ -1,0 +1,92 @@
+/*
+ * The desktop shell's own chrome. Colours come from @ordewell/ui's tokens, so
+ * the welcome and workspace windows match the chat drawn inside them later;
+ * the light set below is the desktop's, since the tokens ship a dark default.
+ */
+@media (prefers-color-scheme: light) {
+  :root {
+    --ow-bg: #ffffff;
+    --ow-bg-sidebar: #f6f8fa;
+    --ow-border: #d0d7de;
+    --ow-fg: #1f2328;
+    --ow-fg-secondary: #59636e;
+    --ow-accent: #0969da;
+  }
+}
+
+:root {
+  color-scheme: light dark;
+  --desktop-font-sans: 'Inter Variable', system-ui, -apple-system, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; margin: 0; }
+
+body {
+  background: var(--ow-bg);
+  color: var(--ow-fg);
+  font-family: var(--desktop-font-sans);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: var(--ow-bg-sidebar);
+  border: 1px solid var(--ow-border);
+  border-radius: 6px;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+button:disabled { opacity: 0.5; cursor: default; }
+button.primary { background: var(--ow-accent); border-color: var(--ow-accent); color: #fff; }
+
+h1 { font-size: 20px; margin: 0; }
+h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ow-fg-secondary); margin: 24px 0 8px; }
+.muted { color: var(--ow-fg-secondary); }
+.error { color: var(--ow-status-error, #f85149); }
+
+.app { display: flex; flex-direction: column; height: 100%; }
+.app-body { flex: 1; overflow: auto; padding: 32px 40px; }
+
+.welcome, .workspace { max-width: 720px; margin: 0 auto; }
+.welcome-head, .workspace-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.workspace-head { display: block; }
+.workspace-head p { margin: 4px 0 0; }
+
+ul { list-style: none; margin: 0; padding: 0; }
+
+.recents li { display: flex; align-items: stretch; gap: 4px; margin-bottom: 4px; }
+.recent-open { flex: 1; display: flex; flex-direction: column; align-items: flex-start; text-align: left; background: transparent; border-color: transparent; }
+.recent-open:hover:not(:disabled) { background: var(--ow-bg-sidebar); border-color: var(--ow-border); }
+.recent-name { font-weight: 600; }
+.recent-path { color: var(--ow-fg-secondary); font-size: 12px; }
+.recents li.missing .recent-name { text-decoration: line-through; }
+.recent-forget { background: transparent; border-color: transparent; color: var(--ow-fg-secondary); }
+
+.runner-line { display: flex; flex-wrap: wrap; gap: 16px; }
+.runner-signed-in::before { content: '● '; color: var(--ow-status-passed, #3fb950); }
+.runner-signed-out::before { content: '● '; color: var(--ow-status-warning, #d29922); }
+.runner-unknown::before { content: '● '; color: var(--ow-fg-secondary); }
+.runner-missing { color: var(--ow-fg-secondary); }
+.runner-missing::before { content: '○ '; }
+
+.sessions li { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 8px 0; border-bottom: 1px solid var(--ow-border); }
+.session-goal { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-status { font-size: 12px; color: var(--ow-fg-secondary); }
+
+.daemon-card { margin: 0 16px 8px; padding: 12px 16px; border: 1px solid var(--ow-border); border-radius: 8px; background: var(--ow-bg-sidebar); }
+.daemon-card h2 { margin: 0 0 4px; text-transform: none; letter-spacing: 0; font-size: 13px; color: var(--ow-fg); }
+.daemon-card p { margin: 0 0 8px; }
+.daemon-card-warning { border-color: var(--ow-status-warning, #d29922); }
+.daemon-card-error { border-color: var(--ow-status-error, #f85149); }
+.daemon-refusal { color: var(--ow-status-error, #f85149); }
+.daemon-actions { display: flex; gap: 8px; }
+
+.daemon-bar { display: flex; align-items: center; gap: 8px; padding: 4px 16px; border-top: 1px solid var(--ow-border); background: var(--ow-bg-sidebar); color: var(--ow-fg-secondary); font-size: 12px; }
+.daemon-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ow-fg-secondary); }
+.daemon-bar-connected .daemon-dot { background: var(--ow-status-passed, #3fb950); }
+.daemon-bar-reconnecting .daemon-dot, .daemon-bar-mismatch .daemon-dot { background: var(--ow-status-warning, #d29922); }
+.daemon-bar-unauthorized .daemon-dot, .daemon-bar-port-taken .daemon-dot, .daemon-bar-failed .daemon-dot { background: var(--ow-status-error, #f85149); }

@@ -18,10 +18,11 @@
     "packages/ui",
     "packages/vscode",
     "packages/cli",
-    "packages/web"
+    "packages/web",
+    "packages/desktop"
   ],
   "scripts": {
-    "build": "npm run build -w packages/core && npm run build -w packages/ui && npm run build -w packages/vscode && npm run build -w packages/cli && npm run build -w packages/web",
+    "build": "npm run build -w packages/core && npm run build -w packages/ui && npm run build -w packages/vscode && npm run build -w packages/cli && npm run build -w packages/web && npm run build -w packages/desktop",
     "build:core": "npm run build -w packages/core",
     "build:ui": "npm run build -w packages/ui",
     "build:vscode": "npm run build -w packages/vscode",
@@ -39,6 +40,8 @@
     "test:containers": "node scripts/container-e2e.mjs",
     "ci": "node scripts/ci.mjs",
     "build:web": "npm run build -w packages/web",
+    "build:desktop": "npm run build -w packages/desktop",
+    "desktop:dev": "npm run dev -w packages/desktop",
     "start": "node packages/cli/dist/main.js tui"
   },
   "devDependencies": {
@@ -50,5 +53,8 @@
     "eslint": "^8.57.1",
     "tsup": "^8.3.0",
     "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "dompurify": "^3.4.17"
   }
 }

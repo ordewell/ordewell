@@ -9,6 +9,8 @@ dist/
 dist-test/
 out/
 *.vsix
+# electron-builder output (packages/desktop/electron-builder.yml)
+packages/desktop/release/
 
 # Copied from @ordewell/core by scripts/copy-skills.mjs at build time — not source.
 packages/vscode/skills/

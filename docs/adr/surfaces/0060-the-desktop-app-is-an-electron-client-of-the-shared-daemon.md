@@ -1,7 +1,7 @@
 ---
 status: accepted
-implemented: none
-note: "Settles the host half of #129 and #136; the design is docs/desktop/design.md. Waits on the slices that design lists, from the packages/ui extraction on."
+implemented: partial
+note: "Settles the host half of #129 and #136; the design is docs/desktop/design.md. packages/desktop holds the shell: the daemon manager, the token-holding proxy, the hardened windows, the tray and quit rules. The workspace view beyond its session list, packaging, signing and updates wait on the later slices that design lists."
 ---
 
 # 0060 — The desktop app is an Electron client of the shared daemon, and its renderer never holds the token
@@ -192,3 +192,4 @@ same bridge.
 ## History
 
 - 2026-11-03 — accepted.
+- 2026-11-03 — partly implemented: the Electron shell in packages/desktop.

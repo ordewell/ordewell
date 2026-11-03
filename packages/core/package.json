@@ -51,6 +51,11 @@
       "types": "./dist/testing.d.ts",
       "import": "./dist/testing.mjs",
       "require": "./dist/testing.js"
+    },
+    "./daemon-client": {
+      "types": "./dist/daemon-client.d.ts",
+      "import": "./dist/daemon-client.mjs",
+      "require": "./dist/daemon-client.js"
     }
   },
   "typesVersions": {
@@ -63,6 +68,9 @@
       ],
       "testing": [
         "./dist/testing.d.ts"
+      ],
+      "daemon-client": [
+        "./dist/daemon-client.d.ts"
       ]
     }
   },
@@ -76,7 +84,7 @@
     "AUTHORS.md"
   ],
   "scripts": {
-    "build": "tsup src/index.ts src/parsing.ts src/testing.ts src/plan-utils.ts --dts --sourcemap --format cjs,esm --clean --tsconfig tsconfig.json",
+    "build": "tsup src/index.ts src/parsing.ts src/testing.ts src/plan-utils.ts src/daemon-client.ts --dts --sourcemap --format cjs,esm --clean --tsconfig tsconfig.json",
     "prepublishOnly": "npm run build",
     "watch": "tsup src/index.ts --watch --sourcemap",
     "test": "vitest run",

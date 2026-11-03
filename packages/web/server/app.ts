@@ -21,6 +21,7 @@ import {
 } from './security/admission';
 import { OrchestratorPool } from './pool/orchestratorPool';
 import {
+  DAEMON_CONTRACT,
   createUserGit,
   createWorkspaceReader,
   landingRuns,
@@ -28,6 +29,7 @@ import {
   type UserGit,
   type WorkspaceReader,
 } from '@ordewell/core';
+import { serverVersion } from './utils/serverVersion';
 
 /**
  * The user's git actions (ADR-0062). The pool answers only whether a run is
@@ -67,8 +69,15 @@ export function createApp(
 
   // `ordewell stop --server` verifies a PID file against the process that
   // actually owns the port before signalling anything, so a stale file cannot
-  // terminate an unrelated process. Behind admission like every other route.
-  app.get('/api/server', (c) => c.json({ pid: process.pid, port: admission.port } satisfies ServerInfoResponse));
+  // terminate an unrelated process. The desktop app reads the version and the
+  // contract before it drives a daemon it did not start (ADR-0060 H3). Behind
+  // admission like every other route.
+  app.get('/api/server', (c) => c.json({
+    pid: process.pid,
+    port: admission.port,
+    version: serverVersion(),
+    contract: DAEMON_CONTRACT,
+  } satisfies ServerInfoResponse));
 
   app.route('/api/sessions', sessionsRoute(pool));
   app.route('/api/sessions', childrenRoute(pool));
