@@ -19,6 +19,8 @@ interface RouteSpec {
 }
 
 const WS = ['workspace'] as const;
+/** What the file read routes take to pick the tree (ADR-0061 R2): the repo and the view scope. */
+const AT = ['workspace', 'repo', 'scope', 'sessionId', 'taskId'] as const;
 
 // Rows follow the daemon's routers in packages/web/server/routes, named
 // `area.verb` as the design's Daemon routes table does.
@@ -81,6 +83,13 @@ export const ROUTES = {
 
   'runners.list': { method: 'GET', path: '/api/runners', query: WS },
   'runners.setEnabled': { method: 'PUT', path: '/api/runners/:id' },
+
+  'files.tree': { method: 'GET', path: '/api/files/tree', query: [...AT, 'dir'] },
+  'files.content': { method: 'GET', path: '/api/files/content', query: [...AT, 'path'] },
+  'files.find': { method: 'GET', path: '/api/files/find', query: [...AT, 'query', 'text', 'limit'] },
+  'files.save': { method: 'PUT', path: '/api/files/content' },
+
+  'git.repos': { method: 'GET', path: '/api/git/repos', query: WS },
 
   'settings.get': { method: 'GET', path: '/api/settings', query: ['workspace', 'sessionId'] },
   'settings.update': { method: 'PATCH', path: '/api/settings' },

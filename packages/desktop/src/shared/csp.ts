@@ -11,13 +11,18 @@ export const APP_ORIGIN = `${APP_SCHEME}://${APP_HOST}`;
 /**
  * The built app's policy. Nothing reaches the network: every daemon request
  * goes through main, so `connect-src` is `'none'`, and there is no remote
- * script, style, frame or form target.
+ * script, style, frame or form target. Monaco's web workers load from
+ * `script-src 'self'`, since `worker-src` falls back to it.
  */
 export function productionCsp(): string {
   return [
     "default-src 'none'",
     "script-src 'self'",
-    "style-src 'self'",
+    // Monaco writes its theme and layout rules into <style> elements it creates
+    // (domStylesheets.js), which a policy without 'unsafe-inline' refuses. Styles
+    // run no script, and with connect-src 'none' and no remote img-src or
+    // font-src they have nowhere to send anything; script-src stays 'self'.
+    "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data:",
     "font-src 'self'",
     "connect-src 'none'",

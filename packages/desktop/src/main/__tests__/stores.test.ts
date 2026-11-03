@@ -93,6 +93,17 @@ describe('prefs', () => {
     expect(validPref('panes', '300')).toBeUndefined();
   });
 
+  it('never takes the editor command from a page, only from the file', () => {
+    expect(validPref('editorCommand', 'rm -rf /')).toBeUndefined();
+    const file = join(dir, 'prefs.json');
+    writeFileSync(file, JSON.stringify({ editorCommand: 'code -r' }));
+    const store = new PrefsStore(file);
+    expect(store.get().editorCommand).toBe('code -r');
+    expect(store.set({ theme: 'dark' }).editorCommand).toBe('code -r');
+    writeFileSync(file, JSON.stringify({ editorCommand: 7 }));
+    expect(new PrefsStore(file).get().editorCommand).toBe('');
+  });
+
   it('reads defaults, keeps a set value and drops unknown keys from the file', () => {
     const file = join(dir, 'prefs.json');
     const store = new PrefsStore(file);

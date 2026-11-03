@@ -121,3 +121,40 @@ describe('stream paths', () => {
     expect(childStreamPath('a', '..')).toEqual({ ok: false, error: 'childId is not a path segment' });
   });
 });
+
+describe('the file routes', () => {
+  const at = { workspace: '/w', repo: '.', scope: 'task', sessionId: 's1', taskId: 't3' };
+
+  it('read a tree, a file and a search in a scope, as query parameters', () => {
+    expect(buildRequest('files.tree', { ...at, dir: 'src' })).toEqual({
+      ok: true,
+      request: { method: 'GET', path: '/api/files/tree?workspace=%2Fw&repo=.&scope=task&sessionId=s1&taskId=t3&dir=src' },
+    });
+    expect(buildRequest('files.content', { workspace: '/w', repo: '.', scope: 'checkout', path: 'a b.ts' })).toEqual({
+      ok: true,
+      request: { method: 'GET', path: '/api/files/content?workspace=%2Fw&repo=.&scope=checkout&path=a+b.ts' },
+    });
+    expect(buildRequest('files.find', { workspace: '/w', repo: '.', scope: 'checkout', query: 'x', text: '1', limit: '100' })).toEqual({
+      ok: true,
+      request: { method: 'GET', path: '/api/files/find?workspace=%2Fw&repo=.&scope=checkout&query=x&text=1&limit=100' },
+    });
+  });
+
+  it('save with a PUT whose body names the file, and nothing in the query', () => {
+    const body = { workspace: '/w', repo: '.', path: 'a.ts', text: 'x', baseHash: 'h1' };
+    expect(buildRequest('files.save', {}, body)).toEqual({
+      ok: true,
+      request: { method: 'PUT', path: '/api/files/content', body: JSON.stringify(body) },
+    });
+    expect(refused(buildRequest('files.save', { path: 'a.ts' }, body))).toContain('unknown param path');
+  });
+
+  it('refuse a param a read route does not take, and a body on a read', () => {
+    expect(refused(buildRequest('files.tree', { ...at, dir: '', root: '/etc' }))).toContain('unknown param root');
+    expect(refused(buildRequest('files.content', at, {}))).toContain('no body');
+  });
+
+  it('list the repositories of a workspace', () => {
+    expect(buildRequest('git.repos', { workspace: '/w' })).toEqual({ ok: true, request: { method: 'GET', path: '/api/git/repos?workspace=%2Fw' } });
+  });
+});

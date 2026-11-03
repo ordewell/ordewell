@@ -6,6 +6,9 @@ import { Frame } from '../../frame/Frame';
 import { FrameProvider, FrameStore } from '../../frame/store';
 import { registerViews } from '../index';
 
+// Monaco needs a browser; the stubs here never open a file.
+vi.mock('../../monaco', async () => (await import('../../test/monacoMock')).fakeMonacoModule());
+
 const SIZES = { sidebar: 260, right: 360, bottom: 240 };
 const CONNECTED: DaemonStatus = { state: 'connected', port: 3700, owned: true, daemon: { version: '0.12.3', contract: 1 } };
 
@@ -68,7 +71,7 @@ describe('the view stubs', () => {
     expect(await screen.findByText('Ship the frame')).toBeInTheDocument();
     expect(within(screen.getByRole('complementary', { name: 'Plan' })).getByRole('heading', { name: 'Needs you' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Message the planner' })).toBeInTheDocument();
-    expect(screen.getByRole('banner')).toHaveTextContent('Checkout');
+    expect(screen.getByRole('banner')).toHaveTextContent('Your checkout');
     expect(screen.getByRole('group', { name: 'Plan view' })).toBeInTheDocument();
 
     act(() => store.api.openTab({ kind: 'diff', id: 'src/a.ts', title: 'a.ts', scope: { kind: 'integration', sessionId: 's1' } }));

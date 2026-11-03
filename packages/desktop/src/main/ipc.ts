@@ -1,4 +1,5 @@
-import { BrowserWindow, dialog, ipcMain, nativeTheme, type IpcMainInvokeEvent, type WebContents } from 'electron';
+import { spawn } from 'node:child_process';
+import { BrowserWindow, dialog, ipcMain, nativeTheme, shell, type IpcMainInvokeEvent, type WebContents } from 'electron';
 import { CHANNELS, EVENTS, type AppInfo, type ConfirmSpec, type StreamDelivery, type StreamEvent } from '../shared/bridge';
 import { isAppPage } from '../shared/csp';
 import { buildRequest, childStreamPath, sessionStreamPath, type BuildResult } from '../shared/routes';
@@ -6,6 +7,7 @@ import type { DaemonManager } from './daemon/DaemonManager';
 import type { DaemonProxy } from './daemon/proxy';
 import { validPref, type PrefsStore } from './prefs';
 import type { RecentsStore } from './recents';
+import { Shell } from './shell';
 import type { UpdateController } from './updater';
 import type { WindowManager } from './windows';
 
@@ -175,6 +177,27 @@ export function registerIpc(deps: IpcDeps): void {
     return next;
   });
   handle(CHANNELS.updateState, () => ({ state: deps.updates.state() }));
+
+  const files = new Shell(
+    {
+      openPath: (path) => shell.openPath(path),
+      showItemInFolder: (path) => { shell.showItemInFolder(path); },
+      launch: (program, args) => new Promise((resolve, reject) => {
+        const child = spawn(program, args, { detached: true, stdio: 'ignore' });
+        child.once('error', reject);
+        child.once('spawn', () => { child.unref(); resolve(); });
+      }),
+    },
+    () => prefs.get().editorCommand,
+  );
+  // The workspace is the window's own, never one the page names (ADR-0060 H6).
+  const workspaceOfCaller = (event: IpcMainInvokeEvent): string => {
+    const context = windows.contextOf(event.sender);
+    if (context?.kind !== 'workspace') throw new Error('Refused: this window has no workspace.');
+    return context.path;
+  };
+  handle(CHANNELS.shellOpenInEditor, (event, target) => files.openInEditor(workspaceOfCaller(event), target));
+  handle(CHANNELS.shellReveal, (event, target) => files.reveal(workspaceOfCaller(event), target));
 
   daemon.onStatus((status) => windows.broadcast(EVENTS.daemonStatus, status));
   nativeTheme.on('updated', () => windows.broadcast(EVENTS.theme, currentTheme()));

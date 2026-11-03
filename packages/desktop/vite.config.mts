@@ -10,6 +10,9 @@ export default defineConfig({
   root: here('./src/renderer'),
   base: './',
   plugins: [react()],
+  // Module workers: Monaco's are bundled as files of the app (renderer/monaco), which
+  // script-src 'self' serves; the default IIFE format cannot import shared chunks.
+  worker: { format: 'es' },
   server: { host: '127.0.0.1', port: 5183, strictPort: true },
   build: {
     outDir: here('./dist/renderer'),

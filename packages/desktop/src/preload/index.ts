@@ -83,6 +83,10 @@ const bridge: OrdewellBridge = {
   update: {
     state: () => ipcRenderer.invoke(CHANNELS.updateState),
   },
+  shell: {
+    openInEditor: (target) => ipcRenderer.invoke(CHANNELS.shellOpenInEditor, target),
+    reveal: (target) => ipcRenderer.invoke(CHANNELS.shellReveal, target),
+  },
 };
 
 contextBridge.exposeInMainWorld('ordewell', bridge);

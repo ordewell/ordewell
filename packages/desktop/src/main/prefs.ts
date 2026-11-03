@@ -1,7 +1,7 @@
 import type { PaneSizes, Prefs } from '../shared/bridge';
 import { readJsonFile, writeJsonFile } from './jsonFile';
 
-export const DEFAULT_PREFS: Prefs = { theme: 'system', panes: { sidebar: 260, right: 360, bottom: 240 } };
+export const DEFAULT_PREFS: Prefs = { theme: 'system', panes: { sidebar: 260, right: 360, bottom: 240 }, editorCommand: '' };
 
 const THEMES: ReadonlySet<string> = new Set(['system', 'light', 'dark']);
 
@@ -18,6 +18,9 @@ function paneSizes(value: unknown): PaneSizes | undefined {
   }
   return sizes as PaneSizes;
 }
+
+/** `editorCommand` is deliberately not here: it is a program to run, so only the user's own file sets it. */
+const FILE_ONLY: ReadonlySet<string> = new Set(['editorCommand']);
 
 /** A key and value as a renderer sent them, checked before anything is written. */
 export function validPref(key: unknown, value: unknown): Partial<Prefs> | undefined {
@@ -37,7 +40,10 @@ export class PrefsStore {
     const stored = readJsonFile(this.file);
     const prefs: Prefs = { ...DEFAULT_PREFS };
     if (typeof stored === 'object' && stored !== null) {
-      for (const [key, value] of Object.entries(stored)) Object.assign(prefs, validPref(key, value));
+      for (const [key, value] of Object.entries(stored)) {
+        Object.assign(prefs, validPref(key, value));
+        if (FILE_ONLY.has(key) && typeof value === 'string' && value.length <= 500) Object.assign(prefs, { [key]: value });
+      }
     }
     return prefs;
   }
