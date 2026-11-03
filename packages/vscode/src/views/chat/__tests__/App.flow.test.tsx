@@ -4,7 +4,7 @@ import { render, screen, act, fireEvent } from '@testing-library/react';
 import type { ResearchStep, SessionMessage } from '@ordewell/core';
 import App from '../App';
 import { activityRows, api, hostBridge, openActivity, post, rowKinds } from './hostBridge';
-import type { HostToWebview } from '../../../shared/protocol';
+import type { HostToWebview } from '@ordewell/ui/protocol';
 
 function send(msg: HostToWebview) {
   post(msg);

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Drive the webview harness with a real `ConversationViewHost` (ADR-0017) and
- * capture screenshots of every state packages/vscode/src/views/chat draws,
+ * capture screenshots of every state packages/ui/src/chat draws,
  * asserting the DOM at each one:
  *
  *   - a reply streams in place as message text, settles, then loses its cursor

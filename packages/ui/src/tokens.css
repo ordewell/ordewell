@@ -1,0 +1,51 @@
+/*
+ * The colours and fonts a host gives the surfaces. styles.css reads only these,
+ * never a host's own variables, so a host themes the chat by setting them and
+ * the VS Code webview does it by pointing each at a --vscode-* variable.
+ *
+ * Load this before styles.css, and a host's mapping after it. A token set to
+ * `initial` has no value of its own: each rule that reads it falls back to a
+ * colour styles.css derives from the base tokens, which is what a host that
+ * maps nothing for it gets. A host's mapping that names a variable its theme
+ * leaves unset produces the same fallback.
+ */
+:root {
+  /* Surfaces */
+  --ow-bg: #0d1117;
+  --ow-bg-sidebar: #161b22;
+  --ow-bg-widget: initial;
+  --ow-bg-overlay: initial;
+  --ow-bg-hover: initial;
+  --ow-bg-input: initial;
+  --ow-bg-code: initial;
+
+  /* Borders. The contrast pair is drawn only by a high-contrast theme. */
+  --ow-border: #30363d;
+  --ow-border-widget: initial;
+  --ow-border-contrast: initial;
+  --ow-border-contrast-active: initial;
+  --ow-sash-hover: initial;
+
+  /* Text */
+  --ow-fg: #e6edf3;
+  --ow-fg-secondary: #8b949e;
+  --ow-fg-placeholder: initial;
+  --ow-fg-link: initial;
+
+  /* Accent: the focus colour, and the fill of a primary button. */
+  --ow-accent: #58a6ff;
+  --ow-accent-emphasis: #1f6feb;
+
+  /* Status */
+  --ow-status-passed: #3fb950;
+  --ow-status-failed: #f85149;
+  --ow-status-warning: #d2991d;
+  --ow-status-warning-text: initial;
+  --ow-status-error: initial;
+  --ow-diff-inserted: initial;
+  --ow-diff-removed: initial;
+
+  /* Fonts */
+  --ow-font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'SF Pro Text', Helvetica, Arial, sans-serif;
+  --ow-font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+}

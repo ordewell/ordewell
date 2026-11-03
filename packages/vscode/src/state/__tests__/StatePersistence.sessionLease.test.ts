@@ -7,7 +7,7 @@ import { createSession, createTask, LeaseHost, LEASE_STALE_MS, RunnerRegistry, B
 import type { IAiService, IRunner, LegacyPlanState, ModelResolver, Session } from '@ordewell/core';
 import { fakeConfig, fakeFileSystem } from '@ordewell/core/testing';
 import { ChatViewProvider } from '../../providers/ChatViewProvider';
-import type { HostToWebview } from '../../shared/protocol';
+import type { HostToWebview } from '@ordewell/ui/protocol';
 import { restoreState, saveCurrentSession, type PersistenceDeps } from '../StatePersistence';
 
 const SESSION = 'session-shared';

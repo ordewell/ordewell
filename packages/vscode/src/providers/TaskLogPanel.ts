@@ -1,9 +1,8 @@
 import * as vscode from 'vscode';
 import { accountLimitsOf, assignedRunnerOf, lastServedModel, taskActionCommand, canContinue, taskLogHeaderView, type AccountLimitSnapshot, type CommandOutcome, type DisplayBlock, type ExecutionActor, type ExecutionCommand, type IsolationView, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
 import { EMPTY_TASK_LOG_FOLLOW, followTaskLog } from '@ordewell/core/plan-utils';
-import { diffConversation } from '../shared/conversationPatch';
+import { diffConversation, type HostToTaskLog, type TaskLogStatus, type TaskLogToHost } from '@ordewell/ui/protocol';
 import { renderWebviewHtml } from './webviewHtml';
-import type { HostToTaskLog, TaskLogStatus, TaskLogToHost } from '../shared/taskLogProtocol';
 
 /**
  * The Session calls a task-log panel makes (ADR-0018, M1, A1, K1). Narrowed to

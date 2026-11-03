@@ -28,7 +28,7 @@ import type { SecretStore, ApiProvider } from '../adapters/SecretStore';
 import type { VsCodeConfig } from '../adapters/VsCodeConfig';
 import type { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
 import type { VsCodeNotification } from '../adapters/VsCodeNotification';
-import type { HostToWebview, WebviewToHost } from '../shared/protocol';
+import type { HostToWebview, WebviewToHost } from '@ordewell/ui/protocol';
 import type { ChildPlanHandle } from '@ordewell/core';
 import { __panels, __resetPanels, commands, createFakeWebviewPanel, window } from '../test/vscode.mock';
 

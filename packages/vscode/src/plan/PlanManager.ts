@@ -7,7 +7,7 @@ import {
   taskActionCommand, revertEffect, revertListLine, revertTaskRef, runHoldsEditors, cardEditNeedsUnstarted, confirmedOverride, manualOverrideConfirmation, manualOverrideStopFirst, overrideNeedsConfirmation, titledTaskRefOf, type ExecutionCommand, type OverrideDirection, type TaskAction, type TaskEditOptions,
   recordedRunnerAuth, runnerForProvider, type RunnerInstallation,
 } from '@ordewell/core';
-import type { TaskDraft, TaskEdit, WebviewToHost } from '../shared/protocol';
+import type { TaskDraft, TaskEdit, WebviewToHost } from '@ordewell/ui/protocol';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
 import { VsCodeConfig } from '../adapters/VsCodeConfig';
 import { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';

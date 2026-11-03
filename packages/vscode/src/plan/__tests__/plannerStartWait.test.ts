@@ -9,7 +9,7 @@ import {
 } from '@ordewell/core';
 import { fakeConfig, fakeFileSystem } from '@ordewell/core/testing';
 import { ChatViewProvider } from '../../providers/ChatViewProvider';
-import type { HostToWebview } from '../../shared/protocol';
+import type { HostToWebview } from '@ordewell/ui/protocol';
 import { handleNewSession, handleStartPlanning, handleStopPlanning, type PlanManagerDeps } from '../PlanManager';
 import { routeWebviewMessage, type WebviewRouterDeps } from '../webviewRouter';
 

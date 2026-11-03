@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type * as vscode from 'vscode';
 import { ChatViewProvider } from '../ChatViewProvider';
-import type { HostToWebview } from '../../shared/protocol';
+import type { HostToWebview } from '@ordewell/ui/protocol';
 
 function provider() {
   const posted: HostToWebview[] = [];

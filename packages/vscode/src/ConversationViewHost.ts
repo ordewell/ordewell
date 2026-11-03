@@ -5,8 +5,7 @@ import {
   type ConversationInput, type ConversationView, type DisplayBlock, type GatedConversation, type LocalEntry, type PromptHold,
   type TurnGate,
 } from '@ordewell/core/plan-utils';
-import { diffConversation } from './shared/conversationPatch';
-import type { HostToWebview } from './shared/protocol';
+import { diffConversation, type HostToWebview } from '@ordewell/ui/protocol';
 
 const FLUSH_MS = 30;
 

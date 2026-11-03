@@ -3,9 +3,9 @@ import { DELEGATION_OFFERED, type AccountLimitSnapshot, type GlobalRunSettings, 
 import { ConversationViewHost, type SavedConversation } from '../ConversationViewHost';
 import { RunViewHost } from '../RunViewHost';
 import { renderWebviewHtml } from './webviewHtml';
-import type { ChatState, HostToWebview, ModelOption, PlannerBackend, RunnerMeta, RunnerModeMeta, WebviewToHost } from '../shared/protocol';
+import type { ChatState, HostToWebview, ModelOption, PlannerBackend, RunnerMeta, RunnerModeMeta, WebviewToHost } from '@ordewell/ui/protocol';
 
-export type { PlannerBackend, RunnerMeta } from '../shared/protocol';
+export type { PlannerBackend, RunnerMeta } from '@ordewell/ui/protocol';
 
 // The union core owns, not a copy of it: a hand-maintained duplicate silently
 // diverged the moment ADR-0009 added the three harness planners.

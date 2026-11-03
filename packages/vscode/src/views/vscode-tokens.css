@@ -1,0 +1,38 @@
+/*
+ * The VS Code theme behind @ordewell/ui's tokens. Loaded after tokens.css, so
+ * every token below takes the theme's colour over the package default.
+ *
+ * No fallbacks here, on purpose: a theme that leaves a variable unset makes
+ * the token invalid, and each rule in styles.css then falls back exactly as it
+ * did when it read the --vscode-* variable itself. A fallback here would
+ * replace those per-rule fallbacks with one colour.
+ */
+:root {
+  --ow-bg: var(--vscode-editor-background);
+  --ow-bg-sidebar: var(--vscode-sideBar-background);
+  --ow-bg-widget: var(--vscode-editorWidget-background);
+  --ow-bg-overlay: var(--vscode-quickInput-background);
+  --ow-bg-hover: var(--vscode-list-hoverBackground);
+  --ow-bg-input: var(--vscode-input-background);
+  --ow-bg-code: var(--vscode-textPreformat-background);
+  --ow-border: var(--vscode-panel-border);
+  --ow-border-widget: var(--vscode-widget-border);
+  --ow-border-contrast: var(--vscode-contrastBorder);
+  --ow-border-contrast-active: var(--vscode-contrastActiveBorder);
+  --ow-sash-hover: var(--vscode-sash-hoverBorder);
+  --ow-fg: var(--vscode-foreground);
+  --ow-fg-secondary: var(--vscode-descriptionForeground);
+  --ow-fg-placeholder: var(--vscode-input-placeholderForeground);
+  --ow-fg-link: var(--vscode-textLink-foreground);
+  --ow-accent: var(--vscode-focusBorder);
+  --ow-accent-emphasis: var(--vscode-button-background);
+  --ow-status-passed: var(--vscode-testing-iconPassed);
+  --ow-status-failed: var(--vscode-testing-iconFailed);
+  --ow-status-warning: var(--vscode-editorWarning-foreground);
+  --ow-status-warning-text: var(--vscode-list-warningForeground);
+  --ow-status-error: var(--vscode-errorForeground);
+  --ow-diff-inserted: var(--vscode-diffEditor-insertedLineBackground);
+  --ow-diff-removed: var(--vscode-diffEditor-removedLineBackground);
+  --ow-font-sans: var(--vscode-font-family);
+  --ow-font-mono: var(--vscode-editor-font-family);
+}

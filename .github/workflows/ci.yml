@@ -137,10 +137,10 @@ jobs:
         if: needs.scope.outputs.packages != 'false'
         run: npm run test:bench
 
-      - name: Build (vscode, cli & web)
+      - name: Build (ui, vscode, cli & web)
         id: build-rest
         if: needs.scope.outputs.packages != 'false'
-        run: npm run build -w packages/vscode -w packages/cli -w packages/web --if-present
+        run: npm run build -w packages/ui -w packages/vscode -w packages/cli -w packages/web --if-present
 
       # The extension integration test drives a real VS Code instance. Cache the
       # ~320 MB download so only the first run on a new VS Code version pays for

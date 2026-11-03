@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { latestTaskCommands } from '../shared/taskCommands';
 import type { RunnerId } from '@ordewell/core';
-import type { ChildCheckpointAnswer, SettingsChange, WebviewToHost } from '../shared/protocol';
+import type { ChildCheckpointAnswer, SettingsChange, WebviewToHost } from '@ordewell/ui/protocol';
 import { isKnownSlashCommand } from '../commands/SlashParser';
 import { handleIsolationAction } from './isolation';
 import {

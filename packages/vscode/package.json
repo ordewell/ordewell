@@ -340,7 +340,8 @@
     }
   },
   "dependencies": {
-    "@ordewell/core": "^0.12.3"
+    "@ordewell/core": "^0.12.3",
+    "@ordewell/ui": "^0.12.3"
   },
   "devDependencies": {
     "@testing-library/dom": "^10.4.1",
