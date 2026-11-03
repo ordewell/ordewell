@@ -264,7 +264,7 @@ describe('what only a person can start', () => {
       [{ id: MERGE_ALL, kind: 'merge-all', options: ['merge-all'] }]],
     ['a merge owed beside a failure the run ended on', [task('t1', 1, { status: 'completed' }), task('t2', 2, { status: 'failed' })], { attempts: { t2: 1 }, run: { merge, id: 'r1' } },
       [{ id: 'failed:t2:1', kind: 'failed', options: ['retry', 'skip', 'complete'] }, { id: MERGE_ALL, kind: 'merge-all', options: ['merge-all'] }]],
-    ['a run a dirty checkout turned away, first', [task('t1', 1, { status: 'failed' })], { attempts: { t1: 1 }, run: { blocked: 4, advancing: true } },
+    ['a run a dirty checkout turned away, first', [task('t1', 1, { status: 'failed' })], { attempts: { t1: 1 }, run: { blocked: { start: 4, repos: ['.'] }, advancing: true } },
       [{ id: 'blocked-run:4', kind: 'blocked-run', options: ['stash', 'run-without-isolation'] }, { id: 'failed:t1:1', kind: 'failed', options: ['retry', 'skip'] }]],
   ])('%s', (_name, tasks, setup, expected) => {
     expect(shape(listFor(tasks, setup))).toEqual(expected);
@@ -403,6 +403,13 @@ describe('what an id names', () => {
   });
 
   it('keeps the attempt alone in naming a run\'s own waits', () => {
-    expect(ids([], { run: { blocked: 3 } })).toEqual(['blocked-run:3']);
+    expect(ids([], { run: { blocked: { start: 3, repos: ['.'] } } })).toEqual(['blocked-run:3']);
+  });
+
+  it('names the dirty repositories of a blocked run, for the card to list their changes (ADR-0062 G9)', () => {
+    const [single] = listFor([], { run: { blocked: { start: 1, repos: ['.'] } } });
+    expect(single).toMatchObject({ repos: ['.'], reason: 'Tracked files have uncommitted changes, so tasks cannot run in isolated worktrees.' });
+    const [group] = listFor([], { run: { blocked: { start: 2, repos: ['web', 'api'] } } });
+    expect(group).toMatchObject({ repos: ['web', 'api'], reason: 'Tracked files have uncommitted changes in web, api, so tasks cannot run in isolated worktrees.' });
   });
 });

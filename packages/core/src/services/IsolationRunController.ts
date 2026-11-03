@@ -265,6 +265,8 @@ export class IsolationRunController {
 
   /** How many starts a dirty tree has turned away: what tells one wait on it from the next (ADR-0053). */
   get blockedStarts(): number { return this.turnedAway; }
+  /** The repositories whose tracked changes turned the parked start away, `.` for the workspace's own. */
+  get blockedIn(): string[] { return this.blockedRepos.length > 0 ? [...this.blockedRepos] : ['.']; }
 
   /** What the plan persists of isolated execution; null when no run ever isolated. */
   get planIsolation(): PlanIsolation | null {

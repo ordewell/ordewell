@@ -12,6 +12,7 @@ import {
   SessionHeldError,
   SessionNotFoundError,
   TaskControlError,
+  UserGitError,
   WorkspaceNotAProjectError,
   WorkspaceNotFoundError,
   WorkspaceReadError,
@@ -92,6 +93,13 @@ function classify(err: unknown): Classified | undefined {
     if (err.code === 'path_not_found') return { status: 404, code: 'path_not_found' };
     return { status: 400, code: 'refused' };
   }
+  // A user git action (ADR-0062): what changed under the person, or a run
+  // holding the branch, is a bad moment (409); git's own refusal (a hook, a
+  // rejected push) is the person's repository answering, not a daemon fault.
+  if (err instanceof UserGitError) {
+    if (err.code === 'landing_branch_held' || err.code === 'confirm_stale' || err.code === 'stale') return { status: 409, code: err.code };
+    return { status: 400, code: err.code };
+  }
   if (err instanceof ConversationEditError || err instanceof PlanEditError || err instanceof TaskControlError) {
     return { status: 400, code: 'refused' };
   }
@@ -127,6 +135,8 @@ export function failure(
     ...(err instanceof WorkspaceNotAProjectError ? { workspace: err.workspace } : {}),
     ...(err instanceof PlannerNotReadyError ? { plannerNotReady: err.reason } : {}),
     ...(err instanceof SessionHeldError ? { sessionHeld: err.held } : {}),
+    ...(err instanceof UserGitError && err.detail.held ? { landingBranchHeld: err.detail.held } : {}),
+    ...(err instanceof UserGitError && err.detail.difference ? { confirmStale: err.detail.difference } : {}),
   };
   return c.json(body, status);
 }

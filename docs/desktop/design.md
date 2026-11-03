@@ -1002,7 +1002,7 @@ have today, with the ADR that governs it; the rest exist.
 | POST | `/api/git/discard` | `paths` or `hunks`, `confirm { files }` | **new** — ADR-0062 G3 |
 | POST | `/api/git/branch`, `/api/git/switch` | `name`, `from?` / `branch` | **new** — ADR-0062 G1, G7 |
 | POST | `/api/git/branch-delete` | `branch`, `confirm { branch, unmerged }` | **new** — ADR-0062 G3, G7 |
-| POST | `/api/git/stash`, `/api/git/stash-pop` | `paths?`, `message?` / `stash` | **new** — ADR-0062 |
+| POST | `/api/git/stash`, `/api/git/stash-pop`, `/api/git/stash-drop` | `paths?`, `message?` / `stash` | **new** — ADR-0062 |
 | POST | `/api/git/fetch`, `/api/git/pull`, `/api/git/push` | `confirm { remote, branch }` for pull and push | **new** — ADR-0062 G3, G5 |
 | GET | `/api/plans/:sessionId/isolation/merge-preflight` | per repo: `repo`, `branch`, `overlap[]`, `otherDirty` | **new** — ADR-0062 G8 |
 
@@ -1075,11 +1075,14 @@ existing surface working. "Done" means what the slice's own task proves.
    the activity bar, sidebar, tabs (preview, pin, split), title bar with native
    chrome, planner panel, status bar, command palette, light and dark. Done:
    the frame with empty views; token contrast pairs tested.
-7. **Packaging and CI.** electron-builder for dmg (arm64, x64), NSIS (x64),
-   AppImage and deb (x64), unsigned; a desktop job in `release.yml` attaching
-   them to the GitHub Release; auto-update wired and disabled; the build in
-   `scripts/ci.mjs` and `change-scope.mjs`. Done: a tag build produces the five
-   installers.
+7. **Packaging and CI.** electron-builder for dmg and zip (arm64, x64), NSIS
+   (x64), AppImage and deb (x64), unsigned (macOS ad hoc: the fuses rewrite the
+   executable, and an arm64 Mac refuses one whose seal is broken); a desktop job
+   in `release.yml` attaching them to the GitHub Release; auto-update wired and
+   disabled; the build in `scripts/ci.mjs` and `change-scope.mjs`. Done: a tag
+   build produces the seven installers. node-pty's native rebuild is left to
+   the slice that needs a terminal (the `REBUILD NODE-PTY` marker in
+   `packages/desktop/scripts/package.mjs`).
 8. **Session view.** W2, W3, W4, W6, W14, W17: planning, approval, the List
    with full row parity, the task tab, restored and failed states, one window
    per workspace (H6), welcome (W1).

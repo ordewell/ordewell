@@ -1,17 +1,51 @@
-# Packaging for the desktop app. Signing, notarization and the update feed
-# arrive with their own slices; this file fixes what every build must have.
+# Packaging for the desktop app (docs/desktop/design.md, Distribution).
+# `npm run desktop:package` runs this for the current OS; release.yml runs it on
+# each OS and attaches the installers to the GitHub Release.
 appId: ai.ordewell.desktop
 productName: Ordewell
+copyright: Copyright © Alessandro Costanzo Ciano
 directories:
   output: release
-  buildResources: resources
+  # Icons come from the logo mark: scripts/app-icon.mjs writes build/.
+  buildResources: build
 files:
   - dist/**/*
   - resources/**/*
   - package.json
 asar: true
+# The licence, NOTICE and authors travel with the installer as they do with
+# each npm package (scripts/verify-notice.mjs); Electron adds its own.
+extraResources:
+  - from: ../../LICENSE
+    to: LICENSE
+  - from: ../../NOTICE
+    to: NOTICE
+  - from: ../../AUTHORS.md
+    to: AUTHORS.md
+# The daemon runs as a utility process: a separate Node process that reads its
+# script and modules from disk and cannot see inside app.asar. So the whole
+# production closure (@ordewell/web, @ordewell/core, hono, ws, ...) is unpacked
+# beside the archive, and forkDaemon.ts points at app.asar.unpacked
+# (unpackedFromAsar). The app's own code stays in the archive, which the
+# integrity fuse below covers.
+asarUnpack:
+  - node_modules/**/*
+# Installers are named by product, version, OS and architecture, so the files
+# one release carries never collide: the same name is what the update feed lists.
+artifactName: Ordewell-${version}-${os}-${arch}.${ext}
+# node-pty's native rebuild belongs here, and a later task adds it. The addon
+# is a dependency already, but nothing builds it against Electron yet:
+#   - set `npmRebuild: true` or call @electron/rebuild from scripts/package.mjs
+#     (the REBUILD NODE-PTY marker there), once a terminal view needs it;
+#   - Linux ships no prebuilt binary, so that build needs make, g++ and python.
+npmRebuild: false
+# No signing identity is required: with none configured the build is unsigned
+# and succeeds (scripts/package.mjs turns identity discovery off). Signing and
+# notarization arrive with their own slice, and auto-update stays off until then
+# (AUTO_UPDATE_ENABLED in src/main/updater.ts).
 # ADR-0060 H4: the binary itself refuses the ways a packaged Electron app can
-# be made to run code that is not its own.
+# be made to run code that is not its own. Applied by electron-builder after it
+# unpacks the Electron distribution, before the app is signed.
 electronFuses:
   runAsNode: false
   enableNodeOptionsEnvironmentVariable: false
@@ -21,10 +55,42 @@ electronFuses:
   onlyLoadAppFromAsar: true
   grantFileProtocolExtraPrivileges: false
   loadBrowserProcessSpecificV8Snapshot: false
+# The feed electron-updater reads once updates are enabled. `--publish never`
+# keeps electron-builder from uploading: release.yml attaches the installers.
+publish:
+  provider: github
+  owner: ordewell
+  repo: ordewell
+  releaseType: release
 mac:
   category: public.app-category.developer-tools
-  target: dir
-linux:
-  target: dir
+  icon: icon.icns
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+dmg:
+  title: Ordewell ${version}
 win:
-  target: dir
+  icon: icon.ico
+  target:
+    - target: nsis
+      arch: [x64]
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+linux:
+  icon: icons
+  # Not `ordewell`: the deb links its executable into /usr/bin, where the
+  # CLI of that name lives.
+  executableName: ordewell-desktop
+  category: Development
+  synopsis: Turn one goal into an ordered plan of coding-agent tasks.
+  maintainer: Alessandro Costanzo Ciano
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]

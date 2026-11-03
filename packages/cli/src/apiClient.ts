@@ -13,6 +13,7 @@ import type {
   ChildPlanResponse,
   ChildTaskControlResponse,
   ChildTreeFrame,
+  ConfirmDifference,
   ContainerChange,
   ContainerChangeResponse,
   ContainerStatus,
@@ -29,6 +30,18 @@ import type {
   FileContentResponse,
   FileFindResponse,
   FileTreeResponse,
+  FileSaveRequest,
+  GitActionResponse,
+  GitBranchCreateRequest,
+  GitBranchDeleteRequest,
+  GitChangesRequest,
+  GitCommitRequest,
+  GitDiscardRequest,
+  GitRemoteRequest,
+  GitStashRequest,
+  LandingBranchHeld,
+  MergePreflightResponse,
+  UserGitTarget,
   GitBranchesResponse,
   GitCommitResponse,
   GitDiffResponse,
@@ -109,6 +122,10 @@ export class DaemonError extends Error {
     readonly plannerNotReady?: PlannerNotReady,
     /** With `session_held`: the host that runs the session (ADR-0049). */
     readonly sessionHeld?: SessionHeld,
+    /** With `landing_branch_held`: the live run that lands on the branch (ADR-0062 G7). */
+    readonly landingBranchHeld?: LandingBranchHeld,
+    /** With `confirm_stale`: what the person was shown against what is there now (ADR-0062 G3). */
+    readonly confirmStale?: ConfirmDifference,
   ) {
     super(message);
     this.name = 'DaemonError';
@@ -226,9 +243,9 @@ const SESSION_PATH = /^\/api\/(?:plans|sessions)\/([^/?]+)/;
 
 /** A non-200 answer as an error. The body is not trusted to be JSON: an HTML error page arrives as a string. */
 function daemonError(status: number, data: unknown, fallback: string): DaemonError {
-  const { error, code, workspace, plannerNotReady, sessionHeld } = (typeof data === 'object' && data !== null ? data : {}) as Partial<ErrorBody>;
+  const { error, code, workspace, plannerNotReady, sessionHeld, landingBranchHeld, confirmStale } = (typeof data === 'object' && data !== null ? data : {}) as Partial<ErrorBody>;
   if (code === 'workspace_not_a_project') return new WorkspaceInitNeededError(error || 'Not a project directory', workspace ?? '');
-  return new DaemonError(error || fallback, status, code, plannerNotReady, sessionHeld);
+  return new DaemonError(error || fallback, status, code, plannerNotReady, sessionHeld, landingBranchHeld, confirmStale);
 }
 
 /** A read's target (ADR-0061), its workspace the client's own unless named. */
@@ -604,6 +621,78 @@ export class ApiClient {
   getTaskDiff(sessionId: string, taskId: string, options: { workspace?: string; repo?: string; path?: string; names?: boolean } = {}): Promise<TaskDiffResponse> {
     const { workspace, repo, path, names } = options;
     return this.read(`/api/plans/${sessionId}/tasks/${encodeURIComponent(taskId)}/diff`, { workspace, repo }, { path, names: names ? '1' : undefined }, 'Could not read the task\'s diff');
+  }
+
+  /** Saves a file read at `baseHash` (ADR-0062 G10); a file changed since answers `stale`. */
+  saveFile(target: UserGitTarget, file: Omit<FileSaveRequest, keyof UserGitTarget>): Promise<GitActionResponse> {
+    return this.act('PUT', '/api/files/content', target, file, 'Could not save the file');
+  }
+
+  gitStage(target: UserGitTarget, changes: Omit<GitChangesRequest, keyof UserGitTarget>): Promise<GitActionResponse> {
+    return this.act('POST', '/api/git/stage', target, changes, 'Could not stage');
+  }
+
+  gitUnstage(target: UserGitTarget, changes: Omit<GitChangesRequest, keyof UserGitTarget>): Promise<GitActionResponse> {
+    return this.act('POST', '/api/git/unstage', target, changes, 'Could not unstage');
+  }
+
+  gitCommit(target: UserGitTarget, commit: Omit<GitCommitRequest, keyof UserGitTarget>): Promise<GitActionResponse> {
+    return this.act('POST', '/api/git/commit', target, commit, 'Could not commit');
+  }
+
+  gitDiscard(target: UserGitTarget, discard: Omit<GitDiscardRequest, keyof UserGitTarget>): Promise<GitActionResponse> {
+    return this.act('POST', '/api/git/discard', target, discard, 'Could not discard');
+  }
+
+  gitCreateBranch(target: UserGitTarget, branch: Omit<GitBranchCreateRequest, keyof UserGitTarget>): Promise<GitActionResponse> {
+    return this.act('POST', '/api/git/branch', target, branch, 'Could not create the branch');
+  }
+
+  /** Refused with `landing_branch_held` while a live run lands on the branch checked out now (ADR-0062 G7). */
+  gitSwitch(target: UserGitTarget, branch: string): Promise<GitActionResponse> {
+    return this.act('POST', '/api/git/switch', target, { branch }, 'Could not switch branch');
+  }
+
+  gitDeleteBranch(target: UserGitTarget, branch: string, confirm: GitBranchDeleteRequest['confirm']): Promise<GitActionResponse> {
+    return this.act('POST', '/api/git/branch-delete', target, { branch, confirm }, 'Could not delete the branch');
+  }
+
+  /** The answer's `stash` names the stash made, by the sha `gitStashPop` and `gitStashDrop` take. */
+  gitStash(target: UserGitTarget, stash: Omit<GitStashRequest, keyof UserGitTarget> = {}): Promise<GitActionResponse> {
+    return this.act('POST', '/api/git/stash', target, stash, 'Could not stash');
+  }
+
+  gitStashPop(target: UserGitTarget, stash: string): Promise<GitActionResponse> {
+    return this.act('POST', '/api/git/stash-pop', target, { stash }, 'Could not apply the stash');
+  }
+
+  gitStashDrop(target: UserGitTarget, stash: string): Promise<GitActionResponse> {
+    return this.act('POST', '/api/git/stash-drop', target, { stash }, 'Could not drop the stash');
+  }
+
+  gitFetch(target: UserGitTarget): Promise<GitActionResponse> {
+    return this.act('POST', '/api/git/fetch', target, {}, 'Could not fetch');
+  }
+
+  /** `confirm` is the tracking remote and branch the person was shown. */
+  gitPull(target: UserGitTarget, confirm: GitRemoteRequest['confirm']): Promise<GitActionResponse> {
+    return this.act('POST', '/api/git/pull', target, { confirm }, 'Could not pull');
+  }
+
+  gitPush(target: UserGitTarget, confirm: GitRemoteRequest['confirm']): Promise<GitActionResponse> {
+    return this.act('POST', '/api/git/push', target, { confirm }, 'Could not push');
+  }
+
+  /** Per repository, the user's uncommitted files Merge all would collide with (ADR-0062 G8). */
+  mergePreflight(sessionId: string, workspace?: string): Promise<MergePreflightResponse> {
+    const query = new URLSearchParams({ workspace: workspace ?? this.workspace });
+    return this.call('GET', `/api/plans/${sessionId}/isolation/merge-preflight?${query.toString()}`, 'Could not read the run');
+  }
+
+  /** A user git action's body: its target first, its workspace the client's own unless named, then the action's own fields. */
+  private act(method: string, route: string, target: UserGitTarget, fields: object, fallback: string): Promise<GitActionResponse> {
+    const scope = { workspace: target.workspace ?? this.workspace, ...(target.repo !== undefined ? { repo: target.repo } : {}) };
+    return this.call(method, route, fallback, { ...scope, ...fields });
   }
 
   /** A user read's query: the target first, as every read route takes it, then the route's own parameters. */

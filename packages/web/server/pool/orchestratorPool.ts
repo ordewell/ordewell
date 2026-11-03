@@ -29,6 +29,9 @@ import {
   RunnerInstallation,
   listSessions,
   loadSession,
+  appendUserAction,
+  processLeaseHost,
+  savedRunLooksLive,
   deleteSession,
   reclaimContainers,
   changeContainers,
@@ -371,6 +374,35 @@ export class OrchestratorPool {
   }
 
   hasSession(sessionId: string): boolean { return this.sessions.has(sessionId); }
+
+  /** The session open here under this id for this workspace, if any: an id names a session only within its workspace. */
+  private heldHere(sessionId: string, workspace: string): Session | undefined {
+    const held = this.sessionWorkspaces.get(sessionId);
+    return held !== undefined && resolve(held) === resolve(workspace) ? this.sessions.get(sessionId) : undefined;
+  }
+
+  /**
+   * Whether a session's run holds its landing branch (ADR-0062 G7): this
+   * host's own word for a session open here; for one another live host holds,
+   * the saved record, which is all a non-holder can read; and for one nobody
+   * holds, nothing is at work.
+   */
+  userRunIsLive(sessionId: string, workspace: string, plan: LegacyPlanState): boolean {
+    const session = this.heldHere(sessionId, workspace);
+    if (session) return session.runIsLive;
+    return (this.leaseHost ?? processLeaseHost()).peek(sessionId, workspace) !== null && savedRunLooksLive(plan);
+  }
+
+  /**
+   * A user git action into the session's timeline (ADR-0062 G6): straight in
+   * for a session open here, else left in its directory for whichever host
+   * holds it, or next opens it, to fold (ADR-0049 L5).
+   */
+  recordUserAction(sessionId: string, workspace: string, text: string): void {
+    const session = this.heldHere(sessionId, workspace);
+    if (session?.planState) session.recordUserAction(text);
+    else appendUserAction(sessionId, workspace, { text, at: new Date().toISOString() });
+  }
 
   /** Answer an approval prompt, the planner's or a task runner's. False means the id was unknown or already settled. */
   resolveApproval(sessionId: string, approvalId: string, answer: ApprovalAnswer): boolean {
@@ -1054,6 +1086,8 @@ export class OrchestratorPool {
     // A live session with no plan yet is mid-planning; replacing it must stop that turn.
     this.destroy(sessionId);
     this.registerSession(sessionId, workspace, session);
+    // What another host recorded while it held the session, before this one took it (ADR-0062 G6).
+    session.foldUserActions();
 
     return session.planState ?? saved.plan;
   }

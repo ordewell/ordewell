@@ -6,12 +6,22 @@ import { daemonLogPath, daemonPidFilePath } from '@ordewell/core/daemon-client';
 import type { OwnedProcess } from './DaemonManager';
 
 /**
+ * A utility process is a separate Node process: it reads the script from disk
+ * and cannot see inside `app.asar`. electron-builder.yml unpacks the daemon's
+ * files next to the archive, so a path `require.resolve` found inside it is
+ * the same path with `app.asar.unpacked`.
+ */
+export function unpackedFromAsar(path: string): string {
+  return path.replace(/([\\/])app\.asar(?=[\\/])/, '$1app.asar.unpacked');
+}
+
+/**
  * The daemon entry this app bundles: @ordewell/web's built server. A source
  * checkout without a linked package falls back to the sibling workspace.
  */
 export function bundledDaemonEntry(): string {
   try {
-    return join(dirname(require.resolve('@ordewell/web/package.json')), 'dist', 'server', 'main.js');
+    return unpackedFromAsar(join(dirname(require.resolve('@ordewell/web/package.json')), 'dist', 'server', 'main.js'));
   } catch {
     return join(__dirname, '..', '..', '..', 'web', 'dist', 'server', 'main.js');
   }

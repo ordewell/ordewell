@@ -83,7 +83,8 @@ export interface Prefs {
 }
 
 export interface UpdateState {
-  state: 'disabled';
+  /** `disabled` until installers are signed (ADR-0060): the app never fetches an update on its own. */
+  state: 'disabled' | 'checking';
 }
 
 export type Unsubscribe = () => void;

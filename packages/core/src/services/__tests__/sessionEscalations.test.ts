@@ -280,6 +280,7 @@ describe('the run\'s own waits', () => {
     await env.start();
 
     expect(env.session.escalations().map((e) => e.kind)).toEqual(['blocked-run']);
+    expect(env.session.escalations()[0].repos).toEqual(['.']);
     env.expectStreamed();
     isolation.availability = { active: true };
 
@@ -289,6 +290,16 @@ describe('the run\'s own waits', () => {
     await vi.waitFor(() => expect(env.latest('t1')).toBeDefined());
     expect(env.ids()).toEqual([]);
     env.expectStreamed();
+  });
+
+  it('names the dirty repositories of a group on the blocked run (ADR-0062 G9)', async () => {
+    const isolation = new FakeWorktreeIsolation();
+    isolation.availability = { active: false, reason: 'dirty', repos: ['web', 'api'] };
+    const env = setup(isolation);
+    env.load([task('t1', 1)]);
+    await env.start();
+
+    expect(env.session.escalations()).toMatchObject([{ kind: 'blocked-run', repos: ['web', 'api'], reason: expect.stringContaining('in web, api') }]);
   });
 
   it('adds a resolver task for a landing conflict', async () => {
