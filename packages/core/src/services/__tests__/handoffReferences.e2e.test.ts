@@ -6,7 +6,7 @@ import { execFileSync } from 'child_process';
 import { createTask } from '../../models/Task';
 import type { IRunner } from '../../interfaces/IRunner';
 import { openTaskLog, readTaskLog } from '../../utils/taskLogStore';
-import { makeSession, FakeRunnerSession } from './sessionTestKit';
+import { closeSessions, makeSession, FakeRunnerSession } from './sessionTestKit';
 
 it('resolves file and commit claims on pull, marks missing or escaping claims unresolved, and checks again on the next read', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-reference-'));
@@ -49,7 +49,7 @@ it('resolves file and commit claims on pull, marks missing or escaping claims un
     expect((await read({ task: 'a' })).text).toContain('present.ts (unresolved)');
     expect(session.taskLog('a', 1).find((e) => e.type === 'handoff')).toMatchObject({ handoff: { artifacts: [{ resolved: false }, { resolved: false }, { resolved: false }, { resolved: true }, { resolved: false }] } });
   } finally {
-    session.destroy();
+    await closeSessions();
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(outside, { recursive: true, force: true });
   }

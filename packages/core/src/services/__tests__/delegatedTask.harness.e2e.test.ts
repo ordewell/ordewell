@@ -11,7 +11,7 @@ import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import { fakeConfig } from '../../testing';
 import { loadChildSession, saveSession } from '../../utils/sessionStore';
 import { openTaskLog } from '../../utils/taskLogStore';
-import { fakeFs, makeSession } from './sessionTestKit';
+import { closeSessions, fakeFs, makeSession } from './sessionTestKit';
 
 /*
  * The same climb as delegatedTask.e2e, with nothing of the harness faked but its
@@ -32,13 +32,14 @@ const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd,
 const dirs: string[] = [];
 const savedPath = process.env.PATH;
 const savedState = process.env.FAKE_CLAUDE_STATE;
-afterEach(() => {
+afterEach(async () => {
+  await closeSessions();
   process.env.PATH = savedPath;
   if (savedState === undefined) delete process.env.FAKE_CLAUDE_STATE;
   else process.env.FAKE_CLAUDE_STATE = savedState;
   delete process.env.FAKE_CLAUDE_LOG;
   delete process.env.FAKE_CLAUDE_REFUSE_RESUME;
-  while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true });
+  while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 });
 
 function tempDir(): string {

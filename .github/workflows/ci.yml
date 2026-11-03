@@ -5,6 +5,9 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  # release.yml waits for a full run of this workflow before it publishes. A
+  # called workflow sees the caller's event, a push, which never narrows.
+  workflow_call:
 
 # A new push to a PR makes the in-flight run obsolete; don't pay for it.
 concurrency:
@@ -12,6 +15,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # What this event has to prove (scripts/change-scope.mjs). Only a pull request
+  # is narrowed, and every path it cannot judge means the full run.
+  #
+  # Each step below it runs unless its check is exactly 'false', so a scope job
+  # that fails or loses an output leaves everything running. `required-checks`
+  # is what branch protection must require: a skipped job reads as a pass to
+  # GitHub, so that job judges the others by what the change owed them.
+  scope:
+    runs-on: ubuntu-latest
+    outputs:
+      scope: ${{ steps.select.outputs.scope }}
+      packages: ${{ steps.select.outputs.packages }}
+      sandbox: ${{ steps.select.outputs.sandbox }}
+      planner: ${{ steps.select.outputs.planner }}
+      integration: ${{ steps.select.outputs.integration }}
+      engine: ${{ steps.select.outputs.engine }}
+      coverage_args: ${{ steps.select.outputs.coverage_args }}
+
+    steps:
+      # Two commits: a pull_request run checks out a merge, and its first
+      # parent is the main this change is really being merged into.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - name: Work out what this change needs
+        id: select
+        env:
+          EVENT: ${{ github.event_name }}
+        run: node scripts/ci-scope.mjs select
+
   # Linux only, deliberately.
   #
   # Ordewell supports macOS and Windows (ADR-0010) and it would be better to
@@ -27,7 +61,11 @@ jobs:
   # What is still unproven off Linux is the test suite, which assumes a POSIX
   # shell, git and sealed runs. A matrix therefore waits for that, not for npm.
   build-and-test:
+    needs: scope
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    outputs:
+      confirmed: ${{ steps.confirm.outputs.confirmed }}
 
     # Nothing in CI may reach ordewell.ai (ADR-0048): the integration test
     # starts the real extension, and every step's children inherit this.
@@ -47,6 +85,7 @@ jobs:
         run: npm ci
 
       - name: Build (core first — cli, web and vscode compile against its dist/)
+        id: build-core
         run: npm run build:core
 
       # The unit tests only prove the arguments bubblewrap is given; these
@@ -55,17 +94,28 @@ jobs:
       # users, then ORDEWELL_REQUIRE_SANDBOX makes a probe that still fails a
       # test failure rather than a skip.
       - name: Planner sandbox — real bubblewrap e2e
+        id: sandbox
+        if: needs.scope.outputs.sandbox != 'false'
         run: bash scripts/linux-sandbox-e2e.sh
 
       # Skills seeding, slash invocation and the settings migration, each run
       # against the built core in a throwaway HOME.
       - name: Verify scripts (offline, against the built core)
+        id: verify-scripts
         run: |
           for f in scripts/verify-*.mjs; do
             node "$f" || exit 1
           done
 
+      # Tests in core that read every tracked file. Docs alone can break them,
+      # so they do not wait for core to be selected.
+      - name: Repository-wide guards
+        id: repo-guards
+        run: npm run test:guards
+
       - name: Planner conversation loop — offline e2e (mock model, no API key)
+        id: planner-loop
+        if: needs.scope.outputs.planner != 'false'
         run: |
           node bench/live/mock-provider.mjs &
           MOCK_PID=$!
@@ -81,10 +131,15 @@ jobs:
       # node:test suites, not vitest: the runner-detection lab makes the real
       # install probe run against shimmed CLIs in a throwaway HOME, and the
       # pipeline test drives plan -> execute -> verify through the fake claude.
+      # scripts/*.test.mjs run here too, selection's own among them.
       - name: Bench harness tests (offline, against the built core)
+        id: bench
+        if: needs.scope.outputs.packages != 'false'
         run: npm run test:bench
 
       - name: Build (vscode, cli & web)
+        id: build-rest
+        if: needs.scope.outputs.packages != 'false'
         run: npm run build -w packages/vscode -w packages/cli -w packages/web --if-present
 
       # The extension integration test drives a real VS Code instance. Cache the
@@ -97,18 +152,21 @@ jobs:
       # it resolves and key the cache on the version being tested.
       - name: Resolve the VS Code version under test
         id: vscode-version
+        if: needs.scope.outputs.integration != 'false'
         run: |
           version=$(node -e "fetch('https://update.code.visualstudio.com/api/releases/stable?released=true').then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); }).then((v) => process.stdout.write(String(v[0])))")
           echo "VS Code under test: $version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Cache the VS Code download
+        if: needs.scope.outputs.integration != 'false'
         uses: actions/cache@v4
         with:
           path: packages/vscode/.vscode-test
           key: vscode-test-${{ runner.os }}-${{ steps.vscode-version.outputs.version }}
 
       - name: Install xvfb if the image lacks it
+        if: needs.scope.outputs.integration != 'false'
         run: |
           if ! command -v xvfb-run >/dev/null 2>&1; then
             sudo apt-get update
@@ -116,6 +174,8 @@ jobs:
           fi
 
       - name: VS Code integration test (synthetic runner — no API key)
+        id: vscode-integration
+        if: needs.scope.outputs.integration != 'false'
         env:
           ORDEWELL_TEST_WORKSPACE: ${{ runner.temp }}/ordewell-integration-workspace
         run: |
@@ -123,6 +183,8 @@ jobs:
           xvfb-run -a npm run test:integration -w ordewell
 
       - name: Typecheck
+        id: typecheck
+        if: needs.scope.outputs.packages != 'false'
         run: npm run typecheck
 
       # Coverage is report-only for the codebase as a whole: no overall
@@ -130,14 +192,21 @@ jobs:
       # a per-file floor on the modules the seam refactors introduced (see
       # `thresholds` in packages/core/vitest.config.ts), set at each file's
       # measured value so those seams cannot quietly lose their tests.
+      #
+      # A selected run names its workspaces; with none named this is the root
+      # script, every workspace. COVERAGE_ARGS is left unquoted to split them.
       - name: Test with coverage
+        id: coverage
+        if: needs.scope.outputs.packages != 'false'
         shell: bash
+        env:
+          COVERAGE_ARGS: ${{ needs.scope.outputs.coverage_args }}
         run: |
           set -o pipefail
-          npm run test:coverage 2>&1 | tee coverage.log
+          npm run test:coverage $COVERAGE_ARGS --if-present 2>&1 | tee coverage.log
 
       - name: Append coverage summaries to the job summary
-        if: always()
+        if: ${{ always() && needs.scope.outputs.packages != 'false' }}
         shell: bash
         run: |
           node --input-type=module - <<'NODE' >> "$GITHUB_STEP_SUMMARY"
@@ -160,7 +229,7 @@ jobs:
           NODE
 
       - name: Upload coverage reports
-        if: always()
+        if: ${{ always() && needs.scope.outputs.packages != 'false' }}
         uses: actions/upload-artifact@v4
         with:
           name: coverage-reports
@@ -168,29 +237,46 @@ jobs:
           if-no-files-found: warn
 
       - name: Lint
+        id: lint
+        if: needs.scope.outputs.packages != 'false'
         run: npm run lint
 
       - name: Package VS Code Extension
+        id: package-vscode
+        if: needs.scope.outputs.packages != 'false'
         run: npm run package -w packages/vscode
 
       # What a user installs: the four npm tarballs and this VSIX. This fails on
       # a missing entry target, a LICENSE or NOTICE npm left out of `files`, a
       # bundle that cannot start, and a third-party notice the VSIX dropped.
       - name: Verify packaged npm and VS Code artifacts
+        id: verify-artifacts
+        if: needs.scope.outputs.packages != 'false'
         run: node scripts/package-check.mjs
 
       - name: Upload .vsix
+        id: upload-vsix
+        if: needs.scope.outputs.packages != 'false'
         uses: actions/upload-artifact@v4
         with:
           name: ordewell-vsix
           path: packages/vscode/*.vsix
           if-no-files-found: error
 
+      - name: Confirm every step this change owed ran
+        id: confirm
+        env:
+          SCOPE: ${{ needs.scope.outputs.scope }}
+          STEPS: ${{ toJSON(steps) }}
+        run: node scripts/ci-scope.mjs confirm
+
   # The container suites on a real Linux engine, with real Claude Code, Codex and
   # OpenCode in the image and a controlled model behind each: no key, no account.
   # `build-and-test` skips them, as its `CI` says to, so this job is what runs
   # them. A test that skips here fails the job (bench/containers/verdict.mjs).
   real-engine:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.engine != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
@@ -211,3 +297,20 @@ jobs:
 
       - name: Real engine — every harness in a real container
         run: npm run test:containers
+
+  # The status to require on main. `always()`: a job that is itself skipped
+  # reports nothing a branch rule can fail on, so this one always concludes.
+  required-checks:
+    name: Required checks
+    if: always()
+    needs: [scope, build-and-test, real-engine]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Require every check this change owed
+        env:
+          EVENT: ${{ github.event_name }}
+          NEEDS: ${{ toJSON(needs) }}
+        run: node scripts/ci-scope.mjs gate

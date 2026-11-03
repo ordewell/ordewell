@@ -127,6 +127,7 @@ const STEPS = {
     }
     return 0;
   },
+  'Repository-wide guards': () => npm('run', 'test:guards'),
   'Planner conversation loop — offline e2e (mock model, no API key)': plannerE2e,
   'Bench harness tests (offline, against the built core)': () => npm('run', 'test:bench'),
   'Build (vscode, cli & web)': () => npm('run', 'build', '-w', 'packages/vscode', '-w', 'packages/cli', '-w', 'packages/web', '--if-present'),
@@ -140,6 +141,9 @@ const STEPS = {
 
 /** Named in ci.yml but not run here, and why. */
 const CI_ONLY = {
+  'Work out what this change needs': 'a local run does not select: it runs every step here',
+  'Confirm every step this change owed ran': 'nothing is skipped here for it to confirm',
+  'Require every check this change owed': 'a GitHub required status',
   'Use Node.js 22.x': 'the local Node is what you have',
   // ci.yml explains why the lockfile does not install cleanly off Linux, and
   // `npm ci` would also wipe the node_modules you are working in.
