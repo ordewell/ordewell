@@ -74,3 +74,17 @@ describe('the desktop job in release.yml', () => {
     assert.doesNotMatch(release.replace(desktop, ''), /needs:.*desktop/);
   });
 });
+
+describe('node-pty in the desktop package (ADR-0062 G11)', () => {
+  const builder = readFileSync('packages/desktop/electron-builder.yml', 'utf8');
+
+  it('is rebuilt for Electron per architecture and unpacked from the archive', () => {
+    assert.match(builder, /^npmRebuild: true$/m);
+    assert.match(builder, /^  - node_modules\/node-pty\/\*\*\/\*$/m);
+  });
+
+  it('is built by the package step that ci.yml and every release.yml runner run', () => {
+    assert.match(job(release, 'desktop'), /run: npm run desktop:package\n/);
+    assert.match(ci, /run: npm run desktop:package\n/);
+  });
+});

@@ -7,8 +7,8 @@
 // user. Run after the package step, as package-check.mjs runs after the VSIX's.
 //
 // The current OS is checked: each release.yml runner proves its own platform.
-import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -44,6 +44,17 @@ export const UNPACKED_ENTRIES = [
   'node_modules/ws/package.json',
 ];
 
+/**
+ * What the terminal's pty needs beside the daemon closure (ADR-0062 G11):
+ * node-pty's addon as electron-builder.yml rebuilds it for Electron, which
+ * build/Release holds and node-pty loads before its shipped prebuilds/. On
+ * macOS the spawn-helper it forks through must stay an executable file.
+ */
+export function ptyEntries(platform = process.platform) {
+  const release = 'node_modules/node-pty/build/Release';
+  return [`${release}/pty.node`, ...(platform === 'darwin' ? [`${release}/spawn-helper`] : [])];
+}
+
 /** ADR-0060 H4, as electron-builder.yml sets them: fuse name -> whether it is on. */
 export const EXPECTED_FUSES = {
   RunAsNode: false,
@@ -75,13 +86,18 @@ export function fuseDrift(wire, options) {
 }
 
 /** What a resources directory must hold; returns the failures, none when whole. */
-export function checkResources(resources, exists = existsSync) {
+export function checkResources(resources, exists = existsSync, platform = process.platform, modeOf = (path) => statSync(path).mode) {
   const failures = [];
   if (!exists(join(resources, 'app.asar'))) failures.push(`${resources}: app.asar is missing`);
   for (const entry of UNPACKED_ENTRIES) {
     if (!exists(join(resources, 'app.asar.unpacked', entry))) {
       failures.push(`${resources}: app.asar.unpacked/${entry} is missing, so the owned daemon could not start`);
     }
+  }
+  for (const entry of ptyEntries(platform)) {
+    const path = join(resources, 'app.asar.unpacked', entry);
+    if (!exists(path)) failures.push(`${resources}: app.asar.unpacked/${entry} is missing, so the terminal could not start (npmRebuild, asarUnpack)`);
+    else if (entry.endsWith('spawn-helper') && (modeOf(path) & 0o111) === 0) failures.push(`${resources}: app.asar.unpacked/${entry} is not executable, so no shell could be forked`);
   }
   for (const notice of ['LICENSE', 'NOTICE', 'AUTHORS.md']) {
     if (!exists(join(resources, notice))) failures.push(`${resources}: ${notice} is not shipped (extraResources)`);
@@ -141,6 +157,40 @@ export async function smokeDaemon(entry) {
   }
 }
 
+/**
+ * Load the unpacked node-pty with a plain Node and run a shell through it. The
+ * addon is N-API, so the Node that runs this loads what Electron will; it
+ * proves the rebuilt binary opens a real pty from where the package keeps it.
+ */
+export function smokePty(unpackedModules, platform = process.platform) {
+  // node-pty turns "app.asar" into "app.asar.unpacked" in its helper's path, as
+  // it must when Electron loads it through the archive; loaded from the
+  // unpacked directory itself that gives "app.asar.unpacked.unpacked". So the
+  // copy sits under a path with neither.
+  const scratch = mkdtempSync(join(tmpdir(), 'ordewell-desktop-pty-'));
+  try {
+    if (existsSync(join(unpackedModules, 'node-pty'))) cpSync(join(unpackedModules, 'node-pty'), join(scratch, 'node-pty'), { recursive: true, dereference: true });
+    return runPty(scratch, platform);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+function runPty(scratch, platform) {
+  const script = `
+    const pty = require(process.argv[1]);
+    const win = process.platform === 'win32';
+    const term = pty.spawn(win ? 'cmd.exe' : '/bin/sh', win ? ['/c', 'echo ow-pty-ok'] : ['-c', 'echo ow-pty-ok'], { cols: 80, rows: 24, cwd: process.cwd() });
+    let seen = '';
+    term.onData((d) => { seen += d; if (seen.includes('ow-pty-ok')) { process.stdout.write('ok'); process.exit(0); } });
+    term.onExit(() => process.exit(seen.includes('ow-pty-ok') ? 0 : 3));
+    setTimeout(() => process.exit(4), 8000);
+  `;
+  const result = spawnSync(process.execPath, ['-e', script, join(scratch, 'node-pty')], { encoding: 'utf8', timeout: 15000 });
+  if (result.status === 0 && result.stdout.includes('ok')) return { ok: true };
+  return { ok: false, message: `${(result.stderr || result.stdout || `exit ${result.status}`).trim().split('\n').slice(0, 4).join(' | ')} (${platform})` };
+}
+
 export async function checkDesktopPackage(root, platform = process.platform) {
   const failures = [];
   const ok = (message) => console.log(`  ok  ${message}`);
@@ -179,6 +229,13 @@ export async function checkDesktopPackage(root, platform = process.platform) {
     const result = await smokeDaemon(entry);
     if (result.ok) ok(`the unpacked daemon answers (HTTP ${result.status} without its token)`);
     else failures.push(`unpacked daemon: ${result.message}`);
+  }
+
+  const unpacked = dirs.map((dir) => join(dir, 'app.asar.unpacked', 'node_modules')).find((path) => existsSync(join(path, 'node-pty')));
+  if (unpacked) {
+    const result = smokePty(unpacked, platform);
+    if (result.ok) ok('the unpacked node-pty opens a pty and runs a shell');
+    else failures.push(`unpacked node-pty: ${result.message}`);
   }
   return failures;
 }

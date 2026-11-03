@@ -90,6 +90,8 @@ export const ROUTES = {
   'files.save': { method: 'PUT', path: '/api/files/content' },
 
   'git.repos': { method: 'GET', path: '/api/git/repos', query: WS },
+  // Read by main, to find the worktree a task's terminal opens in.
+  'git.branches': { method: 'GET', path: '/api/git/branches', query: AT },
 
   'settings.get': { method: 'GET', path: '/api/settings', query: ['workspace', 'sessionId'] },
   'settings.update': { method: 'PATCH', path: '/api/settings' },

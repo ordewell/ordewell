@@ -79,10 +79,9 @@ function main() {
   run(process.execPath, [require.resolve('tsup/dist/cli-default.js')]);
   run(process.execPath, [join(dirname(require.resolve('vite/package.json')), 'bin', 'vite.js'), 'build']);
 
-  // REBUILD NODE-PTY: a later task rebuilds node-pty against Electron here
-  // (npmRebuild is false in electron-builder.yml until then). Do it before
-  // electron-builder runs, with @electron/rebuild, for the Electron version
-  // in this package's devDependencies.
+  // node-pty is rebuilt for Electron by electron-builder itself, per target
+  // architecture (npmRebuild in electron-builder.yml): a single rebuild here
+  // would be the host's architecture, wrong for a macOS x64 build on arm64.
 
   const builderCli = join(dirname(require.resolve('electron-builder/package.json')), 'cli.js');
   run(process.execPath, [builderCli, ...args], signingEnv(process.env));

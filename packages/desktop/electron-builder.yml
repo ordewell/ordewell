@@ -28,17 +28,24 @@ extraResources:
 # beside the archive, and forkDaemon.ts points at app.asar.unpacked
 # (unpackedFromAsar). The app's own code stays in the archive, which the
 # integrity fuse below covers.
+#
+# node-pty is named on its own as well: a .node file cannot be dlopen'd from
+# inside an archive, and the macOS spawn-helper must stay an executable file.
 asarUnpack:
   - node_modules/**/*
+  - node_modules/node-pty/**/*
 # Installers are named by product, version, OS and architecture, so the files
 # one release carries never collide: the same name is what the update feed lists.
 artifactName: Ordewell-${version}-${os}-${arch}.${ext}
-# node-pty's native rebuild belongs here, and a later task adds it. The addon
-# is a dependency already, but nothing builds it against Electron yet:
-#   - set `npmRebuild: true` or call @electron/rebuild from scripts/package.mjs
-#     (the REBUILD NODE-PTY marker there), once a terminal view needs it;
-#   - Linux ships no prebuilt binary, so that build needs make, g++ and python.
-npmRebuild: false
+# The terminal's pty (node-pty, owned by the main process) is a native addon.
+# electron-builder rebuilds it with @electron/rebuild against this app's
+# Electron, once per target architecture, before it packs: so a macOS x64 build
+# made on an arm64 Mac carries an x64 binary. The rebuild writes
+# build/Release, which node-pty loads before its shipped prebuilds/.
+# Linux ships no prebuilt binary, so that build needs make, g++ and python
+# (ubuntu-latest has them). Windows compiles with Spectre-mitigated libraries
+# (node-pty's binding.gyp), a Visual Studio component the runner must carry.
+npmRebuild: true
 # No signing identity is required: with none configured the build is unsigned
 # and succeeds (scripts/package.mjs turns identity discovery off). Signing and
 # notarization arrive with their own slice, and auto-update stays off until then

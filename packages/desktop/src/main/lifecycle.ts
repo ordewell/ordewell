@@ -16,9 +16,24 @@ export interface QuitPrompt {
 /**
  * Whether quitting asks first, and what it says happens (ADR-0060 H5). With
  * the daemon this app started, quitting stops it and every run in it. With
- * one it attached to, the runs go on there: nothing is stopped.
+ * one it attached to, the runs go on there: nothing is stopped. A terminal
+ * running a process is asked about in the same dialog, since quitting ends it
+ * (ADR-0062 G11); a terminal at its prompt has nothing to lose.
  */
-export function quitPrompt(liveRuns: readonly LiveRun[] | undefined, owned: boolean): QuitPrompt | undefined {
+export function quitPrompt(liveRuns: readonly LiveRun[] | undefined, owned: boolean, busyTerminals = 0): QuitPrompt | undefined {
+  const terminals = busyTerminals === 1
+    ? 'A terminal is running a process, and quitting ends it.'
+    : `${busyTerminals} terminals are running a process, and quitting ends them.`;
+  const runs = runPrompt(liveRuns, owned);
+  if (!runs) {
+    return busyTerminals > 0
+      ? { message: busyTerminals === 1 ? 'A terminal is running a process. Quit Ordewell?' : `${busyTerminals} terminals are running a process. Quit Ordewell?`, detail: terminals, confirmLabel: 'Quit' }
+      : undefined;
+  }
+  return busyTerminals > 0 ? { ...runs, detail: `${runs.detail}\n\n${terminals}` } : runs;
+}
+
+function runPrompt(liveRuns: readonly LiveRun[] | undefined, owned: boolean): QuitPrompt | undefined {
   if (liveRuns !== undefined && liveRuns.length === 0) return undefined;
   const names = liveRuns && liveRuns.length > 0
     ? liveRuns.map((run) => `• ${run.goal} (${run.workspace})`).join('\n')
