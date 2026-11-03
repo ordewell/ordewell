@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import type { ActionResult, DaemonStatus } from '../shared/bridge';
 
-type Action = 'retry' | 'start' | 'restart';
+export type Action = 'retry' | 'start' | 'restart';
 
-interface Card {
+export interface Card {
   tone: 'info' | 'warning' | 'error';
   title: string;
   body: string;
@@ -61,7 +61,8 @@ export function cardFor(status: DaemonStatus): Card | undefined {
   }
 }
 
-function label(status: DaemonStatus): string {
+/** The connection in a few words, for the bar at the foot of a window. */
+export function daemonLabel(status: DaemonStatus): string {
   switch (status.state) {
     case 'connecting': return `Connecting to :${status.port}…`;
     case 'connected': {
@@ -109,7 +110,7 @@ export function DaemonBar({ status }: { status: DaemonStatus }): JSX.Element {
       )}
       <footer className={`daemon-bar daemon-bar-${status.state}`}>
         <span className="daemon-dot" aria-hidden="true" />
-        {label(status)}
+        {daemonLabel(status)}
       </footer>
     </>
   );

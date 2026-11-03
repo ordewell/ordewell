@@ -1,22 +1,9 @@
 /*
- * The desktop shell's own chrome. Colours come from @ordewell/ui's tokens, so
- * the welcome and workspace windows match the chat drawn inside them later;
- * the light set below is the desktop's, since the tokens ship a dark default.
+ * The welcome window's own layout, and what the workspace frame's views share.
+ * Colours come from @ordewell/ui's tokens with theme.css's desktop values.
  */
-@media (prefers-color-scheme: light) {
-  :root {
-    --ow-bg: #ffffff;
-    --ow-bg-sidebar: #f6f8fa;
-    --ow-border: #d0d7de;
-    --ow-fg: #1f2328;
-    --ow-fg-secondary: #59636e;
-    --ow-accent: #0969da;
-  }
-}
-
 :root {
   color-scheme: light dark;
-  --desktop-font-sans: 'Inter Variable', system-ui, -apple-system, sans-serif;
 }
 
 * { box-sizing: border-box; }
@@ -26,9 +13,7 @@ html, body, #root { height: 100%; margin: 0; }
 body {
   background: var(--ow-bg);
   color: var(--ow-fg);
-  font-family: var(--desktop-font-sans);
-  font-size: 13px;
-  line-height: 1.5;
+  font: var(--ow-type-body);
 }
 
 button {
@@ -41,7 +26,7 @@ button {
   cursor: pointer;
 }
 button:disabled { opacity: 0.5; cursor: default; }
-button.primary { background: var(--ow-accent); border-color: var(--ow-accent); color: #fff; }
+button.primary { background: var(--ow-accent-emphasis); border-color: var(--ow-accent-emphasis); color: var(--ow-accent-on); }
 
 h1 { font-size: 20px; margin: 0; }
 h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ow-fg-secondary); margin: 24px 0 8px; }
@@ -51,10 +36,8 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: 
 .app { display: flex; flex-direction: column; height: 100%; }
 .app-body { flex: 1; overflow: auto; padding: 32px 40px; }
 
-.welcome, .workspace { max-width: 720px; margin: 0 auto; }
-.welcome-head, .workspace-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.workspace-head { display: block; }
-.workspace-head p { margin: 4px 0 0; }
+.welcome { max-width: 720px; margin: 0 auto; }
+.welcome-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 
 ul { list-style: none; margin: 0; padding: 0; }
 
@@ -73,6 +56,7 @@ ul { list-style: none; margin: 0; padding: 0; }
 .runner-missing { color: var(--ow-fg-secondary); }
 .runner-missing::before { content: '○ '; }
 
+.frame-sidebar .sessions { padding: 0 var(--ow-space-5); }
 .sessions li { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 8px 0; border-bottom: 1px solid var(--ow-border); }
 .session-goal { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-status { font-size: 12px; color: var(--ow-fg-secondary); }

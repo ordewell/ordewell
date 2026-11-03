@@ -1,0 +1,57 @@
+/*
+ * The sizes every host shares: type, spacing, radii, elevation and motion
+ * (docs/desktop/design.md, Design tokens). They are not colours, so they sit
+ * apart from tokens.css: a host maps colours to its theme, never these, and
+ * VS Code's mapping (vscode-tokens.css) must cover every token tokens.css
+ * declares.
+ */
+:root {
+  /* Type, on a 13px base. Each step is a font shorthand: size/line-height. */
+  --ow-type-caption: 500 11px/16px var(--ow-font-sans);
+  --ow-type-small: 400 12px/18px var(--ow-font-sans);
+  --ow-type-body: 400 13px/20px var(--ow-font-sans);
+  --ow-type-body-strong: 600 13px/20px var(--ow-font-sans);
+  --ow-type-heading: 600 15px/22px var(--ow-font-sans);
+  --ow-type-title: 600 20px/28px var(--ow-font-sans);
+  --ow-type-code: 400 12.5px/19px var(--ow-font-mono);
+
+  /* Spacing */
+  --ow-space-1: 2px;
+  --ow-space-2: 4px;
+  --ow-space-3: 6px;
+  --ow-space-4: 8px;
+  --ow-space-5: 12px;
+  --ow-space-6: 16px;
+  --ow-space-7: 24px;
+  --ow-space-8: 32px;
+
+  /* A row of one line, a row of two, and the smallest thing a pointer may have to hit. */
+  --ow-row: 28px;
+  --ow-row-double: 44px;
+  --ow-hit: 24px;
+
+  /* Radii */
+  --ow-radius-sm: 4px;
+  --ow-radius-md: 6px;
+  --ow-radius-lg: 8px;
+  --ow-radius-pill: 999px;
+
+  /* Elevation: only a popover, a menu or the palette is raised. */
+  --ow-elevation-raised: 0 4px 16px var(--ow-shadow-color);
+
+  /* Motion */
+  --ow-motion-fast: 120ms;
+  --ow-motion-base: 160ms;
+  --ow-motion-easing: cubic-bezier(0.2, 0, 0, 1);
+
+  /* The focus ring: 2px, 2px off the element. */
+  --ow-focus-width: 2px;
+  --ow-focus-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --ow-motion-fast: 0ms;
+    --ow-motion-base: 0ms;
+  }
+}

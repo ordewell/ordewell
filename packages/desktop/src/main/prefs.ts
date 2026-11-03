@@ -1,13 +1,31 @@
-import type { Prefs } from '../shared/bridge';
+import type { PaneSizes, Prefs } from '../shared/bridge';
 import { readJsonFile, writeJsonFile } from './jsonFile';
 
-export const DEFAULT_PREFS: Prefs = { theme: 'system' };
+export const DEFAULT_PREFS: Prefs = { theme: 'system', panes: { sidebar: 260, right: 360, bottom: 240 } };
 
 const THEMES: ReadonlySet<string> = new Set(['system', 'light', 'dark']);
+
+/** Past this a pane is not a size anyone dragged to: a corrupt or hostile file. */
+const MAX_PANE = 4000;
+
+function paneSizes(value: unknown): PaneSizes | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const sizes: Partial<PaneSizes> = {};
+  for (const key of ['sidebar', 'right', 'bottom'] as const) {
+    const size: unknown = (value as Record<string, unknown>)[key];
+    if (typeof size !== 'number' || !Number.isFinite(size) || size < 0 || size > MAX_PANE) return undefined;
+    sizes[key] = Math.round(size);
+  }
+  return sizes as PaneSizes;
+}
 
 /** A key and value as a renderer sent them, checked before anything is written. */
 export function validPref(key: unknown, value: unknown): Partial<Prefs> | undefined {
   if (key === 'theme' && typeof value === 'string' && THEMES.has(value)) return { theme: value as Prefs['theme'] };
+  if (key === 'panes') {
+    const panes = paneSizes(value);
+    return panes ? { panes } : undefined;
+  }
   return undefined;
 }
 

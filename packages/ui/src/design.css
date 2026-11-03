@@ -1,0 +1,61 @@
+/*
+ * The looks of the design kit (@ordewell/ui/design): icons, icon buttons and
+ * status indicators. It reads tokens.css and scale.css, so load it after both.
+ */
+.ow-icon, .ow-glyph { flex: none; display: inline-block; vertical-align: middle; }
+
+.ow-icon-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--ow-hit);
+  min-height: var(--ow-hit);
+  padding: var(--ow-space-2);
+  border: 0;
+  border-radius: var(--ow-radius-md);
+  background: transparent;
+  color: var(--ow-fg-secondary);
+  cursor: pointer;
+  transition: background-color var(--ow-motion-fast) var(--ow-motion-easing), color var(--ow-motion-fast) var(--ow-motion-easing);
+}
+.ow-icon-button:hover { background: var(--ow-bg-hover); color: var(--ow-fg); }
+.ow-icon-button:disabled { opacity: 0.5; cursor: default; }
+.ow-icon-button:focus-visible { outline: var(--ow-focus-width) solid var(--ow-focus-ring, var(--ow-accent)); outline-offset: calc(var(--ow-focus-offset) * -1); }
+.ow-icon-button-active, .ow-icon-button-active:hover { background: var(--ow-accent-tint, var(--ow-bg-hover)); color: var(--ow-accent); }
+
+.ow-icon-badge {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: var(--ow-radius-pill);
+  background: var(--ow-accent-emphasis);
+  color: var(--ow-accent-on, #fff);
+  font: var(--ow-type-caption);
+  font-size: 10px;
+  line-height: 14px;
+  text-align: center;
+}
+.ow-icon-badge:empty { min-width: 6px; width: 6px; height: 6px; top: 3px; right: 3px; padding: 0; }
+
+.ow-status { display: inline-flex; align-items: center; gap: var(--ow-space-3); vertical-align: middle; }
+.ow-status > svg { flex: none; }
+.ow-status-label { color: var(--ow-fg); }
+.ow-status-idle { color: var(--ow-status-idle); }
+.ow-status-running { color: var(--ow-status-running); }
+.ow-status-attention { color: var(--ow-status-attention); }
+.ow-status-passed { color: var(--ow-status-passed); }
+.ow-status-failed { color: var(--ow-status-failed); }
+.ow-status-blocked { color: var(--ow-status-blocked); }
+.ow-status-merge { color: var(--ow-status-merge); }
+
+@keyframes ow-turn { to { transform: rotate(360deg); } }
+.ow-status-turning > svg { animation: ow-turn 1.6s linear infinite; }
+
+/* The running shape stops turning; it still reads as running by its half fill. */
+@media (prefers-reduced-motion: reduce) {
+  .ow-status-turning > svg { animation: none; }
+}

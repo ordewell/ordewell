@@ -18,6 +18,7 @@
   --ow-bg-hover: initial;
   --ow-bg-input: initial;
   --ow-bg-code: initial;
+  --ow-bg-selected: initial;
 
   /* Borders. The contrast pair is drawn only by a high-contrast theme. */
   --ow-border: #30363d;
@@ -32,18 +33,38 @@
   --ow-fg-placeholder: initial;
   --ow-fg-link: initial;
 
-  /* Accent: the focus colour, and the fill of a primary button. */
+  /*
+   * Accent: the focus colour, and the fill of a primary button. The tint is
+   * what an active item sits on, `on` the text drawn over the emphasis fill.
+   */
   --ow-accent: #58a6ff;
   --ow-accent-emphasis: #1f6feb;
+  --ow-accent-tint: initial;
+  --ow-accent-on: initial;
+  --ow-focus-ring: initial;
 
-  /* Status */
+  /*
+   * Status. Passed, failed and the four below are the task states every
+   * surface draws (docs/desktop/design.md, Status vocabulary); attention is a
+   * task waiting on the user, warning any other caution.
+   */
   --ow-status-passed: #3fb950;
   --ow-status-failed: #f85149;
+  --ow-status-idle: #8c939d;
+  --ow-status-running: #5b9cff;
+  --ow-status-attention: #e3a64a;
+  --ow-status-blocked: #d9894a;
+  --ow-status-merge: #9d8cf0;
   --ow-status-warning: #d2991d;
   --ow-status-warning-text: initial;
   --ow-status-error: initial;
   --ow-diff-inserted: initial;
   --ow-diff-removed: initial;
+  --ow-diff-inserted-word: initial;
+  --ow-diff-removed-word: initial;
+
+  /* What a raised surface casts: scale.css composes it into an elevation. */
+  --ow-shadow-color: rgb(0 0 0 / 0.5);
 
   /* Fonts */
   --ow-font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'SF Pro Text', Helvetica, Arial, sans-serif;

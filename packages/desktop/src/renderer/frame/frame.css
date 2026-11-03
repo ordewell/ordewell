@@ -1,0 +1,246 @@
+/*
+ * The workspace window's frame (docs/desktop/design.md, App frame). Reads
+ * @ordewell/ui's tokens, scale and design kit, and theme.css's values for them.
+ */
+.frame {
+  display: grid;
+  grid-template-rows: var(--frame-title-height, 38px) minmax(0, 1fr) auto;
+  height: 100%;
+  background: var(--ow-bg);
+  color: var(--ow-fg);
+  font: var(--ow-type-body);
+}
+
+:focus-visible { outline: var(--ow-focus-width) solid var(--ow-focus-ring); outline-offset: var(--ow-focus-offset); }
+
+.frame-empty { color: var(--ow-fg-secondary); padding: var(--ow-space-5); margin: 0; }
+.frame-pane-title {
+  margin: 0;
+  font: var(--ow-type-small);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ow-fg-secondary);
+}
+.frame-section-title { margin: 0; padding: var(--ow-space-3) var(--ow-space-5); font: var(--ow-type-small); font-weight: 600; color: var(--ow-fg-secondary); }
+
+/* Title bar: the window drags by it, except by anything that takes a click. */
+.frame-title {
+  display: flex;
+  align-items: center;
+  gap: var(--ow-space-3);
+  padding: 0 var(--ow-space-4);
+  background: var(--ow-bg-sidebar);
+  border-bottom: 1px solid var(--ow-border);
+  -webkit-app-region: drag;
+  user-select: none;
+}
+.frame-title button, .frame-title a, .frame-title input, .frame-title-slot, .frame-popover { -webkit-app-region: no-drag; }
+/* Clear of the traffic lights (chrome.ts sets where they sit). */
+.frame-title-mac { padding-left: 84px; }
+/* Clear of the overlay's window controls, which titlebar-area names on Windows and Linux. */
+.frame-title-overlay { padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + var(--ow-space-4)); }
+.frame-title-drag { flex: 1; align-self: stretch; }
+.frame-title-anchor { position: relative; }
+
+.frame-breadcrumb ol { display: flex; align-items: center; gap: var(--ow-space-2); margin: 0; padding: 0; list-style: none; }
+.frame-breadcrumb li { display: flex; align-items: center; gap: var(--ow-space-2); color: var(--ow-fg-secondary); white-space: nowrap; }
+.frame-breadcrumb li:first-child { color: var(--ow-fg); font-weight: 600; }
+
+.frame-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ow-space-3);
+  height: var(--ow-hit);
+  padding: 0 var(--ow-space-5);
+  border: 0;
+  border-radius: var(--ow-radius-md);
+  background: var(--ow-accent-emphasis);
+  color: var(--ow-accent-on);
+  font: var(--ow-type-body-strong);
+  cursor: pointer;
+}
+.frame-primary:disabled { opacity: 0.5; cursor: default; }
+
+.frame-popover {
+  position: absolute;
+  top: calc(100% + var(--ow-space-2));
+  right: 0;
+  z-index: 20;
+  min-width: 280px;
+  max-height: 60vh;
+  overflow: auto;
+  padding: var(--ow-space-2) 0;
+  background: var(--ow-bg-overlay);
+  border: 1px solid var(--ow-border-widget);
+  border-radius: var(--ow-radius-lg);
+  box-shadow: var(--ow-elevation-raised);
+}
+.frame-menu { min-width: 200px; }
+.frame-menu ul { margin: 0; padding: 0; list-style: none; }
+.frame-menu button {
+  width: 100%;
+  padding: var(--ow-space-3) var(--ow-space-5);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+}
+.frame-menu button:hover, .frame-menu button:focus-visible { background: var(--ow-bg-hover); }
+
+/* Body: activity bar, sidebar, editor and panels side by side. */
+.frame-body { display: flex; min-height: 0; }
+
+.frame-activity {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+  width: 44px;
+  padding: var(--ow-space-3) 0;
+  background: var(--ow-bg-sidebar);
+  border-right: 1px solid var(--ow-border);
+}
+.frame-activity-items { display: flex; flex-direction: column; gap: var(--ow-space-2); }
+
+.frame-sidebar, .frame-panel {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  min-width: 0;
+  min-height: 0;
+  background: var(--ow-bg-sidebar);
+}
+.frame-sidebar > .frame-pane-title { padding: var(--ow-space-4) var(--ow-space-5); }
+.frame-sidebar-body, .frame-panel-body { flex: 1; overflow: auto; }
+.frame-panel-head { display: flex; align-items: center; justify-content: space-between; padding: var(--ow-space-2) var(--ow-space-3) var(--ow-space-2) var(--ow-space-5); }
+
+.frame-center { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.frame-main { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+
+.frame-sash { flex: none; position: relative; background: var(--ow-border); transition: background-color var(--ow-motion-fast) var(--ow-motion-easing); }
+.frame-sash-vertical { width: 1px; cursor: col-resize; }
+.frame-sash-horizontal { height: 1px; cursor: row-resize; }
+/* A wider grip than the line it draws. */
+.frame-sash::after { content: ''; position: absolute; inset: 0 -3px; }
+.frame-sash-horizontal::after { inset: -3px 0; }
+.frame-sash:hover, .frame-sash:focus-visible { background: var(--ow-sash-hover); }
+.frame-sash:focus-visible { outline: none; box-shadow: 0 0 0 var(--ow-focus-width) var(--ow-focus-ring); }
+
+/* Tabs. */
+.frame-groups { display: flex; flex: 1; min-height: 0; }
+.frame-group { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.frame-group + .frame-group { border-left: 1px solid var(--ow-border); }
+.frame-tabs-head { display: flex; align-items: stretch; background: var(--ow-bg-sidebar); border-bottom: 1px solid var(--ow-border); }
+.frame-tabs { display: flex; flex: 1; min-width: 0; overflow-x: auto; }
+.frame-tab {
+  display: flex;
+  align-items: center;
+  gap: var(--ow-space-3);
+  height: var(--ow-row);
+  padding: 0 var(--ow-space-3) 0 var(--ow-space-5);
+  border-right: 1px solid var(--ow-border);
+  color: var(--ow-fg-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.frame-tab:hover { background: var(--ow-bg-hover); }
+.frame-tab-active { background: var(--ow-bg); color: var(--ow-fg); box-shadow: inset 0 -2px 0 var(--ow-accent); }
+.frame-group:not(.frame-group-focused) .frame-tab-active { box-shadow: none; }
+.frame-tab:focus-visible { outline-offset: calc(var(--ow-focus-offset) * -1); }
+.frame-tab-preview .frame-tab-title { font-style: italic; }
+.frame-tab-close { min-width: 18px; min-height: 18px; padding: var(--ow-space-1); visibility: hidden; }
+.frame-tab:hover .frame-tab-close, .frame-tab-active .frame-tab-close, .frame-tab:focus-visible .frame-tab-close { visibility: visible; }
+.frame-tabpanel { flex: 1; min-height: 0; overflow: auto; }
+.frame-tabpanel:focus { outline: none; }
+
+/* Banners. */
+.frame-banners { display: flex; flex-direction: column; gap: var(--ow-space-3); padding: var(--ow-space-4) var(--ow-space-5) 0; }
+.frame-banner {
+  padding: var(--ow-space-4) var(--ow-space-5);
+  border: 1px solid var(--ow-border-widget);
+  border-left-width: 3px;
+  border-radius: var(--ow-radius-lg);
+  background: var(--ow-bg-widget);
+}
+.frame-banner h2 { margin: 0 0 var(--ow-space-2); font: var(--ow-type-body-strong); color: var(--ow-fg); text-transform: none; letter-spacing: 0; }
+.frame-banner p { margin: 0 0 var(--ow-space-3); color: var(--ow-fg-secondary); }
+.frame-banner-info { border-left-color: var(--ow-accent); }
+.frame-banner-warning { border-left-color: var(--ow-status-warning); }
+.frame-banner-error { border-left-color: var(--ow-status-error); }
+.frame-banner-actions { display: flex; gap: var(--ow-space-3); }
+
+/* Status bar. */
+.frame-status {
+  display: flex;
+  align-items: center;
+  gap: var(--ow-space-6);
+  height: 24px;
+  padding: 0 var(--ow-space-5);
+  background: var(--ow-bg-sidebar);
+  border-top: 1px solid var(--ow-border);
+  color: var(--ow-fg-secondary);
+  font: var(--ow-type-small);
+}
+.frame-status-daemon { display: inline-flex; align-items: center; gap: var(--ow-space-3); }
+.frame-status-dot { width: 8px; height: 8px; border-radius: var(--ow-radius-pill); background: var(--ow-status-idle); }
+.frame-status-passed .frame-status-dot { background: var(--ow-status-passed); }
+.frame-status-attention .frame-status-dot { background: var(--ow-status-attention); }
+/* A hollow mark for a failure, so it reads without its colour. */
+.frame-status-failed .frame-status-dot { background: transparent; border: 2px solid var(--ow-status-failed); }
+.frame-status-slot { display: inline-flex; align-items: center; gap: var(--ow-space-4); }
+.frame-status-slot:empty { display: none; }
+.frame-status-slot:last-child { margin-left: auto; }
+
+/* Command palette. */
+.frame-scrim { position: fixed; inset: 0; z-index: 30; display: flex; justify-content: center; align-items: flex-start; padding-top: 12vh; background: rgb(0 0 0 / 0.2); }
+.frame-palette {
+  width: min(560px, 90vw);
+  overflow: hidden;
+  background: var(--ow-bg-overlay);
+  border: 1px solid var(--ow-border-widget);
+  border-radius: var(--ow-radius-lg);
+  box-shadow: var(--ow-elevation-raised);
+}
+.frame-palette-input {
+  width: 100%;
+  padding: var(--ow-space-4) var(--ow-space-5);
+  border: 0;
+  border-bottom: 1px solid var(--ow-border);
+  background: var(--ow-bg-input);
+  color: var(--ow-fg);
+  font: var(--ow-type-body);
+}
+.frame-palette-input::placeholder { color: var(--ow-fg-placeholder); }
+.frame-palette-input:focus-visible { outline: none; }
+.frame-palette-list { max-height: 50vh; overflow: auto; margin: 0; padding: var(--ow-space-2) 0; list-style: none; }
+.frame-palette-list [role='option'] { display: flex; justify-content: space-between; gap: var(--ow-space-5); padding: var(--ow-space-3) var(--ow-space-5); cursor: pointer; }
+.frame-palette-chosen { background: var(--ow-bg-selected); box-shadow: inset 2px 0 0 var(--ow-accent); }
+.frame-palette-list kbd { font: var(--ow-type-small); color: var(--ow-fg-secondary); }
+
+/* For the views a slice draws inside the frame, so a stub and its slice look alike. */
+.frame-toolbar { display: flex; align-items: center; gap: var(--ow-space-2); padding: var(--ow-space-3) var(--ow-space-5); border-bottom: 1px solid var(--ow-border); }
+.frame-stack { display: flex; flex-direction: column; gap: var(--ow-space-4); padding: var(--ow-space-4) var(--ow-space-5); }
+.frame-stack > .frame-empty { padding: 0; }
+.frame-chip { display: inline-flex; align-items: center; gap: var(--ow-space-3); height: var(--ow-hit); padding: 0 var(--ow-space-4); border-radius: var(--ow-radius-md); color: var(--ow-fg-secondary); }
+.frame-input {
+  width: 100%;
+  padding: var(--ow-space-4);
+  border: 1px solid var(--ow-border-widget);
+  border-radius: var(--ow-radius-md);
+  background: var(--ow-bg-input);
+  color: var(--ow-fg);
+  font: var(--ow-type-body);
+  resize: vertical;
+}
+.frame-input::placeholder { color: var(--ow-fg-placeholder); }
+
+/* Said, not shown. */
+.frame-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

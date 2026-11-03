@@ -16,6 +16,7 @@ import { findLiveRuns, type LiveRun } from './daemon/liveRuns';
 import { DaemonProxy } from './daemon/proxy';
 import { registerIpc } from './ipc';
 import { onLastWindowClosed, quitPrompt } from './lifecycle';
+import { menuTemplate } from './menu';
 import { PrefsStore } from './prefs';
 import { RecentsStore } from './recents';
 import { lockSession, lockWebContents, registerAppScheme, serveRenderer } from './security';
@@ -47,6 +48,7 @@ async function main(): Promise<void> {
   await app.whenReady();
 
   lockSession(devOrigin);
+  Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate(process.platform, !app.isPackaged, app.getName())));
   lockWebContents();
   if (!devUrl) serveRenderer(join(__dirname, '..', 'renderer'));
 
@@ -80,9 +82,10 @@ async function main(): Promise<void> {
     preloadPath: join(__dirname, '..', 'preload', 'index.js'),
     pageUrl: devUrl ?? `${APP_ORIGIN}/index.html`,
     devTools: !app.isPackaged,
-    backgroundColor: () => (nativeTheme.shouldUseDarkColors ? '#16171a' : '#ffffff'),
+    dark: () => nativeTheme.shouldUseDarkColors,
   });
   late.windows = wm;
+  nativeTheme.on('updated', () => wm.retheme());
 
   registerIpc({
     appVersion: app.getVersion(),

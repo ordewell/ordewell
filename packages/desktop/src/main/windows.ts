@@ -1,14 +1,16 @@
 import { realpathSync } from 'node:fs';
 import { basename } from 'node:path';
-import { BrowserWindow, type WebContents } from 'electron';
+import { BrowserWindow, type BrowserWindowConstructorOptions, type WebContents } from 'electron';
 import type { WindowContext } from '../shared/bridge';
+import { canvasColour, titleBarOverlay, workspaceChrome } from './chrome';
 
 export interface WindowManagerOptions {
   preloadPath: string;
   /** The page every window loads: the app's own scheme, or the dev server in development. */
   pageUrl: string;
   devTools: boolean;
-  backgroundColor(): string;
+  /** Whether the OS, or the user's theme preference, has the app dark. */
+  dark(): boolean;
 }
 
 /** The key a workspace's window is found by: its real path, so a symlink and its target are one workspace (H6). */
@@ -46,7 +48,8 @@ export class WindowManager {
     if (existing && !existing.isDestroyed()) {
       this.focus(existing);
     } else {
-      const win = this.create({ kind: 'workspace', path: key }, `${basename(key)} — Ordewell`, { width: 1280, height: 820 });
+      const chrome = workspaceChrome(process.platform, this.options.dark());
+      const win = this.create({ kind: 'workspace', path: key }, `${basename(key)} — Ordewell`, { width: 1280, height: 820, ...chrome });
       this.workspaces.set(key, win);
       win.on('closed', () => { this.workspaces.delete(key); });
     }
@@ -73,6 +76,13 @@ export class WindowManager {
     for (const win of this.all()) win.webContents.send(channel, payload);
   }
 
+  /** Repaint what main draws itself, the window controls' overlay, when the theme changes. */
+  retheme(): void {
+    if (process.platform === 'darwin') return;
+    const overlay = titleBarOverlay(this.options.dark());
+    for (const win of this.workspaces.values()) if (!win.isDestroyed()) win.setTitleBarOverlay(overlay);
+  }
+
   /** Bring a window back from the tray or the Dock: the last one used, or the welcome window. */
   show(): void {
     const [first] = this.all();
@@ -87,14 +97,14 @@ export class WindowManager {
     return win;
   }
 
-  private create(context: WindowContext, title: string, size: { width: number; height: number }): BrowserWindow {
+  private create(context: WindowContext, title: string, shape: BrowserWindowConstructorOptions): BrowserWindow {
     const win = new BrowserWindow({
-      ...size,
+      ...shape,
       minWidth: 640,
       minHeight: 480,
       title,
       show: false,
-      backgroundColor: this.options.backgroundColor(),
+      backgroundColor: canvasColour(this.options.dark()),
       webPreferences: {
         preload: this.options.preloadPath,
         // ADR-0060 H4: the page gets the bridge and nothing of Node or Electron.

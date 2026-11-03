@@ -1,0 +1,118 @@
+/*
+ * The desktop's values for @ordewell/ui's tokens, light and dark, from
+ * docs/desktop/design.md (Design tokens). The OS picks the scheme, or the
+ * user's theme preference does: main sets nativeTheme.themeSource from it,
+ * and prefers-color-scheme follows.
+ *
+ * Every token tokens.css declares is set in both schemes, so nothing falls
+ * back to tokens.css's dark default in a light window. The two contrast
+ * borders stay unset: they belong to a high-contrast theme, which the
+ * desktop does not ship. The contrast test reads this file
+ * (__tests__/contrast.test.ts), so a value changed here is checked there.
+ *
+ * Three values differ from the doc's table, each to pass WCAG AA on every
+ * surface it is drawn on: muted text is darker in light and lighter in dark
+ * (the doc's fall under 4.5:1 on a hover or selected row), and in light the
+ * link and a filled button's background are a deeper teal (`accent-emphasis`),
+ * since white on the doc's accent is 3.6:1. The accent itself, for strokes,
+ * pills and rings, is the doc's.
+ */
+:root {
+  color-scheme: light dark;
+  --ow-font-sans: 'Inter Variable', Inter, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --ow-font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --ow-border-contrast: initial;
+  --ow-border-contrast-active: initial;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --ow-bg: #ffffff;
+    --ow-bg-sidebar: #f6f7f8;
+    --ow-bg-widget: #ffffff;
+    --ow-bg-overlay: #ffffff;
+    --ow-bg-hover: #eef0f2;
+    --ow-bg-input: #ffffff;
+    --ow-bg-code: #f1f2f4;
+    --ow-bg-selected: #e7f4f8;
+
+    --ow-border: #e4e6ea;
+    --ow-border-widget: #cdd1d6;
+    --ow-sash-hover: #1393b3;
+
+    --ow-fg: #1a1c1f;
+    --ow-fg-secondary: #5b616b;
+    --ow-fg-placeholder: #666d77;
+    --ow-fg-link: #0e7590;
+
+    --ow-accent: #1393b3;
+    --ow-accent-emphasis: #0e7590;
+    --ow-accent-tint: #e7f4f8;
+    --ow-accent-on: #ffffff;
+    --ow-focus-ring: #1393b3;
+
+    --ow-status-idle: #7a818b;
+    --ow-status-running: #2f6feb;
+    --ow-status-attention: #b26b00;
+    --ow-status-passed: #1f8a4c;
+    --ow-status-failed: #c93c37;
+    --ow-status-blocked: #9a4f1a;
+    --ow-status-merge: #6e56cf;
+    --ow-status-warning: #b26b00;
+    --ow-status-warning-text: #8a5300;
+    --ow-status-error: #c93c37;
+
+    --ow-diff-inserted: #e6f4ea;
+    --ow-diff-removed: #fbe9e8;
+    --ow-diff-inserted-word: #b7e1c1;
+    --ow-diff-removed-word: #f4c2bf;
+
+    --ow-shadow-color: rgb(0 0 0 / 0.12);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ow-bg: #1b1d21;
+    --ow-bg-sidebar: #202328;
+    --ow-bg-widget: #272a30;
+    --ow-bg-overlay: #272a30;
+    --ow-bg-hover: #2a2e34;
+    --ow-bg-input: #16181b;
+    --ow-bg-code: #16181b;
+    --ow-bg-selected: #173540;
+
+    --ow-border: #2e3238;
+    --ow-border-widget: #3d424a;
+    --ow-sash-hover: #3bb3d1;
+
+    --ow-fg: #e6e8eb;
+    --ow-fg-secondary: #a3a9b3;
+    --ow-fg-placeholder: #949ba5;
+    --ow-fg-link: #3bb3d1;
+
+    --ow-accent: #3bb3d1;
+    --ow-accent-emphasis: #5cc4de;
+    --ow-accent-tint: #173540;
+    --ow-accent-on: #0e1a1f;
+    --ow-focus-ring: #3bb3d1;
+
+    --ow-status-idle: #8c939d;
+    --ow-status-running: #5b9cff;
+    --ow-status-attention: #e3a64a;
+    --ow-status-passed: #4cc07a;
+    --ow-status-failed: #f0726c;
+    --ow-status-blocked: #d9894a;
+    --ow-status-merge: #9d8cf0;
+    --ow-status-warning: #e3a64a;
+    --ow-status-warning-text: #e3a64a;
+    --ow-status-error: #f0726c;
+
+    --ow-diff-inserted: #16301f;
+    --ow-diff-removed: #3a1b1a;
+    --ow-diff-inserted-word: #1f5a33;
+    --ow-diff-removed-word: #6b2522;
+
+    --ow-shadow-color: rgb(0 0 0 / 0.5);
+  }
+}

@@ -1,0 +1,52 @@
+import type { MenuItemConstructorOptions } from 'electron';
+
+/**
+ * The application menu. Electron's default one closes the window on Cmd/Ctrl+W
+ * and reloads it on Cmd/Ctrl+R, and a menu accelerator fires before the page
+ * sees the key: the frame's Close tab would close the window instead. So every
+ * submenu is spelled out here, and Close Window moves to Shift+W, as editors do.
+ */
+export function menuTemplate(platform: NodeJS.Platform, dev: boolean, appName: string): MenuItemConstructorOptions[] {
+  const mac = platform === 'darwin';
+  const separator: MenuItemConstructorOptions = { type: 'separator' };
+  const app: MenuItemConstructorOptions[] = mac
+    ? [{
+        label: appName,
+        submenu: [
+          { role: 'about' }, separator,
+          { role: 'services' }, separator,
+          { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, separator,
+          { role: 'quit' },
+        ],
+      }]
+    : [];
+  return [
+    ...app,
+    {
+      label: 'File',
+      submenu: [
+        { label: 'Close Window', accelerator: 'CmdOrCtrl+Shift+W', role: 'close' },
+        ...(mac ? [] : [separator, { role: 'quit' } as const]),
+      ],
+    },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' }, { role: 'redo' }, separator,
+        { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' },
+      ],
+    },
+    {
+      label: 'View',
+      submenu: [
+        ...(dev ? [{ role: 'reload' } as const, { role: 'toggleDevTools' } as const, separator] : []),
+        { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, separator,
+        { role: 'togglefullscreen' },
+      ],
+    },
+    {
+      label: 'Window',
+      submenu: [{ role: 'minimize' }, { role: 'zoom' }, ...(mac ? [separator, { role: 'front' } as const] : [])],
+    },
+  ];
+}
