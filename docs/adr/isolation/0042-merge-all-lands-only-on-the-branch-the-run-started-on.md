@@ -5,6 +5,7 @@ amends: ["0013", "0014"]
 
 # 0042 — Merge all lands only on the branch the run started on
 
+*Pending:* [ADR-0062](0062-user-git-actions-are-confirmed-at-a-host-and-a-live-run-holds-only-its-landing-branch.md) — a live run refuses a host's switch away from its landing branch, and Merge all is preceded by a preflight offering to commit or stash overlapping edits; `wrong-branch` stays the backstop.
 
 ## Problem
 

@@ -5,6 +5,9 @@ amends: ["0013"]
 
 # 0049 — A session has one live host: the session lease
 
+*Pending:* [ADR-0061](../surfaces/0061-a-host-reads-files-and-git-for-the-user-confined-to-the-workspace.md) — the files, diffs and branches of a held session's run are readable from any host without the lease.
+*Pending:* [ADR-0062](0062-user-git-actions-are-confirmed-at-a-host-and-a-live-run-holds-only-its-landing-branch.md) — a host that does not hold a session appends user-action lines to its `user-actions.jsonl` under the lock, for the holder to fold in.
+
 ## Problem
 
 Nothing stopped two Ordewell processes from running one session at once.

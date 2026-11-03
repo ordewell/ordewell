@@ -7,6 +7,8 @@ folds:
 
 # 0014 — Multi-repo workspaces: isolate a repo group, land it atomically
 
+*Pending:* [ADR-0062](0062-user-git-actions-are-confirmed-at-a-host-and-a-live-run-holds-only-its-landing-branch.md) — a host switches, commits on and discards in a user's branch at their confirmed request; *never resets a user branch* stays a rule about Ordewell's own account.
+
 ## Problem
 
 Worktree isolation (ADR-0013) assumed the workspace is one git repository. Many

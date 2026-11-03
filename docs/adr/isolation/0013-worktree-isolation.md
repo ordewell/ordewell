@@ -4,6 +4,8 @@ status: accepted
 
 # 0013 — Worktree isolation: one checkout per task, one branch per run
 
+*Pending:* [ADR-0062](0062-user-git-actions-are-confirmed-at-a-host-and-a-live-run-holds-only-its-landing-branch.md) — fetch, pull and push to the tracking remote at a person's request through a host; *no remote operation* stays a rule about Ordewell's own account.
+
 ## Problem
 
 Every AI task ran in the same working directory — the workspace root. With
