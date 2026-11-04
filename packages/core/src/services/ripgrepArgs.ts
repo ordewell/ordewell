@@ -95,26 +95,44 @@ export function grepRegexFromProbe(exitCode: number | null): GrepRegex {
  * the search comes back confidently empty. Outside a class the enhanced
  * `-E` already reads `\s`, `\w`, `\d` and `\b`, so only classes are touched,
  * but for a non-capturing group: GNU grep's `-E`, which Git for Windows ships,
- * reads no `(?:`, and a plain group matches the same lines. Not in a pattern
- * with a backreference, whose groups that would renumber: `\1` would name
- * another group and match other lines, where `(?:` left alone matches none.
+ * reads no `(?:`, and a plain group matches the same lines. Each one it makes
+ * a group ERE counts, so a backreference is renumbered to the group it named.
+ * ERE has no `\10`: a pattern whose renumbering would need one keeps its
+ * `(?:`, which no conversion can make right.
  */
 export function toPosixClasses(pattern: string): string {
+  const converted = convertForEre(pattern, true);
+  return converted ?? convertForEre(pattern, false)!;
+}
+
+/** NUL cannot reach grep in an argument, so it marks a backreference until its number is known. */
+const BACKREFERENCE = /\0([1-9])\0/g;
+
+function convertForEre(pattern: string, plainGroups: boolean): string | null {
   const CLASS_ESCAPES: Record<string, string> = { s: '[:space:]', w: '[:alnum:]_', d: '[:digit:]', t: '\t' };
-  const backreferenced = /\\[1-9]/.test(pattern);
+  // The ERE group each of the pattern's own capturing groups became, by its number.
+  const groupOf: number[] = [];
+  let groups = 0;
+  let captures = 0;
   let out = '';
   let i = 0;
   while (i < pattern.length) {
     const c = pattern[i];
     if (c === '\\') {
-      out += pattern.slice(i, i + 2);
+      const next = pattern[i + 1] ?? '';
+      out += /[1-9]/.test(next) ? `\0${next}\0` : pattern.slice(i, i + 2);
       i += 2;
       continue;
     }
-    if (!backreferenced && pattern.startsWith('(?:', i)) {
-      out += '(';
-      i += 3;
-      continue;
+    if (c === '(') {
+      // Every `(` is a group to ERE; only a plain one is a capture to the pattern.
+      groups++;
+      if (plainGroups && pattern.startsWith('(?:', i)) {
+        out += '(';
+        i += 3;
+        continue;
+      }
+      if (pattern[i + 1] !== '?') groupOf[++captures] = groups;
     }
     if (c !== '[') {
       out += c;
@@ -167,7 +185,13 @@ export function toPosixClasses(pattern: string): string {
     }
     out += `[${negate ? '^' : ''}${closeBracket ? ']' : ''}${body}${openBracket ? '[' : ''}${dash ? '-' : ''}]`;
   }
-  return out;
+  let representable = true;
+  const renumbered = out.replace(BACKREFERENCE, (_, n: string) => {
+    const group = plainGroups ? (groupOf[Number(n)] ?? Number(n)) : Number(n);
+    if (group > 9) representable = false;
+    return `\\${group}`;
+  });
+  return representable ? renumbered : null;
 }
 
 /**

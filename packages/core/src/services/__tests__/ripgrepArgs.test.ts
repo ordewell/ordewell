@@ -191,8 +191,16 @@ describe('toPosixClasses', () => {
     expect(toPosixClasses('\\(?:x[(?:]')).toBe('\\(?:x[(?:]');
   });
 
-  it('keeps a non-capturing group beside a backreference, which a plain one would renumber', () => {
-    expect(toPosixClasses('(?:a|b)(c)\\1')).toBe('(?:a|b)(c)\\1');
+  it('renumbers a backreference past the groups it made, so it names the group it did', () => {
+    expect(toPosixClasses('(?:a|b)(c)\\1')).toBe('(a|b)(c)\\2');
+    expect(toPosixClasses('(x)(?:y)(z)\\2\\1')).toBe('(x)(y)(z)\\3\\1');
+    // An escaped backslash is no backreference.
+    expect(toPosixClasses('(?:a)\\\\1')).toBe('(a)\\\\1');
+  });
+
+  it('keeps its non-capturing groups where a renumbered backreference would need \\10, which ERE lacks', () => {
+    const pattern = `${'(?:x)'.repeat(5)}${'(y)'.repeat(5)}\\5`;
+    expect(toPosixClasses(pattern)).toBe(pattern);
   });
 
   it('leaves escapes outside a class, and an unterminated class, alone', () => {
