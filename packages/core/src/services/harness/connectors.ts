@@ -17,6 +17,7 @@ import { COPILOT_CLI_PROFILE } from './copilotProfile';
 import { QWEN_CODE_PROFILE } from './qwenProfile';
 import { CLINE_PROFILE } from './clineProfile';
 import { GEMINI_CLI_PROFILE } from './geminiProfile';
+import { CURSOR_AGENT_PROFILE } from './cursorProfile';
 
 /**
  * One runner's connector: the adapter that drives it over its programmatic
@@ -67,6 +68,7 @@ export const CONNECTORS: Readonly<Record<string, RunnerConnector>> = {
   'qwen-code': acpConnector(QWEN_CODE_PROFILE),
   cline: acpConnector(CLINE_PROFILE),
   'gemini-cli': acpConnector(GEMINI_CLI_PROFILE),
+  'cursor-agent': acpConnector(CURSOR_AGENT_PROFILE),
 };
 
 /** The connector for a runner id; undefined for an unknown id (including `toString`). */

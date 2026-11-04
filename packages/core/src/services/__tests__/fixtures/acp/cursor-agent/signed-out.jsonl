@@ -1,0 +1,8 @@
+{"dir":"note","ms":4,"event":"spawn","args":["acp"]}
+{"dir":"out","ms":5,"line":{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false},"clientInfo":{"name":"ordewell","title":"Ordewell","version":"0.1.0"}}}}
+{"dir":"in","ms":432,"line":{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"mcpCapabilities":{"http":true,"sse":true},"promptCapabilities":{"audio":false,"embeddedContext":false,"image":true},"sessionCapabilities":{"list":{}}},"authMethods":[{"id":"cursor_login","name":"Cursor Login","description":"Authenticate using existing Cursor login credentials. Run 'agent login' first if not logged in."}]}}}
+{"dir":"out","ms":433,"line":{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"{{CWD}}","mcpServers":[{"type":"http","name":"ordewell","url":"{{MCP_URL}}","headers":[{"name":"Authorization","value":"Bearer [REDACTED]"}]}]}}}
+{"dir":"in","ms":441,"line":{"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"Authentication required","data":{"message":"Authentication required. Please run 'agent login' first, then call authenticate() with methodId 'cursor_login'."}}}}
+{"dir":"note","ms":441,"event":"contact-at-session-new","contacted":false}
+{"dir":"note","ms":441,"event":"session-error"}
+{"dir":"note","ms":441,"event":"summary","completed":[],"permissions":[],"extensionRequests":[],"leftBehind":[],"contacted":false}
