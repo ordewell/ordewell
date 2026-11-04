@@ -1,7 +1,8 @@
 import {
-  EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, PROVIDER_PRIORITY, getProviderMeta, isApiProvider, isPlannerBackend, runnerForProvider, type AiProvider,
+  EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, PROVIDER_PRIORITY, TERMINAL_UI_COMMANDS, getProviderMeta, isApiProvider, isPlannerBackend, runnerForProvider, type AiProvider,
 } from '@ordewell/core';
 import { handoffCommand } from '../handoff';
+import { taskOnlyRunnerRefusal } from '../../plannerModelSwitch';
 import { canonicalCommandName, findCommand, type ParsedCommand } from '../slash';
 import { findTask, plannerInFlight, type PickerItem, type TuiState } from '../state';
 import { modelsForRunner } from '../taskAssignment';
@@ -243,6 +244,8 @@ function setPlanner(state: TuiState, args: string[]): Step {
   if (args[0]) {
     const id = args[0].toLowerCase();
     if (!isPlannerBackend(id)) {
+      const taskOnly = taskOnlyRunnerRefusal(id, state.runners, TERMINAL_UI_COMMANDS.pickPlanner);
+      if (taskOnly) return fail(state, taskOnly);
       return fail(state, `Unknown planner: ${id}. Run /planner with no arguments to see the list.`);
     }
     return step(state, [{ type: 'setPlanner', provider: id }]);

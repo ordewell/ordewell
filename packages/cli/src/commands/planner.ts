@@ -11,7 +11,7 @@ import {
 import type { ApiClient } from '../apiClient';
 import { positionals } from '../utils';
 import { connect, fail, fetchCatalog, persistEnv, writeEnv } from './shared';
-import { plannerSwitchRecall, uninstalledPlannerRefusal } from '../plannerModelSwitch';
+import { plannerSwitchRecall, taskOnlyRunnerRefusal, uninstalledPlannerRefusal } from '../plannerModelSwitch';
 import { plannerIdChoice } from '../runnerNames';
 
 /**
@@ -32,6 +32,8 @@ export async function handlePlanner(subArgs: string[], injectedApi?: ApiClient):
   const provider = wanted.toLowerCase();
   const meta = getProviderMeta(provider);
   if (!meta) {
+    const taskOnly = taskOnlyRunnerRefusal(provider, (await api.getRunners()).runners, HEADLESS_CLI_COMMANDS.pickPlanner);
+    if (taskOnly) fail(taskOnly);
     fail(`Unknown planner: ${provider}`, 'Run `ordewell planner` with no arguments to see the list.');
   }
   if (isCliProvider(provider)) {

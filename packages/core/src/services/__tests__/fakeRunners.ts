@@ -406,6 +406,8 @@ function copilotCli(script: FakeRunnerScript): FakeRunner {
     turnOpen: async () => { await answered(() => (agent().requests('session/prompt').length > 0 ? true : undefined)); },
     callOrdewellTool: (tool) => {
       agent().send('session/update', update({ sessionUpdate: 'tool_call', toolCallId: `call_${tool}`, title: `ordewell-${tool}`, kind: 'other', status: 'pending', rawInput: {} }));
+      // A pending call is not yet running, and is not reported until it is.
+      agent().send('session/update', update({ sessionUpdate: 'tool_call_update', toolCallId: `call_${tool}`, status: 'in_progress' }));
     },
     askOrdewellTool: (tool) => ask({ title: `ordewell-${tool}`, kind: 'other' }, { title: tool, kind: 'other' }),
     askWrite: () => ask({ title: 'Creating /repo/a.txt', kind: 'edit' }, { title: 'Create file', kind: 'edit' }),
