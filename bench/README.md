@@ -90,10 +90,27 @@ still runs a single goal the old way.
   (`{"turnsFrom":"<path>"}`), which is how `delegatedTask.harness.e2e.test.ts`
   runs a subplanner.
   `claude` is the POSIX shim and `claude.cmd` the Windows one.
+- `fake-acp/` — a deterministic stand-in for an ACP v1 agent, put first on
+  `PATH` as `copilot` so the real `copilot-cli` connector (`AcpAdapter`) drives
+  it as `copilot --acp --stdio`: no model, no API key. It answers `initialize`
+  with HTTP MCP support, remembers the Ordewell server `session/new` hands it
+  (url and `Authorization` header), contacts it eagerly as Copilot does, and
+  completes a task only by calling `task_complete` on it over Streamable HTTP.
+  A task steers it with the same cue style as `fake-opencode`:
+  `<fake-acp>{"delayMs":300,"write":{"A.txt":"hi"},"status":"blocked","reason":"why"}</fake-acp>`
+  (all fields optional; `edit` asks through `session/request_permission`, and
+  `calls` reaches the planner tools). `copilot` is the POSIX shim and
+  `copilot.cmd` the Windows one.
+  On this branch `copilot-cli` claims no planner role (`roles: { plans: false }`
+  in `copilotProfile.ts`), so the pipeline cases cover it as a task runner only;
+  the fake's planner half is ready for a connector that is granted that role.
 - `drive-pipeline.mjs` — drives a plan end to end through the fake `claude`
   (`--runner fake`, the default) so auto-advance, parallel task scheduling and
-  dependency chains can be tested without spending anything, or through a real
-  `opencode` (`--runner opencode`). The VS Code integration scenarios
+  dependency chains can be tested without spending anything, through the fake
+  ACP agent as `copilot-cli` (`--runner acp`), or through a real `opencode`
+  (`--runner opencode`). The ACP case also has `--case no-completion`: one task
+  whose agent works and exits without calling `task_complete`, which must not
+  pass. The VS Code integration scenarios
   (`packages/vscode/src/test-integration/`) use the same fake via `PATH`.
 - `pipeline.test.mjs` — runs the driver under `node:test`. Needs core built
   first (`npm run build:core`).

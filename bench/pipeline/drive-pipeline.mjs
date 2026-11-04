@@ -9,7 +9,15 @@
  * Modes (toggle with --runner):
  *   --runner fake      The built-in claude-code connector driving the fake
  *                      `claude` in fake-claude/ (first on PATH; no LLM, no key).
+ *   --runner acp       The built-in copilot-cli connector driving the fake ACP
+ *                      agent in fake-acp/ as `copilot` (first on PATH; no LLM,
+ *                      no key). copilot-cli claims no planner role on this
+ *                      branch, so this is its task-runner half only.
  *   --runner opencode  Real opencode sessions with DeepSeek V4 Flash.
+ *
+ * `--case no-completion` (ACP only) runs one task whose fake agent works and
+ * ends its turn without calling task_complete, then exits: the task must not
+ * pass. That is the negative half of "a task passes only through task_complete".
  *
  * The plan has 3 tasks: A and B run in parallel (no deps), C depends on A.
  * The driver asserts:
@@ -33,12 +41,22 @@ function arg(name, fallback) {
   return i >= 0 ? process.argv[i + 1] : fallback;
 }
 
-const RUNNER = arg('runner', 'fake');
+const runnerArg = arg('runner', 'fake');
+const RUNNER = runnerArg === 'fake-acp' || runnerArg === 'copilot' ? 'acp' : runnerArg;
+const CASE = arg('case', 'full');
 const MODEL_ID = arg('model', 'openrouter/deepseek/deepseek-v4-flash');
 const KEEP = process.env.KEEP_WORKSPACE === '1' || process.argv.includes('--keep');
 
-if (RUNNER !== 'fake' && RUNNER !== 'opencode') {
-  console.error(`Unknown runner: ${RUNNER}. Use --runner fake or --runner opencode`);
+if (RUNNER !== 'fake' && RUNNER !== 'opencode' && RUNNER !== 'acp') {
+  console.error(`Unknown runner: ${runnerArg}. Use --runner fake, --runner acp or --runner opencode`);
+  process.exit(2);
+}
+if (CASE !== 'full' && CASE !== 'no-completion') {
+  console.error(`Unknown case: ${CASE}. Use --case full or --case no-completion`);
+  process.exit(2);
+}
+if (CASE === 'no-completion' && RUNNER !== 'acp') {
+  console.error('--case no-completion is an ACP case only.');
   process.exit(2);
 }
 
@@ -47,16 +65,19 @@ if (RUNNER === 'opencode' && !process.env.OPENROUTER_API_KEY) {
   process.exit(2);
 }
 
-const RUNNER_ID = RUNNER === 'fake' ? 'claude-code' : 'opencode';
+const RUNNER_ID = RUNNER === 'fake' ? 'claude-code' : RUNNER === 'acp' ? 'copilot-cli' : 'opencode';
 
 // Before the first spawn: the runner environment is built from this PATH, so
-// the fake shadows any real `claude` the machine has.
-if (RUNNER === 'fake') {
-  process.env.PATH = [path.join(__dirname, 'fake-claude'), process.env.PATH].filter(Boolean).join(path.delimiter);
+// the fake shadows any real `claude` or `copilot` the machine has.
+const fakeDir = RUNNER === 'fake' ? 'fake-claude' : RUNNER === 'acp' ? 'fake-acp' : null;
+if (fakeDir) {
+  process.env.PATH = [path.join(__dirname, fakeDir), process.env.PATH].filter(Boolean).join(path.delimiter);
 }
 
-// What the fake `claude` reads from a prompt (see fake-claude/fake-claude.mjs).
-const cue = (spec) => `<fake-claude>${JSON.stringify(spec)}</fake-claude>`;
+// What the fake runner reads from a prompt (see the fake's own header).
+const cue = (spec) => RUNNER === 'acp'
+  ? `<fake-acp>${JSON.stringify(spec)}</fake-acp>`
+  : `<fake-claude>${JSON.stringify(spec)}</fake-claude>`;
 
 // ---------- dummy workspace ----------
 function makeDummyWorkspace() {
@@ -107,7 +128,7 @@ async function main() {
   const workspace = makeDummyWorkspace();
   console.log(`Dummy workspace: ${workspace}`);
 
-  // claude-code and opencode are builtins in RunnerRegistry
+  // claude-code, opencode and copilot-cli are builtins in RunnerRegistry
   const registry = new core.RunnerRegistry();
 
   // The runner every host hands a structured task to
@@ -135,31 +156,49 @@ async function main() {
     onExecutionComplete: () => { executionComplete = true; },
   });
 
-  // Build a plan: A and B parallel (no deps), C depends on A
+  // Build a plan: A and B parallel (no deps), C depends on A. The
+  // no-completion case is one task only: it proves that an agent which ends
+  // its turn without task_complete is not a pass.
   const modelAssignment = RUNNER === 'opencode'
     ? { modelId: MODEL_ID, modelLabel: 'DeepSeek V4 Flash' }
-    : { modelId: 'fake-claude', modelLabel: 'Fake Claude' };
+    : RUNNER === 'acp'
+      ? { modelId: 'auto', modelLabel: 'Auto' }
+      : { modelId: 'fake-claude', modelLabel: 'Fake Claude' };
+  // Copilot's own autonomous mode is allowAll; its profile puts it on the
+  // command line, so the fake is never asked to hold an edit for a person.
+  const taskMode = RUNNER === 'acp' ? 'allowAll' : 'build';
+  const cuedRunner = RUNNER === 'fake' || RUNNER === 'acp';
 
-  const tasks = [
-    core.createTask({
-      id: 'A', order: 1, title: 'Task A (parallel)',
-      prompt: `Create a file called A.txt in the workspace root with the text "hello from A".${RUNNER === 'fake' ? cue({ delayMs: 400, write: { 'A.txt': 'hello from A' } }) : ''}`,
-      assignedRunner: RUNNER_ID, assignedModel: modelAssignment, taskMode: 'build',
-    }),
-    core.createTask({
-      id: 'B', order: 2, title: 'Task B (parallel)',
-      prompt: `Create a file called B.txt in the workspace root with the text "hello from B".${RUNNER === 'fake' ? cue({ delayMs: 400, write: { 'B.txt': 'hello from B' } }) : ''}`,
-      assignedRunner: RUNNER_ID, assignedModel: modelAssignment, taskMode: 'build',
-    }),
-    core.createTask({
-      id: 'C', order: 3, title: 'Task C (depends on A)',
-      prompt: `Read the file A.txt and create C.txt with its contents reversed.${RUNNER === 'fake' ? cue({ write: { 'C.txt': 'A morf olleh' } }) : ''}`,
-      dependencies: ['A'],
-      assignedRunner: RUNNER_ID, assignedModel: modelAssignment, taskMode: 'build',
-    }),
-  ];
+  const tasks = CASE === 'no-completion'
+    ? [
+      core.createTask({
+        id: 'N', order: 1, title: 'Task N (works, never reports)',
+        prompt: `Create a file called N.txt in the workspace root with the text "work done".${cue({ write: { 'N.txt': 'work done' }, noComplete: true, exitAfterTurn: true })}`,
+        assignedRunner: RUNNER_ID, assignedModel: modelAssignment, taskMode,
+      }),
+    ]
+    : [
+      core.createTask({
+        id: 'A', order: 1, title: 'Task A (parallel)',
+        prompt: `Create a file called A.txt in the workspace root with the text "hello from A".${cuedRunner ? cue({ delayMs: 400, write: { 'A.txt': 'hello from A' } }) : ''}`,
+        assignedRunner: RUNNER_ID, assignedModel: modelAssignment, taskMode,
+      }),
+      core.createTask({
+        id: 'B', order: 2, title: 'Task B (parallel)',
+        prompt: `Create a file called B.txt in the workspace root with the text "hello from B".${cuedRunner ? cue({ delayMs: 400, write: { 'B.txt': 'hello from B' } }) : ''}`,
+        assignedRunner: RUNNER_ID, assignedModel: modelAssignment, taskMode,
+      }),
+      core.createTask({
+        id: 'C', order: 3, title: 'Task C (depends on A)',
+        prompt: `Read the file A.txt and create C.txt with its contents reversed.${cuedRunner ? cue({ write: { 'C.txt': 'A morf olleh' } }) : ''}`,
+        dependencies: ['A'],
+        assignedRunner: RUNNER_ID, assignedModel: modelAssignment, taskMode,
+      }),
+    ];
 
-  console.log(`Plan: ${tasks.length} tasks (A + B parallel, C depends on A)`);
+  console.log(CASE === 'no-completion'
+    ? 'Plan: 1 task (works, never calls task_complete, then exits)'
+    : `Plan: ${tasks.length} tasks (A + B parallel, C depends on A)`);
   console.log(`Runner: ${RUNNER_ID}, Model: ${modelAssignment.modelId}`);
   orchestrator.loadPlan(tasks, [RUNNER_ID]);
 
@@ -169,7 +208,7 @@ async function main() {
   await orchestrator.approveReview();
 
   // Wait for completion
-  const timeoutMs = RUNNER === 'fake' ? 15000 : 180000;
+  const timeoutMs = RUNNER === 'opencode' ? 180000 : 15000;
   while (!executionComplete && Date.now() - execStart < timeoutMs) {
     await new Promise(r => setTimeout(r, 200));
   }
@@ -201,18 +240,28 @@ async function main() {
   console.log('\n=== Assertions ===');
 
   const findById = (id) => log.find(e => e.id === id);
-  const passed = (id) => findById(id)?.verdict?.outcome === 'pass';
 
-  const assertions = [
-    ['Task A in execution log with pass verdict', () => log.some(e => e.id === 'A' && e.verdict?.outcome === 'pass')],
-    ['Task B in execution log with pass verdict', () => log.some(e => e.id === 'B' && e.verdict?.outcome === 'pass')],
-    ['Task C in execution log with pass verdict', () => log.some(e => e.id === 'C' && e.verdict?.outcome === 'pass')],
-    ['Execution completed (auto-advance worked)', () => executionComplete],
-    ['All 3 tasks in execution log', () => log.length === 3],
-    // The plan keeps its tasks after a run; completion is their status, not their absence.
-    ['Every plan task is completed', () => orchestrator.storeInstance.planTasks.every(t => t.status === 'completed')],
-    ['Orchestrator is no longer running', () => !orchestrator.isRunning],
-  ];
+  const assertions = CASE === 'no-completion'
+    ? [
+      ['Task N in execution log', () => findById('N') !== undefined],
+      ['Task N did not pass', () => findById('N')?.verdict?.outcome !== 'pass'],
+      ['The failure names the missing task_complete', () => /task_complete/.test(findById('N')?.verdict?.reason ?? '')],
+      ['Execution completed', () => executionComplete],
+      ['Orchestrator is no longer running', () => !orchestrator.isRunning],
+    ]
+    : [
+      ['Task A in execution log with pass verdict', () => log.some(e => e.id === 'A' && e.verdict?.outcome === 'pass')],
+      ['Task B in execution log with pass verdict', () => log.some(e => e.id === 'B' && e.verdict?.outcome === 'pass')],
+      ['Task C in execution log with pass verdict', () => log.some(e => e.id === 'C' && e.verdict?.outcome === 'pass')],
+      ['Execution completed (auto-advance worked)', () => executionComplete],
+      ['All 3 tasks in execution log', () => log.length === 3],
+      // The plan keeps its tasks after a run; completion is their status, not their absence.
+      ['Every plan task is completed', () => orchestrator.storeInstance.planTasks.every(t => t.status === 'completed')],
+      ['Orchestrator is no longer running', () => !orchestrator.isRunning],
+      ...(RUNNER === 'acp'
+        ? [['Every pass came from task_complete', () => log.every(e => e.verdict?.outcome !== 'pass' || /task_complete/.test(e.verdict?.reason ?? ''))]]
+        : []),
+    ];
 
   let allPassed = true;
   for (const [label, check] of assertions) {
@@ -221,7 +270,10 @@ async function main() {
     console.log(`  ${ok ? 'PASS' : 'FAIL'}: ${label}`);
   }
 
-  console.log(`\n${allPassed ? 'ALL TESTS PASSED' : 'SOME TESTS FAILED'}\n`);
+  const verdictLine = CASE === 'no-completion'
+    ? (allPassed ? 'EXPECTED FAILURE OBSERVED' : 'SOME TESTS FAILED')
+    : (allPassed ? 'ALL TESTS PASSED' : 'SOME TESTS FAILED');
+  console.log(`\n${verdictLine}\n`);
 
   // Show workspace contents
   console.log('Workspace contents:');
