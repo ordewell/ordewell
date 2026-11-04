@@ -28,11 +28,11 @@ they connect to them, and whether their own tools can be taken away.
 an `AcpProfile`: data, not code.** `acpConnector(profile)` turns a profile into
 the runner's entry in `CONNECTORS`, so a new ACP agent is a manifest and a
 profile. GitHub Copilot CLI (`copilot-cli`, `copilot --acp --stdio`) is the
-reference agent. Qwen Code (`qwen-code`, `qwen --acp`) plans and runs
-read-only tasks too; Cline (`cline`, `cline --acp`) takes writable and
-read-only tasks but does not plan; Gemini CLI (`gemini-cli`,
-`gemini --acp --skip-trust`) and Cursor (`cursor-agent`, `cursor-agent acp`)
-take writable tasks only.
+reference agent. Qwen Code (`qwen-code`, `qwen --acp`) and Cursor
+(`cursor-agent`, `cursor-agent acp`) plan and run read-only tasks too; Cline
+(`cline`, `cline --acp`) takes writable and read-only tasks but does not plan;
+Gemini CLI (`gemini-cli`, `gemini --acp --skip-trust`) takes writable tasks
+only.
 
 Ordewell is the ACP client and does no I/O for the agent: it advertises no
 file-system and no terminal capability, so the agent works in the worktree
@@ -115,7 +115,11 @@ of its provider credential and the sign-in route that reader adds.
 
   The restriction is data on the profile, whatever form the agent's own
   controls take. For an agent with a deny list they are arguments and
-  variables, as Copilot's are. For an agent with no deny list that can be
+  variables, as Copilot's are, or a settings file in a home of configuration
+  of the start's own, as Cursor's are. An agent that refuses a denied tool
+  itself sends Ordewell no request, so for those tools the recording of its
+  refusal is the whole evidence, and Ordewell's refusal by kind still answers
+  every request it does send. For an agent with no deny list that can be
   made to ask before every write, edit and command, they are the arguments
   that put it in that mode, as Qwen's and Cline's are, and Ordewell's refusal
   by kind is what denies. An agent that defers an MCP tool until the model loads it
@@ -131,9 +135,10 @@ of its provider credential and the sign-in route that reader adds.
     does so with the attempt's token as the MCP settings file holds it (R4).
     Nothing there is executable, so a hook's settings name its interpreter.
   - `restricted.configDirs`: variables that move the agent's home of
-    configuration, each set to an empty 0700 directory of its own in the
-    private directory, so the user's global rules, hooks, plugins and skills
-    do not load in a planner or a read-only task.
+    configuration, each set to a 0700 directory of its own in the private
+    directory, empty but for the `restricted.files` named inside it
+    (`<VARIABLE>/<file>`), so the user's global settings, rules, hooks,
+    plugins and skills do not load in a planner or a read-only task.
 
   Both apply on a planner's start and a read-only task's alone, share the
   private directory's life (R4), and are refused under a placement, whose
@@ -585,15 +590,16 @@ signed in to a Cursor account with no paid plan:
 | profile field | Cursor |
 |---|---|
 | instructions | the first prompt: Cursor has no instruction file or `_meta` slot outside the worktree |
-| mode | `--force` under the manifest's `force`, nothing under `default`; Cursor's session modes (`agent`, `plan`, `ask`) change what it does, not only whether it asks, so none is set |
+| mode | `--force` under the manifest's `force`, nothing under `default`; Cursor's session modes (`agent`, `plan`, `ask`) change what it does, not only whether it asks, so none is set. Its read-only mode `plan` is Ordewell's, the restricted start in Cursor's `agent` mode, never Cursor's own `plan` or `ask` |
 | model | the `model` config option, set with `session/set_config_option` after `session/new`; `--model` after `acp` is not read (`model-flag.jsonl`) |
 | Ordewell's tools | the request titled `ordewell-<tool>: <tool>`, paired with the turn's first report of that call, titled `MCP: tool`; a native call's request is the command in backticks or Cursor's own words, and its report never says MCP. The kind is not read: Cursor reports every MCP call as `other` |
 | MCP server | `session/new`, over HTTP, which Cursor advertises; it contacts the server while `session/new` runs, which is the attach (R5) |
 | `minVersion` | none: Cursor's `initialize` carries no `agentInfo`, and the check refuses an agent that does not say its version |
 | credentials | none: Cursor uses its own sign-in over ACP |
-| restriction | none |
-| roles | none: Cursor is task-only, since no recording shows its `plan` or `ask` mode, or any flag, refusing a write and a command (R3) |
-| `extensionRequests` | Cursor's own `cursor/ask_question` and `cursor/create_plan`, answered by `cursorRequests.ts`; no recorded turn sent either |
+| restriction | a `cli-config.json` in a home of configuration of the start's own (`CURSOR_CONFIG_DIR`), denying Cursor's own reads, writes and shell (`Read(**)`, `Write(**)`, `Shell(*)`) and allowing nothing; `--sandbox disabled`; and a private start directory that is also its temp directory |
+| repository | no reader: a restricted start loads none of the repository's `.cursor/` rules, hooks, MCP servers or permissions, nor its `AGENTS.md`, and is handed none of them (ADR-0028) |
+| roles | the planner, and a read-only mode (`plan`) |
+| `extensionRequests` | Cursor's own `cursor/ask_question` and `cursor/create_plan`, answered by `cursorRequests.ts`; no recorded turn sent either, and asked to use them in a restricted start Cursor answered it had no such tool (`extension-requests.jsonl`) |
 
 In its default mode Cursor asks about a command its own allowlist does not
 hold, with the reason "Not in allowlist: touch" (`execute.jsonl`), and about
@@ -624,6 +630,58 @@ A signed-out
 models come from ACP discovery alone: `session/new` lists `default[]` and
 Cursor's models with their parameters in the id (`discovery.jsonl`).
 
+Cursor's default mode writes an edit unasked, so asking cannot be its
+control, and its own `plan` and `ask` modes are refused to the account with
+no paid plan. Its control is its permission settings: Cursor reads
+`cli-config.json` from its home of configuration, `CURSOR_CONFIG_DIR` or else
+`~/.cursor`, and refuses a tool those settings deny without asking. A
+restricted start moves that home into its private directory
+(`restricted.configDirs`) and writes there only the profile's settings
+(`restricted.files`): Cursor's reads, writes and shell denied, nothing
+allowed, and the approval mode `allowlist`. No list of the user's, which may
+allow commands or accept web searches unasked, is read. Reads are denied too,
+since Cursor's own reads were seen reaching past the directory it starts in
+unasked, so a planner and a read-only task read the workspace through
+Ordewell's `run_command`. `--sandbox disabled` matches the settings, so the
+deny list alone decides: a shell command was refused with the sandbox on or
+off. The sign-in survived the move on macOS; a start that finds none fails
+as signed out. Cursor keeps its default model in the same `cli-config.json`,
+so a model set in a restricted start stays in that start's home and goes with
+it, and does not become the user's default.
+
+Started in a workspace, Cursor loads its `.cursor/` rules, hooks, MCP servers
+and permissions and its `AGENTS.md` (ADR-0028). Started in a private
+directory it loads none of them, and it calls Ordewell's tools without
+loading them first, so the profile names no `toolSearch`. The recordings of
+the restricted starts, all on Auto (`default[]`), the one model the account
+may pick, show it holding, each with nothing left behind in the workspace or
+the private directory:
+- `restricted-write.jsonl`, `restricted-shell.jsonl` and
+  `restricted-delete.jsonl`: Cursor's own edit of `probe.txt`, its
+  `touch probe-shell.txt` and its delete of the workspace's `README.md` are
+  each refused by Cursor itself, with no request to Ordewell, the call
+  reported completed with no content; the refusal is only in the model's
+  words ("Read permission denied", since Cursor's edit reads the file first,
+  "refused by permissions", "Permission denied") and in the `blocked` it
+  reports with `task_complete`;
+- `restricted-fetch.jsonl` and `restricted-search.jsonl`: Cursor's web fetch
+  and web search ask, kinds `fetch` and `search`, and a read-only task
+  refuses both (ADR-0046);
+- `planted-hook.jsonl`: a read-only task in a workspace planting hooks for
+  every event in `.cursor/hooks.json`, a server in `.cursor/mcp.json`, a
+  `.cursor/cli.json` allowing everything, an always-applied rule and an
+  `AGENTS.md`: no hook or server ran, neither marker word appears, and the
+  task read the README with `run_command`;
+- `planner.jsonl`: a planner that called `list_runners`, `list_models`,
+  `submit_plan`, with one read-only task on `cursor-agent`, and `run_plan`,
+  each pre-allowed by name (R7);
+- `read-only.jsonl`: a read-only task that read a file in the worktree with
+  `run_command` and reported `done` with `task_complete`, its attempt's token
+  read-only;
+- `extension-requests.jsonl`: a read-only task asked to use AskQuestion and
+  CreatePlan, which Cursor did not offer the model, so it sent neither
+  `cursor/ask_question` nor `cursor/create_plan`.
+
 ## Testing decisions
 
 - **Recorded fixtures are the agent's evidence.** A recording is the JSONL of
@@ -640,6 +698,15 @@ Cursor's models with their parameters in the id (`discovery.jsonl`).
   read-only token: each started in a private directory with
   `--auto-approve false` once, whatever mode the plan gave it, its write,
   shell and file read refused, and its report reaching the server.
+  `cursorAgent.test.ts` replays Cursor's restricted recordings as a planner
+  and a read-only task the same way: each started in a private directory with
+  `--sandbox disabled` and no mode, its config home holding only the deny
+  list, 0700 and 0600; its own write, shell and delete refused with no
+  request; its fetch and search answered `reject-once`; Ordewell's tools
+  allowed once by name, `run_plan` and `task_complete` reaching the server;
+  and a writable start spawned as before. `cursorRolesLive.smoke.test.ts`
+  makes those recordings through the real `spawnAttached`, `AcpAdapter` and
+  `OrdewellMcpServer`, outside the suite.
 - **`fakeAcpAgent`** scripts an agent for the adapter's own tests
   (`acpAdapter.test.ts`, `acpCancelRace.adversarial.test.ts`), and
   `fakeRunners.ts` gives the connector contract tests an ACP runner. It can
@@ -688,8 +755,15 @@ Cursor's models with their parameters in the id (`discovery.jsonl`).
   use a Gemini API key. No recording shows a task run on another sign-in.
 - **Cursor on a paid plan.** The recordings use an account with no paid plan,
   which was refused a turn in `plan` mode and on a model other than its
-  default. No recording shows `cursor/ask_question` or `cursor/create_plan`
-  sent, or how Cursor takes their answers.
+  default, and whose model was not offered AskQuestion or CreatePlan. No
+  recording shows `cursor/ask_question` or `cursor/create_plan` sent, or how
+  Cursor takes their answers; `cursorRequests.ts`'s answers are tested on
+  their own, a restricted start's included. No recording shows Cursor's
+  SwitchMode, subagents, image generation or notebook edit in a restricted
+  start.
+- **A restricted Cursor's sign-in off macOS.** The sign-in was recorded
+  surviving the moved home of configuration on macOS only. Where Cursor keeps
+  it inside that home, a planner or read-only start fails as signed out.
 - **A key kept outside the environment.** The hook reads the host's and the
   workspace's variables, where the CLI's `/key` writes; a key VS Code keeps in
   its secret store, and its `aiProvider` setting, reach no agent until the
@@ -838,6 +912,23 @@ Cursor's models with their parameters in the id (`discovery.jsonl`).
   the route Cursor took.
 - **Cursor's servers in `.cursor/mcp.json`.** Not needed: Cursor connects the
   servers `session/new` hands it, while `session/new` runs.
+- **A restricted Cursor made to ask, as Qwen and Cline are.** Rejected: in its
+  default mode Cursor writes an edit without asking (`edit.jsonl`), so no
+  answer of Ordewell's can stop a write. Only its deny list refuses one.
+- **The deny list in the user's `~/.cursor/cli-config.json` or the
+  workspace's `.cursor/cli.json`.** Rejected: the user's file is shared by
+  every Cursor process and may allow commands or accept web searches unasked,
+  and a workspace's is the repository's to write. The start's own home holds
+  the only settings it reads.
+- **Cursor's own reads kept, bounded by its `readBoundary: workspace`
+  setting.** Rejected: in a probe not kept as a recording, a read outside the
+  directory Cursor started in still went through unasked. Its reads are
+  denied, and a planner or a read-only task reads with `run_command`, under
+  the envelope or the read-only task's rules.
+- **Cursor's sandbox as the shell's control (`--sandbox enabled`).** Not
+  needed: a shell command was refused with the sandbox on and off alike, so
+  the deny list decides, and `--sandbox disabled` matches the settings file
+  the start writes.
 - **Ordewell calling `authenticate` with the stored key.** Rejected: ACP's
   auth methods are the agent's to name and differ by agent, signing in stays
   the user's
@@ -897,7 +988,13 @@ Cursor's models with their parameters in the id (`discovery.jsonl`).
   `.gemini/` settings and hooks run in it, whatever the user chose for that
   folder in Gemini.
 - A Cursor task in `default` writes files without asking, and the model a
-  plan sets for it stays the user's default model in Cursor afterwards.
+  plan sets for it stays the user's default model in Cursor afterwards. A
+  planner or a read-only Cursor keeps the model in its own home instead.
+- A planner or a read-only Cursor rests on its own deny list, which it
+  enforces without a request, so Ordewell sees those refusals only in the
+  model's words and its `task_complete`; the recordings of Cursor CLI
+  2026.10.22 are the evidence it holds. It reads only through `run_command`,
+  and without the repository's rules or `AGENTS.md`.
 - Cursor reports no version, so no `minVersion` holds its profile to the
   release its recordings were made on.
 - Each agent's ACP server is young and changes between releases; the profile's
@@ -949,3 +1046,7 @@ Cursor's models with their parameters in the id (`discovery.jsonl`).
   directory under `--approval-mode default`, Ordewell refusing each write and
   command it asks for; a restricted start names the agent's deferred-tool
   loader (`restricted.toolSearch`).
+- 2026-11-04 — R3: Cursor (`cursor-agent`) plans and runs read-only tasks from
+  a private directory, its own reads, writes and shell denied by a settings
+  file in a home of configuration of the start's own; a restricted file may
+  sit inside a moved config home.

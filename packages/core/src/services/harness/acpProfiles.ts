@@ -87,12 +87,13 @@ export interface AcpAskedCall {
 }
 
 /**
- * A file a restricted start hands the agent, such as a settings file that
- * registers a hook refusing writes and commands, or the hook's script, for an
- * agent with no deny flag of its own (ADR-0060, R3).
+ * A file a restricted start hands the agent, for an agent with no deny flag of
+ * its own: a settings file that registers a hook refusing writes and commands,
+ * or the hook's script, or a settings file that denies the agent's own tools
+ * in a home of configuration {@link AcpRestriction.configDirs} moves (ADR-0060, R3).
  */
 export interface AcpRestrictedFile {
-  /** Its name in the process's private directory. */
+  /** Its name in the process's private directory, under one of {@link AcpRestriction.configDirs} for a file the agent finds there. */
   fileName: string;
   /**
    * The whole file, from the private directory's path alone, so one file can
@@ -130,9 +131,10 @@ export interface AcpRestriction {
   files?: readonly AcpRestrictedFile[];
   /**
    * Variables that move the agent's home of configuration, each set to an
-   * empty owner-only directory of this start's own in its private directory,
-   * so the user's global rules, hooks, plugins and skills do not load. What
-   * the agent keeps there goes with the process.
+   * owner-only directory of this start's own in its private directory, empty
+   * but for the {@link files} named inside it, so the user's global settings,
+   * rules, hooks, plugins and skills do not load. What the agent keeps there
+   * goes with the process.
    */
   configDirs?: readonly string[];
   /**

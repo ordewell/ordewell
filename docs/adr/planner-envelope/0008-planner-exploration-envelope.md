@@ -407,7 +407,9 @@ Ordewell refusing every edit, delete, move, command and mode switch it still
 requests, and a recorded refusal of both. Its other requests reach the
 envelope as the Claude planner's do. GitHub Copilot CLI and Qwen Code plan
 so, each started in a private directory of its own: it asks for each path in
-the worktree, and the envelope decides every one.
+the worktree, and the envelope decides every one. Cursor plans from a private
+directory too, with its own reads denied as well as its writes and shell, so
+it reads the worktree only through `run_command`, which the envelope decides.
 
 ## Considered options
 
@@ -458,3 +460,4 @@ the worktree, and the envelope decides every one.
 - 2026-11-04 — an ACP runner is a harness planner only on its profile's evidence; GitHub Copilot CLI is none (ADR-0060).
 - 2026-11-04 — GitHub Copilot CLI is a harness planner, its every worktree read put to the envelope (ADR-0060).
 - 2026-11-04 — Qwen Code is a harness planner, its every worktree read put to the envelope (ADR-0060).
+- 2026-11-04 — Cursor is a harness planner, reading the worktree only through `run_command` (ADR-0060).
