@@ -215,9 +215,11 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
    * instructions only by the profile's route, never as a file in the worktree
    * (ADR-0022, A5; ADR-0018, C2; ADR-0060, R4, R6). A restricted start adds the controls that
    * take the agent's own write and shell tools away; a planner has no mode.
+   * The profile's provider credential is this spawn's alone (ADR-0060, R9).
    */
-  protected spawnSpec(): SpawnSpec {
+  protected async spawnSpec(_opts: AgentStartOptions, workspace: Record<string, string>): Promise<SpawnSpec> {
     const started = this.requireStarted();
+    const credential = await this.credential(started, workspace);
     const { instructions, mode, restricted, mcpConfig } = this.profile;
     const args = [
       ...this.profile.args,
@@ -225,7 +227,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
       ...(started.kind === 'task' && mode?.kind === 'args' ? mode.args(started.flags) : []),
       ...(started.model && this.profile.modelArgs ? this.profile.modelArgs(started.model) : []),
     ];
-    const env: Record<string, string> = { ...this.profile.env, ...(this.restricted ? restricted?.env : {}) };
+    const env: Record<string, string> = { ...this.profile.env, ...(this.restricted ? restricted?.env : {}), ...credential };
     const files: string[] = [];
     const startsOutside = this.restricted && restricted?.privateCwd === true;
     const dir = startsOutside || instructions.kind === 'file' || mcpConfig ? this.ownPrivateDir() : null;
@@ -254,6 +256,17 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     // its first prompt carries it again.
     this.preamble = instructions.kind === 'prompt' ? contract : null;
     return { command: this.profile.manifest.runner.command, args, env, ...(files.length ? { files } : {}), ...(this.startDir ? { cwd: this.startDir } : {}) };
+  }
+
+  /**
+   * The variables the profile's hook adds for this spawn, read afresh for each
+   * so nothing holds the secret past it and two attempts never share one. A
+   * container is handed none: a key of the user's does not cross into a lease,
+   * which holds its own stand-in for one (ADR-0059 L7).
+   */
+  private async credential(started: Started, workspace: Record<string, string>): Promise<Readonly<Record<string, string>> | null> {
+    if (!this.profile.credentials || this.deps.placement) return null;
+    return this.profile.credentials({ env: { ...process.env, ...workspace }, kind: started.kind });
   }
 
   /**

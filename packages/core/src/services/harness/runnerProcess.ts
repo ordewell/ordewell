@@ -104,9 +104,10 @@ export class RunnerProcess {
    *
    * `command` is asked for only once `cwd` is known to exist, and `handshake`
    * is called in the same tick as the spawn, so a listener it attaches hears
-   * the process's first output.
+   * the process's first output. It may answer later, for a launch that reads
+   * something of the workspace's variables first.
    */
-  async start(cwd: string, command: (workspace: Record<string, string>) => RunnerCommand, handshake: (child: ChildProcess) => Promise<void>): Promise<void> {
+  async start(cwd: string, command: (workspace: Record<string, string>) => RunnerCommand | Promise<RunnerCommand>, handshake: (child: ChildProcess) => Promise<void>): Promise<void> {
     try {
       await this.launch(cwd, command, handshake);
     } catch (err) {
@@ -115,13 +116,13 @@ export class RunnerProcess {
     }
   }
 
-  private async launch(cwd: string, describe: (workspace: Record<string, string>) => RunnerCommand, handshake: (child: ChildProcess) => Promise<void>): Promise<void> {
+  private async launch(cwd: string, describe: (workspace: Record<string, string>) => RunnerCommand | Promise<RunnerCommand>, handshake: (child: ChildProcess) => Promise<void>): Promise<void> {
     // Checked before anything else: a workspace deleted out from under a
     // stale `process.cwd()` otherwise surfaces as `spawn`'s ENOENT, which
     // reads as a missing runner binary rather than a missing directory.
     assertWorkspaceExists(cwd, { isDirectory: this.deps.isDirectory });
     const workspace = await (this.deps.workspaceEnv ?? workspaceEnvOf)(cwd);
-    const asked = describe(workspace);
+    const asked = await describe(workspace);
     const { placement } = this.deps;
     if (placement && asked.cwd) throw new Error('A placed runner starts where its placement puts it, not in a directory of this host.');
     if (placement) this.placed = await placement.place({ command: asked.command, args: asked.args, env: asked.env?.(workspace) ?? {}, files: asked.files ?? [] });

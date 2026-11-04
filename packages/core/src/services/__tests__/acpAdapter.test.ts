@@ -21,6 +21,8 @@ import { fakeAcpSpawn, type FakeAcpAgentOptions, type FakeAcpStep } from './fake
 import { planJson, type FakeSpawnOptions } from './harnessTestKit';
 import { fakeConfig } from '../../testing';
 import { CURSOR_EXTENSION_REQUESTS } from '../harness/cursorRequests';
+import { runnerEnv } from '../harness/runnerEnv';
+import { clineCredentials } from '../harness/clineCredentials';
 
 /**
  * The ACP connector's task core (#73, slice S3/S4) against the scripted ACP
@@ -1183,6 +1185,161 @@ describe('AcpAdapter MCP settings file', () => {
     expect((http.agent.requests('session/new')[0].params as { mcpServers: unknown }).mcpServers).toEqual([
       { type: 'http', name: 'ordewell', url: 'http://127.0.0.1:4555/mcp', headers: [{ name: 'Authorization', value: `Bearer ${TOKEN}` }] },
     ]);
+  });
+});
+
+describe('AcpAdapter provider credential', () => {
+  const KEY = 'sk-or-v1-provider-key-never-shown';
+  const withKey = (credentials: AcpProfile['credentials']): AcpProfile => ({ ...PROFILE, credentials });
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('hands the hook the host\'s and the workspace\'s variables, and adds what it answers to that spawn\'s environment', async () => {
+    vi.stubEnv('FAKE_HOST_VAR', 'from-host');
+    const seen: Array<Record<string, string | undefined>> = [];
+    const { adapter, spawned } = setup(handshake(), withKey(async ({ env }) => {
+      seen.push({ host: env.FAKE_HOST_VAR, workspace: env.FAKE_STORE_PATH });
+      return { FAKE_PROVIDER: 'openrouter', FAKE_API_KEY: KEY };
+    }), {}, { workspaceEnv: async () => ({ FAKE_STORE_PATH: '/elsewhere/providers.json' }) });
+
+    await adapter.start(taskStart());
+
+    expect(seen).toEqual([{ host: 'from-host', workspace: '/elsewhere/providers.json' }]);
+    expect(spawned.lastEnv()).toMatchObject({ FAKE_PROVIDER: 'openrouter', FAKE_API_KEY: KEY });
+  });
+
+  it('refuses the start in the hook\'s own words when it has no credential, and starts nothing', async () => {
+    const { adapter, spawned } = setup(handshake(), withKey(async () => { throw new Error('Fake Agent has no provider key: sign in, or set FAKE_API_KEY.'); }));
+
+    await expect(adapter.start(taskStart())).rejects.toThrow('Fake Agent has no provider key: sign in, or set FAKE_API_KEY.');
+    expect(spawned.processes).toHaveLength(0);
+  });
+
+  it('spawns a profile without the hook exactly as before, and one whose hook needs nothing the same way', async () => {
+    const workspaceEnv = async () => ({ FAKE_WORKSPACE_VAR: 'w' });
+    const plain = setup(handshake(), PROFILE, {}, { workspaceEnv });
+    const none = setup(handshake(), withKey(async () => null), {}, { workspaceEnv });
+    await plain.adapter.start(taskStart());
+    await none.adapter.start(taskStart());
+
+    // Today's launch: the host's variables, the workspace's, the resolved PATH, and nothing of the adapter's.
+    expect(plain.spawned.lastEnv()).toEqual(runnerEnv('/usr/bin', { FAKE_WORKSPACE_VAR: 'w' }, {}));
+    expect(plain.spawned.lastArgs()).toEqual(['--acp']);
+    expect(none.spawned.lastEnv()).toEqual(plain.spawned.lastEnv());
+    expect(none.spawned.lastArgs()).toEqual(plain.spawned.lastArgs());
+  });
+
+  it('gives two attempts each its own credential, read for each, and starts one while the other runs', async () => {
+    let reads = 0;
+    const credentials = vi.fn(async () => ({ FAKE_API_KEY: `${KEY}-${++reads}` }));
+    const first = setup([...handshake(), { expect: 'session/prompt' }, { answer: { stopReason: 'end_turn' }, to: 'session/prompt' }], withKey(credentials));
+    const second = setup(handshake(), withKey(credentials));
+
+    await first.adapter.start(taskStart());
+    const running = turn(first.adapter, 'go');
+    await second.adapter.start(taskStart());
+    await running;
+
+    expect(credentials).toHaveBeenCalledTimes(2);
+    expect(first.spawned.lastEnv()?.FAKE_API_KEY).toBe(`${KEY}-1`);
+    expect(second.spawned.lastEnv()?.FAKE_API_KEY).toBe(`${KEY}-2`);
+
+    const together = [setup(handshake(), withKey(credentials)), setup(handshake(), withKey(credentials))];
+    await Promise.all(together.map((s) => s.adapter.start(taskStart())));
+    expect(together.map((s) => s.spawned.lastEnv()?.FAKE_API_KEY).sort()).toEqual([`${KEY}-3`, `${KEY}-4`]);
+  });
+
+  it('hands a container none of the user\'s keys and never reads the store for one', async () => {
+    const credentials = vi.fn(async () => ({ FAKE_API_KEY: KEY }));
+    const launches: Array<{ env: Readonly<Record<string, string>> }> = [];
+    const placement = {
+      cwd: '/work',
+      place: async (launch: { command: string; args: readonly string[]; env: Readonly<Record<string, string>> }) => {
+        launches.push(launch);
+        return { command: 'docker', args: [...launch.args], env: { FAKE_API_KEY: 'ordewell-lease-token' }, stop: () => {}, ended: vi.fn() };
+      },
+      reach: async (url: string) => url,
+      blob: async () => undefined,
+    };
+    const { adapter, spawned } = setup(handshake(), withKey(credentials), {}, { placement });
+
+    await adapter.start(taskStart());
+
+    expect(credentials).not.toHaveBeenCalled();
+    expect(launches).toHaveLength(1);
+    expect(JSON.stringify(launches)).not.toContain(KEY);
+    expect(JSON.stringify(spawned.lastEnv())).not.toContain(KEY);
+  });
+
+  it('keeps the key out of the log, the events, the agent\'s transcript, the arguments and the start\'s errors', async () => {
+    const logged = (['log', 'info', 'warn', 'error', 'debug'] as const).map((level) => vi.spyOn(console, level));
+    const credentials = async () => ({ FAKE_API_KEY: KEY });
+    const { adapter, agent, spawned } = setup([
+      ...handshake(),
+      { expect: 'session/prompt' },
+      { notify: 'session/update', params: update('agent_message_chunk', { content: text('Done.') }) },
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    ], withKey(credentials));
+
+    await adapter.start(taskStart());
+    const events = await turn(adapter, 'go');
+    const signedOut = setup([{ expect: 'initialize', reply: INITIALIZED }, { expect: 'session/new', error: { code: ACP_ERROR.authRequired, message: 'Authentication required' } }], withKey(credentials));
+    const refused = await signedOut.adapter.start(taskStart()).then(() => null, (e: unknown) => e);
+
+    expect(spawned.lastEnv()?.FAKE_API_KEY).toBe(KEY);
+    expect(refused).toBeInstanceOf(Error);
+    const seen = [
+      JSON.stringify(events),
+      JSON.stringify(agent.received),
+      JSON.stringify(signedOut.agent.received),
+      JSON.stringify(spawned.lastArgs()),
+      String((refused as Error).message),
+      String((refused as Error).stack),
+      JSON.stringify(logged.flatMap((spy) => spy.mock.calls)),
+    ];
+    for (const place of seen) expect(place).not.toContain(KEY);
+  });
+
+  describe('with Cline\'s store', () => {
+    let home: string;
+    const providers = () => join(home, '.cline', 'data', 'settings', 'providers.json');
+    const cline = () => withKey(clineCredentials({ homedir: () => home }));
+    beforeEach(() => {
+      home = mkdtempSync(join(tmpdir(), 'ordewell-cline-acp-'));
+      mkdirSync(dirname(providers()), { recursive: true });
+      // The developer's own Cline variables must not decide what these read.
+      for (const name of ['CLINE_API_KEY', 'CLINE_PROVIDER', 'CLINE_MODEL', 'CLINE_PROVIDER_SETTINGS_PATH']) vi.stubEnv(name, '');
+    });
+    afterEach(() => rmSync(home, { recursive: true, force: true }));
+
+    it('starts the agent under the last-used entry\'s key, which the agent never hears over ACP', async () => {
+      writeFileSync(providers(), JSON.stringify({ version: 1, lastUsedProvider: 'openrouter', providers: { openrouter: { settings: { provider: 'openrouter', apiKey: KEY, model: 'openai/gpt-4.1-mini' } } } }), { mode: 0o600 });
+      const { adapter, agent, spawned } = setup(handshake(), cline());
+
+      await adapter.start(taskStart());
+
+      expect(spawned.lastEnv()).toMatchObject({ CLINE_PROVIDER: 'openrouter', CLINE_API_KEY: KEY, CLINE_MODEL: 'openai/gpt-4.1-mini' });
+      expect(JSON.stringify(agent.received)).not.toContain(KEY);
+      expect(JSON.stringify(spawned.lastArgs())).not.toContain(KEY);
+    });
+
+    it('refuses a signed-out store with both routes in place of today\'s "Run `login`", and starts nothing', async () => {
+      writeFileSync(providers(), JSON.stringify({ version: 1, providers: {} }), { mode: 0o600 });
+      const { adapter, spawned } = setup(handshake(), cline());
+
+      const refused = await adapter.start(taskStart()).then(() => null, (e: unknown) => e as Error);
+
+      expect(refused?.message).toBe(`Cline has no provider key Ordewell can hand it: \`${providers()}\` names no provider it last used. Sign in with \`cline auth\` (a Cline or ClinePass account, or a provider's key), or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell's environment.`);
+      expect(refused?.message).not.toContain('Run `fake-agent login`');
+      expect(spawned.processes).toHaveLength(0);
+    });
+
+    it('refuses an unreadable store the same way', async () => {
+      writeFileSync(providers(), '{ not json', { mode: 0o600 });
+      const { adapter } = setup(handshake(), cline());
+
+      await expect(adapter.start(taskStart())).rejects.toThrow(`\`${providers()}\` could not be read. Sign in with \`cline auth\``);
+    });
   });
 });
 
