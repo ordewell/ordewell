@@ -174,7 +174,9 @@ async function main() {
   await orchestrator.approveReview();
 
   // Wait for completion
-  const timeoutMs = RUNNER === 'fake' ? 15000 : 180000;
+  // A stall is what this catches, so the fake's room only costs a failing run: on
+  // Windows PowerShell starts each fake, which a loaded runner takes seconds over.
+  const timeoutMs = RUNNER === 'fake' ? 60000 : 180000;
   while (!executionComplete && Date.now() - execStart < timeoutMs) {
     await new Promise(r => setTimeout(r, 200));
   }

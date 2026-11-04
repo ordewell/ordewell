@@ -257,13 +257,14 @@ describe('a delegated task', () => {
 
     await parent.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('in_progress'));
-    await vi.waitFor(() => expect(held.runner.spawned).toContain('s'));
+    // The child's worktrees come first, which real git on a loaded Windows runner takes seconds over.
+    await vi.waitFor(() => expect(held.runner.spawned).toContain('s'), { timeout: 30_000 });
     // A sibling holds the one slot, the delegated task runs beside it and holds none, and its subplanner's turn waits in the queue.
     held.release('s');
     await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
     await vi.waitFor(() => expect(statusOf(parent, 'c')).toBe('completed'), { timeout: 20_000 });
     parent.destroy();
-  });
+  }, 90_000);
 
   it('starts while its parent\'s only slot is held by nothing else, its child\'s tasks taking it one at a time', async () => {
     const { parent } = tree([SUBMIT([childTask('a', 1), childTask('b', 2, ['a'])]), DONE], { parallel: 1 });
