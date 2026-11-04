@@ -620,7 +620,8 @@ function geminiCli(script: FakeRunnerScript): FakeRunner {
     // In a trusted folder Gemini contacts the server while the session is
     // made, the only attach evidence ACP leaves (ADR-0060, R5).
     ...(script.attach === 'connected' ? [{ run: (agent: FakeAcpAgent) => { void agent.listMcpTools().catch(() => undefined); } }] : []),
-    { expect: 'session/set_mode', reply: {} },
+    // A task sets its mode; a planner sets none, as the planner recording shows.
+    { expect: 'session/set_mode', optional: true, reply: {} },
     script.reply === undefined
       ? { expect: 'session/prompt' }
       : { expect: 'session/prompt', reply: (_params: unknown, agent: FakeAcpAgent) => { agent.send('session/update', update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: script.reply } })); return { stopReason: 'end_turn' }; } },

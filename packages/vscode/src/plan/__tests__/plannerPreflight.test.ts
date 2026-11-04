@@ -24,7 +24,7 @@ function config(aiProvider: PlannerBackendId, apiKey: string, planningModel: str
  * answered "API key not configured" instead of planning.
  */
 describe('plannerPreflightError', () => {
-  for (const provider of ['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code']) {
+  for (const provider of ['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'gemini-cli']) {
     it(`lets ${provider} plan with no API key`, () => {
       expect(plannerPreflightError(config(provider, '', 'sonnet'), '/repo')).toBeNull();
     });
@@ -36,7 +36,7 @@ describe('plannerPreflightError', () => {
 
   it('sends a vendor planner with no key to /planner first, then offers /key', () => {
     expect(plannerPreflightError(config('openrouter', '', 'openai/gpt-5'), '/repo')).toBe(
-      'No planner is ready. Pick one with /planner: Claude Code, Codex, OpenCode, GitHub Copilot CLI and Qwen Code plan with no API key. ' +
+      'No planner is ready. Pick one with /planner: Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code and Gemini CLI plan with no API key. ' +
       'To plan with OpenRouter instead, add OPENROUTER_API_KEY with /key.',
     );
   });
@@ -120,7 +120,7 @@ describe('plannerPreflightError on the extension\'s own config', () => {
     const config = new VsCodeConfig(await store({ openrouterKey: 'sk-or-secret' }));
 
     expect(plannerPreflightError(config, '/repo')).toBe(
-      'No planner is ready. Pick one with /planner: Claude Code, Codex, OpenCode, GitHub Copilot CLI and Qwen Code plan with no API key. ' +
+      'No planner is ready. Pick one with /planner: Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code and Gemini CLI plan with no API key. ' +
       'To plan with OpenAI instead, add OPENAI_API_KEY with /key.',
     );
   });

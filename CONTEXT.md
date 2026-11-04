@@ -843,23 +843,25 @@ the worktree with its own tools and reaches Ordewell only through the Ordewell
 MCP server, given over HTTP in `session/new` or in a settings file of the
 agent's own (ADR-0060 R4). It has no mid-turn steer: a
 message waits for the turn's end. Five are admitted so far. GitHub Copilot CLI
-(`copilot-cli`) and Qwen Code (`qwen-code`) run tasks, read-only ones included,
-and plan, and on a planner or read-only start each begins in a private
-directory, never the worktree, so the repository's hooks and config do not run
-(ADR-0060 R3). Cline (`cline`) runs tasks, read-only ones included, but does
-not plan: it takes Ordewell's server from a settings file and attaches on the
-task's first turn, which a planner cannot (ADR-0060 R4, R5). A read-only Cline
-also begins in a private directory, and with no list to take its own tools
-away it is started asking about each, so its edits, commands and file reads
-are refused and it reads through Ordewell's `run_command` (ADR-0060 R3). Gemini
-CLI (`gemini-cli`) and Cursor (`cursor-agent`) run writable tasks only: no
-recording shows either refusing a write and a command, so they claim neither
-role. Qwen Code and Cline are handed the provider key configured in Ordewell at
-spawn, Cline its own stored key where Ordewell holds none it can use (ADR-0060
-R9). Gemini CLI is started trusting the task's worktree, since it connects no
-MCP server in a folder it does not trust (ADR-0060, Gemini CLI). Cursor writes
-a file edit without asking in its default mode, and keeps a model the plan
-sets as the user's own default (ADR-0060, Cursor).
+(`copilot-cli`), Qwen Code (`qwen-code`) and Gemini CLI (`gemini-cli`) run
+tasks, read-only ones included, and plan, and on a planner or read-only start
+each begins in a private directory, never the worktree, so the repository's
+hooks and config do not run (ADR-0060 R3). A restricted Gemini CLI runs under a
+policy file Ordewell hands it, which refuses its own write, shell and web tools
+and every MCP server but Ordewell's (ADR-0060, Gemini CLI). Cline (`cline`) runs
+tasks, read-only ones included, but does not plan: it takes Ordewell's server
+from a settings file and attaches on the task's first turn, which a planner
+cannot (ADR-0060 R4, R5). A read-only Cline also begins in a private directory,
+and with no list to take its own tools away it is started asking about each, so
+its edits, commands and file reads are refused and it reads through Ordewell's
+`run_command` (ADR-0060 R3). Cursor (`cursor-agent`) runs writable tasks only:
+no recording shows it refusing a write and a command, so it claims neither role.
+Qwen Code and Cline are handed the provider key configured in Ordewell at spawn,
+Cline its own stored key where Ordewell holds none it can use (ADR-0060 R9).
+Gemini CLI is started trusting the task's worktree, since it connects no MCP
+server in a folder it does not trust (ADR-0060, Gemini CLI). Cursor writes a
+file edit without asking in its default mode, and keeps a model the plan sets as
+the user's own default (ADR-0060, Cursor).
 *Avoid:* "ACP shim" or "ACP bridge" for it (a third-party adapter in front of an
 agent does not qualify); "ACP backend", "ACP provider".
 

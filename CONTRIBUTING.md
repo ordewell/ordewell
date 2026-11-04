@@ -173,7 +173,8 @@ from a settings file of its own, connects to them only on its first turn,
 ignores over ACP the login its own CLI stored, or has no list that takes its
 own tools away. Read
 `services/harness/geminiProfile.ts` if it names a tool only in its call ids,
-or connects MCP servers only in a folder it trusts. Read
+connects MCP servers only in a folder it trusts, or is restricted by a policy
+file of its own. Read
 `services/harness/cursorProfile.ts` if its first report of an MCP call does not
 name the tool, or it reports no version: a profile then sets no `minVersion`,
 since the check refuses an agent that does not say its version.
@@ -226,14 +227,14 @@ since the check refuses an agent that does not say its version.
   - a recording of a write attempt and a shell attempt refused, with nothing
     left behind.
 
-  A planner or a read-only task must also run nothing the repository's
-  config names (ADR-0028). An agent that loads hooks or config from the
-  directory it starts in, with no switch to stop it, sets
-  `restricted.privateCwd`, as Copilot does: it then starts in a private
-  directory of its own and asks for every path in the worktree. Record a hook
-  planted in the worktree running on a writable start and not on a restricted
-  one, as Copilot's `repo-hooks.jsonl`, `planner.jsonl` and `read-only.jsonl`
-  do, Qwen Code's `planted-hook.jsonl`, and Cline's `repo-hooks.jsonl` and
+  A planner or a read-only task must also run nothing the repository's config
+  names (ADR-0028). An agent that loads hooks or config from the directory it
+  starts in, with no switch to stop it, sets `restricted.privateCwd`, as
+  Copilot does: it then starts in a private directory of its own and asks for
+  every path in the worktree. Record a hook planted in the worktree running on
+  a writable start and not on a restricted one, as Copilot's
+  `repo-hooks.jsonl`, `planner.jsonl` and `read-only.jsonl` do, Qwen Code's
+  and Gemini CLI's `planted-hook.jsonl`, and Cline's `repo-hooks.jsonl` and
   `read-only-hooks.jsonl`. A variable that moves the agent's config home is
   not that switch unless a recording shows it: Cline's `CLINE_DIR` left the
   worktree's hooks running (`repo-hooks-cline-dir.jsonl`).
@@ -241,8 +242,10 @@ since the check refuses an agent that does not say its version.
   An agent made to ask before every use of its tools leaves the adapter to
   refuse each by its kind, a request to switch modes included, and the
   recordings must show it. Never claim a role through the agent's own plan or
-  read-only mode if a request to switch modes leaves it. An agent that defers
-  MCP tools until the model loads them names its loading tool in
+  read-only mode if a request to switch modes leaves it, and record that mode
+  rather than trust its name: Gemini CLI's own plan mode refused Ordewell's
+  tools and let the model write a `.md` file. An agent that defers MCP tools
+  until the model loads them names its loading tool in
   `restricted.toolSearch`, so a restricted start's prompt says to load each
   Ordewell tool first.
 
@@ -255,6 +258,15 @@ since the check refuses an agent that does not say its version.
   variables that move the agent's config home, so the user's global rules,
   hooks and skills do not load. Both are a layer under Ordewell's refusal by
   kind, and the role still needs the recording above.
+
+  An agent whose own policy file can deny its tools, as Gemini CLI's can, is
+  handed that file in `restricted.files` at every tier it reads one from the
+  command line, so a rule the person saved cannot outrank it. The refusal
+  must reach the transcript: a rule that hides a tool from the model leaves
+  no call to record, so Gemini's rules match every call instead
+  (`argsPattern = "."`) and each is refused as a failed tool call. Name
+  Ordewell's tools in full, as the agent names them, where it checks an MCP
+  call under more than one server name.
 
 ## Releasing
 

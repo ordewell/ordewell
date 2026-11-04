@@ -25,7 +25,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   attached and its models discovered. Gemini starts each task trusting the
   task's worktree for that run only, since an untrusted folder gets no MCP
   servers; with that trust it also loads the worktree's own `.gemini/`
-  settings. It runs writable tasks only, not the planner or read-only tasks.
+  settings. It can also be the planner and run read-only tasks: those start it
+  in a private directory instead of the worktree, so it never runs a
+  repository's `.gemini/settings.json` hooks, and under a policy Ordewell hands
+  it its own write, shell and web tools are refused, as is every other MCP
+  server's. It reaches the workspace only through requests Ordewell answers.
   Gemini CLI 0.66.0 or newer is required, and signing in is done by running
   `gemini` itself.
 

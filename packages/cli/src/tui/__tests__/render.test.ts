@@ -497,7 +497,7 @@ describe('transcript', () => {
   it('says what is missing when nothing can plan yet', () => {
     const out = text(DETECTED);
     // Same order as the not-ready error: the no-key way in first, the vendor key second.
-    expect(out).toMatch(/Claude Code, Codex, OpenCode, GitHub Copilot CLI or\s+Qwen Code.*\/planner.*No API key.*\/key/s);
+    expect(out).toMatch(/Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen\s+Code or Gemini CLI.*\/planner.*No API key.*\/key/s);
   });
 
   it('treats a configured API provider as enough to plan', () => {

@@ -5,15 +5,16 @@ import { plannerSettingProblem } from '../plannerSetting';
 
 describe('plannerSettingProblem', () => {
   it('accepts blank, a vendor and a runner that can plan', () => {
-    for (const value of ['', 'google', 'openai_compatible', 'claude-code', 'codex', 'opencode']) {
+    for (const value of ['', 'google', 'openai_compatible', 'claude-code', 'codex', 'opencode', 'gemini-cli']) {
       expect(plannerSettingProblem(value)).toBeUndefined();
     }
   });
 
   it('names an unknown value and every choice', () => {
-    const problem = plannerSettingProblem('gemini-cli');
-    expect(problem).toContain('"gemini-cli"');
-    for (const id of ['claude-code', 'codex', 'opencode', 'google', 'openrouter']) expect(problem).toContain(id);
+    // `gemini` is the vendor's name, never a runner's: Gemini CLI's id is `gemini-cli`.
+    const problem = plannerSettingProblem('gemini');
+    expect(problem).toContain('"gemini"');
+    for (const id of ['claude-code', 'codex', 'opencode', 'gemini-cli', 'google', 'openrouter']) expect(problem).toContain(id);
   });
 
   it('is not shadowed by a static enum in package.json, which would go stale with the registry', () => {

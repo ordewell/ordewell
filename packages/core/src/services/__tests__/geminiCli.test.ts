@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -6,8 +6,10 @@ import { CONNECTORS } from '../harness/connectors';
 import { acpOrdewellBinding } from '../harness/acpOrdewell';
 import { discoverAcpModels } from '../harness/acpModels';
 import { GEMINI_CLI_PROFILE } from '../harness/geminiProfile';
+import { ORDEWELL_TOOL_NAMES } from '../harness/ordewellBinding';
+import { decidePlannerPermission } from '../harness/plannerPermissions';
 import type { AcpToolCall } from '../harness/acpSchema';
-import type { AgentEvent, AgentProcessDeps, TaskModeAgentAdapter, TaskStartOptions } from '../harness/AgentAdapter';
+import type { AgentEvent, AgentProcessDeps, PlannerStartOptions, TaskModeAgentAdapter, TaskStartOptions } from '../harness/AgentAdapter';
 import { VENDORS } from '../apiProviders';
 import { BUILTIN_MANIFESTS } from '../../plugins/builtin';
 import { GEMINI_ACP_ARGS, GEMINI_CLI_MANIFEST } from '../../plugins/builtin/gemini-cli.manifest';
@@ -38,8 +40,17 @@ interface Note {
   ok?: boolean;
   contacted?: boolean;
   completed?: Array<Record<string, unknown>>;
-  permissions?: Array<{ toolCallId: string; title: string; kind: string; options: string[]; answer?: string }>;
+  /** As the task-only recordings list them with their title and options; the role recordings list what Ordewell answered. */
+  permissions?: Array<{ toolCallId: string; title?: string; kind: string; options?: string[]; answer?: string; answered?: string }>;
   leftBehind?: string[];
+  /** The role recordings': Ordewell's tools called, the calls Gemini reported failed, and what the server was handed. */
+  calls?: string[];
+  failed?: Array<{ toolCallId: string; kind: string }>;
+  handed?: Array<{ tool: string; args: Record<string, unknown> }>;
+  hooksRan?: string[];
+  cwd?: string;
+  tmpdir?: string;
+  startDirAtSpawn?: string[];
 }
 type Recorded = { dir: 'in' | 'out'; ms: number; line: WireLine } | Note;
 
@@ -394,14 +405,6 @@ describe('gemini-cli, replayed from Gemini CLI 0.66.0', () => {
     expect('Gemini CLI is not signed in. Run `gemini`.').toMatch(GEMINI_CLI_MANIFEST.auth?.signedOut ?? /^$/);
   });
 
-  it('claims no role: Gemini does not plan and offers no read-only mode, as no recording shows its plan mode refusing a write and a command', () => {
-    expect(CONNECTORS['gemini-cli'].plans).toBe(false);
-    expect(GEMINI_CLI_PROFILE.roles).toBeUndefined();
-    expect(GEMINI_CLI_PROFILE.restricted).toBeUndefined();
-    expect(GEMINI_CLI_MANIFEST.modes?.some((mode) => mode.readOnly)).toBe(false);
-    expect(GEMINI_CLI_MANIFEST.modes?.map((mode) => mode.id)).toEqual(['default', 'autoEdit', 'yolo']);
-  });
-
   it('takes a call for Ordewell\'s only when its call id names a tool under Ordewell\'s server prefix', () => {
     const binding = acpOrdewellBinding(GEMINI_CLI_PROFILE);
     const call = (toolCallId: string, title = 'task_complete(status: done)', kind: AcpToolCall['kind'] = 'other'): AcpToolCall => ({ toolCallId, title, kind });
@@ -429,6 +432,251 @@ describe('gemini-cli, replayed from Gemini CLI 0.66.0', () => {
     const recorded = note('ordewell-tool', 'summary')?.permissions?.[0].toolCallId ?? '';
     expect(GEMINI_CLI_PROFILE.toolName?.('task_complete')).toBe(recorded.slice(0, recorded.indexOf('__')));
     expect(GEMINI_CLI_PROFILE.toolName?.('task_complete')).toBe('mcp_ordewell_task_complete');
+  });
+});
+
+async function readOnlyToken() {
+  const server = new OrdewellMcpServer();
+  servers.push(server);
+  const completed = vi.fn(async () => ({ text: 'Recorded.' }));
+  const commands = vi.fn(async () => ({ text: 'exit 0\nThe secret word is HERON.' }));
+  const credential = await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: 1, readOnly: true }, { taskComplete: completed, runCommand: commands } as never);
+  return { mcp: mcpClientConfig(credential), completed, commands };
+}
+
+async function plannerToken() {
+  const server = new OrdewellMcpServer();
+  servers.push(server);
+  const submitted = vi.fn(async () => ({ text: 'Plan received.' }));
+  const listed = vi.fn(async () => ({ text: '[]' }));
+  const models = vi.fn(async () => ({ text: '[]' }));
+  const ran = vi.fn(async () => ({ text: 'The plan is running.' }));
+  const credential = await server.issuePlannerToken({ sessionId: 's1' }, { submitPlan: submitted, listRunners: listed, listModels: models, runPlan: ran } as never);
+  return { mcp: mcpClientConfig(credential), submitted, listed, models, ran };
+}
+
+/** Gemini's read-only mode, as the plan names it. */
+const READ_ONLY_MODE = GEMINI_CLI_MANIFEST.modes?.find((mode) => mode.readOnly)?.id ?? 'none';
+
+/** The model a recording was made on, which its launch names. */
+const modelOf = (name: string): string => recordedArgs(name)[recordedArgs(name).indexOf('--model') + 1];
+
+function readOnlyStart(mcp: McpClientConfig, model = MODEL): TaskStartOptions {
+  return taskStart(mcp, READ_ONLY_MODE, { model, flags: resolveTaskRunnerFlags(GEMINI_CLI_MANIFEST, { mode: READ_ONLY_MODE, model }) });
+}
+
+function plannerStart(mcp: McpClientConfig, model = MODEL): PlannerStartOptions {
+  return { kind: 'planner', cwd: CWD, model, systemPrompt: 'You are the planner.', mcp };
+}
+
+/** A planner's turn, every held request put to its envelope as `CliAgentAiService` puts it (ADR-0026). */
+async function plannerTurn(adapter: TaskModeAgentAdapter): Promise<AgentEvent[]> {
+  const events: AgentEvent[] = [];
+  await adapter.send('go', (event) => {
+    events.push(event);
+    if (event.type === 'permission_request' && !event.decided) {
+      void decidePlannerPermission(event.ask, event.input ?? {}, { workspaceRoot: CWD })
+        .then((decision) => adapter.answerPermission?.(event.id, decision));
+    }
+  });
+  return events;
+}
+
+/**
+ * The recording's calls to Ordewell's server, made where Gemini made them:
+ * once its request to was allowed. Gemini's request names the tool and never
+ * its arguments, so they are what the recording's server was handed.
+ */
+const handing = (name: string): Partial<Record<string, FakeAcpStep[]>> => {
+  const calls = [...(note(name, 'summary')?.handed ?? [])];
+  return {
+    ...CONTACT_ON,
+    'session/request_permission': [{ run: async (agent) => {
+      const call = calls.shift();
+      if (call) await agent.callMcp(call.tool, call.args);
+    } }],
+  };
+};
+
+/** What Gemini reported failing, in the words it reported, as the transcript shows them. */
+const refused = (events: AgentEvent[]) => events.flatMap((e) => (e.type === 'tool_result' && !e.success ? [{ id: e.id, output: e.output }] : []));
+
+/** The recorded launch with its private directory put back as `dir`, the one this start made. */
+function launchedAs(name: string, dir: string) {
+  const at = (path: string | undefined) => path?.replaceAll('{{START_DIR}}', dir);
+  const spawn = note(name, 'spawn');
+  return {
+    args: recordedArgs(name).map(at),
+    cwd: at(spawn?.cwd),
+    tmpdir: at(spawn?.tmpdir),
+    startDirAtSpawn: spawn?.startDirAtSpawn,
+  };
+}
+
+/** The policy file's rules, each key's value as TOML wrote it, which for these values JSON reads too. */
+function policyRules(text: string): Array<Record<string, unknown>> {
+  return text.split('[[rule]]').slice(1).map((block) => Object.fromEntries(block.trim().split('\n').map((line) => {
+    const at = line.indexOf(' = ');
+    return [line.slice(0, at), JSON.parse(line.slice(at + 3)) as unknown];
+  })));
+}
+
+const ROLE_RECORDINGS = ['planner', 'read-only', 'restricted-write', 'restricted-shell', 'restricted-safe-shell', 'restricted-web', 'planted-hook'] as const;
+
+describe('gemini-cli roles, replayed from Gemini CLI 0.66.0 (ADR-0026, ADR-0028, ADR-0046, ADR-0060)', () => {
+  it('claims both roles: it plans, and offers a read-only mode Gemini runs in its own default mode, never its plan mode', () => {
+    expect(CONNECTORS['gemini-cli'].plans).toBe(true);
+    expect(READ_ONLY_MODE).toBe('plan');
+    expect(resolveTaskRunnerFlags(GEMINI_CLI_MANIFEST, { mode: READ_ONLY_MODE, model: MODEL }).permissionMode).toBe('default');
+    expect(GEMINI_CLI_MANIFEST.modes?.map((mode) => mode.id)).toEqual(['default', 'autoEdit', 'yolo', 'plan']);
+    expect(GEMINI_CLI_PROFILE.restricted?.args).toEqual(['--approval-mode', 'default']);
+    expect(GEMINI_CLI_PROFILE.restricted?.privateCwd).toBe(true);
+    expect(GEMINI_CLI_PROFILE.restricted?.files?.map((file) => [file.fileName, file.pass])).toEqual([
+      ['ordewell-admin-policy.toml', { flag: '--admin-policy' }],
+      ['ordewell-policy.toml', { flag: '--policy' }],
+    ]);
+  });
+
+  it('hands Gemini one policy at both tiers: its own tools denied in a way that still offers them, Ordewell\'s asking, every other server\'s denied', () => {
+    const files = GEMINI_CLI_PROFILE.restricted?.files ?? [];
+    const [admin, user] = files.map((file) => file.render('/private'));
+    expect(user).toBe(admin);
+    // Nothing of the attempt reaches it, so it holds no secret.
+    expect(files[0].render('/elsewhere')).toBe(admin);
+    const rules = policyRules(admin);
+    expect(rules.some((rule) => rule.decision === 'allow')).toBe(false);
+
+    const denied = rules.filter((rule) => rule.decision === 'deny' && rule.priority === 999);
+    expect(denied.map((rule) => [rule.toolName, rule.argsPattern])).toEqual([
+      [['write_file', 'replace'], '.'],
+      ['run_shell_command', '.'],
+      [['web_fetch', 'google_web_search'], '.'],
+      [['enter_plan_mode', 'exit_plan_mode'], undefined],
+    ]);
+
+    const asking = rules.filter((rule) => rule.decision === 'ask_user');
+    expect(asking).toHaveLength(1);
+    expect(asking[0].priority).toBe(999);
+    const names = asking[0].toolName as string[];
+    expect(names).toEqual(expect.arrayContaining(ORDEWELL_TOOL_NAMES.map((tool) => `mcp_ordewell_${tool}`)));
+    const called = ROLE_RECORDINGS.flatMap((name) => note(name, 'summary')?.calls ?? []);
+    expect(names).toEqual(expect.arrayContaining(called.map((tool) => `mcp_ordewell_${tool}`)));
+    const binding = acpOrdewellBinding(GEMINI_CLI_PROFILE);
+    for (const name of names) expect(binding.isOrdewellAsk({ request: { toolCallId: `${name}__call_1`, title: name, kind: 'other' } })).toBe(true);
+
+    expect(rules.filter((rule) => rule.mcpName !== undefined)).toEqual([
+      expect.objectContaining({ toolName: '*', mcpName: '*', decision: 'deny', priority: 998 }),
+    ]);
+  });
+
+  it.each(ROLE_RECORDINGS)('starts a %s session as it was recorded: under the policy, in a directory of its own holding only it, where none of the workspace\'s hooks ran', async (name) => {
+    const start = name === 'planner' ? plannerStart((await plannerToken()).mcp, modelOf(name)) : readOnlyStart((await readOnlyToken()).mcp, modelOf(name));
+    const { spawned, agent, adapter } = gemini(replay(name, CONTACT_ON));
+    await adapter.start(start);
+
+    const dir = spawned.lastCwd() ?? '';
+    expect(dir).not.toBe('');
+    expect(dir.startsWith(CWD)).toBe(false);
+    expect({ args: spawned.lastArgs(), cwd: dir, tmpdir: spawned.lastEnv().TMPDIR, startDirAtSpawn: readdirSync(dir).sort() }).toEqual(launchedAs(name, dir));
+    expect((agent.requests('session/new')[0].params as { cwd: string }).cwd).toBe(dir);
+    // The workspace's planted `.gemini/settings.json` hooks wrote nothing on any recorded start.
+    expect(note(name, 'summary')?.hooksRan).toEqual([]);
+    expect(agent.requests('session/set_mode').map((r) => r.params)).toEqual(recordedOut(name, 'session/set_mode'));
+    expect(agent.problems).toEqual([]);
+  });
+
+  it('leaves a writable start where it was: in the task\'s directory, with no policy', async () => {
+    const { mcp } = await taskToken();
+    const { spawned, adapter } = gemini(replay('ordewell-tool', CONTACT_ON));
+    await adapter.start(taskStart(mcp));
+
+    expect(spawned.lastCwd()).toBe(CWD);
+    expect(spawned.lastArgs()).toEqual(recordedArgs('ordewell-tool'));
+    expect(spawned.lastEnv().TMPDIR).toBe(process.env.TMPDIR);
+  });
+
+  it.each([
+    ['restricted-write', 'write_file', 'edit', 'WriteFile'],
+    ['restricted-shell', 'run_shell_command', 'execute', 'Shell'],
+    ['restricted-safe-shell', 'run_shell_command', 'execute', 'Shell'],
+    ['restricted-web', 'google_web_search', 'search', 'GoogleSearch'],
+  ])('refuses a read-only task\'s %s with no request made, as a failed call the transcript shows, and it reports blocked through Ordewell', async (name, tool, kind, shown) => {
+    const { mcp, completed } = await readOnlyToken();
+    const { agent, adapter } = gemini(replay(name, handing(name)));
+    await adapter.start(readOnlyStart(mcp, modelOf(name)));
+    const events = await turn(adapter);
+
+    const summary = note(name, 'summary');
+    expect(summary?.failed).toEqual([{ toolCallId: expect.stringMatching(new RegExp(`^${tool}__`)), kind }]);
+    // Gemini's words for a policy's denial, in 0.66.0's source: `Tool execution for "${displayName}" denied by policy.`
+    expect(refused(events)).toEqual([{ id: summary?.failed?.[0].toolCallId, output: `Tool execution for "${shown}" denied by policy.` }]);
+    const requests = asked(events);
+    expect(requests.map((e) => e.decided)).toEqual([{ decision: 'allow' }]);
+    expect(requests[0].toolUseId).toMatch(/^mcp_ordewell_task_complete__/);
+    expect(permissionAnswers(agent)).toEqual(recordedAnswers(name));
+    expect(permissionAnswers(agent)).toEqual([{ outcome: 'selected', optionId: 'proceed_once' }]);
+    expect(reports(completed)).toEqual([expect.objectContaining({ status: 'blocked' })]);
+    expect(summary?.calls).toEqual(['task_complete']);
+    expect(summary?.leftBehind).toEqual([]);
+    expect(agent.problems).toEqual([]);
+    await agent.finished;
+  });
+
+  it('plans with Ordewell\'s planner tools alone, each allowed by the name its call id carries: it lists, submits a plan and starts it, leaving nothing behind', async () => {
+    const tools = ['list_runners', 'list_models', 'submit_plan', 'run_plan'];
+    const { mcp, submitted, listed, models, ran } = await plannerToken();
+    const { agent, adapter } = gemini(replay('planner', handing('planner')));
+    await adapter.start(plannerStart(mcp, modelOf('planner')));
+    const events = await plannerTurn(adapter);
+
+    expect(note('planner', 'summary')?.calls).toEqual(tools);
+    expect(asked(events).map((e) => e.decided)).toEqual(tools.map(() => ({ decision: 'allow' })));
+    expect(permissionAnswers(agent)).toEqual(recordedAnswers('planner'));
+    expect(permissionAnswers(agent)).toEqual(tools.map(() => ({ outcome: 'selected', optionId: 'proceed_once' })));
+    expect(agent.mcpCalls.map((call) => call.tool)).toEqual(tools);
+    expect(listed).toHaveBeenCalled();
+    expect(models).toHaveBeenCalledWith(expect.objectContaining({ runner: 'gemini-cli' }), expect.anything());
+    expect(submitted).toHaveBeenCalledWith(expect.objectContaining({
+      tasks: [expect.objectContaining({ assignedRunner: 'gemini-cli', readOnly: true, autonomy: 'AFK' })],
+    }), expect.anything());
+    expect(ran).toHaveBeenCalled();
+    expect(refused(events)).toEqual([]);
+    expect(note('planner', 'summary')?.leftBehind).toEqual([]);
+    expect(agent.problems).toEqual([]);
+    await agent.finished;
+  });
+
+  it.each([
+    ['read-only', ['run_command', 'task_complete'], ['cat README.md'], { status: 'done', summary: 'HERON' }],
+    ['planted-hook', ['task_complete'], [], { status: 'done', summary: 'ok' }],
+  ] as const)('runs a %s task through Ordewell\'s tools alone, each allowed, and completes with the attempt\'s token, leaving nothing behind', async (name, tools, ran, report) => {
+    const { mcp, completed, commands } = await readOnlyToken();
+    const { agent, adapter } = gemini(replay(name, handing(name)));
+    await adapter.start(readOnlyStart(mcp, modelOf(name)));
+    const events = await turn(adapter);
+
+    expect(note(name, 'summary')?.calls).toEqual(tools);
+    expect(asked(events).map((e) => e.decided)).toEqual(tools.map(() => ({ decision: 'allow' })));
+    expect(permissionAnswers(agent)).toEqual(recordedAnswers(name));
+    expect(agent.mcpCalls.map((call) => call.tool)).toEqual(tools);
+    // The workspace is read through Ordewell's command alone: Gemini's own reads stay in its private directory.
+    expect(commands.mock.calls.map((call: unknown[]) => call[0])).toEqual(ran.map((command) => expect.objectContaining({ command })));
+    expect(reports(completed)).toEqual([expect.objectContaining(report)]);
+    expect(refused(events)).toEqual([]);
+    expect(note(name, 'summary')?.leftBehind).toEqual([]);
+    expect(agent.problems).toEqual([]);
+    await agent.finished;
+  });
+
+  it('takes every request a role recording shows as Ordewell\'s, and none of the calls Gemini refused', () => {
+    const binding = acpOrdewellBinding(GEMINI_CLI_PROFILE);
+    const call = (toolCallId: string, kind: string): AcpToolCall => ({ toolCallId, title: 'task_complete(status: done)', kind: kind as AcpToolCall['kind'] });
+    const asks = ROLE_RECORDINGS.flatMap((name) => note(name, 'summary')?.permissions ?? []);
+    const failed = ROLE_RECORDINGS.flatMap((name) => note(name, 'summary')?.failed ?? []);
+    expect(asks.length).toBeGreaterThan(0);
+    expect(failed.length).toBe(4);
+    for (const p of asks) expect(binding.isOrdewellAsk({ request: call(p.toolCallId, p.kind) })).toBe(true);
+    for (const f of failed) expect(binding.isOrdewellAsk({ request: call(f.toolCallId, f.kind) })).toBe(false);
   });
 });
 
