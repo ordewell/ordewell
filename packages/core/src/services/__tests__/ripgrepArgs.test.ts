@@ -191,6 +191,10 @@ describe('toPosixClasses', () => {
     expect(toPosixClasses('\\(?:x[(?:]')).toBe('\\(?:x[(?:]');
   });
 
+  it('keeps a non-capturing group beside a backreference, which a plain one would renumber', () => {
+    expect(toPosixClasses('(?:a|b)(c)\\1')).toBe('(?:a|b)(c)\\1');
+  });
+
   it('leaves escapes outside a class, and an unterminated class, alone', () => {
     expect(toPosixClasses('\\bfoo\\s+bar\\b')).toBe('\\bfoo\\s+bar\\b');
     expect(toPosixClasses('a[\\s')).toBe('a[\\s');

@@ -95,6 +95,17 @@ describe('killTree on Windows', () => {
     expect(calls).toEqual([['/pid', '4242', '/T'], ['/pid', '4242', '/T', '/F']]);
   });
 
+  it('forces nothing when the unforced pass failed for a process already gone, whose pid may be another\'s', () => {
+    const calls: string[][] = [];
+    const h = harness({
+      platform: 'win32',
+      execFileImpl: (_f, args, cb) => { calls.push(args); h.child.exitCode = 0; cb(new Error('not found')); },
+    });
+    killTree(h.child as unknown as ChildProcess, h.deps);
+
+    expect(calls).toEqual([['/pid', '4242', '/T']]);
+  });
+
   it('waits out the grace for a process that agreed to close', () => {
     const h = harness({ platform: 'win32' });
     killTree(h.child as unknown as ChildProcess, h.deps);

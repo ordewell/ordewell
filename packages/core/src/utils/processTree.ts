@@ -270,7 +270,9 @@ export function killTree(proc: ChildProcess | null, deps: KillTreeDeps = {}): vo
     // workspace the user has stopped it in, and holding it from removal.
     // `/F` follows on the timer too, for one that agreed and did not go.
     const force = () => run('taskkill', ['/pid', String(pid), '/T', '/F'], () => { /* already gone */ });
-    run('taskkill', ['/pid', String(pid), '/T'], (err) => { if (err) force(); });
+    // A pass that failed because the process had already gone forces nothing:
+    // its pid may be another's by then.
+    run('taskkill', ['/pid', String(pid), '/T'], (err) => { if (err && !hasExited(proc)) force(); });
     const hardKill = setTimeoutImpl(force, HARD_KILL_DELAY_MS);
     hardKill.unref?.();
     proc.once('exit', () => clearTimeoutImpl(hardKill));

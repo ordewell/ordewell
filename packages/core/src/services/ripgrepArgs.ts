@@ -95,10 +95,13 @@ export function grepRegexFromProbe(exitCode: number | null): GrepRegex {
  * the search comes back confidently empty. Outside a class the enhanced
  * `-E` already reads `\s`, `\w`, `\d` and `\b`, so only classes are touched,
  * but for a non-capturing group: GNU grep's `-E`, which Git for Windows ships,
- * reads no `(?:`, and a plain group matches the same lines.
+ * reads no `(?:`, and a plain group matches the same lines. Not in a pattern
+ * with a backreference, whose groups that would renumber: `\1` would name
+ * another group and match other lines, where `(?:` left alone matches none.
  */
 export function toPosixClasses(pattern: string): string {
   const CLASS_ESCAPES: Record<string, string> = { s: '[:space:]', w: '[:alnum:]_', d: '[:digit:]', t: '\t' };
+  const backreferenced = /\\[1-9]/.test(pattern);
   let out = '';
   let i = 0;
   while (i < pattern.length) {
@@ -108,7 +111,7 @@ export function toPosixClasses(pattern: string): string {
       i += 2;
       continue;
     }
-    if (pattern.startsWith('(?:', i)) {
+    if (!backreferenced && pattern.startsWith('(?:', i)) {
       out += '(';
       i += 3;
       continue;

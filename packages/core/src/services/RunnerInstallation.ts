@@ -3,7 +3,7 @@ import { promisify } from 'util';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import type { RunnerManifest } from '../plugins/types';
 import { augmentedPath, withPath } from '../utils/shellPath';
-import { planDirectLaunch, type LaunchDeps } from '../utils/launch';
+import { isExecutableResolved, planDirectLaunch, type LaunchDeps } from '../utils/launch';
 import type { ExecImpl } from './ModelDiscovery';
 import { connectorFor } from './harness/connectors';
 import { readRunnerAuth, recordRunnerAuth, type RunnerAuth, type RunnerAuthExec } from './runnerAuth';
@@ -223,9 +223,9 @@ export class RunnerInstallation {
     if ((this.launch.platform ?? process.platform) !== 'win32') return true;
     try {
       const plan = await planDirectLaunch(command, [], this.launch);
-      // An unresolvable command is handed back verbatim; anything else means a
-      // real file was found, directly or behind the interpreter.
-      return plan.file !== command;
+      // Asked as the runner's own start asks it (runnerProcess), so the two
+      // cannot disagree. Windows judges by the plan, which searched PATH itself.
+      return isExecutableResolved(command, plan, '', this.launch);
     } catch {
       // A CommandLineTooLongError cannot happen with no arguments; anything
       // else here is a resolution failure, which is the answer.
