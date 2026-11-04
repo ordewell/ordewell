@@ -1,6 +1,6 @@
 # Ordewell for VS Code
 
-**Plan once, run it across Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code and Cline, and review one branch.**
+**Plan once, run it across Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Cline and Gemini CLI, and review one branch.**
 One goal becomes an editable plan with a runner and model assigned to each AI task.
 By default, submitted build plans wait for your approval. Run settings let you
 automate execution and merging. Research tasks and consented script tasks can
@@ -56,7 +56,7 @@ To plan with an API key instead, set `ordewell.openAiApiKey` (OpenRouter) or
 `ordewell.apiKey` (Gemini), or export `OPENROUTER_API_KEY` or `GEMINI_API_KEY`. A key
 you have set takes priority over the installed agent.
 
-Each runner you want to use (Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code or Cline)
+Each runner you want to use (Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Cline or Gemini CLI)
 must be installed and on your PATH. If a runner appears greyed out right after installing it, reload the
 window so the extension picks up the new PATH.
 

@@ -28,8 +28,9 @@ they connect to them, and whether their own tools can be taken away.
 an `AcpProfile`: data, not code.** `acpConnector(profile)` turns a profile into
 the runner's entry in `CONNECTORS`, so a new ACP agent is a manifest and a
 profile. GitHub Copilot CLI (`copilot-cli`, `copilot --acp --stdio`) is the
-reference agent. Qwen Code (`qwen-code`, `qwen --acp`) and Cline (`cline`,
-`cline --acp`) take writable tasks only.
+reference agent. Qwen Code (`qwen-code`, `qwen --acp`), Cline (`cline`,
+`cline --acp`) and Gemini CLI (`gemini-cli`, `gemini --acp --skip-trust`) take
+writable tasks only.
 
 Ordewell is the ACP client and does no I/O for the agent: it advertises no
 file-system and no terminal capability, so the agent works in the worktree
@@ -440,15 +441,71 @@ Cline loads its user's own configuration in every attempt:
 `CLINE_DIR` nor `CLINE_DATA_DIR`, so a user's global rules and hooks run inside
 Ordewell's attempts.
 
+## Gemini CLI
+
+Checked against Gemini CLI 0.66.0, the profile's `minVersion`, and the
+recordings in `packages/core/src/services/__tests__/fixtures/acp/gemini-cli/`,
+made with `gemini-3.5-flash-lite` and a Gemini API key from Gemini's own
+settings:
+
+| profile field | Gemini CLI |
+|---|---|
+| instructions | the first prompt: Gemini has no instruction file or `_meta` slot outside the worktree |
+| mode | the session mode, set with `session/set_mode` after `session/new` (`default`, `autoEdit`, `yolo`), since Gemini offers no config options; no `plan`, whose refusal of a write and a command has no recording |
+| model | `--model` at spawn, with the id as `session/new` lists it |
+| Ordewell's tools | the call id up to its first `__`, `mcp_ordewell_<tool>`: Gemini's call ids are the name it looked the tool up by, then a counter; the title is the call as the model wrote it (`task_complete(summary: ok, status: done)`), the kind is a guess (`other`), and there is no `_meta` or raw input, so none of those is read |
+| trust | `--skip-trust`: the task's worktree is trusted for that process only |
+| credentials | none: Gemini reads the key in its own settings over ACP, as the recordings show, so its spawn carries none from Ordewell (R9) |
+| restriction | none |
+| roles | none: Gemini is task-only, since no recording shows its `plan` mode, or any control, refusing a write and a command (R3) |
+
+A new worktree is a folder Gemini has not been told to trust, and in such a
+folder Gemini connects no MCP server and refuses `yolo`: the server is never
+contacted (`untrusted.jsonl`), and `session/set_mode` to `yolo` fails with
+`-32603` "Internal error", whose details say privileged modes cannot be
+enabled there (`untrusted-yolo.jsonl`). So every start passes `--skip-trust`.
+With it Gemini contacts the server while `session/new` runs, which is the
+attach (R5), and a `session/load` contacts it while the load runs
+(`load.jsonl`). The trust is Gemini's whole trust, not only its MCP servers:
+it loads the worktree's own `.gemini/` settings and hooks, as Claude Code and
+Codex load theirs in a task, and it overrides a user's choice not to trust
+that folder, for that process.
+
+Gemini advertises `loadSession` and no resume, so a resume is `session/load`,
+which first replays the session's history as updates; they come outside a turn
+and are dropped. A mode change is announced as a message chunk outside the
+turn too, and dropped likewise. In `default` Gemini asks about an edit
+(`edit.jsonl`), a command (`execute.jsonl`) and every MCP call, Ordewell's own
+included (`ordewell-tool.jsonl`), but runs a command it deems safe, such as
+`echo`, without asking (`execute-safe.jsonl`). A native tool's request offers
+`proceed_always`, `proceed_once` and `cancel`; an MCP tool's adds
+`proceed_always_server` and `proceed_always_tool`. A refused edit leaves
+nothing (`deny.jsonl`). In `yolo` it asks about nothing (`allow-all.jsonl`). A
+cancel ends the turn `cancelled` and the pending request is answered
+`cancelled`; the command did not run (`cancel.jsonl`).
+
+The turn reports a call under the same title as its request, so the
+transcript names Ordewell's call as the model wrote it, and a call with no
+arguments by the tool's display name, `<tool> (ordewell MCP Server)`, as
+Gemini's source words it; no recording has such a call. Gemini
+has no login or status command: `gemini` itself offers the sign-in, and a
+signed-out `session/new` fails with `-32000` "Gemini API key is missing or not
+configured." (`signed-out.jsonl`), which is how a signed-out Gemini is learned.
+Its models come from ACP discovery alone, started bare (`--acp`) and so
+untrusted, since discovery hands it no server: `session/new` lists `auto` and
+five Gemini models (`discovery.jsonl`), and there is no command to fall back
+to.
+
 ## Testing decisions
 
 - **Recorded fixtures are the agent's evidence.** A recording is the JSONL of
   every line each side sent, with notes for the spawn arguments and what the
   live run left behind. `copilotCli.test.ts` replays the agent's side against a
-  live adapter and Ordewell server, and `qwenCode.test.ts` and
-  `clineCode.test.ts` do the same for Qwen and Cline; a claim about the agent
-  cites a recording. Cline's replay also answers the MCP calls the recording
-  shows from the file it was handed, with the attempt's own token, so its
+  live adapter and Ordewell server, and `qwenCode.test.ts`,
+  `clineCode.test.ts` and `geminiCli.test.ts` do the same for Qwen, Cline and
+  Gemini; a claim about the agent cites a recording. Cline's replay also
+  answers the MCP calls the recording shows from the file it was handed, with
+  the attempt's own token, so its
   first-turn attach, its resume and its concurrent attempts are judged by the
   server as live.
 - **`fakeAcpAgent`** scripts an agent for the adapter's own tests
@@ -489,8 +546,10 @@ Ordewell's attempts.
 - **A stdio-to-HTTP MCP bridge.** An agent that takes only stdio MCP servers
   would need a local process carrying the token; it is refused instead, until
   such an agent is worth the bridge.
-- **Agents beyond Copilot CLI, Qwen Code and Cline.** Gemini CLI and Goose wait
-  for the same live probe those passed before they are admitted at all.
+- **Agents beyond Copilot CLI, Qwen Code, Cline and Gemini CLI.** Goose waits
+  for the same live probe those passed before it is admitted at all.
+- **Gemini CLI signed in with a Google account or Vertex AI.** The recordings
+  use a Gemini API key. No recording shows a task run on another sign-in.
 - **A key kept outside the environment.** The hook reads the host's and the
   workspace's variables, where the CLI's `/key` writes; a key VS Code keeps in
   its secret store, and its `aiProvider` setting, reach no agent until the
@@ -596,6 +655,18 @@ Ordewell's attempts.
   may start or join a hub daemon that outlives the attempt and serves other
   sessions, so the session would not end with the process Ordewell stops.
   `CLINE_SESSION_BACKEND_MODE=local` keeps it in that process.
+- **Gemini started without `--skip-trust`, its worktree left untrusted.**
+  Rejected: an untrusted folder connects no MCP server, so the attach never
+  comes and every start would be refused, and it refuses `yolo`, so a plan's
+  autonomous mode could never be set. Trusting the folder for the process is
+  what lets the server reach it; the cost is that the worktree's own `.gemini/`
+  configuration loads, as a native runner's does.
+- **The worktree added to Gemini's `trustedFolders.json`.** Rejected: that
+  file is the user's and shared by every Gemini process, so every worktree
+  would stay trusted after its attempt, and a crash would leave the entry
+  behind. The flag's trust ends with the process.
+- **Gemini's `plan` mode as a read-only mode.** Rejected for want of evidence,
+  as Qwen's and Cline's are.
 - **Ordewell calling `authenticate` with the stored key.** Rejected: ACP's
   auth methods are the agent's to name and differ by agent, signing in stays
   the user's
@@ -639,9 +710,15 @@ Ordewell's attempts.
   have changed the worktree the respawn starts in.
 - A runner id shares the planner setting's namespace with the API vendors'
   ids, so an ACP runner id must not equal one (`kimi-cli`, not `kimi`;
-  `qwen-code`, because `qwen` is DashScope's; `cline` is no vendor's).
-- Cline's transcript names each call with its arguments' summary, since that
-  is the title it reports the call under.
+  `qwen-code`, because `qwen` is DashScope's; `cline` is no vendor's;
+  `gemini-cli`, because `google` is the vendor whose models are Gemini, and a
+  bare `gemini` would read as them).
+- Cline's transcript names each call with its arguments' summary, and
+  Gemini's with the call as the model wrote it, since those are the titles
+  they report their calls under.
+- A Gemini task runs in a worktree Gemini trusts, so a repository's
+  `.gemini/` settings and hooks run in it, whatever the user chose for that
+  folder in Gemini.
 - Each agent's ACP server is young and changes between releases; the profile's
   `minVersion` and its recordings name the version each claim was checked on.
 
@@ -680,3 +757,5 @@ Ordewell's attempts.
   empty config homes in its private directory (`restricted.files`,
   `restricted.configDirs`), for an agent whose controls are a hook or a
   settings file; no profile uses them yet.
+- 2026-11-04 — Gemini CLI (`gemini-cli`) is admitted on its recordings, for
+  writable tasks only, started trusting its worktree (`--skip-trust`).
