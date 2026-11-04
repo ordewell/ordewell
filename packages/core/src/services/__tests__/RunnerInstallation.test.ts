@@ -133,14 +133,6 @@ describe('RunnerInstallation.plannerUsability (ADR-0009 preflight)', () => {
     expect(result.reason).toContain('no planner transport');
   });
 
-  it('refuses a runner whose connector runs tasks but does not plan, in words that say so', async () => {
-    const exec: ExecImpl = vi.fn(async () => ({ stdout: 'ok' }));
-    const inst = new RunnerInstallation(registryWith(COPILOT_CLI_MANIFEST), exec);
-
-    expect(await inst.plannerUsability('copilot-cli')).toEqual({ usable: false, reason: 'GitHub Copilot CLI can run tasks but cannot plan in Ordewell yet.' });
-    expect(exec).not.toHaveBeenCalled();
-  });
-
   it('plans with exactly the runners whose connectors plan', async () => {
     const exec: ExecImpl = vi.fn(async () => ({ stdout: 'ok' }));
     const authExec: RunnerAuthExec = vi.fn(async () => ({ code: -1, stdout: '', stderr: '' }));

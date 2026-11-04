@@ -20,6 +20,8 @@ export interface SpawnSpec {
   envDrop?: (name: string) => boolean;
   /** Paths on this host, named in `args`, that the process reads. */
   files?: readonly string[];
+  /** Where the process starts, when not in the workspace. */
+  cwd?: string;
 }
 
 /**
@@ -98,8 +100,8 @@ export abstract class StdioAgentAdapter extends ProcessLifecycle implements Agen
    */
   protected async launch(cwd: string, spec: (workspace: Record<string, string>) => SpawnSpec, handshake: () => Promise<void>): Promise<void> {
     await this.startProcess(cwd, (workspace) => {
-      const { command, args, env, envDrop, files } = spec(workspace);
-      return { command, args, env: () => env ?? {}, ...(envDrop ? { envDrop } : {}), ...(files ? { files } : {}) };
+      const { command, args, env, envDrop, files, cwd: startIn } = spec(workspace);
+      return { command, args, env: () => env ?? {}, ...(envDrop ? { envDrop } : {}), ...(files ? { files } : {}), ...(startIn ? { cwd: startIn } : {}) };
     }, () => {
       this.readProtocol();
       return handshake();

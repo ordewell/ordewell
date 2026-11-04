@@ -202,11 +202,11 @@ describe('ordewell planner', () => {
   });
 
   it('refuses a runner that runs tasks but cannot plan by its name, not as an unknown planner', async () => {
-    const d = await fakeDaemon({ models: CATALOG, runners: { runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }, { id: 'copilot-cli', name: 'GitHub Copilot CLI', enabled: true }], headless: false, orchestratorModel: '' } });
+    const d = await fakeDaemon({ models: CATALOG, runners: { runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }, { id: 'acme', name: 'Acme Agent', enabled: true }], headless: false, orchestratorModel: '' } });
     const { handlePlanner } = await import('../planner');
-    const { stderr, exitCode } = await capture(() => handlePlanner(['copilot-cli'], new ApiClient(d.port)));
-    expect(stderr).toContain('GitHub Copilot CLI runs tasks but cannot plan in Ordewell yet.');
-    expect(stderr).toContain('claude-code, codex, opencode');
+    const { stderr, exitCode } = await capture(() => handlePlanner(['acme'], new ApiClient(d.port)));
+    expect(stderr).toContain('Acme Agent runs tasks but cannot plan in Ordewell yet.');
+    expect(stderr).toContain('claude-code, codex, opencode, copilot-cli');
     expect(stderr).not.toContain('Unknown planner');
     expect(exitCode).toBe(1);
     expect(d.sent).toEqual([]);

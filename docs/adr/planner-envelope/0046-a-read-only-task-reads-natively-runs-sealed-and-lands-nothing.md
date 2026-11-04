@@ -199,8 +199,9 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
   command and mode switch the agent still asks for, with nobody asked, and
   fails a session that leaves the mode it settled in. A profile without the
   role gives its manifest no read-only mode, so ModeResolver never assigns
-  one. GitHub Copilot CLI claims none: its controls hold, but under ACP it
-  runs the repository's hooks (ADR-0028).
+  one. GitHub Copilot CLI claims it (its `plan` mode): it starts in a private
+  directory of its own, so it runs none of the repository's hooks (ADR-0028),
+  and its every read of the worktree is a request this ADR's rules answer.
 - **Native web tools are refused.** A runner's own fetch and search run
   outside Ordewell's pinned transport, and a provider-side search outside its
   secret check and budget too, with nobody there to approve one. Claude's
@@ -461,3 +462,4 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
 - 2026-11-01 — a script task and a delegated task may be read-only (ADR-0055 D1, D8).
 - 2026-11-01 — the task tool is `read` ([ADR-0057](../supervision/0057-information-moves-by-reference.md) R11).
 - 2026-11-04 — an ACP runner runs a read-only task only on its profile's evidence; GitHub Copilot CLI runs none (ADR-0060).
+- 2026-11-04 — GitHub Copilot CLI runs read-only tasks, from a private start directory (ADR-0060).

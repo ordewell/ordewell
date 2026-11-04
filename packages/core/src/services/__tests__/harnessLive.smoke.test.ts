@@ -72,10 +72,8 @@ function liveService(provider: LiveAgent) {
 
 describe.runIf(requested.length > 0)('harness planners — live smoke', () => {
   for (const agent of ['claude-code', 'codex', 'opencode', 'copilot-cli'] as const) {
-    // Copilot CLI's profile withholds the planner role (ADR-0028 hooks run
-    // under ACP, and Copilot labels run_plan an `execute`), so it is held to
-    // its refusal instead, and the planner checks start running the day the
-    // role is granted.
+    // A runner whose connector does not claim the planner role is held to its
+    // refusal instead, and the planner checks start running the day it does.
     const plans = connectorFor(agent)?.plans === true;
 
     it.runIf(requested.includes(agent) && !plans)(`${agent} is refused as a planner, in plain words`, () => {
@@ -147,7 +145,7 @@ describe.runIf(requested.length > 0)('harness planners — live smoke', () => {
 
         expect(tasks.length).toBeGreaterThan(0);
         expect(tasks[0].assignedRunner).toBe(agent);
-        expect(tasks[0].prompt?.trim().length).toBeGreaterThan(0);
+        expect(tasks[0].prompt?.trim().length ?? 0, `a task without a prompt: ${JSON.stringify(tasks[0])}`).toBeGreaterThan(0);
       } finally {
         svc.reset();
       }

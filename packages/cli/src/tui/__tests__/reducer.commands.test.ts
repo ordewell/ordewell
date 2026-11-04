@@ -51,11 +51,11 @@ describe('models and providers', () => {
   });
 
   it('/planner names a runner that runs tasks but cannot plan, rather than calling it unknown', () => {
-    const runners: RunnerView[] = [{ id: 'copilot-cli', name: 'GitHub Copilot CLI', enabled: true }];
-    const { state, effects } = run('/planner copilot-cli', { runners });
+    const runners: RunnerView[] = [{ id: 'acme', name: 'Acme Agent', enabled: true }];
+    const { state, effects } = run('/planner acme', { runners });
     expect(effects).toEqual([]);
     expect(lastMessage(state)).toMatchObject({ role: 'error' });
-    expect(JSON.stringify(lastMessage(state))).toContain('GitHub Copilot CLI runs tasks but cannot plan in Ordewell yet.');
+    expect(JSON.stringify(lastMessage(state))).toContain('Acme Agent runs tasks but cannot plan in Ordewell yet.');
     expect(JSON.stringify(lastMessage(state))).not.toContain('Unknown planner');
   });
 

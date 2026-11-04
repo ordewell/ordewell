@@ -773,7 +773,8 @@ Ordewell holds for a runner it drives over the runner's own protocol: the
 adapter that serves it as a harness planner (ADR-0009) and as a structured
 task's runner (ADR-0018), its *Ordewell tool binding*, and optionally how it
 words a usage-limit reset. Its `plans` says whether the runner can also be the
-planner: a runner may be task-only, as GitHub Copilot CLI is. The registry is
+planner: a runner may be task-only, as an ACP agent whose profile claims no
+planner role is. The registry is
 keyed by runner id; a runner without a connector cannot run, and a runner id
 shares the planner setting's namespace with the API vendors' ids, so it never
 equals one. Adding a runner to it is the one place a runner's planner, task
@@ -839,7 +840,9 @@ server qualifies. Ordewell offers it no file system or terminal, so it works in
 the worktree with its own tools and reaches Ordewell only through the Ordewell
 MCP server, given over HTTP in `session/new`. It has no mid-turn steer: a
 message waits for the turn's end. GitHub Copilot CLI (`copilot-cli`) is the one
-admitted so far, for writable tasks only.
+admitted so far: it runs tasks, read-only ones included, and plans, and on a
+planner or read-only start it begins in a private directory, never the
+worktree, so the repository's hooks and config do not run (ADR-0060 R3).
 *Avoid:* "ACP shim" or "ACP bridge" for it (a third-party adapter in front of an
 agent does not qualify); "ACP backend", "ACP provider".
 

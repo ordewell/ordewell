@@ -64,8 +64,10 @@ const OPENCODE_ACP_PROFILE: AcpProfile = {
   // Ordewell for the permission test to answer, nor for `auto` to approve.
   env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ permission: { bash: 'ask' } }) },
   instructions: { kind: 'prompt' },
-  ordewellTool: (call) =>
-    call.kind === 'other' && call.title?.startsWith(OPENCODE_SERVER_PREFIX) ? call.title.slice(OPENCODE_SERVER_PREFIX.length) : null,
+  ordewellTool: ({ request, report }) => {
+    const call = report ?? request;
+    return call.kind === 'other' && call.title?.startsWith(OPENCODE_SERVER_PREFIX) ? call.title.slice(OPENCODE_SERVER_PREFIX.length) : null;
+  },
   toolName: (tool) => `${OPENCODE_SERVER_PREFIX}${tool}`,
 };
 

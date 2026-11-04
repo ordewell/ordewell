@@ -101,9 +101,9 @@ still runs a single goal the old way.
   (all fields optional; `edit` asks through `session/request_permission`, and
   `calls` reaches the planner tools). `copilot` is the POSIX shim and
   `copilot.cmd` the Windows one.
-  On this branch `copilot-cli` claims no planner role (`roles: { plans: false }`
-  in `copilotProfile.ts`), so the pipeline cases cover it as a task runner only;
-  the fake's planner half is ready for a connector that is granted that role.
+  The pipeline plans through its API planner, so it drives `copilot-cli` as a
+  task runner only; the fake's planner half (`role: "planner"`) is there for a
+  driver that starts it as the planner.
 - `drive-pipeline.mjs` — drives a plan end to end through the fake `claude`
   (`--runner fake`, the default) so auto-advance, parallel task scheduling and
   dependency chains can be tested without spending anything, through the fake

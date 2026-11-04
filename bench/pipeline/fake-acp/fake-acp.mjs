@@ -32,9 +32,9 @@
  * the work it began stops with it. With FAKE_ACP_LOG set, every prompt, tool
  * call and reply is appended to that file as a line of JSON.
  *
- * The planner half is here for a connector that claims a planner role. On this
- * branch copilot-cli does not (`roles: { plans: false }`), so the pipeline
- * exercises this agent as a task runner only.
+ * The planner half is here for a driver that starts copilot-cli as the
+ * planner. The pipeline plans through its API planner, so it exercises this
+ * agent as a task runner only.
  */
 import fs from 'node:fs';
 import path from 'node:path';

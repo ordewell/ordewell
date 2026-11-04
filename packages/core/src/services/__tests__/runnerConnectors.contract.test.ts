@@ -60,6 +60,24 @@ async function opened(runner: string, start: AgentStartOptions, script: FakeRunn
   return { fake, adapter, events };
 }
 
+/**
+ * `work`, run with the clock moved on until it settles: a runner that reports
+ * no MCP status (ACP) shows a server it never used only by the attach wait
+ * running out (ADR-0060, R5).
+ */
+async function onFakeClock<T>(work: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+  try {
+    const running = work();
+    let settled = false;
+    running.then(() => { settled = true; }, () => { settled = true; });
+    while (!settled) await vi.advanceTimersByTimeAsync(1_000);
+    return await running;
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 const servers: OrdewellMcpServer[] = [];
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => server.dispose()));
@@ -149,10 +167,12 @@ describe.each(runners)('the %s connector and the Ordewell tools', (runner) => {
     const server = new OrdewellMcpServer();
     servers.push(server);
     const issued = vi.spyOn(server, 'issuePlannerToken');
-    const fake = FAKE_RUNNERS[runner]({ attach: 'connected', reply: planJson(runner) });
+    const fake = FAKE_RUNNERS[runner]({ attach: 'connected' });
     const svc = new CliAgentAiService(fakeConfig({ aiProvider: providerForRunner(runner)!, enabledRunners: [runner] }), { ...fake.deps, workspaceRoot: () => '/repo', mcpServer: server });
 
-    await svc.startConversation({
+    // Checked in the planner's open first turn: a runner that asks about each
+    // call (ACP) asks only in a turn, and is answered by what the turn reported.
+    const conversation = svc.startConversation({
       goal: 'Add the thing',
       runners: [runner],
       modelsByRunner: { [runner]: [{ modelId: 'sonnet', modelLabel: 'Sonnet', variants: [] }] },
@@ -160,6 +180,8 @@ describe.each(runners)('the %s connector and the Ordewell tools', (runner) => {
       onProgress: () => {},
       plannerTools: { sessionId: 's1', handler: {} },
     }).catch(() => undefined);
+    await vi.waitFor(() => expect(fake.launches()).toBe(1));
+    await fake.turnOpen();
     const credential = await issued.mock.results[0].value;
     const config = mcpClientConfig(credential);
     const client = new Client({ name: 'test', version: '0.0.0' });
@@ -170,6 +192,7 @@ describe.each(runners)('the %s connector and the Ordewell tools', (runner) => {
     for (const tool of hidden) expect(await fake.preAllows(name(tool)), tool).toBe(false);
     await client.close();
     svc.reset();
+    await conversation;
   });
 
   it.each(roles)('shows a %s calling each of its tools under that name', async (_role, start, tools) => {
@@ -196,7 +219,7 @@ describe.each(runners)('the %s connector and the Ordewell tools', (runner) => {
     const announced = events.filter((e) => e.type === 'permission_request');
     expect(announced).toHaveLength(1);
     const request = announced[0] as Extract<AgentEvent, { type: 'permission_request' }>;
-    if (request.decided) expect(request.decided).toEqual({ decision: 'deny' });
+    if (request.decided) expect(request.decided.decision).toBe('deny');
     else expect(await adapter.answerPermission?.(request.id, { decision: 'deny' })).toBe(true);
     expect(await answer).toBe('deny');
     adapter.dispose();
@@ -225,14 +248,14 @@ describe.each(runners)('the %s connector and the Ordewell tools', (runner) => {
     const fake = FAKE_RUNNERS[runner]({ attach: 'failed', reply: planJson(runner) });
     const svc = new CliAgentAiService(fakeConfig({ aiProvider: providerForRunner(runner)!, enabledRunners: [runner] }), { ...fake.deps, workspaceRoot: () => '/repo', mcpServer: server });
 
-    await expect(svc.startConversation({
+    await expect(onFakeClock(() => svc.startConversation({
       goal: 'Add the thing',
       runners: [runner],
       modelsByRunner: { [runner]: [{ modelId: 'sonnet', modelLabel: 'Sonnet', variants: [] }] },
       fs: fakeFileSystem(),
       onProgress: () => {},
       plannerTools: { sessionId: 's1', handler: {} },
-    })).rejects.toThrow('MCP server connected');
+    }))).rejects.toThrow('MCP server connected');
 
     expect(fake.launches()).toBe(2);
     expect(fake.injectedUrl(0)).toBe(server.url);

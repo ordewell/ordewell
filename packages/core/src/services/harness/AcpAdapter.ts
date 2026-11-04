@@ -25,19 +25,24 @@ import {
 import { endTurn, newTurn, reduceUpdate, type AcpTurn } from './acpEvents';
 import { acpOrdewellBinding } from './acpOrdewell';
 import { currentValue, findOption, optionValues, type OptionRole } from './acpOptions';
-import type { AcpProfile } from './acpProfiles';
+import type { AcpAskedCall, AcpProfile } from './acpProfiles';
 import { acpAsk, acpRoles, decideRestricted } from './acpRoles';
 import { PermissionLedger, type LedgerStance } from './permissionLedger';
 import { readOnlyTask } from './plannerPermissions';
 import { awaitAttach, listed, MCP_ATTACH_TIMEOUT_MS, type AttachState } from './ordewellBinding';
 import { settleWithin } from './settleWithin';
 import { compareVersions } from '../../utils/version';
-import { dirname } from 'path';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { dirname, join } from 'path';
 import { ownerOnlyConfigFile, taskCompletionContract, type McpClientConfig } from '../mcp';
 
 const DEFAULT_INIT_TIMEOUT_MS = 30_000;
 
 const MODEL_COMMAND = 'model';
+
+/** Where a process finds its temp directory: POSIX's, then Windows's. */
+const TEMP_DIR_VARIABLES = ['TMPDIR', 'TMP', 'TEMP'] as const;
 
 type PermissionOutcome = { outcome: 'selected'; optionId: string } | { outcome: 'cancelled' };
 const CANCELLED: PermissionOutcome = { outcome: 'cancelled' };
@@ -86,7 +91,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
   private readonly binding: ReturnType<typeof acpOrdewellBinding>;
   private readonly ledger: PermissionLedger<HeldRequest>;
   /** Each request the agent waits on, by the ledger's id for it, with its own JSON-RPC id, the call it asks for and what settles its answer. */
-  private readonly held = new Map<string, { rpcId: number | string; call: AcpToolCall; resolve(outcome: PermissionOutcome): void }>();
+  private readonly held = new Map<string, { rpcId: number | string; asked: AcpAskedCall; resolve(outcome: PermissionOutcome): void }>();
   private started: Started | null = null;
   /**
    * A planner's start or a read-only task's: the profile's restricted
@@ -94,6 +99,12 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
    * raises without a person (ADR-0026, ADR-0046; ADR-0060, R3).
    */
   private restricted = false;
+  /**
+   * The empty directory this process was started in instead of the worktree
+   * (`AcpRestriction.privateCwd`), or null where it started in the worktree.
+   * The worktree stays the start's for every decision.
+   */
+  private startDir: string | null = null;
   /** The mode a restricted session settled in, which it may not leave; watched once the settings are applied. */
   private settledMode: { id: string | undefined } | null = null;
   /** Why this process may take no further turn: it left the mode its restricted start held. */
@@ -151,6 +162,10 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     if (opts.kind === 'planner' && !roles.plans) throw new Error(`${this.name} cannot plan in Ordewell: its profile claims no planner role.`);
     if (opts.kind === 'task' && restricted && !roles.readOnly) throw new Error(`${this.name} cannot run a read-only task in Ordewell: its profile claims no read-only role.`);
     if (!opts.mcp) throw new Error(`${this.name} cannot start without the Ordewell MCP server to carry its tools.`);
+    // A container starts its runner in the worktree, the one place this start must keep it out of (ADR-0028).
+    if (restricted && this.profile.restricted?.privateCwd && this.deps.placement) {
+      throw new Error(`${this.name} cannot ${opts.kind === 'planner' ? 'plan' : 'run a read-only task'} in a container: there it would start in the worktree and run the repository's hooks.`);
+    }
     this.started = { ...opts, mcp: opts.mcp };
     this.restricted = restricted;
     await super.start(opts);
@@ -169,7 +184,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
         role: started.kind === 'planner' ? 'planner' : 'task',
         autoApprove: false,
         // The ledger asks while the request is being held, so its call is here.
-        decide: (request) => decideRestricted(this.held.get(request.id)!.call, request.ask ?? { kind: 'other' }, started),
+        decide: (request) => decideRestricted(this.held.get(request.id)!.asked, request.ask ?? { kind: 'other' }, started),
       };
     }
     return { role: 'task', autoApprove: this.profile.mode === undefined && started?.kind === 'task' && started.flags.modeSettings.approvals === 'auto' };
@@ -193,23 +208,51 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     ];
     const env: Record<string, string> = { ...this.profile.env, ...(this.restricted ? restricted?.env : {}) };
     const files: string[] = [];
+    this.startDir = this.restricted && restricted?.privateCwd ? this.ownStartDir() : null;
+    // The system's temp directory is shared by every process of the user's,
+    // other attempts' instructions included, and an agent may read its own
+    // temp directory without asking: Copilot does, whatever its flags say.
+    if (this.startDir) for (const name of TEMP_DIR_VARIABLES) env[name] = this.startDir;
     const contract = this.instructions(started);
     if (instructions.kind === 'file') {
-      const file = ownerOnlyConfigFile(instructions.fileName, contract);
-      this.own('instructions', file.remove);
+      const path = this.instructionsFile(instructions.fileName, contract);
       if ('flag' in instructions.pass) {
-        args.push(instructions.pass.flag, file.path);
-        files.push(file.path);
-      } else if ('envDir' in instructions.pass) {
-        env[instructions.pass.envDir] = dirname(file.path);
-      } else {
-        env[instructions.pass.env] = file.path;
+        args.push(instructions.pass.flag, path);
+        files.push(path);
+      } else if (!('envDir' in instructions.pass)) {
+        env[instructions.pass.env] = path;
+      } else if (!this.startDir) {
+        env[instructions.pass.envDir] = dirname(path);
       }
     }
     // Every process starts without the contract, a resumed one included, so
     // its first prompt carries it again.
     this.preamble = instructions.kind === 'prompt' ? contract : null;
-    return { command: this.profile.manifest.runner.command, args, env, ...(files.length ? { files } : {}) };
+    return { command: this.profile.manifest.runner.command, args, env, ...(files.length ? { files } : {}), ...(this.startDir ? { cwd: this.startDir } : {}) };
+  }
+
+  /** A directory of this process's own, owner-only and empty, outside any repository. */
+  private ownStartDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'ordewell-acp-'));
+    this.own('start-dir', () => rmSync(dir, { recursive: true, force: true }));
+    return dir;
+  }
+
+  /**
+   * The contract as an owner-only file, never in the worktree. A process
+   * started in a directory of its own gets it there, as that directory's own
+   * instructions, which the agent loads with the session: a file in a
+   * directory it is only pointed at, Copilot reads when the model chooses to.
+   */
+  private instructionsFile(fileName: string, contents: string): string {
+    if (this.startDir) {
+      const path = join(this.startDir, fileName);
+      writeFileSync(path, contents, { mode: 0o600 });
+      return path;
+    }
+    const file = ownerOnlyConfigFile(fileName, contents);
+    this.own('instructions', file.remove);
+    return file.path;
   }
 
   protected override async handshake(): Promise<void> {
@@ -304,7 +347,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
   private sessionParams(started: Started): Record<string, unknown> {
     const { mcp } = started;
     return {
-      cwd: this.deps.placement?.cwd ?? started.cwd,
+      cwd: this.deps.placement?.cwd ?? this.startDir ?? started.cwd,
       mcpServers: [{ type: 'http', name: mcp.name, url: mcp.url, headers: Object.entries(mcp.headers).map(([name, value]) => ({ name, value })) }],
     };
   }
@@ -407,9 +450,16 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
    * What the process is told before its first prompt. A planner gets its
    * system prompt and where its tools are, all from its planner token
    * (ADR-0022); a task gets the completion contract, and a read-only task
-   * also that Ordewell's tools are its only shell and web (ADR-0046).
+   * also that Ordewell's tools are its only shell and web (ADR-0046). One
+   * started in a private directory is first told where the workspace is,
+   * since its relative paths now name that empty directory.
    */
   private instructions(started: Started): string {
+    const where = this.startDir ? `The workspace is \`${started.cwd}\`, not the directory you start in: name its files by their full path there.` : null;
+    return [where, this.contract(started)].filter(Boolean).join('\n\n');
+  }
+
+  private contract(started: Started): string {
     const { toolName } = this.binding;
     if (started.kind === 'planner') {
       const { hidden = [], extraTools } = started.mcp;
@@ -624,7 +674,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
       rawInput: toolCall.rawInput ?? report?.rawInput,
     };
     return new Promise((resolve) => {
-      this.held.set(id, { rpcId, call, resolve: (outcome) => resolve({ outcome }) });
+      this.held.set(id, { rpcId, asked: { request: call, ...(report ? { report } : {}) }, resolve: (outcome) => resolve({ outcome }) });
       cancelled.addEventListener('abort', () => {
         if (!this.settle(id, CANCELLED)) return;
         this.ledger.withdraw(id, (event) => this.announce(event));
@@ -638,7 +688,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
         toolUseId: toolCall.toolCallId,
         ...(this.restricted ? { ask: acpAsk(call) } : {}),
         // By exact name only: a near miss is anyone's tool (ADR-0022, S3; ADR-0060, R7).
-        ordewell: this.binding.isOrdewellAsk(report ?? toolCall),
+        ordewell: this.binding.isOrdewellAsk(report ? { request: toolCall, report } : { request: toolCall }),
       }, { id, options }, (event) => this.announce(event));
     });
   }

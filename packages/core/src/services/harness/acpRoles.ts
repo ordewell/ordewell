@@ -1,7 +1,7 @@
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { PlannerAsk, TaskStartOptions } from './AgentAdapter';
 import type { AcpToolCall } from './acpSchema';
-import type { AcpProfile, AcpRoles } from './acpProfiles';
+import type { AcpAskedCall, AcpProfile, AcpRoles } from './acpProfiles';
 import { decideReadOnlyTaskPermission } from './plannerPermissions';
 
 /** The roles a profile claims, refused when they cannot hold (ADR-0060, R3): the connector table is built at load, so a bad profile never ships. */
@@ -56,15 +56,18 @@ const REFUSED: Readonly<Record<string, string>> = {
  * The answer to a request on a restricted start, or undefined to hold it for
  * the planner's envelope, which `CliAgentAiService` applies to every held
  * request with its `ask` (ADR-0026). A read-only task has nobody to ask, so
- * everything is answered here (ADR-0046).
+ * everything is answered here (ADR-0046). A request may ask only for the path
+ * its call needs, as a read, where the turn reported the call as a write or a
+ * command: Copilot asks so for a file it would create, so the call is refused
+ * for what either says it does.
  */
 export function decideRestricted(
-  call: AcpToolCall,
+  { request, report }: AcpAskedCall,
   ask: PlannerAsk,
   start: { kind: 'planner' } | Pick<TaskStartOptions, 'kind' | 'cwd' | 'workspaceRoot'>,
 ): ApprovalDecision | undefined {
-  const refused = call.kind ? REFUSED[call.kind] : undefined;
+  const refused = [request.kind, report?.kind].map((kind) => (kind ? REFUSED[kind] : undefined)).find((note) => note !== undefined);
   if (refused) return deny(refused);
-  if (call.kind === 'think') return { decision: 'allow' };
+  if (request.kind === 'think') return { decision: 'allow' };
   return start.kind === 'task' ? decideReadOnlyTaskPermission(ask, start) : undefined;
 }

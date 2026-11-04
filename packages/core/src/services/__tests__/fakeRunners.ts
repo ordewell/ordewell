@@ -363,13 +363,18 @@ function copilotCli(script: FakeRunnerScript): FakeRunner {
   const steps = (): FakeAcpStep[] => [
     { expect: 'initialize', reply: COPILOT_INITIALIZED },
     { expect: 'session/new', reply: { sessionId: COPILOT_SESSION } },
+    // Copilot lists the server's tools once the session has it, and that use
+    // of the token is the only attach evidence ACP leaves (ADR-0060, R5). Not
+    // awaited: a start given a contact record of its own names no live server.
+    ...(script.attach === 'connected' ? [{ run: (agent: FakeAcpAgent) => { void agent.listMcpTools().catch(() => undefined); } }] : []),
     script.reply === undefined
       ? { expect: 'session/prompt' }
       : { expect: 'session/prompt', reply: (_params: unknown, agent: FakeAcpAgent) => { agent.send('session/update', update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: script.reply } })); return { stopReason: 'end_turn' }; } },
   ];
   const update = (body: Record<string, unknown>) => ({ sessionId: COPILOT_SESSION, update: body });
   const spawn: SpawnFn = (cmd, argv, options) => {
-    const dir = options.env?.COPILOT_CUSTOM_INSTRUCTIONS_DIRS;
+    // A restricted start finds AGENTS.md in the private directory it starts in.
+    const dir = options.env?.COPILOT_CUSTOM_INSTRUCTIONS_DIRS ?? (typeof options.cwd === 'string' ? options.cwd : undefined);
     instructions.push(dir && existsSync(join(dir, 'AGENTS.md')) ? readFileSync(join(dir, 'AGENTS.md'), 'utf8') : '');
     const proc = kit.spawn(cmd, argv, options);
     const agent = new FakeAcpAgent(steps());

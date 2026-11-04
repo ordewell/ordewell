@@ -104,7 +104,7 @@ describe('/planner', () => {
   it('names the agents to install when nothing can plan', () => {
     const { state } = run('/planner', { ...ready, runners: [], configuredProviders: [] });
 
-    expect(stepperOf(state).items[0]?.detail).toContain('Claude Code, Codex or OpenCode');
+    expect(stepperOf(state).items[0]?.detail).toContain('Claude Code, Codex, OpenCode or GitHub Copilot CLI');
   });
 
   const saved = (provider: string, modelId: string, effort: string, notice: string, noticeLevel?: 'error') =>
@@ -315,6 +315,13 @@ describe('/planner', () => {
     const { state, effects } = run('/planner opencode', installedAll);
     expect(effects).toEqual([{ type: 'setPlanner', provider: 'opencode' }]);
     expect(state.overlay).toBeNull();
+  });
+
+  it('/planner copilot-cli switches like any runner that plans', () => {
+    const runners = [...(installedAll.runners ?? []), { id: 'copilot-cli', name: 'GitHub Copilot CLI', enabled: true }];
+    const { state, effects } = run('/planner copilot-cli', { runners });
+    expect(effects).toEqual([{ type: 'setPlanner', provider: 'copilot-cli' }]);
+    expect(lastMessage(state)?.role).not.toBe('error');
   });
 
   it('rejects a provider it does not know', () => {

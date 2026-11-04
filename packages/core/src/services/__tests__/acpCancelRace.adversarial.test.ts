@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { AcpAdapter } from '../harness/AcpAdapter';
 import type { AcpProfile } from '../harness/acpProfiles';
 import type { AgentEvent, AgentProcessDeps, TaskStartOptions } from '../harness/AgentAdapter';
-import type { AcpToolCall } from '../harness/acpSchema';
 import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
 import type { RunnerManifest } from '../../plugins/types';
 import { mcpClientConfig } from '../mcp';
@@ -20,7 +19,7 @@ const MANIFEST = {
 } as RunnerManifest;
 const PROFILE: AcpProfile = {
   manifest: MANIFEST, args: ['--acp'],
-  ordewellTool: (call: AcpToolCall) => (call.title?.startsWith('ordewell/') ? call.title.slice(9) : null),
+  ordewellTool: ({ request }) => (request.title?.startsWith('ordewell/') ? request.title.slice(9) : null),
   instructions: { kind: 'prompt' },
 };
 const INITIALIZED = { protocolVersion: 1, agentCapabilities: { mcpCapabilities: { http: true } }, agentInfo: { name: 'fake-agent', version: '1.4.0' } };
