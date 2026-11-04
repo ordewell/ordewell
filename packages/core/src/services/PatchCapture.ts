@@ -12,6 +12,7 @@ import { listed } from './harness/ordewellBinding';
 import { resolveTaskRef, titledTaskRefOf } from './TaskRefs';
 import type { ApplyPatchArgs, McpToolReply } from './mcp/tools';
 import { shellQuoted } from '../utils/shell';
+import { realPathOf } from '../utils/realPath';
 
 /*
  * A read-only task's prototype, kept as a patch (ADR-0050). Its worktree is
@@ -747,8 +748,8 @@ export async function applyPatch(invoker: GitInvoker, worktree: string, patch: B
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-apply-'));
   try {
     const toplevel = (await git(invoker, worktree, [...APPLY_GIT, 'rev-parse', '--show-toplevel'])).trim();
-    // Native, as git names the toplevel its own way on Windows (see taskDiffRead).
-    if (fs.realpathSync.native(toplevel) !== fs.realpathSync.native(worktree)) return refused(`${worktree} is not the root of a worktree of its own.`);
+    // As the file system names both, since git names the toplevel its own way on Windows.
+    if (realPathOf(toplevel) !== realPathOf(worktree)) return refused(`${worktree} is not the root of a worktree of its own.`);
     const head = (await git(invoker, worktree, [...APPLY_GIT, 'rev-parse', '--verify', 'HEAD^{commit}'])).trim();
     if (!(await tryGit(invoker, worktree, [...APPLY_GIT, 'cat-file', '-e', `${saved.base}^{commit}`])).ok) {
       return refused(`the commit the patch was taken against (${saved.base.slice(0, 12)}) is not in this repository, so there is nothing to merge it from.`);

@@ -4,6 +4,7 @@ import * as path from 'path';
 import type { IsolationRun } from '../interfaces/IWorktreeIsolation';
 import { git, tryGit, type GitInvoker } from './gitExec';
 import { stateRootOf } from './stateRoot';
+import { realPathOf } from '../utils/realPath';
 import type { HandoffPatch } from '../models/Handoff';
 
 export interface TaskDiffRead {
@@ -187,10 +188,10 @@ export async function readTaskDiff(invoker: GitInvoker, run: IsolationRun, taskI
       if (!inside(workspaceRoot, fs.realpathSync(cwd))) throw new Error('The recorded task repository moved outside the workspace.');
       if (live) {
         const toplevel = (await git(reader, cwd, ['rev-parse', '--show-toplevel'])).trim();
-        // Native: git names the worktree in long form with forward slashes, and on
-        // Windows the record may hold an 8.3 short name or a lower-case drive letter,
-        // which only the native call resolves to the same path.
-        if (fs.realpathSync.native(toplevel) !== fs.realpathSync.native(entry.worktree)) throw new Error('The recorded task worktree is no longer a repository.');
+        // git names the worktree in long form with forward slashes, and on
+        // Windows the record may hold an 8.3 short name or a lower-case drive
+        // letter: only the file system's own name for both compares them.
+        if (realPathOf(toplevel) !== realPathOf(entry.worktree)) throw new Error('The recorded task worktree is no longer a repository.');
       }
       const prefix = (await git(reader, repo.root, ['rev-parse', '--show-prefix'])).trim();
       const common = ['--no-pager', '-c', 'core.fsmonitor=false'];
