@@ -6,8 +6,10 @@ import { clineCredentials } from '../clineCredentials';
 
 const KEY = 'sk-or-v1-cline-key-never-shown';
 const OTHER_KEY = 'sk-ant-other-provider-key';
+const ORDEWELL_KEY = 'sk-or-v1-ordewell-own-key-never-shown';
 
-const ROUTES = 'Sign in with `cline auth` (a Cline or ClinePass account, or a provider\'s key), or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell\'s environment.';
+const ROUTES = 'Set the key of a provider Cline offers, such as OpenRouter, in Ordewell with `/key`, or sign in with `cline auth` (a Cline or ClinePass account, or a provider\'s key), or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell\'s environment.';
+const NONE = 'Cline has no provider key Ordewell can hand it: Ordewell holds none for a provider Cline offers, and ';
 
 let home: string;
 let storePath: string;
@@ -46,6 +48,7 @@ async function refusal(env: Record<string, string | undefined> = {}): Promise<st
   expect(message).toContain(ROUTES);
   expect(`${message}\n${(error as Error).stack}`).not.toContain(KEY);
   expect(`${message}\n${(error as Error).stack}`).not.toContain(OTHER_KEY);
+  expect(`${message}\n${(error as Error).stack}`).not.toContain(ORDEWELL_KEY);
   return message;
 }
 
@@ -65,7 +68,32 @@ describe('clineCredentials', () => {
 
     expect(await read({ CLINE_PROVIDER_SETTINGS_PATH: named })).toMatchObject({ CLINE_API_KEY: KEY });
     rmSync(named);
-    expect(await refusal({ CLINE_PROVIDER_SETTINGS_PATH: named })).toBe(`Cline has no provider key Ordewell can hand it: \`${named}\` is missing. ${ROUTES}`);
+    expect(await refusal({ CLINE_PROVIDER_SETTINGS_PATH: named })).toBe(`${NONE}\`${named}\` is missing. ${ROUTES}`);
+  });
+
+  describe('with a provider configured in Ordewell', () => {
+    it('hands Cline the OpenRouter key Ordewell holds, ahead of Cline\'s own store', async () => {
+      store(signedIn('anthropic'));
+      expect(await read({ OPENROUTER_API_KEY: ORDEWELL_KEY })).toEqual({ CLINE_PROVIDER: 'openrouter', CLINE_API_KEY: ORDEWELL_KEY });
+    });
+
+    it('hands the vendor AI_PROVIDER names over the first configured one, with the planner\'s model unless the user chose Cline\'s', async () => {
+      store(signedIn());
+      const env = { OPENROUTER_API_KEY: 'sk-or-v1-not-chosen', XAI_API_KEY: ` ${ORDEWELL_KEY} `, AI_PROVIDER: 'xai', ORCHESTRATOR_MODEL: 'grok-4' };
+      expect(await read(env)).toEqual({ CLINE_PROVIDER: 'xai', CLINE_API_KEY: ORDEWELL_KEY, CLINE_MODEL: 'grok-4' });
+      expect(await read({ ...env, CLINE_MODEL: 'grok-code-fast' })).toEqual({ CLINE_PROVIDER: 'xai', CLINE_API_KEY: ORDEWELL_KEY });
+    });
+
+    it('falls back to Cline\'s store for a vendor Cline cannot reach where Ordewell does: moved off its endpoint, unknown to Cline, or not OpenAI-compatible', async () => {
+      store(signedIn());
+      const unreachable = {
+        OPENROUTER_API_KEY: ORDEWELL_KEY, OPENROUTER_BASE_URL: 'https://proxy.example/v1',
+        MOONSHOT_API_KEY: ORDEWELL_KEY,
+        GEMINI_API_KEY: ORDEWELL_KEY, AI_PROVIDER: 'google',
+        OPENAI_COMPATIBLE_API_KEY: ORDEWELL_KEY, OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:11434/v1',
+      };
+      expect(await read(unreachable)).toEqual({ CLINE_PROVIDER: 'openrouter', CLINE_API_KEY: KEY, CLINE_MODEL: 'openai/gpt-4.1-mini' });
+    });
   });
 
   it('reads nothing and adds nothing when the user hands Cline a key of their own', async () => {
@@ -85,11 +113,14 @@ describe('clineCredentials', () => {
   });
 
   it('names both routes, and the store, when there is no store', async () => {
-    expect(await refusal()).toBe(`Cline has no provider key Ordewell can hand it: \`${storePath}\` is missing. ${ROUTES}`);
+    expect(await refusal()).toBe(`${NONE}\`${storePath}\` is missing. ${ROUTES}`);
+    // A key Ordewell holds for an endpoint Cline cannot reach is not named, nor is its vendor's variable.
+    const elsewhere = await refusal({ OPENROUTER_API_KEY: ORDEWELL_KEY, OPENROUTER_BASE_URL: 'https://proxy.example/v1' });
+    expect(elsewhere).toBe(`${NONE}\`${storePath}\` is missing. ${ROUTES}`);
   });
 
   it('names both routes when the store cannot be read: not JSON, a directory, too big, or not a path it can stand on', async () => {
-    const unreadable = (path: string) => `Cline has no provider key Ordewell can hand it: \`${path}\` could not be read. ${ROUTES}`;
+    const unreadable = (path: string) => `${NONE}\`${path}\` could not be read. ${ROUTES}`;
     store(`{"lastUsedProvider":"openrouter","providers":{"openrouter":{"settings":{"apiKey":"${KEY}"`);
     expect(await refusal()).toBe(unreadable(storePath));
 
@@ -107,18 +138,18 @@ describe('clineCredentials', () => {
   it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('names both routes when the store is not the user\'s to read', async () => {
     store(signedIn());
     chmodSync(storePath, 0o000);
-    expect(await refusal()).toBe(`Cline has no provider key Ordewell can hand it: \`${storePath}\` could not be read. ${ROUTES}`);
+    expect(await refusal()).toBe(`${NONE}\`${storePath}\` could not be read. ${ROUTES}`);
   });
 
   it('names both routes when the store is signed out: no provider last used, no entry for it, or an entry with no key', async () => {
     store({ version: 1, providers: {} });
-    expect(await refusal()).toBe(`Cline has no provider key Ordewell can hand it: \`${storePath}\` names no provider it last used. ${ROUTES}`);
+    expect(await refusal()).toBe(`${NONE}\`${storePath}\` names no provider it last used. ${ROUTES}`);
 
     store({ version: 1, lastUsedProvider: 'openrouter', providers: { anthropic: signedIn().providers.anthropic } });
-    expect(await refusal()).toBe(`Cline has no provider key Ordewell can hand it: the provider it last used (openrouter) has no key in \`${storePath}\`. ${ROUTES}`);
+    expect(await refusal()).toBe(`${NONE}the provider it last used (openrouter) has no key in \`${storePath}\`. ${ROUTES}`);
 
     store({ version: 1, lastUsedProvider: 'openrouter', providers: { openrouter: { settings: { provider: 'openrouter', apiKey: '', model: 'm' } } } });
-    expect(await refusal()).toBe(`Cline has no provider key Ordewell can hand it: the provider it last used (openrouter) has no key in \`${storePath}\`. ${ROUTES}`);
+    expect(await refusal()).toBe(`${NONE}the provider it last used (openrouter) has no key in \`${storePath}\`. ${ROUTES}`);
   });
 
   it('reads the store afresh for each spawn, so a sign-in between two is the second\'s', async () => {
