@@ -60,7 +60,8 @@ A test that depends on the time of day (a usage-limit "resets 8:10pm") fails
 for the hour after that time; derive such a time from the clock, or fake it,
 instead of fixing it. A recorded fixture with a fixed future instant expires
 the same way. `vi.waitFor` waits up to ten seconds here, not vitest's one
-(`vitest.setup.ts`), and a test may run for thirty, because real git and
+(`vitest.setup.ts`), and a test may run for thirty, ninety on Windows
+(`vitest.shared.ts`), because real git and
 file-system events can take past a second on a loaded machine: pass a
 `timeout` only to wait longer still.
 
