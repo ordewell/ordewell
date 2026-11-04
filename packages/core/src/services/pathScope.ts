@@ -16,6 +16,14 @@ import * as path from 'path';
 export interface ResolvedPath {
   abs: string;
   inside: boolean;
+  /** A device that reads nothing and writes nowhere but the command's own streams: `/dev/null`. */
+  device?: true;
+  /**
+   * A path the shell reads by rules this check cannot follow (`HostPath`), so
+   * it is judged to be nowhere: a command naming it is refused, not asked about,
+   * since no folder an approval could name is the one it reaches.
+   */
+  unfollowable?: true;
 }
 
 /**
@@ -34,11 +42,26 @@ function expandHome(target: string): string {
   return path.join(path.dirname(home), target.slice(1));
 }
 
-/** `from` is where a relative `target` starts; containment is still judged against `root`. */
-export function resolveWithin(root: string, target: string, from: string = root): ResolvedPath {
-  const abs = path.resolve(from, expandHome(target));
+/**
+ * Where a path a command names lands on the host, run from the host folder
+ * `from`, for a shell that reads paths its own way (`ResearchShell.hostPath`):
+ * Git Bash's `/c/x` is `C:\x`. Undefined when the shell's reading of it cannot
+ * be followed for certain.
+ */
+export type HostPath = (spelled: string, from: string) => string | undefined;
+
+/**
+ * `from` is where a relative `target` starts; containment is still judged against `root`.
+ * `hostPath` reads `target` as the shell running it will, which also knows its devices.
+ */
+export function resolveWithin(root: string, target: string, from: string = root, hostPath?: HostPath): ResolvedPath {
+  const spelled = hostPath ? hostPath(target, from) : target;
+  if (spelled === undefined) return { abs: target, inside: false, unfollowable: true };
+  // The shell's own device, which is no place on the host's disk to resolve.
+  if (hostPath && isInertDevice(spelled)) return { abs: spelled, inside: false, device: true };
+  const abs = path.resolve(from, expandHome(spelled));
   const rel = path.relative(root, abs);
-  return { abs, inside: rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel)) };
+  return { abs, inside: rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel)), ...(isInertDevice(abs) ? { device: true as const } : {}) };
 }
 
 /**
@@ -46,9 +69,15 @@ export function resolveWithin(root: string, target: string, from: string = root)
  * applied in turn. The chain may leave the workspace; the path is then judged
  * from where the shell will be, and the `cd` that left was asked about itself.
  */
-export function resolveRef(root: string, ref: { path: string; cwd: string[] }): ResolvedPath {
-  const from = ref.cwd.reduce((dir, target) => resolveWithin(root, target, dir).abs, root);
-  return resolveWithin(root, ref.path, from);
+export function resolveRef(root: string, ref: { path: string; cwd: string[] }, hostPath?: HostPath): ResolvedPath {
+  let from = root;
+  for (const target of ref.cwd) {
+    const dir = resolveWithin(root, target, from, hostPath);
+    // After a `cd` nobody can follow, no path is anywhere certain.
+    if (dir.unfollowable) return { abs: ref.path, inside: false, unfollowable: true };
+    from = dir.abs;
+  }
+  return resolveWithin(root, ref.path, from, hostPath);
 }
 
 /** The directory a grant covers for `target` — its parent for files, itself for directories. */

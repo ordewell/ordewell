@@ -99,13 +99,14 @@ function nonPromptingFs(fs: IFileSystem): IFileSystem {
     findSymbol: (symbol, opts) => (withinWorkspace(opts?.path) ? fs.findSymbol(symbol, opts) : Promise.resolve(outsideRefusal(opts!.path!))),
     listDir: (p, depth) => (withinWorkspace(p) ? fs.listDir(p, depth) : Promise.resolve(outsideRefusal(p))),
     bash: async (command, signal, opts) => {
-      const policy = researchPolicyOptions(resolveResearchShell());
+      const shell = resolveResearchShell();
+      const policy = researchPolicyOptions(shell);
       const { tier, reason } = classifyCommand(command, policy);
       // An `auto` binary (cat, find, rg, …) is only auto because reading is
       // read-only — its arguments can still name a path outside the
       // workspace, and a subagent can never prompt to approve one.
       // Named as resolved: after a `cd`, the path as written says nothing about where it points.
-      const escaping = pathRefs(command, policy).map((ref) => resolveRef(fs.getWorkspaceRoot(), ref)).find((r) => !r.inside);
+      const escaping = pathRefs(command, policy).map((ref) => resolveRef(fs.getWorkspaceRoot(), ref, shell.hostPath)).find((r) => !r.inside);
       // Only `auto` reaches the shell unsealed, so every command a subagent
       // runs runs without the network (ADR-0011 B3): nothing it could ask for
       // was approved.
