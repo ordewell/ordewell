@@ -40,9 +40,11 @@ in `session/new`, or in a settings file of its own where its profile says so
 `session/resume` or `session/load` for a resume, then the plan's mode, model
 and effort; a turn is one `session/prompt`. The adapter never calls
 `authenticate`: a `-32000` answer is read as signed out, and signing in is the
-user's, in the agent's own terminal. An agent that over ACP ignores the
-provider key its own login stored is handed that key for the spawn instead,
-read from the agent's own store (R9). Any other request from the agent is
+user's, in the agent's own terminal, or Ordewell's own: a provider key
+configured once in Ordewell is handed to each spawn of an agent whose profile
+asks for it, in the variables that agent reads, and an agent that over ACP
+ignores the key its own login stored is handed that key instead where
+Ordewell holds none it can use (R9). Any other request from the agent is
 answered `-32601` at once, so a turn never waits on Ordewell; a profile may
 instead answer the agent's own methods that hold its turn until the client
 replies (`extensionRequests`), and a request its handler cannot read keeps the
@@ -63,7 +65,7 @@ it is not `session/new`, when the agent first uses its token (R5), the mode
 route, what it loads from a repository
 (ADR-0028), the roles it claims, the controls that restrict it, the
 answers to the agent's own requests, and where an agent needs one, the reader
-of its provider credential.
+of its provider credential and the sign-in route that reader adds.
 
 ## Key properties
 
@@ -203,27 +205,64 @@ of its provider credential.
   prompt's own response, then a new `session/prompt`; requests still pending
   at the cancel are answered `cancelled`. Only the `session/prompt` response
   ends a turn: no streamed update and no timer does.
-- **An agent's provider key is read from its own store, for one spawn (R9).**
-  An agent can ignore over ACP the login its own CLI stored: Cline 3.0.74
-  answers `session/new` with `-32000` though `cline auth` saved an OpenRouter
-  key, and runs when `CLINE_PROVIDER`, `CLINE_API_KEY` and `CLINE_MODEL` are
-  in its environment. Such a profile has a `credentials` hook, which reads the
-  key as [ADR-0051](../platform/0051-opencode-go-limits-from-the-selected-login-read-in-place.md)
-  reads OpenCode's: from the store the agent itself names and nowhere else,
-  under the host's and the workspace's variables (its G2), with nothing
-  refreshed, written, copied or kept beyond the read. For Cline that is
-  `CLINE_PROVIDER_SETTINGS_PATH`, else `~/.cline/data/settings/providers.json`,
-  and the provider, key and model of the entry it last used
-  (`clineCredentials.ts`). The hook answers the variables to add, and they go
-  into that spawn's environment, the only place the key goes:
+- **An agent's provider key comes from Ordewell, else from its own store, for
+  one spawn (R9).** A key configured once in Ordewell, with `/key` or the
+  variable it writes, serves the agents as it serves the planner, so no agent
+  needs a login of its own. And an agent can ignore over ACP the login its own
+  CLI stored: Cline 3.0.74 answers `session/new` with `-32000` though `cline
+  auth` saved an OpenRouter key, and runs when `CLINE_PROVIDER`,
+  `CLINE_API_KEY` and `CLINE_MODEL` are in its environment. Such a profile has
+  a `credentials` hook, which answers, under the host's and the workspace's
+  variables, the variables to add to that spawn's environment. In order:
+  1. **The user's own variables for the agent.** Where they already hand it a
+     provider (`CLINE_API_KEY` for Cline, `OPENAI_BASE_URL` for Qwen), the
+     hook adds nothing and reads nothing.
+  2. **Ordewell's provider** (`ordewellProvider.ts`): the vendor `AI_PROVIDER`
+     names, else the first configured in `PROVIDER_PRIORITY`, read by the same
+     key and base-URL rules the planner's config uses (`vendorApiKeyIn`,
+     `vendorBaseUrlIn`). Only an OpenAI-compatible vendor with a key
+     qualifies, and `openai_compatible` only with its base URL named, and
+     only one the agent reaches at the endpoint Ordewell reaches it at: a key
+     is never sent anywhere its owner did not send it. Qwen reads any
+     OpenAI-compatible endpoint, so it is handed `OPENAI_API_KEY` and
+     `OPENAI_BASE_URL`. Cline takes no endpoint from its environment, so it
+     is handed `CLINE_PROVIDER` and `CLINE_API_KEY` only for a vendor whose
+     Cline provider id defaults to Ordewell's endpoint (OpenRouter is
+     `openrouter`, OpenAI `openai-native`; `clineCredentials.ts` lists them),
+     and not for one behind a proxy or on another region's host. The model
+     (`OPENAI_MODEL`, `CLINE_MODEL`) is the planner's, prefix stripped, only
+     when `AI_PROVIDER` named that vendor, since no other model of Ordewell's
+     is that vendor's for certain; the plan's model still reaches the agent
+     at spawn or as a config option, so this is only the agent's default.
+     This route comes before the agent's own store: the key the person gave
+     Ordewell is their choice for every agent.
+  3. **The agent's own store**, where it has one and ignores it over ACP: read
+     as [ADR-0051](../platform/0051-opencode-go-limits-from-the-selected-login-read-in-place.md)
+     reads OpenCode's, from the store the agent itself names and nowhere else
+     (its G2), with nothing refreshed, written, copied or kept beyond the
+     read. For Cline that is `CLINE_PROVIDER_SETTINGS_PATH`, else
+     `~/.cline/data/settings/providers.json`, and the provider, key and model
+     of the entry it last used. Qwen reads its own settings and sign-in
+     itself, so its hook answers nothing here.
+  4. **A refusal naming both routes.** Cline's hook refuses the start before
+     anything is spawned, naming the store and the routes: "Set the key of a
+     provider Cline offers, such as OpenRouter, in Ordewell with `/key`, or
+     sign in with `cline auth` (a Cline or ClinePass account, or a provider's
+     key), or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell's
+     environment." Qwen learns it is signed out from its own `-32000`, and its
+     profile's `signInRoute` adds Ordewell's route to the login the message
+     names: "Qwen Code is not signed in. Run `qwen`, or set the key of an
+     OpenAI-compatible provider, such as OpenRouter, in Ordewell with `/key`."
+
+  A model the user's environment chooses for the agent stays theirs. What the
+  hook answers holds a secret and goes into that spawn's environment, the
+  only place the key goes, under ADR-0051's rules:
   - read afresh at each spawn and held by nothing after it, so two attempts
-    running at once each have their own, and a sign-in between two spawns is
-    the second's;
+    running at once each have their own, and a sign-in or `/key` between two
+    spawns is the second's;
   - never logged, never in an error, never written to disk, never in the
     arguments, and never sent over ACP, so not to a model, the planner or a
     webview;
-  - not read when the user's own environment already hands the agent a key
-    (`CLINE_API_KEY`), and a model the user's environment chooses stays theirs;
   - not read, and nothing added, under a placement: a container holds the
     lease's stand-in for a key, never the user's own
     ([ADR-0059](../isolation/0059-an-execution-lease-reserves-in-the-claim-and-opens-after-it.md) L7);
@@ -232,11 +271,7 @@ of its provider credential.
     asked as it runs, and a hook that finds no key is no answer, so nothing is
     spawned and the miss is not cached past a sign-in.
 
-  A store that is missing, cannot be read, or holds no key for the provider it
-  last used refuses the start before anything is spawned, naming the store and
-  both routes: "Sign in with `cline auth` (a Cline or ClinePass account, or a
-  provider's key), or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell's
-  environment." A profile without the hook spawns exactly as before.
+  A profile without the hook spawns exactly as before, whatever Ordewell holds.
 
 ## GitHub Copilot CLI
 
@@ -311,7 +346,9 @@ tool. In `yolo` Qwen asks about nothing (`allow-all.jsonl`); the pending
 request of a cancelled turn is answered `cancelled`. It has no login or
 status command: it signs in from its settings file or its provider's key, a
 signed-out `session/new` fails with `-32000` "Authentication required", and
-that is how a signed-out Qwen is learned.
+that is how a signed-out Qwen is learned. Its profile's `credentials` hands
+it the provider key configured in Ordewell through the `OPENAI_*` variables
+its `openai` sign-in reads, and its `signInRoute` names that route (R9).
 
 Its models come from ACP discovery alone: `session/new` lists the models its
 settings configure, and there is no command to fall back to.
@@ -330,7 +367,7 @@ OpenRouter model and its key handed in the spawn's environment (R9):
 | Ordewell's tools | the permission request's title up to its first colon, `ordewell__<tool>`: Cline titles a call with its tool's name, then a summary of the model's arguments, and gives the kind `other` to its own edits and to MCP calls alike, so the kind is not read |
 | MCP server | `mcpConfig`: `cline_mcp_settings.json`, one `streamableHttp` entry with the token in its headers, named by `CLINE_MCP_SETTINGS_PATH`; `session/new` and `session/load` carry an empty `mcpServers`, since Cline advertises no HTTP |
 | attach | `firstTurn` |
-| credentials | Cline's reader (R9) |
+| credentials | the provider configured in Ordewell where Cline reaches it, else Cline's own store (R9) |
 | environment | `CLINE_SESSION_BACKEND_MODE=local`, so the session lives in the process Ordewell starts and stops, never in a hub daemon that outlives it |
 | restriction | none |
 | roles | none: Cline is task-only, since it has no shell allow or deny list and no recording shows its `plan` mode refusing a write and a command (R3) |
@@ -359,8 +396,8 @@ command it asked to run did not run (`cancel.jsonl`).
 The turn reports a call under the same title, so the transcript names
 Ordewell's call with its arguments' summary
 (`ordewell__task_complete: {"status":"done",…}`). Cline signs in with
-`cline auth`, which has no status command: a store with no key refuses the
-start before anything is spawned (R9), and a `-32000` from `session/new` is
+`cline auth`, which has no status command: with no key from Ordewell, a store
+with no key refuses the start before anything is spawned (R9), and a `-32000` from `session/new` is
 read as signed out. Its models come from ACP discovery alone: started with
 the profile's environment and the key its reader finds (R9), `session/new`
 lists its provider's models, and there is no command to fall back to. Without
@@ -387,6 +424,7 @@ settings:
 | model | `--model` at spawn, with the id as `session/new` lists it |
 | Ordewell's tools | the call id up to its first `__`, `mcp_ordewell_<tool>`: Gemini's call ids are the name it looked the tool up by, then a counter; the title is the call as the model wrote it (`task_complete(summary: ok, status: done)`), the kind is a guess (`other`), and there is no `_meta` or raw input, so none of those is read |
 | trust | `--skip-trust`: the task's worktree is trusted for that process only |
+| credentials | none: Gemini reads the key in its own settings over ACP, as the recordings show, so its spawn carries none from Ordewell (R9) |
 | restriction | none |
 | roles | none: Gemini is task-only, since no recording shows its `plan` mode, or any control, refusing a write and a command (R3) |
 
@@ -447,12 +485,18 @@ to.
   one token per concurrent attempt, the sweep, and the refusal of an agent
   that ignores the file, without a live agent.
 - **The credential hook** is tested in `acpAdapter.test.ts` with a scripted
-  hook and with Cline's reader on a store in a temporary home: the spawn's
-  environment carries the key; the log, the events, the arguments, the
-  agent's transcript and the start's errors do not; a profile without the hook
-  spawns as before; two attempts at once each get their own key; and a
-  placement gets none. `clineCredentials.test.ts` covers the reader's store
-  path, the last-used entry, and each refusal. `ModelDiscovery.acp.test.ts`
+  hook, with Cline's reader on a store in a temporary home, and with Qwen's
+  and Cline's hooks on a key configured in Ordewell: the spawn's environment
+  carries the key; the log, the events, the arguments, the agent's transcript
+  and the start's errors do not; a profile without the hook spawns as before,
+  a key in Ordewell or not; two attempts at once each get their own key; and a
+  placement gets none. The tests blank the host's provider variables
+  (`ordewellProviderEnv.ts`), so a developer's own key decides nothing.
+  `clineCredentials.test.ts` covers the precedence, Ordewell's vendors Cline
+  is and is not handed, the store path, the last-used entry, and each
+  refusal; `qwenCredentials.test.ts` covers Qwen's precedence and variables;
+  and `qwenCode.test.ts` replays Qwen's recordings with Ordewell's key in the
+  spawn and signed out. `ModelDiscovery.acp.test.ts`
   covers discovery's env and hook, and `clineCode.test.ts` runs discovery
   against a Cline stand-in that refuses `session/new` without the key from a
   store.
@@ -468,6 +512,10 @@ to.
   for the same live probe those passed before it is admitted at all.
 - **Gemini CLI signed in with a Google account or Vertex AI.** The recordings
   use a Gemini API key. No recording shows a task run on another sign-in.
+- **A key kept outside the environment.** The hook reads the host's and the
+  workspace's variables, where the CLI's `/key` writes; a key VS Code keeps in
+  its secret store, and its `aiProvider` setting, reach no agent until the
+  extension hands them to the runner's environment.
 - **Cline signed in to a Cline or ClinePass account.** The recordings use a
   provider's key. No recording shows what an account's sign-in stores or a
   task run on it; where the reader finds no key in the entry Cline last used,
@@ -585,6 +633,16 @@ to.
   injection, and a second `session/prompt` during a turn is not specified to
   join it. The turn-end queue is what v1 supports.
 
+- **The agent's own store before the key configured in Ordewell.** Rejected:
+  the person configured that key for Ordewell's work, and a store left by an
+  earlier sign-in would decide otherwise without their seeing it. The cost is
+  that a key in Ordewell also moves an agent signed in to its own account onto
+  that key's billing; the user's own agent variables still win.
+- **Handing Cline the key of any vendor Ordewell reaches.** Rejected: Cline
+  takes no endpoint from its environment, so a key Ordewell sends to a proxy,
+  another region's host or a custom endpoint would go to Cline's default
+  host for that provider instead.
+
 ## Consequences
 
 - Admitting an ACP agent is a probe, a recording, a manifest and a profile,
@@ -642,5 +700,8 @@ to.
 - 2026-11-04 — R9: model discovery starts an ACP agent with its profile's
   `env` and credential hook, so Cline lists its models with its key in its
   store only.
+- 2026-11-04 — R9: the provider key configured in Ordewell comes before the
+  agent's own store, handed to Qwen and Cline in the variables each reads;
+  a signed-out message names that route (`signInRoute`).
 - 2026-11-04 — Gemini CLI (`gemini-cli`) is admitted on its recordings, for
   writable tasks only, started trusting its worktree (`--skip-trust`).

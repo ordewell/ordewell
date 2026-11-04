@@ -125,12 +125,13 @@ export interface AcpCredentialContext {
 }
 
 /**
- * The provider credential an agent ignores in its own store over ACP, read
- * from that store for one spawn (ADR-0060, R9; ADR-0051). Answers the
- * variables to add to that spawn's environment, null when the agent needs
- * none from Ordewell, and throws, naming the routes that would sign it in,
- * when it has none. What it answers holds a secret: it reaches the process's
- * environment and nothing else.
+ * The provider credential one spawn of an agent starts under: the key
+ * configured in Ordewell, in the variables that agent reads, else what the
+ * agent's own store holds where it does not read that store over ACP
+ * (ADR-0060, R9; ADR-0051). Answers the variables to add to that spawn's
+ * environment, null when the agent needs none from Ordewell, and throws,
+ * naming the routes that would sign it in, when it has none. What it answers
+ * holds a secret: it reaches the process's environment and nothing else.
  */
 export type AcpCredentials = (context: AcpCredentialContext) => Promise<Readonly<Record<string, string>> | null>;
 
@@ -146,6 +147,11 @@ export interface AcpProfile {
   env?: Readonly<Record<string, string>>;
   /** Absent: the agent finds its own provider credential, and its spawn carries none from Ordewell. */
   credentials?: AcpCredentials;
+  /**
+   * A route besides the agent's own login that signs it in, as a clause the
+   * signed-out message offers after that login: the one `credentials` reads.
+   */
+  signInRoute?: string;
   /** The oldest agent version this profile was checked against, compared with `agentInfo.version`. */
   minVersion?: string;
   /** How long `initialize`, `session/new` and the mode switch may each take; 30 s when absent. */

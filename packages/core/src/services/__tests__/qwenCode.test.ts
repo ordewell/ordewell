@@ -10,6 +10,7 @@ import { QWEN_CODE_MANIFEST } from '../../plugins/builtin/qwen.manifest';
 import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
 import { OrdewellMcpServer, mcpClientConfig, type McpClientConfig } from '../mcp';
 import { fakeAcpSpawn, type FakeAcpAgent, type FakeAcpStep } from './fakeAcpAgent';
+import { stubNoOrdewellProvider } from './ordewellProviderEnv';
 
 /**
  * The qwen-code connector against Qwen Code 0.26.6 as it was recorded over ACP
@@ -96,6 +97,7 @@ const EAGER_CONTACT: Partial<Record<string, FakeAcpStep[]>> = {
 const adapters: TaskModeAgentAdapter[] = [];
 const servers: OrdewellMcpServer[] = [];
 afterEach(async () => {
+  vi.unstubAllEnvs();
   for (const adapter of adapters.splice(0)) adapter.dispose();
   await Promise.all(servers.splice(0).map((server) => server.dispose()));
 });
@@ -108,7 +110,7 @@ async function taskToken(): Promise<{ mcp: McpClientConfig; completed: ReturnTyp
   return { mcp: mcpClientConfig(credential), completed };
 }
 
-function qwen(steps: FakeAcpStep[]) {
+function qwen(steps: FakeAcpStep[], workspace: Record<string, string> = {}) {
   const spawned = fakeAcpSpawn(steps);
   const deps: AgentProcessDeps = {
     spawn: spawned.spawn,
@@ -117,7 +119,7 @@ function qwen(steps: FakeAcpStep[]) {
     platform: 'linux',
     isDirectory: () => true,
     exists: () => true,
-    workspaceEnv: async () => ({}),
+    workspaceEnv: async () => workspace,
   };
   const adapter = CONNECTORS['qwen-code'].create(deps);
   adapters.push(adapter);
@@ -303,5 +305,32 @@ describe('qwen-code, replayed from Qwen Code 0.26.6', () => {
 
   it('names an Ordewell tool the way Qwen shows it to the model', () => {
     expect(QWEN_CODE_PROFILE.toolName?.('task_complete')).toBe('mcp__ordewell__task_complete');
+  });
+
+  it('hands Qwen the OpenRouter key configured in Ordewell through the variables its openai auth reads, in the spawn alone', async () => {
+    stubNoOrdewellProvider();
+    const key = 'sk-or-v1-qwen-ordewell-0000';
+    const { mcp } = await taskToken();
+    const { spawned, agent, adapter } = qwen(replay('ordewell-tool', EAGER_CONTACT), { OPENROUTER_API_KEY: key });
+    await adapter.start(taskStart(mcp));
+
+    // OpenRouter's documented OpenAI-compatible endpoint.
+    expect(spawned.lastEnv()).toMatchObject({ OPENAI_API_KEY: key, OPENAI_BASE_URL: 'https://openrouter.ai/api/v1' });
+    expect(spawned.lastArgs()).toEqual(recordedArgs('ordewell-tool'));
+    expect(JSON.stringify(agent.received)).not.toContain(key);
+  });
+
+  it('refuses a start Qwen answers signed out with both routes: its own sign-in, and a key set in Ordewell', async () => {
+    stubNoOrdewellProvider();
+    const { mcp } = await taskToken();
+    const { spawned, adapter } = qwen(replay('signed-out'));
+
+    await expect(adapter.start(taskStart(mcp))).rejects.toThrow(/^Qwen Code is not signed in\. Run `qwen`, or set the key of an OpenAI-compatible provider, such as OpenRouter, in Ordewell with `\/key`\.$/);
+    expect(spawned.lastEnv()?.OPENAI_API_KEY || undefined).toBeUndefined();
+  });
+
+  it('asks Qwen\'s model list with the same hook its tasks use', () => {
+    expect(QWEN_CODE_PROFILE.credentials).toBeDefined();
+    expect(QWEN_CODE_PROFILE.credentials).toBe(QWEN_CODE_MANIFEST.modelDiscovery.acp?.credentials);
   });
 });
