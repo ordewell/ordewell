@@ -1,4 +1,4 @@
-import { readFileSync } from 'fs';
+import { readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CONNECTORS } from '../harness/connectors';
@@ -7,6 +7,7 @@ import { acpOrdewellBinding } from '../harness/acpOrdewell';
 import type { AcpProfile } from '../harness/acpProfiles';
 import { COPILOT_CLI_PROFILE } from '../harness/copilotProfile';
 import { decidePlannerPermission } from '../harness/plannerPermissions';
+import type { AcpToolCall } from '../harness/acpSchema';
 import type { AgentEvent, AgentProcessDeps, PlannerStartOptions, TaskModeAgentAdapter, TaskStartOptions } from '../harness/AgentAdapter';
 import { COPILOT_CLI_MANIFEST } from '../../plugins/builtin/copilot-cli.manifest';
 import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
@@ -21,12 +22,21 @@ import { fakeAcpSpawn, type FakeAcpAgent, type FakeAcpStep } from './fakeAcpAgen
 
 const FIXTURES = join(__dirname, 'fixtures/acp/copilot-cli');
 
+/** Where each test's start puts the task, which the recordings name `{{CWD}}`. */
+const CWD = '/repo';
+
 type Recorded =
   | { dir: 'in' | 'out'; ms: number; line: { id?: number; method?: string; params?: unknown; result?: unknown; error?: { code: number; message: string } } }
-  | { dir: 'note'; ms: number; event: string; args?: string[]; calls?: string[]; leftBehind?: string[] };
+  | {
+    dir: 'note'; ms: number; event: string; args?: string[]; calls?: string[]; leftBehind?: string[];
+    /** Where Copilot was started, `{{START_DIR}}` for the private directory, and what was in it then. */
+    cwd?: string; tmpdir?: string; startDirAtSpawn?: string[]; instructionsDirs?: string | null; COPILOT_ALLOW_ALL?: string | null;
+    /** The markers the recorded workspace's `.github/hooks/` hook wrote, one per hook event that ran it. */
+    hooksRan?: string[];
+  };
 
 function recording(name: string): Recorded[] {
-  return readFileSync(join(FIXTURES, `${name}.jsonl`), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as Recorded);
+  return readFileSync(join(FIXTURES, `${name}.jsonl`), 'utf8').replaceAll('{{CWD}}', CWD).trim().split('\n').map((line) => JSON.parse(line) as Recorded);
 }
 
 function note(name: string, event: string): Extract<Recorded, { dir: 'note' }> | undefined {
@@ -43,6 +53,15 @@ function recordedArgs(name: string): string[] {
 function recordedOutcome(name: string): { calls: string[]; leftBehind: string[] } {
   const summary = note(name, 'summary');
   return { calls: summary?.calls ?? [], leftBehind: summary?.leftBehind ?? [] };
+}
+
+/** Where Copilot was recorded starting, and the hooks the workspace it served ran there. */
+function recordedLaunch(name: string) {
+  const spawn = note(name, 'spawn');
+  return {
+    cwd: spawn?.cwd, tmpdir: spawn?.tmpdir, startDirAtSpawn: spawn?.startDirAtSpawn,
+    instructionsDirs: spawn?.instructionsDirs, allowAll: spawn?.COPILOT_ALLOW_ALL, hooksRan: note(name, 'summary')?.hooksRan,
+  };
 }
 
 /** The arguments the agent called an Ordewell tool with, as its own tool-call report showed them. */
@@ -246,29 +265,23 @@ describe('copilot-cli, replayed from Copilot CLI 1.0.105', () => {
     await agent.finished;
   });
 
-  it('does not take a call Copilot reports in other words for one of Ordewell\'s', async () => {
+  it('takes a call for Ordewell\'s only when its request names the tool bare and its report names it on Ordewell\'s server, whatever kind either says', () => {
     const binding = acpOrdewellBinding(COPILOT_CLI_PROFILE);
-    // The permission request's bare name, a model-written command title, and a lookalike server.
-    expect(binding.isOrdewellAsk({ toolCallId: 'a', title: 'task_complete', kind: 'other' })).toBe(false);
-    expect(binding.isOrdewellAsk({ toolCallId: 'b', title: 'ordewell-task_complete', kind: 'execute' })).toBe(false);
-    expect(binding.isOrdewellAsk({ toolCallId: 'c', title: 'ordewell-evil-task_complete', kind: 'other' })).toBe(false);
-    expect(binding.isOrdewellAsk({ toolCallId: 'd', title: 'ordewell-task_complete', kind: 'other' })).toBe(true);
+    const call = (title: string, kind: AcpToolCall['kind']): AcpToolCall => ({ toolCallId: 'c', title, kind });
+    // Copilot's kind for an MCP tool is its guess at what the tool does: the
+    // planner recording reports run_plan as `execute` and list_runners as `read`.
+    expect(binding.isOrdewellAsk({ request: call('task_complete', 'other'), report: call('ordewell-task_complete', 'other') })).toBe(true);
+    expect(binding.isOrdewellAsk({ request: call('run_plan', 'other'), report: call('ordewell-run_plan', 'execute') })).toBe(true);
+    expect(binding.isOrdewellAsk({ request: call('list_runners', 'read'), report: call('ordewell-list_runners', 'read') })).toBe(true);
+    // The bare name alone; a model-written command title, which Copilot puts
+    // on both; a lookalike server; two names that disagree; no such tool.
+    expect(binding.isOrdewellAsk({ request: call('task_complete', 'other') })).toBe(false);
+    expect(binding.isOrdewellAsk({ request: call('ordewell-task_complete', 'execute'), report: call('ordewell-task_complete', 'execute') })).toBe(false);
+    expect(binding.isOrdewellAsk({ request: call('task_complete', 'other'), report: call('ordewell-evil-task_complete', 'other') })).toBe(false);
+    expect(binding.isOrdewellAsk({ request: call('run_plan', 'other'), report: call('ordewell-task_complete', 'other') })).toBe(false);
+    expect(binding.isOrdewellAsk({ request: call('rm', 'other'), report: call('ordewell-rm', 'other') })).toBe(false);
   });
 });
-
-/**
- * Copilot as it would be with both roles claimed, to replay what the controls
- * were recorded doing. Its own profile withholds both all the same: Copilot
- * runs the repository's hooks under ACP (ADR-0028).
- */
-const COPILOT_WITH_ROLES: AcpProfile = {
-  ...COPILOT_CLI_PROFILE,
-  manifest: {
-    ...COPILOT_CLI_MANIFEST,
-    modes: [...(COPILOT_CLI_MANIFEST.modes ?? []), { id: 'readOnly', label: 'Read-only', description: 'Reads only', readOnly: true }],
-  },
-  roles: { plans: true, readOnly: true },
-};
 
 async function readOnlyToken() {
   const server = new OrdewellMcpServer();
@@ -283,17 +296,20 @@ async function plannerToken() {
   servers.push(server);
   const submitted = vi.fn(async () => ({ text: 'Plan received.' }));
   const listed = vi.fn(async () => ({ text: '[]' }));
-  const credential = await server.issuePlannerToken({ sessionId: 's1' }, { submitPlan: submitted, listRunners: listed } as never);
-  return { mcp: mcpClientConfig(credential), submitted, listed };
+  const models = vi.fn(async () => ({ text: '[]' }));
+  const credential = await server.issuePlannerToken({ sessionId: 's1' }, { submitPlan: submitted, listRunners: listed, listModels: models } as never);
+  return { mcp: mcpClientConfig(credential), submitted, listed, models };
 }
 
+/** Copilot's read-only mode, as the plan names it. */
+const READ_ONLY_MODE = COPILOT_CLI_MANIFEST.modes?.find((mode) => mode.readOnly)?.id ?? 'none';
+
 function readOnlyStart(mcp: McpClientConfig): TaskStartOptions {
-  const model = 'gpt-6-luna';
-  return { kind: 'task', cwd: '/repo', mode: 'readOnly', model, flags: resolveTaskRunnerFlags(COPILOT_WITH_ROLES.manifest, { mode: 'readOnly', model }), mcp };
+  return taskStart(mcp, READ_ONLY_MODE);
 }
 
 function plannerStart(mcp: McpClientConfig): PlannerStartOptions {
-  return { kind: 'planner', cwd: '/repo', model: 'gpt-6-luna', systemPrompt: 'You are the planner.', mcp };
+  return { kind: 'planner', cwd: CWD, model: 'gpt-6-luna', systemPrompt: 'You are the planner.', mcp };
 }
 
 /** A planner's turn, every held request put to its envelope as `CliAgentAiService` puts it (ADR-0026). */
@@ -302,7 +318,7 @@ async function plannerTurn(adapter: TaskModeAgentAdapter): Promise<AgentEvent[]>
   await adapter.send('go', (event) => {
     events.push(event);
     if (event.type === 'permission_request' && !event.decided) {
-      void decidePlannerPermission(event.ask, event.input ?? {}, { workspaceRoot: '/repo' })
+      void decidePlannerPermission(event.ask, event.input ?? {}, { workspaceRoot: CWD })
         .then((decision) => adapter.answerPermission?.(event.id, decision));
     }
   });
@@ -311,75 +327,153 @@ async function plannerTurn(adapter: TaskModeAgentAdapter): Promise<AgentEvent[]>
 
 const failures = (events: AgentEvent[]) => JSON.stringify(events.filter((e) => e.type === 'tool_result'));
 
-describe('copilot-cli roles, replayed from Copilot CLI 1.0.105 (ADR-0026, ADR-0028, ADR-0046)', () => {
-  it('claims neither role, so it plans nothing and offers no read-only mode', async () => {
-    expect(CONNECTORS['copilot-cli'].plans).toBe(false);
-    expect(COPILOT_CLI_MANIFEST.modes?.some((mode) => mode.readOnly)).toBe(false);
-    const { mcp } = await plannerToken();
-    const { spawned, adapter } = copilot([]);
+/** The recorded launch with its private directory put back as `dir`, the one this start made. */
+function launchedAs(name: string, dir: string) {
+  const at = (path: string | undefined) => (path === '{{START_DIR}}' ? dir : path);
+  const launch = recordedLaunch(name);
+  return { ...launch, cwd: at(launch.cwd), tmpdir: at(launch.tmpdir) };
+}
 
-    await expect(adapter.start(plannerStart(mcp))).rejects.toThrow('GitHub Copilot CLI cannot plan in Ordewell: its profile claims no planner role.');
-    expect(spawned.processes).toHaveLength(0);
+describe('copilot-cli roles, replayed from Copilot CLI 1.0.105 (ADR-0026, ADR-0028, ADR-0046, ADR-0060)', () => {
+  it('claims both roles: it plans, and offers a read-only mode', () => {
+    expect(CONNECTORS['copilot-cli'].plans).toBe(true);
+    expect(READ_ONLY_MODE).toBe('plan');
+  });
+
+  it.each([
+    ['planner', async () => plannerStart((await plannerToken()).mcp)],
+    ['read-only', async () => readOnlyStart((await readOnlyToken()).mcp)],
+  ] as const)('starts a %s session in a directory of its own, as it was recorded running none of the workspace\'s hooks', async (name, start) => {
+    const { spawned, agent, adapter } = copilot(replay(name, EAGER_CONTACT));
+    await adapter.start(await start());
+
+    const dir = spawned.lastCwd() ?? '';
+    const env = spawned.lastEnv();
+    expect(dir.startsWith(CWD)).toBe(false);
+    expect(spawned.lastArgs()).toEqual(recordedArgs(name));
+    const { hooksRan, ...launch } = launchedAs(name, dir);
+    expect({
+      cwd: dir, tmpdir: env.TMPDIR, startDirAtSpawn: readdirSync(dir), instructionsDirs: env.COPILOT_CUSTOM_INSTRUCTIONS_DIRS ?? null, allowAll: env.COPILOT_ALLOW_ALL,
+    }).toEqual(launch);
+    expect((agent.requests('session/new')[0].params as { cwd: string }).cwd).toBe(dir);
+    // The workspace's marker hook wrote nothing on the recorded start.
+    expect(hooksRan).toEqual([]);
+    expect(readFileSync(join(dir, 'AGENTS.md'), 'utf8')).toContain(`The workspace is \`${CWD}\`, not the directory you start in`);
+  });
+
+  it('starts a writable task in its worktree, where the same workspace\'s hooks were recorded running', async () => {
+    const { mcp } = await taskToken();
+    const { spawned, adapter } = copilot(replay('repo-hooks', EAGER_CONTACT));
+    await adapter.start(taskStart(mcp));
+
+    const launch = recordedLaunch('repo-hooks');
+    expect(spawned.lastArgs()).toEqual(recordedArgs('repo-hooks'));
+    expect(spawned.lastCwd()).toBe(launch.cwd);
+    expect(spawned.lastEnv().COPILOT_ALLOW_ALL).toBeUndefined();
+    expect(launch.hooksRan).toEqual(['repohooks-preToolUse', 'repohooks-sessionEnd', 'repohooks-sessionStart', 'repohooks-userPromptSubmitted']);
+  });
+
+  it('plans with Ordewell\'s planner tools alone: a read goes to the envelope, its own shell is refused by Copilot and a write by Ordewell, and nothing is left behind', async () => {
+    const { mcp, submitted, listed, models } = await plannerToken();
+    const { agent, adapter } = copilot(replay('planner', {
+      ...EAGER_CONTACT,
+      'session/prompt': ['list_runners', 'list_models', 'submit_plan'].map((tool) => ({ callMcp: { tool, args: recordedMcpCall('planner', tool) } })),
+    }));
+    await adapter.start(plannerStart(mcp));
+    const events = await plannerTurn(adapter);
+
+    // Copilot asks to reach a workspace path as a read, even for a file it
+    // would create: the turn's report of the call says which it is.
+    const requests = asked(events);
+    expect(requests.map((e) => [e.input?.path, e.decided?.decision])).toEqual([
+      [`${CWD}/README.md`, undefined],
+      [`${CWD}/probe-write.txt`, 'deny'],
+    ]);
+    expect(requests[0].ask).toEqual({ kind: 'path', path: `${CWD}/README.md`, directory: false });
+    expect(permissionAnswers(agent)).toEqual([
+      { outcome: 'selected', optionId: 'allow_once' },
+      { outcome: 'selected', optionId: 'reject_once' },
+    ]);
+    expect(failures(events)).toContain('denied due to the following rules: `shell`');
+    expect(failures(events)).toContain('The user rejected this tool call.');
+    expect(listed).toHaveBeenCalled();
+    expect(models).toHaveBeenCalled();
+    expect(submitted).toHaveBeenCalledWith(expect.objectContaining({ tasks: [expect.objectContaining({ assignedRunner: 'copilot-cli' })] }), expect.anything());
+    expect(recordedOutcome('planner')).toEqual({ calls: ['list_runners', 'list_models', 'submit_plan'], leftBehind: [] });
+    expect(agent.problems).toEqual([]);
+    // The recording ends with the session closed, as disposing it closes it.
+    adapter.dispose();
+    await agent.finished;
+  });
+
+  it('allows a planner\'s call of an Ordewell tool by its two names, though Copilot reports run_plan as a command (ADR-0022, S3)', async () => {
+    const { mcp } = await plannerToken();
+    const { spawned, agent, adapter } = copilot(replay('planner-in-worktree', EAGER_CONTACT));
+    await adapter.start(plannerStart(mcp));
+    const events = await plannerTurn(adapter);
+
+    const text = readFileSync(join(spawned.lastCwd() ?? '', 'AGENTS.md'), 'utf8');
+    expect(text).toContain('You are the planner.');
+    expect(text).toContain('Your Ordewell tools come from the `ordewell` MCP server');
+    expect(failures(events)).toContain('denied due to the following rules: `shell`');
+    expect(asked(events).map((e) => [e.name, e.decided])).toEqual([['run_plan', { decision: 'allow' }]]);
+    expect(permissionAnswers(agent)).toEqual([{ outcome: 'selected', optionId: 'allow_once' }]);
+    expect(agent.problems).toEqual([]);
+    await agent.finished;
+  });
+
+  it('runs a read-only task in Copilot\'s read-only mode: its read of the workspace is allowed, and it completes through Ordewell', async () => {
+    const { mcp, completed } = await readOnlyToken();
+    const { agent, adapter } = copilot(replay('read-only', {
+      ...EAGER_CONTACT,
+      'session/prompt': [{ callMcp: { tool: 'task_complete', args: recordedMcpCall('read-only', 'task_complete') } }],
+    }));
+    await adapter.start(readOnlyStart(mcp));
+    const events = await turn(adapter);
+
+    expect(asked(events).map((e) => [e.name, e.input?.path, e.decided])).toEqual([
+      ['Access paths outside trusted directories', `${CWD}/README.md`, { decision: 'allow' }],
+      ['task_complete', undefined, { decision: 'allow' }],
+    ]);
+    expect(permissionAnswers(agent)).toEqual([
+      { outcome: 'selected', optionId: 'allow_once' },
+      { outcome: 'selected', optionId: 'allow_once' },
+    ]);
+    expect(recordedOutcome('read-only')).toEqual({ calls: ['task_complete'], leftBehind: [] });
+    expect(completed).toHaveBeenCalledWith(expect.objectContaining({ status: 'done' }), expect.anything());
+    expect(agent.problems).toEqual([]);
+    // The recording ends with the session closed, as disposing it closes it.
+    adapter.dispose();
+    await agent.finished;
   });
 
   it('runs a read-only task under the controls Copilot was recorded refusing a write and a command under, which left nothing behind', async () => {
     const { mcp, completed } = await readOnlyToken();
-    const { spawned, agent, adapter } = copilot(replay('read-only', {
+    const { agent, adapter } = copilot(replay('read-only-in-worktree', {
       ...EAGER_CONTACT,
-      'session/request_permission': [{ callMcp: { tool: 'task_complete', args: recordedMcpCall('read-only', 'task_complete') } }],
-    }), COPILOT_WITH_ROLES);
+      'session/request_permission': [{ callMcp: { tool: 'task_complete', args: recordedMcpCall('read-only-in-worktree', 'task_complete') } }],
+    }));
     await adapter.start(readOnlyStart(mcp));
     const events = await turn(adapter);
 
-    expect(spawned.lastArgs()).toEqual(recordedArgs('read-only'));
-    expect(spawned.lastEnv().COPILOT_ALLOW_ALL).toBe('false');
     // Copilot refused both itself, by the denied tools, and asked nothing.
     expect(failures(events)).toContain('denied due to the following rules: `write`');
     expect(failures(events)).toContain('denied due to the following rules: `shell`');
     expect(asked(events).map((e) => e.decided)).toEqual([{ decision: 'allow' }]);
-    expect(recordedOutcome('read-only')).toEqual({ calls: ['run_command', 'task_complete'], leftBehind: [] });
+    expect(recordedOutcome('read-only-in-worktree')).toEqual({ calls: ['run_command', 'task_complete'], leftBehind: [] });
     expect(completed).toHaveBeenCalledWith(expect.objectContaining({ status: 'blocked' }), expect.anything());
     expect(agent.problems).toEqual([]);
     await agent.finished;
   });
 
-  it('tells a read-only task its own tools are off, beside the contract, from its private directory', async () => {
+  it('tells a read-only task its own tools are off, beside the contract, in its private directory\'s instructions', async () => {
     const { mcp } = await readOnlyToken();
-    const { spawned, adapter } = copilot(replay('read-only', EAGER_CONTACT), COPILOT_WITH_ROLES);
+    const { spawned, adapter } = copilot(replay('read-only', EAGER_CONTACT));
     await adapter.start(readOnlyStart(mcp));
 
-    const text = readFileSync(join(spawned.lastEnv().COPILOT_CUSTOM_INSTRUCTIONS_DIRS ?? '', 'AGENTS.md'), 'utf8');
-    // The recording was made without this note: told its tools were off, the model would not try them.
+    const text = readFileSync(join(spawned.lastCwd() ?? '', 'AGENTS.md'), 'utf8');
     expect(text).toContain('This task is read-only: your own file edits, shell and web tools are off.');
     expect(text).toContain('`ordewell-run_command`');
     expect(text).toContain('call the `task_complete` tool');
-  });
-
-  it('plans with Ordewell\'s planner tools alone: its own shell is refused, and a tool it reports as a command goes to the envelope', async () => {
-    const { mcp, submitted, listed } = await plannerToken();
-    const { spawned, agent, adapter } = copilot(replay('planner', {
-      ...EAGER_CONTACT,
-      'session/prompt': [
-        { callMcp: { tool: 'list_runners', args: recordedMcpCall('planner', 'list_runners') } },
-        { callMcp: { tool: 'submit_plan', args: recordedMcpCall('planner', 'submit_plan') } },
-      ],
-    }), COPILOT_WITH_ROLES);
-    await adapter.start(plannerStart(mcp));
-    const events = await plannerTurn(adapter);
-
-    expect(spawned.lastArgs()).toEqual(recordedArgs('planner'));
-    const text = readFileSync(join(spawned.lastEnv().COPILOT_CUSTOM_INSTRUCTIONS_DIRS ?? '', 'AGENTS.md'), 'utf8');
-    expect(text).toContain('You are the planner.');
-    expect(text).toContain('Your Ordewell tools come from the `ordewell` MCP server');
-    expect(recordedOutcome('planner')).toEqual({ calls: ['list_runners', 'submit_plan'], leftBehind: [] });
-    expect(listed).toHaveBeenCalled();
-    expect(submitted).toHaveBeenCalledWith(expect.objectContaining({ tasks: [expect.objectContaining({ assignedRunner: 'copilot-cli' })] }), expect.anything());
-    expect(failures(events)).toContain('denied due to the following rules: `shell`');
-    // run_plan's report says `execute`, which a model-written command title
-    // could say too, so it is not taken for Ordewell's and its envelope has no rule for it.
-    expect(asked(events).map((e) => [e.name, e.ask, e.decided])).toEqual([['run_plan', { kind: 'other' }, undefined]]);
-    expect(permissionAnswers(agent)).toEqual([{ outcome: 'selected', optionId: 'reject_once' }]);
-    expect(agent.problems).toEqual([]);
-    await agent.finished;
   });
 });

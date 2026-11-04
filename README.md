@@ -34,7 +34,7 @@ plans wait for your approval by default; run settings let you automate execution
 and merging.
 
 Claude Code, Codex, OpenCode and GitHub Copilot CLI are supported out of the box,
-and can be mixed freely within one plan. Copilot runs tasks but does not plan. Try it in your project, with nothing to install:
+and can be mixed freely within one plan. Try it in your project, with nothing to install:
 
 ```bash
 npx ordewell
@@ -74,7 +74,7 @@ get it from [Open VSX](https://open-vsx.org/extension/ordewell/ordewell). The
 extension bundles its own core and needs nothing from npm.
 
 **Requirements:** Node.js 20.3 or newer, at least one of Claude Code, Codex,
-OpenCode or GitHub Copilot CLI (which runs tasks but does not plan), and git 2.38 or newer for task isolation.
+OpenCode or GitHub Copilot CLI, and git 2.38 or newer for task isolation.
 
 ### Windows
 

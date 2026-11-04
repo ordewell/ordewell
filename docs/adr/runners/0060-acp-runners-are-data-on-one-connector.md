@@ -1,6 +1,6 @@
 ---
 status: accepted
-amends: ["0008", "0009", "0018", "0022", "0023", "0025", "0046"]
+amends: ["0008", "0009", "0018", "0022", "0023", "0025", "0028", "0046"]
 ---
 
 # 0060 — ACP runners are data on one connector
@@ -68,16 +68,25 @@ repository (ADR-0028), the roles it claims, and the controls that restrict it.
   - a spawn-level control (`restricted`) removes or denies the agent's own
     write and shell tools, and is shown to hold under ACP;
   - Ordewell refuses every `edit`, `delete`, `move` and `execute` permission
-    request, and every switch of mode, on those starts (`decideRestricted`);
+    request, and every switch of mode, on those starts (`decideRestricted`),
+    by the kind the request names or the kind the turn reported for the same
+    call, except Ordewell's own tools, pre-allowed by exact name (R7);
   - a recorded live run shows a write attempt and a shell attempt refused,
     with nothing left behind.
 
-  A planner also runs nothing the repository's config names (ADR-0028).
-  `acpRoles` refuses at load a profile whose claimed read-only role and
-  manifest disagree, or that claims a role with no restriction; `AcpAdapter`
-  refuses a planner or a read-only start its profile does not claim. A
-  restricted session that leaves the mode it settled in fails, and its process
-  is disposed.
+  A planner or a read-only task also runs nothing the repository's config
+  names (ADR-0028). An agent that loads configuration from the directory it
+  starts in, with no switch of its own to stop it, starts there in a private
+  directory instead (`restricted.privateCwd`): owner-only and empty but for
+  its instructions, the session's `cwd` and its temp directory too. It then
+  reaches the worktree only by asking, so every read goes to the planner's
+  envelope or to the read-only task's rules (ADR-0046). Such a start is
+  refused under a placement, since a container starts its runner in the
+  worktree. `acpRoles` refuses at load a profile whose claimed read-only role
+  and manifest disagree, or that claims a role with no restriction;
+  `AcpAdapter` refuses a planner or a read-only start its profile does not
+  claim. A restricted session that leaves the mode it settled in fails, and
+  its process is disposed.
 - **Ordewell's tools go over HTTP, with the token in `session/new` (R4).** The
   server is given as one `http` entry in `mcpServers`, its token as a header,
   so the token reaches the agent over stdin and never as an argument or a file
@@ -95,15 +104,18 @@ repository (ADR-0028), the roles it claims, and the controls that restrict it.
   field. The completion contract (and a planner's system prompt) goes through
   the agent's own channel outside the worktree where it has one: an
   owner-only file named by a flag or a variable, or found in a private
-  directory a variable lists, or a documented `_meta` field of
-  `session/new`. An agent with none gets it as a preamble on the first prompt
+  directory a variable lists or the private directory a restricted start
+  begins in (R3), or a documented `_meta` field of `session/new`. An agent with none gets it as a preamble on the first prompt
   of every new process, a resumed one included. This is ADR-0018 C2's ACP
   exception.
 - **The plan's mode reaches the agent at spawn (R7).** A mode route maps it to
   the agent's own allow-all flag or session mode where it has one; without one
   the adapter answers each permission request as the manifest's mode settings
   say. Ordewell's own tools are pre-allowed by exact name only, as the profile
-  reads it from the agent's tool-call report (ADR-0022 S3). The model and
+  reads it from the permission request and the turn's report of the same
+  call (ADR-0022 S3). The name is decided before any kind is read: an agent
+  guesses an MCP tool's kind from its name, so a planner's or a read-only
+  task's refusal by kind would otherwise turn Ordewell's tools away. The model and
   effort are set through the session's config options and read back
   (ADR-0018 B2): a model with no setting to read back is taken on the agent's
   word at spawn only when the profile passes it by argument.
@@ -124,16 +136,30 @@ recordings in `packages/core/src/services/__tests__/fixtures/acp/copilot-cli/`:
 | instructions | an owner-only `AGENTS.md` in a private directory named by `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` |
 | mode | `--allow-all` under `allowAll`, nothing under `default`; its `autopilot` session mode is not used, because it changes how Copilot works, not only whether it asks |
 | model | `--model` at spawn; 1.0.105 exposes no model or effort setting over ACP |
-| Ordewell's tools | a call of kind `other` whose report title is `ordewell-<tool>`; the request's bare tool name is never trusted |
-| restriction | `--deny-tool=write`, `--deny-tool=shell`, `--deny-tool=url`, `--disable-builtin-mcps`, and `COPILOT_ALLOW_ALL=false` |
-| roles | none: no planner, no read-only mode |
+| Ordewell's tools | a request titled with the bare tool name whose call the turn reported as `ordewell-<tool>`; neither title alone, and never the kind, which Copilot guesses (`run_plan` as `execute`, `list_runners` as `read`) |
+| restriction | `--deny-tool=write`, `--deny-tool=shell`, `--deny-tool=url`, `--disable-builtin-mcps`, `COPILOT_ALLOW_ALL=false`, and a private start directory that is also `TMPDIR`, `TMP` and `TEMP` and holds the instructions as its own `AGENTS.md` |
+| roles | the planner, and a read-only mode (`plan`) |
 
-The recordings show the restriction holding: a write and a command refused by
-Copilot itself, with nothing left behind. The roles are withheld under
-ADR-0028 instead: under ACP Copilot 1.0.105 runs the shell hooks in the
-repository's `.github/hooks/` from the first prompt, in a folder it was never
-told to trust and with hooks disabled, and no flag turns them off. A planner or
-a read-only task would run the repository's code.
+A native call's two titles are Copilot's own fixed words ("Create file",
+"Creating <path>") or the one description the model wrote, the same on both,
+so only a call to the server named `ordewell` carries the pair.
+
+Under ACP Copilot 1.0.105 runs the shell hooks in `.github/hooks/` of the
+directory it starts in, from the first prompt, trusted or not and with
+`disableAllHooks` set, and no flag turns them off (`repo-hooks.jsonl`). Under
+ACP `--add-dir` grants no access and `--disallow-temp-dir` takes none away, and
+Copilot reads its temp directory without asking, so the private directory is
+its temp directory too. Started there it runs no hook, and asks for each path
+in the worktree ("Access paths outside trusted directories").
+
+The recordings of both restricted starts (`planner.jsonl`, `read-only.jsonl`)
+show no hook run and nothing left behind. In `planner.jsonl` a shell attempt is
+refused by Copilot itself under `--deny-tool=shell`, with no request, and a
+write attempt arrives as a request to read the path it would create, which the
+turn reported as an `edit`, and Ordewell refuses it. A refused request ends
+Copilot's turn: the planner goes on in its next turn, and a read-only task
+whose turn so ends without `task_complete` is reminded of it like any task
+([ADR-0018](0018-structured-runner-transport.md) W1).
 
 Its models come from ACP discovery (`initialize` and `session/new` in a scratch
 directory) first; an empty answer falls through to `copilot help config`
@@ -158,9 +184,11 @@ learned from `-32000` and shown with its `copilot login`
 - **A stdio-to-HTTP MCP bridge.** An agent that takes only stdio MCP servers
   would need a local process carrying the token; it is refused instead, until
   such an agent is worth the bridge.
-- **The planner and read-only roles for any admitted agent.** Copilot CLI
-  holds neither. Gemini CLI, Qwen Code and Goose wait for the same live probe
-  Copilot passed before they are admitted at all.
+- **Agents beyond Copilot CLI.** Gemini CLI, Qwen Code and Goose wait for the
+  same live probe Copilot passed before they are admitted at all.
+- **A resumed restricted start.** A resume begins in a new private directory
+  and hands it to `session/load`; no recording yet shows Copilot resuming a
+  session whose `cwd` has changed.
 - **ACP v2.** Its prompt lifecycle separates acceptance from processing and
   does not yet specify queueing or steering; nothing here relies on it.
 
@@ -183,6 +211,16 @@ learned from `-32000` and shown with its `copilot login`
 - **Roles enforced by the agent's mode alone.** Rejected: a mode's name is the
   agent's promise. A plan or ask mode does not show that a write or a command
   is refused.
+- **Ordewell's tools recognised by the report's title alone.** Rejected: the
+  request is what is answered, and Copilot asks for an MCP call by the bare
+  tool name, which a native call's model-written description can equal. The
+  pair is what only the `ordewell` server's calls carry.
+- **A restricted Copilot started in the worktree, with `--add-dir` or a trust
+  setting holding it to the workspace.** Rejected: hooks run from the start
+  directory whatever Copilot is told, and under ACP neither `--add-dir` nor
+  `--disallow-temp-dir` has any effect. The roles were withheld until the
+  private start directory, which keeps the repository's hooks and config out of
+  the process without a switch of Copilot's.
 - **Roles enforced by withholding Ordewell's capabilities.** Advertising no
   file-system or terminal capability is how Ordewell stays out of the agent's
   I/O, not a restriction: the agent writes and runs commands with its own
@@ -207,9 +245,13 @@ learned from `-32000` and shown with its `copilot login`
 - Admitting an ACP agent is a probe, a recording, a manifest and a profile,
   with no adapter code. What the probe must show is in CONTRIBUTING.md's ACP
   section.
-- A runner can now be task-only: `plans` is false for Copilot CLI, so it runs
-  tasks, is listed and signs in like any runner, and never appears among the
-  planners.
+- A runner can be task-only: where a profile claims no planner role, `plans`
+  is false, and the runner runs tasks, is listed and signs in like any runner
+  but never appears among the planners. Copilot CLI claims the role, so it
+  plans like the native runners.
+- A restricted Copilot names the worktree's files by their full path, since
+  its own relative paths name the private directory; its instructions tell it
+  where the workspace is.
 - A runner id shares the planner setting's namespace with the API vendors'
   ids, so an ACP runner id must not equal one (`kimi-cli`, not `kimi`).
 - Each agent's ACP server is young and changes between releases; the profile's
@@ -219,3 +261,6 @@ learned from `-32000` and shown with its `copilot login`
 
 - 2026-11-04 — accepted and implemented: `copilot-cli` is the reference ACP
   runner, for writable tasks only.
+- 2026-11-04 — Copilot CLI plans and runs read-only tasks: a restricted start
+  begins in a private directory, and Ordewell's tools are named by the
+  request and report pair before any kind is read.

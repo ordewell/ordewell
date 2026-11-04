@@ -188,7 +188,8 @@ An agent that ships its own Agent Client Protocol server needs no adapter:
   under `services/__tests__/fixtures/acp/<id>/`, as `{dir, ms, line}`, with
   `dir: "note"` lines for the spawn arguments and for what the run left behind.
   Copilot's recordings show what to cover: discovery, signed out, allow-all,
-  an edit and a command asked for, an Ordewell tool call, and a cancel. Replay
+  an edit and a command asked for, an Ordewell tool call, a cancel, and each
+  restricted start. Replay
   them against a live adapter as `copilotCli.test.ts` does. Every claim the
   profile makes about the agent cites a recording. Add the runner to the fakes
   in `services/__tests__/fakeRunners.ts` and to the contract tests' tables.
@@ -202,9 +203,14 @@ An agent that ships its own Agent Client Protocol server needs no adapter:
   - a recording of a write attempt and a shell attempt refused, with nothing
     left behind.
 
-  A planner must also run nothing the repository's config names (ADR-0028).
-  Copilot passes the first three and is still task-only, because it runs the
-  repository's `.github/hooks/` under ACP.
+  A planner or a read-only task must also run nothing the repository's
+  config names (ADR-0028). An agent that loads hooks or config from the
+  directory it starts in, with no switch to stop it, sets
+  `restricted.privateCwd`, as Copilot does: it then starts in an empty
+  private directory and asks for every path in the worktree. Record a hook
+  planted in the worktree running on a writable start and not on a restricted
+  one, as Copilot's `repo-hooks.jsonl`, `planner.jsonl` and `read-only.jsonl`
+  do.
 
 ## Releasing
 

@@ -56,8 +56,8 @@ To plan with an API key instead, set `ordewell.openAiApiKey` (OpenRouter) or
 `ordewell.apiKey` (Gemini), or export `OPENROUTER_API_KEY` or `GEMINI_API_KEY`. A key
 you have set takes priority over the installed agent.
 
-Each runner you want to use (Claude Code, Codex, OpenCode or GitHub Copilot CLI,
-which runs tasks but does not plan) must be installed and on your PATH. If a runner appears greyed out right after installing it, reload the
+Each runner you want to use (Claude Code, Codex, OpenCode or GitHub Copilot CLI)
+must be installed and on your PATH. If a runner appears greyed out right after installing it, reload the
 window so the extension picks up the new PATH.
 
 Skills are `SKILL.md` folders: type `/name` in the panel to load one into the

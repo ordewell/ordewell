@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { AcpAdapter } from '../harness/AcpAdapter';
@@ -38,11 +38,17 @@ const MANIFEST: RunnerManifest = {
   auth: { statusArgs: ['status'], loginArgs: ['login'] },
 } as RunnerManifest;
 
-/** Names an Ordewell call by a title the test agent gives it; a real profile records its agent's own. */
+/**
+ * Names an Ordewell call by a title the test agent gives it, in its report or
+ * else its request; a real profile records its agent's own.
+ */
 const PROFILE: AcpProfile = {
   manifest: MANIFEST,
   args: ['--acp'],
-  ordewellTool: (call: AcpToolCall) => (call.title?.startsWith('ordewell/') ? call.title.slice('ordewell/'.length) : null),
+  ordewellTool: ({ request, report }) => {
+    const title = (report ?? request).title;
+    return title?.startsWith('ordewell/') ? title.slice('ordewell/'.length) : null;
+  },
   instructions: { kind: 'prompt' },
 };
 
@@ -61,7 +67,7 @@ const handshake = (reply: Record<string, unknown> = INITIALIZED): FakeAcpStep[] 
   { expect: 'session/new', reply: { sessionId: 'sess-1' } },
 ];
 
-function setup(steps: FakeAcpStep[], profile: AcpProfile = PROFILE, options: FakeSpawnOptions = {}) {
+function setup(steps: FakeAcpStep[], profile: AcpProfile = PROFILE, options: FakeSpawnOptions = {}, extra: Partial<AgentProcessDeps> = {}) {
   const spawned = fakeAcpSpawn(steps, options);
   const deps: AgentProcessDeps = {
     spawn: spawned.spawn,
@@ -71,6 +77,7 @@ function setup(steps: FakeAcpStep[], profile: AcpProfile = PROFILE, options: Fak
     isDirectory: () => true,
     exists: () => true,
     workspaceEnv: async () => ({}),
+    ...extra,
   };
   const adapter = new AcpAdapter(deps, profile);
   adapters.push(adapter);
@@ -960,11 +967,11 @@ describe('acpOrdewellBinding', () => {
   const call = (title: string): AcpToolCall => ({ toolCallId: 'c', title });
 
   it('tells Ordewell\'s own tools apart by exact name only', () => {
-    expect(binding.isOrdewellAsk(call('ordewell/task_complete'))).toBe(true);
-    expect(binding.isOrdewellAsk(call('ordewell/read'))).toBe(true);
-    expect(binding.isOrdewellAsk(call('ordewell/task_complete_now'))).toBe(false);
-    expect(binding.isOrdewellAsk(call('ordewell/'))).toBe(false);
-    expect(binding.isOrdewellAsk(call('task_complete'))).toBe(false);
+    expect(binding.isOrdewellAsk({ request: call('ordewell/task_complete') })).toBe(true);
+    expect(binding.isOrdewellAsk({ request: call('ordewell/read') })).toBe(true);
+    expect(binding.isOrdewellAsk({ request: call('ordewell/task_complete_now') })).toBe(false);
+    expect(binding.isOrdewellAsk({ request: call('ordewell/') })).toBe(false);
+    expect(binding.isOrdewellAsk({ request: call('task_complete') })).toBe(false);
   });
 
   it('reads the attach states', () => {
@@ -1577,11 +1584,72 @@ describe('AcpAdapter roles (ADR-0026, ADR-0046)', () => {
     expect(first).toContain('task_complete');
   });
 
+  it('starts a planner and a read-only task of a profile that loads its start directory\'s configuration in an empty private directory, and still judges their reads by the worktree', async () => {
+    const outside: AcpProfile = { ...ROLES_PROFILE, restricted: { ...ROLES_PROFILE.restricted!, privateCwd: true } };
+    const read = ask('read', 'c-read', { locations: [{ path: '/repo/src/a.ts' }] });
+    for (const start of [plannerStart(), readOnlyStart()]) {
+      const { agent, adapter, spawned } = setup([...handshake(), { expect: 'session/prompt' }, read, { answer: { stopReason: 'end_turn' }, to: 'session/prompt' }], outside);
+      await adapter.start(start);
+      const asks: unknown[] = [];
+      await adapter.send('go', (e) => {
+        if (e.type !== 'permission_request') return;
+        // A planner's read is held for its envelope, which judges it by the
+        // workspace; a read-only task's is answered here, by its worktree.
+        asks.push(e.decided?.decision ?? e.ask);
+        if (!e.decided) adapter.answerPermission(e.id, { decision: 'allow' });
+      });
+
+      const dir = spawned.lastCwd()!;
+      expect(dir).not.toBe('/repo');
+      expect(statSync(dir).mode & 0o777).toBe(0o700);
+      expect(readdirSync(dir)).toEqual([]);
+      expect((agent.requests('session/new')[0].params as { cwd: string }).cwd).toBe(dir);
+      // Its relative paths now name the empty directory, so it is told where the files are.
+      expect(promptText(agent)).toContain('The workspace is `/repo`, not the directory you start in: name its files by their full path there.');
+      expect(asks).toEqual([start.kind === 'planner' ? { kind: 'path', path: '/repo/src/a.ts', directory: false } : 'allow']);
+      expect(chosen(agent)).toEqual(['opt-b']);
+      adapter.dispose();
+      expect(existsSync(dir)).toBe(false);
+    }
+  });
+
+  it('hands such a start its instructions as its private directory\'s own file, and makes that directory its temp directory', async () => {
+    const outside: AcpProfile = {
+      ...ROLES_PROFILE,
+      instructions: { kind: 'file', fileName: 'AGENTS.md', pass: { envDir: 'FAKE_INSTRUCTION_DIRS' } },
+      restricted: { ...ROLES_PROFILE.restricted!, privateCwd: true },
+    };
+    const { adapter, spawned } = setup(handshake(), outside);
+    await adapter.start(plannerStart());
+
+    const dir = spawned.lastCwd()!;
+    const file = join(dir, 'AGENTS.md');
+    expect(readdirSync(dir)).toEqual(['AGENTS.md']);
+    if (process.platform !== 'win32') expect(statSync(file).mode & 0o077).toBe(0);
+    expect(readFileSync(file, 'utf8')).toMatch(/^The workspace is `\/repo`, [^\n]*\n\nYou are the planner\./);
+    expect(spawned.lastEnv().FAKE_INSTRUCTION_DIRS).toBeUndefined();
+    expect([spawned.lastEnv().TMPDIR, spawned.lastEnv().TMP, spawned.lastEnv().TEMP]).toEqual([dir, dir, dir]);
+    adapter.dispose();
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  it('refuses a restricted start of such a profile where a placement would start it in the worktree', async () => {
+    const outside: AcpProfile = { ...ROLES_PROFILE, restricted: { ...ROLES_PROFILE.restricted!, privateCwd: true } };
+    const place = vi.fn();
+    const { adapter, spawned } = setup(handshake(), outside, {}, { placement: { cwd: '/work', place, reach: async (url) => url, blob: async () => undefined } });
+
+    await expect(adapter.start(readOnlyStart())).rejects.toThrow(/cannot run a read-only task in a container/);
+    expect(place).not.toHaveBeenCalled();
+    expect(spawned.processes).toHaveLength(0);
+  });
+
   it('leaves a writable task on a role-claiming profile as it was: no restricted controls, its own mode', async () => {
-    const { adapter, spawned } = setup(handshake(), ROLES_PROFILE);
+    const { agent, adapter, spawned } = setup(handshake(), { ...ROLES_PROFILE, restricted: { ...ROLES_PROFILE.restricted!, privateCwd: true } });
     await adapter.start(taskStart('auto', { flags: resolveTaskRunnerFlags(ROLES_MANIFEST, { mode: 'auto' }) }));
     expect(spawned.lastArgs()).toEqual(['--acp', '--allow-all-tools']);
     expect(spawned.lastEnv().FAKE_ALLOW_ALL).toBeUndefined();
+    expect(spawned.lastCwd()).toBe('/repo');
+    expect((agent.requests('session/new')[0].params as { cwd: string }).cwd).toBe('/repo');
   });
 
   it('answers every request of a read-only task itself, by what the agent says the call does', async () => {
@@ -1621,6 +1689,27 @@ describe('AcpAdapter roles (ADR-0026, ADR-0046)', () => {
     expect(note('c-fetch')).toMatchObject({ decision: 'deny', note: expect.stringContaining('unavailable on a read-only task') });
   });
 
+  it('allows Ordewell\'s own tools by name on a planner and a read-only start whatever kind the agent gives them, and refuses a near miss of the same kind', async () => {
+    const calls = (): FakeAcpStep[] => [
+      ...handshake(),
+      { expect: 'session/prompt' },
+      ask('execute', 'c-run', { title: 'ordewell/run_command' }),
+      ask('edit', 'c-plan', { title: 'ordewell/run_plan' }),
+      ask('read', 'c-list', { title: 'ordewell/list_runners' }),
+      ask('execute', 'c-near', { title: 'ordewell/run_commands' }),
+      ask('edit', 'c-other-server', { title: 'ordewellx/run_plan' }),
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    ];
+    for (const start of [plannerStart(), readOnlyStart()]) {
+      const { agent, adapter } = setup(calls(), ROLES_PROFILE);
+      await adapter.start(start);
+      const events = await turn(adapter, 'go');
+      const decided = events.flatMap((e) => (e.type === 'permission_request' ? [[e.toolUseId, e.decided?.decision]] : []));
+      expect(decided).toEqual([['c-run', 'allow'], ['c-plan', 'allow'], ['c-list', 'allow'], ['c-near', 'deny'], ['c-other-server', 'deny']]);
+      expect(chosen(agent)).toEqual(['opt-b', 'opt-b', 'opt-b', 'opt-c', 'opt-c']);
+    }
+  });
+
   it('judges a request by the turn\'s report of its call where the request leaves the kind out', async () => {
     const { agent, adapter } = setup([
       ...handshake(),
@@ -1634,6 +1723,32 @@ describe('AcpAdapter roles (ADR-0026, ADR-0046)', () => {
     await adapter.start(readOnlyStart());
     await turn(adapter, 'go');
     expect(chosen(agent)).toEqual(['opt-c', 'opt-b']);
+  });
+
+  it('refuses a request to reach a path for a call the turn reported as a write or a command, though the request calls it a read', async () => {
+    // Copilot's own words for it, from the live planner recording: the report
+    // is the create, the request only the path it needs.
+    const calls = (): FakeAcpStep[] => [
+      ...handshake(),
+      { expect: 'session/prompt' },
+      { notify: 'session/update', params: update('tool_call', { toolCallId: 'c-1', title: 'Creating /repo/a.txt', kind: 'edit', status: 'pending', locations: [{ path: '/repo/a.txt' }] }) },
+      { notify: 'session/update', params: update('tool_call', { toolCallId: 'c-2', title: 'touch b.txt', kind: 'execute', status: 'pending' }) },
+      ask('read', 'c-1', { title: 'Access paths outside trusted directories', locations: [{ path: '/repo/a.txt' }] }),
+      ask('read', 'c-2', { title: 'Access paths outside trusted directories', locations: [{ path: '/repo/b.txt' }] }),
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    ];
+    for (const start of [plannerStart(), readOnlyStart()]) {
+      const { agent, adapter } = setup(calls(), ROLES_PROFILE);
+      await adapter.start(start);
+      const held: string[] = [];
+      await adapter.send('go', (e) => {
+        if (e.type !== 'permission_request' || e.decided) return;
+        held.push(e.toolUseId ?? '');
+        adapter.answerPermission(e.id, { decision: 'allow' });
+      });
+      expect(held).toEqual([]);
+      expect(chosen(agent)).toEqual(['opt-c', 'opt-c']);
+    }
   });
 
   it('refuses a planner\'s writes, commands and mode switches at once and holds its reads and fetches for the envelope, with their ask', async () => {

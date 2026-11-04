@@ -405,8 +405,9 @@ evidence [ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)
 R3 asks for: spawn controls that take its own write and shell tools away,
 Ordewell refusing every edit, delete, move, command and mode switch it still
 requests, and a recorded refusal of both. Its other requests reach the
-envelope as the Claude planner's do. GitHub Copilot CLI claims no planner
-role.
+envelope as the Claude planner's do. GitHub Copilot CLI plans so, started in
+a private directory of its own: it asks for each path in the worktree, and
+the envelope decides every one.
 
 ## Considered options
 
@@ -455,3 +456,4 @@ role.
 - 2026-10-29 — git is scoped by its operands past leading flags, so `git -C <dir> …` no longer scopes to bare `git`.
 - 2026-10-29 — `chdir` and a re-cased `CD` move the shell: following stops, and the grant is the line.
 - 2026-11-04 — an ACP runner is a harness planner only on its profile's evidence; GitHub Copilot CLI is none (ADR-0060).
+- 2026-11-04 — GitHub Copilot CLI is a harness planner, its every worktree read put to the envelope (ADR-0060).

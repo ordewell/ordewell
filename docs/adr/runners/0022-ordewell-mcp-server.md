@@ -90,11 +90,10 @@ A runner-facing tool joins the task side on the same mechanism.
 
 ### Scope
 
-- **Task runners and the three coding-agent planners (S1).** Claude Code,
-  Codex and OpenCode use the required server, as task runners and as
-  planners; GitHub Copilot CLI, an ACP runner that does not plan, uses it as a
-  task runner
-  ([ADR-0060](0060-acp-runners-are-data-on-one-connector.md)). An ACP agent
+- **Task runners and the coding-agent planners (S1).** Claude Code, Codex,
+  OpenCode and GitHub Copilot CLI, an ACP runner
+  ([ADR-0060](0060-acp-runners-are-data-on-one-connector.md)), use the
+  required server, as task runners and as planners. An ACP agent
   that cannot take an HTTP MCP server is refused, since Ordewell runs no
   stdio bridge to carry the token. API planners (`OpenAiService`,
   `GeminiService`) keep envelopes and their existing query read loop, alongside direct task read tool calls.
@@ -114,8 +113,8 @@ A runner-facing tool joins the task side on the same mechanism.
   else: a harness planner stays in its read-only mode for every other tool.
   An ACP runner has no launch-time grant: the adapter answers the agent's
   `session/request_permission` for an Ordewell tool itself, allowing it at
-  once, by the exact name its profile reads from the agent's tool-call report
-  (ADR-0060 R7).
+  once, by the exact name its profile reads from the request and the agent's
+  report of the same call, before the call's kind is read (ADR-0060 R7).
   A request is taken for an Ordewell tool's by its exact name (Claude Code,
   OpenCode, ACP) or server name (Codex), never by a prefix: a server named
   `ordewell_x` or `ordewell__x` names its tools under Ordewell's prefix.
@@ -375,3 +374,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-11-01 — a runner in a container reaches this server through its lease's relay, on its own loopback at the same port, so T1 and T2 hold unchanged ([ADR-0059](../isolation/0059-an-execution-lease-reserves-in-the-claim-and-opens-after-it.md) L6).
 - 2026-11-01 — L3: a subplanner is told its runner's catalog in its prompt (ADR-0057 R5).
 - 2026-11-04 — A5: the configuration may travel over the runner's own stdin protocol; S1, S3, S4: how an ACP runner takes, is pre-allowed and attaches to the server (ADR-0060).
+- 2026-11-04 — S1, S3: GitHub Copilot CLI uses the server as a planner too, and an ACP runner's Ordewell tool is named before its kind is read (ADR-0060).

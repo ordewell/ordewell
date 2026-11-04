@@ -27,14 +27,15 @@ export const COPILOT_CLI_MANIFEST: RunnerManifest = {
   contextFile: 'AGENTS.md',
   contextFileAltPath: '.github/copilot-instructions.md',
 
-  // No read-only mode: Copilot runs the repository's hooks under ACP, so its
-  // profile claims no read-only role (ADR-0028, ADR-0046).
   // Copilot has `copilot login` but no status command, so there are no
   // `statusArgs`: a signed-out agent is learned from ACP's auth-required error,
   // which the adapter words as "not signed in" (its -32000 message).
   auth: { loginArgs: ['login'], signedOut: /Authentication required|not signed in/i },
   modes: [
     { id: 'default', label: 'Ask before actions', description: 'Edits and commands wait for your approval', safe: true },
+    // Copilot's own read-only controls are its profile's restricted start
+    // (ADR-0046), so this mode adds no flag of its own.
+    { id: 'plan', label: 'Read-only', description: 'Native reads and Ordewell commands; lands nothing', readOnly: true },
     { id: 'allowAll', label: 'Allow all', description: 'Copilot runs edits and commands without asking (--allow-all)', autonomous: true },
   ],
 };

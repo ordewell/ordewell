@@ -8,6 +8,7 @@ import {
 import { ModelResolver } from '../../services/ModelResolver';
 import { supportsTaskMode, type RunnerConnector } from '../../services/harness/connectors';
 import { readUsageLimitReset } from '../../services/runnerExit';
+import { RunnerInstallation } from '../../services/RunnerInstallation';
 
 // A built-in runner is declared in exactly two places: its manifest in the
 // built-in list and its entry in CONNECTORS. This file adds a fake one there and
@@ -58,7 +59,7 @@ describe('a built-in runner declared by manifest and connector only', () => {
   });
 
   it('can plan: it is a harness planner, labelled from its manifest', () => {
-    expect(CLI_PROVIDERS).toEqual(['claude-code', 'codex', 'opencode', 'acme']);
+    expect(CLI_PROVIDERS).toEqual(['claude-code', 'codex', 'opencode', 'copilot-cli', 'acme']);
     expect(isCliProvider('acme')).toBe(true);
     expect(runnerForProvider('acme')).toBe('acme');
     expect(providerForRunner('acme')).toBe('acme');
@@ -96,5 +97,13 @@ describe('a built-in runner declared by manifest and connector only', () => {
     expect(isCliProvider('tasker')).toBe(false);
     expect(CLI_PROVIDERS).not.toContain('tasker');
     expect(plannerBackendEntries({ tasker: { usable: true } }, []).some((e) => e.id === 'tasker')).toBe(false);
+  });
+
+  it('is refused as a planner, in words that say it runs tasks, without starting it', async () => {
+    const exec = vi.fn(async () => ({ stdout: 'ok' }));
+    const installation = new RunnerInstallation(new RunnerRegistry(), exec);
+
+    expect(await installation.plannerUsability('tasker')).toEqual({ usable: false, reason: 'Tasker can run tasks but cannot plan in Ordewell yet.' });
+    expect(exec).not.toHaveBeenCalled();
   });
 });

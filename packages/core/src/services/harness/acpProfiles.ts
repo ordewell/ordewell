@@ -52,10 +52,25 @@ export interface AcpRoles {
   readOnly: boolean;
 }
 
+/** A permission request, with the turn's first report of the same call where the agent sent one. */
+export interface AcpAskedCall {
+  request: AcpToolCall;
+  report?: AcpToolCall;
+}
+
 /** Spawn-level controls that take the agent's own write, shell and web tools away. */
 export interface AcpRestriction {
   args: readonly string[];
   env?: Readonly<Record<string, string>>;
+  /**
+   * Start the agent in a private directory of its own, the session's cwd and
+   * its temp directory too, for an agent that takes the directory it starts in
+   * as configuration to load: its hooks run the repository's code, and no
+   * switch of its own turns them off (ADR-0028). The directory holds only the
+   * instructions, as its own. The agent then reaches the workspace only by
+   * asking, and every read is put to the envelope (ADR-0060, R3).
+   */
+  privateCwd?: boolean;
 }
 
 /**
@@ -75,12 +90,14 @@ export interface AcpProfile {
   /** How long the agent may take to first use its Ordewell token before the attach counts as missed; MCP_ATTACH_TIMEOUT_MS when absent. */
   attachTimeoutMs?: number;
   /**
-   * The Ordewell tool a call names, by its name on the server, or null for
-   * any other call. Each agent reports MCP calls in its own words, so the
-   * profile reads them; the binding then matches the result exactly
-   * (ADR-0022, S3).
+   * The Ordewell tool a permission request is for, by its name on the server,
+   * or null for any other call. Each agent words MCP calls its own way, in the
+   * request and in the turn's report of the same call, so the profile reads
+   * them; the binding then matches the result exactly (ADR-0022, S3). It is
+   * decided before the call's kind is read, so a profile should not lean on
+   * the kind: that is the agent's guess at what an MCP tool does.
    */
-  ordewellTool(call: AcpToolCall): string | null;
+  ordewellTool(call: AcpAskedCall): string | null;
   /** The name the agent calls an Ordewell tool by, given its name on the server; the server's own name when absent. */
   toolName?(tool: string): string;
   /** Arguments that run the agent on the plan's model; absent when the agent cannot be told one at spawn. */

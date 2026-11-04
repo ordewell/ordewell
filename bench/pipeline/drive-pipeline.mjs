@@ -11,8 +11,8 @@
  *                      `claude` in fake-claude/ (first on PATH; no LLM, no key).
  *   --runner acp       The built-in copilot-cli connector driving the fake ACP
  *                      agent in fake-acp/ as `copilot` (first on PATH; no LLM,
- *                      no key). copilot-cli claims no planner role on this
- *                      branch, so this is its task-runner half only.
+ *                      no key). The plan comes from the API planner, so
+ *                      this is copilot-cli's task-runner half only.
  *   --runner opencode  Real opencode sessions with DeepSeek V4 Flash.
  *
  * `--case no-completion` (ACP only) runs one task whose fake agent works and

@@ -39,7 +39,7 @@ per-agent adapter:
 | Claude Code | `-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages` | `--permission-mode default` + `--permission-prompt-tool stdio`, direct edit, shell and native plan-mode tools disallowed (ADR-0008, ADR-0026) |
 | Codex | `app-server` stdio JSON-RPC: `initialize` → `thread/start` → `turn/start` | `sandbox: read-only`, `approvalPolicy: on-request` with only MCP tool approvals held for Ordewell (ADR-0026) |
 | OpenCode | `serve` (headless HTTP) + SSE event stream — 1.x `/event`, 2.x `/api/event` | `agent: plan`, shell and subagent tools withheld, and Ordewell's permission policy for the server (ADR-0026) |
-| an ACP agent | ACP over stdio: `initialize` → `session/new` → `session/prompt` | only where its profile claims the planner role on evidence ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md) R3); GitHub Copilot CLI claims none and does not plan |
+| an ACP agent | ACP over stdio: `initialize` → `session/new` → `session/prompt` | only where its profile claims the planner role on evidence ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md) R3); GitHub Copilot CLI's own write, shell and web tools denied, started in a private directory, every edit, delete, move and command request refused |
 
 Three details in that table were corrected during implementation, against the
 binaries themselves rather than against memory:
@@ -244,7 +244,7 @@ plans where its `CONNECTORS` entry's `plans` says so — its manifest and that
 entry are the whole of declaring it — so the harness planners, their labels
 and the planner lists are derived from those two, and an id is checked against
 them at runtime rather than by the compiler. A runner whose connector does not
-plan, such as GitHub Copilot CLI
+plan, such as an ACP agent whose profile claims no planner role
 ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)), runs
 tasks and never appears among the planners. Since runner ids and vendor ids
 share this one setting, a runner id must not equal a vendor's. One `isCliProvider()` guard covers key
@@ -385,3 +385,4 @@ this backend should understand they are trading speed for not holding a key.
 - 2026-10-31 — a turn waiting on the probe for installed agents says so on every surface.
 - 2026-11-01 — a subplanner is a harness planner that parks between turns (ADR-0055 D5, D18).
 - 2026-11-04 — a runner plans where its connector's `plans` says so; an ACP agent plans only on its profile's evidence, and GitHub Copilot CLI does not ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)).
+- 2026-11-04 — GitHub Copilot CLI plans ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)).

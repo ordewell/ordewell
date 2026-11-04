@@ -16,7 +16,8 @@ import { mcpClientConfig } from '../mcp';
  * runner's process group, not just the CLI at its head.
  */
 
-const plannerStart: AgentStartOptions = { kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN' };
+const MCP = mcpClientConfig({ url: 'http://127.0.0.1:4555/mcp', token: 'tok' });
+const plannerStart: AgentStartOptions = { kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN', mcp: MCP };
 const manifests = new RunnerRegistry();
 
 /** A planner's start where the runner can plan; a task's, which a runner that only runs tasks needs, where it cannot. */
@@ -24,7 +25,7 @@ function startFor(runner: string): AgentStartOptions {
   if (CONNECTORS[runner].plans) return plannerStart;
   const manifest = manifests.getManifest(runner)!;
   const mode = manifest.modes![0].id;
-  return { kind: 'task', cwd: '/repo', mode, flags: resolveTaskRunnerFlags(manifest, { mode }), mcp: mcpClientConfig({ url: 'http://127.0.0.1:4555/mcp', token: 'tok' }) };
+  return { kind: 'task', cwd: '/repo', mode, flags: resolveTaskRunnerFlags(manifest, { mode }), mcp: MCP };
 }
 
 function baseDeps(spawn: AgentProcessDeps['spawn'], fetchImpl: typeof fetch): AgentProcessDeps {
@@ -147,5 +148,21 @@ describe('RunnerProcess', () => {
     await expect(runner.start('/gone', describe, async () => {})).rejects.toThrow('/gone');
     expect(describe).not.toHaveBeenCalled();
     expect(spawned.processes).toHaveLength(0);
+  });
+
+  it('starts a launch that names its own directory there, under the workspace\'s variables, and refuses one a placement would put elsewhere', async () => {
+    const spawned = fakeSpawn([]);
+    const askedFor: string[] = [];
+    const deps = { ...baseDeps(spawned.spawn, noHttp), workspaceEnv: async (cwd: string) => { askedFor.push(cwd); return { FROM_ENVRC: 'yes' }; } };
+    await new RunnerProcess(tracked(deps)).start('/repo', () => ({ command: 'agent', args: [], cwd: '/private-start' }), async () => {});
+    expect(spawned.lastCwd()).toBe('/private-start');
+    expect(askedFor).toEqual(['/repo']);
+    expect(spawned.lastEnv().FROM_ENVRC).toBe('yes');
+
+    const place = vi.fn();
+    const placed = new RunnerProcess({ ...deps, placement: { cwd: '/work', place, reach: async (url) => url, blob: async () => undefined } });
+    await expect(placed.start('/repo', () => ({ command: 'agent', args: [], cwd: '/private-start' }), async () => {})).rejects.toThrow(/placement/);
+    expect(place).not.toHaveBeenCalled();
+    expect(spawned.processes).toHaveLength(1);
   });
 });

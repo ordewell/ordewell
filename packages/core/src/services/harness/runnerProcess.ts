@@ -53,6 +53,12 @@ export interface RunnerCommand {
    * credentials a native-shell planner keeps out of its process (ADR-0036 N2.2).
    */
   envDrop?: (name: string) => boolean;
+  /**
+   * Where the process starts, when not in the workspace it serves, whose
+   * variables it still gets. A placement starts its runner where it puts it,
+   * so a placed launch cannot name one.
+   */
+  cwd?: string;
 }
 
 export interface RunnerExit {
@@ -117,6 +123,7 @@ export class RunnerProcess {
     const workspace = await (this.deps.workspaceEnv ?? workspaceEnvOf)(cwd);
     const asked = describe(workspace);
     const { placement } = this.deps;
+    if (placement && asked.cwd) throw new Error('A placed runner starts where its placement puts it, not in a directory of this host.');
     if (placement) this.placed = await placement.place({ command: asked.command, args: asked.args, env: asked.env?.(workspace) ?? {}, files: asked.files ?? [] });
     const placed = this.placed;
     const command: RunnerCommand = placed ? { command: placed.command, args: placed.args, env: () => placed.env } : asked;
@@ -144,7 +151,7 @@ export class RunnerProcess {
     const child = spawnInOwnGroup((detached) => this.deps.spawn(launch.file, launch.args, {
       env: this.spawnEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
-      cwd,
+      cwd: asked.cwd ?? cwd,
       windowsVerbatimArguments: launch.verbatim,
       detached,
     }), this.deps.platform);
