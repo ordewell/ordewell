@@ -1,4 +1,4 @@
-import { lstatSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'fs';
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -14,6 +14,8 @@ export interface AcpPrivateDir {
   path: string;
   /** `contents` as `fileName` in the directory, readable by its owner alone; the file's path. */
   write(fileName: string, contents: string): string;
+  /** An empty directory `name` in the directory, its owner's alone; its path. */
+  subdir(name: string): string;
   /** Remove the directory and all it holds. Idempotent. */
   remove(): void;
 }
@@ -34,6 +36,11 @@ export function acpPrivateDir(): AcpPrivateDir {
       const file = join(path, fileName);
       writeFileSync(file, contents, { mode: 0o600 });
       return file;
+    },
+    subdir(name) {
+      const sub = join(path, name);
+      mkdirSync(sub, { mode: 0o700 });
+      return sub;
     },
     remove: () => rmSync(path, { recursive: true, force: true }),
   };

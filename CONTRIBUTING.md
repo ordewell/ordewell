@@ -219,11 +219,21 @@ ignores over ACP the login its own CLI stored.
   A planner or a read-only task must also run nothing the repository's
   config names (ADR-0028). An agent that loads hooks or config from the
   directory it starts in, with no switch to stop it, sets
-  `restricted.privateCwd`, as Copilot does: it then starts in an empty
-  private directory and asks for every path in the worktree. Record a hook
+  `restricted.privateCwd`, as Copilot does: it then starts in a private
+  directory of its own and asks for every path in the worktree. Record a hook
   planted in the worktree running on a writable start and not on a restricted
   one, as Copilot's `repo-hooks.jsonl`, `planner.jsonl` and `read-only.jsonl`
   do.
+
+  An agent with no deny flag, whose controls are a settings file or a hook,
+  is handed them in `restricted.files`: each is written 0600 into that
+  private directory and named to the agent by a variable, a flag, or another
+  of the files. Render each from the directory's path alone, with no key or
+  token in it, and name a script's interpreter in the setting that runs it,
+  since nothing there is executable. List in `restricted.configDirs` the
+  variables that move the agent's config home, so the user's global rules,
+  hooks and skills do not load. Both are a layer under Ordewell's refusal by
+  kind, and the role still needs the recording above.
 
 ## Releasing
 
