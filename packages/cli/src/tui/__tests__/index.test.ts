@@ -44,7 +44,7 @@ vi.mock('../../apiClient', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../apiClient')>();
   return { ...actual, ApiClient: apiClient.ApiClient };
 });
-vi.mock('../../utils/env', () => ({ findEnvFile: vi.fn(() => '/ws/.env'), writeEnvVar: vi.fn() }));
+vi.mock('../../utils/env', () => ({ findEnvFile: vi.fn(() => '/ws/.env'), writeEnvVar: vi.fn(), shellEnvValue: vi.fn(() => undefined) }));
 vi.mock('../terminal', () => ({
   openTerminal: vi.fn((options: { onKey(key: Key): void; mouse?: boolean }) => {
     fakeTerminal.onKey = options.onKey;

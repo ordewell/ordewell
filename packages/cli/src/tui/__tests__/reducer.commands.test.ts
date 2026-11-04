@@ -59,6 +59,19 @@ describe('models and providers', () => {
     expect(JSON.stringify(lastMessage(state))).not.toContain('Unknown planner');
   });
 
+  it('/planner says when a shell AI_PROVIDER overrides the planner just chosen', () => {
+    const { effects } = run('/planner opencode', { plannerEnvOverride: 'claude-code' });
+    expect(effects).toEqual([{
+      type: 'setPlanner',
+      provider: 'opencode',
+      overrideNotice: 'Saved OpenCode as your planner, but AI_PROVIDER=claude-code in this environment takes precedence: unset it to plan with OpenCode.',
+    }]);
+  });
+
+  it('/planner keeps the plain confirmation when AI_PROVIDER names the planner just chosen', () => {
+    expect(run('/planner opencode', { plannerEnvOverride: 'opencode' }).effects).toEqual([{ type: 'setPlanner', provider: 'opencode' }]);
+  });
+
   it('/key set stores a provider key', () => {
     expect(run('/key set openrouter sk-or-123').effects).toEqual([
       { type: 'setApiKey', provider: 'openrouter', key: 'sk-or-123' },

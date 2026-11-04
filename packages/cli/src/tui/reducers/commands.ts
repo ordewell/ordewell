@@ -2,7 +2,7 @@ import {
   EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, PROVIDER_PRIORITY, TERMINAL_UI_COMMANDS, getProviderMeta, isApiProvider, isPlannerBackend, runnerForProvider, type AiProvider,
 } from '@ordewell/core';
 import { handoffCommand } from '../handoff';
-import { taskOnlyRunnerRefusal } from '../../plannerModelSwitch';
+import { plannerSwitchOverrideNotice, taskOnlyRunnerRefusal } from '../../plannerModelSwitch';
 import { canonicalCommandName, findCommand, type ParsedCommand } from '../slash';
 import { findTask, plannerInFlight, type PickerItem, type TuiState } from '../state';
 import { modelsForRunner } from '../taskAssignment';
@@ -248,7 +248,8 @@ function setPlanner(state: TuiState, args: string[]): Step {
       if (taskOnly) return fail(state, taskOnly);
       return fail(state, `Unknown planner: ${id}. Run /planner with no arguments to see the list.`);
     }
-    return step(state, [{ type: 'setPlanner', provider: id }]);
+    const overrideNotice = plannerSwitchOverrideNotice(id, state.plannerEnvOverride);
+    return step(state, [{ type: 'setPlanner', provider: id, ...(overrideNotice ? { overrideNotice } : {}) }]);
   }
   const opened = openStepper(state, plannerStepper);
   // The model step lists the chosen backend's catalog, so fetch it fresh; the

@@ -481,6 +481,12 @@ export interface TuiState {
    */
   plannerProvider: string;
   /**
+   * AI_PROVIDER as the shell exported it, before `.env` filled gaps. The
+   * resolver reads it before a saved planner, so a switch it overrides must
+   * say so; a value only `.env` supplied is the choice the switch replaces.
+   */
+  plannerEnvOverride: string;
+  /**
    * Thinking effort for a harness planner — one of the selected model's own
    * variants, or empty for the agent's default. Meaningless for a vendor
    * planner, whose effort is baked into the model id.
@@ -812,6 +818,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     providerErrors: {},
     orchestratorModel: '',
     plannerProvider: '',
+    plannerEnvOverride: '',
     plannerEffort: '',
     plannerModels: {},
     maxParallel: DEFAULT_MAX_PARALLEL,
