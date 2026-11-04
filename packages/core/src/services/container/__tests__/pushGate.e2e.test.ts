@@ -390,10 +390,9 @@ describe('a session on a container backend, and the hooks of its repository (ADR
     await expect(landedWith(true)).resolves.toEqual([]);
   });
 
-  // Every hook that fires is a shell git starts, which on Windows takes Git for Windows' sh: past thirty seconds on a loaded runner.
   it('is what holds them back: the same steps run them without it', async () => {
     await expect(landedWith(false)).resolves.toEqual(expect.arrayContaining(['pre-commit', 'post-commit', 'post-checkout', 'post-index-change']));
-  }, 90_000);
+  });
 
   it('refuses a `post-index-change` hook at the lease: with hooks off, it would be a check silently gone', async () => {
     const { host } = setup();
