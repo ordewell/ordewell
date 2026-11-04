@@ -911,10 +911,11 @@ export class Attempts {
     }
     if (attempt.kind.kind === 'repair') return failed({ leaves: 'conflict', why: `could not start: ${message}` });
     if (attachTimeout) {
-      // The runner stayed up but never connected. Nothing was sent to it
-      // and no verdict exists, so the task is held with a reason rather
-      // than failed: its dependents stay on the plan, and a later start
-      // can still run it (ADR-0022, S2).
+      // The runner stayed up but never connected, so no verdict exists, and
+      // a task sent to it as the attach check goes with the worktree
+      // (ADR-0060, R5). The task is held with a reason rather than failed:
+      // its dependents stay on the plan, and a later start can still run it
+      // (ADR-0022, S2).
       return failed({ leaves: 'held', hold: 'could not connect to Ordewell\'s tools; start it again', settles: true, notice: { level: 'warn', text: `Task "${task.title}" is on hold: could not connect to Ordewell's tools. Start it again.` } });
     }
     if (err instanceof TaskSkillsError) {

@@ -131,8 +131,22 @@ export interface AcpProfile {
   minVersion?: string;
   /** How long `initialize`, `session/new` and the mode switch may each take; 30 s when absent. */
   initTimeoutMs?: number;
-  /** How long the agent may take to first use its Ordewell token before the attach counts as missed; MCP_ATTACH_TIMEOUT_MS when absent. */
+  /**
+   * How long the agent may take to first use its Ordewell token before the
+   * attach counts as missed, from its start or, under `attach: 'firstTurn'`,
+   * from the first turn's; MCP_ATTACH_TIMEOUT_MS when absent.
+   */
   attachTimeoutMs?: number;
+  /**
+   * When the agent first uses its Ordewell token (ADR-0060, R5). `sessionNew`,
+   * the default: by the time its session is open, so the task is sent only
+   * once it has. `firstTurn`: only once a prompt starts its runtime, as an
+   * agent that connects its MCP servers then does, so the task's prompt is
+   * the check. That turn is kept only if the token is used before it ends;
+   * otherwise it is discarded with its process. No planner role: a planner
+   * has no task to send as the check.
+   */
+  attach?: 'sessionNew' | 'firstTurn';
   /**
    * The Ordewell tool a permission request is for, by its name on the server,
    * or null for any other call. Each agent words MCP calls its own way, in the

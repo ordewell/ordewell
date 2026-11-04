@@ -12,15 +12,15 @@ own protocol ([ADR-0018](0018-structured-runner-transport.md)). Many more
 agents now ship a native server for the Agent Client Protocol (ACP), and the
 user who has one of them installed cannot hand it a task. A connector per agent
 does not scale to them, but one generic connector has to hold every rule a
-native connector holds: Ordewell's tools attached before the first prompt
+native connector holds: Ordewell's tools attached before any result is accepted
 ([ADR-0025](0025-structured-only-runners.md)), the plan's mode and model held
 ([ADR-0001](../routing/0001-autonomous-mode-resolution.md)), and a planner or a
 read-only task that cannot write
 ([ADR-0026](../planner-envelope/0026-one-envelope-for-every-planner.md),
 [ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)).
 ACP agents differ in exactly those places: how they take instructions, how
-they are put in a mode, whether they honour a client's MCP servers, and
-whether their own tools can be taken away.
+they are put in a mode, whether they honour a client's MCP servers and when
+they connect to them, and whether their own tools can be taken away.
 
 ## Decision
 
@@ -56,7 +56,8 @@ A profile holds the manifest, the ACP arguments, the minimum agent version
 read from `initialize`'s `agentInfo`, the setup timeout, how the agent names
 Ordewell's tools in its reports and to the model, how a model reaches it at
 spawn, the instructions route, the route Ordewell's MCP server takes where
-it is not `session/new`, the mode route, what it loads from a repository
+it is not `session/new`, when the agent first uses its token (R5), the mode
+route, what it loads from a repository
 (ADR-0028), the roles it claims, the controls that restrict it, and the
 answers to the agent's own requests.
 
@@ -137,11 +138,42 @@ answers to the agent's own requests.
   would name a path it does not have. An agent that advertises no HTTP and
   whose profile has no `mcpConfig` is refused in plain words: it "cannot take
   Ordewell's tools over HTTP, so it cannot run tasks or plan here".
-- **The attach is read from the server's first contact (R5).** ACP has no MCP
-  status notification. The attach state is the Ordewell MCP server's own
-  record (`McpContact`): connected once a request carrying the token has
-  passed every check, failed when the agent refused the session or the process
-  is gone, pending until then (ADR-0022 S2, S4).
+- **The attach is read from the server's first contact, before any result is
+  accepted (R5).** ACP has no MCP status notification. The attach state is the
+  Ordewell MCP server's own record (`McpContact`): connected once a request
+  carrying the token has passed every check, failed when the agent refused the
+  session or the process is gone, pending until then (ADR-0022 S2, S4). The
+  profile's `attach` says when that contact can come:
+  - `sessionNew`, the default and every admitted profile's: while the session
+    opens, so the task is sent only once the server was contacted, as for a
+    native runner (ADR-0025).
+  - `firstTurn`: only once a prompt starts the agent's runtime, for an agent
+    that connects its MCP servers then, as Cline 3.0.74 does. An agent that
+    made contact by the time its session opened goes on as under
+    `sessionNew`. Otherwise the task's prompt is the check: the attach passes
+    only if the server is contacted before that turn ends, within the attach
+    timeout counted from the turn's start. Until it passes the session's
+    listeners hear nothing of the turn; its events, text, requests and report
+    are held, then heard in order. A turn that ends or runs out of time
+    without contact fails the check: its process is killed, its token revoked
+    and everything it said dropped, then the respawn and the hold follow as
+    for any missed attach, with the same "Could not start <name> with
+    Ordewell's tools, so the task was not sent to it." A held task gives up
+    its worktree, and the discarded turns' edits with it. A contact after the
+    turn ended is refused, since its token was revoked first.
+
+  So the invariant is that no result is accepted from an agent without
+  Ordewell's tools, not that no prompt reaches one: a `task_complete` counts
+  only through the token-bound tool, so a turn that never reached the server
+  can report nothing. Its cost is a wasted model turn per missed attach, two
+  when the respawn misses too. The respawn works in the same worktree, so it
+  finds what the discarded turn changed there, and what it keeps of that is
+  its own result. A `firstTurn` agent cannot plan, and `acpRoles` refuses the
+  claim at load: a planner's first turn is the goal, never sent without tools.
+  Nor can it be re-attached after an ignored interrupt killed its process,
+  since that restart has no prompt to check with, so the task fails then. The
+  discarded turn stays in the agent's own history should that session ever be
+  resumed.
 - **Instructions never land in the worktree (R6).** ACP has no system-prompt
   field. The completion contract (and a planner's system prompt) goes through
   the agent's own channel outside the worktree where it has one: an
@@ -270,8 +302,8 @@ settings configure, and there is no command to fall back to.
   such an agent is worth the bridge.
 - **Agents beyond Copilot CLI and Qwen Code.** Gemini CLI and Goose wait for
   the same live probe those passed before they are admitted at all. No profile
-  uses `mcpConfig` yet: Cline 3.0.74 needs it, and waits for a recording of
-  it connecting from the file.
+  uses `mcpConfig` or `attach: 'firstTurn'` yet: Cline 3.0.74 needs both,
+  and waits for a recording of it connecting from the file on its first turn.
 - **A resumed restricted start.** A resume begins in a new private directory
   and hands it to `session/load`; no recording yet shows Copilot resuming a
   session whose `cwd` has changed.
@@ -305,6 +337,16 @@ settings configure, and there is no command to fall back to.
   status notification, and an agent may accept `mcpServers` and never use them
   (Cline 3.0.74, cline#15504; Kiro before April 2026, Kiro#7349). The server's
   first contact is evidence; an accepted `session/new` is not.
+- **A throwaway first prompt that starts the agent's runtime before the
+  task.** Rejected for a `firstTurn` agent: it costs a model turn on every
+  start rather than on a missed attach, and leaves a prompt that is not the
+  task in the agent's history, which a resume replays.
+- **A `firstTurn` agent's result accepted without contact.** Rejected: an
+  agent that never reached the server has no token-bound `task_complete`, so
+  its stop reason or its word would be the verdict (ADR-0025).
+- **A contact after the first turn ended accepted.** Rejected: that turn is
+  the check, and waiting past it would only hold every missed attach for the
+  whole timeout. A turn's end decides it.
 - **Roles enforced by the agent's mode alone.** Rejected: a mode's name is the
   agent's promise. A plan or ask mode does not show that a write or a command
   is refused.
@@ -354,6 +396,9 @@ settings configure, and there is no command to fall back to.
 - A restricted Copilot names the worktree's files by their full path, since
   its own relative paths name the private directory; its instructions tell it
   where the workspace is.
+- An agent that connects its MCP servers only on its first turn can run
+  tasks, but each missed attach costs a model turn, and a discarded turn may
+  have changed the worktree the respawn starts in.
 - A runner id shares the planner setting's namespace with the API vendors'
   ids, so an ACP runner id must not equal one (`kimi-cli`, not `kimi`;
   `qwen-code`, because `qwen` is DashScope's).
@@ -376,3 +421,6 @@ settings configure, and there is no command to fall back to.
 - 2026-11-04 — R4: an agent that takes Ordewell's server only from a settings
   file of its own is handed one per process (`mcpConfig`), and `session/new`
   carries the server only to an agent that advertises HTTP.
+- 2026-11-04 — R5: a profile may attach on the first turn (`attach:
+  'firstTurn'`), the task's prompt as the check, kept only when the server
+  was contacted before it ended; such a profile cannot plan.

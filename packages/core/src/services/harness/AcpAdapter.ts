@@ -812,16 +812,26 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
    * ACP reports no MCP status, so the server's first-contact record is the
    * evidence (ADR-0022, S2; ADR-0060, R5): connected once the token was used, failed when the
    * agent refused the session or exited first, pending while it has not.
+   *
+   * An agent attaching on its first turn that has not used the token by the
+   * time its session is open is checked by that turn instead: connected only
+   * by a use the server recorded before the turn's end was read, so a use
+   * after it counts for nothing. With no turn to send it cannot attach.
    */
-  async mcpAttached(): Promise<AttachState> {
+  async mcpAttached(sendFirstTurn?: () => Promise<unknown>): Promise<AttachState> {
     const contact = this.started?.mcp.contact;
     if (!contact || this.sessionRefused || !this.process) return 'failed';
-    return awaitAttach(
-      () => contact.whenContacted().then((used): AttachState => (used ? 'connected' : 'failed')),
-      this.profile.attachTimeoutMs ?? MCP_ATTACH_TIMEOUT_MS,
-      0,
-      this.processEnded,
-    );
+    const used = () => contact.whenContacted().then((ok): AttachState => (ok ? 'connected' : 'failed'));
+    const timeoutMs = this.profile.attachTimeoutMs ?? MCP_ATTACH_TIMEOUT_MS;
+    if (this.profile.attach !== 'firstTurn' || contact.contacted()) return awaitAttach(used, timeoutMs, 0, this.processEnded);
+    if (!sendFirstTurn) return 'failed';
+    const turnEnded = sendFirstTurn().then((): AttachState => (contact.contacted() ? 'connected' : 'pending'));
+    return settleWithin(Promise.race([used(), turnEnded]), {
+      timeoutMs,
+      onTimeout: (): AttachState => 'pending',
+      ended: this.processEnded,
+      onEnded: (): AttachState => 'failed',
+    });
   }
 
   override dispose(): void {
