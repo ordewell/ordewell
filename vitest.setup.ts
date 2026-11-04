@@ -1,8 +1,8 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, vi } from 'vitest';
-import { homeEnv, setEnv } from './packages/core/src/testEnv';
+import { homeEnv, removeDir, setEnv } from './packages/core/src/testEnv';
 
 // No test reaches ordewell.ai (ADR-0048). A test of the version check passes
 // its own env, so this only silences the CLI, daemon and extension code that
@@ -18,7 +18,8 @@ process.env.ORDEWELL_NO_VERSION_CHECK = '1';
 process.env.DOCKER_CONFIG ??= join(homedir(), '.docker');
 const home = mkdtempSync(join(tmpdir(), 'ordewell-test-home-'));
 setEnv({ ...homeEnv(home), XDG_CONFIG_HOME: undefined, XDG_DATA_HOME: undefined });
-afterAll(() => rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+// What a child still holds there at the end leaves a scratch folder, not a failed file.
+afterAll(() => removeDir(home).catch(() => undefined));
 
 // Git as it comes, whatever this host configured: Git for Windows turns
 // core.autocrlf on system-wide, so a test reading back what a checkout wrote

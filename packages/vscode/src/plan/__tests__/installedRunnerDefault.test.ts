@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, vi, it } from 'vitest';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import https from 'https';
 import { basename, delimiter, join } from 'path';
@@ -26,23 +26,12 @@ import {
   PROVIDER_DETECT_PRIORITY, resetInstalledPlanner, RUN_SETTINGS_DEFAULTS, RunnerRegistry, SettingsService,
   type ModelResolver, type IRunner, type RunnerId,
 } from '@ordewell/core';
-import { fakeFileSystem, homeEnv, setEnv } from '@ordewell/core/testing';
+import { fakeFileSystem, homeEnv, setEnv, writeStandIn } from '@ordewell/core/testing';
 import { __resetConfig, __setConfig, configUpdates } from '../../test/vscode.mock';
 import { VsCodeConfig } from '../../adapters/VsCodeConfig';
 import { ChatViewProvider } from '../../providers/ChatViewProvider';
 import type { HostToWebview } from '../../shared/protocol';
 import { handleStartPlanning, type PlanManagerDeps } from '../PlanManager';
-
-/**
- * What `name` resolves to on PATH; never run, since the spawn is faked. Windows
- * starts a native executable ahead of anything else on PATH (ADR-0010), so
- * there the stand-in is one.
- */
-function standIn(bin: string, name: string): void {
-  const file = join(bin, process.platform === 'win32' ? `${name}.exe` : name);
-  writeFileSync(file, '#!/bin/sh\nexit 1\n');
-  chmodSync(file, 0o755);
-}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -62,7 +51,7 @@ describe('VS Code with no saved runner choice enables the installed agents', () 
     dir = mkdtempSync(join(tmpdir(), 'ordewell-vscode-installed-runners-'));
     mkdirSync(join(dir, '.git'));
     mkdirSync(join(dir, 'bin'));
-    for (const agent of AGENTS) standIn(join(dir, 'bin'), agent);
+    for (const agent of AGENTS) writeStandIn(join(dir, 'bin'), agent);
     restoreHome = setEnv(homeEnv(dir));
     process.env.PATH = `${join(dir, 'bin')}${delimiter}${process.env.PATH ?? ''}`;
     process.env.ORDEWELL_SETTINGS_PATH = join(dir, 'settings.json');

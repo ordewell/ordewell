@@ -3,7 +3,7 @@ import http from 'http';
 import https from 'https';
 import type { AddressInfo } from 'net';
 import type { SpawnFn } from '@ordewell/core';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, delimiter, join } from 'path';
 
@@ -35,18 +35,7 @@ import { WebConfig } from '../../../../web/server/adapters/WebConfig';
 import { OrchestratorPool } from '../../../../web/server/pool/orchestratorPool';
 import { ApiClient } from '../../apiClient';
 import { handlePlan } from '../plan';
-import { FakeRunnerSession, homeEnv, setEnv } from '@ordewell/core/testing';
-
-/**
- * What `name` resolves to on PATH; never run, since the spawn is faked. Windows
- * starts a native executable ahead of anything else on PATH (ADR-0010), so
- * there the stand-in is one.
- */
-function standIn(bin: string, name: string): void {
-  const file = join(bin, process.platform === 'win32' ? `${name}.exe` : name);
-  writeFileSync(file, '#!/bin/sh\nexit 1\n');
-  chmodSync(file, 0o755);
-}
+import { FakeRunnerSession, homeEnv, setEnv, writeStandIn } from '@ordewell/core/testing';
 
 /** Discovery that never spawns a CLI or reaches the network. */
 function inertResolver(): ModelResolver {
@@ -100,7 +89,7 @@ describe('with no saved runner choice, the installed agents are the enabled runn
     // The spawn is faked, but each binary must still resolve on PATH first.
     const bin = join(dir, 'bin');
     mkdirSync(bin);
-    for (const agent of AGENTS) standIn(bin, agent);
+    for (const agent of AGENTS) writeStandIn(bin, agent);
     process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ''}`;
     clearAugmentedPathCache();
     vi.spyOn(https, 'request').mockImplementation(() => { throw new Error('Unexpected external HTTPS request'); });

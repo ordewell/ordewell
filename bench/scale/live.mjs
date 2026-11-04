@@ -139,6 +139,6 @@ if (flag('heap')) out.heapAfterRunMb = +(heapMb() - before).toFixed(2);
 if (isolate) out.git = { commands: gitCalls(), perTask: per(gitCalls()) };
 say(JSON.stringify(out));
 swarm.stop();
-load.stop();
+await load.stop();
 host.dropWorkspace();
 process.exit(0);

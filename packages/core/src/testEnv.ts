@@ -55,6 +55,18 @@ function applyEnv(vars: Record<string, string | undefined>): void {
 }
 
 /**
+ * A file `name` resolves to on PATH from `bin`, for a test whose spawn is
+ * faked: it is never run. Windows starts a native executable ahead of anything
+ * else on PATH (ADR-0010), so there it is a `.exe`.
+ */
+export function writeStandIn(bin: string, name: string): string {
+  const file = path.join(bin, process.platform === 'win32' ? `${name}.exe` : name);
+  fs.writeFileSync(file, '#!/bin/sh\nexit 1\n');
+  fs.chmodSync(file, 0o755);
+  return file;
+}
+
+/**
  * A PATH on which `command` starts the fake in `dir`.
  *
  * First on PATH is enough on POSIX. A fake is a batch shim on Windows, and

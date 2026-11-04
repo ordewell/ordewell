@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, vi, it } from 'vitest';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import http from 'http';
 import https from 'https';
@@ -26,7 +26,7 @@ import {
   detectInstalledPlanner, getProviderMeta, PROVIDER_DETECT_PRIORITY, recordInstalledPlanner, resetInstalledPlanner,
   RUN_SETTINGS_DEFAULTS, RunnerRegistry, SettingsService, PlannerModelMemory, type LegacyPlanState, type ModelResolver, type PlannerUsability, type IRunner,
 } from '@ordewell/core';
-import { fakeFileSystem, flushMicrotasks, homeEnv, setEnv } from '@ordewell/core/testing';
+import { fakeFileSystem, flushMicrotasks, homeEnv, setEnv, writeStandIn } from '@ordewell/core/testing';
 import { __resetConfig, __setConfig } from '../../test/vscode.mock';
 import { VsCodeConfig } from '../../adapters/VsCodeConfig';
 import { SecretStore } from '../../adapters/SecretStore';
@@ -36,17 +36,6 @@ import type { HostToWebview } from '../../shared/protocol';
 import { handleStartPlanning, handleContinueConversation, handleStopPlanning, handleSendMessageNow, type PlanManagerDeps } from '../PlanManager';
 
 interface FakeAgentProcess extends ChildProcess { emitStdout(chunk: string): void }
-
-/**
- * What `name` resolves to on PATH; never run, since the spawn is faked. Windows
- * starts a native executable ahead of anything else on PATH (ADR-0010), so
- * there the stand-in is one.
- */
-function standIn(bin: string, name: string): void {
-  const file = join(bin, process.platform === 'win32' ? `${name}.exe` : name);
-  writeFileSync(file, '#!/bin/sh\nexit 1\n');
-  chmodSync(file, 0o755);
-}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -74,7 +63,7 @@ describe('VS Code keyless first-run process boundary', () => {
     dir = mkdtempSync(join(tmpdir(), 'ordewell-vscode-keyless-'));
     mkdirSync(join(dir, '.git'));
     mkdirSync(join(dir, 'bin'));
-    standIn(join(dir, 'bin'), 'claude');
+    writeStandIn(join(dir, 'bin'), 'claude');
     restoreHome = setEnv(homeEnv(dir));
     process.env.PATH = `${join(dir, 'bin')}${delimiter}${process.env.PATH ?? ''}`;
     process.env.ORDEWELL_SETTINGS_PATH = join(dir, 'settings.json');

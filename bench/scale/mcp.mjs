@@ -51,6 +51,7 @@ export class LoadGen {
       ? new Promise((resolve) => http.listen(0, '127.0.0.1', () => resolve(http.address().port)))
       : Promise.resolve(null);
     this.ready = port.then((loopback) => this.start(http, connections, processes, loopback));
+    this.http = http;
   }
 
   start(http, connections, processes, loopback) {
@@ -96,8 +97,12 @@ export class LoadGen {
     return this.send({ kind: 'complete', path: new URL(url).pathname, headers, args });
   }
 
+  /** Ends the load processes, once they have started, and the loopback listener Windows was given. */
   stop() {
-    for (const child of this.children) child.stdin.end();
+    return this.ready.then(() => {
+      for (const child of this.children) child.stdin.end();
+      if (this.http.listening) this.http.close();
+    });
   }
 }
 

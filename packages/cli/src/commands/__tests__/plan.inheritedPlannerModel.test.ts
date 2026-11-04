@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import http from 'http';
 import type { AddressInfo } from 'net';
 import type { SpawnFn } from '@ordewell/core';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, delimiter, join } from 'path';
 
@@ -34,18 +34,7 @@ import { createRequestListener } from '../../../../web/server/nodeAdapter';
 import { OrchestratorPool } from '../../../../web/server/pool/orchestratorPool';
 import { ApiClient } from '../../apiClient';
 import { handlePlan } from '../plan';
-import { homeEnv, setEnv } from '@ordewell/core/testing';
-
-/**
- * What `name` resolves to on PATH; never run, since the spawn is faked. Windows
- * starts a native executable ahead of anything else on PATH (ADR-0010), so
- * there the stand-in is one.
- */
-function standIn(bin: string, name: string): void {
-  const file = join(bin, process.platform === 'win32' ? `${name}.exe` : name);
-  writeFileSync(file, '#!/bin/sh\nexit 1\n');
-  chmodSync(file, 0o755);
-}
+import { homeEnv, setEnv, writeStandIn } from '@ordewell/core/testing';
 
 /** Discovery that never spawns a CLI or reaches the network. */
 function inertResolver(): ModelResolver {
@@ -143,7 +132,7 @@ describe('ordewell plan with an inherited planner model', () => {
     // The spawn is faked, but the binary must still resolve on PATH first.
     const bin = join(dir, 'bin');
     mkdirSync(bin);
-    standIn(bin, 'claude');
+    writeStandIn(bin, 'claude');
     process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ''}`;
     clearAugmentedPathCache();
 
