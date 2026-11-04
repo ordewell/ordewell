@@ -580,8 +580,11 @@ export class ModelDiscovery {
     //     silent agent offers nothing; the remaining methods answer instead.
     if (discovery.method === 'acp' && discovery.acp) {
       const acpModels = await this.acpClient(manifest.runner.command, discovery.acp.args, { env });
-      if (acpModels && acpModels.length > 0) return { models: acpModels, cacheable: true };
-      cacheable = false;
+      if (acpModels && acpModels.length > 0) return { models: mergeCanonicalAliases(acpModels, manifest), cacheable: true };
+      // No answer (signed out, timeout, failed start) is transient and must
+      // not be cached behind a working fallback; an agent that answered with
+      // no model choice is a stable answer, so the fallback may be cached.
+      if (!acpModels) cacheable = false;
     }
 
     // 1. Try API discovery first (e.g. Anthropic Models API for Claude Code).
@@ -600,7 +603,7 @@ export class ModelDiscovery {
       // A fallback-only result means the CLI wasn't reachable — don't cache
       // it, so a transient failure (PATH, network, cold start) heals on the
       // next lookup instead of persisting until an explicit refresh.
-      return { models: result.models, cacheable: !result.fromFallback };
+      return { models: result.models, cacheable: cacheable && !result.fromFallback };
     }
     return { models: buildFallbackModels(manifest), cacheable };
   }
