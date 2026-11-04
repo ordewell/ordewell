@@ -33,7 +33,8 @@ reference agent and the one ACP runner admitted so far.
 Ordewell is the ACP client and does no I/O for the agent: it advertises no
 file-system and no terminal capability, so the agent works in the worktree
 itself and reaches Ordewell only through the Ordewell MCP server it is handed
-in `session/new`. A start is `initialize`, then `session/new`, or
+in `session/new`, or in a settings file of its own where its profile says so
+(R4). A start is `initialize`, then `session/new`, or
 `session/resume` or `session/load` for a resume, then the plan's mode, model
 and effort; a turn is one `session/prompt`. The adapter never calls
 `authenticate`: a `-32000` answer is read as signed out, and signing in is the
@@ -48,8 +49,9 @@ ahead of the specification.
 A profile holds the manifest, the ACP arguments, the minimum agent version
 read from `initialize`'s `agentInfo`, the setup timeout, how the agent names
 Ordewell's tools in its reports and to the model, how a model reaches it at
-spawn, the instructions route, the mode route, what it loads from a
-repository (ADR-0028), the roles it claims, and the controls that restrict it.
+spawn, the instructions route, the route Ordewell's MCP server takes where
+it is not `session/new`, the mode route, what it loads from a repository
+(ADR-0028), the roles it claims, and the controls that restrict it.
 
 ## Key properties
 
@@ -78,7 +80,8 @@ repository (ADR-0028), the roles it claims, and the controls that restrict it.
   names (ADR-0028). An agent that loads configuration from the directory it
   starts in, with no switch of its own to stop it, starts there in a private
   directory instead (`restricted.privateCwd`): owner-only and empty but for
-  its instructions, the session's `cwd` and its temp directory too. It then
+  its instructions and, where the profile has one, its MCP settings file
+  (R4), the session's `cwd` and its temp directory too. It then
   reaches the worktree only by asking, so every read goes to the planner's
   envelope or to the read-only task's rules (ADR-0046). Since it loads none
   of the repository's instruction files there, the profile's reader
@@ -90,14 +93,43 @@ repository (ADR-0028), the roles it claims, and the controls that restrict it.
   `AcpAdapter` refuses a planner or a read-only start its profile does not
   claim. A restricted session that leaves the mode it settled in fails, and
   its process is disposed.
-- **Ordewell's tools go over HTTP, with the token in `session/new` (R4).** The
-  server is given as one `http` entry in `mcpServers`, its token as a header,
-  so the token reaches the agent over stdin and never as an argument or a file
-  (ADR-0022 A5). It is given again on every resume and load, since the agent
-  keeps no session's servers between processes. An agent whose `initialize`
-  does not advertise `mcpCapabilities.http` is refused in plain words: it
-  "cannot take Ordewell's tools over HTTP, so it cannot run tasks or plan
-  here".
+- **Ordewell's tools go over HTTP, with the token in `session/new` or in the
+  agent's own settings file (R4).** To an agent whose `initialize` advertises
+  `mcpCapabilities.http`, the server is given as one `http` entry in
+  `mcpServers`, its token as a header, so the token reaches the agent over
+  stdin and never as an argument (ADR-0022 A5). It is given again on every
+  resume and load, since the agent keeps no session's servers between
+  processes. An agent can accept `mcpServers` and never connect to them, yet
+  load MCP servers from a settings file of its own. Its profile then has an
+  `mcpConfig` route: a file name, how to render the agent's settings format
+  from the server's name, URL and headers, and the environment variable that
+  names the file's path to the agent. The adapter writes that file for each
+  process, and it holds Ordewell's server alone, its token in the headers.
+  The file is:
+  - the process's own, so two attempts running at once have two files, each
+    holding only its own attempt's token;
+  - written 0600 into the process's private directory, which is 0700, in the
+    temp directory and never in the worktree, the same directory that holds a
+    file-route's instructions (R6);
+  - removed with that directory when the process ends, or when it is
+    disposed;
+  - swept at a later start if Ordewell died before removing it. The private
+    directory's name carries the process id of the Ordewell that made it
+    (`ordewell-acp-<pid>-XXXXXX`). Making a private directory first removes
+    those directories whose maker is no longer running, that this user owns,
+    and that are directories, not links, and nothing else in the temp
+    directory;
+  - not evidence of an attach. The attach is still read from the server (R5),
+    so an agent that is handed the file and never uses it is refused, as an
+    agent that never connects is.
+
+  ACP asks a client to check `mcpCapabilities.http` before it hands an HTTP
+  server, so `session/new` gives an agent that advertises no HTTP an empty
+  `mcpServers`. A profile with `mcpConfig` is refused under a placement:
+  a container receives only files named in the arguments, so the variable
+  would name a path it does not have. An agent that advertises no HTTP and
+  whose profile has no `mcpConfig` is refused in plain words: it "cannot take
+  Ordewell's tools over HTTP, so it cannot run tasks or plan here".
 - **The attach is read from the server's first contact (R5).** ACP has no MCP
   status notification. The attach state is the Ordewell MCP server's own
   record (`McpContact`): connected once a request carrying the token has
@@ -185,7 +217,11 @@ learned from `-32000` and shown with its `copilot login`
   live adapter and Ordewell server; a claim about the agent cites a recording.
 - **`fakeAcpAgent`** scripts an agent for the adapter's own tests
   (`acpAdapter.test.ts`, `acpCancelRace.adversarial.test.ts`), and
-  `fakeRunners.ts` gives the connector contract tests an ACP runner.
+  `fakeRunners.ts` gives the connector contract tests an ACP runner. It can
+  read its MCP servers from a settings file its environment names, and records
+  each read, so the tests show the `mcpConfig` route's file read, its lifetime,
+  one token per concurrent attempt, the sweep, and the refusal of an agent
+  that ignores the file, without a live agent.
 - `acpEvents` is a pure reducer from `session/update` to Ordewell's agent
   events, tested on its own.
 
@@ -195,7 +231,9 @@ learned from `-32000` and shown with its `copilot login`
   would need a local process carrying the token; it is refused instead, until
   such an agent is worth the bridge.
 - **Agents beyond Copilot CLI.** Gemini CLI, Qwen Code and Goose wait for the
-  same live probe Copilot passed before they are admitted at all.
+  same live probe Copilot passed before they are admitted at all. No profile
+  uses `mcpConfig` yet: Cline 3.0.74 needs it, and waits for a recording of
+  it connecting from the file.
 - **A resumed restricted start.** A resume begins in a new private directory
   and hands it to `session/load`; no recording yet shows Copilot resuming a
   session whose `cwd` has changed.
@@ -214,6 +252,17 @@ learned from `-32000` and shown with its `copilot login`
 - **The token on the command line, or in a config file in the worktree.**
   Rejected by ADR-0022 A5. `session/new` carries the server with its headers
   over stdin, which every ACP agent reads anyway.
+- **Ordewell's server added to the agent's own settings, in the user's
+  config directory.** Rejected for an agent that ignores `session/new`'s
+  servers: that file is shared by every process and attempt of the agent, the
+  user's own included, so two attempts would race on it and one could read the
+  other's token, and a crash would leave a token in the user's settings. The
+  route's file is one process's own, named to it by a variable.
+- **Leftovers left to the system's temp cleaning.** Rejected: a token would
+  sit on disk for as long as the system keeps its temp files. The sweep
+  removes only what a dead Ordewell made, by the name and owner it gave it,
+  so a running Ordewell's directory and anything not Ordewell's are never
+  touched.
 - **The attach taken from the agent's own word.** Rejected: ACP has no MCP
   status notification, and an agent may accept `mcpServers` and never use them
   (Cline 3.0.74, cline#15504; Kiro before April 2026, Kiro#7349). The server's
@@ -276,3 +325,6 @@ learned from `-32000` and shown with its `copilot login`
   request and report pair before any kind is read.
 - 2026-11-04 — a restricted start is handed the repository's instruction
   files after Ordewell's own, from Copilot's repository-config reader.
+- 2026-11-04 — R4: an agent that takes Ordewell's server only from a settings
+  file of its own is handed one per process (`mcpConfig`), and `session/new`
+  carries the server only to an agent that advertises HTTP.

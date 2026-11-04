@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import { readFileSync } from 'fs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { LineBuffer } from '../harness/AgentAdapter';
@@ -30,7 +31,9 @@ import { fakeSpawn, type FakeAgentProcess, type FakeSpawnOptions, type FakeSpawn
  *  - `notify` and `request` are the agent speaking first; a `request` holds
  *    the script until the client answers it.
  *  - `callMcp` is the agent calling a tool on the MCP server the client gave it
- *    in `session/new`, with the headers it was given there.
+ *    in `session/new`, with the headers it was given there; or, for an agent
+ *    made with {@link FakeAcpAgentOptions.settings}, on the one its own
+ *    settings file names, whatever `session/new` said.
  *  - `together` writes its answers and notifications as one stdout chunk,
  *    the way an agent's reply and the update after it can share a read.
  *  - `run` is anything else a test needs to do at that point.
@@ -78,6 +81,22 @@ export interface FakeAcpMcpServer {
   name: string;
   url: string;
   headers: Record<string, string>;
+}
+
+export interface FakeAcpAgentOptions {
+  /**
+   * The agent takes its MCP servers from a settings file of its own, named by
+   * the variable `env` of its spawn environment and read once, at spawn, as an
+   * agent reads its configuration when it starts. `session/new`'s servers are
+   * then ignored, as an agent that only stores them ignores them.
+   */
+  settings?: { env: string; servers(contents: string): FakeAcpMcpServer[] };
+}
+
+/** What a settings agent found at one spawn: the path its variable named, and the file's contents, or null where it read none. */
+export interface FakeAcpSettingsRead {
+  path: string | undefined;
+  contents: string | null;
 }
 
 const REQUEST_SCHEMAS: Readonly<Record<string, z.ZodTypeAny>> = {
@@ -128,17 +147,20 @@ export class FakeAcpAgent {
   /** The lines a `together` step is collecting into its one chunk. */
   private chunk: string[] | undefined;
   private client: Client | undefined;
+  /** What the agent read of its settings file at each spawn, in order. */
+  readonly settingsReads: FakeAcpSettingsRead[] = [];
   private finish!: () => void;
   /** Resolves when the script has run to its end. */
   readonly finished: Promise<void> = new Promise((resolve) => { this.finish = resolve; });
 
-  constructor(private readonly steps: readonly FakeAcpStep[]) {
+  constructor(private readonly steps: readonly FakeAcpStep[], private readonly options: FakeAcpAgentOptions = {}) {
     if (steps.length === 0) this.finish();
   }
 
-  /** Start answering on `proc`: its stdin is read here and its stdout is written. */
-  attach(proc: FakeAgentProcess): void {
+  /** Start answering on `proc`, spawned with `env`: its stdin is read here and its stdout is written. */
+  attach(proc: FakeAgentProcess, env: NodeJS.ProcessEnv = {}): void {
     this.proc = proc;
+    if (this.options.settings) this.readSettings(env[this.options.settings.env]);
     proc.on('__written', (chunk: string) => {
       this.lines.push(chunk, (line) => this.receive(line));
     });
@@ -201,10 +223,31 @@ export class FakeAcpAgent {
   }
 
   private async mcpClient(server: string): Promise<Client> {
-    const config = this.mcpServers.find((s) => s.name === server && s.type === 'http');
+    const config = this.settingsServer(server) ?? this.mcpServers.find((s) => s.name === server && s.type === 'http');
     if (!config) throw new Error(`session/new gave no http MCP server named "${server}"`);
     this.client ??= await connect(config);
     return this.client;
+  }
+
+  private readSettings(path: string | undefined): void {
+    let contents: string | null = null;
+    try {
+      if (path !== undefined) contents = readFileSync(path, 'utf8');
+    } catch {
+      // Recorded as read with no contents, which a later tool call reports.
+    }
+    this.settingsReads.push({ path, contents });
+  }
+
+  /** The server this spawn's settings file names, for an agent that reads one; undefined for one that reads `session/new`. */
+  private settingsServer(server: string): FakeAcpMcpServer | undefined {
+    const settings = this.options.settings;
+    if (!settings) return undefined;
+    const read = this.settingsReads.at(-1);
+    if (!read?.contents) throw new Error(`no settings file to read at ${read?.path ?? `$${settings.env}`}`);
+    const config = settings.servers(read.contents).find((s) => s.name === server);
+    if (!config) throw new Error(`the settings file names no MCP server "${server}"`);
+    return config;
   }
 
   /** Release the MCP connection and end the process, as the agent exiting does. */
@@ -346,12 +389,12 @@ async function connect(config: FakeAcpMcpServer): Promise<Client> {
  * test, and read what it sent from `agent`. Each process spawned is attached to
  * the one agent, so a script covers a single launch.
  */
-export function fakeAcpSpawn(steps: readonly FakeAcpStep[], options: FakeSpawnOptions = {}): FakeSpawnResult & { agent: FakeAcpAgent } {
-  const agent = new FakeAcpAgent(steps);
+export function fakeAcpSpawn(steps: readonly FakeAcpStep[], options: FakeSpawnOptions = {}, agentOptions: FakeAcpAgentOptions = {}): FakeSpawnResult & { agent: FakeAcpAgent } {
+  const agent = new FakeAcpAgent(steps, agentOptions);
   const kit = fakeSpawn([], options);
   const spawn: FakeSpawnResult['spawn'] = (...args) => {
     const proc = kit.spawn(...args);
-    agent.attach(proc as unknown as FakeAgentProcess);
+    agent.attach(proc as unknown as FakeAgentProcess, args[2]?.env);
     return proc;
   };
   return { ...kit, spawn, agent };

@@ -182,8 +182,14 @@ An agent that ships its own Agent Client Protocol server needs no adapter:
   use, never a branch on a runner id in the adapter. Instructions go through
   the agent's own channel outside the worktree, or else as a preamble on the
   first prompt; never as a file in the worktree. The agent must advertise
-  `mcpCapabilities.http`. Ordewell has no stdio bridge, and an agent without
-  HTTP MCP is refused.
+  `mcpCapabilities.http`, or load MCP servers from a settings file of its own
+  that an environment variable can name. Ordewell has no stdio bridge, and an
+  agent with neither is refused. For the second, set `mcpConfig`: the
+  adapter writes the file per process, owner-only, outside the worktree, and
+  removes it with the process. A recording must show the agent connecting from
+  that file, and the attach is still judged by the server, so an agent that
+  ignores the file is refused (ADR-0060 R4). Such a runner cannot run in a
+  container.
 - **Recorded fixtures.** Record every line each side sent in a live run as JSONL
   under `services/__tests__/fixtures/acp/<id>/`, as `{dir, ms, line}`, with
   `dir: "note"` lines for the spawn arguments and for what the run left behind.
