@@ -75,7 +75,7 @@ describe('OrchestratorPool default planner', () => {
     let answer!: (value: PlannerUsability) => void;
     const gate = new Promise<PlannerUsability>((resolve) => { answer = resolve; });
     return {
-      installation: { plannerUsability: vi.fn(() => gate), filterInstalled: vi.fn(async () => []) },
+      installation: { plannerUsability: vi.fn(() => gate), runnerUsability: vi.fn(() => gate), filterInstalled: vi.fn(async () => []) },
       answer: () => answer(usable ? { usable: true } : { usable: false, reason: 'not installed' }),
     };
   }
@@ -324,6 +324,7 @@ describe('OrchestratorPool default planner', () => {
   it('probes once at startup, not once for each planning turn', async () => {
     const installation = {
       plannerUsability: vi.fn(async (runner: string): Promise<PlannerUsability> => ({ usable: runner === 'codex' })),
+      runnerUsability: vi.fn(async (runner: string): Promise<PlannerUsability> => ({ usable: runner === 'codex' })),
       filterInstalled: vi.fn(async () => []),
     };
     const pool = new OrchestratorPool({ runnerInstallation: installation });
@@ -357,6 +358,7 @@ describe('OrchestratorPool default planner', () => {
     let installed: string[] = [];
     const installation = {
       plannerUsability: vi.fn(async (runner: string): Promise<PlannerUsability> => ({ usable: installed.includes(runner) })),
+      runnerUsability: vi.fn(async (runner: string): Promise<PlannerUsability> => ({ usable: installed.includes(runner) })),
       filterInstalled: vi.fn(async (runners: string[]) => runners.filter((r) => installed.includes(r))),
       refresh: vi.fn(),
     };
@@ -386,6 +388,7 @@ describe('OrchestratorPool default planner', () => {
     writeFileSync(join(ws, '.ordewell', 'env'), 'CLAUDE_CONFIG_DIR=/accounts/a\n');
     vi.spyOn(RunnerInstallation.prototype, 'filterInstalled').mockResolvedValue([]);
     vi.spyOn(RunnerInstallation.prototype, 'plannerUsability').mockResolvedValue({ usable: true });
+    vi.spyOn(RunnerInstallation.prototype, 'runnerUsability').mockResolvedValue({ usable: true });
     const pool = new OrchestratorPool({
       codexSandbox: { ensure: async () => undefined, refresh: async () => undefined },
     });
@@ -404,11 +407,13 @@ describe('OrchestratorPool default planner', () => {
   it('leaves an installed runner its own usability refuses out of the list', async () => {
     // An installed CLI can still be unspawnable (a Windows `.cmd` shim).
     // Offering it would fail at spawn; VS Code already hides it.
+    const usability = async (runner: string): Promise<PlannerUsability> => ({
+      usable: runner === 'claude-code',
+      ...(runner === 'codex' ? { reason: 'codex is not directly spawnable' } : {}),
+    });
     const installation = {
-      plannerUsability: vi.fn(async (runner: string): Promise<PlannerUsability> => ({
-        usable: runner === 'claude-code',
-        ...(runner === 'codex' ? { reason: 'codex is not directly spawnable' } : {}),
-      })),
+      plannerUsability: vi.fn(usability),
+      runnerUsability: vi.fn(usability),
       filterInstalled: vi.fn(async (runners: string[]) => runners.filter((r) => r === 'claude-code' || r === 'codex')),
       refresh: vi.fn(),
     };
@@ -424,11 +429,13 @@ describe('OrchestratorPool default planner', () => {
   });
 
   it('carries each installed runner\'s auth verdict without dropping a signed-out one from the list', async () => {    const auth = { state: 'signed-out' as const, loginCommand: ['claude', 'auth', 'login'], detail: 'not logged in' };
+    const usability = async (runner: string): Promise<PlannerUsability> => ({
+      usable: runner === 'claude-code',
+      ...(runner === 'claude-code' ? { auth } : { auth: { state: 'unknown' as const } }),
+    });
     const installation = {
-      plannerUsability: vi.fn(async (runner: string): Promise<PlannerUsability> => ({
-        usable: runner === 'claude-code',
-        ...(runner === 'claude-code' ? { auth } : { auth: { state: 'unknown' as const } }),
-      })),
+      plannerUsability: vi.fn(usability),
+      runnerUsability: vi.fn(usability),
       filterInstalled: vi.fn(async (runners: string[]) => runners.filter((r) => r === 'claude-code')),
       refresh: vi.fn(),
     };
@@ -442,6 +449,26 @@ describe('OrchestratorPool default planner', () => {
     expect(runners).toEqual([expect.objectContaining({ id: 'claude-code', auth })]);
     pool.destroyAll();
   });
+
+  it('lists an installed task-only runner with its login, though it cannot plan', async () => {
+    // Copilot runs tasks over ACP and cannot plan yet; it is still an installed
+    // agent a user signs in to, from `/login` or the runner row.
+    const auth = { state: 'unknown' as const, loginCommand: ['copilot', 'login'] };
+    const installation = {
+      plannerUsability: vi.fn(async (): Promise<PlannerUsability> => ({ usable: false, reason: 'cannot plan in Ordewell yet' })),
+      runnerUsability: vi.fn(async (): Promise<PlannerUsability> => ({ usable: true, auth })),
+      filterInstalled: vi.fn(async (runners: string[]) => runners.filter((r) => r === 'copilot-cli')),
+      refresh: vi.fn(),
+    };
+    const pool = new OrchestratorPool({
+      runnerInstallation: installation,
+      codexSandbox: { ensure: async () => undefined, refresh: async () => undefined },
+    });
+
+    expect(await pool.getInstalledRunners()).toEqual([expect.objectContaining({ id: 'copilot-cli', name: 'GitHub Copilot CLI', auth })]);
+    pool.destroyAll();
+  });
+
   /** A workspace whose `.ordewell/env` selects `accountDir` as its Claude account. */
   function workspaceWithAccount(name: string, accountDir: string): string {
     const ws = join(dir, name);

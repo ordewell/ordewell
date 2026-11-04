@@ -53,7 +53,11 @@ describe('OrchestratorPool routing after a credential change', () => {
     return new OrchestratorPool({
       modelResolver: new ModelResolver(registry, new WebConfig(), { fetchImpl: catalogs }),
       codexSandbox: { ensure: async () => undefined, refresh: async () => undefined } as unknown as OrchestratorPoolDeps['codexSandbox'],
-      runnerInstallation: { plannerUsability: async () => ({ usable: false, reason: 'not installed' }), filterInstalled: async () => [] },
+      runnerInstallation: {
+        plannerUsability: async () => ({ usable: false, reason: 'not installed' }),
+        runnerUsability: async () => ({ usable: false, reason: 'not installed' }),
+        filterInstalled: async () => [],
+      },
     });
   }
 

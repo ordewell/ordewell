@@ -92,6 +92,7 @@ export async function readRunnerAuth(manifest: RunnerManifest, options: ReadRunn
   if (!spec) return { state: 'unknown' };
   const command = manifest.runner.command;
   const loginCommand = [command, ...spec.loginArgs];
+  if (!spec.statusArgs) return { state: 'unknown', loginCommand };
 
   let answer: RunnerAuthExecResult;
   let env: NodeJS.ProcessEnv;

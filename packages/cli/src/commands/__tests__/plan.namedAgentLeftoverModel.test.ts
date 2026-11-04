@@ -224,7 +224,7 @@ describe('ordewell plan --no-chat with a named coding agent and a vendor model l
       accountLimitCollectors: () => [],
       modelResolver: catalogResolver(),
       runner,
-      runnerInstallation: { plannerUsability: async () => ({ usable: true as const }), filterInstalled: async (ids: string[]) => ids.filter((id) => (AGENTS as readonly string[]).includes(id)) },
+      runnerInstallation: { plannerUsability: async () => ({ usable: true as const }), runnerUsability: async () => ({ usable: true as const }), filterInstalled: async (ids: string[]) => ids.filter((id) => (AGENTS as readonly string[]).includes(id)) },
       codexSandbox: { ensure: async () => undefined, refresh: async () => undefined },
     } as unknown as ConstructorParameters<typeof OrchestratorPool>[0]);
     server = http.createServer();

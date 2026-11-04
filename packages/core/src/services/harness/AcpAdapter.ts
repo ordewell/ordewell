@@ -5,6 +5,7 @@ import { StdioAgentAdapter, type SpawnSpec } from './StdioAgentAdapter';
 import { JsonRpcError, JsonRpcPeer, type RpcMessage, type RpcResponse } from './jsonRpc';
 import {
   ACP_ERROR,
+  ACP_INITIALIZE_PARAMS,
   ACP_PROTOCOL_VERSION,
   initializeResponseSchema,
   isAuthRequired,
@@ -37,9 +38,6 @@ import { ownerOnlyConfigFile, taskCompletionContract, type McpClientConfig } fro
 const DEFAULT_INIT_TIMEOUT_MS = 30_000;
 
 const MODEL_COMMAND = 'model';
-
-/** What Ordewell tells an agent about itself; the same words the Codex app-server is given. */
-const CLIENT_INFO = { name: 'ordewell', title: 'Ordewell', version: '0.1.0' };
 
 type PermissionOutcome = { outcome: 'selected'; optionId: string } | { outcome: 'cancelled' };
 const CANCELLED: PermissionOutcome = { outcome: 'cancelled' };
@@ -347,11 +345,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
    * agent's own terminal.
    */
   private async initialize(): Promise<void> {
-    const answered = await this.setupCall('initialize', {
-      protocolVersion: ACP_PROTOCOL_VERSION,
-      clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-      clientInfo: CLIENT_INFO,
-    });
+    const answered = await this.setupCall('initialize', { ...ACP_INITIALIZE_PARAMS });
     if (!answered.ok) throw new Error(isAuthRequired(answered) ? this.signedOut() : `${this.name} could not start: ${answered.message ?? 'no reason given'}`);
     const parsed = parseAcp(initializeResponseSchema, answered.result);
     if (!parsed.ok) throw new Error(`${this.name} answered initialize in a shape Ordewell cannot read: ${parsed.error}`);

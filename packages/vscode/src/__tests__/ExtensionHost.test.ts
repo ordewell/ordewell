@@ -247,6 +247,7 @@ function fakeRunnerInstallation(installed: string[]) {
   return {
     filterInstalled: vi.fn(async (runners: string[]) => runners.filter((r) => installed.includes(r))),
     plannerUsability: vi.fn(async (_runner?: string): Promise<PlannerUsability> => ({ usable: true, reason: undefined })),
+    runnerUsability: vi.fn(async (_runner?: string): Promise<PlannerUsability> => ({ usable: true, reason: undefined })),
     // A discovery refresh asks again; the fake keeps no verdicts, so it is a no-op.
     refresh: vi.fn(),
   };
@@ -606,7 +607,7 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     expect(h.chat.provider.postMessage).toHaveBeenCalledWith({
       type: 'plannerLoginEnded', runner: 'codex', ok: false, message: 'Ordewell has no login for Codex.',
     });
-    expect(h.installation.plannerUsability).toHaveBeenCalledWith('codex');
+    expect(h.installation.runnerUsability).toHaveBeenCalledWith('codex');
   });
 
   it('remembers the dragged plan dock height for the next webview to open', async () => {
