@@ -62,6 +62,8 @@ const REFUSED: Record<string, { deps: () => AgentProcessDeps; launches: number }
   // An ACP agent is refused at `initialize`, once it is running.
   'copilot-cli': { deps: () => baseDeps(fakeSpawn([`${JSON.stringify({ jsonrpc: '2.0', id: 1, error: { code: -32603, message: 'unsupported client' } })}\n`]).spawn, noHttp), launches: 1 },
   'qwen-code': { deps: () => baseDeps(fakeSpawn([`${JSON.stringify({ jsonrpc: '2.0', id: 1, error: { code: -32603, message: 'unsupported client' } })}\n`]).spawn, noHttp), launches: 1 },
+  // Cline's key is handed in as Ordewell's environment would hold it, so the start never reads Cline's own store.
+  cline: { deps: () => ({ ...baseDeps(fakeSpawn([`${JSON.stringify({ jsonrpc: '2.0', id: 1, error: { code: -32603, message: 'unsupported client' } })}\n`]).spawn, noHttp), workspaceEnv: async () => ({ CLINE_API_KEY: 'sk-fake' }) }), launches: 1 },
 };
 
 let nextPid = 3_900_000;

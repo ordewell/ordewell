@@ -23,6 +23,7 @@ export default defineConfig({
       exclude: ['**/*.test.ts', '**/__tests__/**', '**/fixtures/**', '**/*.d.ts', 'dist/**'],
       thresholds: {
         'src/conversation/labels.ts': floor(100, 100, 100),
+        'src/plugins/builtin/cline.manifest.ts': floor(100, 100, 100),
         'src/plugins/builtin/copilot-cli.manifest.ts': floor(100, 100, 100),
         'src/plugins/builtin/copilotModels.ts': floor(100, 100, 100),
         'src/plugins/builtin/qwen.manifest.ts': floor(100, 100, 100),
@@ -40,6 +41,7 @@ export default defineConfig({
         'src/services/harness/acpRoles.ts': floor(100, 100, 100),
         'src/services/harness/acpSchema.ts': floor(100, 100, 100),
         'src/services/harness/claudeOrdewell.ts': floor(100, 83, 100),
+        'src/services/harness/clineProfile.ts': floor(100, 100, 100),
         'src/services/harness/codexOrdewell.ts': floor(100, 94, 100),
         'src/services/harness/connectors.ts': floor(100, 87, 100),
         'src/services/harness/copilotProfile.ts': floor(100, 100, 100),

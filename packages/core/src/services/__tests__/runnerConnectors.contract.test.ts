@@ -27,16 +27,19 @@ const RUNNER_NAME: Record<string, (tool: string) => string> = {
   opencode: (tool) => `ordewell_${tool}`,
   'copilot-cli': (tool) => `ordewell-${tool}`,
   'qwen-code': (tool) => `mcp__ordewell__${tool}`,
+  cline: (tool) => `ordewell__${tool}`,
 };
 
 /**
  * What a runner's transcript calls an Ordewell tool call, where that is not
  * the name it runs it by: Qwen Code reports an MCP call first under the
  * placeholder title "ToolCall" and an event keeps the name its call was first
- * seen under (acpEvents.ts), while its requests carry the real name.
+ * seen under (acpEvents.ts), while its requests carry the real name. Cline's
+ * title is the name and then a summary of the model's arguments.
  */
 const REPORTED_AS: Record<string, (tool: string) => string> = {
   'qwen-code': () => 'ToolCall',
+  cline: (tool) => `ordewell__${tool}: {}`,
 };
 
 /**
@@ -49,6 +52,7 @@ const NATIVE_INSTEAD: Record<string, string[]> = {
   opencode: [],
   'copilot-cli': [],
   'qwen-code': [],
+  cline: [],
 };
 
 const mcp = mcpClientConfig({ url: 'http://127.0.0.1:4555/mcp', token: 'tok-secret' });

@@ -28,8 +28,8 @@ they connect to them, and whether their own tools can be taken away.
 an `AcpProfile`: data, not code.** `acpConnector(profile)` turns a profile into
 the runner's entry in `CONNECTORS`, so a new ACP agent is a manifest and a
 profile. GitHub Copilot CLI (`copilot-cli`, `copilot --acp --stdio`) is the
-reference agent; Qwen Code (`qwen-code`, `qwen --acp`) is the second, for
-writable tasks only.
+reference agent. Qwen Code (`qwen-code`, `qwen --acp`) and Cline (`cline`,
+`cline --acp`) take writable tasks only.
 
 Ordewell is the ACP client and does no I/O for the agent: it advertises no
 file-system and no terminal capability, so the agent works in the worktree
@@ -111,7 +111,8 @@ of its provider credential.
   stdin and never as an argument (ADR-0022 A5). It is given again on every
   resume and load, since the agent keeps no session's servers between
   processes. An agent can accept `mcpServers` and never connect to them, yet
-  load MCP servers from a settings file of its own. Its profile then has an
+  load MCP servers from a settings file of its own, as Cline 3.0.74 does. Its
+  profile then has an
   `mcpConfig` route: a file name, how to render the agent's settings format
   from the server's name, URL and headers, and the environment variable that
   names the file's path to the agent. The adapter writes that file for each
@@ -147,9 +148,8 @@ of its provider credential.
   carrying the token has passed every check, failed when the agent refused the
   session or the process is gone, pending until then (ADR-0022 S2, S4). The
   profile's `attach` says when that contact can come:
-  - `sessionNew`, the default and every admitted profile's: while the session
-    opens, so the task is sent only once the server was contacted, as for a
-    native runner (ADR-0025).
+  - `sessionNew`, the default: while the session opens, so the task is sent
+    only once the server was contacted, as for a native runner (ADR-0025).
   - `firstTurn`: only once a prompt starts the agent's runtime, for an agent
     that connects its MCP servers then, as Cline 3.0.74 does. An agent that
     made contact by the time its session opened goes on as under
@@ -311,13 +311,65 @@ that is how a signed-out Qwen is learned.
 Its models come from ACP discovery alone: `session/new` lists the models its
 settings configure, and there is no command to fall back to.
 
+## Cline
+
+Checked against Cline 3.0.74, the profile's `minVersion`, and the recordings
+in `packages/core/src/services/__tests__/fixtures/acp/cline/`, made with an
+OpenRouter model and its key handed in the spawn's environment (R9):
+
+| profile field | Cline |
+|---|---|
+| instructions | the first prompt: no instruction file or `_meta` slot outside the worktree is read by an ACP start |
+| mode | `--auto-approve true` under `autoApprove`, `--auto-approve false` under `default`, passed on every start because Cline's default is `true`; its `plan` session mode is not used, and every start stays in `act`, the mode `session/new` reports |
+| model | the `model` config option, set after `session/new` and read back; its ids are the provider's (`openai/gpt-4.1-mini`) |
+| Ordewell's tools | the permission request's title up to its first colon, `ordewell__<tool>`: Cline titles a call with its tool's name, then a summary of the model's arguments, and gives the kind `other` to its own edits and to MCP calls alike, so the kind is not read |
+| MCP server | `mcpConfig`: `cline_mcp_settings.json`, one `streamableHttp` entry with the token in its headers, named by `CLINE_MCP_SETTINGS_PATH`; `session/new` and `session/load` carry an empty `mcpServers`, since Cline advertises no HTTP |
+| attach | `firstTurn` |
+| credentials | Cline's reader (R9) |
+| environment | `CLINE_SESSION_BACKEND_MODE=local`, so the session lives in the process Ordewell starts and stops, never in a hub daemon that outlives it |
+| restriction | none |
+| roles | none: Cline is task-only, since it has no shell allow or deny list and no recording shows its `plan` mode refusing a write and a command (R3) |
+
+In every recording of a new session Cline has not contacted the server when
+`session/new` answers, and contacts it from the settings file once the prompt
+runs, before its first tool call: the first turn is the attach (R5). A
+`session/load` contacts it while the load runs (`load.jsonl`), so a resume is
+attached before its turn, as under `sessionNew`; the load first replays the
+session's history as updates, which come outside a turn and are dropped. Two
+attempts at once each read only their own file and token
+(`concurrent-a.jsonl`, `concurrent-b.jsonl`), and no recording leaves a private
+directory or a Cline process behind.
+
+Under `--auto-approve false` Cline asks about every edit, every command and
+every MCP call, Ordewell's own included, with the options `allow_once`,
+`allow_always` and `reject_once`; Ordewell's tools are allowed by name
+(`ordewell-tool.jsonl`), an edit waits for the plan's answer (`edit.jsonl`),
+and a refused edit leaves nothing (`deny.jsonl`). Just before a request the
+turn sends a `tool_call_update` under the same title for a call it has not yet
+reported, and reports the call itself only once the request is answered. Under
+`--auto-approve true` Cline asks about nothing (`allow-all.jsonl`). A cancel
+ends the turn `cancelled` and the pending request is answered `cancelled`; the
+command it asked to run did not run (`cancel.jsonl`).
+
+The turn reports a call under the same title, so the transcript names
+Ordewell's call with its arguments' summary
+(`ordewell__task_complete: {"status":"done",…}`). Cline signs in with
+`cline auth`, which has no status command: a store with no key refuses the
+start before anything is spawned (R9), and a `-32000` from `session/new` is
+read as signed out. Its models come from ACP discovery alone: `session/new`
+lists its provider's models, and there is no command to fall back to.
+
 ## Testing decisions
 
 - **Recorded fixtures are the agent's evidence.** A recording is the JSONL of
   every line each side sent, with notes for the spawn arguments and what the
   live run left behind. `copilotCli.test.ts` replays the agent's side against a
-  live adapter and Ordewell server, and `qwenCode.test.ts` does the same for
-  Qwen; a claim about the agent cites a recording.
+  live adapter and Ordewell server, and `qwenCode.test.ts` and
+  `clineCode.test.ts` do the same for Qwen and Cline; a claim about the agent
+  cites a recording. Cline's replay also answers the MCP calls the recording
+  shows from the file it was handed, with the attempt's own token, so its
+  first-turn attach, its resume and its concurrent attempts are judged by the
+  server as live.
 - **`fakeAcpAgent`** scripts an agent for the adapter's own tests
   (`acpAdapter.test.ts`, `acpCancelRace.adversarial.test.ts`), and
   `fakeRunners.ts` gives the connector contract tests an ACP runner. It can
@@ -340,11 +392,12 @@ settings configure, and there is no command to fall back to.
 - **A stdio-to-HTTP MCP bridge.** An agent that takes only stdio MCP servers
   would need a local process carrying the token; it is refused instead, until
   such an agent is worth the bridge.
-- **Agents beyond Copilot CLI and Qwen Code.** Gemini CLI and Goose wait for
-  the same live probe those passed before they are admitted at all. No profile
-  uses `mcpConfig`, `attach: 'firstTurn'` or `credentials` yet: Cline 3.0.74
-  needs all three, and waits for a recording of it connecting from the file on
-  its first turn.
+- **Agents beyond Copilot CLI, Qwen Code and Cline.** Gemini CLI and Goose wait
+  for the same live probe those passed before they are admitted at all.
+- **Cline signed in to a Cline or ClinePass account.** The recordings use a
+  provider's key. No recording shows what an account's sign-in stores or a
+  task run on it; where the reader finds no key in the entry Cline last used,
+  the start is refused with both routes (R9).
 - **A resumed restricted start.** A resume begins in a new private directory
   and hands it to `session/load`; no recording yet shows Copilot resuming a
   session whose `cwd` has changed.
@@ -421,6 +474,15 @@ settings configure, and there is no command to fall back to.
   (ADR-0001). Every start sets one of the three modes the manifest offers.
 - **Qwen's `plan` mode as a read-only mode.** Rejected for want of evidence:
   no recording shows it refusing a write and a command, and R3 asks for one.
+  Cline's `plan` mode is not offered for the same reason, and Cline has no
+  control that takes its shell away.
+- **Cline's `--auto-approve` left to its default under `default`.** Rejected:
+  its default is `true`, so a plan that asks for approval would run every edit
+  and command unasked (ADR-0001). The profile passes the flag on every start.
+- **Cline's session left to its own backend.** Rejected: left to choose, Cline
+  may start or join a hub daemon that outlives the attempt and serves other
+  sessions, so the session would not end with the process Ordewell stops.
+  `CLINE_SESSION_BACKEND_MODE=local` keeps it in that process.
 - **Ordewell calling `authenticate` with the stored key.** Rejected: ACP's
   auth methods are the agent's to name and differ by agent, signing in stays
   the user's
@@ -454,7 +516,9 @@ settings configure, and there is no command to fall back to.
   have changed the worktree the respawn starts in.
 - A runner id shares the planner setting's namespace with the API vendors'
   ids, so an ACP runner id must not equal one (`kimi-cli`, not `kimi`;
-  `qwen-code`, because `qwen` is DashScope's).
+  `qwen-code`, because `qwen` is DashScope's; `cline` is no vendor's).
+- Cline's transcript names each call with its arguments' summary, since that
+  is the title it reports the call under.
 - Each agent's ACP server is young and changes between releases; the profile's
   `minVersion` and its recordings name the version each claim was checked on.
 
@@ -481,3 +545,5 @@ settings configure, and there is no command to fall back to.
 - 2026-11-04 — R5: a profile may attach on the first turn (`attach:
   'firstTurn'`), the task's prompt as the check, kept only when the server
   was contacted before it ended; such a profile cannot plan.
+- 2026-11-04 — Cline (`cline`) is admitted on its recordings, for writable
+  tasks only, through `mcpConfig`, `attach: 'firstTurn'` and `credentials`.

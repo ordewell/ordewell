@@ -10,6 +10,13 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Added
 
+- **Cline runs tasks.** A plan can assign a task to `cline`, which Ordewell
+  drives over the Agent Client Protocol with its models discovered. The
+  Ordewell tools reach it through a settings file of its own, written for each
+  task outside the worktree and removed after, and the provider key `cline auth`
+  stored is handed to it for that task only. It runs writable tasks only, not
+  the planner or read-only tasks. Cline 3.0.74 or newer is required.
+
 - **Qwen Code runs tasks.** A plan can assign a task to `qwen-code`, which
   Ordewell drives over the Agent Client Protocol with the Ordewell tools
   attached and its models discovered. It runs writable tasks only, not the
