@@ -1593,6 +1593,25 @@ describe.skipIf(!hasGit)('WorktreeIsolation bootstrap', () => {
     expect(kept).not.toContain('refs/notes/notes.md');
   });
 
+  it('keeps a symbolic link a task made in what it saves, as git stores a link', async (ctx) => {
+    const root = repo({ 'docs/guide.md': 'guide\n' });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(root);
+    const { cwd } = await iso.prepare(task(1, 'Links a guide'), run);
+    try {
+      symlinkSync(join('docs', 'guide.md'), join(cwd, 'GUIDE.md'), 'file');
+    } catch {
+      // Windows makes a symbolic link only with Developer Mode or as an administrator.
+      ctx.skip();
+    }
+    writeFileSync(join(cwd, 'work.txt'), 'never landed\n');
+
+    const removal = await iso.release(run, 'task-1', { keep: false });
+
+    const kept = git(root, 'ls-tree', '-r', '--name-only', removal.preserved[0].branch).split('\n');
+    expect(kept).toEqual(expect.arrayContaining(['GUIDE.md', 'work.txt']));
+  });
+
   it('skips artifacts that are not present in the main worktree', async () => {
     const root = repo();
     const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });

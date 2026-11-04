@@ -23,10 +23,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   folder below its repository's top, the links a worktree makes into your
   checkout, `.claude` among them, were left in place, and their folders were
   emptied in your own checkout; so was any folder a task linked to itself. Every
-  link in a worktree is now taken down first, and kept out of the commit that
-  saves a task's unlanded work. A worktree Ordewell leaves in place is now
-  removed, as its notice says, with `rmdir /s`, which leaves a junction's folder
-  alone.
+  link in a worktree is now taken down first. A junction a task left is kept out
+  of its commits too, where git would have copied in the folder it leads to; a
+  symbolic link is still committed as the link it is. A worktree Ordewell leaves
+  in place is now removed, as its notice says, with `rmdir /s`, which leaves a
+  junction's folder alone.
 - **Stop stops a task's runner at once on Windows.** The polite kill Windows
   offers only asks a window to close, which no console agent has, so a stopped
   runner went on for five more seconds, writing to its worktree and holding it

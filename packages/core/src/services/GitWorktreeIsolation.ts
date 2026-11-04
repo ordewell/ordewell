@@ -142,17 +142,6 @@ function resolvesAsNamed(base: string, p: string): boolean {
   }
 }
 
-/** Every link below `root`, relative to it, found without entering one. */
-function linkPathsUnder(root: string, dir = root): string[] {
-  let entries: fs.Dirent[];
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
-  return entries.flatMap((entry) => {
-    const full = path.join(dir, entry.name);
-    if (entry.isSymbolicLink()) return [path.relative(root, full)];
-    return entry.isDirectory() && !(dir === root && entry.name === '.git') ? linkPathsUnder(root, full) : [];
-  });
-}
-
 function firstLine(text: string): string {
   return text.split(/\r?\n/, 1)[0].trim();
 }
@@ -1962,13 +1951,12 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     // path such as `.env` in an exclude pathspec makes `add` refuse.
     const prefix = await this.prefixOf(repo);
     const excludes: string[] = [];
-    // On Windows git stages a junction as the directory it leads to, so one a
-    // task left anywhere would commit a folder of the user's: every link there
-    // stays out, as git elsewhere would keep it a link and not its contents.
-    const links = [...entry.linked.map((name) => prefix + name), ...(this.platform === 'win32' ? linkPathsUnder(entry.worktree) : [])];
-    for (const name of new Set(links.map((link) => link.replace(/\\/g, '/')))) {
-      if ((await this.tryGit(entry.worktree, ['check-ignore', '-q', '--', name])).ok) continue;
-      excludes.push(`:(exclude,literal)${name}`);
+    for (const name of entry.linked) {
+      if ((await this.tryGit(entry.worktree, ['check-ignore', '-q', '--', prefix + name])).ok) continue;
+      excludes.push(`:(exclude,literal)${(prefix + name).replace(/\\/g, '/')}`);
+    }
+    if (this.platform === 'win32') {
+      for (const link of await this.linksGitWalksInto(entry.worktree)) excludes.push(`:(exclude,literal)${link}`);
     }
     await this.git(entry.worktree, ['add', '-A', '--', '.', ...excludes]);
     const staged = await this.tryGit(entry.worktree, ['diff', '--cached', '--quiet']);
@@ -1977,6 +1965,42 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     // the commit, or a signing prompt nobody will answer, must not stop it.
     const commit = opts.rescue ? ['-c', 'commit.gpgsign=false', 'commit', '--no-verify'] : ['commit'];
     await this.git(entry.worktree, [...VERBATIM, ...commit, '-q', ...messageArgs(message)]);
+  }
+
+  /**
+   * The links git would walk into when it stages `worktree`: on Windows a
+   * junction reads to git as the directory it leads to, so staging one a task
+   * left commits what it holds, a folder of the user's as readily as anything.
+   * A symbolic link git stages as a link, as it does elsewhere, and keeps. Read
+   * from git's own listing, one call, so what git ignores, a mirrored install
+   * among it, is never walked; and a link is told by lstat, as Windows reports
+   * every reparse point, a OneDrive placeholder too, as a link in a directory
+   * listing.
+   */
+  private async linksGitWalksInto(worktree: string): Promise<string[]> {
+    const listed = await this.tryGit(worktree, ['status', '--porcelain=v1', '-z', '--no-renames', '--untracked-files=all']);
+    if (!listed.ok) return [];
+    const isLink = new Map<string, boolean>();
+    const linkAt = (rel: string): boolean => {
+      let link = isLink.get(rel);
+      if (link === undefined) {
+        try { link = fs.lstatSync(path.join(worktree, rel)).isSymbolicLink(); } catch { link = false; }
+        isLink.set(rel, link);
+      }
+      return link;
+    };
+    const found = new Set<string>();
+    for (const entry of listed.stdout.split('\0')) {
+      const parts = entry.slice(3).split('/');
+      for (let depth = 1; depth < parts.length; depth++) {
+        const dir = parts.slice(0, depth).join('/');
+        if (linkAt(dir)) {
+          found.add(dir);
+          break;
+        }
+      }
+    }
+    return [...found];
   }
 
   /** A message Ordewell writes, with the trailer if the user's setting says so right now. */
@@ -2115,8 +2139,15 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const entry of entries) {
       const target = path.join(dir, entry.name);
-      if (entry.isSymbolicLink()) this.unlinkIfLink(target);
-      else if (entry.isDirectory()) this.unlinkLinksUnder(target);
+      if (entry.isDirectory()) this.unlinkLinksUnder(target);
+      else if (entry.isSymbolicLink()) {
+        // Windows lists every reparse point as a link, a OneDrive placeholder
+        // folder among them; lstat says which are, and a folder is walked.
+        let stat: fs.Stats | undefined;
+        try { stat = fs.lstatSync(target); } catch { /* gone */ }
+        if (stat?.isSymbolicLink()) this.unlinkIfLink(target);
+        else if (stat?.isDirectory()) this.unlinkLinksUnder(target);
+      }
     }
   }
 
