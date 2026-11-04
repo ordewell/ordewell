@@ -90,6 +90,15 @@ export interface DiscoveryCommand {
  */
 export type RunnerEnv = Readonly<Record<string, string | undefined>>;
 
+/**
+ * Reads an agent's provider credential from its own store for one start: the
+ * variables to add to that start's environment, null when the agent needs none
+ * from Ordewell, and a throw, naming the routes that would sign it in, when it
+ * has none (ADR-0060, R9). What it answers holds a secret. `kind` is the
+ * start's, absent when model discovery asks.
+ */
+export type RunnerCredentials = (context: { env: RunnerEnv; kind?: 'planner' | 'task' }) => Promise<Readonly<Record<string, string>> | null>;
+
 export type ApiAuthMethod =
   | { type: 'env'; varName: string; header: string; prefix?: string }
   /** `path` is `~` expanded; a function of the runner's environment when that relocates the file. */
@@ -136,8 +145,13 @@ export interface RunnerModelDiscovery {
    * and read the models and efforts the new session offers. No prompt is sent,
    * so nothing is billed. Any failure, signed-out included, falls through to
    * the remaining methods: discovery never gates a pick (ADR-0040).
+   *
+   * `env` and `credentials` are the ones the runner's ACP profile starts it
+   * with, so an agent that reads its key only from its environment is asked
+   * as it runs (ADR-0060, R9). A hook that refuses is no answer, and nothing
+   * is spawned.
    */
-  acp?: { args: string[] };
+  acp?: { args: string[]; env?: Readonly<Record<string, string>>; credentials?: RunnerCredentials };
   /**
    * Optional last-resort list for a CLI that cannot enumerate
    * models. Used only when command discovery fails entirely or the CLI is

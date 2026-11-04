@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CONNECTORS } from '../harness/connectors';
 import { acpOrdewellBinding } from '../harness/acpOrdewell';
 import { discoverAcpModels } from '../harness/acpModels';
+import { ModelDiscovery, type AcpClientImpl, type ExecImpl } from '../ModelDiscovery';
+import type { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { CLINE_PROFILE } from '../harness/clineProfile';
 import type { AcpToolCall } from '../harness/acpSchema';
 import type { AgentEvent, AgentProcessDeps, TaskModeAgentAdapter, TaskStartOptions } from '../harness/AgentAdapter';
@@ -510,10 +512,62 @@ require('readline').createInterface({ input: process.stdin }).on('line', (text) 
     return [file];
   }
 
-  it('starts Cline as an ACP agent with the same arguments the task runner uses', () => {
+  it('starts Cline as an ACP agent with the same arguments, environment and key the task runner uses', () => {
     expect(CLINE_MANIFEST.modelDiscovery.method).toBe('acp');
-    expect(CLINE_MANIFEST.modelDiscovery.acp).toEqual({ args: ['--acp'] });
+    expect(CLINE_MANIFEST.modelDiscovery.acp?.args).toEqual(['--acp']);
+    expect(CLINE_MANIFEST.modelDiscovery.acp?.env).toEqual({ CLINE_SESSION_BACKEND_MODE: 'local' });
     expect(CLINE_PROFILE.args).toBe(CLINE_ACP_ARGS);
+    expect(CLINE_PROFILE.env).toBe(CLINE_MANIFEST.modelDiscovery.acp?.env);
+    expect(CLINE_PROFILE.credentials).toBe(CLINE_MANIFEST.modelDiscovery.acp?.credentials);
+  });
+
+  /**
+   * Cline 3.0.74 as a user signed in with `cline auth` meets it: the key is in
+   * its own store only, and without it in the environment `session/new` is
+   * refused with -32000 (ADR-0060, R9). With it, the recording's answer.
+   */
+  function clineNeedingItsKey(key: string): string[] {
+    const [file] = clineReplaying('ordewell-tool');
+    const replay = readFileSync(file, 'utf8');
+    writeFileSync(file, `
+const signedIn = process.env.CLINE_API_KEY === ${JSON.stringify(key)} && process.env.CLINE_PROVIDER === 'openrouter' && process.env.CLINE_SESSION_BACKEND_MODE === 'local';
+if (!signedIn) {
+  require('readline').createInterface({ input: process.stdin }).on('line', (text) => {
+    const msg = JSON.parse(text);
+    const reply = msg.method === 'session/new'
+      ? { jsonrpc: '2.0', id: msg.id, error: { code: -32000, message: 'Authentication required: Call authenticate before starting a session' } }
+      : { jsonrpc: '2.0', id: msg.id, result: ${JSON.stringify((recording('ordewell-tool').find((e) => e.dir === 'in') as { line: WireLine }).line.result)} };
+    process.stdout.write(JSON.stringify(reply) + '\\n');
+  });
+} else {
+${replay}
+}
+`);
+    return [file];
+  }
+
+  it('lists the provider\'s models for a user whose key lives only in Cline\'s own store', async () => {
+    const key = 'sk-or-v1-discovery-key-never-shown';
+    const store = join(dir, 'providers.json');
+    writeFileSync(store, JSON.stringify({
+      version: 1,
+      lastUsedProvider: 'openrouter',
+      providers: { openrouter: { settings: { provider: 'openrouter', apiKey: key, model: MODEL } } },
+    }), { mode: 0o600 });
+    const fake = clineNeedingItsKey(key);
+    const asked: string[][] = [];
+    const client: AcpClientImpl = (_command, args, options) => {
+      asked.push(args);
+      return discoverAcpModels(process.execPath, fake, { ...options, timeout: 5000 });
+    };
+    const registry = { getManifest: (id: string) => (id === 'cline' ? CLINE_MANIFEST : undefined) } as unknown as RunnerRegistry;
+    const env = { PATH: process.env.PATH, CLINE_PROVIDER_SETTINGS_PATH: store };
+    const exec: ExecImpl = async () => { throw new Error('cline has no model listing command'); };
+
+    const models = await new ModelDiscovery(registry, exec, undefined, undefined, undefined, undefined, async () => env, client).discover('cline');
+
+    expect(asked).toEqual([['--acp']]);
+    expect(models.map((m) => m.modelId)).toEqual(['moonshotai/kimi-k3.1-pro', 'recursive/flint-v1.0:free', MODEL]);
   });
 
   it('lists the models Cline 3.0.74 offers in session/new, as the recording kept them', async () => {

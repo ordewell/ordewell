@@ -70,6 +70,19 @@ export type AcpClientImpl = (
 export const defaultAcpClient: AcpClientImpl = (command, args, options) =>
   discoverAcpModels(command, args, { timeout: options?.timeout, env: options?.env });
 
+/**
+ * The environment an ACP agent is asked under: the runner's, then what its
+ * profile starts it with, then the key its credential hook reads for this one
+ * start (ADR-0060, R9). Null when the hook finds no key, so nothing is spawned.
+ */
+async function acpStartEnv(acp: NonNullable<RunnerManifest['modelDiscovery']['acp']>, env: RunnerEnv): Promise<RunnerEnv | null> {
+  const started = { ...env, ...acp.env };
+  if (!acp.credentials) return started;
+  // The hook reads the variables the agent would have without the profile's, as at a task's start.
+  const credential = await acp.credentials({ env }).catch(() => undefined);
+  return credential === undefined ? null : { ...started, ...credential };
+}
+
 function effortVariant(effort: string): { id: string; label: string } {
   return { id: effort, label: effort.charAt(0).toUpperCase() + effort.slice(1) };
 }
@@ -579,7 +592,8 @@ export class ModelDiscovery {
     // 0b. ACP discovery: the agent's own session options. A signed-out or
     //     silent agent offers nothing; the remaining methods answer instead.
     if (discovery.method === 'acp' && discovery.acp) {
-      const acpModels = await this.acpClient(manifest.runner.command, discovery.acp.args, { env });
+      const acpEnv = await acpStartEnv(discovery.acp, env);
+      const acpModels = acpEnv ? await this.acpClient(manifest.runner.command, discovery.acp.args, { env: acpEnv }) : null;
       if (acpModels && acpModels.length > 0) return { models: mergeCanonicalAliases(acpModels, manifest), cacheable: true };
       // No answer (signed out, timeout, failed start) is transient and must
       // not be cached behind a working fallback; an agent that answered with

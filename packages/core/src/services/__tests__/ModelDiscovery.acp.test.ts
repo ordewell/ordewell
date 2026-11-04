@@ -82,6 +82,52 @@ describe('ModelDiscovery — the acp method', () => {
   });
 });
 
+describe('ModelDiscovery — the acp method with a credential hook', () => {
+  const KEY = 'sk-discovery-key-never-shown';
+
+  it('starts the agent under the runner\'s env, then the profile\'s, then the key the hook read from that runner env', async () => {
+    const credentials = vi.fn(async () => ({ AGENT_API_KEY: KEY }));
+    const keyed: RunnerManifest = { ...agent, modelDiscovery: { ...agent.modelDiscovery, acp: { args: ['--acp'], env: { AGENT_MODE: 'local' }, credentials } } };
+    const client: AcpClientImpl = vi.fn(async () => OFFERED);
+    const runnerEnv = { HOME: '/home/someone', AGENT_MODE: 'shared' };
+    const discovery = new ModelDiscovery(registryWith(keyed), execOf(''), undefined, undefined, undefined, undefined, async () => runnerEnv, client);
+
+    expect((await discovery.discover('acp-agent')).map((m) => m.modelId)).toEqual(['small']);
+    expect(credentials).toHaveBeenCalledWith({ env: runnerEnv });
+    expect(client).toHaveBeenCalledWith('acp-agent', ['--acp'], { env: { HOME: '/home/someone', AGENT_MODE: 'local', AGENT_API_KEY: KEY } });
+  });
+
+  it('spawns nothing when the hook finds no key, falls back, and asks again once the user has signed in', async () => {
+    let now = 1_000;
+    let stored: string | null = null;
+    const credentials = vi.fn(async () => {
+      if (!stored) throw new Error('Cline has no provider key Ordewell can hand it');
+      return { AGENT_API_KEY: stored };
+    });
+    const keyed: RunnerManifest = { ...agent, modelDiscovery: { ...agent.modelDiscovery, acp: { args: ['--acp'], credentials } } };
+    const client: AcpClientImpl = vi.fn(async () => OFFERED);
+    const discovery = new ModelDiscovery(registryWith(keyed), execOf('alpha\n'), undefined, undefined, undefined, () => now, async () => ({}), client);
+
+    expect((await discovery.discover('acp-agent')).map((m) => m.modelId)).toEqual(['alpha']);
+    expect(client).not.toHaveBeenCalled();
+
+    stored = KEY;
+    now += 61_000;
+    expect((await discovery.discover('acp-agent')).map((m) => m.modelId)).toEqual(['small']);
+    expect(client).toHaveBeenCalledWith('acp-agent', ['--acp'], { env: { AGENT_API_KEY: KEY } });
+  });
+
+  it('starts the agent under the runner\'s env alone when the hook says it needs nothing from Ordewell', async () => {
+    const keyed: RunnerManifest = { ...agent, modelDiscovery: { ...agent.modelDiscovery, acp: { args: ['--acp'], credentials: async () => null } } };
+    const client: AcpClientImpl = vi.fn(async () => OFFERED);
+    const runnerEnv = { AGENT_API_KEY: 'the-users-own' };
+    const discovery = new ModelDiscovery(registryWith(keyed), execOf(''), undefined, undefined, undefined, undefined, async () => runnerEnv, client);
+
+    await discovery.discover('acp-agent');
+    expect(client).toHaveBeenCalledWith('acp-agent', ['--acp'], { env: runnerEnv });
+  });
+});
+
 describe('ModelDiscovery — acp failures and canonical aliases', () => {
   it('keeps a failed ACP handshake uncached even when the fallback command answers, so a recovered agent is asked again', async () => {
     let now = 1_000;
