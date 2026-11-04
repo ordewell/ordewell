@@ -219,8 +219,8 @@ since the check refuses an agent that does not say its version.
   all three of these:
   - a `restricted` control that takes the agent's own write and shell tools
     away, or, where the agent has no list to take them from, makes it ask
-    before every use, as Cline's `--auto-approve false` does; either shown to
-    hold under ACP;
+    before every use, as Qwen Code's `--approval-mode default` and Cline's
+    `--auto-approve false` do; either shown to hold under ACP;
   - Ordewell's refusal of every edit, delete, move and execute request, which
     the adapter already does;
   - a recording of a write attempt and a shell attempt refused, with nothing
@@ -233,10 +233,18 @@ since the check refuses an agent that does not say its version.
   directory of its own and asks for every path in the worktree. Record a hook
   planted in the worktree running on a writable start and not on a restricted
   one, as Copilot's `repo-hooks.jsonl`, `planner.jsonl` and `read-only.jsonl`
-  do, and Cline's `repo-hooks.jsonl` and `read-only-hooks.jsonl`. A variable
-  that moves the agent's config home is not that switch unless a recording
-  shows it: Cline's `CLINE_DIR` left the worktree's hooks running
-  (`repo-hooks-cline-dir.jsonl`).
+  do, Qwen Code's `planted-hook.jsonl`, and Cline's `repo-hooks.jsonl` and
+  `read-only-hooks.jsonl`. A variable that moves the agent's config home is
+  not that switch unless a recording shows it: Cline's `CLINE_DIR` left the
+  worktree's hooks running (`repo-hooks-cline-dir.jsonl`).
+
+  An agent made to ask before every use of its tools leaves the adapter to
+  refuse each by its kind, a request to switch modes included, and the
+  recordings must show it. Never claim a role through the agent's own plan or
+  read-only mode if a request to switch modes leaves it. An agent that defers
+  MCP tools until the model loads them names its loading tool in
+  `restricted.toolSearch`, so a restricted start's prompt says to load each
+  Ordewell tool first.
 
   An agent with no deny flag, whose controls are a settings file or a hook,
   is handed them in `restricted.files`: each is written 0600 into that

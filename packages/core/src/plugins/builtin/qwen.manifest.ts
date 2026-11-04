@@ -14,7 +14,9 @@ export const QWEN_CODE_MANIFEST: RunnerManifest = {
 
   runner: { command: 'qwen' },
 
-  features: {},
+  // Ordewell's read-only mode runs in Qwen's own `default`, which asks before
+  // every write and command, so the adapter can refuse each by its kind (ADR-0060, R3).
+  features: { permissionModeValues: { plan: 'default' } },
 
   modelDiscovery: {
     // Qwen lists its configured models in `session/new`, so ACP answers and
@@ -34,11 +36,13 @@ export const QWEN_CODE_MANIFEST: RunnerManifest = {
   // Its default session mode is `auto`, which asks an LLM classifier whether to
   // allow an action: that is not a decision the plan's mode may leave to a
   // model, so no Ordewell mode names it, and every start sets one of these.
-  // `plan` is Qwen's own read-only mode, but its refusal of a write and a
-  // command has no recording, so it is not offered as the read-only mode (ADR-0046).
+  // `plan` is not Qwen's own plan mode, which the model can leave by asking to
+  // switch modes: it is `default` under the profile's restricted start, which
+  // the recordings show refusing a write and a command (ADR-0046).
   modes: [
     { id: 'default', label: 'Ask before actions', description: 'Edits and commands wait for your approval', safe: true },
     { id: 'auto-edit', label: 'Auto-approve edits', description: 'Qwen writes files without asking; commands still wait' },
     { id: 'yolo', label: 'Allow all', description: 'Qwen runs edits and commands without asking', autonomous: true },
+    { id: 'plan', label: 'Read-only', description: 'Native reads and Ordewell commands; lands nothing', readOnly: true },
   ],
 };

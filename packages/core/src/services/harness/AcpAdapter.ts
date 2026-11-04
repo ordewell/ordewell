@@ -549,7 +549,10 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
    */
   private instructions(started: Started): string {
     const where = this.startDir ? `The workspace is \`${started.cwd}\`, not the directory you start in: name its files by their full path there.` : null;
-    return [where, this.contract(started)].filter(Boolean).join('\n\n');
+    const search = this.restricted ? this.profile.restricted?.toolSearch : undefined;
+    const ending = this.binding.toolName(started.kind === 'planner' ? 'submit_plan' : 'task_complete');
+    const deferred = search ? `Your Ordewell tools are deferred: call \`${search}\` to load each one, \`${ending}\` included, before you call it.` : null;
+    return [where, deferred, this.contract(started)].filter(Boolean).join('\n\n');
   }
 
   private contract(started: Started): string {

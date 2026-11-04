@@ -27,7 +27,9 @@ import { fakeSpawn, type FakeAgentProcess, type FakeSpawnOptions, type FakeSpawn
  * The script is a list of steps, run in order:
  *  - `expect` waits for the client to send a method, then answers it at once
  *    (`reply` or `error`), or leaves it open for a later `answer` or `fail`,
- *    which is how updates are sent between a prompt and its response.
+ *    which is how updates are sent between a prompt and its response. An
+ *    `optional` one is passed over when another method comes first, for a
+ *    request only some starts send, such as a setting a planner never makes.
  *  - `notify` and `request` are the agent speaking first; a `request` holds
  *    the script until the client answers it.
  *  - `callMcp` is the agent calling a tool on the MCP server the client gave it
@@ -47,7 +49,7 @@ import { fakeSpawn, type FakeAgentProcess, type FakeSpawnOptions, type FakeSpawn
 export type FakeAcpValue<T> = T | ((params: unknown, agent: FakeAcpAgent) => T);
 
 export type FakeAcpStep =
-  | { expect: string; reply?: FakeAcpValue<unknown>; error?: AcpRpcError }
+  | { expect: string; reply?: FakeAcpValue<unknown>; error?: AcpRpcError; optional?: boolean }
   | { answer: FakeAcpValue<unknown>; to?: string }
   | { fail: AcpRpcError; to?: string }
   | { notify: string; params?: FakeAcpValue<unknown> }
@@ -346,6 +348,10 @@ export class FakeAcpAgent {
       const message = this.inbox.shift();
       if (!message) return false;
       const received: FakeAcpReceived = { method: message.method ?? '', params: message.params, ...(message.id !== undefined ? { id: message.id } : {}) };
+      if (message.method !== step.expect && step.optional) {
+        this.inbox.unshift(message);
+        return true;
+      }
       if (message.method !== step.expect) {
         this.unexpected.push(received);
         if (message.id !== undefined) this.respond(message.id, undefined, { code: ACP_ERROR.methodNotFound, message: `Method not found: ${received.method}` });

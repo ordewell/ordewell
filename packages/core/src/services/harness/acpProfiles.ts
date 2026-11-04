@@ -135,6 +135,14 @@ export interface AcpRestriction {
    * the agent keeps there goes with the process.
    */
   configDirs?: readonly string[];
+  /**
+   * The agent's own tool that loads a deferred tool's schema, for an agent
+   * that refuses a call of an MCP tool the model has not loaded first: a
+   * planner's or read-only task's first prompt tells the model to load each
+   * Ordewell tool with it, as the recordings of those starts show working
+   * (ADR-0060, R3). A writable start's prompt stays as its recordings have it.
+   */
+  toolSearch?: string;
 }
 
 /** What an extension request's answer may depend on: the start it came to, never a person. */

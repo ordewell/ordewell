@@ -60,7 +60,7 @@ describe('a built-in runner declared by manifest and connector only, on the CLI'
   it('is named in help and in the /runners command', async () => {
     const help = await printed(() => printHelp());
     expect(help).toContain('Enable or disable runners (claude-code, codex, opencode, copilot-cli, qwen-code, cline, gemini-cli, cursor-agent, acme)');
-    expect(help).toContain('claude-code, codex, opencode, copilot-cli, acme: plan with that CLI');
+    expect(help).toContain('claude-code, codex, opencode, copilot-cli, qwen-code, acme: plan with that CLI');
     expect(SLASH_COMMANDS.find((c) => c.name === 'runners')?.description).toContain('claude-code, codex, opencode, copilot-cli, qwen-code, cline, gemini-cli, cursor-agent, acme');
   });
 
@@ -74,7 +74,7 @@ describe('a built-in runner declared by manifest and connector only, on the CLI'
 
   it('is named by the first-run notice and the planner switch hint', async () => {
     const welcome = render(initialState({ rows: 40, cols: 200, plannerKnown: true, runnersKnown: true, providersKnown: true })).join('\n');
-    expect(welcome).toContain('Claude Code, Codex, OpenCode, GitHub Copilot CLI or Acme Agent');
+    expect(welcome).toContain('Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code or Acme Agent');
 
     const api = {
       getSettings: async () => ({ aiProvider: 'openrouter', orchestratorModel: '', plannerThinkingEffort: '' }),
@@ -83,7 +83,7 @@ describe('a built-in runner declared by manifest and connector only, on the CLI'
     const exit = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => { throw new Error(`exit ${code}`); }) as never);
     const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await expect(handlePlannerEffort([], api)).rejects.toThrow('exit 1');
-    expect(err.mock.calls.flat().join('\n')).toContain('ordewell planner claude-code|codex|opencode|copilot-cli|acme');
+    expect(err.mock.calls.flat().join('\n')).toContain('ordewell planner claude-code|codex|opencode|copilot-cli|qwen-code|acme');
     exit.mockRestore();
   });
 });

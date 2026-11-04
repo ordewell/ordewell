@@ -6,6 +6,7 @@ import { CLAUDE_CODE_MANIFEST } from '../../plugins/builtin/claude-code.manifest
 import { OPENCODE_MANIFEST } from '../../plugins/builtin/opencode.manifest';
 import { CODEX_MANIFEST } from '../../plugins/builtin/codex.manifest';
 import { COPILOT_CLI_MANIFEST } from '../../plugins/builtin/copilot-cli.manifest';
+import { QWEN_CODE_MANIFEST } from '../../plugins/builtin/qwen.manifest';
 import { CONNECTORS } from '../harness/connectors';
 import { recordedRunnerAuth, resetRunnerAuth, type RunnerAuthExec } from '../runnerAuth';
 
@@ -136,7 +137,7 @@ describe('RunnerInstallation.plannerUsability (ADR-0009 preflight)', () => {
   it('plans with exactly the runners whose connectors plan', async () => {
     const exec: ExecImpl = vi.fn(async () => ({ stdout: 'ok' }));
     const authExec: RunnerAuthExec = vi.fn(async () => ({ code: -1, stdout: '', stderr: '' }));
-    const manifests = [CLAUDE_CODE_MANIFEST, CODEX_MANIFEST, OPENCODE_MANIFEST, COPILOT_CLI_MANIFEST, { name: 'aider', runner: { command: 'aider' } }];
+    const manifests = [CLAUDE_CODE_MANIFEST, CODEX_MANIFEST, OPENCODE_MANIFEST, COPILOT_CLI_MANIFEST, QWEN_CODE_MANIFEST, { name: 'aider', runner: { command: 'aider' } }];
     const inst = new RunnerInstallation(registryWith(...manifests), exec, Date.now, { authExec });
 
     const plannable: string[] = [];
