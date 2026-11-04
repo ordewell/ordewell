@@ -8,6 +8,32 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **The terminal UI is supported on native Windows.** It was run there from a
+  goal to a merged plan; WSL is no longer needed for it.
+
+### Fixed
+
+- **An agent installed by npm starts whole on Windows.** Ordewell now starts the
+  Node script or program an npm shim names, rather than the shim through cmd.exe
+  or PowerShell. Claude Code installed that way was started through PowerShell,
+  since its system prompt spans lines, and PowerShell dropped every quote on the
+  way: its JSON settings arrived as `{disableAllHooks:true}`, and the quotes in
+  its prompt were gone. A prompt past cmd.exe's 8191 characters, a line break, a
+  `"` and a `%VAR%` now reach any npm-installed agent as written.
+- **The planner's commands are confined to the folders Git Bash reaches.** On
+  Windows a command's paths were judged as if on the current drive, so approving
+  `/etc` or `/tmp` named a different folder than the one the command read, and
+  `/dev/null` asked for approval. They are now read through Git Bash's own mount
+  table, as the shell reads them: `/c/Users` is `C:\Users`, `/tmp` is your temp
+  folder. A path whose folder Git Bash's rules leave uncertain, such as one with
+  a `..` past a mount or one in its own `/proc`, is refused with the reason,
+  rather than asked about under a folder it may not reach.
+- **Search without ripgrep reads a character class as written.** A `]` first in
+  a class, as in `[]\s]`, cut the class off there, and an escaped `^` first, as
+  in `[\^a]`, turned it into its opposite, every character but `a`.
+
 ## [0.12.4] - 2026-11-04
 
 ### Fixed
