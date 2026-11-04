@@ -9,6 +9,7 @@ import { augmentedPath, withPath } from '../utils/shellPath';
 import { globalDataDir } from '../utils/globalDataDir';
 import { expandRunnerHome } from '../utils/runnerHome';
 import { discoverAppServerModels, type AppServerModel } from './harness/appServerModels';
+import { discoverAcpModels } from './harness/acpModels';
 
 export type { AppServerModel } from './harness/appServerModels';
 
@@ -53,6 +54,21 @@ export type AppServerClientImpl = (
 /** Exported for its test: the real client is the one place that spawns an app-server. */
 export const defaultAppServerClient: AppServerClientImpl = (command, args, options) =>
   discoverAppServerModels(command, args, { timeout: options?.timeout, env: options?.env });
+
+/**
+ * Injectable ACP client: start the agent, open a session and return what it
+ * offers. Null on any failure (spawn error, timeout, signed out, malformed
+ * answer) so discovery falls through to the manifest's other methods; an empty
+ * list means the agent answered and offered no model choice.
+ */
+export type AcpClientImpl = (
+  command: string,
+  args: string[],
+  options?: { timeout?: number; env?: RunnerEnv }
+) => Promise<DiscoveredModel[] | null>;
+
+export const defaultAcpClient: AcpClientImpl = (command, args, options) =>
+  discoverAcpModels(command, args, { timeout: options?.timeout, env: options?.env });
 
 function effortVariant(effort: string): { id: string; label: string } {
   return { id: effort, label: effort.charAt(0).toUpperCase() + effort.slice(1) };
@@ -434,6 +450,7 @@ export class ModelDiscovery {
   private execImpl: ExecImpl;
   private fetchImpl?: typeof fetch;
   private appServerClient: AppServerClientImpl;
+  private acpClient: AcpClientImpl;
   private readFileImpl: (path: string) => string | null;
   private now: () => number;
   private env: () => Promise<RunnerEnv>;
@@ -446,11 +463,13 @@ export class ModelDiscovery {
     readFileImpl?: (path: string) => string | null,
     now: () => number = Date.now,
     env: () => Promise<RunnerEnv> = async () => process.env,
+    acpClient: AcpClientImpl = defaultAcpClient,
   ) {
     this.registry = registry;
     this.execImpl = execImpl;
     this.fetchImpl = fetchImpl;
     this.appServerClient = appServerClient;
+    this.acpClient = acpClient;
     this.now = now;
     this.env = env;
     this.readFileImpl = readFileImpl ?? ((filePath: string) => {
@@ -557,6 +576,14 @@ export class ModelDiscovery {
       cacheable = false;
     }
 
+    // 0b. ACP discovery: the agent's own session options. A signed-out or
+    //     silent agent offers nothing; the remaining methods answer instead.
+    if (discovery.method === 'acp' && discovery.acp) {
+      const acpModels = await this.acpClient(manifest.runner.command, discovery.acp.args, { env });
+      if (acpModels && acpModels.length > 0) return { models: acpModels, cacheable: true };
+      cacheable = false;
+    }
+
     // 1. Try API discovery first (e.g. Anthropic Models API for Claude Code).
     //    Returns null when no auth token is available or the request fails —
     //    in both cases we fall through to command-based discovery.
@@ -568,7 +595,7 @@ export class ModelDiscovery {
     }
 
     // 2. Command-based discovery (CLI subcommand or --help parsing).
-    if (discovery.method === 'command' && (discovery.command || discovery.discoveryCommands?.length)) {
+    if ((discovery.method === 'command' || discovery.method === 'acp') && (discovery.command || discovery.discoveryCommands?.length)) {
       const result = await discoverFromCommand(manifest, this.execImpl, env);
       // A fallback-only result means the CLI wasn't reachable — don't cache
       // it, so a transient failure (PATH, network, cold start) heals on the

@@ -196,6 +196,13 @@ export const initializeRequestSchema = obj({
   clientInfo: obj({ name: z.string(), version: z.string(), title: z.string().nullish() }).nullish(),
 });
 
+/** What Ordewell says in `initialize`, shared by every client of an agent so discovery and a task introduce it alike. */
+export const ACP_INITIALIZE_PARAMS = {
+  protocolVersion: ACP_PROTOCOL_VERSION,
+  clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+  clientInfo: { name: 'ordewell', title: 'Ordewell', version: '0.1.0' },
+};
+
 export const initializeResponseSchema = obj({
   protocolVersion: z.number(),
   agentCapabilities: obj({

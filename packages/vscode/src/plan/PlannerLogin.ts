@@ -13,7 +13,7 @@ const TERMINAL_LOST_MESSAGE = 'The login terminal stopped before sign-in finishe
 const PROBE_FAILED_MESSAGE = "The sign-in could not be checked: the agent's status probe failed.";
 
 export interface PlannerLoginDeps {
-  runnerInstallation: Pick<RunnerInstallation, 'plannerUsability' | 'refresh'>;
+  runnerInstallation: Pick<RunnerInstallation, 'runnerUsability' | 'refresh'>;
   /** Only to name the agent and refuse an id the host does not know. */
   runnerRegistry: Pick<RunnerRegistry, 'getManifest'>;
   config: { readonly aiProvider: PlannerBackendId };
@@ -101,9 +101,9 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
   }
 
   const label = manifest.displayName;
-  let usability: Awaited<ReturnType<PlannerLoginDeps['runnerInstallation']['plannerUsability']>>;
+  let usability: Awaited<ReturnType<PlannerLoginDeps['runnerInstallation']['runnerUsability']>>;
   try {
-    usability = await deps.runnerInstallation.plannerUsability(runner);
+    usability = await deps.runnerInstallation.runnerUsability(runner);
   } catch (err) {
     // A webview clears its pending button only on `plannerLoginEnded`; a throw
     // here would leave it waiting until a reload.
@@ -115,7 +115,7 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
   if (!usability.usable) {
     // The CLI exists but cannot be spawned (a Windows `.cmd` shim, for one).
     // Saying it has no login would be false: the reason is the real answer.
-    const message = usability.reason ?? `${label} is not usable as a planner.`;
+    const message = usability.reason ?? `${label} is not usable.`;
     deps.post({ type: 'plannerLoginEnded', runner, ok: false, message });
     deps.notifications.info(message);
     return;
@@ -196,7 +196,7 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
       // finished within the last half minute.
       deps.runnerInstallation.refresh();
       try {
-        if ((await deps.runnerInstallation.plannerUsability(runner)).auth?.state === 'signed-in') {
+        if ((await deps.runnerInstallation.runnerUsability(runner)).auth?.state === 'signed-in') {
           signedIn = true;
           break;
         }

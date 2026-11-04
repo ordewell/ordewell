@@ -100,7 +100,7 @@ export interface AdoptedFork {
  * test may hand in only the two probes; the real `RunnerInstallation` always
  * has it, and a refresh then re-probes a CLI installed since the last look.
  */
-type RunnerInstall = Pick<RunnerInstallation, 'filterInstalled' | 'plannerUsability'> & Partial<Pick<RunnerInstallation, 'refresh'>>;
+type RunnerInstall = Pick<RunnerInstallation, 'filterInstalled' | 'plannerUsability' | 'runnerUsability'> & Partial<Pick<RunnerInstallation, 'refresh'>>;
 
 export interface OrchestratorPoolDeps {
   /** Inject acquisition boundaries without reading real accounts in host lifecycle tests. */
@@ -886,7 +886,7 @@ export class OrchestratorPool {
       runners
         .filter((p) => installedIds.has(p.manifest.name))
         .map(async (p): Promise<RunnersResponse['runners'][number] | null> => {
-          const { usable, auth } = await installation.plannerUsability(p.manifest.name);
+          const { usable, auth } = await installation.runnerUsability(p.manifest.name);
           if (!usable) return null;
           return {
             id: p.manifest.name,

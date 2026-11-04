@@ -155,7 +155,7 @@ describe('ordewell plan with an inherited planner model', () => {
       accountLimitCollectors: () => [],
       modelResolver: inertResolver(),
       runner,
-      runnerInstallation: { plannerUsability: async () => ({ usable: true as const }), filterInstalled: async (ids: string[]) => ids.filter((id) => id === 'claude-code') },
+      runnerInstallation: { plannerUsability: async () => ({ usable: true as const }), runnerUsability: async () => ({ usable: true as const }), filterInstalled: async (ids: string[]) => ids.filter((id) => id === 'claude-code') },
       codexSandbox: { ensure: async () => undefined, refresh: async () => undefined },
     } as unknown as ConstructorParameters<typeof OrchestratorPool>[0]);
     server = http.createServer();

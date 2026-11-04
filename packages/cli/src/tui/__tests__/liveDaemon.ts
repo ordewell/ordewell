@@ -116,6 +116,7 @@ export async function liveDaemon(accountLimitCollectors: (workspace: string) => 
     runnerInstallation: {
       filterInstalled: async (runners) => runners.filter((id) => id === 'claude-code'),
       plannerUsability: async (id) => ({ usable: id === 'claude-code' }),
+      runnerUsability: async (id) => ({ usable: id === 'claude-code' }),
     },
     codexSandbox: { ensure: async () => {}, refresh: async () => {} },
   });

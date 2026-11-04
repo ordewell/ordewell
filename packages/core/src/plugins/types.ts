@@ -39,8 +39,13 @@ export interface RunnerAuthStatus {
  * table to drift.
  */
 export interface RunnerAuthSpec {
-  /** The CLI args that answer whether the user is signed in, e.g. `auth status`. */
-  statusArgs: string[];
+  /**
+   * The CLI args that answer whether the user is signed in, e.g. `auth status`.
+   * Absent when the runner has a login but no status command to ask (Copilot):
+   * nothing is probed, the verdict stays `unknown`, and a failed turn's own
+   * words (`signedOut`) are what learn it.
+   */
+  statusArgs?: string[];
   /** The CLI args that run the login, e.g. `auth login`. */
   loginArgs: string[];
   /**
@@ -107,7 +112,12 @@ export interface ApiDiscoveryConfig {
 }
 
 export interface RunnerModelDiscovery {
-  method: 'command' | 'hardcoded';
+  /**
+   * `acp` asks the running agent over the Agent Client Protocol first; the
+   * manifest's `discoveryCommands` and aliases are what it falls back to, so a
+   * runner using it still declares them.
+   */
+  method: 'command' | 'hardcoded' | 'acp';
   command?: string;
   args?: string[];
   parser?: ModelDiscoveryParser;
@@ -120,6 +130,14 @@ export interface RunnerModelDiscovery {
    * the remaining discovery methods.
    */
   appServer?: { command: string; args: string[]; cacheFile?: string | ((env: RunnerEnv) => string) };
+  /**
+   * ACP discovery (`method: 'acp'`): start `runner.command` with `args`, run
+   * `initialize` and `session/new` in a scratch directory with no MCP servers,
+   * and read the models and efforts the new session offers. No prompt is sent,
+   * so nothing is billed. Any failure, signed-out included, falls through to
+   * the remaining methods: discovery never gates a pick (ADR-0040).
+   */
+  acp?: { args: string[] };
   /**
    * Optional last-resort list for a CLI that cannot enumerate
    * models. Used only when command discovery fails entirely or the CLI is

@@ -61,6 +61,9 @@ export interface RunnerInstallationOptions {
  * augmented PATH, per-process cache. A runner that isn't installed should never
  * be offered for selection in any surface.
  */
+/** Whether an agent can be started, why not, and its login verdict beside it. */
+export interface RunnerUsability { usable: boolean; reason?: string; auth?: RunnerAuth }
+
 export class RunnerInstallation {
   private cache: Map<string, { installed: boolean; at: number }> = new Map();
   private inflight: Map<string, Promise<boolean>> = new Map();
@@ -143,7 +146,7 @@ export class RunnerInstallation {
    * it is installed, and the user may log in from the same picker — so the
    * auth verdict rides beside usability, never inside it.
    */
-  async plannerUsability(runner: string): Promise<{ usable: boolean; reason?: string; auth?: RunnerAuth }> {
+  async plannerUsability(runner: string): Promise<RunnerUsability> {
     const manifest = this.registry.getManifest(runner);
     if (!manifest) return { usable: false, reason: `No runner manifest is registered for "${runner}".` };
     const connector = connectorFor(runner);
@@ -153,6 +156,18 @@ export class RunnerInstallation {
     if (!connector.plans) {
       return { usable: false, reason: `${manifest.displayName ?? runner} can run tasks but cannot plan in Ordewell yet.` };
     }
+    return this.runnerUsability(runner);
+  }
+
+  /**
+   * {@link plannerUsability} without the question of planning: whether the
+   * agent's CLI is installed and can be started, with its login verdict. The
+   * runner list and the login flows ask this, because a task runner that cannot
+   * plan yet (an ACP agent) is still offered and still needs signing in.
+   */
+  async runnerUsability(runner: string): Promise<RunnerUsability> {
+    const manifest = this.registry.getManifest(runner);
+    if (!manifest) return { usable: false, reason: `No runner manifest is registered for "${runner}".` };
     if (!(await this.isInstalled(runner))) {
       return { usable: false, reason: `${manifest.runner.command} is not installed or is not on PATH.` };
     }

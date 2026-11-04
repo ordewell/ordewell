@@ -70,6 +70,35 @@ describe('RunnerInstallation', () => {
   });
 });
 
+// Signing in and being offered belong to an installed agent, not to its being
+// able to plan: a task runner that cannot plan yet still has a login.
+describe('RunnerInstallation.runnerUsability', () => {
+  it('reports a task-only runner usable, with the login command its manifest declares and no verdict to ask', async () => {
+    const exec: ExecImpl = vi.fn(async () => ({ stdout: '1.0.105' }));
+    const authExec: RunnerAuthExec = vi.fn(async () => ({ code: 0, stdout: '', stderr: '' }));
+    const inst = new RunnerInstallation(registryWith(COPILOT_CLI_MANIFEST), exec, Date.now, { authExec });
+
+    expect(await inst.runnerUsability('copilot-cli')).toEqual({
+      usable: true,
+      auth: { state: 'unknown', loginCommand: ['copilot', 'login'] },
+    });
+    expect(authExec).not.toHaveBeenCalled();
+  });
+
+  it('names the missing binary like the planner check does', async () => {
+    const exec: ExecImpl = vi.fn(async () => { throw new Error('command not found'); });
+    const inst = new RunnerInstallation(registryWith(COPILOT_CLI_MANIFEST), exec);
+
+    expect(await inst.runnerUsability('copilot-cli')).toEqual({ usable: false, reason: 'copilot is not installed or is not on PATH.' });
+  });
+
+  it('refuses a runner no manifest names', async () => {
+    const inst = new RunnerInstallation(registryWith(COPILOT_CLI_MANIFEST), vi.fn(async () => ({ stdout: '' })));
+
+    expect((await inst.runnerUsability('nonexistent')).usable).toBe(false);
+  });
+});
+
 describe('RunnerInstallation.plannerUsability (ADR-0009 preflight)', () => {
   it('reports a planner-capable runner whose CLI answers as usable', async () => {
     const exec: ExecImpl = vi.fn(async () => ({ stdout: '2.0.0' }));

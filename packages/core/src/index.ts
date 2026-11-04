@@ -120,7 +120,7 @@ export type { ExecImpl } from './services/ModelDiscovery';
 export { ModelResolver } from './services/ModelResolver';
 export type { ModelResolverDeps } from './services/ModelResolver';
 export { RunnerInstallation } from './services/RunnerInstallation';
-export type { RunnerInstallationOptions } from './services/RunnerInstallation';
+export type { RunnerInstallationOptions, RunnerUsability } from './services/RunnerInstallation';
 export { readRunnerAuth, recordRunnerAuth, recordedRunnerAuth, resetRunnerAuth } from './services/runnerAuth';
 export type { RunnerAuth, RunnerAuthExec, RunnerAuthExecOptions, RunnerAuthExecResult, ReadRunnerAuthOptions } from './services/runnerAuth';
 export { workspaceEnvOf } from './services/workspaceEnv';
