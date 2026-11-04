@@ -23,7 +23,9 @@ import {
   buildConversationSystemPrompt,
   buildPlanWithResults,
   NATIVE_SHELL_GUIDE,
+  type ConversationVariant,
 } from '../PlanPrompts';
+import { resolveResearchShell } from '../researchShell';
 import { repairLoop, resubmitPlanPrompt } from '../PlanRepair';
 import { PlanChangeCheck, planChangeErrorText, requestScope } from '../PlanChangeCheck';
 import type { SkillLookup } from '../taskSkills';
@@ -268,6 +270,12 @@ export class CliAgentAiService implements IAiService {
 
   hasActiveConversation(): boolean { return this.session?.start != null; }
 
+  /** On Windows, the shell `run_command` runs, which a coding agent there would take for PowerShell (ADR-0010). */
+  private researchShell(): ConversationVariant['researchShell'] {
+    if ((this.processDeps.platform ?? process.platform) !== 'win32') return undefined;
+    return resolveResearchShell().dialect === 'cmd' ? 'cmd' : 'git-bash';
+  }
+
   /**
    * False when the running agent process was spawned under a model/effort the
    * user has since changed in the picker. Unlike a vendor backend, the model
@@ -333,13 +341,14 @@ export class CliAgentAiService implements IAiService {
     session.notice = req.notice;
 
     const contextStr = await collectResearchContext(req.fs, req.runners);
+    const researchShell = this.researchShell();
     const systemPrompt = buildConversationSystemPrompt(
       req.goal,
       contextStr,
       req.modelsByRunner,
       req.runners,
       req.runnerModes,
-      { harness: true, runner: this.runner, isolatedExecution: req.isolatedExecution, skills: req.skills, execution: req.plannerTools !== undefined, autorun: req.autorun, delegation: req.delegation, subplanner: req.subplanner, ...(req.plannerTools.noSubagents ? { subagents: false } : {}) },
+      { harness: true, runner: this.runner, isolatedExecution: req.isolatedExecution, skills: req.skills, execution: req.plannerTools !== undefined, autorun: req.autorun, delegation: req.delegation, subplanner: req.subplanner, ...(req.plannerTools.noSubagents ? { subagents: false } : {}), ...(researchShell ? { researchShell } : {}) },
     );
 
     const fetcher = req.fetcher;
@@ -1046,6 +1055,9 @@ export class CliAgentAiService implements IAiService {
     };
     const tools: PlannerToolsOffer = {
       sessionId: uuidv4(),
+      // No session here runs a command, so the planner is not offered one: it
+      // reads with its harness's own tools, and Codex keeps its shell for it.
+      withheld: ['run_command'],
       handler: {
         listRunners: async () => ({ text: JSON.stringify({ runners: catalog.runners.map((id) => ({ id, readOnly: readOnlyMode(catalog.runnerModes?.[id]) !== undefined })) }) }),
         listModels: async ({ runner }) => ({ text: JSON.stringify({ runner, models: catalog.modelsByRunner?.[runner] ?? [] }) }),

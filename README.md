@@ -80,7 +80,9 @@ OpenCode, and git 2.38 or newer for task isolation.
 
 The VS Code extension, the full-screen terminal UI and the `ordewell` commands
 (`plan`, `run`, `handoff` and the rest) run natively on Windows. Install Git
-for Windows: the planner's research commands run in its shell.
+for Windows: the planner's research commands run in its shell. For Codex tasks,
+[set up Codex's own sandbox](docs/troubleshooting.md#codexs-windows-sandbox-is-not-set-up)
+once. The terminal UI's mouse and paste need Node.js 22.17 or newer there.
 See the [platform notes](https://ordewell.ai/docs#platforms) for setup and
 current limitations.
 

@@ -3914,8 +3914,13 @@ which was the last one left, in `ModelDiscovery`'s Codex app-server probe.
 
 **Platform support** — the VS Code extension, the TUI and the local daemon run
 on Linux, macOS, and native Windows. Runner execution needs no tmux or per-task terminal windows
-(ADR-0025). Three things about Windows are explicitly unverified rather than
-claimed — Codex's read-only sandbox enforcement, and, for a shim npm did not
+(ADR-0025). Until the user sets up Codex's own Windows sandbox, a Codex change
+task runs read-only by Codex's account and its approved writes run unconfined,
+which the task says. A Codex planner on Windows plans with its own shell off,
+since Codex's sandbox there cannot keep a command off the network. Three things
+about Windows are explicitly unverified rather than claimed — what Codex's
+Administrator sandbox enforces for a change task, and, for a shim npm did not
 write, `%VAR%` expansion on the cmd.exe route and a `"` on the PowerShell one.
 Argument fidelity through an npm shim and on the PowerShell shim route was
-measured on a Windows host. See ADR-0010.
+measured on a Windows host. On Windows the TUI's mouse and paste need Node
+22.17 or newer, and it says so on an older one. See ADR-0010.

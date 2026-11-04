@@ -32,7 +32,9 @@ export type RpcHandler = (response: RpcResponse, emit: Emit) => void;
  * means stays with the adapter.
  *
  * Ids count up from 1, so `initialize` is 1 and the thread request after it
- * 2, as the recorded transcripts have them.
+ * 2, as the recorded transcripts have them, unless a question comes between:
+ * a read-only task's `config/read`, or a Windows change task's sandbox
+ * readiness.
  */
 export class CodexRpc {
   private nextId = 1;

@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 import { describe, expect, it, vi } from 'vitest';
-import { openTerminal, takeBackgroundReply } from '../terminal';
+import { openTerminal, rawModeReadsVtOnWindows, takeBackgroundReply, windowsInputNotice } from '../terminal';
 
 class FakeInput extends EventEmitter {
   isTTY = true;
@@ -106,6 +106,36 @@ describe('openTerminal', () => {
     output.writes.length = 0;
     terminal.close();
     expect(output.writes.join('')).toContain('\x1b[?1000l');
+  });
+
+  it('changes mouse tracking only while raw mode is on, since a Windows pseudo console drops it otherwise', () => {
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    const terminal = openTerminal({
+      input: input as unknown as NodeJS.ReadStream,
+      output: output as unknown as NodeJS.WriteStream,
+      mouse: true,
+      onKey: vi.fn(),
+      onResize: vi.fn(),
+    });
+    /** Whether each write naming `mode` came while raw mode was on, by the calls' order. */
+    const rawAtEachWrite = (mode: string): boolean[] => {
+      const toggles = input.setRawMode.mock.calls.map(([on], i) => ({ on: on as boolean, at: input.setRawMode.mock.invocationCallOrder[i] }));
+      return output.write.mock.calls.flatMap(([text], i) => {
+        if (!String(text).includes(mode)) return [];
+        const at = output.write.mock.invocationCallOrder[i];
+        return [toggles.filter((toggle) => toggle.at < at).at(-1)?.on === true];
+      });
+    };
+
+    terminal.suspend();
+    terminal.resume();
+    terminal.close();
+
+    // Open and resume arm it, suspend and close hand it back: all four with raw mode on.
+    expect(rawAtEachWrite('\x1b[?1006h')).toEqual([true, true]);
+    expect(rawAtEachWrite('\x1b[?1006l')).toEqual([true, true]);
+    expect(input.setRawMode).toHaveBeenLastCalledWith(false);
   });
 
   it('asks for button-event tracking too, so a held button reports the motion a drag is made of', () => {
@@ -650,5 +680,29 @@ describe('the background reply', () => {
 
   it('leaves input without one untouched', () => {
     expect(takeBackgroundReply('\x1b[A')).toEqual({ rest: '\x1b[A', background: null });
+  });
+});
+
+describe('the Windows console and Node\'s raw mode', () => {
+  // nodejs/node#58358: Node 22.17 and 24.2 have the console read VT input, which
+  // carries mouse reports and paste markers; 20.20.2 was measured without it.
+  it.each([
+    ['v20.20.2', false],
+    ['v22.16.0', false],
+    ['v22.17.0', true],
+    ['v22.17.1', true],
+    ['v23.11.1', false],
+    ['v24.1.0', false],
+    ['v24.2.0', true],
+    ['v25.0.0', true],
+  ])('reads %s as passing VT input: %s', (version, reads) => {
+    expect(rawModeReadsVtOnWindows(version)).toBe(reads);
+  });
+
+  it('says once at start, on Windows only, what an older Node costs the TUI', () => {
+    expect(windowsInputNotice('win32', 'v20.20.2')).toMatch(/Node v20\.20\.2 .*wheel does nothing.*sends the line.*Node 22\.17 or newer/);
+    expect(windowsInputNotice('win32', 'v22.17.1')).toBeNull();
+    expect(windowsInputNotice('linux', 'v20.20.2')).toBeNull();
+    expect(windowsInputNotice('darwin', 'v20.20.2')).toBeNull();
   });
 });

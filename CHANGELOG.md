@@ -11,7 +11,18 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 ### Changed
 
 - **The terminal UI is supported on native Windows.** It was run there from a
-  goal to a merged plan; WSL is no longer needed for it.
+  goal to a merged plan, with the wheel and bracketed paste, which need Node
+  22.17 or newer there; WSL is no longer needed for it.
+
+### Security
+
+- **A Codex planner on Windows plans with its own shell off.** Codex's sandbox
+  there cannot keep a command off the network, so a Codex planner reads through
+  Ordewell's `run_command`, under the same command rules as every other planner
+  on Windows. Before, only Codex's own checks, and Ordewell refusing what they
+  asked to approve, kept its shell from writing or reaching the network. A
+  one-shot plan (`ordewell plan --no-chat`) runs no command, so there Codex
+  keeps its shell, with those approvals still refused.
 
 ### Fixed
 
@@ -33,6 +44,31 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **Search without ripgrep reads a character class as written.** A `]` first in
   a class, as in `[]\s]`, cut the class off there, and an escaped `^` first, as
   in `[\^a]`, turned it into its opposite, every character but `a`.
+- **A planner on Windows is told which shell its commands run in.** A coding
+  agent there expects PowerShell, and its `Get-Content` asked for an approval
+  that would have run it in Git Bash, which has no such command. It is told to
+  read with `cat`, `ls` and `grep` (or cmd.exe's own, without Git for Windows).
+- **A one-shot plan no longer offers its planner a `run_command` it cannot
+  run.** `ordewell plan --no-chat` and the plan endpoint answered every call
+  "not available", so a planner lost turns on it before reading with its own
+  tools.
+- **A Codex task on Windows says what Codex grants it.** Until Codex's own
+  Windows sandbox is set up, Codex opens a Guarded task read-only: each edit,
+  and each command it does not judge safe, goes to its reviewer, and what the
+  reviewer approves runs unconfined. A model that read "read-only" could end
+  the task as impossible. It is now told how to write through review, and you
+  are told once, with how to set the sandbox up.
+- **A Codex task on Windows runs npm.** Its shell is PowerShell, whose default
+  execution policy refuses `npm.ps1`, so `npm test` failed before it started,
+  and a model once reported the tests passing anyway. It is now told to call
+  `npm.cmd`.
+- **The terminal UI hands the mouse back when it quits on Windows.** It turned
+  mouse reporting off after leaving raw mode, which Windows' console ignores,
+  so the terminal went on sending mouse reports to the shell. Back from a
+  login, it turned the mouse on before raw mode, and the wheel stopped working.
+  On a Node older than 22.17, which cannot pass the mouse or a paste to it on
+  Windows, it now says so at start: there the wheel does nothing and a line
+  break in a paste sends the line.
 
 ## [0.12.4] - 2026-11-04
 

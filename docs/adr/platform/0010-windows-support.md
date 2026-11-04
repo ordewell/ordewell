@@ -156,6 +156,11 @@ is unresolvable even with a working `grep.exe` on the box. A cmd.exe fallback
 appends `researchShellWarning` to any failed command, so a degraded research
 surface reads as degraded rather than as a repository with no answer.
 
+A harness planner is **told which of the two** its `run_command` runs. A coding
+agent on Windows expects PowerShell: a Codex planner reached for `Get-Content`,
+which the rules refused as unknown and an approval would have run in a shell
+that has no such command.
+
 POSIX resolves to `{ file: null }`, meaning "use `shell: true`" — byte for byte
 the call the adapters made before.
 
@@ -255,6 +260,51 @@ nothing there.
   way the planner actually spawns it, closing the gap where `exec` said healthy
   and `spawn` said ENOENT. POSIX always agrees, since `execvp` and `exec` search
   PATH identically.
+- **Codex's own Windows sandbox is not the one ADR-0026 assumes.** Codex has
+  a Windows sandbox of its own, which the user sets up once through an
+  Administrator prompt that Ordewell never raises for them. Until then Codex
+  answers `windowsSandbox/readiness` with `notConfigured` and has nothing to
+  confine a command with: it opens a thread asked for `workspace-write` as
+  `read-only`, puts each command it does not judge safe to approval, and runs
+  an approved one unconfined (codex-cli 0.166.0, measured). Its non-admin
+  backend (`windows.sandbox = "unelevated"`, a restricted token) refuses a
+  read-only thread's writes, but runs that thread's commands without asking
+  and lets Node reach the network; only proxy variables pointed at a dead port
+  and stubs in front of `curl` and `ssh` stand in the way (measured). Under it
+  Codex also refuses every command of a `workspace-write` thread. The
+  Administrator one was not measured. So:
+  - **A planner** on Windows has Codex's own shell off, whatever the user set
+    up, and reads through `run_command` alone, as ADR-0033's profile does and
+    as every other planner does on Windows (ADR-0026). Its readiness is not
+    asked. A one-shot plan (`ordewell plan --no-chat`, the plan endpoint) runs
+    no command and is offered no `run_command`, so there Codex keeps its own
+    shell, the one way it has to read, with its approvals declined as before.
+  - **A change task** keeps the mode its plan gives it (ADR-0001), and what
+    Codex grants instead is said. Its readiness is asked before the thread.
+    Short of `ready`, the model is told that an edit goes through `apply_patch`
+    and a writing command through escalation, each decided by Codex's
+    reviewer, so it does not end the task as impossible. Where Codex then
+    grants `read-only`, the user is shown once that the task runs unconfined
+    and how to set up the Administrator sandbox, warned off the non-admin one.
+    A sandbox the user set up is left as Codex configures it, and a Codex that
+    does not know the question is left alone.
+  - **Any task with Codex's own shell** is told that shell is Windows
+    PowerShell, whose default execution policy refuses the `npm.ps1` npm puts
+    first on PATH, and to call `npm.cmd` instead. Told nothing, a task's
+    `npm test` failed before it started, and the model reported the suite
+    passing all the same. The policy is the user's and is left as it is.
+- **The TUI changes the mouse modes only in raw mode.** Windows' pseudo
+  console passes a DEC mouse-mode change on to the terminal only while the
+  console reads VT input, and drops it otherwise (measured). Node's raw mode
+  turns VT input on from Node 22.17 and 24.2 (nodejs/node#58358). `close()`
+  left raw mode before handing the mouse back, so the terminal went on
+  reporting the mouse to the shell after the TUI quit; `resume()` re-armed it
+  before entering raw mode, so the wheel was dead after a login. Both now write
+  with raw mode on, as opening and `suspend()` did. On an older Node the
+  console never reads VT input: the request for mouse reports is dropped and a
+  paste's markers are stripped, so the wheel does nothing and a line break in a
+  paste sends the line (measured on Node 20.20.2). Nothing in Node can change
+  that, so the TUI says so once at start.
 
 ## Consequences
 
@@ -264,24 +314,23 @@ model discovery, and the exploration envelope with its gate intact.
 
 The **TUI runs on native Windows**: driven in a Windows pseudo console, it drew
 on the alternate screen, took keys, redrew on a resize, planned, ran and
-merged a plan, and gave the screen back on exit. Mouse scrolling and bracketed
-paste were not exercised there. Runner execution uses structured connectors and no longer needs
+merged a plan, and gave the screen back on exit. In the same console, on Node
+22.17, the wheel scrolled, quitting handed the mouse back to the shell, and a
+bracketed paste of two lines with quotes, `$VAR` and `%PATH%` landed in the
+composer as written, unsent. Runner execution uses structured connectors and no longer needs
 tmux or per-task terminal windows (ADR-0025). The launch and kill seams are
 shared in core.
 
 Three things are **explicitly not claimed**:
 
-1. **Codex's read-only guarantee on Windows is unverified.** `codexSandbox`
-   correctly short-circuits its bubblewrap probe off Linux, and the approvals
-   half of the invariant holds by construction (`approvalPolicy: 'on-request'`:
-   what Codex asks to run or change is declined at once, a user's MCP tool is
-   decided by Ordewell, and every other request is refused, ADR-0026). But
-   Codex's OS-level sandboxing
-   on Windows is not the equivalent of Seatbelt or Landlock, so
-   `sandbox: 'read-only'` may be enforced by Codex's tool layer rather than by
-   the kernel. "Read-only by construction" is a Linux/macOS guarantee until
-   someone tests it there. The comment in `codexSandbox.ts` says so rather than
-   asserting the stronger claim it used to.
+1. **What Codex's Administrator sandbox does for a change task on Windows.**
+   A planner does not depend on it: its own shell is off there, and the
+   approvals half holds as everywhere (`approvalPolicy: 'on-request'`: what
+   Codex asks to run or change is declined at once, a user's MCP tool is
+   decided by Ordewell, and every other request is refused, ADR-0026). With
+   that sandbox set up, Codex grants a change task `workspace-write`; how far
+   it confines the task is Codex's claim, not measured here. Until it is set
+   up, a change task runs unconfined, and says so (see *Also*).
 2. **`%VAR%` expansion on the cmd.exe shim route,** for a shim npm did not
    write. In a `cmd /c` context `%` cannot be escaped — `%%` is a batch-file
    construct and `^%` still expands — so an argument naming a *defined*
@@ -339,3 +388,5 @@ lower-case drive letter.
 - 2026-11-03 — CI runs the suites on Windows, real plans ran there through to a merged handoff, a refused unforced `taskkill` is forced at once, and a `"` on the PowerShell shim route is recorded as unclaimed.
 - 2026-11-04 — a batch shim npm wrote starts the file it names directly, so a `"`, a line break and `%VAR%` reach the program whole.
 - 2026-11-04 — path confinement reads a path through Git Bash's mount table, as the shell running the command does.
+- 2026-11-04 — a Codex planner's own shell is off on Windows, a harness planner is told which shell runs its commands, and a change task asks whether Codex's sandbox is set up and says what Codex granted it.
+- 2026-11-04 — the TUI changes the mouse modes only in raw mode, and says at start when Node cannot pass the mouse or a paste; both were measured in a Windows pseudo console.

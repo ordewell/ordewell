@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Security
+
+- **A Codex planner on Windows plans with its own shell off.** Codex's sandbox
+  there cannot keep a command off the network, so a Codex planner reads through
+  Ordewell's `run_command`, under the same command rules as every other planner
+  on Windows.
+
 ### Fixed
 
 - **An agent installed by npm starts whole on Windows.** Claude Code installed
@@ -10,6 +17,15 @@
   directly, for every npm-installed agent.
 - **The planner's commands are confined to the folders Git Bash reaches**, so
   approving `/tmp` approves your temp folder, and `/dev/null` no longer asks.
+- **A Codex task on Windows says what Codex grants it.** Until Codex's own
+  Windows sandbox is set up, Codex runs a Guarded task read-only, with each
+  write approved by its reviewer and run unconfined. The task now says so once,
+  with how to set the sandbox up, and its model is told how to write through
+  review rather than giving up.
+- **A Codex task on Windows runs npm.** PowerShell's default execution policy
+  refused `npm.ps1`, so its tests never ran; it is now told to call `npm.cmd`.
+- **A planner on Windows is told which shell its commands run in**, so a Codex
+  planner reads with `cat` rather than asking to run PowerShell's `Get-Content`.
 
 ## [0.12.4] - 2026-11-04
 

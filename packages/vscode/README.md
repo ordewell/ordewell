@@ -74,10 +74,16 @@ The extension, its local daemon and the `ordewell` terminal UI run natively on
 Windows. Ordewell finds npm-installed runners and starts what their shims name.
 Install Git for Windows: the planner's research commands run in its shell.
 
+For Codex tasks, set up Codex's own sandbox once: run `codex` in a terminal and
+choose **Set up default sandbox** (it asks for Administrator), not the non-admin
+one, under which Codex refuses a Guarded task's commands. Until then a Codex
+task runs read-only by Codex's account, each write approved by Codex's reviewer
+and run unconfined, and the task says so.
+
 Every test suite runs on Windows in CI, and real plans have run there from goal
 to merge with Claude Code, Codex and OpenCode as planner and as runner. Open
-there: whether Codex's read-only sandbox is enforced, and, for a shim npm did
-not write, `%VAR%` expansion on the `cmd.exe` route and a `"` on the PowerShell
+there: what Codex's Administrator sandbox enforces for a task, and, for a shim npm did not
+write, `%VAR%` expansion on the `cmd.exe` route and a `"` on the PowerShell
 one. The planner's shell has no OS sandbox on Windows and relies on its command
 rules alone. See
 [Windows support](https://github.com/ordewell/ordewell/blob/main/docs/adr/platform/0010-windows-support.md).

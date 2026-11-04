@@ -8,7 +8,7 @@ import { findEnvFile, writeEnvVar } from '../utils/env';
 import { createApp } from './app';
 import { runEffect } from './effects';
 import { registerSkillCommands } from './slash';
-import { openTerminal } from './terminal';
+import { openTerminal, windowsInputNotice } from './terminal';
 import { startCliVersionCheck } from '../versionCheck';
 
 /** Past the stop's own two-second check that the port's daemon is the one it means to signal. */
@@ -236,6 +236,8 @@ export async function handleTui(subArgs: string[], options: HandleTuiOptions = {
   const { rows, cols } = terminal.size();
   app.dispatch({ type: 'resize', rows, cols });
   app.start();
+  const inputNotice = windowsInputNotice();
+  if (inputNotice) app.dispatch({ type: 'notice', message: inputNotice });
 
   // A daemon this TUI spawned dies with it — tasks mid-flight are abandoned,
   // not reconciled; the next launch respawns a fresh daemon and reloads the
