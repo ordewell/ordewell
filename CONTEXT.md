@@ -808,8 +808,10 @@ requests are for them and so are never refused or left waiting
 another server's name could extend), what the runner's own status word for the server means
 (`attachState`), and the runner-specific injection that writes the server into
 its launch or configuration. Every supported connector has one. Task runners
-and coding-agent planners must connect their tools before receiving a prompt;
-a failed attach is respawned once, then fails (ADR-0025).
+and coding-agent planners must connect their tools before any result of theirs
+is accepted: before receiving a prompt, or, for an ACP runner that connects
+only on its first turn, before that turn ends, which is otherwise discarded
+(ADR-0060 R5). A failed attach is respawned once, then fails (ADR-0025).
 *Avoid:* "MCP adapter", "tool prefix" (a prefix is how two of the runners happen
 to name a tool, not the concept).
 
@@ -853,7 +855,9 @@ agent needs beyond the protocol, as data: its manifest, ACP arguments, minimum
 version, how it names Ordewell's tools, how it is given a model, the route its
 instructions take outside the worktree, the route its mode takes, the settings
 file that hands it Ordewell's MCP server when it takes none over HTTP in
-`session/new` (`mcpConfig`, ADR-0060 R4), what it loads
+`session/new` (`mcpConfig`, ADR-0060 R4), when it first uses its token
+(`attach`: by the time its session opens, or only on the task's first turn,
+which is then the attach check, ADR-0060 R5), what it loads
 from a repository, the roles it claims, the controls that restrict it, and the
 answers it gives to the agent's own client-bound requests (any other, and any
 in ACP's `session/`, `fs/` or `terminal/` namespaces, is "method not found").

@@ -33,7 +33,12 @@ coding-agent planners.**
   cap, not failed, so its dependents stay on the plan; a runner that reports the
   server `failed` still fails the task. A coding-agent planner turn fails
   either way, and a planner that cannot be re-attached fails its turn without
-  the prompt being sent. Never send the prompt without tools.
+  the prompt being sent. Never accept a result from a runner without tools:
+  the prompt is sent only once they are attached, except to an ACP runner
+  that connects them only when a prompt starts it (ADR-0060 R5). That
+  runner's first turn is the check, kept only if the server was contacted
+  before it ended, and otherwise discarded with its process and token, the
+  task then held and its worktree given up.
 - Completion evidence is only a `task_complete` call bound to the attempt's
   token. `VerdictEngine` checks the current generation; only `done` passes.
   `blocked` and `failed` end without a pass and carry a reason. A process exit,
@@ -83,8 +88,10 @@ Agents that ship a native Agent Client Protocol (ACP) server run through one
 generic connector, `AcpAdapter`, with each agent's differences held in its
 profile ([ADR-0060](0060-acp-runners-are-data-on-one-connector.md)). It is a
 structured connector like the others, under every rule above: Ordewell's tools
-attach before the first prompt, read from the server's first contact, and only
-a `task_complete` call is evidence. GitHub Copilot CLI (`copilot-cli`) is the
+attach before any result is accepted, read from the server's first contact
+before the first prompt or, for an agent that connects only on its first
+turn, before that turn ends (ADR-0060 R5), and only a `task_complete` call is
+evidence. GitHub Copilot CLI (`copilot-cli`) is the
 reference agent and the one ACP runner admitted so far; Claude Code, Codex and
 OpenCode keep their native connectors. The following findings were first
 checked on 2026-10-09 and rechecked on 2026-11-03.
@@ -220,7 +227,9 @@ its supported access path and applicable terms need checking before adoption.
 ## Consequences
 
 One process/session contract owns every task. A missing tool connection fails
-before the coding agent receives work. The fake `claude` harness verifies the
+before any of the coding agent's work is kept: before it receives work, or,
+for an ACP agent that connects only on its first turn, with that turn
+discarded at the cost of a model turn. The fake `claude` harness verifies the
 real connector and tool path without a model or API key. Supporting another
 runner requires a structured connector and verified Ordewell tool attachment;
 a manifest alone is insufficient. For an agent with a native ACP server, the
@@ -243,3 +252,4 @@ tmux; the TUI remains unverified on native Windows (ADR-0010).
 - 2026-10-27 — a coding-agent planner's attach is checked before every turn, not only after spawn: a live process whose tools are gone is respawned once on a fresh token and resumed, and a turn that cannot re-attach fails without being sent.
 - 2026-11-03 — the ACP successor findings were rechecked: about 52 agents are listed, `mcpServers` handling varies by agent, and the first wave is Gemini CLI (reference), Qwen Code, Goose and Copilot CLI.
 - 2026-11-04 — the ACP connector is implemented ([ADR-0060](0060-acp-runners-are-data-on-one-connector.md)); `copilot-cli` is its reference agent, not Gemini CLI.
+- 2026-11-04 — the rule is that no result is accepted without tools, not that no prompt is sent without them: an ACP runner that attaches on its first turn is sent the task as the check, and that turn is discarded unless the server was contacted before it ended (ADR-0060 R5).

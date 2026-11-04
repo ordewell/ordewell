@@ -12,10 +12,11 @@ import { ACP_ERROR, type AcpToolCall } from '../harness/acpSchema';
 import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
 import type { RunnerManifest } from '../../plugins/types';
 import type { RunnerRegistry } from '../../plugins/RunnerRegistry';
+import type { StructuredEvent } from '../../interfaces/IRunner';
 import { StructuredRunner } from '../StructuredRunner';
 import { OrdewellMcpServer, mcpClientConfig, type McpClientConfig } from '../mcp';
 import type { TaskCompleteArgs } from '../mcp';
-import { McpAttachTimeout, spawnAttached } from '../harness/ordewellBinding';
+import { McpAttachTimeout, RunnerStartupExit, spawnAttached } from '../harness/ordewellBinding';
 import { fakeAcpSpawn, type FakeAcpAgentOptions, type FakeAcpStep } from './fakeAcpAgent';
 import { planJson, type FakeSpawnOptions } from './harnessTestKit';
 import { fakeConfig } from '../../testing';
@@ -1387,6 +1388,224 @@ describe('AcpAdapter through StructuredRunner', () => {
   });
 });
 
+describe('AcpAdapter attached on the first turn (ADR-0060, R5)', () => {
+  const FIRST_TURN: AcpProfile = { ...PROFILE, attach: 'firstTurn', attachTimeoutMs: 2_000 };
+
+  /** A runner whose spawns are `agents` in order: the first spawn, then its respawn. */
+  function runnerOver(server: OrdewellMcpServer, agents: Array<ReturnType<typeof fakeAcpSpawn>>, profile: AcpProfile = FIRST_TURN): StructuredRunner {
+    let spawns = 0;
+    return new StructuredRunner({
+      createAdapter: (_runner, deps) => new AcpAdapter(deps, profile),
+      process: {
+        spawn: (...args: Parameters<AgentProcessDeps['spawn']>) => {
+          const next = agents[spawns++];
+          if (!next) throw new Error('spawned more often than the test has agents');
+          return next.spawn(...args);
+        },
+        resolvePath: async () => '/usr/bin',
+        platform: 'linux',
+        isDirectory: () => true,
+        exists: () => true,
+      },
+      interruptGraceMs: 20,
+      mcp: server,
+    });
+  }
+
+  function spawnTask(runner: StructuredRunner, notices: string[] = []) {
+    return runner.spawn({
+      taskId: 'task-0001-abcdef',
+      runner: 'fake-acp',
+      prompt: 'Do the task',
+      mode: 'ask',
+      cwd: '/repo',
+      registry: { get: () => ({ manifest: MANIFEST }) } as unknown as RunnerRegistry,
+      onNotice: (notice) => notices.push(notice),
+    });
+  }
+
+  /** An agent that answers its first prompt without ever reaching the server. */
+  const withoutTools = () => fakeAcpSpawn([
+    ...handshake(),
+    { expect: 'session/prompt' },
+    { notify: 'session/update', params: update('agent_message_chunk', { content: text('Working without tools.\n') }) },
+    { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+  ]);
+
+  const promptText = (agent: ReturnType<typeof fakeAcpSpawn>['agent']) =>
+    agent.requests('session/prompt').map((r) => JSON.stringify((r.params as { prompt: unknown }).prompt));
+
+  it('sends the task to an agent that reaches the server only once a prompt starts it, and keeps that turn', async () => {
+    const server = new OrdewellMcpServer();
+    servers.push(server);
+    const spawned = fakeAcpSpawn([
+      ...handshake(),
+      { expect: 'session/prompt' },
+      { notify: 'session/update', params: update('agent_message_chunk', { content: text('Connecting my tools.\n') }) },
+      { callMcp: { tool: 'read', args: { task: 'x' } } },
+      { request: 'session/request_permission', params: permissionParams('ordewell/task_complete', 'tc') },
+      { callMcp: { tool: 'task_complete', args: { status: 'done', summary: 'All done.' } } },
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    ]);
+    const session = await spawnTask(runnerOver(server, [spawned]));
+    const events: StructuredEvent[] = [];
+    const reports: TaskCompleteArgs[] = [];
+    session.onEvent((event) => events.push(event));
+    session.onTaskComplete((report) => reports.push(report));
+    await spawned.agent.finished;
+    await expect.poll(() => reports.length).toBe(1);
+
+    expect(reports[0]).toMatchObject({ status: 'done', summary: 'All done.' });
+    expect(promptText(spawned.agent)).toHaveLength(1);
+    expect(promptText(spawned.agent)[0]).toContain('Do the task');
+    // Sent while the attach was still being checked, and heard in full once it passed.
+    expect(events[0]).toMatchObject({ type: 'turn_start', text: 'Do the task' });
+    expect(events.filter((e) => e.type === 'turn_start')).toHaveLength(1);
+    expect(events.at(-1)).toMatchObject({ type: 'turn_end', reason: 'completed' });
+    expect(session.getOutput()).toContain('Connecting my tools.');
+    expect(spawned.agent.problems).toEqual([]);
+    session.kill?.();
+  });
+
+  it('fails as before when no first turn uses the token, discarding each turn with its process and token', async () => {
+    const server = new OrdewellMcpServer();
+    servers.push(server);
+    const agents = [withoutTools(), withoutTools()];
+    const runner = runnerOver(server, agents);
+    const notices: string[] = [];
+    const began = Date.now();
+
+    const failed = spawnTask(runner, notices);
+
+    await expect(failed).rejects.toBeInstanceOf(McpAttachTimeout);
+    await expect(failed).rejects.toHaveProperty('message', expect.stringMatching(/^Could not start fake-acp with Ordewell's tools, so the task was not sent to it\. /));
+    // Each turn's end settled its check: neither waited out the attach timeout.
+    expect(Date.now() - began).toBeLessThan(FIRST_TURN.attachTimeoutMs!);
+    expect(agents.map(({ agent }) => promptText(agent).length)).toEqual([1, 1]);
+    expect(agents.map(({ processes }) => processes[0].killed)).toEqual([true, true]);
+    expect(server.heldTokens()).toEqual([]);
+    expect(runner.activeCount).toBe(0);
+    expect(notices).toEqual([expect.stringContaining('respawning once')]);
+  });
+
+  it('refuses a token first used after the turn ended, and hears only the respawn\'s turn', async () => {
+    const server = new OrdewellMcpServer();
+    servers.push(server);
+    const late = fakeAcpSpawn([
+      ...handshake(),
+      { expect: 'session/prompt' },
+      { notify: 'session/update', params: update('agent_message_chunk', { content: text('Working without tools.\n') }) },
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+      { callMcp: { tool: 'task_complete', args: { status: 'done', summary: 'Too late.' } } },
+    ]);
+    const prompt = fakeAcpSpawn([
+      ...handshake(),
+      { expect: 'session/prompt' },
+      { notify: 'session/update', params: update('agent_message_chunk', { content: text('Connected this time.\n') }) },
+      { request: 'session/request_permission', params: permissionParams('ordewell/task_complete', 'tc') },
+      { callMcp: { tool: 'task_complete', args: { status: 'done', summary: 'All done.' } } },
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    ]);
+
+    const session = await spawnTask(runnerOver(server, [late, prompt]));
+    const events: StructuredEvent[] = [];
+    const reports: TaskCompleteArgs[] = [];
+    session.onEvent((event) => events.push(event));
+    session.onTaskComplete((report) => reports.push(report));
+    await Promise.all([late.agent.finished, prompt.agent.finished]);
+    await expect.poll(() => reports.length).toBe(1);
+
+    expect(late.agent.mcpCalls).toEqual([]);
+    expect(late.agent.problems).toEqual([expect.stringMatching(/^callMcp task_complete: /)]);
+    expect(late.processes[0].killed).toBe(true);
+    expect(reports).toEqual([expect.objectContaining({ summary: 'All done.' })]);
+    expect(events.filter((e) => e.type === 'turn_start')).toHaveLength(1);
+    expect(session.getOutput()).toContain('Connected this time.');
+    expect(session.getOutput()).not.toContain('Working without tools.');
+    session.kill?.();
+  });
+
+  it('discards a first turn still open when its check runs out, with the text and requests it left', async () => {
+    const server = new OrdewellMcpServer();
+    servers.push(server);
+    const stuck = fakeAcpSpawn([
+      ...handshake(),
+      { expect: 'session/prompt' },
+      { notify: 'session/update', params: update('agent_message_chunk', { content: text('Still deciding') }) },
+      { request: 'session/request_permission', params: permissionParams('Write src/a.ts', 'w1') },
+    ]);
+    const prompt = fakeAcpSpawn([
+      ...handshake(),
+      { expect: 'session/prompt' },
+      { callMcp: { tool: 'task_complete', args: { status: 'done', summary: 'All done.' } } },
+      { notify: 'session/update', params: update('agent_message_chunk', { content: text('Connected this time.') }) },
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    ]);
+
+    const session = await spawnTask(runnerOver(server, [stuck, prompt], { ...FIRST_TURN, attachTimeoutMs: 150 }));
+    const events: StructuredEvent[] = [];
+    session.onEvent((event) => events.push(event));
+    await prompt.agent.finished;
+    await expect.poll(() => events.at(-1)).toMatchObject({ type: 'turn_end', reason: 'completed' });
+    session.kill?.();
+
+    expect(stuck.processes[0].killed).toBe(true);
+    expect(session.getOutput()).toBe('Connected this time.\n');
+    expect(events.filter((e) => e.type.startsWith('permission_'))).toEqual([]);
+  });
+
+  it('fails as a start-up exit, with nothing left running, when the agent exits during its first turn without using the token', async () => {
+    const server = new OrdewellMcpServer();
+    servers.push(server);
+    const gone = fakeAcpSpawn([
+      ...handshake(),
+      { expect: 'session/prompt' },
+      { run: (agent) => agent.close(1) },
+    ]);
+    const runner = runnerOver(server, [gone]);
+
+    await expect(spawnTask(runner)).rejects.toBeInstanceOf(RunnerStartupExit);
+    expect(server.heldTokens()).toEqual([]);
+    expect(runner.activeCount).toBe(0);
+  });
+
+  it('sends the task only once the session is open when the agent used the token by then, as a sessionNew agent', async () => {
+    const server = new OrdewellMcpServer();
+    servers.push(server);
+    const early = fakeAcpSpawn([
+      { expect: 'initialize', reply: INITIALIZED },
+      { expect: 'session/new' },
+      { callMcp: { tool: 'read', args: { task: 'x' } } },
+      { answer: { sessionId: 'sess-1' }, to: 'session/new' },
+      { expect: 'session/prompt' },
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    ]);
+
+    const session = await spawnTask(runnerOver(server, [early]));
+    expect(early.agent.requests('session/prompt')).toEqual([]);
+    const events: StructuredEvent[] = [];
+    session.onEvent((event) => events.push(event));
+    await early.agent.finished;
+    await expect.poll(() => events.at(-1)).toMatchObject({ type: 'turn_end', reason: 'completed' });
+    expect(events[0]).toMatchObject({ type: 'turn_start', text: 'Do the task' });
+    expect(early.agent.problems).toEqual([]);
+    session.kill?.();
+  });
+
+  it('never sends the task to an agent of a sessionNew profile that has not used the token by then', async () => {
+    const server = new OrdewellMcpServer();
+    servers.push(server);
+    const agents = [withoutTools(), withoutTools()];
+
+    const failed = spawnTask(runnerOver(server, agents, { ...PROFILE, attach: 'sessionNew', attachTimeoutMs: 20 }));
+
+    await expect(failed).rejects.toBeInstanceOf(McpAttachTimeout);
+    await expect(failed).rejects.toHaveProperty('message', expect.stringMatching(/^Could not start fake-acp with Ordewell's tools, so the task was not sent to it\. /));
+    expect(agents.map(({ agent }) => agent.requests('session/prompt').length)).toEqual([0, 0]);
+    expect(server.heldTokens()).toEqual([]);
+  });
+});
+
 describe('acpConnector', () => {
   it('is the profile\'s adapter and binding, with no repository config of its own', () => {
     const connector = acpConnector({ ...PROFILE, promptCacheTtlMs: 1000 });
@@ -1415,6 +1634,13 @@ describe('acpConnector', () => {
     expect(() => acpConnector({ ...ROLES_PROFILE, manifest: { ...MANIFEST, modes: undefined } })).toThrow(
       'Fake Agent claims the read-only role, but its manifest has no mode tagged readOnly.',
     );
+  });
+
+  it('refuses at load a planner that would attach Ordewell\'s tools only on a task\'s first turn', () => {
+    expect(() => acpConnector({ ...ROLES_PROFILE, attach: 'firstTurn' })).toThrow(
+      "Fake Agent attaches Ordewell's tools only on a task's first turn, so it cannot plan.",
+    );
+    expect(acpConnector({ ...ROLES_PROFILE, roles: { plans: false, readOnly: true }, attach: 'firstTurn' }).plans).toBe(false);
   });
 
   it('carries the profile\'s usage-limit reader and leaves out what the profile leaves out', () => {

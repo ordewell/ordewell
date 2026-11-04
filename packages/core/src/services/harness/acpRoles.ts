@@ -5,7 +5,7 @@ import type { AcpAskedCall, AcpProfile, AcpRoles } from './acpProfiles';
 import { decideReadOnlyTaskPermission } from './plannerPermissions';
 
 /** The roles a profile claims, refused when they cannot hold (ADR-0060, R3): the connector table is built at load, so a bad profile never ships. */
-export function acpRoles(profile: Pick<AcpProfile, 'manifest' | 'roles' | 'restricted'>): AcpRoles {
+export function acpRoles(profile: Pick<AcpProfile, 'manifest' | 'roles' | 'restricted' | 'attach'>): AcpRoles {
   const roles = profile.roles ?? { plans: false, readOnly: false };
   const name = profile.manifest.displayName;
   const readOnlyMode = profile.manifest.modes?.some((mode) => mode.readOnly) ?? false;
@@ -16,6 +16,11 @@ export function acpRoles(profile: Pick<AcpProfile, 'manifest' | 'roles' | 'restr
   }
   if ((roles.plans || roles.readOnly) && !profile.restricted?.args.length) {
     throw new Error(`${name} claims a planner or read-only role without the controls that take its own write and shell tools away.`);
+  }
+  // A planner's first turn is the goal, not a task whose turn may be thrown
+  // away, so it is never sent before the tools are there (ADR-0060, R5).
+  if (roles.plans && profile.attach === 'firstTurn') {
+    throw new Error(`${name} attaches Ordewell's tools only on a task's first turn, so it cannot plan.`);
   }
   return roles;
 }
