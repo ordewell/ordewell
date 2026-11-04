@@ -8,7 +8,7 @@ import { BOARD_LIMITS, type BoardPost } from '../../models/Board';
 import { checkWords } from '../../models/Delegation';
 import { createTask, type Task } from '../../models/Task';
 import { ROOT_NODE, type NodePath } from '../../models/TreeEvent';
-import { FakeEventStore } from '../../testing';
+import { FakeEventStore, patient } from '../../testing';
 import { blobsIn, NodeBoard, type BoardGit } from '../Board';
 import { rootMandate, type Mandate } from '../Mandate';
 import { TreeLedger } from '../TreeLedger';
@@ -306,7 +306,7 @@ describe('contested and stale are computed (ADR-0057 R9)', () => {
       expect(await boardOf(ledger, node, branch({})).post(entry({ files: ['pipe'] }), task, blobsIn(cwd))).toMatchObject({ text: expect.stringContaining('Posted') });
       expect(ledger.board(node)[0].files).toEqual([{ kind: 'file', path: 'pipe' }]);
       rmSync(cwd, { recursive: true });
-    }, 5_000);
+    }, patient(5_000));
 
     it('claims nothing of a branch it cannot read, a link out of the worktree, or an entry with no files', async () => {
       const cwd = worktree();

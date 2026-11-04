@@ -3,7 +3,7 @@ import { mkdirSync, readdirSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import type { IRunner } from '../../interfaces/IRunner';
 import { createTask, type Task } from '../../models/Task';
-import { FakeRunnerSession } from '../../testing';
+import { FakeRunnerSession, patient } from '../../testing';
 import { loadChildSession } from '../../utils/sessionStore';
 import type { PlannerToolHandler } from '../mcp';
 import type { PlannerTurn as Turn } from './sessionTestKit';
@@ -141,7 +141,7 @@ describe('two siblings and a provided interface', () => {
     expect(lower.p.asked.join('\n')).not.toContain('Nobody hears this');
     expect(lower.o.asked.join('\n')).not.toContain('what you declared moved');
     parent.destroy();
-  }, 90_000);
+  }, patient(90_000));
 });
 
 describe('a contract of a child that failed (ADR-0057 R6)', () => {

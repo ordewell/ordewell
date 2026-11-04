@@ -12,7 +12,7 @@ import { StructuredRunner } from '../../StructuredRunner';
 import { BufferedTaskOutputSource } from '../../BufferedTaskOutputSource';
 import { fakeFs, fakeNotification, makeSession } from '../../__tests__/sessionTestKit';
 import { createTask, type LegacyPlanState, type Task } from '../../../models/Task';
-import { fakeConfig, removeDir } from '../../../testing';
+import { fakeConfig, patient, removeDir } from '../../../testing';
 import { saveSession } from '../../../utils/sessionStore';
 import { openTaskLog } from '../../../utils/taskLogStore';
 import { CredentialBroker } from '../credentialBroker';
@@ -157,7 +157,7 @@ describe.skipIf(!engineAnswers || !IMAGE)('a Codex task in a real container', ()
     for (const { authorization } of model.heard) expect(authorization).toBe(`Bearer ${key}`);
     model.server.close();
     run.parent.destroy();
-  }, 300_000);
+  }, patient(300_000));
 
   it("holds a task at Codex's Guarded mode at its start, by the real sandbox's own failure, and asks the model nothing", async () => {
     const model = fakeResponsesApi();
@@ -173,5 +173,5 @@ describe.skipIf(!engineAnswers || !IMAGE)('a Codex task in a real container', ()
     expect(model.heard.filter(({ path }) => path.startsWith('/v1/responses'))).toEqual([]);
     model.server.close();
     run.parent.destroy();
-  }, 240_000);
+  }, patient(240_000));
 });

@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, vi } from 'vitest';
-import { homeEnv, removeDir, setEnv } from './packages/core/src/testEnv';
+import { homeEnv, patient, removeDir, setEnv } from './packages/core/src/testEnv';
 
 // No test reaches ordewell.ai (ADR-0048). A test of the version check passes
 // its own env, so this only silences the CLI, daemon and extension code that
@@ -31,9 +31,12 @@ process.env.GIT_CONFIG_NOSYSTEM = '1';
 // a loaded machine slows past a second: the full suite, under coverage, on a CI
 // runner. A wait that succeeds returns as soon as it does, so a longer default
 // costs time only in a test that is failing anyway. A timeout a call passes
-// itself still wins.
+// itself still wins, and every one, the default too, is as much longer on
+// Windows as a test's own limit is (`patient`).
 const WAIT_FOR_TIMEOUT_MS = 10_000;
 
 const waitFor = vi.waitFor;
-vi.waitFor = ((callback, options) =>
-  waitFor(callback, typeof options === 'number' ? options : { timeout: WAIT_FOR_TIMEOUT_MS, ...options })) as typeof vi.waitFor;
+vi.waitFor = ((callback, options) => {
+  const { timeout = WAIT_FOR_TIMEOUT_MS, ...rest } = typeof options === 'number' ? { timeout: options } : options ?? {};
+  return waitFor(callback, { ...rest, timeout: patient(timeout) });
+}) as typeof vi.waitFor;

@@ -8,7 +8,7 @@ import { createWorktreeIsolation } from '../GitWorktreeIsolation';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import { createTask } from '../../models/Task';
 import type { IRunner } from '../../interfaces/IRunner';
-import { fakeConfig, FakeRunnerSession, removeDir } from '../../testing';
+import { fakeConfig, FakeRunnerSession, patient, removeDir } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
 
 /**
@@ -97,5 +97,5 @@ describe.skipIf(!hasGit)('ADVERSARIAL: revert and retry through the real pipelin
     expect(log.filter((line) => line === 'Merge: One')).toHaveLength(2);
     expect(log.filter((line) => line === 'Revert: One')).toHaveLength(1);
     expect(existsSync(join(root, 'one.txt'))).toBe(false);
-  }, 60000);
+  }, patient(60000));
 });
