@@ -1,6 +1,6 @@
 ---
 status: accepted
-amends: ["0008", "0009", "0018", "0022", "0023", "0025", "0028", "0046"]
+amends: ["0008", "0009", "0018", "0022", "0023", "0025", "0026", "0028", "0046"]
 ---
 
 # 0060 — ACP runners are data on one connector
@@ -93,9 +93,10 @@ of its provider credential and the sign-in route that reader adds.
   A planner or a read-only task also runs nothing the repository's config
   names (ADR-0028). An agent that loads configuration from the directory it
   starts in, with no switch of its own to stop it, starts there in a private
-  directory instead (`restricted.privateCwd`): owner-only and empty but for
-  its instructions and, where the profile has one, its MCP settings file
-  (R4), the session's `cwd` and its temp directory too. It then
+  directory instead (`restricted.privateCwd`): owner-only and holding only
+  what the start hands it, its instructions, its MCP settings file where the
+  profile has one (R4), and the restriction's own files and config homes,
+  the session's `cwd` and its temp directory too. It then
   reaches the worktree only by asking, so every read goes to the planner's
   envelope or to the read-only task's rules (ADR-0046). Since it loads none
   of the repository's instruction files there, the profile's reader
@@ -107,6 +108,30 @@ of its provider credential and the sign-in route that reader adds.
   `AcpAdapter` refuses a planner or a read-only start its profile does not
   claim. A restricted session that leaves the mode it settled in fails, and
   its process is disposed.
+
+  The restriction is data on the profile, whatever form the agent's own
+  controls take. For an agent with a deny list they are arguments and
+  variables, as Copilot's are. For an agent whose controls are a settings
+  file or a hook, they are also files and config homes in the process's
+  private directory:
+  - `restricted.files`: each written 0600 into that directory, never the
+    worktree, and named to the agent by a variable, by a flag, or by another
+    of these files, as a hook's settings name its script. A file is rendered
+    from the directory's path alone, so neither the provider key (R9) nor the
+    token reaches it and none holds a secret; a hook that must reach Ordewell
+    does so with the attempt's token as the MCP settings file holds it (R4).
+    Nothing there is executable, so a hook's settings name its interpreter.
+  - `restricted.configDirs`: variables that move the agent's home of
+    configuration, each set to an empty 0700 directory of its own in the
+    private directory, so the user's global rules, hooks, plugins and skills
+    do not load in a planner or a read-only task.
+
+  Both apply on a planner's start and a read-only task's alone, share the
+  private directory's life (R4), and are refused under a placement, whose
+  container would be handed variables naming paths it does not have. They
+  are a layer beneath Ordewell's refusal by kind, never in its place, and
+  neither is a role's evidence: a role still needs the recording above. A
+  profile without them spawns exactly as before.
 - **Ordewell's tools go over HTTP, with the token in `session/new` or in the
   agent's own settings file (R4).** To an agent whose `initialize` advertises
   `mcpCapabilities.http`, the server is given as one `http` entry in
@@ -125,7 +150,8 @@ of its provider credential and the sign-in route that reader adds.
     holding only its own attempt's token;
   - written 0600 into the process's private directory, which is 0700, in the
     temp directory and never in the worktree, the same directory that holds a
-    file-route's instructions (R6);
+    file-route's instructions (R6) and a restricted start's own files and
+    config homes (R3);
   - removed with that directory when the process ends, or when it is
     disposed;
   - swept at a later start if Ordewell died before removing it. The private
@@ -180,6 +206,11 @@ of its provider credential and the sign-in route that reader adds.
   since that restart has no prompt to check with, so the task fails then. The
   discarded turn stays in the agent's own history should that session ever be
   resumed.
+
+  A restricted start's own files and config homes (R3) change none of this:
+  none carries the token, so the attach is read from the server as on any
+  start, and a config home that hides the route by which the agent finds
+  Ordewell's server shows as a missed attach, never as one that passed.
 - **Instructions never land in the worktree (R6).** ACP has no system-prompt
   field. The completion contract (and a planner's system prompt) goes through
   the agent's own channel outside the worktree where it has one: an
@@ -483,7 +514,14 @@ to.
   read its MCP servers from a settings file its environment names, and records
   each read, so the tests show the `mcpConfig` route's file read, its lifetime,
   one token per concurrent attempt, the sweep, and the refusal of an agent
-  that ignores the file, without a live agent.
+  that ignores the file, without a live agent. It also records what each
+  variable its `loads` names held at spawn, a file's text or a directory's
+  entries, so the tests show a restricted start's own files 0600 at the paths
+  the variables name, outside the worktree, and its config homes empty; both
+  gone with the process and swept after a crash; two attempts with two
+  directories; a writable task and Copilot's restricted starts spawned as
+  before; a placement refused; and a start so restricted still refusing a
+  write and a command by kind.
 - **The credential hook** is tested in `acpAdapter.test.ts` with a scripted
   hook, with Cline's reader on a store in a temporary home, and with Qwen's
   and Cline's hooks on a key configured in Ordewell: the spawn's environment
@@ -544,6 +582,18 @@ to.
   user's own included, so two attempts would race on it and one could read the
   other's token, and a crash would leave a token in the user's settings. The
   route's file is one process's own, named to it by a variable.
+- **A restricted start's hook or settings in the worktree or the user's
+  config home.** Rejected for the same reasons: the worktree's files land with
+  the task, and the user's home is shared by every process of the agent, the
+  user's own included. The private directory is the process's own and goes
+  with it.
+- **A restriction written as code for each agent.** Rejected by R1: an agent
+  whose controls are a hook or a settings file differs from one with a deny
+  list only in which files and variables it needs, which a profile can state.
+- **The token or the provider key rendered into a restricted file.**
+  Rejected: a hook needs neither to refuse a write or a command, and a file is
+  one more place a secret sits on disk (R9). A file is rendered from the
+  directory's path alone.
 - **Leftovers left to the system's temp cleaning.** Rejected: a token would
   sit on disk for as long as the system keeps its temp files. The sweep
   removes only what a dead Ordewell made, by the name and owner it gave it,
@@ -703,5 +753,9 @@ to.
 - 2026-11-04 — R9: the provider key configured in Ordewell comes before the
   agent's own store, handed to Qwen and Cline in the variables each reads;
   a signed-out message names that route (`signInRoute`).
+- 2026-11-04 — R3: a restricted start may hand the agent owner-only files and
+  empty config homes in its private directory (`restricted.files`,
+  `restricted.configDirs`), for an agent whose controls are a hook or a
+  settings file; no profile uses them yet.
 - 2026-11-04 — Gemini CLI (`gemini-cli`) is admitted on its recordings, for
   writable tasks only, started trusting its worktree (`--skip-trust`).

@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import { readFileSync } from 'fs';
+import { readdirSync, readFileSync, statSync } from 'fs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { LineBuffer } from '../harness/AgentAdapter';
@@ -91,6 +91,19 @@ export interface FakeAcpAgentOptions {
    * then ignored, as an agent that only stores them ignores them.
    */
   settings?: { env: string; servers(contents: string): FakeAcpMcpServer[] };
+  /**
+   * Variables of its spawn environment naming configuration the agent loads
+   * when it starts, a hook's settings or a home directory, each looked at once,
+   * at spawn, and recorded in {@link FakeAcpAgent.loaded}.
+   */
+  loads?: readonly string[];
+}
+
+/** What the agent found at one spawn where a variable it loads from pointed: a file's text, a directory's entries, or null for nothing there. */
+export interface FakeAcpLoad {
+  env: string;
+  path: string | undefined;
+  found: string | string[] | null;
 }
 
 /** What a settings agent found at one spawn: the path its variable named, and the file's contents, or null where it read none. */
@@ -149,6 +162,8 @@ export class FakeAcpAgent {
   private client: Client | undefined;
   /** What the agent read of its settings file at each spawn, in order. */
   readonly settingsReads: FakeAcpSettingsRead[] = [];
+  /** What the agent found where each variable of {@link FakeAcpAgentOptions.loads} pointed, at each spawn, in order. */
+  readonly loaded: FakeAcpLoad[] = [];
   private finish!: () => void;
   /** Resolves when the script has run to its end. */
   readonly finished: Promise<void> = new Promise((resolve) => { this.finish = resolve; });
@@ -161,6 +176,7 @@ export class FakeAcpAgent {
   attach(proc: FakeAgentProcess, env: NodeJS.ProcessEnv = {}): void {
     this.proc = proc;
     if (this.options.settings) this.readSettings(env[this.options.settings.env]);
+    for (const name of this.options.loads ?? []) this.loaded.push({ env: name, path: env[name], found: look(env[name]) });
     proc.on('__written', (chunk: string) => {
       this.lines.push(chunk, (line) => this.receive(line));
     });
@@ -398,4 +414,13 @@ export function fakeAcpSpawn(steps: readonly FakeAcpStep[], options: FakeSpawnOp
     return proc;
   };
   return { ...kit, spawn, agent };
+}
+
+function look(path: string | undefined): string | string[] | null {
+  if (path === undefined) return null;
+  try {
+    return statSync(path).isDirectory() ? readdirSync(path) : readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
 }

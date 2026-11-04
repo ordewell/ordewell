@@ -195,7 +195,13 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
   ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md) R3):
   the profile's spawn controls take the agent's own write, shell and web tools
   away, and a recorded live run shows a write and a command refused with
-  nothing left behind. `AcpAdapter` then refuses every edit, delete, move,
+  nothing left behind. Those controls are arguments and variables for an
+  agent with a deny list. For an agent whose controls are a hook or a
+  settings file they are also owner-only files in the process's private
+  directory, outside the worktree and holding no secret, and empty config
+  homes there, so the user's global rules, hooks, plugins and skills do not
+  load in the task; all of it goes with the process, and none of it is
+  allowed under a placement. `AcpAdapter` then refuses every edit, delete, move,
   command and mode switch the agent still asks for, with nobody asked, and
   fails a session that leaves the mode it settled in. A profile without the
   role gives its manifest no read-only mode, so ModeResolver never assigns
@@ -463,3 +469,4 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
 - 2026-11-01 — the task tool is `read` ([ADR-0057](../supervision/0057-information-moves-by-reference.md) R11).
 - 2026-11-04 — an ACP runner runs a read-only task only on its profile's evidence; GitHub Copilot CLI runs none (ADR-0060).
 - 2026-11-04 — GitHub Copilot CLI runs read-only tasks, from a private start directory (ADR-0060).
+- 2026-11-04 — an ACP runner's restricted start may hand it owner-only files and empty config homes outside the worktree, for an agent with no deny flag (ADR-0060 R3).
