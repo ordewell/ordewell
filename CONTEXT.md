@@ -810,8 +810,8 @@ another server's name could extend), what the runner's own status word for the s
 its launch or configuration. Every supported connector has one. Task runners
 and coding-agent planners must connect their tools before any result of theirs
 is accepted: before receiving a prompt, or, for an ACP runner that connects
-only on its first turn, before that turn ends, which is otherwise discarded
-(ADR-0060 R5). A failed attach is respawned once, then fails (ADR-0025).
+only on its first turn (a task's prompt, a planner's goal or message), before
+that turn ends, which is otherwise discarded unheard (ADR-0060 R5). A failed attach is respawned once, then fails (ADR-0025).
 *Avoid:* "MCP adapter", "tool prefix" (a prefix is how two of the runners happen
 to name a tool, not the concept).
 
@@ -849,9 +849,9 @@ or read-only start each begins in a private directory, never the worktree, so
 the repository's hooks and config do not run (ADR-0060 R3). A restricted Gemini
 CLI runs under a policy file Ordewell hands it, which refuses its own write,
 shell and web tools and every MCP server but Ordewell's (ADR-0060, Gemini CLI).
-Cline (`cline`) runs tasks, read-only ones included, but does not plan: it takes
-Ordewell's server from a settings file and attaches on the task's first turn,
-which a planner cannot (ADR-0060 R4, R5). A read-only Cline also begins in a
+Cline (`cline`) runs tasks, read-only ones included, but its profile claims no
+planner role (ADR-0060 R3); it takes Ordewell's server from a settings file and
+attaches on its first turn (ADR-0060 R4, R5). A read-only Cline also begins in a
 private directory, and with no list to take its own tools away it is started
 asking about each, so its edits, commands and file reads are refused and it
 reads through Ordewell's `run_command` (ADR-0060 R3). A planner or read-only
@@ -873,8 +873,8 @@ version, how it names Ordewell's tools, how it is given a model, the route its
 instructions take outside the worktree, the route its mode takes, the settings
 file that hands it Ordewell's MCP server when it takes none over HTTP in
 `session/new` (`mcpConfig`, ADR-0060 R4), when it first uses its token
-(`attach`: by the time its session opens, or only on the task's first turn,
-which is then the attach check, ADR-0060 R5), what it loads
+(`attach`: by the time its session opens, or only on its first turn, a task's
+prompt or a planner's goal, which is then the attach check, ADR-0060 R5), what it loads
 from a repository, the roles it claims, the controls that restrict it, and the
 answers it gives to the agent's own client-bound requests (any other, and any
 in ACP's `session/`, `fs/` or `terminal/` namespaces, is "method not found").

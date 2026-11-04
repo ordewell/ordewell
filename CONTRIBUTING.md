@@ -204,7 +204,8 @@ home of configuration.
   that file, and the attach is still judged by the server, so an agent that
   ignores the file is refused (ADR-0060 R4). Such a runner cannot run in a
   container. An agent that connects only once a prompt runs sets
-  `attach: 'firstTurn'` (R5) and cannot plan; one that needs its provider key
+  `attach: 'firstTurn'` (R5), and its first turn, a task's prompt or a
+  planner's goal, is then the attach check; one that needs its provider key
   in its environment, or can take the key configured in Ordewell, sets
   `credentials`, and `signInRoute` where the agent's own refusal should name
   that route too (R9). Cline's recordings show all three.

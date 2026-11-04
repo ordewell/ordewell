@@ -714,14 +714,15 @@ describe('cline read-only tasks, replayed from Cline 3.0.74 (ADR-0028, ADR-0046,
     await vi.waitFor(() => expect(readdirSync(temp)).toEqual([]));
   });
 
-  it('refuses to plan, since Cline reaches Ordewell\'s server only once a prompt runs and a planner\'s first prompt is the goal (ADR-0060, R5)', async () => {
+  it('refuses to plan, since its profile claims no planner role (ADR-0060, R3)', async () => {
     const { mcp } = await readOnlyToken();
     const { spawned, adapter } = cline(replay('read-only'));
     const planner: PlannerStartOptions = { kind: 'planner', cwd: CWD, model: MODEL, systemPrompt: 'You are the planner.', mcp };
 
     await expect(adapter.start(planner)).rejects.toThrow('Cline cannot plan in Ordewell: its profile claims no planner role.');
     expect(spawned.processes).toHaveLength(0);
-    expect(() => acpRoles({ ...CLINE_PROFILE, roles: { plans: true, readOnly: true } })).toThrow('Cline attaches Ordewell\'s tools only on a task\'s first turn, so it cannot plan.');
+    // Not for how it attaches: a planner's goal can be its attach check too (R5).
+    expect(acpRoles({ ...CLINE_PROFILE, roles: { plans: true, readOnly: true } })).toEqual({ plans: true, readOnly: true });
   });
 });
 

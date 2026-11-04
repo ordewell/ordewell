@@ -322,8 +322,9 @@ export interface AgentAdapter {
    * `false` is the old boolean answer for "not attached"; a real adapter says
    * `pending` while its process is still starting, or `failed` when the
    * runner reports the server cannot connect. A runner that uses its token
-   * only once a turn starts it is checked by the task's first turn, sent
-   * through `sendFirstTurn` (ADR-0060, R5); without one it cannot attach.
+   * only once a turn starts it is checked by its first turn, a task's prompt
+   * or a planner's message, sent through `sendFirstTurn` (ADR-0060, R5);
+   * without one it cannot attach.
    */
   mcpAttached?(sendFirstTurn?: () => Promise<unknown>): Promise<boolean | AttachState>;
 

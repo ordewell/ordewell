@@ -33,12 +33,13 @@ coding-agent planners.**
   cap, not failed, so its dependents stay on the plan; a runner that reports the
   server `failed` still fails the task. A coding-agent planner turn fails
   either way, and a planner that cannot be re-attached fails its turn without
-  the prompt being sent. Never accept a result from a runner without tools:
+  its answer being heard. Never accept a result from a runner without tools:
   the prompt is sent only once they are attached, except to an ACP runner
   that connects them only when a prompt starts it (ADR-0060 R5). That
-  runner's first turn is the check, kept only if the server was contacted
-  before it ended, and otherwise discarded with its process and token, the
-  task then held and its worktree given up.
+  runner's first turn is the check, a task's prompt or a planner's goal or
+  message, kept only if the server was contacted before it ended, and
+  otherwise discarded with its process and token: a task is then held and its
+  worktree given up, and a planner's turn fails with nothing left running.
 - Completion evidence is only a `task_complete` call bound to the attempt's
   token. `VerdictEngine` checks the current generation; only `done` passes.
   `blocked` and `failed` end without a pass and carry a reason. A process exit,
@@ -229,8 +230,8 @@ its supported access path and applicable terms need checking before adoption.
 
 One process/session contract owns every task. A missing tool connection fails
 before any of the coding agent's work is kept: before it receives work, or,
-for an ACP agent that connects only on its first turn, with that turn
-discarded at the cost of a model turn. The fake `claude` harness verifies the
+for an ACP agent that connects only on its first turn, task or planner, with
+that turn discarded at the cost of a model turn. The fake `claude` harness verifies the
 real connector and tool path without a model or API key. Supporting another
 runner requires a structured connector and verified Ordewell tool attachment;
 a manifest alone is insufficient. For an agent with a native ACP server, the
@@ -255,3 +256,4 @@ tmux; the TUI remains unverified on native Windows (ADR-0010).
 - 2026-11-04 — the ACP connector is implemented ([ADR-0060](0060-acp-runners-are-data-on-one-connector.md)); `copilot-cli` is its reference agent, not Gemini CLI.
 - 2026-11-04 — the rule is that no result is accepted without tools, not that no prompt is sent without them: an ACP runner that attaches on its first turn is sent the task as the check, and that turn is discarded unless the server was contacted before it ended (ADR-0060 R5).
 - 2026-11-04 — Cursor's CLI was found to connect the servers `session/new` hands it over ACP, beyond the `.cursor/mcp.json` servers it documents.
+- 2026-11-05 — a coding-agent planner on an ACP runner that attaches on its first turn sends its goal or message as the check, its turn discarded unheard and failed when the server was not contacted before it ended (ADR-0060 R5).
