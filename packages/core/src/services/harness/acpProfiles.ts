@@ -166,8 +166,9 @@ export interface AcpProfile {
   /**
    * Answers to the agent's own requests by method, for an agent that holds a
    * turn until the client replies to one (Cursor's `cursor/ask_question`).
-   * Every other request is answered "method not found". ACP's own methods
-   * are the adapter's and cannot be overridden here.
+   * Every other request is answered "method not found". A method in ACP's
+   * client namespaces (`session/`, `fs/`, `terminal/`) is the adapter's: a
+   * handler under one is never served (ADR-0060).
    */
   extensionRequests?: Readonly<Record<string, AcpExtensionHandler>>;
 }

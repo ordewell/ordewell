@@ -42,7 +42,8 @@ user's, in the agent's own terminal. Any other request from the agent is
 answered `-32601` at once, so a turn never waits on Ordewell; a profile may
 instead answer the agent's own methods that hold its turn until the client
 replies (`extensionRequests`), and a request its handler cannot read keeps the
-`-32601`.
+`-32601`. ACP's client namespaces (`session/`, `fs/`, `terminal/`) are never
+served from a profile, so no profile can make Ordewell do I/O for the agent.
 
 The protocol is spoken from vendored v1 types (`acpSchema.ts`, checked with
 zod) on a protocol-neutral JSON-RPC peer (`jsonRpc.ts`). Every object passes
