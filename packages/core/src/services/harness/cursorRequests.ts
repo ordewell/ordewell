@@ -3,9 +3,9 @@ import { isRecord } from './repoConfig';
 
 /**
  * Cursor's own client-bound requests, which its agent waits on before the
- * turn goes on, answered for a future `cursor-agent` profile. No recording of
- * Cursor exists yet, so each params check is only what any request must be:
- * an object.
+ * turn goes on, answered for the `cursor-agent` profile. No recorded turn sent
+ * either (the plan-mode turn was refused on an account with no paid plan), so
+ * each params check is only what any request must be: an object.
  */
 export const CURSOR_EXTENSION_REQUESTS: Readonly<Record<string, AcpExtensionHandler>> = {
   // Nobody is at a task's terminal to answer, and holding the turn for one would stall it.

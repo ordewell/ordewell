@@ -59,9 +59,9 @@ describe('a built-in runner declared by manifest and connector only, on the CLI'
 
   it('is named in help and in the /runners command', async () => {
     const help = await printed(() => printHelp());
-    expect(help).toContain('Enable or disable runners (claude-code, codex, opencode, copilot-cli, qwen-code, cline, gemini-cli, acme)');
+    expect(help).toContain('Enable or disable runners (claude-code, codex, opencode, copilot-cli, qwen-code, cline, gemini-cli, cursor-agent, acme)');
     expect(help).toContain('claude-code, codex, opencode, copilot-cli, acme: plan with that CLI');
-    expect(SLASH_COMMANDS.find((c) => c.name === 'runners')?.description).toContain('claude-code, codex, opencode, copilot-cli, qwen-code, cline, gemini-cli, acme');
+    expect(SLASH_COMMANDS.find((c) => c.name === 'runners')?.description).toContain('claude-code, codex, opencode, copilot-cli, qwen-code, cline, gemini-cli, cursor-agent, acme');
   });
 
   it('is in the runner picker and the planner picker', () => {

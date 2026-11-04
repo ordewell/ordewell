@@ -7,7 +7,7 @@
 
 <p align="center">
   <strong>Stop juggling agent tabs. Talk to one planner.</strong><br>
-  It runs Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Cline and Gemini CLI for you, in plain sight. Review build plans before they run, or turn on autorun.
+  It runs Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor for you, in plain sight. Review build plans before they run, or turn on autorun.
 </p>
 
 <p align="center">
@@ -33,7 +33,7 @@ tasks in parallel, review the changes, and merge into your branch. Submitted bui
 plans wait for your approval by default; run settings let you automate execution
 and merging.
 
-Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Cline and Gemini CLI are supported out of the box,
+Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor are supported out of the box,
 and can be mixed freely within one plan. Try it in your project, with nothing to install:
 
 ```bash
@@ -74,7 +74,7 @@ get it from [Open VSX](https://open-vsx.org/extension/ordewell/ordewell). The
 extension bundles its own core and needs nothing from npm.
 
 **Requirements:** Node.js 20.3 or newer, at least one of Claude Code, Codex,
-OpenCode, GitHub Copilot CLI, Qwen Code, Cline or Gemini CLI, and git 2.38 or newer for task isolation.
+OpenCode, GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI or Cursor, and git 2.38 or newer for task isolation.
 
 ### Windows
 
