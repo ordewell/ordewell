@@ -26,7 +26,11 @@ planner's model is one of that provider's models.
 
 A provider key adds a planner, never a runner. A `DEEPSEEK_API_KEY` or
 `MOONSHOT_API_KEY` lets DeepSeek or Kimi models plan; tasks still run on the built-in
-runners.
+runners. An installed Qwen Code or Cline does run on that key, though, so neither
+needs a login of its own: the key of the provider `AI_PROVIDER` names, else the first
+one configured, is handed to it at each start. Qwen Code takes any OpenAI-compatible
+provider's key; Cline takes the key of a provider it offers at the same address, such
+as OpenRouter. Where Ordewell holds no such key, each agent uses its own sign-in.
 
 ## Who runs tasks
 

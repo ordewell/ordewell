@@ -1,3 +1,4 @@
+import { qwenCredentials } from '../../services/harness/qwenCredentials';
 import type { RunnerManifest } from '../types';
 
 /** How Qwen Code is started as an ACP agent; the profile runs it and discovery asks it with the same words. */
@@ -19,7 +20,8 @@ export const QWEN_CODE_MANIFEST: RunnerManifest = {
     // Qwen lists its configured models in `session/new`, so ACP answers and
     // there is no command to fall back to (ADR-0040: discovery never gates a pick).
     method: 'acp',
-    acp: { args: QWEN_ACP_ARGS },
+    // The key Ordewell holds lets discovery list the models a task would get (ADR-0060, R9).
+    acp: { args: QWEN_ACP_ARGS, credentials: qwenCredentials },
     discoveryCommands: [],
   },
 

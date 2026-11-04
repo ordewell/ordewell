@@ -48,7 +48,7 @@ require('readline').createInterface({ input: process.stdin }).on('line', (text) 
 describe('qwen-code model discovery', () => {
   it('starts Qwen as an ACP agent with the same arguments the task runner uses', () => {
     expect(QWEN_CODE_MANIFEST.modelDiscovery.method).toBe('acp');
-    expect(QWEN_CODE_MANIFEST.modelDiscovery.acp).toEqual({ args: ['--acp'] });
+    expect(QWEN_CODE_MANIFEST.modelDiscovery.acp).toEqual({ args: ['--acp'], credentials: QWEN_CODE_PROFILE.credentials });
     expect(QWEN_CODE_PROFILE.args).toBe(QWEN_ACP_ARGS);
   });
 
