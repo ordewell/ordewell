@@ -223,6 +223,12 @@ export function fakeSpawn(replies: ScriptedReply[], options: FakeSpawnOptions = 
       proc.emitStdout(`${JSON.stringify({ id: rpc.id, ...answer })}\n`);
       return;
     }
+    // A thread on a Windows host first asks whether the user set up Codex's sandbox there.
+    if (rpc.method === 'windowsSandbox/readiness') {
+      const answer = options.codexDiscovery?.(rpc.method) ?? { result: { status: 'ready' } };
+      proc.emitStdout(`${JSON.stringify({ id: rpc.id, ...answer })}\n`);
+      return;
+    }
     const reply = queue.shift();
     if (reply !== undefined) {
       if (typeof reply === 'function') reply(chunk, proc);

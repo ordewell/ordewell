@@ -1489,6 +1489,27 @@ describe('CliAgentAiService — Codex', () => {
     expect(planner.developerInstructions).toContain('your own subagents');
   });
 
+  it('tells a planner on Windows which shell run_command runs there, and one elsewhere nothing', async () => {
+    const systemPrompt = async (platform: NodeJS.Platform) => {
+      const spawned = fakeSpawn([...codexHandshake(), fixture('codex', 'tools')]);
+      const svc = new CliAgentAiService(fakeConfig({ aiProvider: 'codex' }), {
+        spawn: spawned.spawn,
+        fetch: (async () => { throw new Error('no HTTP in this test'); }) as unknown as typeof fetch,
+        resolvePath: async () => '/usr/bin',
+        workspaceRoot: () => '/repo',
+        platform,
+        isDirectory: () => true,
+        exists: () => true,
+        mcpServer: fakeMcpServer(),
+      });
+      await svc.startConversation(request({ runners: ['codex'] }));
+      return String(JSON.parse(spawned.processes[0].written[1]).params.developerInstructions);
+    };
+
+    expect(await systemPrompt('win32')).toMatch(/On this Windows machine run_command runs (Git Bash|cmd\.exe)/);
+    expect(await systemPrompt('linux')).not.toContain('On this Windows machine');
+  });
+
   it('plans with Codex\'s own shell off when no sandbox backend works', async () => {
     const { svc, spawned } = service(
       'codex',
@@ -2206,6 +2227,16 @@ describe('CliAgentAiService — one-shot plan generation', () => {
     expect(result.researchLog[0]).toMatchObject({ type: 'user_prompt', content: 'Add the thing' });
     expect(spawned.processes[0].killed).toBe(true);
     expect(svc.hasActiveConversation()).toBe(false);
+  });
+
+  it('offers a one-shot planner no run_command, which nothing here would run', async () => {
+    // The tool answered "not available" to every call, and a Codex planner told
+    // to use it, with its own shell off on Windows, had nothing left to read with.
+    const mcp = fakeMcpServer();
+    const { svc } = service('claude-code', [submitting(mcp, planTasks(), claudeSays('Submitted the plan.'))], {}, {}, mcp);
+    await svc.researchAndPlan('Add the thing', ['claude-code'], { 'claude-code': [] }, fakeFileSystem(), () => {});
+
+    expect(mcp.plannerScopes[0].hidden).toContain('run_command');
   });
 
   // Live, Haiku backgrounded its Explore agents and ended the turn "waiting

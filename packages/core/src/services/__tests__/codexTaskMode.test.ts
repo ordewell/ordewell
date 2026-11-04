@@ -11,6 +11,7 @@ import { toTaskLogEvent } from '../../models/TaskLog';
 import { replayTaskLog } from '../../conversation/taskLog';
 import { mcpClientConfig, TASK_COMPLETION_CONTRACT, taskCompletionContract } from '../mcp';
 import { CODEX_ORDEWELL } from '../harness/codexOrdewell';
+import { CODEX_WINDOWS_SHELL_ADVICE } from '../harness/codexSandbox';
 import { ApprovalPolicy, effectiveApprovalMode, type ApprovalModeSetting } from '../ApprovalPolicy';
 import { WebReadPolicy } from '../webReadPolicy';
 import type { PlacedLaunch, RunnerLaunch } from '../executionLease';
@@ -233,6 +234,128 @@ describe('CodexAdapter task sandbox', () => {
     const note = events.find((e) => e.type === 'thinking');
     expect(note?.type === 'thinking' && note.text).toMatch(/legacy Landlock/);
     expect(note?.type === 'thinking' && note.text).not.toMatch(/plan|writes are still denied/i);
+    adapter.dispose();
+  });
+});
+
+describe('CodexAdapter task on a Windows host', () => {
+  /** Codex's answer to whether the user set up its Windows sandbox; the rest of discovery is empty. */
+  const readiness = (status: string | null) => ({
+    codexDiscovery: (method: string) => {
+      if (method === 'config/read') return { result: { config: { mcp_servers: {} }, origins: {} } };
+      if (method !== 'windowsSandbox/readiness') return { data: [], nextCursor: null };
+      return status === null ? { error: { code: -32600, message: 'unknown variant `windowsSandbox/readiness`' } } : { result: { status } };
+    },
+  });
+  /** `task-thread` as codex-cli 0.166.0 answers a `workspace-write` thread on a Windows host whose sandbox is not set up. */
+  const grantedReadOnly: ScriptedReply = (written, proc) => {
+    const { id } = JSON.parse(written) as { id: number };
+    const answer = JSON.parse(fixture('codex', 'task-thread')) as { result: Record<string, unknown> };
+    proc.emitStdout(line({ ...answer, id, result: { ...answer.result, sandbox: { type: 'readOnly', networkAccess: false } } }));
+  };
+  const windows = (replies: ScriptedReply[], status: string | null) => {
+    const { spawned, processDeps } = deps(replies, readiness(status));
+    return { spawned, adapter: new CodexAdapter({ ...processDeps, platform: 'win32' }) };
+  };
+  const notes = async (adapter: CodexAdapter): Promise<string[]> => {
+    const events: AgentEvent[] = [];
+    await adapter.send('fix sum', (e) => events.push(e));
+    return events.flatMap((e) => (e.type === 'thinking' ? [e.text] : []));
+  };
+
+  it('keeps the planned mode where Codex grants only read-only, and says so to the model and to the user once', async () => {
+    const { spawned, adapter } = windows([fixture('codex', 'handshake'), grantedReadOnly, fixture('codex', 'task-turn')], 'notConfigured');
+    await adapter.start(taskStart('agent'));
+
+    const sent = written(spawned.processes[0].written).map((msg) => msg.method).filter(Boolean);
+    expect(sent.slice(0, 3)).toEqual(['initialize', 'windowsSandbox/readiness', 'thread/start']);
+    const [threadStart] = sentNamed(spawned.processes[0].written, 'thread/start');
+    expect(threadStart.params?.sandbox).toBe('workspace-write');
+    expect(threadStart.params?.config).toBeUndefined();
+    expect(threadStart.params?.developerInstructions).toMatch(/Do not end the task because the sandbox is read-only/);
+    const shown = await notes(adapter);
+    expect(shown).toHaveLength(1);
+    expect(shown[0]).toMatch(/Windows sandbox is not set up/);
+    expect(shown[0]).toMatch(/Set up default sandbox/);
+    adapter.dispose();
+  });
+
+  it('tells the model, but shows no note, where Codex grants the write sandbox after all', async () => {
+    const { spawned, adapter } = windows([fixture('codex', 'handshake'), codexAnswer('task-thread'), fixture('codex', 'task-turn')], 'notConfigured');
+    await adapter.start(taskStart('agent'));
+
+    expect(sentNamed(spawned.processes[0].written, 'thread/start')[0].params?.developerInstructions).toMatch(/sandbox may be read-only/);
+    expect(await notes(adapter)).toEqual([]);
+    adapter.dispose();
+  });
+
+  it('says the same of a sandbox whose setup Codex wants run again', async () => {
+    const { spawned, adapter } = windows([fixture('codex', 'handshake'), grantedReadOnly, fixture('codex', 'task-turn')], 'updateRequired');
+    await adapter.start(taskStart('agent'));
+
+    expect(sentNamed(spawned.processes[0].written, 'thread/start')[0].params?.developerInstructions).toMatch(/sandbox may be read-only/);
+    const shown = await notes(adapter);
+    expect(shown).toHaveLength(1);
+    expect(shown[0]).toMatch(/needs its setup run again/);
+    adapter.dispose();
+  });
+
+  it('asks before a resumed thread too, and says what Codex granted it', async () => {
+    const { spawned, adapter } = windows([fixture('codex', 'handshake'), grantedReadOnly, fixture('codex', 'task-turn')], 'notConfigured');
+    await adapter.start(taskStart('agent', { resumeSessionId: 'thr-task-1' }));
+
+    const sent = written(spawned.processes[0].written).map((msg) => msg.method).filter(Boolean);
+    expect(sent.slice(0, 3)).toEqual(['initialize', 'windowsSandbox/readiness', 'thread/resume']);
+    expect(sentNamed(spawned.processes[0].written, 'thread/resume')[0].params?.sandbox).toBe('workspace-write');
+    expect(await notes(adapter)).toHaveLength(1);
+    adapter.dispose();
+  });
+
+  it.each([
+    ['the user set up', 'ready'],
+    ['this Codex was not asked about', null],
+  ])('leaves a sandbox %s as Codex configures it', async (_label, status) => {
+    const { spawned, adapter } = windows([fixture('codex', 'handshake'), grantedReadOnly, fixture('codex', 'task-turn')], status);
+    await adapter.start(taskStart('agent'));
+
+    const [threadStart] = sentNamed(spawned.processes[0].written, 'thread/start');
+    expect(threadStart.params).toEqual({ cwd: '/repo', sandbox: 'workspace-write', approvalPolicy: 'on-request', approvalsReviewer: 'auto_review', developerInstructions: CODEX_WINDOWS_SHELL_ADVICE });
+    expect(await notes(adapter)).toEqual([]);
+    adapter.dispose();
+  });
+
+  it.each([
+    ['a Guarded task', 'agent', true],
+    ['a full-access task', 'fullAccess', true],
+    ['a read-only task, whose only shell is run_command', 'plan', false],
+  ])('tells %s whether its shell is PowerShell, whose policy refuses npm.ps1', async (_label, mode, told) => {
+    const { spawned, adapter } = windows(handshake(), 'ready');
+    await adapter.start(taskStart(mode));
+
+    const instructions = String(sentNamed(spawned.processes[0].written, 'thread/start')[0].params?.developerInstructions ?? '');
+    expect(instructions.includes('call the .cmd beside it instead')).toBe(told);
+    adapter.dispose();
+  });
+
+  it.each(['linux', 'darwin'])('asks nothing of a Windows sandbox on %s', async (platform) => {
+    const { spawned, processDeps } = deps([fixture('codex', 'handshake'), codexAnswer('task-thread')], readiness('notConfigured'));
+    const adapter = new CodexAdapter({ ...processDeps, platform: platform as NodeJS.Platform });
+    await adapter.start(taskStart('agent'));
+
+    expect(sentNamed(spawned.processes[0].written, 'windowsSandbox/readiness')).toEqual([]);
+    expect(sentNamed(spawned.processes[0].written, 'thread/start')[0].params).toEqual({ cwd: '/repo', sandbox: 'workspace-write', approvalPolicy: 'on-request', approvalsReviewer: 'auto_review' });
+    adapter.dispose();
+  });
+
+  it.each([
+    ['full access, which runs no sandbox', 'fullAccess'],
+    ['read-only, whose own shell is off', 'plan'],
+  ])('asks nothing of a task in %s', async (_label, mode) => {
+    const { spawned, adapter } = windows(handshake(), 'notConfigured');
+    await adapter.start(taskStart(mode));
+
+    expect(sentNamed(spawned.processes[0].written, 'windowsSandbox/readiness')).toEqual([]);
+    expect(JSON.stringify(sentNamed(spawned.processes[0].written, 'thread/start')[0].params)).not.toMatch(/Windows sandbox|"windows"/);
     adapter.dispose();
   });
 });
@@ -789,6 +912,44 @@ describe('CodexAdapter planner boundary (ADR-0008/0009)', () => {
       config: { web_search: 'disabled', projects: untrustedRepo() },
       developerInstructions: 'PLAN',
     });
+    adapter.dispose();
+  });
+
+  // Codex's sandboxes on Windows cannot keep a command off the network: with
+  // none set up there is none, and under the non-admin one Node reaches it.
+  it.each([
+    ['Windows, with its own shell off and nothing asked of its sandbox', 'win32', { shell_tool: false, unified_exec: false }],
+    ['Linux, with its own shell', 'linux', undefined],
+    ['macOS, with its own shell', 'darwin', undefined],
+  ])('plans read-only on %s', async (_label, platform, features) => {
+    const mcp = mcpClientConfig({ url: 'http://127.0.0.1:4555/mcp', token: 'tok-secret' });
+    const { spawned, processDeps } = deps(plannerHandshake());
+    const adapter = new CodexAdapter({ ...processDeps, platform: platform as NodeJS.Platform });
+    await adapter.start({ kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN', mcp });
+
+    const sent = written(spawned.processes[0].written);
+    expect(sent.map((msg) => msg.method)).not.toContain('windowsSandbox/readiness');
+    const thread = sent.find((msg) => msg.method === 'thread/start');
+    expect(thread?.params?.sandbox).toBe('read-only');
+    expect(thread?.params?.approvalPolicy).toBe('on-request');
+    const config = thread?.params?.config as { features?: unknown; windows?: unknown } | undefined;
+    expect(config?.features).toEqual(features);
+    expect(config?.windows).toBeUndefined();
+    expect(thread?.params?.developerInstructions).toContain(features ? 'You have no shell of your own on this machine' : 'not your own shell');
+    adapter.dispose();
+  });
+
+  it('keeps Codex\'s own shell on Windows for a planner offered no run_command, its one way to read', async () => {
+    // A one-shot plan runs no command (CliAgentAiService.oneShot), so it withholds the tool.
+    const mcp = mcpClientConfig({ url: 'http://127.0.0.1:4555/mcp', token: 'tok-secret', hidden: ['run_command'] });
+    const { spawned, processDeps } = deps(plannerHandshake());
+    const adapter = new CodexAdapter({ ...processDeps, platform: 'win32' });
+    await adapter.start({ kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN', mcp });
+
+    const thread = written(spawned.processes[0].written).find((msg) => msg.method === 'thread/start');
+    expect((thread?.params?.config as { features?: unknown } | undefined)?.features).toBeUndefined();
+    expect(thread?.params?.developerInstructions).not.toContain('run_command');
+    expect(thread?.params?.developerInstructions).not.toContain('  ');
     adapter.dispose();
   });
 
@@ -1752,6 +1913,15 @@ describe('CodexAdapter in a lease\'s container (ADR-0059 L7)', () => {
     expect(sentNamed(spawned.processes[0].written, 'thread/start')).toHaveLength(0);
     // The two probes and the app-server: a lease waits for each to end before it closes.
     await vi.waitFor(() => expect(ended).toHaveBeenCalledTimes(3));
+  });
+
+  it('asks a container\'s Codex nothing of a Windows sandbox, whichever host places it', async () => {
+    const { spawned, processDeps } = deps(handshake(), { probe: () => ({ code: 0 }) });
+    const adapter = new CodexAdapter({ ...processDeps, platform: 'win32', placement: placed().placement });
+    await adapter.start(taskStart('agent'));
+
+    expect(sentNamed(spawned.processes[0].written, 'windowsSandbox/readiness')).toEqual([]);
+    adapter.dispose();
   });
 
   it('runs a sandboxed task when the sandbox does start in the container', async () => {

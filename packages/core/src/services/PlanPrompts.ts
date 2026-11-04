@@ -123,7 +123,7 @@ function sealedGuide(tool: 'bash' | 'run_command'): string {
  * forked prompt would mean each future block gets written twice, or silently
  * works on one backend only.
  */
-function researchPhaseBlock(harnessMode: boolean, agents: InTurnAgents): string {
+function researchPhaseBlock(harnessMode: boolean, agents: InTurnAgents, researchShell?: ConversationVariant['researchShell']): string {
   const shared = [
     'RESEARCH PHASE:',
     '- Start by reading README.md and any agent config files (AGENTS.md, CLAUDE.md)',
@@ -133,6 +133,7 @@ function researchPhaseBlock(harnessMode: boolean, agents: InTurnAgents): string 
       '- Explore the repository with your own tools until you understand its architecture',
       '- You are planning, not implementing: do NOT edit, create, or delete any file, and do not run commands that change the workspace',
       '- Run commands — git, gh, cloud CLIs, the project\'s own tooling — with the run_command tool, not a shell of your own. MCP tools the user configured (issue trackers, todo lists) are yours to read from too. Reads run at once; anything else is approved or refused by the user\'s settings. When something the plan needs to change is refused, add it to the plan instead: a script task when you can state the exact commands, an ops task when it needs judgment',
+      ...researchShellLine(researchShell),
       `- ${sealedGuide('run_command')}`,
       ...(agents === null ? [] : ['- When you delegate orientation to your own agents (WHO EXPLORES below), WAIT for their results inside this reply. Do NOT launch them in the background or async and end your turn saying you will report back later: your turn ending is what hands the conversation back to the user, and anything you say after it never reaches them.']),
     ]
@@ -250,6 +251,20 @@ export interface ConversationVariant {
   delegation?: PlannerDelegation;
   /** The planner is a subplanner: its parent's plan stands where the user does (ADR-0055 D4). */
   subplanner?: SubplannerBrief;
+  /**
+   * The shell a harness planner's `run_command` runs on Windows: Git Bash, or
+   * cmd.exe where Git for Windows is missing (ADR-0010). A coding agent there
+   * expects PowerShell, whose cmdlets that shell does not have. Absent
+   * elsewhere, where the prompt does not change by a byte.
+   */
+  researchShell?: 'git-bash' | 'cmd';
+}
+
+/** What `run_command` speaks on Windows, for a planner whose own shell there is PowerShell. */
+function researchShellLine(shell: ConversationVariant['researchShell']): string[] {
+  if (shell === 'git-bash') return ['- On this Windows machine run_command runs Git Bash, a POSIX shell: read with cat, ls, grep and find, not PowerShell cmdlets such as Get-Content.'];
+  if (shell === 'cmd') return ['- On this Windows machine run_command runs cmd.exe: read with type, dir and findstr, not PowerShell cmdlets such as Get-Content.'];
+  return [];
 }
 
 /** What a planner that may delegate is told of its limits (ADR-0055 D19). */
@@ -568,7 +583,7 @@ function buildConversationBody(
     '4. When the strategy calls for a plan and you have enough context, produce a prose outline — a short list describing each task in order.',
     autorun ? `5. Write the outline in your reply, then ${submit} in the same reply.` : `5. After the user confirms the outline, ${submit}.`,
     '',
-    researchPhaseBlock(tools, agents),
+    researchPhaseBlock(tools, agents, variant.researchShell),
     '',
     ...whoExploresSection(agents),
     '',
