@@ -634,27 +634,73 @@ describe('cline read-only tasks, replayed from Cline 3.0.74 (ADR-0028, ADR-0046,
     await agent.finished;
   });
 
-  it('refuses Cline\'s own file read, which names no path to judge, so a read-only task reads through run_command and completes through Ordewell', async () => {
+  it('lets a read-only task read through run_command and complete through Ordewell, as it was recorded', async () => {
     const { mcp, completed, commands } = await readOnlyToken();
     const { agent, adapter } = cline(replay('read-only'));
     await adapter.start(taskStart(mcp, READ_ONLY_MODE));
-    const first = await turn(adapter);
+    await turn(adapter);
     const second = await turn(adapter);
 
-    const [read] = note('read-only', 'summary')?.permissions ?? [];
-    expect(read).toMatchObject({ kind: 'read', title: expect.stringMatching(/^read_files: /) });
-    // Cline's request carries the path only in the model's arguments, never as a location.
-    const request = recording('read-only').find((e) => e.dir === 'in' && e.line.method === 'session/request_permission');
-    expect(request?.dir === 'in' ? (request.line.params as { toolCall: { locations?: unknown[] } }).toolCall.locations ?? [] : ['?']).toEqual([]);
-    expect(asked(first).map((e) => [e.name, e.decided?.decision])).toEqual([[expect.stringContaining('read_files'), 'deny']]);
+    // Recorded when Cline's own read was still refused, which is why it turned
+    // to run_command: that read is now allowed, so only the turn after it is
+    // checked against the recording.
+    expect(recordedAnswers('read-only')[0]).toEqual({ outcome: 'selected', optionId: 'reject_once' });
     expect(asked(second).map((e) => e.decided?.decision)).toEqual(['allow', 'allow']);
-    expect(permissionAnswers(agent)).toEqual(recordedAnswers('read-only'));
+    expect(permissionAnswers(agent).slice(1)).toEqual(recordedAnswers('read-only').slice(1));
     expect(commands).toHaveBeenCalledWith(expect.objectContaining({ command: `head -40 ${CWD}/README.md` }), expect.anything());
     expect(reports(completed)).toEqual(recordedReports('read-only').map((r) => expect.objectContaining(r)));
     expect(completed).toHaveBeenCalledWith(expect.objectContaining({ status: 'done' }), expect.anything());
     expect(note('read-only', 'summary')).toMatchObject({ ...UNTOUCHED, worktree: { entries: ['.git', 'README.md'], gitStatus: '' } });
     expect(agent.problems).toEqual([]);
     await agent.finished;
+  });
+
+  /**
+   * The read-only recording with its read_files request asking for `rawInput`
+   * instead. Only the first turn is driven: what Cline did after its read was
+   * answered is the recording's, made on a refusal.
+   */
+  async function firstRead(rawInput: unknown) {
+    const { mcp } = await readOnlyToken();
+    let swapped = false;
+    const steps = replay('read-only').map((step): FakeAcpStep => {
+      if (swapped || !('request' in step) || step.request !== 'session/request_permission') return step;
+      swapped = true;
+      const params = step.params as { toolCall: Record<string, unknown> };
+      return { request: step.request, params: { ...params, toolCall: { ...params.toolCall, title: `read_files: ${JSON.stringify(rawInput)}`, rawInput } } };
+    });
+    const { agent, adapter } = cline(steps);
+    await adapter.start(taskStart(mcp, READ_ONLY_MODE));
+    const events = await turn(adapter);
+    return { decided: asked(events).map((e) => e.decided?.decision), answer: permissionAnswers(agent)[0] };
+  }
+
+  it('allows Cline\'s own read of a workspace file on a read-only start, by the path its arguments name', async () => {
+    const [read] = note('read-only', 'summary')?.permissions ?? [];
+    expect(read).toMatchObject({ kind: 'read', title: expect.stringMatching(/^read_files: /) });
+    // Cline's request carries the path only in the model's arguments, never as a location.
+    const recorded = recording('read-only').find((e) => e.dir === 'in' && e.line.method === 'session/request_permission');
+    const { rawInput, locations } = recorded?.dir === 'in' ? (recorded.line.params as { toolCall: { rawInput: Record<string, unknown>; locations?: unknown[] } }).toolCall : { rawInput: {}, locations: ['?'] };
+    expect(locations ?? []).toEqual([]);
+    expect(rawInput).toEqual({ files: [{ path: `${CWD}/README.md`, start_line: 1, end_line: 20 }] });
+
+    expect(await firstRead(rawInput)).toEqual({ decided: ['allow'], answer: { outcome: 'selected', optionId: 'allow_once' } });
+    expect(await firstRead({ path: `${CWD}/src` })).toEqual({ decided: ['allow'], answer: { outcome: 'selected', optionId: 'allow_once' } });
+  });
+
+  it('refuses Cline\'s own read of a file outside the workspace, of several files, and of no path it names', async () => {
+    const refused = { decided: ['deny'], answer: { outcome: 'selected', optionId: 'reject_once' } };
+    expect(await firstRead({ files: [{ path: '/etc/hosts' }] })).toEqual(refused);
+    expect(await firstRead({ files: [{ path: `${CWD}/../etc/hosts` }] })).toEqual(refused);
+    expect(await firstRead({ files: [{ path: `${CWD}/README.md` }, { path: `${CWD}/a.ts` }] })).toEqual(refused);
+    expect(await firstRead({ queries: ['where is the README'] })).toEqual(refused);
+    expect(await firstRead({ files: [{ path: `${CWD}/README.md` }, { start_line: 1 }] })).toEqual(refused);
+    // A shape the hook does not read names nothing, even where a path shows through.
+    expect(await firstRead({ files: `${CWD}/README.md` })).toEqual(refused);
+    expect(await firstRead({ files: [`${CWD}/README.md`] })).toEqual(refused);
+    expect(await firstRead(`${CWD}/README.md`)).toEqual(refused);
+    // Cline starts in a directory of its own, so that is where it would read a relative path from.
+    expect(await firstRead({ files: [{ path: 'README.md' }] })).toEqual(refused);
   });
 
   it('leaves no private directory behind once a read-only task\'s process is gone', async () => {

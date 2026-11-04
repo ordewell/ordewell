@@ -414,6 +414,16 @@ from a private directory too, with its own reads denied as well as its writes
 and shell, so it reads the worktree only through `run_command`, which the
 envelope decides.
 
+An ACP runner's own read or search is a path ask only when it names exactly
+one path. That path is the call's location or, for an agent that names its
+files only in the model's arguments, the one its profile reads from them
+(ADR-0060 R3), resolved against the directory the agent runs in. It meets
+the same containment as any path: inside the workspace it is decided as a
+read, outside it asks or is refused. A call naming several paths is refused,
+never widened to the directory they share, and one naming none is `other`
+and refused. Reading the arguments adds no permission, only an ask the
+envelope can judge.
+
 ## Considered options
 
 - **Native Claude plan mode plus direct write-tool denials.** Rejected: its
@@ -465,3 +475,4 @@ envelope decides.
 - 2026-11-04 — Qwen Code is a harness planner, its every worktree read put to the envelope (ADR-0060).
 - 2026-11-04 — Gemini CLI is a harness planner, reaching the worktree only through `run_command` (ADR-0060).
 - 2026-11-04 — Cursor is a harness planner, reading the worktree only through `run_command` (ADR-0060).
+- 2026-11-04 — an ACP runner's own read or search is judged by the one path its location or, per its profile, its arguments name; several or none are refused (ADR-0060).

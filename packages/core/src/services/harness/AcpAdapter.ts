@@ -423,9 +423,14 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     const { mcp } = started;
     const takesHttp = this.capabilities.mcpCapabilities?.http === true;
     return {
-      cwd: this.deps.placement?.cwd ?? this.startDir ?? started.cwd,
+      cwd: this.sessionCwd(started),
       mcpServers: takesHttp ? [{ type: 'http', name: mcp.name, url: mcp.url, headers: Object.entries(mcp.headers).map(([name, value]) => ({ name, value })) }] : [],
     };
+  }
+
+  /** Where the agent runs, and so where a relative path it names is read from. */
+  private sessionCwd(started: Started): string {
+    return this.deps.placement?.cwd ?? this.startDir ?? started.cwd;
   }
 
   /** A fresh process has not been told the contract, whether its session is new or resumed. */
@@ -787,7 +792,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
         detail: toolCall.title ?? '',
         ...(typeof input === 'object' && input !== null && !Array.isArray(input) ? { input: input as Record<string, unknown> } : {}),
         toolUseId: toolCall.toolCallId,
-        ...(this.restricted ? { ask: acpAsk(call) } : {}),
+        ...(this.restricted ? { ask: acpAsk(call, { profile: this.profile, cwd: this.sessionCwd(this.requireStarted()) }) } : {}),
         // By exact name only: a near miss is anyone's tool (ADR-0022, S3; ADR-0060, R7).
         ordewell: this.binding.isOrdewellAsk(report ? { request: toolCall, report } : { request: toolCall }),
       }, { id, options }, (event) => this.announce(event));
