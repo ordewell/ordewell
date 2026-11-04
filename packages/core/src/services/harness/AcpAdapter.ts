@@ -29,6 +29,7 @@ import type { AcpAskedCall, AcpProfile } from './acpProfiles';
 import { acpAsk, acpRoles, decideRestricted } from './acpRoles';
 import { PermissionLedger, type LedgerStance } from './permissionLedger';
 import { readOnlyTask } from './plannerPermissions';
+import { instructionsBlock } from './repoConfig';
 import { awaitAttach, listed, MCP_ATTACH_TIMEOUT_MS, type AttachState } from './ordewellBinding';
 import { settleWithin } from './settleWithin';
 import { compareVersions } from '../../utils/version';
@@ -512,7 +513,11 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     const contract = taskCompletionContract(started.commits ? { commits: true } : {});
     if (!this.restricted) return contract;
     const note = `This task is read-only: your own file edits, shell and web tools are off. Read files, search the repository and run tests with \`${toolName('run_command')}\`, read web pages with \`${toolName('fetch')}\` and search the web with \`${toolName('web_search')}\`.`;
-    return `${note}\n\n${contract}`;
+    // Started outside its worktree, the agent loads none of the repository's
+    // instruction files itself, so they follow as text. A planner's are in
+    // its system prompt already (ADR-0028).
+    const repository = this.startDir ? instructionsBlock(this.profile.repoConfig?.instructions(started.cwd) ?? [], 'in this read-only task') : '';
+    return [note, contract, repository].filter(Boolean).join('\n\n');
   }
 
   private requireStarted(): Started {

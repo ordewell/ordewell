@@ -105,7 +105,7 @@ export interface AcpProfile {
   instructions: AcpInstructionsRoute;
   /** Absent: the agent has no mode switch, so the adapter answers its requests per the mode. */
   mode?: AcpModeRoute;
-  /** What the agent loads from a repository, which the planner reads instead (ADR-0028). None when absent. */
+  /** What the agent loads from a repository, handed instead to a planner and to a read-only task started outside it (ADR-0028). None when absent. */
   repoConfig?: RepoConfigReader;
   usageLimitReset?(tail: string, now: Date): Date | null;
   promptCacheTtlMs?: number;
