@@ -298,6 +298,9 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     const parsed = parseAcp(requestPermissionRequestSchema, params);
     if (!parsed.ok) return new JsonRpcError(ACP_ERROR.invalidParams, `Ordewell cannot read this permission request: ${parsed.error}`);
     const { toolCall, options } = parsed.value;
+    // A request that crossed this turn's session/cancel was pending when the
+    // agent read it: ACP has the client answer it `cancelled`, never ask anyone.
+    if (this.cancelSent && this.turn) return Promise.resolve({ outcome: CANCELLED });
     const id = String(rpcId);
     return new Promise((resolve) => {
       this.held.set(id, { rpcId, resolve: (outcome) => resolve({ outcome }) });
