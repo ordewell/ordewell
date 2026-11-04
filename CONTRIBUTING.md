@@ -169,8 +169,9 @@ An agent that ships its own Agent Client Protocol server needs no adapter:
 `plugins/builtin/copilot-cli.manifest.ts` and
 `services/harness/copilotProfile.ts` before writing yours. Read
 `services/harness/clineProfile.ts` too if your agent takes MCP servers only
-from a settings file of its own, connects to them only on its first turn, or
-ignores over ACP the login its own CLI stored. Read
+from a settings file of its own, connects to them only on its first turn,
+ignores over ACP the login its own CLI stored, or has no list that takes its
+own tools away. Read
 `services/harness/geminiProfile.ts` if it names a tool only in its call ids,
 or connects MCP servers only in a folder it trusts. Read
 `services/harness/cursorProfile.ts` if its first report of an MCP call does not
@@ -217,7 +218,9 @@ since the check refuses an agent that does not say its version.
   only. To claim the planner role or a read-only mode (ADR-0060 R3), you need
   all three of these:
   - a `restricted` control that takes the agent's own write and shell tools
-    away, shown to hold under ACP;
+    away, or, where the agent has no list to take them from, makes it ask
+    before every use, as Cline's `--auto-approve false` does; either shown to
+    hold under ACP;
   - Ordewell's refusal of every edit, delete, move and execute request, which
     the adapter already does;
   - a recording of a write attempt and a shell attempt refused, with nothing
@@ -230,7 +233,10 @@ since the check refuses an agent that does not say its version.
   directory of its own and asks for every path in the worktree. Record a hook
   planted in the worktree running on a writable start and not on a restricted
   one, as Copilot's `repo-hooks.jsonl`, `planner.jsonl` and `read-only.jsonl`
-  do.
+  do, and Cline's `repo-hooks.jsonl` and `read-only-hooks.jsonl`. A variable
+  that moves the agent's config home is not that switch unless a recording
+  shows it: Cline's `CLINE_DIR` left the worktree's hooks running
+  (`repo-hooks-cline-dir.jsonl`).
 
   An agent with no deny flag, whose controls are a settings file or a hook,
   is handed them in `restricted.files`: each is written 0600 into that
