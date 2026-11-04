@@ -9,6 +9,7 @@ import type { ConversationRequest } from '../AiService';
 import type { ApprovalRequest, IApproval } from '../../interfaces/IApproval';
 import { ApprovalPolicy } from '../ApprovalPolicy';
 import type { ProjectServerApprovals } from '../harness/projectServers';
+import { instructionsBlock } from '../harness/repoConfig';
 import { CONNECTORS, createTaskAdapter } from '../harness/connectors';
 import type { AgentProcessDeps, PlannerStartOptions, TaskStartOptions } from '../harness/AgentAdapter';
 import { fakeMcpServer, fakeSpawn, fixture, sseResponse, type FakeAgentProcess, type ScriptedReply } from './harnessTestKit';
@@ -212,6 +213,18 @@ describe('Claude Code planner instructions (ADR-0028)', () => {
     expect(prompt).toContain('Prefer small commits.');
     expect(prompt).not.toContain('OUTSIDE-IMPORT');
     expect(prompt).not.toContain('CODE-SPAN-IMPORT');
+  });
+
+  it('leaves out a memory file the repository links outside the workspace', async () => {
+    const outside = repo({ 'secret.md': 'USER-SECRET' });
+    const root = repo({ 'CLAUDE.local.md': 'Prefer small commits.' });
+    symlinkSync(join(outside, 'secret.md'), join(root, 'CLAUDE.md'));
+    const { svc, spawned } = service('claude-code', root, [fixture('claude-code', 'prose')]);
+    await svc.startConversation(request());
+
+    const prompt = flag(spawned.lastArgs(), '--append-system-prompt') ?? '';
+    expect(prompt).toContain('Prefer small commits.');
+    expect(prompt).not.toContain('USER-SECRET');
   });
 });
 
@@ -592,6 +605,45 @@ describe('Copilot CLI instructions (ADR-0028, ADR-0060)', () => {
       ['.github/instructions/app.instructions.md', 'APP-MODULAR'],
     ]);
     expect(files.find((file) => file.path.endsWith('ts.instructions.md'))?.text).toContain('TS-RULES');
+  });
+
+  it('reads no instruction file a link points outside the repository, judged where it points', () => {
+    const outside = repo({ 'secret.md': 'USER-SECRET', 'copilot-instructions.md': 'USER-GITHUB-DIR' });
+    const linkedFile = repo({ 'CLAUDE.md': 'REPO-CLAUDE' });
+    symlinkSync(join(outside, 'secret.md'), join(linkedFile, 'AGENTS.md'));
+    symlinkSync(join(outside, 'secret.md'), join(linkedFile, 'GEMINI.md'));
+    const linkedDir = repo({ 'AGENTS.md': 'REPO-AGENTS' });
+    symlinkSync(outside, join(linkedDir, '.github'));
+
+    expect(reader.instructions(linkedFile)).toEqual([{ path: 'CLAUDE.md', text: 'REPO-CLAUDE' }]);
+    expect(reader.instructions(linkedDir)).toEqual([{ path: 'AGENTS.md', text: 'REPO-AGENTS' }]);
+  });
+
+  /** A repository of 3000 modular instruction files, 25 to 29 characters each: about 80,000 together, twice what a planner is given. */
+  function manyRules(): string {
+    return repo(Object.fromEntries([...Array(3000).keys()].map((i) => [
+      `.github/instructions/a/b/rule-${String(i).padStart(4, '0')}-with-a-long-descriptive-name.instructions.md`,
+      `RULE-${i} ${'x'.repeat(20)}`,
+    ])));
+  }
+
+  it('bounds the instruction block however many instruction files the repository holds, saying the rest were left out', () => {
+    const block = instructionsBlock(reader.instructions(manyRules()));
+
+    expect(block.length).toBeLessThan(41_000);
+    expect(block.match(/left out/g)).toHaveLength(1);
+    expect(block).toContain('RULE-0 ');
+    expect(block).not.toContain('RULE-2999 ');
+  });
+
+  it('stops reading instruction files once they fill what the planner is given, and reads no one file past it', () => {
+    const read = reader.instructions(manyRules());
+    expect(read.length).toBeLessThan(2000);
+    expect(read.map((file) => file.text).join('').length).toBeLessThan(41_000);
+
+    const huge = reader.instructions(repo({ 'AGENTS.md': `HEAD ${'x'.repeat(1_000_000)}` }));
+    expect(huge[0].text.startsWith('HEAD ')).toBe(true);
+    expect(huge[0].text.length).toBeLessThanOrEqual(160_000);
   });
 
   it('reads nothing from a repository without instruction files, and no project servers from one that declares them', () => {
