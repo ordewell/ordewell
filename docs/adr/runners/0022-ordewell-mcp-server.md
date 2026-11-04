@@ -97,7 +97,7 @@ A runner-facing tool joins the task side on the same mechanism.
 ### Scope
 
 - **Task runners and the coding-agent planners (S1).** Claude Code, Codex,
-  OpenCode, and GitHub Copilot CLI, Qwen Code and Gemini CLI, ACP runners
+  OpenCode, and GitHub Copilot CLI, Qwen Code, Gemini CLI and Cursor, ACP runners
   ([ADR-0060](0060-acp-runners-are-data-on-one-connector.md)), use the
   required server, as task runners and as planners. An ACP agent
   that can take an HTTP MCP server neither in `session/new` nor from a
@@ -385,3 +385,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-11-04 — A5, S1: a file holding the token is one runner process's own, outside the worktree and removed with it; an ACP runner may take the server from a settings file of its own, swept after a crash, and `session/new` carries it only to an agent that advertises HTTP (ADR-0060 R4).
 - 2026-11-04 — S1: Qwen Code uses the server as a planner too (ADR-0060).
 - 2026-11-04 — S1: Gemini CLI uses the server as a planner too (ADR-0060).
+- 2026-11-04 — S1: Cursor uses the server as a planner too (ADR-0060).

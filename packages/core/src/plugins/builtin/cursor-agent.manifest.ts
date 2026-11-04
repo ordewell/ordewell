@@ -34,11 +34,13 @@ export const CURSOR_AGENT_MANIFEST: RunnerManifest = {
   // `--force` is Cursor's allow-all switch, given at spawn (the profile). Its
   // default mode asks before a command or MCP tool outside the user's Cursor
   // allowlist, and writes a file edit without asking, as recorded, so the
-  // description promises no ask before an edit. Cursor's `plan` and `ask`
-  // modes are not offered as the read-only mode: no recording shows either
-  // refusing a write and a command (ADR-0046).
+  // description promises no ask before an edit. The read-only mode is not
+  // Cursor's own `plan` or `ask`, which its plan refused on an account with no
+  // paid plan: a restricted start sets no mode, and its settings deny
+  // Cursor's own tools (the profile; ADR-0046).
   modes: [
     { id: 'default', label: 'Ask before commands', description: 'Commands and MCP tools outside your Cursor allowlist wait for approval; Cursor writes file edits without asking', safe: true },
     { id: 'force', label: 'Allow all', description: 'Cursor runs commands and tools without asking (--force)', autonomous: true },
+    { id: 'plan', label: 'Read-only', description: 'Ordewell commands with Cursor\'s own tools off; lands nothing', readOnly: true },
   ],
 };

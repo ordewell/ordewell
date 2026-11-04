@@ -217,7 +217,11 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
   which runs Gemini's `default` under a policy file Ordewell hands it,
   denying Gemini's own write, shell and web tools and every MCP server's but
   Ordewell's), from a private directory its own reads cannot leave, so it
-  reads the worktree through `run_command` alone.
+  reads the worktree through `run_command` alone. Cursor claims it (its
+  manifest's `plan` mode, which is Cursor's `agent` mode restricted, never
+  Cursor's own `plan`), from a private directory with a config home of its
+  own whose settings deny Cursor's reads, writes and shell; Cursor refuses
+  those itself, and it reads through `run_command`.
 - **Native web tools are refused.** A runner's own fetch and search run
   outside Ordewell's pinned transport, and a provider-side search outside its
   secret check and budget too, with nobody there to approve one. Claude's
@@ -485,3 +489,4 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
 - 2026-11-04 — an ACP runner's restricted start may hand it owner-only files and empty config homes outside the worktree, for an agent with no deny flag (ADR-0060 R3).
 - 2026-11-04 — Cline runs read-only tasks, from a private start directory, asking before each of its own tools (ADR-0060 R3).
 - 2026-11-04 — Gemini CLI runs read-only tasks, from a private start directory, under a policy file that denies its own write, shell and web tools (ADR-0060 R3).
+- 2026-11-04 — Cursor runs read-only tasks, from a private start directory, its own reads, writes and shell denied (ADR-0060 R3).

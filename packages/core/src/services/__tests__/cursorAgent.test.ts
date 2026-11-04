@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -7,8 +7,10 @@ import { acpOrdewellBinding } from '../harness/acpOrdewell';
 import { discoverAcpModels } from '../harness/acpModels';
 import { CURSOR_AGENT_PROFILE } from '../harness/cursorProfile';
 import { CURSOR_EXTENSION_REQUESTS } from '../harness/cursorRequests';
+import { decideRestricted } from '../harness/acpRoles';
+import { decidePlannerPermission } from '../harness/plannerPermissions';
 import type { AcpToolCall } from '../harness/acpSchema';
-import type { AgentEvent, AgentProcessDeps, TaskModeAgentAdapter, TaskStartOptions } from '../harness/AgentAdapter';
+import type { AgentEvent, AgentProcessDeps, PlannerStartOptions, TaskModeAgentAdapter, TaskStartOptions } from '../harness/AgentAdapter';
 import { VENDORS } from '../apiProviders';
 import { classifyRunnerStop } from '../runnerExit';
 import { BUILTIN_MANIFESTS } from '../../plugins/builtin';
@@ -23,9 +25,11 @@ import { fakeAcpSpawn, type FakeAcpAgent, type FakeAcpStep } from './fakeAcpAgen
  * (`fixtures/acp/cursor-agent/`): each recording is replayed as the agent's
  * side of the conversation, with Ordewell's side live. Cursor's MCP traffic
  * went to the server, not over stdio, so the replay makes the contact the
- * recording's notes show at the point they show it. Only the `model` and
- * `model-persists` recordings set a model; the rest ran on the account's
- * default, which is a task with no model (`TaskStartOptions.model`).
+ * recording's notes show at the point they show it. Of the writable
+ * recordings only `model` and `model-persists` set a model; the rest ran on
+ * the account's default, which is a task with no model
+ * (`TaskStartOptions.model`). The planner's and read-only task's recordings
+ * (`ROLES`) each set Auto, `default[]`, as the plan names it.
  */
 
 const FIXTURES = join(__dirname, 'fixtures/acp/cursor-agent');
@@ -45,10 +49,31 @@ interface Note {
   extensionRequests?: unknown[];
   leftBehind?: string[];
   current?: Array<[string, string]>;
+  cwd?: string;
+  tmpdir?: string;
+  startDirAtSpawn?: string[];
+}
+
+/** What a restricted start's recording noted at its end, from the server's side and the workspace's. */
+interface RolesOutcome {
+  /** The Ordewell tools the server saw called, in order. */
+  calls: string[];
+  permissions: Array<{ title: string; kind: string; answered: string }>;
+  /** Cursor's own client-bound requests (`cursor/*`) the turn sent. */
+  extensions: unknown[];
+  leftBehind: string[];
+  /** What the workspace's planted `.cursor/hooks.json` hooks and `.cursor/mcp.json` server marked, had any run. */
+  hooksRan: string[];
+  /** Whether the word only the workspace's planted `.cursor/rules` rule, or its `AGENTS.md`, asks for reached the transcript. */
+  ruleLoaded: boolean;
+  agentsLoaded: boolean;
 }
 type Recorded = { dir: 'in' | 'out'; ms: number; line: WireLine } | Note;
 
 const NAMES = ['cancel', 'deny', 'discovery', 'edit', 'execute', 'force', 'load', 'model', 'model-flag', 'model-persists', 'ordewell-tool', 'plan', 'signed-out'];
+
+/** The restricted starts' recordings: a planner's, and the rest read-only tasks'. */
+const ROLES = ['planner', 'read-only', 'planted-hook', 'extension-requests', 'restricted-write', 'restricted-shell', 'restricted-delete', 'restricted-fetch', 'restricted-search'] as const;
 
 function recording(name: string): Recorded[] {
   return readFileSync(join(FIXTURES, `${name}.jsonl`), 'utf8').replaceAll('{{CWD}}', CWD).trim().split('\n').map((line) => JSON.parse(line) as Recorded);
@@ -94,6 +119,43 @@ function firstReports(name: string): Map<string, AcpToolCall> {
     if (update.sessionUpdate === 'tool_call' && !found.has(update.toolCallId)) found.set(update.toolCallId, update);
   }
   return found;
+}
+
+const recordedOutcome = (name: string) => note(name, 'summary') as unknown as RolesOutcome;
+
+/** The recorded launch with its private directory put back as `dir`, the one this start made. */
+function launchedAs(name: string, dir: string) {
+  const at = (path: string | undefined) => (path === '{{START_DIR}}' ? dir : path);
+  const spawn = note(name, 'spawn');
+  return { cwd: at(spawn?.cwd), tmpdir: at(spawn?.tmpdir), startDirAtSpawn: spawn?.startDirAtSpawn };
+}
+
+/**
+ * The Ordewell call each of Cursor's permission requests was for, in order, as
+ * its report of the call carries it, or null for a request for a tool of its
+ * own. Cursor's MCP traffic went to the server, so the wire has only this.
+ */
+function recordedCalls(name: string): Array<{ tool: string; args: Record<string, unknown> } | null> {
+  const ordewell = new Map<string, { tool: string; args: Record<string, unknown> }>();
+  const calls: Array<{ tool: string; args: Record<string, unknown> } | null> = [];
+  for (const entry of recording(name)) {
+    if (entry.dir !== 'in') continue;
+    if (entry.line.method === 'session/update') {
+      const update = (entry.line.params as { update: { toolCallId?: string; rawInput?: { providerIdentifier?: string; toolName?: string; args?: Record<string, unknown> } } }).update;
+      const input = update.rawInput;
+      if (update.toolCallId && input?.providerIdentifier === 'ordewell' && input.toolName) ordewell.set(update.toolCallId, { tool: input.toolName, args: input.args ?? {} });
+    } else if (entry.line.method === 'session/request_permission') {
+      calls.push(ordewell.get((entry.line.params as { toolCall: { toolCallId: string } }).toolCall.toolCallId) ?? null);
+    }
+  }
+  return calls;
+}
+
+/** The arguments of the recording's one call of `tool`. */
+function recordedCall(name: string, tool: string): Record<string, unknown> {
+  const found = recordedCalls(name).find((call) => call?.tool === tool);
+  if (!found) throw new Error(`${name} has no call of ${tool}`);
+  return found.args;
 }
 
 /** The value of a session's `model` option, as Cursor answered `session/new`. */
@@ -155,6 +217,22 @@ const reporting = (name: string): Partial<Record<string, FakeAcpStep[]>> => {
     'session/request_permission': [{ run: async (agent) => {
       const args = reports.shift();
       if (args) await agent.callMcp('task_complete', args);
+    } }],
+  };
+};
+
+/**
+ * The recording's Ordewell calls, each made where Cursor made it: once its
+ * request was answered. A request for a tool of Cursor's own is followed by
+ * none: the recordings show it refused.
+ */
+const calling = (name: string): Partial<Record<string, FakeAcpStep[]>> => {
+  const calls = recordedCalls(name);
+  return {
+    ...CONTACT_ON,
+    'session/request_permission': [{ run: async (agent) => {
+      const call = calls.shift();
+      if (call) await agent.callMcp(call.tool, call.args);
     } }],
   };
 };
@@ -395,19 +473,13 @@ describe('cursor-agent, replayed from Cursor CLI 2026.10.22', () => {
     expect(note('signed-out', 'summary')?.contacted).toBe(false);
   });
 
-  it('claims no role: no recording shows Cursor\'s plan or ask mode refusing a write and a command', () => {
-    expect(recordedOut('plan', 'session/set_config_option')).toEqual([expect.objectContaining({ configId: 'mode', value: 'plan' })]);
-    expect(note('plan', 'summary')).toMatchObject({ permissions: [], completed: [], leftBehind: [] });
-    expect(CONNECTORS['cursor-agent'].plans).toBe(false);
-    expect(CURSOR_AGENT_PROFILE.roles).toBeUndefined();
-    expect(CURSOR_AGENT_PROFILE.restricted).toBeUndefined();
-    expect(CURSOR_AGENT_MANIFEST.modes?.some((mode) => mode.readOnly)).toBe(false);
-    expect(CURSOR_AGENT_MANIFEST.modes?.map((mode) => mode.id)).toEqual(['default', 'force']);
-  });
-
   it('answers Cursor\'s own blocking requests with the cursorRequests handlers, which no recorded turn sent', () => {
     expect(CURSOR_AGENT_PROFILE.extensionRequests).toBe(CURSOR_EXTENSION_REQUESTS);
     for (const name of NAMES) expect(note(name, 'summary')?.extensionRequests).toEqual([]);
+    for (const name of ROLES) expect(recordedOutcome(name).extensions).toEqual([]);
+    for (const name of [...NAMES, ...ROLES]) {
+      expect(recording(name).filter((e) => e.dir === 'in' && e.line.method?.startsWith('cursor/'))).toEqual([]);
+    }
   });
 
   it('takes a call for Ordewell\'s only when its request names a tool on Ordewell\'s server and its report is an MCP call', () => {
@@ -450,6 +522,252 @@ describe('cursor-agent, replayed from Cursor CLI 2026.10.22', () => {
       return input?.toolName ? [[input.providerIdentifier, input.toolName]] : [];
     });
     expect(named).toEqual([['ordewell', 'task_complete']]);
+  });
+});
+
+async function readOnlyToken() {
+  const server = new OrdewellMcpServer();
+  servers.push(server);
+  const completed = vi.fn(async () => ({ text: 'Recorded.' }));
+  const ran = vi.fn(async () => ({ text: '# Notes\n\nThe secret word is HERON.\n' }));
+  const credential = await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: 1, readOnly: true }, { taskComplete: completed, runCommand: ran } as never);
+  return { mcp: mcpClientConfig(credential), completed, ran };
+}
+
+async function plannerToken() {
+  const server = new OrdewellMcpServer();
+  servers.push(server);
+  const submitted = vi.fn(async () => ({ text: 'Plan received.' }));
+  const listed = vi.fn(async () => ({ text: '[]' }));
+  const models = vi.fn(async () => ({ text: '[]' }));
+  const ran = vi.fn(async () => ({ text: 'The plan is running.' }));
+  const credential = await server.issuePlannerToken({ sessionId: 's1' }, { submitPlan: submitted, listRunners: listed, listModels: models, runPlan: ran } as never);
+  return { mcp: mcpClientConfig(credential), submitted, listed, models, ran };
+}
+
+/** Cursor's read-only mode, as the plan names it. */
+const READ_ONLY_MODE = CURSOR_AGENT_MANIFEST.modes?.find((mode) => mode.readOnly)?.id ?? 'none';
+
+/** Auto, the model every restricted recording ran on: an account with no paid plan offered nothing else. */
+const AUTO = 'default[]';
+
+function readOnlyStart(mcp: McpClientConfig): TaskStartOptions {
+  return taskStart(mcp, READ_ONLY_MODE, { model: AUTO });
+}
+
+function plannerStart(mcp: McpClientConfig): PlannerStartOptions {
+  return { kind: 'planner', cwd: CWD, model: AUTO, systemPrompt: 'You are the planner.', mcp };
+}
+
+const startOf = async (name: string) => (name === 'planner' ? plannerStart((await plannerToken()).mcp) : readOnlyStart((await readOnlyToken()).mcp));
+
+/** A planner's turn, every held request put to its envelope as `CliAgentAiService` puts it (ADR-0026). */
+async function plannerTurn(adapter: TaskModeAgentAdapter): Promise<AgentEvent[]> {
+  const events: AgentEvent[] = [];
+  await adapter.send('go', (event) => {
+    events.push(event);
+    if (event.type === 'permission_request' && !event.decided) {
+      void decidePlannerPermission(event.ask, event.input ?? {}, { workspaceRoot: CWD })
+        .then((decision) => adapter.answerPermission?.(event.id, decision));
+    }
+  });
+  return events;
+}
+
+/** The settings a restricted start hands Cursor: every tool of its own that reads, writes or runs, denied. */
+const DENY_ALL = {
+  version: 1,
+  permissions: { allow: [], deny: ['Read(**)', 'Write(**)', 'Shell(*)'] },
+  approvalMode: 'allowlist',
+  sandbox: { mode: 'disabled' },
+};
+
+const ALLOWED_ONCE = { outcome: 'selected', optionId: 'allow-once' };
+
+describe('cursor-agent roles, replayed from Cursor CLI 2026.10.22 (ADR-0026, ADR-0028, ADR-0046, ADR-0060)', () => {
+  it('claims both roles: it plans, and offers a read-only mode that never reaches Cursor\'s own plan or ask mode', () => {
+    expect(CONNECTORS['cursor-agent'].plans).toBe(true);
+    expect(CURSOR_AGENT_PROFILE.roles).toEqual({ plans: true, readOnly: true });
+    expect(READ_ONLY_MODE).toBe('plan');
+    expect(CURSOR_AGENT_MANIFEST.modes?.map((mode) => mode.id)).toEqual(['default', 'force', 'plan']);
+    // Cursor's own plan mode, the one recorded turn that reached it, was refused for the account's plan.
+    expect(recordedOut('plan', 'session/set_config_option')).toEqual([expect.objectContaining({ configId: 'mode', value: 'plan' })]);
+    expect(JSON.stringify(recording('plan'))).toContain('Upgrade your plan to continue');
+    for (const name of ROLES) {
+      expect(recordedOut(name, 'session/set_mode')).toEqual([]);
+      expect(recordedOut(name, 'session/set_config_option')).toEqual([expect.objectContaining({ configId: 'model', value: AUTO })]);
+    }
+  });
+
+  it.each(ROLES)('starts %s in a directory of its own with Cursor\'s own read, write and shell tools denied, as it was recorded running none of the workspace\'s hooks or rules', async (name) => {
+    const { spawned, agent, adapter } = cursor(replay(name, CONTACT_ON));
+    await adapter.start(await startOf(name));
+
+    const dir = spawned.lastCwd() ?? '';
+    expect(dir.startsWith(CWD)).toBe(false);
+    expect(spawned.lastArgs()).toEqual(recordedArgs(name));
+    expect(spawned.lastArgs()).toEqual(['acp', '--sandbox', 'disabled']);
+    expect({ cwd: dir, tmpdir: spawned.lastEnv().TMPDIR, startDirAtSpawn: readdirSync(dir) }).toEqual(launchedAs(name, dir));
+    // Cursor's home of configuration is this start's own, holding the deny list and nothing of the user's.
+    const home = join(dir, 'CURSOR_CONFIG_DIR');
+    expect(spawned.lastEnv().CURSOR_CONFIG_DIR).toBe(home);
+    expect(readdirSync(home)).toEqual(['cli-config.json']);
+    expect(JSON.parse(readFileSync(join(home, 'cli-config.json'), 'utf8'))).toEqual(DENY_ALL);
+    expect(statSync(home).mode & 0o777).toBe(0o700);
+    expect(statSync(join(home, 'cli-config.json')).mode & 0o777).toBe(0o600);
+    expect((agent.requests('session/new')[0].params as { cwd: string }).cwd).toBe(dir);
+    expect(agent.requests('session/set_mode')).toEqual([]);
+    expect(agent.requests('session/set_config_option').map((r) => r.params)).toEqual(recordedOut(name, 'session/set_config_option'));
+    expect(recordedOutcome(name)).toMatchObject({ hooksRan: [], ruleLoaded: false, agentsLoaded: false, leftBehind: [] });
+    expect(agent.problems).toEqual([]);
+  });
+
+  it('leaves a writable start as it was: in the worktree, on the user\'s own configuration, with only its mode\'s arguments', async () => {
+    for (const [mode, args] of [['default', ['acp']], ['force', ['acp', '--force']]] as const) {
+      const { mcp } = await taskToken();
+      const { spawned, adapter } = cursor(replay(mode === 'force' ? 'force' : 'ordewell-tool', CONTACT_ON));
+      await adapter.start(taskStart(mcp, mode));
+
+      expect(spawned.lastArgs()).toEqual(args);
+      expect(spawned.lastCwd()).toBe(CWD);
+      expect(spawned.lastEnv().CURSOR_CONFIG_DIR).toBeUndefined();
+    }
+  });
+
+  it('plans with Ordewell\'s planner tools alone, each allowed by its title: it lists, submits a plan with a read-only Cursor task and starts it, leaving nothing behind', async () => {
+    const tools = ['list_runners', 'list_models', 'submit_plan', 'run_plan'];
+    const { mcp, submitted, listed, models, ran } = await plannerToken();
+    const { agent, adapter } = cursor(replay('planner', calling('planner')));
+    await adapter.start(plannerStart(mcp));
+    const events = await plannerTurn(adapter);
+
+    expect(asked(events).map((e) => e.decided)).toEqual(tools.map(() => ({ decision: 'allow' })));
+    expect(permissionAnswers(agent)).toEqual(recordedAnswers('planner'));
+    expect(permissionAnswers(agent)).toEqual(tools.map(() => ALLOWED_ONCE));
+    expect(listed).toHaveBeenCalled();
+    expect(models).toHaveBeenCalledWith(expect.objectContaining({ runner: 'cursor-agent' }), expect.anything());
+    expect(submitted).toHaveBeenCalledWith(expect.objectContaining({
+      tasks: [expect.objectContaining({ assignedRunner: 'cursor-agent', readOnly: true })],
+    }), expect.anything());
+    expect(ran).toHaveBeenCalled();
+    expect(recordedOutcome('planner')).toMatchObject({
+      calls: tools,
+      permissions: tools.map((tool) => ({ title: `ordewell-${tool}: ${tool}`, kind: 'other', answered: 'allow_once' })),
+      leftBehind: [],
+    });
+    expect(agent.problems).toEqual([]);
+    await agent.finished;
+  });
+
+  it.each([
+    ['restricted-write', 'edit', `Edit \`${CWD}/probe.txt\``, '`Read permission denied`'],
+    ['restricted-shell', 'execute', '`touch probe-shell.txt`', 'was refused by permissions'],
+    ['restricted-delete', 'delete', `Delete \`${CWD}/README.md\``, '`Permission denied`'],
+  ] as const)('shows %s refused by Cursor\'s own deny list without asking, which the model reports blocked, leaving nothing behind', async (name, kind, title, refusal) => {
+    const { mcp, completed } = await readOnlyToken();
+    const { agent, adapter } = cursor(replay(name, calling(name)));
+    await adapter.start(readOnlyStart(mcp));
+    const events = await turn(adapter);
+
+    // The call is reported, and never asked about: the deny list refused it inside Cursor.
+    expect([...firstReports(name).values()].map((report) => report.kind)).toEqual([kind, 'other']);
+    expect(JSON.stringify(recording(name))).toContain(JSON.stringify(title).slice(1, -1));
+    expect(JSON.stringify(events)).toContain(JSON.stringify(refusal).slice(1, -1));
+    expect(asked(events).map((e) => e.decided)).toEqual([{ decision: 'allow' }]);
+    expect(permissionAnswers(agent)).toEqual(recordedAnswers(name));
+    expect(permissionAnswers(agent)).toEqual([ALLOWED_ONCE]);
+    expect(completed).toHaveBeenCalledWith(expect.objectContaining({ status: 'blocked' }), expect.anything());
+    expect(recordedOutcome(name)).toMatchObject({
+      calls: ['task_complete'],
+      permissions: [{ title: 'ordewell-task_complete: task_complete', kind: 'other', answered: 'allow_once' }],
+      leftBehind: [],
+    });
+    expect(agent.problems).toEqual([]);
+    await agent.finished;
+  });
+
+  it.each([
+    ['restricted-write', 'edit'],
+    ['restricted-shell', 'execute'],
+    ['restricted-delete', 'delete'],
+  ] as const)('would refuse %s by its kind with no person asked, had Cursor asked for it', async (name, kind) => {
+    const [report] = firstReports(name).values();
+    const request: AcpToolCall = { toolCallId: report.toolCallId, title: report.title, kind };
+    const { mcp } = await readOnlyToken();
+
+    expect(decideRestricted({ request, report }, { kind: 'other' }, readOnlyStart(mcp))).toMatchObject({ decision: 'deny' });
+    expect(decideRestricted({ request, report }, { kind: 'other' }, { kind: 'planner' })).toMatchObject({ decision: 'deny' });
+  });
+
+  it.each([
+    ['restricted-fetch', 'Fetch https://httpbin.org/uuid', 'fetch'],
+    ['restricted-search', 'Web search: httpbin uuid', 'search'],
+  ] as const)('refuses %s, the one tool of Cursor\'s own that asks, with its reject option and no person asked', async (name, title, kind) => {
+    const { mcp, completed } = await readOnlyToken();
+    const { agent, adapter } = cursor(replay(name, calling(name)));
+    await adapter.start(readOnlyStart(mcp));
+    const events = await turn(adapter);
+
+    const requests = asked(events);
+    expect(requests.map((e) => e.decided?.decision)).toEqual(['deny', 'allow']);
+    expect(JSON.stringify(requests[0])).toContain(title);
+    expect(permissionAnswers(agent)).toEqual(recordedAnswers(name));
+    expect(permissionAnswers(agent)).toEqual([{ outcome: 'selected', optionId: 'reject-once' }, ALLOWED_ONCE]);
+    expect(completed).toHaveBeenCalledWith(expect.objectContaining({ status: 'blocked' }), expect.anything());
+    expect(recordedOutcome(name)).toMatchObject({
+      calls: ['task_complete'],
+      permissions: [{ title, kind, answered: 'reject_once' }, { title: 'ordewell-task_complete: task_complete', kind: 'other', answered: 'allow_once' }],
+      leftBehind: [],
+    });
+    expect(agent.problems).toEqual([]);
+    await agent.finished;
+  });
+
+  it.each([
+    ['read-only', ['run_command', 'task_complete']],
+    ['planted-hook', ['read', 'run_command', 'task_complete']],
+  ] as const)('runs a %s task that reads the workspace through Ordewell\'s run_command and completes with the attempt\'s token', async (name, tools) => {
+    const { mcp, completed, ran } = await readOnlyToken();
+    const { agent, adapter } = cursor(replay(name, calling(name)));
+    await adapter.start(readOnlyStart(mcp));
+    const events = await turn(adapter);
+
+    expect(asked(events).map((e) => e.decided)).toEqual(tools.map(() => ({ decision: 'allow' })));
+    expect(permissionAnswers(agent)).toEqual(recordedAnswers(name));
+    expect(permissionAnswers(agent)).toEqual(tools.map(() => ALLOWED_ONCE));
+    expect(recordedCall(name, 'run_command')).toEqual({ command: `cat ${CWD}/README.md` });
+    expect(ran).toHaveBeenCalledWith(expect.objectContaining({ command: `cat ${CWD}/README.md` }), expect.anything());
+    expect(completed).toHaveBeenCalledWith(expect.objectContaining({ status: 'done', summary: 'HERON' }), expect.anything());
+    expect(recordedOutcome(name)).toMatchObject({
+      calls: tools,
+      permissions: tools.map((tool) => ({ title: `ordewell-${tool}: ${tool}`, kind: 'other', answered: 'allow_once' })),
+      leftBehind: [],
+    });
+    expect(agent.problems).toEqual([]);
+    await agent.finished;
+  });
+
+  it('answers Cursor\'s question skipped and its plan rejected in a read-only start, which Cursor was recorded not offering the model at all', async () => {
+    const { mcp, completed } = await readOnlyToken();
+    const { agent, adapter } = cursor(replay('extension-requests', {
+      ...calling('extension-requests'),
+      'session/prompt': [
+        { request: 'cursor/ask_question', params: { toolCallId: 'q1', questions: [{ id: 'a', prompt: 'Which one?' }] } },
+        { request: 'cursor/create_plan', params: { toolCallId: 'p1', plan: '1. Fix it.' } },
+      ],
+    }));
+    await adapter.start(readOnlyStart(mcp));
+    await turn(adapter);
+
+    expect(agent.answers.filter((a) => a.method.startsWith('cursor/'))).toEqual([
+      { method: 'cursor/ask_question', result: { outcome: { outcome: 'skipped', reason: 'No user is present; decide and continue, or use Ordewell\'s checkpoint tool.' } } },
+      { method: 'cursor/create_plan', result: { outcome: { outcome: 'rejected', reason: 'Plan mode is not available in this role.' } } },
+    ]);
+    expect(recordedCall('extension-requests', 'task_complete')).toMatchObject({ status: 'done', summary: 'AskQuestion: no such tool. CreatePlan: no such tool.' });
+    expect(completed).toHaveBeenCalledWith(expect.objectContaining({ status: 'done' }), expect.anything());
+    expect(recordedOutcome('extension-requests').extensions).toEqual([]);
+    expect(agent.problems).toEqual([]);
+    await agent.finished;
   });
 });
 

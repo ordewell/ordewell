@@ -238,6 +238,24 @@ planner (above and below), and Ordewell reads them itself:
   planner's Gemini plans without them. Its user's own `~/.gemini/settings.json`
   still loads.
 
+### Cursor planners
+
+- **Started outside the repository.** Started in a workspace, Cursor CLI
+  2026.10.22 loads its `.cursor/rules/`, runs the hooks in its
+  `.cursor/hooks.json` and reads its `AGENTS.md`, as a run in print mode in a
+  workspace planting all three showed. A planner's Cursor, and a read-only
+  task's, starts in an empty private directory of its own instead, also its
+  temp directory, with `CURSOR_CONFIG_DIR` set to a home of that start's own
+  ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md) R3).
+  On the recorded restricted start in a workspace that also planted a
+  `.cursor/mcp.json` server and a `.cursor/cli.json` allowing every tool, no
+  hook or server ran and no rule or `AGENTS.md` reached the reply
+  (`planted-hook.jsonl`); the restricted write and command, recorded in the
+  same workspace, were refused despite that allow list.
+- **No instructions as text.** The profile has no reader, so a planner's
+  Cursor plans without the repository's rules or `AGENTS.md`. Its user's own
+  `~/.cursor/cli-config.json` does not load either, since the home moved.
+
 ### Cline read-only tasks
 
 - **Started outside the repository.** Under ACP, Cline 3.0.74 runs the hooks
@@ -287,6 +305,10 @@ planner (above and below), and Ordewell reads them itself:
 | Gemini CLI | `.gemini/settings.json` hooks | run commands | started in a private directory |
 | Gemini CLI | `.gemini/settings.json` MCP servers | start a command, reach a URL | started in a private directory; every server but Ordewell's denied by policy |
 | Gemini CLI | context files (`GEMINI.md`) | text | started in a private directory; not read |
+| Cursor | `.cursor/hooks.json` | run commands | started in a private directory |
+| Cursor | `.cursor/mcp.json` | start a command, reach a URL | started in a private directory |
+| Cursor | `.cursor/cli.json` permissions | allow its own tools | started in a private directory |
+| Cursor | `.cursor/rules/`, `AGENTS.md` | text | started in a private directory; not read |
 | Cline (read-only task) | `.cline/hooks/`, `.clinerules/hooks/` | run commands | started in a private directory |
 | Cline (read-only task) | `.clinerules/` rules | text | started in a private directory; not read |
 
@@ -500,3 +522,4 @@ specifies.
 - 2026-11-04 — a Cline read-only task starts in a private directory, out of reach of the repository's hooks (ADR-0060).
 - 2026-11-04 — a Qwen Code planner or read-only task starts in a private directory, out of reach of the repository's `.qwen/settings.json` (ADR-0060).
 - 2026-11-04 — a Gemini CLI planner or read-only task starts in a private directory, out of reach of the repository's `.gemini/settings.json` (ADR-0060).
+- 2026-11-04 — a Cursor planner or read-only task starts in a private directory with a config home of its own, out of reach of the repository's `.cursor/` (ADR-0060).

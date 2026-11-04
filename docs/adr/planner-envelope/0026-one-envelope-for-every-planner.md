@@ -126,15 +126,17 @@ How each runner raises them, checked live (Claude Code 2.1.296, codex-cli
   their own, and a 2.x that cannot do that is refused as a planner.
 - **An ACP runner** plans only when its profile claims the planner role on
   evidence ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)
-  R3), as GitHub Copilot CLI 1.0.105, Qwen Code 0.26.6 and Gemini CLI 0.66.0
-  do. Its start is restricted by the profile's spawn controls, which take the
-  agent's own write and shell tools away or make it ask before every use of
-  them: arguments and variables for an agent with a deny list or such a mode,
-  and for an agent whose controls are a hook, a settings file or a policy
-  file, owner-only files in the process's private directory, outside the
-  worktree and holding no secret, with, where the profile names them, empty
-  config homes there so the user's global rules, hooks, plugins and skills do
-  not load. An agent that loads configuration from the directory it starts in
+  R3), as GitHub Copilot CLI 1.0.105, Qwen Code 0.26.6, Gemini CLI 0.66.0 and
+  Cursor CLI 2026.10.22 do. Its start is restricted by the profile's spawn
+  controls, which take the agent's own write and shell tools away or make it
+  ask before every use of them: arguments and variables for an agent with a
+  deny list or such a mode, and for an agent whose controls are a hook, a
+  settings file or a policy file, owner-only files in the process's private
+  directory, outside the worktree and holding no secret, with, where the
+  profile names them, empty config homes there so the user's global rules,
+  hooks, plugins and skills do not load. A config home may hold the start's
+  own settings file, as Cursor's holds the deny list for its reads, writes and
+  shell. An agent that loads configuration from the directory it starts in
   starts in that private directory (ADR-0028).
   Whatever those controls let through, `AcpAdapter` refuses every edit,
   delete, move, command and mode switch by the kind the request or the turn's
@@ -332,3 +334,4 @@ refused from a workspace's environment files (ADR-0016). The effect allowlist
 - 2026-11-04 — an ACP runner plans on its profile's evidence: its restricted start's controls, flags or owner-only files and config homes outside the worktree, then Ordewell's refusal by kind, with every other request decided here (ADR-0060 R3).
 - 2026-11-04 — an ACP runner's spawn controls may make it ask before every write and command, Ordewell's refusal by kind deciding each; Qwen Code plans so (ADR-0060).
 - 2026-11-04 — an ACP runner's spawn controls may be a policy file it is handed; Gemini CLI plans under one (ADR-0060).
+- 2026-11-04 — a restricted start's config home may hold its own settings file; Cursor plans so (ADR-0060).

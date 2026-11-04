@@ -409,7 +409,10 @@ envelope as the Claude planner's do. GitHub Copilot CLI and Qwen Code plan
 so, each started in a private directory of its own: it asks for each path in
 the worktree, and the envelope decides every one. Gemini CLI plans so too,
 from a private directory its own reads cannot leave, so it reaches the
-worktree only through `run_command`, which the envelope decides.
+worktree only through `run_command`, which the envelope decides. Cursor plans
+from a private directory too, with its own reads denied as well as its writes
+and shell, so it reads the worktree only through `run_command`, which the
+envelope decides.
 
 ## Considered options
 
@@ -461,3 +464,4 @@ worktree only through `run_command`, which the envelope decides.
 - 2026-11-04 — GitHub Copilot CLI is a harness planner, its every worktree read put to the envelope (ADR-0060).
 - 2026-11-04 — Qwen Code is a harness planner, its every worktree read put to the envelope (ADR-0060).
 - 2026-11-04 — Gemini CLI is a harness planner, reaching the worktree only through `run_command` (ADR-0060).
+- 2026-11-04 — Cursor is a harness planner, reading the worktree only through `run_command` (ADR-0060).
