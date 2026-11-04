@@ -53,7 +53,8 @@ const FIVE_MINUTES = 5 * 60_000;
 /**
  * The runners Ordewell drives over their own protocols, by runner id. Being
  * here is what gives a runner a task-mode connector, and with `plans` a
- * harness planner; a runner that is not here cannot run tasks at all.
+ * harness planner; a runner that is not here cannot run tasks at all. An ACP
+ * runner plans only when its profile claims the role on evidence (ADR-0060, R3).
  */
 export const CONNECTORS: Readonly<Record<string, RunnerConnector>> = {
   'claude-code': { create: (deps) => new ClaudeCodeAdapter(deps), plans: true, ordewellTools: CLAUDE_ORDEWELL, repoConfig: CLAUDE_REPO_CONFIG, usageLimitReset: claudeUsageLimitReset, promptCacheTtlMs: FIVE_MINUTES },

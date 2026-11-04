@@ -400,6 +400,14 @@ tools are withheld, and its server runs under Ordewell's own permission
 policy, which denies every write and shell tool. The plan agent's name and a
 model's refusal to write were never security evidence.
 
+An ACP runner plans only when its profile claims the planner role on the
+evidence [ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)
+R3 asks for: spawn controls that take its own write and shell tools away,
+Ordewell refusing every edit, delete, move, command and mode switch it still
+requests, and a recorded refusal of both. Its other requests reach the
+envelope as the Claude planner's do. GitHub Copilot CLI claims no planner
+role.
+
 ## Considered options
 
 - **Native Claude plan mode plus direct write-tool denials.** Rejected: its
@@ -446,3 +454,4 @@ model's refusal to write were never security evidence.
 - 2026-10-29 — git's subcommands are an allowlist with per-subcommand reading forms, and gawk's `SYMTAB` is refused.
 - 2026-10-29 — git is scoped by its operands past leading flags, so `git -C <dir> …` no longer scopes to bare `git`.
 - 2026-10-29 — `chdir` and a re-cased `CD` move the shell: following stops, and the grant is the line.
+- 2026-11-04 — an ACP runner is a harness planner only on its profile's evidence; GitHub Copilot CLI is none (ADR-0060).

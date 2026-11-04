@@ -112,8 +112,8 @@ not an edit to that surface.
    (`services/harness/connectors.ts`): the adapter that drives it over its
    programmatic protocol, how it is handed the Ordewell MCP server (ADR-0022),
    and what it would load from a repository (ADR-0028). Having a connector is
-   what lets a runner run tasks (ADR-0018) and plan (ADR-0009). A usage-limit
-   reader is optional: add `usageLimitReset` only if the runner prints a time.
+   what lets a runner run tasks (ADR-0018), and its `plans` what lets it plan
+   (ADR-0009). A usage-limit reader is optional: add `usageLimitReset` only if the runner prints a time.
 3. **The tests.**
    - Copy `plugins/__tests__/declaringABuiltinRunner.test.ts` to see the
      contract: a fake runner declared at those two places must show up
@@ -158,6 +158,53 @@ catches.
 
 If the agent is closed source or auth-bundled, say so in the issue: the
 planner must fail before the goal is typed when the agent is unusable.
+
+### An ACP runner
+
+An agent that ships its own Agent Client Protocol server needs no adapter:
+`AcpAdapter` drives every ACP runner, and what differs between agents is an
+`AcpProfile` (ADR-0060). GitHub Copilot CLI is the reference: read
+`plugins/builtin/copilot-cli.manifest.ts` and
+`services/harness/copilotProfile.ts` before writing yours.
+
+- **Native servers only.** The agent's own maintainers must ship its ACP
+  server. A third-party shim in front of an agent does not qualify
+  (ADR-0060 R2).
+- **The manifest** is written the same way as any runner's, as in step 1 above.
+  `name` is the runner id, and it shares the planner setting's namespace with
+  the API vendors' ids in `services/apiProviders.ts`, so it must not equal
+  one of them: `kimi-cli`, not `kimi`.
+- **The profile** goes in `services/harness/<id>Profile.ts`, and its connector
+  entry is `CONNECTORS['<id>'] = acpConnector(PROFILE)`. It is data: the ACP
+  arguments, the `minVersion` you checked, how the agent names Ordewell's
+  tools, how a model reaches it, and the routes its instructions and modes
+  take. A behaviour your agent needs becomes a profile field any agent can
+  use, never a branch on a runner id in the adapter. Instructions go through
+  the agent's own channel outside the worktree, or else as a preamble on the
+  first prompt; never as a file in the worktree. The agent must advertise
+  `mcpCapabilities.http`. Ordewell has no stdio bridge, and an agent without
+  HTTP MCP is refused.
+- **Recorded fixtures.** Record every line each side sent in a live run as JSONL
+  under `services/__tests__/fixtures/acp/<id>/`, as `{dir, ms, line}`, with
+  `dir: "note"` lines for the spawn arguments and for what the run left behind.
+  Copilot's recordings show what to cover: discovery, signed out, allow-all,
+  an edit and a command asked for, an Ordewell tool call, and a cancel. Replay
+  them against a live adapter as `copilotCli.test.ts` does. Every claim the
+  profile makes about the agent cites a recording. Add the runner to the fakes
+  in `services/__tests__/fakeRunners.ts` and to the contract tests' tables.
+- **Roles need evidence.** With no `roles`, the runner gets writable tasks
+  only. To claim the planner role or a read-only mode (ADR-0060 R3), you need
+  all three of these:
+  - a `restricted` control that takes the agent's own write and shell tools
+    away, shown to hold under ACP;
+  - Ordewell's refusal of every edit, delete, move and execute request, which
+    the adapter already does;
+  - a recording of a write attempt and a shell attempt refused, with nothing
+    left behind.
+
+  A planner must also run nothing the repository's config names (ADR-0028).
+  Copilot passes the first three and is still task-only, because it runs the
+  repository's `.github/hooks/` under ACP.
 
 ## Releasing
 

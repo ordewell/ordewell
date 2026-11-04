@@ -762,19 +762,22 @@ the directive to attach.
 *Avoid:* "skill message", "skill event".
 
 **Executor / Runner** — an external coding-agent CLI (Claude Code, Codex,
-OpenCode) that runs *one task* in its own session through a structured
-connector. `RunnerRegistry` holds their built-in manifests: identity, command,
-model discovery and mode settings. External plugin manifests are ignored with
-one notice at host startup.
+OpenCode, and GitHub Copilot CLI over ACP) that runs *one task* in its own
+session through a structured connector. `RunnerRegistry` holds their built-in
+manifests: identity, command, model discovery and mode settings. External
+plugin manifests are ignored with one notice at host startup.
 *Avoid:* "backend", "provider" (provider means the LLM vendor, below).
 
 **Runner connector** (`RunnerConnector`, in the `CONNECTORS` registry) — what
 Ordewell holds for a runner it drives over the runner's own protocol: the
 adapter that serves it as a harness planner (ADR-0009) and as a structured
 task's runner (ADR-0018), its *Ordewell tool binding*, and optionally how it
-words a usage-limit reset. The registry is keyed by runner id; a runner without a connector cannot run. Adding a runner
-to it is the one place a runner's planner, task connector and Ordewell tools are
-declared, so none of the three can drift apart.
+words a usage-limit reset. Its `plans` says whether the runner can also be the
+planner: a runner may be task-only, as GitHub Copilot CLI is. The registry is
+keyed by runner id; a runner without a connector cannot run, and a runner id
+shares the planner setting's namespace with the API vendors' ids, so it never
+equals one. Adding a runner to it is the one place a runner's planner, task
+connector and Ordewell tools are declared, so none of the three can drift apart.
 *Avoid:* conflating it with `RunnerRegistry`, which holds *manifests* (identity
 and mode/discovery settings for the built-in runners); "adapter table".
 
@@ -828,6 +831,30 @@ replayed tagged with that subagent) and how a turn is settled are one
 implementation, so a behaviour fixed for one version is fixed for both.
 *Avoid:* "transport" alone for this — **Transport** is the runner session
 contract, and OpenCode's HTTP protocol is one implementation of it.
+
+**ACP runner** — a runner Ordewell drives over the Agent Client Protocol: JSON-RPC
+on the agent's stdio, with Ordewell as the client (ADR-0060). One `AcpAdapter`
+serves every such runner, and only an agent whose own maintainers ship its ACP
+server qualifies. Ordewell offers it no file system or terminal, so it works in
+the worktree with its own tools and reaches Ordewell only through the Ordewell
+MCP server, given over HTTP in `session/new`. It has no mid-turn steer: a
+message waits for the turn's end. GitHub Copilot CLI (`copilot-cli`) is the one
+admitted so far, for writable tasks only.
+*Avoid:* "ACP shim" or "ACP bridge" for it (a third-party adapter in front of an
+agent does not qualify); "ACP backend", "ACP provider".
+
+**ACP profile** (`AcpProfile`, `harness/acpProfiles.ts`) — everything one ACP
+agent needs beyond the protocol, as data: its manifest, ACP arguments, minimum
+version, how it names Ordewell's tools, how it is given a model, the route its
+instructions take outside the worktree, the route its mode takes, what it loads
+from a repository, the roles it claims and the controls that restrict it.
+`acpConnector(profile)` turns it into the runner's connector, so admitting an
+agent means writing a profile and a manifest, not an adapter. A role, planner or
+read-only, is claimed only on evidence; with none claimed the runner gets
+writable tasks only.
+*Avoid:* "ACP config", "agent settings" (a profile is checked-in code reviewed
+against recordings, not a user setting); branching on a runner id inside
+`AcpAdapter` instead of adding a profile field.
 
 **Transport** — how Ordewell drives a task's runner: its programmatic
 protocol, with structured events in and messages out. Every `IRunnerSession`

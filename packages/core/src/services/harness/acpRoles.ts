@@ -4,7 +4,7 @@ import type { AcpToolCall } from './acpSchema';
 import type { AcpProfile, AcpRoles } from './acpProfiles';
 import { decideReadOnlyTaskPermission } from './plannerPermissions';
 
-/** The roles a profile claims, refused when they cannot hold: the connector table is built at load, so a bad profile never ships. */
+/** The roles a profile claims, refused when they cannot hold (ADR-0060, R3): the connector table is built at load, so a bad profile never ships. */
 export function acpRoles(profile: Pick<AcpProfile, 'manifest' | 'roles' | 'restricted'>): AcpRoles {
   const roles = profile.roles ?? { plans: false, readOnly: false };
   const name = profile.manifest.displayName;

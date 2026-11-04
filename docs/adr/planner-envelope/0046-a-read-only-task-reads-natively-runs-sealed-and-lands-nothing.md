@@ -190,6 +190,17 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
   `run_command`. The profile needs no native sandbox probe, so it
   stays available on hosts where Guarded is unavailable. Project config is
   untrusted, as for the planner. No model is replaced.
+- **An ACP runner** may run a read-only task only when its profile claims the
+  read-only role on evidence
+  ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md) R3):
+  the profile's spawn controls take the agent's own write, shell and web tools
+  away, and a recorded live run shows a write and a command refused with
+  nothing left behind. `AcpAdapter` then refuses every edit, delete, move,
+  command and mode switch the agent still asks for, with nobody asked, and
+  fails a session that leaves the mode it settled in. A profile without the
+  role gives its manifest no read-only mode, so ModeResolver never assigns
+  one. GitHub Copilot CLI claims none: its controls hold, but under ACP it
+  runs the repository's hooks (ADR-0028).
 - **Native web tools are refused.** A runner's own fetch and search run
   outside Ordewell's pinned transport, and a provider-side search outside its
   secret check and budget too, with nobody there to approve one. Claude's
@@ -449,3 +460,4 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
 - 2026-10-31 — a task's commands before its first sealed run have a scratch directory apart from its sealed runs' (ADR-0036 S8).
 - 2026-11-01 — a script task and a delegated task may be read-only (ADR-0055 D1, D8).
 - 2026-11-01 — the task tool is `read` ([ADR-0057](../supervision/0057-information-moves-by-reference.md) R11).
+- 2026-11-04 — an ACP runner runs a read-only task only on its profile's evidence; GitHub Copilot CLI runs none (ADR-0060).

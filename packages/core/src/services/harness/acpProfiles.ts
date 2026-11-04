@@ -9,7 +9,7 @@ import { NO_SERVERS, type RepoConfigReader } from './repoConfig';
 
 /**
  * How a task's instructions reach an ACP agent, which has no system-prompt
- * field of its own (ADR-0018, C2). Never a file in the task's worktree: the
+ * field of its own (ADR-0018, C2; ADR-0060, R6). Never a file in the task's worktree: the
  * agent's own channel outside it where the agent has one, the first prompt of
  * each process otherwise.
  */
@@ -27,7 +27,7 @@ export type AcpInstructionsRoute =
   | { kind: 'file'; fileName: string; pass: { flag: string } | { env: string } | { envDir: string } };
 
 /**
- * How the plan's mode reaches the agent at spawn (ADR-0001): its own switch,
+ * How the plan's mode reaches the agent at spawn (ADR-0001; ADR-0060, R7): its own switch,
  * so the agent asks nothing a mode already settled. Without one the adapter
  * answers the agent's requests per the manifest's mode settings.
  */
@@ -39,7 +39,7 @@ export type AcpModeRoute =
 
 /**
  * What an agent may do past a writable task. Each role is claimed only on
- * evidence (ADR-0026, ADR-0046): {@link AcpProfile.restricted} takes the
+ * evidence (ADR-0026, ADR-0046; ADR-0060, R3): {@link AcpProfile.restricted} takes the
  * agent's own write and shell tools away and holds under ACP, Ordewell refuses
  * every edit, delete, move and command the agent still asks for, and a
  * recorded live run shows a write and a command refused with nothing left
@@ -60,7 +60,7 @@ export interface AcpRestriction {
 
 /**
  * Everything one ACP agent needs past the protocol itself: a profile is data,
- * so a new agent is a profile and a manifest, not an adapter.
+ * so a new agent is a profile and a manifest, not an adapter (ADR-0060, R1).
  */
 export interface AcpProfile {
   /** The runner's manifest: its command, display name, modes and login. */
