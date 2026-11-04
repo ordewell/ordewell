@@ -193,9 +193,16 @@ planner (above and below), and Ordewell reads them itself:
   R3). Checked live with a hook planted in the worktree that writes a marker
   for each event: a writable task's start ran it, and neither restricted
   start did (`repo-hooks.jsonl`, `planner.jsonl`, `read-only.jsonl`).
-- **Nothing read for it.** Copilot's profile has no repository-config reader,
-  so none of the repository's servers is offered to it, and its instruction
-  files reach the planner only as files it reads.
+- **Instructions as text.** Started outside the repository, Copilot loads
+  none of its instruction files, so Ordewell reads the ones Copilot would:
+  `.github/copilot-instructions.md`, `AGENTS.md`, `CLAUDE.md`,
+  `.claude/CLAUDE.md` and `GEMINI.md` in each directory from the repository
+  root down to the workspace, with the `@path` imports Copilot expands that
+  stay inside the repository, and `.github/instructions/**/*.instructions.md`
+  at the root and the workspace. They follow Ordewell's own instructions in
+  the private directory's `AGENTS.md`, a read-only task's too. No hook,
+  setting or MCP server file is read, so none of the repository's servers is
+  offered to it.
 
 ### What the repository's config can do, and how the planner launch stops it
 
@@ -221,7 +228,8 @@ planner (above and below), and Ordewell reads them itself:
 | Codex | `shell_environment_policy`, profiles, exec policies | shape the shell | untrusted; the shell stays sandboxed |
 | Codex | `AGENTS.md` | text | injected by Ordewell |
 | Copilot CLI | `.github/hooks/` | run commands | started in a private directory |
-| Copilot CLI | MCP config, instruction files | start a command, reach a URL; text | started in a private directory |
+| Copilot CLI | MCP config | start a command, reach a URL | started in a private directory |
+| Copilot CLI | instruction files, imports | text | started in a private directory; injected by Ordewell |
 
 The workspace's own environment (ADR-0016) is unchanged: it holds only what
 direnv was allowed to export and an untracked `.ordewell/env`.
@@ -429,3 +437,4 @@ specifies.
   shared task runs in), covers OpenCode's and Codex's configuration, skips
   read-only tasks, and no longer reads settings files for an `ordewell` server.
 - 2026-11-04 — a Copilot CLI planner or read-only task starts in a private directory, out of reach of the repository's hooks (ADR-0060).
+- 2026-11-04 — a Copilot CLI planner or read-only task is handed the repository's instruction files as text (ADR-0060).

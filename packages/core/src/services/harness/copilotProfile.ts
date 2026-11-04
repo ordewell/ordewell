@@ -1,6 +1,7 @@
 import { COPILOT_ACP_ARGS, COPILOT_CLI_MANIFEST } from '../../plugins/builtin/copilot-cli.manifest';
 import { ORDEWELL_MCP_SERVER_NAME } from '../mcp/clientConfig';
 import type { AcpProfile } from './acpProfiles';
+import { COPILOT_REPO_CONFIG } from './copilotRepoConfig';
 
 /** Copilot names an MCP tool `<server>-<tool>`, in its tool-call reports and in what it shows the model. */
 const SERVER_PREFIX = `${ORDEWELL_MCP_SERVER_NAME}-`;
@@ -51,5 +52,9 @@ export const COPILOT_CLI_PROFILE: AcpProfile = {
     env: { COPILOT_ALLOW_ALL: 'false' },
     privateCwd: true,
   },
+  // A restricted start begins outside the worktree, so Copilot loads none of
+  // the repository's instruction files itself: they reach it as text in its
+  // private directory's AGENTS.md, after Ordewell's own (ADR-0060, R3).
+  repoConfig: COPILOT_REPO_CONFIG,
   roles: { plans: true, readOnly: true },
 };

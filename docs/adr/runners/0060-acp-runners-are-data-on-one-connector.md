@@ -80,7 +80,10 @@ repository (ADR-0028), the roles it claims, and the controls that restrict it.
   directory instead (`restricted.privateCwd`): owner-only and empty but for
   its instructions, the session's `cwd` and its temp directory too. It then
   reaches the worktree only by asking, so every read goes to the planner's
-  envelope or to the read-only task's rules (ADR-0046). Such a start is
+  envelope or to the read-only task's rules (ADR-0046). Since it loads none
+  of the repository's instruction files there, the profile's reader
+  (`repoConfig`) reads them and they follow Ordewell's own in its
+  instructions, bounded as every planner's are (ADR-0028). Such a start is
   refused under a placement, since a container starts its runner in the
   worktree. `acpRoles` refuses at load a profile whose claimed read-only role
   and manifest disagree, or that claims a role with no restriction;
@@ -138,6 +141,7 @@ recordings in `packages/core/src/services/__tests__/fixtures/acp/copilot-cli/`:
 | model | `--model` at spawn; 1.0.105 exposes no model or effort setting over ACP |
 | Ordewell's tools | a request titled with the bare tool name whose call the turn reported as `ordewell-<tool>`; neither title alone, and never the kind, which Copilot guesses (`run_plan` as `execute`, `list_runners` as `read`) |
 | restriction | `--deny-tool=write`, `--deny-tool=shell`, `--deny-tool=url`, `--disable-builtin-mcps`, `COPILOT_ALLOW_ALL=false`, and a private start directory that is also `TMPDIR`, `TMP` and `TEMP` and holds the instructions as its own `AGENTS.md` |
+| repository | a restricted start is handed the instruction files Copilot would load from the repository, and no hook, setting or MCP server (ADR-0028) |
 | roles | the planner, and a read-only mode (`plan`) |
 
 A native call's two titles are Copilot's own fixed words ("Create file",
@@ -160,6 +164,12 @@ turn reported as an `edit`, and Ordewell refuses it. A refused request ends
 Copilot's turn: the planner goes on in its next turn, and a read-only task
 whose turn so ends without `task_complete` is reminded of it like any task
 ([ADR-0018](0018-structured-runner-transport.md) W1).
+
+Started there, Copilot loads none of the repository's instruction files, so a
+restricted start is handed them after Ordewell's own. Checked live on 1.0.105
+with `gpt-5-mini`: a planner in a scratch repository whose `AGENTS.md` asked
+for a title prefix called only `list_runners`, `list_models` and
+`submit_plan`, and its one task carried the prefix.
 
 Its models come from ACP discovery (`initialize` and `session/new` in a scratch
 directory) first; an empty answer falls through to `copilot help config`
@@ -264,3 +274,5 @@ learned from `-32000` and shown with its `copilot login`
 - 2026-11-04 — Copilot CLI plans and runs read-only tasks: a restricted start
   begins in a private directory, and Ordewell's tools are named by the
   request and report pair before any kind is read.
+- 2026-11-04 — a restricted start is handed the repository's instruction
+  files after Ordewell's own, from Copilot's repository-config reader.

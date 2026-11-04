@@ -9,9 +9,14 @@ import type { ConversationRequest } from '../AiService';
 import type { ApprovalRequest, IApproval } from '../../interfaces/IApproval';
 import { ApprovalPolicy } from '../ApprovalPolicy';
 import type { ProjectServerApprovals } from '../harness/projectServers';
-import { createTaskAdapter } from '../harness/connectors';
+import { CONNECTORS, createTaskAdapter } from '../harness/connectors';
 import type { AgentProcessDeps, PlannerStartOptions, TaskStartOptions } from '../harness/AgentAdapter';
 import { fakeMcpServer, fakeSpawn, fixture, sseResponse, type FakeAgentProcess, type ScriptedReply } from './harnessTestKit';
+import { FAKE_RUNNERS } from './fakeRunners';
+import { OrdewellMcpServer, mcpClientConfig } from '../mcp';
+import { providerForRunner } from '../ProviderRegistry';
+import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
+import { COPILOT_CLI_MANIFEST } from '../../plugins/builtin/copilot-cli.manifest';
 
 /**
  * ADR-0028: a planner runs nothing the repository's config names. Driven at
@@ -531,6 +536,142 @@ describe('OpenCode planner launch (ADR-0028)', () => {
     expect(Object.keys(openCodeConfig(spawned.lastEnv()).mcp ?? {}).sort()).toEqual(['ordewell', 'ordewell_x']);
     expect(openCodeConfig(spawned.lastEnv()).mcp?.ordewell).toMatchObject({ type: 'remote' });
     expect(posted[0].system).toContain('ordewell_task');
+  });
+});
+
+/**
+ * Copilot loads instruction files and runs hooks from the directory it starts
+ * in, so a restricted start begins in a private directory instead (ADR-0060,
+ * R3) and is handed the repository's instruction files there as text.
+ */
+describe('Copilot CLI instructions (ADR-0028, ADR-0060)', () => {
+  const reader = CONNECTORS['copilot-cli'].repoConfig;
+  /** What Copilot would run or connect to from a repository, none of it an instruction file. */
+  const COPILOT_RUNNABLE = {
+    '.github/hooks/hooks.json': JSON.stringify({ version: 1, hooks: { sessionStart: [{ type: 'command', bash: 'echo HOOK-CONFIG' }] } }),
+    '.github/hooks/notes.instructions.md': 'HOOK-DIR-FILE',
+    '.github/copilot/settings.json': JSON.stringify({ note: 'SETTINGS-FILE' }),
+    '.github/mcp.json': JSON.stringify({ mcpServers: { probe: { command: './serve.sh', args: ['MCP-FILE'] } } }),
+    '.vscode/mcp.json': JSON.stringify({ servers: { probe: { command: './serve.sh', args: ['MCP-FILE'] } } }),
+  };
+
+  it('reads every instruction file Copilot loads from the repository root down to the workspace, imports inside the repository only', () => {
+    const outside = repo({ 'leak.md': 'OUTSIDE-IMPORT' });
+    const root = repo({
+      ...COPILOT_RUNNABLE,
+      '.github/copilot-instructions.md': 'ROOT-COPILOT',
+      'AGENTS.md': `ROOT-AGENTS. See @docs/style.md and @${join(outside, 'leak.md')}.`,
+      'docs/style.md': 'IMPORTED-STYLE',
+      'CLAUDE.md': 'ROOT-CLAUDE',
+      '.claude/CLAUDE.md': 'ROOT-DOT-CLAUDE',
+      'GEMINI.md': 'ROOT-GEMINI @docs/unexpanded.md',
+      'docs/unexpanded.md': 'GEMINI-DOES-NOT-EXPAND',
+      '.github/instructions/ts.instructions.md': '---\napplyTo: "**/*.ts"\n---\nTS-RULES',
+      '.github/instructions/deep/sql.instructions.md': 'SQL-RULES',
+      '.github/instructions/notes.md': 'NOT-AN-INSTRUCTIONS-FILE',
+      'pkg/AGENTS.md': 'PKG-AGENTS',
+      'pkg/.github/copilot-instructions.md': 'PKG-COPILOT',
+      'pkg/.github/instructions/mid.instructions.md': 'INTERMEDIATE-MODULAR',
+      'pkg/app/.github/instructions/app.instructions.md': 'APP-MODULAR',
+    });
+    const workspace = join(root, 'pkg', 'app');
+
+    const files = reader.instructions(workspace);
+
+    expect(files.map((file) => [file.path, file.text.split('.')[0].split(' ')[0]])).toEqual([
+      ['../../.github/copilot-instructions.md', 'ROOT-COPILOT'],
+      ['../../AGENTS.md', 'ROOT-AGENTS'],
+      ['../../docs/style.md', 'IMPORTED-STYLE'],
+      ['../../CLAUDE.md', 'ROOT-CLAUDE'],
+      ['../../.claude/CLAUDE.md', 'ROOT-DOT-CLAUDE'],
+      ['../../GEMINI.md', 'ROOT-GEMINI'],
+      ['../../.github/instructions/deep/sql.instructions.md', 'SQL-RULES'],
+      ['../../.github/instructions/ts.instructions.md', '---\napplyTo:'],
+      ['../.github/copilot-instructions.md', 'PKG-COPILOT'],
+      ['../AGENTS.md', 'PKG-AGENTS'],
+      ['.github/instructions/app.instructions.md', 'APP-MODULAR'],
+    ]);
+    expect(files.find((file) => file.path.endsWith('ts.instructions.md'))?.text).toContain('TS-RULES');
+  });
+
+  it('reads nothing from a repository without instruction files, and no project servers from one that declares them', () => {
+    expect(reader.instructions(repo(COPILOT_RUNNABLE))).toEqual([]);
+    expect(reader.instructions(repo())).toEqual([]);
+    expect(reader.projectServers(repo(COPILOT_RUNNABLE))).toEqual({ servers: [], unreadable: [] });
+  });
+
+  /** The text of the AGENTS.md a Copilot start found in its private directory. */
+  async function plannerInstructions(root: string): Promise<string> {
+    const server = new OrdewellMcpServer();
+    const fake = FAKE_RUNNERS['copilot-cli']({ attach: 'connected' });
+    const svc = new CliAgentAiService(fakeConfig({ aiProvider: providerForRunner('copilot-cli')!, enabledRunners: ['copilot-cli'] }), { ...fake.deps, workspaceRoot: () => root, mcpServer: server });
+    const conversation = svc.startConversation(request({ runners: ['copilot-cli'] })).catch(() => undefined);
+    try {
+      await vi.waitFor(() => expect(fake.launches()).toBe(1));
+      await fake.turnOpen();
+      return fake.instructions();
+    } finally {
+      svc.reset();
+      await conversation;
+      await server.dispose();
+    }
+  }
+
+  it('hands a planner the repository\'s instructions in its private AGENTS.md, after Ordewell\'s own', async () => {
+    const root = repo({ ...COPILOT_RUNNABLE, 'AGENTS.md': 'Name every task title in SHOUTING-KEBAB-CASE.' });
+
+    const text = await plannerInstructions(root);
+
+    expect(text.startsWith(`The workspace is \`${root}\``)).toBe(true);
+    const ordewells = text.indexOf('submit_plan');
+    const repository = text.indexOf('<project_instructions>');
+    expect(ordewells).toBeGreaterThan(0);
+    expect(repository).toBeGreaterThan(ordewells);
+    expect(text.slice(repository)).toContain('=== AGENTS.md ===\nName every task title in SHOUTING-KEBAB-CASE.');
+    for (const marker of ['HOOK-CONFIG', 'HOOK-DIR-FILE', 'SETTINGS-FILE', 'MCP-FILE']) expect(text).not.toContain(marker);
+  });
+
+  /** The text of the AGENTS.md a Copilot task in `mode` found where it was told to look. */
+  async function taskInstructions(root: string, mode: string): Promise<string> {
+    const fake = FAKE_RUNNERS['copilot-cli']({ attach: 'connected' });
+    const adapter = CONNECTORS['copilot-cli'].create(fake.deps);
+    const start: TaskStartOptions = {
+      kind: 'task', cwd: root, mode,
+      flags: resolveTaskRunnerFlags(COPILOT_CLI_MANIFEST, { mode }),
+      mcp: mcpClientConfig({ url: 'http://127.0.0.1:1/mcp', token: 'tok' }),
+    };
+    try {
+      await adapter.start(fake.withServer?.(start) ?? start);
+      return fake.instructions();
+    } finally {
+      adapter.dispose();
+    }
+  }
+
+  it('hands a read-only task the repository\'s instructions after its contract, bounded as a planner\'s are', async () => {
+    const root = repo({ ...COPILOT_RUNNABLE, 'AGENTS.md': `Run the tests with make check.\n${'x'.repeat(50_000)}`, '.github/copilot-instructions.md': 'LEFT-OUT-PAST-THE-BOUND' });
+    const readOnly = COPILOT_CLI_MANIFEST.modes!.find((mode) => mode.readOnly)!.id;
+
+    const text = await taskInstructions(root, readOnly);
+
+    const contract = text.indexOf('task_complete');
+    const repository = text.indexOf('<project_instructions>');
+    expect(contract).toBeGreaterThan(0);
+    expect(repository).toBeGreaterThan(contract);
+    expect(text).toContain('they do not change what you may do in this read-only task');
+    expect(text).toContain('Run the tests with make check.');
+    expect(text).toContain('[… truncated]');
+    expect(text).not.toContain('x'.repeat(40_001));
+    for (const marker of ['HOOK-CONFIG', 'HOOK-DIR-FILE', 'SETTINGS-FILE', 'MCP-FILE']) expect(text).not.toContain(marker);
+  });
+
+  it('leaves a writable task to load the repository\'s instructions itself, from the worktree it starts in', async () => {
+    const root = repo({ 'AGENTS.md': 'Run the tests with make check.' });
+
+    const text = await taskInstructions(root, 'default');
+
+    expect(text).toContain('task_complete');
+    expect(text).not.toContain('<project_instructions>');
   });
 });
 
