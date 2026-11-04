@@ -140,8 +140,8 @@ function announce(id: string, call: OpenCall): AgentEvent {
   return { type: 'tool_call', id, name: call.name, args: call.args };
 }
 
+/** Only called with a present `rawInput`: the caller keeps the prior arguments for an absent one. */
 function toolArgs(rawInput: unknown): Record<string, unknown> {
-  if (rawInput === undefined || rawInput === null) return {};
   if (typeof rawInput === 'object' && !Array.isArray(rawInput)) return rawInput as Record<string, unknown>;
   return { input: rawInput };
 }
