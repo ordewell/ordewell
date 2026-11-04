@@ -103,6 +103,18 @@ node bench/live/drive-conversation.mjs
 - **The plan is the source of truth** for what runs. Modes and models are never
   silently rewritten at spawn time
   ([ADR-0001](docs/adr/routing/0001-autonomous-mode-resolution.md)).
+- **Every suite runs on Windows too** (CI's `windows` jobs,
+  [ADR-0010](docs/adr/platform/0010-windows-support.md)). Build paths with
+  `path`, never `/`-joined strings or a `:`-joined PATH, and compare a path git
+  or the OS printed with `realpathSync.native`: on Windows it may differ by an
+  8.3 short name, the drive letter's case or its slashes. A test that needs a
+  home of its own sets one with `setEnv(homeEnv(dir))` from
+  `@ordewell/core/testing`, since HOME alone moves no home on Windows, and every
+  test file already starts under a throwaway one. A fake CLI is a Node script
+  with a `.cmd` and a `.ps1` shim beside its POSIX one, put on PATH with
+  `pathWithFake`. Skip on Windows (`it.skipIf(process.platform === 'win32')`,
+  with the reason) only a test whose subject is POSIX-only: bubblewrap,
+  Seatbelt, signals, file modes, containers.
 ## Architecture decisions
 
 [docs/adr/README.md](docs/adr/README.md) is the full guide: read it before

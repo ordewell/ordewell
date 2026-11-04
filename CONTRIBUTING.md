@@ -74,6 +74,11 @@ node bench/live/drive-conversation.mjs
 If you change planner behaviour, run that. It is the fastest way to find out
 that a prompt edit broke plan emission.
 
+CI runs the suites on Linux and again on Windows. `npm run ci` works on either:
+on Windows it skips only the bubblewrap sandbox suite, which is Linux's. If you
+work on Linux or macOS, the Windows jobs on your pull request are where a
+POSIX-only assumption shows up. [AGENTS.md](AGENTS.md) lists the usual ones.
+
 ## Layout
 
 ```
