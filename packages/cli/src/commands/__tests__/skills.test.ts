@@ -2,10 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { createHash } from 'crypto';
-import { join } from 'path';
+import { join, sep } from 'path';
 import { handleSkills } from '../skills';
 import { COMMANDS } from '../registry';
 import { printHelp } from '../../help';
+
+/** A path as the listing shows it, which is with `/` on Windows too (`abbreviateHome`). */
+const shown = (file: string) => file.split(sep).join('/');
 
 let scratch: string;
 let home: string;
@@ -63,8 +66,8 @@ describe('ordewell skills', () => {
     expect(logs).toContainEqual(expect.stringMatching(/^model-only\s+global\s+planner\s+model\s+/));
     expect(logs).toContainEqual(expect.stringMatching(/^disabled\s+global\s+planner\s+none\s+/));
     expect(logs.find((line) => line.startsWith('task-only'))).toMatch(/^task-only\s+workspace\s+task\s+user\s+/);
-    expect(logs.find((line) => line.startsWith('task-only'))).toContain(taskPath);
-    expect(logs).toContain(`workspace skill "shared" shadowed by the global copy at ~/.ordewell/skills/shared/SKILL.md · ${shadowedPath}`);
+    expect(logs.find((line) => line.startsWith('task-only'))).toContain(shown(taskPath));
+    expect(logs).toContain(`workspace skill "shared" shadowed by the global copy at ~/.ordewell/skills/shared/SKILL.md · ${shown(shadowedPath)}`);
     expect(logs.filter((line) => line.startsWith('shared'))).toHaveLength(1);
   });
 
@@ -83,9 +86,9 @@ describe('ordewell skills', () => {
     // home nothing has seeded yet; this test is about the workspace selection.
     expect(listed.skills.filter((s: { name: string }) => ['shared', 'selected-only'].includes(s.name))).toEqual([
       { name: 'shared', scope: 'global', appliesTo: 'planner', invocation: 'both', path: '~/.ordewell/skills/shared/SKILL.md' },
-      { name: 'selected-only', scope: 'workspace', appliesTo: 'task', invocation: 'both', path: skillPath },
+      { name: 'selected-only', scope: 'workspace', appliesTo: 'task', invocation: 'both', path: shown(skillPath) },
     ]);
-    expect(listed.shadowed).toEqual([{ name: 'shared', path: duplicatePath, shadowedBy: { scope: 'global', path: '~/.ordewell/skills/shared/SKILL.md' } }]);
+    expect(listed.shadowed).toEqual([{ name: 'shared', path: shown(duplicatePath), shadowedBy: { scope: 'global', path: '~/.ordewell/skills/shared/SKILL.md' } }]);
     expect(listed.invalid).toEqual([]);
   });
 
@@ -98,11 +101,11 @@ describe('ordewell skills', () => {
     handleSkills(['--json']);
 
     const listed = JSON.parse(logs[0]);
-    expect(listed.skills.filter((s: { name: string }) => ['deploy', 'api-check'].includes(s.name)).map((s: { name: string; path: string }) => [s.name, s.path])).toEqual([['deploy', rootPath], ['api-check', apiPath]]);
-    expect(listed.shadowed).toEqual([{ name: 'deploy', path: shadowedPath, shadowedBy: { scope: 'workspace', path: rootPath } }]);
+    expect(listed.skills.filter((s: { name: string }) => ['deploy', 'api-check'].includes(s.name)).map((s: { name: string; path: string }) => [s.name, s.path])).toEqual([['deploy', shown(rootPath)], ['api-check', shown(apiPath)]]);
+    expect(listed.shadowed).toEqual([{ name: 'deploy', path: shown(shadowedPath), shadowedBy: { scope: 'workspace', path: shown(rootPath) } }]);
 
     handleSkills([]);
-    expect(logs).toContain(`workspace skill "deploy" shadowed by the workspace copy at ${rootPath} · ${shadowedPath}`);
+    expect(logs).toContain(`workspace skill "deploy" shadowed by the workspace copy at ${shown(rootPath)} · ${shown(shadowedPath)}`);
   });
 
   it('reports a skill folder whose name no skill can have, with the reason, and lists it nowhere else', () => {
@@ -114,7 +117,7 @@ describe('ordewell skills', () => {
 
     const skipped = (name: string) => logs.find((line) => line.startsWith(`skill folder "${name}" skipped: not a valid skill name`));
     expect(logs.filter((line) => /^(pr\.review|PR-Review)\s/.test(line))).toEqual([]);
-    expect(skipped('pr.review')?.endsWith(` · ${dotted}`)).toBe(true);
+    expect(skipped('pr.review')?.endsWith(` · ${shown(dotted)}`)).toBe(true);
     expect(skipped('PR-Review')?.endsWith(' · ~/.ordewell/skills/PR-Review/SKILL.md')).toBe(true);
 
     handleSkills(['--json']);
@@ -124,7 +127,7 @@ describe('ordewell skills', () => {
     expect(listed.skills.map((s: { name: string }) => s.name)).not.toContain('PR-Review');
     expect(listed.invalid).toEqual([
       { name: 'PR-Review', path: '~/.ordewell/skills/PR-Review/SKILL.md', reason: expect.stringMatching(/^not a valid skill name/) },
-      { name: 'pr.review', path: dotted, reason: expect.stringMatching(/^not a valid skill name/) },
+      { name: 'pr.review', path: shown(dotted), reason: expect.stringMatching(/^not a valid skill name/) },
     ]);
   });
 
@@ -132,8 +135,8 @@ describe('ordewell skills', () => {
     const otherWorkspace = home + '-other';
     const file = writeSkill(otherWorkspace, 'mine');
     handleSkills(['--workspace', otherWorkspace, '--json']);
-    const listed = JSON.parse(logs[0]).skills.find((s: { name: string }) => s.name === 'mine');
-    expect(listed.path).toBe(file);
+    const mine = JSON.parse(logs[0]).skills.find((s: { name: string }) => s.name === 'mine');
+    expect(mine.path).toBe(shown(file));
   });
 
   it('does not seed, refresh, prune or write a manifest while listing', () => {

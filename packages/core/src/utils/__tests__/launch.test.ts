@@ -1,4 +1,8 @@
 import { describe, it, expect } from 'vitest';
+import { execFileSync } from 'child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import {
   planDirectLaunch,
   windowsCommandLine,
@@ -390,6 +394,18 @@ describe('isExecutableResolved', () => {
     const plan = await planDirectLaunch('nosuchcli', ['-x'], win([]));
     expect(isExecutableResolved('nosuchcli', plan, PATH, { platform: 'win32' })).toBe(false);
   });
+
+  it('is true on Windows when the command names its own file, which the plan resolves to itself', async () => {
+    const deps = win(['C:\\tools\\claude.exe']);
+    const plan = await planDirectLaunch('C:\\tools\\claude.exe', ['-p'], deps);
+    expect(isExecutableResolved('C:\\tools\\claude.exe', plan, PATH, deps)).toBe(true);
+  });
+
+  it('is false on Windows when the file a command names is not there', async () => {
+    const deps = win([]);
+    const plan = await planDirectLaunch('C:\\tools\\claude.exe', ['-p'], deps);
+    expect(isExecutableResolved('C:\\tools\\claude.exe', plan, PATH, deps)).toBe(false);
+  });
 });
 
 describe('ExecutableNotFoundError', () => {
@@ -398,4 +414,24 @@ describe('ExecutableNotFoundError', () => {
     expect(err.message).toContain('opencode');
     expect(err.message).toContain('/usr/local/bin:/usr/bin');
   });
+});
+
+// What ADR-0010 claims of the PowerShell route, run for real: a shim as npm
+// writes it, in the Windows PowerShell the route starts, handing `$args` to
+// node. A `"` is not among these: PowerShell passes `$args` on without
+// escaping one, which the ADR records as unclaimed.
+describe.runIf(process.platform === 'win32')('the PowerShell route through a real shim', () => {
+  it('carries line breaks, $(…), a backtick and %PATH% to the program whole', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ordewell-ps1-'));
+    try {
+      writeFileSync(join(dir, 'argv.js'), 'process.stdout.write(JSON.stringify(process.argv.slice(2)));');
+      writeFileSync(join(dir, 'agent.ps1'), '$basedir = Split-Path $MyInvocation.MyCommand.Definition -Parent\r\n& "node" "$basedir/argv.js" $args\r\nexit $LASTEXITCODE\r\n');
+      const args = ['-p', 'multi\nline $(calc) `t` %PATH%', 'two words'];
+      const plan = await planDirectLaunch('agent', args, { resolvePath: async () => dir });
+      expect(plan.file).toContain('powershell.exe');
+      expect(JSON.parse(execFileSync(plan.file, plan.args, { encoding: 'utf8' }))).toEqual(args);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
 });

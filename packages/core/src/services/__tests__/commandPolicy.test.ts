@@ -1,6 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { AUTO_COMMANDS, classifyCommand, innerCommandScopes, pathLikeArgs, pathRefs } from '../commandPolicy';
+import { AUTO_COMMANDS, classifyCommand as classifyIn, innerCommandScopes as innerCommandScopesIn, pathLikeArgs as pathLikeArgsIn, pathRefs as pathRefsIn, type CommandPolicyOptions } from '../commandPolicy';
 import { parseAllowlist } from '../plannerAllowlist';
+
+// A case here is a POSIX shell's unless it names the cmd dialect. Given none,
+// the classifier takes the host's (dialectFor), which is cmd on Windows.
+const posix = <T>(fn: (command: string, opts?: CommandPolicyOptions) => T) =>
+  (command: string, opts: CommandPolicyOptions = {}): T => fn(command, { dialect: 'posix', ...opts });
+const classifyCommand = posix(classifyIn);
+const innerCommandScopes = posix(innerCommandScopesIn);
+const pathLikeArgs = posix(pathLikeArgsIn);
+const pathRefs = posix(pathRefsIn);
 
 describe('classifyCommand', () => {
   describe('auto tier — read-only inspection runs with no prompt', () => {

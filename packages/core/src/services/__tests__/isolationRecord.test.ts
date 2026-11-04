@@ -1,3 +1,4 @@
+import * as path from 'path';
 import { describe, it, expect } from 'vitest';
 import { handoffOf, isolationViewOfPlan, migratePlanIsolation, taskIsolationOf, taskIsolationsOf, type Adr0013PlanIsolation, type Adr0013TaskRecord } from '../isolationRecord';
 import { capConflictFiles } from '../conflictFiles';
@@ -7,11 +8,15 @@ const legacyTask = (taskId: string, order: number, status: IsolationTaskStatus, 
   taskId, order, title: `Task ${taskId}`, branch: `ordewell/r1/${order}-${taskId}`, worktree: `/work/app/.ordewell/worktrees/r1/${order}-${taskId}`, status, linked,
 });
 
+// A workspace root as this platform writes one: the migration joins the
+// group's one repo onto it natively.
+const APP = path.resolve('/work/app');
+
 // As 0.4.23 wrote it to `LegacyPlanState.isolation`.
 const legacy = (over: Partial<Adr0013PlanIsolation['run']> = {}, resolvers: Record<string, string> = {}): Adr0013PlanIsolation => ({
   run: {
     id: 'r1',
-    workspaceRoot: '/work/app',
+    workspaceRoot: APP,
     baseRef: '0123abcd',
     baseBranch: 'main',
     integrationBranch: 'ordewell/r1/integration',
@@ -26,8 +31,8 @@ describe('migratePlanIsolation', () => {
     expect(migratePlanIsolation(legacy())).toEqual({
       run: {
         id: 'r1',
-        workspaceRoot: '/work/app',
-        repos: [{ path: '.', root: '/work/app', baseRef: '0123abcd', baseBranch: 'main', integrationBranch: 'ordewell/r1/integration' }],
+        workspaceRoot: APP,
+        repos: [{ path: '.', root: APP, baseRef: '0123abcd', baseBranch: 'main', integrationBranch: 'ordewell/r1/integration' }],
         shared: [],
         sharedRepos: [],
         tasks: {},
@@ -82,7 +87,7 @@ describe('migratePlanIsolation', () => {
   it('leaves the base branch out for a run started on a detached HEAD', () => {
     const { run } = migratePlanIsolation(legacy({ baseBranch: undefined }));
 
-    expect(run.repos).toEqual([{ path: '.', root: '/work/app', baseRef: '0123abcd', integrationBranch: 'ordewell/r1/integration' }]);
+    expect(run.repos).toEqual([{ path: '.', root: APP, baseRef: '0123abcd', integrationBranch: 'ordewell/r1/integration' }]);
     expect('baseBranch' in run.repos[0]).toBe(false);
   });
 

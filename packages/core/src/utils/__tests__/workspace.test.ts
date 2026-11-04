@@ -138,6 +138,6 @@ describe('assertWorkspaceIsProject', () => {
         },
       }),
     ).not.toThrow();
-    expect(seen).toContain('/whatever/.git');
+    expect(seen).toContain(join('/whatever', '.git'));
   });
 });

@@ -35,7 +35,8 @@ describe('the paths a verdict reads', () => {
     run.parent.destroy();
   });
 
-  it('holds a file named around a line break under a pattern', async () => {
+  // Windows allows no line break in a file name.
+  it.skipIf(process.platform === 'win32')('holds a file named around a line break under a pattern', async () => {
     const file = 'src/x\ny/guard.test.ts';
     const { run, status } = await verdictOver([file], ['**/*.test.ts']);
     expect(status).toBe('failed');

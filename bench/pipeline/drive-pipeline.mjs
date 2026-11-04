@@ -50,9 +50,14 @@ if (RUNNER === 'opencode' && !process.env.OPENROUTER_API_KEY) {
 const RUNNER_ID = RUNNER === 'fake' ? 'claude-code' : 'opencode';
 
 // Before the first spawn: the runner environment is built from this PATH, so
-// the fake shadows any real `claude` the machine has.
+// the fake shadows any real `claude` the machine has. A home of its own too:
+// on Windows a real claude.exe in the home's bin dirs would still be started
+// in the fake's place, and the run's ~/.ordewell is not the user's.
+let fakeHome;
 if (RUNNER === 'fake') {
-  process.env.PATH = [path.join(__dirname, 'fake-claude'), process.env.PATH].filter(Boolean).join(path.delimiter);
+  const testing = await import(pathToFileURL(path.join(__dirname, '../../packages/core/dist/testing.mjs')).href);
+  fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-pipeline-home-'));
+  testing.setEnv({ ...testing.homeEnv(fakeHome), PATH: testing.pathWithFake(path.join(__dirname, 'fake-claude'), 'claude') });
 }
 
 // What the fake `claude` reads from a prompt (see fake-claude/fake-claude.mjs).
@@ -169,7 +174,9 @@ async function main() {
   await orchestrator.approveReview();
 
   // Wait for completion
-  const timeoutMs = RUNNER === 'fake' ? 15000 : 180000;
+  // A stall is what this catches, so the fake's room only costs a failing run: on
+  // Windows PowerShell starts each fake, which a loaded runner takes seconds over.
+  const timeoutMs = RUNNER === 'fake' ? 60000 : 180000;
   while (!executionComplete && Date.now() - execStart < timeoutMs) {
     await new Promise(r => setTimeout(r, 200));
   }
@@ -235,6 +242,7 @@ async function main() {
   } else {
     try { fs.rmSync(workspace, { recursive: true, force: true }); } catch {}
   }
+  if (fakeHome) try { fs.rmSync(fakeHome, { recursive: true, force: true }); } catch {}
 
   process.exit(allPassed ? 0 : 1);
 }

@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { execFileSync } from 'child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, normalize } from 'path';
 import { createWorktreeIsolation } from '../GitWorktreeIsolation';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import type { Session } from '../createSession';
@@ -12,6 +12,7 @@ import { createTask, type ConversationMessage, type LegacyPlanState, type Task }
 import type { IRunner } from '../../interfaces/IRunner';
 import type { IsolationHandoff, IsolationRun, TaskIsolation } from '../../interfaces/IWorktreeIsolation';
 import { fakeConfig, FakeRunnerSession, makeSession, taskOf, saves } from './sessionTestKit';
+import { removeDir } from '../../testing';
 
 const hasGit = (() => {
   try { execFileSync('git', ['--version'], { stdio: 'ignore' }); return true; } catch { return false; }
@@ -29,15 +30,26 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd, env: cleanEnv(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
+/**
+ * The worktrees git lists for `root`, as this platform writes a path: Git for
+ * Windows names them with forward slashes.
+ */
+function worktrees(root: string): string[] {
+  return git(root, 'worktree', 'list', '--porcelain').split('\n').filter((l) => l.startsWith('worktree ')).map((l) => normalize(l.slice('worktree '.length)));
+}
+
 const isAncestor = (cwd: string, ancestor: string, of: string) => {
   try { git(cwd, 'merge-base', '--is-ancestor', ancestor, of); return true; } catch { return false; }
 };
 
 const roots: string[] = [];
-afterEach(() => { while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true }); });
+// A run that ended as its test did can still be running git in a repository,
+// and Windows removes no directory a process works in: the retries outwait it.
+afterEach(async () => { while (roots.length) await removeDir(roots.pop()!); });
 
 function tempDir(): string {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-multi-e2e-')));
+  // Native, as git names a path: on Windows the JS realpath keeps the 8.3 short name of the temp folder.
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'ordewell-multi-e2e-')));
   roots.push(dir);
   return dir;
 }
@@ -256,7 +268,7 @@ describe.skipIf(!hasGit)('isolated execution over a folder of three repositories
     const t3 = marked(session.isolationView()!.tasks.t3);
     for (const r of ['api', 'web'] as const) {
       expect(git(roots[r], 'show', `${t3.branch}:${r}.txt`)).toBe(`${r} by t3`);
-      expect(git(roots[r], 'worktree', 'list', '--porcelain')).toContain(join(t3.worktree, r));
+      expect(worktrees(roots[r])).toContain(join(t3.worktree, r));
     }
     // Its dependent waits for all of it.
     expect(env.agent.spawned.map((s) => s.taskId)).not.toContain('t4');
@@ -288,7 +300,7 @@ describe.skipIf(!hasGit)('isolated execution over a folder of three repositories
     // Handed over: only the integration branches are left, and no worktree but the user's.
     for (const r of REPOS) {
       expect(git(roots[r], 'branch', '--list', 'ordewell/*', '--format=%(refname:short)'), r).toBe(integration);
-      expect(git(roots[r], 'worktree', 'list', '--porcelain').split('\n').filter((l) => l.startsWith('worktree '))).toEqual([`worktree ${roots[r]}`]);
+      expect(worktrees(roots[r])).toEqual([roots[r]]);
       expect(git(roots[r], 'rev-parse', 'main'), r).toBe(bases[r]);
       expect(git(roots[r], 'status', '--porcelain', '--untracked-files=no'), r).toBe('');
     }
@@ -320,7 +332,7 @@ describe.skipIf(!hasGit)('isolated execution over a folder of three repositories
     for (const r of REPOS) {
       expect(isAncestor(roots[r], merged[r], 'HEAD'), r).toBe(true);
       expect(git(roots[r], 'branch', '--list', 'ordewell/*'), r).toBe('');
-      expect(git(roots[r], 'worktree', 'list', '--porcelain').split('\n').filter((l) => l.startsWith('worktree '))).toEqual([`worktree ${roots[r]}`]);
+      expect(worktrees(roots[r])).toEqual([roots[r]]);
       expect(git(roots[r], 'symbolic-ref', '--short', 'HEAD'), r).toBe('main');
     }
     expect(readFileSync(join(roots.api, 'endpoint.txt'), 'utf8')).toBe('endpoint\n');
@@ -343,7 +355,7 @@ describe.skipIf(!hasGit)('isolated execution over a folder of three repositories
 
     for (const r of REPOS) {
       expect(git(roots[r], 'branch', '--list', 'ordewell/*'), r).toBe('');
-      expect(git(roots[r], 'worktree', 'list', '--porcelain').split('\n').filter((l) => l.startsWith('worktree '))).toEqual([`worktree ${roots[r]}`]);
+      expect(worktrees(roots[r])).toEqual([roots[r]]);
       expect(git(roots[r], 'rev-parse', 'HEAD'), r).toBe(bases[r]);
       expect(git(roots[r], 'status', '--porcelain'), r).toBe('');
     }

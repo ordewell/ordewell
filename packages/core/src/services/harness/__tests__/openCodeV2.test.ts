@@ -373,6 +373,13 @@ describe('OpenCode 2.x — a planner\'s own search (ADR-0027)', () => {
   });
 });
 
+/**
+ * A start that builds the launcher: a `/bin/sh` script with its short temp
+ * folder under `/tmp`. The native shell is offered on macOS only (ADR-0036 N5),
+ * and a Windows host has neither.
+ */
+const launcherIt = it.skipIf(process.platform === 'win32');
+
 describe('OpenCode 2.x — the native shell (ADR-0036 N2)', () => {
   const dirs: string[] = [];
   afterEach(() => {
@@ -412,7 +419,7 @@ describe('OpenCode 2.x — the native shell (ADR-0036 N2)', () => {
     }));
   }
 
-  it('names the launcher in SHELL and the config, asks for both shell spellings, and starts the server credential-free', async () => {
+  launcherIt('names the launcher in SHELL and the config, asks for both shell spellings, and starts the server credential-free', async () => {
     vi.stubEnv('GITHUB_TOKEN', 'ghp_secret');
     vi.stubEnv('OPENCODE_API_KEY', 'oc-login');
     vi.stubEnv('DEEPSEEK_API_KEY', 'provider-secret');
@@ -464,7 +471,7 @@ describe('OpenCode 2.x — the native shell (ADR-0036 N2)', () => {
     }
   });
 
-  it('routes a shell request to the native-shell kind the opt-in allows', async () => {
+  launcherIt('routes a shell request to the native-shell kind the opt-in allows', async () => {
     const server = fakeServer();
     const { adapter } = await start(server, plannerStart({ cwd: workspace(), nativeShell: true }), nativeSandbox());
     const events: AgentEvent[] = [];
@@ -484,7 +491,7 @@ describe('OpenCode 2.x — the native shell (ADR-0036 N2)', () => {
     adapter.dispose();
   });
 
-  it('fails a call whose shell.created names another shell, and reports it on that call', async () => {
+  launcherIt('fails a call whose shell.created names another shell, and reports it on that call', async () => {
     const server = fakeServer();
     const { adapter } = await start(server, plannerStart({ cwd: workspace(), nativeShell: true }), nativeSandbox());
     const events: AgentEvent[] = [];
@@ -508,7 +515,7 @@ describe('OpenCode 2.x — the native shell (ADR-0036 N2)', () => {
     adapter.dispose();
   });
 
-  it('accepts a shell.created naming Ordewell\'s launcher, and reports each command as a bash step', async () => {
+  launcherIt('accepts a shell.created naming Ordewell\'s launcher, and reports each command as a bash step', async () => {
     const server = fakeServer();
     const { adapter, env } = await start(server, plannerStart({ cwd: workspace(), nativeShell: true }), nativeSandbox());
     const events: AgentEvent[] = [];
@@ -547,7 +554,7 @@ describe('OpenCode 2.x — the native shell (ADR-0036 N2)', () => {
     adapter.dispose();
   });
 
-  it('resumes a planner session whose shell rules match the opt-in, and starts fresh when they do not', async () => {
+  launcherIt('resumes a planner session whose shell rules match the opt-in, and starts fresh when they do not', async () => {
     const shellAsk = rules(OPENCODE_PLANNER_PERMISSION).map((rule) => (rule.action === 'bash' || rule.action === 'shell' ? { ...rule, effect: 'ask' } : rule));
     const resumable = fakeServer({ [`GET /api/session/${SES}`]: () => ({ data: { id: SES, permissions: [...shellAsk, ...codeModeOff] } }) });
     const resumed = await start(resumable, plannerStart({ cwd: workspace(), nativeShell: true, resumeSessionId: SES }), nativeSandbox());

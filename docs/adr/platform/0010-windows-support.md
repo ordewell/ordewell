@@ -171,7 +171,10 @@ nothing there.
   dispose path. Windows has no signals, and the direct child may be the cmd.exe
   shim rather than the agent — so terminating it left the agent running, holding
   the workspace and the subscription, invisible to the surface that thought it
-  had stopped. `taskkill /T` walks the tree; POSIX keeps its SIGTERM → SIGKILL
+  had stopped. `taskkill /T` walks the tree, and is forced (`/F`) at once when
+  the unforced pass is refused: that pass only asks a window to close, which a
+  console agent does not have, so it went on writing to the worktree it was
+  stopped in for the whole grace. POSIX keeps its SIGTERM → SIGKILL
   escalation, sent to the runner's process group (see CONTEXT.md, *Kill
   tree*). A leader's exit does not end that group — a crashed runner leaves its
   shells and dev servers running — so the group is signalled after the leader
@@ -224,7 +227,7 @@ that surface. Runner execution uses structured connectors and no longer needs
 tmux or per-task terminal windows (ADR-0025). The launch and kill seams are
 shared in core.
 
-Two things are **explicitly not claimed**:
+Three things are **explicitly not claimed**:
 
 1. **Codex's read-only guarantee on Windows is unverified.** `codexSandbox`
    correctly short-circuits its bubblewrap probe off Linux, and the approvals
@@ -242,18 +245,39 @@ Two things are **explicitly not claimed**:
    an argument naming a *defined* environment variable is expanded. Preferring a
    native executable skips cmd.exe and the hazard with it, which is the main
    reason the preference is global.
-**Argument fidelity on the PowerShell shim route is measured.** `-File`
-receives an ordinary argument vector that Node quotes by the CommandLineToArgvW
-inverse. On a Windows host, a multi-line argument containing `$(…)`, a backtick
-and `%PATH%` arrived byte-exact, with no expansion — so `%VAR%` expansion is a
-hazard this route avoids too.
+3. **A `"` on the PowerShell shim route.** A shim hands `$args` on to its
+   program, and Windows PowerShell 5.1 re-quotes each argument by its own
+   reckoning and escapes nothing: a `"` inside one is lost or splits it, an
+   empty argument is dropped, and a trailing `\` in one with whitespace escapes
+   the quote it is closed with. Escaping the arguments for the program behind
+   the shim was tried and taken back. A subplanner's system prompt, near
+   Windows' command-line ceiling already, went over it once its quotes were
+   escaped, and 5.1's quoting decisions are not ones an escape can always
+   satisfy: a space between two quotes still splits. What lifts both is handing
+   a long prompt over in a file rather than on the command line. Until then a
+   native executable, which this route never reaches, is the install that
+   keeps a prompt whole.
 
-The Windows branches are tested on Linux through injected seams. The batch
-route's line-break failure and the PowerShell route's fidelity were found and
-measured on a Windows host. So was the VS Code extension's first run: activation,
-runner detection, the login probe and Log in, with Claude Code as its native
-`.exe` and Codex and OpenCode as npm `.cmd` shims, and a Codex planner
-conversation. The rest has not been run on one.
+**Argument fidelity on the PowerShell shim route is measured** for what it does
+carry. `-File` receives an ordinary argument vector that Node quotes by the
+CommandLineToArgvW inverse. On a Windows host, a multi-line argument containing
+`$(…)`, a backtick and `%PATH%` arrived byte-exact through a shim as npm writes
+it, with no expansion, so `%VAR%` expansion is a hazard this route avoids too.
+
+The Windows branches are tested on Linux through injected seams, and **CI runs
+every suite again on a Windows runner**: each package's vitest suites, the
+bench harnesses, the offline planner loop and the VS Code integration test. A
+test whose subject is POSIX-only (bubblewrap, Seatbelt, signals, file modes,
+containers) skips there and says why. The batch route's line-break failure and
+the PowerShell route's fidelity were found and measured on a Windows host. So
+was the VS Code extension's first run: activation, runner detection, the login
+probe and Log in, with Claude Code as its native `.exe` and Codex and OpenCode
+as npm `.cmd` shims. Real plans have run there through the CLI's headless
+commands, each built-in agent as planner and as runner, with worktree isolation
+under an 8.3 short path, through to a merged handoff. A worktree's path is
+compared with git's name for it by `realpathSync.native`: git prints the long
+name with forward slashes, and a recorded path can carry a short name or a
+lower-case drive letter.
 
 ## History
 
@@ -266,3 +290,4 @@ conversation. The rest has not been run on one.
 - 2026-10-17 — Codex's approvals on Windows read `on-request`, as ADR-0026 made them on 2026-10-10; the text still said `never`.
 - 2026-10-24 — a spawn throw is held through the one spawn-failure path in `Attempts`; the text named a `TaskOrchestrator.startTask` that no longer exists.
 - 2026-11-03 — the VS Code extension's activation, runner detection and login run on a Windows host.
+- 2026-11-03 — CI runs the suites on Windows, real plans ran there through to a merged handoff, a refused unforced `taskkill` is forced at once, and a `"` on the PowerShell shim route is recorded as unclaimed.

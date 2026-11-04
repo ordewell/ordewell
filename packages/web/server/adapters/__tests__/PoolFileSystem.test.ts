@@ -335,7 +335,8 @@ describe('PoolFileSystem', () => {
       expect(result.output).toContain('hello.txt');
     });
 
-    it('hands the signal that ended a command to core, which reads the memory limit from it', async () => {
+    // A POSIX signal ending the shell: a Windows process ends with an exit code alone.
+    it.skipIf(process.platform === 'win32')('hands the signal that ended a command to core, which reads the memory limit from it', async () => {
       class Exposed extends PoolFileSystem {
         exec(command: string) { return this.execBashImpl(command, { file: '/bin/sh', args: ['-c'], wallTimeMs: 5_000 }, undefined, tmpDir); }
       }

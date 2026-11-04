@@ -8,6 +8,7 @@
  * is: built here they would share one prompt string and read as next to nothing.
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import { captureConsole, core, heapMb, hostSession, makeTasks, ms, now, numbers, tempWorkspace } from './lib.mjs';
 
 const { say } = captureConsole();
@@ -39,7 +40,7 @@ say('| --- | --- | --- |');
 for (const count of counts) {
   const base = heapMb();
   const t = now();
-  const hosts = Array.from({ length: count }, () => hostSession({ runner: IDLE, workspace: '/tmp' }));
+  const hosts = Array.from({ length: count }, () => hostSession({ runner: IDLE, workspace: os.tmpdir() }));
   const spent = ms(t);
   say(`| ${count} | ${(((heapMb() - base) * 1024) / count).toFixed(1)} | ${(spent / count).toFixed(3)} |`);
   for (const host of hosts) host.session.destroy();

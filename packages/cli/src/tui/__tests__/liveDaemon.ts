@@ -19,7 +19,7 @@ import {
   type IRunner,
   type LegacyPlanState,
 } from '@ordewell/core';
-import { FakeRunnerSession } from '@ordewell/core/testing';
+import { FakeRunnerSession, homeEnv, setEnv } from '@ordewell/core/testing';
 import { attachWsHandler, createApp } from '../../../../web/server/app';
 import { createRequestListener } from '../../../../web/server/nodeAdapter';
 import { OrchestratorPool } from '../../../../web/server/pool/orchestratorPool';
@@ -86,17 +86,17 @@ export async function liveDaemon(accountLimitCollectors: (workspace: string) => 
   const dir = mkdtempSync(join(tmpdir(), 'ordewell-live-'));
   const workspace = join(dir, 'ws');
   mkdirSync(join(workspace, '.git'), { recursive: true });
-  const keys = ['HOME', 'ORDEWELL_SETTINGS_PATH', 'AI_PROVIDER', 'ORCHESTRATOR_MODEL', 'ORDEWELL_PLANNER_EFFORT', 'OPENROUTER_API_KEY', 'ORDEWELL_AUTONOMOUS_MODE', 'ORDEWELL_ENABLED_RUNNERS'];
-  const savedEnv = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
-  process.env.HOME = dir;
-  process.env.ORDEWELL_SETTINGS_PATH = join(dir, 'settings.json');
-  process.env.AI_PROVIDER = 'openrouter';
-  process.env.ORCHESTRATOR_MODEL = 'openrouter/auto';
-  process.env.OPENROUTER_API_KEY = 'sk-or-test';
-  process.env.ORDEWELL_ENABLED_RUNNERS = 'claude-code';
-  delete process.env.ORDEWELL_PLANNER_EFFORT;
-  // Guarded, where a planner's start of a task the user has not approved asks on its card.
-  process.env.ORDEWELL_AUTONOMOUS_MODE = 'false';
+  const restoreEnv = setEnv({
+    ...homeEnv(dir),
+    ORDEWELL_SETTINGS_PATH: join(dir, 'settings.json'),
+    AI_PROVIDER: 'openrouter',
+    ORCHESTRATOR_MODEL: 'openrouter/auto',
+    OPENROUTER_API_KEY: 'sk-or-test',
+    ORDEWELL_ENABLED_RUNNERS: 'claude-code',
+    ORDEWELL_PLANNER_EFFORT: undefined,
+    // Guarded, where a planner's start of a task the user has not approved asks on its card.
+    ORDEWELL_AUTONOMOUS_MODE: 'false',
+  });
 
   // A turn on a session the daemon adopted is a replay, so every turn opens
   // through `startConversation`; each waits for the test to finish it.
@@ -185,10 +185,7 @@ export async function liveDaemon(accountLimitCollectors: (workspace: string) => 
       for (const socket of sockets) socket.destroy();
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
-      for (const [key, value] of Object.entries(savedEnv)) {
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
-      }
+      restoreEnv();
       rmSync(dir, { recursive: true, force: true });
       vi.restoreAllMocks();
     },

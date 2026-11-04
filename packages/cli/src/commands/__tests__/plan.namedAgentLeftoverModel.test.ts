@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import http from 'http';
 import type { AddressInfo } from 'net';
 import type { SpawnFn } from '@ordewell/core';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, delimiter, join } from 'path';
 
@@ -15,7 +15,7 @@ const boundary = vi.hoisted(() => ({ agents: new Map<string, SpawnFn>() }));
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
   const spawn = ((command: string, args: string[], options: Parameters<SpawnFn>[2]) => {
-    const agent = boundary.agents.get(basename(command));
+    const agent = boundary.agents.get(basename(command, '.exe'));
     return agent ? agent(command, args, options) : actual.spawn(command, args, options);
   }) as typeof actual.spawn;
   return { ...actual, spawn, default: { ...actual, spawn } };
@@ -35,6 +35,7 @@ import { OrchestratorPool } from '../../../../web/server/pool/orchestratorPool';
 import { ApiClient } from '../../apiClient';
 import { loadEnvFile } from '../../utils/env';
 import { handlePlan } from '../plan';
+import { homeEnv, setEnv, writeStandIn } from '@ordewell/core/testing';
 
 /** What OpenCode's `opencode models` lists for this user: its own providers' ids, which share an OpenRouter slug's shape. */
 const OPENCODE_CATALOG = ['opencode/deepseek-v4.1-flash', 'opencode-go/claude-haiku-5-5'];
@@ -174,9 +175,10 @@ const BINARY = { 'claude-code': 'claude', codex: 'codex', opencode: 'opencode' }
  * generation process must never be handed the slug, and the plan must land.
  */
 describe('ordewell plan --no-chat with a named coding agent and a vendor model left in .env', () => {
-  const keys = ['HOME', 'PATH', 'ORDEWELL_SETTINGS_PATH', 'AI_PROVIDER', 'ORCHESTRATOR_MODEL', 'ORDEWELL_PLANNER_EFFORT',
+  const keys = ['PATH', 'ORDEWELL_SETTINGS_PATH', 'AI_PROVIDER', 'ORCHESTRATOR_MODEL', 'ORDEWELL_PLANNER_EFFORT',
     'ORDEWELL_ENABLED_RUNNERS', 'ORDEWELL_CLAUDE_CODE_ENABLED', 'ORDEWELL_CODEX_ENABLED', 'ORDEWELL_OPENCODE_ENABLED'];
   const saved: Record<string, string | undefined> = {};
+  let restoreHome: () => void;
   let dir: string;
   let workspace: string;
   let pool: OrchestratorPool;
@@ -197,17 +199,14 @@ describe('ordewell plan --no-chat with a named coding agent and a vendor model l
         delete process.env[key];
       }
     }
-    for (const key of keys.slice(3)) delete process.env[key];
-    process.env.HOME = dir;
+    for (const key of keys.slice(2)) delete process.env[key];
+    restoreHome = setEnv(homeEnv(dir));
     process.env.ORDEWELL_SETTINGS_PATH = join(dir, 'settings.json');
 
     // The spawns are faked, but each binary must still resolve on PATH first.
     const bin = join(dir, 'bin');
     mkdirSync(bin);
-    for (const agent of AGENTS) {
-      writeFileSync(join(bin, BINARY[agent]), '#!/bin/sh\nexit 1\n');
-      chmodSync(join(bin, BINARY[agent]), 0o755);
-    }
+    for (const agent of AGENTS) writeStandIn(bin, BINARY[agent]);
     process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ''}`;
     clearAugmentedPathCache();
 
@@ -248,6 +247,7 @@ describe('ordewell plan --no-chat with a named coding agent and a vendor model l
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+    restoreHome();
     rmSync(dir, { recursive: true, force: true });
     vi.restoreAllMocks();
   });

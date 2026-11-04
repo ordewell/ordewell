@@ -11,6 +11,20 @@
   cmd.exe, so PowerShell's default Restricted execution policy no longer refuses
   an npm-installed agent's `.ps1` shim and leaves the sign-in waiting until it
   times out.
+- **Removing a task's worktree no longer empties your folders on Windows.** The
+  folders a worktree linked from your checkout, such as `.claude`, and any a task
+  linked itself, were emptied when it was removed. Every link now comes down
+  first.
+- **Stop stops a task's runner at once on Windows**, rather than five seconds
+  later, when it had gone on writing to its worktree.
+- **A task is held for runner settings as it is on Linux**: not for your own
+  ignored `.claude/settings.local.json`, and for a shared `.mcp.json` an earlier
+  task rewrote.
+- **A task's diff reads on Windows.** The planner's `task_diff` no longer calls a
+  task's worktree "no longer a repository" when Windows names its folder two ways,
+  and untracked files are in the diff.
+- **A `!` path exclusion holds on Windows in any case and with either slash.**
+- **Search's `include` filter works on Windows without ripgrep.**
 
 ## [0.12.3] - 2026-11-03
 

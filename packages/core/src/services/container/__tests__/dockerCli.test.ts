@@ -16,7 +16,9 @@ describe('SpawnedDockerCli', () => {
     return new SpawnedDockerCli(async () => [dir, process.env.PATH].join(delimiter));
   };
 
-  it('keeps -1 for a CLI that could not start: one it killed for taking too long is not a missing one', async () => {
+  // Windows is refused before any docker call (containerPreflight), and its
+  // spawn starts no shell script in docker's place.
+  it.skipIf(process.platform === 'win32')('keeps -1 for a CLI that could not start: one it killed for taking too long is not a missing one', async () => {
     const hung = await cliRunning('exec sleep 30').call(['version'], { timeoutMs: 50 });
     const absent = await new SpawnedDockerCli(async () => join(tmpdir(), 'ordewell-no-such-dir')).call(['version']);
 

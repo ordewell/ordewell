@@ -5,6 +5,11 @@ import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CODEX_SIGN_IN_FILE, COPY_CODEX_SIGN_IN, COPY_OPENCODE_SIGN_IN, COPY_SIGN_IN, EXPORT_SCRIPT, HOME_DIR, mirrorDir, repoDir } from '../taskWorkspace';
 
+// The scripts below run only in a task's Linux container, which Windows does
+// not start (containerPreflight). Run here they would get Git's shell, Windows
+// paths and no file modes: nothing a container gives them.
+const inTheContainer = describe.skipIf(process.platform === 'win32');
+
 describe('where a repository is in a container', () => {
   it('keeps a lone repository at the workspace', () => {
     expect(repoDir({ path: '.' })).toBe('/task/work');
@@ -29,7 +34,7 @@ describe('where a repository is in a container', () => {
  * The export as a shell runs it, on real git, over a repository an attempt has
  * left: everything in `.git` is the attempt's to write.
  */
-describe('reading what an attempt left', () => {
+inTheContainer('reading what an attempt left', () => {
   let root: string;
   let work: string;
 
@@ -98,7 +103,7 @@ describe('reading what an attempt left', () => {
  * the real one was measured to (ADR-0059 L7): logged in on a token or a key.
  * `dockerLease.e2e.test.ts` runs it with the real binary.
  */
-describe('a task\'s copy of a sign-in', () => {
+inTheContainer('a task\'s copy of a sign-in', () => {
   const STAND_IN = '#!/bin/sh\ncat "$CLAUDE_CONFIG_DIR/.credentials.json" "$CLAUDE_CONFIG_DIR/.claude.json" 2>/dev/null | grep -q -e accessToken -e primaryApiKey\n';
   let root: string;
   let kept: string;
@@ -186,7 +191,7 @@ describe('a task\'s copy of a sign-in', () => {
   });
 });
 
-describe('a task\'s copy of a person\'s Codex sign-in', () => {
+inTheContainer('a task\'s copy of a person\'s Codex sign-in', () => {
   const roots: string[] = [];
   afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
@@ -288,7 +293,7 @@ describe('a task\'s copy of a person\'s Codex sign-in', () => {
   });
 });
 
-describe('a task\'s copy of a person\'s OpenCode sign-in', () => {
+inTheContainer('a task\'s copy of a person\'s OpenCode sign-in', () => {
   let root: string;
   let kept: string;
   let copy: string;

@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BaseFileSystem } from '../BaseFileSystem';
 import { ApprovalPolicy } from '../ApprovalPolicy';
@@ -43,6 +43,12 @@ function available(backend: SandboxBackend): PlannerSandboxAvailability {
     sealed: { available: true, profile: (opts) => sealedShellProfile({ platform: 'darwin', reads: ['/usr'], masked: [], overlay: false }, opts) },
   };
 }
+
+/**
+ * A path as a command line spells it for the POSIX shell these commands run
+ * in: on Windows that is Git Bash, which reads a backslash as an escape.
+ */
+const shellPath = (p: string) => p.split(sep).join('/');
 
 interface Ran {
   command: string;
@@ -103,7 +109,9 @@ describe("a read-only task's shell (ADR-0046)", () => {
 
   beforeEach(() => {
     asked = [];
-    workspace = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-task-shell-')));
+    // The name the kernel gives it, as the .git snapshot finds it: on Windows the
+    // temporary directory is often an 8.3 short name only the native call expands.
+    workspace = realpathSync.native(mkdtempSync(join(tmpdir(), 'ordewell-task-shell-')));
     writeFileSync(join(workspace, 'a.md'), 'one\n');
     worktree = join(workspace, '.ordewell', 'worktrees', 'run', '1-review');
     mkdirSync(worktree, { recursive: true });
@@ -221,7 +229,7 @@ describe("a read-only task's shell (ADR-0046)", () => {
     const fs = session();
     const shell = fs.taskShell({ cwd: worktree, writable: worktree });
 
-    await shell.run(`cat ${join(workspace, 'a.md')}`);
+    await shell.run(`cat ${shellPath(join(workspace, 'a.md'))}`);
 
     expect(asked).toEqual([]);
     expect(fs.ran[0]).toMatchObject({ sealed: true, cwd: worktree });
@@ -460,7 +468,8 @@ describe("a read-only task's shell (ADR-0046)", () => {
 
       expect(fs.ran.map((r) => r.sealed)).toEqual([true, true]);
       expect(linked.output).toContain('may leave no link leading out of its worktree');
-      for (const gone of ['leak', 'src/deep', 'dangling']) {
+      // Named relative to the worktree, with the host's separator.
+      for (const gone of ['leak', join('src', 'deep'), 'dangling']) {
         expect(linked.output).toContain(gone);
         expect(() => lstatSync(join(worktree, gone))).toThrow();
       }
@@ -492,7 +501,7 @@ describe("a read-only task's shell (ADR-0046)", () => {
       const linked = await fs.taskShell({ cwd: worktree, writable: worktree }).run('npm test');
 
       expect(linked.output).toContain('may leave no link leading out of its worktree');
-      for (const gone of ['hide/key', 'hide/deeper/key', 'kept/key']) {
+      for (const gone of [join('hide', 'key'), join('hide', 'deeper', 'key'), join('kept', 'key')]) {
         expect(linked.output).toContain(gone);
         expect(() => lstatSync(join(worktree, gone))).toThrow();
       }
@@ -540,7 +549,7 @@ describe("a read-only task's shell (ADR-0046)", () => {
     const planted = await fs.taskShell({ cwd: worktree, writable: worktree }).run('git init sub');
 
     expect(planted.output).toContain('may leave no .git');
-    expect(planted.output).toContain('sub/.git');
+    expect(planted.output).toContain(join('sub', '.git'));
     expect(existsSync(join(worktree, 'sub', '.git'))).toBe(false);
     // A submodule's `.git` file and a vendored repository were the checkout's, not the run's.
     expect(readFileSync(join(worktree, 'vendor', 'lib', '.git'), 'utf8')).toBe('gitdir: /repo/.git/modules/lib\n');
@@ -576,17 +585,17 @@ describe("a read-only task's shell (ADR-0046)", () => {
     }
 
     it('stops the task shell when a vendored .git config changed', async () => {
-      await stopsAfter(() => writeFileSync(join(worktree, 'vendor', '.git', 'config'), '[core]\n\tfsmonitor = ./evil.sh\n'), 'vendor/.git');
+      await stopsAfter(() => writeFileSync(join(worktree, 'vendor', '.git', 'config'), '[core]\n\tfsmonitor = ./evil.sh\n'), join('vendor', '.git'));
     });
 
     it("stops the task shell when a vendored .git's hooks changed", async () => {
       await stopsAfter(() => {
         mkdirSync(join(worktree, 'vendor', '.git', 'hooks', 'extra'));
-      }, 'vendor/.git');
+      }, join('vendor', '.git'));
     });
 
     it("stops the task shell when a submodule's .git file changed", async () => {
-      await stopsAfter(() => writeFileSync(join(worktree, 'sub', '.git'), 'gitdir: fake\n'), 'sub/.git');
+      await stopsAfter(() => writeFileSync(join(worktree, 'sub', '.git'), 'gitdir: fake\n'), join('sub', '.git'));
     });
 
     it('stops the task shell when an entry is replaced at the same path by another kind', async () => {
@@ -594,7 +603,7 @@ describe("a read-only task's shell (ADR-0046)", () => {
         const dir = join(worktree, 'vendor', '.git');
         rmSync(dir, { recursive: true, force: true });
         writeFileSync(dir, 'gitdir: fake\n');
-      }, 'vendor/.git');
+      }, join('vendor', '.git'));
     });
   });
 
@@ -616,11 +625,11 @@ describe("a read-only task's shell (ADR-0046)", () => {
       const shell = fs.taskShell({ cwd: worktree, writable: worktree });
 
       const planted = await shell.run('git init sub');
-      expect(planted.output).toContain('sub/.git');
+      expect(planted.output).toContain(join('sub', '.git'));
 
       const next = await shell.run('git status');
       expect(next.success).toBe(false);
-      expect(next.output).toContain('a repository a sealed run planted could not be removed (sub/.git)');
+      expect(next.output).toContain(`a repository a sealed run planted could not be removed (${join('sub', '.git')})`);
       expect(next.output).toContain("this task's shell is stopped");
       // The refused command never ran, and the `.git` is still where git would find it.
       expect(fs.ran.map((r) => r.command)).toEqual(['git init sub']);
@@ -729,7 +738,7 @@ describe("a read-only task's shell (ADR-0046)", () => {
     const status = await shell.run('git status');
     const tests = await shell.run('npm test');
     const loop = await shell.run('for f in *.md; do wc -l "$f"; done');
-    const outside = await shell.run(`cat ${join(workspace, 'a.md')}`);
+    const outside = await shell.run(`cat ${shellPath(join(workspace, 'a.md'))}`);
 
     expect(status.success).toBe(true);
     expect(fs.ran).toEqual([{ command: 'git status', cwd: worktree, sealed: false }]);

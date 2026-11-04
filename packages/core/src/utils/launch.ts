@@ -191,7 +191,8 @@ export class BatchQuoteError extends Error {
     super(
       `Cannot start "${command}" on Windows: an argument holds a double quote, and the only launcher found on PATH was a batch shim (${command}.cmd).\n\n` +
       `cmd.exe has no way to carry a quote inside a quoted argument, so the text after it would run as commands of their own.\n\n` +
-      `Install the native executable from the coding agent's own Windows installer or release binary. Ordewell will launch it directly, with no interpreter in the way. A PowerShell shim (${command}.ps1) beside the batch one is also enough.`,
+      // Not the .ps1 beside it, as the other errors here say: Windows PowerShell drops a quote on its way through a shim (ADR-0010).
+      `Install the native executable from the coding agent's own Windows installer or release binary. Ordewell will launch it directly, with no interpreter in the way.`,
     );
     this.name = 'BatchQuoteError';
   }
@@ -212,7 +213,7 @@ export class ExecutableNotFoundError extends Error {
 
 function isResolvableOnPosixPath(command: string, PATH: string, exists: (candidate: string) => boolean): boolean {
   if (command.includes('/')) return exists(command);
-  return PATH.split(path.delimiter).map((d) => d.trim()).filter(Boolean).some((dir) => exists(path.join(dir, command)));
+  return PATH.split(path.posix.delimiter).map((d) => d.trim()).filter(Boolean).some((dir) => exists(path.posix.join(dir, command)));
 }
 
 /**
@@ -224,11 +225,19 @@ function isResolvableOnPosixPath(command: string, PATH: string, exists: (candida
  * PATH search), so the search is repeated here instead. Windows already did
  * the search inside `planDirectLaunch` — signalled by the returned file
  * differing from the bare command name it was given; an unresolved command
- * comes back unchanged.
+ * comes back unchanged. A command that already names its file, location and
+ * extension both, is found as itself, so that one is checked directly.
  */
 export function isExecutableResolved(command: string, plan: LaunchPlan, PATH: string, deps: LaunchDeps = {}): boolean {
-  if ((deps.platform ?? process.platform) === 'win32') return plan.file !== command;
+  if ((deps.platform ?? process.platform) === 'win32') return plan.file !== command || namesDirectFile(command, deps);
   return isResolvableOnPosixPath(command, PATH, deps.exists ?? defaultExists);
+}
+
+/** Whether `command` names, by location and extension, an existing file Windows starts directly. */
+function namesDirectFile(command: string, deps: LaunchDeps): boolean {
+  if (path.win32.basename(command) === command) return false;
+  const pathExt = (deps.pathExt ?? (() => process.env.PATHEXT ?? ''))();
+  return candidateExtensions(command, pathExt).direct.includes('') && (deps.exists ?? defaultExists)(command);
 }
 
 function defaultExists(candidate: string): boolean {

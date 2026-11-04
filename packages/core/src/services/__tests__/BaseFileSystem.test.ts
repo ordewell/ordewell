@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync, readdirSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, resolve as resolvePath } from 'node:path';
 import { describe, it, expect, vi } from 'vitest';
 import { BaseFileSystem } from '../BaseFileSystem';
 import { PlannerShellSandbox, type PlannerShellLaunch } from '../sandbox/plannerSandbox';
@@ -15,6 +15,12 @@ import type { GrepOptions, ReadFileOpts, ToolOutcome } from '../../interfaces/IF
 import { fakeSecret } from './fakeSecret';
 
 const ROOT = '/repo';
+
+// Confinement judges a path with the host's `path` (pathScope.ts), so on
+// Windows `/repo` and `/etc` resolve onto the current drive, spelled with
+// backslashes, and a grant's scope is spelled the same way.
+const abs = (p: string) => resolvePath(p);
+const scopeOf = (dir: string) => join(abs(dir), '*');
 
 /**
  * A test double for the mechanics half only. Every `*Impl` records the absolute
@@ -71,7 +77,7 @@ describe('BaseFileSystem — path confinement', () => {
     const result = await fs.readFile('src/index.ts');
 
     expect(result.success).toBe(true);
-    expect(fs.readCalls).toEqual(['/repo/src/index.ts']);
+    expect(fs.readCalls).toEqual([abs('/repo/src/index.ts')]);
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -102,11 +108,11 @@ describe('BaseFileSystem — path confinement', () => {
     const result = await fs.readFile('/tmp/dump/a.log');
 
     expect(result.success).toBe(true);
-    expect(fs.readCalls).toEqual(['/tmp/dump/a.log']);
+    expect(fs.readCalls).toEqual([abs('/tmp/dump/a.log')]);
     expect(request).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'external_path',
-      subject: '/tmp/dump/a.log',
-      scope: '/tmp/dump/*',
+      subject: abs('/tmp/dump/a.log'),
+      scope: scopeOf('/tmp/dump'),
     }));
   });
 
@@ -118,7 +124,7 @@ describe('BaseFileSystem — path confinement', () => {
     await fs.readFile('/tmp/dump/a.log');
     await fs.readFile('/tmp/dump/b.log');
 
-    expect(fs.readCalls).toEqual(['/tmp/dump/a.log', '/tmp/dump/b.log']);
+    expect(fs.readCalls).toEqual([abs('/tmp/dump/a.log'), abs('/tmp/dump/b.log')]);
     expect(ask).toHaveBeenCalledTimes(1);
   });
 
@@ -129,7 +135,7 @@ describe('BaseFileSystem — path confinement', () => {
 
     await fs.listDir('/tmp/dump');
 
-    expect(request).toHaveBeenCalledWith(expect.objectContaining({ scope: '/tmp/dump/*' }));
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({ scope: scopeOf('/tmp/dump') }));
   });
 
   it('confines grep and glob search roots too, not just direct file reads', async () => {
@@ -148,7 +154,7 @@ describe('BaseFileSystem — path confinement', () => {
 
     const result = await fs.readFiles(['src/a.ts', '/etc/passwd']);
 
-    expect(result.output).toContain('contents of /repo/src/a.ts');
+    expect(result.output).toContain(`contents of ${abs('/repo/src/a.ts')}`);
     expect(result.output).toContain('[not read]');
     expect(result.output).toContain('outside the workspace root');
   });
@@ -215,7 +221,7 @@ describe('BaseFileSystem — bash tiers', () => {
 
     expect(result.success).toBe(false);
     expect(result.output).toContain('outside the workspace root');
-    expect(request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', subject: '/etc/passwd' }));
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', subject: abs('/etc/passwd') }));
     expect(fs.bashCalls).toEqual([]);
   });
 
@@ -228,7 +234,7 @@ describe('BaseFileSystem — bash tiers', () => {
 
     expect(result.success).toBe(true);
     expect(fs.bashCalls).toEqual(['cat /etc/passwd']);
-    expect(request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', scope: '/etc/*' }));
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', scope: scopeOf('/etc') }));
   });
 
   it('points a denied sed at the line reads that run without asking', async () => {
@@ -286,7 +292,7 @@ describe('BaseFileSystem — bash tiers', () => {
     const result = await fs.bash('cat src/../../etc/passwd');
 
     expect(result.success).toBe(false);
-    expect(request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', subject: '/etc/passwd' }));
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', subject: abs('/etc/passwd') }));
     expect(fs.bashCalls).toEqual([]);
   });
 
@@ -312,7 +318,9 @@ describe('BaseFileSystem — bash tiers', () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it('does not ask about the null device or the standard streams', async () => {
+  // POSIX's own device tree: on Windows the classifier resolves `/dev/...` onto
+  // the current drive like any other path, so neither exemption applies there.
+  it.skipIf(process.platform === 'win32')('does not ask about the null device or the standard streams', async () => {
     const fs = new TestFileSystem();
     const request = vi.fn();
     fs.setApproval({ request });
@@ -323,7 +331,7 @@ describe('BaseFileSystem — bash tiers', () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it('still asks about the rest of /dev', async () => {
+  it.skipIf(process.platform === 'win32')('still asks about the rest of /dev', async () => {
     const fs = new TestFileSystem();
     const request = vi.fn().mockResolvedValue(false);
     fs.setApproval({ request });
@@ -345,7 +353,7 @@ describe('BaseFileSystem — bash tiers', () => {
     expect(request).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'shell_command',
       subject: 'npm --prefix /opt/app test',
-      scopes: ['npm', '/opt/*'],
+      scopes: ['npm', scopeOf('/opt')],
     }));
   });
 
@@ -357,7 +365,7 @@ describe('BaseFileSystem — bash tiers', () => {
     await fs.bash('cat /etc/hosts /opt/app/x /etc/hostname');
 
     expect(request).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', scopes: ['/etc/*', '/opt/app/*'] }));
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', scopes: [scopeOf('/etc'), scopeOf('/opt/app')] }));
   });
 
   it('asks a lone outside path with its single scope, as before', async () => {
@@ -367,7 +375,7 @@ describe('BaseFileSystem — bash tiers', () => {
 
     await fs.bash('cat /etc/hosts');
 
-    expect(request.mock.calls[0][0]).toEqual(expect.objectContaining({ scope: '/etc/*' }));
+    expect(request.mock.calls[0][0]).toEqual(expect.objectContaining({ scope: scopeOf('/etc') }));
     expect(request.mock.calls[0][0].scopes).toBeUndefined();
   });
 
@@ -380,7 +388,7 @@ describe('BaseFileSystem — bash tiers', () => {
 
     expect(result.success).toBe(false);
     expect(result.output).toContain('outside the workspace root');
-    expect(request).toHaveBeenCalledWith(expect.objectContaining({ scopes: ['npm', '/etc/*'] }));
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({ scopes: ['npm', scopeOf('/etc')] }));
     expect(fs.bashCalls).toEqual([]);
   });
 });
@@ -406,13 +414,13 @@ describe('BaseFileSystem — bash follows a cd chain', () => {
   it('still asks when the chain climbs out of the workspace', async () => {
     const { request } = await run('cd api && cat ../../etc/hosts');
 
-    expect(request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', scope: '/etc/*' }));
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', scope: scopeOf('/etc') }));
   });
 
   it('resolves later paths from a directory the chain left the workspace for', async () => {
     const { request } = await run('cd ../other && cat ../etc/hosts', true);
 
-    expect(request.mock.calls[0][0].scopes).toEqual(['/other/*', '/etc/*']);
+    expect(request.mock.calls[0][0].scopes).toEqual([scopeOf('/other'), scopeOf('/etc')]);
   });
 
   it('does not let a subshell cd leak into the commands after it', async () => {
@@ -456,7 +464,7 @@ describe('BaseFileSystem — bash follows a cd chain', () => {
   ])('does not follow a chain with %s, and asks about the path outside', async (_label, command) => {
     const { request } = await run(command);
 
-    expect(scopesAsked(request).some((scope) => scope.startsWith('/'))).toBe(true);
+    expect(scopesAsked(request).some((scope) => isAbsolute(scope))).toBe(true);
   });
 
   it.each([
@@ -478,7 +486,7 @@ describe('BaseFileSystem — bash follows a cd chain', () => {
   it('stops following at a cd it cannot read', async () => {
     const { request } = await run('cd "$HOME" && cd api && cat ../x', true);
 
-    expect(scopesAsked(request).some((scope) => scope.startsWith('/'))).toBe(true);
+    expect(scopesAsked(request).some((scope) => isAbsolute(scope))).toBe(true);
   });
 
   // Grants were keyed on the binary name, so one approved `cd "$HOME"` (or
@@ -1440,9 +1448,9 @@ describe('BaseFileSystem runs sealed what it would refuse without asking (ADR-00
 
   it('refuses a path an exclusion names, sealed or not (S3)', async () => {
     const fs = new SealingFileSystem();
-    fs.setApproval(policy({ mode: 'deny', preApproved: ['!/etc/*'] }).approval);
+    fs.setApproval(policy({ mode: 'deny', preApproved: [`!${scopeOf('/etc')}`] }).approval);
     expect((await fs.bash('cat /etc/hosts', undefined, { sealed: true })).output)
-      .toBe('Command refused: the planner allowlist excludes "/etc/hosts", and an exclusion holds for a sealed run too.');
+      .toBe(`Command refused: the planner allowlist excludes "${abs('/etc/hosts')}", and an exclusion holds for a sealed run too.`);
     expect((await fs.bash('cat /etc/hosts')).output).toMatch(/^Access denied:/);
     expect(fs.sealedRuns).toEqual([]);
   });

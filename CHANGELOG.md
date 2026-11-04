@@ -18,6 +18,35 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   login terminal is cmd.exe, so PowerShell's default Restricted execution policy
   no longer refuses an npm-installed agent's `.ps1` shim and leaves the sign-in
   waiting until it times out.
+- **Removing a task's worktree no longer empties your folders on Windows.** Git
+  for Windows removes a junction by walking into it. With the workspace in a
+  folder below its repository's top, the links a worktree makes into your
+  checkout, `.claude` among them, were left in place, and their folders were
+  emptied in your own checkout; so was any folder a task linked to itself. Every
+  link in a worktree is now taken down first. A junction a task left is kept out
+  of its commits too, where git would have copied in the folder it leads to; a
+  symbolic link is still committed as the link it is. A worktree Ordewell leaves
+  in place is now removed, as its notice says, with `rmdir /s`, which leaves a
+  junction's folder alone.
+- **Stop stops a task's runner at once on Windows.** The polite kill Windows
+  offers only asks a window to close, which no console agent has, so a stopped
+  runner went on for five more seconds, writing to its worktree and holding it
+  from a Continue.
+- **A task is held for runner settings as it is on Linux.** On Windows a task was
+  held for your own ignored `.claude/settings.local.json`, which git read through
+  the worktree's link, and was not held for a shared `.mcp.json` an earlier task
+  rewrote.
+- **A task's diff reads on Windows.** git names a worktree in its long form, and
+  Ordewell could hold a short `8.3` name or a lower-case drive letter for the same
+  folder, so the planner's `task_diff` called the worktree "no longer a
+  repository". Untracked files are in the diff too: Git for Windows could not open
+  the empty side it was handed.
+- **A `!` path exclusion holds on Windows in any case and with either slash.** An
+  exclusion such as `!C:/Users/me/.ssh/*` now applies to `C:\Users\me\.ssh\*` and
+  to any casing of it, as Windows itself would read the path.
+- **Search's `include` filter works on Windows without ripgrep.** The fallback
+  search matched an anchored glob such as `src/*.ts` against backslashed paths and
+  found nothing.
 
 ## [0.12.3] - 2026-11-03
 

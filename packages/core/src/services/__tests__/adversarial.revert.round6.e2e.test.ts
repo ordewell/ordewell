@@ -9,7 +9,7 @@ import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import type { IsolationRun, IWorktreeIsolation } from '../../interfaces/IWorktreeIsolation';
 import type { IRunner } from '../../interfaces/IRunner';
 import { createTask, type Task } from '../../models/Task';
-import { fakeConfig, FakeRunnerSession } from '../../testing';
+import { fakeConfig, FakeRunnerSession, removeDir } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
 
 /**
@@ -44,7 +44,7 @@ function initRepo(root: string): string {
 }
 const temps: string[] = [];
 function tempDir(): string { const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-r6-'))); temps.push(dir); return dir; }
-afterEach(() => { while (temps.length) rmSync(temps.pop()!, { recursive: true, force: true }); });
+afterEach(async () => { while (temps.length) await removeDir(temps.pop()!); });
 function task(order: number, title: string): Task {
   return { id: `task-${order}`, order, title, description: '', type: 'ai', status: 'in_progress', dependencies: [], subtasks: [], assignedRunner: 'claude-code' };
 }

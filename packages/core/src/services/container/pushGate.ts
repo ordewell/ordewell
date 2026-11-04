@@ -1,7 +1,8 @@
-import { accessSync, constants, mkdtempSync, realpathSync, rmSync } from 'fs';
+import { accessSync, constants, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { isAbsolute, join, relative, resolve, sep } from 'path';
 import { git, isAncestor, NO_HOOKS, tryGit, type GitInvoker } from '../gitExec';
+import { realPathOf } from '../../utils/realPath';
 
 /** Git's own checks on what it takes from a stranger: a tree that writes into `.git`, a malformed object. */
 const FSCK = ['-c', 'transfer.fsckObjects=true', '-c', 'fetch.fsckObjects=true'];
@@ -80,7 +81,9 @@ async function hooksWritten(invoker: GitInvoker, repo: string, base: string, sna
 
 function realOf(path: string): string {
   try {
-    return realpathSync(path);
+    // As git's toplevel is named, which on Windows the JS realpath is not: an
+    // 8.3 short name it keeps reads to `relative` as another folder.
+    return realPathOf(path);
   } catch {
     return path;
   }
