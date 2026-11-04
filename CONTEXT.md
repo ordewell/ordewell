@@ -848,8 +848,10 @@ or read-only start it begins in a private directory, never the worktree, so the
 repository's hooks and config do not run (ADR-0060 R3). Qwen Code (`qwen-code`)
 and Cline (`cline`) run writable tasks only: no recording shows either
 refusing a write and a command, so they claim neither role. Cline takes
-Ordewell's server from a settings file, attaches on the task's first turn, and
-is handed its provider key at spawn (ADR-0060 R4, R5, R9).
+Ordewell's server from a settings file and attaches on the task's first turn
+(ADR-0060 R4, R5). Qwen Code and Cline are handed the provider key configured in
+Ordewell at spawn, Cline its own stored key where Ordewell holds none it can use
+(ADR-0060 R9).
 *Avoid:* "ACP shim" or "ACP bridge" for it (a third-party adapter in front of an
 agent does not qualify); "ACP backend", "ACP provider".
 

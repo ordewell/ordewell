@@ -23,6 +23,8 @@ import { fakeConfig } from '../../testing';
 import { CURSOR_EXTENSION_REQUESTS } from '../harness/cursorRequests';
 import { runnerEnv } from '../harness/runnerEnv';
 import { clineCredentials } from '../harness/clineCredentials';
+import { qwenCredentials } from '../harness/qwenCredentials';
+import { stubNoOrdewellProvider } from './ordewellProviderEnv';
 
 /**
  * The ACP connector's task core (#73, slice S3/S4) against the scripted ACP
@@ -219,6 +221,19 @@ describe('AcpAdapter start', () => {
       { expect: 'session/new', error: { code: ACP_ERROR.authRequired, message: 'Authentication required' } },
     ], { ...PROFILE, manifest: signless });
     await expect(adapter.start(taskStart())).rejects.toThrow(/^Fake Agent is not signed in\.$/);
+  });
+
+  it('offers the profile\'s other sign-in route after the login command, or alone where there is none', async () => {
+    const signedOutSteps = (): FakeAcpStep[] => [
+      { expect: 'initialize', reply: INITIALIZED },
+      { expect: 'session/new', error: { code: ACP_ERROR.authRequired, message: 'Authentication required' } },
+    ];
+    const signInRoute = 'set FAKE_API_KEY in Ordewell';
+    const both = setup(signedOutSteps(), { ...PROFILE, signInRoute });
+    const alone = setup(signedOutSteps(), { ...PROFILE, signInRoute, manifest: { ...MANIFEST, auth: undefined } });
+
+    await expect(both.adapter.start(taskStart())).rejects.toThrow(/^Fake Agent is not signed in\. Run `fake-agent login`, or set FAKE_API_KEY in Ordewell\.$/);
+    await expect(alone.adapter.start(taskStart())).rejects.toThrow(/^Fake Agent is not signed in\. Set FAKE_API_KEY in Ordewell\.$/);
   });
 
   it('reports the agent\'s own refusal of session/new', async () => {
@@ -1216,6 +1231,9 @@ describe('AcpAdapter provider credential', () => {
   });
 
   it('spawns a profile without the hook exactly as before, and one whose hook needs nothing the same way', async () => {
+    // A key configured in Ordewell reaches only a profile whose hook asks for it.
+    stubNoOrdewellProvider();
+    vi.stubEnv('OPENROUTER_API_KEY', KEY);
     const workspaceEnv = async () => ({ FAKE_WORKSPACE_VAR: 'w' });
     const plain = setup(handshake(), PROFILE, {}, { workspaceEnv });
     const none = setup(handshake(), withKey(async () => null), {}, { workspaceEnv });
@@ -1227,6 +1245,47 @@ describe('AcpAdapter provider credential', () => {
     expect(plain.spawned.lastArgs()).toEqual(['--acp']);
     expect(none.spawned.lastEnv()).toEqual(plain.spawned.lastEnv());
     expect(none.spawned.lastArgs()).toEqual(plain.spawned.lastArgs());
+    for (const name of ['OPENAI_API_KEY', 'OPENAI_BASE_URL', 'CLINE_API_KEY', 'CLINE_PROVIDER']) expect(plain.spawned.lastEnv()?.[name] || undefined).toBeUndefined();
+  });
+
+  describe('from the provider configured in Ordewell', () => {
+    beforeEach(() => {
+      // The developer's own agent variables and provider keys must not decide what these read.
+      for (const name of ['CLINE_API_KEY', 'CLINE_PROVIDER', 'CLINE_MODEL', 'CLINE_PROVIDER_SETTINGS_PATH']) vi.stubEnv(name, '');
+      stubNoOrdewellProvider();
+    });
+
+    it('starts each agent under the variables it reads, from the key `/key` wrote to the workspace', async () => {
+      const workspaceEnv = async () => ({ OPENROUTER_API_KEY: KEY });
+      const qwen = setup(handshake(), withKey(qwenCredentials), {}, { workspaceEnv });
+      const cline = setup(handshake(), withKey(clineCredentials({ homedir: () => '/no-such-home' })), {}, { workspaceEnv });
+
+      await qwen.adapter.start(taskStart());
+      await cline.adapter.start(taskStart());
+
+      // OpenRouter's OpenAI-compatible endpoint, and Cline's id for OpenRouter.
+      expect(qwen.spawned.lastEnv()).toMatchObject({ OPENAI_API_KEY: KEY, OPENAI_BASE_URL: 'https://openrouter.ai/api/v1' });
+      expect(cline.spawned.lastEnv()).toMatchObject({ CLINE_PROVIDER: 'openrouter', CLINE_API_KEY: KEY });
+    });
+
+    it('keeps the key out of the log, the agent\'s transcript, the arguments and the errors of a start the agent refuses', async () => {
+      const logged = (['log', 'info', 'warn', 'error', 'debug'] as const).map((level) => vi.spyOn(console, level));
+      vi.stubEnv('OPENROUTER_API_KEY', KEY);
+      const signedOut = setup([{ expect: 'initialize', reply: INITIALIZED }, { expect: 'session/new', error: { code: ACP_ERROR.authRequired, message: 'Authentication required' } }], withKey(qwenCredentials));
+
+      const refused = await signedOut.adapter.start(taskStart()).then(() => null, (e: unknown) => e as Error);
+
+      expect(signedOut.spawned.lastEnv()?.OPENAI_API_KEY).toBe(KEY);
+      expect(refused).toBeInstanceOf(Error);
+      const seen = [
+        JSON.stringify(signedOut.agent.received),
+        JSON.stringify(signedOut.spawned.lastArgs()),
+        String(refused?.message),
+        String(refused?.stack),
+        JSON.stringify(logged.flatMap((spy) => spy.mock.calls)),
+      ];
+      for (const place of seen) expect(place).not.toContain(KEY);
+    });
   });
 
   it('gives two attempts each its own credential, read for each, and starts one while the other runs', async () => {
@@ -1307,8 +1366,9 @@ describe('AcpAdapter provider credential', () => {
     beforeEach(() => {
       home = mkdtempSync(join(tmpdir(), 'ordewell-cline-acp-'));
       mkdirSync(dirname(providers()), { recursive: true });
-      // The developer's own Cline variables must not decide what these read.
+      // The developer's own Cline variables and provider keys must not decide what these read.
       for (const name of ['CLINE_API_KEY', 'CLINE_PROVIDER', 'CLINE_MODEL', 'CLINE_PROVIDER_SETTINGS_PATH']) vi.stubEnv(name, '');
+      stubNoOrdewellProvider();
     });
     afterEach(() => rmSync(home, { recursive: true, force: true }));
 
@@ -1329,7 +1389,7 @@ describe('AcpAdapter provider credential', () => {
 
       const refused = await adapter.start(taskStart()).then(() => null, (e: unknown) => e as Error);
 
-      expect(refused?.message).toBe(`Cline has no provider key Ordewell can hand it: \`${providers()}\` names no provider it last used. Sign in with \`cline auth\` (a Cline or ClinePass account, or a provider's key), or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell's environment.`);
+      expect(refused?.message).toBe(`Cline has no provider key Ordewell can hand it: Ordewell holds none for a provider Cline offers, and \`${providers()}\` names no provider it last used. Set the key of a provider Cline offers, such as OpenRouter, in Ordewell with \`/key\`, or sign in with \`cline auth\` (a Cline or ClinePass account, or a provider's key), or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell's environment.`);
       expect(refused?.message).not.toContain('Run `fake-agent login`');
       expect(spawned.processes).toHaveLength(0);
     });
@@ -1338,7 +1398,7 @@ describe('AcpAdapter provider credential', () => {
       writeFileSync(providers(), '{ not json', { mode: 0o600 });
       const { adapter } = setup(handshake(), cline());
 
-      await expect(adapter.start(taskStart())).rejects.toThrow(`\`${providers()}\` could not be read. Sign in with \`cline auth\``);
+      await expect(adapter.start(taskStart())).rejects.toThrow(`\`${providers()}\` could not be read. Set the key of a provider Cline offers, such as OpenRouter, in Ordewell with \`/key\`, or sign in with \`cline auth\``);
     });
   });
 });

@@ -511,7 +511,8 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
 
   private signedOut(): string {
     const { auth, runner } = this.profile.manifest;
-    return auth ? `${this.name} is not signed in. Run \`${[runner.command, ...auth.loginArgs].join(' ')}\`.` : `${this.name} is not signed in.`;
+    const routes = [auth ? `run \`${[runner.command, ...auth.loginArgs].join(' ')}\`` : null, this.profile.signInRoute].filter(Boolean).join(', or ');
+    return routes ? `${this.name} is not signed in. ${routes[0].toUpperCase()}${routes.slice(1)}.` : `${this.name} is not signed in.`;
   }
 
   /**
