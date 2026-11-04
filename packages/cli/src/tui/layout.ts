@@ -9,7 +9,7 @@ import { DELEGATION_OFFERED, SUPERVISOR_LEVEL_LABEL, type DiscoveredModel } from
 import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
-import { runnerNamesOr } from '../runnerNames';
+import { plannerNamesOr } from '../runnerNames';
 import { TASK_EDITOR_KEYS, planFooterHints, planKeysByGroup } from './planKeys';
 import { accountLimitsText, attachingLabel, contextMeterText, accountLimitsOf, assignedRunnerOf, describeIsolationPreview, elapsedSince, scriptTaskText, getProviderMeta, isApiProvider, blockedByLabel, handoffPeekParts, holdLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeTime, runnerForProvider, taskLogHeaderView, taskActivity, taskRowView, taskStatusKind, tasksTotalText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskLogHeaderTask, type TaskLogHeaderView, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
 
@@ -1035,7 +1035,7 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     ? []
     : [
       ...wrap(
-        style.yellow(`Install a coding agent (${runnerNamesOr()}) and pick it with /planner. No API key needed. Or add an API key with /key and choose your provider.`),
+        style.yellow(`Install a coding agent (${plannerNamesOr()}) and pick it with /planner. No API key needed. Or add an API key with /key and choose your provider.`),
         Math.max(1, cols - 1),
       ),
       '',

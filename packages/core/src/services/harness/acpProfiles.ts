@@ -17,8 +17,13 @@ export type AcpInstructionsRoute =
   | { kind: 'prompt' }
   /** In `session/new`'s `_meta` under `key`, a field the agent documents. */
   | { kind: 'meta'; key: string }
-  /** An owner-only file outside the worktree, named to the agent by a flag or an environment variable. */
-  | { kind: 'file'; fileName: string; pass: { flag: string } | { env: string } };
+  /**
+   * An owner-only file outside the worktree, named to the agent by a flag or
+   * an environment variable, or found by name in a private directory the
+   * variable names, for an agent that loads instruction files from the
+   * directories it is given.
+   */
+  | { kind: 'file'; fileName: string; pass: { flag: string } | { env: string } | { envDir: string } };
 
 /**
  * How the plan's mode reaches the agent at spawn (ADR-0001): its own switch,
@@ -54,6 +59,10 @@ export interface AcpProfile {
    * (ADR-0022, S3).
    */
   ordewellTool(call: AcpToolCall): string | null;
+  /** The name the agent calls an Ordewell tool by, given its name on the server; the server's own name when absent. */
+  toolName?(tool: string): string;
+  /** Arguments that run the agent on the plan's model; absent when the agent cannot be told one at spawn. */
+  modelArgs?(model: string): readonly string[];
   instructions: AcpInstructionsRoute;
   /** Absent: the agent has no mode switch, so the adapter answers its requests per the mode. */
   mode?: AcpModeRoute;
@@ -69,6 +78,8 @@ const NO_REPO_CONFIG: RepoConfigReader = { instructions: () => [], projectServer
 export function acpConnector(profile: AcpProfile): RunnerConnector {
   return {
     create: (deps) => new AcpAdapter(deps, profile),
+    // The planner's envelope and the read-only roles over ACP are their own slice.
+    plans: false,
     ordewellTools: acpOrdewellBinding(profile),
     repoConfig: profile.repoConfig ?? NO_REPO_CONFIG,
     ...(profile.usageLimitReset ? { usageLimitReset: profile.usageLimitReset } : {}),

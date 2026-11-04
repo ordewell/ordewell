@@ -146,8 +146,12 @@ export class RunnerInstallation {
   async plannerUsability(runner: string): Promise<{ usable: boolean; reason?: string; auth?: RunnerAuth }> {
     const manifest = this.registry.getManifest(runner);
     if (!manifest) return { usable: false, reason: `No runner manifest is registered for "${runner}".` };
-    if (!connectorFor(runner)) {
+    const connector = connectorFor(runner);
+    if (!connector) {
       return { usable: false, reason: `${manifest.displayName ?? runner} has no planner transport yet.` };
+    }
+    if (!connector.plans) {
+      return { usable: false, reason: `${manifest.displayName ?? runner} can run tasks but cannot plan in Ordewell yet.` };
     }
     if (!(await this.isInstalled(runner))) {
       return { usable: false, reason: `${manifest.runner.command} is not installed or is not on PATH.` };

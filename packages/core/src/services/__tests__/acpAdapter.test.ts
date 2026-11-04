@@ -312,6 +312,31 @@ describe('AcpAdapter turn', () => {
     expect(spawned.lastArgs()).toEqual(['--acp']);
   });
 
+  it('can name the directory the instructions file is in, for an agent that loads instruction files from the directories it is given', async () => {
+    const { adapter, spawned } = setup(handshake(), { ...PROFILE, instructions: { kind: 'file', fileName: 'AGENTS.md', pass: { envDir: 'FAKE_INSTRUCTION_DIRS' } } });
+    await adapter.start(taskStart());
+
+    const dir = spawned.lastEnv().FAKE_INSTRUCTION_DIRS ?? '';
+    expect(dir.startsWith('/repo')).toBe(false);
+    const { readFileSync, existsSync, readdirSync } = await import('fs');
+    expect(readdirSync(dir)).toEqual(['AGENTS.md']);
+    expect(readFileSync(`${dir}/AGENTS.md`, 'utf8')).toContain('task_complete');
+    expect(spawned.lastArgs()).toEqual(['--acp']);
+    adapter.dispose();
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  it('names the plan\'s model on the command line when the profile says how, and nothing without one', async () => {
+    const profile: AcpProfile = { ...PROFILE, modelArgs: (model) => ['--model', model] };
+    const chosen = setup(handshake(), profile);
+    await chosen.adapter.start(taskStart('ask', { model: 'fast-1' }));
+    expect(chosen.spawned.lastArgs()).toEqual(['--acp', '--model', 'fast-1']);
+
+    const unchosen = setup(handshake(), profile);
+    await unchosen.adapter.start(taskStart());
+    expect(unchosen.spawned.lastArgs()).toEqual(['--acp']);
+  });
+
   it('turns the agent\'s refusal of a prompt into an error, and a signed-out refusal into the login words', async () => {
     const { adapter } = setup([
       ...handshake(),
@@ -466,6 +491,53 @@ describe('AcpAdapter permissions', () => {
       { outcome: { outcome: 'selected', optionId: 'opt-c' } },
       { outcome: { outcome: 'selected', optionId: 'opt-c' } },
     ]);
+  });
+
+  it('reads an Ordewell call from the agent\'s report of it when its permission request names the tool more briefly', async () => {
+    const report = (toolCallId: string, title: string) => update('tool_call', { toolCallId, title, kind: 'other', status: 'pending' });
+    const { agent, adapter } = setup([
+      ...handshake(),
+      { expect: 'session/prompt' },
+      { notify: 'session/update', params: report('c1', 'ordewell/task_complete') },
+      { request: 'session/request_permission', params: permissionParams('task_complete', 'c1') },
+      { notify: 'session/update', params: report('c2', 'other/task_complete') },
+      { request: 'session/request_permission', params: permissionParams('ordewell/task_complete', 'c2') },
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    ]);
+    await adapter.start(taskStart());
+    const events: AgentEvent[] = [];
+    await adapter.send('go', (e) => {
+      events.push(e);
+      if (e.type === 'permission_request' && !e.decided) adapter.answerPermission(e.id, { decision: 'deny' });
+    });
+
+    const asked = events.filter((e) => e.type === 'permission_request');
+    expect(asked.map((e) => e.type === 'permission_request' && e.decided)).toEqual([{ decision: 'allow' }, undefined]);
+    expect(agent.answers.map((a) => a.result)).toEqual([
+      { outcome: { outcome: 'selected', optionId: 'opt-b' } },
+      { outcome: { outcome: 'selected', optionId: 'opt-c' } },
+    ]);
+  });
+
+  it('forgets a turn\'s reports with the turn, so a later request is read by its own words', async () => {
+    const { adapter } = setup([
+      ...handshake(),
+      { expect: 'session/prompt' },
+      { notify: 'session/update', params: update('tool_call', { toolCallId: 'c1', title: 'ordewell/task_complete', kind: 'other' }) },
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+      { expect: 'session/prompt' },
+      { request: 'session/request_permission', params: permissionParams('task_complete', 'c1') },
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    ]);
+    await adapter.start(taskStart());
+    await turn(adapter, 'first');
+    const events: AgentEvent[] = [];
+    await adapter.send('second', (e) => {
+      events.push(e);
+      if (e.type === 'permission_request' && !e.decided) adapter.answerPermission(e.id, { decision: 'deny' });
+    });
+
+    expect(events.filter((e) => e.type === 'permission_request').map((e) => e.type === 'permission_request' && e.decided)).toEqual([undefined]);
   });
 
   it('answers every request itself, marked decided, when the task\'s mode approves all and the agent has no switch of its own (ADR-0001)', async () => {
@@ -803,6 +875,10 @@ describe('acpConnector', () => {
     expect(connector.ordewellTools.toolNames('task')).toContain('task_complete');
   });
 
+  it('runs tasks but does not plan, since the adapter refuses a planner start', () => {
+    expect(acpConnector(PROFILE).plans).toBe(false);
+  });
+
   it('carries the profile\'s usage-limit reader and leaves out what the profile leaves out', () => {
     const reset = new Date('2026-01-01T00:00:00Z');
     const usageLimitReset = (tail: string): Date | null => (tail.includes('limit') ? reset : null);
@@ -834,6 +910,12 @@ describe('acpOrdewellBinding', () => {
     expect(binding.attachState('failed')).toBe('failed');
     expect(binding.attachState('pending')).toBe('pending');
     expect(binding.attachState(undefined)).toBe('pending');
+  });
+
+  it('names tools as the profile says the agent does, when it names them its own way', () => {
+    const named = acpOrdewellBinding({ ...PROFILE, toolName: (tool) => `ordewell-${tool}` });
+    expect(named.toolName('task_complete')).toBe('ordewell-task_complete');
+    expect(named.toolNames('task')).toEqual(binding.toolNames('task').map((tool) => `ordewell-${tool}`));
   });
 
   it('names tools as the server serves them and hides none from the planner', () => {

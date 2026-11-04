@@ -116,6 +116,7 @@ export class FakeAcpAgent {
   private readonly inbox: Inbound[] = [];
   private readonly open: Array<{ id: number | string; method: string }> = [];
   private readonly sentRequests = new Map<number, string>();
+  private readonly asked = new Map<number, (answer: FakeAcpAnswer) => void>();
   private nextId = 1;
   private awaiting: number | undefined;
   private pumping = false;
@@ -172,14 +173,33 @@ export class FakeAcpAgent {
     this.write({ jsonrpc: '2.0', method, ...(params !== undefined ? { params } : {}) });
   }
 
+  /** The agent sends a request now, outside the script; resolves with what the client answered. */
+  ask(method: string, params?: unknown): Promise<FakeAcpAnswer> {
+    const id = this.nextId++;
+    this.sentRequests.set(id, method);
+    const answer = new Promise<FakeAcpAnswer>((resolve) => this.asked.set(id, resolve));
+    this.write({ jsonrpc: '2.0', id, method, ...(params !== undefined ? { params } : {}) });
+    return answer;
+  }
+
+  /** Connect to the MCP server given in `session/new` and list its tools, the way an agent that attaches eagerly does. */
+  async listMcpTools(server = 'ordewell'): Promise<string[]> {
+    const client = await this.mcpClient(server);
+    return (await client.listTools()).tools.map((tool) => tool.name);
+  }
+
   /** Call a tool on the MCP server given in `session/new`, sending the headers it was given there. */
   async callMcp(tool: string, args: Record<string, unknown> = {}, server = 'ordewell'): Promise<unknown> {
+    const result = await (await this.mcpClient(server)).callTool({ name: tool, arguments: args });
+    this.mcpCalls.push({ tool, args, result });
+    return result;
+  }
+
+  private async mcpClient(server: string): Promise<Client> {
     const config = this.mcpServers.find((s) => s.name === server && s.type === 'http');
     if (!config) throw new Error(`session/new gave no http MCP server named "${server}"`);
     this.client ??= await connect(config);
-    const result = await this.client.callTool({ name: tool, arguments: args });
-    this.mcpCalls.push({ tool, args, result });
-    return result;
+    return this.client;
   }
 
   /** Release the MCP connection and end the process, as the agent exiting does. */
@@ -196,7 +216,10 @@ export class FakeAcpAgent {
       const method = this.sentRequests.get(Number(message.id));
       if (method === undefined) return;
       this.sentRequests.delete(Number(message.id));
-      this.answers.push({ method, ...(message.error ? { error: message.error } : { result: message.result }) });
+      const answer: FakeAcpAnswer = { method, ...(message.error ? { error: message.error } : { result: message.result }) };
+      this.answers.push(answer);
+      this.asked.get(Number(message.id))?.(answer);
+      this.asked.delete(Number(message.id));
       if (this.awaiting === Number(message.id)) {
         this.awaiting = undefined;
         this.pc++;

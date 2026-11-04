@@ -5,6 +5,7 @@ import type { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { CLAUDE_CODE_MANIFEST } from '../../plugins/builtin/claude-code.manifest';
 import { OPENCODE_MANIFEST } from '../../plugins/builtin/opencode.manifest';
 import { CODEX_MANIFEST } from '../../plugins/builtin/codex.manifest';
+import { COPILOT_CLI_MANIFEST } from '../../plugins/builtin/copilot-cli.manifest';
 import { CONNECTORS } from '../harness/connectors';
 import { recordedRunnerAuth, resetRunnerAuth, type RunnerAuthExec } from '../runnerAuth';
 
@@ -103,15 +104,23 @@ describe('RunnerInstallation.plannerUsability (ADR-0009 preflight)', () => {
     expect(result.reason).toContain('no planner transport');
   });
 
-  it('plans with exactly the runners the connector registry holds', async () => {
+  it('refuses a runner whose connector runs tasks but does not plan, in words that say so', async () => {
+    const exec: ExecImpl = vi.fn(async () => ({ stdout: 'ok' }));
+    const inst = new RunnerInstallation(registryWith(COPILOT_CLI_MANIFEST), exec);
+
+    expect(await inst.plannerUsability('copilot-cli')).toEqual({ usable: false, reason: 'GitHub Copilot CLI can run tasks but cannot plan in Ordewell yet.' });
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it('plans with exactly the runners whose connectors plan', async () => {
     const exec: ExecImpl = vi.fn(async () => ({ stdout: 'ok' }));
     const authExec: RunnerAuthExec = vi.fn(async () => ({ code: -1, stdout: '', stderr: '' }));
-    const manifests = [CLAUDE_CODE_MANIFEST, CODEX_MANIFEST, OPENCODE_MANIFEST, { name: 'aider', runner: { command: 'aider' } }];
+    const manifests = [CLAUDE_CODE_MANIFEST, CODEX_MANIFEST, OPENCODE_MANIFEST, COPILOT_CLI_MANIFEST, { name: 'aider', runner: { command: 'aider' } }];
     const inst = new RunnerInstallation(registryWith(...manifests), exec, Date.now, { authExec });
 
     const plannable: string[] = [];
     for (const m of manifests) if ((await inst.plannerUsability(m.name)).usable) plannable.push(m.name);
-    expect(plannable.sort()).toEqual(Object.keys(CONNECTORS).sort());
+    expect(plannable.sort()).toEqual(Object.keys(CONNECTORS).filter((runner) => CONNECTORS[runner].plans).sort());
   });
 
   it('refuses an unregistered runner without probing anything', async () => {

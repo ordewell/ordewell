@@ -14,6 +14,7 @@ import {
   requestPermissionRequestSchema,
   sessionNotificationSchema,
   type AcpPermissionOption,
+  type AcpToolCall,
 } from './acpSchema';
 import { endTurn, newTurn, reduceUpdate, type AcpTurn } from './acpEvents';
 import { acpOrdewellBinding } from './acpOrdewell';
@@ -22,6 +23,7 @@ import { PermissionLedger } from './permissionLedger';
 import { awaitAttach, MCP_ATTACH_TIMEOUT_MS, type AttachState } from './ordewellBinding';
 import { settleWithin } from './settleWithin';
 import { compareVersions } from '../../utils/version';
+import { dirname } from 'path';
 import { ownerOnlyConfigFile, taskCompletionContract, type McpClientConfig } from '../mcp';
 
 const DEFAULT_INIT_TIMEOUT_MS = 30_000;
@@ -73,6 +75,13 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
   private readonly held = new Map<string, { rpcId: number | string; resolve(outcome: PermissionOutcome): void }>();
   private task: RunningTask | null = null;
   private turn: AcpTurn | null = null;
+  /**
+   * The turn's first report of each tool call, by id. An agent may name a
+   * call more fully there than in its permission request for it (Copilot
+   * says `ordewell-task_complete` in one, `task_complete` in the other), and
+   * only the full name tells Ordewell's tool from another server's.
+   */
+  private reports = new Map<string, AcpToolCall>();
   /** Whether this turn's `session/cancel` went out, which makes whatever ends the turn an interrupt. */
   private cancelSent = false;
   /** Settles when the agent answers this turn's prompt: true with an answer, false when the process went first. */
@@ -120,7 +129,11 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
   protected spawnSpec(): SpawnSpec {
     const task = this.requireTask();
     const { instructions, mode } = this.profile;
-    const args = [...this.profile.args, ...(mode?.kind === 'args' ? mode.args(task.flags) : [])];
+    const args = [
+      ...this.profile.args,
+      ...(mode?.kind === 'args' ? mode.args(task.flags) : []),
+      ...(task.model && this.profile.modelArgs ? this.profile.modelArgs(task.model) : []),
+    ];
     const env: Record<string, string> = { ...this.profile.env };
     const files: string[] = [];
     const contract = this.contract(task);
@@ -130,6 +143,8 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
       if ('flag' in instructions.pass) {
         args.push(instructions.pass.flag, file.path);
         files.push(file.path);
+      } else if ('envDir' in instructions.pass) {
+        env[instructions.pass.envDir] = dirname(file.path);
       } else {
         env[instructions.pass.env] = file.path;
       }
@@ -228,6 +243,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
   protected turnPayload(message: string): string {
     const task = this.requireTask();
     this.turn = newTurn({ source: this.agentId, ...(task.model ? { model: task.model } : {}) });
+    this.reports = new Map();
     this.cancelSent = false;
     this.turnAnswered = new Promise<boolean>((resolve) => { this.answerTurn = resolve; });
     const text = this.preamble ? `${this.preamble}\n\n${message}` : message;
@@ -276,6 +292,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     if (!notification.ok) return;
     const update = parseSessionUpdate(notification.value.update);
     if (this.turn) {
+      if (update.sessionUpdate === 'tool_call' && !this.reports.has(update.toolCallId)) this.reports.set(update.toolCallId, update);
       const step = reduceUpdate(this.turn, update);
       this.turn = step.turn;
       for (const event of step.events) this.announce(event);
@@ -316,7 +333,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
         ...(typeof input === 'object' && input !== null && !Array.isArray(input) ? { input: input as Record<string, unknown> } : {}),
         toolUseId: toolCall.toolCallId,
         // By exact name only: a near miss is anyone's tool (ADR-0022, S3).
-        ordewell: this.binding.isOrdewellAsk(toolCall),
+        ordewell: this.binding.isOrdewellAsk(this.reports.get(toolCall.toolCallId) ?? toolCall),
       }, { id, options }, (event) => this.announce(event));
     });
   }
