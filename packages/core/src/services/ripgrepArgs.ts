@@ -152,7 +152,13 @@ function convertForEre(pattern: string, plainGroups: boolean): string | null {
     let closeBracket = false;
     let openBracket = false;
     let dash = false;
+    let caret = false;
     let closed = false;
+    // A `]` first in a class is one of its members, to ripgrep, PCRE and ERE alike, not its end.
+    if (pattern[i] === ']') {
+      closeBracket = true;
+      i++;
+    }
     while (i < pattern.length) {
       const ch = pattern[i];
       if (ch === ']') {
@@ -175,6 +181,7 @@ function convertForEre(pattern: string, plainGroups: boolean): string | null {
         else if (e === ']') closeBracket = true;
         else if (e === '[') openBracket = true;
         else if (e === '-') dash = true;
+        else if (e === '^') caret = true;
         else body += e;
         continue;
       }
@@ -185,7 +192,11 @@ function convertForEre(pattern: string, plainGroups: boolean): string | null {
       out += pattern.slice(start);
       break;
     }
-    out += `[${negate ? '^' : ''}${closeBracket ? ']' : ''}${body}${openBracket ? '[' : ''}${dash ? '-' : ''}]`;
+    const members = `${closeBracket ? ']' : ''}${body}`;
+    // An escaped `^` is a member, which first in an ERE class would negate it
+    // instead, and a class of `^` alone has no ERE spelling but `\^`.
+    if (caret && !negate && members === '') out += openBracket || dash ? `[${dash ? '-' : ''}${openBracket ? '[' : ''}^]` : '\\^';
+    else out += `[${negate ? '^' : ''}${members}${caret ? '^' : ''}${openBracket ? '[' : ''}${dash ? '-' : ''}]`;
   }
   let representable = true;
   const renumbered = out.replace(BACKREFERENCE, (_, n: string) => {

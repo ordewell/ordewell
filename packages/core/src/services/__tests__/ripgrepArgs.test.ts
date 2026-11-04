@@ -206,6 +206,23 @@ describe('toPosixClasses', () => {
     expect(toPosixClasses(pattern)).toBe(pattern);
   });
 
+  it('reads a ] first in a class as a member, so the class goes on past it', () => {
+    expect(toPosixClasses('[]\\s]')).toBe('[][:space:]]');
+    expect(toPosixClasses('[^]\\d]x')).toBe('[^][:digit:]]x');
+    // The ( is in the class, so it is no group, and \1 still names (b).
+    expect(toPosixClasses('[](](?:a)(b)\\1')).toBe('[](](a)(b)\\2');
+    expect(toPosixClasses('[]')).toBe('[]');
+  });
+
+  // First in an ERE class, `^` negates it: `[\^a]` became `[^a]`, every character but `a`.
+  it('keeps an escaped ^ a member, never first in the class', () => {
+    expect(toPosixClasses('[\\^a]')).toBe('[a^]');
+    expect(toPosixClasses('[^\\^a]')).toBe('[^a^]');
+    expect(toPosixClasses('[\\^]x')).toBe('\\^x');
+    expect(toPosixClasses('[\\^\\-]')).toBe('[-^]');
+    expect(toPosixClasses('[\\^\\[]')).toBe('[[^]');
+  });
+
   it('leaves escapes outside a class, and an unterminated class, alone', () => {
     expect(toPosixClasses('\\bfoo\\s+bar\\b')).toBe('\\bfoo\\s+bar\\b');
     expect(toPosixClasses('a[\\s')).toBe('a[\\s');
