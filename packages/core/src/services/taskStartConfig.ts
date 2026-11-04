@@ -1,6 +1,6 @@
 import * as path from 'path';
 import { createHash } from 'crypto';
-import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync, type Stats } from 'fs';
 import type { IsolationRun } from '../interfaces/IWorktreeIsolation';
 import { defaultExecFile, tryGit } from './gitExec';
 import { repositoryRunnerConfigPaths, RUNNER_CONFIG_ROOTS } from './repositoryRunnerConfig';
@@ -37,18 +37,32 @@ function liveConfig(dir: string): Map<string, string> {
 }
 
 /**
- * The configuration roots `dir` holds as links to the checkout, which is how a
- * worktree reads the `.claude` and `.opencode` directories it did not check
- * out itself.
+ * The configuration roots `dir` holds as links to the checkout at `checkout`,
+ * which is how a worktree reads the `.claude` and `.opencode` directories it
+ * did not check out itself, and a group task a root file shared live.
  */
-function linkedRoots(dir: string): Set<string> {
+function linkedRoots(dir: string, checkout: string): Set<string> {
   const linked = new Set<string>();
   for (const root of RUNNER_CONFIG_ROOTS) {
     try {
-      if (lstatSync(path.join(dir, root)).isSymbolicLink()) linked.add(root);
+      const here = lstatSync(path.join(dir, root));
+      if (here.isSymbolicLink() || (here.isFile() && here.nlink > 1 && sameFile(here, statSync(path.join(checkout, root))))) linked.add(root);
     } catch { /* absent: nothing is linked */ }
   }
   return linked;
+}
+
+/** A hard link is how Windows links a file without privilege (ADR-0010): no symlink, but the checkout's file itself. */
+function sameFile(a: Stats, b: Stats): boolean {
+  return a.dev === b.dev && a.ino === b.ino;
+}
+
+function isLink(dir: string, root: string): boolean {
+  try {
+    return lstatSync(path.join(dir, root)).isSymbolicLink();
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -126,7 +140,7 @@ export class TaskStartConfig {
    */
   private worktreeDifferences(id: string, dir: string, root: string): string[] {
     const now = liveConfig(dir);
-    const linked = linkedRoots(dir);
+    const linked = linkedRoots(dir, root);
     const fromCheckout = (name: string) => linked.has(name.split('/')[0]);
     const key = `${id}:worktree:${dir}`;
     let local = this.live.get(key);
@@ -160,12 +174,17 @@ export class TaskStartConfig {
       // A workspace below its repository's top starts the runner there, and Claude reads that directory's own config.
       const prefix = repo.path === '.' ? (await tryGit(invoker, repo.root, ['rev-parse', '--show-prefix'])).stdout.trim() : '';
       const roots = [...RUNNER_CONFIG_ROOTS, ...(prefix ? RUNNER_CONFIG_ROOTS.map((r) => `${prefix}${r}`) : [])];
+      // What a root linked from the checkout holds is the checkout's, which
+      // worktreeDifferences compares. Git elsewhere lists such a link as one
+      // entry, but Git for Windows walks into a junction and lists its files.
+      const linked = roots.filter((root) => isLink(cwd, root)).map((root) => `${root}/`);
       const diff = await tryGit(invoker, cwd, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '--diff-filter=ACMRTU', '-z', repo.baseRef, '--']);
       const untracked = await tryGit(invoker, cwd, ['ls-files', '--others', '-z', '--', ...roots]);
       // Old restored runs and test doubles may have no reachable base or diff;
       // without evidence of a difference there is no reason to hold the start.
       if (!diff.ok || !untracked.ok) continue;
       for (const name of [...diff.stdout.split('\0'), ...untracked.stdout.split('\0')]) {
+        if (linked.some((root) => name.startsWith(root))) continue;
         const here = prefix && name.startsWith(prefix) ? name.slice(prefix.length) : undefined;
         if (repositoryRunnerConfigPaths([name]).length || (here !== undefined && repositoryRunnerConfigPaths([here]).length)) {
           found.push(repo.path === '.' ? name : path.posix.join(repo.path, name));
