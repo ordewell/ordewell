@@ -119,6 +119,8 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
   private capabilities: NonNullable<AcpInitializeResponse['agentCapabilities']> = {};
   /** The session's complete option list as the agent last gave it. */
   private configOptions: AcpConfigOption[] = [];
+  /** The session mode as the agent last reported it outside its option list, for an agent with `session/set_mode`. */
+  private currentMode: string | undefined;
   /** The commands the agent last listed; `runner_loaded` goes out with the first list only. */
   private commandList: RunnerCommand[] = [];
   private commandsAnnounced = false;
@@ -215,12 +217,26 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
   protected override async handshake(): Promise<void> {
     const started = this.requireStarted();
     await this.initialize();
-    const state = started.resumeSessionId ? await this.resumeSession(started, started.resumeSessionId) : await this.newSession(started);
-    this.configOptions = state.configOptions ?? [];
+    if (started.resumeSessionId) await this.resumeSession(started, started.resumeSessionId);
+    else await this.newSession(started);
 
     await this.applySettings(started);
     this.heldModel = currentValue(findOption(this.configOptions, 'model'));
-    if (this.restricted) this.settledMode = { id: currentValue(findOption(this.configOptions, 'mode')) ?? state.modes?.currentModeId };
+    if (this.restricted) this.settledMode = { id: this.modeNow() };
+  }
+
+  private modeNow(): string | undefined {
+    return currentValue(findOption(this.configOptions, 'mode')) ?? this.currentMode;
+  }
+
+  /**
+   * What a session's answer says of it, taken as it arrives. An update the
+   * agent sent first is older and gives way; what the answer leaves out, an
+   * update may still have said.
+   */
+  private takeSession(state: AcpSessionState): void {
+    if (state.configOptions) this.configOptions = state.configOptions;
+    if (state.modes) this.currentMode = state.modes.currentModeId;
   }
 
   /**
@@ -246,9 +262,10 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
   }
 
   /**
-   * Whether the setting went through an option, which the agent's list can
-   * be read back from. The older `session/set_mode` answers nothing to
-   * check, and a model given at spawn has only the agent's word at spawn.
+   * Whether the agent can be held to the setting: an option is read back
+   * from its list, and a mode taken by the older `session/set_mode` stands
+   * until the agent reports another. A model given at spawn has only the
+   * agent's word at spawn.
    */
   private async putSetting(started: Started, { role, value }: PlanSetting): Promise<boolean> {
     const option = findOption(this.configOptions, role);
@@ -257,9 +274,9 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
       return true;
     }
     if (role === 'mode') {
-      const set = await this.setupCall('session/set_mode', { sessionId: this.sessionId, modeId: value });
+      const set = await this.setupCall('session/set_mode', { sessionId: this.sessionId, modeId: value }, () => { this.currentMode = value; });
       if (!set.ok) throw new Error(`${this.name} refused the mode "${value}": ${set.message ?? 'no reason given'}`);
-      return false;
+      return true;
     }
     // A model given at spawn reached the agent already (Copilot).
     if (role === 'model' && this.profile.modelArgs) return false;
@@ -274,7 +291,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
    * silently rewritten).
    */
   private holdSetting(started: Started, { role, value }: PlanSetting): void {
-    const actual = currentValue(findOption(this.configOptions, role));
+    const actual = role === 'mode' ? this.modeNow() : currentValue(findOption(this.configOptions, role));
     if (actual === value) return;
     const was = `${this.name} did not take the ${role} "${value}": it is on "${actual ?? (role === 'mode' ? 'no mode' : 'none')}".`;
     if (role === 'mode' || (started.kind === 'task' && this.restricted)) throw new Error(was);
@@ -289,15 +306,16 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
    * value is the agent's invalid-params error, said as what it means.
    */
   private async setOption(configId: string, role: OptionRole, value: string): Promise<void> {
-    const response = await this.setupCall('session/set_config_option', { sessionId: this.sessionId, configId, value });
+    const response = await this.setupCall('session/set_config_option', { sessionId: this.sessionId, configId, value }, (result) => {
+      const parsed = parseAcp(setConfigOptionResponseSchema, result);
+      if (!parsed.ok) throw new Error(`${this.name} answered a ${role} change in a shape Ordewell cannot read: ${parsed.error}`);
+      this.configOptions = parsed.value.configOptions;
+    });
     if (!response.ok) {
       throw new Error(response.code === ACP_ERROR.invalidParams
         ? `${this.name} does not know the ${role} "${value}" (or its setting "${configId}"): ${response.message ?? 'no reason given'}`
         : `${this.name} refused the ${role} "${value}": ${response.message ?? 'no reason given'}`);
     }
-    const parsed = parseAcp(setConfigOptionResponseSchema, response.result);
-    if (!parsed.ok) throw new Error(`${this.name} answered a ${role} change in a shape Ordewell cannot read: ${parsed.error}`);
-    this.configOptions = parsed.value.configOptions;
   }
 
   /** Ordewell's server as the session is given it: on a resume and a load too, since the agent keeps none of a session's servers between processes. */
@@ -315,19 +333,21 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     return instructions.kind === 'meta' ? { _meta: { [instructions.key]: this.instructions(started) } } : {};
   }
 
-  private async newSession(started: Started): Promise<AcpSessionState> {
+  private async newSession(started: Started): Promise<void> {
     const opened = await this.setupCall('session/new', {
       ...this.sessionParams(started),
       ...this.sessionMeta(started),
+    }, (result) => {
+      const session = parseAcp(newSessionResponseSchema, result);
+      if (!session.ok || !session.value.sessionId) throw new Error(`${this.name} opened a session without an id Ordewell can read.`);
+      // Set here, so the next line's update is told from another session's.
+      this.sessionId = session.value.sessionId;
+      this.takeSession(session.value);
     });
     if (!opened.ok) {
       this.sessionRefused = true;
       throw new Error(isAuthRequired(opened) ? this.signedOut() : `${this.name} could not open a session: ${opened.message ?? 'no reason given'}`);
     }
-    const session = parseAcp(newSessionResponseSchema, opened.result);
-    if (!session.ok || !session.value.sessionId) throw new Error(`${this.name} opened a session without an id Ordewell can read.`);
-    this.sessionId = session.value.sessionId;
-    return session.value;
   }
 
   /**
@@ -336,7 +356,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
    * (K1) offers the session that did the work, and a new one would pretend
    * it was resumed.
    */
-  private async resumeSession(started: Started, id: string): Promise<AcpSessionState> {
+  private async resumeSession(started: Started, id: string): Promise<void> {
     const { sessionCapabilities, loadSession } = this.capabilities;
     const method = sessionCapabilities?.resume ? 'session/resume' : loadSession ? 'session/load' : null;
     if (!method) throw new Error(`${this.name} could not resume session ${id}: it offers neither session/resume nor session/load.`);
@@ -345,14 +365,15 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
       sessionId: id,
       ...this.sessionParams(started),
       ...this.sessionMeta(started),
+    }, (result) => {
+      const session = parseAcp(newSessionResponseSchema, result);
+      if (!session.ok) throw new Error(`${this.name} resumed session ${id} in a shape Ordewell cannot read: ${session.error}`);
+      this.takeSession(session.value);
     });
     if (!resumed.ok) {
       this.sessionRefused = true;
       throw new Error(isAuthRequired(resumed) ? this.signedOut() : `${this.name} could not resume session ${id}: ${resumed.message ?? 'no reason given'}`);
     }
-    const session = parseAcp(newSessionResponseSchema, resumed.result);
-    if (!session.ok) throw new Error(`${this.name} resumed session ${id} in a shape Ordewell cannot read: ${session.error}`);
-    return session.value;
   }
 
   /**
@@ -388,10 +409,22 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
    * A setup request, bounded by the profile's timeout and by the process: an
    * agent that hangs at start fails the start instead of the attempt waiting
    * forever. A reply after the timeout is still taken and discarded.
+   *
+   * `take` reads what an accepted answer says of the session on the line that
+   * carried it, and fails the call by throwing. Taken any later, it would
+   * overwrite an update the agent sent after it, on the next line of the same
+   * chunk, with the older state.
    */
-  private async setupCall(method: string, params: Record<string, unknown>): Promise<RpcResponse> {
+  private async setupCall(method: string, params: Record<string, unknown>, take?: (result: Record<string, unknown>) => void): Promise<RpcResponse> {
     const timeoutMs = this.profile.initTimeoutMs ?? DEFAULT_INIT_TIMEOUT_MS;
-    const response = await this.rpc.call(method, params, { timeoutMs });
+    const response = await new Promise<RpcResponse>((resolve, reject) => this.rpc.send(method, params, (answer) => {
+      try {
+        if (answer.ok) take?.(answer.result);
+        resolve(answer);
+      } catch (error) {
+        reject(error);
+      }
+    }, { timeoutMs }));
     if (response.ok) return response;
     if (response.timedOut) throw new Error(`${this.name} did not answer ${method} within ${timeoutMs} ms.`);
     if (response.closed) throw new Error(this.runner.withStderrTail(`${this.name} exited before it answered ${method}.`));
@@ -514,6 +547,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
       return;
     }
     if (update.sessionUpdate === 'current_mode_update') {
+      this.currentMode = update.currentModeId;
       this.holdSettledMode(update.currentModeId);
       return;
     }

@@ -31,6 +31,8 @@ import { fakeSpawn, type FakeAgentProcess, type FakeSpawnOptions, type FakeSpawn
  *    the script until the client answers it.
  *  - `callMcp` is the agent calling a tool on the MCP server the client gave it
  *    in `session/new`, with the headers it was given there.
+ *  - `together` writes its answers and notifications as one stdout chunk,
+ *    the way an agent's reply and the update after it can share a read.
  *  - `run` is anything else a test needs to do at that point.
  *
  * A message that is not the expected one is recorded in `unexpected` and a
@@ -47,6 +49,7 @@ export type FakeAcpStep =
   | { fail: AcpRpcError; to?: string }
   | { notify: string; params?: FakeAcpValue<unknown> }
   | { request: string; params?: FakeAcpValue<unknown> }
+  | { together: ReadonlyArray<Extract<FakeAcpStep, { answer: unknown } | { fail: AcpRpcError } | { notify: string }>> }
   | { callMcp: { tool: string; args?: Record<string, unknown>; server?: string } }
   | { run: (agent: FakeAcpAgent) => void | Promise<void> };
 
@@ -122,6 +125,8 @@ export class FakeAcpAgent {
   private pumping = false;
   private repump = false;
   private last: unknown;
+  /** The lines a `together` step is collecting into its one chunk. */
+  private chunk: string[] | undefined;
   private client: Client | undefined;
   private finish!: () => void;
   /** Resolves when the script has run to its end. */
@@ -250,6 +255,15 @@ export class FakeAcpAgent {
         this.answerOpen(step);
       } else if ('notify' in step) {
         this.send(step.notify, this.value(step.params));
+      } else if ('together' in step) {
+        this.chunk = [];
+        for (const part of step.together) {
+          if ('notify' in part) this.send(part.notify, this.value(part.params));
+          else this.answerOpen(part);
+        }
+        const lines = this.chunk.join('');
+        this.chunk = undefined;
+        this.proc?.emitStdout(lines);
       } else if ('request' in step) {
         if (this.awaiting !== undefined) return;
         const id = this.nextId++;
@@ -315,7 +329,9 @@ export class FakeAcpAgent {
   }
 
   private write(message: object): void {
-    this.proc?.emitStdout(`${JSON.stringify(message)}\n`);
+    const line = `${JSON.stringify(message)}\n`;
+    if (this.chunk) this.chunk.push(line);
+    else this.proc?.emitStdout(line);
   }
 }
 
