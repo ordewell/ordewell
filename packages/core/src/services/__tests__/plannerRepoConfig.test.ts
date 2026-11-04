@@ -552,6 +552,90 @@ describe('OpenCode planner launch (ADR-0028)', () => {
   });
 });
 
+/** ADR-0028: the Codex and OpenCode readers hold to the repository as the Claude and Copilot ones do. */
+describe.each([
+  { runner: 'codex' as const, names: ['AGENTS.override.md', 'AGENTS.md'] },
+  { runner: 'opencode' as const, names: ['AGENTS.md', 'CLAUDE.md', 'CONTEXT.md'] },
+])('$runner instruction files stay inside the repository and bounded (ADR-0028)', ({ runner, names }) => {
+  const reader = CONNECTORS[runner].repoConfig;
+  const first = names[0];
+
+  it('reads no instruction file a link points outside the repository', () => {
+    const outside = repo({ 'secret.md': 'USER-SECRET' });
+    const root = repo({ 'pkg/placeholder': '' });
+    symlinkSync(join(outside, 'secret.md'), join(root, first));
+    symlinkSync(join(outside, 'secret.md'), join(root, 'pkg', first));
+
+    expect(reader.instructions(root)).toEqual([]);
+    expect(reader.instructions(join(root, 'pkg'))).toEqual([]);
+  });
+
+  it('reads a link that stays inside the repository', () => {
+    const root = repo({ 'docs/real.md': 'REAL-RULES' });
+    symlinkSync(join(root, 'docs', 'real.md'), join(root, first));
+
+    expect(reader.instructions(root)).toEqual([{ path: first, text: 'REAL-RULES' }]);
+  });
+
+  it('reads one file only so far, however large, and trims it', () => {
+    const [huge] = reader.instructions(repo({ [first]: `  HEAD ${'x'.repeat(1_000_000)}` }));
+    expect(huge.text.startsWith('HEAD ')).toBe(true);
+    expect(huge.text.length).toBeLessThanOrEqual(160_000);
+  });
+
+  it('stops reading at the bound the planner is given, however many levels hold a file', () => {
+    const files = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`${'d/'.repeat(i)}${first}`, 'y'.repeat(30_000)]));
+    const root = repo(files);
+    const read = reader.instructions(join(root, 'd/'.repeat(39)));
+    expect(read.length).toBeLessThan(5);
+    expect(instructionsBlock(read)).toContain('left out');
+  });
+});
+
+describe('Codex instruction file choice (ADR-0028)', () => {
+  const reader = CONNECTORS.codex.repoConfig;
+
+  it('reads the override in place of the plain file at a level, one file per level', () => {
+    const root = repo({ 'AGENTS.md': 'ROOT', 'AGENTS.override.md': 'ROOT-OVERRIDE', 'pkg/AGENTS.md': 'PKG' });
+
+    expect(reader.instructions(join(root, 'pkg'))).toEqual([
+      { path: '../AGENTS.override.md', text: 'ROOT-OVERRIDE' },
+      { path: 'AGENTS.md', text: 'PKG' },
+    ]);
+  });
+
+  it('falls back to the plain file when the override links outside the repository', () => {
+    const outside = repo({ 'secret.md': 'USER-SECRET' });
+    const root = repo({ 'AGENTS.md': 'PLAIN' });
+    symlinkSync(join(outside, 'secret.md'), join(root, 'AGENTS.override.md'));
+
+    expect(reader.instructions(root)).toEqual([{ path: 'AGENTS.md', text: 'PLAIN' }]);
+  });
+});
+
+describe('OpenCode instruction file choice (ADR-0028)', () => {
+  const reader = CONNECTORS.opencode.repoConfig;
+
+  it('reads the first name found at any level, at every level it is found', () => {
+    const root = repo({ 'CLAUDE.md': 'ROOT-CLAUDE', 'pkg/CLAUDE.md': 'PKG-CLAUDE', 'pkg/CONTEXT.md': 'PKG-CONTEXT' });
+    expect(reader.instructions(join(root, 'pkg'))).toEqual([
+      { path: '../CLAUDE.md', text: 'ROOT-CLAUDE' },
+      { path: 'CLAUDE.md', text: 'PKG-CLAUDE' },
+    ]);
+
+    const withAgents = repo({ 'pkg/AGENTS.md': 'PKG-AGENTS', 'CLAUDE.md': 'ROOT-CLAUDE' });
+    expect(reader.instructions(join(withAgents, 'pkg'))).toEqual([{ path: 'AGENTS.md', text: 'PKG-AGENTS' }]);
+  });
+
+  it('moves on to the next name when the first links outside the repository', () => {
+    const outside = repo({ 'secret.md': 'USER-SECRET' });
+    const root = repo({ 'CLAUDE.md': 'REPO-CLAUDE' });
+    symlinkSync(join(outside, 'secret.md'), join(root, 'AGENTS.md'));
+
+    expect(reader.instructions(root)).toEqual([{ path: 'CLAUDE.md', text: 'REPO-CLAUDE' }]);
+  });
+});
+
 /**
  * Copilot loads instruction files and runs hooks from the directory it starts
  * in, so a restricted start begins in a private directory instead (ADR-0060,
