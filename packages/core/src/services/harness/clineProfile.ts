@@ -1,7 +1,6 @@
-import { CLINE_ACP_ARGS, CLINE_MANIFEST } from '../../plugins/builtin/cline.manifest';
+import { CLINE_ACP_ARGS, CLINE_ACP_ENV, CLINE_CREDENTIALS, CLINE_MANIFEST } from '../../plugins/builtin/cline.manifest';
 import { ORDEWELL_MCP_SERVER_NAME } from '../mcp/clientConfig';
 import type { AcpProfile } from './acpProfiles';
-import { clineCredentials } from './clineCredentials';
 
 /** Cline names an MCP tool `<server>__<tool>`, in what it shows the model and in the title of its requests. */
 const SERVER_PREFIX = `${ORDEWELL_MCP_SERVER_NAME}__`;
@@ -17,13 +16,9 @@ const SERVER_PREFIX = `${ORDEWELL_MCP_SERVER_NAME}__`;
 export const CLINE_PROFILE: AcpProfile = {
   manifest: CLINE_MANIFEST,
   args: CLINE_ACP_ARGS,
-  // Left to choose, Cline may start or join a hub daemon that outlives the
-  // attempt and serves other sessions; `local` keeps the session inside the
-  // process Ordewell starts and stops.
-  env: { CLINE_SESSION_BACKEND_MODE: 'local' },
-  // Cline keeps its provider's key in its own store, which an ACP start does
-  // not read, so the key is passed in the start's env (ADR-0060, R9).
-  credentials: clineCredentials(),
+  // Discovery starts Cline with the same env and key (ADR-0060, R9).
+  env: CLINE_ACP_ENV,
+  credentials: CLINE_CREDENTIALS,
   // The version the recordings were made on.
   minVersion: '3.0.74',
   // Cline advertises no HTTP MCP capability, so `session/new` cannot carry the

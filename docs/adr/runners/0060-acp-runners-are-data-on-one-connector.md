@@ -225,7 +225,11 @@ of its provider credential.
     (`CLINE_API_KEY`), and a model the user's environment chooses stays theirs;
   - not read, and nothing added, under a placement: a container holds the
     lease's stand-in for a key, never the user's own
-    ([ADR-0059](../isolation/0059-an-execution-lease-reserves-in-the-claim-and-opens-after-it.md) L7).
+    ([ADR-0059](../isolation/0059-an-execution-lease-reserves-in-the-claim-and-opens-after-it.md) L7);
+  - read for model discovery's start too, which the manifest's
+    `modelDiscovery.acp` gives the profile's own `env` and hook: the agent is
+    asked as it runs, and a hook that finds no key is no answer, so nothing is
+    spawned and the miss is not cached past a sign-in.
 
   A store that is missing, cannot be read, or holds no key for the provider it
   last used refuses the start before anything is spawned, naming the store and
@@ -356,8 +360,17 @@ Ordewell's call with its arguments' summary
 (`ordewell__task_complete: {"status":"done",…}`). Cline signs in with
 `cline auth`, which has no status command: a store with no key refuses the
 start before anything is spawned (R9), and a `-32000` from `session/new` is
-read as signed out. Its models come from ACP discovery alone: `session/new`
-lists its provider's models, and there is no command to fall back to.
+read as signed out. Its models come from ACP discovery alone: started with
+the profile's environment and the key its reader finds (R9), `session/new`
+lists its provider's models, and there is no command to fall back to. Without
+the key it refuses `session/new` with `-32000`, so a store with no key lists
+no models.
+
+Cline loads its user's own configuration in every attempt:
+`CLINE_DIR`, else `~/.cline`, and the global `~/Documents/Cline` with its
+`Rules`, `Hooks`, `Workflows` and `Skills`. The profile sets neither
+`CLINE_DIR` nor `CLINE_DATA_DIR`, so a user's global rules and hooks run inside
+Ordewell's attempts.
 
 ## Testing decisions
 
@@ -383,7 +396,10 @@ lists its provider's models, and there is no command to fall back to.
   agent's transcript and the start's errors do not; a profile without the hook
   spawns as before; two attempts at once each get their own key; and a
   placement gets none. `clineCredentials.test.ts` covers the reader's store
-  path, the last-used entry, and each refusal.
+  path, the last-used entry, and each refusal. `ModelDiscovery.acp.test.ts`
+  covers discovery's env and hook, and `clineCode.test.ts` runs discovery
+  against a Cline stand-in that refuses `session/new` without the key from a
+  store.
 - `acpEvents` is a pure reducer from `session/update` to Ordewell's agent
   events, tested on its own.
 
@@ -547,3 +563,6 @@ lists its provider's models, and there is no command to fall back to.
   was contacted before it ended; such a profile cannot plan.
 - 2026-11-04 — Cline (`cline`) is admitted on its recordings, for writable
   tasks only, through `mcpConfig`, `attach: 'firstTurn'` and `credentials`.
+- 2026-11-04 — R9: model discovery starts an ACP agent with its profile's
+  `env` and credential hook, so Cline lists its models with its key in its
+  store only.

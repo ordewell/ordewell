@@ -1,7 +1,7 @@
 import { promises as fs } from 'fs';
 import { homedir as osHomedir } from 'os';
 import { isAbsolute, join } from 'path';
-import type { AcpCredentials } from './acpProfiles';
+import type { RunnerCredentials } from '../../plugins/types';
 
 /*
  * The provider key Cline's own login stored, handed to Cline's ACP process,
@@ -26,7 +26,7 @@ const PROVIDER_ID = /^[A-Za-z0-9._:-]{1,64}$/;
 const ROUTES = 'Sign in with `cline auth` (a Cline or ClinePass account, or a provider\'s key), or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell\'s environment.';
 
 /** The hook a Cline profile carries: `CLINE_PROVIDER`, `CLINE_API_KEY` and, unless the user chose one, `CLINE_MODEL` from the entry Cline last used. */
-export function clineCredentials(deps: ClineCredentialDeps = {}): AcpCredentials {
+export function clineCredentials(deps: ClineCredentialDeps = {}): RunnerCredentials {
   const homedir = deps.homedir ?? osHomedir;
   return async ({ env }) => {
     // The user's own route: Cline already starts under their variables, and the store is not Ordewell's to read then.

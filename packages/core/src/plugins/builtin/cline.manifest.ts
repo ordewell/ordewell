@@ -1,7 +1,22 @@
+import { clineCredentials } from '../../services/harness/clineCredentials';
 import type { RunnerManifest } from '../types';
 
 /** How Cline is started as an ACP agent; the profile runs it and discovery asks it with the same words. */
 export const CLINE_ACP_ARGS = ['--acp'];
+
+/**
+ * Left to choose, Cline may start or join a hub daemon that outlives the
+ * process and serves other sessions; `local` keeps the session inside the
+ * process Ordewell starts and stops.
+ */
+export const CLINE_ACP_ENV: Readonly<Record<string, string>> = { CLINE_SESSION_BACKEND_MODE: 'local' };
+
+/**
+ * Cline keeps its provider's key in its own store, which an ACP start does not
+ * read, so every start is handed the key in its env, discovery's too
+ * (ADR-0060, R9).
+ */
+export const CLINE_CREDENTIALS = clineCredentials();
 
 /**
  * Cline's CLI over ACP. Its id is `cline`, which no API vendor and no other
@@ -16,10 +31,11 @@ export const CLINE_MANIFEST: RunnerManifest = {
   features: {},
 
   modelDiscovery: {
-    // Cline lists its provider's models in `session/new`, so ACP answers and
-    // there is no command to fall back to (ADR-0040: discovery never gates a pick).
+    // Cline lists its provider's models in `session/new` once it has the key,
+    // so ACP answers and there is no command to fall back to (ADR-0040:
+    // discovery never gates a pick).
     method: 'acp',
-    acp: { args: CLINE_ACP_ARGS },
+    acp: { args: CLINE_ACP_ARGS, env: CLINE_ACP_ENV, credentials: CLINE_CREDENTIALS },
     discoveryCommands: [],
   },
 
