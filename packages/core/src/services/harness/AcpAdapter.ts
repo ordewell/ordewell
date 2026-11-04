@@ -69,7 +69,7 @@ type Started = AgentStartOptions & { mcp: McpClientConfig };
  * reaches Ordewell only through the MCP server `session/new` hands it.
  *
  * A turn is one `session/prompt`, ended by its response alone: no update the
- * agent streams can end it, and no timer does. There is no steer (ADR-0023):
+ * agent streams can end it, and no timer does. There is no steer (ADR-0023; ADR-0060, R8):
  * a message for a running task waits for the turn's end.
  */
 export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapter {
@@ -85,7 +85,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
   /**
    * A planner's start or a read-only task's: the profile's restricted
    * controls are on, and Ordewell answers every request the agent still
-   * raises without a person (ADR-0026, ADR-0046).
+   * raises without a person (ADR-0026, ADR-0046; ADR-0060, R3).
    */
   private restricted = false;
   /** The mode a restricted session settled in, which it may not leave; watched once the settings are applied. */
@@ -173,7 +173,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
    * The command line carries the profile's switches and nothing of the task's
    * own: the token reaches the agent only in `session/new`, over stdin, and the
    * instructions only by the profile's route, never as a file in the worktree
-   * (ADR-0022, A5; ADR-0018, C2). A restricted start adds the controls that
+   * (ADR-0022, A5; ADR-0018, C2; ADR-0060, R4, R6). A restricted start adds the controls that
    * take the agent's own write and shell tools away; a planner has no mode.
    */
   protected spawnSpec(): SpawnSpec {
@@ -361,7 +361,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
       if (compareVersions(version, minVersion) < 0) throw new Error(`${this.name} ${version} is older than Ordewell needs (${minVersion} or later).`);
     }
     // Without HTTP the agent could reach Ordewell only through a local bridge
-    // process carrying the token, which Ordewell does not run.
+    // process carrying the token, which Ordewell does not run (ADR-0060, R4).
     if (!agentCapabilities?.mcpCapabilities?.http) {
       throw new Error(`${this.name} cannot take Ordewell's tools over HTTP, so it cannot run tasks or plan here.`);
     }
@@ -620,7 +620,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
         ...(typeof input === 'object' && input !== null && !Array.isArray(input) ? { input: input as Record<string, unknown> } : {}),
         toolUseId: toolCall.toolCallId,
         ...(this.restricted ? { ask: acpAsk(call) } : {}),
-        // By exact name only: a near miss is anyone's tool (ADR-0022, S3).
+        // By exact name only: a near miss is anyone's tool (ADR-0022, S3; ADR-0060, R7).
         ordewell: this.binding.isOrdewellAsk(report ?? toolCall),
       }, { id, options }, (event) => this.announce(event));
     });
@@ -666,7 +666,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
 
   /**
    * ACP reports no MCP status, so the server's first-contact record is the
-   * evidence (ADR-0022, S2): connected once the token was used, failed when the
+   * evidence (ADR-0022, S2; ADR-0060, R5): connected once the token was used, failed when the
    * agent refused the session or exited first, pending while it has not.
    */
   async mcpAttached(): Promise<AttachState> {

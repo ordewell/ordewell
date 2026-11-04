@@ -8,6 +8,16 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **GitHub Copilot CLI runs tasks.** A plan can assign a task to `copilot-cli`,
+  which Ordewell drives over the Agent Client Protocol with the Ordewell tools
+  attached, its models discovered and a signed-out Copilot flagged with its
+  `copilot login`. It runs writable tasks only: it cannot be the planner or run
+  a read-only task, because under ACP it runs the shell hooks in a repository's
+  `.github/hooks/`.
+  Copilot CLI 1.0.105 or newer is required.
+
 ### Fixed
 
 - **An npm-installed agent's login is read on Windows.** The login check now

@@ -7,7 +7,7 @@ const SERVER_PREFIX = `${ORDEWELL_MCP_SERVER_NAME}-`;
 
 /**
  * GitHub Copilot CLI over ACP (`copilot --acp --stdio`), the reference ACP
- * runner, checked against the recordings in
+ * runner (ADR-0060, R2), checked against the recordings in
  * `__tests__/fixtures/acp/copilot-cli/`.
  */
 export const COPILOT_CLI_PROFILE: AcpProfile = {

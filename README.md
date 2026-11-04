@@ -7,7 +7,7 @@
 
 <p align="center">
   <strong>Stop juggling agent tabs. Talk to one planner.</strong><br>
-  It runs Claude Code, Codex and OpenCode for you, in plain sight. Review build plans before they run, or turn on autorun.
+  It runs Claude Code, Codex, OpenCode and GitHub Copilot CLI for you, in plain sight. Review build plans before they run, or turn on autorun.
 </p>
 
 <p align="center">
@@ -33,8 +33,8 @@ tasks in parallel, review the changes, and merge into your branch. Submitted bui
 plans wait for your approval by default; run settings let you automate execution
 and merging.
 
-Claude Code, Codex and OpenCode are supported out of the box, and can be mixed
-freely within one plan. Try it in your project, with nothing to install:
+Claude Code, Codex, OpenCode and GitHub Copilot CLI are supported out of the box,
+and can be mixed freely within one plan. Copilot runs tasks but does not plan. Try it in your project, with nothing to install:
 
 ```bash
 npx ordewell
@@ -73,8 +73,8 @@ or run `code --install-extension ordewell.ordewell`. In Cursor, Windsurf or VSCo
 get it from [Open VSX](https://open-vsx.org/extension/ordewell/ordewell). The
 extension bundles its own core and needs nothing from npm.
 
-**Requirements:** Node.js 20.3 or newer, at least one of Claude Code, Codex or
-OpenCode, and git 2.38 or newer for task isolation.
+**Requirements:** Node.js 20.3 or newer, at least one of Claude Code, Codex,
+OpenCode or GitHub Copilot CLI (which runs tasks but does not plan), and git 2.38 or newer for task isolation.
 
 ### Windows
 

@@ -27,8 +27,11 @@ and completion evidence.
   tools and its runner's commands (R1). These methods are mandatory, without a
   capability discriminator; a runner without commands reports none.
 - **Built-in connectors (S3).** Claude Code (`stream-json`), Codex
-  (`app-server`) and OpenCode (`serve`) are the only supported runners. Plugin
-  manifests are ignored with one notice at host startup.
+  (`app-server`), OpenCode (`serve`) and GitHub Copilot CLI (ACP over stdio,
+  through the one ACP connector,
+  [ADR-0060](0060-acp-runners-are-data-on-one-connector.md)) are the only
+  supported runners. Plugin manifests are ignored with one notice at host
+  startup.
 - **One connector per runner, shared with the planner (C1).** The harness
   `AgentAdapter`s gain an explicit start switch: *read-only planner* versus
   *task*. The planner path always starts read-only, and tests assert that the
@@ -85,9 +88,14 @@ and completion evidence.
   `task_complete` with `done` and the full report, or `blocked`/`failed` and the
   reason — is therefore not in that message: it is the system prompt
   (`--append-system-prompt`), the thread's `developerInstructions`, or
-  OpenCode's `system` / instruction entry, applied again on every resume. The
-  first message is the task's prompt and its context only. The attempt's token
-  is not part of any of it; it travels in the MCP connection.
+  OpenCode's `system` / instruction entry, applied again on every resume. ACP
+  has no system-prompt field, so an ACP runner takes the contract through its
+  own channel outside the worktree (an owner-only file it is pointed at, or a
+  documented `session/new` field), or else as a preamble on the first prompt
+  of every new process, a resumed one included (ADR-0060 R6). Never as a file
+  in the worktree. The first message is the task's prompt and its context
+  only. The attempt's token is not part of any of it; it travels in the MCP
+  connection.
 - **Talking to a task (M1).** Ordewell owns the message queue. A message sent
   while a turn runs is handed to the runner at once and reaches the model at
   the runner's next step boundary — after the tool call in flight, inside the
@@ -398,8 +406,10 @@ transport is retained for take-over.
   foundation.
 - **Keep the runner TUI and add side channels.** Rejected: hooks differ per
   runner and keystrokes cannot guarantee message delivery at a step boundary.
-- **ACP for every agent immediately.** Deferred: native connectors already
-  work. ADR-0025 records ACP as the expected successor for third-party harnesses.
+- **ACP for every agent immediately.** Rejected: native connectors already
+  work, and ACP reaches Claude Code and Codex only through third-party shims.
+  An agent with a native ACP server runs through the one ACP connector instead
+  ([ADR-0060](0060-acp-runners-are-data-on-one-connector.md)).
 - **Optional structured capabilities on `ITerminalSession`.** Once adopted to
   coexist with terminals; rejected now because every session has the same
   structured contract (`IRunnerSession`).
@@ -515,3 +525,4 @@ transport is retained for take-over.
 - 2026-10-26 — L1: an accepted `task_complete` call is shown received at once, while its turn closes and its attempt winds down; the receipt is no verdict and is never saved.
 - 2026-10-31 — K1: a continue waits on a task's dependencies and merge gate as a retry does.
 - 2026-10-31 — U1: an edit making a paused task manual ends its pause as it lands; Execute, a planner's `run_plan` and signing off the review start nothing under a hold and take no resume back, and the reset gives back the plan's run.
+- 2026-11-04 — S3: GitHub Copilot CLI runs through the ACP connector; C2: an ACP runner takes the contract through its own channel or a first-prompt preamble (ADR-0060).

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+
+- **GitHub Copilot CLI runs tasks.** Copilot CLI 1.0.105 or newer appears among
+  the runners a task can be assigned to, with its models and its login. It
+  cannot be the planner or run a read-only task.
+
 ### Fixed
 
 - **An npm-installed agent's login is read on Windows.** Codex, OpenCode or Claude
