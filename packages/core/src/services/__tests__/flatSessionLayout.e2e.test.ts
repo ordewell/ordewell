@@ -1,13 +1,13 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { execFileSync } from 'child_process';
-import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'fs';
+import { mkdtempSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, relative, sep } from 'path';
 import { createWorktreeIsolation } from '../GitWorktreeIsolation';
 import { LeaseHost } from '../sessionLease';
 import type { IRunner } from '../../interfaces/IRunner';
 import { createTask, type LegacyPlanState } from '../../models/Task';
-import { fakeConfig, FakeRunnerSession } from '../../testing';
+import { fakeConfig, FakeRunnerSession, removeDir } from '../../testing';
 import { saveSession } from '../../utils/sessionStore';
 import { openTaskLog } from '../../utils/taskLogStore';
 import { closeSessions, makeSession } from './sessionTestKit';
@@ -28,7 +28,7 @@ const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd,
 const roots: string[] = [];
 afterEach(async () => {
   await closeSessions();
-  while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  while (roots.length) await removeDir(roots.pop()!);
 });
 
 function repo(): string {

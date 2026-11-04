@@ -3,6 +3,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkS
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { linkPath, mirrorDir } from '../worktreeLink';
+import { removeDir } from '../../testing';
 
 const dirs: string[] = [];
 function scratch(): { source: string; file: string; dir: string; out: string } {
@@ -19,7 +20,7 @@ function scratch(): { source: string; file: string; dir: string; out: string } {
 function lexists(p: string): boolean {
   try { lstatSync(p); return true; } catch { return false; }
 }
-afterEach(() => { while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true }); });
+afterEach(async () => { while (dirs.length) await removeDir(dirs.pop()!); });
 
 describe('linkPath', () => {
   it('symlinks files and directories on POSIX', () => {

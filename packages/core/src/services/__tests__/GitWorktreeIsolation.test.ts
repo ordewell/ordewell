@@ -7,7 +7,7 @@ import { join, sep } from 'path';
 import { createWorktreeIsolation, type GitExecFn, type WorktreeIsolationDeps } from '../GitWorktreeIsolation';
 import type { IsolationRun } from '../../interfaces/IWorktreeIsolation';
 import type { Task } from '../../models/Task';
-import { fakeConfig } from '../../testing';
+import { fakeConfig, removeDir } from '../../testing';
 import { landingMessage, messageArgs } from '../landingMessage';
 
 // Native, as git names a path: on Windows the JS realpath keeps the 8.3 short
@@ -158,8 +158,8 @@ function repo(files?: Record<string, string>): string {
   roots.push(root);
   return root;
 }
-afterEach(() => {
-  while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true });
+afterEach(async () => {
+  while (roots.length) await removeDir(roots.pop()!);
 });
 
 describe('WorktreeIsolation.isActive', () => {

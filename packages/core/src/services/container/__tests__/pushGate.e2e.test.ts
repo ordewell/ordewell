@@ -7,7 +7,7 @@ import { createWorktreeIsolation } from '../../GitWorktreeIsolation';
 import { defaultExecFile, type GitInvoker } from '../../gitExec';
 import { hooksLandingWouldRun, PushRefused, restoreSnapshot, takeThroughGate } from '../pushGate';
 import { createTask, type Task } from '../../../models/Task';
-import { fakeConfig } from '../../../testing';
+import { fakeConfig, removeDir } from '../../../testing';
 
 /*
  * The gate is what a hostile container meets, so it is driven with real git and
@@ -26,7 +26,7 @@ const env = () => {
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, env: env(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
 const dirs: string[] = [];
-afterEach(() => { while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true }); });
+afterEach(async () => { while (dirs.length) await removeDir(dirs.pop()!); });
 
 function tempDir(): string {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-gate-')));

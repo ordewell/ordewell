@@ -1,14 +1,14 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { execFile, execFileSync } from 'child_process';
 import { promisify } from 'util';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createWorktreeIsolation, type GitExecFn, type WorktreeIsolationDeps } from '../GitWorktreeIsolation';
 import { defaultExecFile, subcommandOf } from '../gitExec';
 import type { IsolationRun, IWorktreeIsolation } from '../../interfaces/IWorktreeIsolation';
 import type { Task } from '../../models/Task';
-import { fakeConfig } from '../../testing';
+import { fakeConfig, removeDir } from '../../testing';
 import { taskIsolationsOf } from '../isolationRecord';
 import { IsolationRunController } from '../IsolationRunController';
 import { revertScope } from '../taskRevert';
@@ -46,8 +46,8 @@ function tempDir(): string {
   return dir;
 }
 
-afterEach(() => {
-  while (temps.length) rmSync(temps.pop()!, { recursive: true, force: true });
+afterEach(async () => {
+  while (temps.length) await removeDir(temps.pop()!);
 });
 
 function task(order: number, title: string): Task {

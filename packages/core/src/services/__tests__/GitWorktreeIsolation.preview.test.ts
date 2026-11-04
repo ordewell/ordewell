@@ -1,11 +1,11 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { execFileSync } from 'child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createIsolationPreview, createWorktreeIsolation, type GitExecFn } from '../GitWorktreeIsolation';
 import { defaultExecFile, subcommandOf } from '../gitExec';
-import { fakeConfig } from '../../testing';
+import { fakeConfig, removeDir } from '../../testing';
 import type { IConfig } from '../../interfaces/IConfig';
 
 // A git hook that runs the suite exports GIT_DIR & co., which would point every
@@ -39,8 +39,8 @@ function tempDir(): string {
   temps.push(dir);
   return dir;
 }
-afterEach(() => {
-  for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
+afterEach(async () => {
+  for (const dir of temps.splice(0)) await removeDir(dir);
 });
 
 const preview = (workspace: string, config: Partial<IConfig> = {}, deps: { execFileImpl?: GitExecFn } = {}) =>

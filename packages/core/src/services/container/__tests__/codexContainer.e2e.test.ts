@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync, spawnSync } from 'child_process';
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { mkdtempSync, realpathSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createServer, type ServerResponse } from 'http';
@@ -12,7 +12,7 @@ import { StructuredRunner } from '../../StructuredRunner';
 import { BufferedTaskOutputSource } from '../../BufferedTaskOutputSource';
 import { fakeFs, fakeNotification, makeSession } from '../../__tests__/sessionTestKit';
 import { createTask, type LegacyPlanState, type Task } from '../../../models/Task';
-import { fakeConfig } from '../../../testing';
+import { fakeConfig, removeDir } from '../../../testing';
 import { saveSession } from '../../../utils/sessionStore';
 import { openTaskLog } from '../../../utils/taskLogStore';
 import { CredentialBroker } from '../credentialBroker';
@@ -56,7 +56,7 @@ function repo(): string {
   git(root, 'commit', '-q', '-m', 'initial');
   return root;
 }
-afterEach(() => { while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true }); });
+afterEach(async () => { while (dirs.length) await removeDir(dirs.pop()!); });
 
 function sse(res: ServerResponse, id: string, ...items: unknown[]): void {
   const usage = { input_tokens: 1, output_tokens: 1, total_tokens: 2, input_tokens_details: null, output_tokens_details: null };

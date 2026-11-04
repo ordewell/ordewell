@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { execFile, execFileSync, spawnSync, type ChildProcess } from 'child_process';
 import { createHash } from 'crypto';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import { createServer as createHttpServer, type IncomingHttpHeaders } from 'http';
@@ -17,7 +17,7 @@ import { DONE, SUBMIT } from '../../__tests__/delegationTestKit';
 import { fakeFs, fakeNotification, makeSession, scriptedPlanner, type PlannerTurn } from '../../__tests__/sessionTestKit';
 import type { IAiService } from '../../AiService';
 import { createTask, type LegacyPlanState, type Task } from '../../../models/Task';
-import { fakeConfig, FakeExecutionBackend } from '../../../testing';
+import { fakeConfig, FakeExecutionBackend, removeDir } from '../../../testing';
 import { saveSession } from '../../../utils/sessionStore';
 import { openTaskLog } from '../../../utils/taskLogStore';
 import { LOGIN_VOLUME } from '../containerPreflight';
@@ -118,7 +118,7 @@ function tempDir(prefix = 'ordewell-container-'): string {
   dirs.push(dir);
   return dir;
 }
-afterEach(() => { while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true }); });
+afterEach(async () => { while (dirs.length) await removeDir(dirs.pop()!); });
 
 function repo(): string {
   const root = tempDir();
