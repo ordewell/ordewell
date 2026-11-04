@@ -226,6 +226,15 @@ export interface AcpProfile {
    * the kind: that is the agent's guess at what an MCP tool does.
    */
   ordewellTool(call: AcpAskedCall): string | null;
+  /**
+   * The paths a read or a search of the agent's own reaches, as its arguments
+   * name them, for an agent that leaves them out of the call's `locations`.
+   * Read only on a restricted start, for a call whose kind is `read` or
+   * `search`; each is resolved against the session's cwd and judged by the
+   * same envelope as a location, so it grants nothing a location would not
+   * (ADR-0008, ADR-0060 R3). None when absent, or when the call names none.
+   */
+  askedPaths?(call: AcpToolCall): readonly string[];
   /** The name the agent calls an Ordewell tool by, given its name on the server; the server's own name when absent. */
   toolName?(tool: string): string;
   /** Arguments that run the agent on the plan's model; absent when the agent cannot be told one at spawn. */

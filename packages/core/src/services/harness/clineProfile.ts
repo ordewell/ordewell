@@ -1,6 +1,7 @@
 import { CLINE_ACP_ARGS, CLINE_ACP_ENV, CLINE_CREDENTIALS, CLINE_MANIFEST } from '../../plugins/builtin/cline.manifest';
 import { ORDEWELL_MCP_SERVER_NAME } from '../mcp/clientConfig';
 import type { AcpProfile } from './acpProfiles';
+import { isRecord } from './repoConfig';
 
 /** Cline names an MCP tool `<server>__<tool>`, in what it shows the model and in the title of its requests. */
 const SERVER_PREFIX = `${ORDEWELL_MCP_SERVER_NAME}__`;
@@ -54,6 +55,18 @@ export const CLINE_PROFILE: AcpProfile = {
     return name.startsWith(SERVER_PREFIX) ? name.slice(SERVER_PREFIX.length) : null;
   },
   toolName: (tool) => `${SERVER_PREFIX}${tool}`,
+  // Cline's read_files names its files only in the model's arguments
+  // (`{ files: [{ path, start_line, end_line }] }`), never as a location, as
+  // the read-only recording shows. A file it names without a path, or in a
+  // shape not read here, makes the whole call one with no path to judge, so
+  // it is refused rather than allowed for the files that do have one.
+  askedPaths: ({ rawInput }) => {
+    if (!isRecord(rawInput)) return [];
+    const { files, path } = rawInput;
+    const fromFiles = files === undefined ? [] : Array.isArray(files) ? files.map((file) => (isRecord(file) ? file.path : undefined)) : [undefined];
+    const named = [...fromFiles, ...(path === undefined ? [] : [path])];
+    return named.every((entry): entry is string => typeof entry === 'string') ? named : [];
+  },
   // Cline has no allow or deny list of its own, so what keeps a read-only task
   // from writing is that it asks: with `--auto-approve false` every edit and
   // command is a request, which the restricted start refuses, as the

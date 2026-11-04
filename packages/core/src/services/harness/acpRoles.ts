@@ -2,6 +2,7 @@ import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { PlannerAsk, TaskStartOptions } from './AgentAdapter';
 import type { AcpToolCall } from './acpSchema';
 import type { AcpAskedCall, AcpProfile, AcpRoles } from './acpProfiles';
+import { resolveWithin } from '../pathScope';
 import { decideReadOnlyTaskPermission } from './plannerPermissions';
 
 /** The roles a profile claims, refused when they cannot hold (ADR-0060, R3): the connector table is built at load, so a bad profile never ships. */
@@ -28,12 +29,17 @@ export function acpRoles(profile: Pick<AcpProfile, 'manifest' | 'roles' | 'restr
 /**
  * A request in the envelope's terms. A read or a search is a path only when it
  * names exactly one: several cannot be put to the envelope as one ask, and
- * none says nothing it could judge.
+ * none says nothing it could judge. The paths are its locations and, for an
+ * agent that leaves those out, what the profile reads from its arguments,
+ * resolved where the agent runs: it reads a relative path from there, not
+ * from the workspace (ADR-0008). Both are counted together, so a derived path
+ * never stands in for a location it disagrees with.
  */
-export function acpAsk(call: AcpToolCall): PlannerAsk {
-  const locations = call.locations ?? [];
-  if ((call.kind === 'read' || call.kind === 'search') && locations.length === 1) {
-    return { kind: 'path', path: locations[0].path, directory: call.kind === 'search' };
+export function acpAsk(call: AcpToolCall, site: { profile: Pick<AcpProfile, 'askedPaths'>; cwd: string }): PlannerAsk {
+  if (call.kind === 'read' || call.kind === 'search') {
+    const derived = (site.profile.askedPaths?.(call) ?? []).map((path) => resolveWithin(site.cwd, path).abs);
+    const paths = [...(call.locations ?? []).map((location) => location.path), ...derived];
+    if (paths.length === 1) return { kind: 'path', path: paths[0], directory: call.kind === 'search' };
   }
   const input = call.rawInput;
   const url = typeof input === 'object' && input !== null && !Array.isArray(input) ? (input as Record<string, unknown>).url : undefined;

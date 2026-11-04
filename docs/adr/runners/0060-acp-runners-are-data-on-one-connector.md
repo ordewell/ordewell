@@ -146,6 +146,19 @@ of its provider credential and the sign-in route that reader adds.
   are a layer beneath Ordewell's refusal by kind, never in its place, and
   neither is a role's evidence: a role still needs the recording above. A
   profile without them spawns exactly as before.
+
+  A restricted start puts each of the agent's own reads and searches to the
+  planner's envelope or the read-only task's rules as a path (`acpAsk`): the
+  call's `locations` and, for an agent that names its files only in the
+  model's arguments, the paths the profile's `askedPaths` reads from them,
+  each resolved against the session's `cwd`, where the agent reads a relative
+  path from, which is the private directory when it starts in one. The hook is
+  read only for a call of kind `read` or `search`, so it never makes a write
+  or a command a read, and the call is a path only when the locations and the
+  derived paths together name exactly one; several, or none, leave it `other`,
+  and it is refused. The derived path meets the same containment check as a
+  location (ADR-0008), so the hook grants no permission, only a better-shaped
+  ask for the same one. A profile without it asks exactly as before.
 - **Ordewell's tools go over HTTP, with the token in `session/new` or in the
   agent's own settings file (R4).** To an agent whose `initialize` advertises
   `mcpCapabilities.http`, the server is given as one `http` entry in
@@ -452,6 +465,7 @@ OpenRouter model and its key handed in the spawn's environment (R9):
 | restriction | `--auto-approve false`, once, with nothing of the mode's route, and a private start directory that is also `TMPDIR`, `TMP` and `TEMP` and holds only the MCP settings file |
 | repository | a restricted start runs none of the hooks in `.cline/hooks/` or `.clinerules/hooks/`, and is handed none of the repository's rules: the profile has no reader for them (ADR-0028) |
 | roles | a read-only mode (`plan`), not the planner: Cline attaches on its first turn, and a planner's first turn is the goal (R5) |
+| asked paths | `rawInput.files[].path` and `rawInput.path` of a `read` or `search` call; nothing when any named file has no path |
 
 In every recording of a new session Cline has not contacted the server when
 `session/new` answers, and contacts it from the settings file once the prompt
@@ -497,17 +511,22 @@ show it:
   which Cline names `execute`, is refused by kind, and the model reports
   `failed`. It was recorded with a token that lists no `run_command`, so that
   Cline's own shell was all the model had.
-- `read-only.jsonl`: Cline's `read_files` is refused too, since its request
-  carries no location, only the path in the model's arguments, which Ordewell
-  does not judge. On the reminder the model reads the file with Ordewell's
-  `run_command` and reports `done`.
+- `read-only.jsonl`: Cline's `read_files` names one file, in the model's
+  arguments only (`files: [{ path, start_line, end_line }]`), with no
+  location. It was recorded refused, when Ordewell did not read the
+  arguments, and on the reminder the model read the file with Ordewell's
+  `run_command` and reported `done`. The profile's `askedPaths` now reads
+  that path, so the same request inside the workspace is allowed (R3).
 - `read-only-hooks.jsonl`: hooks planted in the worktree's `.cline/hooks/`
   and `.clinerules/hooks/` do not run.
 
 In each the worktree is as it was (`git status` empty), the private directory
 held only the settings file and is gone, and no Cline process is left behind.
-So a read-only Cline reads only through Ordewell's `run_command`, and Cline's
-own `search_codebase` is refused alike. A refusal reaches the model with no
+So a read-only Cline reads one file at a time of the worktree or workspace
+with its own `read_files`, and anything else through Ordewell's
+`run_command`: a read of several files at once, of a path outside, or of a
+relative path, which Cline would read from its private directory, is refused,
+and so is its `search_codebase`, whose `queries` name no path. A refusal reaches the model with no
 reason, and in three of the four it ended its turn without `task_complete`:
 the completion reminder brought two back to report, and the third,
 `read-only-hooks.jsonl`, never reported
@@ -1157,3 +1176,6 @@ the private directory:
   a private directory, its own reads, writes and shell denied by a settings
   file in a home of configuration of the start's own; a restricted file may
   sit inside a moved config home.
+- 2026-11-04 — R3: a profile may name the paths of a read or a search from
+  the call's arguments (`askedPaths`), resolved against the session's `cwd`
+  and judged as a location is; Cline reads its own `read_files` with it.
