@@ -4,6 +4,12 @@
 
 ### Added
 
+- **Cursor runs tasks.** Cursor appears among the runners a task can be
+  assigned to, with its models. It cannot be the planner or run a read-only
+  task.
+- **Gemini CLI runs tasks.** Gemini CLI 0.66.0 or newer appears among the
+  runners a task can be assigned to, with its models. It cannot be the planner
+  or run a read-only task.
 - **Cline runs tasks.** Cline 3.0.74 or newer appears among the runners a task
   can be assigned to, with its models. It cannot be the planner or run a
   read-only task.

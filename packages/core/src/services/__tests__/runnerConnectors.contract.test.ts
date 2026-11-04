@@ -28,6 +28,8 @@ const RUNNER_NAME: Record<string, (tool: string) => string> = {
   'copilot-cli': (tool) => `ordewell-${tool}`,
   'qwen-code': (tool) => `mcp__ordewell__${tool}`,
   cline: (tool) => `ordewell__${tool}`,
+  'gemini-cli': (tool) => `mcp_ordewell_${tool}`,
+  'cursor-agent': (tool) => tool,
 };
 
 /**
@@ -35,11 +37,16 @@ const RUNNER_NAME: Record<string, (tool: string) => string> = {
  * the name it runs it by: Qwen Code reports an MCP call first under the
  * placeholder title "ToolCall" and an event keeps the name its call was first
  * seen under (acpEvents.ts), while its requests carry the real name. Cline's
- * title is the name and then a summary of the model's arguments.
+ * title is the name and then a summary of the model's arguments. Gemini's is
+ * the call as the model wrote it, and with no arguments the tool's display
+ * name; its call id carries the real name. Cursor reports every MCP call
+ * first as "MCP: tool", and names the tool only in a later update.
  */
 const REPORTED_AS: Record<string, (tool: string) => string> = {
   'qwen-code': () => 'ToolCall',
   cline: (tool) => `ordewell__${tool}: {}`,
+  'gemini-cli': (tool) => `${tool} (ordewell MCP Server)`,
+  'cursor-agent': () => 'MCP: tool',
 };
 
 /**
@@ -53,6 +60,8 @@ const NATIVE_INSTEAD: Record<string, string[]> = {
   'copilot-cli': [],
   'qwen-code': [],
   cline: [],
+  'gemini-cli': [],
+  'cursor-agent': [],
 };
 
 const mcp = mcpClientConfig({ url: 'http://127.0.0.1:4555/mcp', token: 'tok-secret' });

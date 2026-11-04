@@ -140,7 +140,8 @@ also advertises HTTP and honours them, but its repository is archived in favour
 of Kimi Code. Cline 3.0.74 stores the servers, never uses them and advertises no
 `mcpCapabilities` (cline#15504). Kiro silently ignored them until April 2026
 (Kiro#7349). Cursor documents only `.cursor/mcp.json` servers that the user has
-approved. In Goose, one unreachable client server stopped every configured
+approved, yet over ACP its CLI connects the HTTP servers `session/new` hands it
+(ADR-0060, Cursor). In Goose, one unreachable client server stopped every configured
 extension from loading (goose#11493, not planned). Gemini CLI, Qwen Code and
 Goose are the next candidates, each admitted only after a live probe shows
 Ordewell's HTTP MCP tools attached, as Copilot CLI 1.0.105's did.
@@ -253,3 +254,4 @@ tmux; the TUI remains unverified on native Windows (ADR-0010).
 - 2026-11-03 — the ACP successor findings were rechecked: about 52 agents are listed, `mcpServers` handling varies by agent, and the first wave is Gemini CLI (reference), Qwen Code, Goose and Copilot CLI.
 - 2026-11-04 — the ACP connector is implemented ([ADR-0060](0060-acp-runners-are-data-on-one-connector.md)); `copilot-cli` is its reference agent, not Gemini CLI.
 - 2026-11-04 — the rule is that no result is accepted without tools, not that no prompt is sent without them: an ACP runner that attaches on its first turn is sent the task as the check, and that turn is discarded unless the server was contacted before it ended (ADR-0060 R5).
+- 2026-11-04 — Cursor's CLI was found to connect the servers `session/new` hands it over ACP, beyond the `.cursor/mcp.json` servers it documents.

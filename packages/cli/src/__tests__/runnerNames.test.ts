@@ -5,7 +5,7 @@ import { plannerIdChoice, plannerIdList, plannerNamesOr, runnerIdList } from '..
 // runners names every runner.
 describe('runner names, for runners and for planners', () => {
   it('names every runner where the text is about runners', () => {
-    expect(runnerIdList()).toBe('claude-code, codex, opencode, copilot-cli, qwen-code, cline');
+    expect(runnerIdList()).toBe('claude-code, codex, opencode, copilot-cli, qwen-code, cline, gemini-cli, cursor-agent');
   });
 
   it('names only the runners that can plan where the text is about planning', () => {

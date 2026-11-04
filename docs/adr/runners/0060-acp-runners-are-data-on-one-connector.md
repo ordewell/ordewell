@@ -29,7 +29,9 @@ an `AcpProfile`: data, not code.** `acpConnector(profile)` turns a profile into
 the runner's entry in `CONNECTORS`, so a new ACP agent is a manifest and a
 profile. GitHub Copilot CLI (`copilot-cli`, `copilot --acp --stdio`) is the
 reference agent. Qwen Code (`qwen-code`, `qwen --acp`) plans and runs
-read-only tasks too; Cline (`cline`, `cline --acp`) takes writable tasks only.
+read-only tasks too; Cline (`cline`, `cline --acp`), Gemini CLI (`gemini-cli`,
+`gemini --acp --skip-trust`) and Cursor (`cursor-agent`, `cursor-agent acp`)
+take writable tasks only.
 
 Ordewell is the ACP client and does no I/O for the agent: it advertises no
 file-system and no terminal capability, so the agent works in the worktree
@@ -482,15 +484,120 @@ Cline loads its user's own configuration in every attempt:
 `CLINE_DIR` nor `CLINE_DATA_DIR`, so a user's global rules and hooks run inside
 Ordewell's attempts.
 
+## Gemini CLI
+
+Checked against Gemini CLI 0.66.0, the profile's `minVersion`, and the
+recordings in `packages/core/src/services/__tests__/fixtures/acp/gemini-cli/`,
+made with `gemini-3.5-flash-lite` and a Gemini API key from Gemini's own
+settings:
+
+| profile field | Gemini CLI |
+|---|---|
+| instructions | the first prompt: Gemini has no instruction file or `_meta` slot outside the worktree |
+| mode | the session mode, set with `session/set_mode` after `session/new` (`default`, `autoEdit`, `yolo`), since Gemini offers no config options; no `plan`, whose refusal of a write and a command has no recording |
+| model | `--model` at spawn, with the id as `session/new` lists it |
+| Ordewell's tools | the call id up to its first `__`, `mcp_ordewell_<tool>`: Gemini's call ids are the name it looked the tool up by, then a counter; the title is the call as the model wrote it (`task_complete(summary: ok, status: done)`), the kind is a guess (`other`), and there is no `_meta` or raw input, so none of those is read |
+| trust | `--skip-trust`: the task's worktree is trusted for that process only |
+| credentials | none: Gemini reads the key in its own settings over ACP, as the recordings show, so its spawn carries none from Ordewell (R9) |
+| restriction | none |
+| roles | none: Gemini is task-only, since no recording shows its `plan` mode, or any control, refusing a write and a command (R3) |
+
+A new worktree is a folder Gemini has not been told to trust, and in such a
+folder Gemini connects no MCP server and refuses `yolo`: the server is never
+contacted (`untrusted.jsonl`), and `session/set_mode` to `yolo` fails with
+`-32603` "Internal error", whose details say privileged modes cannot be
+enabled there (`untrusted-yolo.jsonl`). So every start passes `--skip-trust`.
+With it Gemini contacts the server while `session/new` runs, which is the
+attach (R5), and a `session/load` contacts it while the load runs
+(`load.jsonl`). The trust is Gemini's whole trust, not only its MCP servers:
+it loads the worktree's own `.gemini/` settings and hooks, as Claude Code and
+Codex load theirs in a task, and it overrides a user's choice not to trust
+that folder, for that process.
+
+Gemini advertises `loadSession` and no resume, so a resume is `session/load`,
+which first replays the session's history as updates; they come outside a turn
+and are dropped. A mode change is announced as a message chunk outside the
+turn too, and dropped likewise. In `default` Gemini asks about an edit
+(`edit.jsonl`), a command (`execute.jsonl`) and every MCP call, Ordewell's own
+included (`ordewell-tool.jsonl`), but runs a command it deems safe, such as
+`echo`, without asking (`execute-safe.jsonl`). A native tool's request offers
+`proceed_always`, `proceed_once` and `cancel`; an MCP tool's adds
+`proceed_always_server` and `proceed_always_tool`. A refused edit leaves
+nothing (`deny.jsonl`). In `yolo` it asks about nothing (`allow-all.jsonl`). A
+cancel ends the turn `cancelled` and the pending request is answered
+`cancelled`; the command did not run (`cancel.jsonl`).
+
+The turn reports a call under the same title as its request, so the
+transcript names Ordewell's call as the model wrote it, and a call with no
+arguments by the tool's display name, `<tool> (ordewell MCP Server)`, as
+Gemini's source words it; no recording has such a call. Gemini
+has no login or status command: `gemini` itself offers the sign-in, and a
+signed-out `session/new` fails with `-32000` "Gemini API key is missing or not
+configured." (`signed-out.jsonl`), which is how a signed-out Gemini is learned.
+Its models come from ACP discovery alone, started bare (`--acp`) and so
+untrusted, since discovery hands it no server: `session/new` lists `auto` and
+five Gemini models (`discovery.jsonl`), and there is no command to fall back
+to.
+
+## Cursor
+
+Checked against Cursor CLI 2026.10.22 and the recordings in
+`packages/core/src/services/__tests__/fixtures/acp/cursor-agent/`, made
+signed in to a Cursor account with no paid plan:
+
+| profile field | Cursor |
+|---|---|
+| instructions | the first prompt: Cursor has no instruction file or `_meta` slot outside the worktree |
+| mode | `--force` under the manifest's `force`, nothing under `default`; Cursor's session modes (`agent`, `plan`, `ask`) change what it does, not only whether it asks, so none is set |
+| model | the `model` config option, set with `session/set_config_option` after `session/new`; `--model` after `acp` is not read (`model-flag.jsonl`) |
+| Ordewell's tools | the request titled `ordewell-<tool>: <tool>`, paired with the turn's first report of that call, titled `MCP: tool`; a native call's request is the command in backticks or Cursor's own words, and its report never says MCP. The kind is not read: Cursor reports every MCP call as `other` |
+| MCP server | `session/new`, over HTTP, which Cursor advertises; it contacts the server while `session/new` runs, which is the attach (R5) |
+| `minVersion` | none: Cursor's `initialize` carries no `agentInfo`, and the check refuses an agent that does not say its version |
+| credentials | none: Cursor uses its own sign-in over ACP |
+| restriction | none |
+| roles | none: Cursor is task-only, since no recording shows its `plan` or `ask` mode, or any flag, refusing a write and a command (R3) |
+| `extensionRequests` | Cursor's own `cursor/ask_question` and `cursor/create_plan`, answered by `cursorRequests.ts`; no recorded turn sent either |
+
+In its default mode Cursor asks about a command its own allowlist does not
+hold, with the reason "Not in allowlist: touch" (`execute.jsonl`), and about
+every MCP call, Ordewell's own included (`ordewell-tool.jsonl`). It writes a
+file edit without asking (`edit.jsonl`), so `default` is safe for commands
+and tools, not for edits. Every request offers `allow-once`, `allow-always`
+and `reject-once`. A refused command leaves nothing (`deny.jsonl`). Under
+`--force` it asks about nothing (`force.jsonl`). A cancel ends the turn
+`cancelled` and the pending request is answered `cancelled`, and the command
+did not run (`cancel.jsonl`). Cursor advertises `loadSession` and no resume,
+so a resume is `session/load`, which contacts the server again and first
+replays the session's history as updates outside a turn, which are dropped
+(`load.jsonl`).
+
+Cursor reports an MCP call first as `MCP: tool` and names the tool only in a
+later update (`ordewell: task_complete`), so the transcript names Ordewell's
+calls `MCP: tool`. A model set with `session/set_config_option` becomes the
+user's own default model: the next process opened on it
+(`model-persists.jsonl`), so a task with no model in the plan runs on
+whichever model the last one set. The account with no paid plan was refused a
+turn on a model it may not use, and in `plan` mode, with the message "Upgrade
+your plan to continue" and the stop reason `end_turn` (`model.jsonl`,
+`plan.jsonl`). That reads as an ordinary turn that ended without
+`task_complete`, not as a usage limit, so the task is not paused for a reset.
+A signed-out
+`session/new` fails with `-32000` "Authentication required"
+(`signed-out.jsonl`), and the manifest signs in with `cursor-agent login`. Its
+models come from ACP discovery alone: `session/new` lists `default[]` and
+Cursor's models with their parameters in the id (`discovery.jsonl`).
+
 ## Testing decisions
 
 - **Recorded fixtures are the agent's evidence.** A recording is the JSONL of
   every line each side sent, with notes for the spawn arguments and what the
   live run left behind. `copilotCli.test.ts` replays the agent's side against a
-  live adapter and Ordewell server, and `qwenCode.test.ts` and
-  `clineCode.test.ts` do the same for Qwen and Cline; a claim about the agent
-  cites a recording. Cline's replay also answers the MCP calls the recording
-  shows from the file it was handed, with the attempt's own token, so its
+  live adapter and Ordewell server, and `qwenCode.test.ts`,
+  `clineCode.test.ts`, `geminiCli.test.ts` and `cursorAgent.test.ts` do the
+  same for Qwen, Cline, Gemini and Cursor; a claim about the agent cites a
+  recording. Cline's replay also
+  answers the MCP calls the recording shows from the file it was handed, with
+  the attempt's own token, so its
   first-turn attach, its resume and its concurrent attempts are judged by the
   server as live.
 - **`fakeAcpAgent`** scripts an agent for the adapter's own tests
@@ -534,8 +641,15 @@ Ordewell's attempts.
 - **A stdio-to-HTTP MCP bridge.** An agent that takes only stdio MCP servers
   would need a local process carrying the token; it is refused instead, until
   such an agent is worth the bridge.
-- **Agents beyond Copilot CLI, Qwen Code and Cline.** Gemini CLI and Goose wait
-  for the same live probe those passed before they are admitted at all.
+- **Agents beyond Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor.**
+  Goose waits for the same live probe those passed before it is admitted at
+  all.
+- **Gemini CLI signed in with a Google account or Vertex AI.** The recordings
+  use a Gemini API key. No recording shows a task run on another sign-in.
+- **Cursor on a paid plan.** The recordings use an account with no paid plan,
+  which was refused a turn in `plan` mode and on a model other than its
+  default. No recording shows `cursor/ask_question` or `cursor/create_plan`
+  sent, or how Cursor takes their answers.
 - **A key kept outside the environment.** The hook reads the host's and the
   workspace's variables, where the CLI's `/key` writes; a key VS Code keeps in
   its secret store, and its `aiProvider` setting, reach no agent until the
@@ -649,6 +763,26 @@ Ordewell's attempts.
   may start or join a hub daemon that outlives the attempt and serves other
   sessions, so the session would not end with the process Ordewell stops.
   `CLINE_SESSION_BACKEND_MODE=local` keeps it in that process.
+- **Gemini started without `--skip-trust`, its worktree left untrusted.**
+  Rejected: an untrusted folder connects no MCP server, so the attach never
+  comes and every start would be refused, and it refuses `yolo`, so a plan's
+  autonomous mode could never be set. Trusting the folder for the process is
+  what lets the server reach it; the cost is that the worktree's own `.gemini/`
+  configuration loads, as a native runner's does.
+- **The worktree added to Gemini's `trustedFolders.json`.** Rejected: that
+  file is the user's and shared by every Gemini process, so every worktree
+  would stay trusted after its attempt, and a crash would leave the entry
+  behind. The flag's trust ends with the process.
+- **Gemini's `plan` mode as a read-only mode.** Rejected for want of evidence,
+  as Cline's is; Qwen's was rejected on evidence (above). Cursor's `plan` and
+  `ask` modes likewise: the
+  recorded `plan` turn was refused for the account's plan before it did
+  anything.
+- **Cursor's model passed at spawn (`acp --model`).** Rejected: Cursor opened
+  on its default with it (`model-flag.jsonl`). `session/set_config_option` is
+  the route Cursor took.
+- **Cursor's servers in `.cursor/mcp.json`.** Not needed: Cursor connects the
+  servers `session/new` hands it, while `session/new` runs.
 - **Ordewell calling `authenticate` with the stored key.** Rejected: ACP's
   auth methods are the agent's to name and differ by agent, signing in stays
   the user's
@@ -692,9 +826,20 @@ Ordewell's attempts.
   have changed the worktree the respawn starts in.
 - A runner id shares the planner setting's namespace with the API vendors'
   ids, so an ACP runner id must not equal one (`kimi-cli`, not `kimi`;
-  `qwen-code`, because `qwen` is DashScope's; `cline` is no vendor's).
-- Cline's transcript names each call with its arguments' summary, since that
-  is the title it reports the call under.
+  `qwen-code`, because `qwen` is DashScope's; `cline` is no vendor's;
+  `gemini-cli`, because `google` is the vendor whose models are Gemini, and a
+  bare `gemini` would read as them; `cursor-agent`, Cursor's own command, so
+  the id is never read as a vendor's).
+- Cline's transcript names each call with its arguments' summary, Gemini's
+  with the call as the model wrote it, and Cursor's MCP calls `MCP: tool`,
+  since those are the titles they report their calls under.
+- A Gemini task runs in a worktree Gemini trusts, so a repository's
+  `.gemini/` settings and hooks run in it, whatever the user chose for that
+  folder in Gemini.
+- A Cursor task in `default` writes files without asking, and the model a
+  plan sets for it stays the user's default model in Cursor afterwards.
+- Cursor reports no version, so no `minVersion` holds its profile to the
+  release its recordings were made on.
 - Each agent's ACP server is young and changes between releases; the profile's
   `minVersion` and its recordings name the version each claim was checked on.
 
@@ -733,6 +878,10 @@ Ordewell's attempts.
   empty config homes in its private directory (`restricted.files`,
   `restricted.configDirs`), for an agent whose controls are a hook or a
   settings file; no profile uses them yet.
+- 2026-11-04 — Gemini CLI (`gemini-cli`) is admitted on its recordings, for
+  writable tasks only, started trusting its worktree (`--skip-trust`).
+- 2026-11-04 — Cursor (`cursor-agent`) is admitted on its recordings, for
+  writable tasks only, with its own requests answered by its profile.
 - 2026-11-04 — R3: Qwen Code plans and runs read-only tasks from a private
   directory under `--approval-mode default`, Ordewell refusing each write and
   command it asks for; a restricted start names the agent's deferred-tool

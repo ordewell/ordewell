@@ -163,13 +163,19 @@ planner must fail before the goal is typed when the agent is unusable.
 
 An agent that ships its own Agent Client Protocol server needs no adapter:
 `AcpAdapter` drives every ACP runner, and what differs between agents is an
-`AcpProfile` (ADR-0060). Three are admitted: GitHub Copilot CLI
-(`copilot-cli`), Qwen Code (`qwen-code`) and Cline (`cline`). Copilot CLI is
-the reference: read `plugins/builtin/copilot-cli.manifest.ts` and
+`AcpProfile` (ADR-0060). Five are admitted: GitHub Copilot CLI
+(`copilot-cli`), Qwen Code (`qwen-code`), Cline (`cline`), Gemini CLI
+(`gemini-cli`) and Cursor (`cursor-agent`). Copilot CLI is the reference: read
+`plugins/builtin/copilot-cli.manifest.ts` and
 `services/harness/copilotProfile.ts` before writing yours. Read
 `services/harness/clineProfile.ts` too if your agent takes MCP servers only
 from a settings file of its own, connects to them only on its first turn, or
-ignores over ACP the login its own CLI stored.
+ignores over ACP the login its own CLI stored. Read
+`services/harness/geminiProfile.ts` if it names a tool only in its call ids,
+or connects MCP servers only in a folder it trusts. Read
+`services/harness/cursorProfile.ts` if its first report of an MCP call does not
+name the tool, or it reports no version: a profile then sets no `minVersion`,
+since the check refuses an agent that does not say its version.
 
 - **Native servers only.** The agent's own maintainers must ship its ACP
   server. A third-party shim in front of an agent does not qualify
@@ -180,9 +186,9 @@ ignores over ACP the login its own CLI stored.
   one of them: `kimi-cli`, not `kimi`.
 - **The profile** goes in `services/harness/<id>Profile.ts`, and its connector
   entry is `CONNECTORS['<id>'] = acpConnector(PROFILE)`. It is data: the ACP
-  arguments, the `minVersion` you checked, how the agent names Ordewell's
-  tools, how a model reaches it, and the routes its instructions and modes
-  take. A behaviour your agent needs becomes a profile field any agent can
+  arguments, the `minVersion` you checked where the agent reports one, how
+  the agent names Ordewell's tools, how a model reaches it, and the routes its
+  instructions and modes take. A behaviour your agent needs becomes a profile field any agent can
   use, never a branch on a runner id in the adapter. Instructions go through
   the agent's own channel outside the worktree, or else as a preamble on the
   first prompt; never as a file in the worktree. The agent must advertise
