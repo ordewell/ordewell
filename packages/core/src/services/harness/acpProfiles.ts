@@ -102,6 +102,21 @@ export interface AcpRestriction {
   privateCwd?: boolean;
 }
 
+/** What an extension request's answer may depend on: the start it came to, never a person. */
+export interface AcpExtensionContext {
+  kind: 'planner' | 'task';
+  /** A planner's start or a read-only task's, under {@link AcpProfile.restricted}. */
+  restricted: boolean;
+}
+
+/**
+ * The answer to one of the agent's own client-bound methods. `params` is
+ * whatever the agent sent, so a handler narrows it; undefined means the
+ * request is not one it can answer, and the agent hears "method not found",
+ * as it would with no handler at all.
+ */
+export type AcpExtensionHandler = (params: unknown, context: AcpExtensionContext) => Record<string, unknown> | undefined;
+
 /**
  * Everything one ACP agent needs past the protocol itself: a profile is data,
  * so a new agent is a profile and a manifest, not an adapter (ADR-0060, R1).
@@ -148,6 +163,13 @@ export interface AcpProfile {
   roles?: AcpRoles;
   /** Applied on a planner's start and a read-only task's, on top of `args` and `env`; required by any role. */
   restricted?: AcpRestriction;
+  /**
+   * Answers to the agent's own requests by method, for an agent that holds a
+   * turn until the client replies to one (Cursor's `cursor/ask_question`).
+   * Every other request is answered "method not found". ACP's own methods
+   * are the adapter's and cannot be overridden here.
+   */
+  extensionRequests?: Readonly<Record<string, AcpExtensionHandler>>;
 }
 
 const NO_REPO_CONFIG: RepoConfigReader = { instructions: () => [], projectServers: () => NO_SERVERS };
