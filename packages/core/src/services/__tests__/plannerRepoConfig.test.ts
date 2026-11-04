@@ -636,6 +636,15 @@ describe('Copilot CLI instructions (ADR-0028, ADR-0060)', () => {
     expect(block).not.toContain('RULE-2999 ');
   });
 
+  it('reads past a file whose padding the block trims, so the files after it are not dropped unsaid', () => {
+    const root = repo({ 'AGENTS.md': `HEAD${' '.repeat(45_000)}\n`, 'CLAUDE.md': 'LATER-CLAUDE' });
+    const block = instructionsBlock(reader.instructions(root));
+
+    expect(block).toContain('HEAD');
+    expect(block).toContain('LATER-CLAUDE');
+    expect(block).not.toContain('left out');
+  });
+
   it('stops reading instruction files once they fill what the planner is given, and reads no one file past it', () => {
     const read = reader.instructions(manyRules());
     expect(read.length).toBeLessThan(2000);
