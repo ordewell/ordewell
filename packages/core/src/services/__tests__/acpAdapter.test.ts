@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AcpAdapter } from '../harness/AcpAdapter';
 import { acpConnector, type AcpProfile } from '../harness/acpProfiles';
 import { acpOrdewellBinding } from '../harness/acpOrdewell';
@@ -225,7 +225,8 @@ describe('AcpAdapter start', () => {
 describe('AcpAdapter turn', () => {
   it('streams a turn with thinking, text, a tool call and usage, and ends it on the prompt response', async () => {
     const { agent, adapter } = setup([
-      ...handshake(),
+      ...withOptions([select('model', 'model', 'm-1', ['m-1'])]),
+      { expect: 'session/set_config_option', reply: { configOptions: [select('model', 'model', 'm-1', ['m-1'])] } },
       { expect: 'session/prompt' },
       { notify: 'session/update', params: update('agent_thought_chunk', { content: text('Reading the file.') }) },
       { notify: 'session/update', params: update('agent_message_chunk', { content: text('I will ') }) },
@@ -758,7 +759,8 @@ describe('AcpAdapter through StructuredRunner', () => {
       { expect: 'initialize', reply: INITIALIZED },
       { expect: 'session/new' },
       { callMcp: { tool: 'read', args: { task: 'x' } } },
-      { answer: { sessionId: 'sess-1' }, to: 'session/new' },
+      { answer: { sessionId: 'sess-1', configOptions: [select('model', 'model', 'm', ['m'])] }, to: 'session/new' },
+      { expect: 'session/set_config_option', reply: { configOptions: [select('model', 'model', 'm', ['m'])] } },
       { expect: 'session/prompt' },
       { request: 'session/request_permission', params: permissionParams('ordewell/task_complete', 'tc') },
       { callMcp: { tool: 'task_complete', args: { status: 'done', summary: 'All done.' } } },
@@ -839,5 +841,451 @@ describe('acpOrdewellBinding', () => {
   it('names tools as the server serves them and hides none from the planner', () => {
     expect(binding.toolName('task_complete')).toBe('task_complete');
     expect(binding.plannerHidden({ kind: 'planner', cwd: '/repo', systemPrompt: '' })).toEqual([]);
+  });
+});
+
+/** What an agent that can resume says of itself, past the MCP-over-HTTP every agent here needs. */
+const initializedWith = (capabilities: Record<string, unknown>) => ({
+  ...INITIALIZED,
+  agentCapabilities: { mcpCapabilities: { http: true }, ...capabilities },
+});
+
+describe('AcpAdapter resume (K1)', () => {
+  it('resumes the saved session with session/resume when the agent advertises it, passing Ordewell\'s server again', async () => {
+    const { agent, adapter } = setup([
+      { expect: 'initialize', reply: initializedWith({ sessionCapabilities: { resume: {} }, loadSession: true }) },
+      { expect: 'session/resume', reply: {} },
+    ]);
+    await adapter.start(taskStart('ask', { resumeSessionId: 'sess-old' }));
+
+    expect(agent.requests('session/new')).toEqual([]);
+    expect(agent.requests('session/load')).toEqual([]);
+    expect(agent.requests('session/resume').map((m) => m.params)).toEqual([{
+      sessionId: 'sess-old',
+      cwd: '/repo',
+      mcpServers: [{ type: 'http', name: 'ordewell', url: 'http://127.0.0.1:4555/mcp', headers: [{ name: 'Authorization', value: `Bearer ${TOKEN}` }] }],
+    }]);
+    expect(adapter.nativeSessionId()).toBe('sess-old');
+    expect(agent.invalid).toEqual([]);
+    expect(agent.unexpected).toEqual([]);
+  });
+
+  it('loads the session when only session/load is advertised, and shows none of the history the agent replays', async () => {
+    const { agent, adapter } = setup([
+      { expect: 'initialize', reply: initializedWith({ loadSession: true }) },
+      { expect: 'session/load' },
+      { notify: 'session/update', params: update('user_message_chunk', { content: text('old question') }) },
+      { notify: 'session/update', params: update('agent_message_chunk', { content: text('old answer') }) },
+      { answer: {} },
+      { expect: 'session/prompt' },
+      { notify: 'session/update', params: update('agent_message_chunk', { content: text('new answer') }) },
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    ]);
+    await adapter.start(taskStart('ask', { resumeSessionId: 'sess-1' }));
+    expect(agent.requests('session/load').map((m) => m.params)).toEqual([{
+      sessionId: 'sess-1', cwd: '/repo',
+      mcpServers: [{ type: 'http', name: 'ordewell', url: 'http://127.0.0.1:4555/mcp', headers: [{ name: 'Authorization', value: `Bearer ${TOKEN}` }] }],
+    }]);
+    const events = await turn(adapter, 'go on');
+    expect(events.filter((e) => e.type === 'assistant_text').map((e) => e.type === 'assistant_text' && e.text)).toEqual(['new answer']);
+    expect(agent.invalid).toEqual([]);
+    expect(agent.unexpected).toEqual([]);
+  });
+
+  it('fails in plain words when the agent offers neither way to resume, without opening a new session', async () => {
+    const { agent, adapter } = setup([{ expect: 'initialize', reply: INITIALIZED }]);
+    await expect(adapter.start(taskStart('ask', { resumeSessionId: 'sess-old' }))).rejects.toThrow(
+      'Fake Agent could not resume session sess-old: it offers neither session/resume nor session/load.',
+    );
+    expect(agent.requests('session/new')).toEqual([]);
+  });
+
+  it('fails when the agent refuses the resume, and never falls back to a new session', async () => {
+    const { agent, adapter } = setup([
+      { expect: 'initialize', reply: initializedWith({ sessionCapabilities: { resume: {} } }) },
+      { expect: 'session/resume', error: { code: -32002, message: 'Session not found' } },
+    ]);
+    await expect(adapter.start(taskStart('ask', { resumeSessionId: 'sess-old' }))).rejects.toThrow(
+      'Fake Agent could not resume session sess-old: Session not found',
+    );
+    expect(agent.requests('session/new')).toEqual([]);
+    expect(await adapter.mcpAttached()).toBe('failed');
+  });
+
+  it('names the login command when the agent wants a sign-in to resume', async () => {
+    const { adapter } = setup([
+      { expect: 'initialize', reply: initializedWith({ sessionCapabilities: { resume: {} } }) },
+      { expect: 'session/resume', error: { code: ACP_ERROR.authRequired, message: 'Authentication required' } },
+    ]);
+    await expect(adapter.start(taskStart('ask', { resumeSessionId: 'sess-old' }))).rejects.toThrow('Fake Agent is not signed in. Run `fake-agent login`.');
+  });
+
+  it('fails in words when the agent answers a resume in a shape Ordewell cannot read', async () => {
+    const { adapter } = setup([
+      { expect: 'initialize', reply: initializedWith({ sessionCapabilities: { resume: {} } }) },
+      { expect: 'session/resume', reply: { configOptions: 'none' } },
+    ]);
+    await expect(adapter.start(taskStart('ask', { resumeSessionId: 'sess-old' }))).rejects.toThrow(
+      /Fake Agent resumed session sess-old in a shape Ordewell cannot read/,
+    );
+  });
+
+  it('gives the contract to the resumed session too when the profile carries it in _meta', async () => {
+    const { agent, adapter } = setup([
+      { expect: 'initialize', reply: initializedWith({ sessionCapabilities: { resume: {} } }) },
+      { expect: 'session/resume', reply: {} },
+    ], { ...PROFILE, instructions: { kind: 'meta', key: 'systemPrompt' } });
+    await adapter.start(taskStart('ask', { resumeSessionId: 'sess-old' }));
+    const [resumed] = agent.requests('session/resume');
+    expect((resumed.params as { _meta: Record<string, unknown> })._meta.systemPrompt).toEqual(expect.stringContaining('task_complete'));
+  });
+
+  it('sets the plan\'s model on a resumed session like on a new one', async () => {
+    const { agent, adapter } = setup([
+      { expect: 'initialize', reply: initializedWith({ sessionCapabilities: { resume: {} } }) },
+      { expect: 'session/resume', reply: { configOptions: [select('model', 'model', 'm-0', ['m-0', 'm-1'])] } },
+      { expect: 'session/set_config_option', reply: { configOptions: [select('model', 'model', 'm-1', ['m-0', 'm-1'])] } },
+    ]);
+    await adapter.start(taskStart('ask', { resumeSessionId: 'sess-old', model: 'm-1' }));
+    expect(agent.requests('session/set_config_option').map((m) => m.params)).toEqual([{ sessionId: 'sess-old', configId: 'model', value: 'm-1' }]);
+  });
+});
+
+const COMMANDS = [
+  { name: 'compact', description: 'Compact the conversation' },
+  { name: 'review', description: 'Review the changes', input: { hint: '<files>' } },
+];
+
+describe('AcpAdapter commands', () => {
+  it('offers the commands the agent reports, announces them once for the process, and follows later lists', async () => {
+    const { adapter } = setup([
+      ...handshake(),
+      { notify: 'session/update', params: update('available_commands_update', { availableCommands: COMMANDS }) },
+      { expect: 'session/prompt' },
+      { notify: 'session/update', params: update('available_commands_update', { availableCommands: [COMMANDS[0]] }) },
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+      { expect: 'session/prompt', reply: { stopReason: 'end_turn' } },
+    ]);
+    await adapter.start(taskStart());
+    expect(adapter.commands()).toEqual([
+      { name: 'compact', description: 'Compact the conversation', kind: 'command' },
+      { name: 'review', description: 'Review the changes', argumentHint: '<files>', kind: 'command' },
+    ]);
+
+    const first = await turn(adapter, 'hi');
+    expect(first.filter((e) => e.type === 'runner_loaded')).toEqual([{
+      type: 'runner_loaded',
+      commands: [
+        { name: 'compact', description: 'Compact the conversation', kind: 'command' },
+        { name: 'review', description: 'Review the changes', argumentHint: '<files>', kind: 'command' },
+      ],
+      mcpServers: [],
+    }]);
+    expect(adapter.commands().map((c) => c.name)).toEqual(['compact']);
+
+    const second = await turn(adapter, 'again');
+    expect(second.filter((e) => e.type === 'runner_loaded')).toEqual([]);
+  });
+
+  it('runs a reported command as a prompt, and refuses one the agent did not report', async () => {
+    const { agent, adapter } = setup([
+      ...handshake(),
+      { notify: 'session/update', params: update('available_commands_update', { availableCommands: COMMANDS }) },
+      { expect: 'session/prompt', reply: { stopReason: 'end_turn' } },
+    ]);
+    await adapter.start(taskStart());
+
+    const unknown: AgentEvent[] = [];
+    await adapter.invokeCommand('nope', '', (e) => unknown.push(e));
+    expect(unknown).toEqual([{ type: 'error', message: 'Fake Agent did not report command /nope.' }]);
+    expect(agent.requests('session/prompt')).toEqual([]);
+
+    const events: AgentEvent[] = [];
+    await adapter.invokeCommand('review', 'src/a.ts', (e) => events.push(e));
+    expect(events.at(-1)).toEqual({ type: 'turn_end' });
+    const [prompt] = agent.requests('session/prompt');
+    expect(JSON.stringify(prompt.params)).toContain('/review src/a.ts');
+  });
+});
+
+describe('AcpAdapter session updates', () => {
+  it("ignores an update that names another session, however it would read in this turn", async () => {
+    const { adapter } = setup([
+      ...handshake(),
+      { expect: 'session/prompt' },
+      { notify: 'session/update', params: { sessionId: 'sess-other', update: { sessionUpdate: 'agent_message_chunk', content: text('not mine') } } },
+      { notify: 'session/update', params: { sessionId: 'sess-other', update: { sessionUpdate: 'available_commands_update', availableCommands: COMMANDS } } },
+      { notify: 'session/update', params: update('agent_message_chunk', { content: text('mine') }) },
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    ]);
+    await adapter.start(taskStart());
+    const events = await turn(adapter, 'hi');
+    expect(events.filter((e) => e.type === 'assistant_text')).toEqual([{ type: 'assistant_text', runId: 'acp-msg-1', text: 'mine' }]);
+    expect(events.some((e) => e.type === 'runner_loaded')).toBe(false);
+    expect(adapter.commands()).toEqual([]);
+  });
+});
+
+const select = (id: string, category: string | null, currentValue: string, values: string[]) => ({
+  id,
+  name: id,
+  ...(category ? { category } : {}),
+  type: 'select',
+  currentValue,
+  options: values.map((value) => ({ value, name: `Name of ${value}` })),
+});
+const withOptions = (configOptions: unknown[]): FakeAcpStep[] => [
+  { expect: 'initialize', reply: INITIALIZED },
+  { expect: 'session/new', reply: { sessionId: 'sess-1', configOptions } },
+];
+const SESSION_MODE_PROFILE: AcpProfile = { ...PROFILE, mode: { kind: 'session-mode' } } as AcpProfile;
+
+describe('AcpAdapter config options', () => {
+  it('sets the plan\'s mode through the mode option, found by its category under any id', async () => {
+    const { agent, adapter } = setup([
+      ...withOptions([select('permission_level', 'mode', 'default', ['default', 'ask', 'auto'])]),
+      { expect: 'session/set_config_option', reply: { configOptions: [select('permission_level', 'mode', 'ask', ['default', 'ask', 'auto'])] } },
+    ], SESSION_MODE_PROFILE);
+    await adapter.start(taskStart('ask'));
+    expect(agent.requests('session/set_config_option').map((m) => m.params)).toEqual([{ sessionId: 'sess-1', configId: 'permission_level', value: 'ask' }]);
+    expect(agent.requests('session/set_mode')).toEqual([]);
+    expect(agent.invalid).toEqual([]);
+    expect(agent.unexpected).toEqual([]);
+  });
+
+  it('finds the model and the effort by id when the agent names no category, and sets both', async () => {
+    const { agent, adapter } = setup([
+      ...withOptions([select('model', null, 'm-0', ['m-0', 'm-1']), select('reasoning_effort', null, 'low', ['low', 'high'])]),
+      { expect: 'session/set_config_option', reply: { configOptions: [select('model', null, 'm-1', ['m-0', 'm-1']), select('reasoning_effort', null, 'low', ['low', 'high'])] } },
+      { expect: 'session/set_config_option', reply: { configOptions: [select('model', null, 'm-1', ['m-0', 'm-1']), select('reasoning_effort', null, 'high', ['low', 'high'])] } },
+    ]);
+    await adapter.start(taskStart('ask', { model: 'm-1', flags: { ...resolveTaskRunnerFlags(MANIFEST, { mode: 'ask' }), effort: 'high' } }));
+    expect(agent.requests('session/set_config_option').map((m) => m.params)).toEqual([
+      { sessionId: 'sess-1', configId: 'model', value: 'm-1' },
+      { sessionId: 'sess-1', configId: 'reasoning_effort', value: 'high' },
+    ]);
+    expect(agent.unexpected).toEqual([]);
+  });
+
+  it('reads the complete list after every set, since a model can bring its own effort option', async () => {
+    const { agent, adapter } = setup([
+      ...withOptions([select('model', 'model', 'm-0', ['m-0', 'm-1'])]),
+      // Only once on m-1 does the agent offer an effort, under an id it did not have before.
+      { expect: 'session/set_config_option', reply: { configOptions: [select('model', 'model', 'm-1', ['m-0', 'm-1']), select('thinking', 'thought_level', 'low', ['low', 'high'])] } },
+      { expect: 'session/set_config_option', reply: { configOptions: [select('model', 'model', 'm-1', ['m-0', 'm-1']), select('thinking', 'thought_level', 'high', ['low', 'high'])] } },
+    ]);
+    await adapter.start(taskStart('ask', { model: 'm-1', flags: { ...resolveTaskRunnerFlags(MANIFEST, { mode: 'ask' }), effort: 'high' } }));
+    expect(agent.requests('session/set_config_option').map((m) => (m.params as { configId: string }).configId)).toEqual(['model', 'thinking']);
+    expect(agent.unexpected).toEqual([]);
+  });
+});
+
+const effortFlags = (effort: string) => ({ ...resolveTaskRunnerFlags(MANIFEST, { mode: 'ask' }), effort });
+
+describe('AcpAdapter config options held to the plan (B2)', () => {
+  it('says in plain words that the agent does not know a model, when it answers invalid params', async () => {
+    const { adapter } = setup([
+      ...withOptions([select('model', 'model', 'm-0', ['m-0'])]),
+      { expect: 'session/set_config_option', error: { code: ACP_ERROR.invalidParams, message: 'Invalid value' } },
+    ]);
+    await expect(adapter.start(taskStart('ask', { model: 'gpt-9' }))).rejects.toThrow(
+      'Fake Agent does not know the model "gpt-9" (or its setting "model"): Invalid value',
+    );
+  });
+
+  it('fails with the agent\'s own refusal for any other error', async () => {
+    const { adapter } = setup([
+      ...withOptions([select('model', 'model', 'm-0', ['m-0'])]),
+      { expect: 'session/set_config_option', error: { code: ACP_ERROR.internalError, message: 'busy' } },
+    ]);
+    await expect(adapter.start(taskStart('ask', { model: 'm-0' }))).rejects.toThrow('Fake Agent refused the model "m-0": busy');
+  });
+
+  it('fails when the agent answers a change in a shape Ordewell cannot read', async () => {
+    const { adapter } = setup([
+      ...withOptions([select('model', 'model', 'm-0', ['m-0'])]),
+      { expect: 'session/set_config_option', reply: { configOptions: 'none' } },
+    ]);
+    await expect(adapter.start(taskStart('ask', { model: 'm-0' }))).rejects.toThrow(/Fake Agent answered a model change in a shape Ordewell cannot read/);
+  });
+
+  it('fails, naming the model, when the agent has no setting for it', async () => {
+    const { agent, adapter } = setup(handshake());
+    await expect(adapter.start(taskStart('ask', { model: 'm-1' }))).rejects.toThrow(
+      'Fake Agent offers no model setting, so it cannot run this task on the model "m-1".',
+    );
+    expect(agent.requests('session/set_config_option')).toEqual([]);
+  });
+
+  it('fails the attempt when the agent stays on another mode than the plan\'s', async () => {
+    const { adapter } = setup([
+      ...withOptions([select('mode', 'mode', 'default', ['default', 'ask'])]),
+      { expect: 'session/set_config_option', reply: { configOptions: [select('mode', 'mode', 'default', ['default', 'ask'])] } },
+    ], SESSION_MODE_PROFILE);
+    await expect(adapter.start(taskStart('ask'))).rejects.toThrow('Fake Agent did not take the mode "ask": it is on "default".');
+  });
+
+  it('starts on a model the agent put elsewhere, and reports the drift in the first turn', async () => {
+    const { adapter } = setup([
+      ...withOptions([select('model', 'model', 'm-0', ['m-0', 'm-1'])]),
+      { expect: 'session/set_config_option', reply: { configOptions: [select('model', 'model', 'm-0', ['m-0', 'm-1'])] } },
+      { expect: 'session/prompt', reply: { stopReason: 'end_turn' } },
+    ]);
+    await adapter.start(taskStart('ask', { model: 'm-1' }));
+    const events = await turn(adapter, 'go');
+    expect(events[0]).toEqual({ type: 'model_drifted', from: { model: 'm-1' }, to: { model: 'm-0' } });
+  });
+
+  it('notes an effort the agent did not take, in the first turn, and runs on', async () => {
+    const { adapter } = setup([
+      ...withOptions([select('model', 'model', 'm-1', ['m-1']), select('effort', 'thought_level', 'low', ['low', 'high'])]),
+      { expect: 'session/set_config_option', reply: { configOptions: [select('model', 'model', 'm-1', ['m-1']), select('effort', 'thought_level', 'low', ['low', 'high'])] } },
+      { expect: 'session/set_config_option', reply: { configOptions: [select('model', 'model', 'm-1', ['m-1']), select('effort', 'thought_level', 'low', ['low', 'high'])] } },
+      { expect: 'session/prompt', reply: { stopReason: 'end_turn' } },
+    ]);
+    await adapter.start(taskStart('ask', { model: 'm-1', flags: effortFlags('high') }));
+    const events = await turn(adapter, 'go');
+    expect(events[0]).toEqual({ type: 'command_output', text: 'Fake Agent did not take the effort "high": it is on "low".' });
+  });
+
+  it('fails when the agent has no effort setting for an effort the plan names', async () => {
+    const { adapter } = setup([
+      ...withOptions([select('model', 'model', 'm-1', ['m-1'])]),
+      { expect: 'session/set_config_option', reply: { configOptions: [select('model', 'model', 'm-1', ['m-1'])] } },
+    ]);
+    await expect(adapter.start(taskStart('ask', { model: 'm-1', flags: effortFlags('high') }))).rejects.toThrow(
+      'Fake Agent offers no effort setting, so it cannot run this task on the effort "high".',
+    );
+  });
+
+  it('still sets the mode through session/set_mode when the agent has no mode option, and fails on a refusal', async () => {
+    const { agent, adapter } = setup([
+      ...withOptions([select('model', 'model', 'm-0', ['m-0'])]),
+      { expect: 'session/set_mode', error: { code: ACP_ERROR.invalidParams, message: 'Unknown mode' } },
+    ], SESSION_MODE_PROFILE);
+    await expect(adapter.start(taskStart('ask'))).rejects.toThrow('Fake Agent refused the mode "ask": Unknown mode');
+    expect(agent.requests('session/set_config_option')).toEqual([]);
+  });
+});
+
+describe('AcpAdapter config_option_update (#106)', () => {
+  const list = (model: string, effort = 'low') => [select('model', 'model', model, ['m-0', 'm-1']), select('effort', 'thought_level', effort, ['low', 'high'])];
+  const optionsUpdate = (configOptions: unknown[]) => ({ notify: 'session/update', params: update('config_option_update', { configOptions }) }) as const;
+  const m0 = { model: 'm-0', label: 'Name of m-0' };
+  const m1 = { model: 'm-1', label: 'Name of m-1' };
+
+  it('reports a model change nobody asked for in the chat as drift', async () => {
+    const { adapter } = setup([
+      ...withOptions(list('m-0')),
+      { expect: 'session/prompt' },
+      optionsUpdate(list('m-1')),
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    ]);
+    await adapter.start(taskStart());
+    const events = await turn(adapter, 'go');
+    expect(events.filter((e) => e.type.startsWith('model_'))).toEqual([{ type: 'model_drifted', from: m0, to: m1 }]);
+  });
+
+  it('reports the change a model command in the chat made as a switch, with the effort the agent then reports', async () => {
+    const { adapter } = setup([
+      ...withOptions(list('m-0')),
+      { expect: 'session/prompt' },
+      optionsUpdate(list('m-1', 'high')),
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+      { expect: 'session/prompt' },
+      optionsUpdate(list('m-0', 'high')),
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    ]);
+    await adapter.start(taskStart());
+    const first = await turn(adapter, '/model m-1');
+    expect(first.filter((e) => e.type.startsWith('model_'))).toEqual([{ type: 'model_switched', from: m0, to: m1, effort: 'high' }]);
+    // The command was spent with its turn: the same kind of update, unprompted, is drift again.
+    const second = await turn(adapter, 'carry on');
+    expect(second.filter((e) => e.type.startsWith('model_'))).toEqual([{ type: 'model_drifted', from: m1, to: m0 }]);
+  });
+
+  it('is silent for a list that keeps the model, and holds the new list for later changes', async () => {
+    const { adapter } = setup([
+      ...withOptions(list('m-0')),
+      { expect: 'session/prompt' },
+      optionsUpdate(list('m-0', 'high')),
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    ]);
+    await adapter.start(taskStart());
+    const events = await turn(adapter, 'go');
+    expect(events.filter((e) => e.type.startsWith('model_'))).toEqual([]);
+  });
+
+  it('recognises a model command by the name the agent reports for it', async () => {
+    const { adapter } = setup([
+      ...withOptions(list('m-0')),
+      { notify: 'session/update', params: update('available_commands_update', { availableCommands: [{ name: 'model', description: 'Pick a model' }] }) },
+      { expect: 'session/prompt' },
+      optionsUpdate(list('m-1')),
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    ]);
+    await adapter.start(taskStart());
+    const events: AgentEvent[] = [];
+    await adapter.invokeCommand('model', 'm-1', (e) => events.push(e));
+    expect(events.filter((e) => e.type.startsWith('model_'))).toEqual([{ type: 'model_switched', from: m0, to: m1, effort: 'low' }]);
+  });
+});
+
+describe('AcpAdapter model labels', () => {
+  const optionsUpdate = (configOptions: unknown[]) => ({ notify: 'session/update', params: update('config_option_update', { configOptions }) }) as const;
+
+  it('names a model by the label in a grouped list, and by its id when the list gives none or drops the option', async () => {
+    const grouped = {
+      id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: 'm-1',
+      options: [{ group: 'g', name: 'Group', options: [{ value: 'm-0', name: 'Zero' }, { value: 'm-1', name: 'One' }] }, { name: 'nothing to pick here' }],
+    };
+    const bare = { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: 'm-2' };
+    const { adapter } = setup([
+      ...withOptions([select('model', 'model', 'm-0', ['m-0'])]),
+      { expect: 'session/prompt' },
+      optionsUpdate([grouped]),
+      optionsUpdate([bare]),
+      optionsUpdate([select('effort', 'thought_level', 'low', ['low'])]),
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    ]);
+    await adapter.start(taskStart());
+    const events = await turn(adapter, 'go');
+    expect(events.filter((e) => e.type.startsWith('model_'))).toEqual([
+      { type: 'model_drifted', from: { model: 'm-0', label: 'Zero' }, to: { model: 'm-1', label: 'One' } },
+      { type: 'model_drifted', from: { model: 'm-1' }, to: { model: 'm-2' } },
+    ]);
+  });
+
+  it('reports no change when the agent never had a model option', async () => {
+    const { adapter } = setup([
+      ...handshake(),
+      { expect: 'session/prompt' },
+      optionsUpdate([select('model', 'model', 'm-1', ['m-1'])]),
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    ]);
+    await adapter.start(taskStart());
+    const events = await turn(adapter, 'go');
+    expect(events.filter((e) => e.type.startsWith('model_'))).toEqual([]);
+  });
+});
+
+describe('AcpAdapter close', () => {
+  it('closes the session on dispose when the agent advertises session/close', async () => {
+    const { agent, adapter } = setup([
+      { expect: 'initialize', reply: initializedWith({ sessionCapabilities: { close: {} } }) },
+      { expect: 'session/new', reply: { sessionId: 'sess-1' } },
+      { expect: 'session/close', reply: {} },
+    ]);
+    await adapter.start(taskStart());
+    adapter.dispose();
+    await vi.waitFor(() => expect(agent.requests('session/close').map((m) => m.params)).toEqual([{ sessionId: 'sess-1' }]));
+    expect(agent.invalid).toEqual([]);
+  });
+
+  it('sends nothing on dispose when the agent does not advertise it', async () => {
+    const { agent, adapter } = setup(handshake());
+    await adapter.start(taskStart());
+    adapter.dispose();
+    expect(agent.requests('session/close')).toEqual([]);
   });
 });

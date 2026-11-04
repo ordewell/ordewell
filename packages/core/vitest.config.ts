@@ -29,6 +29,7 @@ export default defineConfig({
         'src/services/attemptKind.ts': floor(100, 100, 100),
         'src/services/harness/AcpAdapter.ts': floor(100, 87, 100),
         'src/services/harness/acpEvents.ts': floor(100, 100, 100),
+        'src/services/harness/acpOptions.ts': floor(100, 100, 100),
         'src/services/harness/acpOrdewell.ts': floor(100, 100, 100),
         'src/services/harness/acpProfiles.ts': floor(100, 100, 100),
         'src/services/harness/acpSchema.ts': floor(100, 100, 100),
