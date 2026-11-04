@@ -12,6 +12,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { npm as runNpm } from './npm.mjs';
 
 const MOCK_PROVIDER_PORT = 3799;
 
@@ -20,7 +21,7 @@ const MOCK_PROVIDER_PORT = 3799;
 process.env.ORDEWELL_NO_VERSION_CHECK = '1';
 
 const sh = (cmd, args, env) => spawnSync(cmd, args, { stdio: 'inherit', env: { ...process.env, ...env } }).status ?? 1;
-const npm = (...args) => sh('npm', args);
+const npm = (...args) => runNpm(args);
 
 function portOpen(port) {
   return new Promise((resolve) => {
@@ -77,7 +78,7 @@ function integrationTest() {
   }
   return headlessLinux
     ? sh('xvfb-run', ['-a', 'npm', 'run', 'test:integration', '-w', 'ordewell'], env)
-    : sh('npm', ['run', 'test:integration', '-w', 'ordewell'], env);
+    : runNpm(['run', 'test:integration', '-w', 'ordewell'], env);
 }
 
 /**

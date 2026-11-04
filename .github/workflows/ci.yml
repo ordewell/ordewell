@@ -334,12 +334,12 @@ jobs:
       - name: Build every package
         run: npm run build
 
-      # A selected run names its workspaces, `-ws` all of them. A shard of a
-      # small workspace may hold no file.
+      # A selected run names its workspaces, `-ws` all of them. A shard that
+      # found no test fails, as a run on Linux would.
       - name: Test on Windows
         env:
           WORKSPACE_ARGS: ${{ needs.scope.outputs.workspace_args }}
-        run: npm run test ${WORKSPACE_ARGS:--ws} --if-present -- --shard=${{ matrix.shard }}/4 --passWithNoTests
+        run: npm run test ${WORKSPACE_ARGS:--ws} --if-present -- --shard=${{ matrix.shard }}/4
 
   # What runs on Windows beside the suites: the verify scripts, the bench
   # harnesses, the offline planner loop and the VS Code integration test, each
