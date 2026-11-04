@@ -15,9 +15,6 @@
   folders a worktree linked from your checkout, such as `.claude`, and any a task
   linked itself, were emptied when it was removed. Every link now comes down
   first.
-- **An agent started through its PowerShell shim gets its arguments whole.** On
-  Windows an argument holding a `"`, an empty one, or one ending in `\` no longer
-  reaches an npm-installed agent split or lost.
 - **Stop stops a task's runner at once on Windows**, rather than five seconds
   later, when it had gone on writing to its worktree.
 - **A task is held for runner settings as it is on Linux**: not for your own

@@ -27,12 +27,6 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   saves a task's unlanded work. A worktree Ordewell leaves in place is now
   removed, as its notice says, with `rmdir /s`, which leaves a junction's folder
   alone.
-- **An agent started through its PowerShell shim gets its arguments whole.** A
-  prompt that spans lines cannot pass through an npm `.cmd`, so on Windows
-  Ordewell starts the `.ps1` npm writes beside it. Windows PowerShell split an
-  argument holding a `"` on its way to the agent, dropped an empty one, and let a
-  trailing `\` swallow the closing quote. Each argument now arrives as it was
-  sent.
 - **Stop stops a task's runner at once on Windows.** The polite kill Windows
   offers only asks a window to close, which no console agent has, so a stopped
   runner went on for five more seconds, writing to its worktree and holding it

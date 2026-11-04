@@ -227,7 +227,7 @@ that surface. Runner execution uses structured connectors and no longer needs
 tmux or per-task terminal windows (ADR-0025). The launch and kill seams are
 shared in core.
 
-Two things are **explicitly not claimed**:
+Three things are **explicitly not claimed**:
 
 1. **Codex's read-only guarantee on Windows is unverified.** `codexSandbox`
    correctly short-circuits its bubblewrap probe off Linux, and the approvals
@@ -245,17 +245,24 @@ Two things are **explicitly not claimed**:
    an argument naming a *defined* environment variable is expanded. Preferring a
    native executable skips cmd.exe and the hazard with it, which is the main
    reason the preference is global.
-**Argument fidelity on the PowerShell shim route is measured.** `-File`
-receives an ordinary argument vector that Node quotes by the CommandLineToArgvW
-inverse. On a Windows host, a multi-line argument containing `$(…)`, a backtick
-and `%PATH%` arrived byte-exact, with no expansion — so `%VAR%` expansion is a
-hazard this route avoids too. The shim then hands `$args` on to its program,
-and Windows PowerShell does that by quoting an argument with whitespace in it
-and escaping nothing: a `"` inside one split it, a trailing `\` escaped the
-closing quote, and an empty argument was dropped. Each argument is therefore
-handed to the shim already escaped for the program behind it
-(CommandLineToArgvW), which PowerShell's quoting leaves intact; with that,
-those arrive byte-exact too, through a shim as npm writes it.
+3. **A `"` on the PowerShell shim route.** A shim hands `$args` on to its
+   program, and Windows PowerShell 5.1 re-quotes each argument by its own
+   reckoning and escapes nothing: a `"` inside one is lost or splits it, an
+   empty argument is dropped, and a trailing `\` in one with whitespace escapes
+   the quote it is closed with. Escaping the arguments for the program behind
+   the shim was tried and taken back. A subplanner's system prompt, near
+   Windows' command-line ceiling already, went over it once its quotes were
+   escaped, and 5.1's quoting decisions are not ones an escape can always
+   satisfy: a space between two quotes still splits. What lifts both is handing
+   a long prompt over in a file rather than on the command line. Until then a
+   native executable, which this route never reaches, is the install that
+   keeps a prompt whole.
+
+**Argument fidelity on the PowerShell shim route is measured** for what it does
+carry. `-File` receives an ordinary argument vector that Node quotes by the
+CommandLineToArgvW inverse. On a Windows host, a multi-line argument containing
+`$(…)`, a backtick and `%PATH%` arrived byte-exact through a shim as npm writes
+it, with no expansion, so `%VAR%` expansion is a hazard this route avoids too.
 
 The Windows branches are tested on Linux through injected seams, and **CI runs
 every suite again on a Windows runner**: each package's vitest suites, the
@@ -283,4 +290,4 @@ lower-case drive letter.
 - 2026-10-17 — Codex's approvals on Windows read `on-request`, as ADR-0026 made them on 2026-10-10; the text still said `never`.
 - 2026-10-24 — a spawn throw is held through the one spawn-failure path in `Attempts`; the text named a `TaskOrchestrator.startTask` that no longer exists.
 - 2026-11-03 — the VS Code extension's activation, runner detection and login run on a Windows host.
-- 2026-11-03 — CI runs the suites on Windows, real plans ran there through to a merged handoff, a refused unforced `taskkill` is forced at once, and an argument goes to a PowerShell shim escaped for the program behind it.
+- 2026-11-03 — CI runs the suites on Windows, real plans ran there through to a merged handoff, a refused unforced `taskkill` is forced at once, and a `"` on the PowerShell shim route is recorded as unclaimed.

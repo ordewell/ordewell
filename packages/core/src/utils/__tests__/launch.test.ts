@@ -200,12 +200,10 @@ describe('planDirectLaunch on Windows', () => {
     expect(err.message).toContain('claude.cmd');
   });
 
-  // The shim hands `$args` on, which Windows PowerShell quotes and does not
-  // escape, so the argument goes in escaped for the program behind it.
-  it('takes the .ps1 beside a .cmd for an argument holding a quote, escaped for the program behind the shim', async () => {
-    const plan = await planDirectLaunch('claude', ['--model', 'say "hi"', '', 'C:\\dir with space\\'], win(['C:\\tools\\claude.cmd', 'C:\\tools\\claude.ps1']));
+  it('takes the .ps1 beside a .cmd for an argument holding a quote, and passes it whole', async () => {
+    const plan = await planDirectLaunch('claude', ['--model', 'say "hi"'], win(['C:\\tools\\claude.cmd', 'C:\\tools\\claude.ps1']));
     expect(plan.file).toContain('powershell.exe');
-    expect(plan.args.slice(-4)).toEqual(['--model', 'say \\"hi\\"', '""', 'C:\\dir with space\\\\']);
+    expect(plan.args[plan.args.length - 1]).toBe('say "hi"');
   });
 
   it('leaves a single-line invocation on the batch route', async () => {
@@ -418,15 +416,17 @@ describe('ExecutableNotFoundError', () => {
   });
 });
 
-// What the unit cases above assume, run for real: a shim as npm writes it, in
-// the Windows PowerShell this route starts, handing `$args` to node.
+// What ADR-0010 claims of the PowerShell route, run for real: a shim as npm
+// writes it, in the Windows PowerShell the route starts, handing `$args` to
+// node. A `"` is not among these: PowerShell passes `$args` on without
+// escaping one, which the ADR records as unclaimed.
 describe.runIf(process.platform === 'win32')('the PowerShell route through a real shim', () => {
-  it('carries quotes, trailing backslashes, empty arguments and line breaks to the program whole', async () => {
+  it('carries line breaks, $(…), a backtick and %PATH% to the program whole', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ordewell-ps1-'));
     try {
       writeFileSync(join(dir, 'argv.js'), 'process.stdout.write(JSON.stringify(process.argv.slice(2)));');
       writeFileSync(join(dir, 'agent.ps1'), '$basedir = Split-Path $MyInvocation.MyCommand.Definition -Parent\r\n& "node" "$basedir/argv.js" $args\r\nexit $LASTEXITCODE\r\n');
-      const args = ['-p', 'Fix the "login button" now', 'a"b', 'x\\"y', 'ends with \\', '', 'multi\nline "q" $(calc) `t` %PATH%'];
+      const args = ['-p', 'multi\nline $(calc) `t` %PATH%', 'two words'];
       const plan = await planDirectLaunch('agent', args, { resolvePath: async () => dir });
       expect(plan.file).toContain('powershell.exe');
       expect(JSON.parse(execFileSync(plan.file, plan.args, { encoding: 'utf8' }))).toEqual(args);

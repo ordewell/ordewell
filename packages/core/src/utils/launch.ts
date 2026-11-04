@@ -283,33 +283,6 @@ function quoteForCmd(arg: string): string {
   return `${quoted}${'\\'.repeat(backslashes * 2)}"`;
 }
 
-/**
- * What an argument is handed to a `.ps1` shim as, so the program behind the
- * shim reads it whole. A shim passes `$args` on to a native command, and
- * Windows PowerShell does that by quoting an argument that holds whitespace and
- * escaping nothing: a `"` inside one ended the quoting and split the argument,
- * a trailing `\` escaped the quote PowerShell closed it with, and an empty
- * argument was dropped. So each goes in already escaped by the rules the
- * program reads its command line by (CommandLineToArgvW), which the quoting
- * PowerShell adds leaves intact. Measured on Windows PowerShell 5.1, the one
- * this route starts (`defaultPowerShell`); every `"` is escaped, so PowerShell
- * counts none of them and quotes exactly an argument with whitespace.
- */
-function forPowerShellShim(arg: string): string {
-  if (arg === '') return '""';
-  let escaped = '';
-  let backslashes = 0;
-  for (const ch of arg) {
-    if (ch === '\\') {
-      backslashes++;
-      continue;
-    }
-    escaped += ch === '"' ? `${'\\'.repeat(backslashes * 2 + 1)}"` : `${'\\'.repeat(backslashes)}${ch}`;
-    backslashes = 0;
-  }
-  return escaped + '\\'.repeat(/\s/.test(arg) ? backslashes * 2 : backslashes);
-}
-
 /** The verbatim command line cmd.exe receives after `/d /s /c`, before wrapping. */
 export function windowsCommandLine(file: string, args: string[]): string {
   return [file, ...args].map(quoteForCmd).join(' ');
@@ -447,7 +420,7 @@ function planFor(found: FoundExecutable, args: string[], deps: LaunchDeps): Laun
   // evaluation: the script path and the arguments after it are strings, never
   // PowerShell source, so a prompt containing `$(…)` or a backtick is data.
   const shell = (deps.powerShell ?? defaultPowerShell)();
-  const psArgs = [...POWERSHELL_FLAGS, found.file, ...args.map(forPowerShellShim)];
+  const psArgs = [...POWERSHELL_FLAGS, found.file, ...args];
   const length = windowsCommandLine(shell, psArgs).length;
   return length > WINDOWS_MAX_COMMAND_LINE
     ? { tooLong: length, limit: WINDOWS_MAX_COMMAND_LINE }
