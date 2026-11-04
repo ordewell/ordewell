@@ -7,6 +7,7 @@ import { plannerNotReadyFor } from '../plannerReadiness';
 import { CLAUDE_CODE_MANIFEST } from '../../plugins/builtin/claude-code.manifest';
 import { CODEX_MANIFEST } from '../../plugins/builtin/codex.manifest';
 import { OPENCODE_MANIFEST } from '../../plugins/builtin/opencode.manifest';
+import { COPILOT_CLI_MANIFEST } from '../../plugins/builtin/copilot-cli.manifest';
 import type { LaunchDeps } from '../../utils/launch';
 
 type Answer = { code: number; stdout?: string; stderr?: string };
@@ -155,6 +156,16 @@ describe('readRunnerAuth', () => {
     const exec: RunnerAuthExec = vi.fn(async () => ({ code: 0, stdout: '', stderr: '' }));
 
     expect(await readRunnerAuth(OPENCODE_MANIFEST, { exec })).toEqual({ state: 'unknown' });
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  // Copilot has `copilot login` and no status command, so nothing can be asked:
+  // the verdict stays unknown until a failed turn says otherwise, and the login
+  // command is still offered for the surfaces that run it.
+  it('runs nothing for a runner with a login but no status command, and offers its login', async () => {
+    const exec: RunnerAuthExec = vi.fn(async () => ({ code: 0, stdout: '', stderr: '' }));
+
+    expect(await readRunnerAuth(COPILOT_CLI_MANIFEST, { exec })).toEqual({ state: 'unknown', loginCommand: ['copilot', 'login'] });
     expect(exec).not.toHaveBeenCalled();
   });
 
@@ -472,6 +483,21 @@ describe('signedOutFromFailure', () => {
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
+  });
+
+  it("reads the ACP agent's auth-required error as Copilot signed out, with `copilot login`", () => {
+    expect(signedOutFromFailure(COPILOT_CLI_MANIFEST, 'Authentication required')).toEqual({
+      state: 'signed-out',
+      loginCommand: ['copilot', 'login'],
+      detail: 'not logged in',
+    });
+    // The adapter's own words for the same error, which is what a task's failure carries.
+    expect(signedOutFromFailure(COPILOT_CLI_MANIFEST, 'GitHub Copilot CLI is not signed in. Run `copilot login`.')?.state).toBe('signed-out');
+  });
+
+  it('leaves an unrelated Copilot failure unjudged', () => {
+    expect(signedOutFromFailure(COPILOT_CLI_MANIFEST, 'gh: You are not logged in to any GitHub hosts.')).toBeUndefined();
+    expect(signedOutFromFailure(COPILOT_CLI_MANIFEST, 'Model not available')).toBeUndefined();
   });
 
   it('leaves an unrelated failure, and a runner that declares no login, unjudged', () => {

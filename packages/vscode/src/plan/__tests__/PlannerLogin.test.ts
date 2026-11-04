@@ -51,7 +51,7 @@ function harness(options: HarnessOptions = {}) {
   const verdict = options.verdict ?? (() => SIGNED_OUT_CLAUDE);
   const deps = {
     runnerInstallation: {
-      plannerUsability: vi.fn(async () => {
+      runnerUsability: vi.fn(async () => {
         probe += 1;
         options.afterProbe?.(probe, close);
         return { usable: true, auth: verdict(probe) };
@@ -98,7 +98,7 @@ describe('loginPlanner', () => {
 
     await loginPlanner(h.deps);
 
-    expect(h.deps.runnerInstallation.plannerUsability).toHaveBeenCalledWith('claude-code');
+    expect(h.deps.runnerInstallation.runnerUsability).toHaveBeenCalledWith('claude-code');
     expect(h.createTerminal).toHaveBeenCalledWith({
       name: 'Claude Code login',
       cwd: '/ws',
@@ -168,12 +168,24 @@ describe('loginPlanner', () => {
 
     await loginPlanner(h.deps, 'codex');
 
-    expect(h.deps.runnerInstallation.plannerUsability).toHaveBeenCalledWith('codex');
+    expect(h.deps.runnerInstallation.runnerUsability).toHaveBeenCalledWith('codex');
     expect(h.createTerminal).toHaveBeenCalledWith(expect.objectContaining({ name: 'Codex login' }));
     expect(h.terminal.sent).toEqual(['codex login']);
     expect(h.deps.config.aiProvider).toBe('claude-code');
     expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner: 'codex', ok: true });
     expect(h.deps.notifications.info).toHaveBeenCalledWith('Signed in to Codex.');
+  });
+
+  it("runs a task-only agent's own login, though it cannot plan", async () => {
+    // Copilot has a login but no status command, so the sign-in cannot be
+    // confirmed by a probe; the terminal still gets the manifest's argv.
+    const h = harness({ verdict: () => ({ state: 'unknown', loginCommand: ['copilot', 'login'] }), afterProbe: (probe, close) => { if (probe >= 2) close(); } });
+
+    await loginPlanner(h.deps, 'copilot-cli');
+
+    expect(h.createTerminal).toHaveBeenCalledWith(expect.objectContaining({ name: 'GitHub Copilot CLI login' }));
+    expect(h.terminal.sent).toEqual(['copilot login']);
+    expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner: 'copilot-cli', ok: false, message: 'The terminal closed before sign-in finished.' });
   });
 
   it('says so instead of opening a terminal for an agent it has no login for', async () => {
@@ -203,7 +215,7 @@ describe('loginPlanner', () => {
 
   it('names why an installed agent is not usable instead of saying it has no login', async () => {
     const h = harness();
-    vi.mocked(h.deps.runnerInstallation.plannerUsability).mockResolvedValue({ usable: false, reason: 'claude is not directly spawnable' });
+    vi.mocked(h.deps.runnerInstallation.runnerUsability).mockResolvedValue({ usable: false, reason: 'claude is not directly spawnable' });
 
     await loginPlanner(h.deps, 'claude-code');
 
@@ -216,7 +228,7 @@ describe('loginPlanner', () => {
 
   it('ends the pending state when the first status probe throws', async () => {
     const h = harness();
-    vi.mocked(h.deps.runnerInstallation.plannerUsability).mockRejectedValueOnce(new Error('probe failed'));
+    vi.mocked(h.deps.runnerInstallation.runnerUsability).mockRejectedValueOnce(new Error('probe failed'));
 
     await loginPlanner(h.deps, 'claude-code');
 
@@ -229,7 +241,7 @@ describe('loginPlanner', () => {
 
   it('does not blame the terminal when a poll probe throws', async () => {
     const h = harness();
-    vi.mocked(h.deps.runnerInstallation.plannerUsability)
+    vi.mocked(h.deps.runnerInstallation.runnerUsability)
       .mockResolvedValueOnce({ usable: true, auth: SIGNED_OUT_CLAUDE })
       .mockRejectedValueOnce(new Error('probe failed'));
 
@@ -247,7 +259,7 @@ describe('loginPlanner', () => {
 
     await loginPlanner(h.deps);
 
-    expect(h.deps.runnerInstallation.plannerUsability).toHaveBeenCalledTimes(1);
+    expect(h.deps.runnerInstallation.runnerUsability).toHaveBeenCalledTimes(1);
     expect(h.ended()).toEqual({
       type: 'plannerLoginEnded', runner: 'claude-code', ok: false, message: 'The login terminal could not be opened.',
     });
@@ -260,7 +272,7 @@ describe('loginPlanner', () => {
 
     await loginPlanner(h.deps, 'not-a-runner');
 
-    expect(h.deps.runnerInstallation.plannerUsability).not.toHaveBeenCalled();
+    expect(h.deps.runnerInstallation.runnerUsability).not.toHaveBeenCalled();
     expect(h.createTerminal).not.toHaveBeenCalled();
     expect(h.deps.post).not.toHaveBeenCalled();
     expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining('not-a-runner'));
@@ -271,7 +283,7 @@ describe('loginPlanner', () => {
 
     await loginPlanner(h.deps);
 
-    expect(vi.mocked(h.deps.runnerInstallation.plannerUsability).mock.calls.length).toBe(2);
+    expect(vi.mocked(h.deps.runnerInstallation.runnerUsability).mock.calls.length).toBe(2);
     expect(h.deps.sendState).not.toHaveBeenCalled();
     expect(h.ended()).toEqual({
       type: 'plannerLoginEnded', runner: 'claude-code', ok: false, message: 'The terminal closed before sign-in finished.',

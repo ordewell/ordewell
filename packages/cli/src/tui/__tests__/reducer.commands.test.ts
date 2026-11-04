@@ -97,6 +97,17 @@ describe('login', () => {
     expect(state.plannerProvider).toBe('claude-code');
   });
 
+  it("signs in a task-only agent through its manifest's login, though no probe can confirm it", () => {
+    const copilot: RunnerView = {
+      id: 'copilot-cli', name: 'GitHub Copilot CLI', enabled: true,
+      auth: { state: 'unknown', loginCommand: ['copilot', 'login'] },
+    };
+    const { state, effects } = run('/login copilot-cli', { plannerProvider: 'claude-code', runners: [claude, copilot], runnersKnown: true });
+
+    expect(effects).toEqual([{ type: 'plannerLogin', command: ['copilot', 'login'], label: 'GitHub Copilot CLI' }]);
+    expect(state.plannerProvider).toBe('claude-code');
+  });
+
   it('matches a named runner by its display label too', () => {
     const { effects } = run('/login Claude Code', { plannerProvider: 'codex', runners: [claude, codex], runnersKnown: true });
 

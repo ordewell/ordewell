@@ -1,4 +1,4 @@
-import { COPILOT_CLI_MANIFEST } from '../../plugins/builtin/copilot-cli.manifest';
+import { COPILOT_ACP_ARGS, COPILOT_CLI_MANIFEST } from '../../plugins/builtin/copilot-cli.manifest';
 import { ORDEWELL_MCP_SERVER_NAME } from '../mcp/clientConfig';
 import type { AcpProfile } from './acpProfiles';
 
@@ -12,7 +12,7 @@ const SERVER_PREFIX = `${ORDEWELL_MCP_SERVER_NAME}-`;
  */
 export const COPILOT_CLI_PROFILE: AcpProfile = {
   manifest: COPILOT_CLI_MANIFEST,
-  args: ['--acp', '--stdio'],
+  args: COPILOT_ACP_ARGS,
   minVersion: '1.0.105',
   // Copilot loads AGENTS.md from each directory this variable lists, so the
   // contract reaches it from a private directory and never the worktree. It

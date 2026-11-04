@@ -106,6 +106,7 @@ describe('with no saved runner choice, the installed agents are the enabled runn
       runner,
       runnerInstallation: {
         plannerUsability: async (id: RunnerId) => (await usability()) ?? { usable: installed.includes(id) },
+        runnerUsability: async (id: RunnerId) => (await usability()) ?? { usable: installed.includes(id) },
         filterInstalled: async (ids: string[]) => ids.filter((id) => installed.includes(id)),
       },
       codexSandbox: { ensure: async () => undefined, refresh: async () => undefined },
