@@ -2,6 +2,17 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 /**
+ * Remove a test's scratch directory, waiting out whatever still holds it.
+ * Windows removes no directory a process works in, and a process tree it was
+ * told to end takes a moment to go. The retries back off linearly, about five
+ * seconds in all, and only a held directory waits. Async, so the event loop is
+ * free to run the kill that lets it go.
+ */
+export function removeDir(dir: string): Promise<void> {
+  return fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+}
+
+/**
  * The variables that make `home` the user's home, for a test that gives this
  * process, or a child, a home of its own.
  *

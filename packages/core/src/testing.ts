@@ -32,7 +32,7 @@ import type { EventStore } from './services/eventStore';
 import { isWithin, type NodePath, type TreeEvent, type TreeFact } from './models/TreeEvent';
 import { handoffOf, integrationBranchFor, noRemoval, SELF_REPO } from './services/isolationRecord';
 
-export { homeEnv, pathWithFake, setEnv } from './testEnv';
+export { homeEnv, pathWithFake, removeDir, setEnv } from './testEnv';
 
 /**
  * Let an already-queued promise chain run to its next await before asserting,
