@@ -382,6 +382,20 @@ describe('AcpAdapter turn', () => {
     expect(await turn(adapter, 'two')).toEqual([{ type: 'error', message: 'Fake Agent is not signed in. Run `fake-agent login`.' }]);
   });
 
+  it('ends a turn whose prompt answer names no stop reason as an error, keeping what the agent said, never as a normal end', async () => {
+    const { adapter } = setup([
+      ...handshake(),
+      { expect: 'session/prompt' },
+      { notify: 'session/update', params: update('agent_message_chunk', { content: text('Half done.') }) },
+      { answer: {}, to: 'session/prompt' },
+    ]);
+    await adapter.start(taskStart());
+    const events = await turn(adapter, 'go');
+
+    expect(events.map((e) => e.type)).toEqual(['assistant_text_delta', 'assistant_text', 'error']);
+    expect(events[2]).toEqual({ type: 'error', message: expect.stringMatching(/^The agent ended the turn with an answer Ordewell cannot read: .*stopReason/) });
+  });
+
   it('ends a turn with the exit\'s last words when the agent dies mid-turn', async () => {
     const { adapter, spawned } = setup([
       ...handshake(),
@@ -650,7 +664,7 @@ describe('AcpAdapter permissions', () => {
       ...handshake(),
       { expect: 'session/prompt' },
       { run: () => spawned.processes[0].emitStdout(`${JSON.stringify({ jsonrpc: '2.0', id: 77, method: 'session/request_permission', params: permissionParams('Edit src/a.ts') })}\n`) },
-      { run: () => spawned.processes[0].emitStdout(`${JSON.stringify({ jsonrpc: '2.0', method: '$/cancel_request', params: { id: 77 } })}\n`) },
+      { run: () => spawned.processes[0].emitStdout(`${JSON.stringify({ jsonrpc: '2.0', method: '$/cancel_request', params: { requestId: 77 } })}\n`) },
       { notify: 'session/update', params: update('agent_message_chunk', { content: text('Never mind.') }) },
       { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
     ]);
@@ -1274,6 +1288,38 @@ describe('AcpAdapter config options held to the plan (B2)', () => {
     await adapter.start(taskStart('ask', { model: 'm-1', flags: effortFlags('high') }));
     const events = await turn(adapter, 'go');
     expect(events[0]).toEqual({ type: 'command_output', text: 'Fake Agent did not take the effort "high": it is on "low".' });
+  });
+
+  describe('held by the list the agent ends on, since a later change can move one already set', () => {
+    const moved = (): FakeAcpStep[] => [
+      ...withOptions([select('model', 'model', 'm-0', ['m-0', 'm-1']), select('effort', 'thought_level', 'low', ['low', 'high'])]),
+      { expect: 'session/set_config_option', reply: { configOptions: [select('model', 'model', 'm-1', ['m-0', 'm-1']), select('effort', 'thought_level', 'low', ['low', 'high'])] } },
+      // The effort is taken, and the model the agent took a moment ago goes back.
+      { expect: 'session/set_config_option', reply: { configOptions: [select('model', 'model', 'm-0', ['m-0', 'm-1']), select('effort', 'thought_level', 'high', ['low', 'high'])] } },
+      { expect: 'session/prompt', reply: { stopReason: 'end_turn' } },
+    ];
+
+    it('reports a model an effort change moved, in the first turn, for a task that may run on', async () => {
+      const { adapter } = setup(moved());
+      await adapter.start(taskStart('ask', { model: 'm-1', flags: effortFlags('high') }));
+      const events = await turn(adapter, 'go');
+      expect(events[0]).toEqual({ type: 'model_drifted', from: { model: 'm-1' }, to: { model: 'm-0' } });
+    });
+
+    it('fails a read-only task whose model an effort change moved', async () => {
+      const { adapter } = setup(moved(), ROLES_PROFILE);
+      await expect(adapter.start(readOnlyStart({ model: 'm-1', flags: { ...resolveTaskRunnerFlags(ROLES_MANIFEST, { mode: 'look' }), effort: 'high' } })))
+        .rejects.toThrow('Fake Agent did not take the model "m-1": it is on "m-0".');
+    });
+
+    it('fails a task whose mode a model change moved', async () => {
+      const { adapter } = setup([
+        ...withOptions([select('mode', 'mode', 'default', ['default', 'ask']), select('model', 'model', 'm-0', ['m-0', 'm-1'])]),
+        { expect: 'session/set_config_option', reply: { configOptions: [select('mode', 'mode', 'ask', ['default', 'ask']), select('model', 'model', 'm-0', ['m-0', 'm-1'])] } },
+        { expect: 'session/set_config_option', reply: { configOptions: [select('mode', 'mode', 'default', ['default', 'ask']), select('model', 'model', 'm-1', ['m-0', 'm-1'])] } },
+      ], SESSION_MODE_PROFILE);
+      await expect(adapter.start(taskStart('ask', { model: 'm-1' }))).rejects.toThrow('Fake Agent did not take the mode "ask": it is on "default".');
+    });
   });
 
   it('fails when the agent has no effort setting for an effort the plan names', async () => {

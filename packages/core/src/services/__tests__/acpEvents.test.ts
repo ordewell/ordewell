@@ -252,7 +252,7 @@ describe('endTurn', () => {
       expect(endTurn(newTurn({ source: 's' }), 'end_turn', undefined, true)).toEqual([{ type: 'turn_end', interrupted: true }]);
     });
 
-    it.each(['max_tokens', 'max_turn_requests', 'refusal', 'something_new'])('marks %s after a cancel interrupted', (reason) => {
+    it.each<string | { unreadable: string }>(['max_tokens', 'max_turn_requests', 'refusal', 'something_new', { unreadable: 'stopReason: Required' }])('marks %o after a cancel interrupted', (reason) => {
       const events = endTurn(newTurn({ source: 's' }), reason, undefined, true);
       expect(events[events.length - 1]).toEqual({ type: 'turn_end', interrupted: true });
       expect(events.some((e) => e.type === 'error')).toBe(false);

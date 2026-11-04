@@ -169,8 +169,11 @@ const NOTE: Readonly<Record<string, string>> = {
  * agent can answer `end_turn` to a cancel that crossed its own finish, and
  * the turn was still interrupted. A reason Ordewell does not know ends the
  * turn the way `end_turn` does, with the reason named, since the agent did stop.
+ * An answer with no stop reason to read (`unreadable`, the parse error) says
+ * nothing of why the agent stopped, so it ends the turn as an error rather
+ * than passing for a normal end.
  */
-export function endTurn(turn: AcpTurn, stopReason: string, usage: AcpTokenUsage | null | undefined, cancelSent: boolean): AgentEvent[] {
+export function endTurn(turn: AcpTurn, stopReason: string | { unreadable: string }, usage: AcpTokenUsage | null | undefined, cancelSent: boolean): AgentEvent[] {
   const events: AgentEvent[] = [];
 
   // A call still open has no result coming: the turn it belonged to is over.
@@ -186,6 +189,8 @@ export function endTurn(turn: AcpTurn, stopReason: string, usage: AcpTokenUsage 
 
   if (cancelSent || stopReason === 'cancelled') {
     events.push({ type: 'turn_end', interrupted: true });
+  } else if (typeof stopReason === 'object') {
+    events.push({ type: 'error', message: `The agent ended the turn with an answer Ordewell cannot read: ${stopReason.unreadable}` });
   } else if (stopReason === 'refusal') {
     // An error alone ends the turn, as for the other runners.
     events.push({ type: 'error', message: 'The agent refused to continue this turn.' });
