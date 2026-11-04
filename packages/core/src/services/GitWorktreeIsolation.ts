@@ -142,6 +142,17 @@ function resolvesAsNamed(base: string, p: string): boolean {
   }
 }
 
+/** Every link below `root`, relative to it, found without entering one. */
+function linkPathsUnder(root: string, dir = root): string[] {
+  let entries: fs.Dirent[];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
+  return entries.flatMap((entry) => {
+    const full = path.join(dir, entry.name);
+    if (entry.isSymbolicLink()) return [path.relative(root, full)];
+    return entry.isDirectory() && !(dir === root && entry.name === '.git') ? linkPathsUnder(root, full) : [];
+  });
+}
+
 function firstLine(text: string): string {
   return text.split(/\r?\n/, 1)[0].trim();
 }
@@ -1951,9 +1962,13 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     // path such as `.env` in an exclude pathspec makes `add` refuse.
     const prefix = await this.prefixOf(repo);
     const excludes: string[] = [];
-    for (const name of entry.linked) {
-      if ((await this.tryGit(entry.worktree, ['check-ignore', '-q', '--', prefix + name])).ok) continue;
-      excludes.push(`:(exclude,literal)${(prefix + name).replace(/\\/g, '/')}`);
+    // On Windows git stages a junction as the directory it leads to, so one a
+    // task left anywhere would commit a folder of the user's: every link there
+    // stays out, as git elsewhere would keep it a link and not its contents.
+    const links = [...entry.linked.map((name) => prefix + name), ...(this.platform === 'win32' ? linkPathsUnder(entry.worktree) : [])];
+    for (const name of new Set(links.map((link) => link.replace(/\\/g, '/')))) {
+      if ((await this.tryGit(entry.worktree, ['check-ignore', '-q', '--', name])).ok) continue;
+      excludes.push(`:(exclude,literal)${name}`);
     }
     await this.git(entry.worktree, ['add', '-A', '--', '.', ...excludes]);
     const staged = await this.tryGit(entry.worktree, ['diff', '--cached', '--quiet']);
@@ -2163,6 +2178,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     // its top for a workspace in a folder of the repository: Git for Windows
     // removes a junction by walking into it, so one missed empties the
     // user's own folder.
+    // Not prefixOf, which throws: a repository git no longer reads still has its worktree removed.
     const prefix = (await this.tryGit(repo.root, ['rev-parse', '--show-prefix'])).stdout.trim();
     for (const base of new Set([dir, path.join(dir, prefix)])) {
       for (const name of new Set([...linked, ...installDirs(base)])) {
@@ -2175,6 +2191,10 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
         if (LINKED_ARTIFACTS.has(name) || isEnvFile(name)) this.unlinkIfLink(path.join(base, name));
       }
     }
+    // On Windows every link goes, not only the ones the bootstrap made: a task
+    // can leave a junction anywhere in its worktree, and git would empty what it
+    // leads to. The walk enters no link, so it reaches nothing of the user's.
+    if (this.platform === 'win32' && resolvesAsNamed(this.runRoot(run), dir)) this.unlinkLinksUnder(dir);
     await this.tryGit(repo.root, ['worktree', 'remove', '--force', dir]);
     if (fs.existsSync(dir) && isInside(this.runRoot(run), dir)) {
       clearImmutableFlags(this.platform, dir);

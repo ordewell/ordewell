@@ -145,6 +145,14 @@ function crashAt(at: (args: string[], cwd: string | undefined) => boolean): { ex
 }
 
 const roots: string[] = [];
+
+/** A setup command sh and cmd.exe run alike: node on a script of its own. */
+function setupCommand(script: string): string {
+  const scripts = realpath(mkdtempSync(join(tmpdir(), 'ordewell-setup-')));
+  roots.push(scripts);
+  writeFileSync(join(scripts, 'setup.cjs'), script);
+  return `"${process.execPath}" "${join(scripts, 'setup.cjs')}"`;
+}
 function repo(files?: Record<string, string>): string {
   const root = makeRepo(files);
   roots.push(root);
@@ -1562,6 +1570,29 @@ describe.skipIf(!hasGit)('WorktreeIsolation bootstrap', () => {
     expect(readFileSync(join(workspace, '.claude', 'settings.local.json'), 'utf8')).toBe('{}\n');
   });
 
+  // A junction, which Windows makes with no privilege, is a directory to Git for
+  // Windows: its removal walked into one, and a rescue commit staged what it held.
+  it('neither empties nor keeps a folder of the user\'s a task left a link to', async () => {
+    const root = repo();
+    const theirs = realpath(mkdtempSync(join(tmpdir(), 'ordewell-wt-theirs-')));
+    roots.push(theirs);
+    writeFileSync(join(theirs, 'notes.md'), 'precious\n');
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(root);
+    const { cwd } = await iso.prepare(task(1, 'Plants a link'), run);
+    mkdirSync(join(cwd, 'refs'));
+    symlinkSync(theirs, join(cwd, 'refs', 'notes'), 'junction');
+    writeFileSync(join(cwd, 'work.txt'), 'never landed\n');
+
+    const removal = await iso.release(run, 'task-1', { keep: false });
+
+    expect(existsSync(cwd)).toBe(false);
+    expect(readFileSync(join(theirs, 'notes.md'), 'utf8')).toBe('precious\n');
+    const kept = git(root, 'ls-tree', '-r', '--name-only', removal.preserved[0].branch).split('\n');
+    expect(kept).toContain('work.txt');
+    expect(kept).not.toContain('refs/notes/notes.md');
+  });
+
   it('skips artifacts that are not present in the main worktree', async () => {
     const root = repo();
     const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
@@ -1635,7 +1666,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation bootstrap', () => {
 
   it('a failing setup command falls back to the default links, wiping what it left half-done', async () => {
     const root = repoWithLocalState();
-    const iso = create({ config: fakeConfig({ worktreeSetupCommand: 'mkdir -p node_modules/half && echo x >> README.md && exit 3' }) });
+    const iso = create({ config: fakeConfig({ worktreeSetupCommand: setupCommand("const fs = require('fs'); fs.mkdirSync('node_modules/half', { recursive: true }); fs.appendFileSync('README.md', 'x\\n'); process.exit(3);") }) });
     const run = await iso.startRun(root);
     const { cwd, setupFailed } = await iso.prepare(task(1, 'Broken setup'), run);
 
@@ -1736,7 +1767,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation bootstrap of a workspace install', (
 
   it('with a setup command links nothing by default', async () => {
     const root = installedWorkspace('node_modules/\n');
-    const iso = create({ config: fakeConfig({ worktreeSetupCommand: 'true' }) });
+    const iso = create({ config: fakeConfig({ worktreeSetupCommand: 'exit 0' }) });
     const run = await iso.startRun(root);
     const { cwd } = await iso.prepare(task(1, 'Setup'), run);
     expect(lexists(join(cwd, 'node_modules'))).toBe(false);
@@ -2641,14 +2672,6 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
       expect(tree('infra')).not.toContain('.envrc');
       expect(existsSync(join(dir, 'web', 'node_modules', 'left-pad'))).toBe(true);
     });
-
-    /** A setup command sh and cmd.exe run alike: node on a script of its own. */
-    function setupCommand(script: string): string {
-      const scripts = realpath(mkdtempSync(join(tmpdir(), 'ordewell-setup-')));
-      roots.push(scripts);
-      writeFileSync(join(scripts, 'setup.cjs'), script);
-      return `"${process.execPath}" "${join(scripts, 'setup.cjs')}"`;
-    }
 
     it('runs the setup command once per isolated repository, in its worktree, naming the repository', async () => {
       const dir = group();
