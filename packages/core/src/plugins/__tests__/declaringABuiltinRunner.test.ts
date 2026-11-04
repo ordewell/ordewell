@@ -55,7 +55,7 @@ vi.mock('../../services/harness/connectors', async (importOriginal) => {
 describe('a built-in runner declared by manifest and connector only', () => {
   it('is in the runner list core exposes, after the shipped runners', () => {
     const ids = new RunnerRegistry().list().map((entry) => entry.manifest.name);
-    expect(ids).toEqual(['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'acme', 'tasker']);
+    expect(ids).toEqual(['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent', 'acme', 'tasker']);
   });
 
   it('can plan: it is a harness planner, labelled from its manifest', () => {
