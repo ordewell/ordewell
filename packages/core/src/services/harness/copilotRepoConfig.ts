@@ -1,7 +1,7 @@
 import { readdirSync } from 'fs';
 import * as path from 'path';
 import {
-  NO_SERVERS, insideOnDisk, readText, repoLevels, repoRoot, withImports,
+  NO_SERVERS, readInstruction, repoLevels, repoRoot, withImports,
   type InstructionFile, type RepoConfigReader,
 } from './repoConfig';
 
@@ -51,8 +51,7 @@ export const COPILOT_REPO_CONFIG: RepoConfigReader = {
     const plain = (file: string) => {
       if (seen.has(file)) return;
       seen.add(file);
-      const text = readText(file);
-      if (text !== undefined) files.push({ path: path.relative(workspace, file), text });
+      readInstruction(file, at, files);
     };
     for (const dir of repoLevels(workspace)) {
       for (const { name, imports } of LEVEL_FILES) {
@@ -60,8 +59,7 @@ export const COPILOT_REPO_CONFIG: RepoConfigReader = {
         else plain(path.join(dir, name));
       }
       if (dir !== root && dir !== path.resolve(workspace)) continue;
-      // A link out of the repository would hand the planner a file of the user's.
-      for (const file of modularFiles(path.join(dir, MODULAR_DIR))) if (insideOnDisk(root, file)) plain(file);
+      for (const file of modularFiles(path.join(dir, MODULAR_DIR))) plain(file);
     }
     return files;
   },
