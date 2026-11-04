@@ -247,7 +247,9 @@ describe('the hooks a landing would run on this host', () => {
     await expect(hooksLandingWouldRun(GIT, host)).resolves.toEqual(['post-merge']);
   });
 
-  it('leaves out what git would not run, and what a landing never fires', async () => {
+  // Git for Windows has no executable bit to read: it runs, or fails the
+  // landing on, any file a hook's name finds, so there this one is a hook.
+  it.skipIf(process.platform === 'win32')('leaves out what git would not run, and what a landing never fires', async () => {
     const { host } = setup();
     mkdirSync(join(host, '.git', 'hooks'), { recursive: true });
     writeFileSync(join(host, '.git', 'hooks', 'pre-commit'), 'not executable\n');

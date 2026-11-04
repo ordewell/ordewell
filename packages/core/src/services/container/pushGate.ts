@@ -80,7 +80,9 @@ async function hooksWritten(invoker: GitInvoker, repo: string, base: string, sna
 
 function realOf(path: string): string {
   try {
-    return realpathSync(path);
+    // Native, to be read against git's toplevel: on Windows the JS one keeps
+    // an 8.3 short name, which `relative` takes for another folder.
+    return realpathSync.native(path);
   } catch {
     return path;
   }
