@@ -176,7 +176,9 @@ own tools away. Read
 or connects MCP servers only in a folder it trusts. Read
 `services/harness/cursorProfile.ts` if its first report of an MCP call does not
 name the tool, or it reports no version: a profile then sets no `minVersion`,
-since the check refuses an agent that does not say its version.
+since the check refuses an agent that does not say its version. Read it too if
+the only list that takes your agent's own tools away is a settings file in its
+home of configuration.
 
 - **Native servers only.** The agent's own maintainers must ship its ACP
   server. A third-party shim in front of an agent does not qualify
@@ -218,8 +220,9 @@ since the check refuses an agent that does not say its version.
   only. To claim the planner role or a read-only mode (ADR-0060 R3), you need
   all three of these:
   - a `restricted` control that takes the agent's own write and shell tools
-    away, or, where the agent has no list to take them from, makes it ask
-    before every use, as Qwen Code's `--approval-mode default` and Cline's
+    away, as Cursor's deny list in a settings file of the start's own does,
+    or, where the agent has no list to take them from, makes it ask before
+    every use, as Qwen Code's `--approval-mode default` and Cline's
     `--auto-approve false` do; either shown to hold under ACP;
   - Ordewell's refusal of every edit, delete, move and execute request, which
     the adapter already does;
@@ -233,8 +236,8 @@ since the check refuses an agent that does not say its version.
   directory of its own and asks for every path in the worktree. Record a hook
   planted in the worktree running on a writable start and not on a restricted
   one, as Copilot's `repo-hooks.jsonl`, `planner.jsonl` and `read-only.jsonl`
-  do, Qwen Code's `planted-hook.jsonl`, and Cline's `repo-hooks.jsonl` and
-  `read-only-hooks.jsonl`. A variable that moves the agent's config home is
+  do, Qwen Code's and Cursor's `planted-hook.jsonl`, and Cline's
+  `repo-hooks.jsonl` and `read-only-hooks.jsonl`. A variable that moves the agent's config home is
   not that switch unless a recording shows it: Cline's `CLINE_DIR` left the
   worktree's hooks running (`repo-hooks-cline-dir.jsonl`).
 
@@ -253,8 +256,13 @@ since the check refuses an agent that does not say its version.
   token in it, and name a script's interpreter in the setting that runs it,
   since nothing there is executable. List in `restricted.configDirs` the
   variables that move the agent's config home, so the user's global rules,
-  hooks and skills do not load. Both are a layer under Ordewell's refusal by
-  kind, and the role still needs the recording above.
+  hooks and skills do not load; a file named `<VARIABLE>/<file>` is written
+  inside that home, as Cursor's `CURSOR_CONFIG_DIR/cli-config.json` is. Both
+  are a layer under Ordewell's refusal by kind, and the role still needs the
+  recording above. An agent that refuses a denied tool without asking, as
+  Cursor does, sends Ordewell no request to refuse, so its recordings must show
+  the refusal in its own words and nothing left behind; deny its reads too if
+  its own reads reach past the directory it starts in.
 
 ## Releasing
 

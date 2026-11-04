@@ -39,7 +39,7 @@ per-agent adapter:
 | Claude Code | `-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages` | `--permission-mode default` + `--permission-prompt-tool stdio`, direct edit, shell and native plan-mode tools disallowed (ADR-0008, ADR-0026) |
 | Codex | `app-server` stdio JSON-RPC: `initialize` → `thread/start` → `turn/start` | `sandbox: read-only`, `approvalPolicy: on-request` with only MCP tool approvals held for Ordewell (ADR-0026) |
 | OpenCode | `serve` (headless HTTP) + SSE event stream — 1.x `/event`, 2.x `/api/event` | `agent: plan`, shell and subagent tools withheld, and Ordewell's permission policy for the server (ADR-0026) |
-| an ACP agent | ACP over stdio: `initialize` → `session/new` → `session/prompt` | only where its profile claims the planner role on evidence ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md) R3); GitHub Copilot CLI's own write, shell and web tools denied, Qwen Code made to ask before each write and command, both started in a private directory, every edit, delete, move and command request refused |
+| an ACP agent | ACP over stdio: `initialize` → `session/new` → `session/prompt` | only where its profile claims the planner role on evidence ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md) R3); GitHub Copilot CLI's own write, shell and web tools denied, Qwen Code made to ask before each write and command, Cursor's own reads, writes and shell denied by a settings file of the start's own, each started in a private directory, every edit, delete, move and command request refused |
 
 Three details in that table were corrected during implementation, against the
 binaries themselves rather than against memory:
@@ -387,3 +387,4 @@ this backend should understand they are trading speed for not holding a key.
 - 2026-11-04 — a runner plans where its connector's `plans` says so; an ACP agent plans only on its profile's evidence, and GitHub Copilot CLI does not ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)).
 - 2026-11-04 — GitHub Copilot CLI plans ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)).
 - 2026-11-04 — Qwen Code plans ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)).
+- 2026-11-04 — Cursor plans ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)).

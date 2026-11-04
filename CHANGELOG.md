@@ -12,13 +12,20 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 - **Cursor runs tasks.** A plan can assign a task to `cursor-agent`, which
   Ordewell drives over the Agent Client Protocol with the Ordewell tools
-  attached and its models discovered. It runs writable tasks only, not the
-  planner or read-only tasks. In its default mode Cursor asks before a command
-  outside its own allowlist and before each MCP tool call, but writes file edits
-  without asking. A model the plan sets becomes Cursor's own default model
-  for later sessions too. Cursor reports no version, so none is checked; it
-  was tested on Cursor CLI 2026.10.22. Signing in is done with
-  `cursor-agent login`.
+  attached and its models discovered. It can also be the planner and run
+  read-only tasks: those start it in a private directory instead of the
+  worktree, so it never loads a repository's `.cursor/` rules, hooks or MCP
+  servers, and with a settings file of that start's own that denies Cursor's
+  file reads, writes and shell, so the user's own Cursor settings do not load
+  either. It reads the workspace through Ordewell's commands, and Ordewell
+  refuses every web fetch or search it asks for in a read-only task. In its
+  default mode a writable task's Cursor asks before a command outside its own
+  allowlist and before each MCP tool call, but writes file edits without
+  asking. A model the plan sets for a writable task becomes Cursor's own
+  default model for later sessions too. Cursor reports no version, so none is
+  checked; it was tested on Cursor CLI 2026.10.22. Signing in is done with
+  `cursor-agent login`; a planner or read-only start keeps that sign-in on
+  macOS, where it was tested.
 
 - **Gemini CLI runs tasks.** A plan can assign a task to `gemini-cli`, which
   Ordewell drives over the Agent Client Protocol with the Ordewell tools

@@ -59,7 +59,7 @@ describe('a built-in runner declared by manifest and connector only', () => {
   });
 
   it('can plan: it is a harness planner, labelled from its manifest', () => {
-    expect(CLI_PROVIDERS).toEqual(['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'acme']);
+    expect(CLI_PROVIDERS).toEqual(['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cursor-agent', 'acme']);
     expect(isCliProvider('acme')).toBe(true);
     expect(runnerForProvider('acme')).toBe('acme');
     expect(providerForRunner('acme')).toBe('acme');

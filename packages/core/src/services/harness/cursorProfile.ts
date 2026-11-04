@@ -9,14 +9,29 @@ const SERVER_PREFIX = `${ORDEWELL_MCP_SERVER_NAME}-`;
 /** What Cursor's first report of every MCP call is titled, whatever the server and tool. */
 const MCP_REPORT_TITLE = 'MCP: tool';
 
+/** The variable Cursor reads its home of configuration from, `~/.cursor` when unset. */
+const CURSOR_CONFIG_HOME = 'CURSOR_CONFIG_DIR';
+
+/**
+ * Cursor's settings for a restricted start: every read, write and command of
+ * its own denied, and nothing allowed, so no list of the user's can let one
+ * through. Its own web fetch and search are not in these terms; they ask.
+ */
+const RESTRICTED_CLI_CONFIG = JSON.stringify({
+  version: 1,
+  permissions: { allow: [], deny: ['Read(**)', 'Write(**)', 'Shell(*)'] },
+  approvalMode: 'allowlist',
+  sandbox: { mode: 'disabled' },
+});
+
 /**
  * Cursor's CLI over ACP (`cursor-agent acp`), checked against the recordings
  * in `__tests__/fixtures/acp/cursor-agent/` (ADR-0060).
  *
- * It is a task-only runner: `roles` and `restricted` are absent because no
- * recording shows its `plan` or `ask` mode, or any flag, refusing a write and
- * a command (ADR-0046). The account it was recorded on had no paid plan, and
- * Cursor ended the plan-mode turn with "Upgrade your plan to continue".
+ * It plans and runs read-only tasks in its agent mode, its own tools denied
+ * by a settings file of the start's own (ADR-0046; ADR-0060, R3). Its `plan`
+ * and `ask` modes are never used: Cursor ended the plan-mode turn recorded on
+ * an account with no paid plan with "Upgrade your plan to continue".
  */
 export const CURSOR_AGENT_PROFILE: AcpProfile = {
   manifest: CURSOR_AGENT_MANIFEST,
@@ -49,5 +64,33 @@ export const CURSOR_AGENT_PROFILE: AcpProfile = {
   // `session/set_config_option`. Cursor keeps that as the user's default for
   // its next process, as recorded, so a task with no model opens on whatever
   // the last one set.
+  // A model set in a restricted start is kept in that start's own home of
+  // configuration, and goes with it.
   extensionRequests: CURSOR_EXTENSION_REQUESTS,
+  // Cursor's default mode writes an edit without asking, as recorded, so
+  // asking cannot be what stops a write. It refuses a tool its settings deny
+  // without asking either, and reports the call completed with no content:
+  // the restricted-write, restricted-shell and restricted-delete recordings
+  // show each refused, the refusal only in the model's words, and nothing left
+  // behind. Reads are denied too, since Cursor's own were seen reaching past
+  // the directory it starts in unasked; a read-only task reads through
+  // Ordewell's run_command. Its web fetch and search ask, and the restricted
+  // start refuses them as any read-only task's (the restricted-fetch and
+  // restricted-search recordings). The settings sit in a home of
+  // configuration of this start's own, so the user's own `cli-config.json`,
+  // which may allow commands or accept web searches unasked, is not read; the
+  // sign-in survived the move on macOS, and a start signed out fails as not
+  // signed in. `--sandbox disabled` matches the settings, so the deny list
+  // alone decides: a shell command was refused with the sandbox on or off.
+  // Started in its worktree, Cursor loads the repository's `.cursor/` rules,
+  // hooks, MCP servers and permissions, and its AGENTS.md (ADR-0028): in a
+  // directory of its own, the planted-hook recording shows none loading. No
+  // `toolSearch`: Cursor calls Ordewell's tools without loading them first.
+  restricted: {
+    args: ['--sandbox', 'disabled'],
+    privateCwd: true,
+    configDirs: [CURSOR_CONFIG_HOME],
+    files: [{ fileName: `${CURSOR_CONFIG_HOME}/cli-config.json`, render: () => RESTRICTED_CLI_CONFIG }],
+  },
+  roles: { plans: true, readOnly: true },
 };
