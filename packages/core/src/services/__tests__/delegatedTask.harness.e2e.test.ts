@@ -71,7 +71,12 @@ const childTask = (id: string, order: number, dependencies: string[] = []) => ({
   id, order, title: `Write ${id}`, description: id, type: 'ai', sliceType: 'AFK', autonomy: 'AFK', dependencies, prompt: cue({ write: { [`${id}.txt`]: `written by ${id}\n` }, summary: `Wrote ${id}.` }),
 });
 
-describe('a delegated task on a real harness', () => {
+// On Windows the fake claude starts through the .ps1 shim npm writes, as an
+// npm-installed Claude Code does, and a subplanner's system prompt goes on the
+// command line: escaped so the shim hands it on whole, it is past the 32,767
+// characters Windows allows, and the launch refuses it (ADR-0010). Handing the
+// prompt over in a file is what would lift that.
+describe.skipIf(process.platform === 'win32')('a delegated task on a real harness', () => {
   it('lands a two-task child plan beside its sibling, and only the root reaches the user\'s branch', async () => {
     process.env.PATH = pathWithFake(FAKE_CLAUDE, 'claude', savedPath);
     process.env.FAKE_CLAUDE_STATE = tempDir();

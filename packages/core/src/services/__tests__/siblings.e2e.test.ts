@@ -118,6 +118,7 @@ describe('two siblings and a provided interface', () => {
     parent.destroy();
   });
 
+  // Three children on real git, which a Windows runner takes past the default to land.
   it('opens no turn for a line, and tells a sibling that declared nothing it touched nothing', async () => {
     const built = tree([], {
       parallel: 5,
@@ -140,7 +141,7 @@ describe('two siblings and a provided interface', () => {
     expect(lower.p.asked.join('\n')).not.toContain('Nobody hears this');
     expect(lower.o.asked.join('\n')).not.toContain('what you declared moved');
     parent.destroy();
-  });
+  }, 90_000);
 });
 
 describe('a contract of a child that failed (ADR-0057 R6)', () => {
