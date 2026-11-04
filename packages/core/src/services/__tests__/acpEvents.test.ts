@@ -70,9 +70,39 @@ describe('reduceUpdate', () => {
   describe('tool calls', () => {
     it('reports a tool call by the title the agent gave it, with the raw input as its arguments', () => {
       const { events } = feed([
-        { sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Read package.json', kind: 'read', status: 'pending', rawInput: { path: 'package.json' } },
+        { sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Read package.json', kind: 'read', status: 'in_progress', rawInput: { path: 'package.json' } },
       ]);
       expect(events).toEqual([{ type: 'tool_call', id: 't1', name: 'Read package.json', args: { path: 'package.json' } }]);
+    });
+
+    // OpenCode 2.2.5 under `opencode acp`, as recorded live: the pending call
+    // holds only its cwd, and the command arrives with the update after it.
+    it('holds a pending call until its input is in, then reports that input', () => {
+      const { events } = feed([
+        { sessionUpdate: 'tool_call', toolCallId: 'c1', name: 'shell', title: 'shell', kind: 'execute', status: 'pending', rawInput: { cwd: '/repo' } },
+        { sessionUpdate: 'tool_call_update', toolCallId: 'c1', title: 'sleep 60', kind: 'execute', status: 'in_progress', rawInput: { command: 'sleep 60', cwd: '/repo' } },
+        { sessionUpdate: 'tool_call_update', toolCallId: 'c1', title: 'sleep 60', status: 'in_progress', rawInput: { command: 'sleep 60', cwd: '/repo' } },
+      ]);
+      expect(events).toEqual([{ type: 'tool_call', id: 'c1', name: 'shell', args: { command: 'sleep 60', cwd: '/repo' } }]);
+    });
+
+    it('keeps a call pending through an update that leaves its status unchanged', () => {
+      const { events } = feed([
+        { sessionUpdate: 'tool_call', toolCallId: 'c1', title: 'shell', status: 'pending' },
+        { sessionUpdate: 'tool_call_update', toolCallId: 'c1', rawInput: { command: 'ls' } },
+      ]);
+      expect(events).toEqual([]);
+    });
+
+    it('reports a pending call that fails, as a call then its result', () => {
+      const { events } = feed([
+        { sessionUpdate: 'tool_call', toolCallId: 'c1', title: 'shell', status: 'pending', rawInput: { command: 'touch a' } },
+        { sessionUpdate: 'tool_call_update', toolCallId: 'c1', status: 'failed' },
+      ]);
+      expect(events).toEqual([
+        { type: 'tool_call', id: 'c1', name: 'shell', args: { command: 'touch a' } },
+        { type: 'tool_result', id: 'c1', name: 'shell', output: '', success: false },
+      ]);
     });
 
     it('wraps a raw input that is not an object', () => {
@@ -293,6 +323,15 @@ describe('endTurn', () => {
       const events = endTurn(turn, 'cancelled', undefined, true);
       expect(events[0]).toMatchObject({ type: 'tool_result', id: 't1', name: 'Run tests', success: false });
       expect(events[events.length - 1]).toEqual({ type: 'turn_end', interrupted: true });
+    });
+
+    it('reports a call that never left pending before closing it', () => {
+      const turn = turnWith([{ sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Run tests', status: 'pending', rawInput: { command: 'npm test' } }]);
+      const events = endTurn(turn, 'cancelled', undefined, true);
+      expect(events.slice(0, 2)).toEqual([
+        { type: 'tool_call', id: 't1', name: 'Run tests', args: { command: 'npm test' } },
+        { type: 'tool_result', id: 't1', name: 'Run tests', output: 'The turn ended before this call reported a result.', success: false },
+      ]);
     });
 
     it('leaves a finished call alone', () => {

@@ -20,6 +20,9 @@ interface Run {
 
 interface OpenCall {
   name: string;
+  args: Record<string, unknown>;
+  /** Whether its `tool_call` event has gone out; a `pending` call's waits for its input. */
+  announced: boolean;
 }
 
 export interface AcpTurn {
@@ -105,22 +108,36 @@ function toolName(update: AcpToolCall): string {
   return update.name || update.title || update.kind || 'tool';
 }
 
+// A `pending` call can still be filling in its input: OpenCode reports its
+// shell call with only `{ cwd }` and sends the command in the next update.
+// Announcing it there gave the call an empty summary, so it waits for the
+// first update past `pending`, as the native OpenCode adapter does. An agent
+// that sends no status is announced at once: nothing says more is coming.
 function toolCall(turn: AcpTurn, update: AcpToolCall & { sessionUpdate: string }): AcpStep {
   const id = update.toolCallId;
   if (turn.finished.includes(id)) return { turn, events: [] };
   const events: AgentEvent[] = [];
-  let open = turn.open;
-  let known = open[id];
-  if (!known) {
-    known = { name: toolName(update) };
-    open = { ...open, [id]: known };
-    events.push({ type: 'tool_call', id, name: known.name, args: toolArgs(update.rawInput) });
+  const prior = turn.open[id];
+  const call: OpenCall = {
+    name: prior?.name ?? toolName(update),
+    args: update.rawInput === undefined || update.rawInput === null ? (prior?.args ?? {}) : toolArgs(update.rawInput),
+    announced: prior?.announced ?? false,
+  };
+  // An update without a status leaves it unchanged, so a call still unannounced stays pending.
+  const pending = update.status === 'pending' || ((update.status === undefined || update.status === null) && prior !== undefined);
+  if (!call.announced && !pending) {
+    events.push(announce(id, call));
+    call.announced = true;
   }
-  if (update.status !== 'completed' && update.status !== 'failed') return { turn: { ...turn, open }, events };
-  const rest = { ...open };
+  if (update.status !== 'completed' && update.status !== 'failed') return { turn: { ...turn, open: { ...turn.open, [id]: call } }, events };
+  const rest = { ...turn.open };
   delete rest[id];
-  events.push({ type: 'tool_result', id, name: known.name, output: toolOutput(update), success: update.status === 'completed' });
+  events.push({ type: 'tool_result', id, name: call.name, output: toolOutput(update), success: update.status === 'completed' });
   return { turn: { ...turn, open: rest, finished: [...turn.finished, id] }, events };
+}
+
+function announce(id: string, call: OpenCall): AgentEvent {
+  return { type: 'tool_call', id, name: call.name, args: call.args };
 }
 
 function toolArgs(rawInput: unknown): Record<string, unknown> {
@@ -158,6 +175,7 @@ export function endTurn(turn: AcpTurn, stopReason: string, usage: AcpTokenUsage 
 
   // A call still open has no result coming: the turn it belonged to is over.
   for (const [id, call] of Object.entries(turn.open)) {
+    if (!call.announced) events.push(announce(id, call));
     events.push({ type: 'tool_result', id, name: call.name, output: 'The turn ended before this call reported a result.', success: false });
   }
   for (const run of turn.thoughts) events.push({ type: 'thinking', text: run.text });

@@ -43,3 +43,16 @@ export function uninstalledPlannerRefusal(provider: string, installed: readonly 
     ? `${label} is not installed or not on PATH. Installed coding agents: ${agents.join(', ')}. Switch with ${pickPlanner}.`
     : `${label} is not installed or not on PATH, and no other coding agent is. Install one, or plan with an API provider through ${pickPlanner}.`;
 }
+
+/**
+ * Why a runner that can run tasks but cannot plan was not taken as a planner,
+ * or null for any id that is not such a runner. `runners` is the daemon's
+ * runner list: an ACP runner sits there beside the coding agents, so calling
+ * its id an unknown planner contradicts the list the user just read.
+ */
+export function taskOnlyRunnerRefusal(id: string, runners: readonly { id: string; name: string }[], pickPlanner: string): string | null {
+  if (getProviderMeta(id)) return null;
+  const runner = runners.find((r) => r.id === id);
+  if (!runner) return null;
+  return `${runner.name} runs tasks but cannot plan in Ordewell yet. The coding agents that plan are ${CLI_PROVIDERS.join(', ')}: switch with ${pickPlanner}.`;
+}
