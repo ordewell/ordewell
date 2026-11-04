@@ -82,6 +82,26 @@ describe('killTree on Windows', () => {
     expect(h.taskkill).toHaveBeenLastCalledWith('taskkill', ['/pid', '4242', '/T', '/F'], expect.any(Function));
   });
 
+  // A console process, which every runner is, refuses the unforced pass: left
+  // for the grace, it went on writing to the workspace it was stopped in.
+  it('forces the tree at once when the unforced pass is refused', () => {
+    const calls: string[][] = [];
+    const h = harness({
+      platform: 'win32',
+      execFileImpl: (_f, args, cb) => { calls.push(args); cb(args.includes('/F') ? null : new Error('can only be terminated forcefully')); },
+    });
+    killTree(h.child as unknown as ChildProcess, h.deps);
+
+    expect(calls).toEqual([['/pid', '4242', '/T'], ['/pid', '4242', '/T', '/F']]);
+  });
+
+  it('waits out the grace for a process that agreed to close', () => {
+    const h = harness({ platform: 'win32' });
+    killTree(h.child as unknown as ChildProcess, h.deps);
+
+    expect(h.taskkill).toHaveBeenCalledTimes(1);
+  });
+
   it('does nothing for a process that never started, since there is no tree', () => {
     const h = harness({ platform: 'win32' });
     h.child.pid = undefined;

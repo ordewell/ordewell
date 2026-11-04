@@ -264,12 +264,14 @@ export function killTree(proc: ChildProcess | null, deps: KillTreeDeps = {}): vo
     const run = deps.execFileImpl ?? defaultExecFile;
 
     // `/T` is the whole point: without it this is the TerminateProcess call
-    // that already failed to reach the agent. The unforced pass first gives a
-    // console app a chance to flush; `/F` follows if it did not take.
-    run('taskkill', ['/pid', String(pid), '/T'], () => { /* exit code is not news */ });
-    const hardKill = setTimeoutImpl(() => {
-      run('taskkill', ['/pid', String(pid), '/T', '/F'], () => { /* already gone */ });
-    }, HARD_KILL_DELAY_MS);
+    // that already failed to reach the agent. The unforced pass only asks a
+    // window to close, so a console process — every runner — refuses it, and
+    // is forced at once: left for the grace, it would go on writing to a
+    // workspace the user has stopped it in, and holding it from removal.
+    // `/F` follows on the timer too, for one that agreed and did not go.
+    const force = () => run('taskkill', ['/pid', String(pid), '/T', '/F'], () => { /* already gone */ });
+    run('taskkill', ['/pid', String(pid), '/T'], (err) => { if (err) force(); });
+    const hardKill = setTimeoutImpl(force, HARD_KILL_DELAY_MS);
     hardKill.unref?.();
     proc.once('exit', () => clearTimeoutImpl(hardKill));
     return;
