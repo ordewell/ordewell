@@ -37,7 +37,11 @@ in `session/new`. A start is `initialize`, then `session/new`, or
 `session/resume` or `session/load` for a resume, then the plan's mode, model
 and effort; a turn is one `session/prompt`. The adapter never calls
 `authenticate`: a `-32000` answer is read as signed out, and signing in is the
-user's, in the agent's own terminal.
+user's, in the agent's own terminal. Any other request from the agent is
+answered `-32601` at once, so a turn never waits on Ordewell; a profile may
+instead answer the agent's own methods that hold its turn until the client
+replies (`extensionRequests`), and a request its handler cannot read keeps the
+`-32601`.
 
 The protocol is spoken from vendored v1 types (`acpSchema.ts`, checked with
 zod) on a protocol-neutral JSON-RPC peer (`jsonRpc.ts`). Every object passes
@@ -49,7 +53,8 @@ A profile holds the manifest, the ACP arguments, the minimum agent version
 read from `initialize`'s `agentInfo`, the setup timeout, how the agent names
 Ordewell's tools in its reports and to the model, how a model reaches it at
 spawn, the instructions route, the mode route, what it loads from a
-repository (ADR-0028), the roles it claims, and the controls that restrict it.
+repository (ADR-0028), the roles it claims, the controls that restrict it,
+and the answers to the agent's own requests.
 
 ## Key properties
 
@@ -276,3 +281,5 @@ learned from `-32000` and shown with its `copilot login`
   request and report pair before any kind is read.
 - 2026-11-04 — a restricted start is handed the repository's instruction
   files after Ordewell's own, from Copilot's repository-config reader.
+- 2026-11-04 — a profile may answer the agent's own client-bound requests
+  (`extensionRequests`); Cursor's are written, for a profile not yet admitted.

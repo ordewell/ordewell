@@ -2,7 +2,7 @@ import type { AgentEvent, AgentProcessDeps, AgentStartOptions, TaskModeAgentAdap
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import { findRunnerCommand, type RunnerCommand, type RunnerModelRef } from '../../models/RunnerCommand';
 import { StdioAgentAdapter, type SpawnSpec } from './StdioAgentAdapter';
-import { JsonRpcError, JsonRpcPeer, type RpcMessage, type RpcResponse } from './jsonRpc';
+import { JsonRpcError, JsonRpcPeer, METHOD_NOT_FOUND, type RpcMessage, type RpcResponse } from './jsonRpc';
 import {
   ACP_ERROR,
   ACP_INITIALIZE_PARAMS,
@@ -25,11 +25,11 @@ import {
 import { endTurn, newTurn, reduceUpdate, type AcpTurn } from './acpEvents';
 import { acpOrdewellBinding } from './acpOrdewell';
 import { currentValue, findOption, optionValues, type OptionRole } from './acpOptions';
-import type { AcpAskedCall, AcpProfile } from './acpProfiles';
+import type { AcpAskedCall, AcpExtensionHandler, AcpProfile } from './acpProfiles';
 import { acpAsk, acpRoles, decideRestricted } from './acpRoles';
 import { PermissionLedger, type LedgerStance } from './permissionLedger';
 import { readOnlyTask } from './plannerPermissions';
-import { instructionsBlock } from './repoConfig';
+import { instructionsBlock, isRecord } from './repoConfig';
 import { awaitAttach, listed, MCP_ATTACH_TIMEOUT_MS, type AttachState } from './ordewellBinding';
 import { settleWithin } from './settleWithin';
 import { compareVersions } from '../../utils/version';
@@ -151,6 +151,10 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
       (handle, decision) => this.choose(handle, decision),
       () => this.stance(),
     );
+    // Registered first so that ACP's own methods, registered after, replace a profile's handler of the same name.
+    for (const [method, handler] of Object.entries(profile.extensionRequests ?? {})) {
+      this.rpc.onRequest(method, (params) => this.onExtension(method, handler, params));
+    }
     this.rpc.onRequest('session/request_permission', (params, request) => this.onPermission(params, request.id, request.cancelled));
     this.rpc.onNotification('session/update', (params) => this.onUpdate(params));
     void this.processEnded.then(() => {
@@ -730,6 +734,23 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
         ordewell: this.binding.isOrdewellAsk(report ? { request: toolCall, report } : { request: toolCall }),
       }, { id, options }, (event) => this.announce(event));
     });
+  }
+
+  /**
+   * One of the agent's own requests, answered by the profile on the line that
+   * carried it. A handler that cannot read the request, or throws, leaves it
+   * "method not found", as if there were no handler: the agent already copes
+   * with that, where an internal error might end its turn (ADR-0060).
+   */
+  private onExtension(method: string, handler: AcpExtensionHandler, params: unknown): Record<string, unknown> | JsonRpcError {
+    const started = this.started;
+    let answer: unknown;
+    try {
+      answer = started ? handler(params, { kind: started.kind, restricted: this.restricted }) : undefined;
+    } catch (error) {
+      console.debug(`[acp] ${this.agentId}: the handler for ${method} threw: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return isRecord(answer) ? answer : new JsonRpcError(METHOD_NOT_FOUND, `Method not found: ${method}`);
   }
 
   /** ACP's answer carries an option, not a note: a denial's reason has nowhere to go. */

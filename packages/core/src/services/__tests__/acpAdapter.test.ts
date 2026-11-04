@@ -18,6 +18,7 @@ import { McpAttachTimeout, spawnAttached } from '../harness/ordewellBinding';
 import { fakeAcpSpawn, type FakeAcpStep } from './fakeAcpAgent';
 import { planJson, type FakeSpawnOptions } from './harnessTestKit';
 import { fakeConfig } from '../../testing';
+import { CURSOR_EXTENSION_REQUESTS } from '../harness/cursorRequests';
 
 /**
  * The ACP connector's task core (#73, slice S3/S4) against the scripted ACP
@@ -454,6 +455,105 @@ describe('AcpAdapter turn', () => {
   it('has no mid-turn steer: a message waits for the turn\'s end (ADR-0023)', () => {
     const { adapter } = setup([]);
     expect('steer' in adapter).toBe(false);
+  });
+});
+
+describe('AcpAdapter extension requests', () => {
+  const CURSOR_LIKE: AcpProfile = { ...ROLES_PROFILE, extensionRequests: CURSOR_EXTENSION_REQUESTS };
+
+  /** The agent asks `method` mid-turn, and the turn still ends on its own response. */
+  const asking = (...requests: FakeAcpStep[]): FakeAcpStep[] => [
+    ...handshake(),
+    { expect: 'session/prompt' },
+    ...requests,
+    { notify: 'session/update', params: update('agent_message_chunk', { content: text('Done.') }) },
+    { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+  ];
+
+  it('answers cursor/ask_question skipped, pointing the agent at the checkpoint tool, and the turn goes on', async () => {
+    const { agent, adapter } = setup(asking({ request: 'cursor/ask_question', params: { toolCallId: 'q1', questions: [{ id: 'a', prompt: 'Which one?' }] } }), CURSOR_LIKE);
+    await adapter.start(taskStart());
+    const events = await turn(adapter, 'go');
+
+    expect(agent.answers).toEqual([{
+      method: 'cursor/ask_question',
+      result: { outcome: { outcome: 'skipped', reason: 'No user is present; decide and continue, or use Ordewell\'s checkpoint tool.' } },
+    }]);
+    expect(events.at(-2)).toEqual({ type: 'assistant_text', runId: expect.any(String), text: 'Done.' });
+    expect(events.at(-1)).toEqual({ type: 'turn_end' });
+  });
+
+  it('accepts cursor/create_plan from a writable task', async () => {
+    const { agent, adapter } = setup(asking({ request: 'cursor/create_plan', params: { toolCallId: 'p1', plan: '1. Fix it.' } }), CURSOR_LIKE);
+    await adapter.start(taskStart());
+    expect((await turn(adapter, 'go')).at(-1)).toEqual({ type: 'turn_end' });
+
+    expect(agent.answers).toEqual([{ method: 'cursor/create_plan', result: { outcome: { outcome: 'accepted' } } }]);
+  });
+
+  it('rejects cursor/create_plan from a planner and from a read-only task', async () => {
+    for (const start of [plannerStart(), readOnlyStart()]) {
+      const { agent, adapter } = setup(asking({ request: 'cursor/create_plan', params: { toolCallId: 'p1', plan: '1. Fix it.' } }), CURSOR_LIKE);
+      await adapter.start(start);
+      expect((await turn(adapter, 'go')).at(-1)).toEqual({ type: 'turn_end' });
+
+      expect(agent.answers).toEqual([{ method: 'cursor/create_plan', result: { outcome: { outcome: 'rejected', reason: 'Plan mode is not available in this role.' } } }]);
+    }
+  });
+
+  it('still answers a method the profile has no handler for "method not found", and leaves a notification unanswered, and the turn goes on', async () => {
+    const { agent, adapter } = setup(asking(
+      { request: 'cursor/unknown_thing', params: { toolCallId: 'u1' } },
+      { notify: 'cursor/ask_question', params: { toolCallId: 'q1' } },
+      { request: 'fs/read_text_file', params: { sessionId: 'sess-1', path: '/etc/passwd' } },
+    ), CURSOR_LIKE);
+    await adapter.start(taskStart());
+    const events = await turn(adapter, 'go');
+
+    expect(agent.answers).toEqual([
+      { method: 'cursor/unknown_thing', error: { code: -32601, message: 'Method not found: cursor/unknown_thing' } },
+      { method: 'fs/read_text_file', error: { code: -32601, message: 'Method not found: fs/read_text_file' } },
+    ]);
+    expect(events.at(-1)).toEqual({ type: 'turn_end' });
+  });
+
+  it('answers a request whose params it cannot read "method not found", and the turn goes on', async () => {
+    const { agent, adapter } = setup(asking(
+      { request: 'cursor/ask_question', params: ['not', 'an', 'object'] },
+      { request: 'cursor/create_plan', params: 'a plan' },
+    ), CURSOR_LIKE);
+    await adapter.start(taskStart());
+    const events = await turn(adapter, 'go');
+
+    expect(agent.answers).toEqual([
+      { method: 'cursor/ask_question', error: { code: -32601, message: 'Method not found: cursor/ask_question' } },
+      { method: 'cursor/create_plan', error: { code: -32601, message: 'Method not found: cursor/create_plan' } },
+    ]);
+    expect(events.filter((e) => e.type === 'error')).toEqual([]);
+    expect(events.at(-1)).toEqual({ type: 'turn_end' });
+  });
+
+  it('answers "method not found" when a profile\'s handler throws, and the turn goes on', async () => {
+    const throwing: AcpProfile = { ...PROFILE, extensionRequests: { 'x/boom': () => { throw new Error('boom'); } } };
+    const { agent, adapter } = setup(asking({ request: 'x/boom', params: {} }), throwing);
+    await adapter.start(taskStart());
+    const events = await turn(adapter, 'go');
+
+    expect(agent.answers).toEqual([{ method: 'x/boom', error: { code: -32601, message: 'Method not found: x/boom' } }]);
+    expect(events.at(-1)).toEqual({ type: 'turn_end' });
+  });
+
+  it('keeps ACP\'s own methods its own: a profile handler of the same name is never asked', async () => {
+    const handler = vi.fn(() => ({ outcome: { outcome: 'selected', optionId: 'opt-a' } }));
+    const shadowing: AcpProfile = { ...PROFILE, extensionRequests: { 'session/request_permission': handler } };
+    const { agent, adapter } = setup(asking({ request: 'session/request_permission', params: permissionParams('Edit src/a.ts') }), shadowing);
+    await adapter.start(taskStart());
+    await adapter.send('go', (e) => {
+      if (e.type === 'permission_request' && !e.decided) adapter.answerPermission(e.id, { decision: 'deny' });
+    });
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(agent.answers).toEqual([{ method: 'session/request_permission', result: { outcome: { outcome: 'selected', optionId: 'opt-c' } } }]);
   });
 });
 
