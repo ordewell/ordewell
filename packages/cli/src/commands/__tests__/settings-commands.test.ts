@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { rmSync } from 'fs';
 import http from 'http';
 import { ApiClient } from '../../apiClient';
+import { findEnvFile, loadEnvFile, writeEnvVar } from '../../utils/env';
 
 interface RecordedBody {
   env?: Record<string, string>;
@@ -220,6 +221,45 @@ describe('ordewell planner', () => {
     expect(stderr).toContain('Unknown planner: gpt-9');
     expect(exitCode).toBe(1);
     expect(d.sent).toEqual([]);
+    d.close();
+  });
+
+  it('says when a shell AI_PROVIDER keeps planning with another provider', async () => {
+    vi.stubEnv('AI_PROVIDER', 'claude-code');
+    loadEnvFile();
+    const d = await fakeDaemon({ models: CATALOG, runners: INSTALLED });
+    const { handlePlanner } = await import('../planner');
+    const { stdout } = await capture(() => handlePlanner(['opencode'], new ApiClient(d.port)));
+
+    expect(stdout).toContain('Saved OpenCode as your planner, but AI_PROVIDER=claude-code in this environment takes precedence: unset it to plan with OpenCode.');
+    // The switch itself still went through: the sentence qualifies it, not refuses it.
+    expect(d.sent.find((r) => r.method === 'PATCH')!.body.env).toEqual({ AI_PROVIDER: 'opencode' });
+    d.close();
+  });
+
+  it('keeps the plain confirmation when AI_PROVIDER names the planner just chosen', async () => {
+    vi.stubEnv('AI_PROVIDER', 'opencode');
+    loadEnvFile();
+    const d = await fakeDaemon({ models: CATALOG, runners: INSTALLED });
+    const { handlePlanner } = await import('../planner');
+    const { stdout } = await capture(() => handlePlanner(['opencode'], new ApiClient(d.port)));
+
+    expect(stdout).toContain('Planning with OpenCode');
+    expect(stdout).not.toContain('takes precedence');
+    d.close();
+  });
+
+  it('does not blame AI_PROVIDER when only .env supplied it, since the switch rewrites that line', async () => {
+    delete process.env.AI_PROVIDER;
+    writeEnvVar(findEnvFile(), 'AI_PROVIDER', 'claude-code');
+    loadEnvFile();
+
+    const d = await fakeDaemon({ models: CATALOG, runners: INSTALLED });
+    const { handlePlanner } = await import('../planner');
+    const { stdout } = await capture(() => handlePlanner(['opencode'], new ApiClient(d.port)));
+
+    expect(stdout).toContain('Planning with OpenCode');
+    expect(stdout).not.toContain('takes precedence');
     d.close();
   });
 });

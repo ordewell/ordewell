@@ -1010,6 +1010,23 @@ describe('planner switch', () => {
     const notice = h.actions.find((a) => a.type === 'notice') as Extract<Action, { type: 'notice' }>;
     expect(notice.message).toContain('Pick a model with /planner.');
   });
+
+  it('says a shell AI_PROVIDER overrides the planner it just switched to', async () => {
+    const h = harness({
+      getRunners: vi.fn().mockResolvedValue({ runners: [{ id: 'opencode', name: 'OpenCode', enabled: true }], orchestratorModel: '' }),
+      updateSettings: vi.fn().mockResolvedValue({ orchestratorModel: 'model-x', switchRecall: { model: 'model-x', effort: '', source: 'remembered' } }),
+    });
+
+    await runEffect({
+      type: 'setPlanner',
+      provider: 'opencode',
+      overrideNotice: 'Saved OpenCode as your planner, but AI_PROVIDER=claude-code in this environment takes precedence: unset it to plan with OpenCode.',
+    }, h.deps);
+
+    const notice = h.actions.find((a) => a.type === 'notice') as Extract<Action, { type: 'notice' }>;
+    expect(notice.message).toContain('AI_PROVIDER=claude-code in this environment takes precedence');
+    expect(notice.message).toContain('unset it to plan with OpenCode');
+  });
 });
 
 /** `/planner`'s stepper: harness, model and effort reach the daemon in one write. */

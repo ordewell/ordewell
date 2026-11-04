@@ -1,4 +1,4 @@
-import { CLI_PROVIDERS, getProviderMeta, isVendorModelFor, runnerForProvider } from '@ordewell/core';
+import { CLI_PROVIDERS, getProviderMeta, isPlannerBackend, isVendorModelFor, runnerForProvider } from '@ordewell/core';
 import type { PlannerModelRecall, SettingsUpdateResponse } from '@ordewell/core';
 
 /**
@@ -55,4 +55,18 @@ export function taskOnlyRunnerRefusal(id: string, runners: readonly { id: string
   const runner = runners.find((r) => r.id === id);
   if (!runner) return null;
   return `${runner.name} runs tasks but cannot plan in Ordewell yet. The coding agents that plan are ${CLI_PROVIDERS.join(', ')}: switch with ${pickPlanner}.`;
+}
+
+/**
+ * What a planner switch must say when the shell's AI_PROVIDER names another
+ * planner, or null. The resolver reads AI_PROVIDER before the saved choice
+ * (BaseConfig.detectProvider), and `ordewell plan` forwards the shell's value on
+ * every run, so the planner just saved would not be what plans. `inherited` is
+ * AI_PROVIDER as the shell held it: a value `.env` supplied is the saved choice
+ * the switch has just replaced, and does not outlive it.
+ */
+export function plannerSwitchOverrideNotice(chosen: string, inherited: string | undefined): string | null {
+  if (!inherited || inherited === chosen || !isPlannerBackend(inherited)) return null;
+  const label = getProviderMeta(chosen)?.label ?? chosen;
+  return `Saved ${label} as your planner, but AI_PROVIDER=${inherited} in this environment takes precedence: unset it to plan with ${label}.`;
 }

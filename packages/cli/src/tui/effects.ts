@@ -518,7 +518,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
         type: 'notice',
         message: `${isCliProvider(effect.provider)
           ? `Planning with ${meta.label}: no API key needed.`
-          : `Planner set to ${meta.label}.`} ${plannerModelNotice(recall)}`,
+          : `Planner set to ${meta.label}.`} ${plannerModelNotice(recall)}${effect.overrideNotice ? ` ${effect.overrideNotice}` : ''}`,
       });
       await loadModels(deps);
       return;

@@ -14,11 +14,20 @@ function unquote(value: string): string {
 }
 
 /**
+ * `process.env` as the shell handed it over, before {@link loadEnvFile} filled
+ * any gap from `.env`; null until that runs. A planner switch rewrites `.env`
+ * and the process environment, so only a value from here outlives it and keeps
+ * overriding the saved choice.
+ */
+let shellEnv: NodeJS.ProcessEnv | null = null;
+
+/**
  * Populate process.env from ~/.ordewell/.env.
  * Shell-exported vars always win — a var already set is left untouched — so this
  * only fills gaps left by setting a key/model in the TUI. No-op if the file doesn't exist.
  */
 export function loadEnvFile(): void {
+  shellEnv = { ...process.env };
   const filePath = findEnvFile();
   if (!existsSync(filePath)) return;
   const content = readFileSync(filePath, 'utf8');
@@ -33,6 +42,16 @@ export function loadEnvFile(): void {
       process.env[key] = value;
     }
   }
+}
+
+/**
+ * The value `key` had in the shell that launched this process, or undefined
+ * before {@link loadEnvFile}, or for a key that only `.env` supplied. A value
+ * a command wrote afterwards is not this: only the shell's survives the next
+ * launch.
+ */
+export function shellEnvValue(key: string): string | undefined {
+  return shellEnv?.[key];
 }
 
 // A shell variable name, which is all `.env` can hold. Rejecting anything else
