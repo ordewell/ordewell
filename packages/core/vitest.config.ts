@@ -35,6 +35,7 @@ export default defineConfig({
         'src/services/harness/acpOptions.ts': floor(100, 100, 100),
         'src/services/harness/acpOrdewell.ts': floor(100, 100, 100),
         'src/services/harness/acpProfiles.ts': floor(100, 100, 100),
+        'src/services/harness/acpRoles.ts': floor(100, 100, 100),
         'src/services/harness/acpSchema.ts': floor(100, 100, 100),
         'src/services/harness/claudeOrdewell.ts': floor(100, 83, 100),
         'src/services/harness/codexOrdewell.ts': floor(100, 94, 100),

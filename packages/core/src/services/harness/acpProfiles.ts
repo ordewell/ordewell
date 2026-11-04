@@ -3,6 +3,7 @@ import type { TaskRunnerFlags } from './AgentAdapter';
 import type { AcpToolCall } from './acpSchema';
 import { AcpAdapter } from './AcpAdapter';
 import { acpOrdewellBinding } from './acpOrdewell';
+import { acpRoles } from './acpRoles';
 import type { RunnerConnector } from './connectors';
 import { NO_SERVERS, type RepoConfigReader } from './repoConfig';
 
@@ -35,6 +36,27 @@ export type AcpModeRoute =
   | { kind: 'args'; args(flags: TaskRunnerFlags): readonly string[] }
   /** `session/set_mode` to the flags' `permissionMode`: the agent's own mode id, through the manifest's `permissionModeValues`. */
   | { kind: 'session-mode' };
+
+/**
+ * What an agent may do past a writable task. Each role is claimed only on
+ * evidence (ADR-0026, ADR-0046): {@link AcpProfile.restricted} takes the
+ * agent's own write and shell tools away and holds under ACP, Ordewell refuses
+ * every edit, delete, move and command the agent still asks for, and a
+ * recorded live run shows a write and a command refused with nothing left
+ * behind. A planner also runs nothing the repository's config names (ADR-0028).
+ */
+export interface AcpRoles {
+  /** The connector's `plans`: the agent can be the planner. */
+  plans: boolean;
+  /** The manifest has a mode tagged `readOnly` (ADR-0031), so ModeResolver can assign a read-only task. */
+  readOnly: boolean;
+}
+
+/** Spawn-level controls that take the agent's own write, shell and web tools away. */
+export interface AcpRestriction {
+  args: readonly string[];
+  env?: Readonly<Record<string, string>>;
+}
 
 /**
  * Everything one ACP agent needs past the protocol itself: a profile is data,
@@ -70,6 +92,10 @@ export interface AcpProfile {
   repoConfig?: RepoConfigReader;
   usageLimitReset?(tail: string, now: Date): Date | null;
   promptCacheTtlMs?: number;
+  /** Absent: writable tasks only. */
+  roles?: AcpRoles;
+  /** Applied on a planner's start and a read-only task's, on top of `args` and `env`; required by any role. */
+  restricted?: AcpRestriction;
 }
 
 const NO_REPO_CONFIG: RepoConfigReader = { instructions: () => [], projectServers: () => NO_SERVERS };
@@ -78,8 +104,7 @@ const NO_REPO_CONFIG: RepoConfigReader = { instructions: () => [], projectServer
 export function acpConnector(profile: AcpProfile): RunnerConnector {
   return {
     create: (deps) => new AcpAdapter(deps, profile),
-    // The planner's envelope and the read-only roles over ACP are their own slice.
-    plans: false,
+    plans: acpRoles(profile).plans,
     ordewellTools: acpOrdewellBinding(profile),
     repoConfig: profile.repoConfig ?? NO_REPO_CONFIG,
     ...(profile.usageLimitReset ? { usageLimitReset: profile.usageLimitReset } : {}),

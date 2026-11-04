@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentProcessDeps, AgentStartOptions, TaskModeAgentAdapter, TaskStartOptions } from './AgentAdapter';
+import type { AgentEvent, AgentProcessDeps, AgentStartOptions, TaskModeAgentAdapter } from './AgentAdapter';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import { findRunnerCommand, type RunnerCommand, type RunnerModelRef } from '../../models/RunnerCommand';
 import { StdioAgentAdapter, type SpawnSpec } from './StdioAgentAdapter';
@@ -26,8 +26,10 @@ import { endTurn, newTurn, reduceUpdate, type AcpTurn } from './acpEvents';
 import { acpOrdewellBinding } from './acpOrdewell';
 import { currentValue, findOption, optionValues, type OptionRole } from './acpOptions';
 import type { AcpProfile } from './acpProfiles';
-import { PermissionLedger } from './permissionLedger';
-import { awaitAttach, MCP_ATTACH_TIMEOUT_MS, type AttachState } from './ordewellBinding';
+import { acpAsk, acpRoles, decideRestricted } from './acpRoles';
+import { PermissionLedger, type LedgerStance } from './permissionLedger';
+import { readOnlyTask } from './plannerPermissions';
+import { awaitAttach, listed, MCP_ATTACH_TIMEOUT_MS, type AttachState } from './ordewellBinding';
 import { settleWithin } from './settleWithin';
 import { compareVersions } from '../../utils/version';
 import { dirname } from 'path';
@@ -57,7 +59,7 @@ interface HeldRequest {
   options: readonly AcpPermissionOption[];
 }
 
-type RunningTask = TaskStartOptions & { mcp: McpClientConfig };
+type Started = AgentStartOptions & { mcp: McpClientConfig };
 
 /**
  * A task runner that speaks the Agent Client Protocol (ACP v1) on stdio: one
@@ -77,9 +79,19 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
   private readonly rpc = new JsonRpcPeer((payload) => this.writeLine(payload));
   private readonly binding: ReturnType<typeof acpOrdewellBinding>;
   private readonly ledger: PermissionLedger<HeldRequest>;
-  /** Each request the agent waits on, by the ledger's id for it, with its own JSON-RPC id and what settles its answer. */
-  private readonly held = new Map<string, { rpcId: number | string; resolve(outcome: PermissionOutcome): void }>();
-  private task: RunningTask | null = null;
+  /** Each request the agent waits on, by the ledger's id for it, with its own JSON-RPC id, the call it asks for and what settles its answer. */
+  private readonly held = new Map<string, { rpcId: number | string; call: AcpToolCall; resolve(outcome: PermissionOutcome): void }>();
+  private started: Started | null = null;
+  /**
+   * A planner's start or a read-only task's: the profile's restricted
+   * controls are on, and Ordewell answers every request the agent still
+   * raises without a person (ADR-0026, ADR-0046).
+   */
+  private restricted = false;
+  /** The mode a restricted session settled in, which it may not leave; watched once the settings are applied. */
+  private settledMode: { id: string | undefined } | null = null;
+  /** Why this process may take no further turn: it left the mode its restricted start held. */
+  private failure: string | null = null;
   private turn: AcpTurn | null = null;
   /**
    * The turn's first report of each tool call, by id. An agent may name a
@@ -117,9 +129,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     this.binding = acpOrdewellBinding(profile);
     this.ledger = new PermissionLedger<HeldRequest>(
       (handle, decision) => this.choose(handle, decision),
-      // An agent with a switch of its own was put in the plan's mode at spawn
-      // (ADR-0001); one without is answered here as that mode would.
-      () => ({ role: 'task', autoApprove: profile.mode === undefined && this.task?.flags.modeSettings.approvals === 'auto' }),
+      () => this.stance(),
     );
     this.rpc.onRequest('session/request_permission', (params, request) => this.onPermission(params, request.id, request.cancelled));
     this.rpc.onNotification('session/update', (params) => this.onUpdate(params));
@@ -130,30 +140,54 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
   }
 
   override async start(opts: AgentStartOptions): Promise<void> {
-    if (opts.kind === 'planner') throw new Error(`${this.name} cannot plan in Ordewell yet.`);
-    if (opts.flags.readOnly) throw new Error(`${this.name} cannot run a read-only task in Ordewell yet.`);
+    const roles = acpRoles(this.profile);
+    const restricted = opts.kind === 'planner' || readOnlyTask(opts);
+    if (opts.kind === 'planner' && !roles.plans) throw new Error(`${this.name} cannot plan in Ordewell: its profile claims no planner role.`);
+    if (opts.kind === 'task' && restricted && !roles.readOnly) throw new Error(`${this.name} cannot run a read-only task in Ordewell: its profile claims no read-only role.`);
     if (!opts.mcp) throw new Error(`${this.name} cannot start without the Ordewell MCP server to carry its tools.`);
-    this.task = { ...opts, mcp: opts.mcp };
+    this.started = { ...opts, mcp: opts.mcp };
+    this.restricted = restricted;
     await super.start(opts);
+  }
+
+  /**
+   * An agent with a switch of its own was put in the plan's mode at spawn
+   * (ADR-0001); one without is answered here as that mode would. A restricted
+   * start is answered by its role's rules alone: a planner's open requests go
+   * to its envelope, and a read-only task has nobody to ask.
+   */
+  private stance(): LedgerStance {
+    const started = this.started;
+    if (this.restricted && started) {
+      return {
+        role: started.kind === 'planner' ? 'planner' : 'task',
+        autoApprove: false,
+        // The ledger asks while the request is being held, so its call is here.
+        decide: (request) => decideRestricted(this.held.get(request.id)!.call, request.ask ?? { kind: 'other' }, started),
+      };
+    }
+    return { role: 'task', autoApprove: this.profile.mode === undefined && started?.kind === 'task' && started.flags.modeSettings.approvals === 'auto' };
   }
 
   /**
    * The command line carries the profile's switches and nothing of the task's
    * own: the token reaches the agent only in `session/new`, over stdin, and the
    * instructions only by the profile's route, never as a file in the worktree
-   * (ADR-0022, A5; ADR-0018, C2).
+   * (ADR-0022, A5; ADR-0018, C2). A restricted start adds the controls that
+   * take the agent's own write and shell tools away; a planner has no mode.
    */
   protected spawnSpec(): SpawnSpec {
-    const task = this.requireTask();
-    const { instructions, mode } = this.profile;
+    const started = this.requireStarted();
+    const { instructions, mode, restricted } = this.profile;
     const args = [
       ...this.profile.args,
-      ...(mode?.kind === 'args' ? mode.args(task.flags) : []),
-      ...(task.model && this.profile.modelArgs ? this.profile.modelArgs(task.model) : []),
+      ...(this.restricted && restricted ? restricted.args : []),
+      ...(started.kind === 'task' && mode?.kind === 'args' ? mode.args(started.flags) : []),
+      ...(started.model && this.profile.modelArgs ? this.profile.modelArgs(started.model) : []),
     ];
-    const env: Record<string, string> = { ...this.profile.env };
+    const env: Record<string, string> = { ...this.profile.env, ...(this.restricted ? restricted?.env : {}) };
     const files: string[] = [];
-    const contract = this.contract(task);
+    const contract = this.instructions(started);
     if (instructions.kind === 'file') {
       const file = ownerOnlyConfigFile(instructions.fileName, contract);
       this.own('instructions', file.remove);
@@ -173,13 +207,14 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
   }
 
   protected override async handshake(): Promise<void> {
-    const task = this.requireTask();
+    const started = this.requireStarted();
     await this.initialize();
-    const state = task.resumeSessionId ? await this.resumeSession(task, task.resumeSessionId) : await this.newSession(task);
+    const state = started.resumeSessionId ? await this.resumeSession(started, started.resumeSessionId) : await this.newSession(started);
     this.configOptions = state.configOptions ?? [];
 
-    await this.applySettings(task);
+    await this.applySettings(started);
     this.heldModel = currentValue(findOption(this.configOptions, 'model'));
+    if (this.restricted) this.settledMode = { id: currentValue(findOption(this.configOptions, 'mode')) ?? state.modes?.currentModeId };
   }
 
   /**
@@ -187,10 +222,11 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
    * against what the agent reports it is on (ADR-0018, B2): the plan is held,
    * or the attempt fails in words, and never silently runs on another.
    */
-  private async applySettings(task: RunningTask): Promise<void> {
-    if (this.profile.mode?.kind === 'session-mode') await this.holdMode(task.flags.permissionMode);
-    if (task.model) await this.holdChoice(task, 'model', task.model);
-    if (task.flags.effort) await this.holdChoice(task, 'effort', task.flags.effort);
+  private async applySettings(started: Started): Promise<void> {
+    if (started.kind === 'task' && this.profile.mode?.kind === 'session-mode') await this.holdMode(started.flags.permissionMode);
+    const effort = started.kind === 'task' ? started.flags.effort : started.effort;
+    if (started.model) await this.holdChoice(started, 'model', started.model);
+    if (effort) await this.holdChoice(started, 'effort', effort);
   }
 
   /** Through the mode option when the agent has one, else through the older `session/set_mode`, which answers nothing to check. */
@@ -211,19 +247,20 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
    * Where it ends up on another, a task that may change nothing fails; any
    * other says so and carries on (ADR-0001: said, never silently rewritten).
    */
-  private async holdChoice(task: RunningTask, role: Exclude<OptionRole, 'mode'>, wanted: string): Promise<void> {
+  private async holdChoice(started: Started, role: Exclude<OptionRole, 'mode'>, wanted: string): Promise<void> {
     const option = findOption(this.configOptions, role);
     if (!option) {
       // A model given at spawn reached the agent already; with no setting to
       // read it back from, the agent's word at spawn is all there is (Copilot).
       if (role === 'model' && this.profile.modelArgs) return;
-      throw new Error(`${this.name} offers no ${role} setting, so it cannot run this task on the ${role} "${wanted}".`);
+      const work = started.kind === 'planner' ? 'plan' : 'run this task';
+      throw new Error(`${this.name} offers no ${role} setting, so it cannot ${work} on the ${role} "${wanted}".`);
     }
     await this.setOption(option.id, role, wanted);
     const actual = currentValue(findOption(this.configOptions, role));
     if (actual === wanted) return;
     const was = `${this.name} did not take the ${role} "${wanted}": it is on "${actual ?? 'none'}".`;
-    if (task.flags.readOnly) throw new Error(was);
+    if (started.kind === 'task' && this.restricted) throw new Error(was);
     this.announce(role === 'model'
       ? { type: 'model_drifted', from: { model: wanted }, to: { model: actual ?? 'unknown' } }
       : { type: 'command_output', text: was });
@@ -247,24 +284,24 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
   }
 
   /** Ordewell's server as the session is given it: on a resume and a load too, since the agent keeps none of a session's servers between processes. */
-  private sessionParams(task: RunningTask): Record<string, unknown> {
-    const { mcp } = task;
+  private sessionParams(started: Started): Record<string, unknown> {
+    const { mcp } = started;
     return {
-      cwd: this.deps.placement?.cwd ?? task.cwd,
+      cwd: this.deps.placement?.cwd ?? started.cwd,
       mcpServers: [{ type: 'http', name: mcp.name, url: mcp.url, headers: Object.entries(mcp.headers).map(([name, value]) => ({ name, value })) }],
     };
   }
 
   /** A fresh process has not been told the contract, whether its session is new or resumed. */
-  private sessionMeta(task: RunningTask): Record<string, unknown> {
+  private sessionMeta(started: Started): Record<string, unknown> {
     const { instructions } = this.profile;
-    return instructions.kind === 'meta' ? { _meta: { [instructions.key]: this.contract(task) } } : {};
+    return instructions.kind === 'meta' ? { _meta: { [instructions.key]: this.instructions(started) } } : {};
   }
 
-  private async newSession(task: RunningTask): Promise<AcpSessionState> {
+  private async newSession(started: Started): Promise<AcpSessionState> {
     const opened = await this.setupCall('session/new', {
-      ...this.sessionParams(task),
-      ...this.sessionMeta(task),
+      ...this.sessionParams(started),
+      ...this.sessionMeta(started),
     });
     if (!opened.ok) {
       this.sessionRefused = true;
@@ -282,15 +319,15 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
    * (K1) offers the session that did the work, and a new one would pretend
    * it was resumed.
    */
-  private async resumeSession(task: RunningTask, id: string): Promise<AcpSessionState> {
+  private async resumeSession(started: Started, id: string): Promise<AcpSessionState> {
     const { sessionCapabilities, loadSession } = this.capabilities;
     const method = sessionCapabilities?.resume ? 'session/resume' : loadSession ? 'session/load' : null;
     if (!method) throw new Error(`${this.name} could not resume session ${id}: it offers neither session/resume nor session/load.`);
     this.sessionId = id;
     const resumed = await this.setupCall(method, {
       sessionId: id,
-      ...this.sessionParams(task),
-      ...this.sessionMeta(task),
+      ...this.sessionParams(started),
+      ...this.sessionMeta(started),
     });
     if (!resumed.ok) {
       this.sessionRefused = true;
@@ -349,18 +386,52 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     return auth ? `${this.name} is not signed in. Run \`${[runner.command, ...auth.loginArgs].join(' ')}\`.` : `${this.name} is not signed in.`;
   }
 
-  private contract(task: RunningTask): string {
-    return taskCompletionContract(task.commits ? { commits: true } : {});
+  /**
+   * What the process is told before its first prompt. A planner gets its
+   * system prompt and where its tools are, all from its planner token
+   * (ADR-0022); a task gets the completion contract, and a read-only task
+   * also that Ordewell's tools are its only shell and web (ADR-0046).
+   */
+  private instructions(started: Started): string {
+    const { toolName } = this.binding;
+    if (started.kind === 'planner') {
+      const { hidden = [], extraTools } = started.mcp;
+      const tools = this.binding.toolNames('planner', hidden, extraTools);
+      const web = [
+        ...(hidden.includes('fetch') ? [] : [`read web pages with \`${toolName('fetch')}\``]),
+        ...(hidden.includes('web_search') ? [] : [`search the web with \`${toolName('web_search')}\``]),
+      ];
+      return [
+        started.systemPrompt,
+        [
+          `Your Ordewell tools come from the \`${started.mcp.name}\` MCP server: ${listed(tools.map((name) => `\`${name}\``))}.`,
+          `Your own file edits, shell and web tools are off in this session: run commands with \`${toolName('run_command')}\`${web.length ? `, ${listed(web)}` : ''}.`,
+        ].join(' '),
+      ].join('\n\n');
+    }
+    const contract = taskCompletionContract(started.commits ? { commits: true } : {});
+    if (!this.restricted) return contract;
+    const note = `This task is read-only: your own file edits, shell and web tools are off. Read files, search the repository and run tests with \`${toolName('run_command')}\`, read web pages with \`${toolName('fetch')}\` and search the web with \`${toolName('web_search')}\`.`;
+    return `${note}\n\n${contract}`;
   }
 
-  private requireTask(): RunningTask {
-    if (!this.task) throw new Error(`${this.name} has no task to run.`);
-    return this.task;
+  private requireStarted(): Started {
+    if (!this.started) throw new Error(`${this.name} has not been started.`);
+    return this.started;
+  }
+
+  /** A process that left its restricted mode takes no further turn: the error is said again, since the first may have had no turn to reach. */
+  override async send(message: string, onEvent: (event: AgentEvent) => void, signal?: AbortSignal, onActivity?: () => void): Promise<void> {
+    if (this.failure !== null) {
+      onEvent({ type: 'error', message: this.failure });
+      return;
+    }
+    await super.send(message, onEvent, signal, onActivity);
   }
 
   protected turnPayload(message: string): string {
-    const task = this.requireTask();
-    this.turn = newTurn({ source: this.agentId, ...(task.model ? { model: task.model } : {}) });
+    const started = this.requireStarted();
+    this.turn = newTurn({ source: this.agentId, ...(started.model ? { model: started.model } : {}) });
     this.reports = new Map();
     this.cancelSent = false;
     this.noteModelCommand(message);
@@ -421,6 +492,12 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     }
     if (update.sessionUpdate === 'config_option_update') {
       this.noteOptions(update.configOptions);
+      const option = findOption(update.configOptions, 'mode');
+      if (option) this.holdSettledMode(currentValue(option));
+      return;
+    }
+    if (update.sessionUpdate === 'current_mode_update') {
+      this.holdSettledMode(update.currentModeId);
       return;
     }
     if (this.turn) {
@@ -431,6 +508,20 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
       return;
     }
     console.debug(`[acp] ${this.agentId}: dropped an update (${update.sessionUpdate === 'unknown' ? update.kind ?? 'nameless' : update.sessionUpdate}) outside a turn`);
+  }
+
+  /**
+   * A restricted session that moves to another mode may have moved to one
+   * that writes, so the attempt ends here rather than trusting the agent to
+   * keep refusing (ADR-0046). The error goes out before the process does, so
+   * an open turn ends on it.
+   */
+  private holdSettledMode(now: string | undefined): void {
+    const settled = this.settledMode;
+    if (!settled || now === settled.id || this.failure !== null) return;
+    this.failure = `${this.name} left the mode it was started in ("${settled.id ?? 'none'}" to "${now ?? 'none'}"), so this ${this.started?.kind === 'planner' ? 'planner session' : 'read-only task'} cannot go on.`;
+    this.announce({ type: 'error', message: this.failure });
+    this.dispose();
   }
 
   private noteCommands(listed: ReadonlyArray<{ name: string; description: string; input?: { hint: string } | null }>): void {
@@ -507,8 +598,16 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     // agent read it: ACP has the client answer it `cancelled`, never ask anyone.
     if (this.cancelSent && this.turn) return Promise.resolve({ outcome: CANCELLED });
     const id = String(rpcId);
+    const report = this.reports.get(toolCall.toolCallId);
+    // The request says what is asked; the turn's report fills in what it leaves out.
+    const call: AcpToolCall = {
+      ...toolCall,
+      kind: toolCall.kind ?? report?.kind,
+      locations: toolCall.locations ?? report?.locations,
+      rawInput: toolCall.rawInput ?? report?.rawInput,
+    };
     return new Promise((resolve) => {
-      this.held.set(id, { rpcId, resolve: (outcome) => resolve({ outcome }) });
+      this.held.set(id, { rpcId, call, resolve: (outcome) => resolve({ outcome }) });
       cancelled.addEventListener('abort', () => {
         if (!this.settle(id, CANCELLED)) return;
         this.ledger.withdraw(id, (event) => this.announce(event));
@@ -520,8 +619,9 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
         detail: toolCall.title ?? '',
         ...(typeof input === 'object' && input !== null && !Array.isArray(input) ? { input: input as Record<string, unknown> } : {}),
         toolUseId: toolCall.toolCallId,
+        ...(this.restricted ? { ask: acpAsk(call) } : {}),
         // By exact name only: a near miss is anyone's tool (ADR-0022, S3).
-        ordewell: this.binding.isOrdewellAsk(this.reports.get(toolCall.toolCallId) ?? toolCall),
+        ordewell: this.binding.isOrdewellAsk(report ?? toolCall),
       }, { id, options }, (event) => this.announce(event));
     });
   }
@@ -570,7 +670,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
    * agent refused the session or exited first, pending while it has not.
    */
   async mcpAttached(): Promise<AttachState> {
-    const contact = this.task?.mcp.contact;
+    const contact = this.started?.mcp.contact;
     if (!contact || this.sessionRefused || !this.process) return 'failed';
     return awaitAttach(
       () => contact.whenContacted().then((used): AttachState => (used ? 'connected' : 'failed')),
