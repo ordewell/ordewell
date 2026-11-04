@@ -44,6 +44,9 @@ const MODEL_COMMAND = 'model';
 /** Where a process finds its temp directory: POSIX's, then Windows's. */
 const TEMP_DIR_VARIABLES = ['TMPDIR', 'TMP', 'TEMP'] as const;
 
+/** The method prefixes ACP gives the client; a profile's extension request is never served under one. */
+const ACP_CLIENT_NAMESPACES = ['session/', 'fs/', 'terminal/'] as const;
+
 type PermissionOutcome = { outcome: 'selected'; optionId: string } | { outcome: 'cancelled' };
 const CANCELLED: PermissionOutcome = { outcome: 'cancelled' };
 
@@ -151,8 +154,10 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
       (handle, decision) => this.choose(handle, decision),
       () => this.stance(),
     );
-    // Registered first so that ACP's own methods, registered after, replace a profile's handler of the same name.
+    // ACP's client namespaces are the adapter's alone, so a profile cannot make
+    // it serve the file system or terminals it advertises it does not (ADR-0060).
     for (const [method, handler] of Object.entries(profile.extensionRequests ?? {})) {
+      if (ACP_CLIENT_NAMESPACES.some((ns) => method.startsWith(ns))) continue;
       this.rpc.onRequest(method, (params) => this.onExtension(method, handler, params));
     }
     this.rpc.onRequest('session/request_permission', (params, request) => this.onPermission(params, request.id, request.cancelled));

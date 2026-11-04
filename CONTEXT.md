@@ -849,10 +849,12 @@ agent does not qualify); "ACP backend", "ACP provider".
 **ACP profile** (`AcpProfile`, `harness/acpProfiles.ts`) — everything one ACP
 agent needs beyond the protocol, as data: its manifest, ACP arguments, minimum
 version, how it names Ordewell's tools, how it is given a model, the route its
-instructions take outside the worktree, the route its mode takes, what it loads
+instructions take outside the worktree, the route its mode takes, the settings
+file that hands it Ordewell's MCP server when it takes none over HTTP in
+`session/new` (`mcpConfig`, ADR-0060 R4), what it loads
 from a repository, the roles it claims, the controls that restrict it, and the
-answers it gives to the agent's own client-bound requests (any other is
-"method not found").
+answers it gives to the agent's own client-bound requests (any other, and any
+in ACP's `session/`, `fs/` or `terminal/` namespaces, is "method not found").
 `acpConnector(profile)` turns it into the runner's connector, so admitting an
 agent means writing a profile and a manifest, not an adapter. A role, planner or
 read-only, is claimed only on evidence; with none claimed the runner gets

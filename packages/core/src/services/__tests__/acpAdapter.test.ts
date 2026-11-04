@@ -556,6 +556,31 @@ describe('AcpAdapter extension requests', () => {
     expect(handler).not.toHaveBeenCalled();
     expect(agent.answers).toEqual([{ method: 'session/request_permission', result: { outcome: { outcome: 'selected', optionId: 'opt-c' } } }]);
   });
+
+  it('serves none of ACP\'s client methods from a profile: fs/* and terminal/* are still "method not found"', async () => {
+    const handler = vi.fn(() => ({ content: 'served by profile' }));
+    const shadowing: AcpProfile = {
+      ...PROFILE,
+      extensionRequests: { 'fs/read_text_file': handler, 'fs/write_text_file': handler, 'terminal/create': handler, 'session/other': handler },
+    };
+    const { agent, adapter } = setup(asking(
+      { request: 'fs/read_text_file', params: { sessionId: 'sess-1', path: '/etc/passwd' } },
+      { request: 'fs/write_text_file', params: { sessionId: 'sess-1', path: 'a.txt', content: 'x' } },
+      { request: 'terminal/create', params: { sessionId: 'sess-1', command: 'ls' } },
+      { request: 'session/other', params: { sessionId: 'sess-1' } },
+    ), shadowing);
+    await adapter.start(taskStart());
+    const events = await turn(adapter, 'go');
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(agent.answers).toEqual([
+      { method: 'fs/read_text_file', error: { code: -32601, message: 'Method not found: fs/read_text_file' } },
+      { method: 'fs/write_text_file', error: { code: -32601, message: 'Method not found: fs/write_text_file' } },
+      { method: 'terminal/create', error: { code: -32601, message: 'Method not found: terminal/create' } },
+      { method: 'session/other', error: { code: -32601, message: 'Method not found: session/other' } },
+    ]);
+    expect(events.at(-1)).toEqual({ type: 'turn_end' });
+  });
 });
 
 describe('AcpAdapter permissions', () => {
