@@ -33,10 +33,9 @@ import { instructionsBlock, isRecord } from './repoConfig';
 import { awaitAttach, listed, MCP_ATTACH_TIMEOUT_MS, type AttachState } from './ordewellBinding';
 import { settleWithin } from './settleWithin';
 import { compareVersions } from '../../utils/version';
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
-import { dirname, join } from 'path';
-import { ownerOnlyConfigFile, taskCompletionContract, type McpClientConfig } from '../mcp';
+import { acpPrivateDir, type AcpPrivateDir } from './acpPrivateDir';
+import { dirname } from 'path';
+import { taskCompletionContract, type McpClientConfig } from '../mcp';
 
 const DEFAULT_INIT_TIMEOUT_MS = 30_000;
 
@@ -78,7 +77,8 @@ interface PlanSetting {
  * adapter for every such agent, which differs from the next only by its
  * {@link AcpProfile}. Ordewell is the client and does no I/O for the agent —
  * no file system, no terminal — so the agent works in the worktree itself and
- * reaches Ordewell only through the MCP server `session/new` hands it.
+ * reaches Ordewell only through the MCP server `session/new` hands it, or
+ * the profile's settings file names to it (ADR-0060, R4).
  *
  * A turn is one `session/prompt`, ended by its response alone: no update the
  * agent streams can end it, and no timer does. There is no steer (ADR-0023; ADR-0060, R8):
@@ -173,6 +173,12 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     if (restricted && this.profile.restricted?.privateCwd && this.deps.placement) {
       throw new Error(`${this.name} cannot ${opts.kind === 'planner' ? 'plan' : 'run a read-only task'} in a container: there it would start in the worktree and run the repository's hooks.`);
     }
+    // A placement copies only files named in the arguments into the container;
+    // the settings file's path goes in the environment, where it would name a
+    // file the container does not have (ADR-0060, R4).
+    if (this.profile.mcpConfig && this.deps.placement) {
+      throw new Error(`${this.name} cannot run in a container: it takes Ordewell's MCP server from a settings file on this machine, which the container does not see.`);
+    }
     this.started = { ...opts, mcp: opts.mcp };
     this.restricted = restricted;
     await super.start(opts);
@@ -199,14 +205,15 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
 
   /**
    * The command line carries the profile's switches and nothing of the task's
-   * own: the token reaches the agent only in `session/new`, over stdin, and the
+   * own: the token reaches the agent only in `session/new`, over stdin, or in
+   * the owner-only settings file the profile's `mcpConfig` names, and the
    * instructions only by the profile's route, never as a file in the worktree
    * (ADR-0022, A5; ADR-0018, C2; ADR-0060, R4, R6). A restricted start adds the controls that
    * take the agent's own write and shell tools away; a planner has no mode.
    */
   protected spawnSpec(): SpawnSpec {
     const started = this.requireStarted();
-    const { instructions, mode, restricted } = this.profile;
+    const { instructions, mode, restricted, mcpConfig } = this.profile;
     const args = [
       ...this.profile.args,
       ...(this.restricted && restricted ? restricted.args : []),
@@ -215,14 +222,20 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     ];
     const env: Record<string, string> = { ...this.profile.env, ...(this.restricted ? restricted?.env : {}) };
     const files: string[] = [];
-    this.startDir = this.restricted && restricted?.privateCwd ? this.ownStartDir() : null;
+    const startsOutside = this.restricted && restricted?.privateCwd === true;
+    const dir = startsOutside || instructions.kind === 'file' || mcpConfig ? this.ownPrivateDir() : null;
+    this.startDir = startsOutside ? dir?.path ?? null : null;
     // The system's temp directory is shared by every process of the user's,
     // other attempts' instructions included, and an agent may read its own
     // temp directory without asking: Copilot does, whatever its flags say.
     if (this.startDir) for (const name of TEMP_DIR_VARIABLES) env[name] = this.startDir;
+    if (dir && mcpConfig) {
+      const { name, url, headers } = started.mcp;
+      env[mcpConfig.pass.env] = dir.write(mcpConfig.fileName, mcpConfig.render({ name, url, headers }));
+    }
     const contract = this.instructions(started);
-    if (instructions.kind === 'file') {
-      const path = this.instructionsFile(instructions.fileName, contract);
+    if (dir && instructions.kind === 'file') {
+      const path = dir.write(instructions.fileName, contract);
       if ('flag' in instructions.pass) {
         args.push(instructions.pass.flag, path);
         files.push(path);
@@ -238,28 +251,19 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     return { command: this.profile.manifest.runner.command, args, env, ...(files.length ? { files } : {}), ...(this.startDir ? { cwd: this.startDir } : {}) };
   }
 
-  /** A directory of this process's own, owner-only and empty, outside any repository. */
-  private ownStartDir(): string {
-    const dir = mkdtempSync(join(tmpdir(), 'ordewell-acp-'));
-    this.own('start-dir', () => rmSync(dir, { recursive: true, force: true }));
-    return dir;
-  }
-
   /**
-   * The contract as an owner-only file, never in the worktree. A process
-   * started in a directory of its own gets it there, as that directory's own
-   * instructions, which the agent loads with the session: a file in a
-   * directory it is only pointed at, Copilot reads when the model chooses to.
+   * A directory of this process's own, owner-only, outside any repository,
+   * removed when the process ends, and swept at a later start if Ordewell died
+   * first. It holds what the agent is handed as files, so the contract and the
+   * token never sit in the worktree; a process started in it loads the
+   * contract as that directory's own instructions, which Copilot does with the
+   * session, where a file in a directory it is only pointed at, it reads when
+   * the model chooses to.
    */
-  private instructionsFile(fileName: string, contents: string): string {
-    if (this.startDir) {
-      const path = join(this.startDir, fileName);
-      writeFileSync(path, contents, { mode: 0o600 });
-      return path;
-    }
-    const file = ownerOnlyConfigFile(fileName, contents);
-    this.own('instructions', file.remove);
-    return file.path;
+  private ownPrivateDir(): AcpPrivateDir {
+    const dir = acpPrivateDir();
+    this.own('private-dir', dir.remove);
+    return dir;
   }
 
   protected override async handshake(): Promise<void> {
@@ -366,12 +370,19 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     }
   }
 
-  /** Ordewell's server as the session is given it: on a resume and a load too, since the agent keeps none of a session's servers between processes. */
+  /**
+   * Ordewell's server as the session is given it: on a resume and a load too,
+   * since the agent keeps none of a session's servers between processes. ACP
+   * has a client check `mcpCapabilities.http` before it hands an HTTP server,
+   * so an agent that takes its server from a settings file and advertises no
+   * HTTP is given none here (ADR-0060, R4).
+   */
   private sessionParams(started: Started): Record<string, unknown> {
     const { mcp } = started;
+    const takesHttp = this.capabilities.mcpCapabilities?.http === true;
     return {
       cwd: this.deps.placement?.cwd ?? this.startDir ?? started.cwd,
-      mcpServers: [{ type: 'http', name: mcp.name, url: mcp.url, headers: Object.entries(mcp.headers).map(([name, value]) => ({ name, value })) }],
+      mcpServers: takesHttp ? [{ type: 'http', name: mcp.name, url: mcp.url, headers: Object.entries(mcp.headers).map(([name, value]) => ({ name, value })) }] : [],
     };
   }
 
@@ -447,8 +458,9 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
       if (compareVersions(version, minVersion) < 0) throw new Error(`${this.name} ${version} is older than Ordewell needs (${minVersion} or later).`);
     }
     // Without HTTP the agent could reach Ordewell only through a local bridge
-    // process carrying the token, which Ordewell does not run (ADR-0060, R4).
-    if (!agentCapabilities?.mcpCapabilities?.http) {
+    // process carrying the token, which Ordewell does not run, unless it reads
+    // the server from a settings file of its own (ADR-0060, R4).
+    if (!this.profile.mcpConfig && !agentCapabilities?.mcpCapabilities?.http) {
       throw new Error(`${this.name} cannot take Ordewell's tools over HTTP, so it cannot run tasks or plan here.`);
     }
   }

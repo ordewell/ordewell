@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs';
+import { spawnSync } from 'child_process';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { AcpAdapter } from '../harness/AcpAdapter';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
 import { acpConnector, type AcpProfile } from '../harness/acpProfiles';
@@ -15,7 +16,7 @@ import { StructuredRunner } from '../StructuredRunner';
 import { OrdewellMcpServer, mcpClientConfig, type McpClientConfig } from '../mcp';
 import type { TaskCompleteArgs } from '../mcp';
 import { McpAttachTimeout, spawnAttached } from '../harness/ordewellBinding';
-import { fakeAcpSpawn, type FakeAcpStep } from './fakeAcpAgent';
+import { fakeAcpSpawn, type FakeAcpAgentOptions, type FakeAcpStep } from './fakeAcpAgent';
 import { planJson, type FakeSpawnOptions } from './harnessTestKit';
 import { fakeConfig } from '../../testing';
 import { CURSOR_EXTENSION_REQUESTS } from '../harness/cursorRequests';
@@ -68,8 +69,8 @@ const handshake = (reply: Record<string, unknown> = INITIALIZED): FakeAcpStep[] 
   { expect: 'session/new', reply: { sessionId: 'sess-1' } },
 ];
 
-function setup(steps: FakeAcpStep[], profile: AcpProfile = PROFILE, options: FakeSpawnOptions = {}, extra: Partial<AgentProcessDeps> = {}) {
-  const spawned = fakeAcpSpawn(steps, options);
+function setup(steps: FakeAcpStep[], profile: AcpProfile = PROFILE, options: FakeSpawnOptions = {}, extra: Partial<AgentProcessDeps> = {}, agentOptions: FakeAcpAgentOptions = {}) {
+  const spawned = fakeAcpSpawn(steps, options, agentOptions);
   const deps: AgentProcessDeps = {
     spawn: spawned.spawn,
     fetch: (async () => { throw new Error('no HTTP in this test'); }) as unknown as typeof fetch,
@@ -970,6 +971,192 @@ describe('AcpAdapter attach', () => {
       failed: (first, second) => `${first}; ${second}`,
     })).rejects.toBeInstanceOf(McpAttachTimeout);
     expect(spawns).toBe(2);
+  });
+});
+
+describe('AcpAdapter MCP settings file', () => {
+  /** Where the agent of this test reads its MCP servers, in a shape of its own that the fake reads back. */
+  const SETTINGS_ENV = 'FAKE_AGENT_MCP_SETTINGS';
+  const SETTINGS_PROFILE: AcpProfile = {
+    ...PROFILE,
+    mcpConfig: {
+      kind: 'file',
+      fileName: 'mcp_settings.json',
+      render: ({ name, url, headers }) => JSON.stringify({ mcpServers: { [name]: { transport: 'streamableHttp', url, headers } } }),
+      pass: { env: SETTINGS_ENV },
+    },
+  };
+  const READS_SETTINGS: FakeAcpAgentOptions = {
+    settings: {
+      env: SETTINGS_ENV,
+      servers: (contents) => {
+        const parsed = JSON.parse(contents) as { mcpServers: Record<string, { url: string; headers: Record<string, string> }> };
+        return Object.entries(parsed.mcpServers).map(([name, s]) => ({ name, url: s.url, headers: s.headers }));
+      },
+    },
+  };
+  /** An agent that advertises no MCP transport at all, the way one that only reads its own settings does. */
+  const NO_HTTP = { ...INITIALIZED, agentCapabilities: {} };
+
+  async function issued(server: OrdewellMcpServer, attempt = 1) {
+    return mcpClientConfig(await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt }, { taskComplete: async () => ({ ok: true }) } as never));
+  }
+
+  /** A temp directory of this test's own, so what is written there, and swept from it, is only this test's. */
+  let temp = '';
+  beforeEach(() => {
+    temp = mkdtempSync(join(tmpdir(), 'acp-settings-test-'));
+    for (const name of ['TMPDIR', 'TMP', 'TEMP']) vi.stubEnv(name, temp);
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(temp, { recursive: true, force: true });
+  });
+
+  it('writes the settings file owner-only, outside the worktree, for the process\'s life alone', async () => {
+    const server = new OrdewellMcpServer();
+    servers.push(server);
+    const mcp = await issued(server);
+    const { adapter, agent, spawned } = setup(handshake(NO_HTTP), SETTINGS_PROFILE, {}, {}, READS_SETTINGS);
+    expect(readdirSync(temp)).toEqual([]);
+
+    await adapter.start(taskStart('ask', { mcp }));
+    const path = spawned.lastEnv()[SETTINGS_ENV] ?? '';
+    expect(path.startsWith(`${temp}/`)).toBe(true);
+    expect(path.startsWith('/repo')).toBe(false);
+    expect(agent.settingsReads).toEqual([{ path, contents: readFileSync(path, 'utf8') }]);
+    expect(statSync(path).mode & 0o077).toBe(0);
+    expect(statSync(dirname(path)).mode & 0o077).toBe(0);
+
+    await agent.close(0);
+    await vi.waitFor(() => expect(existsSync(path)).toBe(false));
+    expect(readdirSync(temp)).toEqual([]);
+  });
+
+  it('sweeps at the next start what an Ordewell that died left behind, and nothing else', async () => {
+    // A process that has exited, so its id is one no running Ordewell holds.
+    const dead = spawnSync(process.execPath, ['-e', '']).pid;
+    const leftover = join(temp, `ordewell-acp-${dead}-AbC123`);
+    mkdirSync(leftover, { mode: 0o700 });
+    writeFileSync(join(leftover, 'mcp_settings.json'), 'Bearer an-old-token', { mode: 0o600 });
+    const running = join(temp, `ordewell-acp-${process.pid}-XyZ789`);
+    mkdirSync(running, { mode: 0o700 });
+    const unrelated = join(temp, `ordewell-acpx-${dead}-AbC123`);
+    mkdirSync(unrelated);
+    const target = join(temp, 'elsewhere');
+    mkdirSync(target);
+    writeFileSync(join(target, 'keep'), 'x');
+    const link = join(temp, `ordewell-acp-${dead}-Lnk456`);
+    symlinkSync(target, link);
+
+    const { adapter } = setup(handshake(NO_HTTP), SETTINGS_PROFILE);
+    await adapter.start(taskStart());
+
+    expect(existsSync(leftover)).toBe(false);
+    expect(existsSync(running)).toBe(true);
+    expect(existsSync(unrelated)).toBe(true);
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(readFileSync(join(target, 'keep'), 'utf8')).toBe('x');
+  });
+
+  it('starts an agent that takes no MCP over HTTP, which reads the server from its own settings file and calls a tool', async () => {
+    const server = new OrdewellMcpServer();
+    servers.push(server);
+    const mcp = await issued(server);
+    const { adapter, agent } = setup([
+      { expect: 'initialize', reply: NO_HTTP },
+      { expect: 'session/new', reply: { sessionId: 'sess-1' } },
+      { callMcp: { tool: 'read', args: { task: 'x' } } },
+    ], SETTINGS_PROFILE, {}, {}, READS_SETTINGS);
+    await adapter.start(taskStart('ask', { mcp }));
+
+    expect(await adapter.mcpAttached()).toBe('connected');
+    await agent.finished;
+    expect(agent.problems).toEqual([]);
+    expect(agent.mcpCalls.map((c) => c.tool)).toEqual(['read']);
+  });
+
+  it('gives two attempts running at once a settings file each, holding only its own token', async () => {
+    const server = new OrdewellMcpServer();
+    servers.push(server);
+    const [first, second] = await Promise.all([issued(server, 1), issued(server, 2)]);
+    const reads = () => setup([
+      { expect: 'initialize', reply: NO_HTTP },
+      { expect: 'session/new', reply: { sessionId: 'sess-1' } },
+      { callMcp: { tool: 'read', args: { task: 'x' } } },
+    ], SETTINGS_PROFILE, {}, {}, READS_SETTINGS);
+    const a = reads();
+    const b = reads();
+    await Promise.all([a.adapter.start(taskStart('ask', { mcp: first })), b.adapter.start(taskStart('ask', { mcp: second }))]);
+
+    const tokenA = first.headers.Authorization;
+    const tokenB = second.headers.Authorization;
+    expect(tokenA).not.toBe(tokenB);
+    const [pathA, pathB] = [a.spawned.lastEnv()[SETTINGS_ENV], b.spawned.lastEnv()[SETTINGS_ENV]];
+    expect(pathA).toBeTruthy();
+    expect(pathB).toBeTruthy();
+    expect(pathA).not.toBe(pathB);
+    const [readA, readB] = [a.agent.settingsReads[0], b.agent.settingsReads[0]];
+    expect(readA.path).toBe(pathA);
+    expect(readB.path).toBe(pathB);
+    expect(readA.contents).toContain(tokenA);
+    expect(readA.contents).not.toContain(tokenB);
+    expect(readB.contents).toContain(tokenB);
+    expect(readB.contents).not.toContain(tokenA);
+    expect(await Promise.all([a.adapter.mcpAttached(), b.adapter.mcpAttached()])).toEqual(['connected', 'connected']);
+  });
+
+  it('refuses, as it does an agent without the server, an agent that is handed the file and never uses it', async () => {
+    const server = new OrdewellMcpServer();
+    servers.push(server);
+    const agents: Array<ReturnType<typeof setup>['agent']> = [];
+    let attempt = 0;
+    const refused = spawnAttached({
+      runner: 'fake-acp',
+      create: () => {
+        const made = setup(handshake(NO_HTTP), { ...SETTINGS_PROFILE, attachTimeoutMs: 20 }, {}, {}, READS_SETTINGS);
+        agents.push(made.agent);
+        return made.adapter;
+      },
+      issueToken: () => server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: ++attempt }, { taskComplete: async () => ({ ok: true }) } as never),
+      revoke: (token) => server.revoke(token),
+      start: (adapter, credential) => adapter.start(taskStart('ask', { mcp: mcpClientConfig(credential) })),
+      failed: (first, second) => `${first}; ${second}`,
+    });
+
+    const wording = "fake-acp did not report Ordewell's MCP server connected";
+    await expect(refused).rejects.toBeInstanceOf(McpAttachTimeout);
+    await expect(refused).rejects.toHaveProperty('message', `${wording}; ${wording}`);
+    expect(agents).toHaveLength(2);
+    expect(agents.map((a) => a.settingsReads.length)).toEqual([1, 1]);
+    expect(agents.every((a) => a.settingsReads[0].contents !== null)).toBe(true);
+    expect(readdirSync(temp)).toEqual([]);
+  });
+
+  it('refuses to start in a container, where the path it would name is the host\'s and the file is not there, and writes nothing', async () => {
+    const place = vi.fn();
+    const { adapter, spawned } = setup(handshake(NO_HTTP), SETTINGS_PROFILE, {}, {}, READS_SETTINGS);
+    const placed = setup(handshake(NO_HTTP), SETTINGS_PROFILE, {}, { placement: { cwd: '/work', place, reach: async (url) => url, blob: async () => undefined } }, READS_SETTINGS);
+
+    await expect(placed.adapter.start(taskStart())).rejects.toThrow('Fake Agent cannot run in a container: it takes Ordewell\'s MCP server from a settings file on this machine, which the container does not see.');
+    expect(place).not.toHaveBeenCalled();
+    expect(placed.spawned.processes).toHaveLength(0);
+    expect(readdirSync(temp)).toEqual([]);
+    await adapter.start(taskStart());
+    expect(spawned.processes).toHaveLength(1);
+  });
+
+  it('still hands the server in session/new to an agent that advertises HTTP, and none to one that does not, as ACP asks of a client', async () => {
+    const plain = setup(handshake(NO_HTTP), SETTINGS_PROFILE);
+    await plain.adapter.start(taskStart());
+    expect((plain.agent.requests('session/new')[0].params as { mcpServers: unknown }).mcpServers).toEqual([]);
+    expect(plain.agent.invalid).toEqual([]);
+
+    const http = setup(handshake(), SETTINGS_PROFILE);
+    await http.adapter.start(taskStart());
+    expect((http.agent.requests('session/new')[0].params as { mcpServers: unknown }).mcpServers).toEqual([
+      { type: 'http', name: 'ordewell', url: 'http://127.0.0.1:4555/mcp', headers: [{ name: 'Authorization', value: `Bearer ${TOKEN}` }] },
+    ]);
   });
 });
 
