@@ -191,7 +191,8 @@ export class BatchQuoteError extends Error {
     super(
       `Cannot start "${command}" on Windows: an argument holds a double quote, and the only launcher found on PATH was a batch shim (${command}.cmd).\n\n` +
       `cmd.exe has no way to carry a quote inside a quoted argument, so the text after it would run as commands of their own.\n\n` +
-      `Install the native executable from the coding agent's own Windows installer or release binary. Ordewell will launch it directly, with no interpreter in the way. A PowerShell shim (${command}.ps1) beside the batch one is also enough.`,
+      // Not the .ps1 beside it, as the other errors here say: Windows PowerShell drops a quote on its way through a shim (ADR-0010).
+      `Install the native executable from the coding agent's own Windows installer or release binary. Ordewell will launch it directly, with no interpreter in the way.`,
     );
     this.name = 'BatchQuoteError';
   }

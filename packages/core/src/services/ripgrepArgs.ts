@@ -132,7 +132,9 @@ function convertForEre(pattern: string, plainGroups: boolean): string | null {
         i += 3;
         continue;
       }
-      if (pattern[i + 1] !== '?') groupOf[++captures] = groups;
+      // A named group, `(?<n>`, `(?P<n>` or `(?'n'`, captures as a plain one does; a lookbehind does not.
+      const named = /^\(\?(?:P?<(?![=!])|')/.test(pattern.slice(i, i + 4));
+      if (pattern[i + 1] !== '?' || named) groupOf[++captures] = groups;
     }
     if (c !== '[') {
       out += c;

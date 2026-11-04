@@ -1956,7 +1956,12 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       excludes.push(`:(exclude,literal)${(prefix + name).replace(/\\/g, '/')}`);
     }
     if (this.platform === 'win32') {
-      for (const link of await this.linksGitWalksInto(entry.worktree)) excludes.push(`:(exclude,literal)${link}`);
+      // A link under one the bootstrap made is out with it: a mirrored install's thousand packages are one exclude.
+      const made = entry.linked.map((name) => (prefix + name).replace(/\\/g, '/'));
+      const under = (link: string) => made.some((dir) => link === dir || link.startsWith(`${dir}/`));
+      for (const link of await this.linksGitWalksInto(entry.worktree)) {
+        if (!under(link)) excludes.push(`:(exclude,literal)${link}`);
+      }
     }
     await this.git(entry.worktree, ['add', '-A', '--', '.', ...excludes]);
     const staged = await this.tryGit(entry.worktree, ['diff', '--cached', '--quiet']);
@@ -1978,8 +1983,9 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
    * listing.
    */
   private async linksGitWalksInto(worktree: string): Promise<string[]> {
+    // A listing git could not give leaves nothing known, and staging then would walk every junction: refused.
     const listed = await this.tryGit(worktree, ['status', '--porcelain=v1', '-z', '--no-renames', '--untracked-files=all']);
-    if (!listed.ok) return [];
+    if (!listed.ok) throw new Error(`git could not list what the worktree holds: ${firstLine(listed.stderr.trim() || `exit ${listed.code}`)}`);
     const isLink = new Map<string, boolean>();
     const linkAt = (rel: string): boolean => {
       let link = isLink.get(rel);

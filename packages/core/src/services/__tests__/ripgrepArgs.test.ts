@@ -196,6 +196,9 @@ describe('toPosixClasses', () => {
     expect(toPosixClasses('(x)(?:y)(z)\\2\\1')).toBe('(x)(y)(z)\\3\\1');
     // An escaped backslash is no backreference.
     expect(toPosixClasses('(?:a)\\\\1')).toBe('(a)\\\\1');
+    // A named group captures; a lookbehind does not.
+    expect(toPosixClasses('(?<n>a)(?:b)(c)\\2')).toBe('(?<n>a)(b)(c)\\3');
+    expect(toPosixClasses('(?<=a)(?:b)(c)\\1')).toBe('(?<=a)(b)(c)\\3');
   });
 
   it('keeps its non-capturing groups where a renumbered backreference would need \\10, which ERE lacks', () => {
