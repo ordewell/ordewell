@@ -81,3 +81,32 @@ describe('ModelDiscovery — the acp method', () => {
     expect(client).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('ModelDiscovery — acp failures and canonical aliases', () => {
+  it('keeps a failed ACP handshake uncached even when the fallback command answers, so a recovered agent is asked again', async () => {
+    let now = 1_000;
+    let signedIn = false;
+    const client: AcpClientImpl = vi.fn(async () => (signedIn ? OFFERED : null));
+    const discovery = new ModelDiscovery(registryWith(agent), execOf('alpha\n'), undefined, undefined, undefined, () => now, undefined, client);
+
+    expect((await discovery.discover('acp-agent')).map((m) => m.modelId)).toEqual(['alpha']);
+    signedIn = true;
+    now += 61_000;
+
+    const recovered = await discovery.discover('acp-agent');
+    expect(client).toHaveBeenCalledTimes(2);
+    expect(recovered.map((m) => m.modelId)).toEqual(['small']);
+    expect(recovered[0].variants).toEqual(OFFERED[0].variants);
+  });
+
+  it('adds the manifest\'s canonical aliases the agent does not list, keeping the agent\'s own variants', async () => {
+    const client: AcpClientImpl = vi.fn(async () => OFFERED);
+    const aliased: RunnerManifest = { ...agent, modelDiscovery: { ...agent.modelDiscovery, canonicalAliases: [{ modelId: 'auto', modelLabel: 'Auto' }, { modelId: 'small', modelLabel: 'Small again' }] } };
+    const discovery = new ModelDiscovery(registryWith(aliased), execOf(''), undefined, undefined, undefined, undefined, undefined, client);
+
+    const models = await discovery.discover('acp-agent');
+
+    expect(models.map((m) => m.modelId)).toEqual(['small', 'auto']);
+    expect(models[0].variants).toEqual([{ id: 'low', label: 'Low' }]);
+  });
+});
