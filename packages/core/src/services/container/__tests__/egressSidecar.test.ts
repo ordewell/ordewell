@@ -70,7 +70,12 @@ const REBOUND = Object.keys(RESOLVES).filter((name) => name.endsWith('.example.o
 
 async function sidecar(allow: readonly string[]): Promise<Sidecar> {
   const dir = mkdtempSync(join(tmpdir(), 'ordewell-egress-'));
-  const echo = createServer((socket) => socket.pipe(socket));
+  const echo = createServer((socket) => {
+    // The sidecar drops its side when its client goes, which Windows tells
+    // this end as a reset where Linux closes: an error nobody here awaits.
+    socket.on('error', () => undefined);
+    socket.pipe(socket);
+  });
   await new Promise<void>((resolve) => { echo.listen(0, '127.0.0.1', resolve); });
   const dialed = join(dir, 'dialed');
   writeFileSync(dialed, '');
