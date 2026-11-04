@@ -122,8 +122,11 @@ export function repoRoot(workspace: string): string {
 export function readInstruction(file: string, at: { workspace: string; within: string }, into: InstructionFile[]): string | undefined {
   if (into.reduce((chars, read) => chars + entryChars(read.path) + read.text.length, 0) >= INSTRUCTIONS_MAX_CHARS) return undefined;
   if (!insideOnDisk(at.within, file)) return undefined;
-  const text = readText(file, INSTRUCTION_MAX_BYTES);
-  if (text !== undefined) into.push({ path: path.relative(at.workspace, file), text });
+  const raw = readText(file, INSTRUCTION_MAX_BYTES);
+  if (raw === undefined) return undefined;
+  // Kept trimmed, as instructionsBlock charges it: padding counted here but dropped there would stop the read with room left, and the files after it would go unsaid.
+  const text = raw.trim();
+  into.push({ path: path.relative(at.workspace, file), text });
   return text;
 }
 
