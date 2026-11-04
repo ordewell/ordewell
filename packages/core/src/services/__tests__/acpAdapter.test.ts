@@ -1209,6 +1209,18 @@ describe('AcpAdapter config options', () => {
     expect(agent.unexpected).toEqual([]);
   });
 
+  it('keeps the list an update gave ahead of a session/new answer that carries none', async () => {
+    const { agent, adapter } = setup([
+      { expect: 'initialize', reply: INITIALIZED },
+      { expect: 'session/new' },
+      { notify: 'session/update', params: update('config_option_update', { configOptions: [select('model', 'model', 'm-0', ['m-0', 'm-1'])] }) },
+      { answer: { sessionId: 'sess-1' }, to: 'session/new' },
+      { expect: 'session/set_config_option', reply: { configOptions: [select('model', 'model', 'm-1', ['m-0', 'm-1'])] } },
+    ]);
+    await adapter.start(taskStart('ask', { model: 'm-1' }));
+    expect(agent.requests('session/set_config_option').map((m) => m.params)).toEqual([{ sessionId: 'sess-1', configId: 'model', value: 'm-1' }]);
+  });
+
   it('reads the complete list after every set, since a model can bring its own effort option', async () => {
     const { agent, adapter } = setup([
       ...withOptions([select('model', 'model', 'm-0', ['m-0', 'm-1'])]),
@@ -1319,6 +1331,54 @@ describe('AcpAdapter config options held to the plan (B2)', () => {
         { expect: 'session/set_config_option', reply: { configOptions: [select('mode', 'mode', 'default', ['default', 'ask']), select('model', 'model', 'm-1', ['m-0', 'm-1'])] } },
       ], SESSION_MODE_PROFILE);
       await expect(adapter.start(taskStart('ask', { model: 'm-1' }))).rejects.toThrow('Fake Agent did not take the mode "ask": it is on "default".');
+    });
+  });
+
+  describe('held to what the wire says last, when the update after an answer shares its chunk', () => {
+    const answeredThenMoved = (answered: unknown[], moved: unknown[]): FakeAcpStep[] => [
+      { expect: 'session/set_config_option' },
+      { together: [
+        { answer: { configOptions: answered }, to: 'session/set_config_option' },
+        { notify: 'session/update', params: update('config_option_update', { configOptions: moved }) },
+      ] },
+    ];
+
+    it('fails a task whose mode the update moves back', async () => {
+      const modes = (current: string) => [select('mode', 'mode', current, ['default', 'ask'])];
+      const { adapter } = setup([...withOptions(modes('default')), ...answeredThenMoved(modes('ask'), modes('default'))], SESSION_MODE_PROFILE);
+      await expect(adapter.start(taskStart('ask'))).rejects.toThrow('Fake Agent did not take the mode "ask": it is on "default".');
+    });
+
+    const models = (current: string) => [select('model', 'model', current, ['m-0', 'm-1'])];
+
+    it('reports the model the update moves back as drift, in the first turn, for a task that may run on', async () => {
+      const { adapter } = setup([
+        ...withOptions(models('m-0')),
+        ...answeredThenMoved(models('m-1'), models('m-0')),
+        { expect: 'session/prompt', reply: { stopReason: 'end_turn' } },
+      ]);
+      await adapter.start(taskStart('ask', { model: 'm-1' }));
+      const events = await turn(adapter, 'go');
+      expect(events[0]).toEqual({ type: 'model_drifted', from: { model: 'm-1' }, to: { model: 'm-0' } });
+    });
+
+    it('fails a task the agent puts back on another mode right after it answers session/set_mode', async () => {
+      const modes = (current: string) => ({ currentModeId: current, availableModes: [{ id: 'default', name: 'Default' }, { id: 'ask', name: 'Ask' }] });
+      const { adapter } = setup([
+        { expect: 'initialize', reply: INITIALIZED },
+        { expect: 'session/new', reply: { sessionId: 'sess-1', modes: modes('default') } },
+        { expect: 'session/set_mode' },
+        { together: [
+          { answer: {}, to: 'session/set_mode' },
+          { notify: 'session/update', params: update('current_mode_update', { currentModeId: 'default' }) },
+        ] },
+      ], SESSION_MODE_PROFILE);
+      await expect(adapter.start(taskStart('ask'))).rejects.toThrow('Fake Agent did not take the mode "ask": it is on "default".');
+    });
+
+    it('fails a read-only task whose model the update moves back', async () => {
+      const { adapter } = setup([...withOptions(models('m-0')), ...answeredThenMoved(models('m-1'), models('m-0'))], ROLES_PROFILE);
+      await expect(adapter.start(readOnlyStart({ model: 'm-1' }))).rejects.toThrow('Fake Agent did not take the model "m-1": it is on "m-0".');
     });
   });
 
@@ -1641,6 +1701,47 @@ describe('AcpAdapter roles (ADR-0026, ADR-0046)', () => {
     await expect.poll(() => spawned.processes[0].killed).toBe(true);
     expect(await turn(adapter, 'again')).toEqual([{ type: 'error', message: 'Fake Agent left the mode it was started in ("plan" to "build"), so this planner session cannot go on.' }]);
     expect(agent.requests('session/prompt')).toHaveLength(1);
+  });
+
+  it('settles a planner in the mode an update moved it to in the chunk of the session/new answer, and holds that one', async () => {
+    const modes = (current: string) => [select('mode', 'mode', current, ['plan', 'build'])];
+    const { adapter } = setup([
+      { expect: 'initialize', reply: INITIALIZED },
+      { expect: 'session/new' },
+      { together: [
+        { answer: { sessionId: 'sess-1', configOptions: modes('plan') }, to: 'session/new' },
+        { notify: 'session/update', params: update('config_option_update', { configOptions: modes('build') }) },
+      ] },
+      { expect: 'session/prompt' },
+      { notify: 'session/update', params: update('config_option_update', { configOptions: modes('build') }) },
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+      { expect: 'session/prompt' },
+      { notify: 'session/update', params: update('config_option_update', { configOptions: modes('plan') }) },
+    ], ROLES_PROFILE);
+    await adapter.start(plannerStart());
+
+    expect((await turn(adapter, 'go')).some((e) => e.type === 'error')).toBe(false);
+    expect(await turn(adapter, 'again')).toContainEqual({ type: 'error', message: 'Fake Agent left the mode it was started in ("build" to "plan"), so this planner session cannot go on.' });
+  });
+
+  it('settles a read-only task in the mode a current_mode_update moved it to in the chunk of the session/new answer', async () => {
+    const { adapter } = setup([
+      { expect: 'initialize', reply: INITIALIZED },
+      { expect: 'session/new' },
+      { together: [
+        { answer: WITH_MODES, to: 'session/new' },
+        { notify: 'session/update', params: update('current_mode_update', { currentModeId: 'write' }) },
+      ] },
+      { expect: 'session/prompt' },
+      { notify: 'session/update', params: update('current_mode_update', { currentModeId: 'write' }) },
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+      { expect: 'session/prompt' },
+      { notify: 'session/update', params: update('current_mode_update', { currentModeId: 'read' }) },
+    ], ROLES_PROFILE);
+    await adapter.start(readOnlyStart());
+
+    expect((await turn(adapter, 'go')).some((e) => e.type === 'error')).toBe(false);
+    expect(await turn(adapter, 'again')).toContainEqual({ type: 'error', message: 'Fake Agent left the mode it was started in ("write" to "read"), so this read-only task cannot go on.' });
   });
 
   it('lets a writable task change its mode, since only a restricted start holds one', async () => {
