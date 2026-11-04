@@ -26,6 +26,17 @@ const RUNNER_NAME: Record<string, (tool: string) => string> = {
   codex: (tool) => `mcp__ordewell__${tool}`,
   opencode: (tool) => `ordewell_${tool}`,
   'copilot-cli': (tool) => `ordewell-${tool}`,
+  'qwen-code': (tool) => `mcp__ordewell__${tool}`,
+};
+
+/**
+ * What a runner's transcript calls an Ordewell tool call, where that is not
+ * the name it runs it by: Qwen Code reports an MCP call first under the
+ * placeholder title "ToolCall" and an event keeps the name its call was first
+ * seen under (acpEvents.ts), while its requests carry the real name.
+ */
+const REPORTED_AS: Record<string, (tool: string) => string> = {
+  'qwen-code': () => 'ToolCall',
 };
 
 /**
@@ -37,6 +48,7 @@ const NATIVE_INSTEAD: Record<string, string[]> = {
   codex: [],
   opencode: [],
   'copilot-cli': [],
+  'qwen-code': [],
 };
 
 const mcp = mcpClientConfig({ url: 'http://127.0.0.1:4555/mcp', token: 'tok-secret' });
@@ -200,7 +212,7 @@ describe.each(runners)('the %s connector and the Ordewell tools', (runner) => {
     for (const tool of tools) fake.callOrdewellTool(tool.name);
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(events.flatMap((e) => (e.type === 'tool_call' ? [e.name] : []))).toEqual(tools.map((tool) => name(tool.name)));
+    expect(events.flatMap((e) => (e.type === 'tool_call' ? [e.name] : []))).toEqual(tools.map((tool) => (REPORTED_AS[runner] ?? name)(tool.name)));
     adapter.dispose();
   });
 

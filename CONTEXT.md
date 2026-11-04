@@ -762,7 +762,7 @@ the directive to attach.
 *Avoid:* "skill message", "skill event".
 
 **Executor / Runner** — an external coding-agent CLI (Claude Code, Codex,
-OpenCode, and GitHub Copilot CLI over ACP) that runs *one task* in its own
+OpenCode, and GitHub Copilot CLI and Qwen Code over ACP) that runs *one task* in its own
 session through a structured connector. `RunnerRegistry` holds their built-in
 manifests: identity, command, model discovery and mode settings. External
 plugin manifests are ignored with one notice at host startup.
@@ -839,10 +839,12 @@ serves every such runner, and only an agent whose own maintainers ship its ACP
 server qualifies. Ordewell offers it no file system or terminal, so it works in
 the worktree with its own tools and reaches Ordewell only through the Ordewell
 MCP server, given over HTTP in `session/new`. It has no mid-turn steer: a
-message waits for the turn's end. GitHub Copilot CLI (`copilot-cli`) is the one
-admitted so far: it runs tasks, read-only ones included, and plans, and on a
-planner or read-only start it begins in a private directory, never the
-worktree, so the repository's hooks and config do not run (ADR-0060 R3).
+message waits for the turn's end. Two are admitted so far. GitHub Copilot CLI
+(`copilot-cli`) runs tasks, read-only ones included, and plans, and on a planner
+or read-only start it begins in a private directory, never the worktree, so the
+repository's hooks and config do not run (ADR-0060 R3). Qwen Code (`qwen-code`)
+runs writable tasks only: no recording shows it refusing a write and a command,
+so it claims neither role.
 *Avoid:* "ACP shim" or "ACP bridge" for it (a third-party adapter in front of an
 agent does not qualify); "ACP backend", "ACP provider".
 

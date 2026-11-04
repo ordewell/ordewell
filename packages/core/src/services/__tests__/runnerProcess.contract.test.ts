@@ -61,6 +61,7 @@ const REFUSED: Record<string, { deps: () => AgentProcessDeps; launches: number }
   }, launches: 1 },
   // An ACP agent is refused at `initialize`, once it is running.
   'copilot-cli': { deps: () => baseDeps(fakeSpawn([`${JSON.stringify({ jsonrpc: '2.0', id: 1, error: { code: -32603, message: 'unsupported client' } })}\n`]).spawn, noHttp), launches: 1 },
+  'qwen-code': { deps: () => baseDeps(fakeSpawn([`${JSON.stringify({ jsonrpc: '2.0', id: 1, error: { code: -32603, message: 'unsupported client' } })}\n`]).spawn, noHttp), launches: 1 },
 };
 
 let nextPid = 3_900_000;

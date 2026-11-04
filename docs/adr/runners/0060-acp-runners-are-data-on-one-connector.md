@@ -28,7 +28,8 @@ whether their own tools can be taken away.
 an `AcpProfile`: data, not code.** `acpConnector(profile)` turns a profile into
 the runner's entry in `CONNECTORS`, so a new ACP agent is a manifest and a
 profile. GitHub Copilot CLI (`copilot-cli`, `copilot --acp --stdio`) is the
-reference agent and the one ACP runner admitted so far.
+reference agent; Qwen Code (`qwen-code`, `qwen --acp`) is the second, for
+writable tasks only.
 
 Ordewell is the ACP client and does no I/O for the agent: it advertises no
 file-system and no terminal capability, so the agent works in the worktree
@@ -182,12 +183,43 @@ directory) first; an empty answer falls through to `copilot help config`
 learned from `-32000` and shown with its `copilot login`
 ([ADR-0052](../routing/0052-a-signed-out-coding-agent-is-flagged-and-signs-in-from-the-chat.md)).
 
+## Qwen Code
+
+Checked against Qwen Code 0.26.6, the profile's `minVersion`, and the
+recordings in `packages/core/src/services/__tests__/fixtures/acp/qwen-code/`,
+made with an OpenRouter model:
+
+| profile field | Qwen Code |
+|---|---|
+| instructions | the first prompt: Qwen has no instruction file or `_meta` slot outside the worktree |
+| mode | the `mode` config option, set after `session/new` (`default`, `auto-edit`, `yolo`); the manifest offers no `auto`, Qwen's default, because an LLM classifier decides there, and no `plan`, whose refusal of a write and a command has no recording |
+| model | `--model` at spawn and the `model` config option, whose ids carry a provider suffix (`openai/gpt-4.1-mini(openai)`) |
+| Ordewell's tools | `_meta.toolName` of the permission request, `mcp__ordewell__<tool>`; the title is the call's arguments, which the model writes, and the kind is a guess, so neither is read |
+| restriction | none |
+| roles | none: Qwen is task-only, since no recording shows its `plan` mode, or any control, refusing a write and a command (R3) |
+
+Qwen contacts the server while `session/new` runs, which is the attach (R5).
+It defers an MCP tool's schema: the model must find a tool with `tool_search`
+before it can call it, and a bare call of `task_complete` is refused by Qwen
+itself and completes nothing (`deferred-refused.jsonl`). A call is first
+reported under the placeholder title `ToolCall`, so the transcript names the
+call only from its in-progress update, whose `_meta.toolName` carries the
+tool. In `yolo` Qwen asks about nothing (`allow-all.jsonl`); the pending
+request of a cancelled turn is answered `cancelled`. It has no login or
+status command: it signs in from its settings file or its provider's key, a
+signed-out `session/new` fails with `-32000` "Authentication required", and
+that is how a signed-out Qwen is learned.
+
+Its models come from ACP discovery alone: `session/new` lists the models its
+settings configure, and there is no command to fall back to.
+
 ## Testing decisions
 
 - **Recorded fixtures are the agent's evidence.** A recording is the JSONL of
   every line each side sent, with notes for the spawn arguments and what the
   live run left behind. `copilotCli.test.ts` replays the agent's side against a
-  live adapter and Ordewell server; a claim about the agent cites a recording.
+  live adapter and Ordewell server, and `qwenCode.test.ts` does the same for
+  Qwen; a claim about the agent cites a recording.
 - **`fakeAcpAgent`** scripts an agent for the adapter's own tests
   (`acpAdapter.test.ts`, `acpCancelRace.adversarial.test.ts`), and
   `fakeRunners.ts` gives the connector contract tests an ACP runner.
@@ -199,8 +231,8 @@ learned from `-32000` and shown with its `copilot login`
 - **A stdio-to-HTTP MCP bridge.** An agent that takes only stdio MCP servers
   would need a local process carrying the token; it is refused instead, until
   such an agent is worth the bridge.
-- **Agents beyond Copilot CLI.** Gemini CLI, Qwen Code and Goose wait for the
-  same live probe Copilot passed before they are admitted at all.
+- **Agents beyond Copilot CLI and Qwen Code.** Gemini CLI and Goose wait for
+  the same live probe those passed before they are admitted at all.
 - **A resumed restricted start.** A resume begins in a new private directory
   and hands it to `session/load`; no recording yet shows Copilot resuming a
   session whose `cwd` has changed.
@@ -251,6 +283,11 @@ learned from `-32000` and shown with its `copilot login`
 - **Autonomous modes answered by the adapter alone.** Rejected where the agent
   has its own switch: the agent would still ask, and each ask is a round trip
   the mode already settled. The adapter answers only for an agent without one.
+- **Qwen's own `auto` mode as its default mode.** Rejected: an LLM
+  classifier decides what runs there, which leaves a plan's mode to a model
+  (ADR-0001). Every start sets one of the three modes the manifest offers.
+- **Qwen's `plan` mode as a read-only mode.** Rejected for want of evidence:
+  no recording shows it refusing a write and a command, and R3 asks for one.
 - **Steering through a prompt sent mid-turn.** Rejected: v1 defines no
   injection, and a second `session/prompt` during a turn is not specified to
   join it. The turn-end queue is what v1 supports.
@@ -268,7 +305,8 @@ learned from `-32000` and shown with its `copilot login`
   its own relative paths name the private directory; its instructions tell it
   where the workspace is.
 - A runner id shares the planner setting's namespace with the API vendors'
-  ids, so an ACP runner id must not equal one (`kimi-cli`, not `kimi`).
+  ids, so an ACP runner id must not equal one (`kimi-cli`, not `kimi`;
+  `qwen-code`, because `qwen` is DashScope's).
 - Each agent's ACP server is young and changes between releases; the profile's
   `minVersion` and its recordings name the version each claim was checked on.
 
@@ -283,3 +321,5 @@ learned from `-32000` and shown with its `copilot login`
   files after Ordewell's own, from Copilot's repository-config reader.
 - 2026-11-04 — a profile may answer the agent's own client-bound requests
   (`extensionRequests`); Cursor's are written, for a profile not yet admitted.
+- 2026-11-04 — Qwen Code (`qwen-code`) is admitted on its recordings, for
+  writable tasks only.

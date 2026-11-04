@@ -14,6 +14,7 @@ import { claudeUsageLimitReset } from './claudeUsageLimit';
 import { codexUsageLimitReset } from './codexUsageLimit';
 import { acpConnector } from './acpProfiles';
 import { COPILOT_CLI_PROFILE } from './copilotProfile';
+import { QWEN_CODE_PROFILE } from './qwenProfile';
 
 /**
  * One runner's connector: the adapter that drives it over its programmatic
@@ -61,6 +62,7 @@ export const CONNECTORS: Readonly<Record<string, RunnerConnector>> = {
   codex: { create: (deps) => new CodexAdapter(deps), plans: true, ordewellTools: CODEX_ORDEWELL, repoConfig: CODEX_REPO_CONFIG, usageLimitReset: codexUsageLimitReset, promptCacheTtlMs: FIVE_MINUTES },
   opencode: { create: (deps) => new OpenCodeAdapter(deps), plans: true, ordewellTools: OPENCODE_ORDEWELL, repoConfig: OPENCODE_REPO_CONFIG },
   'copilot-cli': acpConnector(COPILOT_CLI_PROFILE),
+  'qwen-code': acpConnector(QWEN_CODE_PROFILE),
 };
 
 /** The connector for a runner id; undefined for an unknown id (including `toString`). */

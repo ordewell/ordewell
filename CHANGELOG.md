@@ -10,6 +10,12 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Added
 
+- **Qwen Code runs tasks.** A plan can assign a task to `qwen-code`, which
+  Ordewell drives over the Agent Client Protocol with the Ordewell tools
+  attached and its models discovered. It runs writable tasks only, not the
+  planner or read-only tasks. Qwen Code 0.26.6 or newer is required, and
+  signing in is done by running `qwen` itself.
+
 - **GitHub Copilot CLI runs tasks.** A plan can assign a task to `copilot-cli`,
   which Ordewell drives over the Agent Client Protocol with the Ordewell tools
   attached, its models discovered and a signed-out Copilot flagged with its
