@@ -786,7 +786,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       if (target.worktree) await this.removeWorktreeDir(run, repo, worktree, target.linked);
     }
     for (const repo of run.repos) await this.tryGit(repo.root, ['branch', '-D', names.branch]);
-    this.removeTaskWorkspace(run, names.dir);
+    await this.removeTaskWorkspace(run, names.dir);
     return removal;
   }
 
@@ -1930,7 +1930,8 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     if (!listed.ok) return null;
     let worktree: string | null = null;
     for (const line of listed.stdout.split(/\r?\n/)) {
-      if (line.startsWith('worktree ')) worktree = line.slice('worktree '.length);
+      // Git for Windows names it with forward slashes; the user is told it as the platform writes it.
+      if (line.startsWith('worktree ')) worktree = path.normalize(line.slice('worktree '.length));
       else if (line === `branch refs/heads/${branch}`) return { worktree };
     }
     return { worktree: null };
@@ -2017,7 +2018,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       if (entry) await this.removeWorktreeDir(run, repo, entry.worktree, entry.linked);
       await this.tryGit(repo.root, ['branch', '-D', record.branch]);
     }
-    this.removeTaskWorkspace(run, record.workspace);
+    await this.removeTaskWorkspace(run, record.workspace);
     if (opts.dropRecord) delete run.tasks[record.taskId];
     return removal;
   }
@@ -2077,11 +2078,21 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
    * links and the directories that held deeper repos. Links are unlinked
    * first, so removing the rest can never walk into the real workspace.
    */
-  private removeTaskWorkspace(run: IsolationRun, dir: string): void {
+  private async removeTaskWorkspace(run: IsolationRun, dir: string): Promise<void> {
     if (!isInside(this.runRoot(run), dir) || !fs.existsSync(dir)) return;
     this.unlinkLinksUnder(dir);
     clearImmutableFlags(this.platform, dir);
-    fs.rmSync(dir, { recursive: true, force: true });
+    await this.removeDir(dir);
+  }
+
+  /**
+   * Windows removes no directory a process works in, and a runner stopped
+   * there a moment ago may still be going: taskkill ends it from another
+   * process. So there the removal waits for it, a while, before it gives up.
+   */
+  private async removeDir(dir: string): Promise<void> {
+    if (this.platform === 'win32') await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    else fs.rmSync(dir, { recursive: true, force: true });
   }
 
   private unlinkLinksUnder(dir: string): void {
@@ -2126,7 +2137,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
         }
         if (!kept) continue;
         for (const repo of run.repos) await this.removeWorktreeDir(run, repo, path.join(dir, repo.path), []);
-        this.removeTaskWorkspace(run, dir);
+        await this.removeTaskWorkspace(run, dir);
       }
     }
     const taskBranches = Object.values(run.tasks).map((r) => r.branch);
@@ -2148,20 +2159,26 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     // it is found again from package.json when no record names it. Only
     // where the way to it is still the run's own directories: a link a task
     // put in place of one would lead the unlinking into a directory of the
-    // user's.
-    for (const name of new Set([...linked, ...installDirs(dir)])) {
-      const target = path.join(dir, name);
-      if (!resolvesAsNamed(this.runRoot(run), path.dirname(target))) continue;
-      this.unlinkIfLink(target);
-      this.unlinkLinksUnder(target);
-    }
-    for (const name of resolvesAsNamed(this.runRoot(run), dir) ? fs.readdirSync(dir) : []) {
-      if (LINKED_ARTIFACTS.has(name) || isEnvFile(name)) this.unlinkIfLink(path.join(dir, name));
+    // user's. They were made where the workspace sits in the worktree, below
+    // its top for a workspace in a folder of the repository: Git for Windows
+    // removes a junction by walking into it, so one missed empties the
+    // user's own folder.
+    const prefix = (await this.tryGit(repo.root, ['rev-parse', '--show-prefix'])).stdout.trim();
+    for (const base of new Set([dir, path.join(dir, prefix)])) {
+      for (const name of new Set([...linked, ...installDirs(base)])) {
+        const target = path.join(base, name);
+        if (!resolvesAsNamed(this.runRoot(run), path.dirname(target))) continue;
+        this.unlinkIfLink(target);
+        this.unlinkLinksUnder(target);
+      }
+      for (const name of resolvesAsNamed(this.runRoot(run), base) ? fs.readdirSync(base) : []) {
+        if (LINKED_ARTIFACTS.has(name) || isEnvFile(name)) this.unlinkIfLink(path.join(base, name));
+      }
     }
     await this.tryGit(repo.root, ['worktree', 'remove', '--force', dir]);
     if (fs.existsSync(dir) && isInside(this.runRoot(run), dir)) {
       clearImmutableFlags(this.platform, dir);
-      fs.rmSync(dir, { recursive: true, force: true });
+      await this.removeDir(dir);
     }
     await this.tryGit(repo.root, ['worktree', 'prune']);
     // A deeper repo's worktree leaves the directories above it behind.

@@ -1,14 +1,18 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { execFile, execFileSync } from 'child_process';
 import { promisify } from 'util';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, sep } from 'path';
 import { createWorktreeIsolation, type GitExecFn, type WorktreeIsolationDeps } from '../GitWorktreeIsolation';
 import type { IsolationRun } from '../../interfaces/IWorktreeIsolation';
 import type { Task } from '../../models/Task';
 import { fakeConfig } from '../../testing';
 import { landingMessage, messageArgs } from '../landingMessage';
+
+// Native, as git names a path: on Windows the JS realpath keeps the 8.3 short
+// name the temp folder has there, and a fixture would not match what git lists.
+const realpath = realpathSync.native;
 
 const hasGit = (() => {
   try { execFileSync('git', ['--version'], { stdio: 'ignore' }); return true; } catch { return false; }
@@ -46,7 +50,7 @@ function initRepo(root: string, files: Record<string, string> = { 'README.md': '
 }
 
 function makeRepo(files?: Record<string, string>): string {
-  return initRepo(realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-wt-'))), files);
+  return initRepo(realpath(mkdtempSync(join(tmpdir(), 'ordewell-wt-'))), files);
 }
 
 function task(order: number, title: string): Task {
@@ -70,12 +74,33 @@ function worktreePaths(root: string): string[] {
     .map((l) => realpathSafe(l.slice('worktree '.length)));
 }
 
+/**
+ * Rewrite a worktree's `.git` file as a task could. Replaced, not written over:
+ * Git for Windows hides it, and Windows creates no file over a hidden one.
+ */
+function replaceGitFile(worktree: string, content: string): void {
+  rmSync(join(worktree, '.git'));
+  writeFileSync(join(worktree, '.git'), content);
+}
+
+/**
+ * Whether `p` leads live to `target` as the platform links without privilege
+ * (ADR-0010): a symlink, or on Windows a hard link for a file, which is the
+ * file itself rather than a link to it.
+ */
+function linksTo(p: string, target: string): boolean {
+  const here = lstatSync(p);
+  if (here.isSymbolicLink()) return realpath(p) === realpath(target);
+  const there = statSync(target);
+  return process.platform === 'win32' && here.isFile() && here.dev === there.dev && here.ino === there.ino;
+}
+
 function lexists(p: string): boolean {
   try { lstatSync(p); return true; } catch { return false; }
 }
 
 function realpathSafe(p: string): string {
-  try { return realpathSync(p); } catch { return p; }
+  try { return realpath(p); } catch { return p; }
 }
 
 function branches(root: string, pattern = 'ordewell/*'): string[] {
@@ -147,7 +172,7 @@ describe('WorktreeIsolation.isActive', () => {
 
   describe.skipIf(!hasGit)('with git installed', () => {
     it('reports not-git for a plain directory', async () => {
-      const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-plain-')));
+      const dir = realpath(mkdtempSync(join(tmpdir(), 'ordewell-plain-')));
       roots.push(dir);
       const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
       expect(await iso.isActive(dir)).toEqual({ active: false, reason: 'not-git' });
@@ -213,7 +238,7 @@ describe('WorktreeIsolation.isActive', () => {
     });
 
     it('isolates a folder of repositories as a group of the ones directly inside it, not deeper ones', async () => {
-      const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-group-')));
+      const dir = realpath(mkdtempSync(join(tmpdir(), 'ordewell-group-')));
       roots.push(dir);
       initRepo(join(dir, 'web'));
       initRepo(join(dir, 'api'));
@@ -227,7 +252,7 @@ describe('WorktreeIsolation.isActive', () => {
     });
 
     it('reports no-commits for a repository with nothing to branch from', async () => {
-      const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-empty-')));
+      const dir = realpath(mkdtempSync(join(tmpdir(), 'ordewell-empty-')));
       roots.push(dir);
       git(dir, 'init', '-q');
       const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
@@ -1140,12 +1165,12 @@ describe.skipIf(!hasGit)("WorktreeIsolation for a read-only task (ADR-0046)", ()
     // What a sealed command could leave: a gitdir of its own, whose config runs a program for git.
     mkdirSync(join(cwd, 'fake-git'));
     writeFileSync(join(cwd, 'fake-git', 'config'), `[core]\n\tfsmonitor = touch ${join(root, 'ran-outside')}\n`);
-    writeFileSync(join(cwd, '.git'), 'gitdir: fake-git\n');
+    replaceGitFile(cwd, 'gitdir: fake-git\n');
     cwds.length = 0;
 
     await iso.release(run, 'task-1', { keep: false });
 
-    expect(cwds.filter((dir) => dir === cwd || dir.startsWith(`${cwd}/`))).toEqual([]);
+    expect(cwds.filter((dir) => dir === cwd || dir.startsWith(`${cwd}${sep}`))).toEqual([]);
     expect(existsSync(join(root, 'ran-outside'))).toBe(false);
     expect(existsSync(cwd)).toBe(false);
   });
@@ -1172,7 +1197,7 @@ describe.skipIf(!hasGit)("WorktreeIsolation for a read-only task (ADR-0046)", ()
       'packages/b/package.json': '{"name":"b"}\n',
     });
     mkdirSync(join(root, 'packages', 'b', 'node_modules', 'only-b'), { recursive: true });
-    const outside = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-wt-outside-')));
+    const outside = realpath(mkdtempSync(join(tmpdir(), 'ordewell-wt-outside-')));
     roots.push(outside);
     mkdirSync(join(outside, 'b', 'node_modules'), { recursive: true });
     symlinkSync(join(root, 'README.md'), join(outside, 'b', 'node_modules', 'theirs'));
@@ -1511,17 +1536,30 @@ describe.skipIf(!hasGit)('WorktreeIsolation bootstrap', () => {
     const run = await iso.startRun(root);
     const { cwd } = await iso.prepare(task(1, 'Bootstrap'), run);
 
-    for (const name of ['.venv', '.claude', '.env', '.envrc']) {
-      expect(lstatSync(join(cwd, name)).isSymbolicLink(), name).toBe(true);
-      expect(realpathSync(join(cwd, name))).toBe(realpathSync(join(root, name)));
-    }
+    for (const name of ['.venv', '.claude', '.env', '.envrc']) expect(linksTo(join(cwd, name), join(root, name)), name).toBe(true);
     // node_modules is a real directory whose entries are linked one by one.
     expect(lstatSync(join(cwd, 'node_modules')).isSymbolicLink()).toBe(false);
-    expect(realpathSync(join(cwd, 'node_modules', 'left-pad'))).toBe(join(root, 'node_modules', 'left-pad'));
+    expect(realpath(join(cwd, 'node_modules', 'left-pad'))).toBe(join(root, 'node_modules', 'left-pad'));
     expect(readFileSync(join(cwd, 'node_modules', 'left-pad', 'index.js'), 'utf8')).toBe('module.exports = 1;\n');
     expect(existsSync(join(cwd, '.ordewell'))).toBe(false);
     // A tracked file is checked out for real, not replaced by a link.
     expect(lstatSync(join(cwd, '.env.example')).isSymbolicLink()).toBe(false);
+  });
+
+  it('leaves what a link leads to when it removes the worktree of a workspace below the repository top', async () => {
+    const root = repo({ 'sub/file.txt': 'x\n', 'sub/.gitignore': '.claude/\n' });
+    const workspace = join(root, 'sub');
+    mkdirSync(join(workspace, '.claude'));
+    writeFileSync(join(workspace, '.claude', 'settings.local.json'), '{}\n');
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(workspace);
+    const { cwd } = await iso.prepare(task(1, 'Below the top'), run);
+    expect(linksTo(join(cwd, '.claude'), join(workspace, '.claude'))).toBe(true);
+
+    await iso.release(run, 'task-1', { keep: false });
+
+    expect(existsSync(cwd)).toBe(false);
+    expect(readFileSync(join(workspace, '.claude', 'settings.local.json'), 'utf8')).toBe('{}\n');
   });
 
   it('skips artifacts that are not present in the main worktree', async () => {
@@ -1639,10 +1677,12 @@ describe.skipIf(!hasGit)('WorktreeIsolation bootstrap of a workspace install', (
     const run = await iso.startRun(root);
     const { cwd } = await iso.prepare(task(1, 'Change a'), run);
 
-    expect(realpathSync(join(cwd, 'node_modules', '@scope', 'a'))).toBe(join(cwd, 'packages', 'a'));
-    expect(realpathSync(join(cwd, 'node_modules', 'left-pad'))).toBe(join(root, 'node_modules', 'left-pad'));
-    expect(execFileSync(join(cwd, 'node_modules', '.bin', 'pad'), { encoding: 'utf8' })).toBe('padded\n');
-    expect(realpathSync(join(cwd, 'packages', 'b', 'node_modules', 'only-b'))).toBe(join(root, 'packages', 'b', 'node_modules', 'only-b'));
+    expect(realpath(join(cwd, 'node_modules', '@scope', 'a'))).toBe(join(cwd, 'packages', 'a'));
+    expect(realpath(join(cwd, 'node_modules', 'left-pad'))).toBe(join(root, 'node_modules', 'left-pad'));
+    // Windows starts no `#!` script by itself, so there the link is read for the main install's script.
+    if (process.platform === 'win32') expect(readFileSync(join(cwd, 'node_modules', '.bin', 'pad'), 'utf8')).toBe('#!/bin/sh\necho padded\n');
+    else expect(execFileSync(join(cwd, 'node_modules', '.bin', 'pad'), { encoding: 'utf8' })).toBe('padded\n');
+    expect(realpath(join(cwd, 'packages', 'b', 'node_modules', 'only-b'))).toBe(join(root, 'packages', 'b', 'node_modules', 'only-b'));
     expect(existsSync(join(cwd, 'packages', 'a', 'node_modules'))).toBe(false);
     expect(git(cwd, 'status', '--porcelain')).toBe('');
   });
@@ -1673,7 +1713,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation bootstrap of a workspace install', (
 
     expect(existsSync(cwd)).toBe(false);
     expect(readFileSync(join(root, 'node_modules', 'left-pad', 'index.js'), 'utf8')).toBe('module.exports = 1;\n');
-    expect(realpathSync(join(root, 'node_modules', '@scope', 'a'))).toBe(join(root, 'packages', 'a'));
+    expect(realpath(join(root, 'node_modules', '@scope', 'a'))).toBe(join(root, 'packages', 'a'));
     expect(readFileSync(join(root, 'node_modules', '.bin', 'pad'), 'utf8')).toBe('#!/bin/sh\necho padded\n');
     expect(readFileSync(join(root, 'packages', 'b', 'node_modules', 'only-b', 'index.js'), 'utf8')).toBe('module.exports = 2;\n');
     expect(readFileSync(join(root, 'packages', 'a', 'index.js'), 'utf8')).toBe("module.exports = 'a';\n");
@@ -1688,7 +1728,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation bootstrap of a workspace install', (
     await iso.pruneOrphans(run);
 
     expect(existsSync(cwd)).toBe(false);
-    expect(realpathSync(join(root, 'node_modules', '@scope', 'a'))).toBe(join(root, 'packages', 'a'));
+    expect(realpath(join(root, 'node_modules', '@scope', 'a'))).toBe(join(root, 'packages', 'a'));
     expect(readFileSync(join(root, 'node_modules', 'left-pad', 'index.js'), 'utf8')).toBe('module.exports = 1;\n');
     expect(readFileSync(join(root, 'packages', 'b', 'node_modules', 'only-b', 'index.js'), 'utf8')).toBe('module.exports = 2;\n');
     expect(readFileSync(join(root, 'packages', 'a', 'index.js'), 'utf8')).toBe("module.exports = 'a';\n");
@@ -1776,7 +1816,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation.pruneOrphans', () => {
     const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const run = await iso.startRun(root);
     const { cwd } = await iso.prepare(task(1, 'Bootstrap only'), run);
-    expect(lstatSync(join(cwd, '.envrc')).isSymbolicLink()).toBe(true);
+    expect(linksTo(join(cwd, '.envrc'), join(root, '.envrc'))).toBe(true);
 
     const result = await iso.pruneOrphans(run);
 
@@ -2100,7 +2140,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation end-of-run handoff', () => {
       const unmerged = await landedRun(iso, root, 'unmerged.txt');
       git(root, 'merge', '-q', '--no-edit', merged.repos[0].integrationBranch);
       git(root, 'branch', 'ordewell-notes');
-      const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-user-wt-')));
+      const elsewhere = realpath(mkdtempSync(join(tmpdir(), 'ordewell-user-wt-')));
       roots.push(elsewhere);
       git(root, 'worktree', 'add', '-q', '-b', 'ordewell/cafe0000/integration', join(elsewhere, 'wt'), 'HEAD');
       const current = await iso.startRun(root);
@@ -2307,7 +2347,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation for merge gates and ops tasks (ADR-0
   });
 
   it('snapshots every repo of a group, leaving out those excluded', async () => {
-    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-group-')));
+    const dir = realpath(mkdtempSync(join(tmpdir(), 'ordewell-group-')));
     roots.push(dir);
     initRepo(join(dir, 'api'), { 'a.txt': 'a\n' });
     initRepo(join(dir, 'web'), { 'w.txt': 'w\n' });
@@ -2326,7 +2366,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
   // A folder that is not a repository: three repositories with commits, one
   // with none, a loose file, a loose directory, and a gitignored `.env`.
   function group(): string {
-    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-group-')));
+    const dir = realpath(mkdtempSync(join(tmpdir(), 'ordewell-group-')));
     roots.push(dir);
     initRepo(join(dir, 'api'), { 'README.md': 'api\n', '.gitignore': '.env\n' });
     initRepo(join(dir, 'web'), { 'index.html': '<p>web</p>\n' });
@@ -2376,7 +2416,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
       expect(readFileSync(join(cwd, 'libs', 'core', 'lib.ts'), 'utf8')).toBe('export {};\n');
       expect(git(join(cwd, 'libs', 'core'), 'branch', '--show-current')).toBe(run.tasks['task-1'].branch);
       expect(lstatSync(join(cwd, 'libs')).isSymbolicLink()).toBe(false);
-      expect(lstatSync(join(cwd, 'libs', 'README.md')).isSymbolicLink()).toBe(true);
+      expect(linksTo(join(cwd, 'libs', 'README.md'), join(dir, 'libs', 'README.md'))).toBe(true);
     });
 
     it('shares a repository git refuses a worktree for, and isolates the others', async () => {
@@ -2400,7 +2440,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
     });
 
     it('reports no-commits, naming them, when no repository in the folder has a commit', async () => {
-      const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-group-')));
+      const dir = realpath(mkdtempSync(join(tmpdir(), 'ordewell-group-')));
       roots.push(dir);
       for (const name of ['one', 'two']) {
         mkdirSync(join(dir, name));
@@ -2411,7 +2451,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
     });
 
     it('still reports not-git for a folder with no repositories in it', async () => {
-      const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-group-')));
+      const dir = realpath(mkdtempSync(join(tmpdir(), 'ordewell-group-')));
       roots.push(dir);
       mkdirSync(join(dir, 'docs'));
       const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
@@ -2462,12 +2502,9 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
         expect(worktreePaths(join(dir, repo))).toContain(join(cwd, repo));
       }
       expect(readFileSync(join(cwd, 'web', 'index.html'), 'utf8')).toBe('<p>web</p>\n');
-      for (const shared of ['NOTES.md', 'design', 'scratch']) {
-        expect(lstatSync(join(cwd, shared)).isSymbolicLink(), shared).toBe(true);
-        expect(realpathSync(join(cwd, shared))).toBe(join(dir, shared));
-      }
+      for (const shared of ['NOTES.md', 'design', 'scratch']) expect(linksTo(join(cwd, shared), join(dir, shared)), shared).toBe(true);
       expect(existsSync(join(cwd, '.ordewell'))).toBe(false);
-      expect(lstatSync(join(cwd, 'api', '.env')).isSymbolicLink()).toBe(true);
+      expect(linksTo(join(cwd, 'api', '.env'), join(dir, 'api', '.env'))).toBe(true);
       expect(run.tasks['task-1'].repos.api.linked).toEqual(['.env']);
     });
 
@@ -2495,7 +2532,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
 
       expect(run.shared).toEqual(['NOTES.md', 'design', 'scratch']);
       expect(lexists(join(cwd, '.#NOTES.md'))).toBe(false);
-      expect(realpathSync(join(cwd, 'NOTES.md'))).toBe(join(dir, 'NOTES.md'));
+      expect(linksTo(join(cwd, 'NOTES.md'), join(dir, 'NOTES.md'))).toBe(true);
     });
 
     it('lands each repository the task changed on that repository’s integration branch', async () => {
@@ -2535,7 +2572,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
       expect(retry.cwd).toBe(first.cwd);
       expect(existsSync(join(retry.cwd, 'web', 'stale.txt'))).toBe(false);
       expect(readFileSync(join(retry.cwd, 'infra', 'vpc.tf'), 'utf8')).toBe('vpc\n');
-      expect(lstatSync(join(retry.cwd, 'NOTES.md')).isSymbolicLink()).toBe(true);
+      expect(linksTo(join(retry.cwd, 'NOTES.md'), join(dir, 'NOTES.md'))).toBe(true);
       expect(readFileSync(join(dir, 'NOTES.md'), 'utf8')).toBe('notes\n');
     });
   });
@@ -2566,9 +2603,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
       const t = task(1, 'Plan infra');
       const { cwd } = await iso.prepare(t, run);
 
-      const state = join(cwd, 'infra', 'terraform.tfstate');
-      expect(lstatSync(state).isSymbolicLink()).toBe(true);
-      expect(realpathSync(state)).toBe(join(dir, 'infra', 'terraform.tfstate'));
+      expect(linksTo(join(cwd, 'infra', 'terraform.tfstate'), join(dir, 'infra', 'terraform.tfstate'))).toBe(true);
       expect(lstatSync(join(cwd, 'infra', '.terraform')).isSymbolicLink()).toBe(true);
       expect(existsSync(join(cwd, 'infra', 'absent.lock'))).toBe(false);
       expect(existsSync(join(cwd, 'web', 'terraform.tfstate'))).toBe(false);
@@ -2590,8 +2625,8 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
       const t = task(1, 'Use the defaults');
       const { cwd } = await iso.prepare(t, run);
 
-      expect(realpathSync(join(cwd, 'web', 'node_modules', 'left-pad'))).toBe(join(dir, 'web', 'node_modules', 'left-pad'));
-      expect(realpathSync(join(cwd, 'infra', '.envrc'))).toBe(join(dir, 'infra', '.envrc'));
+      expect(realpath(join(cwd, 'web', 'node_modules', 'left-pad'))).toBe(join(dir, 'web', 'node_modules', 'left-pad'));
+      expect(linksTo(join(cwd, 'infra', '.envrc'), join(dir, 'infra', '.envrc'))).toBe(true);
       expect(existsSync(join(cwd, 'api', 'node_modules'))).toBe(false);
       expect(run.tasks['task-1'].repos.web.linked).toEqual(['node_modules']);
       expect(run.tasks['task-1'].repos.infra.linked).toEqual(['.envrc']);
@@ -2607,11 +2642,22 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
       expect(existsSync(join(dir, 'web', 'node_modules', 'left-pad'))).toBe(true);
     });
 
+    /** A setup command sh and cmd.exe run alike: node on a script of its own. */
+    function setupCommand(script: string): string {
+      const scripts = realpath(mkdtempSync(join(tmpdir(), 'ordewell-setup-')));
+      roots.push(scripts);
+      writeFileSync(join(scripts, 'setup.cjs'), script);
+      return `"${process.execPath}" "${join(scripts, 'setup.cjs')}"`;
+    }
+
     it('runs the setup command once per isolated repository, in its worktree, naming the repository', async () => {
       const dir = group();
       const log = join(dir, 'setup.log');
       const iso = create({
-        config: fakeConfig({ worktreeIsolation: true, worktreeSetupCommand: `echo "$ORDEWELL_REPO|$ORDEWELL_MAIN_REPO|$(pwd)" >> "${log}"` }),
+        config: fakeConfig({
+          worktreeIsolation: true,
+          worktreeSetupCommand: setupCommand(`require('fs').appendFileSync(${JSON.stringify(log)}, [process.env.ORDEWELL_REPO, process.env.ORDEWELL_MAIN_REPO, process.cwd()].join('|') + '\\n');`),
+        }),
       });
       const run = await iso.startRun(dir);
       const { cwd } = await iso.prepare(task(1, 'Setup'), run);
@@ -2624,7 +2670,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
     it('a setup command that fails in some repositories gives just those the default links', async () => {
       const dir = group();
       const iso = create({
-        config: fakeConfig({ worktreeIsolation: true, worktreeSetupCommand: '[ "$ORDEWELL_REPO" = infra ] || exit 3' }),
+        config: fakeConfig({ worktreeIsolation: true, worktreeSetupCommand: setupCommand("process.exit(process.env.ORDEWELL_REPO === 'infra' ? 0 : 3);") }),
       });
       const run = await iso.startRun(dir);
       const { cwd, setupFailed } = await iso.prepare(task(1, 'Setup'), run);
@@ -2637,7 +2683,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
 
   // Two repositories in a folder, each with a file two tasks can collide on.
   function pair(): string {
-    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-pair-')));
+    const dir = realpath(mkdtempSync(join(tmpdir(), 'ordewell-pair-')));
     roots.push(dir);
     initRepo(join(dir, 'api'), { 'api.txt': 'api\n' });
     initRepo(join(dir, 'web'), { 'web.txt': 'web\n' });
@@ -2910,7 +2956,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
       // Three repositories; task 1 has landed a change to web.txt, and task 2
       // changes all three, colliding in web — merged last, in path order.
       function trio(): string {
-        const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-trio-')));
+        const dir = realpath(mkdtempSync(join(tmpdir(), 'ordewell-trio-')));
         roots.push(dir);
         initRepo(join(dir, 'api'), { 'api.txt': 'api\n' });
         initRepo(join(dir, 'db'), { 'db.txt': 'db\n' });
@@ -3464,7 +3510,7 @@ describe.skipIf(!hasGit)('task diff reads', () => {
   });
 
   it('names every repository and selects the repository of a single file', async () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-diff-group-')));
+    const root = realpath(mkdtempSync(join(tmpdir(), 'ordewell-diff-group-')));
     roots.push(root);
     initRepo(join(root, 'alpha'));
     initRepo(join(root, 'beta'));
@@ -3506,7 +3552,7 @@ describe.skipIf(!hasGit)('task diff reads', () => {
     const marker = join(root, 'ran-outside');
     mkdirSync(join(cwd, 'planted'));
     writeFileSync(join(cwd, 'planted', 'config'), `[core]\n\tfsmonitor = touch ${marker}\n\thooksPath = ${join(cwd, 'planted')}\n`);
-    writeFileSync(join(cwd, '.git'), 'gitdir: planted\n');
+    replaceGitFile(cwd, 'gitdir: planted\n');
     writeFileSync(join(cwd, 'tried-fix.ts'), 'export const fixed = true;\n');
 
     const diff = await iso.taskDiff!(run, t.id, {});
