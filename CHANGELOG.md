@@ -18,12 +18,21 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   login terminal is cmd.exe, so PowerShell's default Restricted execution policy
   no longer refuses an npm-installed agent's `.ps1` shim and leaves the sign-in
   waiting until it times out.
-- **Removing a task's worktree no longer empties your folders on Windows.** With the
-  workspace in a folder below its repository's top, removing a task's worktree
-  left the links into your checkout in place, and Git for Windows deletes a
-  junction by walking into it: `.claude` and the other folders a worktree links
-  were emptied in your own checkout. The links are now taken down where they
-  were made, first.
+- **Removing a task's worktree no longer empties your folders on Windows.** Git
+  for Windows removes a junction by walking into it. With the workspace in a
+  folder below its repository's top, the links a worktree makes into your
+  checkout, `.claude` among them, were left in place, and their folders were
+  emptied in your own checkout; so was any folder a task linked to itself. Every
+  link in a worktree is now taken down first, and kept out of the commit that
+  saves a task's unlanded work. A worktree Ordewell leaves in place is now
+  removed, as its notice says, with `rmdir /s`, which leaves a junction's folder
+  alone.
+- **An agent started through its PowerShell shim gets its arguments whole.** A
+  prompt that spans lines cannot pass through an npm `.cmd`, so on Windows
+  Ordewell starts the `.ps1` npm writes beside it. Windows PowerShell split an
+  argument holding a `"` on its way to the agent, dropped an empty one, and let a
+  trailing `\` swallow the closing quote. Each argument now arrives as it was
+  sent.
 - **Stop stops a task's runner at once on Windows.** The polite kill Windows
   offers only asks a window to close, which no console agent has, so a stopped
   runner went on for five more seconds, writing to its worktree and holding it
@@ -37,7 +46,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   folder, so the planner's `task_diff` called the worktree "no longer a
   repository". Untracked files are in the diff too: Git for Windows could not open
   the empty side it was handed.
-- **A `!` path exclusion holds on Windows however the path is spelled.** An
+- **A `!` path exclusion holds on Windows in any case and with either slash.** An
   exclusion such as `!C:/Users/me/.ssh/*` now applies to `C:\Users\me\.ssh\*` and
   to any casing of it, as Windows itself would read the path.
 - **Search's `include` filter works on Windows without ripgrep.** The fallback

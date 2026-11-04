@@ -249,7 +249,13 @@ Two things are **explicitly not claimed**:
 receives an ordinary argument vector that Node quotes by the CommandLineToArgvW
 inverse. On a Windows host, a multi-line argument containing `$(…)`, a backtick
 and `%PATH%` arrived byte-exact, with no expansion — so `%VAR%` expansion is a
-hazard this route avoids too.
+hazard this route avoids too. The shim then hands `$args` on to its program,
+and Windows PowerShell does that by quoting an argument with whitespace in it
+and escaping nothing: a `"` inside one split it, a trailing `\` escaped the
+closing quote, and an empty argument was dropped. Each argument is therefore
+handed to the shim already escaped for the program behind it
+(CommandLineToArgvW), which PowerShell's quoting leaves intact; with that,
+those arrive byte-exact too, through a shim as npm writes it.
 
 The Windows branches are tested on Linux through injected seams, and **CI runs
 every suite again on a Windows runner**: each package's vitest suites, the
@@ -277,4 +283,4 @@ lower-case drive letter.
 - 2026-10-17 — Codex's approvals on Windows read `on-request`, as ADR-0026 made them on 2026-10-10; the text still said `never`.
 - 2026-10-24 — a spawn throw is held through the one spawn-failure path in `Attempts`; the text named a `TaskOrchestrator.startTask` that no longer exists.
 - 2026-11-03 — the VS Code extension's activation, runner detection and login run on a Windows host.
-- 2026-11-03 — CI runs the suites on Windows, real plans ran there through to a merged handoff, and a refused unforced `taskkill` is forced at once.
+- 2026-11-03 — CI runs the suites on Windows, real plans ran there through to a merged handoff, a refused unforced `taskkill` is forced at once, and an argument goes to a PowerShell shim escaped for the program behind it.

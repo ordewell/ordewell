@@ -114,7 +114,8 @@ node bench/live/drive-conversation.mjs
   with a `.cmd` and a `.ps1` shim beside its POSIX one, put on PATH with
   `pathWithFake`. Skip on Windows (`it.skipIf(process.platform === 'win32')`,
   with the reason) only a test whose subject is POSIX-only: bubblewrap,
-  Seatbelt, signals, file modes, containers.
+  Seatbelt, signals and process groups, file modes, `/dev`, a file name
+  Windows cannot hold (a line break, a `"`), containers.
 ## Architecture decisions
 
 [docs/adr/README.md](docs/adr/README.md) is the full guide: read it before
