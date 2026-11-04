@@ -762,7 +762,7 @@ the directive to attach.
 *Avoid:* "skill message", "skill event".
 
 **Executor / Runner** — an external coding-agent CLI (Claude Code, Codex,
-OpenCode, and GitHub Copilot CLI and Qwen Code over ACP) that runs *one task* in its own
+OpenCode, and GitHub Copilot CLI, Qwen Code and Cline over ACP) that runs *one task* in its own
 session through a structured connector. `RunnerRegistry` holds their built-in
 manifests: identity, command, model discovery and mode settings. External
 plugin manifests are ignored with one notice at host startup.
@@ -840,13 +840,16 @@ on the agent's stdio, with Ordewell as the client (ADR-0060). One `AcpAdapter`
 serves every such runner, and only an agent whose own maintainers ship its ACP
 server qualifies. Ordewell offers it no file system or terminal, so it works in
 the worktree with its own tools and reaches Ordewell only through the Ordewell
-MCP server, given over HTTP in `session/new`. It has no mid-turn steer: a
-message waits for the turn's end. Two are admitted so far. GitHub Copilot CLI
+MCP server, given over HTTP in `session/new` or in a settings file of the
+agent's own (ADR-0060 R4). It has no mid-turn steer: a
+message waits for the turn's end. Three are admitted so far. GitHub Copilot CLI
 (`copilot-cli`) runs tasks, read-only ones included, and plans, and on a planner
 or read-only start it begins in a private directory, never the worktree, so the
 repository's hooks and config do not run (ADR-0060 R3). Qwen Code (`qwen-code`)
-runs writable tasks only: no recording shows it refusing a write and a command,
-so it claims neither role.
+and Cline (`cline`) run writable tasks only: no recording shows either
+refusing a write and a command, so they claim neither role. Cline takes
+Ordewell's server from a settings file, attaches on the task's first turn, and
+is handed its provider key at spawn (ADR-0060 R4, R5, R9).
 *Avoid:* "ACP shim" or "ACP bridge" for it (a third-party adapter in front of an
 agent does not qualify); "ACP backend", "ACP provider".
 

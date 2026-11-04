@@ -16,7 +16,7 @@ npm install -g @ordewell/cli        # or: npm install -g ordewell
 ```
 
 **Requirements:** Node.js 20.3 or newer, at least one of Claude Code, Codex,
-OpenCode, GitHub Copilot CLI or Qwen Code, and git 2.38 or newer for task isolation. Linux, macOS and Windows are supported;
+OpenCode, GitHub Copilot CLI, Qwen Code or Cline, and git 2.38 or newer for task isolation. Linux, macOS and Windows are supported;
 on Windows, run the terminal UI under WSL.
 
 ## Usage

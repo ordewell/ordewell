@@ -4,6 +4,7 @@ import { CODEX_MANIFEST } from './codex.manifest';
 import { OPENCODE_MANIFEST } from './opencode.manifest';
 import { COPILOT_CLI_MANIFEST } from './copilot-cli.manifest';
 import { QWEN_CODE_MANIFEST } from './qwen.manifest';
+import { CLINE_MANIFEST } from './cline.manifest';
 
 /**
  * The built-in runners, by manifest. With a runner's entry in `CONNECTORS`,
@@ -17,4 +18,5 @@ export const BUILTIN_MANIFESTS: readonly RunnerManifest[] = [
   OPENCODE_MANIFEST,
   COPILOT_CLI_MANIFEST,
   QWEN_CODE_MANIFEST,
+  CLINE_MANIFEST,
 ];

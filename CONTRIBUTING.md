@@ -163,9 +163,13 @@ planner must fail before the goal is typed when the agent is unusable.
 
 An agent that ships its own Agent Client Protocol server needs no adapter:
 `AcpAdapter` drives every ACP runner, and what differs between agents is an
-`AcpProfile` (ADR-0060). GitHub Copilot CLI is the reference: read
-`plugins/builtin/copilot-cli.manifest.ts` and
-`services/harness/copilotProfile.ts` before writing yours.
+`AcpProfile` (ADR-0060). Three are admitted: GitHub Copilot CLI
+(`copilot-cli`), Qwen Code (`qwen-code`) and Cline (`cline`). Copilot CLI is
+the reference: read `plugins/builtin/copilot-cli.manifest.ts` and
+`services/harness/copilotProfile.ts` before writing yours. Read
+`services/harness/clineProfile.ts` too if your agent takes MCP servers only
+from a settings file of its own, connects to them only on its first turn, or
+ignores over ACP the login its own CLI stored.
 
 - **Native servers only.** The agent's own maintainers must ship its ACP
   server. A third-party shim in front of an agent does not qualify
@@ -189,7 +193,10 @@ An agent that ships its own Agent Client Protocol server needs no adapter:
   removes it with the process. A recording must show the agent connecting from
   that file, and the attach is still judged by the server, so an agent that
   ignores the file is refused (ADR-0060 R4). Such a runner cannot run in a
-  container.
+  container. An agent that connects only once a prompt runs sets
+  `attach: 'firstTurn'` (R5) and cannot plan; one that needs its provider key
+  in its environment sets `credentials` (R9). Cline's recordings show all
+  three.
 - **Recorded fixtures.** Record every line each side sent in a live run as JSONL
   under `services/__tests__/fixtures/acp/<id>/`, as `{dir, ms, line}`, with
   `dir: "note"` lines for the spawn arguments and for what the run left behind.
