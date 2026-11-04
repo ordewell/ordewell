@@ -57,11 +57,17 @@ A runner-facing tool joins the task side on the same mechanism.
   MCP configuration, as an HTTP header the runner sends. Prompt and transcript
   text must not expose the credential.
 - **Not on a command line either (A5).** The configuration reaches the
-  runner as a file with owner-only permissions, an environment variable the
-  runner reads, or a message over the runner's own stdin protocol (an ACP
-  runner's `session/new`, which carries the server and its header,
-  [ADR-0060](0060-acp-runners-are-data-on-one-connector.md) R4), never as a
-  process argument, where `ps` shows it to every user on the host.
+  runner as a file, an environment variable the runner reads, or a message
+  over the runner's own stdin protocol, never as a process argument, where
+  `ps` shows it to every user on the host. A file that holds the token is
+  owner-only, in a private directory of its own outside the worktree, made
+  for one runner process and so never shared by two attempts, and removed
+  when that process ends. An ACP runner takes the server in `session/new`,
+  which carries it and its header, only where the agent advertises
+  `mcpCapabilities.http`; one that reads it from a settings file of its own
+  is handed that file instead, and a later start sweeps such a file that an
+  Ordewell which died left behind
+  ([ADR-0060](0060-acp-runners-are-data-on-one-connector.md) R4).
 - **What the token does not defend against (A6).** A same-user process can
   read another process's environment and the session files under
   `.ordewell/`. A task in a write-capable mode can already do anything the user
@@ -94,8 +100,9 @@ A runner-facing tool joins the task side on the same mechanism.
   OpenCode and GitHub Copilot CLI, an ACP runner
   ([ADR-0060](0060-acp-runners-are-data-on-one-connector.md)), use the
   required server, as task runners and as planners. An ACP agent
-  that cannot take an HTTP MCP server is refused, since Ordewell runs no
-  stdio bridge to carry the token. API planners (`OpenAiService`,
+  that can take an HTTP MCP server neither in `session/new` nor from a
+  settings file of its own is refused, since Ordewell runs no stdio bridge to
+  carry the token. API planners (`OpenAiService`,
   `GeminiService`) keep envelopes and their existing query read loop, alongside direct task read tool calls.
 - **Tools or nothing (S2).** Neither a task nor a coding-agent planner runs
   without its tools. One automatic respawn is allowed. A task runner that stays
@@ -375,3 +382,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-11-01 — L3: a subplanner is told its runner's catalog in its prompt (ADR-0057 R5).
 - 2026-11-04 — A5: the configuration may travel over the runner's own stdin protocol; S1, S3, S4: how an ACP runner takes, is pre-allowed and attaches to the server (ADR-0060).
 - 2026-11-04 — S1, S3: GitHub Copilot CLI uses the server as a planner too, and an ACP runner's Ordewell tool is named before its kind is read (ADR-0060).
+- 2026-11-04 — A5, S1: a file holding the token is one runner process's own, outside the worktree and removed with it; an ACP runner may take the server from a settings file of its own, swept after a crash, and `session/new` carries it only to an agent that advertises HTTP (ADR-0060 R4).
