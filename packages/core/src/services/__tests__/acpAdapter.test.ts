@@ -1698,11 +1698,13 @@ describe('acpConnector', () => {
     );
   });
 
-  it('refuses at load a planner that would attach Ordewell\'s tools only on a task\'s first turn', () => {
-    expect(() => acpConnector({ ...ROLES_PROFILE, attach: 'firstTurn' })).toThrow(
-      "Fake Agent attaches Ordewell's tools only on a task's first turn, so it cannot plan.",
-    );
+  it('lets a planner attach Ordewell\'s tools on its first turn, and tells the planner that turn is the check', () => {
+    const firstTurn = acpConnector({ ...ROLES_PROFILE, attach: 'firstTurn' });
+    expect(firstTurn.plans).toBe(true);
+    expect(firstTurn.attachesOnFirstTurn).toBe(true);
     expect(acpConnector({ ...ROLES_PROFILE, roles: { plans: false, readOnly: true }, attach: 'firstTurn' }).plans).toBe(false);
+    expect(acpConnector(ROLES_PROFILE)).not.toHaveProperty('attachesOnFirstTurn');
+    expect(acpConnector({ ...ROLES_PROFILE, attach: 'sessionNew' })).not.toHaveProperty('attachesOnFirstTurn');
   });
 
   it('carries the profile\'s usage-limit reader and leaves out what the profile leaves out', () => {

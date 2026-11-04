@@ -37,6 +37,12 @@ export interface RunnerConnector {
   /** What the runner would load from a repository, which Ordewell reads for its planner instead (ADR-0028). */
   repoConfig: RepoConfigReader;
   /**
+   * The runner uses its Ordewell token only once a prompt runs, so its first
+   * turn is the attach check and a planner spawns it with that turn, not
+   * before (ADR-0060, R5). Absent: it attaches as its session opens.
+   */
+  attachesOnFirstTurn?: boolean;
+  /**
    * When the runner's usage limit resets, read from the tail of what it
    * printed as it stopped; null when the wording names no time. Absent for a
    * runner that prints none of its own — OpenCode passes its provider's error

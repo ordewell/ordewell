@@ -31,7 +31,8 @@ profile. GitHub Copilot CLI (`copilot-cli`, `copilot --acp --stdio`) is the
 reference agent. Qwen Code (`qwen-code`, `qwen --acp`), Gemini CLI
 (`gemini-cli`, `gemini --acp --skip-trust`) and Cursor (`cursor-agent`,
 `cursor-agent acp`) plan and run read-only tasks too; Cline (`cline`,
-`cline --acp`) takes writable and read-only tasks but does not plan.
+`cline --acp`) takes writable and read-only tasks but does not claim the
+planner role.
 
 Ordewell is the ACP client and does no I/O for the agent: it advertises no
 file-system and no terminal capability, so the agent works in the worktree
@@ -204,35 +205,43 @@ of its provider credential and the sign-in route that reader adds.
   carrying the token has passed every check, failed when the agent refused the
   session or the process is gone, pending until then (ADR-0022 S2, S4). The
   profile's `attach` says when that contact can come:
-  - `sessionNew`, the default: while the session opens, so the task is sent
-    only once the server was contacted, as for a native runner (ADR-0025).
+  - `sessionNew`, the default: while the session opens, so the first turn (a
+    task's prompt, a planner's goal or message) is sent only once the server
+    was contacted, as for a native runner (ADR-0025).
   - `firstTurn`: only once a prompt starts the agent's runtime, for an agent
     that connects its MCP servers then, as Cline 3.0.74 does. An agent that
     made contact by the time its session opened goes on as under
-    `sessionNew`. Otherwise the task's prompt is the check: the attach passes
-    only if the server is contacted before that turn ends, within the attach
-    timeout counted from the turn's start. Until it passes the session's
-    listeners hear nothing of the turn; its events, text, requests and report
-    are held, then heard in order. A turn that ends or runs out of time
-    without contact fails the check: its process is killed, its token revoked
-    and everything it said dropped, then the respawn and the hold follow as
-    for any missed attach, with the same "Could not start <name> with
-    Ordewell's tools, so the task was not sent to it." A held task gives up
-    its worktree, and the discarded turns' edits with it. A contact after the
+    `sessionNew`. Otherwise the first turn is the check: a task's prompt, or
+    the planner's goal, or the message that takes a saved planner session up.
+    The attach passes only if the server is contacted before that turn ends,
+    within the attach timeout counted from the turn's start. Until it passes
+    the session's listeners hear nothing of the turn; its events, text,
+    requests and report are held, then heard in order. A turn that ends or
+    runs out of time without contact fails the check: its process is killed,
+    its token revoked and everything it said dropped, then the respawn sends
+    the same turn again, and a second miss fails as any missed attach does:
+    a task is held with "Could not start <name> with Ordewell's tools, so the
+    task was not sent to it.", a planner's turn fails with "Could not start
+    the <name> planner with Ordewell's tools." and leaves no process and no
+    live token behind. A held task gives up its worktree, and the discarded
+    turns' edits with it. A planner stopped during its check ends that turn
+    as stopped, and is not respawned to send it again. A contact after the
     turn ended is refused, since its token was revoked first.
 
   So the invariant is that no result is accepted from an agent without
-  Ordewell's tools, not that no prompt reaches one: a `task_complete` counts
-  only through the token-bound tool, so a turn that never reached the server
-  can report nothing. Its cost is a wasted model turn per missed attach, two
-  when the respawn misses too. The respawn works in the same worktree, so it
-  finds what the discarded turn changed there, and what it keeps of that is
-  its own result. A `firstTurn` agent cannot plan, and `acpRoles` refuses the
-  claim at load: a planner's first turn is the goal, never sent without tools.
-  Nor can it be re-attached after an ignored interrupt killed its process,
-  since that restart has no prompt to check with, so the task fails then. The
-  discarded turn stays in the agent's own history should that session ever be
-  resumed.
+  Ordewell's tools, not that no prompt reaches one: a `task_complete` or a
+  `submit_plan` counts only through the token-bound tool, so a turn that never
+  reached the server can report nothing, and a planner's discarded turn is
+  never heard as its answer. Its cost is a wasted model turn per missed
+  attach, two when the respawn misses too. The respawn works in the same
+  worktree, so it finds what the discarded turn changed there, and what it
+  keeps of that is its own result; a planner's envelope (ADR-0026) is the same
+  on the check turn as on any other, so a planner's discarded turn changed
+  nothing. A `firstTurn` task cannot be re-attached after an ignored interrupt
+  killed its process, since that restart has no prompt to check with, so the
+  task fails then; a planner whose process went is respawned with its next
+  message as the check. The discarded turn stays in the agent's own history
+  should that session ever be resumed.
 
   A restricted start's own files and config homes (R3) change none of this:
   none carries the token, so the attach is read from the server as on any
@@ -464,7 +473,7 @@ OpenRouter model and its key handed in the spawn's environment (R9):
 | environment | `CLINE_SESSION_BACKEND_MODE=local`, so the session lives in the process Ordewell starts and stops, never in a hub daemon that outlives it |
 | restriction | `--auto-approve false`, once, with nothing of the mode's route, and a private start directory that is also `TMPDIR`, `TMP` and `TEMP` and holds only the MCP settings file |
 | repository | a restricted start runs none of the hooks in `.cline/hooks/` or `.clinerules/hooks/`, and is handed none of the repository's rules: the profile has no reader for them (ADR-0028) |
-| roles | a read-only mode (`plan`), not the planner: Cline attaches on its first turn, and a planner's first turn is the goal (R5) |
+| roles | a read-only mode (`plan`), not the planner: the profile does not claim that role (R3), though attaching on its first turn no longer stands in the way (R5) |
 | asked paths | `rawInput.files[].path` and `rawInput.path` of a `read` or `search` call; nothing when any named file has no path |
 
 In every recording of a new session Cline has not contacted the server when
@@ -940,6 +949,17 @@ the private directory:
 - **A contact after the first turn ended accepted.** Rejected: that turn is
   the check, and waiting past it would only hold every missed attach for the
   whole timeout. A turn's end decides it.
+- **A `firstTurn` agent refused the planner role at load.** Once chosen, then
+  dropped: it kept a planner's goal from ever reaching an agent without
+  Ordewell's tools, but no answer is heard from a planner except through its
+  token, so the goal sent as the check gives up nothing the task's prompt does
+  not. Refusing the role kept such an agent out of planning for a reason the
+  check already answers, at the price of a wasted model turn per missed
+  attach.
+- **A planner's first-turn check written in the planner service.** Rejected:
+  it would be a second attach loop beside `spawnAttached` and
+  `AcpAdapter.mcpAttached`. The planner hands the spawn its goal as the turn
+  to send, as a task hands its prompt, and the same check judges both.
 - **Roles enforced by the agent's mode alone.** Rejected: a mode's name is the
   agent's promise. A plan or ask mode does not show that a write or a command
   is refused.
@@ -983,10 +1003,9 @@ the private directory:
   `yolo` and let Ordewell's tools through, so `restricted.files` could hand
   it as a second layer. It is left out while the refusal by kind holds alone
   in every recording, since each layer is one more file per start.
-- **Cline as a planner.** Rejected under R5: Cline contacts its MCP servers
-  only once a prompt runs, so its attach is `firstTurn`, and a planner's first
-  turn is the goal, which is never sent without Ordewell's tools. No
-  recording of Cline as a planner was made.
+- **Cline as a planner.** Deferred under R3: its `firstTurn` attach no longer
+  bars the role (R5), but no recording of Cline as a planner was made, so the
+  profile does not claim it.
 - **`CLINE_DIR` as Cline's control for the repository's hooks.** Rejected on
   the recordings: with it naming an empty home, every hook planted in the
   worktree still ran (`repo-hooks-cline-dir.jsonl`), since Cline reads them
@@ -1091,8 +1110,11 @@ the private directory:
   false`, as 3.0.74 does. It reads only through Ordewell's `run_command`, and
   without the repository's rules.
 - An agent that connects its MCP servers only on its first turn can run
-  tasks, but each missed attach costs a model turn, and a discarded turn may
-  have changed the worktree the respawn starts in.
+  tasks and plan, but each missed attach costs a model turn, two when the
+  respawn misses too, and a discarded turn may have changed the worktree the
+  respawn starts in. A planner's goal reaches such an agent before Ordewell
+  knows its tools are attached; when they never are, that turn is discarded
+  unheard and the user sees the attach failure instead of an answer.
 - A runner id shares the planner setting's namespace with the API vendors'
   ids, so an ACP runner id must not equal one (`kimi-cli`, not `kimi`;
   `qwen-code`, because `qwen` is DashScope's; `cline` is no vendor's;
@@ -1179,3 +1201,7 @@ the private directory:
 - 2026-11-04 — R3: a profile may name the paths of a read or a search from
   the call's arguments (`askedPaths`), resolved against the session's `cwd`
   and judged as a location is; Cline reads its own `read_files` with it.
+- 2026-11-05 — R5: a `firstTurn` profile may plan: the planner's goal, or the
+  message that takes its session up, is the check, discarded with its process
+  when the server is not contacted before it ends; Cline still does not claim
+  the role (R3).

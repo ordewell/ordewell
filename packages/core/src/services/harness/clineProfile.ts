@@ -10,8 +10,9 @@ const SERVER_PREFIX = `${ORDEWELL_MCP_SERVER_NAME}__`;
  * Cline's CLI over ACP (`cline --acp`), checked against the recordings in
  * `__tests__/fixtures/acp/cline/` (ADR-0060).
  *
- * It runs read-only tasks but does not plan: it reaches Ordewell's server only
- * once a prompt runs, and a planner's first turn is the goal (ADR-0060, R5).
+ * It runs read-only tasks but claims no planner role: no recording shows it
+ * planning (ADR-0060, R3). Attaching on its first turn would not bar the role,
+ * since a planner's goal is then the check (ADR-0060, R5).
  */
 export const CLINE_PROFILE: AcpProfile = {
   manifest: CLINE_MANIFEST,
