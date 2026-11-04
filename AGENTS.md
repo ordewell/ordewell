@@ -115,7 +115,8 @@ node bench/live/drive-conversation.mjs
   `pathWithFake`. Skip on Windows (`it.skipIf(process.platform === 'win32')`,
   with the reason) only a test whose subject is POSIX-only: bubblewrap,
   Seatbelt, signals and process groups, file modes, `/dev`, a file name
-  Windows cannot hold (a line break, a `"`), containers.
+  Windows cannot hold (a line break, a `"`), containers. The Windows suites run
+  under Git Bash, as CI's do, so a test may use its `sh` as a tool.
 ## Architecture decisions
 
 [docs/adr/README.md](docs/adr/README.md) is the full guide: read it before

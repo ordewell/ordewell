@@ -269,9 +269,10 @@ describe('a delegated task', () => {
   it('starts while its parent\'s only slot is held by nothing else, its child\'s tasks taking it one at a time', async () => {
     const { parent } = tree([SUBMIT([childTask('a', 1), childTask('b', 2, ['a'])]), DONE], { parallel: 1 });
     await parent.execute({ command: 'run_plan' }, { kind: 'user' });
-    await vi.waitFor(() => expect(statusOf(parent, 'c')).toBe('completed'), { timeout: 20_000 });
+    // Two child tasks and a check, one after another, each on its own real worktree: a loaded Windows runner takes past twenty seconds.
+    await vi.waitFor(() => expect(statusOf(parent, 'c')).toBe('completed'), { timeout: 60_000 });
     parent.destroy();
-  });
+  }, 90_000);
 });
 
 describe('the verdict (ADR-0055 D6)', () => {
