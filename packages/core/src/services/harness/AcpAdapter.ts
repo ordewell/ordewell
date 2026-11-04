@@ -174,9 +174,16 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     if (opts.kind === 'planner' && !roles.plans) throw new Error(`${this.name} cannot plan in Ordewell: its profile claims no planner role.`);
     if (opts.kind === 'task' && restricted && !roles.readOnly) throw new Error(`${this.name} cannot run a read-only task in Ordewell: its profile claims no read-only role.`);
     if (!opts.mcp) throw new Error(`${this.name} cannot start without the Ordewell MCP server to carry its tools.`);
+    const role = opts.kind === 'planner' ? 'plan' : 'run a read-only task';
     // A container starts its runner in the worktree, the one place this start must keep it out of (ADR-0028).
     if (restricted && this.profile.restricted?.privateCwd && this.deps.placement) {
-      throw new Error(`${this.name} cannot ${opts.kind === 'planner' ? 'plan' : 'run a read-only task'} in a container: there it would start in the worktree and run the repository's hooks.`);
+      throw new Error(`${this.name} cannot ${role} in a container: there it would start in the worktree and run the repository's hooks.`);
+    }
+    // A placement copies only files the arguments name: a variable, a file's
+    // naming another, or a config home would point at a path on this machine,
+    // so the agent would start in the container without its controls (ADR-0060, R3).
+    if (restricted && (this.profile.restricted?.files?.length || this.profile.restricted?.configDirs?.length) && this.deps.placement) {
+      throw new Error(`${this.name} cannot ${role} in a container: the files that restrict it are on this machine, which the container does not see.`);
     }
     // A placement copies only files named in the arguments into the container;
     // the settings file's path goes in the environment, where it would name a
@@ -214,7 +221,9 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
    * the owner-only settings file the profile's `mcpConfig` names, and the
    * instructions only by the profile's route, never as a file in the worktree
    * (ADR-0022, A5; ADR-0018, C2; ADR-0060, R4, R6). A restricted start adds the controls that
-   * take the agent's own write and shell tools away; a planner has no mode.
+   * take the agent's own write and shell tools away, as flags or as files and
+   * config homes in the private directory, none of which holds a secret
+   * (ADR-0060, R3); a planner has no mode.
    * The profile's provider credential is this spawn's alone (ADR-0060, R9).
    */
   protected async spawnSpec(_opts: AgentStartOptions, workspace: Record<string, string>): Promise<SpawnSpec> {
@@ -230,12 +239,25 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     const env: Record<string, string> = { ...this.profile.env, ...(this.restricted ? restricted?.env : {}), ...credential };
     const files: string[] = [];
     const startsOutside = this.restricted && restricted?.privateCwd === true;
-    const dir = startsOutside || instructions.kind === 'file' || mcpConfig ? this.ownPrivateDir() : null;
+    const handed = (this.restricted && restricted?.files) || [];
+    const homes = (this.restricted && restricted?.configDirs) || [];
+    const dir = startsOutside || handed.length || homes.length || instructions.kind === 'file' || mcpConfig ? this.ownPrivateDir() : null;
     this.startDir = startsOutside ? dir?.path ?? null : null;
     // The system's temp directory is shared by every process of the user's,
     // other attempts' instructions included, and an agent may read its own
     // temp directory without asking: Copilot does, whatever its flags say.
     if (this.startDir) for (const name of TEMP_DIR_VARIABLES) env[name] = this.startDir;
+    if (dir) {
+      for (const name of homes) env[name] = dir.subdir(name);
+      for (const file of handed) {
+        const path = dir.write(file.fileName, file.render(dir.path));
+        if (file.pass && 'env' in file.pass) env[file.pass.env] = path;
+        else if (file.pass) {
+          args.push(file.pass.flag, path);
+          files.push(path);
+        }
+      }
+    }
     if (dir && mcpConfig) {
       const { name, url, headers } = started.mcp;
       env[mcpConfig.pass.env] = dir.write(mcpConfig.fileName, mcpConfig.render({ name, url, headers }));

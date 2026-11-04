@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs';
 import { spawnSync } from 'child_process';
 import { tmpdir } from 'os';
-import { dirname, join } from 'path';
+import { basename, dirname, join } from 'path';
 import { AcpAdapter } from '../harness/AcpAdapter';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
 import { acpConnector, type AcpProfile } from '../harness/acpProfiles';
@@ -25,6 +25,8 @@ import { runnerEnv } from '../harness/runnerEnv';
 import { clineCredentials } from '../harness/clineCredentials';
 import { qwenCredentials } from '../harness/qwenCredentials';
 import { stubNoOrdewellProvider } from './ordewellProviderEnv';
+import { COPILOT_CLI_PROFILE } from '../harness/copilotProfile';
+import { COPILOT_CLI_MANIFEST } from '../../plugins/builtin/copilot-cli.manifest';
 
 /**
  * The ACP connector's task core (#73, slice S3/S4) against the scripted ACP
@@ -2646,6 +2648,221 @@ describe('AcpAdapter roles (ADR-0026, ADR-0046)', () => {
 
     const none = setup(handshake(), ROLES_PROFILE);
     await expect(none.adapter.start(plannerStart({ effort: 'high' }))).rejects.toThrow('Fake Agent offers no effort setting, so it cannot plan on the effort "high".');
+  });
+});
+
+describe('AcpAdapter restricted start\'s own files (ADR-0060, R3)', () => {
+  /** Where the agent of this test reads its hook settings, the way Qwen Code reads a system settings file a variable names. */
+  const HOOK_SETTINGS = 'FAKE_HOOK_SETTINGS';
+  const DENY = 'printf \'{"decision":"deny"}\'\n';
+  const HOOKED: AcpProfile = {
+    ...ROLES_PROFILE,
+    restricted: {
+      ...ROLES_PROFILE.restricted!,
+      privateCwd: true,
+      files: [
+        { fileName: 'deny.sh', render: () => DENY },
+        { fileName: 'hooks.json', render: (dir) => JSON.stringify({ PreToolUse: [{ command: `sh ${join(dir, 'deny.sh')}` }] }), pass: { env: HOOK_SETTINGS } },
+      ],
+    },
+  };
+  const LOADS: FakeAcpAgentOptions = { loads: [HOOK_SETTINGS] };
+
+  /** A temp directory of this test's own, so what is written there, and swept from it, is only this test's. */
+  let temp = '';
+  beforeEach(() => {
+    temp = realpathSync(mkdtempSync(join(tmpdir(), 'acp-restricted-test-')));
+    for (const name of ['TMPDIR', 'TMP', 'TEMP']) vi.stubEnv(name, temp);
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(temp, { recursive: true, force: true });
+  });
+
+  it('starts a planner and a read-only task with the profile\'s files owner-only in its private directory, outside the worktree, where its variables name them', async () => {
+    for (const start of [plannerStart(), readOnlyStart()]) {
+      const { adapter, agent, spawned } = setup(handshake(), HOOKED, {}, {}, LOADS);
+      await adapter.start(start);
+
+      const dir = spawned.lastCwd()!;
+      expect(dirname(dir)).toBe(temp);
+      const settings = join(dir, 'hooks.json');
+      expect(spawned.lastEnv()[HOOK_SETTINGS]).toBe(settings);
+      expect(agent.loaded).toEqual([{ env: HOOK_SETTINGS, path: settings, found: `{"PreToolUse":[{"command":"sh ${dir}/deny.sh"}]}` }]);
+      expect(readFileSync(join(dir, 'deny.sh'), 'utf8')).toBe(DENY);
+      expect(readdirSync(dir).sort()).toEqual(['deny.sh', 'hooks.json']);
+      for (const name of ['deny.sh', 'hooks.json']) expect(statSync(join(dir, name)).mode & 0o777).toBe(0o600);
+      expect(statSync(dir).mode & 0o777).toBe(0o700);
+      adapter.dispose();
+    }
+  });
+
+  it('names a file the profile passes by flag in the arguments, after the restriction\'s own', async () => {
+    const flagged: AcpProfile = {
+      ...ROLES_PROFILE,
+      restricted: { ...ROLES_PROFILE.restricted!, files: [{ fileName: 'settings.json', render: () => '{"deny":["write"]}', pass: { flag: '--settings' } }] },
+    };
+    const { adapter, spawned } = setup(handshake(), flagged);
+    await adapter.start(plannerStart());
+
+    const args = spawned.lastArgs();
+    const path = args[args.length - 1];
+    expect(args).toEqual([...ROLES_PROFILE.args, ...ROLES_PROFILE.restricted!.args, '--settings', path]);
+    expect(dirname(dirname(path))).toBe(temp);
+    expect(readFileSync(path, 'utf8')).toBe('{"deny":["write"]}');
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
+  it('renders a file from the private directory\'s path alone, so neither the attempt\'s token nor its provider credential can reach one', async () => {
+    const render = vi.fn((dir: string) => `hook in ${dir}`);
+    const credentialed: AcpProfile = {
+      ...HOOKED,
+      credentials: async () => ({ FAKE_PROVIDER_KEY: 'sk-provider-secret' }),
+      restricted: { ...HOOKED.restricted!, files: [{ fileName: 'hooks.json', render, pass: { env: HOOK_SETTINGS } }] },
+    };
+    const { adapter, spawned } = setup(handshake(), credentialed);
+    await adapter.start(readOnlyStart());
+
+    const dir = spawned.lastCwd()!;
+    expect(render.mock.calls).toEqual([[dir]]);
+    expect(spawned.lastEnv().FAKE_PROVIDER_KEY).toBe('sk-provider-secret');
+    for (const name of readdirSync(dir)) {
+      const contents = readFileSync(join(dir, name), 'utf8');
+      expect(contents).not.toContain(TOKEN);
+      expect(contents).not.toContain('sk-provider-secret');
+    }
+  });
+
+  it('points each of the profile\'s config variables at an empty owner-only directory of the start\'s own, so the user\'s global configuration does not load', async () => {
+    const homes: AcpProfile = { ...ROLES_PROFILE, restricted: { ...ROLES_PROFILE.restricted!, configDirs: ['FAKE_HOME', 'FAKE_HOOKS_DIR'] } };
+    const { adapter, agent, spawned } = setup(handshake(), homes, {}, {}, { loads: ['FAKE_HOME', 'FAKE_HOOKS_DIR'] });
+    await adapter.start(readOnlyStart());
+
+    const [home, hooks] = [spawned.lastEnv().FAKE_HOME ?? '', spawned.lastEnv().FAKE_HOOKS_DIR ?? ''];
+    expect(agent.loaded).toEqual([{ env: 'FAKE_HOME', path: home, found: [] }, { env: 'FAKE_HOOKS_DIR', path: hooks, found: [] }]);
+    expect(home).not.toBe(hooks);
+    expect(dirname(home)).toBe(dirname(hooks));
+    expect(dirname(dirname(home))).toBe(temp);
+    for (const path of [home, hooks]) expect(statSync(path).mode & 0o777).toBe(0o700);
+    // Without privateCwd the agent still starts in the worktree.
+    expect(spawned.lastCwd()).toBe('/repo');
+  });
+
+  it('removes the files and the config directories with the process', async () => {
+    const homes: AcpProfile = { ...HOOKED, restricted: { ...HOOKED.restricted!, configDirs: ['FAKE_HOME'] } };
+    const { adapter, agent, spawned } = setup(handshake(), homes);
+    await adapter.start(readOnlyStart());
+    const dir = spawned.lastCwd()!;
+    // What the agent keeps in its home of configuration goes too.
+    writeFileSync(join(spawned.lastEnv().FAKE_HOME ?? '', 'state.json'), '{}');
+    expect(readdirSync(temp)).toEqual([basename(dir)]);
+
+    await agent.close(0);
+    await vi.waitFor(() => expect(existsSync(dir)).toBe(false));
+    expect(readdirSync(temp)).toEqual([]);
+  });
+
+  it('sweeps at a restricted start what an Ordewell that died left of an earlier one', async () => {
+    // A process that has exited, so its id is one no running Ordewell holds.
+    const dead = spawnSync(process.execPath, ['-e', '']).pid;
+    const leftover = join(temp, `ordewell-acp-${dead}-AbC123`);
+    mkdirSync(join(leftover, 'FAKE_HOME', 'data'), { recursive: true, mode: 0o700 });
+    writeFileSync(join(leftover, 'FAKE_HOME', 'data', 'state.json'), '{}', { mode: 0o600 });
+    writeFileSync(join(leftover, 'hooks.json'), '{}', { mode: 0o600 });
+    const running = join(temp, `ordewell-acp-${process.pid}-XyZ789`);
+    mkdirSync(running, { mode: 0o700 });
+
+    const { adapter, spawned } = setup(handshake(), HOOKED);
+    await adapter.start(readOnlyStart());
+
+    expect(existsSync(leftover)).toBe(false);
+    expect(existsSync(running)).toBe(true);
+    expect(readdirSync(temp).sort()).toEqual([basename(running), basename(spawned.lastCwd()!)].sort());
+  });
+
+  it('gives two attempts running at once a private directory each, and ending one leaves the other\'s', async () => {
+    const a = setup(handshake(), HOOKED, {}, {}, LOADS);
+    const b = setup(handshake(), HOOKED, {}, {}, LOADS);
+    await Promise.all([a.adapter.start(readOnlyStart()), b.adapter.start(plannerStart())]);
+
+    const [dirA, dirB] = [a.spawned.lastCwd()!, b.spawned.lastCwd()!];
+    expect(dirA).not.toBe(dirB);
+    expect(a.agent.loaded[0].found).toContain(`sh ${dirA}/deny.sh`);
+    expect(b.agent.loaded[0].found).toContain(`sh ${dirB}/deny.sh`);
+    expect([a.spawned.lastEnv()[HOOK_SETTINGS], b.spawned.lastEnv()[HOOK_SETTINGS]]).toEqual([join(dirA, 'hooks.json'), join(dirB, 'hooks.json')]);
+
+    await a.agent.close(0);
+    await vi.waitFor(() => expect(existsSync(dirA)).toBe(false));
+    expect(readdirSync(dirB).sort()).toEqual(['deny.sh', 'hooks.json']);
+  });
+
+  it('leaves a writable task without them: the files are a restricted start\'s alone', async () => {
+    const homes: AcpProfile = { ...HOOKED, restricted: { ...HOOKED.restricted!, configDirs: ['FAKE_HOME'] } };
+    const { adapter, spawned } = setup(handshake(), homes);
+    await adapter.start(taskStart('auto', { flags: resolveTaskRunnerFlags(ROLES_MANIFEST, { mode: 'auto' }) }));
+
+    expect(spawned.lastEnv()[HOOK_SETTINGS]).toBeUndefined();
+    expect(spawned.lastEnv().FAKE_HOME).toBeUndefined();
+    expect(spawned.lastCwd()).toBe('/repo');
+    expect(readdirSync(temp)).toEqual([]);
+  });
+
+  it('still refuses a write and a command by their kind, under the files: they are a layer under the adapter\'s refusal, not in place of it', async () => {
+    for (const start of [plannerStart(), readOnlyStart()]) {
+      const { agent, adapter } = setup([
+        ...handshake(),
+        { expect: 'session/prompt' },
+        ask('edit', 'c-edit', { locations: [{ path: '/repo/a.ts' }] }),
+        ask('execute', 'c-exec', { rawInput: { command: 'touch b.txt' } }),
+        { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+      ], HOOKED);
+      await adapter.start(start);
+      const events = await turn(adapter, 'go');
+
+      expect(chosen(agent)).toEqual(['opt-c', 'opt-c']);
+      expect(events.flatMap((e) => (e.type === 'permission_request' ? [e.decided] : []))).toEqual([
+        { decision: 'deny', note: 'Nothing may be written here: this session is read-only.' },
+        { decision: 'deny', note: 'Your own shell is off here. Run commands with Ordewell\'s run_command.' },
+      ]);
+    }
+  });
+
+  it('refuses a restricted start that hands files or config directories where a placement would run it, since their paths are this machine\'s', async () => {
+    const profiles: AcpProfile[] = [
+      { ...ROLES_PROFILE, restricted: { ...ROLES_PROFILE.restricted!, files: [{ fileName: 'hooks.json', render: () => '{}', pass: { env: HOOK_SETTINGS } }] } },
+      { ...ROLES_PROFILE, restricted: { ...ROLES_PROFILE.restricted!, configDirs: ['FAKE_HOME'] } },
+    ];
+    for (const profile of profiles) {
+      for (const [start, refusal] of [[plannerStart(), /cannot plan in a container/], [readOnlyStart(), /cannot run a read-only task in a container/]] as const) {
+        const place = vi.fn();
+        const { adapter, spawned } = setup(handshake(), profile, {}, { placement: { cwd: '/work', place, reach: async (url) => url, blob: async () => undefined } });
+        await expect(adapter.start(start)).rejects.toThrow(refusal);
+        expect(place).not.toHaveBeenCalled();
+        expect(spawned.processes).toHaveLength(0);
+      }
+    }
+    expect(readdirSync(temp)).toEqual([]);
+  });
+
+  it('starts Copilot, whose profile hands no such files, as before: its flags, its instructions and its temp directory, nothing more', async () => {
+    const copilotStarts = [
+      plannerStart(),
+      taskStart('plan', { flags: resolveTaskRunnerFlags(COPILOT_CLI_MANIFEST, { mode: 'plan' }) }),
+    ];
+    for (const start of copilotStarts) {
+      const { adapter, spawned } = setup(handshake({ ...INITIALIZED, agentInfo: { name: 'Copilot', version: '1.0.105' } }), COPILOT_CLI_PROFILE);
+      await adapter.start(start);
+
+      const dir = spawned.lastCwd()!;
+      expect(spawned.lastCommand()).toBe('copilot');
+      expect(spawned.lastArgs()).toEqual(['--acp', '--stdio', '--deny-tool=write', '--deny-tool=shell', '--deny-tool=url', '--disable-builtin-mcps']);
+      // What the spawn adds to, or changes in, the environment it inherits; PATH is the host's.
+      const added = Object.entries(spawned.lastEnv()).filter(([name, value]) => name !== 'PATH' && process.env[name] !== value);
+      expect(Object.fromEntries(added)).toEqual({ COPILOT_ALLOW_ALL: 'false', TMPDIR: dir, TMP: dir, TEMP: dir });
+      expect(dirname(dir)).toBe(temp);
+      expect(readdirSync(dir)).toEqual(['AGENTS.md']);
+      adapter.dispose();
+    }
   });
 });
 

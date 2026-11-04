@@ -86,6 +86,26 @@ export interface AcpAskedCall {
   report?: AcpToolCall;
 }
 
+/**
+ * A file a restricted start hands the agent, such as a settings file that
+ * registers a hook refusing writes and commands, or the hook's script, for an
+ * agent with no deny flag of its own (ADR-0060, R3).
+ */
+export interface AcpRestrictedFile {
+  /** Its name in the process's private directory. */
+  fileName: string;
+  /**
+   * The whole file, from the private directory's path alone, so one file can
+   * name another there: a hook's settings name its script. Nothing of the
+   * attempt reaches it, neither the provider credential nor the token, so the
+   * file never holds a secret; Ordewell's server reaches the agent by
+   * `session/new` or {@link AcpProfile.mcpConfig}.
+   */
+  render(dir: string): string;
+  /** Absent: the agent finds it by another file's naming it. */
+  pass?: { env: string } | { flag: string };
+}
+
 /** Spawn-level controls that take the agent's own write, shell and web tools away. */
 export interface AcpRestriction {
   args: readonly string[];
@@ -94,12 +114,27 @@ export interface AcpRestriction {
    * Start the agent in a private directory of its own, the session's cwd and
    * its temp directory too, for an agent that takes the directory it starts in
    * as configuration to load: its hooks run the repository's code, and no
-   * switch of its own turns them off (ADR-0028). The directory holds only the
-   * instructions, as its own, and the MCP settings file where the profile has
-   * one. The agent then reaches the workspace only by
-   * asking, and every read is put to the envelope (ADR-0060, R3).
+   * switch of its own turns them off (ADR-0028). The directory holds only
+   * what this start hands the agent: the instructions, as its own, the MCP
+   * settings file where the profile has one, and {@link files}. The agent then
+   * reaches the workspace only by asking, and every read is put to the
+   * envelope (ADR-0060, R3).
    */
   privateCwd?: boolean;
+  /**
+   * Written owner-only into the process's private directory, never the
+   * worktree, and gone with it, for an agent whose own controls are a settings
+   * file or a hook rather than a flag. A layer under the adapter's refusal of
+   * every edit, delete, move and command by its kind, never in place of it.
+   */
+  files?: readonly AcpRestrictedFile[];
+  /**
+   * Variables that move the agent's home of configuration, each set to an
+   * empty owner-only directory of this start's own in its private directory,
+   * so the user's global rules, hooks, plugins and skills do not load. What
+   * the agent keeps there goes with the process.
+   */
+  configDirs?: readonly string[];
 }
 
 /** What an extension request's answer may depend on: the start it came to, never a person. */
