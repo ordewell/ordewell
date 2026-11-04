@@ -39,7 +39,9 @@ in `session/new`, or in a settings file of its own where its profile says so
 `session/resume` or `session/load` for a resume, then the plan's mode, model
 and effort; a turn is one `session/prompt`. The adapter never calls
 `authenticate`: a `-32000` answer is read as signed out, and signing in is the
-user's, in the agent's own terminal. Any other request from the agent is
+user's, in the agent's own terminal. An agent that over ACP ignores the
+provider key its own login stored is handed that key for the spawn instead,
+read from the agent's own store (R9). Any other request from the agent is
 answered `-32601` at once, so a turn never waits on Ordewell; a profile may
 instead answer the agent's own methods that hold its turn until the client
 replies (`extensionRequests`), and a request its handler cannot read keeps the
@@ -57,8 +59,9 @@ read from `initialize`'s `agentInfo`, the setup timeout, how the agent names
 Ordewell's tools in its reports and to the model, how a model reaches it at
 spawn, the instructions route, the route Ordewell's MCP server takes where
 it is not `session/new`, the mode route, what it loads from a repository
-(ADR-0028), the roles it claims, the controls that restrict it, and the
-answers to the agent's own requests.
+(ADR-0028), the roles it claims, the controls that restrict it, the
+answers to the agent's own requests, and where an agent needs one, the reader
+of its provider credential.
 
 ## Key properties
 
@@ -167,6 +170,36 @@ answers to the agent's own requests.
   prompt's own response, then a new `session/prompt`; requests still pending
   at the cancel are answered `cancelled`. Only the `session/prompt` response
   ends a turn: no streamed update and no timer does.
+- **An agent's provider key is read from its own store, for one spawn (R9).**
+  An agent can ignore over ACP the login its own CLI stored: Cline 3.0.74
+  answers `session/new` with `-32000` though `cline auth` saved an OpenRouter
+  key, and runs when `CLINE_PROVIDER`, `CLINE_API_KEY` and `CLINE_MODEL` are
+  in its environment. Such a profile has a `credentials` hook, which reads the
+  key as [ADR-0051](../platform/0051-opencode-go-limits-from-the-selected-login-read-in-place.md)
+  reads OpenCode's: from the store the agent itself names and nowhere else,
+  under the host's and the workspace's variables (its G2), with nothing
+  refreshed, written, copied or kept beyond the read. For Cline that is
+  `CLINE_PROVIDER_SETTINGS_PATH`, else `~/.cline/data/settings/providers.json`,
+  and the provider, key and model of the entry it last used
+  (`clineCredentials.ts`). The hook answers the variables to add, and they go
+  into that spawn's environment, the only place the key goes:
+  - read afresh at each spawn and held by nothing after it, so two attempts
+    running at once each have their own, and a sign-in between two spawns is
+    the second's;
+  - never logged, never in an error, never written to disk, never in the
+    arguments, and never sent over ACP, so not to a model, the planner or a
+    webview;
+  - not read when the user's own environment already hands the agent a key
+    (`CLINE_API_KEY`), and a model the user's environment chooses stays theirs;
+  - not read, and nothing added, under a placement: a container holds the
+    lease's stand-in for a key, never the user's own
+    ([ADR-0059](../isolation/0059-an-execution-lease-reserves-in-the-claim-and-opens-after-it.md) L7).
+
+  A store that is missing, cannot be read, or holds no key for the provider it
+  last used refuses the start before anything is spawned, naming the store and
+  both routes: "Sign in with `cline auth` (a Cline or ClinePass account, or a
+  provider's key), or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell's
+  environment." A profile without the hook spawns exactly as before.
 
 ## GitHub Copilot CLI
 
@@ -260,6 +293,13 @@ settings configure, and there is no command to fall back to.
   each read, so the tests show the `mcpConfig` route's file read, its lifetime,
   one token per concurrent attempt, the sweep, and the refusal of an agent
   that ignores the file, without a live agent.
+- **The credential hook** is tested in `acpAdapter.test.ts` with a scripted
+  hook and with Cline's reader on a store in a temporary home: the spawn's
+  environment carries the key; the log, the events, the arguments, the
+  agent's transcript and the start's errors do not; a profile without the hook
+  spawns as before; two attempts at once each get their own key; and a
+  placement gets none. `clineCredentials.test.ts` covers the reader's store
+  path, the last-used entry, and each refusal.
 - `acpEvents` is a pure reducer from `session/update` to Ordewell's agent
   events, tested on its own.
 
@@ -270,8 +310,8 @@ settings configure, and there is no command to fall back to.
   such an agent is worth the bridge.
 - **Agents beyond Copilot CLI and Qwen Code.** Gemini CLI and Goose wait for
   the same live probe those passed before they are admitted at all. No profile
-  uses `mcpConfig` yet: Cline 3.0.74 needs it, and waits for a recording of
-  it connecting from the file.
+  uses `mcpConfig` or `credentials` yet: Cline 3.0.74 needs both, and waits
+  for a recording of it connecting from the file.
 - **A resumed restricted start.** A resume begins in a new private directory
   and hands it to `session/load`; no recording yet shows Copilot resuming a
   session whose `cwd` has changed.
@@ -338,6 +378,18 @@ settings configure, and there is no command to fall back to.
   (ADR-0001). Every start sets one of the three modes the manifest offers.
 - **Qwen's `plan` mode as a read-only mode.** Rejected for want of evidence:
   no recording shows it refusing a write and a command, and R3 asks for one.
+- **Ordewell calling `authenticate` with the stored key.** Rejected: ACP's
+  auth methods are the agent's to name and differ by agent, signing in stays
+  the user's
+  ([ADR-0052](../routing/0052-a-signed-out-coding-agent-is-flagged-and-signs-in-from-the-chat.md)),
+  and the key would cross the protocol, where a recording keeps it. The
+  spawn's environment is the route the agent documents.
+- **The key copied into a settings file for the agent, as `mcpConfig` does
+  for the token.** Rejected: a file is one more place the key sits on disk,
+  where the variables the agent already reads hold it only for the process.
+- **The store read once and the key kept for later spawns.** Rejected: a held
+  key outlives the spawn that needed it, and a sign-in or a switch of provider
+  in between would not be seen.
 - **Steering through a prompt sent mid-turn.** Rejected: v1 defines no
   injection, and a second `session/prompt` during a turn is not specified to
   join it. The turn-end queue is what v1 supports.
@@ -376,3 +428,7 @@ settings configure, and there is no command to fall back to.
 - 2026-11-04 — R4: an agent that takes Ordewell's server only from a settings
   file of its own is handed one per process (`mcpConfig`), and `session/new`
   carries the server only to an agent that advertises HTTP.
+- 2026-11-04 — R9: an agent that ignores its own stored login over ACP is
+  handed its provider key at spawn by the profile's `credentials` hook, read
+  from the agent's own store as ADR-0051 reads OpenCode's; Cline's reader is
+  written, for a profile not yet admitted.
