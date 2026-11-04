@@ -8,6 +8,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.12.5] - 2026-11-04
+
 ### Changed
 
 - **The terminal UI is supported on native Windows.** It was run there from a
@@ -3995,7 +3997,8 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.12.4...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.12.5...HEAD
+[0.12.5]: https://github.com/ordewell/ordewell/compare/v0.12.4...v0.12.5
 [0.12.4]: https://github.com/ordewell/ordewell/compare/v0.12.3...v0.12.4
 [0.12.3]: https://github.com/ordewell/ordewell/compare/v0.12.2...v0.12.3
 [0.12.2]: https://github.com/ordewell/ordewell/compare/v0.12.1...v0.12.2

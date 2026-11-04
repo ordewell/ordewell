@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.12.5] - 2026-11-04
+
 ### Security
 
 - **A Codex planner on Windows plans with its own shell off.** Codex's sandbox
