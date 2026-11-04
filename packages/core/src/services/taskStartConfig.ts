@@ -180,13 +180,15 @@ export class TaskStartConfig {
       // A workspace below its repository's top starts the runner there, and Claude reads that directory's own config.
       const prefix = repo.path === '.' ? (await tryGit(invoker, repo.root, ['rev-parse', '--show-prefix'])).stdout.trim() : '';
       const roots = [...RUNNER_CONFIG_ROOTS, ...(prefix ? RUNNER_CONFIG_ROOTS.map((r) => `${prefix}${r}`) : [])];
-      // A root the worktree links from the checkout's same root holds the
-      // checkout's own files, which worktreeDifferences compares. Git elsewhere
-      // lists such a link as one entry, but Git for Windows walks into a
-      // junction and lists its files. A link to anywhere else is what a task
-      // left, and what it leads to is the worktree's to answer for.
+      // A root of the runner's own directory that the worktree links from the
+      // checkout's same root holds the checkout's own files, which
+      // worktreeDifferences compares. Git elsewhere lists such a link as one
+      // entry, but Git for Windows walks into a junction and lists its files.
+      // A link anywhere else, or to anywhere else, is what a task left: nothing
+      // else compares what it leads to, so git's listing still answers for it.
       const top = path.resolve(repo.root, ...prefix.split('/').filter(Boolean).map(() => '..'));
-      const linked = roots.filter((root) => linksTo(path.join(cwd, root), path.join(top, root))).map((root) => `${root}/`);
+      const runnerRoots = prefix ? roots.filter((root) => root.startsWith(prefix)) : roots;
+      const linked = runnerRoots.filter((root) => linksTo(path.join(cwd, root), path.join(top, root))).map((root) => `${root}/`);
       const diff = await tryGit(invoker, cwd, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '--diff-filter=ACMRTU', '-z', repo.baseRef, '--']);
       const untracked = await tryGit(invoker, cwd, ['ls-files', '--others', '-z', '--', ...roots]);
       // Old restored runs and test doubles may have no reachable base or diff;

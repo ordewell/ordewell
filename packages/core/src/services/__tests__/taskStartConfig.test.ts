@@ -80,6 +80,10 @@ it.runIf(process.platform === 'win32')('holds what a task linked into its worktr
   writeFileSync(join(elsewhere, 'config.toml'), 'model = "x"\n');
   // At the repository's top, which Codex and OpenCode read on their way up from the workspace.
   symlinkSync(elsewhere, join(worktree, '.codex'), 'junction');
+  // The checkout's own, but at the top, where nothing compares it with the checkout's first state.
+  mkdirSync(join(top, '.opencode', 'agents'), { recursive: true });
+  writeFileSync(join(top, '.opencode', 'agents', 'build.md'), 'rewritten\n');
+  symlinkSync(join(top, '.opencode'), join(worktree, '.opencode'), 'junction');
   const run = {
     repos: [{ path: '.', root: workspace, baseRef: base }],
     tasks: { t1: { repos: { '.': { worktree } } } },
@@ -88,5 +92,6 @@ it.runIf(process.platform === 'win32')('holds what a task linked into its worktr
   const held = await new TaskStartConfig().check(run, 't1', { epoch: 1, root: workspace, cwd: join(worktree, 'sub'), worktree: true });
 
   expect(held).toContain('.codex/config.toml');
+  expect(held).toContain('.opencode/agents/build.md');
   expect(held.some((name) => name.includes('settings.local.json'))).toBe(false);
 });
