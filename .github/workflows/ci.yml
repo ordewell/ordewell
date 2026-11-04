@@ -151,7 +151,13 @@ jobs:
         id: vscode-version
         if: needs.scope.outputs.integration != 'false'
         run: |
-          version=$(node -e "fetch('https://update.code.visualstudio.com/api/releases/stable?released=true').then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); }).then((v) => process.stdout.write(String(v[0])))")
+          # The update service can miss a connection; one miss is no verdict.
+          for attempt in 1 2 3 4; do
+            version=$(node -e "fetch('https://update.code.visualstudio.com/api/releases/stable?released=true').then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); }).then((v) => process.stdout.write(String(v[0])))") && break
+            echo "The update service did not answer (attempt $attempt of 4)."
+            sleep $((attempt * 10))
+          done
+          [ -n "$version" ] || exit 1
           echo "VS Code under test: $version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
@@ -397,7 +403,13 @@ jobs:
         id: vscode-version
         if: needs.scope.outputs.integration != 'false'
         run: |
-          version=$(node -e "fetch('https://update.code.visualstudio.com/api/releases/stable?released=true').then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); }).then((v) => process.stdout.write(String(v[0])))")
+          # The update service can miss a connection; one miss is no verdict.
+          for attempt in 1 2 3 4; do
+            version=$(node -e "fetch('https://update.code.visualstudio.com/api/releases/stable?released=true').then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); }).then((v) => process.stdout.write(String(v[0])))") && break
+            echo "The update service did not answer (attempt $attempt of 4)."
+            sleep $((attempt * 10))
+          done
+          [ -n "$version" ] || exit 1
           echo "VS Code under test: $version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
