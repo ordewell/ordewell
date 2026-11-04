@@ -1,6 +1,6 @@
 {
   "name": "ordewell",
-  "version": "0.12.3",
+  "version": "0.12.4",
   "description": "Ordewell — turn one goal into an ordered plan of coding-agent tasks. Installs the Ordewell CLI and TUI.",
   "license": "Apache-2.0",
   "author": "Alessandro Costanzo Ciano",
@@ -41,6 +41,6 @@
     "AUTHORS.md"
   ],
   "dependencies": {
-    "@ordewell/cli": "0.12.3"
+    "@ordewell/cli": "0.12.4"
   }
 }

@@ -40,7 +40,7 @@ freely within one plan. Try it in your project, with nothing to install:
 npx ordewell
 ```
 
-This README describes 0.12.3. See the [published releases](https://github.com/ordewell/ordewell/releases)
+This README describes 0.12.4. See the [published releases](https://github.com/ordewell/ordewell/releases)
 for versions available to install and their release notes.
 
 Ordewell is pre-1.0, so minor releases can include breaking changes. Read the

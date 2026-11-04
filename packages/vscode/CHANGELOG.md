@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.12.4] - 2026-11-04
+
 ### Fixed
 
 - **An npm-installed agent's login is read on Windows.** Codex, OpenCode or Claude
@@ -24,7 +26,10 @@
   task's worktree "no longer a repository" when Windows names its folder two ways,
   and untracked files are in the diff.
 - **A `!` path exclusion holds on Windows in any case and with either slash.**
-- **Search's `include` filter works on Windows without ripgrep.**
+- **Search works on Windows without ripgrep**: an `include` filter such as
+  `src/*.ts` and `find_symbol` find what they should, and results are relative.
+- **A runner set by its full path is found on Windows**, rather than read as not
+  installed.
 
 ## [0.12.3] - 2026-11-03
 

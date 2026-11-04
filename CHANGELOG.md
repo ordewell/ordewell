@@ -8,6 +8,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.12.4] - 2026-11-04
+
 ### Fixed
 
 - **An npm-installed agent's login is read on Windows.** The login check now
@@ -44,9 +46,15 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **A `!` path exclusion holds on Windows in any case and with either slash.** An
   exclusion such as `!C:/Users/me/.ssh/*` now applies to `C:\Users\me\.ssh\*` and
   to any casing of it, as Windows itself would read the path.
-- **Search's `include` filter works on Windows without ripgrep.** The fallback
-  search matched an anchored glob such as `src/*.ts` against backslashed paths and
-  found nothing.
+- **Search works on Windows and macOS without ripgrep.** The fallback search
+  matched an anchored glob such as `src/*.ts` against backslashed paths and found
+  nothing; `find_symbol` found nothing at all, since neither GNU nor BSD grep reads
+  the non-capturing groups its pattern holds; and on Windows every result came
+  back as an absolute path.
+- **A runner set by its full path is found on Windows.** A command such as
+  `C:\Tools\claude.exe` read as not installed.
+- **The daemon finds your workspaces on Windows.** Its scan read `HOME`, which
+  Windows does not set, and searched no folder of yours.
 
 ## [0.12.3] - 2026-11-03
 
@@ -3925,7 +3933,8 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.12.3...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.12.4...HEAD
+[0.12.4]: https://github.com/ordewell/ordewell/compare/v0.12.3...v0.12.4
 [0.12.3]: https://github.com/ordewell/ordewell/compare/v0.12.2...v0.12.3
 [0.12.2]: https://github.com/ordewell/ordewell/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/ordewell/ordewell/compare/v0.12.0...v0.12.1
