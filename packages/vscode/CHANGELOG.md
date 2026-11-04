@@ -10,6 +10,9 @@
 - **GitHub Copilot CLI runs tasks.** Copilot CLI 1.0.105 or newer appears among
   the runners a task can be assigned to, with its models and its login. It
   cannot be the planner or run a read-only task.
+- **Qwen Code runs tasks and plans.** Qwen Code 0.26.6 or newer appears among
+  the runners a task can be assigned to, with its models, and among the
+  planners. It can run read-only tasks too.
 
 ### Fixed
 

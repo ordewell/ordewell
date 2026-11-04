@@ -224,7 +224,16 @@ ignores over ACP the login its own CLI stored.
   directory of its own and asks for every path in the worktree. Record a hook
   planted in the worktree running on a writable start and not on a restricted
   one, as Copilot's `repo-hooks.jsonl`, `planner.jsonl` and `read-only.jsonl`
-  do.
+  do, and Qwen Code's `planted-hook.jsonl`.
+
+  An agent with no flag that takes its tools away can still qualify when its
+  `restricted.args` make it ask before every write and command, as Qwen
+  Code's `--approval-mode default` does: the adapter refuses each by its
+  kind, a request to switch modes included, and the recordings must show it.
+  Never claim a role through the agent's own plan or read-only mode if a
+  request to switch modes leaves it. An agent that defers MCP tools until the
+  model loads them names its loading tool in `restricted.toolSearch`, so a
+  restricted start's prompt says to load each Ordewell tool first.
 
   An agent with no deny flag, whose controls are a settings file or a hook,
   is handed them in `restricted.files`: each is written 0600 into that

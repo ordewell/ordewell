@@ -104,7 +104,7 @@ describe('/planner', () => {
   it('names the agents to install when nothing can plan', () => {
     const { state } = run('/planner', { ...ready, runners: [], configuredProviders: [] });
 
-    expect(stepperOf(state).items[0]?.detail).toContain('Claude Code, Codex, OpenCode or GitHub Copilot CLI');
+    expect(stepperOf(state).items[0]?.detail).toContain('Claude Code, Codex, OpenCode, GitHub Copilot CLI or Qwen Code');
   });
 
   const saved = (provider: string, modelId: string, effort: string, notice: string, noticeLevel?: 'error') =>

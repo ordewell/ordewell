@@ -1,11 +1,12 @@
-import { readFileSync } from 'fs';
+import { readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CONNECTORS } from '../harness/connectors';
 import { acpOrdewellBinding } from '../harness/acpOrdewell';
 import { QWEN_CODE_PROFILE } from '../harness/qwenProfile';
+import { decidePlannerPermission } from '../harness/plannerPermissions';
 import type { AcpToolCall } from '../harness/acpSchema';
-import type { AgentEvent, AgentProcessDeps, TaskModeAgentAdapter, TaskStartOptions } from '../harness/AgentAdapter';
+import type { AgentEvent, AgentProcessDeps, PlannerStartOptions, TaskModeAgentAdapter, TaskStartOptions } from '../harness/AgentAdapter';
 import { QWEN_CODE_MANIFEST } from '../../plugins/builtin/qwen.manifest';
 import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
 import { OrdewellMcpServer, mcpClientConfig, type McpClientConfig } from '../mcp';
@@ -25,7 +26,13 @@ const CWD = '/repo';
 
 type Recorded =
   | { dir: 'in' | 'out'; ms: number; line: { id?: number; method?: string; params?: unknown; result?: unknown; error?: { code: number; message: string } } }
-  | { dir: 'note'; ms: number; event: string; args?: string[]; completed?: string[]; leftBehind?: string[] };
+  | {
+    dir: 'note'; ms: number; event: string; args?: string[]; completed?: string[]; calls?: string[]; leftBehind?: string[]; hooksRan?: string[];
+    cwd?: string; tmpdir?: string; startDirAtSpawn?: string[]; permissions?: RecordedPermission[];
+  };
+
+/** A permission request as the recording's summary lists it, with the option Ordewell answered of the kind it was. */
+interface RecordedPermission { title: string; kind: string; toolName: string; answered: string }
 
 function recording(name: string): Recorded[] {
   return readFileSync(join(FIXTURES, `${name}.jsonl`), 'utf8').replaceAll('{{CWD}}', CWD).trim().split('\n').map((line) => JSON.parse(line) as Recorded);
@@ -47,6 +54,36 @@ function settingsOf(params: unknown): { configId: string; value: string } {
 
 function recordedSettings(name: string) {
   return recording(name).flatMap((entry) => (entry.dir === 'out' && entry.line.method === 'session/set_config_option' ? [settingsOf(entry.line.params)] : []));
+}
+
+/** What the recorded run called of Ordewell's, what it was asked and how each was answered, and what it left in the workspace and the start directory. */
+function recordedOutcome(name: string) {
+  const summary = note(name, 'summary');
+  return { calls: summary?.calls ?? [], permissions: summary?.permissions ?? [], leftBehind: summary?.leftBehind ?? [] };
+}
+
+/** The arguments the agent called an Ordewell tool with, as its permission request showed them. */
+function recordedMcpCall(name: string, tool: string): Record<string, unknown> {
+  for (const entry of recording(name)) {
+    const call = entry.dir === 'in' && entry.line.method === 'session/request_permission'
+      ? (entry.line.params as { toolCall: { rawInput?: Record<string, unknown>; _meta?: { toolName?: string } } }).toolCall
+      : undefined;
+    if (call?._meta?.toolName === `mcp__ordewell__${tool}`) return call.rawInput ?? {};
+  }
+  throw new Error(`${name} has no call of ${tool}`);
+}
+
+/** The text of the first prompt Ordewell was recorded sending. */
+function recordedPrompt(name: string): string {
+  const sent = recording(name).find((entry) => entry.dir === 'out' && entry.line.method === 'session/prompt');
+  const prompt = sent?.dir === 'out' ? (sent.line.params as { prompt: { text?: string }[] }).prompt : [];
+  return prompt.map((block) => block.text ?? '').join('');
+}
+
+/** Where Qwen was recorded starting, and the hooks the workspace it served ran there. */
+function recordedLaunch(name: string) {
+  const spawn = note(name, 'spawn');
+  return { cwd: spawn?.cwd, tmpdir: spawn?.tmpdir, startDirAtSpawn: spawn?.startDirAtSpawn, hooksRan: note(name, 'summary')?.hooksRan };
 }
 
 /** The model the recordings ran on, as `session/new` named it and `--model` took it. */
@@ -278,12 +315,6 @@ describe('qwen-code, replayed from Qwen Code 0.26.6', () => {
     await agent.finished;
   });
 
-  it('claims no role: Qwen does not plan and offers no read-only mode, as no recording shows its plan mode refusing a write and a command', () => {
-    expect(CONNECTORS['qwen-code'].plans).toBe(false);
-    expect(QWEN_CODE_MANIFEST.modes?.some((mode) => mode.readOnly)).toBe(false);
-    expect(QWEN_CODE_MANIFEST.modes?.map((mode) => mode.id)).not.toContain('auto');
-  });
-
   it('takes a call for Ordewell\'s only when its request carries the tool in _meta.toolName under Ordewell\'s server prefix', () => {
     const binding = acpOrdewellBinding(QWEN_CODE_PROFILE);
     const call = (toolName: unknown, title = '{}', kind: AcpToolCall['kind'] = 'other'): AcpToolCall => ({ toolCallId: 'c', title, kind, _meta: { toolName } });
@@ -332,5 +363,200 @@ describe('qwen-code, replayed from Qwen Code 0.26.6', () => {
   it('asks Qwen\'s model list with the same hook its tasks use', () => {
     expect(QWEN_CODE_PROFILE.credentials).toBeDefined();
     expect(QWEN_CODE_PROFILE.credentials).toBe(QWEN_CODE_MANIFEST.modelDiscovery.acp?.credentials);
+  });
+});
+
+async function readOnlyToken() {
+  const server = new OrdewellMcpServer();
+  servers.push(server);
+  const completed = vi.fn(async () => ({ text: 'Recorded.' }));
+  const credential = await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: 1, readOnly: true }, { taskComplete: completed } as never);
+  return { mcp: mcpClientConfig(credential), completed };
+}
+
+async function plannerToken() {
+  const server = new OrdewellMcpServer();
+  servers.push(server);
+  const submitted = vi.fn(async () => ({ text: 'Plan received.' }));
+  const listed = vi.fn(async () => ({ text: '[]' }));
+  const models = vi.fn(async () => ({ text: '[]' }));
+  const ran = vi.fn(async () => ({ text: 'The plan is running.' }));
+  const credential = await server.issuePlannerToken({ sessionId: 's1' }, { submitPlan: submitted, listRunners: listed, listModels: models, runPlan: ran } as never);
+  return { mcp: mcpClientConfig(credential), submitted, listed, models, ran };
+}
+
+/** Qwen's read-only mode, as the plan names it. */
+const READ_ONLY_MODE = QWEN_CODE_MANIFEST.modes?.find((mode) => mode.readOnly)?.id ?? 'none';
+
+function readOnlyStart(mcp: McpClientConfig): TaskStartOptions {
+  return taskStart(mcp, READ_ONLY_MODE);
+}
+
+function plannerStart(mcp: McpClientConfig): PlannerStartOptions {
+  return { kind: 'planner', cwd: CWD, model: MODEL, systemPrompt: 'You are the planner.', mcp };
+}
+
+/** A planner's turn, every held request put to its envelope as `CliAgentAiService` puts it (ADR-0026). */
+async function plannerTurn(adapter: TaskModeAgentAdapter): Promise<AgentEvent[]> {
+  const events: AgentEvent[] = [];
+  await adapter.send('go', (event) => {
+    events.push(event);
+    if (event.type === 'permission_request' && !event.decided) {
+      void decidePlannerPermission(event.ask, event.input ?? {}, { workspaceRoot: CWD })
+        .then((decision) => adapter.answerPermission?.(event.id, decision));
+    }
+  });
+  return events;
+}
+
+const failures = (events: AgentEvent[]) => JSON.stringify(events.filter((e) => e.type === 'tool_result'));
+
+/** The recorded launch with its private directory put back as `dir`, the one this start made. */
+function launchedAs(name: string, dir: string) {
+  const at = (path: string | undefined) => (path === '{{START_DIR}}' ? dir : path);
+  const launch = recordedLaunch(name);
+  return { ...launch, cwd: at(launch.cwd), tmpdir: at(launch.tmpdir) };
+}
+
+describe('qwen-code roles, replayed from Qwen Code 0.26.6 (ADR-0026, ADR-0028, ADR-0046, ADR-0060)', () => {
+  it('claims both roles: it plans, and offers a read-only mode that Qwen runs in its own default mode, never its plan, auto or yolo', () => {
+    expect(CONNECTORS['qwen-code'].plans).toBe(true);
+    expect(READ_ONLY_MODE).toBe('plan');
+    expect(resolveTaskRunnerFlags(QWEN_CODE_MANIFEST, { mode: READ_ONLY_MODE, model: MODEL }).permissionMode).toBe('default');
+    expect(QWEN_CODE_MANIFEST.modes?.map((mode) => mode.id)).not.toContain('auto');
+  });
+
+  it.each([
+    ['planner', async () => plannerStart((await plannerToken()).mcp)],
+    ['read-only', async () => readOnlyStart((await readOnlyToken()).mcp)],
+    ['planted-hook', async () => readOnlyStart((await readOnlyToken()).mcp)],
+  ] as const)('starts a %s session asking before every action, in a directory of its own, as it was recorded running none of the workspace\'s hooks', async (name, start) => {
+    const { spawned, agent, adapter } = qwen(replay(name, EAGER_CONTACT));
+    await adapter.start(await start());
+
+    const dir = spawned.lastCwd() ?? '';
+    expect(dir.startsWith(CWD)).toBe(false);
+    expect(spawned.lastArgs()).toEqual(recordedArgs(name));
+    const { hooksRan, ...launch } = launchedAs(name, dir);
+    expect({ cwd: dir, tmpdir: spawned.lastEnv().TMPDIR, startDirAtSpawn: readdirSync(dir) }).toEqual(launch);
+    expect((agent.requests('session/new')[0].params as { cwd: string }).cwd).toBe(dir);
+    // The workspace's planted `.qwen/settings.json` hook wrote nothing on the recorded start.
+    expect(hooksRan).toEqual([]);
+    expect(agent.requests('session/set_config_option').map((r) => settingsOf(r.params))).toEqual(recordedSettings(name));
+    expect(agent.problems).toEqual([]);
+  });
+
+  it('plans with Ordewell\'s planner tools alone, each allowed by its name in _meta: it lists, submits a plan and starts it, leaving nothing behind', async () => {
+    const tools = ['list_runners', 'list_models', 'submit_plan', 'run_plan'];
+    const { mcp, submitted, listed, models, ran } = await plannerToken();
+    const { agent, adapter } = qwen(replay('planner', {
+      ...EAGER_CONTACT,
+      'session/prompt': tools.map((tool) => ({ callMcp: { tool, args: recordedMcpCall('planner', tool) } })),
+    }));
+    await adapter.start(plannerStart(mcp));
+    const events = await plannerTurn(adapter);
+
+    const requests = asked(events);
+    expect(requests.map((e) => e.decided)).toEqual(tools.map(() => ({ decision: 'allow' })));
+    expect(requests.map((e) => e.input)).toEqual(tools.map((tool) => recordedMcpCall('planner', tool)));
+    expect(permissionAnswers(agent)).toEqual(tools.map(() => ({ outcome: 'selected', optionId: 'proceed_once' })));
+    expect(listed).toHaveBeenCalled();
+    expect(models).toHaveBeenCalledWith(expect.objectContaining({ runner: 'qwen-code' }), expect.anything());
+    expect(submitted).toHaveBeenCalledWith(expect.objectContaining({
+      tasks: [expect.objectContaining({ assignedRunner: 'qwen-code', readOnly: true, autonomy: 'AFK' })],
+    }), expect.anything());
+    expect(ran).toHaveBeenCalled();
+    expect(recordedOutcome('planner')).toEqual({
+      calls: tools,
+      permissions: tools.map((tool) => expect.objectContaining({ toolName: `mcp__ordewell__${tool}`, answered: 'allow_once' })),
+      leftBehind: [],
+    });
+    expect(agent.problems).toEqual([]);
+    await agent.finished;
+  });
+
+  it.each([
+    ['planner', async () => plannerStart((await plannerToken()).mcp)],
+    ['read-only', async () => readOnlyStart((await readOnlyToken()).mcp)],
+  ] as const)('tells a %s start its Ordewell tools are deferred, and to load each with tool_search, in the first prompt, as the recording shows it working', async (name, start) => {
+    const { agent, adapter } = qwen(replay(name, EAGER_CONTACT));
+    await adapter.start(await start());
+    void turn(adapter);
+    await vi.waitFor(() => expect(agent.requests('session/prompt')).toHaveLength(1));
+
+    const line = /Your Ordewell tools are deferred: [^\n]*/.exec(recordedPrompt(name))?.[0] ?? 'none recorded';
+    expect(JSON.stringify(agent.requests('session/prompt')[0].params)).toContain(JSON.stringify(line).slice(1, -1));
+  });
+
+  it('leaves a writable task\'s first prompt without the deferred-tool line', async () => {
+    const { mcp } = await taskToken();
+    const { agent, adapter } = qwen(replay('ordewell-tool', EAGER_CONTACT));
+    await adapter.start(taskStart(mcp));
+    void turn(adapter);
+    await vi.waitFor(() => expect(agent.requests('session/prompt')).toHaveLength(1));
+
+    const sent = JSON.stringify(agent.requests('session/prompt')[0].params);
+    expect(sent).toContain('task_complete');
+    expect(sent).not.toContain('tool_search');
+  });
+
+  it.each([
+    ['restricted-write', 'write_file', `Writing to ${CWD}/probe.txt`],
+    ['restricted-shell', 'run_shell_command', 'touch probe-shell.txt'],
+  ])('refuses a read-only task\'s %s by its kind with no person asked, which Qwen was recorded failing, leaving nothing behind', async (name, tool, title) => {
+    const { mcp, completed } = await readOnlyToken();
+    const { agent, adapter } = qwen(replay(name, EAGER_CONTACT));
+    await adapter.start(readOnlyStart(mcp));
+    const events = await turn(adapter);
+
+    const requests = asked(events);
+    expect(requests.map((e) => e.decided?.decision)).toEqual(['deny']);
+    expect(JSON.stringify(requests[0])).toContain(title);
+    expect(permissionAnswers(agent)).toEqual([{ outcome: 'selected', optionId: 'cancel' }]);
+    expect(failures(events)).toContain(`Tool \\"${tool}\\" was canceled by the user.`);
+    expect(completed).not.toHaveBeenCalled();
+    expect(recordedOutcome(name)).toEqual({
+      calls: [],
+      permissions: [expect.objectContaining({ toolName: tool, answered: 'reject_once' })],
+      leftBehind: [],
+    });
+    expect(agent.problems).toEqual([]);
+    await agent.finished;
+  });
+
+  it.each([
+    ['read-only', `${CWD}/README.md`],
+    ['planted-hook', `${CWD}/README.md (lines 1-40)`],
+  ] as const)('runs a %s task in Qwen\'s default mode: its read of the workspace is allowed, and it completes through Ordewell once it has loaded the deferred tool', async (name, read) => {
+    const { mcp, completed } = await readOnlyToken();
+    const { agent, adapter } = qwen(replay(name, {
+      ...EAGER_CONTACT,
+      'session/prompt': [{ callMcp: { tool: 'task_complete', args: recordedMcpCall(name, 'task_complete') } }],
+    }));
+    await adapter.start(readOnlyStart(mcp));
+    const events = await turn(adapter);
+
+    // Qwen titles an Ordewell call with its arguments, so the input says which call it was.
+    const requests = asked(events);
+    expect(requests.map((e) => e.decided)).toEqual([{ decision: 'allow' }, { decision: 'allow' }]);
+    expect(requests[0].input).toMatchObject({ file_path: `${CWD}/README.md` });
+    expect(requests[1].input).toEqual(recordedMcpCall(name, 'task_complete'));
+    expect(permissionAnswers(agent)).toEqual([
+      { outcome: 'selected', optionId: 'proceed_once' },
+      { outcome: 'selected', optionId: 'proceed_once' },
+    ]);
+    // Qwen refused the model's first call of the tool it had not yet loaded.
+    expect(failures(events)).toContain('[tool_call bridge refused] Deferred tool');
+    expect(recordedOutcome(name)).toEqual({
+      calls: ['task_complete'],
+      permissions: [
+        expect.objectContaining({ title: read, kind: 'read', answered: 'allow_once' }),
+        expect.objectContaining({ toolName: 'mcp__ordewell__task_complete', answered: 'allow_once' }),
+      ],
+      leftBehind: [],
+    });
+    expect(completed).toHaveBeenCalledWith(expect.objectContaining({ status: 'done', summary: expect.stringContaining('HERON') }), expect.anything());
+    expect(agent.problems).toEqual([]);
+    await agent.finished;
   });
 });

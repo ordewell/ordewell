@@ -10,9 +10,6 @@ const SERVER_PREFIX = `mcp__${ORDEWELL_MCP_SERVER_NAME}__`;
  * Qwen Code over ACP (`qwen --acp`), the second ACP runner after Copilot
  * (ADR-0060), checked against the recordings in
  * `__tests__/fixtures/acp/qwen-code/`.
- *
- * It is a task-only runner: `roles` is absent because no recording shows its
- * `plan` mode, or any restriction, refusing a write and a command (ADR-0046).
  */
 export const QWEN_CODE_PROFILE: AcpProfile = {
   manifest: QWEN_CODE_MANIFEST,
@@ -42,4 +39,18 @@ export const QWEN_CODE_PROFILE: AcpProfile = {
   // auth, so it needs no sign-in of its own (ADR-0060, R9).
   credentials: qwenCredentials,
   signInRoute: 'set the key of an OpenAI-compatible provider, such as OpenRouter, in Ordewell with `/key`',
+  // Qwen has no flag that takes its write or shell tools away, and its plan
+  // mode is left by a request to switch modes. In `default` it asks before
+  // every write, edit and command, and the adapter refuses each by its kind,
+  // switch_mode included, with no person asked; the restricted-write,
+  // restricted-shell, planner and read-only recordings show that holding
+  // with nothing left behind. Qwen ends its turn on a refused request, so a
+  // read-only task that asks to write stops there and is reminded to call
+  // task_complete (ADR-0018 W1). Started in its worktree, Qwen loads the
+  // repository's `.qwen/settings.json`, whose hooks run the repository's
+  // code (ADR-0028): in a private directory of its own, also its temp
+  // directory, a planted hook was recorded not running, and Qwen reaches the
+  // workspace only by asking, which puts every read to the envelope.
+  restricted: { args: ['--approval-mode', 'default'], privateCwd: true, toolSearch: 'tool_search' },
+  roles: { plans: true, readOnly: true },
 };

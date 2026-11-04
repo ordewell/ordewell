@@ -843,11 +843,11 @@ the worktree with its own tools and reaches Ordewell only through the Ordewell
 MCP server, given over HTTP in `session/new` or in a settings file of the
 agent's own (ADR-0060 R4). It has no mid-turn steer: a
 message waits for the turn's end. Three are admitted so far. GitHub Copilot CLI
-(`copilot-cli`) runs tasks, read-only ones included, and plans, and on a planner
-or read-only start it begins in a private directory, never the worktree, so the
-repository's hooks and config do not run (ADR-0060 R3). Qwen Code (`qwen-code`)
-and Cline (`cline`) run writable tasks only: no recording shows either
-refusing a write and a command, so they claim neither role. Cline takes
+(`copilot-cli`) and Qwen Code (`qwen-code`) run tasks, read-only ones included,
+and plan, and on a planner or read-only start each begins in a private
+directory, never the worktree, so the repository's hooks and config do not run
+(ADR-0060 R3). Cline (`cline`) runs writable tasks only: no recording shows it
+refusing a write and a command, so it claims neither role. Cline takes
 Ordewell's server from a settings file and attaches on the task's first turn
 (ADR-0060 R4, R5). Qwen Code and Cline are handed the provider key configured in
 Ordewell at spawn, Cline its own stored key where Ordewell holds none it can use

@@ -450,10 +450,13 @@ function qwenCode(script: FakeRunnerScript): FakeRunner {
     // Qwen contacts the server while the session is made, and that use of the
     // token is the only attach evidence ACP leaves (ADR-0060, R5).
     ...(script.attach === 'connected' ? [{ run: (agent: FakeAcpAgent) => { void agent.listMcpTools().catch(() => undefined); } }] : []),
-    // It answers a setting with the whole list, the new value in it.
+    // It answers a setting with the whole list, the new value in it. A task
+    // sets its mode; a planner given no model sets nothing.
     {
       expect: 'session/set_config_option',
-      reply: (params: unknown) => {        const { configId, value } = params as { configId: string; value: string };
+      optional: true,
+      reply: (params: unknown) => {
+        const { configId, value } = params as { configId: string; value: string };
         return { configOptions: qwenAnswer(2).configOptions!.map((option) => (option.id === configId ? { ...option, currentValue: value } : option)) };
       },
     },

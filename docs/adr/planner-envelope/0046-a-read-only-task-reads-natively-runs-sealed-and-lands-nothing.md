@@ -205,9 +205,11 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
   command and mode switch the agent still asks for, with nobody asked, and
   fails a session that leaves the mode it settled in. A profile without the
   role gives its manifest no read-only mode, so ModeResolver never assigns
-  one. GitHub Copilot CLI claims it (its `plan` mode): it starts in a private
-  directory of its own, so it runs none of the repository's hooks (ADR-0028),
-  and its every read of the worktree is a request this ADR's rules answer.
+  one. GitHub Copilot CLI and Qwen Code claim it (each manifest's `plan`
+  mode, which for Qwen is its `default`, asking before every write and
+  command): each starts in a private directory of its own, so it runs none of
+  the repository's hooks (ADR-0028), and its every read of the worktree is a
+  request this ADR's rules answer.
 - **Native web tools are refused.** A runner's own fetch and search run
   outside Ordewell's pinned transport, and a provider-side search outside its
   secret check and budget too, with nobody there to approve one. Claude's
@@ -469,4 +471,5 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
 - 2026-11-01 — the task tool is `read` ([ADR-0057](../supervision/0057-information-moves-by-reference.md) R11).
 - 2026-11-04 — an ACP runner runs a read-only task only on its profile's evidence; GitHub Copilot CLI runs none (ADR-0060).
 - 2026-11-04 — GitHub Copilot CLI runs read-only tasks, from a private start directory (ADR-0060).
+- 2026-11-04 — Qwen Code runs read-only tasks, from a private start directory (ADR-0060).
 - 2026-11-04 — an ACP runner's restricted start may hand it owner-only files and empty config homes outside the worktree, for an agent with no deny flag (ADR-0060 R3).

@@ -204,6 +204,20 @@ planner (above and below), and Ordewell reads them itself:
   setting or MCP server file is read, so none of the repository's servers is
   offered to it.
 
+### Qwen Code planners
+
+- **Started outside the repository.** Under ACP, Qwen Code 0.26.6 started in
+  the worktree runs the hooks in the repository's `.qwen/settings.json`, with
+  nobody asked, and rewrites that file. A planner's Qwen, and a read-only
+  task's, starts in an empty private directory of its own instead, also its
+  temp directory, as Copilot's does
+  ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md) R3).
+  A hook planted in the worktree did not run on the recorded restricted
+  start (`planted-hook.jsonl`).
+- **No instructions as text.** Started there, Qwen loads none of the
+  repository's context files, and the profile has no reader, so a planner's
+  Qwen plans without them. Its user's own `~/.qwen/settings.json` still loads.
+
 ### What the repository's config can do, and how the planner launch stops it
 
 | runner | item | can | planner launch |
@@ -230,6 +244,9 @@ planner (above and below), and Ordewell reads them itself:
 | Copilot CLI | `.github/hooks/` | run commands | started in a private directory |
 | Copilot CLI | MCP config | start a command, reach a URL | started in a private directory |
 | Copilot CLI | instruction files, imports | text | started in a private directory; injected by Ordewell |
+| Qwen Code | `.qwen/settings.json` hooks | run commands | started in a private directory |
+| Qwen Code | `.qwen/settings.json` MCP servers | start a command, reach a URL | started in a private directory |
+| Qwen Code | context files (`QWEN.md`) | text | started in a private directory; not read |
 
 The workspace's own environment (ADR-0016) is unchanged: it holds only what
 direnv was allowed to export and an untracked `.ordewell/env`.
@@ -438,3 +455,4 @@ specifies.
   read-only tasks, and no longer reads settings files for an `ordewell` server.
 - 2026-11-04 — a Copilot CLI planner or read-only task starts in a private directory, out of reach of the repository's hooks (ADR-0060).
 - 2026-11-04 — a Copilot CLI planner or read-only task is handed the repository's instruction files as text (ADR-0060).
+- 2026-11-04 — a Qwen Code planner or read-only task starts in a private directory, out of reach of the repository's `.qwen/settings.json` (ADR-0060).
