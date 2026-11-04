@@ -4,12 +4,13 @@ import { basename, dirname, join } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CONNECTORS } from '../harness/connectors';
 import { acpOrdewellBinding } from '../harness/acpOrdewell';
+import { acpRoles } from '../harness/acpRoles';
 import { discoverAcpModels } from '../harness/acpModels';
 import { ModelDiscovery, type AcpClientImpl, type ExecImpl } from '../ModelDiscovery';
 import type { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { CLINE_PROFILE } from '../harness/clineProfile';
 import type { AcpToolCall } from '../harness/acpSchema';
-import type { AgentEvent, AgentProcessDeps, TaskModeAgentAdapter, TaskStartOptions } from '../harness/AgentAdapter';
+import type { AgentEvent, AgentProcessDeps, PlannerStartOptions, TaskModeAgentAdapter, TaskStartOptions } from '../harness/AgentAdapter';
 import { VENDORS } from '../apiProviders';
 import { BUILTIN_MANIFESTS } from '../../plugins/builtin';
 import { CLINE_ACP_ARGS, CLINE_MANIFEST } from '../../plugins/builtin/cline.manifest';
@@ -37,12 +38,20 @@ interface Note {
   event: string;
   args?: string[];
   env?: Record<string, string>;
+  cwd?: string;
   settings?: unknown;
   method?: string;
   tool?: string;
   contacted?: boolean;
   completed?: Array<Record<string, unknown>>;
   permissions?: Array<{ title: string; kind: string; options: string[]; answer: unknown }>;
+  /** The marker each of the workspace's planted hooks writes when it runs, as the recording found them. */
+  hooksRan?: string[];
+  /** The worktree and the private directory as the recording found them once the process was gone. */
+  worktree?: { entries: string[]; gitStatus: string };
+  privateDir?: { entries: string[]; removed: boolean };
+  /** Whether the home `CLINE_DIR` named was empty when the recording started Cline. */
+  clineDir?: { emptyAtStart: boolean };
 }
 type Recorded = { dir: 'in' | 'out'; ms: number; line: WireLine } | Note;
 
@@ -229,6 +238,9 @@ describe('cline, replayed from Cline 3.0.74', () => {
     expect(spawned.lastCommand()).toBe('cline');
     expect(spawned.lastArgs()).toEqual(recordedArgs('ordewell-tool'));
     expect(spawned.lastArgs()).toEqual(['--acp', '--auto-approve', 'false']);
+    // A writable task starts in its worktree, its temp directory left as it was.
+    expect(spawned.lastCwd()).toBe(CWD);
+    expect(spawned.lastEnv().TMPDIR).toBe(temp);
     expect(agent.problems).toEqual([]);
   });
 
@@ -449,12 +461,12 @@ describe('cline, replayed from Cline 3.0.74', () => {
     await vi.waitFor(() => expect(readdirSync(temp)).toEqual([]));
   });
 
-  it('claims no role: Cline does not plan and offers no read-only mode, as it has no shell allow or deny list', () => {
+  it('claims the read-only role and not the planner\'s, which a first-turn attach cannot hold (ADR-0060, R5)', () => {
     expect(CONNECTORS.cline.plans).toBe(false);
-    expect(CLINE_PROFILE.roles).toBeUndefined();
-    expect(CLINE_PROFILE.restricted).toBeUndefined();
-    expect(CLINE_MANIFEST.modes?.some((mode) => mode.readOnly)).toBe(false);
-    expect(CLINE_MANIFEST.modes?.map((mode) => mode.id)).toEqual(['default', 'autoApprove']);
+    expect(CLINE_PROFILE.roles).toEqual({ plans: false, readOnly: true });
+    expect(CLINE_PROFILE.attach).toBe('firstTurn');
+    expect(CLINE_MANIFEST.modes?.filter((mode) => mode.readOnly).map((mode) => mode.id)).toEqual(['plan']);
+    expect(CLINE_MANIFEST.modes?.map((mode) => mode.id)).toEqual(['default', 'plan', 'autoApprove']);
   });
 
   it('takes a call for Ordewell\'s only when the tool its title names is under Ordewell\'s server prefix', () => {
@@ -482,6 +494,188 @@ describe('cline, replayed from Cline 3.0.74', () => {
 
   it('names an Ordewell tool the way Cline shows it to the model', () => {
     expect(CLINE_PROFILE.toolName?.('task_complete')).toBe('ordewell__task_complete');
+  });
+});
+
+/** A read-only task's token, which lists `run_command` beside `task_complete` (ADR-0046). */
+async function readOnlyToken() {
+  const server = new OrdewellMcpServer();
+  servers.push(server);
+  const completed = vi.fn(async () => ({ text: 'Recorded.' }));
+  const commands = vi.fn(async () => ({ text: '# scratch\n' }));
+  const credential = await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: 1, readOnly: true }, { taskComplete: completed, runCommand: commands } as never);
+  return { mcp: mcpClientConfig(credential), completed, commands };
+}
+
+/** Cline's read-only mode, as the plan names it. */
+const READ_ONLY_MODE = CLINE_MANIFEST.modes?.find((mode) => mode.readOnly)?.id ?? 'none';
+
+/** The text of each prompt Ordewell sent, in order. */
+const prompts = (agent: FakeAcpAgent) => agent.requests('session/prompt').map((r) => (r.params as { prompt: Array<{ text: string }> }).prompt[0].text);
+
+/** The recorded spawn's value with its private directory put back as `dir`, the one this start made. */
+const at = (value: string | undefined, dir: string) => value?.replaceAll('{{PRIVATE_DIR}}', dir);
+
+/** What the recording found once the process was gone: the worktree as it was, and the private directory, which held only the settings file, removed. */
+const UNTOUCHED = { worktree: { gitStatus: '' }, privateDir: { entries: ['cline_mcp_settings.json'], removed: true }, leftBehind: { privateDirs: [], clineProcesses: [] } };
+
+describe('cline read-only tasks, replayed from Cline 3.0.74 (ADR-0028, ADR-0046, ADR-0060)', () => {
+  it.each(['read-only', 'read-only-write', 'read-only-shell', 'read-only-hooks'])('starts %s in a directory of its own with --auto-approve false once, as it was recorded', async (name) => {
+    const { mcp } = await readOnlyToken();
+    const { spawned, agent, adapter } = cline(replay(name));
+    await adapter.start(taskStart(mcp, READ_ONLY_MODE));
+
+    const dir = spawned.lastCwd() ?? '';
+    const env = spawned.lastEnv();
+    const recorded = note(name, 'spawn');
+    expect(spawned.lastArgs()).toEqual(recordedArgs(name));
+    expect(spawned.lastArgs()).toEqual(['--acp', '--auto-approve', 'false']);
+    expect(dir.startsWith(CWD)).toBe(false);
+    expect(dir.startsWith(`${temp}/`)).toBe(true);
+    expect(dir).toBe(at(recorded?.cwd, dir));
+    expect([env.TMPDIR, env.TMP, env.TEMP]).toEqual([recorded?.env?.TMPDIR, recorded?.env?.TMP, recorded?.env?.TEMP].map((v) => at(v, dir)));
+    expect(env.CLINE_MCP_SETTINGS_PATH).toBe(at(recorded?.env?.CLINE_MCP_SETTINGS_PATH, dir));
+    expect(readdirSync(dir)).toEqual(['cline_mcp_settings.json']);
+    expect(agent.requests('session/new').map((r) => (r.params as { cwd: string }).cwd)).toEqual([dir]);
+  });
+
+  it('starts a read-only task with --auto-approve false whatever mode the plan gave it, so an autonomous mode cannot put Cline\'s approvals back', async () => {
+    const { mcp } = await readOnlyToken();
+    const { spawned, adapter } = cline(replay('read-only'));
+    await adapter.start(taskStart(mcp, 'autoApprove'));
+
+    expect(spawned.lastArgs()).toEqual(['--acp', '--auto-approve', 'false']);
+    expect(spawned.lastCwd()?.startsWith(CWD)).toBe(false);
+  });
+
+  it('runs none of the workspace\'s hooks on a read-only start, where a writable start in the same workspace was recorded running them all', async () => {
+    const { mcp } = await taskToken();
+    const { spawned, adapter } = cline(replay('repo-hooks'));
+    await adapter.start(taskStart(mcp));
+
+    // The hooks Cline reads from `.cline/hooks/` and `.clinerules/hooks/` of
+    // the directory it starts in: a writable task starts in the worktree.
+    expect(spawned.lastCwd()).toBe(CWD);
+    expect(note('repo-hooks', 'spawn')?.cwd).toBe(CWD);
+    expect(spawned.lastArgs()).toEqual(recordedArgs('repo-hooks'));
+    expect(note('repo-hooks', 'summary')?.worktree?.entries).toEqual(['.cline', '.clinerules', '.git', 'README.md']);
+    const everyHook = [
+      '_cline_hooks-PostToolUse', '_cline_hooks-PreToolUse', '_cline_hooks-TaskComplete', '_cline_hooks-TaskStart',
+      '_clinerules_hooks-PostToolUse', '_clinerules_hooks-PreToolUse', '_clinerules_hooks-TaskComplete', '_clinerules_hooks-TaskStart',
+    ];
+    expect(note('repo-hooks', 'summary')?.hooksRan).toEqual(everyHook);
+    // Cline's home moved to an empty directory keeps none of them out, so
+    // CLINE_DIR is no control for them and the start directory is.
+    expect(note('repo-hooks-cline-dir', 'spawn')).toMatchObject({ cwd: CWD, env: { CLINE_DIR: '{{CLINE_DIR}}' } });
+    expect(note('repo-hooks-cline-dir', 'summary')).toMatchObject({ clineDir: { emptyAtStart: true }, hooksRan: everyHook });
+    // The same hooks, planted the same way, under a read-only start.
+    expect(note('read-only-hooks', 'summary')?.worktree?.entries).toEqual(['.cline', '.clinerules', '.git', 'README.md']);
+    expect(note('read-only-hooks', 'summary')?.hooksRan).toEqual([]);
+    expect(note('read-only-hooks', 'summary')).toMatchObject(UNTOUCHED);
+  });
+
+  it('tells a read-only task its own tools are off, and where the workspace is, in the first prompt, as it was recorded', async () => {
+    const { mcp } = await readOnlyToken();
+    const { agent, adapter } = cline(replay('read-only'));
+    await adapter.start(taskStart(mcp, READ_ONLY_MODE));
+    void turn(adapter);
+    await vi.waitFor(() => expect(agent.requests('session/prompt')).toHaveLength(1));
+
+    const recorded = recording('read-only').find((e) => e.dir === 'out' && e.line.method === 'session/prompt');
+    const textOf = (params: unknown) => (params as { prompt: Array<{ text: string }> }).prompt[0].text;
+    const contract = (text: string) => text.slice(0, text.lastIndexOf('\n\n'));
+    const [sent] = prompts(agent);
+    expect(sent).toContain('This task is read-only: your own file edits, shell and web tools are off.');
+    expect(sent).toContain('`ordewell__run_command`');
+    expect(sent).toContain(`The workspace is \`${CWD}\`, not the directory you start in`);
+    expect(sent).toContain('task_complete');
+    expect(contract(sent)).toBe(contract(recorded?.dir === 'out' ? textOf(recorded.line.params) : ''));
+  });
+
+  it('refuses Cline\'s apply_patch on a read-only start, though Cline names it `other`, and its report of the refusal reaches the server', async () => {
+    const { mcp, completed } = await readOnlyToken();
+    const { agent, adapter } = cline(replay('read-only-write'));
+    await adapter.start(taskStart(mcp, READ_ONLY_MODE));
+    const first = await turn(adapter);
+    // Cline ended its turn on the refusal; Ordewell's completion reminder is the next.
+    const second = await turn(adapter);
+
+    expect(note('read-only-write', 'summary')?.permissions?.[0]).toMatchObject({ kind: 'other', title: expect.stringMatching(/^apply_patch: /) });
+    expect(asked(first).map((e) => [e.name, e.decided?.decision])).toEqual([[expect.stringContaining('apply_patch'), 'deny']]);
+    expect(asked(second).map((e) => e.decided)).toEqual([{ decision: 'allow' }]);
+    expect(permissionAnswers(agent)).toEqual(recordedAnswers('read-only-write'));
+    expect(permissionAnswers(agent)).toEqual([
+      { outcome: 'selected', optionId: 'reject_once' },
+      { outcome: 'selected', optionId: 'allow_once' },
+    ]);
+    expect(reports(completed)).toEqual(recordedReports('read-only-write').map((r) => expect.objectContaining(r)));
+    expect(completed).toHaveBeenCalledWith(expect.objectContaining({ status: 'blocked' }), expect.anything());
+    expect(note('read-only-write', 'summary')).toMatchObject({ ...UNTOUCHED, worktree: { entries: ['.git', 'README.md'], gitStatus: '' } });
+    expect(agent.problems).toEqual([]);
+    await agent.finished;
+  });
+
+  it('refuses Cline\'s own shell on a read-only start by the kind it names, and its report of the refusal reaches the server', async () => {
+    // Recorded with a token that lists no run_command, so Cline's own shell
+    // was all it had to reach for; the start is read-only by its mode.
+    const { mcp, completed } = await taskToken();
+    const { agent, adapter } = cline(replay('read-only-shell'));
+    await adapter.start(taskStart(mcp, READ_ONLY_MODE));
+    const events = await turn(adapter);
+
+    expect(note('read-only-shell', 'summary')?.permissions?.[0]).toMatchObject({ kind: 'execute', title: `run_commands: touch ${CWD}/probe-shell.txt` });
+    expect(asked(events).map((e) => e.decided?.decision)).toEqual(['deny', 'allow']);
+    expect(permissionAnswers(agent)).toEqual(recordedAnswers('read-only-shell'));
+    expect(permissionAnswers(agent)[0]).toEqual({ outcome: 'selected', optionId: 'reject_once' });
+    expect(reports(completed)).toEqual(recordedReports('read-only-shell').map((r) => expect.objectContaining(r)));
+    expect(completed).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }), expect.anything());
+    expect(note('read-only-shell', 'summary')).toMatchObject({ ...UNTOUCHED, worktree: { entries: ['.git', 'README.md'], gitStatus: '' } });
+    expect(agent.problems).toEqual([]);
+    await agent.finished;
+  });
+
+  it('refuses Cline\'s own file read, which names no path to judge, so a read-only task reads through run_command and completes through Ordewell', async () => {
+    const { mcp, completed, commands } = await readOnlyToken();
+    const { agent, adapter } = cline(replay('read-only'));
+    await adapter.start(taskStart(mcp, READ_ONLY_MODE));
+    const first = await turn(adapter);
+    const second = await turn(adapter);
+
+    const [read] = note('read-only', 'summary')?.permissions ?? [];
+    expect(read).toMatchObject({ kind: 'read', title: expect.stringMatching(/^read_files: /) });
+    // Cline's request carries the path only in the model's arguments, never as a location.
+    const request = recording('read-only').find((e) => e.dir === 'in' && e.line.method === 'session/request_permission');
+    expect(request?.dir === 'in' ? (request.line.params as { toolCall: { locations?: unknown[] } }).toolCall.locations ?? [] : ['?']).toEqual([]);
+    expect(asked(first).map((e) => [e.name, e.decided?.decision])).toEqual([[expect.stringContaining('read_files'), 'deny']]);
+    expect(asked(second).map((e) => e.decided?.decision)).toEqual(['allow', 'allow']);
+    expect(permissionAnswers(agent)).toEqual(recordedAnswers('read-only'));
+    expect(commands).toHaveBeenCalledWith(expect.objectContaining({ command: `head -40 ${CWD}/README.md` }), expect.anything());
+    expect(reports(completed)).toEqual(recordedReports('read-only').map((r) => expect.objectContaining(r)));
+    expect(completed).toHaveBeenCalledWith(expect.objectContaining({ status: 'done' }), expect.anything());
+    expect(note('read-only', 'summary')).toMatchObject({ ...UNTOUCHED, worktree: { entries: ['.git', 'README.md'], gitStatus: '' } });
+    expect(agent.problems).toEqual([]);
+    await agent.finished;
+  });
+
+  it('leaves no private directory behind once a read-only task\'s process is gone', async () => {
+    const { mcp } = await readOnlyToken();
+    const { agent, adapter } = cline(replay('read-only-shell'));
+    await adapter.start(taskStart(mcp, READ_ONLY_MODE));
+    await turn(adapter);
+    await agent.finished;
+    await agent.close(0);
+
+    await vi.waitFor(() => expect(readdirSync(temp)).toEqual([]));
+  });
+
+  it('refuses to plan, since Cline reaches Ordewell\'s server only once a prompt runs and a planner\'s first prompt is the goal (ADR-0060, R5)', async () => {
+    const { mcp } = await readOnlyToken();
+    const { spawned, adapter } = cline(replay('read-only'));
+    const planner: PlannerStartOptions = { kind: 'planner', cwd: CWD, model: MODEL, systemPrompt: 'You are the planner.', mcp };
+
+    await expect(adapter.start(planner)).rejects.toThrow('Cline cannot plan in Ordewell: its profile claims no planner role.');
+    expect(spawned.processes).toHaveLength(0);
+    expect(() => acpRoles({ ...CLINE_PROFILE, roles: { plans: true, readOnly: true } })).toThrow('Cline attaches Ordewell\'s tools only on a task\'s first turn, so it cannot plan.');
   });
 });
 

@@ -24,8 +24,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   Ordewell tools reach it through a settings file of its own, written for each
   task outside the worktree and removed after, and the provider key `cline auth`
   stored is handed to it for that task, or for listing its models, only. It
-  runs writable tasks only, not the planner or read-only tasks. Cline 3.0.74 or
-  newer is required.
+  runs writable and read-only tasks, but not the planner. A read-only task
+  starts it in a private directory instead of the worktree, so it never runs a
+  repository's `.clinerules/hooks/`, every edit, command and file read of its
+  own is refused, and it reads the workspace through Ordewell's commands.
+  Cline 3.0.74 or newer is required.
 
 - **Qwen Code runs tasks.** A plan can assign a task to `qwen-code`, which
   Ordewell drives over the Agent Client Protocol with the Ordewell tools

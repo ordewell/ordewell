@@ -9,9 +9,8 @@ const SERVER_PREFIX = `${ORDEWELL_MCP_SERVER_NAME}__`;
  * Cline's CLI over ACP (`cline --acp`), checked against the recordings in
  * `__tests__/fixtures/acp/cline/` (ADR-0060).
  *
- * It is a task-only runner: `roles` and `restricted` are absent because Cline
- * has no shell allow or deny list, and no recording shows its `plan` mode
- * refusing a write and a command (ADR-0046).
+ * It runs read-only tasks but does not plan: it reaches Ordewell's server only
+ * once a prompt runs, and a planner's first turn is the goal (ADR-0060, R5).
  */
 export const CLINE_PROFILE: AcpProfile = {
   manifest: CLINE_MANIFEST,
@@ -55,4 +54,13 @@ export const CLINE_PROFILE: AcpProfile = {
     return name.startsWith(SERVER_PREFIX) ? name.slice(SERVER_PREFIX.length) : null;
   },
   toolName: (tool) => `${SERVER_PREFIX}${tool}`,
+  // Cline has no allow or deny list of its own, so what keeps a read-only task
+  // from writing is that it asks: with `--auto-approve false` every edit and
+  // command is a request, which the restricted start refuses, as the
+  // read-only recordings show, and nothing reaches the worktree. Cline runs
+  // the hooks in `.clinerules/hooks/` of the directory it starts in, and
+  // CLINE_DIR does not keep them out; started in a directory of its own, it
+  // runs none (ADR-0028).
+  restricted: { args: ['--auto-approve', 'false'], privateCwd: true },
+  roles: { plans: false, readOnly: true },
 };
