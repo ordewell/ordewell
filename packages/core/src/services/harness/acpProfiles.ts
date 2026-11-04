@@ -117,6 +117,23 @@ export interface AcpExtensionContext {
  */
 export type AcpExtensionHandler = (params: unknown, context: AcpExtensionContext) => Record<string, unknown> | undefined;
 
+/** What a profile's credential hook may read: the variables the agent would start under without it. */
+export interface AcpCredentialContext {
+  /** The host's environment, then the workspace's own variables over it (ADR-0016). */
+  env: Readonly<Record<string, string | undefined>>;
+  kind: 'planner' | 'task';
+}
+
+/**
+ * The provider credential an agent ignores in its own store over ACP, read
+ * from that store for one spawn (ADR-0060, R9; ADR-0051). Answers the
+ * variables to add to that spawn's environment, null when the agent needs
+ * none from Ordewell, and throws, naming the routes that would sign it in,
+ * when it has none. What it answers holds a secret: it reaches the process's
+ * environment and nothing else.
+ */
+export type AcpCredentials = (context: AcpCredentialContext) => Promise<Readonly<Record<string, string>> | null>;
+
 /**
  * Everything one ACP agent needs past the protocol itself: a profile is data,
  * so a new agent is a profile and a manifest, not an adapter (ADR-0060, R1).
@@ -127,6 +144,8 @@ export interface AcpProfile {
   /** The arguments that make the command speak ACP on stdio. */
   args: readonly string[];
   env?: Readonly<Record<string, string>>;
+  /** Absent: the agent finds its own provider credential, and its spawn carries none from Ordewell. */
+  credentials?: AcpCredentials;
   /** The oldest agent version this profile was checked against, compared with `agentInfo.version`. */
   minVersion?: string;
   /** How long `initialize`, `session/new` and the mode switch may each take; 30 s when absent. */
