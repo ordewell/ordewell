@@ -28,4 +28,17 @@ export const COPILOT_CLI_PROFILE: AcpProfile = {
     call.kind === 'other' && call.title?.startsWith(SERVER_PREFIX) ? call.title.slice(SERVER_PREFIX.length) : null,
   toolName: (tool) => `${SERVER_PREFIX}${tool}`,
   modelArgs: (model) => ['--model', model],
+  // A denied tool is refused by Copilot itself, ahead of any allow and with
+  // no request, which the read-only recording shows holding under ACP. The
+  // variable is cleared because an inherited "true" would also trust the
+  // worktree and load its hooks.
+  restricted: {
+    args: ['--deny-tool=write', '--deny-tool=shell', '--deny-tool=url', '--disable-builtin-mcps'],
+    env: { COPILOT_ALLOW_ALL: 'false' },
+  },
+  // Withheld (ADR-0028): under ACP Copilot 1.0.105 runs the shell hooks in
+  // the repository's `.github/hooks/` from the first prompt, in a folder it
+  // was never told to trust and with `disableAllHooks` set, and no flag turns
+  // them off. A planner or a read-only task would run the repository's code.
+  roles: { plans: false, readOnly: false },
 };

@@ -20,7 +20,8 @@ export const COPILOT_CLI_MANIFEST: RunnerManifest = {
   contextFile: 'AGENTS.md',
   contextFileAltPath: '.github/copilot-instructions.md',
 
-  // No read-only mode: a planner and a read-only task are the next slice's.
+  // No read-only mode: Copilot runs the repository's hooks under ACP, so its
+  // profile claims no read-only role (ADR-0028, ADR-0046).
   // No `auth`: Copilot has `copilot login` but no status command, so a
   // signed-out agent is learned from ACP's auth-required error.
   modes: [

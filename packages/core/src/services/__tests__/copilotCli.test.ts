@@ -2,9 +2,12 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CONNECTORS } from '../harness/connectors';
+import { AcpAdapter } from '../harness/AcpAdapter';
 import { acpOrdewellBinding } from '../harness/acpOrdewell';
+import type { AcpProfile } from '../harness/acpProfiles';
 import { COPILOT_CLI_PROFILE } from '../harness/copilotProfile';
-import type { AgentEvent, AgentProcessDeps, TaskModeAgentAdapter, TaskStartOptions } from '../harness/AgentAdapter';
+import { decidePlannerPermission } from '../harness/plannerPermissions';
+import type { AgentEvent, AgentProcessDeps, PlannerStartOptions, TaskModeAgentAdapter, TaskStartOptions } from '../harness/AgentAdapter';
 import { COPILOT_CLI_MANIFEST } from '../../plugins/builtin/copilot-cli.manifest';
 import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
 import { OrdewellMcpServer, mcpClientConfig, type McpClientConfig } from '../mcp';
@@ -20,16 +23,35 @@ const FIXTURES = join(__dirname, 'fixtures/acp/copilot-cli');
 
 type Recorded =
   | { dir: 'in' | 'out'; ms: number; line: { id?: number; method?: string; params?: unknown; result?: unknown; error?: { code: number; message: string } } }
-  | { dir: 'note'; ms: number; event: string; args?: string[] };
+  | { dir: 'note'; ms: number; event: string; args?: string[]; calls?: string[]; leftBehind?: string[] };
 
 function recording(name: string): Recorded[] {
   return readFileSync(join(FIXTURES, `${name}.jsonl`), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as Recorded);
 }
 
+function note(name: string, event: string): Extract<Recorded, { dir: 'note' }> | undefined {
+  const found = recording(name).find((entry) => entry.dir === 'note' && entry.event === event);
+  return found?.dir === 'note' ? found : undefined;
+}
+
 /** The arguments Copilot was recorded running under. */
 function recordedArgs(name: string): string[] {
-  const spawn = recording(name).find((entry) => entry.dir === 'note' && entry.event === 'spawn');
-  return spawn && spawn.dir === 'note' ? spawn.args ?? [] : [];
+  return note(name, 'spawn')?.args ?? [];
+}
+
+/** What the recorder saw live: the Ordewell tools called, and the files left in the session's real directory. */
+function recordedOutcome(name: string): { calls: string[]; leftBehind: string[] } {
+  const summary = note(name, 'summary');
+  return { calls: summary?.calls ?? [], leftBehind: summary?.leftBehind ?? [] };
+}
+
+/** The arguments the agent called an Ordewell tool with, as its own tool-call report showed them. */
+function recordedMcpCall(name: string, tool: string): Record<string, unknown> {
+  for (const entry of recording(name)) {
+    const update = entry.dir === 'in' ? (entry.line.params as { update?: { sessionUpdate?: string; title?: string; rawInput?: Record<string, unknown> } } | undefined)?.update : undefined;
+    if (update?.sessionUpdate === 'tool_call' && update.title === `ordewell-${tool}`) return update.rawInput ?? {};
+  }
+  throw new Error(`${name} has no call of ${tool}`);
 }
 
 /**
@@ -89,7 +111,7 @@ async function taskToken(): Promise<{ mcp: McpClientConfig; completed: ReturnTyp
   return { mcp: mcpClientConfig(credential), completed };
 }
 
-function copilot(steps: FakeAcpStep[]) {
+function copilot(steps: FakeAcpStep[], profile?: AcpProfile) {
   const spawned = fakeAcpSpawn(steps);
   const deps: AgentProcessDeps = {
     spawn: spawned.spawn,
@@ -100,7 +122,7 @@ function copilot(steps: FakeAcpStep[]) {
     exists: () => true,
     workspaceEnv: async () => ({}),
   };
-  const adapter = CONNECTORS['copilot-cli'].create(deps);
+  const adapter = profile ? new AcpAdapter(deps, profile) : CONNECTORS['copilot-cli'].create(deps);
   adapters.push(adapter);
   return { spawned, agent: spawned.agent, adapter };
 }
@@ -231,5 +253,133 @@ describe('copilot-cli, replayed from Copilot CLI 1.0.105', () => {
     expect(binding.isOrdewellAsk({ toolCallId: 'b', title: 'ordewell-task_complete', kind: 'execute' })).toBe(false);
     expect(binding.isOrdewellAsk({ toolCallId: 'c', title: 'ordewell-evil-task_complete', kind: 'other' })).toBe(false);
     expect(binding.isOrdewellAsk({ toolCallId: 'd', title: 'ordewell-task_complete', kind: 'other' })).toBe(true);
+  });
+});
+
+/**
+ * Copilot as it would be with both roles claimed, to replay what the controls
+ * were recorded doing. Its own profile withholds both all the same: Copilot
+ * runs the repository's hooks under ACP (ADR-0028).
+ */
+const COPILOT_WITH_ROLES: AcpProfile = {
+  ...COPILOT_CLI_PROFILE,
+  manifest: {
+    ...COPILOT_CLI_MANIFEST,
+    modes: [...(COPILOT_CLI_MANIFEST.modes ?? []), { id: 'readOnly', label: 'Read-only', description: 'Reads only', readOnly: true }],
+  },
+  roles: { plans: true, readOnly: true },
+};
+
+async function readOnlyToken() {
+  const server = new OrdewellMcpServer();
+  servers.push(server);
+  const completed = vi.fn(async () => ({ text: 'Recorded.' }));
+  const credential = await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: 1, readOnly: true }, { taskComplete: completed } as never);
+  return { mcp: mcpClientConfig(credential), completed };
+}
+
+async function plannerToken() {
+  const server = new OrdewellMcpServer();
+  servers.push(server);
+  const submitted = vi.fn(async () => ({ text: 'Plan received.' }));
+  const listed = vi.fn(async () => ({ text: '[]' }));
+  const credential = await server.issuePlannerToken({ sessionId: 's1' }, { submitPlan: submitted, listRunners: listed } as never);
+  return { mcp: mcpClientConfig(credential), submitted, listed };
+}
+
+function readOnlyStart(mcp: McpClientConfig): TaskStartOptions {
+  const model = 'gpt-6-luna';
+  return { kind: 'task', cwd: '/repo', mode: 'readOnly', model, flags: resolveTaskRunnerFlags(COPILOT_WITH_ROLES.manifest, { mode: 'readOnly', model }), mcp };
+}
+
+function plannerStart(mcp: McpClientConfig): PlannerStartOptions {
+  return { kind: 'planner', cwd: '/repo', model: 'gpt-6-luna', systemPrompt: 'You are the planner.', mcp };
+}
+
+/** A planner's turn, every held request put to its envelope as `CliAgentAiService` puts it (ADR-0026). */
+async function plannerTurn(adapter: TaskModeAgentAdapter): Promise<AgentEvent[]> {
+  const events: AgentEvent[] = [];
+  await adapter.send('go', (event) => {
+    events.push(event);
+    if (event.type === 'permission_request' && !event.decided) {
+      void decidePlannerPermission(event.ask, event.input ?? {}, { workspaceRoot: '/repo' })
+        .then((decision) => adapter.answerPermission?.(event.id, decision));
+    }
+  });
+  return events;
+}
+
+const failures = (events: AgentEvent[]) => JSON.stringify(events.filter((e) => e.type === 'tool_result'));
+
+describe('copilot-cli roles, replayed from Copilot CLI 1.0.105 (ADR-0026, ADR-0028, ADR-0046)', () => {
+  it('claims neither role, so it plans nothing and offers no read-only mode', async () => {
+    expect(CONNECTORS['copilot-cli'].plans).toBe(false);
+    expect(COPILOT_CLI_MANIFEST.modes?.some((mode) => mode.readOnly)).toBe(false);
+    const { mcp } = await plannerToken();
+    const { spawned, adapter } = copilot([]);
+
+    await expect(adapter.start(plannerStart(mcp))).rejects.toThrow('GitHub Copilot CLI cannot plan in Ordewell: its profile claims no planner role.');
+    expect(spawned.processes).toHaveLength(0);
+  });
+
+  it('runs a read-only task under the controls Copilot was recorded refusing a write and a command under, which left nothing behind', async () => {
+    const { mcp, completed } = await readOnlyToken();
+    const { spawned, agent, adapter } = copilot(replay('read-only', {
+      ...EAGER_CONTACT,
+      'session/request_permission': [{ callMcp: { tool: 'task_complete', args: recordedMcpCall('read-only', 'task_complete') } }],
+    }), COPILOT_WITH_ROLES);
+    await adapter.start(readOnlyStart(mcp));
+    const events = await turn(adapter);
+
+    expect(spawned.lastArgs()).toEqual(recordedArgs('read-only'));
+    expect(spawned.lastEnv().COPILOT_ALLOW_ALL).toBe('false');
+    // Copilot refused both itself, by the denied tools, and asked nothing.
+    expect(failures(events)).toContain('denied due to the following rules: `write`');
+    expect(failures(events)).toContain('denied due to the following rules: `shell`');
+    expect(asked(events).map((e) => e.decided)).toEqual([{ decision: 'allow' }]);
+    expect(recordedOutcome('read-only')).toEqual({ calls: ['run_command', 'task_complete'], leftBehind: [] });
+    expect(completed).toHaveBeenCalledWith(expect.objectContaining({ status: 'blocked' }), expect.anything());
+    expect(agent.problems).toEqual([]);
+    await agent.finished;
+  });
+
+  it('tells a read-only task its own tools are off, beside the contract, from its private directory', async () => {
+    const { mcp } = await readOnlyToken();
+    const { spawned, adapter } = copilot(replay('read-only', EAGER_CONTACT), COPILOT_WITH_ROLES);
+    await adapter.start(readOnlyStart(mcp));
+
+    const text = readFileSync(join(spawned.lastEnv().COPILOT_CUSTOM_INSTRUCTIONS_DIRS ?? '', 'AGENTS.md'), 'utf8');
+    // The recording was made without this note: told its tools were off, the model would not try them.
+    expect(text).toContain('This task is read-only: your own file edits, shell and web tools are off.');
+    expect(text).toContain('`ordewell-run_command`');
+    expect(text).toContain('call the `task_complete` tool');
+  });
+
+  it('plans with Ordewell\'s planner tools alone: its own shell is refused, and a tool it reports as a command goes to the envelope', async () => {
+    const { mcp, submitted, listed } = await plannerToken();
+    const { spawned, agent, adapter } = copilot(replay('planner', {
+      ...EAGER_CONTACT,
+      'session/prompt': [
+        { callMcp: { tool: 'list_runners', args: recordedMcpCall('planner', 'list_runners') } },
+        { callMcp: { tool: 'submit_plan', args: recordedMcpCall('planner', 'submit_plan') } },
+      ],
+    }), COPILOT_WITH_ROLES);
+    await adapter.start(plannerStart(mcp));
+    const events = await plannerTurn(adapter);
+
+    expect(spawned.lastArgs()).toEqual(recordedArgs('planner'));
+    const text = readFileSync(join(spawned.lastEnv().COPILOT_CUSTOM_INSTRUCTIONS_DIRS ?? '', 'AGENTS.md'), 'utf8');
+    expect(text).toContain('You are the planner.');
+    expect(text).toContain('Your Ordewell tools come from the `ordewell` MCP server');
+    expect(recordedOutcome('planner')).toEqual({ calls: ['list_runners', 'submit_plan'], leftBehind: [] });
+    expect(listed).toHaveBeenCalled();
+    expect(submitted).toHaveBeenCalledWith(expect.objectContaining({ tasks: [expect.objectContaining({ assignedRunner: 'copilot-cli' })] }), expect.anything());
+    expect(failures(events)).toContain('denied due to the following rules: `shell`');
+    // run_plan's report says `execute`, which a model-written command title
+    // could say too, so it is not taken for Ordewell's and its envelope has no rule for it.
+    expect(asked(events).map((e) => [e.name, e.ask, e.decided])).toEqual([['run_plan', { kind: 'other' }, undefined]]);
+    expect(permissionAnswers(agent)).toEqual([{ outcome: 'selected', optionId: 'reject_once' }]);
+    expect(agent.problems).toEqual([]);
+    await agent.finished;
   });
 });

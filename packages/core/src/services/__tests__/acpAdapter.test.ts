@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { AcpAdapter } from '../harness/AcpAdapter';
+import { CliAgentAiService } from '../harness/CliAgentAiService';
 import { acpConnector, type AcpProfile } from '../harness/acpProfiles';
 import { acpOrdewellBinding } from '../harness/acpOrdewell';
-import type { AgentEvent, AgentProcessDeps, TaskStartOptions } from '../harness/AgentAdapter';
+import type { AgentEvent, AgentProcessDeps, PlannerStartOptions, TaskStartOptions } from '../harness/AgentAdapter';
 import { ACP_ERROR, type AcpToolCall } from '../harness/acpSchema';
 import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
 import type { RunnerManifest } from '../../plugins/types';
@@ -12,7 +16,8 @@ import { OrdewellMcpServer, mcpClientConfig, type McpClientConfig } from '../mcp
 import type { TaskCompleteArgs } from '../mcp';
 import { McpAttachTimeout, spawnAttached } from '../harness/ordewellBinding';
 import { fakeAcpSpawn, type FakeAcpStep } from './fakeAcpAgent';
-import type { FakeSpawnOptions } from './harnessTestKit';
+import { planJson, type FakeSpawnOptions } from './harnessTestKit';
+import { fakeConfig } from '../../testing';
 
 /**
  * The ACP connector's task core (#73, slice S3/S4) against the scripted ACP
@@ -81,6 +86,27 @@ function taskStart(mode = 'ask', overrides: Partial<TaskStartOptions> = {}): Tas
     mcp: MCP,
     ...overrides,
   };
+}
+
+/** An agent that claims both roles, with controls a real profile would have verified live. */
+const ROLES_MANIFEST: RunnerManifest = {
+  ...MANIFEST,
+  modes: [...(MANIFEST.modes ?? []), { id: 'look', label: 'Read-only', description: 'Reads only.', readOnly: true }],
+} as RunnerManifest;
+const ROLES_PROFILE: AcpProfile = {
+  ...PROFILE,
+  manifest: ROLES_MANIFEST,
+  mode: { kind: 'args', args: (flags) => (flags.modeSettings.approvals === 'auto' ? ['--allow-all-tools'] : []) },
+  roles: { plans: true, readOnly: true },
+  restricted: { args: ['--deny-tool=write', '--deny-tool=shell'], env: { FAKE_ALLOW_ALL: 'false' } },
+};
+
+function plannerStart(overrides: Partial<PlannerStartOptions> = {}): PlannerStartOptions {
+  return { kind: 'planner', cwd: '/repo', systemPrompt: 'You are the planner.', mcp: MCP, ...overrides };
+}
+
+function readOnlyStart(overrides: Partial<TaskStartOptions> = {}): TaskStartOptions {
+  return taskStart('look', { flags: resolveTaskRunnerFlags(ROLES_MANIFEST, { mode: 'look' }), ...overrides });
 }
 
 const update = (sessionUpdate: string, fields: Record<string, unknown>) => ({ sessionId: 'sess-1', update: { sessionUpdate, ...fields } });
@@ -213,12 +239,16 @@ describe('AcpAdapter start', () => {
     expect(agent.requests('session/new')).toEqual([]);
   });
 
-  it('does not yet start as a planner or a read-only task', async () => {
+  it('starts no planner and no read-only task for a profile that claims neither role, before it spawns anything', async () => {
     const planner = setup(handshake());
-    await expect(planner.adapter.start({ kind: 'planner', cwd: '/repo', systemPrompt: 'plan', mcp: MCP })).rejects.toThrow(/Fake Agent cannot plan/);
+    await expect(planner.adapter.start(plannerStart())).rejects.toThrow('Fake Agent cannot plan in Ordewell: its profile claims no planner role.');
+    expect(planner.agent.requests('initialize')).toEqual([]);
     const readOnly = setup(handshake());
     const flags = { ...resolveTaskRunnerFlags(MANIFEST, { mode: 'ask' }), readOnly: true as const };
-    await expect(readOnly.adapter.start(taskStart('ask', { flags }))).rejects.toThrow(/Fake Agent cannot run a read-only task/);
+    await expect(readOnly.adapter.start(taskStart('ask', { flags }))).rejects.toThrow('Fake Agent cannot run a read-only task in Ordewell: its profile claims no read-only role.');
+    const byToken = setup(handshake());
+    await expect(byToken.adapter.start(taskStart('ask', { mcp: { ...MCP, readOnly: true } }))).rejects.toThrow(/cannot run a read-only task/);
+    expect(readOnly.agent.requests('initialize')).toEqual([]);
   });
 });
 
@@ -877,8 +907,24 @@ describe('acpConnector', () => {
     expect(connector.ordewellTools.toolNames('task')).toContain('task_complete');
   });
 
-  it('runs tasks but does not plan, since the adapter refuses a planner start', () => {
+  it('plans only when its profile claims the planner role', () => {
     expect(acpConnector(PROFILE).plans).toBe(false);
+    expect(acpConnector(ROLES_PROFILE).plans).toBe(true);
+    expect(acpConnector({ ...ROLES_PROFILE, roles: { plans: false, readOnly: true } }).plans).toBe(false);
+  });
+
+  it('refuses at load a profile whose roles its manifest or its controls cannot back', () => {
+    expect(() => acpConnector({ ...PROFILE, roles: { plans: false, readOnly: true }, restricted: ROLES_PROFILE.restricted })).toThrow(
+      'Fake Agent claims the read-only role, but its manifest has no mode tagged readOnly.',
+    );
+    expect(() => acpConnector({ ...ROLES_PROFILE, roles: undefined })).toThrow("Fake Agent's manifest tags a read-only mode its profile does not claim.");
+    expect(() => acpConnector({ ...PROFILE, roles: { plans: true, readOnly: false } })).toThrow(
+      'Fake Agent claims a planner or read-only role without the controls that take its own write and shell tools away.',
+    );
+    expect(() => acpConnector({ ...PROFILE, roles: { plans: true, readOnly: false }, restricted: { args: [] } })).toThrow(/without the controls/);
+    expect(() => acpConnector({ ...ROLES_PROFILE, manifest: { ...MANIFEST, modes: undefined } })).toThrow(
+      'Fake Agent claims the read-only role, but its manifest has no mode tagged readOnly.',
+    );
   });
 
   it('carries the profile\'s usage-limit reader and leaves out what the profile leaves out', () => {
@@ -1369,5 +1415,269 @@ describe('AcpAdapter close', () => {
     await adapter.start(taskStart());
     adapter.dispose();
     expect(agent.requests('session/close')).toEqual([]);
+  });
+});
+
+/** A request for one call of `kind`, with the options `permissionParams` offers. */
+function requestFor(kind: string | undefined, toolCallId: string, fields: Record<string, unknown> = {}) {
+  const params = permissionParams(`${kind ?? 'unnamed'} ${toolCallId}`, toolCallId);
+  return { ...params, toolCall: { toolCallId, title: params.toolCall.title, ...(kind ? { kind } : {}), ...fields } };
+}
+const ask = (kind: string | undefined, toolCallId: string, fields: Record<string, unknown> = {}): FakeAcpStep => (
+  { request: 'session/request_permission', params: requestFor(kind, toolCallId, fields) }
+);
+const chosen = (agent: { answers: Array<{ result?: unknown }> }) => agent.answers.map((a) => (a.result as { outcome: { optionId?: string } }).outcome.optionId);
+const promptText = (agent: ReturnType<typeof setup>['agent'], index = 0) => (agent.requests('session/prompt')[index].params as { prompt: Array<{ text: string }> }).prompt[0].text;
+const WITH_MODES = { sessionId: 'sess-1', modes: { currentModeId: 'read', availableModes: [{ id: 'read', name: 'Read' }, { id: 'write', name: 'Write' }] } };
+
+describe('AcpAdapter roles (ADR-0026, ADR-0046)', () => {
+  it('starts a planner under the restricted controls and no mode, with its system prompt and its tools ahead of the first prompt', async () => {
+    const { agent, adapter, spawned } = setup([...handshake(), { expect: 'session/prompt', reply: { stopReason: 'end_turn' } }], ROLES_PROFILE);
+    await adapter.start(plannerStart());
+    await turn(adapter, 'Plan the change');
+
+    expect(spawned.lastArgs()).toEqual(['--acp', '--deny-tool=write', '--deny-tool=shell']);
+    expect(spawned.lastEnv().FAKE_ALLOW_ALL).toBe('false');
+    expect(spawned.lastArgs().join(' ')).not.toContain(TOKEN);
+    const [opened] = agent.requests('session/new');
+    expect((opened.params as { mcpServers: Array<{ name: string }> }).mcpServers.map((s) => s.name)).toEqual([MCP.name]);
+    const first = promptText(agent);
+    expect(first.startsWith('You are the planner.\n\n')).toBe(true);
+    expect(first).toContain(`Your Ordewell tools come from the \`${MCP.name}\` MCP server: `);
+    expect(first).toContain('run commands with `run_command`, read web pages with `fetch` and search the web with `web_search`.');
+    expect(first).not.toContain('task_complete');
+    expect(first.endsWith('Plan the change')).toBe(true);
+  });
+
+  it('names to a planner only the tools its token serves', async () => {
+    const { agent, adapter } = setup([...handshake(), { expect: 'session/prompt', reply: { stopReason: 'end_turn' } }], ROLES_PROFILE);
+    await adapter.start(plannerStart({ mcp: { ...MCP, hidden: ['fetch', 'web_search'] } }));
+    await turn(adapter, 'Plan');
+
+    const first = promptText(agent);
+    expect(first).toContain('run commands with `run_command`.');
+    expect(first).not.toMatch(/`fetch`|`web_search`/);
+  });
+
+  it('starts a read-only task under the restricted controls, telling it Ordewell\'s tools are its shell and its web', async () => {
+    const { agent, adapter, spawned } = setup([...handshake(), { expect: 'session/prompt', reply: { stopReason: 'end_turn' } }], ROLES_PROFILE);
+    await adapter.start(readOnlyStart());
+    await turn(adapter, 'Review it');
+
+    expect(spawned.lastArgs()).toEqual(['--acp', '--deny-tool=write', '--deny-tool=shell']);
+    expect(spawned.lastEnv().FAKE_ALLOW_ALL).toBe('false');
+    const first = promptText(agent);
+    expect(first.startsWith('This task is read-only: your own file edits, shell and web tools are off.')).toBe(true);
+    expect(first).toContain('task_complete');
+  });
+
+  it('leaves a writable task on a role-claiming profile as it was: no restricted controls, its own mode', async () => {
+    const { adapter, spawned } = setup(handshake(), ROLES_PROFILE);
+    await adapter.start(taskStart('auto', { flags: resolveTaskRunnerFlags(ROLES_MANIFEST, { mode: 'auto' }) }));
+    expect(spawned.lastArgs()).toEqual(['--acp', '--allow-all-tools']);
+    expect(spawned.lastEnv().FAKE_ALLOW_ALL).toBeUndefined();
+  });
+
+  it('answers every request of a read-only task itself, by what the agent says the call does', async () => {
+    const { agent, adapter } = setup([
+      ...handshake(),
+      { expect: 'session/prompt' },
+      ask('edit', 'c-edit', { locations: [{ path: '/repo/a.ts' }] }),
+      ask('delete', 'c-delete'),
+      ask('move', 'c-move'),
+      ask('execute', 'c-exec', { rawInput: { command: 'rm -rf .' } }),
+      ask('switch_mode', 'c-mode'),
+      ask('think', 'c-think'),
+      ask('read', 'c-read-in', { locations: [{ path: '/repo/src/a.ts' }] }),
+      ask('read', 'c-read-ws', { locations: [{ path: '/ws/notes.md' }] }),
+      ask('read', 'c-read-out', { locations: [{ path: '/etc/hosts' }] }),
+      ask('search', 'c-search'),
+      ask('fetch', 'c-fetch', { rawInput: { url: 'https://example.com' } }),
+      ask('other', 'c-other'),
+      ask(undefined, 'c-none'),
+      { request: 'session/request_permission', params: { ...requestFor('other', 'c-ordewell'), toolCall: { toolCallId: 'c-ordewell', title: 'ordewell/task_complete', kind: 'other' } } },
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    ], ROLES_PROFILE);
+    await adapter.start(readOnlyStart({ workspaceRoot: '/ws' }));
+    const events = await turn(adapter, 'go');
+
+    expect(chosen(agent)).toEqual(['opt-c', 'opt-c', 'opt-c', 'opt-c', 'opt-c', 'opt-b', 'opt-b', 'opt-b', 'opt-c', 'opt-c', 'opt-c', 'opt-c', 'opt-c', 'opt-b']);
+    const asked = events.filter((e) => e.type === 'permission_request');
+    expect(asked).toHaveLength(14);
+    expect(asked.every((e) => e.type === 'permission_request' && e.decided)).toBe(true);
+    const note = (toolUseId: string) => {
+      const found = asked.find((e) => e.type === 'permission_request' && e.toolUseId === toolUseId);
+      return found?.type === 'permission_request' ? found.decided : undefined;
+    };
+    expect(note('c-edit')).toEqual({ decision: 'deny', note: 'Nothing may be written here: this session is read-only.' });
+    expect(note('c-exec')).toEqual({ decision: 'deny', note: 'Your own shell is off here. Run commands with Ordewell\'s run_command.' });
+    expect(note('c-mode')).toEqual({ decision: 'deny', note: 'This session stays in the mode it was started in.' });
+    expect(note('c-fetch')).toMatchObject({ decision: 'deny', note: expect.stringContaining('unavailable on a read-only task') });
+  });
+
+  it('judges a request by the turn\'s report of its call where the request leaves the kind out', async () => {
+    const { agent, adapter } = setup([
+      ...handshake(),
+      { expect: 'session/prompt' },
+      { notify: 'session/update', params: update('tool_call', { toolCallId: 'c-1', title: 'Write a.ts', kind: 'edit', status: 'pending', locations: [{ path: '/repo/a.ts' }] }) },
+      { notify: 'session/update', params: update('tool_call', { toolCallId: 'c-2', title: 'Read b.ts', kind: 'read', status: 'pending', locations: [{ path: '/repo/b.ts' }] }) },
+      ask(undefined, 'c-1'),
+      ask(undefined, 'c-2'),
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    ], ROLES_PROFILE);
+    await adapter.start(readOnlyStart());
+    await turn(adapter, 'go');
+    expect(chosen(agent)).toEqual(['opt-c', 'opt-b']);
+  });
+
+  it('refuses a planner\'s writes, commands and mode switches at once and holds its reads and fetches for the envelope, with their ask', async () => {
+    const { agent, adapter } = setup([
+      ...handshake(),
+      { expect: 'session/prompt' },
+      ask('edit', 'c-edit'),
+      ask('execute', 'c-exec'),
+      ask('switch_mode', 'c-mode'),
+      ask('think', 'c-think'),
+      ask('read', 'c-read', { locations: [{ path: '/repo/src/a.ts' }] }),
+      ask('search', 'c-search', { locations: [{ path: '/repo/src' }] }),
+      ask('fetch', 'c-fetch', { rawInput: { url: 'https://example.com/doc' } }),
+      ask('read', 'c-many', { locations: [{ path: '/repo/a' }, { path: '/repo/b' }] }),
+      ask('other', 'c-other'),
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    ], ROLES_PROFILE);
+    await adapter.start(plannerStart());
+    const pending: Array<{ toolUseId?: string; ask?: unknown }> = [];
+    await adapter.send('go', (e) => {
+      if (e.type !== 'permission_request' || e.decided) return;
+      pending.push({ toolUseId: e.toolUseId, ask: e.ask });
+      expect(e).not.toHaveProperty('suggestions');
+      expect(adapter.answerPermission(e.id, { decision: e.ask?.kind === 'path' ? 'allow' : 'deny' })).toBe(true);
+    });
+
+    expect(pending).toEqual([
+      { toolUseId: 'c-read', ask: { kind: 'path', path: '/repo/src/a.ts', directory: false } },
+      { toolUseId: 'c-search', ask: { kind: 'path', path: '/repo/src', directory: true } },
+      { toolUseId: 'c-fetch', ask: { kind: 'fetch', url: 'https://example.com/doc' } },
+      { toolUseId: 'c-many', ask: { kind: 'other' } },
+      { toolUseId: 'c-other', ask: { kind: 'other' } },
+    ]);
+    expect(chosen(agent)).toEqual(['opt-c', 'opt-c', 'opt-c', 'opt-b', 'opt-b', 'opt-b', 'opt-c', 'opt-c', 'opt-c']);
+  });
+
+  it('fails a read-only task that leaves the mode it started in, mid-turn, and takes no further turn', async () => {
+    const { agent, adapter, spawned } = setup([
+      { expect: 'initialize', reply: INITIALIZED },
+      { expect: 'session/new', reply: WITH_MODES },
+      { expect: 'session/prompt' },
+      { notify: 'session/update', params: update('current_mode_update', { currentModeId: 'write' }) },
+    ], ROLES_PROFILE);
+    await adapter.start(readOnlyStart());
+    const failed = 'Fake Agent left the mode it was started in ("read" to "write"), so this read-only task cannot go on.';
+
+    expect(await turn(adapter, 'go')).toContainEqual({ type: 'error', message: failed });
+    expect(spawned.processes[0].killed).toBe(true);
+    expect(await turn(adapter, 'again')).toEqual([{ type: 'error', message: failed }]);
+    expect(agent.requests('session/prompt')).toHaveLength(1);
+  });
+
+  it('fails a planner whose mode option moves, between turns too', async () => {
+    const modes = (current: string) => [select('mode', 'mode', current, ['plan', 'build'])];
+    const { agent, adapter, spawned } = setup([
+      ...withOptions(modes('plan')),
+      { expect: 'session/prompt' },
+      { notify: 'session/update', params: update('config_option_update', { configOptions: modes('plan') }) },
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+      { notify: 'session/update', params: update('config_option_update', { configOptions: modes('build') }) },
+    ], ROLES_PROFILE);
+    await adapter.start(plannerStart());
+
+    expect((await turn(adapter, 'go')).some((e) => e.type === 'error')).toBe(false);
+    await expect.poll(() => spawned.processes[0].killed).toBe(true);
+    expect(await turn(adapter, 'again')).toEqual([{ type: 'error', message: 'Fake Agent left the mode it was started in ("plan" to "build"), so this planner session cannot go on.' }]);
+    expect(agent.requests('session/prompt')).toHaveLength(1);
+  });
+
+  it('lets a writable task change its mode, since only a restricted start holds one', async () => {
+    const { adapter, spawned } = setup([
+      { expect: 'initialize', reply: INITIALIZED },
+      { expect: 'session/new', reply: WITH_MODES },
+      { expect: 'session/prompt' },
+      { notify: 'session/update', params: update('current_mode_update', { currentModeId: 'write' }) },
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    ], ROLES_PROFILE);
+    await adapter.start(taskStart('ask', { flags: resolveTaskRunnerFlags(ROLES_MANIFEST, { mode: 'ask' }) }));
+    expect((await turn(adapter, 'go')).some((e) => e.type === 'error')).toBe(false);
+    expect(spawned.processes[0].killed).toBe(false);
+  });
+
+  it('fails a read-only task the agent will not put on the plan\'s model, where a writable one is only told (#13)', async () => {
+    const steps = (): FakeAcpStep[] => [
+      ...withOptions([select('model', 'model', 'm-0', ['m-0', 'm-1'])]),
+      { expect: 'session/set_config_option', reply: { configOptions: [select('model', 'model', 'm-0', ['m-0', 'm-1'])] } },
+    ];
+    const readOnly = setup(steps(), ROLES_PROFILE);
+    await expect(readOnly.adapter.start(readOnlyStart({ model: 'm-1' }))).rejects.toThrow('Fake Agent did not take the model "m-1": it is on "m-0".');
+    const planner = setup(steps(), ROLES_PROFILE);
+    await expect(planner.adapter.start(plannerStart({ model: 'm-1' }))).resolves.toBeUndefined();
+  });
+
+  it('puts a planner on its own effort, and fails one the agent has no setting for', async () => {
+    const efforts = (current: string) => [select('reasoning', 'thought_level', current, ['low', 'high'])];
+    const set = setup([...withOptions(efforts('low')), { expect: 'session/set_config_option', reply: { configOptions: efforts('high') } }], ROLES_PROFILE);
+    await set.adapter.start(plannerStart({ effort: 'high' }));
+    expect(set.agent.requests('session/set_config_option').map((m) => m.params)).toEqual([{ sessionId: 'sess-1', configId: 'reasoning', value: 'high' }]);
+
+    const none = setup(handshake(), ROLES_PROFILE);
+    await expect(none.adapter.start(plannerStart({ effort: 'high' }))).rejects.toThrow('Fake Agent offers no effort setting, so it cannot plan on the effort "high".');
+  });
+});
+
+describe('AcpAdapter through CliAgentAiService', () => {
+  // The service picks a runner's planner by its connector, and an ACP
+  // connector plans only once its profile claims the role; one that does is
+  // stood in for a planner the registry already knows.
+  it('plans on Ordewell\'s tools: the envelope decides a read, the adapter refuses an edit, and submit_plan is the plan', async () => {
+    const workspace = realpathSync(mkdtempSync(join(tmpdir(), 'acp-plan-')));
+    writeFileSync(join(workspace, 'README.md'), '# App\n');
+    const server = new OrdewellMcpServer();
+    servers.push(server);
+    const tasks = (JSON.parse(planJson('opencode')) as { tasks: unknown[] }).tasks;
+    const read = { ...permissionParams('Read README.md', 'call-read'), toolCall: { toolCallId: 'call-read', title: 'Read README.md', kind: 'read', locations: [{ path: join(workspace, 'README.md') }] } };
+    const spawned = fakeAcpSpawn([
+      { expect: 'initialize', reply: INITIALIZED },
+      { expect: 'session/new' },
+      { run: async (agent) => { await agent.listMcpTools(); } },
+      { answer: { sessionId: 'sess-1' }, to: 'session/new' },
+      { expect: 'session/prompt' },
+      { request: 'session/request_permission', params: read },
+      { request: 'session/request_permission', params: permissionParams('Write src/a.ts', 'call-edit') },
+      { callMcp: { tool: 'submit_plan', args: { tasks } } },
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    ]);
+    const svc = new CliAgentAiService(fakeConfig({ aiProvider: 'opencode' }), {
+      spawn: spawned.spawn,
+      createAdapter: (_runner, deps) => new AcpAdapter(deps, ROLES_PROFILE),
+      resolvePath: async () => '/usr/bin',
+      platform: 'linux',
+      isDirectory: () => true,
+      exists: () => true,
+      workspaceRoot: () => workspace,
+      mcpServer: server,
+    });
+    try {
+      // A one-shot plan ends its process itself.
+      const planned = await svc.generatePlanDirect('Add the thing', ['opencode']);
+
+      expect(planned.map((task) => task.title)).toEqual(['Add the thing']);
+      expect(spawned.agent.answers.map((a) => a.result)).toEqual([
+        { outcome: { outcome: 'selected', optionId: 'opt-b' } },
+        { outcome: { outcome: 'selected', optionId: 'opt-c' } },
+      ]);
+      expect(spawned.lastArgs()).toEqual(['--acp', '--deny-tool=write', '--deny-tool=shell']);
+      expect(spawned.lastEnv().FAKE_ALLOW_ALL).toBe('false');
+      expect(spawned.agent.problems).toEqual([]);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
   });
 });

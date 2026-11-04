@@ -43,6 +43,23 @@ describe('PermissionLedger', () => {
     expect(permissions.answer('r1', { decision: 'allow' })).toBe(false);
   });
 
+  it('answers what the stance decides and holds what it leaves undecided, a planner\'s with its ask', () => {
+    const decide = (r: RaisedRequest): ApprovalDecision | undefined => (r.name === 'Edit' ? { decision: 'deny', note: 'read-only' } : undefined);
+    const { permissions, replies, events, onEvent } = ledger({ role: 'planner', autoApprove: false, decide });
+    permissions.raise(request('r1', { name: 'Edit' }), 'h1', onEvent);
+    permissions.raise(request('r2', { name: 'Read' }), 'h2', onEvent);
+
+    expect(replies).toEqual([['h1', { decision: 'deny', note: 'read-only' }]]);
+    expect(events).toEqual([
+      expect.objectContaining({ id: 'r1', decided: { decision: 'deny', note: 'read-only' } }),
+      expect.objectContaining({ id: 'r2', ask: { kind: 'path', path: '/etc/hosts', directory: false } }),
+    ]);
+    expect(events[1]).not.toHaveProperty('decided');
+    expect(permissions.answer('r1', { decision: 'allow' })).toBe(false);
+    expect(permissions.answer('r2', { decision: 'allow' })).toBe(true);
+    expect(replies[1]).toEqual(['h2', { decision: 'allow' }]);
+  });
+
   it.each([['planner', PLANNER], ['task', TASK], ['auto-approving task', AUTO_TASK]])(
     'allows an Ordewell tool at once for a %s, and shows it decided',
     (_label, stance) => {
