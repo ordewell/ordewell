@@ -25,7 +25,9 @@ import { augmentedPath } from './shellPath';
  * that gets to a directly-spawnable file soonest: a native `.exe`, a `.cmd`
  * shim through cmd.exe, a `.ps1` shim through `powershell.exe -File`. The
  * ordering is what keeps the common case off an interpreter, and off the
- * 8191-character buffer cmd.exe brings with it.
+ * 8191-character buffer cmd.exe brings with it. A `.cmd` that npm wrote is no
+ * interpreter's to run, though: it only finds a file and hands it `%*`, so that
+ * file is started directly, as a native one is ({@link npmShimTarget}).
  *
  * The batch route is skipped outright for a multi-line argument: cmd.exe stops
  * reading at the first line break and discards the rest without an error — see
@@ -108,6 +110,8 @@ export interface LaunchDeps {
   powerShell?: () => string;
   /** PATHEXT, as the environment reports it. */
   pathExt?: () => string;
+  /** The text of a batch shim, or undefined when it cannot be read. */
+  readShim?: (file: string) => string | undefined;
 }
 
 /**
@@ -248,6 +252,90 @@ function defaultExists(candidate: string): boolean {
   }
 }
 
+/** A shim is a few hundred bytes; anything far past that is no shim npm wrote. */
+const MAX_SHIM_BYTES = 4096;
+
+function defaultReadShim(file: string): string | undefined {
+  try {
+    return fsSync.statSync(file).size > MAX_SHIM_BYTES ? undefined : fsSync.readFileSync(file, 'utf8');
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The two shims npm writes (its `cmd-shim`), each with `TARGET` where the file
+ * it starts goes, relative to the shim's folder. One runs a Node script with
+ * the `node.exe` beside the shim, or else the `node` on PATH; the other starts
+ * a program in the package itself, as OpenCode's does its `.exe`.
+ */
+const NPM_SHIM_HEAD = '@ECHO off\nGOTO start\n:find_dp0\nSET dp0=%~dp0\nEXIT /b\n:start\nSETLOCAL\nCALL :find_dp0\n';
+const NPM_SHIMS = {
+  node: `${NPM_SHIM_HEAD}\nIF EXIST "%dp0%\\node.exe" (\n  SET "_prog=%dp0%\\node.exe"\n) ELSE (\n  SET "_prog=node"\n  SET PATHEXT=%PATHEXT:;.JS;=;%\n)\n\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\TARGET" %*\n`,
+  program: `${NPM_SHIM_HEAD}"%dp0%\\TARGET"   %*\n`,
+};
+
+/** A shim's template as a pattern whose one group is its target: no quote, `%` or line break, which cmd.exe would read as more than a name. */
+function shimPattern(template: string): RegExp {
+  const [before, after] = template.split('TARGET').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  return new RegExp(`^${before}([^"%\\n]+)${after}$`);
+}
+
+const NPM_SHIM_PATTERNS = { node: shimPattern(NPM_SHIMS.node), program: shimPattern(NPM_SHIMS.program) };
+
+/**
+ * What an npm `.cmd` shim starts, read from the shim: the file to spawn and
+ * the arguments that go before the caller's. A shim only finds that file and
+ * hands it `%*`, so starting the file itself is what the shim does, without
+ * cmd.exe's 8191-character buffer, its cut at a line break, its `%VAR%`
+ * expansion or a `"` it cannot carry (ADR-0010). Only a shim that is npm's
+ * template byte for byte but its target is read so: a `.cmd` with a line of its
+ * own may do more than find a file, and keeps the batch route. Undefined, too,
+ * when the file it names, or a `node` to run it, is not there.
+ */
+function npmShimTarget(shim: string, pathDirs: string[], deps: LaunchDeps): { file: string; leading: string[] } | undefined {
+  const raw = (deps.readShim ?? defaultReadShim)(shim);
+  if (raw === undefined) return undefined;
+  const text = raw.replace(/\r\n/g, '\n').replace(/\n?$/, '\n');
+  const exists = deps.exists ?? defaultExists;
+  const folder = path.win32.dirname(shim);
+
+  const program = NPM_SHIM_PATTERNS.program.exec(text)?.[1];
+  if (program !== undefined) {
+    const file = path.win32.join(folder, program);
+    return DIRECT_EXTENSIONS.includes(path.win32.extname(file).toLowerCase()) && exists(file) ? { file, leading: [] } : undefined;
+  }
+
+  const script = NPM_SHIM_PATTERNS.node.exec(text)?.[1];
+  if (script === undefined) return undefined;
+  const file = path.win32.join(folder, script);
+  if (!exists(file)) return undefined;
+  const beside = path.win32.join(folder, 'node.exe');
+  const node = exists(beside) ? beside : shimNode(pathDirs, deps);
+  return node ? { file: node, leading: [file] } : undefined;
+}
+
+/**
+ * The `node` a shim's `"%_prog%"` would start, found as cmd.exe finds it: the
+ * first PATH folder holding one, by PATHEXT less `.JS`, which the shim drops.
+ * Only a native one is started directly; a `node.cmd` a version manager put
+ * first is a wrapper that may pick another Node, so it keeps the batch route.
+ * cmd.exe also looks in the current folder first, which this does not: a
+ * `node.exe` dropped in a repository is nothing a shim run here starts.
+ */
+function shimNode(pathDirs: string[], deps: LaunchDeps): string | undefined {
+  const exists = deps.exists ?? defaultExists;
+  const declared = (deps.pathExt ?? (() => process.env.PATHEXT ?? ''))().split(path.win32.delimiter).map((e) => e.trim().toLowerCase()).filter(Boolean);
+  const extensions = (declared.length > 0 ? declared : ['.com', '.exe', '.bat', '.cmd']).filter((e) => e !== '.js');
+  for (const dir of pathDirs) {
+    for (const ext of extensions) {
+      const candidate = path.win32.join(dir, `node${ext}`);
+      if (exists(candidate)) return DIRECT_EXTENSIONS.includes(ext) ? candidate : undefined;
+    }
+  }
+  return undefined;
+}
+
 /**
  * Quote one argument for cmd.exe.
  *
@@ -352,6 +440,8 @@ const ROUTES: Route[] = ['direct', 'cmd', 'powershell'];
 interface FoundExecutable {
   file: string;
   route: Route;
+  /** What goes before the caller's arguments: the script an npm shim hands its `node`. */
+  leading?: string[];
 }
 
 /**
@@ -367,13 +457,13 @@ async function findWindowsExecutables(command: string, deps: LaunchDeps): Promis
   const pathExt = (deps.pathExt ?? (() => process.env.PATHEXT ?? ''))();
   const byRoute = candidateExtensions(command, pathExt);
 
-  // A command that already names a location is not a PATH lookup.
-  const dirs = path.win32.basename(command) !== command
-    ? [path.win32.dirname(path.win32.resolve(command))]
-    : ((await (deps.resolvePath ?? augmentedPath)()) || '')
-      .split(path.win32.delimiter)
-      .map((d) => d.trim().replace(/^"|"$/g, ''))
-      .filter(Boolean);
+  const pathDirs = ((await (deps.resolvePath ?? augmentedPath)()) || '')
+    .split(path.win32.delimiter)
+    .map((d) => d.trim().replace(/^"|"$/g, ''))
+    .filter(Boolean);
+  // A command that already names a location is not a PATH lookup, though the
+  // `node` its npm shim runs still is.
+  const dirs = path.win32.basename(command) !== command ? [path.win32.dirname(path.win32.resolve(command))] : pathDirs;
 
   const base = path.win32.basename(command);
   const found: FoundExecutable[] = [];
@@ -382,7 +472,8 @@ async function findWindowsExecutables(command: string, deps: LaunchDeps): Promis
       for (const dir of dirs) {
         const candidate = path.win32.join(dir, `${base}${ext}`);
         if (exists(candidate)) {
-          found.push({ file: candidate, route });
+          const target = route === 'cmd' ? npmShimTarget(candidate, pathDirs, deps) : undefined;
+          found.push(target ? { ...target, route: 'direct' } : { file: candidate, route });
           break outer;
         }
       }
@@ -396,10 +487,11 @@ type Disqualified = { tooLong: number; limit: number } | { lineBreak: true } | {
 
 function planFor(found: FoundExecutable, args: string[], deps: LaunchDeps): LaunchPlan | Disqualified {
   if (found.route === 'direct') {
-    const length = windowsCommandLine(found.file, args).length;
+    const all = [...(found.leading ?? []), ...args];
+    const length = windowsCommandLine(found.file, all).length;
     return length > WINDOWS_MAX_COMMAND_LINE
       ? { tooLong: length, limit: WINDOWS_MAX_COMMAND_LINE }
-      : { file: found.file, args };
+      : { file: found.file, args: all };
   }
 
   if (found.route === 'cmd') {

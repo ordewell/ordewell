@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { delimiter, dirname, join } from 'path';
 import {
   planDirectLaunch,
   windowsCommandLine,
@@ -29,8 +29,23 @@ function win(files: string[], overrides: Partial<LaunchDeps> = {}): LaunchDeps {
     comSpec: () => 'C:\\Windows\\System32\\cmd.exe',
     powerShell: () => 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
     pathExt: () => '.COM;.EXE;.BAT;.CMD;.VBS;.PS1',
+    readShim: () => undefined,
     ...overrides,
   };
+}
+
+/** A shim as npm's cmd-shim writes it, CRLF and all, starting `target` (relative to the shim) with node. */
+function npmNodeShim(target: string): string {
+  return [
+    '@ECHO off', 'GOTO start', ':find_dp0', 'SET dp0=%~dp0', 'EXIT /b', ':start', 'SETLOCAL', 'CALL :find_dp0', '',
+    'IF EXIST "%dp0%\\node.exe" (', '  SET "_prog=%dp0%\\node.exe"', ') ELSE (', '  SET "_prog=node"', '  SET PATHEXT=%PATHEXT:;.JS;=;%', ')', '',
+    `endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\${target}" %*`, '',
+  ].join('\r\n');
+}
+
+/** A shim as npm writes one for a program in the package, as OpenCode's `.exe` is. */
+function npmProgramShim(target: string): string {
+  return ['@ECHO off', 'GOTO start', ':find_dp0', 'SET dp0=%~dp0', 'EXIT /b', ':start', 'SETLOCAL', 'CALL :find_dp0', `"%dp0%\\${target}"   %*`, ''].join('\r\n');
 }
 
 describe('planDirectLaunch on POSIX', () => {
@@ -322,6 +337,112 @@ describe('planDirectLaunch on Windows: the PowerShell shim tier', () => {
   });
 });
 
+describe('planDirectLaunch on Windows: a shim npm wrote', () => {
+  const NPM = 'C:\\Users\\me\\AppData\\Roaming\\npm';
+  const CODEX = `${NPM}\\node_modules\\@openai\\codex\\bin\\codex.js`;
+  const OPENCODE = `${NPM}\\node_modules\\opencode-ai\\bin\\opencode.exe`;
+  const shims = (texts: Record<string, string>) => (file: string) => texts[file.toLowerCase()];
+
+  // A shim only finds a file and hands it `%*`, so cmd.exe's buffer, its cut at
+  // a line break, `%VAR%` and a `"` it cannot carry are nothing the file needs.
+  it('starts the script a node shim names with the node on PATH, every argument whole', async () => {
+    const args = ['--append-system-prompt', 'first line\n\nsays "this" at %PATH%', '--settings={"disableAllHooks":true}'];
+    const plan = await planDirectLaunch('codex', args, win([`${NPM}\\codex.cmd`, `${NPM}\\codex.ps1`, CODEX, 'C:\\tools\\node.exe'], {
+      readShim: shims({ [`${NPM}\\codex.cmd`.toLowerCase()]: npmNodeShim('node_modules\\@openai\\codex\\bin\\codex.js') }),
+    }));
+    expect(plan).toEqual({ file: 'C:\\tools\\node.exe', args: [CODEX, ...args] });
+  });
+
+  it('takes the node.exe beside the shim first, as the shim does', async () => {
+    const plan = await planDirectLaunch('codex', ['app-server'], win([`${NPM}\\codex.cmd`, CODEX, `${NPM}\\node.exe`, 'C:\\tools\\node.exe'], {
+      readShim: shims({ [`${NPM}\\codex.cmd`.toLowerCase()]: npmNodeShim('node_modules\\@openai\\codex\\bin\\codex.js') }),
+    }));
+    expect(plan.file).toBe(`${NPM}\\node.exe`);
+  });
+
+  it('starts the program a program shim names', async () => {
+    const plan = await planDirectLaunch('opencode', ['serve', 'a\nb'], win([`${NPM}\\opencode.cmd`, OPENCODE], {
+      readShim: shims({ [`${NPM}\\opencode.cmd`.toLowerCase()]: npmProgramShim('node_modules\\opencode-ai\\bin\\opencode.exe') }),
+    }));
+    expect(plan).toEqual({ file: OPENCODE, args: ['serve', 'a\nb'] });
+  });
+
+  it('is bounded by the Windows ceiling, not cmd.exe\'s', async () => {
+    const deps = win([`${NPM}\\codex.cmd`, CODEX, 'C:\\tools\\node.exe'], {
+      readShim: shims({ [`${NPM}\\codex.cmd`.toLowerCase()]: npmNodeShim('node_modules\\@openai\\codex\\bin\\codex.js') }),
+    });
+    await expect(planDirectLaunch('codex', ['x'.repeat(CMD_EXE_MAX_COMMAND_LINE + 1)], deps)).resolves.toMatchObject({ file: 'C:\\tools\\node.exe' });
+    await expect(planDirectLaunch('codex', ['x'.repeat(WINDOWS_MAX_COMMAND_LINE)], deps)).rejects.toThrow(/limit Windows places on any command line/);
+  });
+
+  // cmd.exe takes the first PATH folder holding a `node` of any PATHEXT kind; a
+  // version manager's `node.cmd` there may start another Node than a later `node.exe`.
+  it('takes the node cmd.exe would, and keeps the batch route when that is no native one', async () => {
+    const readShim = shims({ [`${NPM}\\codex.cmd`.toLowerCase()]: npmNodeShim('node_modules\\@openai\\codex\\bin\\codex.js') });
+    const wrapped = await planDirectLaunch('codex', [], win([`${NPM}\\codex.cmd`, CODEX, 'C:\\tools\\node.cmd', `${NPM}\\x\\node.exe`], {
+      readShim, resolvePath: async () => ['C:\\tools', NPM, `${NPM}\\x`].join(';'),
+    }));
+    expect(wrapped.file).toBe('C:\\Windows\\System32\\cmd.exe');
+  });
+
+  it('finds the node on PATH for a shim named by its path', async () => {
+    const plan = await planDirectLaunch(`${NPM}\\codex.cmd`, ['app-server'], win([`${NPM}\\codex.cmd`, CODEX, 'C:\\tools\\node.exe'], {
+      readShim: shims({ [`${NPM}\\codex.cmd`.toLowerCase()]: npmNodeShim('node_modules\\@openai\\codex\\bin\\codex.js') }),
+    }));
+    expect(plan).toEqual({ file: 'C:\\tools\\node.exe', args: [CODEX, 'app-server'] });
+  });
+
+  it('still prefers a native executable on PATH to a shim', async () => {
+    const plan = await planDirectLaunch('codex', [], win([`${NPM}\\codex.cmd`, CODEX, 'C:\\tools\\node.exe', 'C:\\tools\\codex.exe'], {
+      readShim: shims({ [`${NPM}\\codex.cmd`.toLowerCase()]: npmNodeShim('node_modules\\@openai\\codex\\bin\\codex.js') }),
+    }));
+    expect(plan).toEqual({ file: 'C:\\tools\\codex.exe', args: [] });
+  });
+
+  // A line of its own may set a variable or do more than find a file, and
+  // only cmd.exe would do it.
+  it('keeps the batch route for a .cmd that is not npm\'s template, byte for byte', async () => {
+    const edited = npmNodeShim('node_modules\\@openai\\codex\\bin\\codex.js').replace('SETLOCAL', 'SETLOCAL\r\nSET CODEX_HOME=%dp0%');
+    const plan = await planDirectLaunch('codex', ['app-server'], win([`${NPM}\\codex.cmd`, CODEX, 'C:\\tools\\node.exe'], {
+      readShim: shims({ [`${NPM}\\codex.cmd`.toLowerCase()]: edited }),
+    }));
+    expect(plan.file).toBe('C:\\Windows\\System32\\cmd.exe');
+  });
+
+  it('keeps the batch route when what the shim names, or a node to run it, is not there', async () => {
+    const readShim = shims({ [`${NPM}\\codex.cmd`.toLowerCase()]: npmNodeShim('node_modules\\@openai\\codex\\bin\\codex.js') });
+    expect((await planDirectLaunch('codex', [], win([`${NPM}\\codex.cmd`, 'C:\\tools\\node.exe'], { readShim }))).file).toBe('C:\\Windows\\System32\\cmd.exe');
+    expect((await planDirectLaunch('codex', [], win([`${NPM}\\codex.cmd`, CODEX], { readShim }))).file).toBe('C:\\Windows\\System32\\cmd.exe');
+  });
+
+  it('reads no target cmd.exe would expand, and starts no program shim\'s script', async () => {
+    const files = [`${NPM}\\agent.cmd`, `${NPM}\\%HOME%\\agent.js`, `${NPM}\\bin\\agent.bat`, 'C:\\tools\\node.exe'];
+    for (const text of [npmNodeShim('%HOME%\\agent.js'), npmProgramShim('bin\\agent.bat')]) {
+      const plan = await planDirectLaunch('agent', [], win(files, { readShim: shims({ [`${NPM}\\agent.cmd`.toLowerCase()]: text }) }));
+      expect(plan.file).toBe('C:\\Windows\\System32\\cmd.exe');
+    }
+  });
+});
+
+// What ADR-0010 claims of an npm shim, run for real: the shim npm writes, its
+// script started with node directly, every argument arriving as it was given.
+describe.runIf(process.platform === 'win32')('an npm shim on a real Windows host', () => {
+  it('hands its script a quote, a line break, %PATH%, an empty argument and cmd.exe\'s metacharacters whole', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ordewell-npm-'));
+    try {
+      mkdirSync(join(dir, 'node_modules', 'agent'), { recursive: true });
+      writeFileSync(join(dir, 'node_modules', 'agent', 'argv.js'), 'process.stdout.write(JSON.stringify(process.argv.slice(2)));');
+      writeFileSync(join(dir, 'agent.cmd'), npmNodeShim('node_modules\\agent\\argv.js'));
+      const args = ['--settings={"disableAllHooks":true}', 'say "hi"\n\nthen %PATH%', '', 'C:\\dir with space\\', 'a&b|c<d>e^f', '"'];
+      const plan = await planDirectLaunch('agent', args, { resolvePath: async () => [dir, dirname(process.execPath)].join(delimiter) });
+      expect(plan.file.toLowerCase()).toBe(process.execPath.toLowerCase());
+      expect(JSON.parse(execFileSync(plan.file, plan.args, { encoding: 'utf8' }))).toEqual(args);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('windowsCommandLine', () => {
   it('leaves an ordinary argument unquoted', () => {
     expect(windowsCommandLine('claude.cmd', ['-p'])).toBe('claude.cmd -p');
@@ -433,5 +554,5 @@ describe.runIf(process.platform === 'win32')('the PowerShell route through a rea
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30_000);
+  });
 });
