@@ -7,7 +7,7 @@ const config = (enabledRunners: string[]) => ({ enabledRunners }) as IConfig;
 describe('RunnerRegistry', () => {
   it('lists only built-ins in picker order', () => {
     const registry = new RunnerRegistry();
-    expect(registry.list().map((entry) => entry.manifest.name)).toEqual(['claude-code', 'codex', 'opencode', 'copilot-cli']);
+    expect(registry.list().map((entry) => entry.manifest.name)).toEqual(['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code']);
     expect(registry.getManifest('claude-code')?.runner.command).toBe('claude');
     expect(registry.get('codex')?.manifest).toBe(registry.getManifest('codex'));
   });

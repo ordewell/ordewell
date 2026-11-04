@@ -95,6 +95,8 @@ const toolCallFields = {
   name: z.string().nullish(),
   rawInput: z.unknown().optional(),
   rawOutput: z.unknown().optional(),
+  /** An agent's own annotations: Qwen Code names an MCP tool's native name in `_meta.toolName`, which its title (the call's arguments) cannot be trusted to. */
+  _meta: meta,
 };
 
 /** What a permission request names its tool call by: a tool call whose every field but its id may be absent. */
