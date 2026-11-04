@@ -14,7 +14,7 @@ export const GEMINI_CLI_MANIFEST: RunnerManifest = {
 
   runner: { command: 'gemini' },
 
-  features: {},
+  features: { permissionModeValues: { plan: 'default' } },
 
   modelDiscovery: {
     // Gemini lists its models in `session/new`, so ACP answers and there is no
@@ -32,14 +32,17 @@ export const GEMINI_CLI_MANIFEST: RunnerManifest = {
   // which the adapter words as "not signed in"; Gemini's own words are kept
   // for a message that reaches the person unworded.
   auth: { loginArgs: [], signedOut: /API key is missing or not configured|Authentication required|not signed in/i },
-  // Gemini's own session mode ids, set with `session/set_mode`. `plan` is its
-  // read-only mode, but no recording shows it refusing a write and a command,
-  // so it is not offered as the read-only mode (ADR-0046). Its default mode
-  // runs a command it deems safe (`echo`) without asking, as recorded, so the
-  // description does not promise that every command waits.
+  // Gemini's own session mode ids, set with `session/set_mode`. Its default
+  // mode runs a command it deems safe (`echo`) without asking, as recorded, so
+  // the description does not promise that every command waits. The read-only
+  // mode keeps the id `plan` a plan names, but runs Gemini's `default` under
+  // Ordewell's policy (the profile's `restricted`): Gemini's own plan mode
+  // denies Ordewell's tools and allows writing a `.md` file, so it is never
+  // set (ADR-0046).
   modes: [
     { id: 'default', label: 'Ask before actions', description: 'Edits and commands wait for your approval, except commands Gemini deems safe', safe: true },
     { id: 'autoEdit', label: 'Auto-approve edits', description: 'Gemini writes files without asking; commands still wait' },
     { id: 'yolo', label: 'Allow all', description: 'Gemini runs edits and commands without asking', autonomous: true },
+    { id: 'plan', label: 'Read-only', description: 'Ordewell commands with Gemini\'s own writes, shell and web off; lands nothing', readOnly: true },
   ],
 };

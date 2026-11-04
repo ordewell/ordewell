@@ -196,11 +196,11 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
   the profile's spawn controls take the agent's own write, shell and web tools
   away, and a recorded live run shows a write and a command refused with
   nothing left behind. Those controls are arguments and variables for an
-  agent with a deny list. For an agent whose controls are a hook or a
-  settings file they are also owner-only files in the process's private
-  directory, outside the worktree and holding no secret, and empty config
-  homes there, so the user's global rules, hooks, plugins and skills do not
-  load in the task; all of it goes with the process, and none of it is
+  agent with a deny list. For an agent whose controls are a hook, a settings
+  file or a policy file they are also owner-only files in the process's
+  private directory, outside the worktree and holding no secret, and, where
+  the profile names them, empty config homes there, so the user's global
+  rules, hooks, plugins and skills do not load in the task; all of it goes with the process, and none of it is
   allowed under a placement. `AcpAdapter` then refuses every edit, delete, move,
   command and mode switch the agent still asks for, with nobody asked, and
   fails a session that leaves the mode it settled in. A profile without the
@@ -213,19 +213,25 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
   a private directory as well. It has no list to take its own tools away, so
   it is started asking before each use, and its edits and commands are
   refused. Its file reads name no location, so they are refused too, and it
-  reads through `run_command`. Cursor claims it (its manifest's `plan` mode,
-  which is Cursor's `agent` mode restricted, never Cursor's own `plan`), from
-  a private directory with a config home of its own whose settings deny
-  Cursor's reads, writes and shell; Cursor refuses those itself, and it reads
-  through `run_command`.
+  reads through `run_command`. Gemini CLI claims it too (its `plan` mode,
+  which runs Gemini's `default` under a policy file Ordewell hands it,
+  denying Gemini's own write, shell and web tools and every MCP server's but
+  Ordewell's), from a private directory its own reads cannot leave, so it
+  reads the worktree through `run_command` alone. Cursor claims it (its
+  manifest's `plan` mode, which is Cursor's `agent` mode restricted, never
+  Cursor's own `plan`), from a private directory with a config home of its
+  own whose settings deny Cursor's reads, writes and shell; Cursor refuses
+  those itself, and it reads through `run_command`.
 - **Native web tools are refused.** A runner's own fetch and search run
   outside Ordewell's pinned transport, and a provider-side search outside its
   secret check and budget too, with nobody there to approve one. Claude's
   `WebFetch` and `WebSearch` are denied at the permission gate, OpenCode's
-  fetch and searches in its policy, and Codex's `web_search` is disabled; the
-  denial names Ordewell's `fetch` and `web_search` instead. A task may still
-  run an allowlisted network command through its task shell under the
-  existing command rules, until its first sealed run.
+  fetch and searches in its policy, Gemini CLI's `web_fetch` and
+  `google_web_search` in the policy file it is handed, and Codex's
+  `web_search` is disabled; the denial names Ordewell's `fetch` and
+  `web_search` instead. A task may still run an allowlisted network command
+  through its task shell under the existing command rules, until its first
+  sealed run.
 
 ### Its web reads
 
@@ -482,4 +488,5 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
 - 2026-11-04 — Qwen Code runs read-only tasks, from a private start directory (ADR-0060).
 - 2026-11-04 — an ACP runner's restricted start may hand it owner-only files and empty config homes outside the worktree, for an agent with no deny flag (ADR-0060 R3).
 - 2026-11-04 — Cline runs read-only tasks, from a private start directory, asking before each of its own tools (ADR-0060 R3).
+- 2026-11-04 — Gemini CLI runs read-only tasks, from a private start directory, under a policy file that denies its own write, shell and web tools (ADR-0060 R3).
 - 2026-11-04 — Cursor runs read-only tasks, from a private start directory, its own reads, writes and shell denied (ADR-0060 R3).

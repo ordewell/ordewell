@@ -218,6 +218,26 @@ planner (above and below), and Ordewell reads them itself:
   repository's context files, and the profile has no reader, so a planner's
   Qwen plans without them. Its user's own `~/.qwen/settings.json` still loads.
 
+### Gemini CLI planners
+
+- **Started outside the repository.** Under ACP, Gemini CLI 0.66.0 trusts the
+  worktree it is started in (`--skip-trust`, which every start passes so that
+  it connects Ordewell's server), so it runs the hooks the repository's
+  `.gemini/settings.json` names and connects its MCP servers. A planner's
+  Gemini, and a read-only task's, starts in an empty private directory of its
+  own instead, also its temp directory, as Qwen's does
+  ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md) R3).
+  Checked live with a hook on every event writing a marker: a writable start
+  in the worktree ran `BeforeAgent` and `BeforeModel` among them, and the
+  restricted start ran none (`planted-hook.jsonl`). Its own reads are held to
+  that directory, so it reaches the worktree only through `run_command`. The
+  policy file it is handed denies every MCP server's tools but Ordewell's, so
+  a server the user's own settings name is refused too.
+- **No instructions as text.** Started there, Gemini loads none of the
+  repository's `GEMINI.md` files, and the profile has no reader, so a
+  planner's Gemini plans without them. Its user's own `~/.gemini/settings.json`
+  still loads.
+
 ### Cursor planners
 
 - **Started outside the repository.** Started in a workspace, Cursor CLI
@@ -282,6 +302,9 @@ planner (above and below), and Ordewell reads them itself:
 | Qwen Code | `.qwen/settings.json` hooks | run commands | started in a private directory |
 | Qwen Code | `.qwen/settings.json` MCP servers | start a command, reach a URL | started in a private directory |
 | Qwen Code | context files (`QWEN.md`) | text | started in a private directory; not read |
+| Gemini CLI | `.gemini/settings.json` hooks | run commands | started in a private directory |
+| Gemini CLI | `.gemini/settings.json` MCP servers | start a command, reach a URL | started in a private directory; every server but Ordewell's denied by policy |
+| Gemini CLI | context files (`GEMINI.md`) | text | started in a private directory; not read |
 | Cursor | `.cursor/hooks.json` | run commands | started in a private directory |
 | Cursor | `.cursor/mcp.json` | start a command, reach a URL | started in a private directory |
 | Cursor | `.cursor/cli.json` permissions | allow its own tools | started in a private directory |
@@ -498,4 +521,5 @@ specifies.
 - 2026-11-04 — a Copilot CLI planner or read-only task is handed the repository's instruction files as text (ADR-0060).
 - 2026-11-04 — a Cline read-only task starts in a private directory, out of reach of the repository's hooks (ADR-0060).
 - 2026-11-04 — a Qwen Code planner or read-only task starts in a private directory, out of reach of the repository's `.qwen/settings.json` (ADR-0060).
+- 2026-11-04 — a Gemini CLI planner or read-only task starts in a private directory, out of reach of the repository's `.gemini/settings.json` (ADR-0060).
 - 2026-11-04 — a Cursor planner or read-only task starts in a private directory with a config home of its own, out of reach of the repository's `.cursor/` (ADR-0060).

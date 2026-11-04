@@ -1,5 +1,6 @@
 import { GEMINI_ACP_ARGS, GEMINI_CLI_MANIFEST } from '../../plugins/builtin/gemini-cli.manifest';
 import { ORDEWELL_MCP_SERVER_NAME } from '../mcp/clientConfig';
+import { plannerToolSet, taskToolSet } from '../mcp/tools';
 import type { AcpProfile } from './acpProfiles';
 
 /** Gemini names an MCP tool `mcp_<server>_<tool>`, in what it shows the model and at the head of its call ids. */
@@ -9,11 +10,81 @@ const SERVER_PREFIX = `mcp_${ORDEWELL_MCP_SERVER_NAME}_`;
 const CALL_SEPARATOR = '__';
 
 /**
+ * Gemini's own tools a restricted start refuses. A deny with no `argsPattern`
+ * takes the tool out of what the model is shown, so a call never happens and
+ * nothing records the refusal; the model was recorded hunting the private
+ * directory for why. With a pattern that matches any call, Gemini keeps
+ * offering the tool and refuses each call as a failed tool call, in its own
+ * words (`Tool execution for "WriteFile" denied by policy.`), which the
+ * transcript shows: the restricted recordings. Over ACP 0.66.0 shows the model
+ * those words, not the `denyMessage`, which only a call Gemini's scheduler
+ * checks, a subagent's, carries; it is kept for that path. A call with no
+ * arguments at all would miss the pattern and ask, which the adapter refuses
+ * by kind.
+ */
+const REFUSED_NATIVE_TOOLS = `[[rule]]
+toolName = ["write_file", "replace"]
+argsPattern = "."
+decision = "deny"
+priority = 999
+denyMessage = "Nothing may be written here: this session is read-only."
+
+[[rule]]
+toolName = "run_shell_command"
+argsPattern = "."
+decision = "deny"
+priority = 999
+denyMessage = "Your own shell is off here. Run commands with ${SERVER_PREFIX}run_command."
+
+[[rule]]
+toolName = ["web_fetch", "google_web_search"]
+argsPattern = "."
+decision = "deny"
+priority = 999
+denyMessage = "Your own web tools are off here. Read web pages with ${SERVER_PREFIX}fetch and search the web with ${SERVER_PREFIX}web_search."
+
+[[rule]]
+toolName = ["enter_plan_mode", "exit_plan_mode"]
+decision = "deny"
+priority = 999
+denyMessage = "This session stays in the mode it was started in."
+`;
+
+/**
+ * The policy a restricted start runs under. Gemini's `default` mode runs a
+ * command it deems safe, a web search and a call a saved rule allows without
+ * asking, so no request reaches the adapter to refuse: these rules deny them
+ * before Gemini decides. Every tool Ordewell's server may list, whatever the
+ * role, still asks, so the adapter answers it as it does unrestricted; every
+ * other MCP server's tool is denied, a trusted one included, which would
+ * otherwise run unasked. Ordewell's tools are named in full because Gemini
+ * checks an MCP call twice, the second time under the server name
+ * `mcp_ordewell`, which no `mcpName` rule for `ordewell` matches.
+ */
+function restrictedPolicy(): string {
+  const served = [
+    taskToolSet({}), taskToolSet({ readOnly: true }), taskToolSet({ board: true }), taskToolSet({ readOnly: true, board: true }),
+    plannerToolSet({ delegates: true, subplanner: true }),
+  ];
+  const names = [...new Set(served.flat().map((tool) => JSON.stringify(`${SERVER_PREFIX}${tool.name}`)))];
+  return `${REFUSED_NATIVE_TOOLS}
+[[rule]]
+toolName = [${names.join(', ')}]
+decision = "ask_user"
+priority = 999
+
+[[rule]]
+toolName = "*"
+mcpName = "*"
+decision = "deny"
+priority = 998
+denyMessage = "Only Ordewell's MCP tools are on in this session."
+`;
+}
+
+/**
  * Gemini CLI over ACP (`gemini --acp`), checked against the recordings in
  * `__tests__/fixtures/acp/gemini-cli/` (ADR-0060).
- *
- * It is a task-only runner: `roles` is absent because no recording shows its
- * `plan` mode, or any restriction, refusing a write and a command (ADR-0046).
  */
 export const GEMINI_CLI_PROFILE: AcpProfile = {
   manifest: GEMINI_CLI_MANIFEST,
@@ -49,4 +120,34 @@ export const GEMINI_CLI_PROFILE: AcpProfile = {
   // `--model` takes the id as `session/new` lists it; with it on the command
   // line the adapter does not set the model again in the session.
   modelArgs: (model) => ['--model', model],
+  // Gemini's `plan` mode is no restriction: it denies Ordewell's tools and
+  // allows writing a `.md` file, so a restricted start runs `default` under a
+  // policy file instead. `default` runs a command it deems safe and a web
+  // search unasked, so the policy denies Gemini's write, shell and web tools
+  // before it decides, asks for every tool Ordewell's server may list, which
+  // the adapter answers by name, and denies every other server's. It is
+  // handed at both tiers Gemini takes a file from the command line: the
+  // admin's outranks any rule the person saved, but Gemini drops it, with a
+  // warning, on a machine whose administrator has policies of their own, and
+  // the user tier's then still holds, in place of the person's saved rules
+  // rather than beside them. The restricted-write,
+  // restricted-shell, restricted-safe-shell and restricted-web recordings show
+  // each refused as a failed call with nothing left behind, and the planner
+  // and read-only ones Ordewell's tools reached. `--sandbox` was not taken: it
+  // confines where a write lands rather than refusing it. Started in its
+  // worktree, Gemini runs the hooks the repository's `.gemini/settings.json`
+  // names (ADR-0028): in a private directory of its own, also its temp
+  // directory, a planted hook was recorded not running. Gemini's own reads are
+  // held to that directory, so it reaches the workspace through Ordewell's
+  // `run_command` alone. A subagent Gemini starts is checked by the same
+  // policy.
+  restricted: {
+    args: ['--approval-mode', 'default'],
+    privateCwd: true,
+    files: [
+      { fileName: 'ordewell-admin-policy.toml', render: restrictedPolicy, pass: { flag: '--admin-policy' } },
+      { fileName: 'ordewell-policy.toml', render: restrictedPolicy, pass: { flag: '--policy' } },
+    ],
+  },
+  roles: { plans: true, readOnly: true },
 };

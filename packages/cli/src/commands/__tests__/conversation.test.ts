@@ -305,7 +305,7 @@ describe('ordewell compact', () => {
 
     expect(exitCode).toBe(1);
     expect(stderr).toContain(
-      'Failed to condense: No planner is ready. Pick one with ordewell planner <id>: Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code and Cursor plan with no API key. ' +
+      'Failed to condense: No planner is ready. Pick one with ordewell planner <id>: Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Gemini CLI and Cursor plan with no API key. ' +
       'To plan with OpenRouter instead, add OPENROUTER_API_KEY with ordewell key set openrouter <key>.',
     );
     expect(stderr).not.toContain('/planner');

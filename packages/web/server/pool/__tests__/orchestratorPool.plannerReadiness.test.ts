@@ -55,7 +55,7 @@ describe('OrchestratorPool planner readiness', () => {
 
     await expect(refusal).rejects.toBeInstanceOf(PlannerNotReadyError);
     await expect(refusal).rejects.toThrow(
-      'No planner is ready. Pick one with /planner: Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code and Cursor plan with no API key. ' +
+      'No planner is ready. Pick one with /planner: Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Gemini CLI and Cursor plan with no API key. ' +
       'To plan with OpenRouter instead, add OPENROUTER_API_KEY with /key.',
     );
     expect(transport).not.toHaveBeenCalled();

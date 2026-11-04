@@ -28,11 +28,10 @@ they connect to them, and whether their own tools can be taken away.
 an `AcpProfile`: data, not code.** `acpConnector(profile)` turns a profile into
 the runner's entry in `CONNECTORS`, so a new ACP agent is a manifest and a
 profile. GitHub Copilot CLI (`copilot-cli`, `copilot --acp --stdio`) is the
-reference agent. Qwen Code (`qwen-code`, `qwen --acp`) and Cursor
-(`cursor-agent`, `cursor-agent acp`) plan and run read-only tasks too; Cline
-(`cline`, `cline --acp`) takes writable and read-only tasks but does not plan;
-Gemini CLI (`gemini-cli`, `gemini --acp --skip-trust`) takes writable tasks
-only.
+reference agent. Qwen Code (`qwen-code`, `qwen --acp`), Gemini CLI
+(`gemini-cli`, `gemini --acp --skip-trust`) and Cursor (`cursor-agent`,
+`cursor-agent acp`) plan and run read-only tasks too; Cline (`cline`,
+`cline --acp`) takes writable and read-only tasks but does not plan.
 
 Ordewell is the ACP client and does no I/O for the agent: it advertises no
 file-system and no terminal capability, so the agent works in the worktree
@@ -115,11 +114,12 @@ of its provider credential and the sign-in route that reader adds.
 
   The restriction is data on the profile, whatever form the agent's own
   controls take. For an agent with a deny list they are arguments and
-  variables, as Copilot's are, or a settings file in a home of configuration
-  of the start's own, as Cursor's are. An agent that refuses a denied tool
-  itself sends Ordewell no request, so for those tools the recording of its
-  refusal is the whole evidence, and Ordewell's refusal by kind still answers
-  every request it does send. For an agent with no deny list that can be
+  variables, as Copilot's are, a file of rules a flag names, as Gemini CLI's
+  policy file is, or a settings file in a home of configuration of the
+  start's own, as Cursor's are. An agent that refuses a denied tool itself
+  sends Ordewell no request, so for those tools the recording of its refusal
+  is the whole evidence, and Ordewell's refusal by kind still answers every
+  request it does send. For an agent with no deny list that can be
   made to ask before every write, edit and command, they are the arguments
   that put it in that mode, as Qwen's and Cline's are, and Ordewell's refusal
   by kind is what denies. An agent that defers an MCP tool until the model loads it
@@ -530,19 +530,20 @@ Ordewell's attempts.
 
 Checked against Gemini CLI 0.66.0, the profile's `minVersion`, and the
 recordings in `packages/core/src/services/__tests__/fixtures/acp/gemini-cli/`,
-made with `gemini-3.5-flash-lite` and a Gemini API key from Gemini's own
-settings:
+made with a Gemini API key from Gemini's own settings, on
+`gemini-3.5-flash-lite` and, for the restricted starts, `gemini-3.8-flash`:
 
 | profile field | Gemini CLI |
 |---|---|
 | instructions | the first prompt: Gemini has no instruction file or `_meta` slot outside the worktree |
-| mode | the session mode, set with `session/set_mode` after `session/new` (`default`, `autoEdit`, `yolo`), since Gemini offers no config options; no `plan`, whose refusal of a write and a command has no recording |
+| mode | the session mode, set with `session/set_mode` after `session/new` (`default`, `autoEdit`, `yolo`), since Gemini offers no config options. Its read-only mode `plan` is Ordewell's, set as Gemini's `default` (`permissionModeValues`), never Gemini's own `plan` |
 | model | `--model` at spawn, with the id as `session/new` lists it |
 | Ordewell's tools | the call id up to its first `__`, `mcp_ordewell_<tool>`: Gemini's call ids are the name it looked the tool up by, then a counter; the title is the call as the model wrote it (`task_complete(summary: ok, status: done)`), the kind is a guess (`other`), and there is no `_meta` or raw input, so none of those is read |
 | trust | `--skip-trust`: the task's worktree is trusted for that process only |
 | credentials | none: Gemini reads the key in its own settings over ACP, as the recordings show, so its spawn carries none from Ordewell (R9) |
-| restriction | none |
-| roles | none: Gemini is task-only, since no recording shows its `plan` mode, or any control, refusing a write and a command (R3) |
+| restriction | `--approval-mode default`; a policy file Ordewell renders, handed with both `--admin-policy` and `--policy`, that denies Gemini's own write, shell and web tools and every MCP server's tools but Ordewell's; and a private start directory that is also its temp directory |
+| repository | no reader: a restricted start is handed none of the repository's instruction files (`GEMINI.md`) |
+| roles | the planner, and a read-only mode (`plan`) |
 
 A new worktree is a folder Gemini has not been told to trust, and in such a
 folder Gemini connects no MCP server and refuses `yolo`: the server is never
@@ -580,6 +581,80 @@ Its models come from ACP discovery alone, started bare (`--acp`) and so
 untrusted, since discovery hands it no server: `session/new` lists `auto` and
 five Gemini models (`discovery.jsonl`), and there is no command to fall back
 to.
+
+Gemini's own `plan` mode cannot be the control for its roles: live, it denied
+Ordewell's tools and let the model write a `.md` file. Its `default` mode
+cannot be the control alone either, since it runs a command it deems safe, a
+web search and a call a saved rule allows without asking, so no request
+reaches Ordewell to refuse. Gemini has no flag that takes a tool away, but it
+takes rules from a policy file, and a deny there is decided before Gemini
+would ask. A restricted start runs `default` under a policy file Ordewell
+renders into the private directory:
+- Gemini's `write_file`, `replace`, `run_shell_command`, `web_fetch` and
+  `google_web_search` are denied. Each rule matches any call's arguments
+  (`argsPattern = "."`): a deny with no pattern takes the tool out of what the
+  model is shown, so the model never calls it, nothing records a refusal, and
+  it was recorded hunting the private directory for why. With the pattern the
+  tool stays offered and each call fails.
+- `enter_plan_mode` and `exit_plan_mode` are denied, so the session stays in
+  the mode it was started in.
+- Every tool Ordewell's server may list, whatever the role, asks, so the
+  adapter allows it by name as it does unrestricted (R7). Each is named in
+  full, `mcp_ordewell_<tool>`, because Gemini checks an MCP call twice, the
+  second time under the server name `mcp_ordewell`, which a rule naming the
+  server `ordewell` does not match: with such a rule Ordewell's own tools were
+  denied.
+- Every other MCP server's tools are denied, a trusted server's included,
+  which would otherwise run unasked.
+
+The file is handed at both tiers Gemini takes one from the command line. The
+admin tier outranks any rule the person saved, but Gemini ignores it, with a
+warning, on a machine whose administrator has policies of their own, and the
+user tier's file then still holds; it replaces the person's saved rules rather
+than joining them. Over ACP a deny is a failed `tool_call_update` with
+Gemini's own words, `Tool execution for "WriteFile" denied by policy.`, and
+no permission request; the rule's own message reaches only a call Gemini's
+scheduler checks, a subagent's. A call with no arguments at all would miss the
+pattern and ask, and the adapter refuses it by kind.
+
+Started in its worktree, Gemini trusts it (`--skip-trust`) and so runs the
+hooks the repository's `.gemini/settings.json` names: live, a writable start
+there ran the planted hooks below, `BeforeAgent` and `BeforeModel` among them
+(over ACP no `SessionStart` hook ran). That control was observed in the live
+test, not kept as a recording. Started in a private directory that is also its
+temp directory, a restricted start ran none of them, and Gemini's own reads
+are held to that directory, so it reaches the worktree only through
+Ordewell's `run_command`, which the planner's envelope or the read-only task's
+rules decide (ADR-0046). A hook is handed the `PWD` of whoever started
+Gemini, not its start directory.
+
+The recordings of the restricted starts show it holding, each started in an
+empty private directory with nothing left behind in it or in the worktree,
+the worktree's `git status` empty, and no hook run:
+- `restricted-write.jsonl`: a `write_file` call, kind `edit`, failed by the
+  policy, and the model reported `blocked`;
+- `restricted-shell.jsonl`: a `run_shell_command` call to `touch` a file,
+  kind `execute`, failed alike;
+- `restricted-safe-shell.jsonl`: a `run_shell_command` call to `echo`, which
+  `default` alone would have run unasked, failed alike;
+- `restricted-web.jsonl`: a `google_web_search` call, kind `search`, failed
+  alike;
+- `planted-hook.jsonl`: a read-only task in a workspace whose
+  `.gemini/settings.json` plants a hook on every event, none of which ran;
+- `planner.jsonl`: a planner that called `list_runners`, `list_models`,
+  `submit_plan`, a read-only Gemini task, and `run_plan`, each allowed by
+  name;
+- `read-only.jsonl`: a read-only task that read a file in the worktree with
+  `run_command` (`cat README.md`) and reported with `task_complete`.
+
+Gemini still loads its user's own `~/.gemini/` settings, hooks included,
+since the profile moves no config home, and the policy files it is handed sit
+in the private directory, where the model can read them; they hold no secret.
+A subagent Gemini starts is checked by the same policy; no recording shows
+one. `--sandbox` was not taken: it confines where a write lands rather than
+refusing it, so a write attempt would not be the refusal R3 asks for. Gemini
+0.66.0 has no `save_memory` tool; its memory is written with `write_file` and
+`replace`, which the policy denies.
 
 ## Cursor
 
@@ -698,6 +773,13 @@ the private directory:
   read-only token: each started in a private directory with
   `--auto-approve false` once, whatever mode the plan gave it, its write,
   shell and file read refused, and its report reaching the server.
+  Gemini's restricted recordings are replayed the same way, as a planner and
+  as read-only tasks: the spawn's arguments, policy files and private
+  directory, its write, shell and web calls failed with no request made,
+  Ordewell's tools allowed by name, and the task's report reaching the server.
+  `geminiRolesLive.smoke.test.ts` makes those recordings against a live
+  Gemini, and its writable control is the evidence a start in the worktree
+  runs the planted hooks.
   `cursorAgent.test.ts` replays Cursor's restricted recordings as a planner
   and a read-only task the same way: each started in a private directory with
   `--sandbox disabled` and no mode, its config home holding only the deny
@@ -753,6 +835,10 @@ the private directory:
   all.
 - **Gemini CLI signed in with a Google account or Vertex AI.** The recordings
   use a Gemini API key. No recording shows a task run on another sign-in.
+- **A Gemini subagent under a restricted start.** Gemini checks a subagent's
+  calls with the same policy, and its bundled `default` rules allow
+  `invoke_agent`, but no recording shows a subagent started by a planner or a
+  read-only task.
 - **Cursor on a paid plan.** The recordings use an account with no paid plan,
   which was refused a turn in `plan` mode and on a model other than its
   default, and whose model was not offered AskQuestion or CreatePlan. No
@@ -773,8 +859,8 @@ the private directory:
   task run on it; where the reader finds no key in the entry Cline last used,
   the start is refused with both routes (R9).
 - **A resumed restricted start.** A resume begins in a new private directory
-  and hands it to `session/load`; no recording yet shows Copilot, Qwen or
-  Cline resuming a session whose `cwd` has changed.
+  and hands it to `session/load`; no recording yet shows Copilot, Qwen,
+  Cline or Gemini resuming a session whose `cwd` has changed.
 - **The repository's rules for a read-only Cline.** Cline reads `.clinerules/`
   from the directory it starts in, and its profile has no `repoConfig` reader
   to hand them over, so a read-only Cline task runs without them.
@@ -903,10 +989,23 @@ the private directory:
   file is the user's and shared by every Gemini process, so every worktree
   would stay trusted after its attempt, and a crash would leave the entry
   behind. The flag's trust ends with the process.
-- **Gemini's `plan` mode as a read-only mode.** Rejected for want of evidence,
-  as Cline's own is; Qwen's was rejected on evidence (above). Cursor's `plan`
-  and `ask` modes likewise: the recorded `plan` turn was refused for the
-  account's plan before it did anything.
+- **Gemini's `plan` mode as a read-only mode.** Rejected on evidence, as
+  Qwen's was: live, it denied Ordewell's tools and let the model write a `.md`
+  file. Cursor's `plan` and `ask` modes are not used either, for want of
+  evidence: the recorded `plan` turn was refused for the account's plan before
+  it did anything.
+- **Gemini's write, shell and web tools denied with no `argsPattern`.**
+  Rejected: such a deny takes the tool out of what the model is shown, so a
+  refusal is never recorded, and the model was recorded hunting the private
+  directory for why it had none. A pattern matching every call keeps the tool
+  offered and each call failed in the transcript.
+- **Gemini's `--sandbox` as the control.** Rejected: it confines where a
+  write lands, not whether it happens. A policy that denies the write is the
+  refusal R3 asks for.
+- **Gemini's policy in the workspace's `.gemini/policies/`.** Rejected: the
+  file would land with the task, and Gemini 0.66.0 does not load workspace
+  policies. The private directory and the command line's two tiers keep it the
+  process's own.
 - **Cursor's model passed at spawn (`acp --model`).** Rejected: Cursor opened
   on its default with it (`model-flag.jsonl`). `session/set_config_option` is
   the route Cursor took.
@@ -963,8 +1062,8 @@ the private directory:
 - A runner can be task-only: where a profile claims no planner role, `plans`
   is false, and the runner runs tasks, is listed and signs in like any runner
   but never appears among the planners. Copilot CLI and Qwen Code claim the
-  role, so they plan like the native runners; Cline claims only a read-only
-  mode, so it runs read-only tasks and never plans.
+  role, as does Gemini CLI, so they plan like the native runners; Cline
+  claims only a read-only mode, so it runs read-only tasks and never plans.
 - A restricted Copilot or Cline names the worktree's files by their full
   path, since its own relative paths name the private directory; its
   instructions tell it where the workspace is.
@@ -984,9 +1083,13 @@ the private directory:
 - Cline's transcript names each call with its arguments' summary, Gemini's
   with the call as the model wrote it, and Cursor's MCP calls `MCP: tool`,
   since those are the titles they report their calls under.
-- A Gemini task runs in a worktree Gemini trusts, so a repository's
-  `.gemini/` settings and hooks run in it, whatever the user chose for that
-  folder in Gemini.
+- A writable Gemini task runs in a worktree Gemini trusts, so a
+  repository's `.gemini/` settings and hooks run in it, whatever the user
+  chose for that folder in Gemini. A planner or a read-only Gemini task starts
+  in a private directory and runs none of them.
+- A restricted Gemini reads only through Ordewell's `run_command`, and
+  without the repository's `GEMINI.md`, since its own reads are held to its
+  private directory.
 - A Cursor task in `default` writes files without asking, and the model a
   plan sets for it stays the user's default model in Cursor afterwards. A
   planner or a read-only Cursor keeps the model in its own home instead.
@@ -1046,6 +1149,10 @@ the private directory:
   directory under `--approval-mode default`, Ordewell refusing each write and
   command it asks for; a restricted start names the agent's deferred-tool
   loader (`restricted.toolSearch`).
+- 2026-11-04 — R3: Gemini CLI plans and runs read-only tasks from a private
+  directory under `--approval-mode default` and a policy file Ordewell hands
+  it, which denies its own write, shell and web tools and every other MCP
+  server's.
 - 2026-11-04 — R3: Cursor (`cursor-agent`) plans and runs read-only tasks from
   a private directory, its own reads, writes and shell denied by a settings
   file in a home of configuration of the start's own; a restricted file may

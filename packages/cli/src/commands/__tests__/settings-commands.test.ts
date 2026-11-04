@@ -207,7 +207,7 @@ describe('ordewell planner', () => {
     const { handlePlanner } = await import('../planner');
     const { stderr, exitCode } = await capture(() => handlePlanner(['acme'], new ApiClient(d.port)));
     expect(stderr).toContain('Acme Agent runs tasks but cannot plan in Ordewell yet.');
-    expect(stderr).toContain('claude-code, codex, opencode, copilot-cli, qwen-code, cursor-agent');
+    expect(stderr).toContain('claude-code, codex, opencode, copilot-cli, qwen-code, gemini-cli, cursor-agent');
     expect(stderr).not.toContain('Unknown planner');
     expect(exitCode).toBe(1);
     expect(d.sent).toEqual([]);
