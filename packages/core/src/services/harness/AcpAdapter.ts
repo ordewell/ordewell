@@ -223,7 +223,9 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
    * (ADR-0022, A5; ADR-0018, C2; ADR-0060, R4, R6). A restricted start adds the controls that
    * take the agent's own write and shell tools away, as flags or as files and
    * config homes in the private directory, none of which holds a secret
-   * (ADR-0060, R3); a planner has no mode.
+   * (ADR-0060, R3), and nothing of the mode's route: a planner has no mode,
+   * and a task its token holds read-only may carry one that would put back
+   * the approvals the controls take away.
    * The profile's provider credential is this spawn's alone (ADR-0060, R9).
    */
   protected async spawnSpec(_opts: AgentStartOptions, workspace: Record<string, string>): Promise<SpawnSpec> {
@@ -233,7 +235,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     const args = [
       ...this.profile.args,
       ...(this.restricted && restricted ? restricted.args : []),
-      ...(started.kind === 'task' && mode?.kind === 'args' ? mode.args(started.flags) : []),
+      ...(started.kind === 'task' && !this.restricted && mode?.kind === 'args' ? mode.args(started.flags) : []),
       ...(started.model && this.profile.modelArgs ? this.profile.modelArgs(started.model) : []),
     ];
     const env: Record<string, string> = { ...this.profile.env, ...(this.restricted ? restricted?.env : {}), ...credential };

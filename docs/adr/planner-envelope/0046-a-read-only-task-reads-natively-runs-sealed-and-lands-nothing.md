@@ -209,7 +209,11 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
   mode, which for Qwen is its `default`, asking before every write and
   command): each starts in a private directory of its own, so it runs none of
   the repository's hooks (ADR-0028), and its every read of the worktree is a
-  request this ADR's rules answer.
+  request this ADR's rules answer. Cline claims it too (its `plan` mode), from
+  a private directory as well. It has no list to take its own tools away, so
+  it is started asking before each use, and its edits and commands are
+  refused. Its file reads name no location, so they are refused too, and it
+  reads through `run_command`.
 - **Native web tools are refused.** A runner's own fetch and search run
   outside Ordewell's pinned transport, and a provider-side search outside its
   secret check and budget too, with nobody there to approve one. Claude's
@@ -473,3 +477,4 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
 - 2026-11-04 — GitHub Copilot CLI runs read-only tasks, from a private start directory (ADR-0060).
 - 2026-11-04 — Qwen Code runs read-only tasks, from a private start directory (ADR-0060).
 - 2026-11-04 — an ACP runner's restricted start may hand it owner-only files and empty config homes outside the worktree, for an agent with no deny flag (ADR-0060 R3).
+- 2026-11-04 — Cline runs read-only tasks, from a private start directory, asking before each of its own tools (ADR-0060 R3).

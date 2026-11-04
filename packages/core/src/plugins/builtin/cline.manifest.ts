@@ -45,10 +45,14 @@ export const CLINE_MANIFEST: RunnerManifest = {
   auth: { loginArgs: ['auth'], signedOut: /Authentication required|not signed in/i },
   // Cline's only permission switch is `--auto-approve`, which the profile
   // passes on every start, so a setting Cline kept from an earlier run never
-  // decides (ADR-0001). Its `plan` session mode is not offered as read-only:
-  // no recording shows it refusing a write and a command (ADR-0046).
+  // decides (ADR-0001).
   modes: [
     { id: 'default', label: 'Ask before actions', description: 'Edits and commands wait for your approval', safe: true },
+    // Read-only is the profile's restricted start (ADR-0046), not Cline's own
+    // `plan` session mode, which nothing sets. Cline's file reads name no
+    // path Ordewell could judge, so they are refused and it reads through
+    // Ordewell's commands.
+    { id: 'plan', label: 'Read-only', description: 'Ordewell commands with Cline\'s own tools off; lands nothing', readOnly: true },
     { id: 'autoApprove', label: 'Allow all', description: 'Cline runs edits and commands without asking (--auto-approve true)', autonomous: true },
   ],
 };

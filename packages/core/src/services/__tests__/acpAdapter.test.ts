@@ -2341,6 +2341,13 @@ describe('AcpAdapter roles (ADR-0026, ADR-0046)', () => {
     expect(first).toContain('task_complete');
   });
 
+  it('starts a task its token holds read-only under the restricted controls alone, whatever mode the plan gave it', async () => {
+    const { adapter, spawned } = setup(handshake(), ROLES_PROFILE);
+    await adapter.start(taskStart('auto', { flags: resolveTaskRunnerFlags(ROLES_MANIFEST, { mode: 'auto' }), mcp: { ...MCP, readOnly: true } }));
+
+    expect(spawned.lastArgs()).toEqual(['--acp', '--deny-tool=write', '--deny-tool=shell']);
+  });
+
   it('starts a planner and a read-only task of a profile that loads its start directory\'s configuration in an empty private directory, and still judges their reads by the worktree', async () => {
     const outside: AcpProfile = { ...ROLES_PROFILE, restricted: { ...ROLES_PROFILE.restricted!, privateCwd: true } };
     const read = ask('read', 'c-read', { locations: [{ path: '/repo/src/a.ts' }] });
