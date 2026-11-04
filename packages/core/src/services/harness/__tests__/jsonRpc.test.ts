@@ -173,7 +173,7 @@ describe('JsonRpcPeer', () => {
     expect(written).toHaveLength(sent);
   });
 
-  it('routes $/cancel_request to the handler of the request it names', () => {
+  it('routes $/cancel_request to the handler of the request its requestId names, as ACP v1 publishes it', () => {
     const { peer, written } = connection();
     const signals = new Map<string | number, AbortSignal>();
     peer.onRequest('session/request_permission', (_params, ctx) => {
@@ -183,7 +183,7 @@ describe('JsonRpcPeer', () => {
     peer.dispatch({ id: 'p1', method: 'session/request_permission' }, noEmit);
     peer.dispatch({ id: 7, method: 'session/request_permission' }, noEmit);
 
-    expect(peer.dispatch({ method: '$/cancel_request', params: { id: 'p1' } }, noEmit)).toBe(true);
+    expect(peer.dispatch({ method: '$/cancel_request', params: { requestId: 'p1' } }, noEmit)).toBe(true);
     expect(signals.get('p1')?.aborted).toBe(true);
     expect(signals.get(7)?.aborted).toBe(false);
     expect(written).toEqual([]);
@@ -194,8 +194,8 @@ describe('JsonRpcPeer', () => {
     let signal: AbortSignal | undefined;
     peer.onRequest('x', (_p, ctx) => { signal = ctx.cancelled; return {}; });
     peer.dispatch({ id: 1, method: 'x' }, noEmit);
-    expect(peer.dispatch({ method: '$/cancel_request', params: { id: 1 } }, noEmit)).toBe(true);
-    expect(peer.dispatch({ method: '$/cancel_request', params: { id: 'nope' } }, noEmit)).toBe(true);
+    expect(peer.dispatch({ method: '$/cancel_request', params: { requestId: 1 } }, noEmit)).toBe(true);
+    expect(peer.dispatch({ method: '$/cancel_request', params: { requestId: 'nope' } }, noEmit)).toBe(true);
     expect(peer.dispatch({ method: '$/cancel_request' }, noEmit)).toBe(true);
     expect(signal?.aborted).toBe(false);
   });

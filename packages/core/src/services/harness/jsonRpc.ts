@@ -46,7 +46,7 @@ export interface IncomingRequest {
   method: string;
   emit: Emit;
   /**
-   * Aborted when the other side sends `$/cancel_request` for this id, or the
+   * Aborted when the other side sends `$/cancel_request` naming this id, or the
    * peer closes. The handler still owes an answer on the first; the peer
    * decides nothing about what a cancelled request should reply.
    */
@@ -216,7 +216,8 @@ export class JsonRpcPeer {
 
   private dispatchNotification(method: string, params: Record<string, unknown>, emit: Emit): boolean {
     if (method === CANCEL_REQUEST) {
-      const named = params.id;
+      // ACP v1's `CancelRequestNotification` names the request in `requestId`, not LSP's `id`.
+      const named = params.requestId;
       if (typeof named === 'number' || typeof named === 'string') this.inFlight.get(named)?.abort();
       return true;
     }

@@ -61,6 +61,12 @@ interface HeldRequest {
 
 type Started = AgentStartOptions & { mcp: McpClientConfig };
 
+/** One of the plan's settings for the session, by the role of the option that carries it. */
+interface PlanSetting {
+  role: OptionRole;
+  value: string;
+}
+
 /**
  * A task runner that speaks the Agent Client Protocol (ACP v1) on stdio: one
  * adapter for every such agent, which differs from the next only by its
@@ -220,49 +226,60 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
   /**
    * The plan's mode, model and effort, put on the session and then checked
    * against what the agent reports it is on (ADR-0018, B2): the plan is held,
-   * or the attempt fails in words, and never silently runs on another.
+   * or the attempt fails in words, and never silently runs on another. Each
+   * change answers the complete list, and a later one can move an option set
+   * before it (an effort that puts the model back), so every setting is held
+   * to the list the agent ends on, not to the answer to its own change.
    */
   private async applySettings(started: Started): Promise<void> {
-    if (started.kind === 'task' && this.profile.mode?.kind === 'session-mode') await this.holdMode(started.flags.permissionMode);
     const effort = started.kind === 'task' ? started.flags.effort : started.effort;
-    if (started.model) await this.holdChoice(started, 'model', started.model);
-    if (effort) await this.holdChoice(started, 'effort', effort);
-  }
-
-  /** Through the mode option when the agent has one, else through the older `session/set_mode`, which answers nothing to check. */
-  private async holdMode(modeId: string): Promise<void> {
-    const option = findOption(this.configOptions, 'mode');
-    if (option) {
-      await this.setOption(option.id, 'mode', modeId);
-      const actual = currentValue(findOption(this.configOptions, 'mode'));
-      if (actual !== modeId) throw new Error(`${this.name} did not take the mode "${modeId}": it is on "${actual ?? 'no mode'}".`);
-      return;
+    const settings: PlanSetting[] = [
+      ...(started.kind === 'task' && this.profile.mode?.kind === 'session-mode' ? [{ role: 'mode' as const, value: started.flags.permissionMode }] : []),
+      ...(started.model ? [{ role: 'model' as const, value: started.model }] : []),
+      ...(effort ? [{ role: 'effort' as const, value: effort }] : []),
+    ];
+    const checked: PlanSetting[] = [];
+    for (const setting of settings) {
+      if (await this.putSetting(started, setting)) checked.push(setting);
     }
-    const set = await this.setupCall('session/set_mode', { sessionId: this.sessionId, modeId });
-    if (!set.ok) throw new Error(`${this.name} refused the mode "${modeId}": ${set.message ?? 'no reason given'}`);
+    for (const setting of checked) this.holdSetting(started, setting);
   }
 
   /**
-   * A model or an effort the plan names must be one the agent can be set to.
-   * Where it ends up on another, a task that may change nothing fails; any
-   * other says so and carries on (ADR-0001: said, never silently rewritten).
+   * Whether the setting went through an option, which the agent's list can
+   * be read back from. The older `session/set_mode` answers nothing to
+   * check, and a model given at spawn has only the agent's word at spawn.
    */
-  private async holdChoice(started: Started, role: Exclude<OptionRole, 'mode'>, wanted: string): Promise<void> {
+  private async putSetting(started: Started, { role, value }: PlanSetting): Promise<boolean> {
     const option = findOption(this.configOptions, role);
-    if (!option) {
-      // A model given at spawn reached the agent already; with no setting to
-      // read it back from, the agent's word at spawn is all there is (Copilot).
-      if (role === 'model' && this.profile.modelArgs) return;
-      const work = started.kind === 'planner' ? 'plan' : 'run this task';
-      throw new Error(`${this.name} offers no ${role} setting, so it cannot ${work} on the ${role} "${wanted}".`);
+    if (option) {
+      await this.setOption(option.id, role, value);
+      return true;
     }
-    await this.setOption(option.id, role, wanted);
+    if (role === 'mode') {
+      const set = await this.setupCall('session/set_mode', { sessionId: this.sessionId, modeId: value });
+      if (!set.ok) throw new Error(`${this.name} refused the mode "${value}": ${set.message ?? 'no reason given'}`);
+      return false;
+    }
+    // A model given at spawn reached the agent already (Copilot).
+    if (role === 'model' && this.profile.modelArgs) return false;
+    const work = started.kind === 'planner' ? 'plan' : 'run this task';
+    throw new Error(`${this.name} offers no ${role} setting, so it cannot ${work} on the ${role} "${value}".`);
+  }
+
+  /**
+   * Another mode than the plan's fails the attempt. A model or an effort
+   * where the agent ended up on another fails a task that may change
+   * nothing; any other says so and carries on (ADR-0001: said, never
+   * silently rewritten).
+   */
+  private holdSetting(started: Started, { role, value }: PlanSetting): void {
     const actual = currentValue(findOption(this.configOptions, role));
-    if (actual === wanted) return;
-    const was = `${this.name} did not take the ${role} "${wanted}": it is on "${actual ?? 'none'}".`;
-    if (started.kind === 'task' && this.restricted) throw new Error(was);
+    if (actual === value) return;
+    const was = `${this.name} did not take the ${role} "${value}": it is on "${actual ?? (role === 'mode' ? 'no mode' : 'none')}".`;
+    if (role === 'mode' || (started.kind === 'task' && this.restricted)) throw new Error(was);
     this.announce(role === 'model'
-      ? { type: 'model_drifted', from: { model: wanted }, to: { model: actual ?? 'unknown' } }
+      ? { type: 'model_drifted', from: { model: value }, to: { model: actual ?? 'unknown' } }
       : { type: 'command_output', text: was });
   }
 
@@ -460,7 +477,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     if (turn) {
       if (response.ok) {
         const parsed = parseAcp(promptResponseSchema, response.result);
-        const { stopReason, usage } = parsed.ok ? parsed.value : { stopReason: 'end_turn', usage: undefined };
+        const { stopReason, usage } = parsed.ok ? parsed.value : { stopReason: { unreadable: parsed.error }, usage: undefined };
         for (const event of endTurn(turn, stopReason, usage, this.cancelSent)) this.announce(event);
       } else if (this.cancelSent) {
         // Some agents answer a cancelled prompt with an error rather than a
