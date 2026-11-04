@@ -60,10 +60,12 @@ A test that depends on the time of day (a usage-limit "resets 8:10pm") fails
 for the hour after that time; derive such a time from the clock, or fake it,
 instead of fixing it. A recorded fixture with a fixed future instant expires
 the same way. `vi.waitFor` waits up to ten seconds here, not vitest's one
-(`vitest.setup.ts`), and a test may run for thirty, ninety on Windows
-(`vitest.shared.ts`), because real git and
+(`vitest.setup.ts`), and a test may run for thirty, because real git and
 file-system events can take past a second on a loaded machine: pass a
-`timeout` only to wait longer still.
+`timeout` only to wait longer still. On Windows, where git and processes take
+several times as long, every limit is three times longer: the defaults
+(`vitest.shared.ts`), each `vi.waitFor`'s, and a test's own, which it writes as
+`patient(ms)` from `@ordewell/core/testing`.
 
 Build order is not optional: `core` emits the types the other three packages
 compile against. Building a leaf package against a stale `core/dist` produces

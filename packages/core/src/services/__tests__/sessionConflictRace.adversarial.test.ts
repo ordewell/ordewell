@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { FakeWorktreeIsolation } from '../../testing';
+import { FakeWorktreeIsolation, patient } from '../../testing';
 import { FakeRunnerSession, fakeConfig, makeSession, taskOf } from './sessionTestKit';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import type { IRunner } from '../../interfaces/IRunner';
@@ -91,7 +91,7 @@ describe('adversarial: one worker per conflict', () => {
       isolation.open();
     }
     await vi.waitFor(() => expect(env.spawned()).toEqual(['t1', 't1']));
-  }, 20_000);
+  }, patient(20_000));
 });
 
 const LIMIT = "You've hit your session limit · resets 8:10pm (UTC)";
@@ -142,7 +142,7 @@ describe('adversarial: a repair respects a usage limit', () => {
     } finally {
       env.session.destroy();
     }
-  }, 20_000);
+  }, patient(20_000));
 
   it('holds a repair of tasks started by hand too, with no scheduler to claim it after', async () => {
     const env = host(conflicted(), { maxParallelSessions: 2 });
@@ -166,7 +166,7 @@ describe('adversarial: a repair respects a usage limit', () => {
     } finally {
       env.session.destroy();
     }
-  }, 20_000);
+  }, patient(20_000));
 
   it('holds a repair on its runner\'s limit when there is no reset to hold the run for', async () => {
     const env = host(conflicted(), { maxParallelSessions: 2 });
@@ -190,5 +190,5 @@ describe('adversarial: a repair respects a usage limit', () => {
     } finally {
       env.session.destroy();
     }
-  }, 20_000);
+  }, patient(20_000));
 });

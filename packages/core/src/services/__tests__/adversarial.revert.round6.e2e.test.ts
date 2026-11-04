@@ -9,7 +9,7 @@ import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import type { IsolationRun, IWorktreeIsolation } from '../../interfaces/IWorktreeIsolation';
 import type { IRunner } from '../../interfaces/IRunner';
 import { createTask, type Task } from '../../models/Task';
-import { fakeConfig, FakeRunnerSession, removeDir } from '../../testing';
+import { fakeConfig, FakeRunnerSession, patient, removeDir } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
 
 /**
@@ -312,5 +312,5 @@ describe('the user\'s own steps after Merge all', () => {
     await orchestrator.mergeRun();
     expect(git(root, 'ls-tree', '--name-only', 'main').split('\n')).toContain('one.txt');
     orchestrator.stop();
-  }, 60000);
+  }, patient(60000));
 });

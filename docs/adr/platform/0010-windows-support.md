@@ -62,6 +62,22 @@ deliberate: two installs of the same CLI are the same program, and taking the
 8191-character buffer. An unresolvable command is handed back untouched so the
 caller's own ENOENT — which names what the user typed — is what surfaces.
 
+**A batch shim npm wrote is not run through cmd.exe.** npm's shims (its
+`cmd-shim`) are two fixed templates: one runs a Node script with the `node.exe`
+beside the shim, or else the `node` on PATH, and one starts a program in the
+package itself, as OpenCode's does its `.exe`. Either only finds a file and
+hands it `%*`, so `planDirectLaunch` reads the shim and starts that file
+directly, which is what the shim does without cmd.exe's 8191-character buffer,
+its cut at a line break, its `%VAR%` expansion and a `"` it cannot carry. That
+matters most for Claude Code installed by npm: its system prompt spans lines
+and its `--settings` and `--mcp-config` are JSON, so on either shim route it
+started with a prompt or a setting it could not read. Only a shim that is
+npm's template byte for byte, but for a target holding no quote, `%` or line
+break, is read so. A `.cmd` with a line of its own may set a variable or do
+more than find a file, which only cmd.exe would do, so it keeps the batch
+route; so does a shim whose file, or a `node` to run it, is not there. pnpm's
+shims also set `NODE_PATH` and are not read.
+
 **The PowerShell tier is availability-ordered, not capacity-ordered.** It is
 reached only when neither of the others resolved: an installer that dropped a
 script rather than a binary, a hand-rolled shim. Every Node package manager
@@ -151,6 +167,30 @@ resolves the research shell once and passes its `dialect` to both
 executing under another is not a bug to avoid but a state the types do not
 permit. A Windows box with Git Bash classifies as POSIX, correctly.
 
+**A path is judged where the shell reads it to be.** Git Bash keeps a mount
+table of its own: `/` is its install, `/tmp` the user's temp folder, `/c` the
+`C:` drive, and `/dev/null` its null device. Read by the host, `/etc/passwd`
+was `<drive>:\etc\passwd` and `/c/Users/me` was `<drive>:\c\Users\me`, so the
+folder a user approved was not the one the command reached, `/dev/null` asked
+to reach a folder that is not there, and a workspace at `<drive>:\c` held paths
+that were not in it. So the research shell carries a `hostPath`, read from Git
+Bash's own `mount` the first time a command names a path that needs it, with
+Git for Windows' default table in its place when `mount` cannot run, and path
+confinement resolves every path a command names, and every `cd` it follows,
+through it: a backslash read as a separator, `/proc/cygdrive` as the drive
+prefix, and a mount point matched in any case only where Git Bash does, on a
+`posix=0` mount. What it cannot follow for certain is refused rather than
+guessed at: Git Bash climbs `/tmp/..` on disk and `/bin/..` by name, reads
+`../../c/Users` from a workspace on `F:` as `C:\Users` by way of its own root,
+and keeps a `/proc` and a `/dev` of its own (`/dev/clipboard` is the
+clipboard), so a POSIX path holding a `..`, a relative one that climbs off its
+drive, and the rest of `/proc` and `/dev` name no folder an approval could
+name, and a command naming one is refused with that reason. This is not a
+wider envelope ([ADR-0008](../planner-envelope/0008-planner-exploration-envelope.md)):
+the same paths are judged, each as the folder the command will reach, and
+those that reach none certainly are refused. Under cmd.exe there is no table
+and no device, so `/dev/null` is the folder it names there.
+
 Only the rules that actually diverge are modeled: escape character, whether that
 escape survives inside quotes, quote characters, expansion syntax, and stripped
 executable extensions. The second one is not a detail — cmd.exe reads `^` inside
@@ -222,8 +262,10 @@ The **VS Code extension and the daemon work on native Windows**: harness
 planners (Claude Code, Codex, OpenCode), API-key planners, runner execution,
 model discovery, and the exploration envelope with its gate intact.
 
-The **TUI is not verified on Windows**. WSL remains the supported answer for
-that surface. Runner execution uses structured connectors and no longer needs
+The **TUI runs on native Windows**: driven in a Windows pseudo console, it drew
+on the alternate screen, took keys, redrew on a resize, planned, ran and
+merged a plan, and gave the screen back on exit. Mouse scrolling and bracketed
+paste were not exercised there. Runner execution uses structured connectors and no longer needs
 tmux or per-task terminal windows (ADR-0025). The launch and kill seams are
 shared in core.
 
@@ -240,23 +282,27 @@ Three things are **explicitly not claimed**:
    the kernel. "Read-only by construction" is a Linux/macOS guarantee until
    someone tests it there. The comment in `codexSandbox.ts` says so rather than
    asserting the stronger claim it used to.
-2. **`%VAR%` expansion on the cmd.exe shim route.** In a `cmd /c` context `%`
-   cannot be escaped — `%%` is a batch-file construct and `^%` still expands — so
-   an argument naming a *defined* environment variable is expanded. Preferring a
-   native executable skips cmd.exe and the hazard with it, which is the main
-   reason the preference is global.
-3. **A `"` on the PowerShell shim route.** A shim hands `$args` on to its
-   program, and Windows PowerShell 5.1 re-quotes each argument by its own
-   reckoning and escapes nothing: a `"` inside one is lost or splits it, an
-   empty argument is dropped, and a trailing `\` in one with whitespace escapes
-   the quote it is closed with. Escaping the arguments for the program behind
-   the shim was tried and taken back. A subplanner's system prompt, near
-   Windows' command-line ceiling already, went over it once its quotes were
-   escaped, and 5.1's quoting decisions are not ones an escape can always
-   satisfy: a space between two quotes still splits. What lifts both is handing
-   a long prompt over in a file rather than on the command line. Until then a
-   native executable, which this route never reaches, is the install that
-   keeps a prompt whole.
+2. **`%VAR%` expansion on the cmd.exe shim route,** for a shim npm did not
+   write. In a `cmd /c` context `%` cannot be escaped — `%%` is a batch-file
+   construct and `^%` still expands — so an argument naming a *defined*
+   environment variable is expanded. Preferring a native executable skips
+   cmd.exe and the hazard with it, which is the main reason the preference is
+   global, and an npm shim's file is started as one.
+3. **A `"` on the PowerShell shim route,** for a shim npm did not write. A shim
+   hands `$args` on to its program, and Windows PowerShell 5.1 re-quotes each
+   argument by its own reckoning and escapes nothing: a `"` inside one is lost
+   or splits it, an empty argument is dropped, and a trailing `\` in one with
+   whitespace escapes the quote it is closed with. Escaping the arguments for
+   the program behind the shim was tried and taken back. A subplanner's system
+   prompt, near Windows' command-line ceiling already, went over it once its
+   quotes were escaped, and 5.1's quoting decisions are not ones an escape can
+   always satisfy: a space between two quotes still splits. npm writes a `.cmd`
+   beside every `.ps1`, and its shim's file is started directly, so the route
+   is left to installs that wrote a script alone.
+
+**Argument fidelity through an npm shim is measured** on every Windows CI run:
+a shim as npm writes it hands its script a `"`, a line break, `%PATH%`, an
+empty argument and cmd.exe's metacharacters as they were given.
 
 **Argument fidelity on the PowerShell shim route is measured** for what it does
 carry. `-File` receives an ordinary argument vector that Node quotes by the
@@ -291,3 +337,5 @@ lower-case drive letter.
 - 2026-10-24 — a spawn throw is held through the one spawn-failure path in `Attempts`; the text named a `TaskOrchestrator.startTask` that no longer exists.
 - 2026-11-03 — the VS Code extension's activation, runner detection and login run on a Windows host.
 - 2026-11-03 — CI runs the suites on Windows, real plans ran there through to a merged handoff, a refused unforced `taskkill` is forced at once, and a `"` on the PowerShell shim route is recorded as unclaimed.
+- 2026-11-04 — a batch shim npm wrote starts the file it names directly, so a `"`, a line break and `%VAR%` reach the program whole.
+- 2026-11-04 — path confinement reads a path through Git Bash's mount table, as the shell running the command does.

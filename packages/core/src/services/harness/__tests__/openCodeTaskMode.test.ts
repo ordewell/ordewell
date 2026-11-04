@@ -10,6 +10,7 @@ import { modeIds, fakeSpawn, sseResponse, type FakeEventStream } from '../../__t
 import type { StructuredEvent } from '../../../interfaces/IRunner';
 import { toTaskLogEvent } from '../../../models/TaskLog';
 import { replayTaskLog } from '../../../conversation/taskLog';
+import { patient } from '../../../testing';
 
 /**
  * OpenCode's task mode (ADR-0018, #55): `opencode serve` driven over HTTP
@@ -412,7 +413,7 @@ describe('OpenCodeAdapter task mode — when a turn ends', () => {
     await turn;
     expect(events).toEqual([{ type: 'turn_end' }]);
     adapter.dispose();
-  }, 5000);
+  }, patient(5000));
 
   it('reads back a reply part the stream never delivered', async () => {
     const server = fakeServer({

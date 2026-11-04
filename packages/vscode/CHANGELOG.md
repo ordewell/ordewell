@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **An agent installed by npm starts whole on Windows.** Claude Code installed
+  with npm was started through PowerShell, which dropped the quotes from its
+  JSON settings and its prompt. Ordewell now starts what the shim names
+  directly, for every npm-installed agent.
+- **The planner's commands are confined to the folders Git Bash reaches**, so
+  approving `/tmp` approves your temp folder, and `/dev/null` no longer asks.
+
 ## [0.12.4] - 2026-11-04
 
 ### Fixed

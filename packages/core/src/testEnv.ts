@@ -2,6 +2,20 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 /**
+ * How many times longer a test may take on this host: a Windows runner starts
+ * a process and runs git several times slower than a Linux one, and a real-git
+ * e2e test does little else, so on CI's Windows jobs many take twenty to thirty
+ * seconds that take a few on Linux. vitest.shared.ts scales the default limits
+ * by it and vitest.setup.ts every `vi.waitFor`'s.
+ */
+export const PACE = process.platform === 'win32' ? 3 : 1;
+
+/** A test's own limit, `ms` on Linux and macOS, as much longer as {@link PACE} says here. */
+export function patient(ms: number): number {
+  return ms * PACE;
+}
+
+/**
  * Remove a test's scratch directory, waiting out whatever still holds it.
  * Windows removes no directory a process works in, and a process tree it was
  * told to end takes a moment to go. The retries back off linearly, about five

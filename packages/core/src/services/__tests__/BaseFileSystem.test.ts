@@ -32,6 +32,9 @@ class TestFileSystem extends BaseFileSystem {
   // classified and confined, not about the host's sandbox.
   constructor(resolveWebHost?: ResolveAll, sandbox = new PlannerShellSandbox(async () => ({ available: false, notice: 'no sandbox in this test' }))) {
     super(resolveWebHost, sandbox);
+    // A shell that reads a path as the host does, on every host: how Git Bash
+    // reads one is researchShell.test.ts's subject, and MountedFileSystem's below.
+    (this as unknown as { researchShell: unknown }).researchShell = { file: null, args: [], dialect: 'posix', utilsDir: null };
   }
 
   readCalls: string[] = [];
@@ -614,8 +617,48 @@ class DialectFileSystem extends TestFileSystem {
   }
 }
 
+/**
+ * A research shell that mounts the workspace at `/w`, as Git Bash mounts a
+ * drive at `/c`, has a `/dev/null` of its own, and reads `/proc` by rules no
+ * one can follow, as Git Bash does.
+ */
+class MountedFileSystem extends TestFileSystem {
+  constructor() {
+    super();
+    const hostPath = (p: string) => (p.startsWith('/proc') ? undefined : p.startsWith('/w/') ? `/repo/${p.slice(3)}` : p);
+    (this as unknown as { researchShell: unknown }).researchShell = { file: null, args: [], dialect: 'posix', utilsDir: null, hostPath };
+  }
+}
+
 describe('BaseFileSystem research-shell coupling', () => {
   const allow = () => new ApprovalPolicy({ ask: async () => true });
+
+  // Confinement judges the folder the command reaches, which is where the
+  // shell reads a path to be, not where the host would (ADR-0010).
+  it('judges a path where the research shell puts it, and knows its devices', async () => {
+    const fs = new MountedFileSystem();
+    const request = vi.fn().mockResolvedValue(false);
+    fs.setApproval({ request });
+
+    expect((await fs.bash('cat /w/src/index.ts /dev/null')).success).toBe(true);
+    expect(request).not.toHaveBeenCalled();
+
+    await fs.bash('cd /w/src && cat ../../etc/passwd');
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', subject: abs('/etc/passwd') }));
+  });
+
+  // No folder an approval could name is the one such a path reaches, so nobody is asked.
+  it('refuses a command naming a path the research shell reads by rules it cannot follow', async () => {
+    const fs = new MountedFileSystem();
+    const request = vi.fn().mockResolvedValue(true);
+    fs.setApproval({ request });
+
+    const outcome = await fs.bash('cat src/index.ts /proc/registry/HKEY_CURRENT_USER/x');
+    expect(outcome.success).toBe(false);
+    expect(outcome.output).toContain('Git Bash reads "/proc/registry/HKEY_CURRENT_USER/x" by rules this check cannot follow');
+    expect(request).not.toHaveBeenCalled();
+    expect(fs.bashCalls).toEqual([]);
+  });
 
   it('refuses a cmd.exe destructive builtin when the shell is cmd.exe', async () => {
     const fs = new DialectFileSystem('cmd');

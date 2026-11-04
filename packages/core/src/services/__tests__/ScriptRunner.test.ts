@@ -8,6 +8,7 @@ import { ScriptRunner, type ScriptRunnerDeps, type ScriptSpawnFn } from '../Scri
 import type { ScriptExit, StructuredEvent } from '../../interfaces/IRunner';
 import { DEFAULT_SCRIPT_TIMEOUT_MS, type ScriptBody } from '../../models/ScriptTask';
 import type { PlacedLaunch, RunnerLaunch, RunnerPlacement } from '../executionLease';
+import { patient } from '../../testing';
 
 /**
  * A script task's body as it really runs (ADR-0035): real processes, at a real
@@ -193,7 +194,7 @@ describe('ScriptRunner: ending early', () => {
     const ended = process.platform === 'win32' ? {} : { signal: 'SIGTERM' };
     expect(ofType(run.events, 'script_exit')).toEqual([expect.objectContaining({ timedOut: true, ...ended })]);
     expect(fs.existsSync(path.join(run.cwd, 'after'))).toBe(false);
-  }, 15_000);
+  }, patient(15_000));
 
   it('ends the running command on Stop, runs none after it, and resolves once the session has exited', async () => {
     const run = await start({ commands: [js("console.log('up'); setTimeout(() => {}, 60_000)"), js("require('fs').writeFileSync('after', '')")] });
@@ -205,7 +206,7 @@ describe('ScriptRunner: ending early', () => {
     expect(await run.exited).toBe(1);
     expect(run.runner.activeCount).toBe(0);
     expect(fs.existsSync(path.join(run.cwd, 'after'))).toBe(false);
-  }, 15_000);
+  }, patient(15_000));
 
   it('runs nothing at all when stopped before its first command', async () => {
     const run = await start({ commands: [js("require('fs').writeFileSync('first', '')")] });

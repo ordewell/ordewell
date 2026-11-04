@@ -126,8 +126,8 @@ export class RunnerProcess {
     // minimal PATH a GUI-launched host inherits.
     const PATH = await resolvePath();
     // On POSIX this hands back the command untouched; on Windows it resolves
-    // the real `.exe` (or routes a `.cmd` shim through cmd.exe), because
-    // CreateProcess performs no PATHEXT lookup of its own. `exists` goes to
+    // the real `.exe`, the file an npm shim names, or else a shim through its
+    // interpreter, because CreateProcess performs no PATHEXT lookup of its own. `exists` goes to
     // both: on Windows the lookup here is the only one the check below trusts.
     const launch = await planDirectLaunch(command.command, command.args, {
       platform: this.deps.platform,
@@ -252,8 +252,8 @@ export class RunnerProcess {
 
   /**
    * Tree-wide, because the direct child may be a CLI whose shells, MCP servers
-   * and test runs would outlive it — or, on Windows, the cmd.exe shim rather
-   * than the runner. The forced follow-up is scheduled and unref'd, so a
+   * and test runs would outlive it — or, on Windows, the cmd.exe or PowerShell
+   * that runs a shim rather than the runner. The forced follow-up is scheduled and unref'd, so a
    * disposed runner is never the reason the host refuses to exit.
    */
   dispose(): void {

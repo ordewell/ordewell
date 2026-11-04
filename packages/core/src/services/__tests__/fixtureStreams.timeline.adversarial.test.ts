@@ -168,7 +168,7 @@ describe('every recorded task turn, folded live and reloaded', () => {
     expect(shown(replayTaskLog(log))).toEqual(expected);
     // What the wire carries: coalesced deltas, through JSON as the file saves it.
     expect(shown(replayTaskLog(JSON.parse(JSON.stringify(coalesceTaskLog(log))) as TaskLogEvent[]))).toEqual(expected);
-  }, 30_000);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -247,13 +247,13 @@ describe('every recorded planner turn, live against its reload', () => {
     const { live, reloaded } = await planWith(planner, 'look around', 'claude-code');
     expect(reloaded).toEqual(live);
     expect(live.slice(1)).toEqual(expected);
-  }, 30_000);
+  });
 
   it('claude-code tools: parallel calls keep their announced order after a reload', async () => {
     const { live, reloaded } = await planWith(harness('claude-code', [fixture('claude-code', 'tools')]), 'look around', 'claude-code');
     expect(live.slice(1, 4)).toEqual(['tool: Read', 'tool: Grep', 'tool: WebFetch']);
     expect(reloaded).toEqual(live);
-  }, 30_000);
+  });
 
   it('Codex: words around the command it ran, live and reloaded', async () => {
     const { live, reloaded } = await planWith(harness('codex', [fixture('codex', 'handshake'), fixture('codex', 'new-conversation'), fixture('codex', 'usage')]), 'What is the answer?', 'codex');

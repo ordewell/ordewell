@@ -1,7 +1,8 @@
 import * as os from 'os';
 import * as path from 'path';
 import { describe, it, expect } from 'vitest';
-import { resolveWithin, grantScopeFor } from '../pathScope';
+import { resolveWithin, resolveRef, grantScopeFor } from '../pathScope';
+import { mountedHostPath, parseMounts } from '../researchShell';
 
 // The fixtures are POSIX paths; on Windows `/repo` resolves to `<drive>:\repo`,
 // and containment is judged the same way in either spelling.
@@ -40,6 +41,42 @@ describe('resolveWithin', () => {
 
   it('keeps ~otheruser outside the workspace rather than resolving it into one', () => {
     expect(resolveWithin('/repo', '~someone/notes.txt').inside).toBe(false);
+  });
+});
+
+describe('a path as the shell running it reads one (ADR-0010)', () => {
+  // A shell that mounts the workspace at /w, as Git Bash mounts a drive at /c.
+  const mounted = (p: string) => (p.startsWith('/w/') ? `/repo/${p.slice(3)}` : p);
+
+  it('judges where the shell puts a path, and a cd target too', () => {
+    expect(resolveWithin('/repo', '/w/src/a.ts', '/repo', mounted)).toEqual({ abs: abs('/repo/src/a.ts'), inside: true });
+    expect(resolveRef('/repo', { path: 'a.ts', cwd: ['/w/src'] }, mounted)).toEqual({ abs: abs('/repo/src/a.ts'), inside: true });
+    expect(resolveRef('/repo', { path: '/etc/passwd', cwd: [] }, mounted).inside).toBe(false);
+  });
+
+  // Resolved as a host path, Git Bash's `/dev/null` was `<drive>:\dev\null`, so
+  // `diff a /dev/null` asked to reach a folder that is not there.
+  it('takes a device the shell provides as no place on disk', () => {
+    expect(resolveWithin('/repo', '/dev/null', '/repo', mounted)).toEqual({ abs: '/dev/null', inside: false, device: true });
+  });
+
+  // No approval could name the folder such a path reaches, so it is judged nowhere, and after a `cd` to one, so is every path.
+  it('judges a path the shell reads by rules it cannot follow to be nowhere, and every path after a cd to one', () => {
+    const unsure = (p: string) => (p.startsWith('/proc') ? undefined : mounted(p));
+    expect(resolveWithin('/repo', '/proc/registry', '/repo', unsure)).toEqual({ abs: '/proc/registry', inside: false, unfollowable: true });
+    expect(resolveRef('/repo', { path: 'a.ts', cwd: ['/proc'] }, unsure)).toEqual({ abs: 'a.ts', inside: false, unfollowable: true });
+  });
+});
+
+describe.runIf(process.platform === 'win32')('a path through Git Bash on a Windows host', () => {
+  const table = parseMounts('C:/Program Files/Git on / type ntfs (binary)\nC: on /c type ntfs (binary,posix=0)', '')!;
+  const hostPath = (p: string, from: string) => mountedHostPath(table, p, from);
+
+  // Read on the host's drive, `/c/Users/me` was `C:\c\Users\me`: inside a workspace at `C:\c`, though the shell reads `C:\Users\me`.
+  it('keeps a drive path out of a workspace that only shares its spelling', () => {
+    expect(resolveWithin('C:\\c', '/c/Users/me/.ssh/id_rsa', 'C:\\c').inside).toBe(true);
+    expect(resolveWithin('C:\\c', '/c/Users/me/.ssh/id_rsa', 'C:\\c', hostPath)).toEqual({ abs: 'C:\\Users\\me\\.ssh\\id_rsa', inside: false });
+    expect(resolveWithin('C:\\Users\\me\\repo', '/c/Users/me/repo/src', 'C:\\Users\\me\\repo', hostPath).inside).toBe(true);
   });
 });
 

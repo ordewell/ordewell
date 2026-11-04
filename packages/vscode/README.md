@@ -70,17 +70,16 @@ Conversation** and **Compact Conversation**. Isolation can be configured under
 
 ### On Windows
 
-The extension and its local daemon run natively on Windows. The `ordewell`
-terminal UI is not verified there; run it under
-[WSL](https://learn.microsoft.com/windows/wsl/install). Ordewell finds
-npm-installed runners (`.cmd` and `.exe` shims).
+The extension, its local daemon and the `ordewell` terminal UI run natively on
+Windows. Ordewell finds npm-installed runners and starts what their shims name.
+Install Git for Windows: the planner's research commands run in its shell.
 
-Most of the Windows support is tested on Linux, through the seams that stand
-in for Windows. On a Windows host, only how npm-installed runners are launched
-has been measured, and no first run from goal to merge has been watched end to
-end. Two things are known to be open: whether Codex's read-only sandbox is
-enforced, and `%VAR%` expansion on the `cmd.exe` shim route. The planner's
-shell has no OS sandbox on Windows and relies on its command rules alone. See
+Every test suite runs on Windows in CI, and real plans have run there from goal
+to merge with Claude Code, Codex and OpenCode as planner and as runner. Open
+there: whether Codex's read-only sandbox is enforced, and, for a shim npm did
+not write, `%VAR%` expansion on the `cmd.exe` route and a `"` on the PowerShell
+one. The planner's shell has no OS sandbox on Windows and relies on its command
+rules alone. See
 [Windows support](https://github.com/ordewell/ordewell/blob/main/docs/adr/platform/0010-windows-support.md).
 
 ## What the extension sends

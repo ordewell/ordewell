@@ -8,7 +8,7 @@ import { LeaseHost } from '../sessionLease';
 import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import { StructuredRunner } from '../StructuredRunner';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
-import { fakeConfig, removeDir } from '../../testing';
+import { fakeConfig, patient, removeDir } from '../../testing';
 import { loadChildSession, saveSession } from '../../utils/sessionStore';
 import { openTaskLog } from '../../utils/taskLogStore';
 import { nodeOfTask } from './delegationTestKit';
@@ -143,5 +143,5 @@ describe('two sibling delegated tasks on a real harness', () => {
     expect(git(root, 'log', '--format=%s', integration).split('\n')).toEqual(expect.arrayContaining(['Merge: Serve the users API', 'Merge: Call the users API']));
     expect(existsSync(join(root, 'api'))).toBe(false);
     parent.destroy();
-  }, 120_000);
+  }, patient(120_000));
 });

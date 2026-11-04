@@ -6,7 +6,7 @@ import { TaskOrchestrator, TaskControlError } from '../TaskOrchestrator';
 import { ScriptRunner } from '../ScriptRunner';
 import { createTask, type Task } from '../../models/Task';
 import type { IRunner, ScriptExit } from '../../interfaces/IRunner';
-import { fakeConfig, FakeRunnerSession, FakeWorktreeIsolation, flushMicrotasks } from '../../testing';
+import { fakeConfig, FakeRunnerSession, FakeWorktreeIsolation, flushMicrotasks, patient } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import { endedByExit } from '../VerdictEngine';
@@ -410,5 +410,5 @@ describe('TaskOrchestrator: a script task run for real', () => {
     expect(r.task('s1').status).toBe('pending');
     await new Promise((resolve) => setTimeout(resolve, 1800));
     expect(fs.existsSync(path.join(r.root, 'late'))).toBe(false);
-  }, 15_000);
+  }, patient(15_000));
 });

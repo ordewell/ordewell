@@ -12,7 +12,7 @@ import { createTask, type ConversationMessage, type LegacyPlanState, type Task }
 import type { IRunner } from '../../interfaces/IRunner';
 import type { IsolationHandoff, IsolationRun, TaskIsolation } from '../../interfaces/IWorktreeIsolation';
 import { fakeConfig, FakeRunnerSession, makeSession, taskOf, saves } from './sessionTestKit';
-import { removeDir } from '../../testing';
+import { patient, removeDir } from '../../testing';
 
 const hasGit = (() => {
   try { execFileSync('git', ['--version'], { stdio: 'ignore' }); return true; } catch { return false; }
@@ -341,7 +341,7 @@ describe.skipIf(!hasGit)('isolated execution over a folder of three repositories
     expect(existsSync(join(dir, '.ordewell', 'worktrees', runId))).toBe(false);
     expect(session.isolationView()).toBeNull();
     expect(session.planState!.isolation).toBeUndefined();
-  }, 60_000);
+  }, patient(60_000));
 
   it('discards a run with a conflicted task, leaving every repository as it was before the run', async () => {
     const env = envFor();
@@ -368,7 +368,7 @@ describe.skipIf(!hasGit)('isolated execution over a folder of three repositories
     // The loose file was never isolated, so discarding the run cannot take the edit back.
     expect(readFileSync(join(dir, 'NOTES.md'), 'utf8')).toBe('notes\nt1 was here\n');
     expect(readFileSync(join(roots.api, '.env'), 'utf8')).toBe('API_KEY=local\n');
-  }, 60_000);
+  }, patient(60_000));
 
   it('tells the planner the group, reads a task running in its task workspace by its live output, and summarises its completion report', async () => {
     const startConversation = vi.fn().mockResolvedValue(say('hi'));
@@ -398,7 +398,7 @@ describe.skipIf(!hasGit)('isolated execution over a folder of three repositories
     expect(taskOf(session, 't1')!.status).toBe('completed');
     expect(taskOf(session, 't1')!.handoff?.summary).toBe('Renamed in both repositories.');
     expect(env.agent.errors).toEqual([]);
-  }, 60_000);
+  }, patient(60_000));
 
   it('never forks the run, and leaves it where it is through a fork, a rewind and a compaction', async () => {
     const continueConversation = vi.fn().mockResolvedValue(say('<conversation_summary>A group, a rename and a conflict.</conversation_summary>'));
@@ -433,5 +433,5 @@ describe.skipIf(!hasGit)('isolated execution over a folder of three repositories
     const handoff = await settled(env);
     expect(handoff.landed.map((l) => l.taskId)).toEqual(['t1', 't2', 't3', 't4', session.planTasks[4].id]);
     expect(env.agent.errors).toEqual([]);
-  }, 60_000);
+  }, patient(60_000));
 });

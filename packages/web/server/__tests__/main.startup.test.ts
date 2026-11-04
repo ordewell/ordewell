@@ -6,6 +6,7 @@ import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { daemonBuild, daemonBuildFailure } from './daemonBuild';
+import { patient } from '@ordewell/core/testing';
 
 // These spawn the built daemon, but `test:quick` on a fresh checkout has no
 // dist yet, and the missing build then fails as a fifteen-second "timed out
@@ -18,7 +19,7 @@ beforeAll(() => {
   } catch (error) {
     throw daemonBuildFailure(error);
   }
-}, 60_000);
+}, patient(60_000));
 
 function freePort(): Promise<number> {
   return new Promise((resolvePort) => {

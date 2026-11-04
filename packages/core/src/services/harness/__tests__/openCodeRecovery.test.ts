@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { OpenCodeAdapter } from '../OpenCodeAdapter';
 import type { AgentEvent, AgentProcessDeps } from '../AgentAdapter';
 import { fakeSpawn, sseResponse } from '../../__tests__/harnessTestKit';
+import { patient } from '../../../testing';
 
 /**
  * The planner turn's POST is held open for the whole turn, and Node's global
@@ -116,5 +117,5 @@ describe('OpenCodeAdapter — turn recovery after a dead socket', () => {
     expect(events.some((e) => e.type === 'assistant_text' && e.text === 'stale')).toBe(false);
     expect(events).toContainEqual({ type: 'assistant_text', runId: 'p1', text: 'fresh' });
     adapter.dispose();
-  }, 15000);
+  }, patient(15000));
 });

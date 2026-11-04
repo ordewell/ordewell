@@ -23,6 +23,8 @@ class ProbeFileSystem extends BaseFileSystem {
   // is about the approval flow, and BaseFileSystem's tests cover sealed runs.
   constructor() {
     super(undefined, new PlannerShellSandbox(async () => ({ available: false, notice: 'no sandbox in this test' })));
+    // A shell that reads a path as the host does, on every host: how Git Bash reads one is researchShell.test.ts's subject.
+    (this as unknown as { researchShell: unknown }).researchShell = { file: null, args: [], dialect: 'posix', utilsDir: null };
   }
 
   bashCalls: string[] = [];
