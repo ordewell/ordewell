@@ -595,6 +595,86 @@ function cline(script: FakeRunnerScript): FakeRunner {
   };
 }
 
+/** Gemini CLI's own answers to `initialize` and `session/new`, as recorded. */
+const GEMINI_RECORDING = readFileSync(join(__dirname, 'fixtures/acp/gemini-cli/ordewell-tool.jsonl'), 'utf8').split('\n').filter(Boolean).map((text) => JSON.parse(text) as { dir: string; line?: { id?: number; result?: unknown } });
+const geminiAnswer = (id: number) => GEMINI_RECORDING.find((entry) => entry.dir === 'in' && entry.line?.id === id)!.line!.result as { sessionId?: string };
+const GEMINI_SESSION = geminiAnswer(2).sessionId!;
+
+/**
+ * Gemini CLI over ACP, in the words its recordings show: a call id is the
+ * tool's name, `__` and a counter, an MCP tool named `mcp_<server>_<tool>`;
+ * a call's title is the call as the model wrote it, and with no arguments
+ * the tool's display name (`formatToolDescription` in Gemini 0.66.0). Its
+ * mode is set with `session/set_mode`; in `yolo` it asks about nothing.
+ */
+function geminiCli(script: FakeRunnerScript): FakeRunner {
+  const kit = fakeSpawn([]);
+  const agents: FakeAcpAgent[] = [];
+  let calls = 0;
+  const steps = (): FakeAcpStep[] => [
+    { expect: 'initialize', reply: geminiAnswer(1) },
+    { expect: 'session/new', reply: geminiAnswer(2) },
+    // In a trusted folder Gemini contacts the server while the session is
+    // made, the only attach evidence ACP leaves (ADR-0060, R5).
+    ...(script.attach === 'connected' ? [{ run: (agent: FakeAcpAgent) => { void agent.listMcpTools().catch(() => undefined); } }] : []),
+    { expect: 'session/set_mode', reply: {} },
+    script.reply === undefined
+      ? { expect: 'session/prompt' }
+      : { expect: 'session/prompt', reply: (_params: unknown, agent: FakeAcpAgent) => { agent.send('session/update', update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: script.reply } })); return { stopReason: 'end_turn' }; } },
+  ];
+  const update = (body: Record<string, unknown>) => ({ sessionId: GEMINI_SESSION, update: body });
+  const spawn: SpawnFn = (cmd, argv, options) => {
+    const proc = kit.spawn(cmd, argv, options);
+    const agent = new FakeAcpAgent(steps());
+    agent.attach(proc as unknown as FakeAgentProcess);
+    agents.push(agent);
+    return proc;
+  };
+  const agent = () => agents[agents.length - 1];
+  const ask = async (tool: string, kind: string, title: string): Promise<RunnerAnswer> => {
+    const toolCallId = `${tool}__call_${++calls}`;
+    let outcome: { outcome?: string; optionId?: string } | undefined;
+    void agent().ask('session/request_permission', {
+      sessionId: GEMINI_SESSION,
+      toolCall: { toolCallId, status: 'pending', title, content: [], locations: [], kind },
+      options: [
+        { optionId: 'proceed_always', name: 'Allow for this session', kind: 'allow_always' },
+        { optionId: 'proceed_once', name: 'Allow', kind: 'allow_once' },
+        { optionId: 'cancel', name: 'Reject', kind: 'reject_once' },
+      ],
+    }).then((answer) => { outcome = (answer.result as { outcome?: { outcome?: string; optionId?: string } } | undefined)?.outcome ?? {}; });
+    const answer = await answered(() => outcome);
+    return answer === undefined ? 'open' : answer.optionId?.startsWith('proceed') ? 'allow' : 'deny';
+  };
+  const allowsAll = () => agent().requests('session/set_mode').some((request) => (request.params as { modeId?: string }).modeId === 'yolo');
+  return {
+    deps: baseDeps(spawn, noHttp),
+    launches: () => agents.length,
+    injectedUrl: (n = agents.length - 1) => agents[n]?.mcpServers.find((server) => server.name === 'ordewell')?.url ?? null,
+    commandLine: () => kit.lastArgs().join(' '),
+    preAllows: async (name) => allowsAll() || (await ask(name, 'other', `${name}(from: fake)`)) === 'allow',
+    // The contract rides in the first prompt: Gemini has no channel apart from it.
+    instructions: () => ((agent().requests('session/prompt')[0]?.params as { prompt?: Array<{ text?: string }> } | undefined)?.prompt ?? []).map((part) => part.text ?? '').join('\n'),
+    turnOpen: async () => { await answered(() => (agent().requests('session/prompt').length > 0 ? true : undefined)); },
+    callOrdewellTool: (tool) => {
+      const toolCallId = `mcp_ordewell_${tool}__call_${++calls}`;
+      agent().send('session/update', update({ sessionUpdate: 'tool_call', toolCallId, status: 'pending', title: `${tool} (ordewell MCP Server)`, content: [], locations: [], kind: 'other' }));
+      agent().send('session/update', update({ sessionUpdate: 'tool_call_update', toolCallId, status: 'in_progress' }));
+    },
+    askOrdewellTool: (tool) => ask(`mcp_ordewell_${tool}`, 'other', `${tool}(from: fake)`),
+    askWrite: () => ask('write_file', 'edit', 'Writing to a.txt'),
+    say: (text) => {
+      agent().send('session/update', update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } }));
+    },
+    killed: (n) => kit.processes[n]?.killed ?? false,
+    withServer: (start) => {
+      if (!start.mcp) return start;
+      const used = script.attach === 'connected';
+      return { ...start, mcp: { ...start.mcp, contact: { contacted: () => used, whenContacted: async () => used } } };
+    },
+  };
+}
+
 /** A fake for every built-in runner, by runner id. */
 export const FAKE_RUNNERS: Record<string, (script: FakeRunnerScript) => FakeRunner> = {
   'claude-code': claudeCode,
@@ -603,4 +683,5 @@ export const FAKE_RUNNERS: Record<string, (script: FakeRunnerScript) => FakeRunn
   'copilot-cli': copilotCli,
   'qwen-code': qwenCode,
   cline,
+  'gemini-cli': geminiCli,
 };

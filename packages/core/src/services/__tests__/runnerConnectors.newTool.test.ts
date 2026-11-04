@@ -29,6 +29,7 @@ const RUNNER_NAME: Record<string, string> = {
   'copilot-cli': 'ordewell-board_post',
   'qwen-code': 'mcp__ordewell__board_post',
   cline: 'ordewell__board_post',
+  'gemini-cli': 'mcp_ordewell_board_post',
 };
 
 const runners = Object.keys(CONNECTORS).filter((runner) => CONNECTORS[runner].ordewellTools);

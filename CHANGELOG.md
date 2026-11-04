@@ -10,6 +10,15 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Added
 
+- **Gemini CLI runs tasks.** A plan can assign a task to `gemini-cli`, which
+  Ordewell drives over the Agent Client Protocol with the Ordewell tools
+  attached and its models discovered. Gemini starts each task trusting the
+  task's worktree for that run only, since an untrusted folder gets no MCP
+  servers; with that trust it also loads the worktree's own `.gemini/`
+  settings. It runs writable tasks only, not the planner or read-only tasks.
+  Gemini CLI 0.66.0 or newer is required, and signing in is done by running
+  `gemini` itself.
+
 - **Cline runs tasks.** A plan can assign a task to `cline`, which Ordewell
   drives over the Agent Client Protocol with its models discovered. The
   Ordewell tools reach it through a settings file of its own, written for each

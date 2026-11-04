@@ -762,7 +762,7 @@ the directive to attach.
 *Avoid:* "skill message", "skill event".
 
 **Executor / Runner** — an external coding-agent CLI (Claude Code, Codex,
-OpenCode, and GitHub Copilot CLI, Qwen Code and Cline over ACP) that runs *one task* in its own
+OpenCode, and GitHub Copilot CLI, Qwen Code, Cline and Gemini CLI over ACP) that runs *one task* in its own
 session through a structured connector. `RunnerRegistry` holds their built-in
 manifests: identity, command, model discovery and mode settings. External
 plugin manifests are ignored with one notice at host startup.
@@ -842,14 +842,16 @@ server qualifies. Ordewell offers it no file system or terminal, so it works in
 the worktree with its own tools and reaches Ordewell only through the Ordewell
 MCP server, given over HTTP in `session/new` or in a settings file of the
 agent's own (ADR-0060 R4). It has no mid-turn steer: a
-message waits for the turn's end. Three are admitted so far. GitHub Copilot CLI
+message waits for the turn's end. Four are admitted so far. GitHub Copilot CLI
 (`copilot-cli`) runs tasks, read-only ones included, and plans, and on a planner
 or read-only start it begins in a private directory, never the worktree, so the
-repository's hooks and config do not run (ADR-0060 R3). Qwen Code (`qwen-code`)
-and Cline (`cline`) run writable tasks only: no recording shows either
-refusing a write and a command, so they claim neither role. Cline takes
-Ordewell's server from a settings file, attaches on the task's first turn, and
-is handed its provider key at spawn (ADR-0060 R4, R5, R9).
+repository's hooks and config do not run (ADR-0060 R3). Qwen Code (`qwen-code`),
+Cline (`cline`) and Gemini CLI (`gemini-cli`) run writable tasks only: no
+recording shows any of them refusing a write and a command, so they claim
+neither role. Cline takes Ordewell's server from a settings file, attaches on
+the task's first turn, and is handed its provider key at spawn (ADR-0060 R4,
+R5, R9). Gemini CLI is started trusting the task's worktree, since it connects
+no MCP server in a folder it does not trust (ADR-0060, Gemini CLI).
 *Avoid:* "ACP shim" or "ACP bridge" for it (a third-party adapter in front of an
 agent does not qualify); "ACP backend", "ACP provider".
 
