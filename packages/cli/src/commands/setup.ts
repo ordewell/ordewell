@@ -1,7 +1,7 @@
 import { existsSync } from 'fs';
 import { writePrivateFile } from '@ordewell/core';
 import { findEnvFile } from '../utils/env';
-import { runnerIdChoice } from '../runnerNames';
+import { plannerIdChoice } from '../runnerNames';
 
 export function handleSetup(subArgs: string[]): void {
   const modelIdx = subArgs.indexOf('--model');
@@ -56,7 +56,7 @@ export function handleSetup(subArgs: string[]): void {
 
 # Or plan with a coding agent you already have installed: no API key needed,
 # it uses that agent's own subscription. Set the model to one of its own.
-# AI_PROVIDER=${runnerIdChoice()}
+# AI_PROVIDER=${plannerIdChoice()}
 # ORCHESTRATOR_MODEL=haiku
 # ORDEWELL_PLANNER_EFFORT=low
 

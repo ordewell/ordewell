@@ -12,10 +12,11 @@ const KNOWN_TOOLS = new Set(ORDEWELL_TOOL_NAMES);
  * status of its own either: the attach state is the adapter's verdict from the
  * server's first-contact record, already in this binding's words.
  */
-export function acpOrdewellBinding(profile: Pick<AcpProfile, 'ordewellTool'>): OrdewellToolBinding<AcpToolCall> {
+export function acpOrdewellBinding(profile: Pick<AcpProfile, 'ordewellTool' | 'toolName'>): OrdewellToolBinding<AcpToolCall> {
+  const toolName = (tool: string): string => profile.toolName?.(tool) ?? tool;
   return {
-    toolName: (tool) => tool,
-    toolNames: (role, hidden, extra) => ordewellToolNames(role, hidden, extra),
+    toolName,
+    toolNames: (role, hidden, extra) => ordewellToolNames(role, hidden, extra).map(toolName),
     plannerHidden: () => [],
     isOrdewellAsk: (call) => {
       const name = profile.ordewellTool(call);

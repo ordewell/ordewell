@@ -24,9 +24,19 @@ const ACME = vi.hoisted((): RunnerManifest => ({
   modes: [{ id: 'build', label: 'Build', description: 'Edits files', safe: true, autonomous: true }],
 }));
 
+// One whose connector runs tasks but cannot plan yet, as an ACP agent's first slice.
+const TASKER = vi.hoisted((): RunnerManifest => ({
+  name: 'tasker',
+  displayName: 'Tasker',
+  runner: { command: 'tasker' },
+  features: {},
+  modelDiscovery: { method: 'command', discoveryCommands: [] },
+  modes: [{ id: 'build', label: 'Build', description: 'Edits files', safe: true, autonomous: true }],
+}));
+
 vi.mock('../builtin', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../builtin')>();
-  return { ...actual, BUILTIN_MANIFESTS: [...actual.BUILTIN_MANIFESTS, ACME] };
+  return { ...actual, BUILTIN_MANIFESTS: [...actual.BUILTIN_MANIFESTS, ACME, TASKER] };
 });
 
 vi.mock('../../services/harness/connectors', async (importOriginal) => {
@@ -36,14 +46,15 @@ vi.mock('../../services/harness/connectors', async (importOriginal) => {
     ...borrowed,
     usageLimitReset: (tail) => (tail.includes('acme quota, back at noon') ? new Date('2026-10-14T12:00:00Z') : null),
   };
-  Object.assign(actual.CONNECTORS, { acme });
+  const tasker: RunnerConnector = { ...borrowed, plans: false };
+  Object.assign(actual.CONNECTORS, { acme, tasker });
   return actual;
 });
 
 describe('a built-in runner declared by manifest and connector only', () => {
   it('is in the runner list core exposes, after the shipped runners', () => {
     const ids = new RunnerRegistry().list().map((entry) => entry.manifest.name);
-    expect(ids).toEqual(['claude-code', 'codex', 'opencode', 'acme']);
+    expect(ids).toEqual(['claude-code', 'codex', 'opencode', 'copilot-cli', 'acme', 'tasker']);
   });
 
   it('can plan: it is a harness planner, labelled from its manifest', () => {
@@ -78,5 +89,12 @@ describe('a built-in runner declared by manifest and connector only', () => {
   it('reads its own usage-limit reset through its connector', () => {
     const now = new Date('2026-10-14T09:00:00Z');
     expect(readUsageLimitReset('acme', 'usage limit: acme quota, back at noon', now)?.toISOString()).toBe('2026-10-14T12:00:00.000Z');
+  });
+
+  it('runs tasks without planning when its connector does not plan', () => {
+    expect(supportsTaskMode('tasker')).toBe(true);
+    expect(isCliProvider('tasker')).toBe(false);
+    expect(CLI_PROVIDERS).not.toContain('tasker');
+    expect(plannerBackendEntries({ tasker: { usable: true } }, []).some((e) => e.id === 'tasker')).toBe(false);
   });
 });

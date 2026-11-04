@@ -1,6 +1,8 @@
-import { readFileSync } from 'fs';
-import type { AgentProcessDeps, SpawnFn } from '../harness/AgentAdapter';
-import { fakeSpawn, fixture, respondingSpawn, sseResponse, type FakeEventStream, type FakeSpawnResult } from './harnessTestKit';
+import { existsSync, readFileSync } from 'fs';
+import { join } from 'path';
+import type { AgentProcessDeps, AgentStartOptions, SpawnFn } from '../harness/AgentAdapter';
+import { FakeAcpAgent, type FakeAcpStep } from './fakeAcpAgent';
+import { fakeSpawn, fixture, respondingSpawn, sseResponse, type FakeAgentProcess, type FakeEventStream, type FakeSpawnResult } from './harnessTestKit';
 
 /**
  * One fake per built-in runner, each speaking that runner's own protocol, so a
@@ -28,8 +30,12 @@ export interface FakeRunner {
   injectedUrl(n?: number): string | null;
   /** The argv of the latest launch, as one string — which every local user can list, so a token must never be in it (ADR-0022, A5). */
   commandLine(): string;
-  /** Whether the latest launch lets the tool the runner calls `name` run with nobody asked. */
-  preAllows(name: string): boolean;
+  /**
+   * Whether the latest launch lets the tool the runner calls `name` run with
+   * nobody asked: read from what it was launched with, or for a runner that
+   * asks its client about every call (ACP), from how the adapter answers.
+   */
+  preAllows(name: string): boolean | Promise<boolean>;
   /** What the latest launch tells the model about its tools besides the tool list, if anything. */
   instructions(): string;
   /** Resolves once the turn the adapter just sent is open on the runner's side. */
@@ -44,6 +50,12 @@ export interface FakeRunner {
   say(text: string): void;
   /** Whether launch `n` was killed. */
   killed(n: number): boolean;
+  /**
+   * The start options as the server would hand them out. ACP reports no MCP
+   * status, so the attach evidence is the server's own record of the token's
+   * first use (ADR-0022, S2), which a fake of such a runner supplies.
+   */
+  withServer?(start: AgentStartOptions): AgentStartOptions;
 }
 
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -333,9 +345,86 @@ function openCode(script: FakeRunnerScript): FakeRunner {
   };
 }
 
+/** Copilot's own answer to `initialize`, as recorded. */
+const COPILOT_INITIALIZED = (JSON.parse(readFileSync(join(__dirname, 'fixtures/acp/copilot-cli/ordewell-tool.jsonl'), 'utf8').split('\n')[2]) as { line: { result: unknown } }).line.result;
+const COPILOT_SESSION = 'sess-copilot';
+
+/**
+ * Copilot CLI over ACP, in the words its recordings show: a tool call
+ * reported as `ordewell-<tool>`, then a permission request for it under the
+ * bare `<tool>`; with `--allow-all` it asks about nothing.
+ */
+function copilotCli(script: FakeRunnerScript): FakeRunner {
+  const kit = fakeSpawn([]);
+  const agents: FakeAcpAgent[] = [];
+  // Read at spawn: the directory is removed with the process that read it.
+  const instructions: string[] = [];
+  let calls = 0;
+  const steps = (): FakeAcpStep[] => [
+    { expect: 'initialize', reply: COPILOT_INITIALIZED },
+    { expect: 'session/new', reply: { sessionId: COPILOT_SESSION } },
+    script.reply === undefined
+      ? { expect: 'session/prompt' }
+      : { expect: 'session/prompt', reply: (_params: unknown, agent: FakeAcpAgent) => { agent.send('session/update', update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: script.reply } })); return { stopReason: 'end_turn' }; } },
+  ];
+  const update = (body: Record<string, unknown>) => ({ sessionId: COPILOT_SESSION, update: body });
+  const spawn: SpawnFn = (cmd, argv, options) => {
+    const dir = options.env?.COPILOT_CUSTOM_INSTRUCTIONS_DIRS;
+    instructions.push(dir && existsSync(join(dir, 'AGENTS.md')) ? readFileSync(join(dir, 'AGENTS.md'), 'utf8') : '');
+    const proc = kit.spawn(cmd, argv, options);
+    const agent = new FakeAcpAgent(steps());
+    agent.attach(proc as unknown as FakeAgentProcess);
+    agents.push(agent);
+    return proc;
+  };
+  const agent = () => agents[agents.length - 1];
+  const ask = async (report: Record<string, unknown>, permission: Record<string, unknown>): Promise<RunnerAnswer> => {
+    const toolCallId = `call_${++calls}`;
+    agent().send('session/update', update({ sessionUpdate: 'tool_call', toolCallId, status: 'pending', rawInput: {}, ...report }));
+    let outcome: { outcome?: string; optionId?: string } | undefined;
+    void agent().ask('session/request_permission', {
+      sessionId: COPILOT_SESSION,
+      toolCall: { toolCallId, status: 'pending', rawInput: {}, ...permission },
+      options: [
+        { optionId: 'allow_once', kind: 'allow_once', name: 'Allow once' },
+        { optionId: 'allow_always', kind: 'allow_always', name: 'Always allow' },
+        { optionId: 'reject_once', kind: 'reject_once', name: 'Deny' },
+      ],
+    }).then((answer) => { outcome = (answer.result as { outcome?: { outcome?: string; optionId?: string } } | undefined)?.outcome ?? {}; });
+    const answer = await answered(() => outcome);
+    return answer === undefined ? 'open' : answer.optionId?.startsWith('allow') ? 'allow' : 'deny';
+  };
+  const allowsAll = () => kit.lastArgs().includes('--allow-all');
+  const bare = (name: string) => (name.startsWith('ordewell-') ? name.slice('ordewell-'.length) : name);
+  return {
+    deps: baseDeps(spawn, noHttp),
+    launches: () => agents.length,
+    injectedUrl: (n = agents.length - 1) => agents[n]?.mcpServers.find((server) => server.name === 'ordewell')?.url ?? null,
+    commandLine: () => kit.lastArgs().join(' '),
+    preAllows: async (name) => allowsAll() || (await ask({ title: name, kind: 'other' }, { title: bare(name), kind: 'other' })) === 'allow',
+    instructions: () => instructions[instructions.length - 1] ?? '',
+    turnOpen: async () => { await answered(() => (agent().requests('session/prompt').length > 0 ? true : undefined)); },
+    callOrdewellTool: (tool) => {
+      agent().send('session/update', update({ sessionUpdate: 'tool_call', toolCallId: `call_${tool}`, title: `ordewell-${tool}`, kind: 'other', status: 'pending', rawInput: {} }));
+    },
+    askOrdewellTool: (tool) => ask({ title: `ordewell-${tool}`, kind: 'other' }, { title: tool, kind: 'other' }),
+    askWrite: () => ask({ title: 'Creating /repo/a.txt', kind: 'edit' }, { title: 'Create file', kind: 'edit' }),
+    say: (text) => {
+      agent().send('session/update', update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } }));
+    },
+    killed: (n) => kit.processes[n]?.killed ?? false,
+    withServer: (start) => {
+      if (!start.mcp) return start;
+      const used = script.attach === 'connected';
+      return { ...start, mcp: { ...start.mcp, contact: { contacted: () => used, whenContacted: async () => used } } };
+    },
+  };
+}
+
 /** A fake for every built-in runner, by runner id. */
 export const FAKE_RUNNERS: Record<string, (script: FakeRunnerScript) => FakeRunner> = {
   'claude-code': claudeCode,
   codex,
   opencode: openCode,
+  'copilot-cli': copilotCli,
 };

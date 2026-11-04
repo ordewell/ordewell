@@ -25,6 +25,7 @@ const RUNNER_NAME: Record<string, (tool: string) => string> = {
   'claude-code': (tool) => `mcp__ordewell__${tool}`,
   codex: (tool) => `mcp__ordewell__${tool}`,
   opencode: (tool) => `ordewell_${tool}`,
+  'copilot-cli': (tool) => `ordewell-${tool}`,
 };
 
 /**
@@ -35,6 +36,7 @@ const NATIVE_INSTEAD: Record<string, string[]> = {
   'claude-code': ['fetch', 'web_search'],
   codex: [],
   opencode: [],
+  'copilot-cli': [],
 };
 
 const mcp = mcpClientConfig({ url: 'http://127.0.0.1:4555/mcp', token: 'tok-secret' });
@@ -51,7 +53,7 @@ const plannerStart: AgentStartOptions = { kind: 'planner', cwd: '/repo', systemP
 async function opened(runner: string, start: AgentStartOptions, script: FakeRunnerScript = { attach: 'connected' }) {
   const fake = FAKE_RUNNERS[runner](script);
   const adapter = CONNECTORS[runner].create(fake.deps);
-  await adapter.start(start);
+  await adapter.start(fake.withServer?.(start) ?? start);
   const events: AgentEvent[] = [];
   void adapter.send('go', (event) => events.push(event));
   await fake.turnOpen();
@@ -69,8 +71,8 @@ it('has a fake for every connector and a runner name for every connector that ta
   expect(Object.keys(NATIVE_INSTEAD).sort()).toEqual([...runners].sort());
 });
 
-it('offers a harness planner for exactly the runners with a connector', () => {
-  expect(CLI_PROVIDERS.map(runnerForProvider).sort()).toEqual(Object.keys(CONNECTORS).sort());
+it('offers a harness planner for exactly the connectors that plan', () => {
+  expect(CLI_PROVIDERS.map(runnerForProvider).sort()).toEqual(Object.keys(CONNECTORS).filter((runner) => CONNECTORS[runner].plans).sort());
 });
 
 describe.each(runners)('the %s connector and the Ordewell tools', (runner) => {
@@ -78,10 +80,13 @@ describe.each(runners)('the %s connector and the Ordewell tools', (runner) => {
   const hidden = NATIVE_INSTEAD[runner];
   const plannerTools = PLANNER_TOOLS.filter((tool) => !hidden.includes(tool.name));
   const hiddenPlannerStart: AgentStartOptions = { ...plannerStart, mcp: { ...mcp, hidden } };
+  // A connector can run tasks before it can plan; what a planner is owed waits for that.
+  const plans = CONNECTORS[runner].plans;
+  const planner = it.runIf(plans);
   const roles = [
-    ['task', () => taskStart(runner), TASK_TOOLS],
-    ['planner', () => hiddenPlannerStart, plannerTools],
-  ] as const;
+    ['task', () => taskStart(runner), TASK_TOOLS] as const,
+    ...(plans ? [['planner', () => hiddenPlannerStart, plannerTools] as const] : []),
+  ];
 
   it.each(roles)('hands a %s the server, the token never on the command line', async (_role, start) => {
     const { fake, adapter } = await opened(runner, start());
@@ -95,8 +100,8 @@ describe.each(runners)('the %s connector and the Ordewell tools', (runner) => {
     const { fake, adapter } = await opened(runner, start());
 
     expect(CONNECTORS[runner].ordewellTools!.toolNames(role, role === 'planner' ? hidden : [])).toEqual(tools.map((tool) => name(tool.name)));
-    for (const tool of tools) expect(fake.preAllows(name(tool.name)), tool.name).toBe(true);
-    expect(fake.preAllows('bash')).toBe(false);
+    for (const tool of tools) expect(await fake.preAllows(name(tool.name)), tool.name).toBe(true);
+    expect(await fake.preAllows('bash')).toBe(false);
     adapter.dispose();
   });
 
@@ -112,35 +117,35 @@ describe.each(runners)('the %s connector and the Ordewell tools', (runner) => {
     adapter.dispose();
   });
 
-  it('does not give a planner the task\'s completion contract', async () => {
+  planner('does not give a planner the task\'s completion contract', async () => {
     const { fake, adapter } = await opened(runner, hiddenPlannerStart);
 
     expect(fake.instructions()).not.toContain('When you have fully completed this task');
     adapter.dispose();
   });
 
-  it('gives a planner the execution tools, run unasked, and allows its request for one at once (ADR-0029)', async () => {
+  planner('gives a planner the execution tools, run unasked, and allows its request for one at once (ADR-0029)', async () => {
     const { fake, adapter } = await opened(runner, hiddenPlannerStart);
 
     expect(CONNECTORS[runner].ordewellTools!.toolNames('planner', hidden)).toEqual(expect.arrayContaining(PLANNER_EXECUTION_TOOLS.map((tool) => name(tool.name))));
     for (const tool of PLANNER_EXECUTION_TOOLS) {
-      expect(fake.preAllows(name(tool.name)), tool.name).toBe(true);
+      expect(await fake.preAllows(name(tool.name)), tool.name).toBe(true);
       expect(await fake.askOrdewellTool(tool.name), tool.name).toBe('allow');
     }
     adapter.dispose();
   });
 
-  it('neither pre-allows nor mentions a planner tool the runner carries natively', async () => {
+  planner('neither pre-allows nor mentions a planner tool the runner carries natively', async () => {
     const { fake, adapter } = await opened(runner, hiddenPlannerStart);
 
     for (const tool of hidden) {
-      expect(fake.preAllows(name(tool)), tool).toBe(false);
+      expect(await fake.preAllows(name(tool)), tool).toBe(false);
       expect(fake.instructions(), tool).not.toContain(name(tool));
     }
     adapter.dispose();
   });
 
-  it('starts a planner on a token that serves exactly the tools the runner is given', async () => {
+  planner('starts a planner on a token that serves exactly the tools the runner is given', async () => {
     const server = new OrdewellMcpServer();
     servers.push(server);
     const issued = vi.spyOn(server, 'issuePlannerToken');
@@ -161,8 +166,8 @@ describe.each(runners)('the %s connector and the Ordewell tools', (runner) => {
     await client.connect(new StreamableHTTPClientTransport(new URL(config.url), { requestInit: { headers: config.headers } }));
 
     expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual(plannerTools.map((tool) => tool.name));
-    for (const tool of plannerTools) expect(fake.preAllows(name(tool.name)), tool.name).toBe(true);
-    for (const tool of hidden) expect(fake.preAllows(name(tool)), tool).toBe(false);
+    for (const tool of plannerTools) expect(await fake.preAllows(name(tool.name)), tool.name).toBe(true);
+    for (const tool of hidden) expect(await fake.preAllows(name(tool)), tool).toBe(false);
     await client.close();
     svc.reset();
   });
@@ -183,7 +188,7 @@ describe.each(runners)('the %s connector and the Ordewell tools', (runner) => {
     adapter.dispose();
   });
 
-  it('never lets a planner write on its own: it denies the request, or holds it for the envelope to deny', async () => {
+  planner('never lets a planner write on its own: it denies the request, or holds it for the envelope to deny', async () => {
     const { fake, adapter, events } = await opened(runner, plannerStart);
 
     const answer = fake.askWrite();
@@ -214,7 +219,7 @@ describe.each(runners)('the %s connector and the Ordewell tools', (runner) => {
     adapter.dispose();
   });
 
-  it('refuses a planner after one respawn still cannot attach tools', async () => {
+  planner('refuses a planner after one respawn still cannot attach tools', async () => {
     const server = new OrdewellMcpServer();
     servers.push(server);
     const fake = FAKE_RUNNERS[runner]({ attach: 'failed', reply: planJson(runner) });
@@ -281,7 +286,8 @@ describe.each(runners)('the %s connector and what its process owns', (runner) =>
   async function inTurn(signal?: AbortSignal) {
     const fake = FAKE_RUNNERS[runner]({ attach: 'connected' });
     const adapter = CONNECTORS[runner].create(tracked(fake.deps));
-    await adapter.start(plannerStart);
+    const start = CONNECTORS[runner].plans ? plannerStart : taskStart(runner);
+    await adapter.start(fake.withServer?.(start) ?? start);
     const released = vi.fn();
     (adapter as unknown as { own(name: string, release: () => void): void }).own('probe', released);
     const turn = adapter.send('go', () => {}, signal);

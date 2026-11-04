@@ -14,15 +14,15 @@ export { PROVIDER_DETECT_PRIORITY, PROVIDER_PRIORITY, type ProviderRegistration 
 export type ByPlannerBackend<T> = Readonly<Record<AiProvider, T>> & Readonly<Partial<Record<RunnerId, T>>>;
 
 /**
- * The harness planners (ADR-0009): every built-in runner with a connector can
- * plan, in manifest order and under its manifest's name. No key, no base URL,
+ * The harness planners (ADR-0009): every built-in runner whose connector plans,
+ * in manifest order and under its manifest's name. No key, no base URL,
  * no HTTP catalog: the binary is local, the credential is the user's existing
  * subscription, and the model list comes from the runner's own discovery.
  * `apiKeyEnvVar` is empty on purpose — anything that resolves keys must skip
  * these, which is what `isCliProvider` is for.
  */
 const HARNESS_PLANNERS: readonly ProviderRegistration[] = BUILTIN_MANIFESTS
-  .filter((manifest) => connectorFor(manifest.name) !== undefined)
+  .filter((manifest) => connectorFor(manifest.name)?.plans === true)
   .map((manifest) => ({
     id: manifest.name, label: manifest.displayName, shortLabel: manifest.displayName,
     serviceType: 'cli', runnerId: manifest.name,

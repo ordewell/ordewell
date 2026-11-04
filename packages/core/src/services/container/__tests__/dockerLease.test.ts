@@ -155,6 +155,15 @@ describe('what runs in a container (ADR-0059 L5)', () => {
     expect(cli.entries).toEqual([]);
   });
 
+  it('refuses the ACP runner, which can run tasks on the host but has not been proven in a container', async () => {
+    const { backend, cli } = backendWith();
+
+    await expect(opened(backend, { ...taskRequest, runner: 'copilot-cli' })).rejects.toThrow(
+      'This session runs tasks in containers, and copilot-cli has not been proven in one: assign the task to claude-code, codex, opencode.',
+    );
+    expect(cli.entries).toEqual([]);
+  });
+
   it('runs an OpenCode change task there', async () => {
     const { backend, cli } = backendWith();
 

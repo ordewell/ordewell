@@ -23,6 +23,8 @@ export default defineConfig({
       exclude: ['**/*.test.ts', '**/__tests__/**', '**/fixtures/**', '**/*.d.ts', 'dist/**'],
       thresholds: {
         'src/conversation/labels.ts': floor(100, 100, 100),
+        'src/plugins/builtin/copilot-cli.manifest.ts': floor(100, 100, 100),
+        'src/plugins/builtin/copilotModels.ts': floor(100, 100, 100),
         'src/services/PlanEditError.ts': floor(100, 100, 100),
         'src/services/PlanEditor.ts': floor(100, 92, 100),
         'src/services/TaskAssignment.ts': floor(100, 97, 100),
@@ -36,6 +38,7 @@ export default defineConfig({
         'src/services/harness/claudeOrdewell.ts': floor(100, 83, 100),
         'src/services/harness/codexOrdewell.ts': floor(100, 94, 100),
         'src/services/harness/connectors.ts': floor(100, 87, 100),
+        'src/services/harness/copilotProfile.ts': floor(100, 100, 100),
         'src/services/harness/jsonRpc.ts': floor(100, 94, 95),
         'src/services/harness/openCodeTransport.ts': floor(100, 97, 94),
         'src/services/harness/ordewellBinding.ts': floor(80, 78, 100),

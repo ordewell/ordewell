@@ -12,7 +12,7 @@ import type { ApiClient } from '../apiClient';
 import { positionals } from '../utils';
 import { connect, fail, fetchCatalog, persistEnv, writeEnv } from './shared';
 import { plannerSwitchRecall, uninstalledPlannerRefusal } from '../plannerModelSwitch';
-import { runnerIdChoice } from '../runnerNames';
+import { plannerIdChoice } from '../runnerNames';
 
 /**
  * Everything that can plan, in one list (ADR-0009) — the `/planner` picker's
@@ -116,7 +116,7 @@ export async function handlePlannerEffort(subArgs: string[], injectedApi?: ApiCl
   if (!runner) {
     fail(
       'Thinking effort applies to a coding-agent planner.',
-      `Switch with: ordewell planner ${runnerIdChoice()}`,
+      `Switch with: ordewell planner ${plannerIdChoice()}`,
     );
   }
 

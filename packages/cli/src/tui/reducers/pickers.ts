@@ -1,5 +1,5 @@
 import { CLI_PROVIDERS, getProviderMeta, plannerBackendEntries, runnerForProvider, type PlannerUsability } from '@ordewell/core';
-import { runnerNamesOr } from '../../runnerNames';
+import { plannerNamesOr } from '../../runnerNames';
 import { dependencyCandidates } from '@ordewell/core/plan-utils';
 import { findTask, titledRefFor, type ModelView, type PickerItem, type PickerState, type TuiState } from '../state';
 import { effortsForTask, modelsForRunner, modelsForTask, modesForTask } from '../taskAssignment';
@@ -241,7 +241,7 @@ export function plannerItems(state: TuiState): PickerItem[] {
 
   const offered = plannerBackendEntries(usability, state.configuredProviders).filter((entry) => entry.usable);
   if (offered.length === 0) {
-    return [{ id: '', label: 'No planner available', detail: `install a coding agent (${runnerNamesOr()}) or add a key with /key`, disabled: true }];
+    return [{ id: '', label: 'No planner available', detail: `install a coding agent (${plannerNamesOr()}) or add a key with /key`, disabled: true }];
   }
   const items: PickerItem[] = offered.map((entry) => {
     // A signed-out agent stays offered — auth never gates usability — but the

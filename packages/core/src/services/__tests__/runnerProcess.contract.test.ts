@@ -5,6 +5,9 @@ import { RunnerProcess } from '../harness/runnerProcess';
 import type { AgentProcessDeps, AgentStartOptions } from '../harness/AgentAdapter';
 import { fakeSpawn, type FakeAgentProcess } from './harnessTestKit';
 import { FAKE_RUNNERS } from './fakeRunners';
+import { RunnerRegistry } from '../../plugins/RunnerRegistry';
+import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
+import { mcpClientConfig } from '../mcp';
 
 /**
  * What every structured adapter owes the runner process it starts, checked
@@ -14,6 +17,15 @@ import { FAKE_RUNNERS } from './fakeRunners';
  */
 
 const plannerStart: AgentStartOptions = { kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN' };
+const manifests = new RunnerRegistry();
+
+/** A planner's start where the runner can plan; a task's, which a runner that only runs tasks needs, where it cannot. */
+function startFor(runner: string): AgentStartOptions {
+  if (CONNECTORS[runner].plans) return plannerStart;
+  const manifest = manifests.getManifest(runner)!;
+  const mode = manifest.modes![0].id;
+  return { kind: 'task', cwd: '/repo', mode, flags: resolveTaskRunnerFlags(manifest, { mode }), mcp: mcpClientConfig({ url: 'http://127.0.0.1:4555/mcp', token: 'tok' }) };
+}
 
 function baseDeps(spawn: AgentProcessDeps['spawn'], fetchImpl: typeof fetch): AgentProcessDeps {
   return {
@@ -46,6 +58,8 @@ const REFUSED: Record<string, { deps: () => AgentProcessDeps; launches: number }
     // Listening, but it hands back no session.
     return baseDeps(spawn, emptyHttp);
   }, launches: 1 },
+  // An ACP agent is refused at `initialize`, once it is running.
+  'copilot-cli': { deps: () => baseDeps(fakeSpawn([`${JSON.stringify({ jsonrpc: '2.0', id: 1, error: { code: -32603, message: 'unsupported client' } })}\n`]).spawn, noHttp), launches: 1 },
 };
 
 let nextPid = 3_900_000;
@@ -94,15 +108,17 @@ describe.each(Object.keys(CONNECTORS))('the %s adapter', (runner) => {
   it('leaves no live process behind a start that was refused', async () => {
     const adapter = CONNECTORS[runner].create(tracked(REFUSED[runner].deps()));
 
-    await expect(adapter.start(plannerStart)).rejects.toThrow();
+    await expect(adapter.start(startFor(runner))).rejects.toThrow();
     vi.advanceTimersByTime(5_000);
     expect(launched).toHaveLength(REFUSED[runner].launches);
     for (const proc of launched) expect(groupSignals(proc)).toEqual(['SIGTERM', 'SIGKILL']);
   });
 
   it('kills the runner\'s whole process group on dispose', async () => {
-    const adapter = CONNECTORS[runner].create(tracked(FAKE_RUNNERS[runner]({ attach: 'connected' }).deps));
-    await adapter.start(plannerStart);
+    const fake = FAKE_RUNNERS[runner]({ attach: 'connected' });
+    const adapter = CONNECTORS[runner].create(tracked(fake.deps));
+    const start = startFor(runner);
+    await adapter.start(fake.withServer?.(start) ?? start);
     expect(launched).toHaveLength(1);
     expect(groupSignals(launched[0])).toEqual([]);
 
