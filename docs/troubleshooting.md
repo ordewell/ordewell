@@ -75,6 +75,34 @@ Codex runs with no sandbox at all.
 Inside a [container](containers.md) none of this applies: Codex's sandbox cannot start
 there, whatever this host allows, and a Codex change task runs at Full access.
 
+## Codex's Windows sandbox is not set up
+
+A Codex task's log on Windows says **Codex's Windows sandbox is not set up on
+this machine, so Codex runs this task read-only with no sandbox** (or that it
+**needs its setup run again**).
+
+### Cause
+
+Codex has a Windows sandbox of its own, which you set up once and which asks
+for Administrator. Until you do, Codex opens a task in Guarded (`agent`) mode
+as read-only and has nothing to confine its commands with. An edit, and a
+command Codex does not judge safe, goes to Codex's reviewer, and what the
+reviewer approves runs unconfined. The task still runs and lands its work;
+Ordewell keeps the mode the plan gave it and tells the model how to write
+through review. A Codex planner is not affected: on Windows it plans with its
+own shell off and reads through Ordewell's `run_command`
+([ADR-0010](adr/platform/0010-windows-support.md)).
+
+### Fix
+
+Run `codex` in a terminal and choose **Set up default sandbox** when it offers,
+or run `/setup-default-sandbox` there. It asks for Administrator once. See
+[Codex on Windows](https://developers.openai.com/codex/windows). Ordewell
+reads the setup when each Codex task starts, so nothing needs a restart.
+
+Do not choose Codex's non-admin sandbox instead: under it, codex-cli 0.166.0
+refuses every command of a Guarded task.
+
 ## Planner shell not sandboxed
 
 Ordewell says **The planner's shell runs without an OS sandbox on this

@@ -56,7 +56,10 @@ ops task when it needs judgment
   network-less sandbox; its instructions point it at `run_command`, as a
   task's point it at its tools. Where that sandbox cannot start, Codex's shell
   is switched off and `run_command` is its only one
-  ([ADR-0033](0033-codex-planner-without-its-sandbox.md)).
+  ([ADR-0033](0033-codex-planner-without-its-sandbox.md)), and so it is on
+  Windows, where Codex's sandbox cannot keep a command off the network
+  ([ADR-0010](../platform/0010-windows-support.md)). A one-shot plan runs no
+  command and is offered no `run_command`; there Codex keeps its shell.
 - A user may let a harness planner use its own shell instead
   ([ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md), N1–N6).
   The opt-in is off by default, user-level only, and offered only for the
@@ -312,3 +315,4 @@ refused from a workspace's environment files (ADR-0016). The effect allowlist
 - 2026-10-20 — every planner command, `run_command`'s included, runs in ADR-0011's OS sandbox where the host has one.
 - 2026-10-21 — the planner performs an exact effect itself as a script task, so the `allowlist` mode's refusal points at `run_script` and an ops task, and the effect allowlist is a separate list ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)).
 - 2026-10-21 — a user may opt in to Claude Code's or OpenCode 2.x's own shell, held in Ordewell's sealed profile, while both stay withheld by default (ADR-0036 N1–N6).
+- 2026-11-04 — Codex's own shell is off for a planner on Windows, where its sandbox cannot keep a command off the network ([ADR-0010](../platform/0010-windows-support.md)).
