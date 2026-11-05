@@ -28,7 +28,7 @@ export interface DockerCall {
 export interface DockerCli {
   call(args: readonly string[], opts?: DockerCall): Promise<DockerResult>;
   /** A command that runs for as long as a container does, with its stdio left open. */
-  entry(args: readonly string[]): Promise<ChildProcess>;
+  entry(args: readonly string[], opts?: Pick<DockerCall, 'env'>): Promise<ChildProcess>;
 }
 
 const CALL_TIMEOUT_MS = 120_000;
@@ -80,7 +80,7 @@ export class SpawnedDockerCli implements DockerCli {
     });
   }
 
-  async entry(args: readonly string[]): Promise<ChildProcess> {
-    return spawn('docker', [...args], { env: await this.environment(), stdio: ['pipe', 'pipe', 'pipe'] });
+  async entry(args: readonly string[], opts: Pick<DockerCall, 'env'> = {}): Promise<ChildProcess> {
+    return spawn('docker', [...args], { env: await this.environment(opts.env), stdio: ['pipe', 'pipe', 'pipe'] });
   }
 }

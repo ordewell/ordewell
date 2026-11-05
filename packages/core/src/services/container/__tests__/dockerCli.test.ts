@@ -24,4 +24,19 @@ describe('SpawnedDockerCli', () => {
     expect(hung.code).not.toBe(0);
     expect(absent.code).toBe(-1);
   });
+
+  it('hands what `-e NAME` names to the CLI in its environment, for a call and an entry alike (ADR-0022 A5)', async () => {
+    const cli = cliRunning('printf "%s|%s" "$ORDEWELL_HANDED" "$*"');
+
+    const called = await cli.call(['exec', '-e', 'ORDEWELL_HANDED', 'box'], { env: { ORDEWELL_HANDED: 'by-call' } });
+    const entry = await cli.entry(['run', '-e', 'ORDEWELL_HANDED', 'image'], { env: { ORDEWELL_HANDED: 'by-entry' } });
+    const said = await new Promise<string>((resolve) => {
+      let out = '';
+      entry.stdout?.on('data', (chunk: Buffer) => { out += chunk.toString(); });
+      entry.once('close', () => resolve(out));
+    });
+
+    expect(called.stdout).toBe('by-call|exec -e ORDEWELL_HANDED box');
+    expect(said).toBe('by-entry|run -e ORDEWELL_HANDED image');
+  });
 });

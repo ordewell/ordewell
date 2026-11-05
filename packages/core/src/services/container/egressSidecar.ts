@@ -1,6 +1,7 @@
 import type { ChildProcess } from 'child_process';
 import { settleWithin } from '../harness/settleWithin';
 import type { IssuedLogin } from './credentialBroker';
+import { envArgs } from './containerSettings';
 import type { DockerCli } from './dockerCli';
 import { ModelGateway } from './modelGateway';
 import { LineTail } from '../../utils/lineTail';
@@ -164,11 +165,11 @@ export class SidecarEgress implements EgressPath {
     const sidecar = `${name}-egress`;
     const made = await this.cli.call(['network', 'create', '--internal', ...labels, network]);
     if (made.code !== 0) throw new Error(`Could not make the lease's network: ${made.stderr.trim()}`);
+    const told = envArgs({ ORDEWELL_EGRESS: JSON.stringify({ port: EGRESS_PORT, allow }) });
     const entry = await this.cli.entry([
-      'run', '-i', '--rm', '--name', sidecar, ...labels, ...limits, '--network', network,
-      '-e', `ORDEWELL_EGRESS=${JSON.stringify({ port: EGRESS_PORT, allow })}`,
+      'run', '-i', '--rm', '--name', sidecar, ...labels, ...limits, '--network', network, ...told.args,
       image, 'node', '-e', EGRESS_ENTRY,
-    ]).catch(async (err: unknown) => {
+    ], { env: told.env }).catch(async (err: unknown) => {
       await this.cli.call(['network', 'rm', network]);
       throw err;
     });

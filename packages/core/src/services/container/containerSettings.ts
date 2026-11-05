@@ -64,12 +64,38 @@ export function containerLimits(settings: ContainerSettings): string[] {
   ];
 }
 
-/** Not secrets: what is goes by name, in the CLI's environment. */
-export const envArgs = (variables: Readonly<Record<string, string>>): string[] => Object.entries(variables).flatMap(([variable, value]) => ['-e', `${variable}=${value}`]);
+/** Names the docker CLI reads for itself: what one holds in its environment steers the CLI, not the container. */
+export const CLI_READS = /^(HOME|PATH|PWD|DOCKER_.*)$/;
+
+/** A docker command line, and what its CLI takes in its environment for the `-e NAME` it holds. */
+export interface DockerCommand {
+  args: string[];
+  env: Record<string, string>;
+}
+
+/**
+ * Each variable by name, its value in the CLI's environment, where docker reads
+ * it: `ps` shows a command line to every user of this host (ADR-0022 A5). HOME is
+ * the CLI's own as well, so a container's goes by value, and only Ordewell's path.
+ */
+export function envArgs(variables: Readonly<Record<string, string>>): DockerCommand {
+  const args: string[] = [];
+  const env: Record<string, string> = {};
+  for (const [variable, value] of Object.entries(variables)) {
+    if (variable === 'HOME' && value === HOME_DIR) args.push('-e', `HOME=${HOME_DIR}`);
+    else if (CLI_READS.test(variable)) throw new Error(`${variable} is one the docker CLI reads for itself, so a container cannot take it.`);
+    else {
+      args.push('-e', variable);
+      env[variable] = value;
+    }
+  }
+  return { args, env };
+}
 
 /** A throwaway container with no network and no runner in it, for what is done to a volume. Not free of an attempt's code: see `EXPORT_SCRIPT`. */
-export function helperArgs(settings: ContainerSettings, volumes: readonly string[], variables: Readonly<Record<string, string>> = {}, labels: readonly string[] = []): string[] {
-  return ['run', '--rm', '-i', ...labels, ...containerLimits(settings), '--network', 'none', ...volumes.flatMap((volume) => ['-v', volume]), ...envArgs({ HOME: HOME_DIR, ...variables }), settings.image];
+export function helperArgs(settings: ContainerSettings, volumes: readonly string[], variables: Readonly<Record<string, string>> = {}, labels: readonly string[] = []): DockerCommand {
+  const told = envArgs({ HOME: HOME_DIR, ...variables });
+  return { args: ['run', '--rm', '-i', ...labels, ...containerLimits(settings), '--network', 'none', ...volumes.flatMap((volume) => ['-v', volume]), ...told.args, settings.image], env: told.env };
 }
 
 function bytesOf(memory: string): number | null {
