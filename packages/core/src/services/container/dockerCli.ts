@@ -38,7 +38,9 @@ export class SpawnedDockerCli implements DockerCli {
   constructor(private readonly resolvePath: () => Promise<string> = augmentedPath) {}
 
   private async environment(env: Readonly<Record<string, string>> = {}): Promise<NodeJS.ProcessEnv> {
-    return { ...withPath(cleanEnv(), await this.resolvePath()), ...env };
+    // Through `withPath`, not a spread over it: on Windows a host variable in
+    // another case would otherwise win over what `-e NAME` hands the CLI.
+    return withPath(cleanEnv(), await this.resolvePath(), env);
   }
 
   async call(args: readonly string[], { input, env, timeoutMs = CALL_TIMEOUT_MS, stdoutTo }: DockerCall = {}): Promise<DockerResult> {
