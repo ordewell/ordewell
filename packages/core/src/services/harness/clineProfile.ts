@@ -59,15 +59,20 @@ export const CLINE_PROFILE: AcpProfile = {
   toolName: (tool) => `${SERVER_PREFIX}${tool}`,
   // Cline's read_files names its files only in the model's arguments
   // (`{ files: [{ path, start_line, end_line }] }`), never as a location, as
-  // the read-only recording shows. A file it names without a path, or in a
-  // shape not read here, makes the whole call one with no path to judge, so
-  // it is refused rather than allowed for the files that do have one.
+  // the read-only recording shows. Cline reads the first shape of its input
+  // union that validates and drops the keys that shape does not name, so a
+  // shape judged here that Cline would reject (a range that is not a positive
+  // integer, say) leaves a later key such as `paths` to be read instead. Only
+  // the two shapes Cline's union tries first are judged, exactly; any other
+  // input makes the whole call one with no path to judge, which is refused.
   askedPaths: ({ rawInput }) => {
     if (!isRecord(rawInput)) return [];
-    const { files, path } = rawInput;
-    const fromFiles = files === undefined ? [] : Array.isArray(files) ? files.map((file) => (isRecord(file) ? file.path : undefined)) : [undefined];
-    const named = [...fromFiles, ...(path === undefined ? [] : [path])];
-    return named.every((entry): entry is string => typeof entry === 'string') ? named : [];
+    if (Object.keys(rawInput).length === 1 && Array.isArray(rawInput.files)) {
+      const paths = rawInput.files.map(readRequestPath);
+      return paths.every((path): path is string => path !== null) ? paths : [];
+    }
+    const path = readRequestPath(rawInput);
+    return path === null ? [] : [path];
   },
   // Cline has no allow or deny list of its own, so what keeps a read-only task
   // or a planner from writing is that it asks: with `--auto-approve false`
@@ -79,3 +84,20 @@ export const CLINE_PROFILE: AcpProfile = {
   restricted: { args: ['--auto-approve', 'false'], privateCwd: true },
   roles: { plans: true, readOnly: true },
 };
+
+const READ_REQUEST_KEYS = ['path', 'start_line', 'end_line'];
+
+/**
+ * The path of one `{ path, start_line?, end_line? }` request, or null when it
+ * is anything Cline's own request shape would refuse. Cline coerces a range
+ * written as a string; refusing one here only refuses more.
+ */
+function readRequestPath(entry: unknown): string | null {
+  if (!isRecord(entry) || !Object.keys(entry).every((key) => READ_REQUEST_KEYS.includes(key))) return null;
+  const { path, start_line, end_line } = entry;
+  return typeof path === 'string' && isLineBound(start_line) && isLineBound(end_line) ? path : null;
+}
+
+function isLineBound(value: unknown): boolean {
+  return value === undefined || value === null || (typeof value === 'number' && Number.isSafeInteger(value) && value > 0);
+}
