@@ -7,21 +7,18 @@ import { assertWorkspaceExists } from '../../utils/workspace';
 import { killTree, spawnInOwnGroup } from '../../utils/processTree';
 import { workspaceEnvOf } from '../workspaceEnv';
 import { sensitiveEnvValues } from '../outboundSecrets';
-import { redactSecrets } from '../../utils/redactSecrets';
+import { redactAgentText } from '../../utils/redactSecrets';
+import { LineTail } from '../../utils/lineTail';
 import { runnerEnv } from './runnerEnv';
 import type { AgentProcessDeps } from './AgentAdapter';
 import type { PlacedLaunch } from '../executionLease';
 
-/** Stderr kept for the failure message; a dying CLI's last words are the only useful diagnostic. */
-const STDERR_TAIL_CHARS = 4000;
-
 /**
- * The word a cut tail starts with: a run of what a key can be made of. The cut
- * can fall inside a key the process printed, and the part it keeps matches
- * neither that key's whole value nor its prefix's shape, so no redaction rule
- * would know it.
+ * Stderr shown in the failure message; a dying CLI's last words are the only
+ * useful diagnostic. Four times as much raw text is kept, in whole lines, so
+ * that what is shown is cut from text already redacted as a whole.
  */
-const CUT_WORD = /^[^\s"'`,;{}[\]()<>]*/;
+const STDERR_LIMITS = { keepChars: 16_000, showChars: 4000 };
 
 /**
  * How long after 'exit' the pipes get to close before the process is ended
@@ -95,9 +92,7 @@ export class RunnerProcess {
   private exitStatus: RunnerExit | null = null;
   /** The process itself reported its end, before its pipes drained; see {@link hasExited}. */
   private exitReported = false;
-  private stderrTail = '';
-  /** The tail no longer starts where the process's stderr did. */
-  private stderrCut = false;
+  private readonly stderr = new LineTail(STDERR_LIMITS);
   private spawnEnv: NodeJS.ProcessEnv = {};
   /** Secrets handed to the process outside its environment, which no message of its may carry either. */
   private readonly held = new Set<string>();
@@ -173,7 +168,7 @@ export class RunnerProcess {
     this.child = child;
 
     const stderrText = new StringDecoder('utf8');
-    child.stderr?.on('data', (chunk: Buffer) => this.appendStderr(stderrText.write(chunk)));
+    child.stderr?.on('data', (chunk: Buffer) => this.stderr.append(stderrText.write(chunk)));
     // A write racing the process's death (a turn, an interrupt, a permission
     // answer) fails with EPIPE asynchronously; unheard, it crashes the host.
     // The close path already reports the death, with its stderr tail.
@@ -199,7 +194,7 @@ export class RunnerProcess {
       void this.ended.then(() => clearTimeout(grace));
     });
     child.on('error', (err) => {
-      this.appendStderr(`\n${err.message}`);
+      this.stderr.append(`\n${err.message}`);
       this.end({ code: -1, signal: null });
     });
 
@@ -266,8 +261,7 @@ export class RunnerProcess {
 
   /** Fail-safe contract: a dead runner reports its own last words, never an empty bubble. */
   withStderrTail(headline: string): string {
-    const kept = this.stderrCut ? this.stderrTail.replace(CUT_WORD, '') : this.stderrTail;
-    const tail = this.redact(kept.trim());
+    const tail = this.stderr.read((text) => this.redact(text));
     return `${headline}${tail ? `\n\n${tail}` : ''}`;
   }
 
@@ -279,10 +273,11 @@ export class RunnerProcess {
   /**
    * Text the process wrote, fit for an error: a CLI that prints its settings
    * or its environment echoes the key it was spawned with, and an error goes
-   * to the task log, the timeline and the planner chat (ADR-0060, R9).
+   * to the task log, the timeline and the planner chat (ADR-0060, R9). Pass it
+   * whole, before any cut: a cut can part a credential's name from its value.
    */
   redact(text: string): string {
-    return redactSecrets(text, [...this.held, ...sensitiveEnvValues(this.spawnEnv)]);
+    return redactAgentText(text, [...this.held, ...sensitiveEnvValues(this.spawnEnv)]);
   }
 
   /**
@@ -309,11 +304,5 @@ export class RunnerProcess {
   private placedEnded(): void {
     this.placed?.ended();
     this.placed = null;
-  }
-
-  private appendStderr(text: string): void {
-    const joined = this.stderrTail + text;
-    if (joined.length > STDERR_TAIL_CHARS) this.stderrCut = true;
-    this.stderrTail = joined.slice(-STDERR_TAIL_CHARS);
   }
 }
