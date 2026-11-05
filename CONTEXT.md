@@ -3284,9 +3284,14 @@ the mandate reads `delegationTokens` only. The first time there is no kept budge
 turning on asks the user to enter one; it is never defaulted, and cancelling saves
 nothing. Turning on always asks for a confirmation that says a subplanner plans in Act
 with autorun and no person reads its plan, and that the budget is counted
-approximately. A build offers it only with `ORDEWELL_DELEGATION=1` when it
-runs from a git checkout of this repository (`DELEGATION_OFFERED`), so a published
-package ignores the variable.
+approximately. A tree's shape is three more run settings beside it (ADR-0055 D19):
+`delegationDepth`, the levels below the root, `delegatedTasksPerPlan` and
+`tasksPerChildPlan`, each at least 1 and at most its hard cap, and kept, like the
+budget, while delegation is off. The desktop's Settings puts **Subplanners** in
+Advanced's Experimental group, with the budget and the shape beside it while it is
+on; `ordewell delegation` prints the shape read-only. A build offers it only with
+`ORDEWELL_DELEGATION=1` when it runs from a git checkout of this repository
+(`DELEGATION_OFFERED`), so a published package ignores the variable.
 
 **Delegated task** (`type: 'delegated'`, `models/Delegation.ts`, ADR-0055) — a
 top-level task that holds a `goal`, not a prompt: its attempt is a **Child plan**. It

@@ -410,7 +410,7 @@ function ExplorerTree({ api }: { api: FrameApi }): JSX.Element {
         {readOnly && <Badge icon={Lock}>Read-only</Badge>}
       </div>
       {multi && (
-        <select className="ex-repo frame-input" aria-label="Repository" value={state.repo} onChange={(event) => store.setRepo(event.target.value)}>
+        <select className="ow-select ex-repo frame-input" aria-label="Repository" value={state.repo} onChange={(event) => store.setRepo(event.target.value)}>
           {state.repos.map((r) => <option key={r.repo} value={r.repo}>{r.repo === '.' ? 'Workspace' : r.repo}{r.branch ? ` (${r.branch})` : ''}</option>)}
         </select>
       )}

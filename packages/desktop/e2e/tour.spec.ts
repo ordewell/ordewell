@@ -1044,8 +1044,88 @@ test('the visual tour', async () => {
     await expect(page.getByRole('heading', { name: 'Run', exact: true })).toBeVisible({ timeout: 30_000 });
   });
 
+  await state(win, 'settings-allowlist', 'Settings, a runner\'s model picker open with a search typed and models ticked', async (record) => {
+    const page = need(win);
+    await page.getByRole('button', { name: 'Edit Claude Code models' }).click();
+    const picker = page.getByRole('listbox', { name: 'Claude Code models' });
+    await expect(picker).toBeVisible({ timeout: 30_000 });
+    const options = picker.getByRole('option');
+    const listed = await options.count();
+    record.notes.push(`the runner lists ${listed} models`);
+    for (let at = 0; at < Math.min(3, listed); at++) await options.nth(at).click();
+    await page.getByRole('searchbox', { name: /Search Claude Code models/ }).fill('o');
+    await page.getByRole('heading', { name: 'Runners' }).scrollIntoViewIfNeeded();
+    // The write goes out on its own once the ticking pauses.
+    await expect(page.getByRole('status').filter({ hasText: /of \d+ allowed/ })).toBeVisible();
+    await settle(page, 1_200);
+  });
+
+  // Advanced is last in the tab and closed until opened: its heading is scrolled into view so the shot is of it.
+  await state(win, 'settings-advanced-closed', 'Settings with Advanced collapsed, the last section', async () => {
+    const page = need(win);
+    const advanced = page.getByRole('button', { name: 'Advanced' });
+    await expect(advanced).toHaveAttribute('aria-expanded', 'false', { timeout: 30_000 });
+    await advanced.scrollIntoViewIfNeeded();
+  });
+
+  await state(win, 'settings-advanced-open', 'Settings with Advanced open: planned-with line, wake-up reads, Experimental', async () => {
+    const page = need(win);
+    const advanced = page.getByRole('button', { name: 'Advanced' });
+    await advanced.click();
+    await expect(advanced).toHaveAttribute('aria-expanded', 'true');
+    await expect(page.getByRole('checkbox', { name: /Planned-with line in commits/ })).toBeVisible();
+    await expect(page.getByRole('textbox', { name: /Wake-up reads/ })).toBeVisible();
+    await page.getByRole('heading', { name: 'Experimental' }).scrollIntoViewIfNeeded();
+  });
+
+  // A fresh settings file keeps no tree budget, so the confirmation asks for one.
+  await state(win, 'settings-subplanners-confirm', 'Advanced: Subplanners asking to turn on, a first tree budget typed', async () => {
+    const page = need(win);
+    await page.getByRole('checkbox', { name: /Subplanners/ }).click();
+    const ask = page.getByRole('group', { name: 'Turn Subplanners on' });
+    await expect(ask).toBeVisible();
+    await ask.getByRole('textbox', { name: /Tree budget/ }).fill('500000');
+    await expect(ask.getByRole('button', { name: 'Turn on' })).toBeEnabled();
+    // The box is taller than a short window's spare room: its buttons are what must show.
+    await ask.getByRole('button', { name: 'Cancel' }).scrollIntoViewIfNeeded();
+  });
+
+  await state(win, 'settings-subplanners-on', 'Advanced with Subplanners on: tree budget, depth, delegated tasks and tasks per child plan', async () => {
+    const page = need(win);
+    await page.getByRole('group', { name: 'Turn Subplanners on' }).getByRole('button', { name: 'Turn on' }).click();
+    await expect(page.getByRole('checkbox', { name: /Subplanners/ })).toBeChecked({ timeout: 30_000 });
+    await expect(page.getByRole('textbox', { name: /Tasks per child plan/ })).toBeVisible();
+    await page.getByRole('textbox', { name: /Tasks per child plan/ }).scrollIntoViewIfNeeded();
+  });
+
+  // Restore defaults is disabled while every setting is at its default, so one is moved first.
+  await state(win, 'settings-restore-confirm', 'Run asking whether to restore its defaults', async () => {
+    const page = need(win);
+    // Subplanners go off again, so nothing after this tour state runs with a tree on.
+    await page.getByRole('checkbox', { name: /Subplanners/ }).click();
+    await expect(page.getByRole('checkbox', { name: /Subplanners/ })).not.toBeChecked({ timeout: 30_000 });
+    const parallel = page.getByRole('textbox', { name: /^Parallel tasks/ });
+    await parallel.fill('7');
+    await parallel.press('Enter');
+    const restore = page.getByRole('button', { name: 'Restore defaults' });
+    await expect(restore).toBeEnabled({ timeout: 30_000 });
+    await restore.click();
+    await expect(page.getByText('Restore Run settings to their defaults?')).toBeVisible();
+    await page.getByRole('heading', { name: 'Run', exact: true }).scrollIntoViewIfNeeded();
+  });
+
+  await state(win, 'settings-restored', 'Run after Restore: back at its defaults, the button disabled again', async () => {
+    const page = need(win);
+    await page.getByRole('button', { name: 'Restore', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Restore defaults' })).toBeDisabled({ timeout: 30_000 });
+    await expect(page.getByRole('textbox', { name: /^Parallel tasks/ })).not.toHaveValue('7');
+  });
+
   await state(win, 'squeezed', 'Squeezed: sidebar and plan panel at their maximum widths', async (record) => {
     const page = need(win);
+    // Settings' model picker was left open by an earlier state; close it so it is not in every later shot.
+    const doneEditing = page.getByRole('button', { name: 'Done editing Claude Code models' });
+    if (await doneEditing.isVisible()) await doneEditing.click();
     if (await page.getByRole('tablist', { name: 'Terminals' }).isVisible()) await page.keyboard.press('Control+Backquote');
     if (!await page.getByRole('navigation', { name: 'Sessions' }).isVisible()) await need(views).getByRole('tab', { name: /^Sessions/ }).click();
     probes.sashDrag = await sashProbe(page);

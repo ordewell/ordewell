@@ -746,7 +746,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
             {canEdit && task.type === 'ai' && runnerOptions.length > 0 && onRunnerChange && (
               <div className="model-selector" style={{ marginTop: '8px' }}>
                 <label htmlFor={`task-runner-${task.id}`}>Runner</label>
-                <select id={`task-runner-${task.id}`} value={task.assignedRunner}
+                <select className="ow-select" id={`task-runner-${task.id}`} value={task.assignedRunner}
                   onChange={(e) => onRunnerChange(task.id, e.target.value)}>
                   {runnerOptions.map((r) => (
                     <option key={r.id} value={r.id}>{r.displayName}</option>
@@ -768,7 +768,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
                   title={row.autonomous ? 'Full: runs without permission prompts. /settings changes the level' : undefined}>
                   Mode{row.autonomous && ' ⚡'}
                 </label>
-                <select id={`task-mode-${task.id}`} value={modeId} title={modeText(activeModes.find((m) => m.id === modeId))}
+                <select className="ow-select" id={`task-mode-${task.id}`} value={modeId} title={modeText(activeModes.find((m) => m.id === modeId))}
                   onChange={(e) => onModeChange(task.id, e.target.value)}>
                   {activeModes.map((m) => (
                     <option key={m.id} value={m.id} disabled={!!m.unavailable}>{modeText(m)}</option>

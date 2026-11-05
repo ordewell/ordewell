@@ -147,6 +147,8 @@ export interface Prefs {
   notifications: boolean;
   /** Keep the app running in the tray when its last window closes and no run is live (H5). */
   keepRunningInTray: boolean;
+  /** Whether Settings' Advanced section is open; it starts closed and stays as the user left it. */
+  settingsAdvancedOpen: boolean;
   /**
    * The command "Open in editor" runs instead of the OS default, such as
    * `code --goto {file}:{line}`; empty uses the default. Main reads it from the

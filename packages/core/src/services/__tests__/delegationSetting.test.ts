@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DELEGATION_RISK, SUBPLANNER_ACCOUNTING, SUBPLANNER_CHILD, SUBPLANNER_SCOPE, delegationSummary, keptDelegationBudget, parseDelegation } from '../runSettingsText';
+import { DELEGATION_NETWORK_RISK, DELEGATION_RISK, SUBPLANNER_ACCOUNTING, SUBPLANNER_CHILD, SUBPLANNER_SCOPE, delegationSummary, keptDelegationBudget, parseDelegation, treeShapeSummary } from '../runSettingsText';
 import { RUN_SETTINGS_DEFAULTS, RunSettingsError, SettingsService, runSettingsOf } from '../SettingsService';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -99,6 +99,11 @@ describe('the delegation setting (ADR-0055 D21)', () => {
     expect(delegationSummary({ ...RUN_SETTINGS_DEFAULTS, delegationTokens: 1000 })).toBe('Delegation: on, 1000 tokens for a tree');
   });
 
+  it('words the tree\'s shape, read only, as the user set it', () => {
+    expect(treeShapeSummary({ ...RUN_SETTINGS_DEFAULTS })).toBe('Tree shape: up to 2 levels below the root, 8 delegated tasks per plan, 30 tasks per child plan');
+    expect(treeShapeSummary({ ...RUN_SETTINGS_DEFAULTS, delegationDepth: 1, delegatedTasksPerPlan: 1, tasksPerChildPlan: 1 })).toBe('Tree shape: up to 1 level below the root, 1 delegated task per plan, 1 task per child plan');
+  });
+
   it('names the budget it keeps while off, and turns on at it only when there is one', () => {
     expect(delegationSummary({ ...RUN_SETTINGS_DEFAULTS, delegationBudget: 2000 })).toBe('Delegation: off, 2000 tokens kept for a tree');
     expect(keptDelegationBudget({ ...RUN_SETTINGS_DEFAULTS, delegationBudget: 2000 })).toBe(2000);
@@ -119,6 +124,13 @@ describe('the delegation setting (ADR-0055 D21)', () => {
     expect(DELEGATION_RISK).toMatch(/no person reads it/);
     expect(DELEGATION_RISK).toMatch(/keep the network they have in a flat run/);
     expect(DELEGATION_RISK).toMatch(/instruction injected/);
+  });
+
+  it('says the network risk on its own, for a surface that names no container', () => {
+    expect(DELEGATION_NETWORK_RISK).toMatch(/keep the network they have in a flat run/);
+    expect(DELEGATION_NETWORK_RISK).toMatch(/instruction injected/);
+    expect(DELEGATION_NETWORK_RISK).not.toMatch(/container/i);
+    expect(DELEGATION_RISK).toContain(DELEGATION_NETWORK_RISK);
   });
 
   it('does not let a container stand in for a boundary: delegation starts none, and one is opt-in', () => {
@@ -152,6 +164,16 @@ describe('the root\'s mandate reads it where it lives (ADR-0030, ADR-0056 M1)', 
   it('starts from the file, as a new session does', () => {
     const session = makeSession({ settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', delegationTokens: 1000 } }) });
     expect(session.mandate().limits.tokens).toBe(1000);
+    session.destroy();
+  });
+
+  it('takes the tree\'s shape the user set, and keeps it while delegation is off', () => {
+    const session = makeSession();
+    expect(session.mandate().limits).toMatchObject({ depth: 2, delegatedTasks: 8, tasksPerPlan: 30 });
+    session.applyRunSettings({ delegationTokens: 1000, delegationDepth: 3, delegatedTasksPerPlan: 1, tasksPerChildPlan: 5 });
+    expect(session.mandate().limits).toMatchObject({ depth: 3, delegatedTasks: 1, tasksPerPlan: 5 });
+    session.applyRunSettings({ delegationTokens: 0 });
+    expect(session.runSettings()).toMatchObject({ delegationDepth: 3, delegatedTasksPerPlan: 1, tasksPerChildPlan: 5 });
     session.destroy();
   });
 

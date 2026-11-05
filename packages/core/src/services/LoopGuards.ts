@@ -14,9 +14,6 @@ import type { ExecutionCommand } from './ExecutionCommands';
  * supervisor for its wake-ups.
  */
 
-/** Retries an Act supervisor may make of one task in a run when the plan sets none. */
-export const DEFAULT_SUPERVISOR_RETRY_LIMIT = 2;
-
 /**
  * More wake-ups than `max` within `windowMs`, with no task passing in
  * between, and the supervisor is spinning: woken, acting, and nothing

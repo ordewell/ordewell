@@ -199,7 +199,7 @@ export { ExecutionCommands } from './services/ExecutionCommands';
 export type { ExecutionCommand, CommandOutcome, CommandPayload, Consent, LoopGuard, ExecutionHost } from './services/ExecutionCommands';
 export { FLOOR_GRANTS, GRANTS, SHAPE_LIMITS, heldMandate, mandateRefusalText, narrow, rootAuthority, rootMandate, type Grant, type Mandate, type MandateExclusions, type MandateLimits, type MandateRefusal, type MandateRequest, type Narrowed, type NodeAuthority, type RootSettings } from './services/Mandate';
 export { parseExecutionCommand, type ParsedCommand } from './services/executionCommandShape';
-export { DEFAULT_SUPERVISOR_RETRY_LIMIT } from './services/LoopGuards';
+export { DEFAULT_AUTONOMOUS_MODE, DEFAULT_SUPERVISOR_RETRY_LIMIT, DEFAULT_WAKE_UP_READ_BUDGET } from './services/runSettingsDefaults';
 export type { GuardTrip, GuardTarget } from './services/LoopGuards';
 export { ConversationEditError, ConversationBusyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, PlannerUsageLimitError } from './services/PlannerConversation';
 export type { RewindTarget, ConversationCompaction, PlannerSubmission } from './services/PlannerConversation';
@@ -342,8 +342,9 @@ export * from './utils/taskLogStore';
 export { mintSessionId } from './utils/sessionId';
 export { extractPrdBlock, savePrdMarkdown, sanitizeSlug } from './utils/prdStore';
 export type { PrdBlock } from './utils/prdStore';
-export { ACT_RISK, AUTORUN_RISK, DELEGATION_OFFERED, containersOffered, DELEGATION_RISK, PLANNED_WITH_LABEL, SUPERVISOR_LEVEL_LABEL, automergeSummary, autorunSummary, delegationSummary, keptDelegationBudget, rememberDelegationBudget, SUBPLANNER_ACCOUNTING, SUBPLANNER_CHILD, SUBPLANNER_SCOPE, parseCount, parseDelegation, parseSwitch, supervisorSummary, trailerSummary } from './services/runSettingsText';
-export { SettingsService, getSettingsPath, runSettingsOf, RUN_SETTINGS_DEFAULTS, RunSettingsError, type GlobalRunSettings, type UserSettings } from './services/SettingsService';
+export { ACT_RISK, AUTORUN_RISK, DELEGATION_OFFERED, containersOffered, DELEGATION_NETWORK_RISK, DELEGATION_RISK, PLANNED_WITH_LABEL, SUPERVISOR_LEVEL_LABEL, automergeSummary, autorunSummary, delegationSummary, keptDelegationBudget, rememberDelegationBudget, SUBPLANNER_ACCOUNTING, SUBPLANNER_CHILD, SUBPLANNER_SCOPE, parseCount, parseDelegation, parseSwitch, supervisorSummary, trailerSummary, treeShapeSummary } from './services/runSettingsText';
+export { SettingsService, getSettingsPath, runSettingsOf, RunSettingsError, type UserSettings } from './services/SettingsService';
+export { RUN_SETTINGS_DEFAULTS, type GlobalRunSettings, type TreeShape } from './services/runSettingsDefaults';
 export {
   PlannerModelMemory,
   type PlannerModelChoice,

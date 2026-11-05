@@ -2,7 +2,7 @@ import type { GlobalRunSettings } from '@ordewell/core';
 import type { ApiClient } from '../apiClient';
 import { positionals } from '../utils';
 import {
-  ACT_RISK, AUTORUN_RISK, DELEGATION_RISK, SUBPLANNER_ACCOUNTING, SUBPLANNER_SCOPE, SUPERVISOR_LEVEL_LABEL, PLANNED_WITH_LABEL, automergeSummary, autorunSummary, delegationSummary, keptDelegationBudget, parseCount, parseDelegation, parseSwitch, supervisorSummary, trailerSummary,
+  ACT_RISK, AUTORUN_RISK, DELEGATION_RISK, SUBPLANNER_ACCOUNTING, SUBPLANNER_SCOPE, SUPERVISOR_LEVEL_LABEL, PLANNED_WITH_LABEL, automergeSummary, autorunSummary, delegationSummary, keptDelegationBudget, parseCount, parseDelegation, parseSwitch, supervisorSummary, trailerSummary, treeShapeSummary,
 } from '@ordewell/core';
 import { connect, fail } from './shared';
 
@@ -102,7 +102,10 @@ export async function handleDelegation(subArgs: string[], injectedApi?: ApiClien
     if (tokens === null) fail('No tree budget is kept yet: enter one with `ordewell delegation <tokens>`.');
   }
   if (tokens === null) {
-    console.log(delegationSummary((await api.getSettings()).run));
+    const { run } = await api.getSettings();
+    console.log(delegationSummary(run));
+    // Read only here: the shape is set in the desktop's Settings, and holds as it was set (ADR-0055 D19).
+    console.log(treeShapeSummary(run));
     console.log(`  ${DELEGATION_USAGE}`);
     return;
   }

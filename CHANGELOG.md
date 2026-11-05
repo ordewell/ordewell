@@ -61,6 +61,22 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   to do, a live run refuses only a switch away from or a delete of its landing
   branch, and Merge all asks about your overlapping uncommitted work before it
   merges.
+- **Settings that read at a glance.** Every dropdown shares one chevron, counts
+  are whole-number fields that take digits and group thousands, and Run's
+  **Restore defaults** puts autonomy, supervisor, retries, merge at gates,
+  autorun and parallel tasks back to core's own defaults in one write. Advanced
+  folds away the commit trailer line, the wake-up reads and the experimental
+  settings, and remembers whether it was open.
+- **A model allowlist you can search and tick.** Settings summarises a runner's
+  allowlist as "All models" or "3 of 14 models", and Edit opens a searchable
+  list where you tick the models it may use, untick one it no longer lists, or
+  take **Allow all models**. The ticking order is the allowlist's priority, and
+  a refused write says so and falls back to what the host holds.
+- **Subplanners as an experimental setting with tree limits.** Advanced's
+  Experimental group holds the Subplanners switch, asks before turning it on,
+  and while it is on offers the tree budget, maximum depth, delegated tasks per
+  plan and tasks per child plan, each within core's caps. `ordewell delegation`
+  prints the shape read-only.
 
 ## [0.12.3] - 2026-11-03
 

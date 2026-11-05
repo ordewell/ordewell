@@ -7,6 +7,7 @@ export const DEFAULT_PREFS: Prefs = {
   layouts: {},
   notifications: true,
   keepRunningInTray: false,
+  settingsAdvancedOpen: false,
   editorCommand: '',
 };
 
@@ -74,6 +75,7 @@ export function validPref(key: unknown, value: unknown): Partial<Prefs> | undefi
   if (key === 'theme' && typeof value === 'string' && THEMES.has(value)) return { theme: value as Prefs['theme'] };
   if (key === 'notifications' && typeof value === 'boolean') return { notifications: value };
   if (key === 'keepRunningInTray' && typeof value === 'boolean') return { keepRunningInTray: value };
+  if (key === 'settingsAdvancedOpen' && typeof value === 'boolean') return { settingsAdvancedOpen: value };
   if (key === 'layouts') {
     const valid = layouts(value);
     return valid ? { layouts: valid } : undefined;

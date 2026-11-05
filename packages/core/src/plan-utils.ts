@@ -20,7 +20,10 @@ export type { HandoffForkRepo } from './services/mergeWording';
 export { blockingFailures, repeatingChecks, planBlocks, type BlockingSubject, type PlanBlocks } from './services/blocking';
 // What a loop's rows say (ADR-0045) is read the way the scheduler reads it.
 export { betweenRounds, outOfRounds, loopRoundOf, checkOf, loopRemovalRefusal, type TaskLoop } from './models/Loop';
-export { ACT_RISK, AUTORUN_RISK, DELEGATION_OFFERED, DELEGATION_RISK, containersOffered, PLANNED_WITH_LABEL, SUBPLANNER_ACCOUNTING, SUBPLANNER_CHILD, SUBPLANNER_SCOPE, SUPERVISOR_LEVEL_LABEL, keptDelegationBudget, parseCount, rememberDelegationBudget } from './services/runSettingsText';
+// The run settings' own defaults, for a surface that restores them; pure, so a renderer may read them.
+export { DEFAULT_AUTONOMOUS_MODE, DEFAULT_SUPERVISOR_RETRY_LIMIT, DEFAULT_WAKE_UP_READ_BUDGET, RUN_SETTINGS_DEFAULTS, SHAPE_LIMITS, type GlobalRunSettings, type TreeShape } from './services/runSettingsDefaults';
+export { DEFAULT_MAX_PARALLEL } from './utils/maxParallel';
+export { ACT_RISK, AUTORUN_RISK, DELEGATION_OFFERED, DELEGATION_NETWORK_RISK, DELEGATION_RISK, containersOffered, PLANNED_WITH_LABEL, SUBPLANNER_ACCOUNTING, SUBPLANNER_CHILD, SUBPLANNER_SCOPE, SUPERVISOR_LEVEL_LABEL, keptDelegationBudget, parseCount, rememberDelegationBudget } from './services/runSettingsText';
 // The empty planner composer's tips (#137), one table for both planner chats.
 export { COMPOSER_TIPS, composerTip, type ComposerTip } from './services/composerTips';
 // The shared conversation view (#51) is pure too, so every surface — a webview

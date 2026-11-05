@@ -235,7 +235,7 @@ export default function TaskLogApp({ composerLabel }: {
           {status.attempts.length > 1 && (
             <label className="task-log-attempt">
               Attempt
-              <select value={status.attempt} onChange={(e) => bridge.post({ type: 'selectAttempt', attempt: Number(e.target.value) })}>
+              <select className="ow-select" value={status.attempt} onChange={(e) => bridge.post({ type: 'selectAttempt', attempt: Number(e.target.value) })}>
                 {status.attempts.map((attempt) => <option key={attempt} value={attempt}>{attempt}</option>)}
               </select>
             </label>

@@ -230,3 +230,38 @@
   font: var(--ow-type-code-small);
   white-space: nowrap;
 }
+
+/*
+ * Select: the one dropdown every surface shares. The native arrow is dropped
+ * for a chevron drawn here as two 1.5px strokes, in a token's colour, so a
+ * theme (the desktop's, or VS Code's through its mapping) colours it and a
+ * hover, focus or disabled select changes it with no image to swap. The
+ * select keeps whatever fill, border, radius and focus ring its own surface
+ * gives it: only the arrow, the room for it and the cut of a long value live here.
+ *
+ * The class is doubled so these rules hold against a surface's own
+ * `padding` and `background` shorthands, whichever stylesheet loads last.
+ */
+.ow-select.ow-select {
+  --select-chevron: var(--ow-fg-secondary);
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  padding-inline-end: calc(var(--ow-space-2) + 10px + var(--ow-space-2));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  /* "\" and "/" meet at the bottom: each half is a diagonal band 1.5px across. */
+  background-image:
+    linear-gradient(to top right, transparent calc(50% - 0.75px), var(--select-chevron) calc(50% - 0.75px), var(--select-chevron) calc(50% + 0.75px), transparent calc(50% + 0.75px)),
+    linear-gradient(to bottom right, transparent calc(50% - 0.75px), var(--select-chevron) calc(50% - 0.75px), var(--select-chevron) calc(50% + 0.75px), transparent calc(50% + 0.75px));
+  background-repeat: no-repeat;
+  background-size: 5px 5px, 5px 5px;
+  background-position: right calc(var(--ow-space-2) + 5px) center, right var(--ow-space-2) center;
+}
+.ow-select.ow-select:hover:not(:disabled),
+.ow-select.ow-select:focus-visible { --select-chevron: var(--ow-fg); }
+.ow-select.ow-select:disabled { --select-chevron: var(--ow-fg-muted, var(--ow-fg-secondary)); opacity: 0.5; cursor: default; }

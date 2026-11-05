@@ -1638,6 +1638,22 @@ Every step lifts off what it sits on by at least 1.05:1, in both themes:
 - **Fields in a card step back.** Light's input and code fills are the card's
   own step, so a field, a select, a pill or a code line inside a card takes
   `inset` instead (Settings, the Welcome cards).
+- **A runner's model allowlist is a collapsed picker.** Settings shows one line,
+  "All models" or "3 of 14 models: Opus, Sonnet, +1", and an Edit button that
+  opens a card in place: a search field (label or id), a count with Allow all
+  models, and a listbox of every model the runner lists, each row a checkbox,
+  its label and its id in the code font, ending in an ellipsis when long. A
+  model that is allowed but no longer listed shows first, marked "Not listed by
+  this runner", so it can be unticked. An empty selection means all models, and
+  the hint says so. Ticking writes after a pause, or when the picker closes;
+  Allow all models writes at once. A refused write shows its error and the
+  picker falls back to the host's allowlist. The list takes one tab stop, with
+  Up, Down, Home and End moving through it, Space or Enter ticking, Up from the
+  first row back to the search field, and Esc closing and returning focus to
+  Edit. The ticking order is the allowlist's order, which is its priority
+  ([ADR-0003](../adr/routing/0003-per-runner-model-allowlist.md)). A runner turned off keeps its
+  picker visible and disabled. The list is the unfiltered catalog
+  (`modelsByRunner`), never the allowlist's view of it.
 - **Graph stages are lanes.** A column is `panel` with no hairline and no
   shadow, under the edges: the ground the cards lift off, not a card itself.
 - **Overlays are the top step.** Title-bar menus and popovers, the command
@@ -1707,6 +1723,7 @@ that were already set:
 | Needs you items (`needsYou.css`) | flat, a rule between them | `--ow-surface-card` cards, 8 px apart | Each escalation is a discrete object; its hairline does the separating. |
 | Settings groups (`settings.css`) | `--ow-bg-widget`, `--ow-border` | `--ow-surface-card`, `card-border`, card elevation | The same reason as the Welcome cards. |
 | Settings fields, pills and runner rows | `--ow-bg-input`, `--ow-bg` | `--ow-surface-inset` | A field in a card steps back. |
+| A runner's open model picker (`allowlist.css`) | the old textarea's `--ow-bg-input` | `--ow-surface-card`, `card-border`, card elevation; its search field `--ow-surface-inset`; rows flat | The picker is an object opened on the runner's inset row, so it lifts off it; its rows are a list and stay flat, with a hover step and no card each. |
 | Session and sidebar banners (`frame.css`, `sidebarKit.css`) | `--ow-bg-widget`, `--ow-bg-overlay` | `--ow-surface-card` | The light overlay and widget fills are white, too faint a step off the panel. |
 | A Changes task summary (`changes.css`) | flat, a rule above | `--ow-surface-card` | The task is the object; its files stay rows under it. |
 | A Merge all repository | `--ow-bg`, `--ow-border` | `--ow-surface-card`, `card-border` | On the confirm's white overlay a white box did not stand off. |
@@ -1787,6 +1804,58 @@ cap height with `align-items: center`, never with a baseline nudge.
 | Graph card: Comfortable / Compact | 104 / 60 | |
 | Welcome card | 112 | |
 | Hit target, minimum | 24 × 24 | an icon-only button is 28 × 28 |
+
+### Settings fields
+
+Settings is a column of section cards: Appearance, Planner, Runners, Run,
+This app, then Advanced. Every field in a card takes the `inset` surface.
+
+- **Select.** Every `<select>`, in the desktop and in `@ordewell/ui`, carries
+  `ow-select` (`design.css`). The native arrow is dropped for a chevron of two
+  1.5 px strokes, in `--ow-fg-secondary` at rest, `--ow-fg` on hover and focus,
+  and the muted colour when disabled. It sits `--ow-space-2` from the right
+  edge, and the text's right padding clears it, so a long value is cut with an
+  ellipsis and never runs under the arrow. The chevron is drawn from tokens, so
+  VS Code's mapping colours it too. A select keeps its own fill, border and
+  focus ring (`--vscode-dropdown-*` in VS Code). The planner tab's compact
+  settings take only the chevron.
+- **Count.** A whole number is a text field with a numeric keypad
+  (`inputMode="numeric"`), never `type=number`: it takes digits only, draws no
+  spin buttons, and shows 10,000 and over with digit grouping while it is not
+  focused. On Enter or blur an empty field or one below its minimum commits the
+  minimum (0 for Supervisor retries, 1 for Parallel tasks, Wake-up reads and
+  Subplanners' fields) and shows it. A field with a ceiling commits the ceiling
+  for anything above it. WebKit spin buttons are hidden for any `type=number` left in the
+  renderer.
+- **Restore defaults.** At the right of the Run heading. It asks inline,
+  "Restore Run settings to their defaults?" with Restore and Cancel, then writes
+  every setting Run shows (autonomy, supervisor, retries, merge at gates,
+  autorun, parallel tasks) in one request, so there is
+  one Saving state and one refusal to report. It is disabled while all of them
+  already equal their defaults. The values are core's own
+  (`RUN_SETTINGS_DEFAULTS`, `DEFAULT_AUTONOMOUS_MODE`, `DEFAULT_MAX_PARALLEL`,
+  read through `@ordewell/core/plan-utils`); the desktop keeps no copy. It
+  never touches Subplanners, which live in Advanced.
+- **Advanced.** A disclosure, collapsed by default and last in the tab, with no
+  Restore defaults. Whether it is open is a desktop preference
+  (`settingsAdvancedOpen`), so it comes back as it was left. It holds
+  "Planned-with line in commits", "Wake-up reads" (only while the supervisor is
+  on) and the Experimental group, for settings that are not ready for everyone.
+  The desktop never runs the daily version check (it runs in the CLI and VS
+  Code), so there is no toggle for it.
+- **Subplanners.** The Experimental group's one switch, its label followed by a
+  neutral `Badge` reading "Experimental" (amber is Needs you's), and a one-line
+  hint. It is on while the tree budget is above 0. Turning it on asks inline, in a
+  bordered `inset` box under the label: "Turn Subplanners on?", what a
+  subplanner may do with no person reading its plan, and how the budget is
+  counted, then Turn on and Cancel. With no budget kept, the box holds a Tree
+  budget field and Turn on stays disabled until it holds a number above 0;
+  Cancel saves nothing. Turning off writes only the budget's 0, so the daemon
+  keeps the budget and the shape for next time. While it is on, four Count fields
+  sit indented under it, each with a hint that names its value: Tree budget
+  (tokens, at least 1), Maximum depth (1 to 4), Delegated tasks per plan (1 to
+  30) and Tasks per child plan (1 to 100); the ceilings are core's
+  `SHAPE_LIMITS`.
 
 ### Radii, elevation and motion
 

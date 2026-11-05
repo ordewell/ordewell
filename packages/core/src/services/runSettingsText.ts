@@ -17,6 +17,10 @@ export const autorunSummary = (run: GlobalRunSettings): string => `Autorun: ${on
 export const delegationSummary = (run: GlobalRunSettings): string =>
   `Delegation: ${run.delegationTokens > 0 ? `on, ${run.delegationTokens} tokens for a tree` : run.delegationBudget > 0 ? `off, ${run.delegationBudget} tokens kept for a tree` : 'off'}`;
 
+/** The tree's shape limits (ADR-0055 D19), which hold while delegation is on and are kept while it is off. */
+export const treeShapeSummary = (run: GlobalRunSettings): string =>
+  `Tree shape: up to ${plural(run.delegationDepth, 'level', 'levels')} below the root, ${plural(run.delegatedTasksPerPlan, 'delegated task', 'delegated tasks')} per plan, ${plural(run.tasksPerChildPlan, 'task', 'tasks')} per child plan`;
+
 /** The budget turning delegation on again takes, or null where the user has entered none and must. */
 export const keptDelegationBudget = (run: GlobalRunSettings): number | null => (run.delegationBudget > 0 ? run.delegationBudget : null);
 
@@ -82,7 +86,9 @@ export function containersOffered(place: DelegationPlace = placeHere(CONTAINERS_
 export const ACT_RISK = 'Tasks it adds run too, ops tasks included, which can act on real systems unattended.';
 export const AUTORUN_RISK = 'Plans start without review, ops tasks included, which can act on real systems unattended. In Full nobody is asked at all: the planner may start anything, script tasks included, from a plan no person read.';
 /** What turning delegation on accepts below the root, as Act and autorun accept it at the root (ADR-0056 M9). A container is not named as a remedy: only its own setting runs one, a child's tasks included (ADR-0059). */
-export const DELEGATION_RISK = 'A subplanner approves and runs its own plan, and no person reads it. Its change tasks keep the network they have in a flat run, so an instruction injected into something a subplanner read can become a plan nobody read, and run with that network. Delegation starts no container of its own: containers are opt-in, and only that setting runs a child\'s tasks in one.';
+/** What a subplanner's tasks may reach (ADR-0056 M9), apart from the containers sentence, for a surface that offers no containers setting. */
+export const DELEGATION_NETWORK_RISK = 'A subplanner\'s change tasks keep the network they have in a flat run, so an instruction injected into something a subplanner read can become a plan nobody read, and run with that network.';
+export const DELEGATION_RISK = `A subplanner approves and runs its own plan, and no person reads it. ${DELEGATION_NETWORK_RISK} Delegation starts no container of its own: containers are opt-in, and only that setting runs a child's tasks in one.`;
 
 /**
  * `changes` with the budget it turns delegation on at also kept as the user's

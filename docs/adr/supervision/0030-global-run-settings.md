@@ -101,6 +101,9 @@ There is no per-plan value and no per-workspace override.
 | wake-up read budget (not in the panels) | whole number ≥ 1 | 12 |
 | delegation (ADR-0055 D21), shown as Subplanners | off, or a tree's budget in tokens | **off** |
 | kept tree budget (`delegationBudget`, not in the panels) | whole number ≥ 0; 0 is none entered | 0 |
+| a tree's depth (`delegationDepth`, ADR-0055 D19) | whole number, 1 to 4 | 2 |
+| delegated tasks per plan (`delegatedTasksPerPlan`, D19) | whole number, 1 to 30 | 8 |
+| tasks per child plan (`tasksPerChildPlan`, D19) | whole number, 1 to 100 | 30 |
 
 Watch becomes the default because it only reads and writes notes to the user:
 it never acts, and it makes the planner's watching of a run something a new
@@ -143,7 +146,11 @@ surfaces show it as a Subplanners switch with the budget as a row only while on.
 The budget last entered is kept while off and across restarts, in its own field
 that turns nothing on and that the mandate never reads: turning on again uses it,
 and with none ever entered the user must type one, so no default stands in for it
-and cancelling saves nothing. The plan pane's `G`, `W` and `L` and VS
+and cancelling saves nothing. A tree's three shape limits (ADR-0055 D19) are kept
+the same way, and only the desktop's Settings sets them, beside the switch while it
+is on: the TUI and VS Code panels have no row for them, and `ordewell delegation`
+with no argument prints them read-only. A value past its cap is refused when saved.
+The plan pane's `G`, `W` and `L` and VS
 Code's plan-card controls are removed: one route per setting. `L` had no job
 left, since lowering the supervisor now lowers the run at once.
 
@@ -501,3 +508,4 @@ the daemon reads it from there at generation.
 - 2026-10-31 — delegation joins the run settings, off by default, with `ordewell delegation`, a `/settings` step after Parallel and a VS Code row; it changes nothing until something can delegate (ADR-0055 D21).
 - 2026-10-31 — Parallel counts a whole tree (ADR-0055 D18).
 - 2026-11-02 — Subplanners is a compact on/off control: the tree budget shows only while on, is entered by the user the first time, and is kept while off and across restarts.
+- 2026-11-05 — a tree's shape limits (ADR-0055 D19) join the run settings, set in the desktop's Settings and printed by `ordewell delegation`.

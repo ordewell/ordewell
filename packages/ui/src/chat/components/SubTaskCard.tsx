@@ -175,7 +175,7 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
             {canEdit && task.type === 'ai' && runnerOptions.length > 0 && onRunnerChange && (
               <div className="model-selector" style={{ marginTop: '8px' }}>
                 <label htmlFor={`subtask-runner-${task.id}`}>Runner</label>
-                <select id={`subtask-runner-${task.id}`} value={task.assignedRunner}
+                <select className="ow-select" id={`subtask-runner-${task.id}`} value={task.assignedRunner}
                   onChange={(e) => onRunnerChange(task.id, e.target.value)}>
                   {runnerOptions.map((r) => (
                     <option key={r.id} value={r.id}>{r.displayName}</option>
@@ -194,7 +194,7 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
             {canEdit && task.type === 'ai' && onModeChange && (
               <div className="model-selector" style={{ marginTop: '8px' }}>
                 <label htmlFor={`subtask-mode-${task.id}`}>Mode</label>
-                <select id={`subtask-mode-${task.id}`} value={task.taskMode ?? activeModes[0]?.id ?? 'build'}
+                <select className="ow-select" id={`subtask-mode-${task.id}`} value={task.taskMode ?? activeModes[0]?.id ?? 'build'}
                   onChange={(e) => onModeChange(task.id, e.target.value)}>
                   {activeModes.map((m) => (
                     <option key={m.id} value={m.id}>{m.label}: {m.description}</option>

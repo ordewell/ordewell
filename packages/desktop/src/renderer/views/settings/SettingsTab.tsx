@@ -1,12 +1,16 @@
-import { useEffect, useId, useState } from 'react';
-import { CircleAlert, Settings as SettingsIcon } from 'lucide-react';
-import { Button, EmptyState } from '@ordewell/ui/design';
+import { useId, useState } from 'react';
+import { ChevronDown, ChevronRight, CircleAlert, Settings as SettingsIcon } from 'lucide-react';
+import { Button, EmptyState, Icon } from '@ordewell/ui/design';
 import type { DiscoveredModel, SettingsResponse, SupervisorLevel } from '@ordewell/core';
-import { SUPERVISOR_LEVEL_LABEL, parseCount } from '@ordewell/core/plan-utils';
+import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core/plan-utils';
 import type { FrameApi, Unregister } from '../../frame/api';
 import { THEME_CHOICES, type ThemePref } from '../../frame/themePref';
 import { daemonHost, type DaemonHost } from '../../session/DaemonHost';
 import { useSession } from '../../session/useSession';
+import NumberField from './NumberField';
+import { atRunDefaults, runDefaultsChange } from './runDefaults';
+import { ModelAllowlist } from './ModelAllowlist';
+import { Subplanners } from './Subplanners';
 import { useSettings, type RunnerSetting } from './useSettings';
 import './settings.css';
 
@@ -55,67 +59,18 @@ function Toggle({ label, checked, hint, onChange }: { label: string; checked: bo
   );
 }
 
-/** A whole number at least `min`, sent on Enter or blur; a refused value comes back with the host's answer. */
-function NumberField({ label, value, min, hint, busy, onCommit }: {
-  label: string;
-  value: number;
-  min: number;
-  hint(n: number): string;
-  busy: boolean;
-  onCommit(n: number): void;
-}): JSX.Element {
-  const [draft, setDraft] = useState(String(value));
-  useEffect(() => setDraft(String(value)), [value]);
-  const parsed = parseCount(draft.trim(), min);
-  const commit = (): void => { if (parsed !== null && parsed !== value) onCommit(parsed); };
+/** Restore for the Run section: it asks inline first, so a stray click never overwrites six settings. */
+function RestoreRunDefaults({ disabled, onRestore }: { disabled: boolean; onRestore(): Promise<void> }): JSX.Element {
+  const [asking, setAsking] = useState(false);
+  if (!asking) {
+    return <Button size="sm" disabled={disabled} onClick={() => setAsking(true)}>Restore defaults</Button>;
+  }
   return (
-    <label className="settings-field">
-      <span className="settings-label">{label}</span>
-      <span className="settings-number">
-        <input
-          type="number"
-          min={min}
-          step={1}
-          value={draft}
-          disabled={busy}
-          aria-invalid={parsed === null}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => { if (event.key === 'Enter') commit(); }}
-          onBlur={commit}
-        />
-        <span className="settings-hint">{parsed === null ? `A whole number of ${min} or more.` : hint(parsed)}</span>
-      </span>
-    </label>
-  );
-}
-
-function Allowlist({ runner, ids, busy, onCommit }: {
-  runner: RunnerSetting;
-  ids: readonly string[] | undefined;
-  busy: boolean;
-  onCommit(ids: string[]): void;
-}): JSX.Element {
-  const [draft, setDraft] = useState((ids ?? []).join(', '));
-  useEffect(() => setDraft((ids ?? []).join(', ')), [ids]);
-  const commit = (): void => {
-    const next = draft.split(/[\s,]+/).map((id) => id.trim()).filter(Boolean);
-    if (next.join(',') !== (ids ?? []).join(',')) onCommit(next);
-  };
-  return (
-    <label className="settings-field">
-      <span className="settings-label">{runner.name} models</span>
-      <textarea
-        className="settings-allowlist"
-        rows={2}
-        value={draft}
-        disabled={busy}
-        placeholder="Every model this runner lists"
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={commit}
-        onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); commit(); } }}
-      />
-      <span className="settings-hint">Comma-separated model ids. Empty allows every model the runner lists.</span>
-    </label>
+    <div className="settings-confirm" role="group" aria-label="Restore Run settings">
+      <span className="settings-confirm-text">Restore Run settings to their defaults?</span>
+      <Button size="sm" variant="primary" onClick={() => { void onRestore().finally(() => setAsking(false)); }}>Restore</Button>
+      <Button size="sm" variant="ghost" onClick={() => setAsking(false)}>Cancel</Button>
+    </div>
   );
 }
 
@@ -149,14 +104,14 @@ function Planner({ settings, runners, providers, models, busy, onPlanner, onMode
     <>
       <label className="settings-field" htmlFor={plannerId}>
         <span className="settings-label">Planner</span>
-        <select id={plannerId} aria-label="Planner" value={settings.aiProvider} disabled={busy} onChange={(event) => onPlanner(event.target.value)}>
+        <select className="ow-select" id={plannerId} aria-label="Planner" value={settings.aiProvider} disabled={busy} onChange={(event) => onPlanner(event.target.value)}>
           {backends.map((backend) => <option key={backend.id} value={backend.id}>{backend.label}</option>)}
         </select>
         <span className="settings-hint">Who turns a goal into a plan. An agent plans with its own models.</span>
       </label>
       <label className="settings-field" htmlFor={modelFieldId}>
         <span className="settings-label">Planner model</span>
-        <select id={modelFieldId} aria-label="Planner model" value={settings.orchestratorModel} disabled={busy || choices.length === 0} onChange={(event) => onModel(event.target.value)}>
+        <select className="ow-select" id={modelFieldId} aria-label="Planner model" value={settings.orchestratorModel} disabled={busy || choices.length === 0} onChange={(event) => onModel(event.target.value)}>
           {choices.length === 0 && <option value={settings.orchestratorModel}>{settings.orchestratorModel || 'No model listed'}</option>}
           {choices.map((candidate) => <option key={candidate.modelId} value={candidate.modelId}>{candidate.modelLabel || candidate.modelId}</option>)}
         </select>
@@ -164,7 +119,7 @@ function Planner({ settings, runners, providers, models, busy, onPlanner, onMode
       {efforts.length > 0 && (
         <label className="settings-field" htmlFor={effortId}>
           <span className="settings-label">Thinking effort</span>
-          <select id={effortId} aria-label="Thinking effort" value={settings.plannerThinkingEffort} disabled={busy} onChange={(event) => onEffort(event.target.value)}>
+          <select className="ow-select" id={effortId} aria-label="Thinking effort" value={settings.plannerThinkingEffort} disabled={busy} onChange={(event) => onEffort(event.target.value)}>
             <option value="">Default</option>
             {efforts.map((variant) => <option key={variant.id} value={variant.id}>{variant.label || variant.id}</option>)}
           </select>
@@ -183,6 +138,9 @@ function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
   const { sessionId } = useSession(host);
   const { view, refresh, update, updateRun, setRunner, savePref, setTheme } = useSettings(host, sessionId);
   const { settings, runners, models, prefs, busy, loading, error } = view;
+  // Held here as well as in the prefs so the disclosure answers the click at once, not after the write.
+  const [advancedChoice, setAdvancedChoice] = useState<boolean | undefined>(undefined);
+  const advancedOpen = advancedChoice ?? prefs?.settingsAdvancedOpen ?? false;
   if (loading) return <EmptyState icon={SettingsIcon} title="Loading settings…" />;
   if (!settings) {
     return (
@@ -216,7 +174,7 @@ function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
         <h3 id="settings-appearance">Appearance</h3>
         <label className="settings-field">
           <span className="settings-label">Theme</span>
-          <select value={prefs?.theme ?? 'dark'} onChange={(event) => { void setTheme(event.target.value as ThemePref); }}>
+          <select className="ow-select" value={prefs?.theme ?? 'dark'} onChange={(event) => { void setTheme(event.target.value as ThemePref); }}>
             {THEME_CHOICES.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
           </select>
           <span className="settings-hint">Dark is the default. System follows your computer's light or dark setting. Also in the command palette (⌘K, then "Theme").</span>
@@ -249,11 +207,12 @@ function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
                 hint={runner.auth ? `Signed ${runner.auth.state === 'signed-in' ? 'in' : runner.auth.state === 'signed-out' ? 'out' : 'in unknown'}` : undefined}
                 onChange={(enabled) => { void setRunner(runner.id, enabled); }}
               />
-              <Allowlist
-                runner={runner}
+              <ModelAllowlist
+                runnerName={runner.name}
+                models={models?.modelsByRunner[runner.id] ?? []}
                 ids={settings.modelAllowlist?.[runner.id]}
-                busy={busy}
-                onCommit={(ids) => { void update({ modelAllowlist: { [runner.id]: ids.length > 0 ? ids : null } }); }}
+                disabled={!runner.enabled}
+                onCommit={(next) => update({ modelAllowlist: { [runner.id]: next } })}
               />
             </li>
           ))}
@@ -261,7 +220,13 @@ function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
       </section>
 
       <section className="settings-section" aria-labelledby="settings-run">
-        <h3 id="settings-run">Run</h3>
+        <div className="settings-section-head">
+          <h3 id="settings-run">Run</h3>
+          <RestoreRunDefaults
+            disabled={busy || atRunDefaults(settings)}
+            onRestore={() => update(runDefaultsChange())}
+          />
+        </div>
         <p className="settings-hint">How a run is started, watched and merged. These apply to the open session; the last change is the default for a new one.</p>
         <Pills
           label="Autonomy"
@@ -271,7 +236,7 @@ function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
         />
         <label className="settings-field">
           <span className="settings-label">Supervisor</span>
-          <select value={settings.run.supervisorLevel} disabled={busy} onChange={(event) => { void updateRun({ supervisorLevel: event.target.value as SupervisorLevel }); }}>
+          <select className="ow-select" value={settings.run.supervisorLevel} disabled={busy} onChange={(event) => { void updateRun({ supervisorLevel: event.target.value as SupervisorLevel }); }}>
             {SUPERVISORS.map((level) => <option key={level} value={level}>{SUPERVISOR_LEVEL_LABEL[level]}</option>)}
           </select>
         </label>
@@ -287,7 +252,6 @@ function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
         )}
         <Toggle label="Merge at gates automatically" checked={settings.run.mergeAtGatesAutomatically} onChange={(mergeAtGatesAutomatically) => { void updateRun({ mergeAtGatesAutomatically }); }} />
         <Toggle label="Autorun" checked={settings.run.autorun} hint="A plan the planner submits starts at once." onChange={(autorun) => { void updateRun({ autorun }); }} />
-        <Toggle label="Planned-with line in commits" checked={settings.run.plannedWithTrailer} onChange={(plannedWithTrailer) => { void updateRun({ plannedWithTrailer }); }} />
         <NumberField
           label="Parallel tasks"
           value={settings.maxParallel}
@@ -295,24 +259,6 @@ function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
           busy={busy}
           hint={(n) => `Up to ${n} AI task${n === 1 ? '' : 's'} at a time.`}
           onCommit={(maxParallel) => { void update({ env: { ORDEWELL_MAX_PARALLEL: String(maxParallel) } }); }}
-        />
-        {settings.run.supervisorLevel !== 'off' && (
-          <NumberField
-            label="Wake-up reads"
-            value={settings.run.wakeUpReadBudget}
-            min={1}
-            busy={busy}
-            hint={(n) => `Up to ${n} read${n === 1 ? '' : 's'} for one supervisor wake-up.`}
-            onCommit={(wakeUpReadBudget) => { void updateRun({ wakeUpReadBudget }); }}
-          />
-        )}
-        <NumberField
-          label="Subplanner tree budget"
-          value={settings.run.delegationTokens}
-          min={0}
-          busy={busy}
-          hint={(n) => (n === 0 ? 'Subplanners off.' : `A tree of plans may spend up to ${n} tokens.`)}
-          onCommit={(delegationTokens) => { void updateRun({ delegationTokens }); }}
         />
       </section>
 
@@ -330,6 +276,39 @@ function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
           hint="Keep the app and its daemon open when the last window closes and no run is live."
           onChange={(keepRunningInTray) => { void savePref('keepRunningInTray', keepRunningInTray); }}
         />
+      </section>
+
+      <section className="settings-section" aria-labelledby="settings-advanced">
+        <h3 id="settings-advanced">
+          <button
+            type="button"
+            className="settings-disclosure"
+            aria-expanded={advancedOpen}
+            aria-controls="settings-advanced-body"
+            onClick={() => { setAdvancedChoice(!advancedOpen); void savePref('settingsAdvancedOpen', !advancedOpen); }}
+          >
+            <Icon icon={advancedOpen ? ChevronDown : ChevronRight} size={16} />
+            <span>Advanced</span>
+          </button>
+        </h3>
+        <div id="settings-advanced-body" className="settings-advanced-body" hidden={!advancedOpen}>
+          <Toggle label="Planned-with line in commits" checked={settings.run.plannedWithTrailer} onChange={(plannedWithTrailer) => { void updateRun({ plannedWithTrailer }); }} />
+          {settings.run.supervisorLevel !== 'off' && (
+            <NumberField
+              label="Wake-up reads"
+              value={settings.run.wakeUpReadBudget}
+              min={1}
+              busy={busy}
+              hint={(n) => `Up to ${n} read${n === 1 ? '' : 's'} for one supervisor wake-up.`}
+              onCommit={(wakeUpReadBudget) => { void updateRun({ wakeUpReadBudget }); }}
+            />
+          )}
+          {/* Settings that are not ready for everyone. */}
+          <div className="settings-group">
+            <h4>Experimental</h4>
+            <Subplanners run={settings.run} busy={busy} onChange={updateRun} />
+          </div>
+        </div>
       </section>
     </div>
   );

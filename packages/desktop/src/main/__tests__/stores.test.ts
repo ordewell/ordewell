@@ -180,6 +180,12 @@ describe('prefs', () => {
     expect(validPref('keepRunningInTray', 1)).toBeUndefined();
   });
 
+  it('remembers whether Settings\' Advanced section is open, as a boolean, closed by default', () => {
+    expect(validPref('settingsAdvancedOpen', true)).toEqual({ settingsAdvancedOpen: true });
+    expect(validPref('settingsAdvancedOpen', 'open')).toBeUndefined();
+    expect(DEFAULT_PREFS.settingsAdvancedOpen).toBe(false);
+  });
+
   it('accepts a workspace layout only with sane sizes and booleans', () => {
     expect(validPref('layouts', { '/repo': { sidebar: 300.4, plan: 320, terminalOpen: true, activity: 'git' } }))
       .toEqual({ layouts: { '/repo': { sidebar: 300, plan: 320, terminalOpen: true, activity: 'git' } } });

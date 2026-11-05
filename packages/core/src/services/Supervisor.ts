@@ -14,13 +14,6 @@ export const WAKE_UP_TURN_TIMEOUT_MS = 10 * 60_000;
 /** How long a stopped wake-up turn has to end before the conversation is taken back from it. */
 export const HUNG_TURN_GRACE_MS = 30_000;
 
-/**
- * Reads a wake-up turn may make when the plan sets none. A supervisor reads
- * to explain a failure — the task, its log, its diff, a neighbour's — and a
- * wake-up has no user message to keep it short (ADR-0029).
- */
-export const DEFAULT_WAKE_UP_READ_BUDGET = 12;
-
 /** How long one event's detail runs in a digest: what happened, never the log behind it. */
 const DETAIL_CHARS = 240;
 

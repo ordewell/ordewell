@@ -82,7 +82,7 @@ function NewBranch({ ctx, close }: { ctx: GitContext; close(): void }): JSX.Elem
       <label>Name<input type="text" className="frame-input" autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label>
       <label>
         From
-        <select className="frame-input" value={from} onChange={(event) => setFrom(event.target.value)}>
+        <select className="ow-select frame-input" value={from} onChange={(event) => setFrom(event.target.value)}>
           {[...ctx.branches.local, ...ctx.branches.remote].map((b) => <option key={b.name} value={b.name}>{b.name}</option>)}
         </select>
       </label>
@@ -186,7 +186,7 @@ function Sidebar({ api }: { api: FrameApi }): JSX.Element {
         <IconButton icon={RefreshCw} label="Refresh the branches" onClick={() => void git.refresh(repo)} />
       </div>
       {multi && (
-        <select className="frame-input git-repo" aria-label="Repository" value={repo} onChange={(event) => setRepo(event.target.value)}>
+        <select className="ow-select frame-input git-repo" aria-label="Repository" value={repo} onChange={(event) => setRepo(event.target.value)}>
           {state.repos.map((r) => <option key={r.repo} value={r.repo}>{r.repo === '.' ? 'Workspace' : r.repo}{r.branch ? ` (${r.branch})` : ''}</option>)}
         </select>
       )}

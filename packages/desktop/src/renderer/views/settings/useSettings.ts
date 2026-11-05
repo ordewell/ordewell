@@ -23,6 +23,7 @@ const EMPTY_PREFS: Prefs = {
   layouts: {},
   notifications: true,
   keepRunningInTray: false,
+  settingsAdvancedOpen: false,
   editorCommand: '',
 };
 

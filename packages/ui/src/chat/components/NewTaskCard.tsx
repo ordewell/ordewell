@@ -111,7 +111,7 @@ export default function NewTaskCard({
       {runnerOptions.length > 0 && (
         <div className="model-selector">
           <label htmlFor="new-task-runner">Runner</label>
-          <select id="new-task-runner" value={effectiveRunner} onChange={(e) => setRunner(e.target.value)}>
+          <select className="ow-select" id="new-task-runner" value={effectiveRunner} onChange={(e) => setRunner(e.target.value)}>
             {runnerOptions.map((r) => <option key={r.id} value={r.id}>{r.displayName}</option>)}
           </select>
         </div>
@@ -126,7 +126,7 @@ export default function NewTaskCard({
       {modes.length > 0 && (
         <div className="model-selector">
           <label htmlFor="new-task-mode">Mode</label>
-          <select id="new-task-mode" value={effectiveMode} onChange={(e) => setMode(e.target.value)}>
+          <select className="ow-select" id="new-task-mode" value={effectiveMode} onChange={(e) => setMode(e.target.value)}>
             <option value="">Runner default</option>
             {modes.map((m) => <option key={m.id} value={m.id} disabled={!!m.unavailable}>{m.label}: {m.unavailable ?? m.description}</option>)}
           </select>

@@ -52,6 +52,39 @@ describe('OrchestratorPool.getProviderModels — configured providers', () => {
   });
 });
 
+describe('OrchestratorPool.getProviderModels — the model allowlist', () => {
+  let dir: string;
+  const savedSettingsPath = process.env.ORDEWELL_SETTINGS_PATH;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-pool-allowlist-models-'));
+    process.env.ORDEWELL_SETTINGS_PATH = path.join(dir, 'settings.json');
+    fs.writeFileSync(process.env.ORDEWELL_SETTINGS_PATH, JSON.stringify({ modelAllowlist: { 'claude-code': ['opus'] } }));
+  });
+
+  afterEach(() => {
+    if (savedSettingsPath === undefined) delete process.env.ORDEWELL_SETTINGS_PATH;
+    else process.env.ORDEWELL_SETTINGS_PATH = savedSettingsPath;
+    fs.rmSync(dir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  // Settings' picker lists this response to let a user tick models: the allowlist
+  // narrows what the planner and a new task are offered, never the catalog.
+  it('lists every model a runner discovers, whatever its allowlist holds (ADR-0003)', async () => {
+    const discovered = ['opus', 'sonnet', 'haiku'].map((modelId) => ({ modelId, modelLabel: modelId, variants: [] }));
+    vi.spyOn(ModelResolver.prototype, 'modelsForRunners').mockResolvedValue({ 'claude-code': discovered });
+    vi.spyOn(ModelResolver.prototype, 'refresh').mockResolvedValue({});
+    vi.spyOn(ModelResolver.prototype, 'pickerOptions').mockResolvedValue([]);
+    vi.spyOn(ModelResolver.prototype, 'getDiscoveryErrors').mockReturnValue({});
+
+    const { modelsByRunner, models } = await new OrchestratorPool().getProviderModels();
+
+    expect(modelsByRunner['claude-code'].map((m) => m.modelId)).toEqual(['opus', 'sonnet', 'haiku']);
+    expect(models.map((m) => m.modelId)).toEqual(['opus', 'sonnet', 'haiku']);
+  });
+});
+
 describe('OrchestratorPool.getProviderModels — per workspace', () => {
   let dir: string;
   const savedSettingsPath = process.env.ORDEWELL_SETTINGS_PATH;

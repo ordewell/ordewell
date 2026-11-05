@@ -262,6 +262,12 @@ describe('who may write one (ADR-0056 M2, M4, ADR-0055 D2, D19)', () => {
     expect(messages(submitted(scopeOf(root()), tasks))).toContain('Level 0 refused limits.delegatedTasks: asked 9, and there is 8.');
   });
 
+  it('holds a plan to the delegated tasks the user set, not the default', () => {
+    const two = [delegated('d0'), delegated('d1'), readOnlyCheck('c0', ['d0']), readOnlyCheck('c1', ['d1'])];
+    expect(messages(submitted(scopeOf(root({ shape: { delegatedTasks: 1 } })), two))).toContain('Level 0 refused limits.delegatedTasks: asked 2, and there is 1.');
+    expect(submitted(scopeOf(root({ shape: { delegatedTasks: 2 } })), two).ok).toBe(true);
+  });
+
   it('holds a child plan to its tasks, and leaves a root plan none', () => {
     const child = { ...root(), limits: { ...root().limits, tasksPerPlan: 2, depth: 0 } };
     const tasks = [spec('a'), spec('b'), spec('c')];

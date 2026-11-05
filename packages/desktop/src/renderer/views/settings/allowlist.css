@@ -1,0 +1,51 @@
+/* A runner's model allowlist (ADR-0003): a summary line that opens a picker in place. */
+
+.allowlist { display: flex; flex-direction: column; gap: var(--ow-space-1); min-width: 0; }
+.allowlist-summary { display: flex; align-items: center; gap: var(--ow-space-2); min-width: 0; }
+.allowlist-summary-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ow-fg); font: var(--ow-type-body); }
+.allowlist-toggle,
+.allowlist-all {
+  display: inline-flex; align-items: center; gap: var(--ow-space-1); flex: none;
+  min-height: var(--ow-hit); padding: 0 var(--ow-space-3);
+  border: 1px solid var(--ow-border-control); border-radius: var(--ow-radius-pill);
+  background: var(--ow-surface-inset); color: var(--ow-fg); font: var(--ow-type-small); cursor: pointer;
+}
+.allowlist-toggle { padding-left: var(--ow-space-2); }
+.allowlist-toggle:hover:not(:disabled),
+.allowlist-all:hover:not(:disabled) { background: var(--ow-bg-hover); }
+.allowlist-toggle:disabled,
+.allowlist-all:disabled { opacity: 0.5; cursor: default; }
+.allowlist-toggle:focus-visible,
+.allowlist-all:focus-visible,
+.allowlist-clear:focus-visible,
+.allowlist-search input:focus-visible,
+.allowlist-list:focus-visible { outline: 1px solid var(--ow-focus-ring); outline-offset: var(--ow-focus-offset); }
+
+/* The open picker is a card on the runner's inset row; its search field steps back to the inset, its rows stay flat. */
+.allowlist-panel { display: flex; flex-direction: column; gap: var(--ow-space-2); min-width: 0; padding: var(--ow-space-2) var(--ow-space-3); border: 1px solid var(--ow-surface-card-border); border-radius: var(--ow-radius-md); background: var(--ow-surface-card); box-shadow: var(--ow-elevation-card); }
+.allowlist-search { position: relative; display: flex; }
+.allowlist-search input {
+  flex: 1; min-width: 0; box-sizing: border-box; min-height: var(--ow-height-input);
+  padding: 0 calc(var(--ow-space-2) + 24px) 0 var(--ow-space-2);
+  border: 1px solid var(--ow-border-control); border-radius: var(--ow-radius-sm);
+  background: var(--ow-surface-inset); color: var(--ow-fg); font: var(--ow-type-body);
+}
+.allowlist-search input::-webkit-search-cancel-button { display: none; }
+.allowlist-clear { position: absolute; top: 50%; right: var(--ow-space-1); transform: translateY(-50%); display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: var(--ow-radius-sm); background: transparent; color: var(--ow-fg-secondary); cursor: pointer; }
+.allowlist-clear:hover { background: var(--ow-bg-hover); color: var(--ow-fg); }
+.allowlist-bar { display: flex; align-items: center; justify-content: space-between; gap: var(--ow-space-2); }
+.allowlist-count { color: var(--ow-fg-secondary); font: var(--ow-type-small); }
+.allowlist-list { display: flex; flex-direction: column; max-height: 264px; overflow-y: auto; border-radius: var(--ow-radius-sm); }
+.allowlist-option { display: flex; align-items: center; gap: var(--ow-space-2); min-width: 0; min-height: var(--ow-hit); padding: var(--ow-space-1) var(--ow-space-2); border-radius: var(--ow-radius-sm); cursor: pointer; }
+.allowlist-option:hover { background: var(--ow-bg-hover); }
+.allowlist-list:focus-visible .allowlist-option.is-active { background: var(--ow-bg-hover); outline: 1px solid var(--ow-focus-ring); outline-offset: -1px; }
+.allowlist-box { flex: none; display: grid; place-items: center; width: 16px; height: 16px; border: 1px solid var(--ow-border-control); border-radius: var(--ow-radius-sm); background: var(--ow-surface-inset); color: var(--ow-accent-on, #fff); }
+.allowlist-box.on { border-color: var(--ow-accent-emphasis); background: var(--ow-accent-emphasis); }
+.allowlist-name { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.allowlist-label,
+.allowlist-id { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.allowlist-label { color: var(--ow-fg); font: var(--ow-type-body); }
+.allowlist-id { color: var(--ow-fg-secondary); font: var(--ow-type-code); }
+.allowlist-unlisted { flex: none; max-width: 40%; color: var(--ow-fg-secondary); font: var(--ow-type-small); }
+.allowlist-empty { padding: var(--ow-space-2); }
+@media (forced-colors: active) { .allowlist-box.on { forced-color-adjust: none; } }

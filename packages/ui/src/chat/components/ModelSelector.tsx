@@ -373,7 +373,7 @@ export default function ModelSelector({
 
         {selectedModel && selectedModel.variants.length > 0 && (
           <select
-            className="variant-select"
+            className="ow-select variant-select"
             // The value must reflect what the runner will actually receive:
             // unset (or invalid for this model) renders as "Default" instead
             // of silently displaying a variant that was never assigned.

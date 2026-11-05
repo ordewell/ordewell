@@ -1584,11 +1584,12 @@ export class Session {
 
   /** Each value where it lives today; the level is the caller's to name (ADR-0056 M1). */
   private rootSettings(): Omit<RootSettings, 'level'> {
-    const { autorun, delegationTokens } = this.userRunSettings();
+    const { autorun, delegationTokens, delegationDepth, delegatedTasksPerPlan, tasksPerChildPlan } = this.userRunSettings();
     return {
       autorun,
       autonomous: this.config.autonomousMode,
       delegationTokens,
+      shape: { depth: delegationDepth, delegatedTasks: delegatedTasksPerPlan, tasksPerPlan: tasksPerChildPlan },
       effects: this.effectRules(),
       runners: this.catalog.runnersFor('plan') ?? [],
       models: this.catalog.allowlist(),

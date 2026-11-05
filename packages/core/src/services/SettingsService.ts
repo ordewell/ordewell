@@ -3,47 +3,12 @@ import * as path from 'path';
 import { globalDataDir, migrateOldConfigDir } from '../utils/globalDataDir';
 import { withFileLock } from '../utils/fileLock';
 import type { SupervisorLevel } from '../models/Execution';
-import { DEFAULT_SUPERVISOR_RETRY_LIMIT } from './LoopGuards';
-import { DEFAULT_WAKE_UP_READ_BUDGET } from './Supervisor';
+import { DEFAULT_AUTONOMOUS_MODE, RUN_SETTINGS_DEFAULTS, SHAPE_LIMITS, type GlobalRunSettings } from './runSettingsDefaults';
 import { parseAutonomyFlag } from './ModeResolver';
 import { containersOffered, rememberDelegationBudget } from './runSettingsText';
 import type { TaskRunnerConfig } from './harness/AgentAdapter';
 
-/** How a run is started, watched and merged: the user's, not a plan's (ADR-0030). */
-export interface GlobalRunSettings {
-  supervisorLevel: SupervisorLevel;
-  mergeAtGatesAutomatically: boolean;
-  /** End the commits Ordewell writes with a `Planned-with: Ordewell` trailer (ADR-0013). */
-  plannedWithTrailer: boolean;
-  /** Start a plan when the planner submits it, approved as if the user had pressed Execute. */
-  autorun: boolean;
-  /** Retries an Act supervisor may make of one task in a run (a loop guard). */
-  supervisorRetryLimit: number;
-  /** Reads a wake-up turn may make, in place of a user message's caps. */
-  wakeUpReadBudget: number;
-  /**
-   * The token budget of a delegation tree (ADR-0055 D21, ADR-0056 M5); 0 is
-   * delegation off. One value, so delegation is never on with no budget.
-   */
-  delegationTokens: number;
-  /**
-   * The last budget the user entered, kept while delegation is off so turning
-   * it on again asks for nothing. 0 is none yet: the first enable takes a
-   * number from the user, never a default. It never turns delegation on.
-   */
-  delegationBudget: number;
-}
-
-export const RUN_SETTINGS_DEFAULTS: Readonly<GlobalRunSettings> = {
-  supervisorLevel: 'watch',
-  mergeAtGatesAutomatically: false,
-  plannedWithTrailer: true,
-  autorun: false,
-  supervisorRetryLimit: DEFAULT_SUPERVISOR_RETRY_LIMIT,
-  wakeUpReadBudget: DEFAULT_WAKE_UP_READ_BUDGET,
-  delegationTokens: 0,
-  delegationBudget: 0,
-};
+export { RUN_SETTINGS_DEFAULTS, type GlobalRunSettings };
 
 export class RunSettingsError extends Error {
   constructor(message: string) {
@@ -53,6 +18,12 @@ export class RunSettingsError extends Error {
 }
 
 const SUPERVISOR_LEVELS: readonly SupervisorLevel[] = ['off', 'watch', 'act'];
+
+/** A shape limit's check: at least 1, and never past the cap a node is refused at (ADR-0055 D19). */
+const shapeCheck = (limit: keyof typeof SHAPE_LIMITS, refusal: string) => ({
+  valid: (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 1 && (v as number) <= SHAPE_LIMITS[limit].hard,
+  refusal: `${refusal}, 1 to ${SHAPE_LIMITS[limit].hard}.`,
+});
 
 /** Each value's own check, so a hand-edited file and a refused update agree on what is usable. */
 const RUN_SETTING_CHECKS: { [K in keyof GlobalRunSettings]: { valid: (v: unknown) => v is GlobalRunSettings[K]; refusal: string } } = {
@@ -88,6 +59,9 @@ const RUN_SETTING_CHECKS: { [K in keyof GlobalRunSettings]: { valid: (v: unknown
     valid: (v): v is number => Number.isSafeInteger(v) && (v as number) >= 0,
     refusal: 'The kept delegation budget must be a whole number of tokens.',
   },
+  delegationDepth: shapeCheck('depth', 'The tree\'s depth must be a whole number of levels'),
+  delegatedTasksPerPlan: shapeCheck('delegatedTasks', 'Delegated tasks per plan must be a whole number'),
+  tasksPerChildPlan: shapeCheck('tasksPerPlan', 'Tasks per child plan must be a whole number'),
 };
 
 const RUN_SETTING_KEYS = Object.keys(RUN_SETTING_CHECKS) as (keyof GlobalRunSettings)[];
@@ -111,6 +85,9 @@ export interface UserSettings {
   wakeUpReadBudget?: number;
   delegationTokens?: number;
   delegationBudget?: number;
+  delegationDepth?: number;
+  delegatedTasksPerPlan?: number;
+  tasksPerChildPlan?: number;
   /**
    * Whether an API planner prunes its own context ahead of a call that would
    * pass 90% of its model's window. Absent means on. Set in the file only:
@@ -394,7 +371,7 @@ export class SettingsService {
    */
   autonomousMode(): boolean {
     const override = this.autonomyOverride();
-    return override ?? this.getAll().autonomousMode ?? false;
+    return override ?? this.getAll().autonomousMode ?? DEFAULT_AUTONOMOUS_MODE;
   }
 
   /** Whether `ORDEWELL_AUTONOMOUS_MODE` decides the level, whatever this file says. */
