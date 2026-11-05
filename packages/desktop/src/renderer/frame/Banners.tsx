@@ -1,20 +1,32 @@
 import { useState } from 'react';
+import { CircleAlert, Info, TriangleAlert } from 'lucide-react';
+import { Button, Icon, type IconComponent } from '@ordewell/ui/design';
 import type { Banner } from './api';
 import { useFrameState } from './store';
+
+const TONE_ICONS: Readonly<Record<Banner['tone'], IconComponent>> = {
+  info: Info,
+  warning: TriangleAlert,
+  error: CircleAlert,
+};
 
 function BannerView({ banner }: { banner: Banner }): JSX.Element {
   const [busy, setBusy] = useState(false);
   const heading = `banner-${banner.id}`;
   return (
     <section className={`frame-banner frame-banner-${banner.tone}`} aria-labelledby={heading}>
-      <h2 id={heading}>{banner.title}</h2>
-      {banner.body && <p>{banner.body}</p>}
+      <Icon icon={TONE_ICONS[banner.tone]} size={16} className="frame-banner-icon" />
+      <div className="frame-banner-text">
+        <h2 id={heading}>{banner.title}</h2>
+        {banner.body && <p>{banner.body}</p>}
+      </div>
       {banner.actions && banner.actions.length > 0 && (
         <div className="frame-banner-actions">
           {banner.actions.map((action) => (
-            <button
+            <Button
               key={action.label}
-              type="button"
+              size="sm"
+              variant="secondary"
               disabled={busy}
               onClick={() => {
                 setBusy(true);
@@ -22,7 +34,7 @@ function BannerView({ banner }: { banner: Banner }): JSX.Element {
               }}
             >
               {action.label}
-            </button>
+            </Button>
           ))}
         </div>
       )}

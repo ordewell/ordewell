@@ -1,34 +1,42 @@
-.checkout { display: flex; flex-direction: column; gap: var(--ow-space-4); padding-bottom: var(--ow-space-5); }
-.checkout-repo { display: flex; flex-direction: column; gap: var(--ow-space-2); }
-.checkout-repo + .checkout-repo { border-top: 1px solid var(--ow-border); padding-top: var(--ow-space-4); }
-.checkout-repo-head { display: flex; align-items: center; gap: var(--ow-space-3); padding: 0 var(--ow-space-5); min-width: 0; }
-.checkout-repo-name { font: var(--ow-type-body-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.checkout-branch { color: var(--ow-fg-secondary); font: var(--ow-type-code); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.checkout-remote { color: var(--ow-fg-secondary); font: var(--ow-type-code); font-size: 11px; white-space: nowrap; }
+/*
+ * The Checkout sidebar (design W10). Rows and groups come from sidebarKit.css;
+ * this file lays out the repository head, the commit box and the sync line.
+ * Every line is a flex row with a gap and one part that shrinks, so a long
+ * branch or path ends in an ellipsis instead of under a control.
+ */
+.checkout { display: flex; flex-direction: column; gap: var(--ow-space-2); padding-bottom: var(--ow-space-3); min-width: 0; }
+.checkout-state { padding: var(--ow-space-6) var(--ow-space-3); }
+.checkout-repo { display: flex; flex-direction: column; gap: var(--ow-space-2); min-width: 0; }
+.checkout-repo + .checkout-repo { border-top: 1px solid var(--ow-border); padding-top: var(--ow-space-2); }
+.checkout-repo-head { display: flex; align-items: center; gap: var(--ow-space-2); min-height: var(--ow-row); padding: 0 var(--ow-space-2) 0 var(--ow-space-3); min-width: 0; }
+.checkout-repo-name { flex: 0 1 auto; max-width: 45%; font: var(--ow-type-body-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.checkout-branch { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--ow-space-1); color: var(--ow-fg-secondary); font: var(--ow-type-code); }
+.checkout-branch .ow-icon { flex: none; }
+.checkout-repo-head .ow-icon-button { flex: none; }
 
-.checkout-live { margin: 0 var(--ow-space-5); padding: var(--ow-space-2) var(--ow-space-4); border-left: 2px solid var(--ow-accent); background: var(--ow-bg-overlay); color: var(--ow-fg-secondary); font: var(--ow-type-body); }
-.checkout-error { margin: 0 var(--ow-space-5); padding: var(--ow-space-2) var(--ow-space-4); border-left: 2px solid var(--ow-status-error, var(--ow-fg)); background: var(--ow-bg-overlay); color: var(--ow-fg); font: var(--ow-type-body); white-space: pre-wrap; }
+.checkout-commit { display: flex; flex-direction: column; gap: var(--ow-space-2); padding: 0 var(--ow-space-3); min-width: 0; }
+.checkout-message { box-sizing: border-box; width: 100%; min-height: 4.5em; padding: var(--ow-space-1) var(--ow-space-2); resize: vertical; border: 1px solid var(--ow-border-control); border-radius: var(--ow-radius-md); background: var(--ow-bg-input); color: var(--ow-fg); font: var(--ow-type-body); }
+.checkout-message::placeholder { color: var(--ow-fg-placeholder); }
+.checkout-message:focus-visible { outline: 1px solid var(--ow-focus-ring); outline-offset: -1px; }
+.checkout-commit-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--ow-space-2) var(--ow-space-3); min-width: 0; }
+.checkout-amend { display: inline-flex; align-items: center; gap: var(--ow-space-2); min-width: 0; color: var(--ow-fg-secondary); font: var(--ow-type-body); }
+.checkout-amend-off { overflow-wrap: anywhere; }
 
-.checkout-commit { display: flex; flex-direction: column; gap: var(--ow-space-2); padding: 0 var(--ow-space-5); }
-.checkout-message { width: 100%; box-sizing: border-box; min-height: 4.5em; padding: var(--ow-space-2) var(--ow-space-4); resize: vertical; font: var(--ow-type-body); }
-.checkout-commit-actions { display: flex; align-items: center; gap: var(--ow-space-4); }
-.checkout-amend { display: inline-flex; align-items: center; gap: var(--ow-space-2); color: var(--ow-fg-secondary); font: var(--ow-type-body); }
+/* [Commit | ▾]: one filled button, split so the menu has its own hit target. */
+.checkout-split { position: relative; display: flex; flex: none; }
+.checkout-split .checkout-split-main { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.checkout-split .checkout-split-more { width: var(--ow-hit); padding: 0; justify-content: center; border-top-left-radius: 0; border-bottom-left-radius: 0; border-left-color: var(--ow-accent-on); }
+.checkout-split .checkout-split-more .ow-icon { flex: none; }
+.frame-popover.checkout-menu { left: 0; right: auto; min-width: 0; width: max-content; max-width: calc(100vw - var(--ow-space-6)); }
+.checkout-menu button:disabled { opacity: 0.5; cursor: default; }
 
-.checkout-heading { display: flex; align-items: center; gap: var(--ow-space-3); margin: 0; padding: var(--ow-space-2) var(--ow-space-5); color: var(--ow-fg-secondary); font: var(--ow-type-body-strong); letter-spacing: 0.04em; }
-.checkout-text { border: 0; background: transparent; color: var(--ow-accent); padding: 0; font: var(--ow-type-body); cursor: pointer; }
-.checkout-text:hover:not(:disabled) { text-decoration: underline; }
-.checkout-text:disabled { opacity: 0.5; cursor: default; }
 .checkout-files { margin: 0; padding: 0; list-style: none; }
-.checkout-row { display: flex; align-items: center; gap: var(--ow-space-2); padding-right: var(--ow-space-4); }
-.checkout-row:hover, .checkout-row:focus-within { background: var(--ow-bg-hover); }
-.checkout-file { display: flex; align-items: center; gap: var(--ow-space-3); flex: 1; min-width: 0; border: 0; background: transparent; color: var(--ow-fg); padding: var(--ow-space-1) var(--ow-space-5); text-align: left; cursor: pointer; white-space: nowrap; }
-.checkout-file:focus-visible { outline: 1px solid var(--ow-focus-ring, var(--ow-accent)); outline-offset: -1px; }
-.checkout-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.checkout-from { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.checkout-row-actions { display: inline-flex; align-items: center; gap: var(--ow-space-1); }
-.checkout-empty { margin: 0; padding: var(--ow-space-2) var(--ow-space-5); color: var(--ow-fg-secondary); font: var(--ow-type-body); }
+.checkout-file .checkout-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.checkout-file .checkout-dir { flex: 1; min-width: 0; color: var(--ow-fg-secondary); font: var(--ow-type-small); }
+.checkout-empty { margin: 0; padding: var(--ow-space-1) var(--ow-space-3); color: var(--ow-fg-secondary); font: var(--ow-type-body); }
 
-.checkout-kind { color: var(--ow-fg-secondary); font: var(--ow-type-code); white-space: nowrap; }
-.checkout-hunk { padding: var(--ow-space-1) var(--ow-space-4); }
-.checkout-hunk-actions { display: flex; align-items: center; gap: var(--ow-space-3); padding: var(--ow-space-1) 0; }
-.checkout-hunk-where { color: var(--ow-fg-secondary); font: var(--ow-type-code); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The Checkout's diff tab: the toolbar's kind label and the stage-hunk strip under each hunk. */
+.checkout-kind { color: var(--ow-fg-secondary); font: var(--ow-type-code-small); white-space: nowrap; }
+.checkout-hunk { padding: var(--ow-space-half) var(--ow-space-2); min-width: 0; }
+.checkout-hunk-actions { display: flex; align-items: center; gap: var(--ow-space-2); padding: var(--ow-space-half) 0; min-width: 0; }
+.checkout-hunk-where { flex: 1; min-width: 0; color: var(--ow-fg-secondary); font: var(--ow-type-code-small); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

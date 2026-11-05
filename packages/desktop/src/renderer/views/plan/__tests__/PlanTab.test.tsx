@@ -1,10 +1,11 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { FrameApi } from '../../../frame/api';
 import { DaemonHost } from '../../../session/DaemonHost';
 import { fakeDaemon, ok, surfacePlan, surfaceTask } from '../../../session/__tests__/fakeDaemon';
 import { selectedTask } from '../../../session/selection';
-import { PlanTab } from '../PlanTab';
+import { PlanList } from '../PlanList';
+import { PlanGraphTab, planProgress } from '../PlanTab';
 
 beforeAll(() => {
   class Observer { observe() {} unobserve() {} disconnect() {} }
@@ -42,63 +43,54 @@ const TASKS = [
   surfaceTask({ id: 'b', order: 2, title: 'Parse the config', dependencies: ['a'] }),
 ];
 
-describe('PlanTab', () => {
-  it('shares one selection between the List and the Graph', async () => {
+describe('the plan graph tab', () => {
+  it('shares one selection with the plan panel\'s list', async () => {
     const host = await openedHost(TASKS);
     const { api } = frameApi();
-    render(<PlanTab host={host} api={api} />);
+    render(<><PlanList host={host} /><PlanGraphTab host={host} api={api} /></>);
 
-    // The graph's click selects; switching to the List keeps it, and the List's open card is that task.
-    fireEvent.click(screen.getByRole('button', { name: 'Graph' }));
-    fireEvent.click(await screen.findByRole('button', { name: /^#2 Parse the config, / }));
+    // The graph's node and the list's row share one name; the node is the one with a menu.
+    const node = async (name: RegExp) => (await screen.findAllByRole('button', { name })).find((b) => b.classList.contains('graph-card-face'))!;
+    const row = (name: RegExp) => screen.getAllByRole('button', { name }).find((b) => b.classList.contains('task-heading'))!;
+
+    // The graph's click selects, and the list's open card is that task.
+    fireEvent.click(await node(/^#2 Parse the config, /));
     expect(selectedTask(host)).toBe('b');
+    expect(await node(/^#2 Parse the config, /)).toHaveAttribute('aria-current', 'true');
+    await waitFor(() => expect(row(/^#2 Parse the config, /)).toHaveAttribute('aria-expanded', 'true'));
 
-    fireEvent.click(screen.getByRole('button', { name: 'List' }));
-    expect(await screen.findByText('Parse the config')).toBeInTheDocument();
-    expect(selectedTask(host)).toBe('b');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Graph' }));
-    expect(await screen.findByRole('button', { name: /^#2 Parse the config, / })).toHaveAttribute('aria-current', 'true');
-  });
-
-  it('shows in the Graph the card the List opened', async () => {
-    const host = await openedHost(TASKS);
-    render(<PlanTab host={host} api={frameApi().api} />);
-
-    fireEvent.click(await screen.findByText('Read the spec'));
+    fireEvent.click(row(/^#1 Read the spec, /));
     expect(selectedTask(host)).toBe('a');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Graph' }));
-    expect(await screen.findByRole('button', { name: /^#1 Read the spec, / })).toHaveAttribute('aria-current', 'true');
+    expect(await node(/^#1 Read the spec, /)).toHaveAttribute('aria-current', 'true');
   });
 
-  it('switches views with V, but not while typing', async () => {
-    const host = await openedHost(TASKS);
-    render(<PlanTab host={host} api={frameApi().api} />);
-    const group = screen.getByRole('group', { name: 'Plan view' });
-
-    fireEvent.keyDown(group, { key: 'v' });
-    expect(screen.getByRole('button', { name: 'Graph' })).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.keyDown(group, { key: 'v', metaKey: true });
-    expect(screen.getByRole('button', { name: 'Graph' })).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.keyDown(group, { key: 'v' });
-    expect(screen.getByRole('button', { name: 'List' })).toHaveAttribute('aria-pressed', 'true');
-  });
-
-  it('falls back to the List with a banner when the plan has a dependency loop, and takes the banner down after', async () => {
+  it('puts up a banner when the plan has a dependency loop, and takes it down after', async () => {
     const host = await openedHost([
       surfaceTask({ id: 'a', order: 1, title: 'One', dependencies: ['b'] }),
       surfaceTask({ id: 'b', order: 2, title: 'Two', dependencies: ['a'] }),
     ]);
     const { api, unregister } = frameApi();
-    const { unmount } = render(<PlanTab host={host} api={api} />);
+    const { unmount } = render(<PlanGraphTab host={host} api={api} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Graph' }));
-    await screen.findByRole('button', { name: 'List' });
-    expect(api.showBanner).toHaveBeenCalledWith(expect.objectContaining({ id: 'plan.graph.cycle', tone: 'warning' }));
-    expect(screen.getByRole('button', { name: 'List' })).toHaveAttribute('aria-pressed', 'true');
-
+    await vi.waitFor(() => expect(api.showBanner).toHaveBeenCalledWith(expect.objectContaining({ id: 'plan.graph.cycle', tone: 'warning' })));
     unmount();
     expect(unregister).toHaveBeenCalled();
+  });
+});
+
+describe('planProgress', () => {
+  it('counts each task by its status, settled ones as done', async () => {
+    const host = await openedHost([
+      surfaceTask({ id: 'a', order: 1, title: 'One', status: 'completed' }),
+      surfaceTask({ id: 'b', order: 2, title: 'Two', status: 'failed' }),
+      surfaceTask({ id: 'c', order: 3, title: 'Three' }),
+    ]);
+    expect(planProgress(host)).toEqual({ done: 1, total: 3, counts: { passed: 1, failed: 1, 'not-started': 1 } });
+  });
+
+  it('has nothing to say before there is a plan', () => {
+    const host = new DaemonHost('/work/empty');
+    hosts.push(host);
+    expect(planProgress(host)).toBeUndefined();
   });
 });

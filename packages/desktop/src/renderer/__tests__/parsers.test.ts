@@ -24,6 +24,21 @@ describe('parseRunners', () => {
     expect(parseRunners(data)?.slice(1)).toEqual([{ id: 'codex', state: 'unknown' }, { id: 'opencode', state: 'unknown' }]);
   });
 
+  it('reads a runner turned off in Settings as off, whatever its login', () => {
+    const data = { runners: [{ id: 'codex', enabled: false, auth: { state: 'signed-in' } }] };
+    expect(parseRunners(data)?.[1]).toEqual({ id: 'codex', state: 'off' });
+  });
+
+  it('keeps the version and the sign-in command when the daemon gives them', () => {
+    const data = { runners: [
+      { id: 'codex', enabled: true, version: '0.9.1', auth: { state: 'signed-out', loginCommand: ['codex', 'login'] } },
+      { id: 'opencode', enabled: true, version: '', auth: { state: 'signed-out', loginCommand: ['opencode', 3] } },
+    ] };
+    const [, codex, opencode] = parseRunners(data) ?? [];
+    expect(codex).toEqual({ id: 'codex', state: 'signed-out', version: '0.9.1', loginCommand: ['codex', 'login'] });
+    expect(opencode).toEqual({ id: 'opencode', state: 'signed-out' });
+  });
+
   it('answers undefined for anything but the runners response', () => {
     expect(parseRunners(undefined)).toBeUndefined();
     expect(parseRunners([])).toBeUndefined();

@@ -14,7 +14,7 @@ describe('task card usage', () => {
   it('shows the assigned runner and model without usage in a collapsed card header', () => {
     const { container } = render(<TaskCard task={task({ attemptUsage: [usage], assignedModel: { modelId: 'anthropic/claude-sonnet', modelLabel: 'Sonnet' } })} models={[]} />);
     expect(container.textContent).not.toMatch(/\$0\.42|ctx|12[,.]4/);
-    expect(container.querySelector('.task-assignment')?.textContent).toBe('codex · Sonnet');
+    expect(container.querySelector('.task-assignment')?.textContent).toBe('Codex · Sonnet');
   });
 
   it('renders no usage on a subtask card', () => {

@@ -1,5 +1,4 @@
-import { useEffect, useRef } from 'react';
-import type { NodeCommand, NodeCommandId } from './nodeCommands';
+import { useEffect, useRef, type RefObject } from 'react';
 
 export interface MenuAnchor {
   x: number;
@@ -7,14 +6,18 @@ export interface MenuAnchor {
 }
 
 /**
- * The node's context menu, a menu in the ARIA sense: arrows and Home/End move,
- * Esc and Tab close, and focus goes back to the node it came from.
+ * A card's small menu, a menu in the ARIA sense: arrows and Home/End move,
+ * Esc and Tab close, and focus goes back to the card it came from. It holds
+ * the card's commands, or the dependencies ← and → can go to. The task tab's
+ * ⋯ opens it too.
  */
-export function NodeMenu({ commands, at, label, onPick, onClose }: {
-  commands: readonly NodeCommand[];
+export function NodeMenu<T extends string>({ commands, at, label, anchor, onPick, onClose }: {
+  commands: readonly { id: T; label: string }[];
   at: MenuAnchor;
   label: string;
-  onPick(id: NodeCommandId): void;
+  /** The button that toggles the menu: a press on it is its own click's to answer, or the click would open the menu again. */
+  anchor?: RefObject<HTMLElement>;
+  onPick(id: T): void;
   onClose(): void;
 }): JSX.Element {
   const list = useRef<HTMLUListElement>(null);
@@ -23,7 +26,8 @@ export function NodeMenu({ commands, at, label, onPick, onClose }: {
   useEffect(() => {
     items()[0]?.focus();
     const away = (event: PointerEvent): void => {
-      if (!list.current?.contains(event.target as Node)) onClose();
+      const target = event.target as Node;
+      if (!list.current?.contains(target) && !anchor?.current?.contains(target)) onClose();
     };
     document.addEventListener('pointerdown', away, true);
     return () => document.removeEventListener('pointerdown', away, true);

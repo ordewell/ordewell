@@ -4,6 +4,7 @@ import type { DaemonStatus } from '../../../../shared/bridge';
 import type { RouteParams } from '../../../../shared/routes';
 import { registerFrameCommands } from '../../../frame/commands';
 import { Frame } from '../../../frame/Frame';
+import { activeTab } from '../../../frame/layout';
 import { FrameProvider, FrameStore } from '../../../frame/store';
 import { daemonHost, resetDaemonHosts } from '../../../session/DaemonHost';
 import { fakeDaemon, ok } from '../../../session/__tests__/fakeDaemon';
@@ -17,7 +18,6 @@ import { commitsTabId } from '../gitModel';
 vi.mock('../../../monaco', async () => (await import('../../../test/monacoMock')).fakeMonacoModule());
 
 const WORKSPACE = '/work/acme';
-const SIZES = { sidebar: 260, right: 360, bottom: 240 };
 const CONNECTED: DaemonStatus = { state: 'connected', port: 3700, owned: true, daemon: { version: '0.12.3', contract: 1 } };
 const sha = (c: string): string => c.repeat(40);
 
@@ -86,7 +86,7 @@ async function mount(extra: Answers = {}, branches: unknown = BRANCHES) {
     'sessions.get': ok(SESSION),
     ...extra,
   });
-  store = new FrameStore({ workspace: WORKSPACE, platform: 'linux', sizes: SIZES });
+  store = new FrameStore({ workspace: WORKSPACE, platform: 'linux' });
   offs.push(registerFrameCommands(store), registerSidebar(store.api), registerGraph(store.api), registerDiff(store.api));
   render(<FrameProvider value={store}><Frame daemon={CONNECTED} /></FrameProvider>);
   act(() => store.api.showActivity('git'));
@@ -106,7 +106,7 @@ describe('the Git sidebar', () => {
     await mount();
     expect(screen.getByLabelText('2 commits ahead, 1 commit behind')).toHaveTextContent('↑2 ↓1');
     expect(screen.getByRole('button', { name: 'origin/main' })).toBeInTheDocument();
-    expect(screen.getByText('stash@{0}: WIP on main')).toBeInTheDocument();
+    expect(screen.getByTitle('stash@{0}: WIP on main')).toBeInTheDocument();
     expect(screen.getByText('Your checkout')).toBeInTheDocument();
   });
 
@@ -114,16 +114,17 @@ describe('the Git sidebar', () => {
     const daemon = await mount();
     const host = daemonHost(WORKSPACE);
     const open = vi.spyOn(host, 'open').mockResolvedValue(undefined);
-    const openTask = vi.spyOn(host, 'openTask').mockReturnValue(undefined);
+    const reveal = vi.spyOn(host, 'revealTask').mockReturnValue(undefined);
     // The task's worktree and its branch both belong to it.
     const [link] = await screen.findAllByRole('button', { name: 'run r7 · task #3' });
     expect(daemon.calls('sessions.get').length).toBeGreaterThan(0);
     expect(screen.getByText('integration')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'run r7' })).toBeInTheDocument();
     fireEvent.click(link!);
-    await waitFor(() => expect(openTask).toHaveBeenCalledWith('t3', 'details'));
+    await waitFor(() => expect(reveal).toHaveBeenCalledWith('t3'));
     expect(open).toHaveBeenCalledWith('s1');
-    expect(store.getSnapshot().layout.activity).toBe('plan');
+    // The plan panel already shows the run's plan: the sidebar stays on Git.
+    expect(store.getSnapshot().layout.activity).toBe('git');
   });
 
   it('has no switch or delete on a branch Ordewell owns, nor on the checked-out one', async () => {
@@ -133,6 +134,15 @@ describe('the Git sidebar', () => {
     expect(screen.queryByRole('button', { name: 'Delete main' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Delete feature/login' })).toBeInTheDocument();
     expect(screen.getByText('read-only')).toBeInTheDocument();
+  });
+
+  it('closes the new-branch form on Esc and keeps that Esc from closing anything under it', async () => {
+    await mount();
+    fireEvent.click(screen.getByRole('button', { name: 'New branch' }));
+    const form = screen.getByRole('form', { name: 'New branch' });
+    const unhandled = fireEvent.keyDown(within(form).getByRole('textbox'), { key: 'Escape' });
+    expect(unhandled).toBe(false);
+    expect(screen.queryByRole('form', { name: 'New branch' })).toBeNull();
   });
 
   it('shows the lock a live run puts on its landing branch', async () => {
@@ -259,7 +269,8 @@ describe('a refused switch or delete', () => {
     expect(refusal).toHaveTextContent('Run r7 of “Ship SSO” is live, and it lands on main.');
     fireEvent.click(within(refusal).getByRole('button', { name: 'Open run' }));
     await waitFor(() => expect(open).toHaveBeenCalledWith('s1'));
-    expect(store.getSnapshot().layout.activity).toBe('plan');
+    // A run with no one task to show opens on its planner conversation.
+    expect(activeTab(store.getSnapshot().layout.groups[0])?.kind).toBe('planner');
   });
 });
 

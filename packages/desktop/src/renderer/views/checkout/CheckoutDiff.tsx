@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { FileX, GitCompare } from 'lucide-react';
+import { Button, EmptyState } from '@ordewell/ui/design';
 import type { FrameApi, Tab } from '../../frame/api';
 import { createDiffEditor, loadMonaco, type DiffEditorHandle } from '../../monaco';
 import { stageHunks, unstageHunks, stagePaths, unstagePaths, readCheckoutDiff, describeGitError, type CheckoutDiff as CheckoutDiffData } from './checkoutData';
 import { onCheckoutChange, notifyCheckoutChange } from './checkoutEvents';
 import { hunkAfterLine, sliceHunk } from './checkoutModel';
 import { parseCheckoutDiffTabId } from './checkoutTabs';
-import '../explorer/explorer.css';
+import '../diffKit.css';
 import './checkout.css';
 
 /*
@@ -31,7 +33,7 @@ function Zone({ editor, afterLine, children }: { editor: DiffEditorHandle; after
 
 export function CheckoutDiff({ api, tab }: { api: FrameApi; tab: Tab }): JSX.Element {
   const parsed = parseCheckoutDiffTabId(tab.id);
-  if (!parsed) return <p className="frame-empty">This diff does not name a file.</p>;
+  if (!parsed) return <EmptyState icon={FileX} title="This diff does not name a file." />;
   return <CheckoutFileDiff api={api} tab={tab} repo={parsed.repo} path={parsed.path} kind={parsed.kind} />;
 }
 
@@ -122,58 +124,60 @@ function CheckoutFileDiff({ api, tab, repo, path, kind }: {
   const fileAction = diff?.kind === 'text' && diff.untracked ? 'Stage file' : unstaged ? 'Stage file' : 'Unstage file';
 
   const body = (): JSX.Element => {
-    if (!diff) return <p className="frame-empty">Loading the diff…</p>;
+    if (!diff) return <EmptyState className="dk-state" icon={GitCompare} title="Loading the diff…" />;
     switch (diff.kind) {
       case 'error':
         return (
-          <div className="ft-message">
-            <p className="frame-empty error" role="alert">{diff.message}</p>
-            <button type="button" className="ft-button" onClick={() => setRound((n) => n + 1)}>Try again</button>
-          </div>
+          <EmptyState
+            className="dk-state"
+            icon={FileX}
+            title={diff.message}
+            action={<Button onClick={() => setRound((n) => n + 1)}>Try again</Button>}
+          />
         );
-      case 'binary': return <p className="frame-empty">This is a binary file, so its change is not shown.</p>;
-      case 'unchanged': return <p className="frame-empty">This file has no change here any more.</p>;
+      case 'binary': return <EmptyState className="dk-state" icon={FileX} title="This is a binary file, so its change is not shown." />;
+      case 'unchanged': return <EmptyState className="dk-state" icon={GitCompare} title="This file has no change here any more." />;
       case 'text':
-        if (failed) return <p className="frame-empty error">The diff editor could not load: {failed}</p>;
-        return <div ref={hostNode} className="ft-editor" data-testid="monaco-diff-host" />;
+        if (failed) return <EmptyState className="dk-state" icon={FileX} title={`The diff editor could not load: ${failed}`} />;
+        return <div ref={hostNode} className="dk-editor" data-testid="monaco-diff-host" />;
     }
   };
 
   return (
-    <div className="ft changes-diff checkout-diff">
-      <div className="ft-bar">
-        <span className="ft-path" title={label}>{label}</span>
+    <div className="dk checkout-diff">
+      <div className="dk-bar">
+        <span className="dk-path" title={label}>{label}</span>
         <span className="checkout-kind">{kind === 'staged' ? 'Staged' : 'Working tree'}</span>
-        <span className="ft-spacer" />
-        <div className="changes-toggle" role="group" aria-label="Layout">
-          <button type="button" className="ft-button" aria-pressed={!sideBySide} onClick={() => setSideBySide(false)}>Unified</button>
-          <button type="button" className="ft-button" aria-pressed={sideBySide} onClick={() => setSideBySide(true)}>Side by side</button>
+        <span className="dk-spacer" />
+        <div className="dk-toggle" role="group" aria-label="Layout">
+          <Button size="sm" aria-pressed={!sideBySide} onClick={() => setSideBySide(false)}>Unified</Button>
+          <Button size="sm" aria-pressed={sideBySide} onClick={() => setSideBySide(true)}>Side by side</Button>
         </div>
-        <button
-          type="button"
-          className={unstaged ? 'ft-button ft-primary' : 'ft-button'}
+        <Button
+          size="sm"
+          variant={unstaged ? 'primary' : 'secondary'}
           disabled={!diff || diff.kind !== 'text' || busy !== undefined}
           onClick={applyFile}
         >
           {fileAction}
-        </button>
-        <button type="button" className="ft-button" onClick={() => setRound((n) => n + 1)}>Refresh</button>
+        </Button>
+        <Button size="sm" onClick={() => setRound((n) => n + 1)}>Refresh</Button>
       </div>
-      {problem && <p className="ft-banner" role="alert">{problem}</p>}
+      {problem && <p className="dk-banner dk-banner-error" role="alert">{problem}</p>}
       {diff?.kind === 'text' && diff.untracked && (
-        <p className="ft-banner" role="note">This file is untracked: the whole file is the change.</p>
+        <p className="dk-banner" role="note">This file is untracked: the whole file is the change.</p>
       )}
       {sides?.partial && (
-        <p className="ft-banner" role="note">Only the changed lines are shown: the file as this pair of trees holds it could not be read, or has moved on since.</p>
+        <p className="dk-banner" role="note">Only the changed lines are shown: the file as this pair of trees holds it could not be read, or has moved on since.</p>
       )}
       {body()}
       {editor && hunks.map((hunk, index) => (
         <Zone key={`${index}:${hunk.newStart}`} editor={editor} afterLine={hunkAfterLine(sides ?? { lines: { modified: [] } }, hunk)}>
           <div className="checkout-hunk-actions">
             <span className="checkout-hunk-where">@@ -{hunk.oldStart},{hunk.oldLines} +{hunk.newStart},{hunk.newLines} @@</span>
-            <button type="button" className="ft-button" disabled={busy !== undefined} onClick={() => applyHunk(index)}>
+            <Button size="sm" disabled={busy !== undefined} onClick={() => applyHunk(index)}>
               {busy === `hunk:${index}` ? 'Working…' : unstaged ? 'Stage hunk' : 'Unstage hunk'}
-            </button>
+            </Button>
           </div>
         </Zone>
       ))}

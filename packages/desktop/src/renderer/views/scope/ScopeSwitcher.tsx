@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { ViewScopeGlyph, Icon } from '@ordewell/ui/design';
-import { ChevronDown } from 'lucide-react';
+import { AlertTriangle, Check, ChevronDown, Loader2, type LucideIcon } from 'lucide-react';
 import type { FrameApi, Unregister, ViewScope } from '../../frame/api';
 import { Popover } from '../../frame/Popover';
 import { all } from '../Stub';
@@ -43,8 +43,8 @@ function ScopeSwitcher({ api }: { api: FrameApi }): JSX.Element {
         onClick={() => setOpen((was) => !was)}
       >
         <Icon icon={ViewScopeGlyph} size={16} />
-        {scopeName(scope, state.session)}
-        <Icon icon={ChevronDown} size={12} />
+        <span className="scope-chip-label">{scopeName(scope, state.session)}</span>
+        <Icon icon={ChevronDown} size={16} />
       </button>
       {open && (
         <Popover label="View scope" anchor={button} role="menu" className="frame-menu scope-menu" onClose={() => setOpen(false)}>
@@ -56,6 +56,13 @@ function ScopeSwitcher({ api }: { api: FrameApi }): JSX.Element {
     </div>
   );
 }
+
+/** What a task option's state mark says, as an icon in a box of its own and as words for a screen reader. */
+const STATE_MARKS: Record<string, { icon: LucideIcon; word: string; tone: string }> = {
+  '✓': { icon: Check, word: 'landed', tone: 'passed' },
+  '◐': { icon: Loader2, word: 'running', tone: 'running' },
+  '!': { icon: AlertTriangle, word: 'conflict', tone: 'failed' },
+};
 
 function ScopeGroup({ repo, heading, state, current, onChoose }: {
   repo: string;
@@ -73,10 +80,14 @@ function ScopeGroup({ repo, heading, state, current, onChoose }: {
           return (
             <li key={option.label + (option.detail ?? '')}>
               <button type="button" role="menuitemradio" aria-checked={checked} onClick={() => onChoose(option.scope)}>
-                <span className="scope-mark" aria-hidden="true">{checked ? '●' : '○'}</span>
+                <span className="scope-mark" aria-hidden="true">{checked && <Icon icon={Check} size={16} />}</span>
                 <span className="scope-label">{option.label}</span>
-                {option.detail && <span className="scope-detail">{option.detail}</span>}
-                {option.mark && <span className="scope-state" aria-label={option.mark === '✓' ? 'landed' : 'running'}>{option.mark}</span>}
+                {option.detail && <span className="scope-detail" title={option.detail}>{option.detail}</span>}
+                {option.mark && STATE_MARKS[option.mark] && (
+                  <span className={`scope-state scope-state-${STATE_MARKS[option.mark]!.tone}`} role="img" aria-label={STATE_MARKS[option.mark]!.word}>
+                    <Icon icon={STATE_MARKS[option.mark]!.icon} size={16} />
+                  </span>
+                )}
               </button>
             </li>
           );
@@ -97,10 +108,15 @@ function RepoBranch({ api }: { api: FrameApi }): JSX.Element | null {
   else branch = scopeName(scope, state.session);
   if (!info && !branch) return null;
   const multi = state.repos.length > 1;
+  const name = branch ?? (info?.detached ? 'detached HEAD' : '');
+  // The tail stays whole while the head takes the ellipsis, so a narrow bar
+  // shortens the branch in its middle (design.md, Title bar priority).
+  const tail = name.length > 12 ? name.slice(-6) : '';
   return (
-    <span className="scope-branch" title={scopeName(scope, state.session)}>
-      {multi && <span>{repoLabel(state.repo)} · </span>}
-      {branch ?? (info?.detached ? 'detached HEAD' : '')}
+    <span className="scope-branch" title={`${multi ? `${repoLabel(state.repo)} · ` : ''}${name}`}>
+      {multi && <span className="scope-repo-name">{repoLabel(state.repo)} · </span>}
+      <span className="scope-branch-head">{tail ? name.slice(0, -6) : name}</span>
+      {tail && <span className="scope-branch-tail">{tail}</span>}
     </span>
   );
 }

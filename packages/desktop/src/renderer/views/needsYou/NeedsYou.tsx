@@ -2,12 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Escalation, EscalationOption } from '@ordewell/core';
 import type { HostToWebview } from '@ordewell/ui/protocol';
 import type { FrameApi, Unregister } from '../../frame/api';
-import { PLAN_TAB } from '../../frame/layout';
+import { PLANNER_TAB } from '../../frame/layout';
+import { useFrameState } from '../../frame/store';
 import { daemonHost, type DaemonHost } from '../../session/DaemonHost';
 import { useSession } from '../../session/useSession';
 import { all } from '../Stub';
 import { startAttention } from './attention';
-import { taskViewFor } from './escalationView';
+import { showEscalatedTask } from './escalationView';
 import './needsYou.css';
 
 /** The words a run-level item is listed under; a task names itself. */
@@ -56,7 +57,10 @@ interface Refusal {
  * each answers inline with the same options a task's own card offers.
  */
 function NeedsYouList({ api, host }: { api: FrameApi; host: DaemonHost }): JSX.Element {
-  const { state, held, readOnly } = useSession(host);
+  const { state, held, readOnly: heldElsewhere } = useSession(host);
+  // The popover is drawn by the title bar, outside the body that goes inert while the daemon is away (W15), so it stops itself.
+  const away = useFrameState().readOnly;
+  const readOnly = heldElsewhere || away;
   const escalations = state.run.escalations ?? [];
   const [draft, setDraft] = useState<Draft | null>(null);
   const [note, setNote] = useState('');
@@ -95,9 +99,8 @@ function NeedsYouList({ api, host }: { api: FrameApi; host: DaemonHost }): JSX.E
   }, [escalations, draft]);
 
   const open = (escalation: Escalation): void => {
-    if (escalation.task) host.openTask(escalation.task.id, taskViewFor(escalation.kind));
-    else api.openTab(PLAN_TAB);
-    api.showActivity('plan');
+    if (escalation.task) showEscalatedTask(host, escalation.task.id, escalation.kind);
+    else api.openTab(PLANNER_TAB);
   };
 
   const send = (escalation: Escalation, option: EscalationOption, text: string): void => {
@@ -126,13 +129,13 @@ function NeedsYouList({ api, host }: { api: FrameApi; host: DaemonHost }): JSX.E
   };
 
   if (escalations.length === 0 && refusals.length === 0) {
-    return <p className="frame-empty needs-empty">{readOnly ? 'Another host holds this session, so its waits are not shown here.' : held ? 'Another host holds this session.' : 'Nothing needs you.'}</p>;
+    return <p className="frame-empty needs-empty">{heldElsewhere ? 'Another host holds this session, so its waits are not shown here.' : held ? 'Another host holds this session.' : 'Nothing needs you.'}</p>;
   }
 
   return (
     <div className="needs-list" aria-label="Waiting on you">
       <p className="needs-count" role="status">{escalations.length} {escalations.length === 1 ? 'item' : 'items'} waiting</p>
-      {readOnly && <p className="needs-hint">This session is open in another host: answer it there, or take it over from the banner.</p>}
+      {heldElsewhere && <p className="needs-hint">This session is open in another host: answer it there, or take it over from the banner.</p>}
       {refusals.map((refusal) => (
         <div key={refusal.key} className="needs-refusal" role="alert">
           <span><strong>Not done — {refusal.title}.</strong> {refusal.message}</span>
@@ -197,7 +200,14 @@ function NeedsYouList({ api, host }: { api: FrameApi; host: DaemonHost }): JSX.E
 export function register(api: FrameApi): Unregister {
   const host = daemonHost(api.workspace);
   return all(
-    api.registerSidebar({ activity: 'plan', id: 'needs-you', title: 'Needs you', order: 0, render: () => <NeedsYouList api={api} host={host} /> }),
+    api.registerSidebar({
+      activity: 'sessions',
+      id: 'needs-you',
+      title: 'Needs you',
+      order: 0,
+      collapsible: true,
+      count: () => (host.getSnapshot().state.run.escalations ?? []).length,
+      render: () => <NeedsYouList api={api} host={host} /> }),
     api.registerSlot({ slot: 'popover.needsYou', id: 'needs-you', render: () => <NeedsYouList api={api} host={host} /> }),
     startAttention(api, host),
   );

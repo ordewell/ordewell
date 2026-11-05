@@ -11,7 +11,6 @@ import { resetTaskViews } from '../task/taskView';
 // Monaco needs a browser; the stubs here never open a file.
 vi.mock('../../monaco', async () => (await import('../../test/monacoMock')).fakeMonacoModule());
 
-const SIZES = { sidebar: 260, right: 360, bottom: 240 };
 const CONNECTED: DaemonStatus = { state: 'connected', port: 3700, owned: true, daemon: { version: '0.12.3', contract: 1 } };
 
 /** The slice of the preload bridge the views touch, pushed by hand. */
@@ -46,7 +45,7 @@ afterEach(() => {
 });
 
 function mount(daemon: DaemonStatus): FrameStore {
-  const store = new FrameStore({ workspace: '/work/acme', platform: 'linux', sizes: SIZES });
+  const store = new FrameStore({ workspace: '/work/acme', platform: 'linux' });
   offs.push(registerFrameCommands(store), registerViews(store.api));
   render(<FrameProvider value={store}><Frame daemon={daemon} /></FrameProvider>);
   return store;
@@ -55,16 +54,16 @@ function mount(daemon: DaemonStatus): FrameStore {
 describe('the view stubs', () => {
   it('register every seam a later slice fills, and take it all back', () => {
     stubBridge(CONNECTED);
-    const store = new FrameStore({ workspace: '/work/acme', platform: 'linux', sizes: SIZES });
+    const store = new FrameStore({ workspace: '/work/acme', platform: 'linux' });
     const off = registerViews(store.api);
     const state = store.getSnapshot();
     expect(state.sidebars.map((s) => `${s.activity}/${s.id}`).sort()).toEqual([
-      'changes/checkout', 'changes/review', 'explorer/files', 'git/branches', 'plan/needs-you', 'plan/sessions', 'plan/tasks',
+      'changes/checkout', 'changes/review', 'explorer/files', 'git/branches', 'sessions/needs-you', 'sessions/sessions',
     ]);
-    expect(Object.keys(state.tabKinds).sort()).toEqual(['commit-diff', 'commits', 'diff', 'file', 'plan', 'settings', 'task']);
-    expect(state.panels.map((p) => `${p.region}/${p.id}`).sort()).toEqual(['bottom/terminal', 'right/planner']);
+    expect(Object.keys(state.tabKinds).sort()).toEqual(['commit-diff', 'commits', 'diff', 'file', 'plan-graph', 'planner', 'settings', 'task']);
+    expect(state.panels.map((p) => `${p.region}/${p.id}`).sort()).toEqual(['plan/plan', 'terminal/terminal']);
     expect(state.slots.map((s) => s.slot).sort()).toEqual([
-      'popover.needsYou', 'status.lease', 'status.runners', 'status.usage', 'title.breadcrumb', 'title.scope',
+      'popover.needsYou', 'status.daemon', 'status.lease', 'status.runners', 'status.usage', 'title.breadcrumb', 'title.scope',
     ]);
     expect(state.commands.map((c) => c.id)).toContain('explorer.quickOpen');
     off();
@@ -73,14 +72,14 @@ describe('the view stubs', () => {
     expect(after.tabKinds).toEqual({});
   });
 
-  it('fill the frame: sessions in the Plan sidebar, the planner, the scope, and a diff tab naming its scope', async () => {
+  it('fill the frame: sessions in the sidebar, the planner, the plan, the scope, and a diff tab naming its scope', async () => {
     stubBridge(CONNECTED);
     const store = mount(CONNECTED);
     expect(await screen.findByText('Ship the frame')).toBeInTheDocument();
-    expect(within(screen.getByRole('complementary', { name: 'Plan' })).getByRole('heading', { name: 'Needs you' })).toBeInTheDocument();
+    expect(within(screen.getByRole('navigation', { name: 'Sessions' })).getByRole('heading', { name: 'Needs you (0)' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Message the planner' })).toBeInTheDocument();
     expect(screen.getByRole('banner')).toHaveTextContent('Your checkout');
-    expect(screen.getByRole('group', { name: 'Plan view' })).toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: 'Plan' })).toBeInTheDocument();
 
     act(() => store.api.openTab({ kind: 'diff', id: 'src/a.ts', title: 'a.ts', scope: { kind: 'integration', sessionId: 's1' } }));
     expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', expect.stringContaining('diff'));

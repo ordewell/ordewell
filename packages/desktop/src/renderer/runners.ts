@@ -1,21 +1,27 @@
 /** The runners the welcome window checks for, in the order it lists them. */
 export const KNOWN_RUNNERS = ['claude-code', 'codex', 'opencode'] as const;
 
-export const RUNNER_NAMES: Readonly<Record<string, string>> = {
-  'claude-code': 'Claude Code',
-  codex: 'Codex',
-  opencode: 'OpenCode',
-};
-
 export interface RunnerLine {
   id: string;
-  /** `missing`: the daemon found no such binary; the rest is its login verdict. */
-  state: 'signed-in' | 'signed-out' | 'unknown' | 'missing';
+  /**
+   * `missing`: the daemon found no such binary. `off`: installed, but turned
+   * off in Settings. The rest is its login verdict.
+   */
+  state: 'signed-in' | 'signed-out' | 'unknown' | 'missing' | 'off';
   detail?: string;
+  /** The CLI's own `--version`, when the daemon could read one. */
+  version?: string;
+  /** The runner's own sign-in, `[command, ...args]` (ADR-0052). */
+  loginCommand?: string[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function stringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  return value.every((part): part is string => typeof part === 'string') ? value : undefined;
 }
 
 /**
@@ -28,8 +34,15 @@ export function parseRunners(data: unknown): RunnerLine[] | undefined {
   for (const entry of data.runners) {
     if (!isRecord(entry) || typeof entry.id !== 'string') continue;
     const auth = isRecord(entry.auth) ? entry.auth : undefined;
-    const state = auth?.state === 'signed-in' || auth?.state === 'signed-out' ? auth.state : 'unknown';
-    found.set(entry.id, { id: entry.id, state, ...(typeof auth?.detail === 'string' ? { detail: auth.detail } : {}) });
+    const signedState = auth?.state === 'signed-in' || auth?.state === 'signed-out' ? auth.state : 'unknown';
+    const loginCommand = stringList(auth?.loginCommand);
+    found.set(entry.id, {
+      id: entry.id,
+      state: entry.enabled === false ? 'off' : signedState,
+      ...(typeof auth?.detail === 'string' ? { detail: auth.detail } : {}),
+      ...(typeof entry.version === 'string' && entry.version !== '' ? { version: entry.version } : {}),
+      ...(loginCommand ? { loginCommand } : {}),
+    });
   }
   return KNOWN_RUNNERS.map((id) => found.get(id) ?? { id, state: 'missing' });
 }

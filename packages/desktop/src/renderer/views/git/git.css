@@ -1,60 +1,91 @@
-/* The Git view: its sidebar, the commit graph and the confirms' target rows (ADR-0062). */
+/* The Git view: its sidebar, the commit graph and the confirms' target rows (ADR-0062). Rows and groups come from ../sidebarKit.css. */
 
-.git-side { display: flex; flex-direction: column; gap: var(--ow-space-3); padding-bottom: var(--ow-space-5); }
-.git-side .ex-repo { margin-bottom: 0; }
-.git-current { display: flex; flex-direction: column; gap: var(--ow-space-2); padding: 0 var(--ow-space-5); }
-.git-current-name { display: flex; align-items: center; gap: var(--ow-space-3); font: var(--ow-type-body-strong); }
-.git-track { color: var(--ow-fg-secondary); font: var(--ow-type-code); font-size: 11px; }
-.git-sync { display: flex; flex-wrap: wrap; gap: var(--ow-space-3); }
-.git-heading { display: flex; align-items: center; justify-content: space-between; margin: 0; padding: var(--ow-space-2) var(--ow-space-5); font: var(--ow-type-body-strong); color: var(--ow-fg-secondary); }
+.git-side { display: flex; flex-direction: column; gap: var(--ow-space-2); padding-bottom: var(--ow-space-3); min-width: 0; }
+.git-side-head { display: flex; align-items: center; gap: var(--ow-space-2); padding: 0 var(--ow-space-2) 0 var(--ow-space-3); min-height: var(--ow-row); }
+.git-side-name { flex: 1; min-width: 0; display: flex; font: var(--ow-type-body-strong); }
+.git-repo { margin: 0 var(--ow-space-3); width: auto; }
+.git-state { padding: var(--ow-space-6) var(--ow-space-3); }
+.git-current { display: flex; flex-direction: column; gap: var(--ow-space-2); }
+.git-current-name { display: flex; align-items: center; gap: var(--ow-space-2); padding: 0 var(--ow-space-2) 0 var(--ow-space-3); font: var(--ow-type-body-strong); }
+.git-current-name > .ow-icon { flex: none; color: var(--ow-fg-secondary); }
+.git-current-label { flex: 1; min-width: 0; }
 .git-list { margin: 0; padding: 0; list-style: none; }
-.git-row { display: flex; align-items: center; gap: var(--ow-space-3); padding: var(--ow-space-1) var(--ow-space-5); min-height: 24px; }
-.git-row:hover, .git-row:focus-within { background: var(--ow-bg-hover); }
-.git-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 0; background: transparent; color: var(--ow-fg); font: inherit; text-align: left; padding: 0; cursor: pointer; }
-.git-row[aria-current='true'] .git-row-name { font: var(--ow-type-body-strong); }
-.git-row-note { color: var(--ow-fg-secondary); font: var(--ow-type-code); font-size: 11px; white-space: nowrap; }
-.git-lock { color: var(--ow-fg-secondary); font: var(--ow-type-code); font-size: 11px; white-space: nowrap; }
-.git-row-actions { display: none; gap: var(--ow-space-1); }
-.git-row:hover .git-row-actions, .git-row:focus-within .git-row-actions { display: inline-flex; }
-.git-row-actions button { border: 0; background: transparent; color: var(--ow-fg-secondary); cursor: pointer; padding: 2px var(--ow-space-2); border-radius: var(--ow-radius-md); font: inherit; }
-.git-row-actions button:hover:not(:disabled) { background: var(--ow-bg-selected); color: var(--ow-fg); }
-.git-row-actions button:disabled { opacity: 0.5; cursor: default; }
-.git-form { display: flex; flex-direction: column; gap: var(--ow-space-3); padding: var(--ow-space-3) var(--ow-space-5); }
-.git-form label { display: flex; flex-direction: column; gap: var(--ow-space-1); color: var(--ow-fg-secondary); }
-.git-form .git-check { flex-direction: row; align-items: center; gap: var(--ow-space-3); }
-.git-form-actions { display: flex; gap: var(--ow-space-3); }
-.git-stash-new { display: flex; gap: var(--ow-space-3); padding: var(--ow-space-2) var(--ow-space-5); }
-.git-stash-new .frame-input { flex: 1; min-width: 0; padding: var(--ow-space-2) var(--ow-space-4); }
+.git-hint { margin: 0; padding: var(--ow-space-1) var(--ow-space-3); color: var(--ow-fg-secondary); font: var(--ow-type-small); overflow-wrap: anywhere; }
+.git-lead { flex: none; display: inline-flex; width: 16px; justify-content: center; color: var(--ow-fg-secondary); }
+.git-branch[aria-current='true'] .git-lead { color: var(--ow-status-passed); }
+.git-lock { flex: none; display: inline-flex; align-items: center; gap: var(--ow-space-half); max-width: 40%; color: var(--ow-fg-secondary); font: var(--ow-type-code-small); white-space: nowrap; }
+.git-lock span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.git-lock .ow-icon { flex: none; }
+.git-stash-ref { max-width: none; }
+/* Two selectors: sidebarKit.css may load after this file, and its row height and centring must not win. */
+.srow-main.git-worktree-main { flex-direction: column; align-items: stretch; gap: 0; height: auto; padding: var(--ow-space-1) 0; }
+/* The state sits under the branch name, not beside it: a long branch must never share a line with it. */
+.srow-main.git-ordewell-main { height: auto; padding: var(--ow-space-1) 0; }
+.git-ordewell-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.git-ordewell-note { color: var(--ow-fg-secondary); font: var(--ow-type-code-small); }
+.git-worktree-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-worktree-path { color: var(--ow-fg-secondary); font: var(--ow-type-code-small); }
+/* A run or task link: the 24px hit target the checklist asks of every control, with the text the part that shrinks. */
+.git-owner { flex: none; display: inline-flex; align-items: center; min-width: 0; max-width: 45%; height: var(--ow-hit); padding: 0 var(--ow-space-2); border: 0; border-radius: var(--ow-radius-md); background: transparent; color: var(--ow-accent); font: var(--ow-type-small); cursor: pointer; }
+.git-owner:hover { background: var(--ow-bg-hover); }
+.git-owner:focus-visible { outline: 1px solid var(--ow-focus-ring); outline-offset: -1px; }
+.git-owner-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.git-target { display: grid; grid-template-columns: max-content 1fr; gap: var(--ow-space-2) var(--ow-space-4); margin: var(--ow-space-3) 0; }
+.git-target { display: grid; grid-template-columns: max-content 1fr; gap: var(--ow-space-1) var(--ow-space-2); margin: var(--ow-space-1) 0; }
 .git-target dt { color: var(--ow-fg-secondary); }
 .git-target dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 
 .git-graph { display: flex; flex-direction: column; height: 100%; min-height: 0; }
-.git-graph-bar { display: flex; align-items: center; gap: var(--ow-space-4); padding: var(--ow-space-3) var(--ow-space-5); border-bottom: 1px solid var(--ow-border); }
+.git-graph-bar { display: flex; align-items: center; gap: var(--ow-space-2); min-height: 36px; padding: 0 var(--ow-space-3); border-bottom: 1px solid var(--ow-border); }
+.git-graph-title { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: var(--ow-space-2); font: var(--ow-type-body-strong); }
+.git-graph-title .mid { flex: 0 1 auto; }
+.git-graph-repo { flex: none; color: var(--ow-fg-secondary); font: var(--ow-type-small); }
 .git-graph-body { display: flex; flex: 1; min-height: 0; }
 .git-commits { flex: 1; min-width: 0; overflow: auto; margin: 0; padding: 0; list-style: none; }
-.git-commit { display: flex; align-items: center; gap: var(--ow-space-3); width: 100%; border: 0; background: transparent; color: var(--ow-fg); padding: 0 var(--ow-space-5) 0 0; text-align: left; cursor: pointer; font: var(--ow-type-body); height: 28px; }
+.git-commit { display: flex; align-items: center; gap: var(--ow-space-2); width: 100%; border: 0; background: transparent; color: var(--ow-fg); padding: 0 var(--ow-space-3) 0 0; text-align: left; cursor: pointer; font: var(--ow-type-body); height: 28px; }
 .git-commit:hover { background: var(--ow-bg-hover); }
+.git-commit:focus-visible { outline: 1px solid var(--ow-focus-ring); outline-offset: -1px; }
 .git-commit[aria-pressed='true'] { background: var(--ow-bg-selected); }
 .git-lanes { flex: none; display: block; }
 .git-commit-subject { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.git-commit-meta { color: var(--ow-fg-secondary); font: var(--ow-type-code); font-size: 11px; white-space: nowrap; }
-.git-refs { display: inline-flex; gap: var(--ow-space-2); flex: none; }
-.git-chip { border: 1px solid var(--ow-border-widget); border-radius: var(--ow-radius-md); padding: 0 var(--ow-space-3); font: var(--ow-type-code); font-size: 11px; white-space: nowrap; background: var(--ow-bg-overlay); }
-.git-chip-head { background: var(--ow-accent); color: var(--ow-bg, #fff); border-color: transparent; }
+.git-commit-meta { flex: none; max-width: 30%; overflow: hidden; text-overflow: ellipsis; color: var(--ow-fg-secondary); font: var(--ow-type-code-small); white-space: nowrap; }
+.git-refs { display: inline-flex; gap: var(--ow-space-1); flex: 0 1 auto; min-width: 0; max-width: 40%; overflow: hidden; }
+.git-chip { flex: 0 1 auto; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; border: 1px solid var(--ow-surface-card-border); border-radius: var(--ow-radius-sm); padding: 0 var(--ow-space-1); font: var(--ow-type-code-small); white-space: nowrap; background: var(--ow-surface-card); }
+.git-chip-head { background: var(--ow-accent); color: var(--ow-accent-on); border-color: transparent; }
 .git-chip-current { font-weight: 600; }
 .git-chip-remote { color: var(--ow-fg-secondary); }
 .git-chip-tag { font-style: italic; }
 .git-chip-ordewell { border-style: dashed; color: var(--ow-accent); }
-.git-more { padding: var(--ow-space-3) var(--ow-space-5); }
-.git-detail { flex: none; width: 320px; border-left: 1px solid var(--ow-border); overflow: auto; padding: var(--ow-space-3) 0; }
-.git-detail h3 { margin: 0; padding: 0 var(--ow-space-5); font: var(--ow-type-body-strong); overflow-wrap: anywhere; }
-.git-detail-meta { margin: 0; padding: var(--ow-space-2) var(--ow-space-5); color: var(--ow-fg-secondary); font: var(--ow-type-code); font-size: 11px; overflow-wrap: anywhere; }
-.git-detail-body { margin: 0; padding: var(--ow-space-2) var(--ow-space-5); white-space: pre-wrap; font: var(--ow-type-body); }
+.git-more { padding: var(--ow-space-2) var(--ow-space-3); }
+.git-state-wide { padding: var(--ow-space-8) var(--ow-space-4); }
 
-/* Lane colours cycle through a fixed palette (lanes.ts LANE_COLORS). */
-.git-lanes { --git-lane-0: #5b8def; --git-lane-1: #e0823d; --git-lane-2: #4caf7d; --git-lane-3: #b565d8; --git-lane-4: #d8b441; --git-lane-5: #3fb8c4; --git-lane-6: #d9566a; --git-lane-7: #8a94a6; }
+.git-detail { flex: none; width: 320px; border-left: 1px solid var(--ow-border); overflow: auto; padding: var(--ow-space-1) 0; display: flex; flex-direction: column; gap: var(--ow-space-1); min-width: 0; }
+.git-detail-head { display: flex; align-items: flex-start; gap: var(--ow-space-2); padding: 0 var(--ow-space-2) 0 var(--ow-space-3); }
+.git-detail h3 { flex: 1; min-width: 0; margin: 0; font: var(--ow-type-body-strong); overflow-wrap: anywhere; }
+.git-detail-meta { margin: 0; padding: 0 var(--ow-space-3); color: var(--ow-fg-secondary); font: var(--ow-type-code-small); overflow-wrap: anywhere; }
+.git-detail-body { margin: 0; padding: var(--ow-space-1) var(--ow-space-3); white-space: pre-wrap; overflow-wrap: anywhere; font: var(--ow-type-body); }
+.git-detail-landed { display: flex; align-items: center; gap: var(--ow-space-1); padding: 0 var(--ow-space-3); color: var(--ow-fg-secondary); font: var(--ow-type-small); min-width: 0; }
+.git-detail-landed .git-owner { flex: 1; max-width: none; justify-content: flex-start; }
+.git-file { gap: var(--ow-space-2); }
+.git-file-counts { flex: none; display: inline-flex; gap: var(--ow-space-1); font: var(--ow-type-code-small); font-variant-numeric: tabular-nums; color: var(--ow-fg-secondary); }
+.git-file-added { color: var(--ow-status-passed); }
+.git-file-removed { color: var(--ow-status-failed); }
+.git-file-name { display: flex; flex: 1; min-width: 0; }
+
+/*
+ * Lane colours cycle through eight of the design's own colours (lanes.ts
+ * LANE_COLORS), so a lane follows the theme: no hex lives here (checklist C5).
+ */
+.git-lanes {
+  --git-lane-0: var(--ow-status-running);
+  --git-lane-1: var(--ow-status-blocked);
+  --git-lane-2: var(--ow-status-passed);
+  --git-lane-3: var(--ow-status-merge);
+  --git-lane-4: var(--ow-status-attention);
+  --git-lane-5: var(--ow-accent);
+  --git-lane-6: var(--ow-area-sessions);
+  --git-lane-7: var(--ow-status-idle);
+}
 .git-lane-0 { stroke: var(--git-lane-0); fill: var(--git-lane-0); }
 .git-lane-1 { stroke: var(--git-lane-1); fill: var(--git-lane-1); }
 .git-lane-2 { stroke: var(--git-lane-2); fill: var(--git-lane-2); }
@@ -65,4 +96,4 @@
 .git-lane-7 { stroke: var(--git-lane-7); fill: var(--git-lane-7); }
 .git-lanes path { fill: none; stroke-width: 2; }
 .git-lanes circle { stroke-width: 2; }
-.git-lanes .git-merge { fill: var(--ow-bg, #1e1e1e); }
+.git-lanes .git-merge { fill: var(--ow-bg); }

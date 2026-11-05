@@ -61,8 +61,17 @@ export interface RunnerInstallationOptions {
  * augmented PATH, per-process cache. A runner that isn't installed should never
  * be offered for selection in any surface.
  */
+/**
+ * The version a CLI printed for `--version`: its first dotted number, so
+ * "claude 1.4.2 (Claude Code)" and "codex-cli 0.9.1" both read as the number.
+ * Undefined when there is none, and a surface then shows no version at all.
+ */
+export function parseCliVersion(stdout: string): string | undefined {
+  return /\bv?(\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?)/.exec(stdout)?.[1];
+}
+
 export class RunnerInstallation {
-  private cache: Map<string, { installed: boolean; at: number }> = new Map();
+  private cache: Map<string, { installed: boolean; at: number; version?: string }> = new Map();
   private inflight: Map<string, Promise<boolean>> = new Map();
   private authCache: Map<string, { auth: RunnerAuth; at: number }> = new Map();
   private authInflight: Map<string, Promise<RunnerAuth>> = new Map();
@@ -104,13 +113,13 @@ export class RunnerInstallation {
 
     const probe = (async () => {
       try {
-        await this.execImpl(`${command} --version`, { timeout: CHECK_TIMEOUT_MS });
-        return true;
+        const { stdout } = await this.execImpl(`${command} --version`, { timeout: CHECK_TIMEOUT_MS });
+        return { installed: true, version: parseCliVersion(String(stdout ?? '')) };
       } catch {
-        return false;
+        return { installed: false, version: undefined };
       }
-    })().then((installed) => {
-      this.cache.set(runner, { installed, at: this.now() });
+    })().then(({ installed, version }) => {
+      this.cache.set(runner, { installed, at: this.now(), ...(version ? { version } : {}) });
       this.inflight.delete(runner);
       return installed;
     });
@@ -143,7 +152,7 @@ export class RunnerInstallation {
    * it is installed, and the user may log in from the same picker — so the
    * auth verdict rides beside usability, never inside it.
    */
-  async plannerUsability(runner: string): Promise<{ usable: boolean; reason?: string; auth?: RunnerAuth }> {
+  async plannerUsability(runner: string): Promise<{ usable: boolean; reason?: string; auth?: RunnerAuth; version?: string }> {
     const manifest = this.registry.getManifest(runner);
     if (!manifest) return { usable: false, reason: `No runner manifest is registered for "${runner}".` };
     if (!connectorFor(runner)) {
@@ -161,7 +170,8 @@ export class RunnerInstallation {
           `Reinstall with the CLI's own installer, or add its install directory to PATH.`,
       };
     }
-    return { usable: true, auth: await this.authFor(runner, manifest) };
+    const version = this.cache.get(runner)?.version;
+    return { usable: true, auth: await this.authFor(runner, manifest), ...(version ? { version } : {}) };
   }
 
   /**

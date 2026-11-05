@@ -212,6 +212,13 @@ describe('the task log tab (ADR-0018, V1)', () => {
     expect(document.querySelector('.task-log-title')?.textContent).toBe('Task 2.1 · Parse JSON');
   });
 
+  it('names the runner in the header as the rest of the app does, not by its id', () => {
+    render(<TaskLogApp />);
+    init();
+
+    expect(document.querySelector('.task-log-runner')?.textContent).toBe('Claude Code');
+  });
+
   it('draws a handoff from the attempt log and opens its full report with the report\'s own disclosure', () => {
     const report = Array.from({ length: 12 }, (_, i) => `Report line ${i + 1}`).join('\n');
     const view = replayTaskLog([{ type: 'handoff', handoff: {

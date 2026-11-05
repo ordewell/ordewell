@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
+import { FileWarning } from 'lucide-react';
+import { EmptyState } from '@ordewell/ui/design';
 import { createEditor, loadMonaco, type EditorHandle } from '../../monaco';
 
 export interface EditorPaneProps {
@@ -57,6 +59,6 @@ export function EditorPane({ modelKey, path, text, readOnly, onChange, onSave, h
 
   useEffect(() => { handle.current?.setReadOnly(readOnly); }, [readOnly, handle]);
 
-  if (failed) return <p className="frame-empty error">The editor could not load: {failed}</p>;
+  if (failed) return <div className="fv-state"><EmptyState icon={FileWarning} title="The editor could not load" body={failed} /></div>;
   return <div ref={host} className="ft-editor" data-testid="monaco-host" />;
 }

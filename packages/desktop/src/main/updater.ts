@@ -1,12 +1,20 @@
 /**
- * Whether the app may update itself. A build-time constant, not a setting or an
- * environment variable: an installer that is not signed must not be able to be
- * told to fetch and run another one, so nothing a user or a page can set
- * reaches this. It stays false until the release flow signs (and, on macOS,
- * notarizes) every installer; flipping it is that change's own commit.
- * ADR-0060 keeps auto-update out of scope until then.
+ * Set by tsup from the signing plan scripts/package.mjs made (tsup.config.ts).
+ * Undeclared in a build that did not set it, such as the tests.
  */
-export const AUTO_UPDATE_ENABLED: boolean = false;
+declare const __ORDEWELL_AUTO_UPDATE__: boolean | undefined;
+
+/**
+ * Whether the app may update itself. Decided when the app is built and baked
+ * into it, not a setting or an environment variable: an installer that is not
+ * signed must not be able to be told to fetch and run another one, so nothing a
+ * user or a page can set reaches this. It is true only in a build that is
+ * signed, and notarized on macOS, where the platform holds an update to the
+ * installed app's signer (ADR-0060 H9). Anything else, including a build that
+ * never decided, is false.
+ */
+export const AUTO_UPDATE_ENABLED: boolean =
+  typeof __ORDEWELL_AUTO_UPDATE__ === 'boolean' ? __ORDEWELL_AUTO_UPDATE__ : false;
 
 /** The part of electron-updater's `autoUpdater` this app drives. */
 export interface UpdaterPort {

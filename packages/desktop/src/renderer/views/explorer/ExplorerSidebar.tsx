@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MutableRefObject } from 'react';
-import { ChevronDown, ChevronRight, File as FileIcon, Folder, FolderOpen, FolderGit2, Link2, Lock, RefreshCw, Search } from 'lucide-react';
-import { Icon } from '@ordewell/ui/design';
+import { ChevronDown, ChevronRight, File as FileIcon, FileSearch, Folder, FolderOpen, FolderGit2, FolderX, Link2, Lock, RefreshCw, Search, SquareArrowOutUpRight, TextSearch } from 'lucide-react';
+import { Badge, Button, EmptyState, Icon, IconButton } from '@ordewell/ui/design';
 import { describeError, filesApi, FilesError, type FindMatch, type ReadTarget, type TreeEntry } from '../../files/api';
 import type { FrameApi, Unregister, ViewScope } from '../../frame/api';
 import { all } from '../Stub';
+import { openRun } from '../git/gitActions';
 import { scopeName, type ScopeSession } from '../scope/scopeStore';
 import { useScope } from '../scope/useScope';
 import { openFile } from './fileTabs';
@@ -12,7 +13,8 @@ import { flatten, isExpandable, windowOf, type Row } from './treeModel';
 import { useTree } from './useTree';
 import './explorer.css';
 
-const ROW_HEIGHT = 24;
+/** A list row is 28 (design.md, Design tokens); the tree's windowing and its CSS share it. */
+const ROW_HEIGHT = 28;
 /** Before the pane has a measured height (and in a test with no layout), draw this much. */
 const FALLBACK_VIEWPORT = 480;
 
@@ -23,6 +25,9 @@ function requestSearchFocus(): void {
   focusWanted = true;
   for (const listener of focusListeners) listener();
 }
+
+/** The header's refresh button lives in the section header, outside the tree it reloads. */
+const reloadListeners = new Set<() => void>();
 
 const STATUS_WORDS: Record<string, string> = { M: 'Modified', A: 'Added', D: 'Deleted', '?': 'Untracked', U: 'Conflicted' };
 
@@ -63,19 +68,27 @@ function Tree({ api, target, session, onGone, reloadKey }: TreeProps): JSX.Eleme
   const [viewport, setViewport] = useState(FALLBACK_VIEWPORT);
   const [focused, setFocused] = useState(0);
   const checkout = target.scope.kind === 'checkout';
+  const hasTree = !(rows.length === 1 && rows[0]?.type === 'note' && rows[0].depth === 0);
+
+  // Another scope starts at its top: the row focused in the last one may not exist in this one.
+  useEffect(() => setFocused(0), [scopeId]);
 
   useEffect(() => {
     const el = scroller.current;
     if (!el) return;
+    // A scroller drawn again after a loading state starts at the top; the window kept from the old one would draw no rows.
+    setScrollTop(el.scrollTop);
     const measure = (): void => setViewport(el.clientHeight || FALLBACK_VIEWPORT);
     measure();
     if (typeof ResizeObserver === 'undefined') return;
     const observer = new ResizeObserver(measure);
     observer.observe(el);
     return () => observer.disconnect();
-  }, []);
+    // The scroller is not drawn while a root state stands in for it.
+  }, [hasTree]);
 
   const { start, end } = windowOf(rows.length, scrollTop, viewport, ROW_HEIGHT);
+  const rootNote = rows.length === 1 && rows[0]?.type === 'note' && rows[0].depth === 0 ? rows[0] : undefined;
 
   const reveal = (index: number): void => {
     const el = scroller.current;
@@ -126,11 +139,16 @@ function Tree({ api, target, session, onGone, reloadKey }: TreeProps): JSX.Eleme
     }
   };
 
+  // A scope's task shows on its card in the plan list, its session opened first when another is.
   const openTask = (taskId: string): void => {
-    if (!session) return;
-    const task = session.tasks.find((t) => t.id === taskId);
-    api.openTab({ kind: 'task', id: taskId, title: task ? `Task #${task.order}` : `Task ${taskId}`, scope: { kind: 'task', sessionId: session.sessionId, taskId } });
+    if (session) void openRun(api, { sessionId: session.sessionId, taskId });
   };
+
+  if (rootNote?.tone === 'empty') return <EmptyState className="ex-state" icon={Folder} title="This folder is empty" />;
+  if (rootNote?.tone === 'error') {
+    return <EmptyState className="ex-state" icon={FolderX} title="The files could not be read" body={rootNote.text} action={<Button size="sm" icon={RefreshCw} onClick={reload}>Try again</Button>} />;
+  }
+  if (rootNote?.tone === 'loading') return <Skeleton />;
 
   return (
     <div
@@ -187,18 +205,26 @@ interface RowProps {
   onEditor(entry: TreeEntry): void;
 }
 
+/**
+ * Every part but the name is a fixed box in a flex row, so the name is the one
+ * thing that shrinks and nothing can be drawn under an icon (design.md, Layout
+ * rules that prevent overlap).
+ */
 function TreeRow({ row, index, total, focused, checkout, platform, session, onFocus, onActivate, onTask, onReveal, onEditor }: RowProps): JSX.Element {
   const top = index * ROW_HEIGHT;
-  const indent = 8 + row.depth * 14;
+  const guides = Array.from({ length: row.depth }, (_, level) => <span key={level} className="ex-guide" aria-hidden="true" />);
   if (row.type === 'note') {
     return (
-      <div className={`ex-note ex-note-${row.tone}`} role="none" style={{ top, height: ROW_HEIGHT, paddingLeft: indent + 20 }}>
-        {row.text}
+      <div className={`ex-note ex-note-${row.tone}`} role="none" style={{ top, height: ROW_HEIGHT }}>
+        {guides}
+        <span className="ex-chevron" aria-hidden="true" />
+        <span className="ex-note-text" title={row.text}>{row.text}</span>
       </div>
     );
   }
   const { entry } = row;
   const expandable = isExpandable(entry);
+  const status = entry.status === '?' ? 'untracked' : entry.status;
   return (
     <div
       role="treeitem"
@@ -210,44 +236,65 @@ function TreeRow({ row, index, total, focused, checkout, platform, session, onFo
       aria-label={entry.name}
       tabIndex={focused ? 0 : -1}
       className={`ex-row${entry.ignored ? ' ex-ignored' : ''}${entry.kind === 'repository' || entry.kind === 'symlink' ? ' ex-inert' : ''}`}
-      style={{ top, height: ROW_HEIGHT, paddingLeft: indent }}
+      style={{ top, height: ROW_HEIGHT }}
       title={entry.ignored ? `${entry.path} (ignored by git)` : entry.path}
       onFocus={onFocus}
       onClick={() => onActivate(entry, false)}
       onDoubleClick={() => { if (!expandable) onActivate(entry, true); }}
     >
+      {guides}
       <span className="ex-chevron" aria-hidden="true">{expandable && <Icon icon={row.expanded ? ChevronDown : ChevronRight} size={12} />}</span>
       <EntryIcon entry={entry} expanded={row.expanded} />
       <span className="ex-name">{entry.name}</span>
-      {entry.taskId && (
-        <button
-          type="button"
-          className="ex-task"
-          tabIndex={-1}
-          title={`Changed by ${taskLabel(session, entry.taskId)}`}
-          aria-label={`Changed by ${taskLabel(session, entry.taskId)}. Open the task`}
-          onClick={(event) => { event.stopPropagation(); onTask(entry.taskId as string); }}
-        >
-          {taskChip(session, entry.taskId)}
-        </button>
-      )}
-      {checkout && entry.kind !== 'symlink' && (
-        <span className="ex-actions">
-          <button type="button" tabIndex={-1} title={revealLabel(platform)} aria-label={`${revealLabel(platform)}: ${entry.name}`} onClick={(event) => { event.stopPropagation(); onReveal(entry); }}>
-            <Icon icon={FolderOpen} size={12} />
-          </button>
-          {entry.kind === 'file' && (
-            <button type="button" tabIndex={-1} title="Open in editor" aria-label={`Open in editor: ${entry.name}`} onClick={(event) => { event.stopPropagation(); onEditor(entry); }}>
-              <Icon icon={FileIcon} size={12} />
+      {/* One cell, two occupants: the task and status letter at rest, the actions on hover or focus.
+          Sharing the cell keeps the name's room the same either way, so nothing shifts or overlaps. */}
+      <span className="ex-trail">
+        <span className="ex-marks">
+          {entry.taskId && (
+            <button
+              type="button"
+              className="ex-task"
+              tabIndex={-1}
+              title={`Changed by ${taskLabel(session, entry.taskId)}`}
+              aria-label={`Changed by ${taskLabel(session, entry.taskId)}. Open the task`}
+              onClick={(event) => { event.stopPropagation(); onTask(entry.taskId as string); }}
+            >
+              {taskChip(session, entry.taskId)}
             </button>
           )}
+          {entry.status && (
+            <span className={`ex-badge ex-badge-${status}`} title={STATUS_WORDS[entry.status]} aria-label={STATUS_WORDS[entry.status]}>
+              {entry.status === '?' ? 'U' : entry.status}
+            </span>
+          )}
         </span>
-      )}
-      {entry.status && (
-        <span className={`ex-badge ex-badge-${entry.status === '?' ? 'untracked' : entry.status}`} title={STATUS_WORDS[entry.status]} aria-label={STATUS_WORDS[entry.status]}>
-          {entry.status === '?' ? 'U' : entry.status}
-        </span>
-      )}
+        {checkout && entry.kind !== 'symlink' && (
+          <span className="ex-actions">
+            <button type="button" tabIndex={-1} title={revealLabel(platform)} aria-label={`${revealLabel(platform)}: ${entry.name}`} onClick={(event) => { event.stopPropagation(); onReveal(entry); }}>
+              <Icon icon={FolderOpen} size={14} />
+            </button>
+            {entry.kind === 'file' && (
+              <button type="button" tabIndex={-1} title="Open in editor" aria-label={`Open in editor: ${entry.name}`} onClick={(event) => { event.stopPropagation(); onEditor(entry); }}>
+                <Icon icon={SquareArrowOutUpRight} size={14} />
+              </button>
+            )}
+          </span>
+        )}
+      </span>
+    </div>
+  );
+}
+
+/** Rows with their final height, so the tree that replaces them moves nothing (checklist S1). */
+function Skeleton(): JSX.Element {
+  return (
+    <div className="ex-skeleton" role="status" aria-label="Loading files" aria-busy="true">
+      {[62, 44, 70, 38, 54, 48].map((width, index) => (
+        <div key={index} className="ex-skeleton-row" style={{ height: ROW_HEIGHT }}>
+          <span className="ex-skeleton-icon" />
+          <span className="ex-skeleton-bar" style={{ width: `${width}%` }} />
+        </div>
+      ))}
     </div>
   );
 }
@@ -296,9 +343,9 @@ function Results({ api, target, query, mode, onError, keys }: ResultsProps): JSX
   };
   useEffect(() => () => { keys.current = undefined; }, [keys]);
 
-  if (failed) return <p className="frame-empty error">{failed}</p>;
-  if (!matches) return <p className="frame-empty">Searching…</p>;
-  if (matches.length === 0) return <p className="frame-empty">{mode === 'text' ? 'No line matches.' : 'No file matches.'}</p>;
+  if (failed) return <EmptyState className="ex-state" icon={FileSearch} title="The search could not run" body={failed} />;
+  if (!matches) return <Skeleton />;
+  if (matches.length === 0) return <EmptyState className="ex-state" icon={FileSearch} title={mode === 'text' ? 'No line matches' : 'No file matches'} />;
   return (
     <ul className="ex-results" aria-label="Search results">
       {matches.map((match, index) => (
@@ -309,12 +356,15 @@ function Results({ api, target, query, mode, onError, keys }: ResultsProps): JSX
             onClick={() => open(match, false)}
             onDoubleClick={() => open(match, true)}
           >
-            <span className="ex-result-path">{match.path}{match.line !== undefined && <span className="ex-result-line">:{match.line}</span>}</span>
+            <span className="ex-result-path" title={match.path}>
+              <span className="ex-result-name">{match.path}</span>
+              {match.line !== undefined && <span className="ex-result-line">:{match.line}</span>}
+            </span>
             {match.preview && <span className="ex-result-preview">{match.preview}</span>}
           </button>
         </li>
       ))}
-      {truncated && <li className="frame-empty">Showing the first {matches.length}. Narrow the search.</li>}
+      {truncated && <li className="ex-more">Showing the first {matches.length}. Narrow the search.</li>}
     </ul>
   );
 }
@@ -330,6 +380,12 @@ function ExplorerTree({ api }: { api: FrameApi }): JSX.Element {
   const target: ReadTarget = { workspace: api.workspace, repo: state.repo, scope };
   const readOnly = scope.kind !== 'checkout';
   const multi = state.repos.length > 1;
+
+  useEffect(() => {
+    const reload = (): void => { void store.refresh(); setReloadKey((n) => n + 1); };
+    reloadListeners.add(reload);
+    return () => { reloadListeners.delete(reload); };
+  }, [store]);
 
   useEffect(() => {
     const focus = (): void => {
@@ -349,14 +405,9 @@ function ExplorerTree({ api }: { api: FrameApi }): JSX.Element {
 
   return (
     <div className="ex">
-      <div className="ex-head">
-        <span className="ex-scope" title={readOnly ? `${scopeName(scope, state.session)} is read-only` : 'Your checkout'}>
-          {scopeName(scope, state.session)}
-          {readOnly && <Icon icon={Lock} size={12} label="Read-only" />}
-        </span>
-        <button type="button" className="ex-icon" title="Refresh" aria-label="Refresh the tree" onClick={() => { void store.refresh(); setReloadKey((n) => n + 1); }}>
-          <Icon icon={RefreshCw} size={12} />
-        </button>
+      <div className="ex-scope" title={readOnly ? `${scopeName(scope, state.session)} is read-only` : 'Your checkout'}>
+        <span className="ex-scope-name">{scopeName(scope, state.session)}</span>
+        {readOnly && <Badge icon={Lock}>Read-only</Badge>}
       </div>
       {multi && (
         <select className="ex-repo frame-input" aria-label="Repository" value={state.repo} onChange={(event) => store.setRepo(event.target.value)}>
@@ -364,13 +415,13 @@ function ExplorerTree({ api }: { api: FrameApi }): JSX.Element {
         </select>
       )}
       {state.notice && (
-        <p className="ex-notice" role="status">
-          {state.notice}{' '}
-          <button type="button" onClick={() => store.dismissNotice()}>Dismiss</button>
-        </p>
+        <div className="ex-notice" role="status">
+          <span className="ex-notice-text">{state.notice}</span>
+          <Button size="sm" variant="ghost" onClick={() => store.dismissNotice()}>Dismiss</Button>
+        </div>
       )}
       <div className="ex-search">
-        <Icon icon={Search} size={12} />
+        <Icon icon={Search} size={16} />
         <input
           ref={input}
           type="search"
@@ -381,9 +432,13 @@ function ExplorerTree({ api }: { api: FrameApi }): JSX.Element {
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={(event) => { if (event.key === 'Escape') setQuery(''); else resultKeys.current?.(event); }}
         />
-        <button type="button" className="ex-mode" aria-pressed={mode === 'text'} title="Search the text of files" onClick={() => setMode(mode === 'text' ? 'name' : 'text')}>
-          Aa
-        </button>
+        <IconButton
+          icon={TextSearch}
+          label="Search the text of files"
+          active={mode === 'text'}
+          aria-pressed={mode === 'text'}
+          onClick={() => setMode(mode === 'text' ? 'name' : 'text')}
+        />
       </div>
       {query.trim()
         ? <Results api={api} target={target} query={query.trim()} mode={mode} onError={onSearchError} keys={resultKeys} />
@@ -394,7 +449,13 @@ function ExplorerTree({ api }: { api: FrameApi }): JSX.Element {
 
 export function register(api: FrameApi): Unregister {
   return all(
-    api.registerSidebar({ activity: 'explorer', id: 'files', title: 'Files', render: () => <ExplorerTree api={api} /> }),
+    api.registerSidebar({
+      activity: 'explorer',
+      id: 'files',
+      title: 'Files',
+      actions: () => <IconButton icon={RefreshCw} label="Refresh the tree" onClick={() => { for (const reload of reloadListeners) reload(); }} />,
+      render: () => <ExplorerTree api={api} />,
+    }),
     api.registerCommand({
       id: 'explorer.quickOpen',
       title: 'Go to file',

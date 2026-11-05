@@ -3,20 +3,27 @@
   --bg-primary: var(--ow-bg, #0d1117);
   --bg-secondary: var(--ow-bg-sidebar, #161b22);
   --bg-tertiary: var(--ow-bg-widget, var(--bg-secondary));
-  --bg-elevated: var(--ow-bg-overlay, var(--bg-secondary));
+  --bg-elevated: var(--ow-surface-overlay, var(--ow-bg-overlay, var(--bg-secondary)));
   --bg-hover: var(--ow-bg-hover, var(--bg-secondary));
   --bg-input: var(--ow-bg-input, var(--bg-primary));
-  /* Task cards sit on the plan's --bg-secondary, which light themes paint the
-     same near-white as everything else; a little foreground lifts them in
-     either direction, so one formula serves dark and light alike. */
-  --bg-card: color-mix(in srgb, var(--text-primary) 4%, var(--bg-secondary));
-  --bg-card-raised: color-mix(in srgb, var(--text-primary) 7%, var(--bg-secondary));
+  /* A card is the host's card surface (tokens.css, the surface ladder). A host
+     that maps none gets the old derivation: task cards sit on the plan's
+     --bg-secondary, which light themes paint the same near-white as everything
+     else, and a little foreground lifts them in either direction. */
+  --bg-card: var(--ow-surface-card, color-mix(in srgb, var(--text-primary) 4%, var(--bg-secondary)));
+  --bg-card-raised: var(--ow-surface-card-hover, color-mix(in srgb, var(--text-primary) 7%, var(--bg-secondary)));
+  --bg-card-selected: var(--ow-surface-card-selected, color-mix(in srgb, var(--accent) 8%, var(--bg-card-raised)));
   --bg-card-row-hover: color-mix(in srgb, var(--text-primary) 4%, transparent);
   /* A card that sits on --bg-primary, not on the plan's --bg-secondary: mixed
      from the page it sits on, the same quiet step works in either theme. Light
      overrides the share, because white has no room left to darken into. */
-  --bg-card-page: color-mix(in srgb, var(--text-primary) 4%, var(--bg-primary));
-  --card-border: var(--border-subtle);
+  --bg-card-page: var(--ow-surface-card, color-mix(in srgb, var(--text-primary) 4%, var(--bg-primary)));
+  /* What a card holds that the user reads or types into: a field, code, a
+     prompt. It steps back from the card, the other way from the card's lift. */
+  --bg-inset: var(--ow-surface-inset, var(--bg-tertiary));
+  --card-border: var(--ow-surface-card-border, var(--border-subtle));
+  --card-border-selected: var(--ow-surface-card-selected-border, color-mix(in srgb, var(--accent) 45%, var(--card-border)));
+  --shadow-card: var(--ow-elevation-card, none);
   /* A separator inside a card: the panel hairline is invisible on the card's
      own tint in light; the share is raised there to the step dark already has. */
   --card-hairline: var(--border-muted);
@@ -70,6 +77,8 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
   --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.4);
+  /* A menu or popover: the top of the surface ladder, the strongest shadow. */
+  --shadow-overlay: var(--ow-elevation-overlay, var(--shadow-lg));
   --transition-fast: 120ms ease;
   --transition-normal: 180ms ease;
   --slash-token-bg: var(--ow-bg-code, color-mix(in srgb, var(--accent) 16%, transparent));
@@ -98,8 +107,8 @@ body.vscode-high-contrast-light {
    drawn by a hairline and a 7% step, not the sidebar's grey block. */
 body.vscode-light {
   --accent: var(--ow-fg-link, #005fb8);
-  --bg-card-page: color-mix(in srgb, var(--text-primary) 7%, var(--bg-primary));
-  --card-border: color-mix(in srgb, var(--text-primary) 16%, transparent);
+  --bg-card-page: var(--ow-surface-card, color-mix(in srgb, var(--text-primary) 7%, var(--bg-primary)));
+  --card-border: var(--ow-surface-card-border, color-mix(in srgb, var(--text-primary) 16%, transparent));
   --card-hairline: color-mix(in srgb, var(--text-primary) 12%, transparent);
 }
 
@@ -750,10 +759,11 @@ body {
 
 .subagent-card {
   padding: 5px 10px;
-  border: 1px solid var(--border-muted);
+  border: 1px solid var(--card-border);
   border-left: 2px solid var(--accent);
   border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
+  background: var(--bg-card-page);
+  box-shadow: var(--shadow-card);
 }
 
 .subagent-card[data-status='failed'] {
@@ -1246,6 +1256,7 @@ body.vscode-high-contrast-light .disclosure:hover {
   align-items: center;
   gap: 6px;
   padding: 4px 11px;
+  min-height: var(--ow-hit, 24px);
   border: 0;
   /* A standalone pill keeps both round ends; only a capsule's first segment
      squares its right edge against the login. */
@@ -1417,6 +1428,7 @@ body.vscode-high-contrast-light .disclosure:hover {
   align-items: center;
   gap: 6px;
   padding: 4px 10px;
+  min-height: var(--ow-hit, 24px);
   border: 0;
   /* Un-grouped, the pill is a pill: the Run rows draw their own segmented
      container, and a standalone planner chip keeps both round ends. */
@@ -1991,7 +2003,7 @@ section.isolation-notice {
   background: var(--bg-card-page);
   border: 1px solid var(--card-border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-card);
   text-align: left;
   user-select: text;
   overflow-wrap: anywhere;
@@ -2823,6 +2835,309 @@ section.isolation-notice {
   gap: 4px;
 }
 
+/* ---- The plan panel: a tall, narrow list (docs/desktop/design.md, W4) ----
+   Rows, not cards: three short lines a task, grouped by stage, opening into
+   the full card when selected. Tokens only, so the panel follows the theme. */
+.plan-list {
+  padding: 0 var(--ow-space-2) var(--ow-space-4);
+}
+
+.plan-list-empty {
+  margin: 0;
+  padding: var(--ow-space-3) var(--ow-space-1);
+  color: var(--ow-fg-secondary);
+}
+
+.plan-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ow-space-2);
+  padding: var(--ow-space-2) var(--ow-space-1) var(--ow-space-1);
+}
+
+.plan-head-goal {
+  margin: 0;
+  font: var(--ow-type-body-strong);
+  color: var(--ow-fg);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.plan-head-bar {
+  display: flex;
+  gap: var(--ow-space-half);
+  height: calc(var(--ow-space-1) + var(--ow-space-half));
+}
+
+.plan-head-segment {
+  flex: 1 1 0;
+  min-width: var(--ow-space-1);
+  border-radius: var(--ow-radius-pill);
+  background: currentColor;
+}
+
+.plan-head-counts {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ow-space-1) var(--ow-space-3);
+  font: var(--ow-type-small);
+  color: var(--ow-fg-secondary);
+}
+
+.plan-head-needs {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ow-space-1);
+  color: var(--ow-status-attention);
+}
+
+.plan-stage-head {
+  margin: var(--ow-space-3) 0 0;
+  padding: 0 var(--ow-space-1);
+  font: var(--ow-type-overline);
+  letter-spacing: var(--ow-overline-tracking);
+  text-transform: uppercase;
+  color: var(--ow-fg-muted);
+}
+
+.task-list-rows {
+  gap: var(--ow-space-half);
+}
+
+.task-card.task-row-card,
+.task-card.task-row-card:hover,
+.task-card.task-row-card.expanded {
+  border-color: transparent;
+  border-radius: var(--ow-radius-md);
+  box-shadow: none;
+}
+
+.task-card.task-row-card {
+  background: transparent;
+}
+
+.task-card.task-row-card:hover {
+  background: var(--ow-bg-hover);
+}
+
+/* Needs you is the one state that asks for the user: its row is marked in the list itself, not only by its shape. */
+.task-card.task-row-card:has(> .task-row-attention) {
+  background: color-mix(in srgb, var(--ow-status-attention) 8%, transparent);
+  box-shadow: inset var(--ow-space-half) 0 0 var(--ow-status-attention);
+}
+
+.task-card.task-row-card.expanded {
+  background: var(--bg-card-selected);
+  border-color: var(--card-border-selected);
+  box-shadow: inset var(--ow-space-half) 0 0 var(--ow-accent), var(--shadow-card);
+}
+
+.task-with-controls-top > .task-card > .task-card-header.task-summary-row {
+  display: flex;
+  flex-direction: column;
+  /* A wrapping column sizes its line to the widest title, so a long title would push every line past the card. */
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 0;
+  min-height: var(--ow-row-double);
+  padding: var(--ow-space-1) var(--ow-space-2) var(--ow-space-1) var(--ow-space-3);
+  /* The header's wrap would make each line as wide as its unwrapped title, past the card instead of to its ellipsis. */
+  flex-wrap: nowrap;
+}
+
+.task-card-header.task-summary-row:hover {
+  background: none;
+}
+
+.task-row-line {
+  display: flex;
+  align-items: center;
+  gap: var(--ow-space-2);
+  min-width: 0;
+}
+
+/* The lines under the title start where the title's order does. */
+.task-row-assignment,
+.task-row-status {
+  padding-left: calc(var(--ow-icon-secondary) + var(--ow-space-2));
+}
+
+.task-row-head {
+  min-height: var(--ow-hit);
+}
+
+.task-row-head > .task-order {
+  font: var(--ow-type-caption);
+  font-variant-numeric: tabular-nums;
+  color: var(--ow-fg-muted);
+  background: none;
+  padding: 0;
+  min-width: 0;
+}
+
+.task-row-head > .task-order::before {
+  content: '#';
+}
+
+.task-row-head > .task-heading {
+  flex: 1 1 auto;
+}
+
+.task-row-head .task-title-text {
+  font: var(--ow-type-label);
+  color: var(--ow-fg);
+  letter-spacing: normal;
+}
+
+.task-row-assignment {
+  font: var(--ow-type-caption);
+  color: var(--ow-fg-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.task-row-assignment > .task-assignment-runner {
+  flex: none;
+  max-width: none;
+}
+
+.task-row-model,
+.task-row-command {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-row-command {
+  font: var(--ow-type-code-small);
+  background: none;
+  padding: 0;
+  color: var(--ow-fg-secondary);
+}
+
+.task-row-status {
+  flex-wrap: wrap;
+  row-gap: var(--ow-space-1);
+  min-height: var(--ow-hit);
+  font: var(--ow-type-caption);
+  color: var(--ow-fg-muted);
+}
+
+.task-row-status > .task-summary-badges {
+  flex: 0 1 auto;
+}
+
+.task-row-status-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-row-running .task-row-status-text {
+  color: var(--ow-fg-secondary);
+}
+
+.task-row-attention .task-row-status-text {
+  color: var(--ow-status-attention);
+}
+
+.task-row-failed .task-row-status-text {
+  color: var(--ow-status-failed);
+}
+
+.task-row-action {
+  appearance: none;
+  flex: none;
+  min-height: var(--ow-hit);
+  padding: 0 var(--ow-space-2);
+  border: 1px solid var(--ow-border-control);
+  border-radius: var(--ow-radius-sm);
+  background: transparent;
+  color: var(--ow-fg);
+  font: var(--ow-type-caption);
+  cursor: pointer;
+}
+
+.task-row-action:hover {
+  background: var(--ow-bg-hover);
+}
+
+/* The title bar holds the view's one filled button: a row's approve is outlined in the accent. */
+.task-row-action.primary {
+  border-color: var(--ow-accent);
+  color: var(--ow-fg-link);
+}
+
+.task-row-action:focus-visible {
+  outline: var(--ow-focus-width) solid var(--ow-focus-ring);
+  outline-offset: var(--ow-focus-offset);
+}
+
+.task-row-item > .task-footer-controls {
+  padding: var(--ow-space-1) var(--ow-space-2) var(--ow-space-2) calc(var(--ow-space-3) + var(--ow-icon-secondary) + var(--ow-space-2));
+}
+
+/* The prompt and the handoff open folded to one line each, so an open card shows where it stands before what it says. */
+.task-fold {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.task-fold-head {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: var(--ow-space-2);
+  min-width: 0;
+  min-height: var(--ow-hit);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ow-fg-muted);
+  font: var(--ow-type-caption);
+  text-align: left;
+  cursor: pointer;
+}
+
+.task-fold-head:hover {
+  color: var(--ow-fg-secondary);
+}
+
+.task-fold-head:focus-visible {
+  outline: var(--ow-focus-width) solid var(--ow-focus-ring);
+  outline-offset: var(--ow-focus-offset);
+}
+
+.task-fold-chevron {
+  flex: none;
+  width: 1em;
+  text-align: center;
+}
+
+.task-fold-label {
+  flex: none;
+  color: var(--ow-fg-secondary);
+  font-weight: 600;
+}
+
+.task-fold-preview {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-fold-body {
+  min-width: 0;
+}
+
 /* ---- Plan Research Log ---- */
 .plan-research-log {
   border-top: 1px solid var(--border-subtle);
@@ -2862,23 +3177,36 @@ section.isolation-notice {
 }
 
 /* ---- Task Card ---- */
+/* Muted text is secondary at partial alpha, which a card's tint pulls under AA;
+   on a card it takes the hint mix, which reads on every step of the ladder. */
+.task-card,
+.plan-approval-card,
+.approval-card,
+.isolation-handoff,
+section.isolation-notice,
+.subagent-card,
+.task-add-form {
+  --text-muted: var(--text-hint);
+}
+
 .task-card {
   background: var(--bg-card);
-  border: 1px solid var(--border-muted);
+  border: 1px solid var(--card-border);
   border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
   transition: border-color var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast);
   overflow: hidden;
 }
 
 .task-card:hover {
-  border-color: color-mix(in srgb, var(--accent) 20%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 20%, var(--card-border));
   background: var(--bg-card-raised);
 }
 
+/* The open card is the selected one: a faint accent tint inside an accent-tinted edge. */
 .task-card.expanded {
-  border-color: var(--border-color);
-  background: var(--bg-card-raised);
-  box-shadow: var(--shadow-sm);
+  border-color: var(--card-border-selected);
+  background: var(--bg-card-selected);
 }
 
 /* High contrast themes draw edges, not tints. */
@@ -2886,9 +3214,12 @@ body.vscode-high-contrast,
 body.vscode-high-contrast-light {
   --bg-card: transparent;
   --bg-card-raised: transparent;
+  --bg-card-selected: transparent;
   --bg-card-page: transparent;
   /* A tintless card keeps its boundary at the theme's full contrast colour. */
   --card-border: var(--ow-border-contrast, var(--border-color));
+  --card-border-selected: var(--ow-border-contrast-active, var(--accent));
+  --shadow-card: none;
 }
 
 body.vscode-high-contrast .task-card:hover,
@@ -2915,8 +3246,9 @@ body.vscode-high-contrast-light .task-card.expanded {
 }
 
 .task-order {
-  font-size: 11px;
+  font: var(--ow-type-caption);
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
   color: var(--ow-fg-link, var(--accent));
   background: var(--accent-subtle);
   border-radius: 4px;
@@ -2926,13 +3258,20 @@ body.vscode-high-contrast-light .task-card.expanded {
   flex-shrink: 0;
 }
 
+/* On the selected tint the badge's own accent fill stacks a second one, which
+   takes the link colour under AA in Dark+; the label leans toward the text. */
+.task-card.expanded:not(.task-row-card) .task-order {
+  color: color-mix(in srgb, var(--ow-fg-link, var(--accent)) 75%, var(--text-primary));
+}
+
 .task-type-badge {
-  font-size: 9px;
-  font-weight: 700;
-  padding: 2px 6px;
-  border-radius: 3px;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: var(--ow-space-half) var(--ow-space-2);
+  border-radius: var(--ow-radius-sm);
+  font: var(--ow-type-caption);
+  white-space: nowrap;
   flex-shrink: 0;
 }
 
@@ -2968,8 +3307,11 @@ body.vscode-high-contrast-light .task-card.expanded {
   display: flex;
   flex: 1 1 110px;
   flex-direction: column;
+  justify-content: center;
   gap: 3px;
   min-width: 0;
+  /* The title is the toggle, so it is a whole target, not the height of its text. */
+  min-height: var(--ow-hit);
 }
 
 .task-with-controls {
@@ -3090,6 +3432,41 @@ body.vscode-high-contrast-light .task-card.expanded {
   margin-left: 0;
 }
 
+/* TaskSummary. Inside a card's subgrid its badges take the title's column. */
+.task-summary-badges {
+  grid-column: -2 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ow-space-1);
+  min-width: 0;
+}
+
+.task-summary-badges:empty {
+  display: none;
+}
+
+/* Compact is one line: the runner badge beside the title, and Open chat in one line too. */
+.task-summary-compact {
+  min-height: var(--ow-row);
+  padding-block: var(--ow-space-1);
+}
+
+.task-summary-compact > .task-heading-block {
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "title meta";
+}
+
+.task-summary-compact > .task-heading-block-with-log {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-areas: "title meta actions";
+}
+
+.task-summary-compact .task-log-open-btn-stacked {
+  flex-direction: row;
+  gap: 0.25em;
+}
+
 .task-with-controls-top > .task-footer-controls > .task-remove-btn {
   margin-left: auto;
 }
@@ -3106,7 +3483,7 @@ body.vscode-high-contrast-light .task-card.expanded {
 
 .task-assignment {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 4px;
   min-width: 0;
   font-size: 11px;
@@ -3149,7 +3526,10 @@ body.vscode-high-contrast-light .task-card.expanded {
 }
 
 .task-description {
-  color: var(--text-hint);
+  /* Only an open card draws it, so it sits on the selected tint: there Light+'s
+     grey foreground leaves the ordinary hint under AA, so it leans closer to
+     the primary text. */
+  color: color-mix(in srgb, var(--text-secondary) 30%, var(--text-primary));
   font-size: 12px;
   line-height: 1.6;
 }
@@ -3242,9 +3622,9 @@ body.vscode-high-contrast-light .task-card.expanded {
 }
 
 .task-output {
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--card-border);
   border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
+  background: var(--bg-inset);
   overflow: hidden;
 }
 
@@ -3408,6 +3788,11 @@ body.vscode-high-contrast-light .task-card.expanded {
   background-repeat: no-repeat;
   background-position: right 10px center;
   padding-right: 28px;
+  /* A mode's description outgrows a narrow card: it cuts, and the select's tooltip has it whole. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .model-selector select:focus {
@@ -3497,10 +3882,10 @@ body.vscode-high-contrast-light .task-card.expanded {
 .model-picker-dropdown {
   /* position/top/left/width are set as inline fixed styles by ModelSelector */
   z-index: 9999;
-  background: var(--bg-primary);
+  background: var(--bg-elevated);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-overlay);
   max-height: 320px;
   min-width: 280px;
   overflow: hidden;
@@ -3653,8 +4038,8 @@ body.vscode-high-contrast-light .task-card.expanded {
 }
 
 .subtask-card {
-  background: var(--bg-primary);
-  border: 1px solid var(--border-muted);
+  background: var(--bg-inset);
+  border: 1px solid var(--card-border);
   border-radius: var(--radius-sm);
   overflow: hidden;
   transition: border-color var(--transition-fast);
@@ -4018,7 +4403,7 @@ body.vscode-high-contrast-light .task-card.expanded {
 }
 
 .regenerate-feedback textarea {
-  background: var(--bg-tertiary);
+  background: var(--bg-inset);
   color: var(--text-primary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
@@ -4225,8 +4610,8 @@ body.vscode-high-contrast-light .task-card.expanded {
 /* ---- To-do / Done indicator ---- */
 .task-check {
   flex-shrink: 0;
-  width: 15px;
-  height: 15px;
+  width: 14px;
+  height: 14px;
   border-radius: var(--radius-full);
   border: 1.5px solid var(--border-color);
   display: inline-flex;
@@ -4413,8 +4798,8 @@ body.vscode-high-contrast-light .task-card.expanded {
 
 /* ---- Execution Prompt (read-only) ---- */
 .task-prompt-readonly {
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-muted);
+  background: var(--bg-inset);
+  border: 1px solid var(--card-border);
   border-radius: var(--radius-sm);
   padding: 8px 12px;
   margin-bottom: 8px;
@@ -4536,6 +4921,9 @@ body.vscode-high-contrast-light .task-card.expanded {
 }
 
 .task-mark-btn {
+  /* The reason beside it wraps instead: a label broken over two lines reads as two controls. */
+  flex-shrink: 0;
+  white-space: nowrap;
   font-size: 11px;
   padding: 2px 10px;
   border: 1px solid var(--border-color);
@@ -4559,6 +4947,7 @@ body.vscode-high-contrast-light .task-card.expanded {
 }
 
 .task-mark-hint {
+  min-width: 0;
   font-size: 10px;
   color: var(--text-muted);
 }
@@ -4812,8 +5201,8 @@ body.vscode-high-contrast-light .task-card.expanded {
   overflow-y: auto;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  background: var(--bg-secondary);
-  box-shadow: var(--shadow-md);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-overlay);
   z-index: 10;
   margin: 0 14px;
 }
@@ -5146,6 +5535,16 @@ body.vscode-high-contrast-light .task-card.expanded {
   cursor: pointer;
 }
 
+/* The prompt's icon is pinned in its box; here it follows the label's text, which has no box of its own to pin it in. */
+.task-deps-label .task-prompt-edit-icon {
+  position: static;
+  margin-left: 6px;
+}
+
+.task-deps-label:hover .task-prompt-edit-icon {
+  opacity: 0.5;
+}
+
 .task-dep-editor {
   display: flex;
   flex-direction: column;
@@ -5211,9 +5610,10 @@ body.vscode-high-contrast-light .task-card.expanded {
   gap: 8px;
   margin-top: 8px;
   padding: 12px;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--card-border);
   border-radius: var(--radius-md);
   background: var(--bg-card);
+  box-shadow: var(--shadow-card);
 }
 
 .task-add-title {
@@ -5699,8 +6099,9 @@ body.vscode-high-contrast-light .task-card.expanded {
    header badge; the branch and worktree are inspection detail and live in the
    expanded body. */
 .task-isolation-badge {
-  font-size: 10px;
-  padding: 1px 6px;
+  font-size: 11px;
+  line-height: 16px;
+  padding: var(--ow-space-half) 6px;
   border-radius: 3px;
   margin-left: 6px;
   font-weight: 500;
@@ -5726,9 +6127,9 @@ body.vscode-high-contrast-light .task-card.expanded {
 .task-isolation {
   margin-bottom: 8px;
   padding: 6px 10px;
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--card-border);
   border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
+  background: var(--bg-inset);
   font-size: 11px;
 }
 
@@ -5761,9 +6162,10 @@ body.vscode-high-contrast-light .task-card.expanded {
 .isolation-handoff {
   margin-top: 10px;
   padding: 10px 12px;
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--card-border);
   border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
+  background: var(--bg-card-page);
+  box-shadow: var(--shadow-card);
 }
 
 .isolation-handoff-header {
@@ -6079,10 +6481,11 @@ body.vscode-high-contrast-light .pending-message {
 .approval-card {
   margin: 4px 14px;
   padding: 8px 10px;
-  border: 1px solid var(--border-muted);
+  border: 1px solid var(--card-border);
   border-left: 2px solid var(--orange);
   border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
+  background: var(--bg-card-page);
+  box-shadow: var(--shadow-card);
   font-size: 11px;
 }
 
@@ -6327,8 +6730,9 @@ body.vscode-high-contrast-light .pending-message {
    header, the queue and the composer, all on the same theme variables. */
 
 .task-log-open-btn {
-  font-size: 10px;
-  padding: 1px 8px;
+  font-size: 11px;
+  min-height: var(--ow-hit);
+  padding: var(--ow-space-half) var(--ow-space-2);
   margin-left: 6px;
   border-radius: 3px;
   font-weight: 500;
@@ -6658,8 +7062,8 @@ body.vscode-high-contrast-light .pending-message {
 .approval-card-body {
   margin: 6px 0;
   padding: 8px 12px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-muted);
+  background: var(--bg-inset);
+  border: 1px solid var(--card-border);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   font-size: 12px;
@@ -7168,4 +7572,104 @@ body.vscode-high-contrast-light .pending-message {
 
 .checkpoint-delegated-error {
   color: var(--ow-status-error, var(--text-muted));
+}
+
+/* ---- The desktop's planner tab (docs/desktop/design.md, W2/W3) ----
+   A conversation with messages uses the whole width of its tab at any size:
+   the list, the cards and the composer share one edge, and the side gutter is
+   each element's own padding. Only the empty first screen keeps a centred
+   column (--first-screen-column, above), by design. A code block or a table
+   scrolls inside its message (.chat-msg-content pre / .md-table), so a wide
+   one never widens the page; min-width: 0 lets a flex child shrink to the tab
+   instead of to its widest line. */
+
+.chat-layout-conversation .message-list {
+  padding-inline: 0;
+}
+
+.chat-layout-conversation > :not(.message-list) {
+  width: 100%;
+  min-width: 0;
+}
+
+.chat-layout-conversation :is(.chat-msg, .chat-msg-bubble, .chat-msg-content) {
+  min-width: 0;
+}
+
+.chat-layout-conversation .setup-panel {
+  border-inline: 1px solid var(--border-muted);
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+}
+
+/* The footer's one target keeps the tab's 24 px floor (checklist A3); the
+   sidebar's usage line stays a caption-height strip. */
+.chat-layout-conversation .escalation-inbox-bar {
+  min-height: var(--ow-hit);
+}
+
+.chat-msg-speaker {
+  display: block;
+  margin-bottom: var(--ow-space-1, 4px);
+  font: var(--ow-type-caption);
+  color: var(--text-secondary);
+}
+
+.chat-msg-user .chat-msg-speaker {
+  color: inherit;
+  opacity: 0.85;
+}
+
+/* The draft's approval, at the foot of what the planner said about it. */
+.plan-approval-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ow-space-3, 12px);
+  margin: var(--ow-space-2, 8px) 14px var(--ow-space-3, 12px);
+  padding: var(--ow-space-3, 12px) var(--ow-space-4, 16px);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-md);
+  background: var(--bg-card-page);
+  box-shadow: var(--shadow-card);
+}
+
+.plan-approval-title {
+  margin: 0;
+  font: var(--ow-type-heading);
+  color: var(--text-primary);
+}
+
+.plan-approval-size {
+  font: var(--ow-type-label);
+  color: var(--text-secondary);
+}
+
+.plan-approval-card .plan-approval-note {
+  max-width: none;
+}
+
+.plan-approval-settings {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ow-space-2, 8px);
+  font: var(--ow-type-small);
+  color: var(--text-secondary);
+}
+
+.plan-approval-label {
+  font: var(--ow-type-label);
+  color: var(--text-primary);
+}
+
+.plan-approval-settings-words {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--ow-space-2, 8px);
+}
+
+.plan-approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--ow-space-2, 8px);
 }

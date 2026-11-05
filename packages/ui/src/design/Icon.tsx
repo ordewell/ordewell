@@ -1,6 +1,6 @@
 import { forwardRef, type ButtonHTMLAttributes, type ComponentType, type ReactNode } from 'react';
 import type { LucideIcon, LucideProps } from 'lucide-react';
-import { ICON_STROKE, type GlyphProps, type IconSize } from './glyphs';
+import { strokeFor, type GlyphProps, type IconSize } from './glyphs';
 
 /** A Lucide icon or an Ordewell glyph: both take a size and a stroke in pixels. */
 export type IconComponent = LucideIcon | ComponentType<GlyphProps>;
@@ -14,16 +14,16 @@ export interface IconProps {
 }
 
 /**
- * One icon at a fixed size and a 1.5px stroke. Lucide draws on a 24px grid, so
- * its stroke is held at pixels rather than scaled with the icon: a 16px icon
- * keeps the stroke a 20px one has.
+ * One icon in a fixed box its own size, stroked at 1.5px (1.75 at 12). Lucide
+ * draws on a 24px grid, so its stroke is held at pixels rather than scaled
+ * with the icon: a 16px icon keeps the stroke a 20px one has.
  */
 export function Icon({ icon: Drawn, size = 16, label, className }: IconProps): JSX.Element {
   const a11y = label ? { role: 'img', 'aria-label': label } : { 'aria-hidden': true as const };
   const classes = ['ow-icon', className].filter(Boolean).join(' ');
   // A glyph ignores the Lucide-only props; both accept size and className.
   const Any = Drawn as ComponentType<LucideProps & GlyphProps>;
-  return <Any size={size} strokeWidth={ICON_STROKE} absoluteStrokeWidth focusable="false" className={classes} {...a11y} />;
+  return <Any size={size} strokeWidth={strokeFor(size)} absoluteStrokeWidth focusable="false" className={classes} {...a11y} />;
 }
 
 export interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'aria-label' | 'children'> {

@@ -243,7 +243,8 @@ export function createDiffEditor(monaco: MonacoApi, host: HTMLElement, options: 
     readOnly: !options.editable,
     originalEditable: false,
     renderSideBySide: options.sideBySide ?? true,
-    useInlineViewWhenSpaceIsLimited: true,
+    // The layout toggle is the truth: Monaco folding to inline on its own would leave "Side by side" pressed and comments placed for two columns.
+    useInlineViewWhenSpaceIsLimited: false,
   });
   editor.setModel({ original, modified });
   const sides = { original: editor.getOriginalEditor(), modified: editor.getModifiedEditor() };

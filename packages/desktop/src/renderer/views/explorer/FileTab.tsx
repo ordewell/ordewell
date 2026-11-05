@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FileText } from 'lucide-react';
+import { FileQuestion, FileText, FileWarning, FileX, FolderOpen, Save, SquareArrowOutUpRight } from 'lucide-react';
+import { Badge, Button, EmptyState, IconButton } from '@ordewell/ui/design';
 import { describeError, filesApi, FilesError, type FileContent, type ReadTarget } from '../../files/api';
 import type { FrameApi, Tab, Unregister, ViewScope } from '../../frame/api';
 import type { EditorHandle } from '../../monaco';
+import { daemonHost } from '../../session/DaemonHost';
 import { scopeName } from '../scope/scopeStore';
 import { useScope } from '../scope/useScope';
 import { clearDraft, getDraft, setDraft, stripDirtyMark, withDirtyMark } from './drafts';
 import { EditorPane } from './EditorPane';
+import { Banner, EditorSkeleton, FileHeader, ScopeBadge } from './fileView';
 import { onLineRequest, openFile, parseFileTabId, takeLine } from './fileTabs';
 import { revealLabel } from './shellLabels';
 import './explorer.css';
@@ -194,54 +197,87 @@ function FileTab({ api, tab }: { api: FrameApi; tab: Tab }): JSX.Element {
     if (!result.ok) api.announce(result.message ?? 'That did not work.');
   };
 
-  if (load.status === 'loading') return <p className="frame-empty">Loading {baseTitle}…</p>;
+  const openTask = async (): Promise<void> => {
+    if (scope.kind !== 'task') return;
+    // A task tab shows the open session's plan (design.md, Tabs): a task of another session switches to it first.
+    const host = daemonHost(api.workspace);
+    if (host.sessionId !== scope.sessionId) await host.open(scope.sessionId);
+    if (host.sessionId !== scope.sessionId) return;
+    api.openTab({ kind: 'task', id: scope.taskId, title: scopeName(scope, state.session), scope });
+  };
+  const checkout = (): void => openFile(api, repo, path, CHECKOUT, { preview: false });
+  const label = `${repo === '.' ? '' : `${repo}/`}${path}`;
+  const scopeLabel = scopeName(scope, state.session);
+
+  if (load.status === 'loading') {
+    return (
+      <div className="ft">
+        <FileHeader label={`${baseTitle}`} path={label} scope={<ScopeBadge name={scopeLabel} readOnly={!editable} />} />
+        <EditorSkeleton label={`Loading ${baseTitle}`} />
+      </div>
+    );
+  }
   if (load.status === 'error') {
     return (
-      <div className="ft ft-message">
-        <p className="frame-empty error" role="alert">{load.message}</p>
-        {!editable && (
-          <button type="button" className="ft-button" onClick={() => openFile(api, repo, path, CHECKOUT, { preview: false })}>Open Your checkout</button>
-        )}
+      <div className="ft">
+        <FileHeader label={`${baseTitle}`} path={label} scope={<ScopeBadge name={scopeLabel} readOnly={!editable} />} />
+        <div className="fv-state">
+          <EmptyState
+            icon={load.gone ? FileX : FileWarning}
+            title={load.gone ? 'This file is gone' : 'The file could not be read'}
+            body={<span role="alert">{load.message}</span>}
+            action={!editable ? <Button size="sm" onClick={checkout}>Open Your checkout</Button> : undefined}
+          />
+        </div>
       </div>
     );
   }
 
   const { content } = load;
-  const label = `${repo === '.' ? '' : `${repo}/`}${path}`;
+  const canEdit = editable && content.kind === 'text';
   return (
     <div className="ft">
-      <div className="ft-bar">
-        <span className="ft-path" title={label}>{label}</span>
-        <span className="ft-scope">{scopeName(scope, state.session)}</span>
-        {dirty && <span className="ft-dirty" role="status">Unsaved changes</span>}
-        <span className="ft-spacer" />
-        {editable && content.kind === 'text' && dirty && (
-          <button type="button" className="ft-button" onClick={discardEdits}>Revert</button>
+      <FileHeader
+        label={`${baseTitle}`}
+        path={label}
+        scope={<ScopeBadge name={scopeLabel} readOnly={!editable} />}
+        meta={(
+          <>
+            {scope.kind === 'task' && <Button variant="ghost" size="sm" title="Open the task" onClick={() => void openTask()}>{scopeLabel}</Button>}
+            {dirty && <Badge tone="accent" role="status">Unsaved changes</Badge>}
+          </>
         )}
-        {editable && content.kind === 'text' && (
-          <button type="button" className="ft-button ft-primary" disabled={!dirty || saving} onClick={() => void save()}>Save</button>
+        actions={(
+          <>
+            {canEdit && dirty && <Button size="sm" onClick={discardEdits}>Revert</Button>}
+            {canEdit && <Button variant="primary" size="sm" icon={Save} disabled={!dirty || saving} onClick={() => void save()}>Save</Button>}
+            {editable && <IconButton icon={SquareArrowOutUpRight} label="Open in editor" onClick={() => void shell('openInEditor')} />}
+            {editable && <IconButton icon={FolderOpen} label={revealLabel(api.platform)} onClick={() => void shell('reveal')} />}
+          </>
         )}
-        {editable && <button type="button" className="ft-button" onClick={() => void shell('openInEditor')}>Open in editor</button>}
-        {editable && <button type="button" className="ft-button" onClick={() => void shell('reveal')}>{revealLabel(api.platform)}</button>}
-      </div>
+      />
       {!editable && (
-        <div className="ft-banner" role="note">
-          <span>Read-only: this is {scopeName(scope, state.session)}.</span>
-          <button type="button" className="ft-button" onClick={() => openFile(api, repo, path, CHECKOUT, { preview: false })}>Open Your checkout</button>
-        </div>
+        <Banner actions={<Button size="sm" onClick={checkout}>Open Your checkout</Button>}>
+          Read-only: this is {scopeLabel}.
+        </Banner>
       )}
       {conflict && (
-        <div className="ft-banner ft-conflict" role="alert">
-          <span>
-            {conflict === 'stale'
-              ? `${baseTitle} changed on disk since you opened it, so it was not saved.`
-              : `${baseTitle} changed on disk while you have unsaved changes.`}
-          </span>
-          <button type="button" className="ft-button" onClick={discardEdits}>Reload from disk</button>
-          <button type="button" className="ft-button" onClick={() => void save(true)}>Overwrite the file</button>
-        </div>
+        <Banner
+          tone="attention"
+          role="alert"
+          actions={(
+            <>
+              <Button size="sm" onClick={discardEdits}>Reload from disk</Button>
+              <Button size="sm" variant="danger" onClick={() => void save(true)}>Overwrite the file</Button>
+            </>
+          )}
+        >
+          {conflict === 'stale'
+            ? `${baseTitle} changed on disk since you opened it, so it was not saved.`
+            : `${baseTitle} changed on disk while you have unsaved changes.`}
+        </Banner>
       )}
-      {saveError && !conflict && <p className="ft-banner ft-conflict" role="alert">{saveError}</p>}
+      {saveError && !conflict && <Banner tone="attention" role="alert">{saveError}</Banner>}
       {content.kind === 'text' ? (
         <EditorPane
           modelKey={tab.key}
@@ -254,13 +290,15 @@ function FileTab({ api, tab }: { api: FrameApi; tab: Tab }): JSX.Element {
           onReady={() => { const line = takeLine(tab.key); if (line !== undefined) editor.current?.revealLine(line); }}
         />
       ) : (
-        <div className="ft-message">
-          <p className="frame-empty">
-            {content.kind === 'binary'
+        <div className="fv-state">
+          <EmptyState
+            icon={content.kind === 'binary' ? FileQuestion : FileWarning}
+            title={content.kind === 'binary' ? 'This is a binary file' : 'This file is too large to show'}
+            body={content.kind === 'binary'
               ? `This is a binary file (${formatSize(content.size)}), so it is not shown.`
               : `This file is ${formatSize(content.size)}, over the ${formatSize(content.limit)} the viewer opens.`}
-          </p>
-          {editable && <button type="button" className="ft-button" onClick={() => void shell('openInEditor')}>Open in editor</button>}
+            action={editable ? <Button size="sm" icon={SquareArrowOutUpRight} onClick={() => void shell('openInEditor')}>Open in editor</Button> : undefined}
+          />
         </div>
       )}
     </div>

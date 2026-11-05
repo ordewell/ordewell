@@ -22,9 +22,9 @@ describe('the assignment while a plan executes', () => {
 
     expect(screen.queryByLabelText('Runner')).toBeNull();
     expect(screen.queryByLabelText(/^Mode/)).toBeNull();
-    expect(container.querySelector('.task-assignment-readonly')?.textContent).toBe('Assignedcodex · GPT · high');
+    expect(container.querySelector('.task-assignment-readonly')?.textContent).toBe('AssignedCodex · GPT · high');
     // The header line under the title is there in every state.
-    expect(container.querySelector('.task-heading-block .task-assignment')?.textContent).toBe('codex · GPT · high');
+    expect(container.querySelector('.task-heading-block .task-assignment')?.textContent).toBe('Codex · GPT · high');
   });
 
   it('replaces them on a subtask card too', () => {
@@ -33,8 +33,8 @@ describe('the assignment while a plan executes', () => {
     fireEvent.click(screen.getByText('Work'));
 
     expect(screen.queryByLabelText('Runner')).toBeNull();
-    expect(container.querySelector('.task-assignment-readonly')?.textContent).toBe('Assignedcodex · GPT · high');
-    expect(container.querySelector('.task-heading .task-assignment')?.textContent).toBe('codex · GPT · high');
+    expect(container.querySelector('.task-assignment-readonly')?.textContent).toBe('AssignedCodex · GPT · high');
+    expect(container.querySelector('.task-heading .task-assignment')?.textContent).toBe('Codex · GPT · high');
   });
 
   it('keeps the pickers, and no read-only copy, before execution', () => {
@@ -93,7 +93,7 @@ describe('the editors follow whether the run could still move the plan on, not o
     fireEvent.click(screen.getByText('Work'));
 
     expect(screen.queryByLabelText('Runner')).toBeNull();
-    expect(container.querySelector('.task-assignment-readonly')?.textContent).toBe('Assignedcodex · GPT · high');
+    expect(container.querySelector('.task-assignment-readonly')?.textContent).toBe('AssignedCodex · GPT · high');
   });
 
   it('still lets a task that has not started keep its editors then', () => {

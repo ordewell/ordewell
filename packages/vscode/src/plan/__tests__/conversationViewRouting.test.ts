@@ -52,7 +52,7 @@ describe('planner events reach the webview through the conversation view', () =>
     send({ type: 'task_started', taskId: 'x', order: 1, title: 'Add a parser', runner: 'claude-code' });
 
     expect(screen.blocks()).toEqual([
-      expect.objectContaining({ type: 'message', role: 'system', text: 'Started "Add a parser" · claude-code' }),
+      expect.objectContaining({ type: 'message', role: 'system', text: 'Started "Add a parser" · Claude Code' }),
     ]);
   });
 

@@ -1,9 +1,11 @@
 import type { ConfirmValue, LandingBranchHeld } from '@ordewell/core';
 import type { FrameApi } from '../../frame/api';
+import { PLANNER_TAB } from '../../frame/layout';
 import { daemonHost } from '../../session/DaemonHost';
 import { confirmWith } from '../../session/ConfirmDialog';
 import { DaemonError, messageOf } from '../../session/daemon';
 import { readLog, runGitAction, type BranchInfo, type Branches, type GitAction, type StashInfo } from './gitData';
+import { notifyCheckoutChange } from '../checkout/checkoutEvents';
 import { plural, repoDisplay, splitUpstream } from './gitModel';
 import { gitStoreFor, runName } from './gitStore';
 import './git.css';
@@ -50,9 +52,15 @@ function TargetRows({ ctx, target }: { ctx: GitContext; target: Target }): JSX.E
 }
 
 /** Asks one yes/no question that names its target; Cancel and Esc are no. */
-async function ask(ctx: GitContext, question: { message: string; detail?: string; yes: string; target: Target }): Promise<boolean> {
+async function ask(ctx: GitContext, question: { message: string; detail?: string; yes: string; target: Target; destructive?: boolean }): Promise<boolean> {
   const answer = await confirmWith(
-    { kind: 'git_action', message: question.message, ...(question.detail ? { detail: question.detail } : {}), choices: [{ id: 'yes', label: question.yes }] },
+    {
+      kind: 'git_action',
+      message: question.message,
+      ...(question.detail ? { detail: question.detail } : {}),
+      ...(question.destructive ? { destructive: true } : {}),
+      choices: [{ id: 'yes', label: question.yes }],
+    },
     <TargetRows ctx={ctx} target={question.target} />,
   );
   return answer === 'yes';
@@ -74,6 +82,7 @@ async function refuse(ctx: GitContext, verb: string, held: LandingBranchHeld): P
       kind: 'git_landing_branch_held',
       message: `Can’t ${verb} ${held.branch}`,
       detail: `${run[0]!.toUpperCase()}${run.slice(1)} is live, and it lands on ${held.branch}. Switching or deleting it now would land the run’s work somewhere else. Wait for the run to finish, or stop it first.`,
+      cancelLabel: 'Close',
       choices: [{ id: 'open', label: 'Open run' }],
     },
     <TargetRows ctx={ctx} target={{ branch: `${run} lands here`, worktree: 'your checkout' }} />,
@@ -82,12 +91,12 @@ async function refuse(ctx: GitContext, verb: string, held: LandingBranchHeld): P
   await openRun(ctx.api, held);
 }
 
-/** Opens the run a branch belongs to, and its task when the branch is a task's, in the Plan view. */
+/** Opens the run a branch belongs to, and its task's tab when the branch is a task's, the planner's when not. */
 export async function openRun(api: FrameApi, owner: { sessionId: string; taskId?: string }): Promise<void> {
   const host = daemonHost(api.workspace);
   if (host.sessionId !== owner.sessionId) await host.open(owner.sessionId);
-  api.showActivity('plan');
-  if (owner.taskId) host.openTask(owner.taskId, 'details');
+  if (owner.taskId) host.revealTask(owner.taskId);
+  else api.openTab(PLANNER_TAB);
 }
 
 type Outcome = { done: true } | { stale: { field: string; shown: ConfirmValue; now: ConfirmValue } } | { done: false };
@@ -117,6 +126,8 @@ async function perform(ctx: GitContext, action: GitAction, verb: string, done: s
   try {
     const result = await runGitAction(ctx.api.workspace, ctx.repo, action);
     await store.refresh(ctx.repo);
+    // The Checkout reads the same working tree: a switch, pull or stash changes what it lists.
+    notifyCheckoutChange();
     ctx.api.announce(done);
     if (result.warning) say(ctx, 'warning', done, result.warning);
     return { done: true };
@@ -175,6 +186,7 @@ export async function deleteBranch(ctx: GitContext, name: string, redraw?: { unm
         : 'Everything on it is merged, so deleting it loses no commits.',
     ].filter(Boolean).join(' '),
     yes: `Delete ${name}`,
+    destructive: true,
     target: { branch: name, branchNote: unmerged ? `commits not merged into ${into}` : `merged into ${into}`, worktree: 'your checkout (not checked out here)' },
   });
   if (!ok) return;
@@ -229,6 +241,7 @@ export async function dropStash(ctx: GitContext, stash: StashInfo): Promise<void
     message: `Drop ${stash.ref}?`,
     detail: `“${stash.message}” is deleted from the stash list, and its changes with it.`,
     yes: `Drop ${stash.ref}`,
+    destructive: true,
     target: { branch, branchNote: 'not changed' },
   });
   if (!ok) return;

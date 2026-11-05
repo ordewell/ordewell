@@ -22,6 +22,14 @@ interface RouteSpec {
    * turn's progress reaches the view over the session socket meanwhile.
    */
   turn?: true;
+  /**
+   * The path param naming a session whose live host answers this route. For
+   * a session the window joined, main sends it to the holder's daemon
+   * (ADR-0060 H8); anything else, and every route without it, stays on the
+   * app's own daemon: files, git, the catalog, and opening, closing or
+   * deleting a session here.
+   */
+  live?: 'id' | 'sessionId';
 }
 
 const WS = ['workspace'] as const;
@@ -37,59 +45,59 @@ export const ROUTES = {
   'workspaces.isolationPreview': { method: 'GET', path: '/api/workspaces/isolation-preview', query: WS },
 
   'sessions.list': { method: 'GET', path: '/api/sessions', query: WS },
-  'sessions.get': { method: 'GET', path: '/api/sessions/:id', query: WS },
+  'sessions.get': { method: 'GET', path: '/api/sessions/:id', query: WS, live: 'id' },
   'sessions.load': { method: 'POST', path: '/api/sessions/:id/load', query: WS },
   'sessions.close': { method: 'POST', path: '/api/sessions/:id/close', query: WS },
   'sessions.delete': { method: 'DELETE', path: '/api/sessions/:id', query: WS },
-  'sessions.taskLog': { method: 'GET', path: '/api/sessions/:id/tasks/:taskId/log', query: WS },
-  'sessions.taskLogAttempt': { method: 'GET', path: '/api/sessions/:id/tasks/:taskId/log/:attempt', query: WS },
+  'sessions.taskLog': { method: 'GET', path: '/api/sessions/:id/tasks/:taskId/log', query: WS, live: 'id' },
+  'sessions.taskLogAttempt': { method: 'GET', path: '/api/sessions/:id/tasks/:taskId/log/:attempt', query: WS, live: 'id' },
 
-  'children.list': { method: 'GET', path: '/api/sessions/:id/children' },
-  'children.get': { method: 'GET', path: '/api/sessions/:id/children/:childId' },
-  'children.taskLog': { method: 'GET', path: '/api/sessions/:id/children/:childId/tasks/:taskId/log' },
-  'children.taskLogAttempt': { method: 'GET', path: '/api/sessions/:id/children/:childId/tasks/:taskId/log/:attempt' },
-  'children.message': { method: 'POST', path: '/api/sessions/:id/children/:childId/message' },
-  'children.taskMessage': { method: 'POST', path: '/api/sessions/:id/children/:childId/tasks/:taskId/message' },
+  'children.list': { method: 'GET', path: '/api/sessions/:id/children', live: 'id' },
+  'children.get': { method: 'GET', path: '/api/sessions/:id/children/:childId', live: 'id' },
+  'children.taskLog': { method: 'GET', path: '/api/sessions/:id/children/:childId/tasks/:taskId/log', live: 'id' },
+  'children.taskLogAttempt': { method: 'GET', path: '/api/sessions/:id/children/:childId/tasks/:taskId/log/:attempt', live: 'id' },
+  'children.message': { method: 'POST', path: '/api/sessions/:id/children/:childId/message', live: 'id' },
+  'children.taskMessage': { method: 'POST', path: '/api/sessions/:id/children/:childId/tasks/:taskId/message', live: 'id' },
 
-  'plans.generate': { method: 'POST', path: '/api/plans/:sessionId/generate', query: ['workspace', 'runners'], turn: true },
-  'plans.execute': { method: 'POST', path: '/api/plans/:sessionId/execute' },
-  'plans.stop': { method: 'POST', path: '/api/plans/:sessionId/stop' },
-  'plans.stopPlanning': { method: 'POST', path: '/api/plans/:sessionId/planning/stop' },
-  'plans.executeCommand': { method: 'POST', path: '/api/plans/:sessionId/execute-command' },
-  'plans.escalations': { method: 'GET', path: '/api/plans/:sessionId/escalations' },
-  'plans.answerEscalation': { method: 'POST', path: '/api/plans/:sessionId/escalations/answer' },
-  'plans.taskCommands': { method: 'POST', path: '/api/plans/:sessionId/tasks/:taskId/commands' },
-  'plans.mergeGate': { method: 'GET', path: '/api/plans/:sessionId/tasks/:taskId/merge-gate' },
-  'plans.revertPreview': { method: 'GET', path: '/api/plans/:sessionId/tasks/:taskId/revert-preview' },
-  'plans.isolationDiff': { method: 'GET', path: '/api/plans/:sessionId/isolation/diff' },
+  'plans.generate': { method: 'POST', path: '/api/plans/:sessionId/generate', query: ['workspace', 'runners'], turn: true, live: 'sessionId' },
+  'plans.execute': { method: 'POST', path: '/api/plans/:sessionId/execute', live: 'sessionId' },
+  'plans.stop': { method: 'POST', path: '/api/plans/:sessionId/stop', live: 'sessionId' },
+  'plans.stopPlanning': { method: 'POST', path: '/api/plans/:sessionId/planning/stop', live: 'sessionId' },
+  'plans.executeCommand': { method: 'POST', path: '/api/plans/:sessionId/execute-command', live: 'sessionId' },
+  'plans.escalations': { method: 'GET', path: '/api/plans/:sessionId/escalations', live: 'sessionId' },
+  'plans.answerEscalation': { method: 'POST', path: '/api/plans/:sessionId/escalations/answer', live: 'sessionId' },
+  'plans.taskCommands': { method: 'POST', path: '/api/plans/:sessionId/tasks/:taskId/commands', live: 'sessionId' },
+  'plans.mergeGate': { method: 'GET', path: '/api/plans/:sessionId/tasks/:taskId/merge-gate', live: 'sessionId' },
+  'plans.revertPreview': { method: 'GET', path: '/api/plans/:sessionId/tasks/:taskId/revert-preview', live: 'sessionId' },
+  'plans.isolationDiff': { method: 'GET', path: '/api/plans/:sessionId/isolation/diff', live: 'sessionId' },
   // Reads of the saved run (ADR-0061, ADR-0062 G8): neither needs the session open here.
-  'plans.taskDiff': { method: 'GET', path: '/api/plans/:sessionId/tasks/:taskId/diff', query: ['workspace', 'repo', 'path', 'names'] },
-  'plans.mergePreflight': { method: 'GET', path: '/api/plans/:sessionId/isolation/merge-preflight', query: WS },
-  'plans.isolationMerge': { method: 'POST', path: '/api/plans/:sessionId/isolation/merge' },
-  'plans.isolationDiscard': { method: 'POST', path: '/api/plans/:sessionId/isolation/discard' },
-  'plans.isolationCleanup': { method: 'POST', path: '/api/plans/:sessionId/isolation/cleanup' },
-  'plans.isolationStash': { method: 'POST', path: '/api/plans/:sessionId/isolation/stash-and-continue' },
-  'plans.isolationRunWithout': { method: 'POST', path: '/api/plans/:sessionId/isolation/run-without' },
-  'plans.checkpointApprove': { method: 'POST', path: '/api/plans/:sessionId/tasks/:taskId/checkpoint/approve' },
-  'plans.checkpointReject': { method: 'POST', path: '/api/plans/:sessionId/tasks/:taskId/checkpoint/reject' },
-  'plans.resolveConflict': { method: 'POST', path: '/api/plans/:sessionId/tasks/:taskId/resolve-conflict' },
-  'plans.addTask': { method: 'POST', path: '/api/plans/:sessionId/tasks' },
-  'plans.updateTask': { method: 'PUT', path: '/api/plans/:sessionId/tasks/:taskId' },
-  'plans.deleteTask': { method: 'DELETE', path: '/api/plans/:sessionId/tasks/:taskId' },
-  'plans.approveReview': { method: 'POST', path: '/api/plans/:sessionId/review/approve' },
-  'plans.converseStart': { method: 'POST', path: '/api/plans/:sessionId/converse/start', query: WS, turn: true },
-  'plans.converseMessage': { method: 'POST', path: '/api/plans/:sessionId/converse/message', turn: true },
-  'plans.converseMessageNow': { method: 'POST', path: '/api/plans/:sessionId/converse/message/now', turn: true },
-  'plans.cancelResend': { method: 'POST', path: '/api/plans/:sessionId/converse/resend/cancel' },
-  'plans.fork': { method: 'POST', path: '/api/plans/:sessionId/conversation/fork' },
-  'plans.rewindTargets': { method: 'GET', path: '/api/plans/:sessionId/conversation/rewind-targets' },
-  'plans.rewind': { method: 'POST', path: '/api/plans/:sessionId/conversation/rewind' },
-  'plans.compact': { method: 'POST', path: '/api/plans/:sessionId/conversation/compact', turn: true },
-  'plans.retryCompact': { method: 'POST', path: '/api/plans/:sessionId/conversation/compact/retry', turn: true },
-  'plans.prd': { method: 'GET', path: '/api/plans/:sessionId/prd' },
+  'plans.taskDiff': { method: 'GET', path: '/api/plans/:sessionId/tasks/:taskId/diff', query: ['workspace', 'repo', 'path', 'names'], live: 'sessionId' },
+  'plans.mergePreflight': { method: 'GET', path: '/api/plans/:sessionId/isolation/merge-preflight', query: WS, live: 'sessionId' },
+  'plans.isolationMerge': { method: 'POST', path: '/api/plans/:sessionId/isolation/merge', live: 'sessionId' },
+  'plans.isolationDiscard': { method: 'POST', path: '/api/plans/:sessionId/isolation/discard', live: 'sessionId' },
+  'plans.isolationCleanup': { method: 'POST', path: '/api/plans/:sessionId/isolation/cleanup', live: 'sessionId' },
+  'plans.isolationStash': { method: 'POST', path: '/api/plans/:sessionId/isolation/stash-and-continue', live: 'sessionId' },
+  'plans.isolationRunWithout': { method: 'POST', path: '/api/plans/:sessionId/isolation/run-without', live: 'sessionId' },
+  'plans.checkpointApprove': { method: 'POST', path: '/api/plans/:sessionId/tasks/:taskId/checkpoint/approve', live: 'sessionId' },
+  'plans.checkpointReject': { method: 'POST', path: '/api/plans/:sessionId/tasks/:taskId/checkpoint/reject', live: 'sessionId' },
+  'plans.resolveConflict': { method: 'POST', path: '/api/plans/:sessionId/tasks/:taskId/resolve-conflict', live: 'sessionId' },
+  'plans.addTask': { method: 'POST', path: '/api/plans/:sessionId/tasks', live: 'sessionId' },
+  'plans.updateTask': { method: 'PUT', path: '/api/plans/:sessionId/tasks/:taskId', live: 'sessionId' },
+  'plans.deleteTask': { method: 'DELETE', path: '/api/plans/:sessionId/tasks/:taskId', live: 'sessionId' },
+  'plans.approveReview': { method: 'POST', path: '/api/plans/:sessionId/review/approve', live: 'sessionId' },
+  'plans.converseStart': { method: 'POST', path: '/api/plans/:sessionId/converse/start', query: WS, turn: true, live: 'sessionId' },
+  'plans.converseMessage': { method: 'POST', path: '/api/plans/:sessionId/converse/message', turn: true, live: 'sessionId' },
+  'plans.converseMessageNow': { method: 'POST', path: '/api/plans/:sessionId/converse/message/now', turn: true, live: 'sessionId' },
+  'plans.cancelResend': { method: 'POST', path: '/api/plans/:sessionId/converse/resend/cancel', live: 'sessionId' },
+  'plans.fork': { method: 'POST', path: '/api/plans/:sessionId/conversation/fork', live: 'sessionId' },
+  'plans.rewindTargets': { method: 'GET', path: '/api/plans/:sessionId/conversation/rewind-targets', live: 'sessionId' },
+  'plans.rewind': { method: 'POST', path: '/api/plans/:sessionId/conversation/rewind', live: 'sessionId' },
+  'plans.compact': { method: 'POST', path: '/api/plans/:sessionId/conversation/compact', turn: true, live: 'sessionId' },
+  'plans.retryCompact': { method: 'POST', path: '/api/plans/:sessionId/conversation/compact/retry', turn: true, live: 'sessionId' },
+  'plans.prd': { method: 'GET', path: '/api/plans/:sessionId/prd', live: 'sessionId' },
 
-  'approvals.list': { method: 'GET', path: '/api/approvals/:sessionId' },
-  'approvals.decide': { method: 'POST', path: '/api/approvals/:sessionId/:approvalId' },
+  'approvals.list': { method: 'GET', path: '/api/approvals/:sessionId', live: 'sessionId' },
+  'approvals.decide': { method: 'POST', path: '/api/approvals/:sessionId/:approvalId', live: 'sessionId' },
 
   'commands.list': { method: 'GET', path: '/api/commands' },
   'commands.run': { method: 'POST', path: '/api/commands/:name' },
@@ -221,6 +229,15 @@ export function buildRequest(routeId: unknown, params: unknown, body?: unknown):
       ...(spec.turn ? { turn: true } : {}),
     },
   };
+}
+
+/** The session a call belongs to when its live host must answer it, read from the route's own path param. */
+export function liveSessionOf(routeId: unknown, params: unknown): string | undefined {
+  if (!isRouteId(routeId) || typeof params !== 'object' || params === null) return undefined;
+  const spec: RouteSpec = ROUTES[routeId];
+  if (!spec.live) return undefined;
+  const value: unknown = Reflect.get(params, spec.live);
+  return typeof value === 'string' ? value : undefined;
 }
 
 /** The session socket's path, its id checked as one segment like any route's. */

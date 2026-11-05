@@ -1,20 +1,57 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Plus } from 'lucide-react';
-import { taskStatusKind, walkPlan } from '@ordewell/core/plan-utils';
-import { IconButton, StatusIndicator, statusOf } from '@ordewell/ui/design';
+import { IconButton, StatusIndicator, type StatusId } from '@ordewell/ui/design';
 import type { FrameApi, Unregister } from '../../frame/api';
 import { daemonHost, type DaemonHost } from '../../session/DaemonHost';
+import { joinedShort } from '../../session/holder';
 import { useSession } from '../../session/useSession';
 import { parseSessions, type SessionRow } from '../../sessions';
 import { useDaemonStatus } from '../../useDaemonStatus';
 import { all } from '../Stub';
+import { planProgress } from './PlanTab';
 
-/** The workspace's sessions, newest first: a click opens one, taking its lease; New session starts a blank one. */
+/** A session's status as the Sessions sidebar says it: a shape and a word (design, The Sessions sidebar). */
+const SESSION_STATUS: Readonly<Record<string, { status: StatusId; word: string }>> = {
+  planning: { status: 'not-started', word: 'Planning' },
+  draft: { status: 'not-started', word: 'Draft' },
+  approved: { status: 'not-started', word: 'Approved' },
+  running: { status: 'running', word: 'Running' },
+  completed: { status: 'passed', word: 'Settled' },
+  settled: { status: 'passed', word: 'Settled' },
+  failed: { status: 'failed', word: 'Failed' },
+  rejected: { status: 'skipped', word: 'Rejected' },
+};
+
+export function sessionStatus(status: string): { status: StatusId; word: string } {
+  return SESSION_STATUS[status] ?? { status: 'not-started', word: status ? status[0]!.toUpperCase() + status.slice(1) : 'Planning' };
+}
+
+const UNITS: ReadonlyArray<[Intl.RelativeTimeFormatUnit, number]> = [
+  ['year', 365 * 86_400_000], ['month', 30 * 86_400_000], ['week', 7 * 86_400_000],
+  ['day', 86_400_000], ['hour', 3_600_000], ['minute', 60_000],
+];
+
+export function relativeTime(iso: string, now = Date.now()): string {
+  const at = Date.parse(iso);
+  if (Number.isNaN(at)) return '';
+  const ago = now - at;
+  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+  for (const [unit, ms] of UNITS) {
+    if (Math.abs(ago) >= ms) return rtf.format(-Math.round(ago / ms), unit);
+  }
+  return 'now';
+}
+
+/** The workspace's sessions, newest first: a click opens one, taking its lease. */
 export function Sessions({ host }: { host: DaemonHost }): JSX.Element {
   const connected = useDaemonStatus()?.state === 'connected';
-  const { sessionId, goal, state } = useSession(host);
+  const { sessionId, goal, state, link } = useSession(host);
+  const joined = link?.kind === 'joined' ? joinedShort(link.holder) : undefined;
   const planStatus = state.plan?.status;
   const [sessions, setSessions] = useState<SessionRow[] | string>();
+  // The saved plan says Approved for as long as its run lasts, so the open session's row reads its live run instead.
+  const progress = state.isExecuting || state.activity.advancesOnItsOwn ? planProgress(host) : undefined;
+  const live = progress ? { status: 'running' as const, word: `Running ${progress.done}/${progress.total}` } : undefined;
 
   // Read again when the session changes, the planner names a new one's goal, or
   // the open plan moves on (approved, running, done): each is a row this list
@@ -30,85 +67,33 @@ export function Sessions({ host }: { host: DaemonHost }): JSX.Element {
     return () => { live = false; };
   }, [host, connected, sessionId, goal, planStatus]);
 
-  const list = (): JSX.Element => {
-    if (!connected) return <p className="frame-empty">Waiting for the daemon…</p>;
-    if (sessions === undefined) return <p className="frame-empty">Loading…</p>;
-    if (typeof sessions === 'string') return <p className="frame-empty error">{sessions}</p>;
-    if (sessions.length === 0) return <p className="frame-empty">No sessions in this workspace yet.</p>;
-    return (
-      <ul className="sessions">
-        {sessions.map((session) => (
+  // The Reconnecting bar speaks for the daemon (W15): this list keeps what it last read, dimmed and inert, and claims no wait of its own.
+  if (!connected && !Array.isArray(sessions)) return <p className="frame-empty">Sessions show here once the daemon is back.</p>;
+  if (sessions === undefined) return <p className="frame-empty">Loading…</p>;
+  if (typeof sessions === 'string') return <p className="frame-empty error">{sessions}</p>;
+  if (sessions.length === 0) return <p className="frame-empty">No sessions yet. Describe a goal to the planner.</p>;
+  return (
+    <ul className="sessions" aria-disabled={connected ? undefined : 'true'}>
+      {sessions.map((session) => {
+        const { status, word } = (session.id === sessionId && live) || sessionStatus(session.status);
+        const when = session.updatedAt ? relativeTime(session.updatedAt) : '';
+        return (
           <li key={session.id}>
             <button
               type="button"
               className="session-row"
               aria-current={session.id === sessionId ? 'true' : undefined}
+              disabled={!connected}
+              title={session.goal || session.id}
               onClick={() => { if (session.id !== sessionId) void host.open(session.id); }}
             >
               <span className="session-goal">{session.goal || session.id}</span>
-              <span className="session-status">{session.status}</span>
-              <span className="muted">{session.taskCount} {session.taskCount === 1 ? 'task' : 'tasks'}{session.updatedAt && ` · ${new Date(session.updatedAt).toLocaleString()}`}</span>
-            </button>
-          </li>
-        ))}
-      </ul>
-    );
-  };
-
-  return (
-    <div className="session-sessions">
-      <div className="frame-toolbar">
-        <IconButton icon={Plus} label="New session" onClick={() => host.newSession()} />
-      </div>
-      {list()}
-    </div>
-  );
-}
-
-/** A live task's "last seen" while the daemon is away: the view never infers progress it did not see. */
-function useAgo(connected: boolean): number {
-  const lastConnected = useRef(Date.now());
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    if (connected) {
-      lastConnected.current = Date.now();
-      return;
-    }
-    const timer = setInterval(() => setNow(Date.now()), 1_000);
-    return () => clearInterval(timer);
-  }, [connected]);
-  return connected ? 0 : Math.max(0, now - lastConnected.current);
-}
-
-function ago(ms: number): string {
-  const seconds = Math.max(0, Math.round(ms / 1000));
-  if (seconds < 2) return 'just now';
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes}m ${seconds % 60}s ago`;
-}
-
-/** The plan as a compact tree: each task's status and title, opening its tab. */
-function Tasks({ host }: { host: DaemonHost }): JSX.Element {
-  const { state } = useSession(host);
-  const connected = useDaemonStatus()?.state === 'connected';
-  const elapsed = useAgo(connected);
-  const tasks = state.plan?.tasks ?? [];
-  if (tasks.length === 0) return <p className="frame-empty">No plan yet: tell the planner the goal.</p>;
-  // The run carries each task's live status; the plan, what a task is when nothing has run it.
-  const live = new Map([...walkPlan(state.run.tasks)].map((p) => [p.task.id, p.task]));
-  return (
-    <ul className="session-tree" aria-label="Tasks">
-      {[...walkPlan(tasks)].map(({ task, label, ancestors }) => {
-        const running = live.get(task.id);
-        const status = statusOf(taskStatusKind(running ?? task));
-        return (
-          <li key={task.id} style={{ paddingInlineStart: `${ancestors.length * 12}px` }}>
-            <button type="button" className="session-tree-row" onClick={() => host.openTask(task.id, 'details')}>
-              <StatusIndicator status={status.id} size={12} />
-              <span className="session-tree-label">#{label}</span>
-              <span className="session-tree-title">{task.title}</span>
-              {!connected && running?.status === 'in_progress' && <span className="muted">last seen {ago(elapsed)}</span>}
+              <span className="session-meta">
+                {joined && session.id === sessionId && <span className="session-joined" role="img" aria-label={`Joined · ${joined}`} title={`Joined · ${joined}`}>⇄</span>}
+                <StatusIndicator status={status} size={12} />
+                <span className="session-status">{word}</span>
+                <span className="muted">· {session.taskCount} {session.taskCount === 1 ? 'task' : 'tasks'}{when && ` · ${when}`}</span>
+              </span>
             </button>
           </li>
         );
@@ -120,8 +105,14 @@ function Tasks({ host }: { host: DaemonHost }): JSX.Element {
 export function register(api: FrameApi): Unregister {
   const host = daemonHost(api.workspace);
   return all(
-    api.registerSidebar({ activity: 'plan', id: 'sessions', title: 'Sessions', order: 10, render: () => <Sessions host={host} /> }),
-    api.registerSidebar({ activity: 'plan', id: 'tasks', title: 'Tasks', order: 20, render: () => <Tasks host={host} /> }),
-    api.registerCommand({ id: 'session.new', title: 'New session', run: () => host.newSession() }),
+    api.registerSidebar({
+      activity: 'sessions',
+      id: 'sessions',
+      title: 'Sessions',
+      order: 10,
+      actions: () => <IconButton icon={Plus} label="New session" onClick={() => host.newSession()} />,
+      render: () => <Sessions host={host} />,
+    }),
+    api.registerCommand({ id: 'session.new', title: 'New session', enabled: () => !api.readOnly, run: () => host.newSession() }),
   );
 }

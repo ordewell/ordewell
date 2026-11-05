@@ -1,20 +1,23 @@
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
-import { app, dialog, Menu, nativeImage, nativeTheme, Notification, Tray } from 'electron';
+import { app, BrowserWindow, dialog, Menu, nativeImage, nativeTheme, Notification, Tray } from 'electron';
 import {
   augmentedPath,
   DAEMON_CONTRACT,
   daemonLogPath,
   probeDaemon,
   readDaemonToken,
+  readLiveHolder,
   resolveDaemonPort,
   stopDaemonAt,
   withPath,
 } from '@ordewell/core/daemon-client';
+import { EVENTS } from '../shared/bridge';
 import { buildRequest, type RouteId, type RouteParams } from '../shared/routes';
 import { DaemonManager } from './daemon/DaemonManager';
 import { forkBundledDaemon } from './daemon/forkDaemon';
 import { findLiveRuns, type LiveRun } from './daemon/liveRuns';
+import { HolderConnections } from './daemon/holders';
 import { DaemonProxy } from './daemon/proxy';
 import { registerIpc } from './ipc';
 import { TerminalChannel } from './terminal/TerminalChannel';
@@ -56,7 +59,9 @@ async function main(): Promise<void> {
   await app.whenReady();
 
   lockSession(devOrigin);
-  Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate(process.platform, !app.isPackaged, app.getName())));
+  Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate(process.platform, !app.isPackaged, app.getName(), (command) => {
+    BrowserWindow.getFocusedWindow()?.webContents.send(EVENTS.menuCommand, command);
+  })));
   lockWebContents();
   if (!devUrl) serveRenderer(join(__dirname, '..', 'renderer'));
 
@@ -70,6 +75,15 @@ async function main(): Promise<void> {
     port: () => port,
     token: () => readDaemonToken(port),
     onUnreachable: () => late.daemon?.noteUnreachable(),
+  });
+  // A session another Ordewell daemon holds is joined there (ADR-0060 H8).
+  const holders = new HolderConnections({
+    contract: DAEMON_CONTRACT,
+    ownPort: () => port,
+    readHolder: (sessionId, workspace) => readLiveHolder(sessionId, workspace),
+    readToken: (p) => readDaemonToken(p),
+    probe: (p) => probeDaemon(p),
+    connect: (p, token) => new DaemonProxy({ port: () => p, token }),
   });
   const get = async (routeId: RouteId, params?: RouteParams): Promise<{ ok: boolean; data?: unknown }> => {
     const built = buildRequest(routeId, params);
@@ -166,6 +180,7 @@ async function main(): Promise<void> {
     windows: wm,
     daemon,
     proxy,
+    holders,
     recents,
     prefs,
     updates,

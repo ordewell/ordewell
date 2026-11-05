@@ -61,6 +61,7 @@ describe('task chat availability', () => {
     render(<TaskCard task={makeTask({ type: 'user', status: 'completed', handoff })} models={[]} isExecuting
       onOpenLog={onOpenLog} expanded onExpandedChange={() => {}} />);
     expect(openChat()).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /^Handoff/ }));
     expect(screen.getByText('Steps done')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Read full handoff' })).toBeNull();
   });

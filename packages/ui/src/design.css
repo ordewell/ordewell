@@ -1,6 +1,9 @@
 /*
- * The looks of the design kit (@ordewell/ui/design): icons, icon buttons and
- * status indicators. It reads tokens.css and scale.css, so load it after both.
+ * The looks of the design kit (@ordewell/ui/design): icons, buttons, badges,
+ * status indicators and the shared layout pieces. It reads tokens.css and
+ * scale.css, so load it after both. Every box here is a flex row whose label
+ * is the one part that shrinks, so text never runs under an icon
+ * (docs/desktop/design.md, Layout rules that prevent overlap).
  */
 .ow-icon, .ow-glyph { flex: none; display: inline-block; vertical-align: middle; }
 
@@ -9,9 +12,11 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: var(--ow-hit);
-  min-height: var(--ow-hit);
-  padding: var(--ow-space-2);
+  flex: none;
+  /* An icon-only button is 28 square (checklist A3), whatever its icon's size. */
+  min-width: var(--ow-hit-icon);
+  min-height: var(--ow-hit-icon);
+  padding: var(--ow-space-1);
   border: 0;
   border-radius: var(--ow-radius-md);
   background: transparent;
@@ -41,7 +46,7 @@
 }
 .ow-icon-badge:empty { min-width: 6px; width: 6px; height: 6px; top: 3px; right: 3px; padding: 0; }
 
-.ow-status { display: inline-flex; align-items: center; gap: var(--ow-space-3); vertical-align: middle; }
+.ow-status { display: inline-flex; align-items: center; gap: var(--ow-space-2); vertical-align: middle; }
 .ow-status > svg { flex: none; }
 .ow-status-label { color: var(--ow-fg); }
 .ow-status-idle { color: var(--ow-status-idle); }
@@ -58,4 +63,170 @@
 /* The running shape stops turning; it still reads as running by its half fill. */
 @media (prefers-reduced-motion: reduce) {
   .ow-status-turning > svg { animation: none; }
+}
+
+/* Buttons: small 24, default 28, large 36; icon and label 8px apart. */
+.ow-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ow-space-2);
+  min-width: 0;
+  max-width: 100%;
+  height: var(--ow-height-button);
+  padding: 0 var(--ow-space-3);
+  border: 1px solid transparent;
+  border-radius: var(--ow-radius-sm);
+  font: var(--ow-type-label);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--ow-motion-fast) var(--ow-motion-easing), border-color var(--ow-motion-fast) var(--ow-motion-easing), color var(--ow-motion-fast) var(--ow-motion-easing);
+}
+.ow-button-sm { height: var(--ow-height-button-sm); padding: 0 var(--ow-space-2); }
+.ow-button-lg { height: var(--ow-height-button-lg); padding: 0 var(--ow-space-4); }
+.ow-button-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ow-button:disabled { opacity: 0.5; cursor: default; }
+.ow-button:focus-visible { outline: var(--ow-focus-width) solid var(--ow-focus-ring, var(--ow-accent)); outline-offset: var(--ow-focus-offset); }
+.ow-button-primary { background: var(--ow-accent-fill); border-color: var(--ow-accent-fill); color: var(--ow-accent-on); }
+.ow-button-primary:hover:not(:disabled) { background: var(--ow-accent-fill-hover); border-color: var(--ow-accent-fill-hover); }
+.ow-button-secondary { background: var(--ow-bg-widget); border-color: var(--ow-border-control); color: var(--ow-fg); }
+.ow-button-secondary:hover:not(:disabled) { background: var(--ow-bg-hover); }
+.ow-button-ghost { background: transparent; color: var(--ow-fg-secondary); }
+.ow-button-ghost:hover:not(:disabled) { background: var(--ow-bg-hover); color: var(--ow-fg); }
+.ow-button-danger { background: var(--ow-bg-widget); border-color: var(--ow-status-failed); color: var(--ow-status-failed); }
+.ow-button-danger:hover:not(:disabled) { background: var(--ow-bg-hover); }
+
+/* Badges and chips: 20px, caption type, a 4px gap between icon and words. */
+.ow-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ow-space-1);
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  height: 20px;
+  padding: var(--ow-space-half) var(--ow-space-2);
+  border-radius: var(--ow-radius-sm);
+  background: var(--ow-bg-hover);
+  color: var(--ow-fg-secondary);
+  font: var(--ow-type-caption);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.ow-badge-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ow-badge-accent { background: var(--ow-accent-tint); color: var(--ow-fg); }
+.ow-badge-attention { color: var(--ow-status-attention); }
+.ow-badge-failed { color: var(--ow-status-failed); }
+.ow-badge-passed { color: var(--ow-status-passed); }
+.ow-badge-merge { color: var(--ow-status-merge); }
+
+/* A runner's colour, on its own tint, beside its name; an unknown runner stays neutral. */
+.ow-runner-claude-code { background: var(--ow-runner-claude-code-tint); color: var(--ow-runner-claude-code); }
+.ow-runner-codex { background: var(--ow-runner-codex-tint); color: var(--ow-runner-codex); }
+.ow-runner-opencode { background: var(--ow-runner-opencode-tint); color: var(--ow-runner-opencode); }
+
+/* A count sits in a box sized for three digits, so 9 becoming 10 moves nothing (checklist O6). */
+.ow-count {
+  flex: none;
+  display: inline-block;
+  min-width: 3ch;
+  font: var(--ow-type-caption);
+  font-variant-numeric: tabular-nums;
+  color: var(--ow-fg-secondary);
+  text-align: center;
+}
+
+/* Section headers: the 36px band, an overline title that shrinks, actions that keep their room. */
+.ow-section-header {
+  display: flex;
+  align-items: center;
+  gap: var(--ow-space-2);
+  height: var(--ow-height-header);
+  padding: 0 var(--ow-space-3);
+  color: var(--ow-fg-secondary);
+}
+.ow-section-header-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--ow-type-overline);
+  letter-spacing: var(--ow-overline-tracking);
+  text-transform: uppercase;
+}
+.ow-section-header-actions { flex: none; display: flex; align-items: center; gap: var(--ow-space-1); }
+
+/*
+ * A card is one step off what it sits on, with a hairline and a quiet lift
+ * (docs/desktop/design.md, Surfaces). A host without the surface ladder keeps
+ * the flat widget card it had.
+ */
+.ow-card {
+  border: 1px solid var(--ow-surface-card-border, var(--ow-border-widget));
+  border-radius: var(--ow-radius-lg);
+  background: var(--ow-surface-card, var(--ow-bg-widget));
+  box-shadow: var(--ow-elevation-card);
+  color: var(--ow-fg);
+}
+.ow-card-comfortable { padding: var(--ow-space-4); }
+.ow-card-compact { padding: var(--ow-space-2); }
+.ow-card-selected {
+  border-color: var(--ow-surface-card-selected-border, var(--ow-accent));
+  background: var(--ow-surface-card-selected, var(--ow-surface-card, var(--ow-bg-widget)));
+}
+
+/* An empty state: centred, one line, at most one action. */
+.ow-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--ow-space-2);
+  padding: var(--ow-space-8);
+  text-align: center;
+  color: var(--ow-fg-secondary);
+}
+.ow-empty-title { margin: 0; font: var(--ow-type-title); color: var(--ow-fg); }
+.ow-empty-body { margin: 0; font: var(--ow-type-body); color: var(--ow-fg-secondary); }
+.ow-empty-action { margin-top: var(--ow-space-2); }
+
+.ow-toolbar { display: flex; align-items: center; gap: var(--ow-space-2); min-width: 0; }
+.ow-toolbar-spacer { flex: 1 1 auto; }
+
+/* Tabs: the 36px band; the active one has the selected ground and an accent marker. */
+.ow-tabs { display: flex; align-items: stretch; height: var(--ow-height-header); min-width: 0; border-bottom: 1px solid var(--ow-border); }
+.ow-tabs-list { display: flex; flex: 1 1 auto; min-width: 0; overflow-x: auto; }
+.ow-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ow-space-2);
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 0 var(--ow-space-3);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--ow-fg-secondary);
+  font: var(--ow-type-body);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ow-tab:hover { color: var(--ow-fg); background: var(--ow-bg-hover); }
+.ow-tab:focus-visible { outline: var(--ow-focus-width) solid var(--ow-focus-ring, var(--ow-accent)); outline-offset: calc(var(--ow-focus-offset) * -1); }
+.ow-tab-active { color: var(--ow-fg); border-bottom-color: var(--ow-accent); }
+.ow-tab-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+.ow-kbd {
+  display: inline-flex;
+  align-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 var(--ow-space-1);
+  border: 1px solid var(--ow-border-widget);
+  border-radius: var(--ow-radius-sm);
+  background: var(--ow-bg-code);
+  color: var(--ow-fg-secondary);
+  font: var(--ow-type-code-small);
+  white-space: nowrap;
 }

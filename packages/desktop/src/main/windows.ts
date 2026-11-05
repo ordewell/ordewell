@@ -42,7 +42,7 @@ export class WindowManager {
 
   openWelcome(): BrowserWindow {
     if (this.welcome && !this.welcome.isDestroyed()) return this.focus(this.welcome);
-    this.welcome = this.create({ kind: 'welcome' }, 'Ordewell', { width: 880, height: 640 });
+    this.welcome = this.create({ kind: 'welcome' }, 'Ordewell', { width: 1000, height: 720 });
     this.welcome.on('closed', () => { this.welcome = undefined; });
     return this.welcome;
   }
@@ -112,8 +112,8 @@ export class WindowManager {
   private create(context: WindowContext, title: string, shape: BrowserWindowConstructorOptions): BrowserWindow {
     const win = new BrowserWindow({
       ...shape,
-      minWidth: 640,
-      minHeight: 480,
+      minWidth: 720,
+      minHeight: 520,
       title,
       show: false,
       backgroundColor: canvasColour(this.options.dark()),

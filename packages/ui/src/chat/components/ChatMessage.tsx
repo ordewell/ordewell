@@ -1,4 +1,4 @@
-import React, { useCallback, useId, useMemo, useState } from 'react';
+import React, { useCallback, useContext, useId, useMemo, useState } from 'react';
 import MarkdownContent from './MarkdownContent';
 import TaskHandoff from './TaskHandoff';
 import ReportBody from './ReportBody';
@@ -8,6 +8,7 @@ import type {
   ThinkingDisplayBlock, ToolBlock, ToolStatus, DiffRow, DiffStat,
 } from '@ordewell/core';
 import { activitySummary, conversationItems } from '../activity';
+import { SpeakerLabelsContext } from '../speakerLabels';
 import { approvalKindText, approvalStatusText, compactionText, diffRows, diffSummary, loadedSkillTokens, markdownHtml, outputLines, outputPreview, planMarkerParts, wakeUpItems } from '@ordewell/core/plan-utils';
 
 /*
@@ -54,6 +55,7 @@ function RunUpdate({ text }: { text: string }) {
 }
 
 export default function ChatMessage({ block }: { block: MessageBlock }) {
+  const labelled = useContext(SpeakerLabelsContext);
   if (block.role === 'system' || block.role === 'error') {
     return (
       <div className={`chat-msg chat-msg-${block.role}`}>
@@ -75,6 +77,7 @@ export default function ChatMessage({ block }: { block: MessageBlock }) {
     return (
       <div className="chat-msg chat-msg-user">
         <div className="chat-msg-bubble">
+          {labelled && <span className="chat-msg-speaker">You</span>}
           {block.forced && <span className="chat-msg-forced" title="Sent now: it stopped the planner turn in flight">sent now</span>}
           <div className="chat-msg-content">{block.skills ? <SkillMarkedText text={block.text} skills={block.skills} /> : block.text}</div>
         </div>
@@ -84,7 +87,8 @@ export default function ChatMessage({ block }: { block: MessageBlock }) {
   return (
     <div className={`chat-msg chat-msg-planner${block.role === 'supervisor' ? ' chat-msg-supervisor' : ''}${block.streaming ? ' streaming' : ''}`}>
       <div className="chat-msg-bubble">
-        {block.role === 'supervisor' && <span className="chat-msg-label">Supervisor</span>}
+        {block.role === 'supervisor' ? <span className="chat-msg-label">Supervisor</span>
+          : labelled && <span className="chat-msg-speaker">Planner</span>}
         <MarkdownContent className="chat-msg-content" html={renderMarkdown(block.text.trim())} />
         {block.streaming && <span className="chat-msg-cursor" aria-hidden="true" />}
       </div>

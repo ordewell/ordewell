@@ -9,9 +9,9 @@ import '@ordewell/ui/design.css';
 import '@ordewell/ui/styles.css';
 import './theme.css';
 import './app.css';
+import './welcome/welcome.css';
 import './frame/frame.css';
 import './session/session.css';
-import '@xyflow/react/dist/style.css';
 import './views/graph/graph.css';
 import { App } from './App';
 

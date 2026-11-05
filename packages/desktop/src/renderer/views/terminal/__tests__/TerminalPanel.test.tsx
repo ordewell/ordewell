@@ -11,7 +11,6 @@ import { terminalStoreFor } from '../terminalStore';
 
 vi.mock('../xterm', async () => (await import('../../../test/xtermMock')).fakeXtermModule());
 
-const SIZES = { sidebar: 260, right: 360, bottom: 240 };
 
 function run(states: { t3: string; t4: string }): unknown {
   return {
@@ -73,7 +72,7 @@ beforeEach(() => { offs = []; terms.length = 0; });
 afterEach(() => { for (const off of offs) off(); vi.restoreAllMocks(); });
 
 async function mount(): Promise<void> {
-  store = new FrameStore({ workspace: '/work/acme', platform: 'linux', sizes: SIZES });
+  store = new FrameStore({ workspace: '/work/acme', platform: 'linux' });
   offs.push(registerFrameCommands(store), registerViews(store.api));
   render(<FrameProvider value={store}><Frame daemon={CONNECTED} /></FrameProvider>);
 }

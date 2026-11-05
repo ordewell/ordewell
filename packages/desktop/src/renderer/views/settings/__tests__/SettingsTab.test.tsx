@@ -11,7 +11,6 @@ import { register } from '../SettingsTab';
 vi.mock('../../../monaco', async () => (await import('../../../test/monacoMock')).fakeMonacoModule());
 
 const WORKSPACE = '/work/acme';
-const SIZES = { sidebar: 260, right: 360, bottom: 240 };
 
 const SETTINGS: SettingsResponse = {
   orchestratorModel: 'claude-sonnet',
@@ -74,7 +73,7 @@ function world(theme: 'system' | 'light' | 'dark' = 'dark'): World {
     },
     'runners.setEnabled': () => ok({ ok: true }),
   });
-  let prefs = { theme, panes: SIZES, notifications: true, keepRunningInTray: false, editorCommand: '' };
+  let prefs = { theme, layouts: {}, notifications: true, keepRunningInTray: false, editorCommand: '' };
   const get = vi.fn(async () => prefs);
   const set = vi.fn(async (key: string, value: unknown) => {
     prefs = { ...prefs, [key]: value };
@@ -86,7 +85,7 @@ function world(theme: 'system' | 'light' | 'dark' = 'dark'): World {
 
 async function mount(theme: 'system' | 'light' | 'dark' = 'dark'): Promise<{ store: FrameStore; w: World }> {
   const w = world(theme);
-  const store = new FrameStore({ workspace: WORKSPACE, platform: 'linux', sizes: SIZES });
+  const store = new FrameStore({ workspace: WORKSPACE, platform: 'linux' });
   offs.push(registerFrameCommands(store), register(store.api));
   render(<FrameProvider value={store}><Frame daemon={{ state: 'connected', port: 3700, owned: true, daemon: { version: '0.12.3', contract: 1 } }} /></FrameProvider>);
   act(() => store.api.openTab({ kind: 'settings', id: 'settings', title: 'Settings' }));

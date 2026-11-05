@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import type { DaemonStatus, WindowContext } from '../shared/bridge';
-import { DaemonBar } from './DaemonBar';
 import { registerFrameCommands } from './frame/commands';
 import { Frame } from './frame/Frame';
 import { FrameProvider, FrameStore } from './frame/store';
@@ -19,8 +18,10 @@ function WorkspaceWindow({ path, status }: { path: string; status: DaemonStatus 
       setStore(new FrameStore({
         workspace: path,
         platform: info.platform,
-        sizes: prefs.panes,
-        persistSizes: (sizes) => { void window.ordewell.prefs.set('panes', sizes); },
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+        layout: prefs.layouts[path],
+        // Only this workspace's entry: main merges it into the others'.
+        persistLayout: (saved) => { void window.ordewell.prefs.set('layouts', { [path]: saved }); },
       }));
     });
     return () => { live = false; };
@@ -30,7 +31,8 @@ function WorkspaceWindow({ path, status }: { path: string; status: DaemonStatus 
     if (!store) return;
     const offCommands = registerFrameCommands(store);
     const offViews = registerViews(store.api);
-    return () => { offViews(); offCommands(); };
+    const offMenu = window.ordewell.app.onMenuCommand((id) => store.api.runCommand(id));
+    return () => { offMenu(); offViews(); offCommands(); };
   }, [store]);
 
   if (!store) return null;
@@ -49,12 +51,5 @@ export function App(): JSX.Element | null {
 
   if (context?.kind === 'workspace') return <WorkspaceWindow path={context.path} status={status} />;
   if (context?.kind !== 'welcome') return null;
-  return (
-    <div className="app">
-      <main className="app-body">
-        <Welcome connected={status?.state === 'connected'} />
-      </main>
-      {status && <DaemonBar status={status} />}
-    </div>
-  );
+  return <Welcome status={status} />;
 }

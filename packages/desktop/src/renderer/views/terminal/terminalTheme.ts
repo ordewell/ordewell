@@ -29,13 +29,13 @@ function withAlpha(color: string, alpha: number): string {
 
 export function buildTerminalTheme(read: (token: string) => string, dark: boolean): TerminalTheme {
   const token = (name: string, fallback: string): string => hex(read(`--ow-${name}`)) ?? fallback;
-  const bg = token('bg', dark ? '#1b1d21' : '#ffffff');
+  const bg = token('bg', dark ? '#1c1f23' : '#ffffff');
   const fg = token('fg', dark ? '#e6e8eb' : '#1a1c1f');
   const muted = token('fg-secondary', fg);
   const accent = token('accent', '#1393b3');
-  const red = token('status-error', '#d1453b');
+  const red = token('status-failed', '#d1453b');
   const green = token('status-passed', '#2e9d5b');
-  const yellow = token('status-warning', '#c08a1a');
+  const yellow = token('status-attention', '#c08a1a');
   const blue = token('status-running', accent);
   const magenta = token('status-merge', '#8b5cc6');
   const cyan = accent;

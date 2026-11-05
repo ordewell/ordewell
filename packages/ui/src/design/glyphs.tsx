@@ -1,10 +1,23 @@
 import type { ReactNode, SVGProps } from 'react';
 
-/** The sizes an icon is drawn at: 16 in a row, 20 in the activity bar (docs/desktop/design.md, Icons). */
-export type IconSize = 12 | 16 | 20 | 24;
+/**
+ * The sizes an icon is drawn at, by context (docs/desktop/design.md, Icon
+ * sizes): 22 in the activity bar, 40 in an empty state, 16 in a control, 14 on
+ * a second line or a chip, 12 inside a badge. 20 and 24 stay for drawings
+ * outside those contexts, such as the Welcome window's.
+ */
+export type IconSize = 12 | 14 | 16 | 20 | 22 | 24 | 40;
 
-/** Every icon is stroked at this many pixels, whatever its size. */
+/** Every icon is stroked at this many pixels, whatever its size... */
 export const ICON_STROKE = 1.5;
+
+/** ...but a badge's: at 12px a 1.5px stroke thins out beside caption text. */
+export const ICON_STROKE_SMALL = 1.75;
+
+/** The stroke, in pixels, an icon of this size is drawn with. */
+export function strokeFor(size: IconSize): number {
+  return size <= 12 ? ICON_STROKE_SMALL : ICON_STROKE;
+}
 
 export interface GlyphProps extends Omit<SVGProps<SVGSVGElement>, 'ref' | 'children'> {
   size?: IconSize;
@@ -25,7 +38,7 @@ interface Dot { cx: number; cy: number; r?: number }
  */
 function glyph(name: string, label: string, dot: Dot, strokes: ReactNode) {
   function Glyph({
-    size = 16, strokeWidth = ICON_STROKE, absoluteStrokeWidth = true, dot: dotColor, className, style, ...rest
+    size = 16, strokeWidth = strokeFor(size), absoluteStrokeWidth = true, dot: dotColor, className, style, ...rest
   }: GlyphProps): JSX.Element {
     const width = absoluteStrokeWidth ? (Number(strokeWidth) * 24) / size : strokeWidth;
     return (

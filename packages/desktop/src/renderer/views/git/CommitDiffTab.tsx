@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { FileDiff as FileDiffIcon } from 'lucide-react';
+import { FileDiff as FileDiffIcon, FileX } from 'lucide-react';
+import { Button, EmptyState } from '@ordewell/ui/design';
 import type { FrameApi, Tab, Unregister } from '../../frame/api';
 import { createDiffEditor, loadMonaco, type DiffEditorHandle } from '../../monaco';
 import { messageOf } from '../../session/daemon';
 import { all } from '../Stub';
 import { diffSides, parsePatch, type DiffSides } from '../changes/changesModel';
-import '../explorer/explorer.css';
-import '../changes/changes.css';
+import '../diffKit.css';
 import { readCommit } from './gitData';
 import { parseCommitDiffTabId, shortSha } from './gitModel';
 
@@ -69,37 +69,32 @@ function CommitDiff({ api, tab }: { api: FrameApi; tab: Tab }): JSX.Element {
 
   const body = (): JSX.Element => {
     switch (read.kind) {
-      case 'loading': return <p className="frame-empty">Loading the diff…</p>;
+      case 'loading': return <EmptyState className="dk-state" icon={FileDiffIcon} title="Loading the diff…" />;
       case 'error':
-        return (
-          <div className="ft-message">
-            <p className="frame-empty error" role="alert">{read.message}</p>
-            <button type="button" className="ft-button" onClick={() => setRound((n) => n + 1)}>Try again</button>
-          </div>
-        );
-      case 'binary': return <p className="frame-empty">This is a binary file, so its change is not shown.</p>;
-      case 'none': return <p className="frame-empty">This commit changes this file’s mode or name only, so there are no lines to show.</p>;
+        return <EmptyState className="dk-state" icon={FileX} title={read.message} action={<Button onClick={() => setRound((n) => n + 1)}>Try again</Button>} />;
+      case 'binary': return <EmptyState className="dk-state" icon={FileX} title="This is a binary file, so its change is not shown." />;
+      case 'none': return <EmptyState className="dk-state" icon={FileX} title="This commit changes this file’s mode or name only, so there are no lines to show." />;
       case 'text':
-        if (failed) return <p className="frame-empty error">The diff editor could not load: {failed}</p>;
-        return <div ref={hostNode} className="ft-editor" data-testid="monaco-diff-host" />;
+        if (failed) return <EmptyState className="dk-state" icon={FileX} title={`The diff editor could not load: ${failed}`} />;
+        return <div ref={hostNode} className="dk-editor" data-testid="monaco-diff-host" />;
     }
   };
 
   const label = `${repo === '.' ? '' : `${repo}/`}${path}`;
   return (
-    <div className="ft changes-diff">
-      <div className="ft-bar">
-        <span className="ft-path" title={label}>{label}</span>
-        <span className="muted">commit {shortSha(sha)}</span>
-        <span className="ft-spacer" />
-        <div className="changes-toggle" role="group" aria-label="Layout">
-          <button type="button" className="ft-button" aria-pressed={!sideBySide} onClick={() => setSideBySide(false)}>Unified</button>
-          <button type="button" className="ft-button" aria-pressed={sideBySide} onClick={() => setSideBySide(true)}>Side by side</button>
+    <div className="dk">
+      <div className="dk-bar">
+        <span className="dk-path" title={label}>{label}</span>
+        <span className="dk-commit">commit {shortSha(sha)}</span>
+        <span className="dk-spacer" />
+        <div className="dk-toggle" role="group" aria-label="Layout">
+          <Button size="sm" aria-pressed={!sideBySide} onClick={() => setSideBySide(false)}>Unified</Button>
+          <Button size="sm" aria-pressed={sideBySide} onClick={() => setSideBySide(true)}>Side by side</Button>
         </div>
-        <button type="button" className="ft-button" disabled={!editor} onClick={() => editor?.goToChange('previous')}>Previous change</button>
-        <button type="button" className="ft-button" disabled={!editor} onClick={() => editor?.goToChange('next')}>Next change</button>
+        <Button size="sm" disabled={!editor} onClick={() => editor?.goToChange('previous')}>Previous change</Button>
+        <Button size="sm" disabled={!editor} onClick={() => editor?.goToChange('next')}>Next change</Button>
       </div>
-      {sides && <p className="ft-banner" role="note">Only the changed lines are shown: this commit’s files are not checked out.</p>}
+      {sides && <p className="dk-banner" role="note">Only the changed lines are shown: this commit’s files are not checked out.</p>}
       {body()}
     </div>
   );

@@ -23,7 +23,11 @@
  *                       from what the answer actually contained
  *   mock/desktop-e2e   a two-task plan on turn one whose prompts steer
  *                       bench/pipeline's fake-claude (the desktop app's
- *                       acceptance test, packages/desktop/e2e)
+ *                       acceptance test, packages/desktop/e2e); a goal that
+ *                       names DESKTOP_FIT_GOAL gets the widest cards instead
+ *   mock/desktop-tour  the desktop tour's plan (DESKTOP_TOUR_PLAN): the
+ *                       acceptance plan, then one card of each kind; the fit
+ *                       goal gets the widest cards here too
  *
  * The five `mock/goal-*` personas are the kinds of goal the strategy step
  * teaches (#108), each replying with the plumbing its kind calls for:
@@ -37,11 +41,22 @@
  * acceptance of each shape; the scenario table is GOAL_SCENARIOS in
  * scenarios.mjs.
  *
- * Usage: node bench/live/mock-provider.mjs [--port 3799]
+ * Usage: node bench/live/mock-provider.mjs [--port 3799] [--hold-file <path>]
+ *
+ * With --hold-file, a turn streams its reasoning and then waits while that file
+ * exists, so a caller can look at the planner mid-turn (the desktop's visual
+ * tour, packages/desktop/e2e/tour.spec.ts) and let it finish by deleting it.
  */
+import fs from 'node:fs';
 import http from 'node:http';
 
-const port = Number(process.argv.includes('--port') ? process.argv[process.argv.indexOf('--port') + 1] : 3799);
+const arg = (name) => (process.argv.includes(name) ? process.argv[process.argv.indexOf(name) + 1] : undefined);
+const port = Number(arg('--port') ?? 3799);
+const holdFile = arg('--hold-file');
+
+async function released() {
+  while (holdFile && fs.existsSync(holdFile)) await new Promise((resolve) => setTimeout(resolve, 100));
+}
 
 const PLAN_JSON = (title) => JSON.stringify({
   tasks: [
@@ -199,6 +214,86 @@ const DESKTOP_E2E_PLAN = {
   ],
 };
 
+/**
+ * The desktop tour's plan: the acceptance plan's two tasks, then one of each
+ * kind of card the graph draws, with long titles and long model names. Each
+ * waits behind #2, which the tour leaves waiting for merge, so none runs and
+ * the run's own states stay those of the acceptance plan. None is research:
+ * a research task starts while the plan is still a draft, and the run would
+ * then offer Stop where the tour approves. The tour detects
+ * only Claude Code, so the long OpenCode-style model id rides on it.
+ */
+const DESKTOP_TOUR_PLAN = {
+  tasks: [
+    ...DESKTOP_E2E_PLAN.tasks,
+    aiTask({
+      id: 'tour-port', order: 3, title: 'Port the tokenizer to the streaming parser and keep every existing fixture passing',
+      description: 'A long title on a long model id with a provider prefix', dependencies: ['desktop-farewell'],
+      assignedModel: { modelId: 'opencode-go/deepseek-v4.1-flash', modelLabel: 'opencode-go/deepseek-v4.1-flash', thinkingEffort: 'high' },
+      prompt: 'Port src/tokenizer.ts to the streaming parser.',
+    }),
+    aiTask({
+      id: 'tour-survey', order: 4, title: 'Survey how other parsers recover from a truncated document',
+      description: 'A read-only task on the largest effort', dependencies: ['desktop-farewell'], taskMode: 'plan',
+      assignedModel: { modelId: 'opus', modelLabel: 'opus', thinkingEffort: 'xhigh' },
+      prompt: 'Report how three parsers recover from a truncated document.', readOnly: true,
+    }),
+    {
+      id: 'tour-check', order: 5, title: 'Run the parser suite', description: 'The check of a loop', type: 'script',
+      dependencies: ['desktop-farewell'], commands: [['npm', 'test', '--', '--run', 'test/parser']], sliceType: 'AFK',
+      loop: { body: ['tour-fix'], maxRounds: 3 },
+    },
+    aiTask({
+      id: 'tour-fix', order: 6, title: 'Fix what the suite reports', description: 'The body of the loop',
+      dependencies: ['tour-check'], taskMode: 'acceptEdits', prompt: 'Fix what the parser suite reports.',
+    }),
+    aiTask({
+      id: 'tour-release', order: 7, title: 'Open the release pull request', description: 'An ops task with a human in the loop',
+      dependencies: ['tour-check'], ops: true, autonomy: 'HITL', sliceType: 'HITL', prompt: 'Open the release pull request.',
+    }),
+    {
+      id: 'tour-sign', order: 8, title: 'Sign off the release notes', description: 'A manual task', type: 'user',
+      dependencies: ['tour-release'], userSteps: [{ order: 1, instruction: 'Read and sign the release notes', completed: false }],
+      autonomy: 'HITL', sliceType: 'HITL', subtasks: [],
+    },
+  ],
+};
+
+/**
+ * The plan cards at their widest, for the desktop tour's overflow probe: long
+ * titles, a long model with its effort, a loop's check and body, Research,
+ * Ops, and a prompt with a path that has nowhere to break. It is never run.
+ */
+const DESKTOP_FIT_GOAL = 'Check that the plan cards fit';
+const DESKTOP_FIT_PLAN = {
+  tasks: [
+    {
+      id: 'fit-check', order: 1, title: 'Run the reconnect suite until the lease heartbeat survives a daemon restart',
+      description: 'The failing suite is the check', type: 'script', dependencies: [],
+      commands: [['node', '--test', 'packages/desktop/src/renderer/session/__tests__/reconnectAfterDaemonRestart.test.mjs']], sliceType: 'AFK',
+      loop: { body: ['fit-fix'], maxRounds: 3 },
+    },
+    aiTask({
+      id: 'fit-fix', order: 2,
+      title: 'Find why the session lease heartbeat outlives the window that holds it after a reconnect with backoff',
+      description: 'Makes the reconnect suite pass', dependencies: ['fit-check'],
+      assignedRunner: 'claude-code',
+      assignedModel: { modelId: 'opencode-go/deepseek-v4.1-flash', thinkingEffort: 'high' },
+      prompt: 'Read packages/desktop/src/renderer/session/DaemonConnectionReconnectBackoffSupervisor.ts and clear the heartbeat timer where the window lets go of its lease.\nThen check every caller.',
+    }),
+    aiTask({
+      id: 'fit-research', order: 3, title: 'Which of the daemon restart paths keeps the old lease heartbeat timer alive past its window?',
+      description: 'Reports the evidence for one hypothesis', dependencies: ['fit-check'],
+      prompt: 'Hypothesis: the restart path re-arms the timer before it clears the old one.', readOnly: true, research: true,
+    }),
+    aiTask({
+      id: 'fit-ops', order: 4, title: 'Restart the shared development daemon on every workstation that still runs the old heartbeat',
+      description: 'Changes no repository files', dependencies: ['fit-check'], ops: true,
+      prompt: 'Restart the daemon.',
+    }),
+  ],
+};
+
 function toolCallTurn(name, args) {
   return { toolCalls: [{ id: `call_${Math.random().toString(36).slice(2, 10)}`, name, args: JSON.stringify(args) }] };
 }
@@ -217,6 +312,14 @@ function shape(messages) {
   return { users, lastRole, lastUser: String(lastUser), toolRounds };
 }
 
+/** The widest cards, for a session whose goal names DESKTOP_FIT_GOAL and that has no plan yet. */
+function fitTurn(messages) {
+  // The fit goal comes after a run, into a session whose context may already hold a skill load or a run's record.
+  const planned = messages.some((m) => m.role === 'assistant' && String(m.content ?? '').includes('"tasks"'));
+  if (planned || !messages.some((m) => m.role === 'user' && String(m.content ?? '').includes(DESKTOP_FIT_GOAL))) return undefined;
+  return { reasoning: 'The widest cards. ', content: fence(DESKTOP_FIT_PLAN) };
+}
+
 function scriptTurn(model, messages) {
   const persona = model.split('/')[1] ?? model;
   const s = shape(messages);
@@ -227,9 +330,18 @@ function scriptTurn(model, messages) {
   }
 
   if (persona === 'desktop-e2e') {
+    const fit = fitTurn(messages);
+    if (fit) return fit;
     // Only the goal gets the plan: a supervisor's wake-up turn refuses plan edits.
     if (messages.some((m) => m.role === 'assistant')) return { content: 'Noted. Nothing to change.' };
     return { reasoning: 'Two small slices. ', content: fence(DESKTOP_E2E_PLAN) };
+  }
+
+  if (persona === 'desktop-tour') {
+    const fit = fitTurn(messages);
+    if (fit) return fit;
+    if (messages.some((m) => m.role === 'assistant')) return { content: 'Noted. Nothing to change.' };
+    return { reasoning: 'Two small slices, then the release. ', content: fence(DESKTOP_TOUR_PLAN) };
   }
 
   if (persona === 'empty-turn') {
@@ -355,7 +467,7 @@ const server = http.createServer((req, res) => {
   }
   let body = '';
   req.on('data', (c) => (body += c));
-  req.on('end', () => {
+  req.on('end', async () => {
     let parsed;
     try { parsed = JSON.parse(body); } catch { res.writeHead(400).end('bad json'); return; }
     const { model, messages } = parsed;
@@ -369,6 +481,7 @@ const server = http.createServer((req, res) => {
         res.write(sseChunk({ reasoning: piece }));
       }
     }
+    await released();
     // ...then content...
     if (turn.content) {
       for (const piece of turn.content.match(/.{1,24}/gs) ?? []) {

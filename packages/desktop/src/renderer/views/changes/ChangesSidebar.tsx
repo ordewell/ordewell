@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
-import { GitMerge, RefreshCw } from 'lucide-react';
-import { taskStatusKind, titledRefs, walkPlan } from '@ordewell/core/plan-utils';
-import type { RunTask } from '@ordewell/core';
-import { IconButton, StatusIndicator, statusOf } from '@ordewell/ui/design';
+import { useEffect, useState, type ReactNode } from 'react';
+import { AlertTriangle, ChevronDown, ChevronRight, GitMerge, GitPullRequestArrow, RefreshCw } from 'lucide-react';
+import { taskRowView, titledRefs, walkPlan } from '@ordewell/core/plan-utils';
+import type { RunTask, RunView, Task, TaskType } from '@ordewell/core';
+import { TaskSummary } from '@ordewell/ui';
+import { Badge, Button, EmptyState, Icon, IconButton, SectionHeader, statusOf } from '@ordewell/ui/design';
 import type { FrameApi, Unregister } from '../../frame/api';
 import { daemonHost, type DaemonHost } from '../../session/DaemonHost';
 import { useSession } from '../../session/useSession';
@@ -22,6 +23,14 @@ import './changes.css';
  */
 
 type Opener = (file: ChangedFile, scope: ReviewScope, tag: string, preview: boolean) => void;
+
+/** A file opens as a diff tab in the scope it was changed in, a preview until it is kept. */
+function opener(api: FrameApi): Opener {
+  return (file, scope, tag, preview) => {
+    const name = file.path.slice(file.path.lastIndexOf('/') + 1);
+    api.openTab({ kind: 'diff', id: fileTabId(file.repo, file.path), title: `${name} (${tag})`, scope }, { preview });
+  };
+}
 
 /** One read of a file list, again whenever `key` changes: a task that moved on has other files. */
 function useFiles(read: () => Promise<FileList>, key: string): FileList | undefined {
@@ -47,6 +56,17 @@ function Counts({ file }: { file: ChangedFile }): JSX.Element {
 
 const LETTER_WORD = { A: 'Added', M: 'Modified', D: 'Deleted' } as const;
 
+/** Rows with the height of the files that replace them, so the list moves nothing when it arrives (checklist S1). */
+function FilesSkeleton(): JSX.Element {
+  return (
+    <div className="changes-skeleton" role="status" aria-label="Loading changes" aria-busy="true">
+      {[58, 40, 66].map((width, index) => (
+        <div key={index} className="changes-skeleton-row"><span className="changes-skeleton-bar" style={{ width: `${width}%` }} /></div>
+      ))}
+    </div>
+  );
+}
+
 function Files({ list, scope, tag, filter, open, empty }: {
   list: FileList | undefined;
   scope: ReviewScope;
@@ -55,8 +75,8 @@ function Files({ list, scope, tag, filter, open, empty }: {
   open: Opener;
   empty: string;
 }): JSX.Element | null {
-  if (!list) return <p className="changes-note">Loading…</p>;
-  if (!list.ok) return <p className="changes-note error" role="alert">{list.error}</p>;
+  if (!list) return <FilesSkeleton />;
+  if (!list.ok) return <p className="changes-note error" role="alert"><Icon icon={AlertTriangle} size={16} />{list.error}</p>;
   const files = list.files.filter((file) => matchesFilter(filter, `${file.repo}/${file.path}`));
   if (list.files.length === 0) return <p className="changes-note">{empty}</p>;
   if (files.length === 0) return null;
@@ -93,13 +113,14 @@ function Files({ list, scope, tag, filter, open, empty }: {
 }
 
 /** Revert what a task landed (ADR-0054): the host shows what the revert takes with it (revert-preview) before it asks. */
-function Revert({ host, task }: { host: DaemonHost; task: RunTask }): JSX.Element | null {
+function Revert({ host, task, row }: { host: DaemonHost; task: RunTask; row?: boolean }): JSX.Element | null {
   if (task.isolation?.revertible !== true) return null;
+  const revert = (): void => { void host.handle({ type: 'sendSystemCommand', command: 'revertTask', taskId: task.id }); };
+  // On a task's header the action sits with the status it follows; in the task tab it has the list to itself.
+  if (row) return <button type="button" className="task-row-action" onClick={revert}>Revert…</button>;
   return (
     <div className="changes-task-actions">
-      <button type="button" className="ft-button" onClick={() => { void host.handle({ type: 'sendSystemCommand', command: 'revertTask', taskId: task.id }); }}>
-        Revert…
-      </button>
+      <Button size="sm" variant="secondary" onClick={revert}>Revert…</Button>
     </div>
   );
 }
@@ -108,15 +129,20 @@ function Revert({ host, task }: { host: DaemonHost; task: RunTask }): JSX.Elemen
 function Gates({ host, gated, tasks }: { host: DaemonHost; gated: Array<{ task: RunTask; label: string }>; tasks: readonly RunTask[] }): JSX.Element {
   return (
     <section className="changes-gates" aria-label="Waiting for a merge">
-      <h3 className="changes-heading">Waiting for a merge</h3>
-      <ul>
+      <SectionHeader level={4} title="Waiting for a merge" count={gated.length} />
+      <ul className="changes-rows">
         {gated.map(({ task, label }) => (
-          <li key={task.id} className="changes-gate">
-            <button type="button" className="changes-link" onClick={() => host.openTask(task.id, 'details')}>#{label} {task.title}</button>
-            <span className="muted">waits for {titledRefs(task.mergeGate ?? [], tasks).join(', ')} to be merged</span>
-            <button type="button" className="ft-button" onClick={() => { void host.handle({ type: 'sendSystemCommand', command: 'forceStart', taskId: task.id }); }}>
-              Start anyway…
-            </button>
+          <li key={task.id} className="changes-item">
+            <div className="changes-item-line">
+              <Badge tone="merge" icon={GitPullRequestArrow}>Merge gate</Badge>
+              <button type="button" className="changes-link" title="Show the task in the plan" onClick={() => host.revealTask(task.id)}>#{label} {task.title}</button>
+            </div>
+            <p className="changes-item-text">waits for {titledRefs(task.mergeGate ?? [], tasks).join(', ')} to be merged</p>
+            <div className="changes-item-actions">
+              <Button size="sm" variant="secondary" onClick={() => { void host.handle({ type: 'sendSystemCommand', command: 'forceStart', taskId: task.id }); }}>
+                Start anyway…
+              </Button>
+            </div>
           </li>
         ))}
       </ul>
@@ -124,9 +150,37 @@ function Gates({ host, gated, tasks }: { host: DaemonHost; gated: Array<{ task: 
   );
 }
 
-function TaskGroup({ host, task, label, filter, round, open }: {
+/** A group with this many files or fewer starts open; a longer one starts closed, and the user's own choice stands from then on. */
+const OPEN_UP_TO = 8;
+
+/** A group's open state: the user's choice once made, otherwise open while it is short or being searched. */
+function useGroupOpen(list: FileList | undefined, filtering: boolean): [boolean, () => void] {
+  const [chosen, setChosen] = useState<boolean>();
+  const short = !list?.ok || list.files.length <= OPEN_UP_TO;
+  const open = filtering || (chosen ?? short);
+  return [open, () => setChosen(!open)];
+}
+
+/** The chevron is decoration: the header's title button carries the disclosure state. */
+function GroupHead({ open, children }: { open: boolean; children: ReactNode }): JSX.Element {
+  return (
+    <div className="changes-group-head">
+      <Icon icon={open ? ChevronDown : ChevronRight} size={16} className="changes-chevron" />
+      {children}
+    </div>
+  );
+}
+
+/** What TaskSummary draws a task from: the run's view of it, the way the graph and the task tab read it. */
+function summaryOf(task: RunTask, tasks: readonly RunTask[]): { subject: Task; row: ReturnType<typeof taskRowView> } {
+  const subject = { ...task, type: task.type as TaskType, assignedModel: task.assignedModel ?? undefined };
+  return { subject: subject as Task, row: taskRowView(subject, { tasks }) };
+}
+
+function TaskGroup({ host, task, tasks, label, filter, round, open }: {
   host: DaemonHost;
   task: RunTask;
+  tasks: readonly RunTask[];
   label: string;
   filter: string;
   round: number;
@@ -137,27 +191,53 @@ function TaskGroup({ host, task, label, filter, round, open }: {
     () => readTaskFiles(host.workspace, sessionId, task.id),
     [sessionId, task.id, task.status, task.isolation?.state, round].join('\0'),
   );
+  const [expanded, toggle] = useGroupOpen(list, filter !== '');
   const scope: ReviewScope = { kind: 'task', sessionId, taskId: task.id };
   // A filter that names the task shows all its files; one that matches none of them hides the task.
   const named = matchesFilter(filter, task.title, `#${label}`);
   if (!named && list?.ok && !list.files.some((f) => matchesFilter(filter, `${f.repo}/${f.path}`))) return null;
-  const status = statusOf(taskStatusKind(task));
+  const { subject, row } = summaryOf(task, tasks);
+  const count = list?.ok ? list.files.length : undefined;
   return (
     <section className="changes-group" aria-label={`Task #${label}: ${task.title}`}>
-      <button type="button" className="changes-group-head" title="Open the task" onClick={() => host.openTask(task.id, 'details')}>
-        <StatusIndicator status={status.id} size={12} />
-        <span className="changes-group-label">#{label}</span>
-        <span className="changes-group-title">{task.title}</span>
-      </button>
+      <GroupHead open={expanded}>
+        <TaskSummary task={subject} row={row} density="row" expanded={expanded} onToggle={toggle} idleSince={task.idleSince} status={statusOf(row.status)} badges={false}>
+          {count !== undefined && <span className="changes-file-count" aria-label={`${count} ${count === 1 ? 'file' : 'files'}`}>{count}</span>}
+          <Revert host={host} task={task} row />
+          <button type="button" className="task-row-action" title="Show the task in the plan" onClick={(event) => { event.stopPropagation(); host.revealTask(task.id); }}>
+            Show in plan
+          </button>
+        </TaskSummary>
+      </GroupHead>
+      {expanded && (
+        <Files
+          list={list}
+          scope={scope}
+          tag={`Task #${label}`}
+          filter={named ? '' : filter}
+          open={open}
+          empty="No changes in this task."
+        />
+      )}
+    </section>
+  );
+}
+
+/**
+ * One task's changed files and its revert, as its tab's Changes view draws
+ * them (docs/desktop/design.md, W6): the list this sidebar draws under the
+ * task, so the two never disagree on what a task changed.
+ */
+export function TaskChanges({ api, host, task, label }: { api: FrameApi; host: DaemonHost; task: RunTask; label: string }): JSX.Element {
+  const sessionId = host.sessionId;
+  const list = useFiles(
+    () => readTaskFiles(host.workspace, sessionId, task.id),
+    [sessionId, task.id, task.status, task.isolation?.state].join('\0'),
+  );
+  return (
+    <section className="changes-group" aria-label="Changed files">
       <Revert host={host} task={task} />
-      <Files
-        list={list}
-        scope={scope}
-        tag={`Task #${label}`}
-        filter={named ? '' : filter}
-        open={open}
-        empty="No changes in this task."
-      />
+      <Files list={list} scope={{ kind: 'task', sessionId, taskId: task.id }} tag={`Task #${label}`} filter="" open={opener(api)} empty="No changes in this task." />
     </section>
   );
 }
@@ -167,12 +247,15 @@ function RunGroup({ host, repos, filter, round, open }: { host: DaemonHost; repo
   const { state } = useSession(host);
   const landed = (state.run.handoff ?? state.run.runMerge)?.landed.length ?? 0;
   const list = useFiles(() => readRunFiles(host.workspace, sessionId, repos), [sessionId, repos.join('\0'), landed, round].join('\0'));
+  const [expanded, toggle] = useGroupOpen(list, filter !== '');
   return (
     <section className="changes-group" aria-label="Whole run vs base">
-      <div className="changes-group-head changes-group-static">
-        <span className="changes-group-title">Whole run vs base</span>
-      </div>
-      <Files list={list} scope={{ kind: 'integration', sessionId }} tag="Integration" filter={filter} open={open} empty="Nothing has landed on the integration branch yet." />
+      <button type="button" className="changes-run-head" aria-expanded={expanded} onClick={toggle}>
+        <Icon icon={expanded ? ChevronDown : ChevronRight} size={16} className="changes-chevron" />
+        <span className="changes-run-title">Whole run vs base</span>
+        {list?.ok && <span className="changes-file-count" aria-label={`${list.files.length} ${list.files.length === 1 ? 'file' : 'files'}`}>{list.files.length}</span>}
+      </button>
+      {expanded && <Files list={list} scope={{ kind: 'integration', sessionId }} tag="Integration" filter={filter} open={open} empty="Nothing has landed on the integration branch yet." />}
     </section>
   );
 }
@@ -180,27 +263,37 @@ function RunGroup({ host, repos, filter, round, open }: { host: DaemonHost; repo
 function Conflicts({ host, rows }: { host: DaemonHost; rows: ConflictRow[] }): JSX.Element {
   return (
     <section className="changes-conflicts" aria-label="Conflicts">
-      <h3 className="changes-heading">Conflicts</h3>
-      <ul>
-        {rows.map((row) => (
-          <li key={row.taskId} className="changes-conflict">
-            <button type="button" className="changes-link" onClick={() => host.openTask(row.taskId, 'details')}>#{row.label} {row.title}</button>
-            <span className="muted">
-              {row.repo === '.' ? '' : `${row.repo}: `}
-              {row.files.length > 0 ? row.files.join(', ') : 'conflicting files'}
-            </span>
-            {row.repairing ? (
-              <span className="changes-note">Being repaired…</span>
-            ) : (
-              <button type="button" className="ft-button" onClick={() => { void host.handle({ type: 'isolationAction', action: 'resolveConflict', taskId: row.taskId }); }}>
-                Resolve
-              </button>
-            )}
-          </li>
-        ))}
+      <SectionHeader level={4} title="Conflicts" count={rows.length} />
+      <ul className="changes-rows">
+        {rows.map((row) => {
+          const files = `${row.repo === '.' ? '' : `${row.repo}: `}${row.files.length > 0 ? row.files.join(', ') : 'conflicting files'}`;
+          return (
+            <li key={row.taskId} className="changes-item changes-conflict">
+              <div className="changes-item-line">
+                <Badge tone="failed" icon={AlertTriangle}>Conflict</Badge>
+                <button type="button" className="changes-link" title="Show the task in the plan" onClick={() => host.revealTask(row.taskId)}>#{row.label} {row.title}</button>
+              </div>
+              <p className="changes-item-text" title={files}>{files}</p>
+              <div className="changes-item-actions">
+                {row.repairing ? (
+                  <span className="changes-note">Being repaired…</span>
+                ) : (
+                  <Button size="sm" variant="secondary" onClick={() => { void host.handle({ type: 'isolationAction', action: 'resolveConflict', taskId: row.taskId }); }}>
+                    Resolve
+                  </Button>
+                )}
+              </div>
+            </li>
+          );
+        })}
       </ul>
     </section>
   );
+}
+
+/** Whether the run has anything Merge all would land: nothing landed, it is not offered (design.md, W13). */
+function hasLanded(run: RunView): boolean {
+  return run.handoff !== null || (run.runMerge !== null && run.runMerge.landed.length > 0);
 }
 
 export function ChangesList({ api, host }: { api: FrameApi; host: DaemonHost }): JSX.Element {
@@ -213,15 +306,12 @@ export function ChangesList({ api, host }: { api: FrameApi; host: DaemonHost }):
   const gated = [...walkPlan(run.tasks)].filter(({ task }) => (task.mergeGate?.length ?? 0) > 0);
   const handoff = run.handoff ?? run.runMerge;
   const repos = handoff ? handoff.repos.map((r) => r.path) : [];
-  const mergeable = run.handoff !== null || (run.runMerge !== null && run.runMerge.landed.length > 0);
+  const mergeable = hasLanded(run);
 
-  const open: Opener = (file, scope, tag, preview) => {
-    const name = file.path.slice(file.path.lastIndexOf('/') + 1);
-    api.openTab({ kind: 'diff', id: fileTabId(file.repo, file.path), title: `${name} (${tag})`, scope }, { preview });
-  };
+  const open = opener(api);
 
   if (tasks.length === 0 && conflicts.length === 0 && gated.length === 0 && !handoff) {
-    return <p className="frame-empty">No task has changes to review yet: an isolated run’s tasks list theirs here.</p>;
+    return <EmptyState icon={GitMerge} title="No changes to review yet" body="An isolated run’s tasks list their changes here." />;
   }
 
   return (
@@ -240,14 +330,12 @@ export function ChangesList({ api, host }: { api: FrameApi; host: DaemonHost }):
       {conflicts.length > 0 && <Conflicts host={host} rows={conflicts} />}
       {gated.length > 0 && <Gates host={host} gated={gated} tasks={run.tasks} />}
       {tasks.map(({ task, label }) => (
-        <TaskGroup key={task.id} host={host} task={task} label={label} filter={filter} round={round} open={open} />
+        <TaskGroup key={task.id} host={host} task={task} tasks={run.tasks} label={label} filter={filter} round={round} open={open} />
       ))}
       {handoff && repos.length > 0 && <RunGroup host={host} repos={repos} filter={filter} round={round} open={open} />}
       {mergeable && (
         <div className="changes-merge">
-          <button type="button" className="ft-button ft-primary" onClick={() => { void mergeAll(api, host); }}>
-            <GitMerge size={14} aria-hidden="true" /> Merge all…
-          </button>
+          <Button variant="primary" icon={GitMerge} onClick={() => { void mergeAll(api, host); }}>Merge all…</Button>
         </div>
       )}
     </div>
@@ -260,7 +348,13 @@ export function register(api: FrameApi): Unregister {
   host.setReviewer({ open: () => api.showActivity('changes'), mergeAll: () => mergeAll(api, host) });
   return all(
     api.registerSidebar({ activity: 'changes', id: 'review', title: 'Review', order: 10, render: () => <ChangesList api={api} host={host} /> }),
-    api.registerCommand({ id: 'changes.mergeAll', title: 'Merge all…', more: true, run: () => { void mergeAll(api, host); } }),
+    // A palette entry only: the ⋯ menu's Merge all is the plan's, which follows the run's actions.
+    api.registerCommand({
+      id: 'changes.mergeAll',
+      title: 'Merge all…',
+      enabled: () => !api.readOnly && !host.getSnapshot().readOnly && hasLanded(host.getSnapshot().state.run),
+      run: () => { void mergeAll(api, host); },
+    }),
     () => host.setReviewer(null),
   );
 }

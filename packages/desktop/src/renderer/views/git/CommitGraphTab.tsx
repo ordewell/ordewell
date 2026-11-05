@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
-import { GitCommitHorizontal } from 'lucide-react';
+import { GitCommitHorizontal, RefreshCw, X } from 'lucide-react';
+import { Button, EmptyState, IconButton } from '@ordewell/ui/design';
 import type { FrameApi, Tab, Unregister } from '../../frame/api';
 import { messageOf } from '../../session/daemon';
 import { all } from '../Stub';
-import '../explorer/explorer.css';
-import '../changes/changes.css';
+import { MiddleText, Notice } from '../sidebarKit';
 import { openRun } from './gitActions';
 import { readBranches, readCommit, readLog, type Branches, type CommitDetail, type CommitSummary } from './gitData';
 import { ago, commitDiffTabId, landedTaskOf, parseCommitsTabId, refChips, shortSha, type LandedTask, type RefChip } from './gitModel';
@@ -77,7 +77,7 @@ function landedFor(commit: CommitSummary, links: readonly Linked[]): { task: Lan
   return undefined;
 }
 
-function Detail({ api, repo, sha, summary, linked }: { api: FrameApi; repo: string; sha: string; summary: CommitSummary; linked: { task: LandedTask; sessionId: string } | undefined }): JSX.Element {
+function Detail({ api, repo, sha, summary, linked, close }: { api: FrameApi; repo: string; sha: string; summary: CommitSummary; linked: { task: LandedTask; sessionId: string } | undefined; close(): void }): JSX.Element {
   const [detail, setDetail] = useState<CommitDetail>();
   const [error, setError] = useState<string>();
   useEffect(() => {
@@ -94,30 +94,34 @@ function Detail({ api, repo, sha, summary, linked }: { api: FrameApi; repo: stri
 
   return (
     <aside className="git-detail" aria-label="Commit">
-      <h3>{summary.subject}</h3>
+      <div className="git-detail-head">
+        <h3>{summary.subject}</h3>
+        <IconButton icon={X} label="Close the commit" onClick={close} />
+      </div>
       <p className="git-detail-meta">{shortSha(sha)} · {summary.author} · {summary.date}</p>
       {linked && (
-        <p className="git-detail-meta">
-          Landed from{' '}
-          <button type="button" className="changes-link" onClick={() => void openRun(api, { sessionId: linked.sessionId, taskId: linked.task.taskId })}>
-            task #{linked.task.order}: {linked.task.title}
+        <p className="git-detail-landed">
+          <span>Landed from</span>
+          <button type="button" className="git-owner" title={`Open task #${linked.task.order}: ${linked.task.title}`} onClick={() => void openRun(api, { sessionId: linked.sessionId, taskId: linked.task.taskId })}>
+            <span className="git-owner-text">task #{linked.task.order}: {linked.task.title}</span>
           </button>
         </p>
       )}
-      {error && <p className="changes-note error" role="alert">{error}</p>}
-      {!detail && !error && <p className="changes-note">Loading…</p>}
+      {error && <Notice tone="error">{error}</Notice>}
+      {!detail && !error && <p className="git-hint">Loading…</p>}
       {detail && (
         <>
           {detail.commit.body.trim() && <pre className="git-detail-body">{detail.commit.body.trim()}</pre>}
-          {detail.files.length === 0 ? <p className="changes-note">This commit changes no files.</p> : (
-            <ul className="changes-files">
+          {detail.files.length === 0 ? <p className="git-hint">This commit changes no files.</p> : (
+            <ul className="git-list">
               {detail.files.map((file) => (
-                <li key={file.path} className="changes-file">
-                  <button type="button" className="git-row-name" title={file.path} onClick={() => open(file.path, true)} onDoubleClick={() => open(file.path, false)}>
-                    <span className={`ex-badge ex-badge-${file.status}`}>{file.status}</span> {file.path}
+                <li key={file.path} className="srow git-file">
+                  <button type="button" className="srow-main" title={file.path} onClick={() => open(file.path, true)} onDoubleClick={() => open(file.path, false)}>
+                    <span className={`sbadge sbadge-${file.status}`} aria-label={file.status}>{file.status}</span>
+                    <MiddleText className="git-file-name" text={file.path} tail={20} />
                   </button>
-                  {file.added === null ? <span className="changes-counts muted">binary</span> : (
-                    <span className="changes-counts"><span className="changes-added">+{file.added}</span> <span className="changes-removed">−{file.removed ?? 0}</span></span>
+                  {file.added === null ? <span className="git-file-counts">binary</span> : (
+                    <span className="git-file-counts"><span className="git-file-added">+{file.added}</span><span className="git-file-removed">−{file.removed ?? 0}</span></span>
                   )}
                 </li>
               ))}
@@ -189,12 +193,12 @@ function Graph({ api, tab }: { api: FrameApi; tab: Tab }): JSX.Element {
   return (
     <div className="git-graph">
       <div className="git-graph-bar">
-        <span className="git-row-name">{ref ?? 'History'}<span className="muted"> {repo === '.' ? '' : repo}</span></span>
-        <button type="button" className="ft-button" onClick={() => setNonce((n) => n + 1)}>Refresh</button>
+        <span className="git-graph-title"><MiddleText text={ref ?? 'History'} tail={16} />{repo !== '.' && <span className="git-graph-repo">{repo}</span>}</span>
+        <Button size="sm" icon={RefreshCw} onClick={() => setNonce((n) => n + 1)}>Refresh</Button>
       </div>
-      {error && <p className="changes-note error" role="alert">{error}</p>}
-      {!loaded && <p className="frame-empty">Loading the history…</p>}
-      {loaded && !error && commits.length === 0 && <p className="frame-empty">This repository has no commits yet.</p>}
+      {error && <Notice tone="error">{error}</Notice>}
+      {!loaded && <EmptyState className="git-state-wide" icon={GitCommitHorizontal} title="Loading the history…" />}
+      {loaded && !error && commits.length === 0 && <EmptyState className="git-state-wide" icon={GitCommitHorizontal} title="This repository has no commits yet." body="Commit something and its history appears here." />}
       <div className="git-graph-body">
         <ul className="git-commits" aria-label="Commits">
           {commits.map((commit, i) => {
@@ -202,7 +206,7 @@ function Graph({ api, tab }: { api: FrameApi; tab: Tab }): JSX.Element {
             const linked = landedFor(commit, links);
             return (
               <li key={commit.sha}>
-                <button type="button" className="git-commit" aria-pressed={commit.sha === selected} aria-label={`Commit ${shortSha(commit.sha)}: ${commit.subject}`} onClick={() => setSelected(commit.sha)}>
+                <button type="button" className="git-commit" aria-pressed={commit.sha === selected} aria-label={`Commit ${shortSha(commit.sha)}: ${commit.subject}`} onClick={() => setSelected((was) => (was === commit.sha ? undefined : commit.sha))}>
                   <Lanes row={row} width={layout.width} />
                   <span className="git-refs">{refChips(commit.refs, branches).map((chip) => <Chip key={chip.text} chip={chip} />)}</span>
                   <span className="git-commit-subject">{commit.subject}</span>
@@ -214,11 +218,11 @@ function Graph({ api, tab }: { api: FrameApi; tab: Tab }): JSX.Element {
           })}
           {cursor && (
             <li className="git-more">
-              <button type="button" className="ft-button" disabled={more} onClick={() => void loadMore()}>{more ? 'Loading…' : 'Load more'}</button>
+              <Button size="sm" disabled={more} onClick={() => void loadMore()}>{more ? 'Loading…' : 'Load more'}</Button>
             </li>
           )}
         </ul>
-        {chosen && <Detail api={api} repo={repo} sha={chosen.sha} summary={chosen} linked={landedFor(chosen, links)} />}
+        {chosen && <Detail api={api} repo={repo} sha={chosen.sha} summary={chosen} linked={landedFor(chosen, links)} close={() => setSelected(undefined)} />}
       </div>
     </div>
   );

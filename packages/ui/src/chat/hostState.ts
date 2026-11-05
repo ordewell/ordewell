@@ -75,6 +75,8 @@ export interface HostState {
   /** A planner turn waits on the probe for coding agents, and no planner has heard of it yet. */
   plannerDetecting: boolean;
   runnersKnown: boolean;
+  /** Why the host's detection of the coding agents failed; null while it is under way or has answered. */
+  detectionError: string | null;
   isReady: boolean;
   modelDiscoveryErrors: Record<string, string>;
   skills: { name: string; description: string; appliesTo?: 'planner' | 'task' }[];
@@ -170,6 +172,7 @@ export const INITIAL_HOST_STATE: HostState = {
   plannerKnown: false,
   plannerDetecting: false,
   runnersKnown: false,
+  detectionError: null,
   isReady: false,
   modelDiscoveryErrors: {},
   skills: [],
@@ -467,9 +470,13 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
     case 'setConfiguredProviders':
       return { ...state, configuredProviders: action.providers ?? [], isReady: true };
 
+    case 'agentDetection':
+      return { ...state, detectionError: action.state === 'failed' ? (action.error || 'unknown error') : null };
+
     case 'setPlannerBackends':
       return {
         ...state,
+        detectionError: null,
         plannerKnown: true,
         planner: {
           backends: action.backends ?? [],
@@ -489,6 +496,7 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
         runnerList: list.map((r: RunnerMeta) => ({ id: r.id, displayName: r.displayName })),
         enabledRunnerIds: list.filter((r: RunnerMeta) => r.enabled).map((r: RunnerMeta) => r.id),
         runnersKnown: true,
+        detectionError: null,
       };
     }
 

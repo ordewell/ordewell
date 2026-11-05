@@ -108,6 +108,15 @@ describe('a change inside workspaces', () => {
     assert.deepEqual(selected('packages/desktop/electron-builder.yml').workspaces, [DESKTOP]);
   });
 
+  it('keeps the packaging scripts to desktop, with the bench step that holds their tests', () => {
+    for (const path of ['packages/desktop/scripts/package.mjs', 'packages/desktop/scripts/esigner-sign.mjs']) {
+      const scope = selected(path);
+      assert.deepEqual(scope.workspaces, [DESKTOP], path);
+      assert.equal(scope.checks.packages, true, path);
+      assert.ok(STEPS_BY_CHECK.packages.includes('bench'));
+    }
+  });
+
   it('unions what several changes need, docs among them', () => {
     const scope = selected('docs/containers.md', 'packages/vscode/src/extension.ts', 'packages/web/server/main.ts');
     assert.equal(scope.mode, 'selected');
@@ -117,7 +126,7 @@ describe('a change inside workspaces', () => {
 
 describe('a change to docs alone', () => {
   it('needs no workspace, and still owes the checks every change owes', () => {
-    const scope = selected('docs/adr/README.md', 'CHANGELOG.md', 'AGENTS.md');
+    const scope = selected('docs/adr/README.md', 'docs/desktop/README.md', 'CHANGELOG.md', 'AGENTS.md');
     assert.equal(scope.mode, 'docs');
     assert.deepEqual(scope.workspaces, []);
     assert.deepEqual(offChecks(scope).length, Object.keys(scope.checks).length);
@@ -137,9 +146,19 @@ describe('the full fallback', () => {
     ['.gitignore', 'read by worktreeLinksIgnored'],
     ['.nvmrc', 'the Node in use'],
     ['.github/workflows/ci.yml', 'this workflow'],
+    ['.github/workflows/release.yml', 'the release'],
+    ['.github/workflows/desktop-build.yml', 'the desktop build: ci.yml cannot judge it, so the full run does'],
     ['.github/workflows/verify-release-tag.mjs', 'the release'],
     ['scripts/change-scope.mjs', 'selection itself'],
     ['scripts/verify-skills.mjs', 'a verify script'],
+    ['scripts/install/desktop.sh', 'the one-line installer, tested by the bench step'],
+    ['scripts/install/desktop.ps1', 'the Windows one-line installer'],
+    ['scripts/install/desktop.test.mjs', 'the installers\' tests'],
+    ['scripts/desktop-release-assets.mjs', 'writes the fixed-name assets and SHA256SUMS the installers read'],
+    ['scripts/render-package-manifests.mjs', 'renders the Homebrew cask and winget manifests from a release'],
+    ['scripts/render-package-manifests.test.mjs', 'the package-manager manifests\' tests'],
+    ['packaging/homebrew/ordewell.rb.tmpl', 'the Homebrew cask template'],
+    ['packaging/winget/Ordewell.Ordewell.installer.yaml.tmpl', 'the winget manifest templates'],
     ['bench/pipeline/fake-claude/fake-claude.mjs', 'read by core e2e tests'],
     ['bench/containers/verdict.mjs', 'the real engine verdict'],
     ['assets/logo.png', 'unknown'],
@@ -356,11 +375,12 @@ describe('the steps a run owes', () => {
     assert.deepEqual(missedSteps(scope, ran(scope)), []);
   });
 
-  it('owes the app\'s drive for a desktop change', () => {
+  it('owes the app\'s drive and its visual tour for a desktop change', () => {
     const scope = selected('packages/desktop/src/renderer/views/task/TaskTab.tsx');
     const steps = ran(scope);
     delete steps['desktop-e2e'];
-    assert.deepEqual(missedSteps(scope, steps), ['desktop-e2e: did not run']);
+    delete steps['desktop-tour'];
+    assert.deepEqual(missedSteps(scope, steps), ['desktop-e2e: did not run', 'desktop-tour: did not run']);
   });
 
   it('names a required step that was skipped', () => {
@@ -630,6 +650,16 @@ describe('ci.yml', () => {
     assert.match(gate, /needs: \[scope, build-and-test, real-engine\]/);
     assert.match(gate, /toJSON\(needs\)/);
     assert.match(gate, /node scripts\/ci-scope\.mjs gate/);
+  });
+
+  it('runs the visual tour strict, beside the app e2e, and uploads its report when it fails', () => {
+    const tour = stepOf('desktop-tour');
+    assert.match(tour, /TOUR_STRICT: '1'/);
+    assert.match(tour, /xvfb-run -a npm run desktop:tour/);
+    const report = workflow.match(/^ {6}- name: Upload the desktop tour report\n([\s\S]*?)(?=^ {6}- name: )/m);
+    assert.ok(report, 'no tour report upload');
+    assert.match(report[0], /failure\(\)/);
+    assert.match(report[0], /path: packages\/desktop\/test-results\/tour/);
   });
 
   it('reads two commits, so a pull request\'s merge has its parents', () => {

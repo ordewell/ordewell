@@ -1,5 +1,14 @@
 import { defineConfig } from 'tsup';
 
+/**
+ * The update gate as main's bundle holds it. scripts/package.mjs sets
+ * ORDEWELL_DESKTOP_AUTO_UPDATE from its signing plan (ADR-0060 H9); any other
+ * build (`npm run build`, `npm run dev`) has it off.
+ */
+export function autoUpdateDefine(env: NodeJS.ProcessEnv): Record<string, string> {
+  return { __ORDEWELL_AUTO_UPDATE__: env.ORDEWELL_DESKTOP_AUTO_UPDATE === 'on' ? 'true' : 'false' };
+}
+
 export default defineConfig({
   entry: { 'main/index': 'src/main/index.ts', 'preload/index': 'src/preload/index.ts' },
   outDir: 'dist',
@@ -15,6 +24,7 @@ export default defineConfig({
   // node_modules hold only the daemon's closure, electron-updater (which reads
   // its own package metadata at run time) and node-pty (a native addon).
   noExternal: [/^(?!electron$|electron-updater$|node-pty$|@ordewell\/web)/],
+  define: autoUpdateDefine(process.env),
   clean: false,
   splitting: false,
   sourcemap: true,

@@ -2,7 +2,8 @@ import { Hono } from 'hono';
 import { OrchestratorPool, getSessionList, removeSession } from '../pool/orchestratorPool';
 import {
   listTaskLogAttempts,
-  loadSessionPlanState,
+  loadSession,
+  migratePlanState,
   readTaskLog,
   surfacePlan,
   surfacePlanState,
@@ -35,14 +36,19 @@ export function sessionsRoute(pool: OrchestratorPool) {
   router.get('/:id', (c) => {
     const ws = c.req.query('workspace') || process.cwd();
     const id = c.req.param('id');
-    const saved = loadSessionPlanState(id, ws);
+    const saved = loadSession(id, ws);
     if (!saved) return refuse(c, 404, 'Session not found', 'session_not_found');
     const run = pool.runSnapshot(id);
+    const plannerTurnId = pool.plannerTurnId(id);
     const plannerCompaction = pool.plannerCompaction(id);
+    // The phase-tagged plan keeps no transcript: a client that joins or only reads the session redraws its chat from this.
+    const { conversationHistory, researchLog, plannerUsage, pendingTurns } = surfacePlan(pool.getPlan(id) ?? saved.plan);
     return c.json({
       meta: saved.meta,
-      plan: surfacePlanState(pool.getPlanState(id) ?? saved.plan),
+      plan: surfacePlanState(pool.getPlanState(id) ?? migratePlanState(saved.plan)),
+      conversation: { conversationHistory, researchLog, plannerUsage, pendingTurns },
       ...(run ? { run } : {}),
+      ...(plannerTurnId ? { plannerTurnId } : {}),
       ...(plannerCompaction ? { plannerCompaction } : {}),
     } satisfies SessionResponse);
   });

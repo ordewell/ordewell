@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildRequest, childStreamPath, isRouteId, ROUTES, segmentError, sessionStreamPath } from '../routes';
+import { buildRequest, childStreamPath, isRouteId, liveSessionOf, ROUTES, segmentError, sessionStreamPath } from '../routes';
 
 function refused(result: ReturnType<typeof buildRequest>): string {
   if (result.ok) throw new Error(`expected a refusal, got ${JSON.stringify(result.request)}`);
@@ -121,6 +121,32 @@ describe('buildRequest: the IPC allowlist', () => {
   it('never lets a param name a header or method', () => {
     expect(refused(buildRequest('sessions.list', { workspace: '/w', method: 'DELETE' }))).toContain('unknown param method');
     expect(refused(buildRequest('sessions.list', { workspace: '/w', Authorization: 'x' }))).toContain('unknown param Authorization');
+  });
+});
+
+// A joined session's live host is another daemon (ADR-0060 H8): what it runs
+// goes there, and what the app's own daemon serves stays here.
+describe('liveSessionOf', () => {
+  it('names the session of a call its live host must answer', () => {
+    expect(liveSessionOf('plans.converseMessage', { sessionId: 's1' })).toBe('s1');
+    expect(liveSessionOf('approvals.decide', { sessionId: 's1', approvalId: 'a1' })).toBe('s1');
+    expect(liveSessionOf('sessions.get', { id: 's1', workspace: '/w' })).toBe('s1');
+    expect(liveSessionOf('sessions.taskLog', { id: 's1', taskId: 't1', workspace: '/w' })).toBe('s1');
+    expect(liveSessionOf('children.get', { id: 's1', childId: 'c1' })).toBe('s1');
+  });
+
+  it('names none for what opens, closes or deletes a session here, or reads the checkout', () => {
+    expect(liveSessionOf('sessions.load', { id: 's1', workspace: '/w' })).toBeUndefined();
+    expect(liveSessionOf('sessions.close', { id: 's1', workspace: '/w' })).toBeUndefined();
+    expect(liveSessionOf('sessions.delete', { id: 's1', workspace: '/w' })).toBeUndefined();
+    expect(liveSessionOf('files.tree', { workspace: '/w', sessionId: 's1', scope: 'checkout' })).toBeUndefined();
+    expect(liveSessionOf('git.status', { workspace: '/w' })).toBeUndefined();
+    expect(liveSessionOf('settings.get', { workspace: '/w', sessionId: 's1' })).toBeUndefined();
+  });
+
+  it('names none for a route it does not know or params that are not an object', () => {
+    expect(liveSessionOf('nope', { sessionId: 's1' })).toBeUndefined();
+    expect(liveSessionOf('plans.execute', 's1')).toBeUndefined();
   });
 });
 

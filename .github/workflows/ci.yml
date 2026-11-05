@@ -202,6 +202,24 @@ jobs:
             packages/desktop/playwright-report
           if-no-files-found: ignore
 
+      # The same offline run, walked for screenshots and layout checks in both
+      # themes at three sizes. TOUR_STRICT makes a failing layout check fail the
+      # step, as it does for a local `TOUR_STRICT=1 npm run desktop:tour`.
+      - name: Desktop app — visual tour and layout checks
+        id: desktop-tour
+        if: needs.scope.outputs.desktop != 'false'
+        env:
+          TOUR_STRICT: '1'
+        run: xvfb-run -a npm run desktop:tour
+
+      - name: Upload the desktop tour report
+        if: ${{ failure() && needs.scope.outputs.desktop != 'false' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-tour-report
+          path: packages/desktop/test-results/tour
+          if-no-files-found: ignore
+
       - name: Typecheck
         id: typecheck
         if: needs.scope.outputs.packages != 'false'

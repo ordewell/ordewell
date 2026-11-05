@@ -15,6 +15,6 @@ const PEEK_LINES = 6;
 export function peekOf(node: GraphNode, output: string | undefined): Peek {
   const tail = (output ?? '').split('\n').map((l) => l.trimEnd()).filter((l) => l.trim() !== '').slice(-PEEK_LINES);
   if (tail.length > 0) return { heading: node.statusLine, lines: tail };
-  const lines = [node.assignment, node.fold?.summary, node.description].filter((l): l is string => !!l);
+  const lines = [node.fold?.summary, node.description].filter((l): l is string => !!l);
   return { heading: node.statusLine, lines };
 }

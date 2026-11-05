@@ -29,3 +29,5 @@ export {
 export { augmentedPath, withPath } from './utils/shellPath';
 export { globalDataDir } from './utils/globalDataDir';
 export { compareVersions } from './utils/version';
+export { readLiveHolder, LEASE_STALE_MS } from './utils/leaseRecord';
+export type { LeaseHostKind, SessionLeaseRecord, LiveHolderProbes } from './utils/leaseRecord';

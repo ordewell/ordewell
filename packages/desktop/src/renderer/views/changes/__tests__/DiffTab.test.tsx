@@ -17,7 +17,6 @@ import { HANDOFF, runTask, runView, worktree } from './fixtures';
 vi.mock('../../../monaco', async () => (await import('../../../test/monacoMock')).fakeMonacoModule());
 
 const WORKSPACE = '/work/acme';
-const SIZES = { sidebar: 260, right: 360, bottom: 240 };
 const CONNECTED: DaemonStatus = { state: 'connected', port: 3700, owned: true, daemon: { version: '0.12.3', contract: 1 } };
 
 const TASKS = [
@@ -60,7 +59,7 @@ async function mount(): Promise<{ daemon: ReturnType<typeof fakeDaemon>; host: D
   await act(async () => {
     daemon.push('s1', { type: 'connected', sessionId: 's1' }, { type: 'run_snapshot', sessionId: 's1', view: runView(TASKS, HANDOFF), stream: 'd1', seq: 0 });
   });
-  store = new FrameStore({ workspace: WORKSPACE, platform: 'linux', sizes: SIZES });
+  store = new FrameStore({ workspace: WORKSPACE, platform: 'linux' });
   offs.push(registerFrameCommands(store), register(store.api));
   render(<FrameProvider value={store}><Frame daemon={CONNECTED} /></FrameProvider>);
   return { daemon, host };
@@ -79,7 +78,7 @@ function select(startLine: number, endLine: number, text: string): void {
 describe('a diff tab', () => {
   it('draws the file\'s two sides and names the scope, repo and base it reads', async () => {
     const { host } = await mount();
-    const openTask = vi.spyOn(host, 'openTask');
+    const reveal = vi.spyOn(host, 'revealTask');
     await openDiff('t3');
     const editor = diffEditors[0]!;
     expect(editor.options.original.text).toBe('export function login() {\n  return null;\n}\n');
@@ -89,7 +88,7 @@ describe('a diff tab', () => {
     expect(panel.getByText('the workspace')).toBeInTheDocument();
     expect(panel.getByText('base main')).toBeInTheDocument();
     fireEvent.click(panel.getByRole('button', { name: 'Task #3 worktree' }));
-    expect(openTask).toHaveBeenCalledWith('t3', 'details');
+    expect(reveal).toHaveBeenCalledWith('t3');
 
     fireEvent.click(panel.getByRole('button', { name: 'Unified' }));
     expect(editor.setSideBySide).toHaveBeenLastCalledWith(false);
@@ -151,6 +150,9 @@ describe('a diff tab', () => {
 
     expect(askPlanner).toHaveBeenCalledWith('On src/sso.ts, lines 1–2 of task #1\'s change:\n> export function login() {\n>   return okta();\n\nAdd a test for this.');
     expect(daemon.calls('plans.executeCommand')).toEqual([]);
+    // The composer it went to comes to the front; the diff keeps the note for when the user is back.
+    expect(screen.getByRole('tab', { name: /Planner/ })).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(screen.getByRole('tab', { name: /sso\.ts/ }));
     expect(await screen.findByRole('note', { name: 'Comment on src/sso.ts, lines 1–2' })).toHaveTextContent('Put in the planner’s composer');
   });
 

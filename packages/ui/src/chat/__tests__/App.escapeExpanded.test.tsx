@@ -59,6 +59,16 @@ describe('Esc with a task card expanded', () => {
     expect(posted()).toEqual([]);
   });
 
+  it('leaves the card open for an Esc pressed in another layer of the host', () => {
+    const layer = document.body.appendChild(document.createElement('input'));
+    try {
+      fireEvent.keyDown(layer, { key: 'Escape' });
+      expect(expandedCards()).toBe(1);
+    } finally {
+      layer.remove();
+    }
+  });
+
   it('collapses from a card header outside a turn, keeping the input text', () => {
     type('draft');
 
@@ -70,6 +80,7 @@ describe('Esc with a task card expanded', () => {
 
   it('leaves the card open when Esc cancels its prompt editor', () => {
     post({ type: 'plannerTurn', active: true });
+    fireEvent.click(document.querySelector('.task-fold-prompt .task-fold-head') as HTMLElement);
     fireEvent.click(document.querySelector('.task-prompt-editable') as HTMLElement);
     const editor = document.querySelector('.task-prompt-textarea') as HTMLTextAreaElement;
     expect(editor).not.toBeNull();

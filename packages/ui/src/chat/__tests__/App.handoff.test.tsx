@@ -12,6 +12,9 @@ const handoff: HandoffDigest = {
   artifacts: [{ kind: 'file', path: 'docs/review.md' }],
 };
 
+// An open card folds its handoff to one line; the digest shows once that fold opens.
+const unfoldHandoff = (): void => { fireEvent.click(screen.getByRole('button', { name: /^Handoff/ })); };
+
 function update(runTask: RunTask): void {
   post({ type: 'runView', view: { tasks: [runTask], runMerge: null, handoff: null, mergeResult: null } });
 }
@@ -30,6 +33,9 @@ describe('task handoffs in the plan dock (ADR-0047)', () => {
     expect(document.querySelector('.task-handoff-peek')).toBeNull();
     expect(document.body).not.toHaveTextContent('Keep the token scoped.');
     fireEvent.click(screen.getByText('Review boundary'));
+    expect(document.querySelector('.task-handoff')).toBeNull();
+    expect(screen.getByRole('button', { name: /^Handoff/ })).toHaveTextContent('Keep the token scoped. · 28 findings');
+    unfoldHandoff();
     expect(document.querySelector('.task-handoff-peek')).toBeNull();
     expect(screen.getByText(/Keep the token scoped\./)).toBeTruthy();
     expect(screen.getByText('F1 · Blocker · Sibling read')).toBeTruthy();
@@ -40,7 +46,7 @@ describe('task handoffs in the plan dock (ADR-0047)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Read full handoff' }));
     expect(api.post).toHaveBeenCalledWith({ type: 'openTaskLog', taskId: 't1' });
     update({ ...task, status: 'in_progress', handoff: undefined });
-    expect(document.querySelector('.task-handoff')).toBeNull();
+    expect(document.querySelector('.task-fold-handoff')).toBeNull();
     fireEvent.click(screen.getByText('Review boundary'));
     expect(document.body).not.toHaveTextContent('Keep the token scoped.');
   });
@@ -57,6 +63,7 @@ describe('task handoffs in the plan dock (ADR-0047)', () => {
     update({ ...task, handoff: { ...handoff, commit: { subject: 'Scope the token', body: 'Reads stay in the tenant.' } } });
     expect(document.querySelector('.task-handoff-peek')).toBeNull();
     fireEvent.click(screen.getByText('Review boundary'));
+    unfoldHandoff();
     const section = document.querySelector('.task-handoff')!;
     expect(section.querySelector('.task-handoff-commit')).toHaveTextContent('Commit: Scope the token Reads stay in the tenant.');
     expect(section.querySelector('.task-handoff-commit')!.compareDocumentPosition(section.querySelector('.task-handoff-summary')!))
@@ -65,6 +72,7 @@ describe('task handoffs in the plan dock (ADR-0047)', () => {
     update({ ...task, handoff: { summary: '', findings: [], findingCount: 0, commit: { subject: 'Only a commit' } } });
     expect(document.querySelector('.task-handoff-peek')).toBeNull();
     fireEvent.click(screen.getByText('Review boundary'));
+    unfoldHandoff();
     expect(document.querySelector('.task-handoff-commit-subject')).toHaveTextContent('Commit: Only a commit');
     expect(document.querySelector('.task-handoff-summary')).toBeNull();
   });
@@ -77,6 +85,7 @@ describe('task handoffs in the plan dock (ADR-0047)', () => {
     expect(document.querySelector('.task-handoff-peek')).toBeNull();
     expect(document.body).not.toHaveTextContent('Finished');
     fireEvent.click(screen.getByText('Review boundary'));
+    unfoldHandoff();
     expect(screen.getByText('Handoff · no findings')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Read full handoff' }));
     expect(api.post).toHaveBeenCalledWith({ type: 'openTaskLog', taskId: 't1' });
@@ -90,6 +99,7 @@ describe('task handoffs in the plan dock (ADR-0047)', () => {
     expect(document.querySelector('.task-handoff-peek')).toBeNull();
     expect(document.body).not.toHaveTextContent('Finished');
     fireEvent.click(screen.getByText('Review boundary'));
+    unfoldHandoff();
     expect(screen.getByText('Handoff · no findings')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Read full handoff' })).toBeNull();
   });
@@ -105,6 +115,7 @@ describe('task handoffs in the plan dock (ADR-0047)', () => {
     expect(document.querySelector('.task-handoff-peek')).toBeNull();
     expect(document.body).not.toHaveTextContent('Tried it.');
     fireEvent.click(screen.getByText('Review boundary'));
+    unfoldHandoff();
     const block = document.querySelector('.task-handoff-patch')!;
     expect(block).toHaveTextContent('Patch · 2 files, +9 -1, 900 B');
     expect(block).toHaveTextContent('saved as .ordewell/sessions/s1/tasks/t1/1.patch (attempt 1)');

@@ -33,7 +33,7 @@ export const THEME_NAME = 'ordewell';
 
 export function buildTheme(read: (token: string) => string, dark: boolean): MonacoThemeData {
   const token = (name: string, fallback: string): string => hex(read(`--ow-${name}`)) ?? fallback;
-  const bg = token('bg', dark ? '#1b1d21' : '#ffffff');
+  const bg = token('bg', dark ? '#1c1f23' : '#ffffff');
   const fg = token('fg', dark ? '#e6e8eb' : '#1a1c1f');
   const muted = token('fg-secondary', fg);
   const placeholder = token('fg-placeholder', muted);
@@ -67,8 +67,15 @@ export function buildTheme(read: (token: string) => string, dark: boolean): Mona
     'diffEditor.removedLineBackground': token('diff-removed', bg),
     'diffEditor.insertedTextBackground': token('diff-inserted-word', bg),
     'diffEditor.removedTextBackground': token('diff-removed-word', bg),
-    'editorError.foreground': token('status-error', fg),
-    'editorWarning.foreground': token('status-warning', fg),
+    // The statuses by their own tokens: `status-error` and `status-warning` are aliases a theme may leave to resolve late.
+    'editorError.foreground': token('status-failed', fg),
+    'editorWarning.foreground': token('status-attention', fg),
+    'editorGutter.background': bg,
+    'diffEditor.border': token('border', muted),
+    'diffEditor.diagonalFill': token('border', muted),
+    'diffEditorGutter.insertedLineBackground': token('diff-inserted-word', bg),
+    'diffEditorGutter.removedLineBackground': token('diff-removed-word', bg),
+    'editorOverviewRuler.border': bg,
   };
   return { base: dark ? 'vs-dark' : 'vs', inherit: true, rules: [], colors };
 }

@@ -1,12 +1,15 @@
 import type { MenuItemConstructorOptions } from 'electron';
+import type { MenuCommand } from '../shared/bridge';
 
 /**
  * The application menu. Electron's default one closes the window on Cmd/Ctrl+W
  * and reloads it on Cmd/Ctrl+R, and a menu accelerator fires before the page
  * sees the key: the frame's Close tab would close the window instead. So every
  * submenu is spelled out here, and Close Window moves to Shift+W, as editors do.
+ * An item of the frame's own, such as Reset Layout, goes to the focused window
+ * through `command`, which runs it there as the palette would.
  */
-export function menuTemplate(platform: NodeJS.Platform, dev: boolean, appName: string): MenuItemConstructorOptions[] {
+export function menuTemplate(platform: NodeJS.Platform, dev: boolean, appName: string, command: (id: MenuCommand) => void): MenuItemConstructorOptions[] {
   const mac = platform === 'darwin';
   const separator: MenuItemConstructorOptions = { type: 'separator' };
   const app: MenuItemConstructorOptions[] = mac
@@ -41,7 +44,8 @@ export function menuTemplate(platform: NodeJS.Platform, dev: boolean, appName: s
       submenu: [
         ...(dev ? [{ role: 'reload' } as const, { role: 'toggleDevTools' } as const, separator] : []),
         { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, separator,
-        { role: 'togglefullscreen' },
+        { role: 'togglefullscreen' }, separator,
+        { label: 'Reset Layout', click: () => command('layout.reset') },
       ],
     },
     {

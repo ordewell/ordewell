@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { RunnerInstallation } from '../RunnerInstallation';
+import { RunnerInstallation, parseCliVersion } from '../RunnerInstallation';
 import type { ExecImpl } from '../ModelDiscovery';
 import type { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { CLAUDE_CODE_MANIFEST } from '../../plugins/builtin/claude-code.manifest';
@@ -69,6 +69,15 @@ describe('RunnerInstallation', () => {
   });
 });
 
+describe('parseCliVersion', () => {
+  it('reads the first dotted number of what a CLI prints', () => {
+    expect(parseCliVersion('1.4.2 (Claude Code)\n')).toBe('1.4.2');
+    expect(parseCliVersion('codex-cli 0.9.1')).toBe('0.9.1');
+    expect(parseCliVersion('opencode v0.15.0-beta.2')).toBe('0.15.0-beta.2');
+    expect(parseCliVersion('ok')).toBeUndefined();
+  });
+});
+
 describe('RunnerInstallation.plannerUsability (ADR-0009 preflight)', () => {
   it('reports a planner-capable runner whose CLI answers as usable', async () => {
     const exec: ExecImpl = vi.fn(async () => ({ stdout: '2.0.0' }));
@@ -78,7 +87,16 @@ describe('RunnerInstallation.plannerUsability (ADR-0009 preflight)', () => {
     expect(await inst.plannerUsability('claude-code')).toEqual({
       usable: true,
       auth: { state: 'signed-in', loginCommand: ['claude', 'auth', 'login'] },
+      version: '2.0.0',
     });
+  });
+
+  it('leaves the version out when `--version` printed no number', async () => {
+    const exec: ExecImpl = vi.fn(async () => ({ stdout: 'ok' }));
+    const authExec: RunnerAuthExec = vi.fn(async () => ({ code: 0, stdout: '{}', stderr: '' }));
+    const inst = new RunnerInstallation(registryWith(CLAUDE_CODE_MANIFEST), exec, Date.now, { authExec });
+
+    expect(await inst.plannerUsability('claude-code')).not.toHaveProperty('version');
   });
 
   it('names the missing binary so the picker can say why an agent is greyed out', async () => {

@@ -1,7 +1,9 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { taskCommand, useRunnerCommands, useTaskCommands } from './RunnerCommands';
 import SubTaskCard from './SubTaskCard';
-import TaskAssignment, { TaskAssignmentReadout } from './TaskAssignment';
+import { TaskAssignmentReadout } from './TaskAssignment';
+import TaskSummary, { TaskSummaryBadges } from './TaskSummary';
+import type { StatusLook } from '../../design/status';
 import ModelSelector from './ModelSelector';
 import DependencyPicker from './DependencyPicker';
 import SkillChips from './SkillChips';
@@ -11,7 +13,7 @@ import { lastLine } from '../taskOutput';
 import { useDelegationOffered } from '../delegationOffered';
 import { checkLabel, verdictSummary } from '../checkLabel';
 import { useFollowOutput } from '../followOutput';
-import { blockedByLabel, dependencyCandidates, capConflictFiles, cardEditable, holdLabel, loopRowParts, pausedOnLimit, scriptTaskText, skippedLabel, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
+import { blockedByLabel, dependencyCandidates, capConflictFiles, cardEditable, handoffFindingsText, holdLabel, pausedOnLimit, scriptTaskText, skippedLabel, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, RunTask, TaskRowAction, TaskRowView, TaskStatusKind, AssignmentScope } from '@ordewell/core';
 
 export interface RunnerMode {
@@ -22,6 +24,10 @@ export interface RunnerMode {
   autonomous?: boolean;
   /** Why this host cannot run the mode; the option is listed, not selectable. */
   unavailable?: string;
+}
+
+function modeText(mode: RunnerMode | undefined): string | undefined {
+  return mode && `${mode.label}: ${mode.unavailable ?? mode.description}`;
 }
 
 export interface RunnerOption {
@@ -105,6 +111,14 @@ interface TaskCardProps {
    *  open (an accordion); omitted, the card keeps its own state. */
   expanded?: boolean;
   onExpandedChange?: (expanded: boolean) => void;
+  /**
+   * A row is the plan panel's (docs/desktop/design.md, W4): collapsed, only
+   * the three-line summary, its attention actions on the status line; open,
+   * the same editors and actions as a card.
+   */
+  variant?: 'card' | 'row';
+  /** The status a row draws, where the host knows more than the task: a passed task whose work is not merged waits for merge. */
+  status?: StatusLook;
 }
 
 const STATUS_BADGE: Record<TaskStatusKind, { label: string; cls: string }> = {
@@ -127,20 +141,6 @@ export function statusBadge(row: Pick<TaskRowView, 'status' | 'awaiting' | 'rece
   if (row.attaching) return { ...badge, label: row.attaching };
   if (row.holdReason) return { ...badge, label: holdLabel(row.holdReason) };
   return { ...badge, label: row.blockedBy ? blockedByLabel(row.blockedBy) : badge.label };
-}
-
-/**
- * A loop's check says its round, and each body task which check it runs for
- * (ADR-0045); what the loop waits for or stopped at is in the hover.
- */
-function LoopBadge({ loop }: { loop: TaskRowView['loop'] }) {
-  if (!loop) return null;
-  const text = loop.role === 'body' ? loop.label : loop.state === 'waiting' || loop.state === 'ended' ? loop.label : `Loop · ${loop.label}`;
-  return (
-    <span className={`task-isolation-badge loop ${loop.role === 'check' ? loop.state : 'body'}`} title={loopRowParts(loop).join('. ')}>
-      {text}
-    </span>
-  );
 }
 
 /** A skip or block reason can run to a sentence: it is cut to the row it
@@ -170,37 +170,6 @@ export function StatusBadge({ status }: { status: { label: string; cls: string }
         })}>
         {status.label}
       </span>
-    </span>
-  );
-}
-
-const CHECK_STATE: Record<TaskStatusKind, 'done' | 'running' | 'stalled' | 'failed' | 'skipped' | 'todo'> = {
-  done: 'done', running: 'running', quiet: 'stalled', todo: 'todo', awaiting: 'todo', blocked: 'todo', failed: 'failed', skipped: 'skipped',
-};
-
-/** Minimal to-do / done indicator: empty ring → sweeping ring → filled check.
- *  It only reports the task's status. Completion is changed deliberately, from
- *  Mark complete / Mark not done at the bottom of the expanded details. */
-export function TaskCheck({ row }: { row: Pick<TaskRowView, 'status'> }) {
-  const state = CHECK_STATE[row.status];
-  const title = state === 'done'
-    ? 'Executed'
-    : state === 'running'
-      ? 'Running'
-      : state === 'stalled'
-        ? 'Stalled: no output recently'
-        : state === 'skipped'
-          ? 'Skipped: nothing of it landed'
-          : state === 'failed'
-            ? 'Failed'
-            : 'To do';
-  return (
-    <span className={`task-check ${state}`} role="img" aria-label={title} title={title}>
-      {state === 'done' && (
-        <svg viewBox="0 0 16 16" aria-hidden="true">
-          <path d="M4.2 8.6l2.4 2.4 5.2-5.6" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      )}
     </span>
   );
 }
@@ -269,55 +238,6 @@ const ACTION_CLASS: Record<TaskRowAction, string> = {
 const ACTION_LABELS: Record<TaskRowAction, string> = {
   cancel: 'Cancel', 'resume-now': 'Resume Now', 'cancel-resume': 'Don\'t Resume', skip: 'Skip', 'force-start': 'Start', complete: 'Mark Complete', uncomplete: 'Mark Not Done',
 };
-
-/** The cue to move a task off a runner or model the user has since moved away from; core words what it means for the task as it stands. */
-export function AssignmentFlag({ row }: { row: Pick<TaskRowView, 'assignmentFlag' | 'assignmentConsequence'> }) {
-  if (!row.assignmentFlag || !row.assignmentConsequence) return null;
-  const consequence = row.assignmentConsequence;
-  return (
-    <span className="task-isolation-badge gate"
-      title={`${consequence[0].toUpperCase()}${consequence.slice(1)}. Change its runner or model to move it, or ask the planner to.`}>
-      {row.assignmentFlag}
-    </span>
-  );
-}
-
-/** What holds a task back or runs on its isolated work, on the collapsed card: a merge gate, a stopped integration, a conflict repair. */
-export function IsolationBadges({ row }: { row: Pick<TaskRowView, 'mergeGate' | 'conflict' | 'repairing' | 'repairWaiting'> }) {
-  return (
-    <>
-      {row.mergeGate && (
-        <span className="task-isolation-badge gate"
-          title={`The work of ${row.mergeGate.join(', ')} is not merged into your branch yet. Merge all lets this task go on.`}>
-          Waits for Merge all
-        </span>
-      )}
-
-      {/* A stopped integration is not a hidden failure (US33) — visible on the
-          collapsed card, since it is the one isolation state that needs a
-          decision, not just inspection. */}
-      {row.conflict && (
-        <span className="task-isolation-badge conflict" title={`Integrating this task conflicted${row.conflict.repo ? ` in ${row.conflict.repo}` : ''}${row.conflict.files ? `: ${row.conflict.files}` : ''}. Its worktree and branch are kept.${row.conflict.resolver ? ` Task ${row.conflict.resolver} is resolving it.` : ''}`}>
-          Conflict{row.conflict.repo ? ` in ${row.conflict.repo}` : ''}
-        </span>
-      )}
-
-      {/* It starts by itself, so it reads as progress; Cancel withdraws it (ADR-0015). */}
-      {row.repairWaiting && (
-        <span className="task-isolation-badge repairing" title={`It repairs its conflict in its own worktree${row.repairWaiting.files ? `: ${row.repairWaiting.files}` : ''}. Cancel withdraws the repair, and the conflict waits for you.`}>
-          {row.repairWaiting.label}
-        </span>
-      )}
-
-      {/* Still running, so it reads as progress, not a blocker like a conflict (ADR-0015). */}
-      {row.repairing && (
-        <span className="task-isolation-badge repairing" title={`Repairing the conflict in its own worktree${row.repairing.files ? `: ${row.repairing.files}` : ''}.`}>
-          Repairing{row.repairing.attempt ? ` (${row.repairing.attempt.attempt} of ${row.repairing.attempt.limit})` : ''}
-        </span>
-      )}
-    </>
-  );
-}
 
 /**
  * The header's controls for a task paused on a usage limit (#84), shown
@@ -431,8 +351,9 @@ export function TaskMessageBox({ taskId, onSend, onSendNow, working = false, res
     <div className="task-message-box" onClick={(e) => e.stopPropagation()}>
       {completion.palette}
       {error && <span className="task-command-error" role="alert">{error}</span>}
+      {/* One row in a card as narrow as the plan panel: the key lives on the button's title, so the placeholder fits. */}
       <textarea className="task-message-input" value={text} rows={1}
-        placeholder={resumes ? 'The limit has reset? A message to resume it with… (Enter to resume)' : 'Message the task… (Enter to send)'}
+        placeholder={resumes ? 'A message to resume it with…' : 'Message the task…'}
         onChange={(e) => completion.change(e.target.value)} onKeyDown={onKeyDown} />
       <button type="button" className="task-message-send" disabled={!canSend} onClick={send}
         title={queues ? QUEUE_TITLE : `${resumes ? 'Resume' : 'Send'} (Enter)`}>
@@ -454,13 +375,70 @@ const DEFAULT_MODES: RunnerMode[] = [
  * model discovery didn't see): a select that dropped it would fall back to
  * displaying some other runner and misreport what the task will be spawned on.
  */
+/** The first line with words on it: a prompt or summary often opens on a blank one. */
+function firstLine(text: string): string {
+  return text.split(/\r?\n/).map((line) => line.trim()).find((line) => line !== '') ?? '';
+}
+
+/**
+ * A long part of an open card, folded to its name and one line of it so the
+ * card stays a summary until the reader asks for more. It starts folded each
+ * time the card opens, since the fold unmounts with the card's body.
+ */
+function TaskFold({ label, preview, className, children }: {
+  label: string;
+  preview: string;
+  className: string;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={`task-fold ${className}${open ? ' open' : ''}`}>
+      <button type="button" className="task-fold-head" aria-expanded={open} title={preview}
+        onClick={(e) => { e.stopPropagation(); setOpen(!open); }}>
+        <span className="task-fold-chevron" aria-hidden="true">{open ? '\u25BE' : '\u25B8'}</span>
+        <span className="task-fold-label">{label}</span>
+        {!open && preview && <span className="task-fold-preview">{preview}</span>}
+      </button>
+      {open && <div className="task-fold-body">{children}</div>}
+    </div>
+  );
+}
+
 export function runnerOptionsFor(runners: RunnerOption[] | undefined, assignedRunner: string): RunnerOption[] {
   if (!runners || runners.length === 0) return [];
   if (runners.some((r) => r.id === assignedRunner)) return runners;
   return [...runners, { id: assignedRunner, displayName: assignedRunner }];
 }
 
-export default function TaskCard({ task, run, runsByTask, models, modes, modelsByRunner, modesByRunner, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, runActive, output, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRevert, onRunTask, onSendMessage, onSendMessageNow, onOpenLog, onOpenChild, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
+/**
+ * A task's row as its card draws it: the plan's task with the run's word on
+ * everything status-only. Exported so a list's header counts each task by the
+ * same reading its row shows.
+ */
+export function cardRowView(task: Task, run: TaskCardRun | undefined, context: { tasks?: Task[]; modes?: RunnerMode[]; runnerScope?: AssignmentScope }): TaskRowView {
+  // The run's verdict and round are the newer word on a loop's check: they say whether it is between rounds (ADR-0045).
+  return taskRowView({
+    ...task,
+    handoff: run ? run.handoff : task.handoff,
+    idleSince: run?.idleSince ?? null,
+    completionReceived: run?.completionReceived,
+    attaching: run?.attaching,
+    awaitingApproval: run?.awaitingApproval ?? 0,
+    isolation: run?.isolation ?? null,
+    mergeGate: run?.mergeGate,
+    holdReason: run?.holdReason,
+    loopStranded: run?.loopStranded === true,
+    continuable: run?.continuable === true,
+    waitsForApproval: run?.waitsForApproval === true,
+    attempted: run?.attempted ?? task.attempted,
+    ...(run?.attemptUsage ? { attemptUsage: run.attemptUsage } : {}),
+    ...(run?.delegation ? { delegation: run.delegation } : {}),
+    ...(run ? { verdict: run.verdict ?? task.verdict, loopRound: run.loopRound } : {}),
+  }, { tasks: context.tasks, modes: context.modes ?? DEFAULT_MODES, runnerScope: context.runnerScope });
+}
+
+export default function TaskCard({ task, run, runsByTask, models, modes, modelsByRunner, modesByRunner, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, runActive, output, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRevert, onRunTask, onSendMessage, onSendMessageNow, onOpenLog, onOpenChild, expanded: expandedProp, onExpandedChange, variant = 'card', status: statusLook }: TaskCardProps) {
   const [internalExpanded, setInternalExpanded] = useState(false);
   const isControlled = expandedProp !== undefined;
   const expanded = isControlled ? expandedProp : internalExpanded;
@@ -479,30 +457,12 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
   const idleSince = run?.idleSince ?? null;
   const awaitingApproval = run?.awaitingApproval ?? 0;
   const isolation = run?.isolation ?? null;
-  const mergeGate = run?.mergeGate;
   const handoff = run ? run.handoff : task.handoff;
 
   const isolatedWork = isolation && isolation.state !== 'none' ? isolation : null;
   const activeModes = modes && modes.length > 0 ? modes : DEFAULT_MODES;
-  // The run's verdict and round are the newer word on a loop's check: they say whether it is between rounds (ADR-0045).
-  const row = taskRowView({
-    ...task,
-    handoff,
-    idleSince,
-    completionReceived: run?.completionReceived,
-    attaching: run?.attaching,
-    awaitingApproval,
-    isolation,
-    mergeGate,
-    holdReason: run?.holdReason,
-    loopStranded: run?.loopStranded === true,
-    continuable: run?.continuable === true,
-    waitsForApproval: run?.waitsForApproval === true,
-    attempted: run?.attempted ?? task.attempted,
-    ...(run?.attemptUsage ? { attemptUsage: run.attemptUsage } : {}),
-    ...(run?.delegation ? { delegation: run.delegation } : {}),
-    ...(run ? { verdict: run.verdict ?? task.verdict, loopRound: run.loopRound } : {}),
-  }, { tasks: siblings, modes: activeModes, runnerScope });
+  const modeId = task.taskMode ?? activeModes[0]?.id ?? 'build';
+  const row = cardRowView(task, run, { tasks: siblings, modes: activeModes, runnerScope });
   // Nothing of a delegated task's child shows where delegation is not offered (ADR-0055 D21).
   const delegated = useDelegationOffered() ? row.delegated : null;
   // Its chat exists only once an attempt has started; status alone never says so.
@@ -570,53 +530,50 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
     && (row.status === 'running' || row.status === 'quiet' || (row.status === 'awaiting' && (!paused || resumable)))
     && !!onSendMessage && !!onSendMessageNow;
 
+  const asRow = variant === 'row';
+  // A force start: core approves it, and never starts it before its dependencies finish.
+  const approveButton = row.waitsForApproval && onForceStart && (
+    <button type="button" className={asRow ? 'task-row-action primary' : 'task-log-open-btn'}
+      onClick={(e) => { e.stopPropagation(); onForceStart(task.id); }}
+      title="Approve it to run: it starts once its dependencies finish">
+      Approve
+    </button>
+  );
+  // Approvals arrive mid-turn and leave the status alone (ADR-0018, A1), so
+  // waiting on one is a badge beside it, which opens the log where the
+  // request is answered.
+  const approvalsButton = row.approvals && chatAvailable && (
+    <button type="button" className={asRow ? 'task-row-action' : 'task-approval-badge'}
+      onClick={(e) => { e.stopPropagation(); onOpenLog?.(task.id); }}
+      title="The runner is waiting for you to allow or deny a tool call: open the chat to answer">
+      {asRow ? 'Answer' : row.approvals}
+    </button>
+  );
+  // Run Task starts a task that has not run yet, or runs a passed one again
+  // only through Retry: never one already running, stalled, done or skipped.
+  const runnable = task.type === 'ai' && !failed && row.status !== 'running' && row.status !== 'quiet'
+    && row.status !== 'done' && row.status !== 'skipped';
+
   return (
-    <div className="task-with-controls task-with-controls-top">
-      <div className={`task-card task-${task.type} ${expanded ? 'expanded' : ''}`}>
-        <div className="task-card-header" onClick={() => setExpanded(!expanded)}>
-          <span className="task-card-lead">
-            <TaskCheck row={row} />
-            <span className="task-order">{row.orderLabel}</span>
-            <span className={`task-type-badge ${task.type}`}>
-              {isUserTask ? 'Manual' : row.kind === 'script' ? 'Script' : row.kind === 'delegated' ? 'Delegated' : 'AI'}
+    <div className={`task-with-controls task-with-controls-top${asRow ? ' task-row-item' : ''}${asRow && expanded ? ' expanded' : ''}`}>
+      <div className={`task-card task-${task.type} ${expanded ? 'expanded' : ''}${asRow ? ' task-row-card' : ''}`}>
+        <TaskSummary task={task} row={row} expanded={expanded} onToggle={() => setExpanded(!expanded)}
+          onOpenChat={onOpenLog && (() => onOpenLog(task.id))} badges={asRow}
+          density={asRow ? 'row' : undefined} idleSince={idleSince} status={statusLook}>
+          {delegated && onOpenChild && <button type="button" className={asRow ? 'task-row-action' : undefined} onClick={(e) => { e.stopPropagation(); onOpenChild(task.id); }}>Open subplanner</button>}
+          {delegated && (delegated.counts || delegated.tokens || delegated.stopping) && (
+            <span className="task-delegated-meta">
+              {(delegated.counts || delegated.tokens) && <span className="task-delegated-line">{[delegated.counts, delegated.tokens].filter(Boolean).join(' · ')}</span>}
+              {delegated.stopping && <span className="task-delegated-stopping">{delegated.stopping}</span>}
             </span>
-            {row.research && (
-              <span className="task-type-badge research" title="A research task: read-only, it lands nothing. Its report comes back to the planner and wakes it when the task ends.">Research</span>
-            )}
-            {row.kind === 'ops' && (
-              <span className="task-type-badge ops" title="An ops task: it changes no repository files and runs in your checkout, once the work it depends on is merged">Ops</span>
-            )}
-          </span>
-          <div className={`task-heading-block${onOpenLog && chatAvailable ? ' task-heading-block-with-log' : ''}`}>
-            <button type="button" className="task-heading" aria-expanded={expanded}
-              title={expanded ? 'Collapse task details' : 'Expand task details'}
-              onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}>
-              <span className="task-title-text">{task.title}</span>
-            </button>
-            {/* Outside the heading button, so Open chat can share its line without nesting a button in a button. */}
-            <TaskAssignment task={task} />
-            {delegated && onOpenChild && <button type="button" onClick={(e) => { e.stopPropagation(); onOpenChild(task.id); }}>Open subplanner</button>}
-            {delegated && (delegated.counts || delegated.tokens || delegated.stopping) && (
-              <span className="task-delegated-meta">
-                {(delegated.counts || delegated.tokens) && <span className="task-delegated-line">{[delegated.counts, delegated.tokens].filter(Boolean).join(' · ')}</span>}
-                {delegated.stopping && <span className="task-delegated-stopping">{delegated.stopping}</span>}
-              </span>
-            )}
-            {onOpenLog && chatAvailable && (
-              <button type="button" className="task-log-open-btn task-log-open-btn-stacked"
-                aria-label="Open chat"
-                onClick={(e) => { e.stopPropagation(); onOpenLog(task.id); }}
-                title="Open this task's chat in an editor tab">
-                <span>Open</span>
-                <span>chat</span>
-              </button>
-            )}
-          </div>
-        </div>
+          )}
+          {asRow && approveButton}
+          {asRow && approvalsButton}
+        </TaskSummary>
 
         {/* Collapsed, the newest line is the whole signal — "which test is it on"
-            without having to open the card. */}
-        {!expanded && output && (
+            without having to open the card. A row's status line says enough. */}
+        {!expanded && !asRow && output && (
           <div className="task-output-peek" onClick={() => setExpanded(true)} title="Show the full tail">
             {lastLine(output)}
           </div>
@@ -627,8 +584,13 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
             <p className="task-description">{task.description}</p>
             {delegated?.goal && <div className="task-delegated-goal"><span className="task-isolation-label">Goal</span> {delegated.goal}</div>}
 
-            {handoff && <TaskHandoff handoff={handoff} taskName={(id) => taskRefOf(siblings ?? [], id)}
-              onReadFull={onOpenLog && chatAvailable ? () => onOpenLog(task.id) : undefined} />}
+            {handoff && (
+              <TaskFold label="Handoff" className="task-fold-handoff"
+                preview={[firstLine(handoff.summary), handoffFindingsText(handoff.findingCount)].filter(Boolean).join(' · ')}>
+                <TaskHandoff handoff={handoff} taskName={(id) => taskRefOf(siblings ?? [], id)}
+                  onReadFull={onOpenLog && chatAvailable ? () => onOpenLog(task.id) : undefined} />
+              </TaskFold>
+            )}
 
             {/* Worktrees are an implementation detail unless something needs the
                 user's attention (US34) — so the branch and path live in the
@@ -753,28 +715,28 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
               </div>
             )}
 
-            {canEdit && task.type === 'ai' && task.prompt && (
-              editingPrompt === null ? (
-                <button type="button" className="task-prompt task-prompt-editable" aria-label={`Edit task prompt: ${task.prompt}`}
-                  onClick={(e) => { e.stopPropagation(); setEditingPrompt(task.prompt ?? ''); }} title="Click to edit prompt">
-                  {task.prompt}
-                  <span className="task-prompt-edit-icon">&#9998;</span>
-                </button>
-              ) : (
-                <div className="task-prompt-edit-wrapper">
-                  <textarea className="task-prompt-textarea" value={editingPrompt} onChange={(e) => setEditingPrompt(e.target.value)}
-                    onBlur={handlePromptSave} onKeyDown={handlePromptKeyDown} onClick={(e) => e.stopPropagation()}
-                    rows={Math.min(editingPrompt.split('\n').length, 20)} autoFocus />
-                  <div className="task-prompt-edit-actions">
-                    <span className="task-prompt-edit-hint">Ctrl+Enter to save &middot; Esc to cancel</span>
-                    <button className="task-prompt-save-btn" onMouseDown={(e) => { e.preventDefault(); handlePromptSave(); }}>Save</button>
+            {task.type === 'ai' && task.prompt && (
+              <TaskFold label="Prompt" className="task-fold-prompt" preview={firstLine(task.prompt)}>
+                {!canEdit ? (
+                  <div className="task-prompt task-prompt-readonly">{task.prompt}</div>
+                ) : editingPrompt === null ? (
+                  <button type="button" className="task-prompt task-prompt-editable" aria-label={`Edit task prompt: ${task.prompt}`}
+                    onClick={(e) => { e.stopPropagation(); setEditingPrompt(task.prompt ?? ''); }} title="Click to edit prompt">
+                    {task.prompt}
+                    <span className="task-prompt-edit-icon">&#9998;</span>
+                  </button>
+                ) : (
+                  <div className="task-prompt-edit-wrapper">
+                    <textarea className="task-prompt-textarea" value={editingPrompt} onChange={(e) => setEditingPrompt(e.target.value)}
+                      onBlur={handlePromptSave} onKeyDown={handlePromptKeyDown} onClick={(e) => e.stopPropagation()}
+                      rows={Math.min(editingPrompt.split('\n').length, 20)} autoFocus />
+                    <div className="task-prompt-edit-actions">
+                      <span className="task-prompt-edit-hint">Ctrl+Enter to save &middot; Esc to cancel</span>
+                      <button className="task-prompt-save-btn" onMouseDown={(e) => { e.preventDefault(); handlePromptSave(); }}>Save</button>
+                    </div>
                   </div>
-                </div>
-              )
-            )}
-
-            {!canEdit && task.type === 'ai' && task.prompt && (
-              <div className="task-prompt task-prompt-readonly">{task.prompt}</div>
+                )}
+              </TaskFold>
             )}
 
             {/* A task execution has reached shows what its pickers decided; one still queued keeps them. */}
@@ -806,10 +768,10 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
                   title={row.autonomous ? 'Full: runs without permission prompts. /settings changes the level' : undefined}>
                   Mode{row.autonomous && ' ⚡'}
                 </label>
-                <select id={`task-mode-${task.id}`} value={task.taskMode ?? activeModes[0]?.id ?? 'build'}
+                <select id={`task-mode-${task.id}`} value={modeId} title={modeText(activeModes.find((m) => m.id === modeId))}
                   onChange={(e) => onModeChange(task.id, e.target.value)}>
                   {activeModes.map((m) => (
-                    <option key={m.id} value={m.id} disabled={!!m.unavailable}>{m.label}: {m.unavailable ?? m.description}</option>
+                    <option key={m.id} value={m.id} disabled={!!m.unavailable}>{modeText(m)}</option>
                   ))}
                 </select>
               </div>
@@ -827,7 +789,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
               </label>
             )}
 
-            {!isExecuting && task.type === 'ai' && !failed && onRunTask && (
+            {!isExecuting && runnable && onRunTask && (
               <div className="task-run-btn-wrapper">
                 <button className="task-action-btn run" onClick={(e) => { e.stopPropagation(); onRunTask(task.id); }}>
                   Run Task
@@ -884,7 +846,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
           </div>
         )}
       </div>
-      <div className="task-footer-controls">
+      {(!asRow || expanded) && <div className="task-footer-controls">
         {/* As plain as a task that waits on the user (ADR-0020). */}
         <UsageLimitControls taskId={task.id} row={row} onResumeNow={onResumeNow} onCancelResume={onCancelResume} />
 
@@ -895,33 +857,12 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
             {row.waitsForApproval}
           </span>
         )}
-        {/* A force start: core approves it, and never starts it before its dependencies finish. */}
-        {row.waitsForApproval && onForceStart && (
-          <button type="button" className="task-log-open-btn"
-            onClick={(e) => { e.stopPropagation(); onForceStart(task.id); }}
-            title="Approve it to run: it starts once its dependencies finish">
-            Approve
-          </button>
-        )}
+        {!asRow && approveButton}
+        {!asRow && <TaskSummaryBadges row={row} />}
+        {!asRow && approvalsButton}
 
-        <AssignmentFlag row={row} />
-
-        <LoopBadge loop={row.loop} />
-
-        <IsolationBadges row={row} />
-
-        {/* Approvals arrive mid-turn and leave the status alone (ADR-0018,
-            A1), so waiting on one is a badge beside it, which opens the log
-            where the request is answered. */}
-        {row.approvals && chatAvailable && (
-          <button type="button" className="task-approval-badge"
-            onClick={(e) => { e.stopPropagation(); onOpenLog?.(task.id); }}
-            title="The runner is waiting for you to allow or deny a tool call: open the chat to answer">
-            {row.approvals}
-          </button>
-        )}
-
-        {canEditDeps ? (
+        {/* A row's dependencies are edited in its open body, and the panel's stages already say what comes first. */}
+        {asRow ? null : canEditDeps ? (
           <button className="task-dep-badge dep-in task-dep-badge-btn"
             title={task.dependencies.length > 0
               ? `Depends on: ${row.dependencies.join(', ')}. Click to edit`
@@ -934,7 +875,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
             &#8593;{task.dependencies.length}
           </span>
         )}
-        {!!dependentCount && (
+        {!asRow && !!dependentCount && (
           <span className="task-dep-badge dep-out" title={`Required by ${dependentCount} task${dependentCount > 1 ? 's' : ''}`}>
             &#8595;{dependentCount}
           </span>
@@ -944,7 +885,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
             task held for the user must read as such whether or not a run is
             still being drawn as active — and so must one a failure blocks,
             one on hold, or a skipped one. */}
-        {(isExecuting || row.holdReason || row.status === 'failed' || row.status === 'awaiting' || row.status === 'blocked' || row.status === 'skipped') && (
+        {!asRow && (isExecuting || row.holdReason || row.status === 'failed' || row.status === 'awaiting' || row.status === 'blocked' || row.status === 'skipped') && (
           <StatusBadge status={status} />
         )}
         {/* In the footer rather than in the header, where it held the title's
@@ -952,9 +893,9 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
             removal with a real modal: a `confirm()` here would never fire — VS
             Code sandboxes the webview without `allow-modals`. */}
         {!isExecuting && onRemoveTask && (
-          <button className="task-remove-btn" onClick={(e) => { e.stopPropagation(); onRemoveTask(task.id); }} title="Remove task">&#10005;</button>
+          <button className="task-remove-btn" onClick={(e) => { e.stopPropagation(); onRemoveTask(task.id); }} title="Remove task" aria-label={asRow ? 'Remove task' : undefined}>{asRow ? 'Remove' : <>&#10005;</>}</button>
         )}
-      </div>
+      </div>}
     </div>
   );
 }

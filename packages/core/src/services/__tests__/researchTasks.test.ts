@@ -176,6 +176,26 @@ describe('research starts (ADR-0037 R4)', () => {
     expect(env.session.waitsForApproval(research(env)[0].id)).toBe(false);
   });
 
+  it('leaves a draft unmoving when its research builds on work only the plan\'s approval starts, and starts it in the run approval opens', async () => {
+    const env = await supervised([], { execute: false, plan: { status: 'draft', approved: false }, settings: { supervisorLevel: 'off' } });
+    const opening = env.session.startPlanning('Investigate');
+    await until(() => env.planner.calls.length === 1);
+    env.planner.calls[0].finish({ kind: 'plan', text: '', tasks: [task('check', 1), task('scout', 2, { research: true, taskMode: 'plan', dependencies: ['check'] }), task('later', 3, { research: true, taskMode: 'plan', dependencies: ['scout'] })], researchLog: [] });
+    await opening;
+    await settled();
+    // Nothing starts before the user approves the plan, so the session offers Approve, not Stop.
+    expect(env.session.activity.advancesOnItsOwn).toBe(false);
+    expect(env.run.spawnedIds()).toEqual([]);
+    expect(env.session.isApproved('scout')).toBe(true);
+
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
+    await until(() => env.run.spawnedIds().includes('check'));
+    env.run.of('check').reportComplete({ status: 'done', summary: 'Done.' });
+    env.run.of('check').emitExit(0);
+    await settled();
+    await until(() => env.run.spawnedIds().includes('scout'));
+  });
+
   it('shares the run\'s Parallel limit with other tasks, and holds the rest for the ordinary slot', async () => {
     const env = await supervised([task('ordinary', 1)], { settings: { supervisorLevel: 'off' }, config: { maxParallelSessions: 2 } });
     await until(() => env.run.spawnedIds().includes('ordinary'));

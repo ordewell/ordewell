@@ -196,6 +196,6 @@ describe('ordewell run announcing a task', () => {
     }
 
     const line = written.find((w) => w.includes('One'));
-    expect(line).toBe('· Started "One" · claude-code\n');
+    expect(line).toBe('· Started "One" · Claude Code\n');
   });
 });

@@ -5,6 +5,8 @@ import { Frame } from '../../../frame/Frame';
 import { FrameProvider, FrameStore } from '../../../frame/store';
 import { CONNECTED, installBridge, refusal, type Call, type Harness } from '../../../test/explorerHarness';
 import { editors, type FakeEditor } from '../../../test/monacoMock';
+import { daemonHost } from '../../../session/DaemonHost';
+import { selectedTask } from '../../../session/selection';
 import { scopeStoreFor } from '../../scope/scopeStore';
 import { registerViews } from '../../index';
 import { clearDraft } from '../drafts';
@@ -12,7 +14,6 @@ import { clearDraft } from '../drafts';
 // Monaco needs a browser's layout and Vite's workers; a test gives it a string and two callbacks.
 vi.mock('../../../monaco', async () => (await import('../../../test/monacoMock')).fakeMonacoModule());
 
-const SIZES = { sidebar: 260, right: 360, bottom: 240 };
 
 const ROOT = [
   { name: 'src', path: 'src', kind: 'directory', ignored: false },
@@ -56,14 +57,14 @@ afterEach(() => {
 });
 
 async function mount(): Promise<void> {
-  store = new FrameStore({ workspace: '/work/acme', platform: 'linux', sizes: SIZES });
+  store = new FrameStore({ workspace: '/work/acme', platform: 'linux' });
   offs.push(registerFrameCommands(store), registerViews(store.api));
   render(<FrameProvider value={store}><Frame daemon={CONNECTED} /></FrameProvider>);
   act(() => store.api.showActivity('explorer'));
   await screen.findByRole('tree', { name: 'Files in Your checkout' });
 }
 
-const tabs = () => store.getSnapshot().layout.groups.flatMap((g) => g.tabs).filter((t) => t.kind !== 'plan');
+const tabs = () => store.getSnapshot().layout.groups.flatMap((g) => g.tabs).filter((t) => t.kind !== 'planner');
 const tree = () => screen.getByRole('tree');
 const row = (name: string) => within(tree()).getByRole('treeitem', { name });
 
@@ -107,14 +108,16 @@ describe('the file tree', () => {
     await waitFor(() => expect(tabs().some((t) => t.title === 'new.ts')).toBe(true));
   });
 
-  it('shows the task that changed a file, and a click opens that task', async () => {
+  it('shows the task that changed a file, and a click shows that task in the plan', async () => {
     workspace();
     await mount();
     fireEvent.click(await screen.findByRole('treeitem', { name: 'src' }));
     await screen.findByRole('treeitem', { name: 'a.ts' });
     await waitFor(() => expect(scopeStoreFor(store.api).getSnapshot().session?.tasks).toHaveLength(1));
     fireEvent.click(within(row('a.ts')).getByRole('button', { name: /Changed by Task #3/ }));
-    await waitFor(() => expect(tabs().find((t) => t.kind === 'task')?.title).toBe('Task #3'));
+    await waitFor(() => expect(selectedTask(daemonHost('/work/acme'))).toBe('t3'));
+    expect(store.getSnapshot().layout.planOpen).toBe(true);
+    expect(tabs().some((t) => t.kind === 'task')).toBe(false);
   });
 
   it('puts "Open in editor" and Reveal on the checkout\'s rows, through the shell', async () => {
@@ -152,7 +155,7 @@ describe('searching', () => {
   it('searches the text of files, and a line opens the file there', async () => {
     const { harness } = workspace();
     await mount();
-    fireEvent.click(screen.getByRole('button', { name: 'Aa' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Search the text of files' }));
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search text in files' }), { target: { value: 'const' } });
     const result = await screen.findByRole('button', { name: /src\/a\.ts\s*:7/ });
     expect(harness.callsTo('files.find')[0]?.params.text).toBe('1');
@@ -182,7 +185,7 @@ describe('scope switching', () => {
     await screen.findByRole('tree', { name: 'Files in Task #3' });
     const read = harness.callsTo('files.tree').at(-1);
     expect(read?.params).toMatchObject({ scope: 'task', sessionId: 's1', taskId: 't3', repo: '.', dir: '' });
-    expect(screen.getByLabelText('Read-only')).toBeInTheDocument();
+    expect(screen.getByText('Read-only')).toBeInTheDocument();
     expect(within(row('README.md')).queryByRole('button', { name: /Open in editor/ })).not.toBeInTheDocument();
   });
 
@@ -209,8 +212,43 @@ describe('scope switching', () => {
     expect(tabs().find((t) => t.title === 'README.md')?.preview).toBeFalsy();
   });
 
+  it('opens a task worktree file\'s task in that task\'s session, switching to it first', async () => {
+    workspace();
+    await mount();
+    await waitFor(() => expect(scopeStoreFor(store.api).getSnapshot().session?.tasks).toHaveLength(1));
+    const host = daemonHost('/work/acme');
+    let open = 'another';
+    vi.spyOn(host, 'sessionId', 'get').mockImplementation(() => open);
+    const switched = vi.spyOn(host, 'open').mockImplementation(async (sessionId) => { open = sessionId; });
+
+    scopeStoreFor(store.api).select('.', { kind: 'task', sessionId: 's1', taskId: 't3' });
+    fireEvent.click(await screen.findByRole('treeitem', { name: 'README.md' }));
+    const fileTab = await waitFor(() => document.querySelector<HTMLElement>('.ft') as HTMLElement);
+    fireEvent.click(await within(fileTab).findByTitle('Open the task'));
+
+    await waitFor(() => expect(tabs().find((t) => t.kind === 'task')?.id).toBe('t3'));
+    expect(switched).toHaveBeenCalledWith('s1');
+  });
+
+  it('draws the new scope\'s rows after a switch made while the tree was scrolled', async () => {
+    workspace();
+    await mount();
+    await waitFor(() => expect(scopeStoreFor(store.api).getSnapshot().session?.tasks).toHaveLength(1));
+    await screen.findByRole('treeitem', { name: 'README.md' });
+    // Scrolled far past what the new scope will have: a window kept from here would draw nothing.
+    fireEvent.scroll(tree(), { target: { scrollTop: 5_000 } });
+    act(() => scopeStoreFor(store.api).select('.', { kind: 'integration', sessionId: 's1' }));
+    await screen.findByRole('tree', { name: 'Files in Integration branch' });
+    expect(await screen.findByRole('treeitem', { name: 'README.md' })).toBeInTheDocument();
+  });
+
   it('falls back to the checkout, and says why, when a scope is gone', async () => {
-    workspace(undefined, { 'files.tree': () => refusal('gone', 'The worktree of Task #3 is gone.') });
+    workspace(undefined, {
+      'files.tree': ({ params }) => {
+        if (params.scope === 'task') return refusal('gone', 'The worktree of Task #3 is gone.');
+        return { at: {}, dir: params.dir, entries: ROOT };
+      },
+    });
     await mount();
     act(() => scopeStoreFor(store.api).select('.', { kind: 'task', sessionId: 's1', taskId: 't3' }));
     await waitFor(() => expect(scopeStoreFor(store.api).getSnapshot().notice).toMatch(/gone/));
@@ -331,7 +369,7 @@ describe('a file in your checkout', () => {
     fireEvent.doubleClick(await screen.findByRole('treeitem', { name: 'README.md' }));
     expect(await screen.findByText('This is a binary file (2.0 KB), so it is not shown.')).toBeInTheDocument();
     expect(editors).toHaveLength(0);
-    fireEvent.click(within(document.querySelector<HTMLElement>('.ft-message') as HTMLElement).getByRole('button', { name: 'Open in editor' }));
+    fireEvent.click(within(document.querySelector<HTMLElement>('.fv-state') as HTMLElement).getByRole('button', { name: 'Open in editor' }));
     expect(harness.shell.openInEditor).toHaveBeenCalledWith({ repo: '.', path: 'README.md' });
 
     fireEvent.doubleClick(row('new.ts'));

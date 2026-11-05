@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ConfirmationRequest } from '@ordewell/ui/host';
+import type { HolderView } from '../../../shared/bridge';
 import { DaemonHost, type Confirm } from '../DaemonHost';
 import { ChatSurface } from '../useSession';
 import { fakeDaemon, ok, surfacePlan, surfaceTask } from './fakeDaemon';
@@ -15,9 +16,9 @@ let hosts: DaemonHost[] = [];
 afterEach(() => { for (const host of hosts) host.dispose(); hosts = []; });
 
 /** The window's confirm, answered by `answer` with whatever choice it names: a test asks for one it offers. */
-function hostWith(answer: (request: ConfirmationRequest<string>) => Promise<string | null> = async () => null): DaemonHost {
+function hostWith(answer: (request: ConfirmationRequest<string>) => Promise<string | null> = async () => null, detectionTimeoutMs?: number, watchMs?: number): DaemonHost {
   const ask: Confirm = async <C extends string>(request: ConfirmationRequest<C>) => await answer(request) as C | null;
-  const host = new DaemonHost(WORKSPACE, ask);
+  const host = new DaemonHost(WORKSPACE, ask, { detectionTimeoutMs, watchMs });
   hosts.push(host);
   return host;
 }
@@ -62,7 +63,7 @@ describe('DaemonHost', () => {
     });
     await waitFor(() => expect(host.getSnapshot().state.run.tasks.find((t) => t.id === 't1')?.status).toBe('in_progress'));
     expect(await screen.findByRole('img', { name: 'Running' })).toBeInTheDocument();
-    expect(screen.getAllByRole('img', { name: 'To do' })).toHaveLength(1);
+    expect(screen.getAllByRole('img', { name: 'Not started' })).toHaveLength(1);
   });
 
   it('posts a card\'s command to the daemon route that does it', async () => {
@@ -112,6 +113,78 @@ describe('DaemonHost', () => {
     expect(daemon.calls('models.list')).toHaveLength(1);
   });
 
+  // No API key and a model catalog still being listed: the coding agent the
+  // daemon found is who plans, so the chat must not wait on the catalog.
+  it('leaves Detecting coding agents for the agents the daemon found, while the model catalog still lists', async () => {
+    fakeDaemon({
+      'runners.list': ok({ runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }], orchestratorModel: '' }),
+      'models.list': new Promise<never>(() => undefined),
+    });
+    const host = hostWith();
+    render(<ChatSurface host={host} layout="conversation" />);
+    await waitFor(() => expect(host.getSnapshot().state.plannerKnown).toBe(true));
+    expect(host.getSnapshot().state.planner.backends.filter((b) => b.usable).map((b) => b.runner)).toEqual(['claude-code']);
+    expect(screen.queryByText('Detecting coding agents…')).toBeNull();
+  });
+
+  it('says detection failed, with a Retry that asks again, when the daemon does not list its agents in time', async () => {
+    let listing: Promise<never> | ReturnType<typeof ok> = new Promise<never>(() => undefined);
+    const daemon = fakeDaemon({
+      'runners.list': () => listing,
+      'models.list': ok({ models: [], modelsByRunner: {}, modesByRunner: {}, orchestratorModel: '', providers: [], orchestratorModels: [], providerErrors: {} }),
+    });
+    const host = hostWith(undefined, 50);
+    render(<ChatSurface host={host} layout="conversation" />);
+    // The chat body and the Settings panel's planner block both say it.
+    const [said] = await screen.findAllByText(/Couldn't detect coding agents/);
+    expect(said).toHaveTextContent("Couldn't detect coding agents: the daemon did not list its coding agents");
+
+    listing = ok({ runners: [{ id: 'codex', name: 'Codex', enabled: true }], orchestratorModel: '' });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Retry' })[0]!);
+    await waitFor(() => expect(host.getSnapshot().state.plannerKnown).toBe(true));
+    expect(daemon.calls('runners.list')).toHaveLength(2);
+    expect(screen.queryByText(/Couldn't detect coding agents/)).toBeNull();
+    expect(screen.queryByText('Detecting coding agents…')).toBeNull();
+  });
+
+  it('keeps the agents it detected for a chat that mounts after a held session is opened', async () => {
+    const sessionHeld = { holder: { hostId: 'h1', pid: 4242, host: { kind: 'vscode' }, since: '2026-11-03T09:00:00.000Z', heartbeatAt: '2026-11-03T09:00:00.000Z', runnerGroups: [] } };
+    fakeDaemon({
+      'runners.list': ok({ runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }], orchestratorModel: '' }),
+      'sessions.load': { ok: false, status: 409, error: 'Conflict', data: { ok: false, error: 'held', code: 'session_held', sessionHeld } },
+      'sessions.get': ok({ meta: { id: 's1', goal: 'Ship the parser' }, plan: { status: 'approved', tasks: [], conversation: {} } }),
+    });
+    const host = hostWith();
+    const first = render(<ChatSurface host={host} layout="conversation" />);
+    await waitFor(() => expect(host.getSnapshot().state.plannerKnown).toBe(true));
+    first.unmount();
+
+    await act(() => host.open('s1'));
+    expect(host.getSnapshot().readOnly).toBe(true);
+    render(<ChatSurface host={host} layout="conversation" />);
+    await screen.findByRole('textbox', { name: 'Message the planner' });
+    expect(screen.queryByText('Detecting coding agents…')).toBeNull();
+    expect(screen.queryByText('Loading…')).toBeNull();
+  });
+
+  it('detects again once the daemon is back, when it was away for the first detection', async () => {
+    let away = true;
+    const daemon = fakeDaemon({
+      'runners.list': () => (away
+        ? { ok: false, status: 0, error: 'The Ordewell daemon is not reachable.' }
+        : ok({ runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }], orchestratorModel: '' })),
+    });
+    const host = hostWith();
+    render(<ChatSurface host={host} layout="conversation" />);
+    await waitFor(() => expect(host.getSnapshot().state.detectionError).toBe('The Ordewell daemon is not reachable.'));
+
+    away = false;
+    act(() => daemon.setStatus({ state: 'reconnecting', port: 3700, attempt: 1, canStart: false }));
+    act(() => daemon.setStatus(daemon.connected));
+    await waitFor(() => expect(host.getSnapshot().state.plannerKnown).toBe(true));
+    expect(host.getSnapshot().state.detectionError).toBeNull();
+  });
+
   it('asks before a removal, in ui\'s words, and removes only on a yes', async () => {
     const daemon = fakeDaemon({ 'sessions.load': ok({ ok: true, plan: PLAN, goal: 'g' }) });
     const asked: ConfirmationRequest<string>[] = [];
@@ -145,7 +218,7 @@ describe('DaemonHost', () => {
   it('sends a card\'s Open chat and a file link to the frame\'s navigator', async () => {
     fakeDaemon();
     const host = hostWith();
-    const navigator = { openTask: vi.fn(), openFile: vi.fn() };
+    const navigator = { openTask: vi.fn(), openFile: vi.fn(), showPlan: vi.fn() };
     host.setNavigator(navigator);
     await act(() => host.handle({ type: 'openTaskLog', taskId: 't1' }));
     await act(() => host.handle({ type: 'openFile', path: 'src/a.ts' }));
@@ -174,5 +247,268 @@ describe('DaemonHost', () => {
     fireEvent.keyDown(box, { key: 'Enter' });
     await waitFor(() => expect(daemon.calls('plans.converseStart')).toHaveLength(1));
     expect(daemon.calls('plans.converseStart')[0]?.[1]).toMatchObject({ goal: 'Add a parser' });
+  });
+});
+
+// W16: a session another Ordewell daemon holds is joined, and driven through
+// that daemon alongside its other client (ADR-0060 H8).
+describe('DaemonHost joining a held session', () => {
+  const VSCODE_HELD = { holder: { hostId: 'v1', pid: 51234, host: { kind: 'vscode' }, since: '2026-11-04T10:02:00.000Z', heartbeatAt: '2026-11-04T10:02:00.000Z', runnerGroups: [] } };
+  const SINCE = '2026-11-04T10:00:00.000Z';
+  const TUI_HELD = { holder: { hostId: 'h1', pid: 48200, host: { kind: 'daemon', port: 49213, ownerPid: 48120 }, since: SINCE, heartbeatAt: SINCE, runnerGroups: [] } };
+  const HOLDER: HolderView = { port: 49213, pid: 48200, ownerPid: 48120, version: '0.12.3', contract: 1, since: SINCE };
+  const heldBy = (sessionHeld: unknown) => ({ ok: false, status: 409, error: 'Conflict', data: { ok: false, error: 'held', code: 'session_held', sessionHeld } }) as const;
+  const TRANSCRIPT = { conversationHistory: [
+    { role: 'user', content: 'Add SSO login', timestamp: SINCE },
+    { role: 'assistant', content: 'Two tasks: parse the config, then wire the CLI.', timestamp: SINCE },
+  ] };
+  const saved = (goal = 'Add SSO login') => ok({ meta: { id: 's1', goal }, plan: { status: 'approved', phase: 'planning', pendingTasks: PLAN.tasks }, conversation: TRANSCRIPT, plannerTurnId: 'turn-7' });
+
+  // The phase-tagged plan keeps no transcript: without the read's own, a joined planner showed the welcome hero (W16).
+  it('draws the joined session\'s planner conversation', async () => {
+    const daemon = fakeDaemon({ 'sessions.load': heldBy(TUI_HELD), 'sessions.get': saved() });
+    daemon.joinWith({ ok: true, holder: HOLDER });
+    const host = hostWith();
+    render(<ChatSurface host={host} layout="conversation" />);
+
+    await act(() => host.open('s1'));
+    await act(async () => {
+      daemon.push('s1', { type: 'connected', sessionId: 's1' }, { type: 'run_snapshot', sessionId: 's1', view: { tasks: PLAN.tasks, runMerge: null, handoff: null, mergeResult: null }, stream: 'd9', seq: 0 });
+    });
+
+    expect(await screen.findByText('Two tasks: parse the config, then wire the CLI.')).toBeInTheDocument();
+  });
+
+  it('draws the saved conversation under a refused join', async () => {
+    const daemon = fakeDaemon({ 'sessions.load': heldBy(TUI_HELD), 'sessions.get': saved() });
+    daemon.joinWith({ ok: false, reason: 'mismatch', message: 'No.' });
+    const host = hostWith();
+    render(<ChatSurface host={host} layout="conversation" />);
+
+    await act(() => host.open('s1'));
+
+    expect(await screen.findByText('Two tasks: parse the config, then wire the CLI.')).toBeInTheDocument();
+    expect(host.getSnapshot().readOnly).toBe(true);
+  });
+
+  it('joins the daemon that holds the session it opens, and drives the session there', async () => {
+    const daemon = fakeDaemon({ 'sessions.load': heldBy(TUI_HELD), 'sessions.get': saved() });
+    daemon.joinWith({ ok: true, holder: HOLDER });
+    const host = hostWith();
+    render(<ChatSurface host={host} layout="plan" />);
+
+    await act(() => host.open('s1'));
+    await act(async () => {
+      daemon.push('s1', { type: 'connected', sessionId: 's1' }, { type: 'run_snapshot', sessionId: 's1', view: { tasks: PLAN.tasks, runMerge: null, handoff: null, mergeResult: null }, stream: 'd9', seq: 0 });
+    });
+
+    expect(daemon.join).toHaveBeenCalledWith('s1');
+    expect(host.getSnapshot()).toMatchObject({ sessionId: 's1', goal: 'Add SSO login', readOnly: false, link: { kind: 'joined', holder: HOLDER } });
+    expect(daemon.subscribe).toHaveBeenLastCalledWith('s1', expect.any(Function));
+    expect(await screen.findByText('Parse the config')).toBeInTheDocument();
+
+    await act(() => host.handle({ type: 'sendMessage', text: 'Add MFA too', typed: false }));
+    expect(daemon.calls('plans.converseMessage')).toEqual([[{ sessionId: 's1' }, { message: 'Add MFA too' }]]);
+    // A load at the holder would adopt the session over its live planner turn.
+    act(() => host.refreshPlan());
+    await waitFor(() => expect(daemon.calls('sessions.get').length).toBeGreaterThan(2));
+    expect(daemon.calls('sessions.load')).toHaveLength(1);
+  });
+
+  it('says when the holder has exited, and continues the session in the app\'s own daemon when asked', async () => {
+    let held = true;
+    // The TUI was running t1 when it exited: the run is the holder's, so here it is restored (W17), not live.
+    const left = surfacePlan([surfaceTask({ id: 't1', order: 1, title: 'Parse the config', status: 'in_progress' })], 'running');
+    const adopted = { sessionId: 's1', goal: 'Add SSO login', plan: left, run: { tasks: left.tasks, runMerge: null, handoff: null, mergeResult: null } };
+    const daemon = fakeDaemon({ 'sessions.load': () => (held ? heldBy(TUI_HELD) : ok(adopted)), 'sessions.get': saved() });
+    daemon.joinWith({ ok: true, holder: HOLDER });
+    const host = hostWith();
+    await act(() => host.open('s1'));
+
+    held = false;
+    daemon.joinWith({ ok: false, reason: 'free', message: 'Nothing holds this session now.' });
+    act(() => daemon.close('s1'));
+
+    await waitFor(() => expect(host.getSnapshot().link).toEqual({ kind: 'gone', holder: HOLDER }));
+    expect(host.getSnapshot().readOnly).toBe(true);
+    expect(daemon.leave).toHaveBeenCalledWith('s1');
+
+    await act(() => host.continueHere());
+
+    expect(host.getSnapshot()).toMatchObject({ sessionId: 's1', link: null, held: null, readOnly: false, restored: true });
+    expect(daemon.calls('sessions.load')).toEqual([[{ id: 's1', workspace: WORKSPACE }, undefined], [{ id: 's1', workspace: WORKSPACE }, undefined]]);
+  });
+
+  it('keeps the read-only view up until Continue here has adopted the session', async () => {
+    let held = true;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const left = surfacePlan([surfaceTask({ id: 't1', order: 1, title: 'Parse the config', status: 'in_progress' })], 'running');
+    const adopted = { sessionId: 's1', goal: 'Add SSO login', plan: left, run: { tasks: left.tasks, runMerge: null, handoff: null, mergeResult: null } };
+    const daemon = fakeDaemon({
+      'sessions.load': async () => {
+        if (held) return heldBy(TUI_HELD);
+        await gate;
+        return ok(adopted);
+      },
+      'sessions.get': saved(),
+    });
+    daemon.joinWith({ ok: true, holder: HOLDER });
+    const host = hostWith();
+    await act(() => host.open('s1'));
+
+    held = false;
+    daemon.joinWith({ ok: false, reason: 'free', message: 'Nothing holds this session now.' });
+    act(() => daemon.close('s1'));
+    await waitFor(() => expect(host.getSnapshot().link).toEqual({ kind: 'gone', holder: HOLDER }));
+
+    let continuing: Promise<void> = Promise.resolve();
+    act(() => { continuing = host.continueHere(); });
+    // The adoption is still in flight: the banner stays, and a message is refused rather than dropped.
+    expect(host.getSnapshot()).toMatchObject({ link: { kind: 'gone', holder: HOLDER }, readOnly: true });
+    await act(() => host.handle({ type: 'sendMessage', text: 'Carry on from here.', typed: false }));
+    expect(daemon.calls('plans.converseMessage')).toEqual([]);
+
+    release();
+    await act(async () => { await continuing; });
+    expect(host.getSnapshot()).toMatchObject({ sessionId: 's1', link: null, readOnly: false });
+    await act(() => host.handle({ type: 'sendMessage', text: 'Carry on from here.', typed: false }));
+    expect(daemon.calls('plans.converseMessage')).toEqual([[{ sessionId: 's1' }, { message: 'Carry on from here.' }]]);
+  });
+
+  it('joins the holder again when its socket drops while it still holds the session', async () => {
+    const daemon = fakeDaemon({ 'sessions.load': heldBy(TUI_HELD), 'sessions.get': saved() });
+    daemon.joinWith({ ok: true, holder: HOLDER });
+    const host = hostWith();
+    await act(() => host.open('s1'));
+
+    act(() => daemon.close('s1'));
+
+    await waitFor(() => expect(daemon.join).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(daemon.subscribe).toHaveBeenCalledTimes(3));
+    expect(host.getSnapshot().link).toEqual({ kind: 'joined', holder: HOLDER });
+    expect(daemon.leave).not.toHaveBeenCalled();
+  });
+
+  it('leaves the holder when the window moves to another session', async () => {
+    const daemon = fakeDaemon({ 'sessions.load': heldBy(TUI_HELD), 'sessions.get': saved() });
+    daemon.joinWith({ ok: true, holder: HOLDER });
+    const host = hostWith();
+    await act(() => host.open('s1'));
+
+    act(() => host.newSession());
+
+    expect(daemon.leave).toHaveBeenCalledWith('s1');
+    expect(host.getSnapshot()).toMatchObject({ link: null, held: null });
+  });
+
+  it('shows why a join was refused, over the saved state', async () => {
+    const daemon = fakeDaemon({ 'sessions.load': heldBy(TUI_HELD), 'sessions.get': saved() });
+    const message = "The TUI's daemon is 0.9.0 (contract 0); this app speaks contract 1, so it can't join.";
+    daemon.joinWith({ ok: false, reason: 'mismatch', message });
+    const host = hostWith();
+
+    await act(() => host.open('s1'));
+
+    expect(host.getSnapshot()).toMatchObject({ sessionId: 's1', readOnly: true, link: { kind: 'refused', reason: 'mismatch', message }, held: TUI_HELD });
+  });
+
+  it('says the holder still runs, and why, when take over is refused', async () => {
+    const daemon = fakeDaemon({ 'sessions.load': heldBy(TUI_HELD), 'sessions.get': saved() });
+    daemon.joinWith({ ok: false, reason: 'token', message: "Can't read the token of the daemon on :49213." });
+    const host = hostWith();
+    await act(() => host.open('s1'));
+
+    const outcome = await act(() => host.takeOver());
+
+    expect(outcome).toEqual({
+      ok: false,
+      message: 'The TUI (pid 48120) is still running and holds this session. Quit it, or close the session there, then choose Continue here.',
+    });
+    expect(host.getSnapshot()).toMatchObject({ sessionId: 's1', readOnly: true });
+  });
+
+  it('says the session runs here once take over succeeds', async () => {
+    let held = true;
+    const daemon = fakeDaemon({
+      'sessions.load': () => (held ? heldBy(VSCODE_HELD) : ok({ sessionId: 's1', goal: 'Add SSO login', plan: PLAN })),
+      'sessions.get': saved(),
+    });
+    const host = hostWith();
+    await act(() => host.open('s1'));
+    held = false;
+
+    const outcome = await act(() => host.takeOver());
+
+    expect(outcome).toEqual({ ok: true, message: 'This window now runs the session.' });
+    expect(host.getSnapshot()).toMatchObject({ sessionId: 's1', readOnly: false, held: null });
+    expect(daemon.join).not.toHaveBeenCalled();
+  });
+});
+
+// A VS Code window runs its session inside the extension host: there is no
+// daemon to join, so the app offers a new session or a read-only watch (W16).
+describe('DaemonHost with a session a VS Code window holds', () => {
+  const SINCE = '2026-11-04T10:02:00.000Z';
+  const VSCODE = { holder: { hostId: 'v1', pid: 51234, host: { kind: 'vscode' }, since: SINCE, heartbeatAt: SINCE, runnerGroups: [] } };
+  const heldBy = { ok: false, status: 409, error: 'Conflict', data: { ok: false, error: 'held', code: 'session_held', sessionHeld: VSCODE } } as const;
+  const savedWith = (tasks: typeof PLAN.tasks, said: string[] = ['Add SSO login']) => ok({
+    meta: { id: 's1', goal: 'Add SSO login' },
+    plan: { status: 'approved', phase: 'planning', pendingTasks: tasks },
+    conversation: { conversationHistory: said.map((content, i) => ({ role: i % 2 ? 'assistant' : 'user', content, timestamp: SINCE })) },
+  });
+
+  it('starts a new session in the workspace with the held goal in the composer, not sent', async () => {
+    const daemon = fakeDaemon({ 'sessions.load': heldBy, 'sessions.get': savedWith(PLAN.tasks) });
+    const host = hostWith();
+    await act(() => host.open('s1'));
+
+    act(() => host.startHere());
+    render(<ChatSurface host={host} layout="conversation" />);
+
+    expect(await screen.findByRole('textbox', { name: 'Message the planner' })).toHaveValue('Add SSO login');
+    expect(host.getSnapshot()).toMatchObject({ readOnly: false, held: null, link: null });
+    expect(host.getSnapshot().sessionId).not.toBe('s1');
+    expect(daemon.join).not.toHaveBeenCalled();
+    expect(daemon.calls('plans.converseMessage')).toEqual([]);
+  });
+
+  it('watches the saved state read-only, drawing what the holder saves', async () => {
+    let tasks = PLAN.tasks;
+    fakeDaemon({ 'sessions.load': heldBy, 'sessions.get': () => savedWith(tasks) });
+    const host = hostWith(undefined, undefined, 20);
+    render(<ChatSurface host={host} layout="plan" />);
+    await act(() => host.open('s1'));
+    expect(await screen.findByText('Parse the config')).toBeInTheDocument();
+
+    tasks = [...PLAN.tasks, surfaceTask({ id: 't3', order: 3, title: 'Add MFA' })];
+
+    expect(await screen.findByText('Add MFA')).toBeInTheDocument();
+    expect(host.getSnapshot()).toMatchObject({ sessionId: 's1', readOnly: true });
+  });
+
+  it('draws the held session\'s conversation read-only, and what the holder says next', async () => {
+    let said = ['Add SSO login', 'Two tasks to start.'];
+    fakeDaemon({ 'sessions.load': heldBy, 'sessions.get': () => savedWith(PLAN.tasks, said) });
+    const host = hostWith(undefined, undefined, 20);
+    render(<ChatSurface host={host} layout="conversation" />);
+    await act(() => host.open('s1'));
+    expect(await screen.findByText('Two tasks to start.')).toBeInTheDocument();
+
+    said = [...said, 'Add MFA too', 'A third task, for MFA.'];
+
+    expect(await screen.findByText('A third task, for MFA.')).toBeInTheDocument();
+  });
+
+  it('stops watching once the window leaves the held session', async () => {
+    const daemon = fakeDaemon({ 'sessions.load': heldBy, 'sessions.get': savedWith(PLAN.tasks) });
+    const host = hostWith(undefined, undefined, 20);
+    await act(() => host.open('s1'));
+    act(() => host.newSession());
+    const reads = daemon.calls('sessions.get').length;
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(daemon.calls('sessions.get')).toHaveLength(reads);
   });
 });

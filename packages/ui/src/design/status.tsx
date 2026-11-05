@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
-import { STALLED_LABEL, type TaskStatusKind } from '@ordewell/core/plan-utils';
-import { ICON_STROKE, NeedsYouGlyph, type IconSize } from './glyphs';
+import type { TaskRowView } from '@ordewell/core';
+import { STALLED_LABEL, blockedByLabel, elapsedSince, holdLabel, skippedLabel, type TaskStatusKind } from '@ordewell/core/plan-utils';
+import { strokeFor, NeedsYouGlyph, type IconSize } from './glyphs';
 
 /**
  * The words a task's state is drawn with, everywhere (docs/desktop/design.md,
@@ -96,6 +97,7 @@ const SHAPES: Record<Exclude<StatusId, 'needs-you'>, ReactNode> = {
 
 export interface StatusIndicatorProps {
   status: StatusId;
+  /** 14 in rows and cards, 16 in the task tab's header, 12 in chips and the rail. */
   size?: IconSize;
   /** Words that say more than the status's own, such as "Stalled · quiet for 4m". */
   label?: string;
@@ -109,7 +111,7 @@ export function StatusIndicator({ status, size = 16, label, showLabel = false, c
   const look = STATUSES[status];
   const words = label ?? look.label;
   const classes = ['ow-status', `ow-status-${look.tone}`, status === 'running' ? 'ow-status-turning' : '', className].filter(Boolean).join(' ');
-  const strokeWidth = (ICON_STROKE * 24) / size;
+  const strokeWidth = (strokeFor(size) * 24) / size;
   const shape = status === 'needs-you'
     ? <NeedsYouGlyph size={size} dot="currentColor" aria-hidden />
     : (
@@ -123,4 +125,24 @@ export function StatusIndicator({ status, size = 16, label, showLabel = false, c
       {showLabel && <span className="ow-status-label">{words}</span>}
     </span>
   );
+}
+
+/** The qualifier a status word carries, in the order a row's badge picks one. */
+function qualifierOf(row: TaskRowView): string | null {
+  if (row.status === 'skipped') return row.skipReason ? skippedLabel(row.skipReason) : null;
+  return row.awaiting ?? row.approvals ?? row.receipt ?? row.attaching
+    ?? (row.holdReason ? holdLabel(row.holdReason) : null)
+    ?? (row.blockedBy ? blockedByLabel(row.blockedBy) : null);
+}
+
+/**
+ * The status word with its reason and, for a quiet task, how long it has been
+ * quiet: a plan panel row's third line and a graph card's, so the two never
+ * word one task differently (docs/desktop/design.md, Task row contents).
+ */
+export function statusLineOf(row: TaskRowView, look: StatusLook, idleSince?: string | null, now: Date = new Date()): string {
+  const qualifier = qualifierOf(row);
+  const quiet = row.status === 'quiet' ? elapsedSince(idleSince ?? undefined, now.getTime()) : '';
+  const line = qualifier ? (qualifier.startsWith(look.label) ? qualifier : `${look.label} · ${qualifier}`) : look.label;
+  return quiet ? `${line} · quiet for ${quiet}` : line;
 }

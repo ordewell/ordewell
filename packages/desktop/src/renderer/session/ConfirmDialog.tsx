@@ -1,13 +1,24 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { Button } from '@ordewell/ui/design';
 import type { ConfirmationRequest } from '@ordewell/ui/host';
+import './confirm.css';
 
 /**
  * A confirmation, with a kind this window may name beyond ui's own: the
  * checkout's and the Git view's questions are asked only here, and ui's
  * words are not theirs to decide.
  */
-export type WindowConfirmation<C extends string> = Omit<ConfirmationRequest<C>, 'kind'> & { kind: string };
+export type WindowConfirmation<C extends string> = Omit<ConfirmationRequest<C>, 'kind'> & {
+  kind: string;
+  /** The first choice destroys something: it is drawn in the failure colour, and focus still starts on Cancel (checklist A4). */
+  destructive?: boolean;
+  /** What the dismissing button says when "Cancel" would mislead: a refusal is closed, not cancelled. */
+  cancelLabel?: string;
+};
+
+/** ui's own confirmations whose yes cannot be undone from the window. */
+const DESTRUCTIVE_KINDS: ReadonlySet<string> = new Set(['remove_task', 'revert_task', 'discard_run', 'discard_changes']);
 
 interface DialogProps<C extends string> {
   request: WindowConfirmation<C>;
@@ -16,6 +27,7 @@ interface DialogProps<C extends string> {
 }
 
 function ConfirmDialog<C extends string>({ request, body, answer }: DialogProps<C>): JSX.Element {
+  const destructive = request.destructive ?? DESTRUCTIVE_KINDS.has(request.kind);
   const panel = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const before = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -45,9 +57,16 @@ function ConfirmDialog<C extends string>({ request, body, answer }: DialogProps<
         {body}
         {request.detail && <p className="session-confirm-detail">{request.detail}</p>}
         <div className="session-confirm-actions">
-          <button type="button" className="session-confirm-cancel" onClick={() => answer(null)}>Cancel</button>
+          <Button className="session-confirm-cancel" onClick={() => answer(null)}>{request.cancelLabel ?? 'Cancel'}</Button>
           {request.choices.map((choice, i) => (
-            <button key={choice.id} type="button" className={i === 0 ? 'frame-primary' : 'session-confirm-choice'} onClick={() => answer(choice.id)}>{choice.label}</button>
+            <Button
+              key={choice.id}
+              variant={i === 0 && !destructive ? 'primary' : i === 0 ? 'danger' : 'secondary'}
+              className={i === 0 ? `frame-primary${destructive ? ' session-confirm-destructive' : ''}` : 'session-confirm-choice'}
+              onClick={() => answer(choice.id)}
+            >
+              {choice.label}
+            </Button>
           ))}
         </div>
       </div>

@@ -928,13 +928,14 @@ export class OrchestratorPool {
       runners
         .filter((p) => installedIds.has(p.manifest.name))
         .map(async (p): Promise<RunnersResponse['runners'][number] | null> => {
-          const { usable, auth } = await installation.plannerUsability(p.manifest.name);
+          const { usable, auth, version } = await installation.plannerUsability(p.manifest.name);
           if (!usable) return null;
           return {
             id: p.manifest.name,
             name: p.manifest.displayName,
             enabled: enabled.has(p.manifest.name),
             ...(auth ? { auth } : {}),
+            ...(version ? { version } : {}),
           };
         }),
     );

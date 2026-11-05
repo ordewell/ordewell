@@ -1,6 +1,6 @@
 # Packaging for the desktop app (docs/desktop/design.md, Distribution).
-# `npm run desktop:package` runs this for the current OS; release.yml runs it on
-# each OS and attaches the installers to the GitHub Release.
+# `npm run desktop:package` runs this for the current OS; desktop-build.yml runs it on
+# each OS, and release.yml attaches the installers it builds to the GitHub Release.
 appId: ai.ordewell.desktop
 productName: Ordewell
 copyright: Copyright © Alessandro Costanzo Ciano
@@ -52,9 +52,10 @@ artifactName: Ordewell-${version}-${os}-${arch}.${ext}
 # (node-pty's binding.gyp), a Visual Studio component the runner must carry.
 npmRebuild: true
 # No signing identity is required: with none configured the build is unsigned
-# and succeeds (scripts/package.mjs turns identity discovery off). Signing and
-# notarization arrive with their own slice, and auto-update stays off until then
-# (AUTO_UPDATE_ENABLED in src/main/updater.ts).
+# (ad hoc on macOS) and succeeds. scripts/package.mjs reads the signing secrets
+# and adds the identity, notarization or Windows signing route on the command
+# line; it also bakes AUTO_UPDATE_ENABLED (src/main/updater.ts), on only for a
+# build signed here, and notarized on macOS (ADR-0060 H9).
 # ADR-0060 H4: the binary itself refuses the ways a packaged Electron app can
 # be made to run code that is not its own. Applied by electron-builder after it
 # unpacks the Electron distribution, before the app is signed.
@@ -68,7 +69,7 @@ electronFuses:
   grantFileProtocolExtraPrivileges: false
   loadBrowserProcessSpecificV8Snapshot: false
 # The feed electron-updater reads once updates are enabled. `--publish never`
-# keeps electron-builder from uploading: release.yml attaches the installers.
+# keeps electron-builder from uploading: desktop-build.yml attaches the installers.
 publish:
   provider: github
   owner: ordewell
@@ -77,6 +78,15 @@ publish:
 mac:
   category: public.app-category.developer-tools
   icon: icon.icns
+  # A signed build runs under the hardened runtime, which notarization
+  # requires. The ad hoc build turns it off (scripts/package.mjs).
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # On only when scripts/package.mjs has the credentials: a maintainer's local
+  # build with an identity signs without trying to notarize. electron-builder
+  # notarizes the app and staples the ticket to it.
+  notarize: false
   target:
     - target: dmg
       arch: [arm64, x64]
@@ -86,6 +96,10 @@ dmg:
   title: Ordewell ${version}
 win:
   icon: icon.ico
+  # A signed build records its publisher in app-update.yml, and electron-updater
+  # then installs only an update signed by that publisher. The default; set
+  # here because the guarantee rests on it.
+  verifyUpdateCodeSignature: true
   target:
     - target: nsis
       arch: [x64]

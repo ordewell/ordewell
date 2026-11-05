@@ -1,6 +1,7 @@
 import React from 'react';
 import type { PlannerResendState } from '@ordewell/core';
 import { resumeTime } from '@ordewell/core/plan-utils';
+import { runnerName } from '../../design/runners';
 
 /**
  * A planner turn that ended on the planner's usage limit is sent again at the
@@ -9,7 +10,7 @@ import { resumeTime } from '@ordewell/core/plan-utils';
  */
 export default function PlannerResendBar({ resend, onCancel }: { resend?: PlannerResendState; onCancel: () => void }) {
   if (!resend?.at) return null;
-  const whose = resend.runner ? `${resend.runner}'s` : 'the planner\'s';
+  const whose = resend.runner ? `${runnerName(resend.runner)}'s` : 'the planner\'s';
   return (
     <div className="planner-resend" role="status">
       <span className="planner-resend-text">Resending at {resumeTime(new Date(resend.at))}, once {whose} usage limit resets</span>

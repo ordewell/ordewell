@@ -1,10 +1,12 @@
 import { createContext, useContext, useSyncExternalStore } from 'react';
-import type { PaneSizes } from '../../shared/bridge';
+import type { SavedLayout } from '../../shared/bridge';
 import type {
-  ActivityId, Banner, Command, FrameApi, OpenTabOptions, PanelView, PrimaryAction, SidebarSection, SlotId, SlotView,
-  TabKind, TabRef, Unregister,
+  ActivityBadge, ActivityId, Banner, Command, FrameApi, OpenTabOptions, PanelView, PlanProgress, PrimaryAction, SidebarSection,
+  SlotId, SlotView, TabKind, TabRef, Unregister,
 } from './api';
-import { besideGroup, initialLayout, reduceLayout, tabKey, type Layout, type LayoutAction } from './layout';
+import {
+  besideGroup, initialLayout, reduceLayout, savedLayout, tabKey, type Layout, type LayoutAction, type Viewport,
+} from './layout';
 
 /** The frame's own overlays: one at a time, so opening one closes another. */
 export type Overlay = 'palette' | 'needsYou' | 'more' | undefined;
@@ -18,6 +20,9 @@ export interface FrameState {
   commands: readonly Command[];
   primary: PrimaryAction | undefined;
   needsYou: number;
+  /** What the plan panel's header and rail count; undefined while there is no plan. */
+  planProgress: PlanProgress | undefined;
+  badges: Readonly<Partial<Record<ActivityId, ActivityBadge>>>;
   readOnly: boolean;
   banners: readonly Banner[];
   /** `serial` changes with each message, so the same words said twice are said twice. */
@@ -28,10 +33,15 @@ export interface FrameState {
 export interface FrameOptions {
   workspace: string;
   platform: string;
-  sizes: PaneSizes;
-  /** Where the pane sizes go once a drag or a key settles them; the prefs store in the app. */
-  persistSizes?(sizes: PaneSizes): void;
+  /** The window's size when the frame opens; a test's default is the 1280 band's window. */
+  viewport?: Viewport;
+  /** How the user left this workspace's window last time. */
+  layout?: SavedLayout;
+  /** Where the user's layout goes when it changes, once a drag settles; the prefs store in the app. */
+  persistLayout?(layout: SavedLayout): void;
 }
+
+const DEFAULT_VIEWPORT: Viewport = { width: 1280, height: 820 };
 
 function byOrder<T extends { order?: number }>(items: readonly T[]): T[] {
   // Array.prototype.sort is stable, so equal orders keep registration order.
@@ -47,10 +57,11 @@ export class FrameStore {
   readonly api: FrameApi;
   private state: FrameState;
   private readonly listeners = new Set<() => void>();
+  private persisted: string;
 
   constructor(private readonly options: FrameOptions) {
     this.state = {
-      layout: initialLayout(options.sizes),
+      layout: initialLayout(options.viewport ?? DEFAULT_VIEWPORT, options.layout),
       sidebars: [],
       tabKinds: {},
       panels: [],
@@ -58,11 +69,14 @@ export class FrameStore {
       commands: [],
       primary: undefined,
       needsYou: 0,
+      planProgress: undefined,
+      badges: {},
       readOnly: false,
       banners: [],
       announcement: { text: '', serial: 0 },
       overlay: undefined,
     };
+    this.persisted = JSON.stringify(savedLayout(this.state.layout));
     this.api = this.makeApi();
   }
 
@@ -77,16 +91,23 @@ export class FrameStore {
 
   dispatch(action: LayoutAction): void {
     const layout = reduceLayout(this.state.layout, action);
-    if (layout !== this.state.layout) this.set({ layout });
+    if (layout === this.state.layout) return;
+    this.set({ layout });
+    // A drag resizes many times a second: it is kept once, when it lets go (commitLayout).
+    if (action.type !== 'resize') this.commitLayout();
   }
 
   setOverlay(overlay: Overlay): void {
     if (overlay !== this.state.overlay) this.set({ overlay });
   }
 
-  /** A drag or key has let go of a sash: the sizes it left are kept for the next window. */
-  commitSizes(): void {
-    this.options.persistSizes?.(this.state.layout.sizes);
+  /** Keeps the user's layout for this workspace's next window, if it changed since it was last kept. */
+  commitLayout(): void {
+    const saved = savedLayout(this.state.layout);
+    const json = JSON.stringify(saved);
+    if (json === this.persisted) return;
+    this.persisted = json;
+    this.options.persistLayout?.(saved);
   }
 
   /** The commands the palette lists and the keyboard reaches now. */
@@ -116,9 +137,11 @@ export class FrameStore {
   }
 
   private makeApi(): FrameApi {
+    const readOnly = (): boolean => this.state.readOnly;
     return {
       workspace: this.options.workspace,
       platform: this.options.platform,
+      get readOnly() { return readOnly(); },
 
       registerSidebar: (section: SidebarSection) => {
         return this.register('sidebars', section, (o) => o.activity === section.activity && o.id === section.id, byOrder);
@@ -133,7 +156,8 @@ export class FrameStore {
         };
       },
       registerPanel: (panel: PanelView) => {
-        return this.register('panels', panel, (o) => o.region === panel.region && o.id === panel.id);
+        // One view fills a region, so a second registration replaces the first.
+        return this.register('panels', panel, (o) => o.region === panel.region);
       },
       registerSlot: (slot: SlotView) => {
         return this.register('slots', slot, (o) => o.slot === slot.slot && o.id === slot.id, byOrder);
@@ -144,7 +168,10 @@ export class FrameStore {
 
       openTab: (tab: TabRef, options: OpenTabOptions = {}) => {
         const { layout } = this.state;
-        const group = options.beside ? besideGroup(layout) : layout.focusedGroup;
+        // A tab already open is focused where it is, so a task opened from anywhere lands on its one tab.
+        const key = tabKey(tab);
+        const where = layout.groups.findIndex((candidate) => candidate.tabs.some((open) => open.key === key));
+        const group = options.beside ? besideGroup(layout) : where >= 0 ? where : layout.focusedGroup;
         this.dispatch({ type: 'open', tab, preview: options.preview ?? false, group });
       },
       closeTab: (tab) => {
@@ -155,6 +182,12 @@ export class FrameStore {
       },
       showActivity: (activity: ActivityId) => {
         this.dispatch({ type: 'activity', activity });
+      },
+      showPlan: () => {
+        this.dispatch({ type: 'togglePlan', open: true });
+      },
+      showSession: (sessionId: string) => {
+        this.dispatch({ type: 'session', sessionId });
       },
       runCommand: (id: string) => {
         const command = this.enabledCommands().find((candidate) => candidate.id === id);
@@ -167,6 +200,18 @@ export class FrameStore {
       setNeedsYouCount: (count: number) => {
         const needsYou = Math.max(0, Math.floor(count));
         if (needsYou !== this.state.needsYou) this.set({ needsYou });
+      },
+      setPlanProgress: (progress: PlanProgress | undefined) => {
+        const now = this.state.planProgress;
+        if (JSON.stringify(now) !== JSON.stringify(progress)) this.set({ planProgress: progress });
+      },
+      setActivityBadge: (activity: ActivityId, badge: ActivityBadge | undefined) => {
+        const now = this.state.badges[activity];
+        if (JSON.stringify(now) === JSON.stringify(badge)) return;
+        const badges = { ...this.state.badges };
+        if (badge) badges[activity] = badge;
+        else delete badges[activity];
+        this.set({ badges });
       },
       setReadOnly: (readOnly: boolean) => {
         if (readOnly !== this.state.readOnly) this.set({ readOnly });

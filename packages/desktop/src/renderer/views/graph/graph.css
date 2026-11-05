@@ -1,85 +1,320 @@
-/* The Plan graph: a React Flow canvas of task nodes. Colours are the status tokens, so no state rests on colour alone. */
+/* The Plan graph (design W5): stage columns of TaskSummary cards, with the edges drawn under them. Colours are tokens, so no state rests on colour alone. */
 
-.plan-graph { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
-.plan-graph-toolbar { display: flex; align-items: center; gap: var(--ow-space-3); padding: var(--ow-space-2) var(--ow-space-5); border-bottom: 1px solid var(--ow-border); font: var(--ow-type-small); color: var(--ow-fg-secondary); }
-.plan-graph-toolbar .plan-graph-note { margin-inline-start: auto; }
-.plan-graph-canvas { position: relative; flex: 1; min-height: 0; background: var(--ow-bg); }
-.plan-graph-legend { display: flex; flex-wrap: wrap; gap: var(--ow-space-5); padding: var(--ow-space-2) var(--ow-space-5); border-top: 1px solid var(--ow-border); font: var(--ow-type-small); color: var(--ow-fg-secondary); }
-.plan-graph-legend span { display: inline-flex; align-items: center; gap: var(--ow-space-2); }
-.plan-graph-legend svg { width: 28px; height: 8px; }
-
-/* React Flow ships a light palette and a .dark class this app never sets, so its controls, minimap and
-   background dots would stay white in a dark window; every one is pointed at a token instead. */
-.plan-graph .react-flow {
-  --ow-graph-line: var(--ow-border-contrast, var(--ow-fg-secondary));
-  --xy-background-color: var(--ow-bg);
-  --xy-edge-stroke-default: var(--ow-fg-secondary);
-  --xy-background-pattern-color: var(--ow-border-widget);
-  --xy-controls-button-background-color: var(--ow-bg-widget);
-  --xy-controls-button-background-color-hover: var(--ow-bg-hover);
-  --xy-controls-button-color: var(--ow-fg);
-  --xy-controls-button-color-hover: var(--ow-fg);
-  --xy-controls-button-border-color: var(--ow-border);
-  --xy-controls-box-shadow: 0 0 2px 1px var(--ow-shadow-color, rgb(0 0 0 / 0.2));
-  --xy-minimap-background-color: var(--ow-bg-sidebar);
-  --xy-minimap-mask-background-color: color-mix(in srgb, var(--ow-bg) 70%, transparent);
-  --xy-minimap-node-background-color: var(--ow-border-widget);
+.plan-graph {
+  --graph-gap: 56px;
+  --graph-pad: var(--ow-space-4);
+  --graph-card-width: 264px;
+  --graph-card-gap: 12px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
-.plan-graph .react-flow__node { padding: 0; border: 0; background: transparent; width: auto; }
-.plan-graph .react-flow__attribution { display: none; }
-.graph-handle { opacity: 0; pointer-events: none; }
 
-.graph-node { position: relative; width: 264px; border: 1px solid var(--ow-border-widget); border-radius: var(--ow-radius-md); background: var(--ow-bg-widget); color: var(--ow-fg); font: var(--ow-type-small); }
-.graph-node[data-selected='true'] { border-color: var(--ow-accent); background: var(--ow-bg-selected); }
-.graph-node[data-critical='true'] { border-color: var(--ow-status-running); }
-.graph-node[data-status='failed'] { border-color: var(--ow-status-failed); }
-.graph-node[data-status='needs-you'] { border-color: var(--ow-status-attention); }
-.graph-node[data-status='skipped'] .graph-node-title, .graph-node[data-status='not-started'] .graph-node-title { color: var(--ow-fg-secondary); }
+/* The stage strip. */
+.plan-graph-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--ow-space-1);
+  height: var(--ow-height-stage-strip);
+  flex: none;
+  padding: 0 var(--ow-space-2);
+  border-bottom: 1px solid var(--ow-border);
+  font: var(--ow-type-small);
+  color: var(--ow-fg-secondary);
+}
+.graph-stage-chips {
+  display: flex;
+  align-items: center;
+  gap: var(--ow-space-1);
+  min-width: 0;
+  height: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.graph-stage-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ow-space-1);
+  flex: none;
+  min-height: var(--ow-hit);
+  padding: 0 var(--ow-space-2);
+  border: 1px solid var(--ow-border-widget);
+  border-radius: var(--ow-radius-pill);
+  background: var(--ow-bg-widget);
+  color: var(--ow-fg);
+  font: var(--ow-type-small);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.graph-stage-chip:hover { background: var(--ow-bg-hover); }
+.graph-stage-chip:focus-visible { outline: var(--ow-focus-width) solid var(--ow-focus-ring); outline-offset: calc(var(--ow-focus-offset) * -1); }
+.graph-stage-chip[aria-current='location'] { border-color: var(--ow-accent); }
+.graph-stage-count { color: var(--ow-fg-secondary); font-variant-numeric: tabular-nums; }
+/* The bracket under the chips in view: one line across them and the gaps between, with ticks at its ends. */
+.graph-stage-chip[data-in-view]::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: calc(var(--ow-space-1) * -1);
+  bottom: -3px;
+  height: 2px;
+  background: var(--ow-fg-secondary);
+}
+.graph-stage-chip[data-view-end]::after { right: 0; }
+.graph-stage-chip[data-view-start]::after { border-bottom-left-radius: 1px; }
+.graph-strip-spacer { flex: 1; }
+.graph-density { display: inline-flex; flex: none; border: 1px solid var(--ow-border-widget); border-radius: var(--ow-radius-sm); overflow: hidden; }
+.graph-density button {
+  min-height: var(--ow-hit);
+  padding: 0 var(--ow-space-2);
+  border: 0;
+  background: transparent;
+  color: var(--ow-fg-secondary);
+  font: var(--ow-type-small);
+  cursor: pointer;
+}
+.graph-density button + button { border-inline-start: 1px solid var(--ow-border-widget); }
+.graph-density button[aria-pressed='true'] { background: var(--ow-bg-selected); color: var(--ow-fg); }
+.graph-density button:hover { background: var(--ow-bg-hover); }
+.graph-density button:focus-visible { outline: var(--ow-focus-width) solid var(--ow-focus-ring); outline-offset: calc(var(--ow-focus-offset) * -1); }
 
-.graph-node-face { display: flex; flex-direction: column; gap: 2px; width: 100%; box-sizing: border-box; height: 78px; padding: var(--ow-space-3) var(--ow-space-4); padding-inline-end: 64px; border: 0; border-radius: var(--ow-radius-md); background: transparent; color: inherit; font: inherit; text-align: start; cursor: pointer; overflow: hidden; }
-.graph-node-face:focus-visible { outline: var(--ow-focus-width) solid var(--ow-focus-ring); outline-offset: var(--ow-focus-offset); }
-.graph-node-head { display: flex; align-items: center; gap: var(--ow-space-3); min-width: 0; font: var(--ow-type-body-strong); }
-.graph-node-order { color: var(--ow-fg-secondary); font-variant-numeric: tabular-nums; }
-.graph-node-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.graph-node-meta { display: flex; align-items: center; gap: var(--ow-space-2); min-width: 0; color: var(--ow-fg-secondary); white-space: nowrap; overflow: hidden; }
-.graph-node-status { color: var(--ow-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.graph-badge { padding: 0 var(--ow-space-3); border: 1px solid var(--ow-border-widget); border-radius: var(--ow-radius-pill); font: var(--ow-type-caption); color: var(--ow-fg-secondary); }
-.graph-badge[data-flag='approval'], .graph-badge[data-flag='waits-for-approval'], .graph-badge[data-flag='checkpoint'], .graph-badge[data-flag='usage-limit'] { color: var(--ow-status-attention); border-color: var(--ow-status-attention); }
-.graph-badge[data-flag='conflict'], .graph-badge[data-flag='repair'] { color: var(--ow-status-failed); border-color: var(--ow-status-failed); }
-.graph-badge[data-flag='merge-gate'] { color: var(--ow-status-merge); border-color: var(--ow-status-merge); }
-.graph-badge[data-flag='hold'] { color: var(--ow-status-blocked); border-color: var(--ow-status-blocked); }
-.graph-badge[data-loop] { color: var(--ow-fg); }
+/* The scroller: native scrolling, snapped to each stage's left edge, so wheel, trackpad and keys all land on one. */
+.plan-graph-scroller {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  scroll-snap-type: x mandatory;
+  scroll-padding-inline-start: var(--graph-pad);
+  background: var(--ow-bg);
+}
+.plan-graph-canvas {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: var(--graph-gap);
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 100%;
+  min-height: 100%;
+  padding: 0 var(--graph-pad) var(--ow-space-6);
+  /* Its own stacking context, so the lanes can paint under the edges and the edges under the cards. */
+  isolation: isolate;
+}
+.plan-graph-canvas[data-density='compact'] { --graph-card-width: 216px; --graph-card-gap: 8px; }
 
-.graph-node-chat { position: absolute; top: var(--ow-space-2); inset-inline-end: var(--ow-space-2); padding: 0 var(--ow-space-3); border: 1px solid var(--ow-border-widget); border-radius: var(--ow-radius-sm); background: var(--ow-bg-widget); color: var(--ow-fg); font: var(--ow-type-caption); cursor: pointer; }
-.graph-node-chat:hover { background: var(--ow-bg-hover); }
-.graph-node-fold { display: flex; align-items: center; gap: var(--ow-space-2); width: 100%; padding: var(--ow-space-1) var(--ow-space-4); border: 0; border-top: 1px solid var(--ow-border); border-radius: 0 0 var(--ow-radius-md) var(--ow-radius-md); background: transparent; color: var(--ow-fg-secondary); font: var(--ow-type-caption); text-align: start; cursor: pointer; }
-.graph-node-fold:hover { background: var(--ow-bg-hover); }
-.graph-node-subtasks { margin: 0; padding: 0 var(--ow-space-4) var(--ow-space-2); list-style: none; }
-.graph-node-subtasks li { display: flex; align-items: center; gap: var(--ow-space-3); height: 20px; min-width: 0; color: var(--ow-fg-secondary); }
-.graph-node-subtasks li > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.graph-column {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--graph-card-gap);
+  width: var(--graph-card-width);
+  flex: none;
+  scroll-snap-align: start;
+}
+/*
+ * A stage is a quiet lane at the panel's step, not a box: no edge, and under
+ * the edge layer, since an edge that skips a stage crosses the lanes between.
+ * The cards lift off it like any card off the panel (design.md, Surfaces).
+ */
+.graph-column::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: 0 calc(var(--ow-space-2) * -1) calc(var(--ow-space-4) * -1);
+  border-radius: 0 0 var(--ow-radius-lg) var(--ow-radius-lg);
+  background: var(--ow-surface-panel);
+}
+/* The header stays while the columns scroll under it; it is the lane's own fill, so cards pass behind it. */
+.graph-column-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: var(--ow-space-3) 0 var(--ow-space-2);
+  background: var(--ow-surface-panel);
+  color: var(--ow-fg-secondary);
+  font: var(--ow-type-overline);
+  letter-spacing: var(--ow-overline-tracking);
+  text-transform: uppercase;
+}
 
-.graph-peek { position: absolute; z-index: 10; top: calc(100% + var(--ow-space-2)); inset-inline-start: 0; width: 320px; padding: var(--ow-space-3) var(--ow-space-4); background: var(--ow-bg-overlay); border: 1px solid var(--ow-border-widget); border-radius: var(--ow-radius-lg); box-shadow: var(--ow-elevation-raised); pointer-events: none; }
-.graph-peek pre { margin: var(--ow-space-2) 0 0; max-height: 8.5em; overflow: hidden; font: var(--ow-type-code); white-space: pre-wrap; word-break: break-word; }
-.graph-peek ul { margin: 0; padding-inline-start: var(--ow-space-5); }
+/* The card: the face (its three rows) is one button; Open chat and the fold are its siblings, never inside it. */
+.graph-card {
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid var(--ow-surface-card-border);
+  border-radius: var(--ow-radius-lg);
+  background: var(--ow-surface-card);
+  box-shadow: var(--ow-elevation-card);
+  color: var(--ow-fg);
+  font: var(--ow-type-small);
+  transition: border-color var(--ow-motion-fast) var(--ow-motion-easing), background var(--ow-motion-fast) var(--ow-motion-easing);
+}
+.graph-card:hover { border-color: color-mix(in srgb, var(--ow-accent) 20%, var(--ow-surface-card-border)); background: var(--ow-surface-card-hover); }
+.graph-card[data-related='true'] { border-color: var(--ow-accent); }
+/* Selection is the accent at two pixels on the selected step, as the edges it highlights are: the tinted border alone is too faint to find the card by. */
+.graph-card[data-selected='true'] { border-color: var(--ow-accent); background: var(--ow-surface-card-selected); box-shadow: inset 0 0 0 1px var(--ow-accent), var(--ow-elevation-card); }
+.graph-card[data-critical='true'] { border-inline-start: 2px solid var(--ow-fg-secondary); }
+.graph-card[data-status='failed'] { border-color: var(--ow-status-failed); }
+.graph-card[data-status='needs-you'] { border-color: var(--ow-status-attention); }
+.graph-card[data-status='skipped'] .graph-card-heading,
+.graph-card[data-status='not-started'] .graph-card-heading { color: var(--ow-fg-secondary); }
 
-.plan-graph .react-flow__edge-path { stroke: var(--ow-graph-line); stroke-width: 1.5; }
-.plan-graph .graph-edge--satisfied .react-flow__edge-path { stroke: var(--ow-status-passed); }
-.plan-graph .graph-edge--active .react-flow__edge-path { stroke: var(--ow-status-running); stroke-dasharray: 6 4; animation: graph-edge-flow 1s linear infinite; }
-.plan-graph .graph-edge--failed .react-flow__edge-path { stroke: var(--ow-status-failed); stroke-dasharray: 2 3; }
-.plan-graph .graph-edge--blocked .react-flow__edge-path { stroke: var(--ow-status-blocked); stroke-dasharray: 8 4; }
-.plan-graph .graph-edge--merge .react-flow__edge-path { stroke: var(--ow-status-merge); stroke-dasharray: 10 3 2 3; }
-.plan-graph .graph-edge--pending .react-flow__edge-path { stroke: var(--ow-graph-line); }
-.plan-graph .graph-edge--critical .react-flow__edge-path { stroke-width: 3.5; }
-@keyframes graph-edge-flow { to { stroke-dashoffset: -20; } }
+/*
+ * Every row has a fixed height, so the face is exactly its token high
+ * whatever the task says: the cards of a column line up, and the edges
+ * anchored to their middles stay put. A long title or model shortens; it
+ * never grows the card.
+ */
+.graph-card-face {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: var(--ow-space-1);
+  box-sizing: border-box;
+  width: 100%;
+  height: var(--ow-height-card-comfortable);
+  padding: var(--ow-space-2) var(--ow-space-2) var(--ow-space-2) var(--ow-space-3);
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--ow-radius-lg);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+  user-select: none;
+}
+.graph-card[data-density='compact'] .graph-card-face { height: var(--ow-height-card-compact); }
+.graph-card-face:focus-visible { outline: var(--ow-focus-width) solid var(--ow-focus-ring); outline-offset: var(--ow-focus-offset); }
+.graph-card-face > * { flex: none; min-width: 0; }
 
-.graph-menu { position: fixed; z-index: 30; min-width: 180px; margin: 0; padding: var(--ow-space-2) 0; list-style: none; background: var(--ow-bg-overlay); border: 1px solid var(--ow-border-widget); border-radius: var(--ow-radius-lg); box-shadow: var(--ow-elevation-raised); }
-.graph-menu button { width: 100%; padding: var(--ow-space-3) var(--ow-space-5); border: 0; background: transparent; color: var(--ow-fg); font: var(--ow-type-body); text-align: start; cursor: pointer; }
+/* Row 1: the status shape in a line-high box, so it sits on the title's first line however many lines the title takes. */
+.graph-card-head { display: flex; align-items: flex-start; gap: var(--ow-space-2); height: 40px; }
+.graph-card[data-density='compact'] .graph-card-head { height: 20px; }
+.graph-card-shape { display: inline-flex; flex: none; align-items: center; justify-content: center; height: 20px; }
+.graph-card-heading {
+  display: -webkit-box;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font: var(--ow-type-body-strong);
+  overflow-wrap: anywhere;
+}
+.graph-card[data-density='compact'] .graph-card-heading { display: block; text-overflow: ellipsis; white-space: nowrap; }
+.graph-card-order { color: var(--ow-fg-secondary); font-variant-numeric: tabular-nums; }
+
+/* Row 2: who does it. The runner keeps its whole badge; the model and the effort shorten first (CardAssignment). */
+.graph-card-lane {
+  display: flex;
+  align-items: center;
+  gap: var(--ow-space-2);
+  height: 20px;
+  overflow: hidden;
+  color: var(--ow-fg-secondary);
+  font: var(--ow-type-small);
+  white-space: nowrap;
+}
+.graph-card-lane .graph-card-runner, .graph-card-lane .graph-card-who { flex: none; }
+.graph-card-part { display: inline-flex; align-items: center; gap: var(--ow-space-1); min-width: 0; }
+.graph-card-part > svg { flex: none; }
+.graph-card-model { flex: 0 1 auto; }
+.graph-card-effort { flex: none; }
+.graph-card-part-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.graph-card-command { font: var(--ow-type-code-small); }
+
+/* Row 3, Comfortable only: what kind of task, then where it stands and for how long. */
+.graph-card-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--ow-space-1);
+  height: 20px;
+  overflow: hidden;
+  color: var(--ow-fg-secondary);
+  white-space: nowrap;
+}
+.graph-card-foot .ow-badge { flex: none; }
+.graph-card-foot .ow-badge[data-flag='hold'] { color: var(--ow-status-blocked); }
+.graph-card-foot .ow-badge[data-loop] { color: var(--ow-fg); }
+.graph-card-status-line { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--ow-fg); }
+.graph-card-elapsed { flex: none; font-variant-numeric: tabular-nums; }
+
+/* Open chat sits on the row that keeps room for it: the last in Comfortable, the title's in Compact. */
+.graph-card[data-chat='true'] .graph-card-foot,
+.graph-card[data-chat='true'][data-density='compact'] .graph-card-head { padding-inline-end: var(--ow-hit-icon); }
+.graph-card-chat {
+  position: absolute;
+  inset-inline-end: var(--ow-space-1);
+  top: calc(var(--ow-height-card-comfortable) - var(--ow-space-2) - 10px - var(--ow-hit-icon) / 2);
+}
+.graph-card[data-density='compact'] .graph-card-chat { top: calc(var(--ow-space-2) + 10px - var(--ow-hit-icon) / 2); }
+.graph-card-chat:focus-visible, .graph-card-fold:focus-visible { outline: var(--ow-focus-width) solid var(--ow-focus-ring); outline-offset: calc(var(--ow-focus-offset) * -1); }
+
+.graph-card-fold {
+  display: flex;
+  align-items: center;
+  gap: var(--ow-space-1);
+  width: 100%;
+  min-height: var(--ow-hit);
+  padding: 0 var(--ow-space-3);
+  border: 0;
+  border-top: 1px solid var(--ow-surface-card-border);
+  border-radius: 0 0 var(--ow-radius-lg) var(--ow-radius-lg);
+  background: transparent;
+  color: var(--ow-fg-secondary);
+  font: var(--ow-type-caption);
+  text-align: start;
+  cursor: pointer;
+}
+.graph-card-fold:hover { background: var(--ow-surface-card-hover); }
+.graph-card-subtasks { margin: 0; padding: 0 var(--ow-space-3) var(--ow-space-1); list-style: none; }
+.graph-card-subtasks li { display: flex; align-items: center; gap: var(--ow-space-2); min-height: 20px; min-width: 0; color: var(--ow-fg-secondary); }
+.graph-card-subtasks li > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The peek opens beside its card, over the gap and the next column, so it hides nothing of the card itself. */
+.graph-peek {
+  position: absolute;
+  z-index: 10;
+  top: 0;
+  inset-inline-start: calc(100% + var(--ow-space-2));
+  width: 320px;
+  padding: var(--ow-space-1) var(--ow-space-2);
+  background: var(--ow-surface-overlay);
+  border: 1px solid var(--ow-border-widget);
+  border-radius: var(--ow-radius-lg);
+  box-shadow: var(--ow-elevation-raised);
+  pointer-events: none;
+}
+.graph-peek pre { margin: var(--ow-space-1) 0 0; max-height: 8.5em; overflow: hidden; font: var(--ow-type-code); white-space: pre-wrap; word-break: break-word; }
+.graph-peek ul { margin: 0; padding-inline-start: var(--ow-space-3); }
+
+/* Edges, under the cards. */
+/* Sized by the canvas, never by a measurement of it: a measured size would count the overlay itself and keep a scrollbar it once caused. */
+.graph-edges { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 0; overflow: visible; pointer-events: none; }
+.graph-edge { fill: none; stroke: var(--ow-border-control); stroke-width: 1.5; transition: opacity var(--ow-motion-fast) var(--ow-motion-easing); }
+.graph-edge[data-state='pending'] { stroke-dasharray: 4 3; }
+.graph-edge[data-critical] { stroke: var(--ow-fg-secondary); stroke-width: 2; stroke-dasharray: none; }
+.graph-edge[data-tone='related'] { stroke: var(--ow-accent); stroke-width: 2; stroke-dasharray: none; }
+.graph-edge[data-tone='faint'] { opacity: 0.35; }
+.graph-arrow--base path { fill: var(--ow-border-control); }
+.graph-arrow--critical path { fill: var(--ow-fg-secondary); }
+.graph-arrow--related path { fill: var(--ow-accent); }
+
+.plan-graph-legend { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ow-space-3); flex: none; padding: var(--ow-space-1) var(--ow-space-3); border-top: 1px solid var(--ow-border); font: var(--ow-type-small); color: var(--ow-fg-secondary); }
+.plan-graph-legend span { display: inline-flex; align-items: center; gap: var(--ow-space-1); }
+.plan-graph-legend svg { width: 28px; height: 8px; }
+.plan-graph-legend .plan-graph-note { margin-inline-start: auto; }
+.graph-legend-related { stroke: var(--ow-accent); stroke-width: 2; }
+.graph-legend-critical { stroke: var(--ow-fg-secondary); stroke-width: 2; }
+
+.graph-menu { position: fixed; z-index: 30; min-width: 180px; margin: 0; padding: var(--ow-space-1) 0; list-style: none; background: var(--ow-surface-overlay); border: 1px solid var(--ow-border-widget); border-radius: var(--ow-radius-lg); box-shadow: var(--ow-elevation-raised); }
+.graph-menu button { width: 100%; min-height: var(--ow-hit); padding: var(--ow-space-1) var(--ow-space-3); border: 0; background: transparent; color: var(--ow-fg); font: var(--ow-type-body); text-align: start; cursor: pointer; }
 .graph-menu button:hover, .graph-menu button:focus-visible { background: var(--ow-bg-hover); }
 
-@media (prefers-reduced-motion: reduce) {
-  .plan-graph .graph-edge--active .react-flow__edge-path { animation: none; }
-  .plan-graph .react-flow__viewport { transition: none !important; }
-}
-
-.plan-graph .react-flow__arrowhead polyline { stroke: var(--ow-graph-line); fill: var(--ow-graph-line); }
-.plan-graph-note[role='alert'] { padding: var(--ow-space-5); }
+.plan-graph-note[role='alert'] { padding: var(--ow-space-3); }

@@ -22,7 +22,8 @@
     "test:changed": "vitest run --changed --passWithNoTests",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.renderer.json && tsc --noEmit -p tsconfig.e2e.json",
-    "test:desktop-e2e": "playwright test -c playwright.config.ts"
+    "test:desktop-e2e": "playwright test -c playwright.config.ts --project acceptance",
+    "test:desktop-tour": "playwright test -c playwright.config.ts --project tour"
   },
   "dependencies": {
     "@ordewell/web": "^0.12.3",
@@ -30,7 +31,6 @@
     "node-pty": "^1.1.0"
   },
   "devDependencies": {
-    "@dagrejs/dagre": "^3.1.3",
     "@electron/fuses": "^2.1.3",
     "@electron/rebuild": "^4.2.1",
     "@fontsource-variable/inter": "^5.3.0",
@@ -48,7 +48,6 @@
     "@vitejs/plugin-react": "^4.3.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
-    "@xyflow/react": "^12.12.1",
     "electron": "45.2.1",
     "electron-builder": "^26.18.0",
     "jsdom": "^25.0.1",

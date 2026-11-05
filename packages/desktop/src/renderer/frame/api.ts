@@ -1,16 +1,17 @@
 import type { ReactNode } from 'react';
-import type { IconComponent } from '@ordewell/ui/design';
+import type { IconComponent, StatusId } from '@ordewell/ui/design';
 import type { ActivityId, Tab, TabRef } from './layout';
 
 export type { ActivityId, Tab, TabRef, ViewScope } from './layout';
+export { PLANNER_TAB, PLAN_GRAPH_TAB } from './layout';
 
 /** Undo a registration: a view that unmounts or a test that cleans up. */
 export type Unregister = () => void;
 
 /**
  * One section of an activity's sidebar. Several modules may add to one
- * activity, such as Needs you at the head of the Plan sidebar, and they stack
- * by `order`.
+ * activity, such as Needs you at the head of the Sessions sidebar, and they
+ * stack by `order`.
  */
 export interface SidebarSection {
   activity: ActivityId;
@@ -18,6 +19,12 @@ export interface SidebarSection {
   title: string;
   /** Lower first; sections with the same order keep registration order. */
   order?: number;
+  /** Shown beside the section's title, such as Needs you's "(2)"; read each time the frame redraws. */
+  count?(): number | undefined;
+  /** The section's header folds it away, as Needs you's does. */
+  collapsible?: boolean;
+  /** Icon buttons at the right of the section's header, such as Sessions' +. */
+  actions?(): ReactNode;
   render(): ReactNode;
 }
 
@@ -28,9 +35,9 @@ export interface TabKind {
   render(tab: Tab): ReactNode;
 }
 
-/** The planner on the right, the terminal at the bottom. */
+/** The plan panel's list on the right, the terminal at the bottom; one view fills each. */
 export interface PanelView {
-  region: 'right' | 'bottom';
+  region: 'plan' | 'terminal';
   id: string;
   title: string;
   render(): ReactNode;
@@ -40,6 +47,7 @@ export interface PanelView {
 export type SlotId =
   | 'title.breadcrumb'
   | 'title.scope'
+  | 'status.daemon'
   | 'status.lease'
   | 'status.runners'
   | 'status.usage'
@@ -85,6 +93,22 @@ export interface Banner {
   actions?: BannerAction[];
 }
 
+/** The plan panel header's progress and its rail's counts. */
+export interface PlanProgress {
+  done: number;
+  total: number;
+  /** How many tasks are in each status, for the rail; a status with none is left out. */
+  counts: Partial<Record<StatusId, number>>;
+}
+
+/** What an activity bar item shows beside its icon: a count, or a dot for something live. */
+export interface ActivityBadge {
+  count?: number;
+  dot?: boolean;
+  /** Said with the item's name: "2 changed files", "a run is live". */
+  label: string;
+}
+
 export interface OpenTabOptions {
   /** Open as a preview: italic, and replaced by the next preview. */
   preview?: boolean;
@@ -100,6 +124,8 @@ export interface FrameApi {
   /** The workspace this window shows (ADR-0060 H6). */
   readonly workspace: string;
   readonly platform: string;
+  /** Whether the daemon is away (setReadOnly): no command of a session's can act until it is back (W15). */
+  readonly readOnly: boolean;
 
   registerSidebar(section: SidebarSection): Unregister;
   registerTabKind(kind: TabKind): Unregister;
@@ -110,12 +136,20 @@ export interface FrameApi {
   openTab(tab: TabRef, options?: OpenTabOptions): void;
   closeTab(tab: Pick<TabRef, 'kind' | 'id' | 'scope'>): void;
   showActivity(activity: ActivityId): void;
+  /** Dock the plan panel, or open it as a drawer where the window is too narrow to dock it. */
+  showPlan(): void;
+  /** The session now open: its own task and diff tabs come back, and the last one's are put away until it is open again. */
+  showSession(sessionId: string): void;
   runCommand(id: string): void;
 
   /** The one action the title bar offers, chosen by the session's state; undefined offers none. */
   setPrimaryAction(action: PrimaryAction | undefined): void;
-  /** The title bar's Needs you badge; 0 hides it. */
+  /** The title bar's Needs you chip and the Sessions badge; 0 hides both. */
   setNeedsYouCount(count: number): void;
+  /** The plan panel's progress; undefined while there is no plan. */
+  setPlanProgress(progress: PlanProgress | undefined): void;
+  /** An activity bar item's badge; Sessions shows the Needs you count before its own. */
+  setActivityBadge(activity: ActivityId, badge: ActivityBadge | undefined): void;
   /**
    * The plan and every control become read-only while the daemon is away. The
    * frame keeps the last known state drawn, dimmed, and stops the keyboard

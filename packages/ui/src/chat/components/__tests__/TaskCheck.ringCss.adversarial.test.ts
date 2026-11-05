@@ -34,10 +34,10 @@ function atBlock(prelude: string): string {
 }
 
 describe('the sweeping ring stylesheet', () => {
-  it('keeps the 15px ring box the pending, running and done states share', () => {
+  it("keeps the 14px ring box, a row's status shape, that the pending, running and done states share", () => {
     const base = block('.task-check');
-    expect(base).toContain('width: 15px;');
-    expect(base).toContain('height: 15px;');
+    expect(base).toContain('width: 14px;');
+    expect(base).toContain('height: 14px;');
   });
 
   it('moves the running ring on the pseudo-element, not the ring box', () => {

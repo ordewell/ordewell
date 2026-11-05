@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 
-export type TaskView = 'details' | 'chat';
+export type TaskView = 'details' | 'chat' | 'changes';
 
 /** One ask to show a task's tab on a view; `seq` makes a repeat of the same ask land again on a tab already open. */
 export interface TaskViewRequest {

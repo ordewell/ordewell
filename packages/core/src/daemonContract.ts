@@ -279,6 +279,8 @@ export interface RunnerEntry {
   enabled: boolean;
   /** The runner's own login verdict, beside `enabled`: a signed-out agent is still offered, flagged. */
   auth?: RunnerAuth;
+  /** What the CLI's `--version` printed, as a number; absent when it printed none. */
+  version?: string;
 }
 
 export interface RunnersResponse {
@@ -293,11 +295,23 @@ export interface SessionResponse {
   meta: SessionMeta;
   plan: SurfacePlanState;
   /**
+   * The planner transcript, which the phase-tagged `plan` does not keep: what
+   * a client that joins the session or only reads it redraws its conversation
+   * from. Absent from a daemon that predates it.
+   */
+  conversation?: Pick<SurfacePlan, 'conversationHistory' | 'researchLog' | 'plannerUsage' | 'pendingTurns'>;
+  /**
    * The live session's run as `Session.runSnapshot()` holds it, isolation
    * marks and handoff included. Absent for a session nobody holds: the saved
    * file has no run to speak of, and a surface does not rebuild one from it.
    */
   run?: RunView;
+  /**
+   * The planner turn running now, as {@link AdoptSessionResponse.plannerTurnId}:
+   * how a client that joined the session at its holder (ADR-0060 H8), and so
+   * never loads it, tells a live turn from one whose end it missed.
+   */
+  plannerTurnId?: string;
   /** The planner compaction running now, as {@link AdoptSessionResponse.plannerCompaction}. */
   plannerCompaction?: PlannerCompactionMessage;
 }

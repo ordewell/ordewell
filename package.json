@@ -43,6 +43,7 @@
     "build:web": "npm run build -w packages/web",
     "build:desktop": "npm run build -w packages/desktop",
     "desktop:dev": "npm run dev -w packages/desktop",
+    "desktop:tour": "npm run test:desktop-tour --workspace packages/desktop",
     "desktop:package": "npm run package -w packages/desktop --",
     "start": "node packages/cli/dist/main.js tui"
   },

@@ -11,7 +11,6 @@ import type { PreflightChoice } from '../preflight';
 import { HANDOFF, runTask, runView, worktree } from './fixtures';
 
 const WORKSPACE = '/work/acme';
-const SIZES = { sidebar: 260, right: 360, bottom: 240 };
 const SHA = '9c1e5b7d2a4f60318e5d7c9b1a2f3e4d5c6b7a80';
 
 const CLEAN: MergePreflightResponse = { runId: 'r1', stashMessage: 'ordewell: before merging r1', repos: [{ repo: '.', branch: 'main', overlap: [], otherDirty: false }] };
@@ -34,7 +33,7 @@ async function setup(preflight: MergePreflightResponse | null, choice: Preflight
   await act(async () => {
     daemon.push('s1', { type: 'connected', sessionId: 's1' }, { type: 'run_snapshot', sessionId: 's1', view: runView([runTask({ id: 't1', order: 1, title: 'Add the login button', status: 'completed', isolation: worktree('integrated') })], HANDOFF), stream: 'd1', seq: 0 });
   });
-  const store = new FrameStore({ workspace: WORKSPACE, platform: 'linux', sizes: SIZES });
+  const store = new FrameStore({ workspace: WORKSPACE, platform: 'linux' });
   const asked: Array<{ request: ConfirmationRequest<PreflightChoice>; body: JSX.Element }> = [];
   const ask = async (request: ConfirmationRequest<PreflightChoice>, body: JSX.Element) => { asked.push({ request, body }); return choice; };
   const run = () => act(() => mergeAll(store.api, host, ask));
@@ -120,7 +119,7 @@ describe('Merge all', () => {
 describe('the session\'s Review & Merge all', () => {
   it('opens the Changes view, and sends every Merge all through the preflight once the view is registered', async () => {
     const daemon = fakeDaemon({ 'sessions.load': ok({ ok: true, plan: surfacePlan([]), goal: 'g' }), 'plans.mergePreflight': ok(CLEAN) });
-    const store = new FrameStore({ workspace: WORKSPACE, platform: 'linux', sizes: SIZES });
+    const store = new FrameStore({ workspace: WORKSPACE, platform: 'linux' });
     const showActivity = vi.spyOn(store.api, 'showActivity');
     const host = daemonHost(WORKSPACE);
     expect(host.reviewing).toBe(false);

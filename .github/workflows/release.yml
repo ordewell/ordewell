@@ -130,62 +130,187 @@ jobs:
             gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --notes-from-tag
           fi
 
-  # The desktop installers, one runner per OS: an installer is built where it
-  # runs (Windows and macOS cannot be cross-built from Linux), and each runner
-  # checks the app it just packaged. They are attached to the Release
-  # github-release made, so this waits for it. The installers are unsigned
-  # (macOS: ad hoc) and auto-update is off until signing exists (ADR-0060).
+  # The desktop installers: built on each OS and attached to the Release
+  # github-release made, so this waits for it. The build itself is
+  # desktop-build.yml, which a pull request and a manual run also use, so the
+  # same recipe is proved before a tag. The signing secrets are passed by
+  # name, not inherited, so the desktop build never holds the publishing
+  # tokens; with none set the installers are unsigned and updates are off
+  # (ADR-0060 H9).
   desktop:
     needs: github-release
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, windows-latest, ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+    uses: ./.github/workflows/desktop-build.yml
+    # A called workflow's token cannot exceed the caller's grant.
     permissions:
       contents: write
-    # Nothing here may reach ordewell.ai (ADR-0048); the daemon smoke starts.
+    with:
+      attach: true
+      tag: ${{ github.ref_name }}
+    secrets:
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+      ES_USERNAME: ${{ secrets.ES_USERNAME }}
+      ES_PASSWORD: ${{ secrets.ES_PASSWORD }}
+      ES_CREDENTIAL_ID: ${{ secrets.ES_CREDENTIAL_ID }}
+      ES_TOTP_SECRET: ${{ secrets.ES_TOTP_SECRET }}
+
+  # The package managers (ADR-0060 H11), from what the Release already carries:
+  # both render the cask and the winget manifests from the version and the
+  # SHA256SUMS the desktop build attached, so a package manager installs the
+  # release's own file and checks it against the release's own hash. Each
+  # publishes only when its token exists, and a release without one is complete:
+  # a notice says why nothing was published. The cask needs one thing more, a
+  # notarized macOS build, because Homebrew refuses an app Gatekeeper stops.
+  #
+  # These two jobs hold the only tokens that reach outside this repository, so
+  # every action they use is pinned to a commit SHA, unlike the tag pins the
+  # rest of the workflows use.
+  homebrew:
+    needs: desktop
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
     env:
-      ORDEWELL_NO_VERSION_CHECK: '1'
+      # A secret cannot be read in an `if`, so the test is a variable; the
+      # token itself reaches only the step that pushes.
+      HOMEBREW_TAP_TOKEN_SET: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Use Node.js 22.x
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22.x
-          cache: 'npm'
 
-      - name: Verify tag matches package versions
-        run: node .github/workflows/verify-release-tag.mjs "${{ github.ref_name }}"
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build
-        run: npm run build
-
-      - name: Package the desktop app
-        run: npm run desktop:package
-
-      - name: Verify the installers and the unpacked app
-        run: node scripts/desktop-package-check.mjs
-
-      # --clobber: a re-run replaces the file it uploaded before. latest*.yml is
-      # the feed electron-updater reads once updates are on; blockmaps let it
-      # download a difference.
-      - name: Attach installers to the GitHub Release
-        shell: bash
+      - name: Download SHA256SUMS from the Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: gh release download "$TAG" --pattern SHA256SUMS --dir sums --repo "$REPO"
+
+      - name: Download the macOS signing manifest
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: signing-macOS
+          path: signing
+
+      - name: Render the cask
+        env:
+          TAG: ${{ github.ref_name }}
+        run: node scripts/render-package-manifests.mjs --version "${TAG#v}" --sums sums/SHA256SUMS --out rendered
+
+      - name: Publish the cask to ordewell/homebrew-tap
+        if: env.HOMEBREW_TAP_TOKEN_SET == 'true'
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ github.ref_name }}
         run: |
-          cd packages/desktop/release
-          # A glob with no match stays literal in bash; only this OS's files exist.
-          shopt -s nullglob
-          files=(Ordewell-*.dmg Ordewell-*.zip Ordewell-*.exe Ordewell-*.AppImage Ordewell-*.deb Ordewell-*.blockmap latest*.yml)
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "::error::no installers in packages/desktop/release"
-            exit 1
+          set -euo pipefail
+          if ! node -e 'process.exit(JSON.parse(require("fs").readFileSync("signing/signing.json", "utf8")).notarized === true ? 0 : 1)'; then
+            echo "::notice::the macOS build was not notarized, so no cask was published: Homebrew requires an app Gatekeeper accepts."
+            exit 0
           fi
-          gh release upload "${{ github.ref_name }}" "${files[@]}" --clobber --repo "${{ github.repository }}"
+          version="${TAG#v}"
+          # The token is in the clone URL only; the remote is reset before the
+          # commit so it is not left in the checkout's config.
+          git clone --depth 1 "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/ordewell/homebrew-tap.git" tap
+          git -C tap remote set-url origin https://github.com/ordewell/homebrew-tap.git
+          mkdir -p tap/Casks
+          cp rendered/homebrew/Casks/ordewell.rb tap/Casks/ordewell.rb
+          git -C tap config user.name 'github-actions[bot]'
+          git -C tap config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -C tap add Casks/ordewell.rb
+          if git -C tap diff --cached --quiet; then
+            echo "the tap already carries the cask for ${version}"
+            exit 0
+          fi
+          git -C tap commit -m "Ordewell ${version}"
+          git -C tap push origin HEAD
+
+      - name: Say why no cask was published
+        if: env.HOMEBREW_TAP_TOKEN_SET != 'true'
+        run: echo "::notice::HOMEBREW_TAP_TOKEN is not set, so no cask was published (ADR-0060 H11)."
+
+  winget:
+    needs: desktop
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    env:
+      WINGET_TOKEN_SET: ${{ secrets.WINGET_TOKEN != '' }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22.x
+
+      - name: Download SHA256SUMS from the Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: gh release download $env:TAG --pattern SHA256SUMS --dir sums --repo $env:REPO
+
+      - name: Render the winget manifests
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          $tag = $env:TAG
+          node scripts/render-package-manifests.mjs --version $tag.TrimStart('v') --sums sums/SHA256SUMS --out rendered
+
+      # Pinned to the release and the SHA256 it publishes: the one third-party
+      # program a release runs, and it runs with a token that opens pull
+      # requests on microsoft/winget-pkgs.
+      - name: Download wingetcreate
+        if: env.WINGET_TOKEN_SET == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $url = 'https://github.com/microsoft/winget-create/releases/download/v1.12.13.0/wingetcreate.exe'
+          $expected = '24042bd37915805615e6cf969ac57c6439124c3fe85823327f5f3fb24bd9ffea'
+          Invoke-WebRequest -Uri $url -OutFile wingetcreate.exe
+          $actual = (Get-FileHash -Algorithm SHA256 wingetcreate.exe).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "wingetcreate.exe hashed to $actual, not the pinned $expected" }
+
+      # wingetcreate forks winget-pkgs under the token's account, commits the
+      # rendered manifests at manifests/o/Ordewell/Ordewell/<version>/ and opens
+      # the pull request. The first submission of a package is reviewed by hand.
+      - name: Open the pull request on microsoft/winget-pkgs
+        if: env.WINGET_TOKEN_SET == 'true'
+        shell: pwsh
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          $tag = $env:TAG
+          $version = $tag.TrimStart('v')
+          ./wingetcreate.exe submit --token $env:WINGET_TOKEN --no-open `
+            --prtitle "New package: Ordewell.Ordewell version $version" `
+            "rendered/winget/manifests/o/Ordewell/Ordewell/$version"
+
+      - name: Say why no pull request was opened
+        if: env.WINGET_TOKEN_SET != 'true'
+        shell: pwsh
+        run: Write-Host '::notice::WINGET_TOKEN is not set, so no winget pull request was opened (ADR-0060 H11).'

@@ -303,3 +303,53 @@ describe('PlanCardGroup — accordion expansion', () => {
     expect(document.querySelectorAll('.task-card-body')).toHaveLength(0);
   });
 });
+
+describe('PlanCardGroup — the plan panel\'s rows', () => {
+  const heading = (name: RegExp) => screen.getByRole('button', { name });
+
+  it('heads each stage once, with every task of that stage under it', () => {
+    render(
+      <PlanCardGroup run={EMPTY_RUN} models={emptyModels} rows
+        tasks={[
+          makeTask({ id: 'a', order: 1, title: 'Alpha' }),
+          makeTask({ id: 'b', order: 2, title: 'Beta', dependencies: ['a'] }),
+          makeTask({ id: 'c', order: 3, title: 'Gamma' }),
+        ]}
+      />,
+    );
+    const heads = [...document.querySelectorAll('.plan-stage-head')].map((h) => h.textContent);
+    expect(heads).toEqual(['Stage 1', 'Stage 2']);
+    const order = [...document.querySelectorAll<HTMLElement>('[data-task-id]')].map((row) => row.dataset.taskId);
+    expect(order).toEqual(['a', 'c', 'b']);
+  });
+
+  it('opens a row\'s subtasks on → and folds them on ←, from the row or a subtask', () => {
+    render(
+      <PlanCardGroup run={EMPTY_RUN} models={emptyModels} rows
+        tasks={[
+          makeTask({ id: 'p', order: 1, title: 'Parent', subtasks: [makeTask({ id: 's', order: 1, title: 'Child' })] }),
+          makeTask({ id: 'q', order: 2, title: 'Plain' }),
+        ]}
+      />,
+    );
+    const parent = heading(/^#1 Parent/);
+    fireEvent.keyDown(parent, { key: 'ArrowRight' });
+    expect(parent.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText('Child')).toBeTruthy();
+
+    fireEvent.keyDown(parent, { key: 'ArrowLeft' });
+    expect(parent.getAttribute('aria-expanded')).toBe('false');
+
+    fireEvent.keyDown(parent, { key: 'ArrowRight' });
+    const child = document.querySelector<HTMLElement>('.subtasks .task-heading');
+    expect(child).not.toBeNull();
+    fireEvent.keyDown(child!, { key: 'ArrowLeft' });
+    expect(parent.getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(parent);
+
+    // A row with no subtasks has nothing for → to open.
+    const plain = heading(/^#2 Plain/);
+    fireEvent.keyDown(plain, { key: 'ArrowRight' });
+    expect(plain.getAttribute('aria-expanded')).toBe('false');
+  });
+});

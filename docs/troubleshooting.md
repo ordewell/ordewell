@@ -409,10 +409,15 @@ kill -TERM -- -<group>
 
 ## The desktop app will not open
 
-The desktop app's installers are unsigned: not notarized by Apple and without a
-Windows code-signing certificate. Gatekeeper and SmartScreen refuse the first
-launch. The macOS build is signed ad hoc, so the system can start it once you
-allow it.
+An unsigned build of the desktop app is not notarized by Apple and carries no
+Windows code-signing certificate, so Gatekeeper and SmartScreen refuse its first
+launch. Releases are unsigned until the project's signing credentials are
+configured, and Linux builds always are. The unsigned macOS build is signed ad hoc, so the
+system can start it once you allow it.
+
+An app installed with the one-line script (`scripts/install/desktop.sh`) was
+downloaded by `curl`, which leaves no quarantine attribute, so macOS may start
+it without the prompts below. The script does not add or remove that attribute.
 
 ### Fix
 
@@ -432,8 +437,10 @@ allow it.
   and start it. On a distribution without FUSE 2, install `libfuse2`, or run it
   with `--appimage-extract-and-run`.
 
-Signing and notarization are out of scope for these builds
-([ADR-0060](adr/surfaces/0060-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)).
+A signed release opens without these steps. When a release is signed, and how
+to check one, is in
+[Signed releases](desktop/README.md#signed-releases)
+([ADR-0060 H9](adr/surfaces/0060-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)).
 
 ## The desktop app cannot reach its daemon
 

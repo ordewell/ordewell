@@ -3324,10 +3324,22 @@ export class Session {
       const to = researchReportTo(this.turnActor());
       this.store.update(task.id, { reportTo: to, researchOrigin: to });
       this.record.approveResearch(task.id);
+      // Behind work only the plan's approval starts, a queued start would hold the session as advancing,
+      // Stop in place of Approve, while nothing can move: the run that approval opens starts it instead.
+      if (!this.startsUnapproved(task.id)) continue;
       if (actorAuthority(this.turnActor().kind) === 'user') this.supervision.userStarting();
       // Queue only as it lands: re-queuing on each turn would undo the user's Stop (ADR-0037 R4).
       this.orchestrator.startAtGate(task.id);
     }
+  }
+
+  /** Whether a task, and the unfinished work it builds on, may start before anyone approves the plan. */
+  private startsUnapproved(taskId: string, seen = new Set<string>()): boolean {
+    const task = this.store.get(taskId);
+    if (!task || task.status === 'completed' || task.status === 'skipped' || this.record.planApproved) return true;
+    if (seen.has(taskId) || !this.record.isApproved(taskId)) return false;
+    seen.add(taskId);
+    return task.dependencies.every((dep) => this.startsUnapproved(dep, seen));
   }
 
   private preparePlannerTaskUpdates(tasks: Task[]): Task[] {

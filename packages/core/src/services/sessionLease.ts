@@ -5,7 +5,7 @@ import { withFileLock } from '../utils/fileLock';
 import { ensureStateDirIgnored } from '../utils/fsHelpers';
 import { ensurePrivateDir, writePrivateFile } from '../utils/privateFile';
 import { groupAlive, onRunnerGroupStarted, processAlive, runnerGroups } from '../utils/processTree';
-import { sessionDataDir } from '../utils/sessionStore';
+import { LEASE_STALE_MS, holderLives, leaseFile, readLeaseRecord, type LeaseHostKind, type SessionLeaseRecord } from '../utils/leaseRecord';
 
 /**
  * One live host per session (ADR-0049). A host — the process that runs
@@ -17,44 +17,7 @@ import { sessionDataDir } from '../utils/sessionStore';
 
 /** How often a holder refreshes the leases it holds. */
 export const LEASE_HEARTBEAT_MS = 10_000;
-/**
- * A lease not refreshed for this long is stale: its holder is gone, or its pid
- * now names another process. Several heartbeats, so a host whose event loop is
- * busy for a moment keeps its session.
- */
-export const LEASE_STALE_MS = 60_000;
-
-const LEASE_FILE = 'lease.json';
-
-/** What kind of process a host is, for the words a refusal names it in. `ownerPid` is the TUI a private daemon serves. */
-export type LeaseHostKind =
-  | { kind: 'daemon'; port: number; ownerPid?: number }
-  | { kind: 'vscode' };
-
-/** A session's lease as its file records it. */
-export interface SessionLeaseRecord {
-  /** Minted once per host, so a restarted process at a reused pid is not mistaken for the holder. */
-  hostId: string;
-  pid: number;
-  host?: LeaseHostKind;
-  /** When this host took the lease. */
-  since: string;
-  /** Refreshed every {@link LEASE_HEARTBEAT_MS}; stale past {@link LEASE_STALE_MS}. */
-  heartbeatAt: string;
-  /**
-   * The process groups of the runners the holder had started and not seen
-   * end. A host killed outright cannot stop them, and they go on writing in
-   * the session's worktrees, so a takeover waits for them.
-   */
-  runnerGroups: number[];
-  /**
-   * Whether the holder's run is live: an attempt at work, a start pending, a
-   * landing or Merge all under way. Much of that is only in the holder's
-   * memory, so it says it here, for another host's landing interlock
-   * (ADR-0062 G7). Absent from a holder that predates it.
-   */
-  runLive?: boolean;
-}
+export { LEASE_STALE_MS, type LeaseHostKind, type SessionLeaseRecord };
 
 /** Who holds a session: a live host, or one that is gone while runners it started still run. */
 export interface SessionHeld {
@@ -189,34 +152,6 @@ interface HeldLease {
   holders: Set<HostedLease>;
 }
 
-function leaseFile(sessionId: string, workspace: string): string {
-  return path.join(sessionDataDir(sessionId, workspace), LEASE_FILE);
-}
-
-function isRecord(value: unknown): value is SessionLeaseRecord {
-  if (typeof value !== 'object' || value === null) return false;
-  const r = value as Record<string, unknown>;
-  return typeof r.hostId === 'string' && typeof r.pid === 'number' && typeof r.since === 'string'
-    && typeof r.heartbeatAt === 'string' && Array.isArray(r.runnerGroups) && r.runnerGroups.every((g) => typeof g === 'number');
-}
-
-/** The record on disk; null when there is none, or none any host could have written (every write is a rename). */
-function readRecord(file: string): SessionLeaseRecord | null {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(file, 'utf8');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw err;
-  }
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return isRecord(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
 function writeRecord(file: string, record: SessionLeaseRecord): void {
   writePrivateFile(file, JSON.stringify(record, null, 2));
 }
@@ -280,7 +215,7 @@ export class LeaseHost {
     let taker: SessionLeaseRecord | null = null;
     try {
       taker = withFileLock(file, () => {
-        const current = readRecord(file);
+        const current = readLeaseRecord(file);
         if (current && current.hostId !== this.id) return current;
         entry.record = this.refreshed(entry.record, entry.holders);
         writeRecord(file, entry.record);
@@ -310,7 +245,7 @@ export class LeaseHost {
     ensureStateDirIgnored(workspace);
     ensurePrivateDir(path.dirname(file));
     const outcome = withFileLock(file, (): { taken: SessionLeaseRecord | null } & ({ refusal: SessionHeld } | { record: SessionLeaseRecord }) => {
-      const current = readRecord(file);
+      const current = readLeaseRecord(file);
       const taken = current !== null && current.hostId !== this.id ? current : null;
       const refusal = taken ? this.judge(taken) : null;
       if (refusal) return { taken, refusal };
@@ -340,7 +275,7 @@ export class LeaseHost {
    */
   check(file: string, holder: HostedLease): SessionHeld | null {
     const entry = this.held.get(file);
-    const current = readRecord(file);
+    const current = readLeaseRecord(file);
     if (current && current.hostId !== this.id) {
       const held = { holder: current };
       if (entry) this.lose(file, entry, held);
@@ -364,7 +299,7 @@ export class LeaseHost {
     if (this.held.size === 0) this.stopHeartbeat();
     try {
       withFileLock(file, () => {
-        if (readRecord(file)?.hostId === this.id) fs.rmSync(file, { force: true });
+        if (readLeaseRecord(file)?.hostId === this.id) fs.rmSync(file, { force: true });
       }, 'release a session lease');
       // A session that was never saved leaves no directory behind for its lease.
       fs.rmdirSync(path.dirname(file));
@@ -380,7 +315,7 @@ export class LeaseHost {
    * judges another host's run by (ADR-0062 G7).
    */
   peek(sessionId: string, workspace: string): SessionHeld | null {
-    const record = readRecord(leaseFile(sessionId, workspace));
+    const record = readLeaseRecord(leaseFile(sessionId, workspace));
     return record && record.hostId !== this.id ? this.judge(record) : null;
   }
 
@@ -392,13 +327,10 @@ export class LeaseHost {
   }
 
   private lives(record: SessionLeaseRecord): boolean {
-    const beat = Date.parse(record.heartbeatAt);
-    if (Number.isNaN(beat) || this.now() - beat > LEASE_STALE_MS) return false;
     // Another host at this very pid is one that lived here before and died,
     // its pid handed on to this process — unless it is a second host of this
     // process, as a test makes.
-    if (record.pid === process.pid) return hostsHere.has(record.hostId);
-    return this.alive(record.pid);
+    return holderLives(record, this.now(), (pid) => (pid === process.pid ? hostsHere.has(record.hostId) : this.alive(pid)));
   }
 
   private lose(file: string, entry: HeldLease, held: SessionHeld): void {

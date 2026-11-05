@@ -6,6 +6,7 @@ import { contextMeterText, contextMeterTitle, hasAccountLimits, taskActivity } f
 import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks, type PatchedView } from '../shared/conversationPatch';
 import type { HostToTaskLog, TaskLogStatus } from '../shared/taskLogProtocol';
 import { useTaskLogBridge } from '../bridge';
+import { runnerName } from '../design/runners';
 import { taskCommand, useRunnerCommands } from '../chat/components/RunnerCommands';
 import ElapsedTime from '../chat/components/ElapsedTime';
 import AccountLimitRows from '../chat/components/AccountLimitRows';
@@ -215,7 +216,7 @@ export default function TaskLogApp({ composerLabel }: {
       {status && (
         <div className="task-log-header">
           <span className="task-log-title">Task {status.orderLabel ?? status.order} · {status.title}</span>
-          {status.runner && <span className="task-log-runner">{status.runner}</span>}
+          {status.runner && <span className="task-log-runner">{runnerName(status.runner)}</span>}
           {state && <span className={`task-log-state ${STATE_CLASS[state.kind]}`}>{state.label}</span>}
           {header?.resumes && <span className="task-log-runner">{header.resumes}</span>}
           {resumes && (

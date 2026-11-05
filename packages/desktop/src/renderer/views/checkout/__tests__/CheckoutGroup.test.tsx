@@ -9,7 +9,6 @@ import { HANDOFF, runView } from '../../changes/__tests__/fixtures';
 import { CheckoutChanges, register } from '../CheckoutGroup';
 
 const WORKSPACE = '/work/acme';
-const SIZES = { sidebar: 260, right: 360, bottom: 240 };
 
 const STATUS = {
   staged: [{ path: 'README.md', status: 'M' }],
@@ -34,7 +33,7 @@ async function mounted(answers: Answers = {}) {
     'git.discard': ok({}),
     ...answers,
   });
-  const store = new FrameStore({ workspace: WORKSPACE, platform: 'linux', sizes: SIZES });
+  const store = new FrameStore({ workspace: WORKSPACE, platform: 'linux' });
   const openTab = vi.spyOn(store.api, 'openTab');
   const off = register(store.api);
   render(<CheckoutChanges api={store.api} />);
@@ -166,7 +165,7 @@ describe('the checkout group', () => {
     await act(async () => {
       daemon.push('s1', { type: 'connected', sessionId: 's1' }, { type: 'run_snapshot', sessionId: 's1', view: running, stream: 'd1', seq: 0 });
     });
-    const store = new FrameStore({ workspace: WORKSPACE, platform: 'linux', sizes: SIZES });
+    const store = new FrameStore({ workspace: WORKSPACE, platform: 'linux' });
     const off = register(store.api);
     render(<CheckoutChanges api={store.api} />);
 

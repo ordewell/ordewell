@@ -1,28 +1,22 @@
 import type { RunTask, RunView, SurfacePlan, TaskRowAction, TaskRowSubject, TaskRowView, TaskType } from '@ordewell/core';
 import {
-  blockedByLabel, EMPTY_RUN, elapsedSince, holdLabel, loopRowParts, loopRoundOf, reduceRun, skippedLabel, taskRowView,
+  EMPTY_RUN, formatElapsed, holdLabel, loopRowParts, loopRoundOf, reduceRun, scriptTaskText, taskRowView,
   type TaskStatusKind,
 } from '@ordewell/core/plan-utils';
-import { statusOf, type StatusLook } from '@ordewell/ui/design';
-import { RUNNER_NAMES } from '../../runners';
+import { effortLabel, modelLabel, runnerName, statusLineOf, statusOf, type StatusLook } from '@ordewell/ui/design';
+import { stagesOf } from './layout';
 
 /**
  * The Plan graph's drawing input, decided once and purely (design W5): which
  * nodes there are, what each says, which edges join them and which chain is
- * critical. Layout (positions) is a separate step that reads only the shape,
- * so a status change restyles a node without moving anything.
+ * critical. Where a card sits is its stage alone, read from the shape, so a
+ * status change restyles a card without moving anything.
  */
-
-export const NODE_WIDTH = 264;
-/** A collapsed node: header line, assignment line and status line. */
-export const NODE_HEIGHT = 78;
-/** One folded subtask row, when its parent is expanded. */
-export const SUBTASK_ROW_HEIGHT = 20;
-const EXPANDED_PADDING = 10;
 
 export type EdgeState = 'satisfied' | 'active' | 'failed' | 'blocked' | 'merge' | 'pending';
 
-export type BadgeKind = 'research' | 'ops' | 'script' | 'manual' | 'delegated';
+/** A card's third line says what kind of work it is; script and manual are said by the second line, which names who does it. */
+export type BadgeKind = 'read-only' | 'research' | 'ops' | 'hitl' | 'delegated';
 export type FlagKind = 'approval' | 'waits-for-approval' | 'conflict' | 'repair' | 'merge-gate' | 'usage-limit' | 'hold' | 'checkpoint';
 
 export interface NodeBadge { kind: BadgeKind; label: string; title: string }
@@ -30,12 +24,25 @@ export interface NodeFlag { kind: FlagKind; label: string; title: string }
 
 export interface LoopBadgeView {
   role: 'check' | 'body';
-  /** "⟲ 2/3" on a check; "⟲ #1" on a body task, for the check it runs for. */
+  /** "2/3" on a check; "#1" on a body task, for the check it runs for. The card draws the loop glyph before it. */
   label: string;
   title: string;
   /** The words a screen reader gets in place of the glyph. */
   spoken: string;
 }
+
+/**
+ * Who does the task, for a card's second line. An AI task's parts stay apart
+ * (ids and labels, not one string), so the card can shorten each on its own.
+ */
+export type LaneView =
+  | { kind: 'ai'; runner: string | null; model: string; effort: string | null }
+  | { kind: 'script'; command: string }
+  | { kind: 'user' }
+  | { kind: 'delegated'; counts: string | null };
+
+/** How long the latest attempt ran: counted on from `since` while it runs, else the time it took. */
+export type ElapsedView = { since: string } | { took: string };
 
 export interface SubtaskView {
   id: string;
@@ -62,19 +69,25 @@ export interface GraphNode {
   title: string;
   /** "Codex · gpt-5 · medium", for an AI task; null for any other. */
   assignment: string | null;
+  lane: LaneView;
   badges: NodeBadge[];
   flags: NodeFlag[];
   loop: LoopBadgeView | null;
   /** The status line: the status word, then what qualifies it. */
   statusLine: string;
+  /** The verdict's reason, for the status line's tooltip; null before there is one. */
+  verdictReason: string | null;
+  elapsed: ElapsedView | null;
   fold: FoldView | null;
   actions: readonly TaskRowAction[];
   /** Ids of the nodes this one depends on, and of those that depend on it. */
   dependsOn: string[];
   dependents: string[];
   critical: boolean;
-  width: number;
-  height: number;
+  /** Its column, from 1: one past the latest of its dependencies (design W5). */
+  stage: number;
+  /** The node's fold is open. */
+  expanded: boolean;
   /** The accessible name and the description of its edges. */
   label: string;
   description: string;
@@ -99,8 +112,8 @@ export interface GraphContext {
   expanded: ReadonlySet<string>;
   /** The scheduler is driving the plan: the critical path is drawn only then. */
   executing: boolean;
-  /** Mode lists by runner, for the row view's autonomy reading. */
-  modesByRunner?: Record<string, readonly { id: string; autonomous?: boolean }[]>;
+  /** Mode lists by runner, for the row view's autonomy reading and a read-only mode's badge. */
+  modesByRunner?: Record<string, readonly { id: string; autonomous?: boolean; readOnly?: boolean }[]>;
   /** A handoff waits for Merge all, so a landed task is not yet merged into the user's branch. */
   handoffPending: boolean;
   now?: Date;
@@ -110,19 +123,51 @@ const isSettled = (kind: TaskStatusKind): boolean => kind === 'done' || kind ===
 
 function assignmentOf(task: RunTask): string | null {
   if (task.type !== 'ai') return null;
-  const runner = task.assignedRunner ? RUNNER_NAMES[task.assignedRunner] ?? task.assignedRunner : null;
-  const model = task.assignedModel?.modelLabel || task.assignedModel?.modelId || 'default model';
-  return [runner, model, task.assignedModel?.thinkingEffort].filter(Boolean).join(' · ');
+  const runner = task.assignedRunner ? runnerName(task.assignedRunner) : null;
+  const effort = task.assignedModel?.thinkingEffort;
+  return [runner, modelLabel(task.assignedModel), effort && effortLabel(effort)].filter(Boolean).join(' · ');
 }
 
-function badgesOf(task: RunTask, row: TaskRowView): NodeBadge[] {
+function laneOf(task: RunTask, row: TaskRowView): LaneView {
+  if (row.kind === 'script') return { kind: 'script', command: scriptTaskText(subjectOf(task)).split('\n')[0] ?? '' };
+  if (row.kind === 'delegated') return { kind: 'delegated', counts: row.delegated?.counts ?? null };
+  if (task.type !== 'ai') return { kind: 'user' };
+  return { kind: 'ai', runner: task.assignedRunner || null, model: modelLabel(task.assignedModel), effort: task.assignedModel?.thinkingEffort ?? null };
+}
+
+type Modes = readonly { id: string; readOnly?: boolean }[];
+
+function badgesOf(task: RunTask, row: TaskRowView, modes: Modes): NodeBadge[] {
   const badges: NodeBadge[] = [];
-  if (task.type === 'user') badges.push({ kind: 'manual', label: 'Manual', title: 'A manual task: you do it and mark it done' });
-  if (row.kind === 'script') badges.push({ kind: 'script', label: 'Script', title: 'A script task: it runs the script the plan holds, with no model' });
-  if (row.kind === 'delegated') badges.push({ kind: 'delegated', label: 'Delegated', title: 'A delegated task: a sub-planner plans and runs it as a child plan' });
+  // A run task says read-only only by its mode (ADR-0031); a research task is read-only by definition, so its own badge says both.
+  const readOnly = task.type === 'ai' && modes.some((m) => m.readOnly && m.id === task.taskMode);
+  if (readOnly && !row.research) badges.push({ kind: 'read-only', label: 'Read-only', title: 'Read-only: it lands nothing' });
   if (row.research) badges.push({ kind: 'research', label: 'Research', title: 'A research task: read-only, its report goes to the planner' });
   if (row.kind === 'ops') badges.push({ kind: 'ops', label: 'Ops', title: 'An ops task: it changes no repository files' });
+  if (row.kind === 'delegated') badges.push({ kind: 'delegated', label: 'Delegated', title: 'A delegated task: a sub-planner plans and runs it as a child plan' });
+  // A manual task is the user's whole, so only an AI task's human touchpoints are news.
+  if (task.type === 'ai' && (task.autonomy === 'HITL' || task.sliceType === 'HITL')) {
+    badges.push({ kind: 'hitl', label: 'HITL', title: 'Human in the loop: it needs your confirmation, review or input partway through' });
+  }
   return badges;
+}
+
+function laneWords(node: GraphNode): string {
+  switch (node.lane.kind) {
+    case 'ai': return node.assignment ?? '';
+    case 'script': return node.lane.command ? `script: ${node.lane.command}` : 'script';
+    case 'user': return 'you do it';
+    case 'delegated': return ['child plan', node.lane.counts].filter(Boolean).join(', ');
+  }
+}
+
+/** The latest attempt's time; a running one counts on from its start, so the card ticks without a rebuild. */
+function elapsedOf(task: RunTask, row: TaskRowView): ElapsedView | null {
+  const last = task.attemptUsage?.[task.attemptUsage.length - 1];
+  if (!last) return null;
+  if (!last.endedAt) return row.running ? { since: last.startedAt } : null;
+  const took = formatElapsed(last.wallTimeMs);
+  return took ? { took } : null;
 }
 
 function flagsOf(task: RunTask, row: TaskRowView): NodeFlag[] {
@@ -144,24 +189,9 @@ function loopOf(task: RunTask, row: TaskRowView): LoopBadgeView | null {
   if (row.loop.role === 'check') {
     if (!task.loop) return null;
     const round = Math.min(loopRoundOf(task), task.loop.maxRounds);
-    return { role: 'check', label: `⟲ ${round}/${task.loop.maxRounds}`, title, spoken: `loop round ${round} of ${task.loop.maxRounds}` };
+    return { role: 'check', label: `${round}/${task.loop.maxRounds}`, title, spoken: `loop round ${round} of ${task.loop.maxRounds}` };
   }
-  return { role: 'body', label: `⟲ ${row.loop.check}`, title, spoken: title };
-}
-
-/** The qualifier the status word carries, in the order a row's badge picks one. */
-function qualifierOf(row: TaskRowView): string | null {
-  if (row.status === 'skipped') return row.skipReason ? skippedLabel(row.skipReason) : null;
-  return row.awaiting ?? row.approvals ?? row.receipt ?? row.attaching
-    ?? (row.holdReason ? holdLabel(row.holdReason) : null)
-    ?? (row.blockedBy ? blockedByLabel(row.blockedBy) : null);
-}
-
-function statusLineOf(row: TaskRowView, look: StatusLook, idleSince: string | null | undefined, now: Date): string {
-  const qualifier = qualifierOf(row);
-  const quiet = row.status === 'quiet' ? elapsedSince(idleSince ?? undefined, now.getTime()) : '';
-  const line = qualifier ? (qualifier.startsWith(look.label) ? qualifier : `${look.label} · ${qualifier}`) : look.label;
-  return quiet ? `${line} · quiet for ${quiet}` : line;
+  return { role: 'body', label: row.loop.check, title, spoken: title };
 }
 
 /** The run folds a task's type as a string; the plan it was folded from only ever holds a TaskType. */
@@ -183,12 +213,6 @@ function foldOf(task: RunTask, row: TaskRowView, parentLabel: string): FoldView 
     childPlan ? ['Child plan', childPlan.counts].filter(Boolean).join(' · ') : null,
   ].filter(Boolean);
   return { subtasks, childPlan, summary: parts.join(' · ') };
-}
-
-function heightOf(fold: FoldView | null, expanded: boolean): number {
-  if (!fold || !expanded) return NODE_HEIGHT;
-  const rows = fold.subtasks.length + (fold.childPlan?.goal ? 1 : 0);
-  return NODE_HEIGHT + (rows > 0 ? EXPANDED_PADDING + rows * SUBTASK_ROW_HEIGHT : 0);
 }
 
 /** Core's reading of a task's edge to one of its dependencies. */
@@ -282,14 +306,16 @@ export function buildGraph(tasks: readonly RunTask[], ctx: GraphContext): GraphM
     return { ok: false, reason: `Tasks ${refs.join(', ')} depend on each other in a loop, so the graph cannot lay them out.` };
   }
 
+  const stages = stagesOf(order, depsOf);
   const dependentsOf = new Map<string, string[]>(top.map((t) => [t.id, []]));
   for (const [id, deps] of depsOf) for (const dep of deps) dependentsOf.get(dep)!.push(id);
 
-  const modes = (runner: string | undefined): readonly { id: string; autonomous?: boolean }[] =>
+  const modes = (runner: string | undefined): readonly { id: string; autonomous?: boolean; readOnly?: boolean }[] =>
     (runner && ctx.modesByRunner?.[runner]) || [];
 
   const nodes: GraphNode[] = top.map((task) => {
-    const row = taskRowView(subjectOf(task), { tasks: top, modes: modes(task.assignedRunner) });
+    const runnerModes = modes(task.assignedRunner);
+    const row = taskRowView(subjectOf(task), { tasks: top, modes: runnerModes });
     const unmerged = row.status === 'done' && ctx.handoffPending && task.isolation?.state === 'integrated';
     const status = statusOf(row.status, { unmerged });
     const orderLabel = row.orderLabel;
@@ -303,17 +329,20 @@ export function buildGraph(tasks: readonly RunTask[], ctx: GraphContext): GraphM
       orderLabel,
       title: task.title,
       assignment: assignmentOf(task),
-      badges: badgesOf(task, row),
+      lane: laneOf(task, row),
+      badges: badgesOf(task, row, runnerModes),
       flags: flagsOf(task, row),
       loop: loopOf(task, row),
       statusLine: statusLineOf(row, status, task.idleSince, now),
+      verdictReason: task.verdict?.reason || null,
+      elapsed: elapsedOf(task, row),
       fold,
       actions: row.actions,
       dependsOn: depsOf.get(task.id)!,
       dependents: dependentsOf.get(task.id)!,
       critical: false,
-      width: NODE_WIDTH,
-      height: heightOf(fold, expanded),
+      stage: stages.get(task.id)!,
+      expanded,
       label: '',
       description: '',
       viewKey: '',
@@ -328,10 +357,15 @@ export function buildGraph(tasks: readonly RunTask[], ctx: GraphContext): GraphM
   for (const node of nodes) {
     node.critical = onPath.has(node.id);
     node.label = `#${node.orderLabel} ${node.title}, ${node.statusLine.charAt(0).toLowerCase()}${node.statusLine.slice(1)}`;
-    node.description = describeEdges(node.dependsOn.map(refOf), node.dependents.map(refOf));
+    // The face's name is its first line; who runs it and what kind it is are its second and third, which a Compact card does not draw.
+    node.description = [
+      `stage ${node.stage}`, describeEdges(node.dependsOn.map(refOf), node.dependents.map(refOf)),
+      laneWords(node), ...node.badges.map((b) => b.label.toLowerCase()), node.loop?.spoken,
+    ].filter(Boolean).join('; ');
     node.viewKey = JSON.stringify([
-      node.status.id, node.statusLine, node.orderLabel, node.title, node.assignment, node.description, node.badges.map((b) => b.label),
-      node.flags.map((f) => [f.label, f.title]), node.loop?.label, node.critical, node.height,
+      node.status.id, node.statusLine, node.orderLabel, node.title, node.lane, node.description, node.badges.map((b) => b.label),
+      node.verdictReason, node.elapsed,
+      node.flags.map((f) => [f.label, f.title]), node.loop?.label, node.critical, node.stage, node.expanded,
       node.fold && [node.fold.summary, node.fold.subtasks.map((s) => [s.title, s.status.id]), node.fold.childPlan?.goal],
       node.actions,
     ]);
@@ -343,8 +377,8 @@ export function buildGraph(tasks: readonly RunTask[], ctx: GraphContext): GraphM
     return { id, source, target: target.id, state: edgeState(byId.get(source)!, target), critical: pathEdges.has(id) };
   }));
 
-  // Position depends on shape alone: who depends on whom, and how tall each node is.
-  const layoutKey = JSON.stringify([nodes.map((n) => [n.id, n.height]), edges.map((e) => e.id)]);
+  // Position depends on shape alone: who depends on whom, and which folds are open.
+  const layoutKey = JSON.stringify([nodes.map((n) => [n.id, n.stage, n.expanded]), edges.map((e) => e.id)]);
   return { ok: true, nodes, edges, layoutKey };
 }
 

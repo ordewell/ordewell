@@ -1,36 +1,49 @@
 /* Settings (W2's planner, ADR-0030's run rules, the runner catalog and this app's preferences). */
 
-.settings-view { flex: 1; min-height: 0; overflow: auto; padding: var(--ow-space-5) var(--ow-space-7) var(--ow-space-8); display: flex; flex-direction: column; gap: var(--ow-space-6); }
-.settings-head h2 { margin: 0 0 var(--ow-space-2); font: var(--ow-type-title); }
+.settings-view { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: var(--ow-space-4) var(--ow-space-6) var(--ow-space-8); display: flex; flex-direction: column; gap: var(--ow-space-4); }
+.settings-head h2 { margin: 0 0 var(--ow-space-1); font: var(--ow-type-title); }
 .settings-head p { margin: 0; max-width: 72ch; color: var(--ow-fg-secondary); font: var(--ow-type-body); }
-.settings-section { display: flex; flex-direction: column; gap: var(--ow-space-4); max-width: 780px; padding-top: var(--ow-space-4); border-top: 1px solid var(--ow-border); }
+/* A section is a card: its fields stack inside it and nothing leaves it, however narrow the tab is. */
+.settings-section { display: flex; flex-direction: column; gap: var(--ow-space-3); width: 100%; max-width: 780px; box-sizing: border-box; padding: var(--ow-space-3) var(--ow-space-4); border: 1px solid var(--ow-surface-card-border); border-radius: var(--ow-radius-lg); background: var(--ow-surface-card); box-shadow: var(--ow-elevation-card); }
 .settings-section h3 { margin: 0; font: var(--ow-type-heading); }
-.settings-field { display: flex; flex-direction: column; gap: var(--ow-space-2); max-width: 560px; }
-.settings-label { font: var(--ow-type-small); font-weight: 600; color: var(--ow-fg); }
+.settings-field { display: flex; flex-direction: column; gap: var(--ow-space-1); max-width: 560px; min-width: 0; }
+.settings-label { font: var(--ow-type-body-strong); color: var(--ow-fg); }
 .settings-field select,
 .settings-field input[type='number'],
 .settings-allowlist {
-  min-height: var(--ow-hit);
-  padding: var(--ow-space-2) var(--ow-space-3);
-  border: 1px solid var(--ow-border-widget);
+  box-sizing: border-box;
+  min-height: var(--ow-height-input);
+  max-width: 100%;
+  padding: 0 var(--ow-space-2);
+  border: 1px solid var(--ow-border-control);
   border-radius: var(--ow-radius-sm);
-  background: var(--ow-bg-input);
+  /* The input fill is the light card's own step; a field in a card steps back to the inset instead. */
+  background: var(--ow-surface-inset);
   color: var(--ow-fg);
   font: var(--ow-type-body);
 }
-.settings-allowlist { resize: vertical; font-family: var(--ow-font-mono); }
-.settings-number { display: flex; flex-direction: column; gap: var(--ow-space-1); }
-.settings-number input { max-width: 10ch; }
-.settings-hint { margin: 0; color: var(--ow-fg-secondary); font: var(--ow-type-small); }
-.settings-pills { display: flex; flex-wrap: wrap; gap: var(--ow-space-2); }
-.settings-pill { min-height: var(--ow-hit); padding: 0 var(--ow-space-4); border: 1px solid var(--ow-border-widget); border-radius: var(--ow-radius-pill); background: var(--ow-bg-widget); color: var(--ow-fg); font: var(--ow-type-small); cursor: pointer; }
+.settings-field select { text-overflow: ellipsis; }
+.settings-field select:focus-visible,
+.settings-field input:focus-visible,
+.settings-allowlist:focus-visible,
+.settings-pill:focus-visible { outline: 1px solid var(--ow-focus-ring); outline-offset: var(--ow-focus-offset); }
+.settings-allowlist { width: 100%; padding: var(--ow-space-1) var(--ow-space-2); resize: vertical; font: var(--ow-type-code); }
+.settings-number { display: flex; flex-direction: column; gap: var(--ow-space-half); }
+.settings-number input { width: 10ch; }
+.settings-number input[aria-invalid='true'] { border-color: var(--ow-status-failed); }
+.settings-hint { margin: 0; color: var(--ow-fg-secondary); font: var(--ow-type-small); overflow-wrap: anywhere; }
+.settings-pills { display: flex; flex-wrap: wrap; gap: var(--ow-space-1); }
+.settings-pill { min-height: var(--ow-hit); padding: 0 var(--ow-space-3); border: 1px solid var(--ow-border-control); border-radius: var(--ow-radius-pill); background: var(--ow-surface-inset); color: var(--ow-fg); font: var(--ow-type-small); cursor: pointer; }
+.settings-pill:hover { background: var(--ow-bg-hover); }
 .settings-pill.active { border-color: var(--ow-accent); background: var(--ow-accent-tint); color: var(--ow-fg); }
-.settings-toggle { display: grid; grid-template-columns: auto 1fr; gap: var(--ow-space-1) var(--ow-space-3); align-items: center; max-width: 620px; font: var(--ow-type-body); }
-.settings-toggle input { width: 16px; height: 16px; }
+.settings-toggle { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: var(--ow-space-half) var(--ow-space-2); align-items: center; max-width: 620px; font: var(--ow-type-body); cursor: pointer; }
+.settings-toggle input { width: 16px; height: 16px; margin: 0; accent-color: var(--ow-accent); }
+.settings-toggle input:focus-visible { outline: 1px solid var(--ow-focus-ring); outline-offset: var(--ow-focus-offset); }
 .settings-toggle .settings-hint { grid-column: 2; }
-.settings-runners { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--ow-space-4); }
-.settings-runner { display: flex; flex-direction: column; gap: var(--ow-space-3); padding: var(--ow-space-3) var(--ow-space-4); border: 1px solid var(--ow-border); border-radius: var(--ow-radius-md); background: var(--ow-bg-sidebar); }
+.settings-runners { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--ow-space-2); }
+.settings-runner { display: flex; flex-direction: column; gap: var(--ow-space-2); min-width: 0; padding: var(--ow-space-2) var(--ow-space-3); border: 1px solid var(--ow-surface-card-border); border-radius: var(--ow-radius-md); background: var(--ow-surface-inset); }
 .settings-runner .settings-field { max-width: none; }
-.settings-error { margin: 0; padding: var(--ow-space-3) var(--ow-space-4); border: 1px solid var(--ow-status-error); border-radius: var(--ow-radius-md); color: var(--ow-fg); background: var(--ow-bg-widget); }
+.settings-error { display: flex; align-items: flex-start; gap: var(--ow-space-2); max-width: 780px; margin: 0; padding: var(--ow-space-2) var(--ow-space-3); border: 1px solid var(--ow-status-failed); border-radius: var(--ow-radius-lg); color: var(--ow-fg); background: var(--ow-surface-card); box-shadow: var(--ow-elevation-card); font: var(--ow-type-body); overflow-wrap: anywhere; }
+.settings-error svg { flex: none; margin-top: var(--ow-space-half); color: var(--ow-status-failed); }
+.settings-error span { flex: 1; min-width: 0; }
 .settings-saving { margin: 0; color: var(--ow-fg-secondary); font: var(--ow-type-small); }
-.settings-view > button { align-self: flex-start; min-height: var(--ow-hit); padding: 0 var(--ow-space-4); border: 1px solid var(--ow-border-widget); border-radius: var(--ow-radius-sm); background: var(--ow-bg-widget); color: var(--ow-fg); cursor: pointer; }

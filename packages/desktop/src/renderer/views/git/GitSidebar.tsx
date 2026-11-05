@@ -1,9 +1,10 @@
-import { useState, type FormEvent } from 'react';
-import { ArrowDownToLine, ArrowUpFromLine, GitBranchPlus, GitGraph, Lock, RefreshCw, Trash2 } from 'lucide-react';
-import { Icon } from '@ordewell/ui/design';
+import { useEffect, useState, type FormEvent } from 'react';
+import { ArrowDownToLine, Check, GitBranch, GitBranchPlus, GitGraph, Lock, RefreshCw, Trash2 } from 'lucide-react';
+import { Button, EmptyState, Icon, IconButton } from '@ordewell/ui/design';
 import type { FrameApi, Unregister } from '../../frame/api';
 import { all } from '../Stub';
-import '../explorer/explorer.css';
+import { onCheckoutChange } from '../checkout/checkoutEvents';
+import { LONG_LIST, MiddleText, Notice, SidebarGroup } from '../sidebarKit';
 import {
   createBranch, deleteBranch, dropStash, fetchRepo, openRun, popStash, pullBranch, pushBranch, stashChanges, switchBranch, syncTarget,
   type GitContext,
@@ -11,6 +12,7 @@ import {
 import type { BranchInfo, Owner, WorktreeInfo } from './gitData';
 import { commitsTabId, plural, repoDisplay, runMark, trackMark } from './gitModel';
 import { gitStoreFor, useGit, type RunInfo } from './gitStore';
+import { SyncBar, type SyncState } from './SyncBar';
 import './git.css';
 
 /*
@@ -19,8 +21,9 @@ import './git.css';
  * listed to look at, never to switch to or delete: a run owns them.
  */
 
-function showGraph(api: FrameApi, repo: string, ref?: string): void {
-  api.openTab({ kind: 'commits', id: commitsTabId(repo, ref), title: ref ? `Commits: ${ref}` : 'Commits' });
+/** A branch row only reveals its history: a preview tab, replaced by the next one, so looking never piles tabs up. */
+function showGraph(api: FrameApi, repo: string, ref?: string, preview = true): void {
+  api.openTab({ kind: 'commits', id: commitsTabId(repo, ref), title: ref ? `Commits: ${ref}` : 'Commits' }, { preview });
 }
 
 /** What a branch or worktree belongs to, as the sidebar words it: `run r7`, and the task when it is one's. */
@@ -31,9 +34,10 @@ function ownerLabel(runs: Readonly<Record<string, RunInfo>>, owner: Owner): stri
 
 function OwnerLink({ api, runs, owner }: { api: FrameApi; runs: Readonly<Record<string, RunInfo>>; owner: Owner }): JSX.Element {
   const task = owner.taskId ? runs[owner.sessionId]?.tasks.find((t) => t.id === owner.taskId) : undefined;
+  const title = task ? `Open task #${task.order}: ${task.title}` : `Open run ${owner.runId}`;
   return (
-    <button type="button" className="changes-link" title={task ? `Open task #${task.order}: ${task.title}` : `Open run ${owner.runId}`} onClick={() => void openRun(api, owner)}>
-      {ownerLabel(runs, owner)}
+    <button type="button" className="git-owner" title={title} onClick={() => void openRun(api, owner)}>
+      <span className="git-owner-text">{ownerLabel(runs, owner)}</span>
     </button>
   );
 }
@@ -41,20 +45,18 @@ function OwnerLink({ api, runs, owner }: { api: FrameApi; runs: Readonly<Record<
 function LocalRow({ ctx, branch }: { ctx: GitContext; branch: BranchInfo }): JSX.Element {
   const mark = trackMark(branch);
   const held = runMark(branch);
+  const hold = branch.landingFor && held ? `A live run lands on ${branch.name}` : undefined;
   return (
-    <li className="git-row" aria-current={branch.current ? 'true' : undefined}>
-      <button type="button" className="git-row-name" title={branch.upstream ? `${branch.name} tracks ${branch.upstream}` : branch.name} onClick={() => showGraph(ctx.api, ctx.repo, branch.name)}>
-        {branch.current ? '● ' : ''}{branch.name}
+    <li className="srow git-branch" aria-current={branch.current ? 'true' : undefined}>
+      <button type="button" className="srow-main" title={branch.upstream ? `${branch.name} tracks ${branch.upstream}` : branch.name} onClick={() => showGraph(ctx.api, ctx.repo, branch.name)}>
+        <span className="git-lead">{branch.current ? <Icon icon={Check} size={14} /> : <Icon icon={GitBranch} size={14} />}</span>
+        <MiddleText className="srow-label" text={branch.name} />
       </button>
-      {mark && <span className="git-row-note" aria-label={`${plural(branch.ahead, 'commit')} ahead, ${plural(branch.behind, 'commit')} behind`}>{mark}</span>}
-      {branch.landingFor && held && <span className="git-lock" title={`A live run lands on ${branch.name}`}><Icon icon={Lock} size={12} /> {held}</span>}
-      <span className="git-row-actions">
-        {!branch.current && <button type="button" aria-label={`Switch to ${branch.name}`} title={`Switch to ${branch.name}`} onClick={() => void switchBranch(ctx, branch.name)}>Switch</button>}
-        {!branch.current && (
-          <button type="button" aria-label={`Delete ${branch.name}`} title={`Delete ${branch.name}`} onClick={() => void deleteBranch(ctx, branch.name)}>
-            <Icon icon={Trash2} size={12} />
-          </button>
-        )}
+      {mark && <span className="srow-note" aria-label={`${plural(branch.ahead, 'commit')} ahead, ${plural(branch.behind, 'commit')} behind`}>{mark}</span>}
+      {hold && <span className="git-lock" title={hold}><Icon icon={Lock} size={12} /><span>{held}</span></span>}
+      <span className="srow-actions">
+        {!branch.current && <IconButton icon={ArrowDownToLine} label={`Switch to ${branch.name}`} onClick={() => void switchBranch(ctx, branch.name)} />}
+        {!branch.current && <IconButton icon={Trash2} label={`Delete ${branch.name}`} onClick={() => void deleteBranch(ctx, branch.name)} />}
       </span>
     </li>
   );
@@ -73,19 +75,22 @@ function NewBranch({ ctx, close }: { ctx: GitContext; close(): void }): JSX.Elem
     void createBranch(ctx, name.trim(), from, switchTo).then((made) => { if (made) close(); else setBusy(false); });
   };
   return (
-    <form className="git-form" aria-label="New branch" onSubmit={submit}>
-      <label>Name<input className="frame-input" autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label>
+    <form className="sform" aria-label="New branch" onSubmit={submit} onKeyDown={(event) => {
+      // The form is the topmost layer: its Esc must not also close the drawer it sits in.
+      if (event.key === 'Escape') { event.preventDefault(); close(); }
+    }}>
+      <label>Name<input type="text" className="frame-input" autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label>
       <label>
         From
         <select className="frame-input" value={from} onChange={(event) => setFrom(event.target.value)}>
           {[...ctx.branches.local, ...ctx.branches.remote].map((b) => <option key={b.name} value={b.name}>{b.name}</option>)}
         </select>
       </label>
-      <label className="git-check"><input type="checkbox" checked={switchTo} onChange={(event) => setSwitchTo(event.target.checked)} /> Switch to it</label>
-      <p className="muted">Creates {name.trim() || 'the branch'} from {from} in {repo}{switchTo ? ' and switches your checkout to it' : ''}.</p>
-      <div className="git-form-actions">
-        <button type="submit" className="ft-button ft-primary" disabled={!name.trim() || busy}>Create branch</button>
-        <button type="button" className="ft-button" onClick={close}>Cancel</button>
+      <label className="sform-check"><input type="checkbox" checked={switchTo} onChange={(event) => setSwitchTo(event.target.checked)} /> Switch to it</label>
+      <p className="git-hint">Creates {name.trim() || 'the branch'} from {from} in {repo}{switchTo ? ' and switches your checkout to it' : ''}.</p>
+      <div className="sform-actions">
+        <Button type="submit" size="sm" variant="primary" disabled={!name.trim() || busy}>Create branch</Button>
+        <Button size="sm" onClick={close}>Cancel</Button>
       </div>
     </form>
   );
@@ -93,40 +98,71 @@ function NewBranch({ ctx, close }: { ctx: GitContext; close(): void }): JSX.Elem
 
 function Stashes({ ctx }: { ctx: GitContext }): JSX.Element {
   const [message, setMessage] = useState('');
+  const { stashes } = ctx.branches;
   return (
-    <>
-      <h3 className="git-heading">Stashes</h3>
-      <form className="git-stash-new" aria-label="Stash changes" onSubmit={(event) => { event.preventDefault(); void stashChanges(ctx, message).then(() => setMessage('')); }}>
-        <input className="frame-input" aria-label="Stash message" placeholder="Message (optional)" value={message} onChange={(event) => setMessage(event.target.value)} />
-        <button type="submit" className="ft-button">Stash changes</button>
+    <SidebarGroup title="Stashes" count={stashes.length} startOpen={stashes.length <= LONG_LIST}>
+      <form className="sform" aria-label="Stash changes" onSubmit={(event) => { event.preventDefault(); void stashChanges(ctx, message).then(() => setMessage('')); }}>
+        <input type="text" className="frame-input" aria-label="Stash message" placeholder="Message (optional)" value={message} onChange={(event) => setMessage(event.target.value)} />
+        <div className="sform-actions"><Button type="submit" size="sm">Stash changes</Button></div>
       </form>
-      {ctx.branches.stashes.length === 0 ? <p className="changes-note">No stashes.</p> : (
+      {stashes.length === 0 ? <p className="git-hint">No stashes.</p> : (
         <ul className="git-list">
-          {ctx.branches.stashes.map((stash) => (
-            <li key={stash.sha} className="git-row">
-              <span className="git-row-name" title={stash.message}>{stash.ref}: {stash.message}</span>
-              <span className="git-row-actions">
-                <button type="button" aria-label={`Pop ${stash.ref}`} onClick={() => void popStash(ctx, stash)}>Pop</button>
-                <button type="button" aria-label={`Drop ${stash.ref}`} onClick={() => void dropStash(ctx, stash)}>Drop</button>
+          {stashes.map((stash) => (
+            <li key={stash.sha} className="srow">
+              <span className="srow-main srow-plain" title={`${stash.ref}: ${stash.message}`}>
+                <span className="srow-note git-stash-ref">{stash.ref}</span>
+                <MiddleText className="srow-label" text={stash.message} />
+              </span>
+              <span className="srow-actions">
+                <Button size="sm" aria-label={`Pop ${stash.ref}`} onClick={() => void popStash(ctx, stash)}>Pop</Button>
+                <IconButton icon={Trash2} label={`Drop ${stash.ref}`} onClick={() => void dropStash(ctx, stash)} />
               </span>
             </li>
           ))}
         </ul>
       )}
-    </>
+    </SidebarGroup>
   );
 }
 
 function WorktreeRow({ api, tree, runs }: { api: FrameApi; tree: WorktreeInfo; runs: Readonly<Record<string, RunInfo>> }): JSX.Element {
   return (
-    <li className="git-row">
-      <span className="git-row-name" title={tree.path}>
-        {tree.main ? 'Your checkout' : tree.branch ?? 'detached'}
-        <span className="muted"> {tree.path}</span>
+    <li className="srow git-worktree">
+      <span className="srow-main srow-plain git-worktree-main" title={tree.path}>
+        <span className="git-worktree-name">{tree.main ? 'Your checkout' : tree.branch ?? 'detached'}</span>
+        <MiddleText className="git-worktree-path" text={tree.path} tail={20} />
       </span>
       {tree.owner && <OwnerLink api={api} runs={runs} owner={tree.owner} />}
     </li>
   );
+}
+
+/** A branch Ordewell owns: shown and diffed, with no switch or delete to press. */
+function OrdewellRow({ api, repo, branch, runs, integration }: { api: FrameApi; repo: string; branch: BranchInfo; runs: Readonly<Record<string, RunInfo>>; integration?: boolean }): JSX.Element {
+  return (
+    <li className="srow">
+      <button type="button" className="srow-main git-ordewell-main" title={`${branch.name}: Ordewell’s, read-only here`} onClick={() => showGraph(api, repo, branch.name)}>
+        <span className="git-lead"><Icon icon={Lock} size={14} /></span>
+        <span className="git-ordewell-text">
+          <MiddleText text={branch.name} />
+          <span className="git-ordewell-note">{integration ? 'integration' : 'read-only'}</span>
+        </span>
+      </button>
+      {branch.owner && <OwnerLink api={api} runs={runs} owner={branch.owner} />}
+    </li>
+  );
+}
+
+function syncStateOf(ctx: GitContext): SyncState {
+  const current = ctx.branches.local.find((b) => b.current);
+  const target = syncTarget(ctx.branches);
+  return {
+    upstream: current?.upstream ?? null,
+    ahead: current?.ahead ?? 0,
+    behind: current?.behind ?? 0,
+    hasRemote: ctx.branches.remote.length > 0 || target !== undefined,
+    branchless: ctx.branches.detached || !current,
+  };
 }
 
 function Sidebar({ api }: { api: FrameApi }): JSX.Element {
@@ -135,97 +171,89 @@ function Sidebar({ api }: { api: FrameApi }): JSX.Element {
   const { branches } = state;
   const multi = state.repos.length > 1;
   const ctx: GitContext | undefined = branches && state.repo === repo ? { api, repo, branches } : undefined;
-  const current = branches?.local.find((b) => b.current);
-  const target = branches ? syncTarget(branches) : undefined;
+
+  // The checkout commits, stages and syncs too: its actions move the same branches, so this list reads again.
+  useEffect(() => onCheckoutChange(() => { void git.refresh(repo); }), [git, repo]);
+
   const integration = branches?.ordewell.filter((b) => b.owner && !b.owner.taskId) ?? [];
   const others = branches?.ordewell.filter((b) => !(b.owner && !b.owner.taskId)) ?? [];
+  const name = repoDisplay(api.workspace, repo).name;
 
   return (
     <div className="git-side">
-      <div className="ex-head">
-        <span>{repoDisplay(api.workspace, repo).name}</span>
-        <button type="button" className="ex-icon" title="Refresh" aria-label="Refresh the branches" onClick={() => void git.refresh(repo)}>
-          <Icon icon={RefreshCw} size={12} />
-        </button>
+      <div className="git-side-head">
+        <span className="git-side-name"><MiddleText text={name} tail={8} /></span>
+        <IconButton icon={RefreshCw} label="Refresh the branches" onClick={() => void git.refresh(repo)} />
       </div>
       {multi && (
-        <select className="ex-repo frame-input" aria-label="Repository" value={repo} onChange={(event) => setRepo(event.target.value)}>
+        <select className="frame-input git-repo" aria-label="Repository" value={repo} onChange={(event) => setRepo(event.target.value)}>
           {state.repos.map((r) => <option key={r.repo} value={r.repo}>{r.repo === '.' ? 'Workspace' : r.repo}{r.branch ? ` (${r.branch})` : ''}</option>)}
         </select>
       )}
-      {state.error && <p className="changes-note error" role="alert">{state.error}</p>}
-      {!ctx && !state.error && <p className="changes-note">Loading…</p>}
+      {state.error && <Notice tone="error">{state.error}</Notice>}
+      {!ctx && !state.error && <EmptyState className="git-state" icon={GitBranch} title="Loading the branches…" />}
       {ctx && (
         <>
           <div className="git-current">
             <div className="git-current-name">
-              <span>{ctx.branches.detached ? 'Detached HEAD' : ctx.branches.current ?? 'No branch yet'}</span>
-              {current && trackMark(current) && <span className="git-track">{trackMark(current)}{current.upstream ? ` ${current.upstream}` : ''}</span>}
+              <Icon icon={GitBranch} size={14} />
+              <MiddleText className="git-current-label" text={ctx.branches.detached ? 'Detached HEAD' : ctx.branches.current ?? 'No branch yet'} />
+              <IconButton icon={GitGraph} label="Show the commit graph" onClick={() => showGraph(api, repo, undefined, false)} />
             </div>
-            <div className="git-sync">
-              <button type="button" className="ft-button" onClick={() => void fetchRepo(ctx)}>Fetch</button>
-              <button type="button" className="ft-button" disabled={!target} title={target ? `Pull ${target.remote}/${target.branch}` : 'No remote to pull from'} onClick={() => void pullBranch(ctx)}>
-                <Icon icon={ArrowDownToLine} size={12} /> Pull
-              </button>
-              <button type="button" className="ft-button" disabled={!target} title={target ? `Push to ${target.remote}/${target.branch}` : 'No remote to push to'} onClick={() => void pushBranch(ctx)}>
-                <Icon icon={ArrowUpFromLine} size={12} /> Push
-              </button>
-              <button type="button" className="ft-button" onClick={() => showGraph(api, repo)}><Icon icon={GitGraph} size={12} /> Commits</button>
-            </div>
+            <SyncBar
+              label={name}
+              state={syncStateOf(ctx)}
+              actions={{ fetch: () => fetchRepo(ctx), pull: () => pullBranch(ctx), push: () => pushBranch(ctx) }}
+            />
           </div>
 
-          <h3 className="git-heading">
-            Local
-            <button type="button" className="ex-icon" aria-label="New branch" title="New branch" onClick={() => setCreating(true)}><Icon icon={GitBranchPlus} size={12} /></button>
-          </h3>
+          {/* Outside the group: a folded Local must still show the form its + opened. */}
           {creating && <NewBranch ctx={ctx} close={() => setCreating(false)} />}
-          <ul className="git-list">{ctx.branches.local.map((b) => <LocalRow key={b.name} ctx={ctx} branch={b} />)}</ul>
+          <SidebarGroup
+            title="Local"
+            count={ctx.branches.local.length}
+            startOpen={ctx.branches.local.length <= LONG_LIST}
+            actions={<IconButton icon={GitBranchPlus} label="New branch" onClick={() => setCreating(true)} />}
+          >
+            {ctx.branches.local.length === 0 ? <p className="git-hint">This repository has no branches yet.</p> : (
+              <ul className="git-list">{ctx.branches.local.map((b) => <LocalRow key={b.name} ctx={ctx} branch={b} />)}</ul>
+            )}
+          </SidebarGroup>
 
           {others.length > 0 && (
-            <>
-              <h3 className="git-heading">Ordewell</h3>
+            <SidebarGroup title="Ordewell" count={others.length} startOpen={others.length <= LONG_LIST}>
               <ul className="git-list">
                 {others.map((b) => <OrdewellRow key={b.name} api={api} repo={repo} branch={b} runs={state.runs} />)}
               </ul>
-            </>
+            </SidebarGroup>
           )}
 
-          <h3 className="git-heading">Worktrees</h3>
-          <ul className="git-list">
-            {ctx.branches.worktrees.map((tree) => <WorktreeRow key={tree.path} api={api} tree={tree} runs={state.runs} />)}
-            {integration.map((b) => <OrdewellRow key={b.name} api={api} repo={repo} branch={b} runs={state.runs} integration />)}
-          </ul>
+          <SidebarGroup title="Worktrees" count={ctx.branches.worktrees.length + integration.length} startOpen={ctx.branches.worktrees.length + integration.length <= LONG_LIST}>
+            <ul className="git-list">
+              {ctx.branches.worktrees.map((tree) => <WorktreeRow key={tree.path} api={api} tree={tree} runs={state.runs} />)}
+              {integration.map((b) => <OrdewellRow key={b.name} api={api} repo={repo} branch={b} runs={state.runs} integration />)}
+            </ul>
+          </SidebarGroup>
 
           {ctx.branches.remote.length > 0 && (
-            <>
-              <h3 className="git-heading">Remote</h3>
+            <SidebarGroup title="Remote" count={ctx.branches.remote.length} startOpen={ctx.branches.remote.length <= LONG_LIST}>
               <ul className="git-list">
                 {ctx.branches.remote.map((b) => (
-                  <li key={b.name} className="git-row">
-                    <button type="button" className="git-row-name" onClick={() => showGraph(api, repo, b.name)}>{b.name}</button>
+                  <li key={b.name} className="srow">
+                    <button type="button" className="srow-main" title={b.name} onClick={() => showGraph(api, repo, b.name)}>
+                      <span className="git-lead"><Icon icon={GitBranch} size={14} /></span>
+                      <MiddleText className="srow-label" text={b.name} />
+                    </button>
                   </li>
                 ))}
               </ul>
-            </>
+            </SidebarGroup>
           )}
 
           <Stashes ctx={ctx} />
         </>
       )}
     </div>
-  );
-}
-
-/** A branch Ordewell owns: shown and diffed, with no switch or delete to press. */
-function OrdewellRow({ api, repo, branch, runs, integration }: { api: FrameApi; repo: string; branch: BranchInfo; runs: Readonly<Record<string, RunInfo>>; integration?: boolean }): JSX.Element {
-  return (
-    <li className="git-row">
-      <button type="button" className="git-row-name" title={`${branch.name}: Ordewell’s, read-only here`} onClick={() => showGraph(api, repo, branch.name)}>
-        {branch.name}
-      </button>
-      <span className="git-row-note">{integration ? 'integration' : 'read-only'}</span>
-      {branch.owner && <OwnerLink api={api} runs={runs} owner={branch.owner} />}
-    </li>
   );
 }
 
@@ -237,8 +265,8 @@ export function register(api: FrameApi): Unregister {
   };
   return all(
     api.registerSidebar({ activity: 'git', id: 'branches', title: 'Branches', render: () => <Sidebar api={api} /> }),
-    api.registerCommand({ id: 'git.fetch', title: 'Git: Fetch', enabled: () => context() !== undefined, run: () => { const ctx = context(); if (ctx) void fetchRepo(ctx); } }),
-    api.registerCommand({ id: 'git.refresh', title: 'Git: Refresh branches', run: () => { const { repo } = store.getSnapshot(); if (repo !== undefined) void store.refresh(repo); } }),
-    api.registerCommand({ id: 'git.showGraph', title: 'Git: Show commit graph', enabled: () => store.getSnapshot().repo !== undefined, run: () => { const { repo } = store.getSnapshot(); if (repo !== undefined) showGraph(api, repo); } }),
+    api.registerCommand({ id: 'git.fetch', title: 'Git: Fetch', enabled: () => !api.readOnly && context() !== undefined, run: () => { const ctx = context(); if (ctx) void fetchRepo(ctx); } }),
+    api.registerCommand({ id: 'git.refresh', title: 'Git: Refresh branches', enabled: () => !api.readOnly, run: () => { const { repo } = store.getSnapshot(); if (repo !== undefined) void store.refresh(repo); } }),
+    api.registerCommand({ id: 'git.showGraph', title: 'Git: Show commit graph', enabled: () => store.getSnapshot().repo !== undefined, run: () => { const { repo } = store.getSnapshot(); if (repo !== undefined) showGraph(api, repo, undefined, false); } }),
   );
 }

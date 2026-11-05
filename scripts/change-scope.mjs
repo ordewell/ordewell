@@ -34,7 +34,7 @@ export const STEPS_BY_CHECK = {
   sandbox: ['sandbox'],
   planner: ['planner-loop'],
   integration: ['vscode-integration'],
-  desktop: ['desktop-e2e'],
+  desktop: ['desktop-e2e', 'desktop-tour'],
 };
 
 /**
@@ -90,6 +90,13 @@ export function fullScope(reason, workspaces) {
  * drive core's dist and no other package. Every package gets the same builds,
  * typecheck, lint and artifact checks: those cover the packages together, and
  * what selection saves is the suites and the checks each package owns.
+ *
+ * Nothing under scripts/ belongs to a workspace, so the installers
+ * (scripts/install/), the release-asset script they read
+ * (scripts/desktop-release-assets.mjs, ADR-0060 H10) and the package-manager
+ * manifests a release renders (packaging/, scripts/render-package-manifests.mjs,
+ * ADR-0060 H11) mean the full run: their tests run in the bench step, which a
+ * narrowed run could skip.
  */
 export function selectScope(paths, workspaces) {
   if (paths.length === 0) return fullScope('git reported no changed path', workspaces);

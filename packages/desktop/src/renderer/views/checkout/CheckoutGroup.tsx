@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Minus, Plus, RefreshCw, Undo2 } from 'lucide-react';
+import { ChevronDown, GitBranch, GitCommitHorizontal, Minus, Plus, RefreshCw, Undo2 } from 'lucide-react';
 import { discardChangesConfirmation } from '@ordewell/ui/host';
-import { IconButton } from '@ordewell/ui/design';
+import { Button, EmptyState, Icon, IconButton } from '@ordewell/ui/design';
 import type { FrameApi, Unregister } from '../../frame/api';
+import { Popover } from '../../frame/Popover';
 import { all } from '../Stub';
 import { FOCUS_COMMIT_COMMAND } from '../changes/mergeAll';
 import { daemonHost, type DaemonHost } from '../../session/DaemonHost';
@@ -18,6 +19,10 @@ import {
   type CheckoutFile, type RepoCheckout,
 } from './checkoutModel';
 import { checkoutDiffTabId, checkoutDiffTitle } from './checkoutTabs';
+import { fetchRepo, popStash, pullBranch, pushBranch, stashChanges, type GitContext } from '../git/gitActions';
+import { SyncBar } from '../git/SyncBar';
+import { useRepoBranches } from '../git/useRepoBranches';
+import { LONG_LIST, MiddleText, Notice, SidebarGroup } from '../sidebarKit';
 import './checkout.css';
 
 /*
@@ -97,6 +102,12 @@ function pathName(repo: string, path: string): string {
 
 const LETTER_WORD: Record<string, string> = { A: 'Added', M: 'Modified', D: 'Deleted', '?': 'Untracked', U: 'Conflicted' };
 
+/** A file's name first, its folder after it in muted type: the name is what tells two rows apart. */
+function splitPath(path: string): { dir: string; base: string } {
+  const at = path.lastIndexOf('/');
+  return at < 0 ? { dir: '', base: path } : { dir: path.slice(0, at), base: path.slice(at + 1) };
+}
+
 function Row({ api, repo, file, staged, busy, actions }: {
   api: FrameApi;
   repo: string;
@@ -106,20 +117,21 @@ function Row({ api, repo, file, staged, busy, actions }: {
   actions: ReactNode;
 }): JSX.Element {
   const name = pathName(repo, file.path);
+  const { dir, base } = splitPath(file.path);
   return (
-    <li className="checkout-row">
+    <li className="srow checkout-row">
       <button
         type="button"
-        className="checkout-file"
+        className="srow-main checkout-file"
         title={name}
         onClick={() => openFile(api, repo, file, staged ? 'staged' : 'unstaged', true)}
         onDoubleClick={() => openFile(api, repo, file, staged ? 'staged' : 'unstaged', false)}
       >
-        <span className={`ex-badge ex-badge-${file.status}`} aria-label={LETTER_WORD[file.status]}>{file.status}</span>
-        <span className="checkout-path">{file.path}</span>
-        {file.from && <span className="checkout-from muted">from {file.from}</span>}
+        <span className={`sbadge sbadge-${file.status}`} aria-label={LETTER_WORD[file.status]}>{file.status}</span>
+        <span className="checkout-name">{base}</span>
+        {file.from ? <MiddleText className="checkout-dir" text={`from ${file.from}`} /> : dir && <MiddleText className="checkout-dir" text={dir} />}
       </button>
-      <span className="checkout-row-actions" aria-busy={busy !== undefined}>{actions}</span>
+      <span className="srow-actions" aria-busy={busy !== undefined}>{actions}</span>
     </li>
   );
 }
@@ -138,11 +150,17 @@ function RepoSection({ api, host, repo, first, onRefresh }: {
   const [busy, setBusy] = useState<string>();
   const [problem, setProblem] = useState<string>();
   const box = useRef<HTMLTextAreaElement>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuAnchor = useRef<HTMLButtonElement>(null);
   const label = checkoutRepoLabel(repo.info.repo);
   const status = repo.status;
   // The route is the authority on whether the last commit is pushed (ADR-0062 G4): ahead of no upstream is a guess it can correct.
   const amendable = canAmend(repo.info) && repo.info.head !== pushedHead;
   const live = liveLandingBranch(state, repo.info.repo, repo.info.branch);
+  const changeCount = repo.status ? repo.status.staged.length + repo.status.changes.length + repo.status.conflicted.length : 0;
+  // What the sync line and the stash menu act on moves with the branch, its commit and the tree: read again when any does, and when the menu opens.
+  const branches = useRepoBranches(api, repo.info.repo, `${repo.info.branch}|${repo.info.head}|${repo.info.ahead}|${repo.info.behind}|${changeCount}|${menuOpen}`);
+  const git: GitContext | undefined = branches ? { api, repo: repo.info.repo, branches } : undefined;
 
   useEffect(() => {
     if (!first) return;
@@ -220,33 +238,49 @@ function RepoSection({ api, host, repo, first, onRefresh }: {
   const stageAllPaths = status ? pathsToStage(status) : [];
   const unstagedPaths = status ? [...status.changes, ...status.conflicted].map((file) => file.path) : [];
   const mod = api.platform === 'darwin' ? '⌘⏎' : 'Ctrl+Enter';
+  const stash = branches?.stashes[0];
+  const stashable = changeCount > 0;
+  const closeMenu = (): void => setMenuOpen(false);
+  const inMenu = (run: (ctx: GitContext) => Promise<void>) => (): void => {
+    closeMenu();
+    if (git) void run(git);
+  };
+  const branchName = repo.info.detached ? 'detached HEAD' : repo.info.branch ?? 'no branch yet';
+  const files = (list: CheckoutFile[], staged: boolean, actions: (file: CheckoutFile) => ReactNode): JSX.Element => (
+    <ul className="checkout-files">
+      {list.map((file) => (
+        <Row key={`${staged ? 'S' : 'W'}:${file.path}`} api={api} repo={repo.info.repo} file={file} staged={staged} busy={busy} actions={actions(file)} />
+      ))}
+    </ul>
+  );
+  const stageOne = (file: CheckoutFile): JSX.Element => (
+    <IconButton
+      icon={Plus}
+      label={`Stage ${pathName(repo.info.repo, file.path)}`}
+      disabled={busy !== undefined}
+      onClick={() => { void act(`stage:${file.path}`, 'Staged.', () => stagePaths(api.workspace, repo.info.repo, [file.path])); }}
+    />
+  );
 
   return (
     <section className="checkout-repo" aria-label={label}>
       <div className="checkout-repo-head">
-        <span className="checkout-repo-name">{label}</span>
-        <span className="checkout-branch">{repo.info.detached ? 'detached HEAD' : repo.info.branch ?? 'no branch yet'}</span>
-        {repo.info.upstream && (
-          <span className="checkout-remote" title={`${repo.info.ahead} ahead, ${repo.info.behind} behind ${repo.info.upstream}`}>
-            ↓ {repo.info.behind} ↑ {repo.info.ahead}
-          </span>
-        )}
-        <span className="ft-spacer" />
-        <IconButton icon={RefreshCw} size={12} label={`Refresh ${label}`} onClick={() => { void onRefresh(); }} />
+        <span className="checkout-repo-name" title={label}>{label}</span>
+        <span className="checkout-branch">
+          <Icon icon={GitBranch} size={14} />
+          <MiddleText text={branchName} />
+        </span>
+        <IconButton icon={RefreshCw} label={`Refresh ${label}`} onClick={() => { void onRefresh(); }} />
       </div>
 
-      {live && (
-        <p className="checkout-live" role="note">
-          {live} is a live run’s landing branch: actions here are noted in its timeline.
-        </p>
-      )}
-      {problem && <p className="checkout-error" role="alert">{problem}</p>}
-      {repo.error && <p className="checkout-error" role="alert">{repo.error}</p>}
+      {live && <Notice tone="info">{live} is a live run’s landing branch: actions here are noted in its timeline.</Notice>}
+      {problem && <Notice tone="error">{problem}</Notice>}
+      {repo.error && <Notice tone="error">{repo.error}</Notice>}
 
       <form className="checkout-commit" onSubmit={(event) => { event.preventDefault(); commit(); }}>
         <textarea
           ref={box}
-          className="frame-input checkout-message"
+          className="checkout-message"
           aria-label={`Commit message for ${label}`}
           placeholder={`Message (${mod} to commit)`}
           rows={3}
@@ -257,16 +291,47 @@ function RepoSection({ api, host, repo, first, onRefresh }: {
           }}
         />
         <div className="checkout-commit-actions">
-          <button type="submit" className="ft-button ft-primary" disabled={message.trim() === '' || busy !== undefined}>
-            {busy === 'commit' ? (amend ? 'Amending…' : 'Committing…') : amend ? 'Amend' : 'Commit'}
-          </button>
+          <div className="checkout-split">
+            <Button type="submit" variant="primary" className="checkout-split-main" disabled={message.trim() === '' || busy !== undefined}>
+              {busy === 'commit' ? (amend ? 'Amending…' : 'Committing…') : amend ? 'Amend' : 'Commit'}
+            </Button>
+            <button
+              ref={menuAnchor}
+              type="button"
+              className="ow-button ow-button-primary checkout-split-more"
+              aria-label="More commit actions"
+              title="More commit actions"
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              disabled={busy !== undefined}
+              onClick={() => setMenuOpen((was) => !was)}
+            >
+              <Icon icon={ChevronDown} size={14} />
+            </button>
+            {menuOpen && (
+              <Popover label="Commit actions" role="menu" anchor={menuAnchor} onClose={closeMenu} className="frame-menu checkout-menu">
+                <ul>
+                  <li>
+                    <button type="button" role="menuitem" disabled={!git || !stashable} title={stashable ? undefined : 'There are no changes to stash.'} onClick={inMenu((ctx) => stashChanges(ctx, ''))}>
+                      Stash changes…
+                    </button>
+                  </li>
+                  <li>
+                    <button type="button" role="menuitem" disabled={!git || !stash} title={stash ? undefined : 'There is no stash to pop.'} onClick={inMenu((ctx) => popStash(ctx, stash!))}>
+                      {stash ? `Pop ${stash.ref}…` : 'Pop latest stash…'}
+                    </button>
+                  </li>
+                </ul>
+              </Popover>
+            )}
+          </div>
           {amendable ? (
             <label className="checkout-amend">
               <input type="checkbox" checked={amend} disabled={busy !== undefined} onChange={(event) => setAmend(event.target.checked)} />
               Amend the last commit
             </label>
           ) : (
-            <span className="checkout-amend muted" title="Amend is offered only while the last commit is on no remote-tracking branch.">
+            <span className="checkout-amend checkout-amend-off" title="Amend is offered only while the last commit is on no remote-tracking branch.">
               {repo.info.head === null ? 'No commit to amend yet' : 'Amend unavailable: the last commit is pushed'}
             </span>
           )}
@@ -276,130 +341,90 @@ function RepoSection({ api, host, repo, first, onRefresh }: {
       {status && (
         <>
           {status.conflicted.length > 0 && (
-            <section className="checkout-group" aria-label={`Conflicts in ${label}`}>
-              <h3 className="checkout-heading">CONFLICTS ({status.conflicted.length})</h3>
-              <ul className="checkout-files">
-                {status.conflicted.map((file) => (
-                  <Row
-                    key={`U:${file.path}`}
-                    api={api}
-                    repo={repo.info.repo}
-                    file={file}
-                    staged={false}
-                    busy={busy}
-                    actions={(
-                      <IconButton
-                        icon={Plus}
-                        size={12}
-                        label={`Stage ${pathName(repo.info.repo, file.path)}`}
-                        disabled={busy !== undefined}
-                        onClick={() => { void act(`stage:${file.path}`, 'Staged.', () => stagePaths(api.workspace, repo.info.repo, [file.path])); }}
-                      />
-                    )}
-                  />
-                ))}
-              </ul>
-            </section>
+            <SidebarGroup title="Conflicts" label={`Conflicts in ${label}`} count={status.conflicted.length}>
+              {files(status.conflicted, false, stageOne)}
+            </SidebarGroup>
           )}
 
           {status.staged.length > 0 && (
-            <section className="checkout-group" aria-label={`Staged in ${label}`}>
-              <h3 className="checkout-heading">
-                STAGED ({status.staged.length})
-                {status.staged.length > 1 && (
-                  <button
-                    type="button"
-                    className="checkout-text"
-                    disabled={busy !== undefined}
-                    onClick={() => { void act('unstage-all', 'Unstaged all.', () => unstagePaths(api.workspace, repo.info.repo, status.staged.map((file) => file.path))); }}
-                  >
-                    Unstage all
-                  </button>
-                )}
-              </h3>
-              <ul className="checkout-files">
-                {status.staged.map((file) => (
-                  <Row
-                    key={`S:${file.path}`}
-                    api={api}
-                    repo={repo.info.repo}
-                    file={file}
-                    staged
-                    busy={busy}
-                    actions={(
-                      <IconButton
-                        icon={Minus}
-                        size={12}
-                        label={`Unstage ${pathName(repo.info.repo, file.path)}`}
-                        disabled={busy !== undefined}
-                        onClick={() => { void act(`unstage:${file.path}`, 'Unstaged.', () => unstagePaths(api.workspace, repo.info.repo, [file.path])); }}
-                      />
-                    )}
-                  />
-                ))}
-              </ul>
-            </section>
+            <SidebarGroup
+              title="Staged"
+              label={`Staged in ${label}`}
+              count={status.staged.length}
+              startOpen={status.staged.length <= LONG_LIST}
+              actions={status.staged.length > 1 && (
+                <IconButton
+                  icon={Minus}
+                  label="Unstage all"
+                  disabled={busy !== undefined}
+                  onClick={() => { void act('unstage-all', 'Unstaged all.', () => unstagePaths(api.workspace, repo.info.repo, status.staged.map((file) => file.path))); }}
+                />
+              )}
+            >
+              {files(status.staged, true, (file) => (
+                <IconButton
+                  icon={Minus}
+                  label={`Unstage ${pathName(repo.info.repo, file.path)}`}
+                  disabled={busy !== undefined}
+                  onClick={() => { void act(`unstage:${file.path}`, 'Unstaged.', () => unstagePaths(api.workspace, repo.info.repo, [file.path])); }}
+                />
+              ))}
+            </SidebarGroup>
           )}
 
           {status.changes.length > 0 && (
-            <section className="checkout-group" aria-label={`Changes in ${label}`}>
-              <h3 className="checkout-heading">
-                CHANGES ({status.changes.length})
-                <button
-                  type="button"
-                  className="checkout-text"
-                  disabled={busy !== undefined || stageAllPaths.length === 0}
-                  onClick={() => { void act('stage-all', 'Staged all.', () => stagePaths(api.workspace, repo.info.repo, stageAllPaths)); }}
-                >
-                  Stage all
-                </button>
-                <button
-                  type="button"
-                  className="checkout-text"
-                  disabled={busy !== undefined}
-                  onClick={() => discard(unstagedPaths)}
-                >
-                  Discard all…
-                </button>
-              </h3>
-              <ul className="checkout-files">
-                {status.changes.map((file) => (
-                  <Row
-                    key={`W:${file.path}`}
-                    api={api}
-                    repo={repo.info.repo}
-                    file={file}
-                    staged={false}
-                    busy={busy}
-                    actions={(
-                      <>
-                        <IconButton
-                          icon={Plus}
-                          size={12}
-                          label={`Stage ${pathName(repo.info.repo, file.path)}`}
-                          disabled={busy !== undefined}
-                          onClick={() => { void act(`stage:${file.path}`, 'Staged.', () => stagePaths(api.workspace, repo.info.repo, [file.path])); }}
-                        />
-                        <IconButton
-                          icon={Undo2}
-                          size={12}
-                          label={`Discard changes to ${pathName(repo.info.repo, file.path)}`}
-                          disabled={busy !== undefined}
-                          onClick={() => discard([file.path])}
-                        />
-                      </>
-                    )}
+            <SidebarGroup
+              title="Changes"
+              label={`Changes in ${label}`}
+              count={status.changes.length}
+              startOpen={status.changes.length <= LONG_LIST}
+              actions={(
+                <>
+                  <IconButton
+                    icon={Plus}
+                    label="Stage all"
+                    disabled={busy !== undefined || stageAllPaths.length === 0}
+                    onClick={() => { void act('stage-all', 'Staged all.', () => stagePaths(api.workspace, repo.info.repo, stageAllPaths)); }}
                   />
-                ))}
-              </ul>
-            </section>
+                  <IconButton icon={Undo2} label="Discard all…" disabled={busy !== undefined} onClick={() => discard(unstagedPaths)} />
+                </>
+              )}
+            >
+              {files(status.changes, false, (file) => (
+                <>
+                  {stageOne(file)}
+                  <IconButton
+                    icon={Undo2}
+                    label={`Discard changes to ${pathName(repo.info.repo, file.path)}`}
+                    disabled={busy !== undefined}
+                    onClick={() => discard([file.path])}
+                  />
+                </>
+              ))}
+            </SidebarGroup>
           )}
 
-          {status.staged.length === 0 && status.changes.length === 0 && status.conflicted.length === 0 && (
+          {changeCount === 0 && (
             <p className="checkout-empty">No changes in {repo.info.repo === '.' ? 'your checkout' : checkoutRepoLabel(repo.info.repo)}.</p>
           )}
         </>
       )}
+
+      <SyncBar
+        label={label}
+        state={{
+          upstream: repo.info.upstream,
+          ahead: repo.info.ahead,
+          behind: repo.info.behind,
+          hasRemote: branches ? branches.remote.length > 0 || repo.info.upstream !== null : undefined,
+          branchless: repo.info.detached || repo.info.branch === null,
+        }}
+        actions={{
+          fetch: async () => { if (git) await fetchRepo(git); },
+          pull: async () => { if (git) await pullBranch(git); },
+          push: async () => { if (git) await pushBranch(git); },
+        }}
+      />
     </section>
   );
 }
@@ -417,12 +442,14 @@ export function CheckoutChanges({ api }: { api: FrameApi }): JSX.Element {
     void refresh();
   }, [landed, refresh]);
 
-  if (!loaded) return <p className="changes-note">Reading your checkout…</p>;
-  if (loaded.repos.length === 0) return <p className="frame-empty">{loaded.error ?? 'No git repository in this workspace, so there is nothing to commit.'}</p>;
+  if (!loaded) return <EmptyState className="checkout-state" icon={GitCommitHorizontal} title="Reading your checkout…" />;
+  if (loaded.repos.length === 0) {
+    return <EmptyState className="checkout-state" icon={GitBranch} title={loaded.error ?? 'No git repository in this workspace, so there is nothing to commit.'} />;
+  }
 
   return (
     <div className="checkout">
-      {loaded.error && <p className="checkout-error" role="alert">{loaded.error}</p>}
+      {loaded.error && <Notice tone="error">{loaded.error}</Notice>}
       {loaded.repos.map((repo, index) => (
         <RepoSection key={repo.info.repo} api={api} host={host} repo={repo} first={index === 0} onRefresh={refresh} />
       ))}

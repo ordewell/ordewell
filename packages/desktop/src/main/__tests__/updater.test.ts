@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { autoUpdateDefine } from '../../../tsup.config';
 import { AUTO_UPDATE_ENABLED, UpdateController, type UpdaterPort } from '../updater';
 
 const port = (overrides: Partial<UpdaterPort> = {}): UpdaterPort => ({
@@ -11,8 +12,15 @@ const port = (overrides: Partial<UpdaterPort> = {}): UpdaterPort => ({
 });
 
 describe('auto-update gate', () => {
-  it('is closed in this build: nothing is signed yet', () => {
+  it('is closed in a build that did not decide, as this one did not', () => {
     expect(AUTO_UPDATE_ENABLED).toBe(false);
+  });
+
+  it('is baked open only when the packaging plan says on', () => {
+    expect(autoUpdateDefine({ ORDEWELL_DESKTOP_AUTO_UPDATE: 'on' })).toEqual({ __ORDEWELL_AUTO_UPDATE__: 'true' });
+    for (const value of ['off', 'true', '1', 'ON', '', undefined]) {
+      expect(autoUpdateDefine({ ORDEWELL_DESKTOP_AUTO_UPDATE: value })).toEqual({ __ORDEWELL_AUTO_UPDATE__: 'false' });
+    }
   });
 
   it('never loads electron-updater or asks for a release while disabled', async () => {

@@ -1,9 +1,9 @@
 import type { Escalation } from '@ordewell/core';
 import type { HostState } from '@ordewell/ui';
 import type { FrameApi, Unregister } from '../../frame/api';
-import { PLAN_TAB } from '../../frame/layout';
+import { PLANNER_TAB } from '../../frame/layout';
 import type { DaemonHost } from '../../session/DaemonHost';
-import { taskViewFor } from './escalationView';
+import { showEscalatedTask } from './escalationView';
 
 /** What a task's run is doing, as the attention monitor reads it: work is at work or on its way. */
 function isLive(state: HostState): boolean {
@@ -88,12 +88,11 @@ export function startAttention(api: FrameApi, host: DaemonHost): Unregister {
 
   const offHost = host.subscribe(update);
   const offClick = notify()?.onClick((click) => {
-    api.showActivity('plan');
     if (click.taskId) {
       const escalation = (host.getSnapshot().state.run.escalations ?? []).find((item) => item.task?.id === click.taskId);
-      host.openTask(click.taskId, escalation ? taskViewFor(escalation.kind) : 'details');
+      showEscalatedTask(host, click.taskId, escalation?.kind);
     } else {
-      api.openTab(PLAN_TAB);
+      api.openTab(PLANNER_TAB);
     }
   });
   update();

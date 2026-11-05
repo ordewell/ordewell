@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { FileDiff as FileDiffIcon } from 'lucide-react';
+import { ChevronDown, ChevronUp, Columns2, FileDiff as FileDiffIcon, FileQuestion, FileWarning, MessageSquarePlus, RefreshCw, Rows2 } from 'lucide-react';
+import { Badge, Button, Card, EmptyState, IconButton } from '@ordewell/ui/design';
 import type { FrameApi, Tab, Unregister } from '../../frame/api';
-import { scopeKey } from '../../frame/layout';
+import { PLANNER_TAB, scopeKey } from '../../frame/layout';
 import { createDiffEditor, loadMonaco, type DiffEditorHandle, type DiffLines, type DiffSide } from '../../monaco';
 import { daemonHost, type DaemonHost } from '../../session/DaemonHost';
 import { messageOf } from '../../session/daemon';
@@ -10,6 +11,7 @@ import { useSession } from '../../session/useSession';
 import { all } from '../Stub';
 import { CheckoutDiff } from '../checkout/CheckoutDiff';
 import { parseFileTabId } from '../explorer/fileTabs';
+import { Banner, EditorSkeleton, FileHeader, ScopeBadge, Segmented } from '../explorer/fileView';
 import { messageTask, readFileDiff, type FileDiff, type ReviewScope } from './changesData';
 import { commentMessage, commentPlace, isFinished, type DiffSides, type LineComment } from './changesModel';
 import { addComment, commentsKey, useComments, type SentComment } from './comments';
@@ -101,58 +103,65 @@ function CommentBox({ draft, taskLabel, finished, send, askPlanner, cancel }: Co
   };
 
   return (
-    <form className="changes-comment-box" aria-label={`Comment on ${commentPlace(draft.comment)}`} onSubmit={(event) => { event.preventDefault(); primary(); }}>
-      <p className="changes-comment-place">{commentPlace(draft.comment)}</p>
-      {finished && <p className="changes-comment-note">Task {taskLabel} has finished, so it reads no more messages. Ask the planner instead: it can retry the task or add one.</p>}
-      {failed && <p className="changes-comment-note error" role="alert">It did not reach task {taskLabel}: {failed}</p>}
-      <textarea
-        autoFocus
-        aria-label={toPlanner ? 'Comment for the planner' : `Comment to task ${taskLabel}`}
-        value={body}
-        rows={3}
-        onChange={(event) => setBody(event.target.value)}
-        onKeyDown={onKey}
-      />
-      <div className="changes-comment-actions">
-        <button type="button" className="ft-button" onClick={cancel}>Cancel</button>
-        {failed && !finished && <button type="button" className="ft-button" disabled={empty || sending} onClick={() => void sendNow()}>Try again</button>}
-        <button type="submit" className="ft-button ft-primary" disabled={empty || sending}>
-          {toPlanner ? 'Ask the planner' : sending ? 'Sending…' : `Send to task ${taskLabel}`}
-        </button>
-      </div>
+    <form aria-label={`Comment on ${commentPlace(draft.comment)}`} onSubmit={(event) => { event.preventDefault(); primary(); }}>
+      <Card density="compact" className="changes-comment-box">
+        <p className="changes-comment-place">{commentPlace(draft.comment)}</p>
+        {finished && <p className="changes-comment-note">Task {taskLabel} has finished, so it reads no more messages. Ask the planner instead: it can retry the task or add one.</p>}
+        {failed && <p className="changes-comment-note error" role="alert">It did not reach task {taskLabel}: {failed}</p>}
+        <textarea
+          autoFocus
+          className="changes-comment-input"
+          aria-label={toPlanner ? 'Comment for the planner' : `Comment to task ${taskLabel}`}
+          value={body}
+          rows={3}
+          onChange={(event) => setBody(event.target.value)}
+          onKeyDown={onKey}
+        />
+        <div className="changes-comment-actions">
+          <Button size="sm" variant="ghost" onClick={cancel}>Cancel</Button>
+          {failed && !finished && <Button size="sm" disabled={empty || sending} onClick={() => void sendNow()}>Try again</Button>}
+          <Button size="sm" variant="primary" type="submit" disabled={empty || sending}>
+            {toPlanner ? 'Ask the planner' : sending ? 'Sending…' : `Send to task ${taskLabel}`}
+          </Button>
+        </div>
+      </Card>
     </form>
   );
 }
 
 function Sent({ sent }: { sent: SentComment }): JSX.Element {
   return (
-    <div className="changes-comment" role="note" aria-label={`Comment on ${commentPlace(sent.comment)}`}>
+    <Card density="compact" className="changes-comment" role="note" aria-label={`Comment on ${commentPlace(sent.comment)}`}>
       <span className="changes-comment-to">{sent.to === 'task' ? `Sent to ${sent.recipient}` : 'Put in the planner’s composer'} · {commentPlace(sent.comment)}</span>
       <p>{sent.comment.body}</p>
-    </div>
+    </Card>
   );
 }
 
-/** What the tab says it reads: task #N's worktree or the integration branch, the repo, the base it is diffed against. */
-function ScopeLine({ host, scope, repo }: { host: DaemonHost; scope: ReviewScope; repo: string }): JSX.Element {
+/**
+ * What the header says the tab reads: task #N's worktree (a link to the task)
+ * or the integration branch, then the repo and the base it is diffed against.
+ */
+function useScopeParts(host: DaemonHost, scope: ReviewScope, repo: string): { scopeNode: JSX.Element; meta: JSX.Element } {
   const { state } = useSession(host);
   const handoff = state.run.handoff ?? state.run.runMerge;
   const base = handoff?.repos.find((r) => r.path === repo);
   const placed = scope.kind === 'task' ? host.task(scope.taskId) : undefined;
   const live = placed?.task.isolation && placed.task.isolation.state !== 'none' && placed.task.isolation.state !== 'integrated';
-  return (
-    <span className="changes-scope">
-      {scope.kind === 'task' ? (
-        <button type="button" className="changes-link" title="Open the task" onClick={() => host.openTask(scope.taskId, 'details')}>
-          {placed ? `Task #${placed.label}${live ? ' worktree' : ''}` : 'Task worktree'}
-        </button>
-      ) : (
-        <span>Integration vs base</span>
-      )}
-      <span className="muted">{repoName(repo)}</span>
-      {base && <span className="muted" title={base.baseRef}>base {base.baseBranch ?? base.baseRef.slice(0, 12)}</span>}
-    </span>
+  const scopeNode = scope.kind === 'task'
+    ? (
+      <Button variant="secondary" size="sm" title="Show the task in the plan" onClick={() => host.revealTask(scope.taskId)}>
+        {placed ? `Task #${placed.label}${live ? ' worktree' : ''}` : 'Task worktree'}
+      </Button>
+    )
+    : <ScopeBadge name="Integration vs base" readOnly />;
+  const meta = (
+    <>
+      <Badge>{repoName(repo)}</Badge>
+      {base && <Badge title={base.baseRef}>{`base ${base.baseBranch ?? base.baseRef.slice(0, 12)}`}</Badge>}
+    </>
   );
+  return { scopeNode, meta };
 }
 
 function useDiff(workspace: string, scope: ReviewScope, repo: string, path: string): { diff: FileDiff | undefined; reload(): void } {
@@ -239,8 +248,9 @@ function ReviewDiff({ api, tab, scope, repo, path }: { api: FrameApi; tab: Tab; 
     if (!draft) return;
     const comment: LineComment = { ...draft.comment, body };
     host.askPlanner(commentMessage(comment, `task ${taskLabel}'s change`));
-    // The planner panel may be hidden: the composer the comment went to has to be in view.
-    if (!document.querySelector('.session-planner')) api.runCommand('planner.toggle');
+    // The planner tab may be behind another: the composer the comment went to has to be in view.
+    const planner = document.querySelector('.session-planner');
+    if (!planner || planner.closest('[hidden]')) api.openTab(PLANNER_TAB);
     addComment(key, { comment, to: 'planner', recipient: 'the planner' });
     setDraft(undefined);
   };
@@ -250,45 +260,52 @@ function ReviewDiff({ api, tab, scope, repo, path }: { api: FrameApi; tab: Tab; 
   const unplaced = sent.filter((s) => where(s.comment.side, s.comment.endLine) === undefined);
 
   const body = (): JSX.Element => {
-    if (!diff) return <p className="frame-empty">Loading the diff…</p>;
+    if (!diff) return <EditorSkeleton label="Loading the diff…" />;
     switch (diff.kind) {
       case 'error':
         return (
-          <div className="ft-message">
-            <p className="frame-empty error" role="alert">{diff.message}</p>
-            <button type="button" className="ft-button" onClick={reload}>Try again</button>
+          <div className="fv-state">
+            <EmptyState icon={FileWarning} title="The diff could not be read" body={<span role="alert">{diff.message}</span>} action={<Button size="sm" icon={RefreshCw} onClick={reload}>Try again</Button>} />
           </div>
         );
-      case 'binary': return <p className="frame-empty">This is a binary file, so its change is not shown.</p>;
-      case 'unchanged': return <p className="frame-empty">This file has no change here any more.</p>;
+      case 'binary':
+        return <div className="fv-state"><EmptyState icon={FileQuestion} title="This is a binary file" body="This is a binary file, so its change is not shown." /></div>;
+      case 'unchanged':
+        return <div className="fv-state"><EmptyState icon={FileDiffIcon} title="No change" body="This file has no change here any more." /></div>;
       case 'text':
-        if (failed) return <p className="frame-empty error">The diff editor could not load: {failed}</p>;
+        if (failed) return <div className="fv-state"><EmptyState icon={FileWarning} title="The diff editor could not load" body={failed} /></div>;
         return <div ref={hostNode} className="ft-editor" data-testid="monaco-diff-host" onFocus={() => { if (editor) active = editor; }} />;
     }
   };
 
   const label = `${repo === '.' ? '' : `${repo}/`}${path}`;
+  const { scopeNode, meta } = useScopeParts(host, scope, repo);
   return (
     <div className="ft changes-diff">
-      <div className="ft-bar">
-        <span className="ft-path" title={label}>{label}</span>
-        <ScopeLine host={host} scope={scope} repo={repo} />
-        <span className="ft-spacer" />
-        <div className="changes-toggle" role="group" aria-label="Layout">
-          <button type="button" className="ft-button" aria-pressed={!sideBySide} onClick={() => setSideBySide(false)}>Unified</button>
-          <button type="button" className="ft-button" aria-pressed={sideBySide} onClick={() => setSideBySide(true)}>Side by side</button>
-        </div>
-        <button type="button" className="ft-button" disabled={!editor} title="Previous change (Shift+F7)" onClick={() => editor?.goToChange('previous')}>Previous change</button>
-        <button type="button" className="ft-button" disabled={!editor} title="Next change (F7)" onClick={() => editor?.goToChange('next')}>Next change</button>
-        {scope.kind === 'task' && (
-          <button type="button" className="ft-button ft-primary" disabled={!editor || !selected || draft !== undefined} title="Select lines in the diff first" onClick={openComment}>
-            Comment to task {taskLabel}
-          </button>
+      <FileHeader
+        label="Diff"
+        path={label}
+        scope={scopeNode}
+        meta={meta}
+        actions={(
+          <>
+            <Segmented label="Layout">
+              <IconButton icon={Rows2} label="Unified" active={!sideBySide} aria-pressed={!sideBySide} onClick={() => setSideBySide(false)} />
+              <IconButton icon={Columns2} label="Side by side" active={sideBySide} aria-pressed={sideBySide} onClick={() => setSideBySide(true)} />
+            </Segmented>
+            <IconButton icon={ChevronUp} label="Previous change" title="Previous change (Shift+F7)" disabled={!editor} onClick={() => editor?.goToChange('previous')} />
+            <IconButton icon={ChevronDown} label="Next change" title="Next change (F7)" disabled={!editor} onClick={() => editor?.goToChange('next')} />
+            <IconButton icon={RefreshCw} label="Refresh" onClick={reload} />
+            {scope.kind === 'task' && (
+              <Button variant="primary" size="sm" icon={MessageSquarePlus} disabled={!editor || !selected || draft !== undefined} title="Select lines in the diff first" onClick={openComment}>
+                Comment to task {taskLabel}
+              </Button>
+            )}
+          </>
         )}
-        <button type="button" className="ft-button" onClick={reload}>Refresh</button>
-      </div>
+      />
       {sides?.partial && (
-        <p className="ft-banner" role="note">Only the changed lines are shown: the file as this scope holds it could not be read, or has moved on since.</p>
+        <Banner>Only the changed lines are shown: the file as this scope holds it could not be read, or has moved on since.</Banner>
       )}
       {unplaced.length > 0 && (
         <div className="changes-unplaced">
@@ -312,7 +329,7 @@ function ReviewDiff({ api, tab, scope, repo, path }: { api: FrameApi; tab: Tab; 
 /** A diff tab: a file in a task's or the run's scope, its id the file tab's (fileTabs.ts). */
 function DiffTab({ api, tab }: { api: FrameApi; tab: Tab }): JSX.Element {
   const scope = tab.scope;
-  if (!scope) return <p className="frame-empty">This diff does not name the scope it reads.</p>;
+  if (!scope) return <div className="fv-state"><EmptyState icon={FileWarning} title="This diff does not name the scope it reads" /></div>;
   // The checkout's own changes are the checkout group's to show (design slice 13).
   if (scope.kind === 'checkout') return <CheckoutDiff api={api} tab={tab} />;
   const { repo, path } = parseFileTabId(tab.id);

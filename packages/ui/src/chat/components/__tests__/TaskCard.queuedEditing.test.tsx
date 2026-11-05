@@ -46,6 +46,11 @@ const handlers = {
   onDependenciesChange: vi.fn(),
 };
 
+// An open card folds its prompt to one line; the prompt, and its editor, are inside the fold.
+function unfoldPrompt(): void {
+  fireEvent.click(screen.getByRole('button', { name: /^Prompt/ }));
+}
+
 function renderCard(over: Partial<React.ComponentProps<typeof TaskCard>> = {}) {
   return render(
     <TaskCard
@@ -66,6 +71,7 @@ function renderCard(over: Partial<React.ComponentProps<typeof TaskCard>> = {}) {
 describe('a queued task keeps its editors while another task runs', () => {
   it('offers the runner, model, mode, prompt, skills and ops controls', () => {
     const { container } = renderCard();
+    unfoldPrompt();
 
     expect(screen.getByLabelText('Runner')).toBeTruthy();
     expect(screen.getByLabelText('Mode')).toBeTruthy();
@@ -123,6 +129,7 @@ describe('a queued task keeps its editors while another task runs', () => {
 
   it('keeps a blocked task editable, waiting on the failure rather than on its card', () => {
     renderCard({ task: makeTask({ status: 'blocked' }) });
+    unfoldPrompt();
 
     expect(screen.getByLabelText('Runner')).toBeTruthy();
     expect(document.querySelector('.task-prompt-editable')).toBeTruthy();
@@ -133,6 +140,7 @@ describe('editable prompt keyboard controls', () => {
   it('focuses and activates a task prompt without toggling the card', () => {
     const onExpandedChange = vi.fn();
     renderCard({ onExpandedChange });
+    unfoldPrompt();
 
     const prompt = screen.getByRole('button', { name: /Edit task prompt:/ });
     prompt.focus();
@@ -164,6 +172,7 @@ describe('editable prompt keyboard controls', () => {
 
   it('does not expose read-only prompts as controls', () => {
     renderCard({ task: makeTask({ status: 'in_progress' }) });
+    unfoldPrompt();
 
     expect(screen.queryByRole('button', { name: /Edit task prompt:/ })).toBeNull();
     expect(screen.getByText('Do the queued work').className).toContain('task-prompt-readonly');
@@ -208,6 +217,7 @@ describe('a task execution has reached is read-only during the run', () => {
     ['a skipped task', makeTask({ status: 'skipped' }), {}],
   ])('leaves %s without editors', (_label, task, run) => {
     const { container } = renderCard({ task, run });
+    unfoldPrompt();
     expect(screen.queryByLabelText('Runner')).toBeNull();
     expect(screen.queryByLabelText('Mode')).toBeNull();
     expect(container.querySelector('.task-prompt-editable')).toBeNull();
@@ -232,6 +242,7 @@ describe('fresh status invalidates a draft safely', () => {
 
   it('shows the accepted prompt after a save the host has not echoed back', () => {
     const { container } = renderCard();
+    unfoldPrompt();
     fireEvent.click(container.querySelector('.task-prompt-editable')!);
     fireEvent.change(container.querySelector('.task-prompt-textarea')!, { target: { value: 'an unaccepted draft' } });
     fireEvent.keyDown(container.querySelector('.task-prompt-textarea')!, { key: 'Enter', ctrlKey: true });
@@ -243,6 +254,7 @@ describe('fresh status invalidates a draft safely', () => {
 
   it('closes an open prompt editor when the task starts, and does not bring the draft back', () => {
     const { container, rerender } = renderCard();
+    unfoldPrompt();
     fireEvent.click(container.querySelector('.task-prompt-editable')!);
     fireEvent.change(container.querySelector('.task-prompt-textarea')!, { target: { value: 'an unsaved draft' } });
 

@@ -2,11 +2,13 @@ import { spawn } from 'node:child_process';
 import { BrowserWindow, dialog, ipcMain, nativeTheme, shell, type IpcMainInvokeEvent, type WebContents } from 'electron';
 import { CHANNELS, EVENTS, type AppInfo, type ConfirmSpec, type NotificationClick, type NotificationRequest, type StreamDelivery, type StreamEvent, type TerminalDelivery } from '../shared/bridge';
 import { isAppPage } from '../shared/csp';
-import { buildRequest, childStreamPath, sessionStreamPath, type BuildResult } from '../shared/routes';
+import { buildRequest, childStreamPath, liveSessionOf, segmentError, sessionStreamPath, type BuildResult } from '../shared/routes';
 import type { DaemonManager } from './daemon/DaemonManager';
+import type { HolderConnections, HolderProxy } from './daemon/holders';
 import type { DaemonProxy } from './daemon/proxy';
 import type { AttentionNotifier } from './notifications';
 import { validPref, type PrefsStore } from './prefs';
+import { droppedFolder } from './droppedFolder';
 import type { RecentsStore } from './recents';
 import { Shell } from './shell';
 import { webLink } from './terminal/link';
@@ -22,6 +24,8 @@ export interface IpcDeps {
   windows: WindowManager;
   daemon: DaemonManager;
   proxy: DaemonProxy;
+  /** The daemons that hold sessions a window joined (ADR-0060 H8). */
+  holders: HolderConnections;
   recents: RecentsStore;
   prefs: PrefsStore;
   updates: UpdateController;
@@ -68,7 +72,7 @@ export function currentTheme(): AppInfo['theme'] {
  * well-behaved page, not a compromised one.
  */
 export function registerIpc(deps: IpcDeps): void {
-  const { windows, daemon, proxy, recents, prefs } = deps;
+  const { windows, daemon, proxy, holders, recents, prefs } = deps;
   const streams = new Map<number, { owner: number; close: () => void }>();
   const watched = new Set<number>();
   let nextSubscription = 1;
@@ -92,9 +96,15 @@ export function registerIpc(deps: IpcDeps): void {
       stream.close();
       streams.delete(id);
     }
+    holders.leaveAll(contents.id);
   }
 
-  function openStream(event: IpcMainInvokeEvent, built: BuildResult): number {
+  /** The daemon a window's call or socket for `sessionId` goes to: the holder's when it joined it, else its own. */
+  function targetOf(event: IpcMainInvokeEvent, sessionId: string | undefined): HolderProxy {
+    return holders.route(event.sender.id, sessionId) ?? proxy;
+  }
+
+  function openStream(event: IpcMainInvokeEvent, built: BuildResult, sessionId: unknown): number {
     if (!built.ok) throw new Error(built.error);
     const contents = event.sender;
     const subscription = nextSubscription++;
@@ -104,15 +114,20 @@ export function registerIpc(deps: IpcDeps): void {
       contents.send(EVENTS.stream, delivery);
       if (streamEvent.kind === 'closed') streams.delete(subscription);
     };
-    streams.set(subscription, { owner: contents.id, close: proxy.stream(built.request.path, deliver) });
-    if (!watched.has(contents.id)) {
-      watched.add(contents.id);
-      const id = contents.id;
-      // A window that reloads or closes leaves no socket open behind it.
-      contents.on('destroyed', () => { closeStreamsOf(contents); watched.delete(id); });
-      contents.on('did-start-navigation', (details) => { if (details.isMainFrame && !details.isSameDocument) closeStreamsOf(contents); });
-    }
+    const target = targetOf(event, typeof sessionId === 'string' ? sessionId : undefined);
+    streams.set(subscription, { owner: contents.id, close: target.stream(built.request.path, deliver) });
+    watchStreams(contents);
     return subscription;
+  }
+
+  function watchStreams(contents: WebContents): void {
+    if (watched.has(contents.id)) return;
+    watched.add(contents.id);
+    const id = contents.id;
+    // A window that reloads or closes leaves no socket open behind it, and no
+    // holder joined: a connection nothing uses is closed.
+    contents.on('destroyed', () => { closeStreamsOf(contents); watched.delete(id); });
+    contents.on('did-start-navigation', (details) => { if (details.isMainFrame && !details.isSameDocument) closeStreamsOf(contents); });
   }
 
   handle(CHANNELS.appInfo, (): AppInfo => ({
@@ -143,25 +158,36 @@ export function registerIpc(deps: IpcDeps): void {
     recents.touch(key);
     return key;
   });
+  handle(CHANNELS.appOpenDroppedFolder, (_event, path) => {
+    const dropped = droppedFolder(path);
+    if (!dropped.ok) return { ok: false, message: dropped.message };
+    recents.touch(windows.openWorkspace(dropped.path));
+    return { ok: true };
+  });
   handle(CHANNELS.appRecentWorkspaces, () => recents.list());
   handle(CHANNELS.appForgetWorkspace, (_event, path) => {
     if (typeof path !== 'string') throw new Error('path must be a string');
     return recents.forget(path);
   });
+  handle(CHANNELS.appUnforgetWorkspace, (_event, path) => {
+    if (typeof path !== 'string') throw new Error('path must be a string');
+    return recents.unforget(path);
+  });
+  handle(CHANNELS.appRememberRecent, (_event, path, facts) => { recents.remember(path, facts); });
 
   handle(CHANNELS.daemonStatus, () => daemon.current());
   handle(CHANNELS.daemonRetry, () => daemon.retry());
   handle(CHANNELS.daemonStart, () => daemon.start());
   handle(CHANNELS.daemonRestart, () => daemon.restart());
-  handle(CHANNELS.daemonCall, async (_event, routeId, params, body) => {
+  handle(CHANNELS.daemonCall, async (event, routeId, params, body) => {
     const built = buildRequest(routeId, params, body);
     if (!built.ok) return { ok: false, error: built.error };
-    return proxy.call(built.request);
+    return targetOf(event, liveSessionOf(routeId, params)).call(built.request);
   });
   handle(CHANNELS.daemonSubscribe, (event, target) => {
     if (!isRecord(target)) throw new Error('subscribe takes a target');
-    if ('sessionId' in target) return openStream(event, sessionStreamPath(target.sessionId));
-    return openStream(event, childStreamPath(target.rootId, target.childId));
+    if ('sessionId' in target) return openStream(event, sessionStreamPath(target.sessionId), target.sessionId);
+    return openStream(event, childStreamPath(target.rootId, target.childId), target.rootId);
   });
   handle(CHANNELS.daemonUnsubscribe, (event, subscription) => {
     if (typeof subscription !== 'number') return;
@@ -242,8 +268,26 @@ export function registerIpc(deps: IpcDeps): void {
     if (context?.kind !== 'workspace') throw new Error('Refused: this window has no workspace.');
     return context.path;
   };
+  // The page names a session; which daemon holds it, and its token, main reads
+  // itself from the window's own workspace (ADR-0060 H8).
+  handle(CHANNELS.daemonJoin, async (event, sessionId) => {
+    const problem = segmentError(sessionId);
+    if (problem) throw new Error(`sessionId ${problem}`);
+    const workspace = workspaceOfCaller(event);
+    watchStreams(event.sender);
+    return holders.join(event.sender.id, workspace, sessionId as string);
+  });
+  handle(CHANNELS.daemonLeave, (event, sessionId) => {
+    if (typeof sessionId === 'string') holders.leave(event.sender.id, sessionId);
+  });
   handle(CHANNELS.shellOpenInEditor, (event, target) => files.openInEditor(workspaceOfCaller(event), target));
   handle(CHANNELS.shellReveal, (event, target) => files.reveal(workspaceOfCaller(event), target));
+  handle(CHANNELS.shellOpenExternal, async (_event, url) => {
+    const link = webLink(url);
+    if (!link || !link.startsWith('https:')) return { ok: false, message: 'Only https pages open from here.' };
+    await shell.openExternal(link);
+    return { ok: true };
+  });
 
   // A window that reloads or closes leaves no shell running behind it (ADR-0062 G11).
   const terminalWatched = new Set<number>();

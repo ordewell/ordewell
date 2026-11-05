@@ -1,6 +1,6 @@
 import { vi } from 'vitest';
 import { createTask, type SurfacePlan, type SurfaceTask } from '@ordewell/core';
-import type { DaemonCallResult, DaemonStatus, StreamEvent } from '../../../shared/bridge';
+import type { DaemonCallResult, DaemonStatus, JoinResult, StreamEvent } from '../../../shared/bridge';
 import type { RouteId, RouteParams } from '../../../shared/routes';
 
 const CONNECTED: DaemonStatus = { state: 'connected', port: 3700, owned: true, daemon: { version: '0.12.3', contract: 1 } };
@@ -26,6 +26,11 @@ export const ok = (data: unknown): DaemonCallResult => ({ ok: true, status: 200,
  */
 export function fakeDaemon(answers: Partial<Record<RouteId, Answer>> = {}) {
   const sockets = new Map<string, Set<(event: StreamEvent) => void>>();
+  const statusListeners = new Set<(status: DaemonStatus) => void>();
+  let current: DaemonStatus = CONNECTED;
+  let joinAnswer: (sessionId: string) => JoinResult = () => ({ ok: false, reason: 'free', message: 'Nothing holds this session now.' });
+  const join = vi.fn(async (sessionId: string): Promise<JoinResult> => joinAnswer(sessionId));
+  const leave = vi.fn(async (_sessionId: string): Promise<void> => undefined);
   const call = vi.fn(async (route: RouteId, params?: RouteParams, body?: unknown): Promise<DaemonCallResult> => {
     const answer = answers[route];
     if (typeof answer === 'function') return answer(params, body);
@@ -41,11 +46,13 @@ export function fakeDaemon(answers: Partial<Record<RouteId, Answer>> = {}) {
     configurable: true,
     value: {
       daemon: {
-        status: async () => CONNECTED,
-        onStatus: () => () => undefined,
+        status: async () => current,
+        onStatus: (cb: (status: DaemonStatus) => void) => { statusListeners.add(cb); return () => { statusListeners.delete(cb); }; },
         retry: async () => ({ ok: true }),
         call,
         subscribe,
+        join,
+        leave,
         subscribeChild: () => () => undefined,
       },
     },
@@ -53,11 +60,27 @@ export function fakeDaemon(answers: Partial<Record<RouteId, Answer>> = {}) {
   return {
     call,
     subscribe,
+    join,
+    leave,
     answers,
+    /** What main says when the window asks to join a session's holder. */
+    joinWith(answer: JoinResult | ((sessionId: string) => JoinResult)): void {
+      joinAnswer = typeof answer === 'function' ? answer : () => answer;
+    },
+    /** The session's socket closing, as when its daemon goes away. */
+    close(sessionId: string): void {
+      for (const cb of [...(sockets.get(sessionId) ?? [])]) cb({ kind: 'closed', code: 1006, reason: '' });
+    },
     /** Each frame as the session's socket would deliver it, numbered in one stream. */
     push(sessionId: string, ...frames: unknown[]): void {
       for (const frame of frames) for (const cb of [...(sockets.get(sessionId) ?? [])]) cb({ kind: 'frame', frame });
     },
+    /** main's word that the connection changed, to every window listening. */
+    setStatus(status: DaemonStatus): void {
+      current = status;
+      for (const cb of [...statusListeners]) cb(status);
+    },
+    connected: CONNECTED,
     calls(route: RouteId): Array<[RouteParams | undefined, unknown]> {
       return call.mock.calls.filter(([r]) => r === route).map(([, params, body]) => [params, body]);
     },

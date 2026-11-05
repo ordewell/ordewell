@@ -103,9 +103,56 @@ the plan and its tasks, your repository's files, diffs and git, and a terminal,
 in one window. It is a client of the same local daemon, so a run started there
 is the one `ordewell status` reports. Each
 [release](https://github.com/ordewell/ordewell/releases) attaches the
-installers. They are unsigned, so on macOS or Windows the first launch asks you
-to allow the app. The [desktop guide](docs/desktop/README.md) covers installing
-it, running it from source and what the window holds.
+installers. Until releases are signed, the first launch on macOS or Windows
+asks you to allow the app. The [desktop guide](docs/desktop/README.md) covers
+installing it, running it from source and what the window holds.
+
+### Install the desktop app
+
+One line, for your user, with the download checked against the release's
+checksums first:
+
+```bash
+# macOS and Linux
+curl -fsSL https://raw.githubusercontent.com/ordewell/ordewell/main/scripts/install/desktop.sh | sh
+```
+
+```powershell
+# Windows (PowerShell 5.1 or 7)
+irm https://raw.githubusercontent.com/ordewell/ordewell/main/scripts/install/desktop.ps1 | iex
+```
+
+Run it again to upgrade; `--uninstall` (`-Uninstall` on Windows) removes it.
+The scripts do not remove a macOS quarantine attribute or change any Windows
+SmartScreen setting, and a file `curl` downloads carries no quarantine
+attribute, so macOS treats it differently from a browser download.
+
+A package manager can install the same release once it has published there:
+
+```bash
+# macOS
+brew install --cask ordewell/tap/ordewell
+```
+
+```powershell
+# Windows
+winget install Ordewell.Ordewell
+```
+
+Both are set up when the project's package-manager accounts and tokens exist;
+the [desktop guide](docs/desktop/README.md#homebrew-and-winget) says what each
+publishes and how it is set up. Until then, use one of the installers above.
+
+Or download an installer. Each release has copies with a fixed name, so these
+links always get the latest one:
+
+- macOS: [Apple silicon `.dmg`](https://github.com/ordewell/ordewell/releases/latest/download/Ordewell-mac-arm64.dmg) · [Intel `.dmg`](https://github.com/ordewell/ordewell/releases/latest/download/Ordewell-mac-x64.dmg)
+- Windows: [`.exe`](https://github.com/ordewell/ordewell/releases/latest/download/Ordewell-win-x64.exe)
+- Linux: [`.AppImage`](https://github.com/ordewell/ordewell/releases/latest/download/Ordewell-linux-x64.AppImage) · [`.deb`](https://github.com/ordewell/ordewell/releases/latest/download/Ordewell-linux-x64.deb)
+- [`SHA256SUMS`](https://github.com/ordewell/ordewell/releases/latest/download/SHA256SUMS), to check a download by hand: `sha256sum --ignore-missing -c SHA256SUMS` (`shasum -a 256 …` on macOS).
+
+Options, the other install paths and what the checksum does and does not prove
+are in the [desktop guide](docs/desktop/README.md#install).
 
 ## See it in action
 

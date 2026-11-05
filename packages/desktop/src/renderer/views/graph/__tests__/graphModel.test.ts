@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { IDLE_ACTIVITY, type RunView } from '@ordewell/core';
+import { IDLE_ACTIVITY, startAttemptUsage, type RunView } from '@ordewell/core';
 import { surfacePlan, surfaceTask } from '../../../session/__tests__/fakeDaemon';
 import { buildGraph, describeEdges, graphTasks, type GraphContext, type GraphModel } from '../graphModel';
 import { runTask } from './fixtures';
@@ -49,6 +49,27 @@ describe('buildGraph: dependencies', () => {
   });
 });
 
+describe('buildGraph: stages', () => {
+  it('puts a task one stage past the latest of its dependencies, so a long chain and a shortcut agree', () => {
+    const model = built(buildGraph([
+      runTask({ id: 'a', order: 1 }),
+      runTask({ id: 'b', order: 2, dependencies: ['a'] }),
+      runTask({ id: 'c', order: 3, dependencies: ['b'] }),
+      runTask({ id: 'd', order: 4, dependencies: ['a', 'c'] }),
+      runTask({ id: 'e', order: 5 }),
+    ], CTX));
+    expect(model.nodes.map((n) => [n.id, n.stage])).toEqual([['a', 1], ['b', 2], ['c', 3], ['d', 4], ['e', 1]]);
+  });
+
+  it('stages a task by a dependency on a subtask as one on the task holding it', () => {
+    const model = built(buildGraph([
+      runTask({ id: 'p', order: 1, subtasks: [runTask({ id: 'p1', order: 1 })] }),
+      runTask({ id: 'q', order: 2, dependencies: ['p1'] }),
+    ], CTX));
+    expect(model.nodes.map((n) => n.stage)).toEqual([1, 2]);
+  });
+});
+
 describe('buildGraph: what a node says', () => {
   it('is named by its order, title and status, and describes its edges', () => {
     const model = built(buildGraph([
@@ -57,8 +78,8 @@ describe('buildGraph: what a node says', () => {
     ], CTX));
     const [a, b] = model.nodes;
     expect(a!.label).toMatch(/^#1 Add the route, /);
-    expect(a!.description).toBe('#2 depends on it');
-    expect(b!.description).toBe('depends on #1');
+    expect(a!.description).toMatch(/^stage 1; #2 depends on it; /);
+    expect(b!.description).toMatch(/^stage 2; depends on #1; /);
   });
 
   it('says the runner, model and effort of an AI task and nothing of a manual one', () => {
@@ -67,8 +88,48 @@ describe('buildGraph: what a node says', () => {
       runTask({ id: 'b', order: 2, type: 'user' }),
     ], CTX));
     expect(model.nodes[0]!.assignment).toBe('Claude Code · Opus · high');
+    expect(model.nodes[0]!.lane).toEqual({ kind: 'ai', runner: 'claude-code', model: 'Opus', effort: 'high' });
+    expect(model.nodes[0]!.description).toContain('Claude Code · Opus · high');
     expect(model.nodes[1]!.assignment).toBeNull();
-    expect(model.nodes[1]!.badges.map((b) => b.kind)).toEqual(['manual']);
+    expect(model.nodes[1]!.lane).toEqual({ kind: 'user' });
+    expect(model.nodes[1]!.badges).toEqual([]);
+  });
+
+  it('keeps an AI task\'s parts apart for the card, in the shared words', () => {
+    const model = built(buildGraph([
+      runTask({ id: 'a', order: 1, type: 'ai', assignedRunner: 'opencode', assignedModel: { modelId: 'opencode-go/deepseek-v4.1-flash', thinkingEffort: 'xhigh' } as never }),
+      runTask({ id: 'b', order: 2, type: 'ai', assignedRunner: 'codex' }),
+    ], CTX));
+    expect(model.nodes[0]!.lane).toEqual({ kind: 'ai', runner: 'opencode', model: 'opencode-go/deepseek-v4.1-flash', effort: 'xhigh' });
+    expect(model.nodes[0]!.assignment).toBe('OpenCode · opencode-go/deepseek-v4.1-flash · extra high');
+    expect(model.nodes[1]!.lane).toEqual({ kind: 'ai', runner: 'codex', model: 'default model', effort: null });
+  });
+
+  it('says a script\'s first line of command', () => {
+    const model = built(buildGraph([runTask({ id: 'a', order: 1, type: 'script', commands: [['npm', 'test'], ['npm', 'run', 'lint']] })], CTX));
+    expect(model.nodes[0]!.lane).toEqual({ kind: 'script', command: 'npm test' });
+    expect(model.nodes[0]!.assignment).toBeNull();
+  });
+
+  it('badges a read-only mode, an ops task and a human-in-the-loop one', () => {
+    const ctx: GraphContext = { ...CTX, modesByRunner: { 'claude-code': [{ id: 'build' }, { id: 'plan', readOnly: true }] } };
+    const model = built(buildGraph([
+      runTask({ id: 'a', order: 1, type: 'ai', assignedRunner: 'claude-code', taskMode: 'plan' }),
+      runTask({ id: 'b', order: 2, type: 'ai', assignedRunner: 'claude-code', taskMode: 'build', ops: true }),
+      runTask({ id: 'c', order: 3, type: 'ai', assignedRunner: 'claude-code', autonomy: 'HITL' }),
+      runTask({ id: 'd', order: 4, type: 'user', autonomy: 'HITL' }),
+    ], ctx));
+    expect(model.nodes.map((n) => n.badges.map((b) => b.kind))).toEqual([['read-only'], ['ops'], ['hitl'], []]);
+  });
+
+  it('times the latest attempt: counted from its start while it runs, else what it took', () => {
+    const started = '2026-11-03T11:58:00Z';
+    const model = built(buildGraph([
+      runTask({ id: 'a', order: 1, status: 'in_progress', attemptUsage: [startAttemptUsage(1, 'claude-code', started)] }),
+      runTask({ id: 'b', order: 2, status: 'completed', attemptUsage: [{ ...startAttemptUsage(1, 'claude-code', started), endedAt: '2026-11-03T12:00:10Z', wallTimeMs: 130_000 }] }),
+      runTask({ id: 'c', order: 3 }),
+    ], CTX));
+    expect(model.nodes.map((n) => n.elapsed)).toEqual([{ since: started }, { took: '2m 10s' }, null]);
   });
 
   it('badges a research task', () => {
@@ -99,17 +160,20 @@ describe('buildGraph: folding', () => {
     expect(node.fold?.subtasks.map((s) => s.orderLabel)).toEqual(['2.1', '2.2']);
   });
 
-  it('is taller when opened, and so lays out again; a fold that is shut keeps the shape', () => {
+  it('opens on request, and so lays out again; a fold that is shut keeps the shape', () => {
     const shut = built(buildGraph([parent], CTX));
     const open = built(buildGraph([parent], { ...CTX, expanded: new Set(['p']) }));
-    expect(open.nodes[0]!.height).toBeGreaterThan(shut.nodes[0]!.height);
+    expect(shut.nodes[0]!.expanded).toBe(false);
+    expect(open.nodes[0]!.expanded).toBe(true);
     expect(open.layoutKey).not.toBe(shut.layoutKey);
   });
 
-  it('does not grow a node that holds nothing', () => {
+  it('does not open a node that holds nothing', () => {
+    const shut = built(buildGraph([runTask({ id: 'a', order: 1 })], CTX));
     const model = built(buildGraph([runTask({ id: 'a', order: 1 })], { ...CTX, expanded: new Set(['a']) }));
     expect(model.nodes[0]!.fold).toBeNull();
-    expect(model.nodes[0]!.height).toBe(78);
+    expect(model.nodes[0]!.expanded).toBe(false);
+    expect(model.layoutKey).toBe(shut.layoutKey);
   });
 
   it('folds a delegated task\'s child plan into its node', () => {
@@ -135,13 +199,13 @@ describe('buildGraph: loops', () => {
 
   it('badges the check with its round of the most, and its body with the check it runs for', () => {
     const model = built(buildGraph(tasks(2), CTX));
-    expect(model.nodes[0]!.loop).toMatchObject({ role: 'check', label: '⟲ 2/3' });
-    expect(model.nodes[1]!.loop).toMatchObject({ role: 'body', label: '⟲ #1' });
+    expect(model.nodes[0]!.loop).toMatchObject({ role: 'check', label: '2/3' });
+    expect(model.nodes[1]!.loop).toMatchObject({ role: 'body', label: '#1' });
   });
 
   it('starts at round 1 and never shows a round past the most', () => {
-    expect(built(buildGraph(tasks(), CTX)).nodes[0]!.loop?.label).toBe('⟲ 1/3');
-    expect(built(buildGraph(tasks(9), CTX)).nodes[0]!.loop?.label).toBe('⟲ 3/3');
+    expect(built(buildGraph(tasks(), CTX)).nodes[0]!.loop?.label).toBe('1/3');
+    expect(built(buildGraph(tasks(9), CTX)).nodes[0]!.loop?.label).toBe('3/3');
   });
 
   it('draws no back-edge: the body depends on the check and nothing returns', () => {

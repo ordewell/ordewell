@@ -25,7 +25,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
  * React for the webviews; `@ordewell/*` itself is first-party and covered by
  * LICENSE, but is walked for the dependencies it brings. desktop's list is what
  * its Vite build and its daemon closure carry: the renderer's UI, editor,
- * graph, terminal and fonts, and the daemon's own production tree. Electron and
+ * terminal and fonts, and the daemon's own production tree. Electron and
  * Chromium are not here: electron-builder copies their licence files beside the
  * app, and they are a build-time dependency, not a bundled package.
  */
@@ -49,8 +49,6 @@ const TARGETS = {
       'node-pty',
       'monaco-editor',
       'lucide-react',
-      '@xyflow/react',
-      '@dagrejs/dagre',
       '@xterm/xterm',
       '@xterm/addon-fit',
       '@fontsource-variable/inter',

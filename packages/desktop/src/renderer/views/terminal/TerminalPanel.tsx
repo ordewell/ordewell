@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from 'react';
-import { ChevronDown, Plus, X } from 'lucide-react';
-import { Icon, IconButton } from '@ordewell/ui/design';
+import { ChevronDown, CircleAlert, Plus, SquareTerminal, X } from 'lucide-react';
+import { EmptyState, IconButton } from '@ordewell/ui/design';
 import type { FrameApi, Unregister } from '../../frame/api';
 import { Popover } from '../../frame/Popover';
 import { optionsFor, type ScopeState } from '../scope/scopeStore';
@@ -88,7 +88,7 @@ function TabLabel({ tab, renaming, onRename, onDone }: {
     return (
       <>
         <span className="terminal-tab-name">{tabTitle(tab)}</span>
-        <span className="terminal-tab-scope">{tab.scopeLabel}</span>
+        {tab.scopeLabel !== tabTitle(tab) && <span className="terminal-tab-scope">{tab.scopeLabel}</span>}
       </>
     );
   }
@@ -193,7 +193,7 @@ function TerminalPanel({ api }: { api: FrameApi }): JSX.Element {
                 />
                 <IconButton
                   icon={X}
-                  size={12}
+                  size={14}
                   label={`Close ${tabTitle(tab)} (${tab.scopeLabel})`}
                   className="terminal-tab-close"
                   tabIndex={-1}
@@ -204,30 +204,27 @@ function TerminalPanel({ api }: { api: FrameApi }): JSX.Element {
           })}
         </div>
         <IconButton icon={Plus} label="New terminal in your checkout" onClick={() => { void terminals.open({ kind: 'checkout' }); }} />
-        <button
+        <IconButton
           ref={menuButton}
-          type="button"
+          icon={ChevronDown}
+          label="Open a terminal in another scope"
           className="terminal-menu-button"
           aria-haspopup="menu"
           aria-expanded={menu}
-          aria-label="Open a terminal in another scope"
-          title="Open a terminal in another scope"
           onClick={() => { setMenu((was) => !was); void scopeStore.refresh(); }}
-        >
-          <Icon icon={ChevronDown} size={12} />
-        </button>
+        />
         {menu && <NewTerminalMenu scopes={scopes} terminals={terminals} anchor={menuButton} onClose={() => setMenu(false)} />}
       </div>
       {banner && <p className="terminal-banner" role="status">{banner}</p>}
       <div className="terminal-stage">
         <div className="terminal-host" ref={host} role="tabpanel" aria-label={active ? `${tabTitle(active)}, ${active.scopeLabel}` : 'Terminal'} hidden={!active || active.phase === 'failed'} />
-        {active?.phase === 'failed' && <p className="terminal-failed" role="alert">{active.message}</p>}
-        {!active && <p className="frame-empty">No terminal is open. The plus button opens one in your checkout.</p>}
+        {active?.phase === 'failed' && <p className="terminal-failed" role="alert"><CircleAlert size={16} aria-hidden="true" /><span>{active.message}</span></p>}
+        {!active && <EmptyState className="terminal-empty" icon={SquareTerminal} title="No terminal is open" body="The plus button opens one in your checkout." />}
       </div>
     </div>
   );
 }
 
 export function register(api: FrameApi): Unregister {
-  return api.registerPanel({ region: 'bottom', id: 'terminal', title: 'Terminal', render: () => <TerminalPanel api={api} /> });
+  return api.registerPanel({ region: 'terminal', id: 'terminal', title: 'Terminal', render: () => <TerminalPanel api={api} /> });
 }

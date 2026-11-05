@@ -1,4 +1,6 @@
 import { useEffect, useId, useState } from 'react';
+import { CircleAlert, Settings as SettingsIcon } from 'lucide-react';
+import { Button, EmptyState } from '@ordewell/ui/design';
 import type { DiscoveredModel, SettingsResponse, SupervisorLevel } from '@ordewell/core';
 import { SUPERVISOR_LEVEL_LABEL, parseCount } from '@ordewell/core/plan-utils';
 import type { FrameApi, Unregister } from '../../frame/api';
@@ -181,13 +183,15 @@ function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
   const { sessionId } = useSession(host);
   const { view, refresh, update, updateRun, setRunner, savePref, setTheme } = useSettings(host, sessionId);
   const { settings, runners, models, prefs, busy, loading, error } = view;
-  if (loading) return <p className="frame-empty">Loading settings…</p>;
+  if (loading) return <EmptyState icon={SettingsIcon} title="Loading settings…" />;
   if (!settings) {
     return (
-      <div className="settings-view">
-        <p className="settings-error" role="alert">{error ?? 'The daemon did not answer with settings.'}</p>
-        <button type="button" onClick={() => { void refresh(); }}>Retry</button>
-      </div>
+      <EmptyState
+        icon={CircleAlert}
+        title="Settings could not be loaded"
+        body={error ?? 'The daemon did not answer with settings.'}
+        action={<Button onClick={() => { void refresh(); }}>Retry</Button>}
+      />
     );
   }
 
@@ -205,7 +209,7 @@ function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
         <h2>Settings</h2>
         <p>The planner, the runners and the run rules. Every surface shares them; the desktop's own preferences stay in this app.</p>
       </header>
-      {error && <p className="settings-error" role="alert">{error}</p>}
+      {error && <p className="settings-error" role="alert"><CircleAlert size={16} aria-hidden="true" /><span>{error}</span></p>}
       {busy && <p className="settings-saving" role="status">Saving…</p>}
 
       <section className="settings-section" aria-labelledby="settings-appearance">

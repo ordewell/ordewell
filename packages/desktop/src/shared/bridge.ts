@@ -19,12 +19,38 @@ export interface AppInfo {
 /** Which window this renderer is: main knows, so a renderer never names its own workspace. */
 export type WindowContext = { kind: 'welcome' } | { kind: 'workspace'; path: string };
 
+/** A workspace's git, as the welcome window last saw it: one repository's branch, or a folder of them (ADR-0014). */
+export type RecentGit =
+  | { kind: 'branch'; name: string }
+  | { kind: 'detached' }
+  | { kind: 'repos'; count: number }
+  | { kind: 'none' };
+
+/** The newest session the daemon listed for a workspace, kept so its card draws before the daemon answers. */
+export interface RecentSession {
+  id: string;
+  goal: string;
+  /** The daemon's plan status: `draft`, `approved`, `rejected`, `running` or `completed`. */
+  status: string;
+  updatedAt: string;
+}
+
+/** What the welcome window may record about a recent workspace once the daemon tells it. */
+export interface RecentFacts {
+  git?: RecentGit;
+  lastSession?: RecentSession;
+}
+
 export interface RecentWorkspace {
   path: string;
   name: string;
+  /** The path with home as `~`; main says it since the page does not know home. */
+  displayPath: string;
   openedAt: string;
   /** The folder is gone: the entry can only be forgotten. */
   missing: boolean;
+  git?: RecentGit;
+  lastSession?: RecentSession;
 }
 
 export interface DaemonIdentityView {
@@ -49,6 +75,30 @@ export type DaemonStatus =
   | { state: 'port-taken'; port: number }
   | { state: 'failed'; port: number; message: string; logPath: string };
 
+/** The daemon that holds a session this window joined (ADR-0060 H8), for the joined chip and status bar. */
+export interface HolderView {
+  port: number;
+  /** The daemon's process. */
+  pid: number;
+  /** The TUI the daemon serves, when it is a TUI's private daemon. */
+  ownerPid?: number;
+  version?: string;
+  contract: number;
+  /** When it took the session. */
+  since: string;
+}
+
+/**
+ * Why a held session was not joined: `free`, nothing holds it any longer;
+ * `vscode`, its host runs it in-process with nothing to join; `own`, this
+ * app's daemon is the holder; the rest are each a reason the join failed.
+ */
+export type JoinRefusal = 'free' | 'vscode' | 'own' | 'no-host' | 'token' | 'unreachable' | 'mismatch';
+
+export type JoinResult =
+  | { ok: true; holder: HolderView }
+  | { ok: false; reason: JoinRefusal; message: string };
+
 export type DaemonCallResult =
   | { ok: true; status: number; data: unknown }
   /** `status` is absent when no response came back at all. */
@@ -71,16 +121,28 @@ export interface ConfirmSpec {
   cancelLabel?: string;
 }
 
-/** The sizes of the frame's resizable panes, in CSS pixels. */
-export interface PaneSizes {
-  sidebar: number;
-  right: number;
-  bottom: number;
+/**
+ * How the user left one workspace's window (docs/desktop/design.md, Sizing).
+ * A size is kept only once the user dragged it: until then the window's width
+ * band decides it.
+ */
+export interface SavedLayout {
+  sidebar?: number;
+  plan?: number;
+  terminal?: number;
+  activity?: string;
+  sidebarOpen?: boolean;
+  planOpen?: boolean;
+  terminalOpen?: boolean;
 }
 
 export interface Prefs {
   theme: 'system' | 'light' | 'dark';
-  panes: PaneSizes;
+  /**
+   * Each workspace's layout, by its path. Setting it merges: a window sends
+   * only its own workspace's entry.
+   */
+  layouts: Record<string, SavedLayout>;
   /** Desktop notifications when something needs the user or a run ends. */
   notifications: boolean;
   /** Keep the app running in the tray when its last window closes and no run is live (H5). */
@@ -148,15 +210,30 @@ export interface TerminalDelivery {
 
 export type Unsubscribe = () => void;
 
+/** The frame commands (renderer/frame/commands.ts) the application menu offers; the menu names no other. */
+export type MenuCommand = 'layout.reset';
+
 export interface OrdewellBridge {
   app: {
     info(): Promise<AppInfo>;
     context(): Promise<WindowContext>;
     onThemeChange(cb: (theme: AppInfo['theme']) => void): Unsubscribe;
+    /** An application-menu item that runs one of the frame's commands in the focused window. */
+    onMenuCommand(cb: (command: MenuCommand) => void): Unsubscribe;
     /** With no path, the native folder picker; with one, a recent entry. Focuses an open window (H6). */
     openWorkspace(path?: string): Promise<string | undefined>;
     recentWorkspaces(): Promise<RecentWorkspace[]>;
     forgetWorkspace(path: string): Promise<RecentWorkspace[]>;
+    /** Forget's Undo: only an entry this app forgot comes back. */
+    unforgetWorkspace(path: string): Promise<RecentWorkspace[]>;
+    /** Records a recent workspace's branch and last session; a path not in the list is ignored. */
+    rememberRecent(path: string, facts: RecentFacts): Promise<void>;
+    /**
+     * Opens a folder dropped on the window. The preload turns the dropped file
+     * into its path; main opens it only when it is a directory, and refuses
+     * anything else in words the page shows.
+     */
+    openDroppedFolder(file: File): Promise<ActionResult>;
   };
   daemon: {
     status(): Promise<DaemonStatus>;
@@ -166,6 +243,13 @@ export interface OrdewellBridge {
     restart(): Promise<ActionResult>;
     call(routeId: RouteId, params?: RouteParams, body?: unknown): Promise<DaemonCallResult>;
     subscribe(sessionId: string, cb: (event: StreamEvent) => void): Unsubscribe;
+    /**
+     * Join the daemon that holds `sessionId` (ADR-0060 H8): main reads which
+     * one from the lease, so the page names only the session. Until `leave`,
+     * this window's calls and socket for that session go to the holder.
+     */
+    join(sessionId: string): Promise<JoinResult>;
+    leave(sessionId: string): Promise<void>;
     subscribeChild(rootId: string, childId: string, cb: (event: StreamEvent) => void): Unsubscribe;
   };
   dialog: {
@@ -198,6 +282,8 @@ export interface OrdewellBridge {
   shell: {
     openInEditor(target: ShellTarget): Promise<ActionResult>;
     reveal(target: ShellTarget): Promise<ActionResult>;
+    /** Opens an https page in the OS browser, such as a runner's install docs; anything else is refused. */
+    openExternal(url: string): Promise<ActionResult>;
   };
   /**
    * The built-in terminal (ADR-0062 G11). The shells are main's: a page asks
@@ -223,6 +309,9 @@ export const CHANNELS = {
   appOpenWorkspace: 'ordewell:app.openWorkspace',
   appRecentWorkspaces: 'ordewell:app.recentWorkspaces',
   appForgetWorkspace: 'ordewell:app.forgetWorkspace',
+  appUnforgetWorkspace: 'ordewell:app.unforgetWorkspace',
+  appRememberRecent: 'ordewell:app.rememberRecent',
+  appOpenDroppedFolder: 'ordewell:app.openDroppedFolder',
   daemonStatus: 'ordewell:daemon.status',
   daemonRetry: 'ordewell:daemon.retry',
   daemonStart: 'ordewell:daemon.start',
@@ -230,6 +319,8 @@ export const CHANNELS = {
   daemonCall: 'ordewell:daemon.call',
   daemonSubscribe: 'ordewell:daemon.subscribe',
   daemonUnsubscribe: 'ordewell:daemon.unsubscribe',
+  daemonJoin: 'ordewell:daemon.join',
+  daemonLeave: 'ordewell:daemon.leave',
   dialogConfirm: 'ordewell:dialog.confirm',
   prefsGet: 'ordewell:prefs.get',
   prefsSet: 'ordewell:prefs.set',
@@ -238,6 +329,7 @@ export const CHANNELS = {
   notifySetBadge: 'ordewell:notify.setBadge',
   shellOpenInEditor: 'ordewell:shell.openInEditor',
   shellReveal: 'ordewell:shell.reveal',
+  shellOpenExternal: 'ordewell:shell.openExternal',
   terminalOpen: 'ordewell:terminal.open',
   terminalWrite: 'ordewell:terminal.write',
   terminalResize: 'ordewell:terminal.resize',
@@ -251,6 +343,7 @@ export const EVENTS = {
   stream: 'ordewell:event.stream',
   terminal: 'ordewell:event.terminal',
   notifyClick: 'ordewell:event.notifyClick',
+  menuCommand: 'ordewell:event.menuCommand',
 } as const;
 
 /** What `daemonSubscribe` takes: a session's socket, or one of its child plans'. */

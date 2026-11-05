@@ -13,118 +13,30 @@
  * Every assertion is on a role and an accessible name. The one exception is
  * picking a line in Monaco's diff, which exposes no line role.
  */
-import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import type { ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
-import net from 'node:net';
-import os from 'node:os';
-import path from 'node:path';
+import { appEnv, freePort, git as gitIn, launchApp, makeSandbox, openFolder, removeSandbox, startMock, untilListening, type Sandbox } from './fixtures';
 
-const ROOT = path.resolve(__dirname, '../../..');
-const DESKTOP = path.join(ROOT, 'packages/desktop');
 const GOAL = 'Add greeting and farewell modules';
 const COMMENT = 'Export it as a named constant, please.';
 
-let tmp = '';
-let repo = '';
+let sandbox: Sandbox | undefined;
 let mock: ChildProcess | undefined;
 let app: ElectronApplication | undefined;
 let daemonPort = 0;
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address();
-      const port = typeof address === 'object' && address ? address.port : 0;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
 function git(...args: string[]): string {
-  return execFileSync('git', args, { cwd: repo, encoding: 'utf8', env: { ...process.env, HOME: path.join(tmp, 'home') } });
-}
-
-function listening(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const socket = net.connect(port, '127.0.0.1', () => { socket.end(); resolve(true); });
-    socket.once('error', () => resolve(false));
-  });
-}
-
-/** Polls a port until it is `up`, or not, for at most ten seconds. */
-async function untilListening(port: number, up: boolean): Promise<boolean> {
-  for (let i = 0; i < 100; i++) {
-    if (await listening(port) === up) return true;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  return false;
-}
-
-/**
- * Only the fake runner, node and git are on PATH. With the machine's own PATH the
- * daemon's model discovery spawns whatever real codex or opencode is installed,
- * which is neither offline nor quick. The daemon still appends the login shell's
- * PATH and the usual install directories after this one, so codex and opencode
- * are stubs that fail as a missing command does, and shadow a real install.
- */
-function hermeticPath(): string {
-  const bin = path.join(tmp, 'bin');
-  fs.mkdirSync(bin);
-  fs.symlinkSync(process.execPath, path.join(bin, 'node'));
-  fs.symlinkSync(execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim(), path.join(bin, 'git'));
-  for (const absent of ['codex', 'opencode']) fs.writeFileSync(path.join(bin, absent), '#!/bin/sh\nexit 127\n', { mode: 0o755 });
-  return [path.join(ROOT, 'bench/pipeline/fake-claude'), bin, '/usr/bin', '/bin'].join(path.delimiter);
-}
-
-function appEnv(home: string, daemonPort: number, mockPort: number): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    // A developer's own Ordewell, Claude Code or VS Code settings would steer the app under test.
-    if (value === undefined || /^(ORDEWELL_|VSCODE_|CLAUDE)/.test(key) || key === 'ELECTRON_RUN_AS_NODE' || key === 'ANTHROPIC_API_KEY') continue;
-    env[key] = value;
-  }
-  return {
-    ...env,
-    HOME: home,
-    PATH: hermeticPath(),
-    ORDEWELL_PORT: String(daemonPort),
-    ORDEWELL_NO_VERSION_CHECK: '1',
-    ORDEWELL_ENABLED_RUNNERS: 'claude-code',
-    AI_PROVIDER: 'openrouter',
-    ORCHESTRATOR_MODEL: 'mock/desktop-e2e',
-    OPENROUTER_API_KEY: 'mock-key',
-    OPENROUTER_BASE_URL: `http://127.0.0.1:${mockPort}/v1`,
-    FAKE_CLAUDE_LOG: path.join(tmp, 'fake-claude.log'),
-  };
+  if (!sandbox) throw new Error('no sandbox');
+  return gitIn(sandbox, ...args);
 }
 
 test.beforeAll(async () => {
-  tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-desktop-e2e-')));
-  const home = path.join(tmp, 'home');
-  repo = path.join(tmp, 'repo');
-  for (const dir of [home, repo]) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(home, '.gitconfig'), '[user]\n\tname = Desktop E2E\n\temail = e2e@example.invalid\n[init]\n\tdefaultBranch = main\n');
-  git('init', '-q');
-  fs.writeFileSync(path.join(repo, 'README.md'), '# demo\n');
-  git('add', '.');
-  git('commit', '-qm', 'init');
-
-  const mockPort = await freePort();
+  sandbox = makeSandbox();
+  const started = await startMock();
+  mock = started.process;
   daemonPort = await freePort();
-  mock = spawn(process.execPath, [path.join(ROOT, 'bench/live/mock-provider.mjs'), '--port', String(mockPort)], { stdio: 'ignore' });
-  // The planner's first turn must never meet a closed port.
-  if (!await untilListening(mockPort, true)) throw new Error(`the mock provider never listened on ${mockPort}`);
-
-  app = await electron.launch({
-    // A Linux CI runner has no setuid chrome-sandbox, and its AppArmor forbids
-    // the unprivileged user namespaces Chromium's sandbox falls back to.
-    args: [DESKTOP, `--user-data-dir=${path.join(tmp, 'user-data')}`, ...(process.platform === 'linux' ? ['--no-sandbox'] : [])],
-    env: appEnv(home, daemonPort, mockPort),
-    cwd: tmp,
-  });
+  app = await launchApp(sandbox, appEnv(sandbox, daemonPort, started.port));
   // Playwright's own `trace` option reaches pages it launches, not an Electron app's.
   await app.context().tracing.start({ screenshots: true, snapshots: true });
 });
@@ -138,8 +50,7 @@ test.afterEach(async ({}, testInfo) => {
     for (const [i, page] of (app?.windows() ?? []).entries()) {
       await page.screenshot({ path: testInfo.outputPath(`window-${i}.png`) }).catch(() => undefined);
     }
-    const log = path.join(tmp, 'fake-claude.log');
-    if (fs.existsSync(log)) await testInfo.attach('fake-claude.log', { path: log });
+    if (sandbox && fs.existsSync(sandbox.fakeClaudeLog)) await testInfo.attach('fake-claude.log', { path: sandbox.fakeClaudeLog });
   }
 });
 
@@ -149,7 +60,7 @@ test.afterAll(async () => {
   // The daemon stops a moment after the window closes, and until then it can
   // write under the temp HOME, which would leave the directory behind.
   if (daemonPort) await untilListening(daemonPort, false);
-  if (tmp) fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5 });
+  if (sandbox) removeSandbox(sandbox);
 });
 
 test('a goal goes from the welcome window to a merge on the checkout\'s branch', async () => {
@@ -160,54 +71,48 @@ test('a goal goes from the welcome window to a merge on the checkout\'s branch',
 
   await test.step('welcome: open the workspace', async () => {
     await expect(welcome.getByRole('button', { name: 'Open folder…' })).toBeVisible();
-    // The native picker cannot be driven: main's dialog answers with the repository.
-    await electronApp.evaluate(({ dialog }, dir) => {
-      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [dir] });
-    }, repo);
-    [win] = await Promise.all([electronApp.waitForEvent('window'), welcome.getByRole('button', { name: 'Open folder…' }).click()]);
-    await expect(win.getByRole('contentinfo')).toContainText('runners: claude-code');
+    win = await openFolder(electronApp, welcome, sandbox?.repo ?? '');
+    await expect(win.getByRole('contentinfo')).toContainText('Claude Code');
   });
 
   const views = win.getByRole('navigation', { name: 'Views' });
-  const editor = win.getByRole('main', { name: 'Editor' });
-  const planSidebar = win.getByRole('complementary', { name: 'Plan', exact: true });
-  const changes = win.getByRole('complementary', { name: 'Changes' });
+  const editor = win.getByRole('main', { name: 'Centre' });
+  const planPanel = win.getByRole('complementary', { name: 'Plan', exact: true });
+  const graph = editor.getByRole('grid', { name: 'Plan graph' });
+  const changes = win.getByRole('navigation', { name: 'Changes' });
+  // The planner tab's approval card offers the same Approve: the title bar's is the frame's one.
+  const approve = win.locator('header.frame-title').getByRole('button', { name: 'Approve plan' });
   const taskOneChanges = changes.getByRole('region', { name: 'Task #1: Add a greeting module' });
 
-  await test.step('new session: describe a goal, and the draft plan appears in List', async () => {
+  await test.step('new session: describe a goal to the planner, and the draft plan appears in the plan panel', async () => {
     await win.getByRole('button', { name: 'New session' }).click();
-    const box = win.getByRole('textbox', { name: 'Message the planner' });
+    await expect(editor.getByRole('tab', { name: /Planner/ })).toHaveAttribute('aria-selected', 'true');
+    const box = editor.getByRole('textbox', { name: 'Message the planner' });
     await box.fill(GOAL);
     await box.press('Enter');
-    await expect(win.getByRole('button', { name: 'Approve plan' })).toBeVisible({ timeout: 60_000 });
-    const planView = editor.getByRole('group', { name: 'Plan view' });
-    await expect(planView.getByRole('button', { name: 'List' })).toHaveAttribute('aria-pressed', 'true');
-    await expect(editor.getByRole('button', { name: 'Add a greeting module' })).toBeVisible();
-    await expect(editor.getByRole('button', { name: 'Add a farewell module' })).toBeVisible();
+    await expect(approve).toBeVisible({ timeout: 60_000 });
+    await expect(planPanel.getByRole('button', { name: 'Add a greeting module' })).toBeVisible();
+    await expect(planPanel.getByRole('button', { name: 'Add a farewell module' })).toBeVisible();
   });
 
-  await test.step('toggle Graph and back to List', async () => {
-    const planView = editor.getByRole('group', { name: 'Plan view' });
-    await planView.getByRole('button', { name: 'Graph' }).click();
-    const graph = editor.getByRole('application', { name: 'Plan graph' });
+  await test.step('the plan graph opens as a tab beside the planner', async () => {
+    await planPanel.getByRole('button', { name: 'Open the plan graph' }).click();
+    await expect(editor.getByRole('tab', { name: /Plan graph/ })).toHaveAttribute('aria-selected', 'true');
     await expect(graph.getByRole('button', { name: '#1 Add a greeting module, not started' })).toBeVisible();
     await expect(graph.getByRole('button', { name: '#2 Add a farewell module, not started' })).toBeVisible();
-    await planView.getByRole('button', { name: 'List' }).click();
-    await expect(planView.getByRole('button', { name: 'List' })).toHaveAttribute('aria-pressed', 'true');
-    await expect(editor.getByRole('button', { name: 'Add a greeting module' })).toBeVisible();
+    await expect(planPanel.getByRole('button', { name: 'Add a greeting module' })).toBeVisible();
   });
 
   await test.step('approve and run: task #1 starts in its own worktree', async () => {
-    await win.getByRole('button', { name: 'Approve plan' }).click();
-    const tasks = planSidebar.getByRole('list', { name: 'Tasks' });
-    await expect(tasks.getByRole('button', { name: 'Running #1 Add a greeting module' })).toBeVisible({ timeout: 60_000 });
-    await expect(tasks.getByRole('button', { name: 'Not started #2 Add a farewell module' })).toBeVisible();
-    await views.getByRole('button', { name: 'Changes' }).click();
+    await approve.click();
+    await expect(graph.getByRole('button', { name: /^#1 Add a greeting module, running/ })).toBeVisible({ timeout: 60_000 });
+    await expect(graph.getByRole('button', { name: /^#2 Add a farewell module, not started/ })).toBeVisible();
+    await views.getByRole('tab', { name: 'Changes' }).click();
     await expect(taskOneChanges.getByRole('button', { name: /greeting\.ts/ })).toBeVisible({ timeout: 60_000 });
   });
 
   await test.step('Explorer: the task #1 worktree scope, then the checkout scope', async () => {
-    await views.getByRole('button', { name: 'Explorer' }).click();
+    await views.getByRole('tab', { name: 'Explorer' }).click();
     await win.getByRole('button', { name: 'Your checkout', exact: true }).click();
     await win.getByRole('menuitemradio', { name: /Task #1 worktree/ }).click();
     const taskTree = win.getByRole('tree', { name: 'Files in Task #1' });
@@ -223,12 +128,13 @@ test('a goal goes from the welcome window to a merge on the checkout\'s branch',
   });
 
   await test.step('Changes: open task #1\'s diff and send it a line comment', async () => {
-    await views.getByRole('button', { name: 'Changes' }).click();
+    await views.getByRole('tab', { name: 'Changes' }).click();
     await taskOneChanges.getByRole('button', { name: /greeting\.ts/ }).click();
     const diff = win.getByTestId('monaco-diff-host');
     await expect(diff).toBeVisible();
     // Monaco draws lines with no accessible role: the line is the one CSS hook.
-    await diff.locator('.editor.modified .view-line').first().click();
+    // A narrow centre turns the diff inline, where the deleted lines are view-lines too.
+    await diff.locator('.editor.modified .view-line').filter({ hasText: 'greeting' }).first().click();
     await win.getByRole('button', { name: 'Comment to task #1' }).click();
     await win.getByRole('textbox', { name: 'Comment to task #1' }).fill(COMMENT);
     await win.getByRole('button', { name: 'Send to task #1' }).click();
@@ -236,11 +142,24 @@ test('a goal goes from the welcome window to a merge on the checkout\'s branch',
   });
 
   await test.step('task #1 passes, with its evidence in the task tab', async () => {
-    await views.getByRole('button', { name: 'Plan' }).click();
-    const passed = planSidebar.getByRole('list', { name: 'Tasks' }).getByRole('button', { name: 'Passed #1 Add a greeting module' });
+    await editor.getByRole('tab', { name: /Plan graph/ }).click();
+    // The run is isolated, so a verified task waits for the merge rather than reading as passed.
+    const passed = graph.getByRole('button', { name: /^#1 Add a greeting module, waiting for merge/ });
     await expect(passed).toBeVisible({ timeout: 60_000 });
+    const editorTabs = editor.getByRole('tablist', { name: 'Editor tabs' }).getByRole('tab');
+    const opened = await editorTabs.count();
+    // A graph card reveals its task in the plan panel, opening it there even from the rail; only Open chat opens a tab.
+    await planPanel.getByRole('button', { name: 'Collapse the plan panel' }).click();
+    await expect(planPanel).toBeHidden();
     await passed.click();
+    const card = planPanel.locator('.task-card').filter({ has: win.getByRole('button', { name: /^#1 Add a greeting module, / }) });
+    await expect(card.getByRole('button', { name: /^#1 Add a greeting module, / })).toHaveAttribute('aria-expanded', 'true');
+    await expect(card).toBeInViewport();
+    await expect(editorTabs).toHaveCount(opened);
+    await card.getByRole('button', { name: 'Open chat' }).click();
     await expect(editor.getByRole('heading', { name: '#1 Add a greeting module' })).toBeVisible();
+    await expect(editorTabs).toHaveCount(opened + 1);
+    await editor.getByRole('tablist', { name: 'Task view' }).getByRole('tab', { name: 'Details' }).click();
     const verdict = editor.getByRole('region', { name: 'Verdict' });
     await expect(verdict).toContainText('Verified: the runner reported completion through task_complete.');
     await expect(verdict).not.toContainText('Verified: Verified');
@@ -248,20 +167,26 @@ test('a goal goes from the welcome window to a merge on the checkout\'s branch',
     await expect(editor.getByRole('region', { name: 'Attempts' })).toContainText('Attempt 1 · Claude Code');
     await expect(editor.getByRole('region', { name: 'Handoff section' })).toContainText('Added src/greeting.ts exporting a greeting.');
     // The comment reached the runner as a message on its turn.
-    expect(fs.readFileSync(path.join(tmp, 'fake-claude.log'), 'utf8')).toContain(COMMENT);
+    expect(fs.readFileSync(sandbox?.fakeClaudeLog ?? '', 'utf8')).toContain(COMMENT);
   });
 
   await test.step('Needs you: task #2\'s checkpoint is raised and answered', async () => {
-    await expect(win.getByRole('button', { name: 'Needs you: 1' })).toBeVisible({ timeout: 60_000 });
-    await win.getByRole('button', { name: 'Approve: #2 Add a farewell module' }).click();
-    await expect(planSidebar.getByRole('list', { name: 'Tasks' }).getByRole('button', { name: 'Passed #2 Add a farewell module' }))
-      .toBeVisible({ timeout: 60_000 });
-    await expect(win.getByRole('button', { name: /Merge all: / })).toBeVisible({ timeout: 60_000 });
+    const needsYou = win.getByRole('button', { name: 'Needs you, 1' });
+    await expect(needsYou).toBeVisible({ timeout: 60_000 });
+    await needsYou.click();
+    await win.getByRole('dialog', { name: 'Needs you' }).getByRole('button', { name: 'Approve: #2 Add a farewell module' }).click();
+    await editor.getByRole('tab', { name: /Plan graph/ }).click();
+    await expect(graph.getByRole('button', { name: /^#2 Add a farewell module, waiting for merge/ })).toBeVisible({ timeout: 60_000 });
+    // The landed run is the next thing that needs you: its Merge all row.
+    await expect(needsYou).toBeVisible({ timeout: 60_000 });
+    await needsYou.click();
+    await expect(win.getByRole('dialog', { name: 'Needs you' }).getByRole('button', { name: /Merge all: / })).toBeVisible({ timeout: 60_000 });
+    await win.keyboard.press('Escape');
   });
 
   await test.step('Git: the view lists the run\'s integration branch', async () => {
-    await views.getByRole('button', { name: 'Git' }).click();
-    await expect(win.getByRole('complementary', { name: 'Git' }).getByRole('button', { name: /^ordewell\/.+\/integration$/ })).toBeVisible();
+    await views.getByRole('tab', { name: 'Git' }).click();
+    await expect(win.getByRole('navigation', { name: 'Git' }).getByRole('button', { name: /^ordewell\/.+\/integration\b/ })).toBeVisible();
   });
 
   await test.step('Review & Merge all, through the preflight', async () => {

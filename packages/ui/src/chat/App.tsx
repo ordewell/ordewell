@@ -14,6 +14,8 @@ import ChildPlanPanel, { ChildQuestions, NO_CHILD_NOTICE, UndeliveredAnswers, ty
 import { reduceHost, runnersOn, INITIAL_HOST_STATE, type HostState } from './hostState';
 import ModelSelector, { API_PROVIDER_LABELS } from './components/ModelSelector';
 import PlanCardGroup from './components/PlanCardGroup';
+import PlanApprovalCard from './components/PlanApprovalCard';
+import { SpeakerLabelsContext } from './speakerLabels';
 import UsageLine from './components/UsageLine';
 import PendingMessages, { type PendingMessage } from './components/PendingMessages';
 import HandoffCard from './components/HandoffCard';
@@ -65,6 +67,21 @@ function runSettingsSummary(run: GlobalRunSettings | undefined, runSettings: Run
 const DETECTING = 'Detecting coding agents…';
 
 /**
+ * "Detecting coding agents…" while the host's detection is under way, or why
+ * it failed with a Retry, so the first screen never waits on an answer that
+ * is not coming.
+ */
+function Detecting({ error, onRetry }: { error: string | null; onRetry: () => void }) {
+  if (error === null) return <>{DETECTING}</>;
+  return (
+    <span className="detection-failed">
+      Couldn't detect coding agents: {error}{' '}
+      <button type="button" className="btn-secondary" onClick={onRetry}>Retry</button>
+    </span>
+  );
+}
+
+/**
  * Which part of the chat a surface draws. `chat` is the one-column webview;
  * a surface with room for both (the desktop app) mounts two instances over one
  * bridge, `conversation` without the plan dock and `plan` as the dock's body
@@ -76,9 +93,20 @@ export type ChatLayout = 'chat' | 'conversation' | 'plan';
 export interface TaskSelection {
   taskId: string | null;
   onChange(taskId: string | null): void;
+  /**
+   * Open the task's chat in its own tab: a preview the next one replaces,
+   * unless the user asked to keep it. Without it a chat opens as the host's
+   * log tab.
+   */
+  onOpen?(taskId: string, view: 'chat', options?: { preview?: boolean }): void;
 }
 
-export default function App({ layout = 'chat', selection }: { layout?: ChatLayout; selection?: TaskSelection } = {}) {
+export default function App({ layout = 'chat', selection, goal }: {
+  layout?: ChatLayout;
+  selection?: TaskSelection;
+  /** The session's goal, named at the head of the `plan` layout. */
+  goal?: string;
+} = {}) {
   const bridge = useChatBridge();
   const [host, dispatch] = useReducer(reduceHost, INITIAL_HOST_STATE);
   const [childTree, setChildTree] = useState<{ rootId: string; children: ChildPlanEntry[] }>({ rootId: '', children: [] });
@@ -106,7 +134,7 @@ export default function App({ layout = 'chat', selection }: { layout?: ChatLayou
   const {
     conversation, plan, isExecuting, isResearchActive, error, models, modelsByRunner,
     runnerList, enabledRunnerIds, pendingRunners, modelAllowlist, held, unsent, modesByRunner, runnerNotice, modelConfig,
-    modelOptions, configuredProviders, planner, plannerKnown, plannerDetecting, runnersKnown, isReady, modelDiscoveryErrors,
+    modelOptions, configuredProviders, planner, plannerKnown, plannerDetecting, runnersKnown, detectionError, isReady, modelDiscoveryErrors,
     skills, taskSkills, checkpoint, taskOutput, run, activity, starting, dockExpanded, dockHeight, settingsRequest, accountLimits, plannerTurnStartedAt,
   } = host;
   const setPlan = useCallback((v: Updatable<HostState['plan']>) => dispatch({ type: 'patchPlan', plan: v }), []);
@@ -153,6 +181,11 @@ export default function App({ layout = 'chat', selection }: { layout?: ChatLayou
   const [slashOutput, setSlashOutput] = useState('');
   const [showNewSessionConfirm, setShowNewSessionConfirm] = useState(false);
   const [setupCollapsed, setSetupCollapsed] = useState(false);
+  /** The person opened or closed the setup themselves, or asked for its settings: theirs from then on. */
+  const setupChosen = useRef(false);
+  const [composerSession, setComposerSession] = useState(0);
+  /** The approval card's Edit, which opens the run settings as the host's request does. */
+  const [ownSettingsRequest, setOwnSettingsRequest] = useState(0);
   const [runExpanded, setRunExpanded] = useState(false);
   /** The coding agent whose login is running, by runner id: each action waits on its own. */
   const [pendingLogin, setPendingLogin] = useState<Record<string, true>>({});
@@ -160,6 +193,8 @@ export default function App({ layout = 'chat', selection }: { layout?: ChatLayou
   const [loginFailure, setLoginFailure] = useState<Record<string, string>>({});
 
   const messageListRef = useRef<HTMLDivElement | null>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const planListRef = useRef<HTMLDivElement>(null);
   const dockBodyRef = useRef<HTMLDivElement>(null);
   const runSettingsRef = useRef<HTMLElement>(null);
   const helpTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -201,6 +236,8 @@ export default function App({ layout = 'chat', selection }: { layout?: ChatLayou
     const handler = (msg: HostToWebview) => {
       lastActivityRef.current = Date.now();
       if (msg.type === 'restoreChat' && childViewRef.current) bridge.post({ type: 'refreshChildren' });
+      // Another session's conversation: a half-typed message was written to the last one.
+      if (msg.type === 'restoreChat') setComposerSession((n) => n + 1);
       if (msg.type === 'children') { setChildTree({ rootId: msg.rootId, children: msg.children }); return; }
       if (msg.type === 'childClosed') { setChildView(null); setChildChoice(null); setChildConversation(EMPTY_PATCHED_VIEW); return; }
       if (msg.type === 'childView') { if (!childLeft.current) setChildView(msg.view); return; }
@@ -239,18 +276,35 @@ export default function App({ layout = 'chat', selection }: { layout?: ChatLayou
     return () => clearTimeout(fallback);
   }, []);
 
+  const settingsAsked = settingsRequest + ownSettingsRequest;
   useEffect(() => {
-    if (settingsRequest === 0) return;
+    if (settingsAsked === 0) return;
+    setupChosen.current = true;
     setSetupCollapsed(false);
     setRunExpanded(true);
-  }, [settingsRequest]);
+  }, [settingsAsked]);
 
   // Focus after the section has rendered open, so the scroll lands on its full height.
   useEffect(() => {
-    if (settingsRequest === 0) return;
+    if (settingsAsked === 0) return;
     runSettingsRef.current?.focus();
     runSettingsRef.current?.scrollIntoView({ block: 'nearest' });
-  }, [settingsRequest, runExpanded]);
+  }, [settingsAsked, runExpanded]);
+
+  // The planner tab gives the conversation the room once there is one: the
+  // setup is the step before it (docs/desktop/design.md, W2), a click away after.
+  // A choice made in one conversation is not one made in the next (a session switch, a reload).
+  const conversing = blocks.length > 0;
+  const epoch = host.conversationEpoch;
+  useEffect(() => {
+    setupChosen.current = false;
+    setSetupCollapsed(false);
+  }, [epoch]);
+  useEffect(() => {
+    if (layout !== 'conversation' || !conversing || setupChosen.current) return;
+    setupChosen.current = true;
+    setSetupCollapsed(true);
+  }, [layout, conversing, epoch]);
 
   const pushSystem = useCallback((text: string) => {
     bridge.post({ type: 'addNote', text });
@@ -487,8 +541,11 @@ export default function App({ layout = 'chat', selection }: { layout?: ChatLayou
 
   // The log tab is the host's webview panel (ADR-0018, V1); the chat only asks
   // for it. Opening is idempotent host-side — an open tab is focused.
+  const onOpenTask = useRef(selection?.onOpen);
+  onOpenTask.current = selection?.onOpen;
   const handleOpenTaskLog = useCallback((taskId: string) => {
-    bridge.post({ type: 'openTaskLog', taskId });
+    if (onOpenTask.current) onOpenTask.current(taskId, 'chat');
+    else bridge.post({ type: 'openTaskLog', taskId });
   }, []);
 
   // The card is where a task's evidence is, so opening the task is opening its
@@ -588,13 +645,17 @@ export default function App({ layout = 'chat', selection }: { layout?: ChatLayou
     return true;
   }, [expandedTaskId, plannerBusy, held, stopArmed, handleUnsend, stopTurn]);
 
-  // Esc closes an open card first, wherever focus is. Inner handlers (card
-  // editors, pickers, the input) mark theirs with preventDefault, so one Esc
-  // does one thing.
+  // Esc closes an open card first, wherever in this app focus is. Inner
+  // handlers (card editors, pickers, the input) mark theirs with
+  // preventDefault, so one Esc does one thing. A host that draws other layers
+  // beside the app (the desktop's drawers and dialogs) keeps their Esc theirs.
   useEffect(() => {
     if (expandedTaskId === null) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return;
+      const root = (chatContainerRef.current ?? planListRef.current)?.parentElement;
+      const target = e.target instanceof Node ? e.target : null;
+      if (root && target && target !== document.body && !root.contains(target)) return;
       e.preventDefault();
       setExpandedTaskId(null);
     };
@@ -890,6 +951,10 @@ export default function App({ layout = 'chat', selection }: { layout?: ChatLayou
         onResolveConflict={handleResolveConflict}
         onOpenLog={handleOpenTaskLog}
         onOpenChild={(taskId) => setChildChoice(taskId)}
+        // The tall panel beside the conversation: the title bar holds Run and Stop, and the header its progress.
+        rows={layout === 'plan'}
+        goal={goal}
+        runControls={layout !== 'plan'}
       />
       {run.handoff && !isExecuting && !run.runMerge?.waitingAtGate && (
         <HandoffCard
@@ -909,7 +974,7 @@ export default function App({ layout = 'chat', selection }: { layout?: ChatLayou
           onAction={(action) => handleIsolationAction(action)}
         />
       )}
-      {isExecuting && (
+      {isExecuting && layout !== 'plan' && (
         <div className="executing-footer">
           <div className="queue-badge done-counter">
             <span className="done-counter-check">✓</span> {doneCount}/{plan.tasks.length} done
@@ -994,10 +1059,10 @@ export default function App({ layout = 'chat', selection }: { layout?: ChatLayou
     return (
       <DelegationOfferedContext.Provider value={delegationOffered}>
       <OpenPatchContext.Provider value={handleOpenPatch}>
-      <div className="plan-list">
+      <div className="plan-list" ref={planListRef}>
         {plan && plan.tasks.length > 0
           ? renderPlanBody()
-          : <p className="plan-list-empty">No plan yet: describe a goal to the planner.</p>}
+          : <p className="plan-list-empty">No plan yet. Describe a goal to the planner.</p>}
       </div>
       </OpenPatchContext.Provider>
       </DelegationOfferedContext.Provider>
@@ -1030,7 +1095,8 @@ export default function App({ layout = 'chat', selection }: { layout?: ChatLayou
       onRootQuestion={() => { leaveChild(); setDockExpanded(true); }}
     />}
     {/* Hidden, not unmounted: the composer's draft and the scroll position are the root's own. */}
-    <div className="chat-container" tabIndex={-1} hidden={inChild}>
+    <SpeakerLabelsContext.Provider value={layout === 'conversation'}>
+    <div className={`chat-container chat-layout-${layout}`} tabIndex={-1} hidden={inChild} ref={chatContainerRef}>
       {!inChild && childNotice.message && <p role="status">{childNotice.message}</p>}
       <ChildQuestions tree={childTree.children} onOpen={openChild} />
       {/* A refusal can come after the child plan has closed, with no panel left to read the words in. */}
@@ -1053,7 +1119,7 @@ export default function App({ layout = 'chat', selection }: { layout?: ChatLayou
           type="button"
           className={`setup-panel-toggle${setupCollapsed ? '' : ' open'}`}
           aria-expanded={!setupCollapsed}
-          onClick={() => setSetupCollapsed((v) => !v)}
+          onClick={() => { setupChosen.current = true; setSetupCollapsed((v) => !v); }}
           title={
             activeBackend?.auth?.state === 'signed-out'
               ? `${activeBackend.label} is not logged in — open Settings to sign in`
@@ -1160,7 +1226,7 @@ export default function App({ layout = 'chat', selection }: { layout?: ChatLayou
             <span className="setup-block-empty">
               {plannerKnown
                 ? <>No planner available — install {orNames(agentNames, 'a coding agent')}, or add a key with <code>/key</code>.</>
-                : DETECTING}
+                : <Detecting error={detectionError} onRetry={handleModelsRefreshNeeded} />}
             </span>
           )}
         </section>
@@ -1218,7 +1284,7 @@ export default function App({ layout = 'chat', selection }: { layout?: ChatLayou
               );
             })}
             {runnerList.length === 0 && !runnersKnown && (
-              <span className="setup-block-empty">{DETECTING}</span>
+              <span className="setup-block-empty"><Detecting error={detectionError} onRetry={handleModelsRefreshNeeded} /></span>
             )}
             {runnerList.length === 0 && runnersKnown && (
               <span className="setup-block-empty">
@@ -1262,8 +1328,8 @@ export default function App({ layout = 'chat', selection }: { layout?: ChatLayou
         {/* Who can plan comes from the probe for coding agents, which can answer after the catalog. */}
         {!hasContent && isReady && !canPlan && !plannerKnown && (
           <div className="loading-state">
-            <div className="loading-pulse" />
-            <p>{DETECTING}</p>
+            {detectionError === null && <div className="loading-pulse" />}
+            <p><Detecting error={detectionError} onRetry={handleModelsRefreshNeeded} /></p>
           </div>
         )}
 
@@ -1289,6 +1355,21 @@ export default function App({ layout = 'chat', selection }: { layout?: ChatLayou
           onShowPlan={handleShowPlan}
           onResolveApproval={handleResolveApproval}
         />
+
+        {/* The desktop's planner tab answers a draft where it is read (W3); VS
+            Code's sidebar answers it in the plan dock below. */}
+        {layout === 'conversation' && plan && plan.tasks.length > 0 && (plan.status === 'draft' || plan.status === 'rejected')
+          && !isExecuting && !isStarting && !plannerBusy && (
+          <PlanApprovalCard
+            tasks={plan.tasks}
+            isolationPreview={host.isolationPreview}
+            runSettings={host.runSettings}
+            settings={runSettingsSummary(host.runSettings?.run, plan.runSettings, isExecuting, delegationOffered)}
+            onApprove={requestStart}
+            onAskForChanges={() => chatContainerRef.current?.querySelector<HTMLTextAreaElement>('.chat-input-wrapper textarea')?.focus()}
+            onEditSettings={() => setOwnSettingsRequest((n) => n + 1)}
+          />
+        )}
       </div>
 
       {layout === 'chat' && renderPlanDock()}
@@ -1330,6 +1411,7 @@ export default function App({ layout = 'chat', selection }: { layout?: ChatLayou
       <PendingMessages messages={pending} />
 
       <ChatInput
+        key={composerSession}
         onSend={handleSend}
         onSendNow={handleSendNow}
         onStop={stopTurn}
@@ -1342,6 +1424,7 @@ export default function App({ layout = 'chat', selection }: { layout?: ChatLayou
         skills={skills}
       />
     </div>
+    </SpeakerLabelsContext.Provider>
     </OpenPatchContext.Provider>
     </DelegationOfferedContext.Provider>
   );

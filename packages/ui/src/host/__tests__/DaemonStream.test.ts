@@ -132,6 +132,8 @@ describe('DaemonSessionStream', () => {
       { type: 'settled', dock: 'draft' },
     ]);
     expect(screen.posts).toContainEqual({ type: 'taskOutput', taskId: 't1', text: 'building' });
+    // The runner by the name the app gives it everywhere else, not its id.
+    expect(JSON.stringify(screen.blocks())).toContain('Started \\"Task t1\\" · Claude Code');
     expect(screen.posts).toContainEqual({ type: 'taskCommands', taskId: 't1', commands: [] });
   });
 

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { Kbd } from '@ordewell/ui/design';
 import type { Command } from './api';
 import { formatChord, isMac, parseChord } from './keys';
 import { useFrameStore } from './store';
@@ -108,7 +109,7 @@ export function CommandPalette(): JSX.Element {
               onClick={() => run(command)}
             >
               <span>{command.title}</span>
-              {command.keys && <kbd>{formatChord(parseChord(command.keys), mac)}</kbd>}
+              {command.keys && <Kbd>{formatChord(parseChord(command.keys), mac)}</Kbd>}
             </li>
           ))}
           {shown.length === 0 && <li className="frame-empty" role="presentation">No command matches.</li>}

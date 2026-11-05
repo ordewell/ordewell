@@ -12,7 +12,6 @@ import { fakeDaemon, ok, surfacePlan, surfaceTask } from '../../../session/__tes
 vi.mock('../../../monaco', async () => (await import('../../../test/monacoMock')).fakeMonacoModule());
 
 const WORKSPACE = '/work/acme';
-const SIZES = { sidebar: 260, right: 360, bottom: 240 };
 const CONNECTED: DaemonStatus = { state: 'connected', port: 3700, owned: true, daemon: { version: '0.12.3', contract: 1 } };
 const AWAY: DaemonStatus = { state: 'reconnecting', port: 3700, attempt: 2, canStart: false };
 
@@ -82,8 +81,8 @@ function world(initial: DaemonStatus, answers: Parameters<typeof fakeDaemon>[0] 
   Object.assign(window.ordewell, {
     dialog: { confirm },
     prefs: {
-      get: async () => ({ theme: 'system', panes: SIZES, notifications: true, keepRunningInTray: false, editorCommand: '' }),
-      set: async () => ({ theme: 'system', panes: SIZES, notifications: true, keepRunningInTray: false, editorCommand: '' }),
+      get: async () => ({ theme: 'system', layouts: {}, notifications: true, keepRunningInTray: false, editorCommand: '' }),
+      set: async () => ({ theme: 'system', layouts: {}, notifications: true, keepRunningInTray: false, editorCommand: '' }),
     },
     notify: { show: vi.fn(async () => ({ ok: true })), setBadge: vi.fn(async () => undefined), onClick: () => () => undefined },
   });
@@ -95,7 +94,7 @@ function world(initial: DaemonStatus, answers: Parameters<typeof fakeDaemon>[0] 
 }
 
 function mount(daemon: DaemonStatus): { store: FrameStore; host: ReturnType<typeof daemonHost> } {
-  const store = new FrameStore({ workspace: WORKSPACE, platform: 'linux', sizes: SIZES });
+  const store = new FrameStore({ workspace: WORKSPACE, platform: 'linux' });
   offs.push(registerFrameCommands(store), registerViews(store.api));
   const host = daemonHost(WORKSPACE);
   render(<FrameProvider value={store}><Frame daemon={daemon} /></FrameProvider>);
@@ -132,29 +131,189 @@ describe('the connection banners', () => {
   });
 });
 
-describe('the held-session banner', () => {
+describe('a session a VS Code window holds (W16)', () => {
   const held = (): Parameters<typeof world>[1] => ({
     'sessions.load': { ok: false, status: 409, error: 'Conflict', data: { ok: false, error: 'This session is open in VS Code.', code: 'session_held', sessionHeld: HELD } },
     'sessions.get': ok(SAVED),
   });
+  const CARD = 'This session is open in a VS Code window';
 
-  it('names the holder, shows the saved state read-only, and offers only what ADR-0049 allows', async () => {
+  it('says the app cannot join it, and shows its saved state read-only with the holder named', async () => {
+    world(CONNECTED, held());
+    const { host } = mount(CONNECTED);
+    await act(() => host.open('s1'));
+
+    const banner = await screen.findByRole('region', { name: CARD });
+    expect(banner).toHaveTextContent(`(extension host pid 4242, since ${new Date(HELD.holder.since).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}).`);
+    expect(banner).toHaveTextContent("VS Code runs it inside its own window, so the app can't join it.");
+    expect(host.getSnapshot().readOnly).toBe(true);
+    expect(screen.getByText('⊡ Read-only · held by VS Code (pid 4242)')).toBeInTheDocument();
+    expect(document.querySelector('.frame-status')).toHaveTextContent('held by VS Code (pid 4242) · read-only');
+  });
+
+  it('starts a new session here with the held goal in the composer, not sent', async () => {
     const w = world(CONNECTED, held());
     const { host } = mount(CONNECTED);
     await act(() => host.open('s1'));
 
-    const banner = await screen.findByRole('region', { name: 'Held by VS Code (pid 4242)' });
-    expect(banner).toHaveTextContent('open in another Ordewell host');
-    expect(host.getSnapshot().readOnly).toBe(true);
+    fireEvent.click(within(await screen.findByRole('region', { name: CARD })).getByRole('button', { name: 'Start a new session here' }));
 
-    fireEvent.click(within(banner).getByRole('button', { name: 'Take over…' }));
-    await waitFor(() => expect(w.confirm).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Message the planner' })).toHaveValue('Ship the parser'));
+    expect(host.getSnapshot()).toMatchObject({ held: null, readOnly: false });
+    expect(screen.queryByRole('region', { name: CARD })).not.toBeInTheDocument();
+    expect(w.daemon.calls('plans.converseMessage')).toEqual([]);
+  });
+
+  it('watches read-only on request, reading the saved state again', async () => {
+    const w = world(CONNECTED, held());
+    const { host } = mount(CONNECTED);
+    await act(() => host.open('s1'));
+    const reads = w.daemon.calls('sessions.get').length;
+
+    fireEvent.click(within(await screen.findByRole('region', { name: CARD })).getByRole('button', { name: 'Watch read-only' }));
+
+    await waitFor(() => expect(w.daemon.calls('sessions.get').length).toBeGreaterThan(reads));
+  });
+
+  it('shows a refused take over and its reason, and the session stays held', async () => {
+    const w = world(CONNECTED, held());
+    const { host } = mount(CONNECTED);
+    await act(() => host.open('s1'));
+
+    fireEvent.click(within(await screen.findByRole('region', { name: CARD })).getByRole('button', { name: 'Take over…' }));
+
+    const refusal = await screen.findByRole('region', { name: 'Take over refused' });
+    expect(w.confirm).toHaveBeenCalledOnce();
+    expect(refusal).toHaveTextContent('VS Code (extension host pid 4242) is still running and holds this session. Close the session there, then take it over again.');
+    expect(screen.getByRole('status')).toHaveTextContent('VS Code (extension host pid 4242) is still running');
+    expect(screen.getByRole('region', { name: CARD })).toBeInTheDocument();
+  });
+
+  it('shows a take over that succeeded', async () => {
+    let freed = false;
+    const w = world(CONNECTED, {
+      ...held(),
+      'sessions.load': () => (freed
+        ? ok({ ok: true, plan: PLAN, goal: 'Ship the parser' })
+        : { ok: false, status: 409, error: 'Conflict', data: { ok: false, error: 'held', code: 'session_held', sessionHeld: HELD } }),
+    });
+    const { host } = mount(CONNECTED);
+    await act(() => host.open('s1'));
+    freed = true;
+
+    fireEvent.click(within(await screen.findByRole('region', { name: CARD })).getByRole('button', { name: 'Take over…' }));
+
+    expect(await screen.findByRole('region', { name: 'Taken over' })).toHaveTextContent('This window now runs the session.');
+    expect(screen.queryByRole('region', { name: CARD })).not.toBeInTheDocument();
     expect(w.daemon.calls('sessions.load')).toHaveLength(2);
-    // Still held, so the banner and the read-only state stay.
-    expect(await screen.findByRole('region', { name: 'Held by VS Code (pid 4242)' })).toBeInTheDocument();
+  });
 
-    fireEvent.click(within(screen.getByRole('region', { name: 'Held by VS Code (pid 4242)' })).getByRole('button', { name: 'View read-only' }));
-    await waitFor(() => expect(w.daemon.calls('sessions.get').length).toBeGreaterThanOrEqual(3));
+  it('shows that Refresh ran, and what it found', async () => {
+    const w = world(CONNECTED, held());
+    const { host } = mount(CONNECTED);
+    await act(() => host.open('s1'));
+    const banner = await screen.findByRole('region', { name: CARD });
+    expect(banner).not.toHaveTextContent('Checked');
+
+    fireEvent.click(within(banner).getByRole('button', { name: 'Refresh' }));
+
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Checked again: still held by VS Code (pid 4242).'));
+    expect(screen.getByRole('region', { name: CARD })).toHaveTextContent('Checked at');
+    expect(w.daemon.calls('sessions.load')).toHaveLength(2);
+  });
+
+  it('shows that the read-only chip\'s Refresh ran too', async () => {
+    const w = world(CONNECTED, held());
+    const { host } = mount(CONNECTED);
+    await act(() => host.open('s1'));
+    const banner = await screen.findByRole('region', { name: CARD });
+    const chipRefresh = screen.getAllByRole('button', { name: 'Refresh' }).find((button) => !banner.contains(button));
+    if (!chipRefresh) throw new Error('no Refresh beside the read-only chip');
+
+    fireEvent.click(chipRefresh);
+
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Checked again: still held by VS Code (pid 4242).'));
+    expect(w.daemon.calls('sessions.load')).toHaveLength(2);
+  });
+});
+
+describe('a session another Ordewell daemon holds (W16)', () => {
+  const SINCE = '2026-11-04T10:00:00.000Z';
+  const TUI_HELD = { holder: { hostId: 'h1', pid: 48200, host: { kind: 'daemon', port: 49213, ownerPid: 48120 }, since: SINCE, heartbeatAt: SINCE, runnerGroups: [] } };
+  const HOLDER = { port: 49213, pid: 48200, ownerPid: 48120, version: '0.12.3', contract: 1, since: SINCE };
+  const heldByTui = { ok: false, status: 409, error: 'Conflict', data: { ok: false, error: 'held', code: 'session_held', sessionHeld: TUI_HELD } } as const;
+
+  it('joins it and names the holder in the header, the status bar and nowhere as a refusal', async () => {
+    const w = world(CONNECTED, { 'sessions.load': heldByTui, 'sessions.get': ok(SAVED) });
+    w.daemon.joinWith({ ok: true, holder: HOLDER });
+    const { host } = mount(CONNECTED);
+    await act(() => host.open('s1'));
+
+    const chip = await screen.findByText('⇄ Joined · TUI pid 48120');
+    expect(chip).toHaveAttribute('title', expect.stringContaining('port 49213'));
+    expect(chip).toHaveAttribute('title', expect.stringContaining('0.12.3'));
+    expect(screen.getByText("Live in the TUI's daemon on port 49213 (pid 48200), shared with the TUI.")).toBeInTheDocument();
+    const status = document.querySelector('.frame-status');
+    expect(status).toHaveTextContent('· joined :49213');
+    expect(status).toHaveTextContent('held by TUI (pid 48120) · joined');
+    expect(screen.queryByRole('region', { name: /held|VS Code/i })).not.toBeInTheDocument();
+    expect(host.getSnapshot().readOnly).toBe(false);
+    expect(body()).not.toHaveAttribute('inert');
+  });
+
+  it('says the holder has exited, and continues the session here when asked', async () => {
+    let held = true;
+    const w = world(CONNECTED, { 'sessions.load': () => (held ? heldByTui : ok({ ok: true, plan: PLAN, goal: 'Ship the parser' })), 'sessions.get': ok(SAVED) });
+    w.daemon.joinWith({ ok: true, holder: HOLDER });
+    const { host } = mount(CONNECTED);
+    await act(() => host.open('s1'));
+
+    held = false;
+    w.daemon.joinWith({ ok: false, reason: 'free', message: 'Nothing holds this session now.' });
+    act(() => w.daemon.close('s1'));
+
+    const gone = await screen.findByRole('region', { name: 'The TUI that held this session has exited.' });
+    expect(gone).toHaveTextContent('Nothing is running it now.');
+    // Nothing still claims the holder holds it: the chip and the status bar say it exited.
+    expect(screen.getByText('⊡ Read-only · the TUI exited')).toBeInTheDocument();
+    expect(document.querySelector('.frame-status')).toHaveTextContent('TUI (pid 48120) exited · read-only');
+    expect(document.querySelector('.frame-status')).not.toHaveTextContent('held by');
+    fireEvent.click(within(gone).getByRole('button', { name: 'Continue here' }));
+
+    await waitFor(() => expect(w.daemon.calls('sessions.load')).toHaveLength(2));
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'The TUI that held this session has exited.' })).not.toBeInTheDocument());
+    expect(screen.queryByText(/⇄ Joined/)).not.toBeInTheDocument();
+  });
+
+  it('names the holder\'s port in the Reconnecting bar while its daemon is away, and offers no Continue here', async () => {
+    const w = world(CONNECTED, { 'sessions.load': heldByTui, 'sessions.get': ok(SAVED) });
+    w.daemon.joinWith({ ok: true, holder: HOLDER });
+    const { host } = mount(CONNECTED);
+    await act(() => host.open('s1'));
+
+    w.daemon.joinWith({ ok: false, reason: 'unreachable', message: 'The daemon that holds this session no longer answers on :49213.' });
+    act(() => w.daemon.close('s1'));
+
+    const away = await screen.findByRole('region', { name: "Reconnecting to the TUI's daemon on :49213…" });
+    expect(away).not.toHaveTextContent(':3700');
+    expect(within(away).queryByRole('button', { name: 'Continue here' })).not.toBeInTheDocument();
+
+    w.daemon.joinWith({ ok: true, holder: HOLDER });
+    await waitFor(() => expect(screen.queryByRole('region', { name: /Reconnecting to the TUI/ })).not.toBeInTheDocument(), { timeout: 15_000 });
+  });
+
+  it('names why a join was refused, and keeps the saved state on screen read-only', async () => {
+    const message = "The TUI's daemon is 0.9.0 (contract 0); this app speaks contract 1, so it can't join.";
+    const w = world(CONNECTED, { 'sessions.load': heldByTui, 'sessions.get': ok(SAVED) });
+    w.daemon.joinWith({ ok: false, reason: 'mismatch', message });
+    const { host } = mount(CONNECTED);
+    await act(() => host.open('s1'));
+
+    const banner = await screen.findByRole('region', { name: "Can't join the TUI (pid 48120)" });
+    expect(banner).toHaveTextContent(message);
+    expect(within(banner).getByRole('button', { name: 'Watch read-only' })).toBeInTheDocument();
+    expect(host.getSnapshot().readOnly).toBe(true);
+    expect(document.querySelector('.frame-status')).toHaveTextContent('held by TUI (pid 48120) · read-only');
   });
 });
 

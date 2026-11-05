@@ -6,8 +6,18 @@
  * the token invalid, and each rule in styles.css then falls back exactly as it
  * did when it read the --vscode-* variable itself. A fallback here would
  * replace those per-rule fallbacks with one colour.
+ *
+ * The runner colours are the one exception: no theme has a colour for a
+ * runner, so they keep the design's values (docs/desktop/design.md, Runners),
+ * the light ones on a light theme.
+ *
+ * No theme has a card colour either, so the surface ladder is mixed from the
+ * theme's own: a card is a little of the foreground in the side bar the plan
+ * dock sits on, which steps it off the side bar and the editor background
+ * alike in a dark theme or a light one (docs/desktop/design.md, Surfaces).
  */
 :root {
+  --ow-bg-chrome: var(--vscode-titleBar-activeBackground);
   --ow-bg: var(--vscode-editor-background);
   --ow-bg-sidebar: var(--vscode-sideBar-background);
   --ow-bg-widget: var(--vscode-editorWidget-background);
@@ -16,17 +26,32 @@
   --ow-bg-input: var(--vscode-input-background);
   --ow-bg-code: var(--vscode-textPreformat-background);
   --ow-bg-selected: var(--vscode-list-activeSelectionBackground);
+  --ow-surface-canvas: var(--vscode-editor-background);
+  --ow-surface-panel: var(--vscode-sideBar-background);
+  --ow-surface-card: color-mix(in srgb, var(--vscode-foreground) 6%, var(--vscode-sideBar-background));
+  --ow-surface-card-hover: color-mix(in srgb, var(--vscode-foreground) 10%, var(--vscode-sideBar-background));
+  --ow-surface-card-selected: color-mix(in srgb, var(--vscode-focusBorder) 8%, var(--vscode-sideBar-background));
+  --ow-surface-card-border: color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
+  --ow-surface-card-selected-border: color-mix(in srgb, var(--vscode-focusBorder) 55%, transparent);
+  --ow-surface-card-shadow: color-mix(in srgb, var(--vscode-widget-shadow) 45%, transparent);
+  --ow-surface-card-highlight: color-mix(in srgb, var(--vscode-foreground) 5%, transparent);
+  --ow-surface-inset: var(--vscode-editor-background);
+  --ow-surface-overlay: var(--vscode-quickInput-background);
   --ow-border: var(--vscode-panel-border);
   --ow-border-widget: var(--vscode-widget-border);
+  --ow-border-control: var(--vscode-checkbox-border);
   --ow-border-contrast: var(--vscode-contrastBorder);
   --ow-border-contrast-active: var(--vscode-contrastActiveBorder);
   --ow-sash-hover: var(--vscode-sash-hoverBorder);
   --ow-fg: var(--vscode-foreground);
   --ow-fg-secondary: var(--vscode-descriptionForeground);
+  --ow-fg-muted: var(--vscode-disabledForeground);
   --ow-fg-placeholder: var(--vscode-input-placeholderForeground);
   --ow-fg-link: var(--vscode-textLink-foreground);
   --ow-accent: var(--vscode-focusBorder);
   --ow-accent-emphasis: var(--vscode-button-background);
+  --ow-accent-fill: var(--vscode-button-background);
+  --ow-accent-fill-hover: var(--vscode-button-hoverBackground);
   --ow-accent-tint: var(--vscode-list-inactiveSelectionBackground);
   --ow-accent-on: var(--vscode-button-foreground);
   --ow-focus-ring: var(--vscode-focusBorder);
@@ -44,7 +69,63 @@
   --ow-diff-removed: var(--vscode-diffEditor-removedLineBackground);
   --ow-diff-inserted-word: var(--vscode-diffEditor-insertedTextBackground);
   --ow-diff-removed-word: var(--vscode-diffEditor-removedTextBackground);
+  --ow-area-planner: var(--vscode-activityBar-activeBorder);
+  --ow-area-sessions: var(--vscode-charts-red);
+  --ow-area-explorer: var(--vscode-charts-blue);
+  --ow-area-changes: var(--vscode-charts-green);
+  --ow-area-git: var(--vscode-charts-purple);
+  --ow-runner-claude-code: #e3967a;
+  --ow-runner-claude-code-tint: #38302f;
+  --ow-runner-codex: #aebcd0;
+  --ow-runner-codex-tint: #30353b;
+  --ow-runner-opencode: #bcd05e;
+  --ow-runner-opencode-tint: #32382b;
   --ow-shadow-color: var(--vscode-widget-shadow);
+  --ow-shadow-color-overlay: var(--vscode-widget-shadow);
   --ow-font-sans: var(--vscode-font-family);
   --ow-font-mono: var(--vscode-editor-font-family);
+}
+
+body.vscode-light, body.vscode-high-contrast-light {
+  --ow-runner-claude-code: #a24a2a;
+  --ow-runner-claude-code-tint: #f6edea;
+  --ow-runner-codex: #4a5a70;
+  --ow-runner-codex-tint: #edeff1;
+  --ow-runner-opencode: #56670f;
+  --ow-runner-opencode-tint: #eef0e7;
+}
+
+/* The surface tokens are read where they are declared, on :root (styles.css's
+   card aliases, scale.css's elevation), so a theme's override has to land on
+   :root too: one on body would never reach them. */
+
+/* A light card catches no light on its top edge; a dark one does. */
+:root:has(> body.vscode-light) {
+  --ow-surface-card-highlight: transparent;
+}
+
+/* An inset steps back from its card. A light theme's editor is white, which
+   does; a dark theme's editor can be as light as a selected card (Dark Modern
+   puts it above the side bar), so a dark inset is the side bar the cards are
+   mixed from, the one fill every step of the ladder lifts off. A dark card
+   takes a larger share of the foreground for the same reason: the planner's
+   cards sit on that lighter editor background, not on the side bar. */
+:root:has(> body.vscode-dark) {
+  --ow-surface-card: color-mix(in srgb, var(--vscode-foreground) 8%, var(--vscode-sideBar-background));
+  --ow-surface-card-hover: color-mix(in srgb, var(--vscode-foreground) 12%, var(--vscode-sideBar-background));
+  --ow-surface-inset: var(--vscode-sideBar-background);
+}
+
+/* High contrast draws edges, not tints or shadows: a card is the theme's own
+   contrast border around the page's background, and a selected one its active
+   border. */
+:root:has(> body.vscode-high-contrast), :root:has(> body.vscode-high-contrast-light) {
+  --ow-surface-card: transparent;
+  --ow-surface-card-hover: transparent;
+  --ow-surface-card-selected: transparent;
+  --ow-surface-card-border: var(--vscode-contrastBorder);
+  --ow-surface-card-selected-border: var(--vscode-contrastActiveBorder);
+  --ow-surface-card-shadow: transparent;
+  --ow-surface-card-highlight: transparent;
+  --ow-surface-inset: transparent;
 }

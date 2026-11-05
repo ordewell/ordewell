@@ -1,5 +1,4 @@
-import { useState } from 'react';
-import type { ActionResult, DaemonStatus } from '../shared/bridge';
+import type { DaemonStatus } from '../shared/bridge';
 
 export type Action = 'retry' | 'start' | 'restart';
 
@@ -75,43 +74,4 @@ export function daemonLabel(status: DaemonStatus): string {
     case 'port-taken': return `Port ${status.port} taken`;
     case 'failed': return 'Daemon failed';
   }
-}
-
-/** The daemon line at the bottom of every window, with its card above when something needs the user. */
-export function DaemonBar({ status }: { status: DaemonStatus }): JSX.Element {
-  const [busy, setBusy] = useState(false);
-  const [refusal, setRefusal] = useState<string>();
-  const card = cardFor(status);
-
-  const run = async (action: Action): Promise<void> => {
-    setBusy(true);
-    setRefusal(undefined);
-    try {
-      const result: ActionResult = await window.ordewell.daemon[action]();
-      if (!result.ok && result.message) setRefusal(result.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <>
-      {card && (
-        <section className={`daemon-card daemon-card-${card.tone}`} role="alert">
-          <h2>{card.title}</h2>
-          <p>{card.body}</p>
-          {refusal && <p className="daemon-refusal">{refusal}</p>}
-          <div className="daemon-actions">
-            {card.actions.map(({ action, label: text }) => (
-              <button key={action} type="button" disabled={busy} onClick={() => { void run(action); }}>{text}</button>
-            ))}
-          </div>
-        </section>
-      )}
-      <footer className={`daemon-bar daemon-bar-${status.state}`}>
-        <span className="daemon-dot" aria-hidden="true" />
-        {daemonLabel(status)}
-      </footer>
-    </>
-  );
 }

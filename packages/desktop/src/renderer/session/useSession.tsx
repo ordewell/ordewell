@@ -16,9 +16,10 @@ export function ChatSurface({ host, layout }: { host: DaemonHost; layout: Exclud
   const bridge = useMemo(() => host.port(layout), [host, layout]);
   // Only the plan's list shares its open card; the planner's chat has none to share.
   const selection = useTaskSelection(host);
+  const goal = useSyncExternalStore(host.subscribe, () => host.getSnapshot().goal);
   return (
     <ChatBridgeContext.Provider value={bridge}>
-      <ChatApp layout={layout} selection={layout === 'plan' ? selection : undefined} />
+      <ChatApp layout={layout} selection={layout === 'plan' ? selection : undefined} goal={layout === 'plan' ? goal : undefined} />
     </ChatBridgeContext.Provider>
   );
 }

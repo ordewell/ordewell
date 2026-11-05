@@ -1,36 +1,45 @@
 .terminal-panel { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
-.terminal-head { position: relative; display: flex; align-items: stretch; background: var(--ow-bg-sidebar); border-bottom: 1px solid var(--ow-border); }
-.terminal-tabs { display: flex; flex: 1; min-width: 0; overflow-x: auto; }
+.terminal-head { position: relative; display: flex; align-items: center; gap: var(--ow-space-half); padding-right: var(--ow-space-1); min-height: 36px; background: var(--ow-surface-panel); border-bottom: 1px solid var(--ow-border); }
+.terminal-tabs { display: flex; flex: 1; min-width: 0; align-self: stretch; overflow-x: auto; scrollbar-width: none; }
 .terminal-tab {
+  flex: 0 1 auto;
   display: flex;
   align-items: center;
-  gap: var(--ow-space-3);
-  height: var(--ow-row);
-  padding: 0 var(--ow-space-3) 0 var(--ow-space-5);
+  gap: var(--ow-space-2);
+  min-width: 0;
+  max-width: 280px;
+  padding: 0 var(--ow-space-1) 0 var(--ow-space-3);
   border-right: 1px solid var(--ow-border);
   color: var(--ow-fg-secondary);
+  font: var(--ow-type-body);
   white-space: nowrap;
   cursor: pointer;
 }
 .terminal-tab:hover { background: var(--ow-bg-hover); }
 .terminal-tab-active { background: var(--ow-bg); color: var(--ow-fg); box-shadow: inset 0 -2px 0 var(--ow-accent); }
-.terminal-tab:focus-visible { outline-offset: calc(var(--ow-focus-offset) * -1); }
+.terminal-tab:focus-visible { outline: 1px solid var(--ow-focus-ring); outline-offset: -1px; }
 .terminal-tab-ended .terminal-tab-name { text-decoration: line-through; }
-.terminal-tab-scope { color: var(--ow-fg-secondary); font: var(--ow-type-caption); }
-.terminal-tab-input { width: 14ch; font: inherit; color: var(--ow-fg); background: var(--ow-bg-input); border: 1px solid var(--ow-border-widget); border-radius: var(--ow-radius-sm, 3px); }
-.terminal-tab-close { min-width: 18px; min-height: 18px; padding: var(--ow-space-1); visibility: hidden; }
-.terminal-tab:hover .terminal-tab-close, .terminal-tab-active .terminal-tab-close, .terminal-tab:focus-visible .terminal-tab-close { visibility: visible; }
-.terminal-menu-button { border: 0; background: transparent; color: var(--ow-fg-secondary); cursor: pointer; padding: 0 var(--ow-space-3); }
-.terminal-menu-button:hover, .terminal-menu-button[aria-expanded='true'] { background: var(--ow-bg-hover); color: var(--ow-fg); }
-.terminal-menu { right: 0; left: auto; top: 100%; min-width: 320px; }
-.terminal-menu .terminal-menu-repo { margin: 0; padding: var(--ow-space-3) var(--ow-space-5) 0; color: var(--ow-fg-secondary); font: var(--ow-type-caption); }
-.terminal-menu button { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--ow-space-1) var(--ow-space-4); }
+/* The name keeps its start and the scope its own room: a long label gives up its ellipsis, never the close button. */
+.terminal-tab-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.terminal-tab-scope { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--ow-fg-secondary); font: var(--ow-type-caption); }
+.terminal-tab-input { width: 14ch; height: var(--ow-hit); box-sizing: border-box; font: var(--ow-type-body); color: var(--ow-fg); background: var(--ow-bg-input); border: 1px solid var(--ow-border-widget); border-radius: var(--ow-radius-sm); }
+.terminal-tab-input:focus-visible { outline: 1px solid var(--ow-focus-ring); outline-offset: -1px; }
+/* Hidden, not removed, so the tab does not change width when the pointer arrives. */
+.terminal-tab-close { flex: none; visibility: hidden; }
+.terminal-tab:hover .terminal-tab-close, .terminal-tab-active .terminal-tab-close, .terminal-tab:focus-visible .terminal-tab-close, .terminal-tab:focus-within .terminal-tab-close { visibility: visible; }
+.terminal-menu-button[aria-expanded='true'] { background: var(--ow-bg-hover); color: var(--ow-fg); }
+.terminal-menu { right: 0; left: auto; top: 100%; min-width: 320px; max-width: min(480px, 90vw); }
+.terminal-menu .terminal-menu-repo { margin: 0; padding: var(--ow-space-1) var(--ow-space-3) 0; color: var(--ow-fg-secondary); font: var(--ow-type-caption); }
+.terminal-menu button { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--ow-space-half) var(--ow-space-2); min-height: var(--ow-row); }
 .terminal-menu button:disabled { color: var(--ow-fg-placeholder); cursor: not-allowed; }
 .terminal-menu-detail { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--ow-fg-secondary); font: var(--ow-type-code); }
 .terminal-menu-reason { flex-basis: 100%; color: var(--ow-fg-secondary); font: var(--ow-type-caption); white-space: normal; }
-.terminal-banner { margin: 0; padding: var(--ow-space-3) var(--ow-space-5); background: var(--ow-bg-selected); border-bottom: 1px solid var(--ow-border); color: var(--ow-fg); font: var(--ow-type-caption); }
+.terminal-banner { margin: 0; padding: var(--ow-space-1) var(--ow-space-3); background: var(--ow-bg-selected); border-bottom: 1px solid var(--ow-border); color: var(--ow-fg); font: var(--ow-type-small); overflow-wrap: anywhere; }
 .terminal-stage { position: relative; flex: 1; min-height: 0; background: var(--ow-bg); }
-.terminal-host { position: absolute; inset: 0; padding: var(--ow-space-3) 0 0 var(--ow-space-5); overflow: hidden; }
+.terminal-host { position: absolute; inset: 0; padding: var(--ow-space-1) 0 0 var(--ow-space-3); overflow: hidden; }
 .terminal-host[hidden] { display: none; }
 .terminal-host .xterm { height: 100%; }
-.terminal-failed { margin: 0; padding: var(--ow-space-5); color: var(--ow-status-error); }
+.terminal-empty { position: absolute; inset: 0; justify-content: center; }
+.terminal-failed { display: flex; align-items: flex-start; gap: var(--ow-space-2); margin: 0; padding: var(--ow-space-3); color: var(--ow-status-failed); font: var(--ow-type-body); overflow-wrap: anywhere; }
+.terminal-failed svg { flex: none; margin-top: var(--ow-space-half); }
+.terminal-failed span { flex: 1; min-width: 0; }

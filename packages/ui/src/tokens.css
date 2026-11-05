@@ -1,7 +1,8 @@
 /*
- * The colours and fonts a host gives the surfaces. styles.css reads only these,
- * never a host's own variables, so a host themes the chat by setting them and
- * the VS Code webview does it by pointing each at a --vscode-* variable.
+ * The colours and fonts a host gives the surfaces. styles.css reads only these
+ * and scale.css's sizes, never a host's own variables, so a host themes the
+ * chat by setting them and the VS Code webview does it by pointing each at a
+ * --vscode-* variable.
  *
  * Load this before styles.css, and a host's mapping after it. A token set to
  * `initial` has no value of its own: each rule that reads it falls back to a
@@ -10,9 +11,10 @@
  * leaves unset produces the same fallback.
  */
 :root {
-  /* Surfaces */
-  --ow-bg: #0d1117;
-  --ow-bg-sidebar: #161b22;
+  /* Surfaces. Chrome is the frame around them: title, activity and status bars. */
+  --ow-bg-chrome: initial;
+  --ow-bg: #1c1f23;
+  --ow-bg-sidebar: #181a1e;
   --ow-bg-widget: initial;
   --ow-bg-overlay: initial;
   --ow-bg-hover: initial;
@@ -20,25 +22,56 @@
   --ow-bg-code: initial;
   --ow-bg-selected: initial;
 
-  /* Borders. The contrast pair is drawn only by a high-contrast theme. */
-  --ow-border: #30363d;
+  /*
+   * The surface ladder (docs/desktop/design.md, Surfaces): what a discrete
+   * object sits on and what it is drawn as, lowest first. A card is one step
+   * off whatever is behind it, in either theme; an inset (a field, code, a
+   * prompt inside a card) steps back the other way, and an overlay sits above
+   * everything with the strongest shadow. List rows are not cards and use none
+   * of these. The highlight is the top edge a dark card catches; the shadows
+   * are colours, which scale.css composes into elevations.
+   */
+  --ow-surface-canvas: initial;
+  --ow-surface-panel: initial;
+  --ow-surface-card: initial;
+  --ow-surface-card-hover: initial;
+  --ow-surface-card-selected: initial;
+  --ow-surface-card-border: initial;
+  --ow-surface-card-selected-border: initial;
+  --ow-surface-card-shadow: initial;
+  --ow-surface-card-highlight: initial;
+  --ow-surface-inset: initial;
+  --ow-surface-overlay: initial;
+
+  /*
+   * Borders. A control's border is the one a user must see to find the
+   * control (3:1); the others are decorative. The contrast pair is drawn only
+   * by a high-contrast theme.
+   */
+  --ow-border: #2a2e34;
   --ow-border-widget: initial;
+  --ow-border-control: initial;
   --ow-border-contrast: initial;
   --ow-border-contrast-active: initial;
   --ow-sash-hover: initial;
 
   /* Text */
-  --ow-fg: #e6edf3;
-  --ow-fg-secondary: #8b949e;
+  --ow-fg: #e6e8eb;
+  --ow-fg-secondary: #a3a9b3;
+  --ow-fg-muted: initial;
   --ow-fg-placeholder: initial;
   --ow-fg-link: initial;
 
   /*
    * Accent: the focus colour, and the fill of a primary button. The tint is
-   * what an active item sits on, `on` the text drawn over the emphasis fill.
+   * what an active item sits on, `on` the text drawn over the fill. The fill
+   * is its own token because no one accent carries that text in both themes:
+   * the plain accent on dark, the emphasis on light.
    */
-  --ow-accent: #58a6ff;
-  --ow-accent-emphasis: #1f6feb;
+  --ow-accent: #3bb3d1;
+  --ow-accent-emphasis: #5cc4de;
+  --ow-accent-fill: initial;
+  --ow-accent-fill-hover: initial;
   --ow-accent-tint: initial;
   --ow-accent-on: initial;
   --ow-focus-ring: initial;
@@ -48,14 +81,14 @@
    * surface draws (docs/desktop/design.md, Status vocabulary); attention is a
    * task waiting on the user, warning any other caution.
    */
-  --ow-status-passed: #3fb950;
-  --ow-status-failed: #f85149;
-  --ow-status-idle: #8c939d;
-  --ow-status-running: #5b9cff;
-  --ow-status-attention: #e3a64a;
-  --ow-status-blocked: #d9894a;
-  --ow-status-merge: #9d8cf0;
-  --ow-status-warning: #d2991d;
+  --ow-status-passed: #55c784;
+  --ow-status-failed: #f27c76;
+  --ow-status-idle: #969da7;
+  --ow-status-running: #6aa6ff;
+  --ow-status-attention: #e8ae55;
+  --ow-status-blocked: #e09358;
+  --ow-status-merge: #a898f3;
+  --ow-status-warning: #e8ae55;
   --ow-status-warning-text: initial;
   --ow-status-error: initial;
   --ow-diff-inserted: initial;
@@ -63,8 +96,32 @@
   --ow-diff-inserted-word: initial;
   --ow-diff-removed-word: initial;
 
-  /* What a raised surface casts: scale.css composes it into an elevation. */
+  /*
+   * Areas: which part of the app the user is in. Only an area's icon and its
+   * 2px marker take its hue, never text or a fill (docs/desktop/design.md,
+   * Visual language). A host that maps none leaves each rule's fallback.
+   */
+  --ow-area-planner: initial;
+  --ow-area-sessions: initial;
+  --ow-area-explorer: initial;
+  --ow-area-changes: initial;
+  --ow-area-git: initial;
+
+  /*
+   * Runners: drawn only in a runner badge, as text on the tint, always with
+   * the runner's name. No theme has a colour for a runner, so every host
+   * keeps these.
+   */
+  --ow-runner-claude-code: #e3967a;
+  --ow-runner-claude-code-tint: #38302f;
+  --ow-runner-codex: #aebcd0;
+  --ow-runner-codex-tint: #30353b;
+  --ow-runner-opencode: #bcd05e;
+  --ow-runner-opencode-tint: #32382b;
+
+  /* What a raised surface and an overlay drawer cast: scale.css composes them into elevations. */
   --ow-shadow-color: rgb(0 0 0 / 0.5);
+  --ow-shadow-color-overlay: rgb(0 0 0 / 0.6);
 
   /* Fonts */
   --ow-font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'SF Pro Text', Helvetica, Arial, sans-serif;

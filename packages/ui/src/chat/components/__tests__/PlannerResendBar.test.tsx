@@ -15,7 +15,7 @@ describe('the planner turn waiting on the planner\'s usage limit', () => {
     let cancelled = 0;
     render(<PlannerResendBar resend={{ runner: 'claude-code', at: soon() }} onCancel={() => cancelled++} />);
 
-    expect(screen.getByText(/^Resending at \d{1,2}(:\d{2})?[ap]m, once claude-code's usage limit resets$/)).toBeTruthy();
+    expect(screen.getByText(/^Resending at \d{1,2}(:\d{2})?[ap]m, once Claude Code's usage limit resets$/)).toBeTruthy();
     fireEvent.click(screen.getByText('Don\'t resend'));
     expect(cancelled).toBe(1);
   });

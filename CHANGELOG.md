@@ -15,11 +15,44 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   a terminal, with one session at a time and one window per workspace. It is a
   client of the local daemon, so a run started there is the one the CLI and
   `ordewell status` see. Closing a window during a run keeps the app in the tray,
-  and quitting asks first, saying whether the run stops with it. The installers
-  are unsigned, so on macOS or Windows the first launch asks you to allow the
-  app, and they are attached to each release (#129, #136). The
-  [desktop guide](docs/desktop/README.md) covers installing it, running it from
-  source, the views and the shortcuts.
+  and quitting asks first, saying whether the run stops with it. A release
+  signs and notarizes its installers once the project's credentials are
+  configured and is unsigned until then, so macOS or Windows may ask you to
+  allow the app on first launch, and the installers are attached to each release
+  (#129, #136). The [desktop guide](docs/desktop/README.md) covers installing
+  it, running it from source, the views and the shortcuts.
+- **A chat in the centre and the plan on the right.** The planner conversation
+  takes the window's centre, the plan panel sits beside it on the right, and
+  your repository is a click away on the left. A narrow window opens the plan
+  as a drawer, and the panel folds so a chat can use the whole tab.
+- **The plan graph in stage columns.** Each task is a card in the column for
+  its stage, with its runner, model and effort on its face and the edges routed
+  between columns. The stage chips scroll to a column, and a card's chat button
+  opens the task while clicking the card reveals it in the plan panel.
+- **A welcome screen for the projects you return to.** The folders you opened
+  before are cards with their branch, their last session's goal and status, and
+  what needs you there; a folder that has gone missing says so. Open a folder,
+  drop one on the window, or take a recent card.
+- **A session another Ordewell daemon holds is joined, not taken.** When the
+  terminal UI or another daemon already holds a session, the app drives it
+  live and says who holds it, and carries it on when that holder exits. A
+  session a VS Code window holds is offered to watch read-only or to start
+  fresh here.
+- **Dark and light themes, with colour that carries meaning.** Dark is the
+  default and Light is its equal; **System** follows your OS. Every text colour
+  reaches WCAG AA on every background it is drawn on, and the area and status
+  colours keep one meaning everywhere.
+- **Installers built for every change, and one line to install one.** A pull
+  request that can change the app builds and checks its installers on macOS,
+  Windows and Linux before any release does. One command installs the right
+  file for your OS and architecture, checks it against the release's checksums,
+  and stops if they do not match; fixed-name links work for the latest release
+  and for a named version.
+- **Signing, notarization, Homebrew and winget when configured.** A release
+  signs its installers and has Apple notarize the macOS ones once the project's
+  credentials exist, and publishes the Homebrew cask and winget manifests once
+  their tokens exist; without them it still builds and publishes unsigned
+  installers. A signed macOS build is the only kind that updates itself.
 - **Your repository's files, diffs and git actions in the app.** The daemon
   reads your checkout, a run's integration branch and a task's worktree, and
   performs the git actions you ask for on your own checkout with your own git:

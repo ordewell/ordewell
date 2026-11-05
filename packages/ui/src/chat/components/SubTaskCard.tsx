@@ -5,7 +5,8 @@ import TaskAssignment, { TaskAssignmentReadout } from './TaskAssignment';
 import TaskHandoff from './TaskHandoff';
 import { cardEditable, pausedOnLimit, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, TaskRowAction, AssignmentScope } from '@ordewell/core';
-import { AssignmentFlag, IsolationBadges, StatusBadge, TaskActions, TaskCheck, TaskMarkControl, TaskRevertControl, UsageLimitControls, runnerOptionsFor, statusBadge } from './TaskCard';
+import { StatusBadge, TaskActions, TaskMarkControl, TaskRevertControl, UsageLimitControls, runnerOptionsFor, statusBadge } from './TaskCard';
+import { AssignmentFlag, IsolationBadges, TaskCheck } from './TaskSummary';
 import type { RunnerMode, RunnerOption, TaskCardRun } from './TaskCard';
 import { checkLabel, verdictSummary } from '../checkLabel';
 

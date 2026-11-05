@@ -9,7 +9,6 @@ import { ChangesList } from '../ChangesSidebar';
 import { HANDOFF, runTask, runView, worktree } from './fixtures';
 
 const WORKSPACE = '/work/acme';
-const SIZES = { sidebar: 260, right: 360, bottom: 240 };
 
 const TASKS = [
   runTask({ id: 't1', order: 1, title: 'Add the login button', status: 'completed', isolation: { ...worktree('integrated'), revertible: true } }),
@@ -55,7 +54,7 @@ async function mounted() {
   await act(async () => {
     daemon.push('s1', { type: 'connected', sessionId: 's1' }, { type: 'run_snapshot', sessionId: 's1', view: runView(TASKS, HANDOFF), stream: 'd1', seq: 0 });
   });
-  const store = new FrameStore({ workspace: WORKSPACE, platform: 'linux', sizes: SIZES });
+  const store = new FrameStore({ workspace: WORKSPACE, platform: 'linux' });
   const openTab = vi.spyOn(store.api, 'openTab');
   render(<ChangesList api={store.api} host={host} />);
   await screen.findByRole('button', { name: /sso\.ts/ });
@@ -134,12 +133,45 @@ describe('the Changes sidebar', () => {
     await waitFor(() => expect(daemon.calls('plans.resolveConflict')).toEqual([[{ sessionId: 's1', taskId: 't4' }, undefined]]));
   });
 
+  it('starts a long group closed, opens it on a click and closes it on the next; Show in plan is separate', async () => {
+    const many = Array.from({ length: 9 }, (_, i) => ({ path: `src/f${i}.ts`, status: 'M', added: 1, removed: 0 }));
+    const sso = runTask({ id: 't3', order: 3, title: 'Wire SSO', status: 'in_progress', isolation: worktree('active') });
+    const daemon = fakeDaemon({
+      'sessions.load': ok({ ok: true, plan: surfacePlan([surfaceTask({ id: 't3', order: 3, title: 'Wire SSO', status: 'in_progress' })], 'running'), goal: 'g' }),
+      'plans.taskDiff': ok({ available: true, text: many.map((f) => `[repo .] ${f.path}: +1 -0\n`).join('') }),
+      'git.diff': (params) => (params?.taskId === 't3' ? ok({ files: many }) : { ok: false as const, status: 404, error: 'No worktree.' }),
+    });
+    const host = new DaemonHost(WORKSPACE, async () => null);
+    hosts.push(host);
+    await act(() => host.open('s1'));
+    await act(async () => {
+      daemon.push('s1', { type: 'connected', sessionId: 's1' }, { type: 'run_snapshot', sessionId: 's1', view: runView([sso], HANDOFF), stream: 'd1', seq: 0 });
+    });
+    const reveal = vi.spyOn(host, 'revealTask');
+    const store = new FrameStore({ workspace: WORKSPACE, platform: 'linux' });
+    render(<ChangesList api={store.api} host={host} />);
+
+    const group = within(await screen.findByRole('region', { name: 'Task #3: Wire SSO' }));
+    await group.findByLabelText('9 files');
+    expect(group.queryByRole('button', { name: /f0\.ts/ })).not.toBeInTheDocument();
+
+    const head = group.getByRole('button', { expanded: false });
+    fireEvent.click(head);
+    expect(await group.findByRole('button', { name: /f0\.ts/ })).toBeInTheDocument();
+    fireEvent.click(group.getByRole('button', { expanded: true }));
+    expect(group.queryByRole('button', { name: /f0\.ts/ })).not.toBeInTheDocument();
+    expect(reveal).not.toHaveBeenCalled();
+
+    fireEvent.click(group.getByRole('button', { name: 'Show in plan' }));
+    expect(reveal).toHaveBeenCalledWith('t3');
+  });
+
   it('says so when no task has changes yet', async () => {
     fakeDaemon({ 'sessions.load': ok({ ok: true, plan: surfacePlan([]), goal: 'g' }) });
     const host = new DaemonHost(WORKSPACE, async () => null);
     hosts.push(host);
-    const store = new FrameStore({ workspace: WORKSPACE, platform: 'linux', sizes: SIZES });
+    const store = new FrameStore({ workspace: WORKSPACE, platform: 'linux' });
     render(<ChangesList api={store.api} host={host} />);
-    expect(screen.getByText(/No task has changes to review yet/)).toBeInTheDocument();
+    expect(screen.getByText(/No changes to review yet/)).toBeInTheDocument();
   });
 });

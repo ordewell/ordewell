@@ -20,7 +20,7 @@ export interface SettingsView {
 
 const EMPTY_PREFS: Prefs = {
   theme: 'dark',
-  panes: { sidebar: 260, right: 360, bottom: 240 },
+  layouts: {},
   notifications: true,
   keepRunningInTray: false,
   editorCommand: '',

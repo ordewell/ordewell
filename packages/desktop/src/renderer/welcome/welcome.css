@@ -1,0 +1,183 @@
+/*
+ * The welcome window (design W1). Every size and colour is a token from
+ * @ordewell/ui's scale.css and tokens.css, with theme.css's desktop values.
+ */
+.welcome { position: relative; display: flex; flex-direction: column; height: 100%; }
+.welcome-body { flex: 1; min-height: 0; overflow: auto; padding: var(--ow-space-12) var(--ow-space-6) var(--ow-space-8); }
+.welcome-content { display: flex; flex-direction: column; gap: var(--ow-space-8); max-width: 880px; margin: 0 auto; }
+
+/* Hero: the wordmark, the tagline and the one filled button. */
+.welcome-hero { display: flex; flex-direction: column; align-items: center; gap: var(--ow-space-3); text-align: center; }
+.welcome-logo { margin: 0; line-height: 0; }
+.welcome-logo img { display: block; width: 200px; height: auto; user-select: none; }
+.welcome-tagline { margin: 0; font: var(--ow-type-heading); color: var(--ow-fg-secondary); }
+.welcome-open { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: var(--ow-space-2) var(--ow-space-4); margin-top: var(--ow-space-3); }
+.welcome-open .ow-button-label { display: inline-flex; align-items: center; gap: var(--ow-space-2); }
+/* On the filled button the key takes the label's colour rather than a chip of its own. */
+.welcome-button-kbd .ow-kbd { background: transparent; border-color: currentColor; color: inherit; }
+
+/* Sections. */
+.welcome-section { display: flex; flex-direction: column; gap: var(--ow-space-3); }
+.welcome-heading-row { display: flex; align-items: baseline; gap: var(--ow-space-3); min-width: 0; }
+.welcome-heading { margin: 0; font: var(--ow-type-overline); letter-spacing: var(--ow-overline-tracking); text-transform: uppercase; color: var(--ow-fg-secondary); }
+.welcome-loading { font: var(--ow-type-small); color: var(--ow-fg-muted); }
+.welcome-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--ow-space-3); margin: 0; padding: 0; list-style: none; }
+.welcome-show-all { align-self: flex-start; }
+.welcome-empty-line { margin: 0; color: var(--ow-fg-secondary); }
+
+/* Cards: one column of lines, each a single row that ends in an ellipsis rather than wrapping under its icon. */
+.welcome-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ow-space-1);
+  min-width: 0;
+  padding: var(--ow-space-3) var(--ow-space-4);
+  border: 1px solid var(--ow-surface-card-border);
+  border-radius: var(--ow-radius-lg);
+  background: var(--ow-surface-card);
+  box-shadow: var(--ow-elevation-card);
+  color: var(--ow-fg);
+}
+.welcome-line { display: flex; align-items: center; gap: var(--ow-space-2); min-width: 0; min-height: 20px; font: var(--ow-type-small); }
+.welcome-line > .ow-icon, .welcome-line > .ow-status { flex: none; }
+.welcome-ellipsis { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.welcome-nowrap { flex: none; white-space: nowrap; }
+.welcome-muted { color: var(--ow-fg-secondary); }
+.welcome-path { font: var(--ow-type-code-small); color: var(--ow-fg-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+/* An inset on the card: the code fill is the light card's own step, so it would vanish into it. */
+.welcome-code { font: var(--ow-type-code-small); color: var(--ow-fg); background: var(--ow-surface-inset); box-shadow: inset 0 0 0 1px var(--ow-surface-card-border); border-radius: var(--ow-radius-sm); padding: 0 var(--ow-space-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; align-self: flex-start; max-width: 100%; }
+
+.welcome-recent { cursor: pointer; transition: background var(--ow-motion-fast) var(--ow-motion-easing), border-color var(--ow-motion-fast) var(--ow-motion-easing); }
+.welcome-recent:hover { background: var(--ow-surface-card-hover); }
+.welcome-recent:has(.welcome-recent-open:focus-visible) { outline: var(--ow-focus-width) solid var(--ow-focus-ring); outline-offset: var(--ow-focus-offset); }
+.welcome-recent-top { display: flex; align-items: center; gap: var(--ow-space-2); min-width: 0; min-height: var(--ow-hit-icon); margin: calc(var(--ow-space-1) * -1) 0 0; }
+.welcome-recent-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--ow-type-body-strong); color: inherit; }
+/* The name is a button for Tab and Enter, drawn as the card's title. */
+.welcome-recent-open { min-width: var(--ow-hit); min-height: var(--ow-hit); padding: 0; border: 0; background: none; cursor: pointer; text-align: left; }
+.welcome-recent-open:focus-visible { outline: none; }
+.welcome-recent-top .ow-badge { flex: none; }
+.welcome-recent-forget { flex: none; margin-left: auto; visibility: hidden; }
+.welcome-recent:hover .welcome-recent-forget, .welcome-recent:focus-within .welcome-recent-forget { visibility: visible; }
+.welcome-recent-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--ow-space-2); min-width: 0; min-height: var(--ow-height-button-sm); }
+.welcome-unavailable { flex: 0 1 auto; color: var(--ow-fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.welcome-recent-missing { cursor: default; color: var(--ow-fg-muted); }
+.welcome-recent-missing:hover { background: var(--ow-surface-card); }
+.welcome-recent-missing .welcome-path, .welcome-recent-missing .welcome-line { color: var(--ow-fg-muted); }
+.welcome-recent-warning > .ow-icon { color: var(--ow-status-warning); }
+
+.welcome-empty {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--ow-space-4);
+  padding: var(--ow-space-5) var(--ow-space-6);
+  border-style: dashed;
+  border-color: var(--ow-border-control);
+  background: transparent;
+  box-shadow: none;
+  color: var(--ow-fg-secondary);
+}
+.welcome-empty .ow-logo-mark { flex: none; color: var(--ow-fg-muted); }
+.welcome-empty p { margin: 0; }
+
+/* Runner cards. */
+.welcome-runner { gap: var(--ow-space-2); }
+.welcome-runner > .ow-runner-badge, .welcome-runner > .ow-badge { align-self: flex-start; }
+.welcome-runner-state { display: inline-flex; align-items: center; gap: var(--ow-space-2); font: var(--ow-type-label); }
+.welcome-tone-passed > .ow-icon { color: var(--ow-status-passed); }
+.welcome-tone-attention > .ow-icon { color: var(--ow-status-attention); }
+.welcome-tone-idle > .ow-icon { color: var(--ow-status-idle); }
+.welcome-tone-failed > .ow-icon { color: var(--ow-status-failed); }
+.welcome-runner .welcome-line { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.welcome-card-actions { display: flex; flex-wrap: wrap; gap: var(--ow-space-2); margin-top: var(--ow-space-1); }
+
+/* Skeleton bars sit at a line's own height, so nothing moves when the text arrives. */
+.welcome-skeleton { display: block; height: 12px; margin: var(--ow-space-1) 0; border-radius: var(--ow-radius-sm); background: var(--ow-surface-card-border); }
+.welcome-line .welcome-skeleton { margin: 0; }
+.welcome-skeleton-short { width: 72px; }
+.welcome-skeleton-medium { width: 128px; }
+.welcome-skeleton-long { width: 70%; }
+
+/* The shared error banner, and the daemon's own card in its place. */
+.welcome-banner {
+  padding: var(--ow-space-2) var(--ow-space-3);
+  border: 1px solid var(--ow-surface-card-border);
+  border-left-width: 3px;
+  border-radius: var(--ow-radius-lg);
+  background: var(--ow-surface-card);
+  box-shadow: var(--ow-elevation-card);
+}
+.welcome-banner h3 { margin: 0 0 var(--ow-space-1); font: var(--ow-type-body-strong); color: var(--ow-fg); }
+.welcome-banner p { margin: 0 0 var(--ow-space-2); color: var(--ow-fg-secondary); overflow-wrap: anywhere; }
+.welcome-banner-info { border-left-color: var(--ow-accent); }
+.welcome-banner-warning { border-left-color: var(--ow-status-warning); }
+.welcome-banner-error { border-left-color: var(--ow-status-error); }
+.welcome-banner-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ow-space-2); }
+.welcome-banner .welcome-refusal { color: var(--ow-status-error); }
+.welcome-details { font: var(--ow-type-small); color: var(--ow-fg-secondary); }
+.welcome-details summary { cursor: pointer; }
+.welcome-details code { font: var(--ow-type-code-small); }
+
+/* Keyboard hints. */
+.welcome-hints { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--ow-space-2) var(--ow-space-6); margin: 0; font: var(--ow-type-small); color: var(--ow-fg-muted); }
+.welcome-hints > span { display: inline-flex; align-items: center; gap: var(--ow-space-2); white-space: nowrap; }
+
+/* Footer, drawn like a workspace's status bar. */
+.welcome-footer {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ow-space-4);
+  height: var(--ow-height-status-bar);
+  padding: 0 var(--ow-space-3);
+  background: var(--ow-bg-chrome);
+  border-top: 1px solid var(--ow-border);
+  color: var(--ow-fg-secondary);
+  font: var(--ow-type-small);
+}
+.welcome-footer-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.welcome-footer-daemon { display: inline-flex; align-items: center; gap: var(--ow-space-2); min-width: 0; }
+.welcome-footer-daemon .ow-button { height: 20px; min-height: 0; }
+.welcome-footer-dot { flex: none; width: 8px; height: 8px; border-radius: var(--ow-radius-pill); background: var(--ow-status-idle); }
+.welcome-footer-passed .welcome-footer-dot { background: var(--ow-status-passed); }
+.welcome-footer-attention .welcome-footer-dot { background: var(--ow-status-attention); }
+/* A hollow mark for a failure, so it reads without its colour. */
+.welcome-footer-failed .welcome-footer-dot { background: transparent; border: 2px solid var(--ow-status-failed); }
+
+/* Toast: above the footer, Undo beside its line. */
+.welcome-toast {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--ow-height-status-bar) + var(--ow-space-4));
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: var(--ow-space-3);
+  max-width: calc(100% - var(--ow-space-8));
+  padding: var(--ow-space-2) var(--ow-space-2) var(--ow-space-2) var(--ow-space-4);
+  transform: translateX(-50%);
+  border: 1px solid var(--ow-border-widget);
+  border-radius: var(--ow-radius-lg);
+  background: var(--ow-surface-overlay);
+  box-shadow: var(--ow-elevation-raised);
+}
+
+/* Drag over the window: the content dims and a dashed outline sits 12px inside the edges. */
+.welcome-drop {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--ow-bg) 75%, transparent);
+  pointer-events: none;
+}
+.welcome-drop::before {
+  content: '';
+  position: absolute;
+  inset: var(--ow-space-3);
+  border: 2px dashed var(--ow-accent);
+  border-radius: var(--ow-radius-lg);
+}
+.welcome-drop span { font: var(--ow-type-heading); color: var(--ow-fg); }

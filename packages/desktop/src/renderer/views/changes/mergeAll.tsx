@@ -1,4 +1,6 @@
+import { AlertTriangle, Check, GitMerge } from 'lucide-react';
 import type { GitActionResponse } from '@ordewell/core';
+import { Badge, Icon } from '@ordewell/ui/design';
 import type { ConfirmationRequest } from '@ordewell/ui/host';
 import type { FrameApi } from '../../frame/api';
 import { confirmWith } from '../../session/ConfirmDialog';
@@ -19,13 +21,21 @@ function Repos({ rows }: { rows: PreflightRow[] }): JSX.Element {
   return (
     <ul className="changes-preflight" aria-label="Where it lands">
       {rows.map((row) => (
-        <li key={row.repo}>
-          <span>Lands on <strong>{row.branch}</strong> in {repoName(row.repo)}</span>
+        <li key={row.repo} className="changes-preflight-repo">
+          <div className="changes-preflight-line">
+            <Icon icon={GitMerge} size={16} />
+            <span className="changes-preflight-landing">Lands on <strong>{row.branch}</strong> in {repoName(row.repo)}</span>
+            {row.overlap.length === 0 && <Badge tone="passed" icon={Check}>clean</Badge>}
+          </div>
           {row.overlap.length > 0 && (
-            <ul className="changes-preflight-files" aria-label={`Your uncommitted files in ${repoName(row.repo)} the run also changed`}>
-              {row.overlap.map((path) => <li key={path}><code>{path}</code></li>)}
-            </ul>
+            <>
+              <p className="changes-preflight-warning"><Icon icon={AlertTriangle} size={16} />Your uncommitted changes touch files this merge changes:</p>
+              <ul className="changes-preflight-files" aria-label={`Your uncommitted files in ${repoName(row.repo)} the run also changed`}>
+                {row.overlap.map((path) => <li key={path} title={path}><code>{path}</code></li>)}
+              </ul>
+            </>
           )}
+          {row.otherDirty && <p className="changes-preflight-other">Other uncommitted files stay as they are: the merge does not touch them.</p>}
         </li>
       ))}
     </ul>

@@ -1,9 +1,10 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron';
 import {
   CHANNELS,
   EVENTS,
   type AppInfo,
   type DaemonStatus,
+  type MenuCommand,
   type NotificationClick,
   type NotificationRequest,
   type OrdewellBridge,
@@ -72,9 +73,19 @@ const bridge: OrdewellBridge = {
     info: () => ipcRenderer.invoke(CHANNELS.appInfo),
     context: () => ipcRenderer.invoke(CHANNELS.appContext),
     onThemeChange: (cb) => listen<AppInfo['theme']>(EVENTS.theme, cb),
+    onMenuCommand: (cb) => listen<MenuCommand>(EVENTS.menuCommand, cb),
     openWorkspace: (path) => ipcRenderer.invoke(CHANNELS.appOpenWorkspace, path),
     recentWorkspaces: () => ipcRenderer.invoke(CHANNELS.appRecentWorkspaces),
     forgetWorkspace: (path) => ipcRenderer.invoke(CHANNELS.appForgetWorkspace, path),
+    unforgetWorkspace: (path) => ipcRenderer.invoke(CHANNELS.appUnforgetWorkspace, path),
+    rememberRecent: (path, facts) => ipcRenderer.invoke(CHANNELS.appRememberRecent, path, facts),
+    // Only the preload can turn a dropped File into its path (contextIsolation
+    // hides File.path); a File the page made itself has none, and is refused.
+    openDroppedFolder: async (file) => {
+      let path = '';
+      try { path = webUtils.getPathForFile(file); } catch { path = ''; }
+      return ipcRenderer.invoke(CHANNELS.appOpenDroppedFolder, path);
+    },
   },
   daemon: {
     status: () => ipcRenderer.invoke(CHANNELS.daemonStatus),
@@ -85,6 +96,8 @@ const bridge: OrdewellBridge = {
     call: (routeId, params, body) => ipcRenderer.invoke(CHANNELS.daemonCall, routeId, params, body),
     subscribe: (sessionId, cb) => subscribe({ sessionId }, cb),
     subscribeChild: (rootId, childId, cb) => subscribe({ rootId, childId }, cb),
+    join: (sessionId) => ipcRenderer.invoke(CHANNELS.daemonJoin, sessionId),
+    leave: (sessionId) => ipcRenderer.invoke(CHANNELS.daemonLeave, sessionId),
   },
   dialog: {
     confirm: (spec) => ipcRenderer.invoke(CHANNELS.dialogConfirm, spec),
@@ -104,6 +117,7 @@ const bridge: OrdewellBridge = {
   shell: {
     openInEditor: (target) => ipcRenderer.invoke(CHANNELS.shellOpenInEditor, target),
     reveal: (target) => ipcRenderer.invoke(CHANNELS.shellReveal, target),
+    openExternal: (url) => ipcRenderer.invoke(CHANNELS.shellOpenExternal, url),
   },
   terminal: {
     async open(spec, onEvent) {

@@ -318,6 +318,12 @@ export type HostToWebview =
   | { type: 'setModesByRunner'; modesByRunner: Record<string, RunnerModeMeta[]>; notice?: { line: string; docs: string } | null }
   | { type: 'setModelConfig'; modelConfig: { orchestrator: string; orchestratorProvider?: string } }
   | { type: 'setPlannerBackends'; backends: PlannerBackend[]; provider: string; runner?: string; effort?: string }
+  /**
+   * Where the host's detection of the coding agents stands: under way, or
+   * failed with why, which the chat shows with a Retry (`refreshModels`) in
+   * place of "Detecting coding agents…". A runner or planner list ends it.
+   */
+  | { type: 'agentDetection'; state: 'detecting' | 'failed'; error?: string }
   | { type: 'setModelDiscoveryErrors'; errors: Record<string, string> }
   /**
    * A session was (re)loaded: the webview drops the previous session's plan,
