@@ -8,6 +8,7 @@ import type { RunnerCommand, RunnerMcpServer, RunnerModelRef } from '../../model
 import type { PlannerShellSandbox } from '../sandbox/plannerSandbox';
 import type { AttachState } from './ordewellBinding';
 import type { RunnerPlacement } from '../executionLease';
+import type { HeldSecrets } from '../HeldSecrets';
 
 
 /**
@@ -450,6 +451,12 @@ export interface AgentProcessDeps {
   nativeShellSandbox?: () => PlannerShellSandbox;
   /** Where a lease put this runner, when not on this host (ADR-0059 L5). */
   placement?: RunnerPlacement;
+  /**
+   * The attempt's held secrets, which the process adds its spawn env and
+   * withheld headers to, so the session's sinks hide them too (ADR-0061, H1).
+   * Absent outside an attempt: the process then holds its own.
+   */
+  held?: HeldSecrets;
 }
 
 /** Builds the adapter for one runner id, or null when that runner cannot plan. */

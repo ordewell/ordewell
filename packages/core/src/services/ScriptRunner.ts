@@ -161,8 +161,13 @@ export class ScriptSession extends AbstractRunnerSession {
   private markGone!: () => void;
   private readonly gone = new Promise<void>((resolve) => { this.markGone = resolve; });
 
+  /** Each pipe's text with what the session holds hidden, before the output, the log, the saved file or the error tail keeps any of it (ADR-0061, H1). */
+  private readonly shownOut = this.secrets.stream();
+  private readonly shownErr = this.secrets.stream();
+
   constructor(id: string, taskId: string, private readonly setup: ScriptSessionSetup) {
     super(id, taskId);
+    this.secrets.holdEnv(setup.env);
     const { body } = setup;
     this.steps = 'commands' in body ? body.commands.map((argv) => ({ argv })) : [{ script: body.script }];
   }
@@ -238,7 +243,8 @@ export class ScriptSession extends AbstractRunnerSession {
       const inside = path.relative(root, this.setup.cwd);
       const line = 'argv' in step ? step.argv.map(shellQuoted).join(' ') : step.script;
       const outcome = await runs.run(inside ? `cd ${shellQuoted(inside)} && ${line}` : line, root);
-      if (outcome.output) this.printError(outcome.output.endsWith('\n') ? outcome.output : `${outcome.output}\n`);
+      const output = this.secrets.hide(outcome.output);
+      if (output) this.printError(output.endsWith('\n') ? output : `${output}\n`);
       return sealedStatus(outcome);
     }, this.sealedEnd.signal);
   }
@@ -285,14 +291,15 @@ export class ScriptSession extends AbstractRunnerSession {
       const finish = (status: ScriptStatus) => {
         if (settled) return;
         settled = true;
-        this.print(stdout.end());
-        this.printError(stderr.end());
+        this.print(this.shownOut.end(stdout.end()));
+        this.printError(this.shownErr.end(stderr.end()));
         this.child = null;
         this.placed = null;
         launch.placed?.ended();
         resolve(status);
       };
       this.placed = launch.placed ?? null;
+      if (launch.placed) this.secrets.holdEnv(launch.placed.env);
       const child = spawnInOwnGroup((detached) => this.setup.spawn(launch.file, launch.args, {
         cwd: this.setup.cwd,
         env: launch.placed ? { ...this.setup.env, ...launch.placed.env } : this.setup.env,
@@ -305,8 +312,8 @@ export class ScriptSession extends AbstractRunnerSession {
       }), this.setup.platform);
       this.child = child;
       this.children.push(child);
-      child.stdout?.on('data', (chunk: Buffer) => this.print(stdout.write(chunk)));
-      child.stderr?.on('data', (chunk: Buffer) => this.printError(stderr.write(chunk)));
+      child.stdout?.on('data', (chunk: Buffer) => this.print(this.shownOut.write(stdout.write(chunk))));
+      child.stderr?.on('data', (chunk: Buffer) => this.printError(this.shownErr.write(stderr.write(chunk))));
       child.on('error', (err) => finish({ code: null, signal: null, error: err.message }));
       // 'close', not 'exit': the step's last output may still be draining at its exit.
       child.on('close', (code, signal) => finish({ code, signal }));

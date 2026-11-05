@@ -321,10 +321,15 @@ export class StructuredSession extends AbstractRunnerSession {
   constructor(id: string, taskId: string, private readonly launch: SessionLaunch) {
     super(id, taskId);
     this.startOptions = launch.startOptions;
-    this.text = new PlainTextChannel((text) => this.say(() => {
-      this.output += text;
-      this.outputEmitter.emit('output', text);
-    }));
+    // What the runner says is written as it said it, held secrets hidden, before
+    // any reader keeps or cuts it (ADR-0061, H1).
+    this.text = new PlainTextChannel((text) => {
+      const shown = this.secrets.hide(text);
+      this.say(() => {
+        this.output += shown;
+        this.outputEmitter.emit('output', shown);
+      });
+    });
   }
 
   /**
@@ -376,16 +381,28 @@ export class StructuredSession extends AbstractRunnerSession {
    * (ADR-0060, R5); without one, as after an interrupt, it cannot attach.
    */
   private async startAttached(opts: TaskStartOptions, prompt?: string): Promise<void> {
+    // Every way a start fails leaves through here, a container's last words among them (ADR-0061, H1).
+    try {
+      await this.attach(opts, prompt);
+    } catch (err) {
+      throw this.secrets.hideError(err);
+    }
+  }
+
+  private async attach(opts: TaskStartOptions, prompt?: string): Promise<void> {
     const { server, scope, shell, savePatch, webReads } = this.launch.tools;
     this.launch.onAttaching?.(1);
     const spawned = await spawnAttached({
       runner: this.launch.runner,
-      create: () => this.launch.createAdapter(this.launch.runner, this.launch.deps),
+      // The process adds its spawn env and the headers it withholds to the session's held secrets.
+      create: () => this.launch.createAdapter(this.launch.runner, { ...this.launch.deps, held: this.secrets }),
       issueToken: () => server.issueTaskToken(scope, {
         taskComplete: async (report) => {
           const checked = await this.launch.checkHandoff(report);
           if (!checked.ok) return { text: checked.refusal, isError: true };
-          this.completionReport = checked.handoff;
+          // Checked as the runner sent it, kept with what Ordewell holds hidden:
+          // a report that quotes the attempt's own token hands it to the planner.
+          this.completionReport = this.secrets.hideIn(checked.handoff);
           // The runner ends its turn on this reply. One that keeps it open has
           // its report published at the same grace; the verdict then stops it.
           if (this.completionTimer) clearTimeout(this.completionTimer);
@@ -411,6 +428,7 @@ export class StructuredSession extends AbstractRunnerSession {
       }),
       revoke: (token) => server.revoke(token),
       start: async (adapter, credential) => {
+        this.secrets.hold(credential.token);
         const url = await this.launch.deps.placement?.reach(credential.url) ?? credential.url;
         this.startOptions = { ...opts, mcp: mcpClientConfig({ ...credential, url }) };
         return this.startAdapter(adapter, this.startOptions);
@@ -425,7 +443,7 @@ export class StructuredSession extends AbstractRunnerSession {
       startupExit: () => this.startupExit,
       ...(prompt !== undefined ? { firstTurn: () => this.sendFirstTurn(prompt) } : {}),
       onRespawn: (failure) => {
-        this.launch.onNotice?.(`${this.launch.runner} started without Ordewell's tools (${failure}); respawning once.`);
+        this.launch.onNotice?.(this.secrets.hide(`${this.launch.runner} started without Ordewell's tools (${failure}); respawning once.`));
         this.launch.onAttaching?.(2);
       },
       failed: (first, second) => `Could not start ${this.launch.runner} with Ordewell's tools, so the task was not sent to it. First spawn: ${first}. Respawn: ${second}.`,
@@ -1044,7 +1062,7 @@ export class StructuredSession extends AbstractRunnerSession {
   }
 
   private emitEvent(event: StructuredEvent): void {
-    this.say(() => this.structuredEmitter.emit('event', event));
+    for (const shown of this.secrets.shownEvents(event)) this.say(() => this.structuredEmitter.emit('event', shown));
   }
 
   /** Said now, or kept while the first turn is the attach check. */
@@ -1126,6 +1144,8 @@ export class StructuredRunner extends AbstractRunner<StructuredSession> {
       onAttaching: opts.onAttaching,
     });
 
+    // Held before the process exists: a runner that never spawns one still echoes what it was handed.
+    session.secrets.holdEnv(env);
     console.error(`[structured] Starting ${opts.runner} [${opts.mode ?? 'default'}] (${opts.modelId || 'default'}) for task ${opts.taskId.slice(0, 8)}`);
     this.registerSession(id, session);
     // Until the start resolves the caller holds no session to stop, so its

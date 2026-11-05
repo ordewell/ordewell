@@ -2876,6 +2876,18 @@ end of its output. It does not discover transcripts or render a runner's PTY.
 *Avoid:* "the output buffer", "transcript capture" as the owner — a transcript
 is a separate artifact, not completion evidence.
 
+**Held secrets** (`services/HeldSecrets.ts`) — the secrets Ordewell itself
+handed one runner session: the attempt's MCP token, the credentials in its
+spawn env and the headers its process withholds. The session owns one record
+for its whole life (`IRunnerSession.secrets`). It hides what the record holds,
+exactly and in every part of eight characters or more, in everything the
+runner writes before any sink sees it. Every reader of the session's output
+redacts with the same record. A secret Ordewell never held is left to the
+name and shape rules of agent-text redaction, which are defence in depth
+([ADR-0061](docs/adr/platform/0061-held-secrets-are-hidden-exactly-and-agent-text-by-name-in-depth.md)).
+*Avoid:* "known secrets", "the secret list": the record is per session, and
+"held" says that Ordewell handed the value over.
+
 **Check** — one deterministic signal inside a verdict. `task_complete` is the
 required completion check, with `exit_code` as supporting diagnostic evidence.
 A manual completion has a `manual` check. `model_review`, `workspace_changes`
