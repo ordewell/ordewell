@@ -54,12 +54,19 @@ redacts with the same record. No sink is handed the values separately.
   - A held value is matched as the literal string it is, not by its shape.
   - Every part of it of eight characters or more is hidden as well, and a run
     of held text becomes one marker.
+  - A part is looked for in the text as written and in the text with its
+    terminal escapes read through. An escape whose bytes hold or end a part, a
+    window title's OSC payload among them, is hidden with it, and an escape
+    inside a run of held text goes into the run's marker.
   - A value too short to tell from a word is not held.
-  - Text that arrives in pieces, such as a model's deltas or a script's pipe
-    chunks, is read on from the piece before it. Its last few characters are
-    held back only while they could still begin a part of a held value, and
-    a run of held text that reaches the end is held back whole. Text that can
-    begin no part, a line's newline among it, is shown at once.
+  - Text that arrives in pieces is read on from the piece before it, in one
+    pass. The pieces may be a model's deltas, a script's pipe chunks, or the
+    lines a session's text channel writes as its runs take turns. Its last few
+    characters are held back only while they could still begin a part of a held
+    value, as is an escape still open at the end. A run of held text that
+    reaches the end is held back whole. Text that can begin no part, a line's
+    newline among it, is shown at once. What is held back is written out before
+    the turn's end or the session's exit is told.
   - An error from a failed start keeps its class, with its message and stack
     hidden.
 - **A cut never makes a secret readable (C1).** A cut that drops the start of a
@@ -69,13 +76,20 @@ redacts with the same record. No sink is handed the values separately.
   reads the head together with what remains, and drops it from what it shows.
   A read that resumes inside such a value reads from the line that opens it.
   This holds at each cut that bounds runner output: the live buffer, an ended
-  attempt's 16k tail, and a `LineTail`.
+  attempt's 16k tail, and a `LineTail`. A trim is a cut as well, so a read is
+  trimmed only after it is redacted.
 - **Gutters and colour are read through (G1).**
   - A key block's gutter is taken from its BEGIN or END line, with the digits
     generalised, and is stripped from each of the block's lines.
+  - A sibling `value:` is matched to its `name:` by the indentation after each
+    line's gutter and quote marker, so a gutter's width is not read as nesting.
   - A block never closes as `0 chars` while body-shaped lines follow it.
   - Agent text is redacted with its terminal escapes (CSI, OSC and the charset
     selections) removed, including in `LineTail`'s read.
+  - An escape is read only to a bound: a CSI of up to 128 parameter and 16
+    intermediate bytes, an OSC payload of up to 4096 characters. Past the bound
+    its bytes are plain text, so an escape that never closes holds nothing back
+    for long and costs no more to read than its bound.
 - **Names, in a documented list of forms (N1).** A value is redacted when a
   credential name labels it in one of the forms below, and when its shape
   passes the form's test. A form not in the list is not covered.
@@ -143,7 +157,7 @@ redacts with the same record. No sink is handed the values separately.
 - A line too long for the buffer stands as a note, and the note closes an open
   block.
 - A fragment of fewer than eight characters can show where one stream gives way
-  to another.
+  to another, as where a turn ends inside a value.
 - Some sibling forms are not covered:
   - a reversed `{value, name}` order;
   - a sibling `value:` given as a block or on the next line;
@@ -156,3 +170,4 @@ redacts with the same record. No sink is handed the values separately.
 ## History
 
 - 2026-11-05 — accepted.
+- 2026-11-05 — parts are found inside escapes and through them, escapes are read to a bound, the text channel is one stream, sibling values are read past the gutter, and a read is trimmed after it is redacted.

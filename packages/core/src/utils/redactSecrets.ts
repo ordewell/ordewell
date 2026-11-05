@@ -233,8 +233,8 @@ const isPadding = (char: string | undefined) => char === ' ' || char === '\t';
  * By hand rather than as a pattern: several numbers in one gutter, as
  * patterns, backtrack polynomially on a long run of digits.
  */
-function pastGutter(gutter: Gutter, line: string): number {
-  let at = 0;
+function pastGutter(gutter: Gutter, line: string, from = 0): number {
+  let at = from;
   for (let i = 0; i < gutter.length; i++) {
     const part = gutter[i];
     if (part === null) {
@@ -772,17 +772,74 @@ function quoteAt(text: string, lineStart: number): string {
   return QUOTE_PREFIX.test(text) ? text.slice(lineStart, QUOTE_PREFIX.lastIndex) : '';
 }
 
+/** How the lines of one entry open: a file viewer's gutter, then a quote, then their indentation past both. */
+type Frame = { gutter: Gutter; quote: string; lead: number };
+
+/** A gutter's mark after its number, `→`, `│`, `|` or `:`: not a quote's `>`, nor anything a line's content opens with. */
+const GUTTER_MARK = /[^\s\w"'\x60\\<>{[(*#$-]/;
+
+const isDigit = (char: string | undefined) => char !== undefined && char >= '0' && char <= '9';
+
+/** Where a gutter whose number ends at `end` of `prefix` ends: past its mark, or at the number, as `cat -n`'s tab is indentation. */
+function gutterEndAfter(prefix: string, end: number): number {
+  let mark = end;
+  while (isPadding(prefix[mark])) mark++;
+  const from = mark;
+  while (mark < prefix.length && GUTTER_MARK.test(prefix[mark])) mark++;
+  return mark > from ? mark : end;
+}
+
+/** The entry's frame with its gutter ending `end` characters into the line at `lineStart`. */
+function frameAt(text: string, lineStart: number, end: number): Frame {
+  const gutter = gutterOf(text.slice(lineStart, lineStart + end));
+  const last = gutter.length - 1;
+  const quoteStart = lineStart + end;
+  const quote = quoteAt(text, quoteStart);
+  let lead = quoteStart + quote.length;
+  while (isPadding(text[lead])) lead++;
+  return {
+    // A gutter that ends at its number is followed by the indentation, not padding of its own.
+    gutter: gutter[last] === '' && gutter[last - 1] === null ? gutter.slice(0, last) : gutter,
+    quote,
+    lead: lead - quoteStart - quote.length,
+  };
+}
+
+/**
+ * The frames the lines of the entry named at `at` can open with: a gutter
+ * numbered with the line's last number before the name, or its first, then
+ * none. A number can be the entry's own (`- id: 3, name: …`), so the line
+ * below the name settles which holds (ADR-0061, G1).
+ */
+function framesOf(text: string, lineStart: number, at: number): Frame[] {
+  const prefix = text.slice(lineStart, at);
+  let last = prefix.length;
+  while (last > 0 && !isDigit(prefix[last - 1])) last--;
+  if (last === 0) return [frameAt(text, lineStart, 0)];
+  let first = prefix.search(/\d/);
+  while (isDigit(prefix[first])) first++;
+  const ends = new Set([gutterEndAfter(prefix, last), gutterEndAfter(prefix, first), 0]);
+  return [...ends].map((end) => frameAt(text, lineStart, end));
+}
+
+/** Where the line at `lineAt` starts past `frame`'s gutter and quote, or -1 when it opens with something else. */
+function pastFrame(frame: Frame, text: string, lineAt: number): number {
+  const past = pastGutter(frame.gutter, text, lineAt);
+  return past >= 0 && text.startsWith(frame.quote, past) ? past + frame.quote.length : -1;
+}
+
 /**
  * The value of the `value` field beside the name found at `at`, read on from
  * `from`; 'open' when the text ends before the entry does. Only a `value`
- * after the name: an entry that gives its value first is not read.
+ * after the name: an entry that gives its value first is not read. Each line
+ * of the entry is read past the gutter and the quote the name's line opens
+ * with, and must be indented as far past them as the name is.
  */
 function siblingValue(text: string, at: number, from: number, name: string): Span[] | 'open' {
   const stops = new RegExp(SIBLING_STOP);
   stops.lastIndex = from;
   let lines = 0;
-  let quote: string | undefined;
-  let lead = 0;
+  let frames: Frame[] | undefined;
   for (let found = stops.exec(text); found; found = stops.exec(text)) {
     const field = found.groups?.field?.toLowerCase();
     if (field === 'value') {
@@ -790,25 +847,21 @@ function siblingValue(text: string, at: number, from: number, name: string): Spa
       return valueAt >= text.length ? 'open' : valuesAt(text, valueAt, name, 'labelled');
     }
     if (field !== undefined || found[0] !== '\n' || ++lines > MAX_SIBLING_LINES) return [];
+    const lineAt = found.index + 1;
     // Computed once a line is crossed: on one long line every name's search ends at the next name.
-    if (quote === undefined) {
-      const lineStart = text.lastIndexOf('\n', at - 1) + 1;
-      quote = quoteAt(text, lineStart);
-      lead = lineStart + quote.length;
-      while (isPadding(text[lead])) lead++;
-      lead -= lineStart + quote.length;
-    }
-    // The entry's lines all open with its quote, whose `>` is no end of an element.
-    const opens = text.slice(found.index + 1, found.index + 1 + quote.length);
-    if (opens !== quote) return quote.startsWith(opens) && found.index + 1 + opens.length === text.length ? 'open' : [];
-    const next = found.index + 1 + quote.length;
+    frames ??= framesOf(text, text.lastIndexOf('\n', at - 1) + 1, at);
+    if (frames.length > 1) frames = [frames.find((frame) => pastFrame(frame, text, lineAt) >= 0) ?? frames[frames.length - 1]];
+    const frame = frames[0];
+    // The entry's lines all open with its gutter and quote, whose `>` is no end of an element.
+    const next = pastFrame(frame, text, lineAt);
+    if (next < 0) return text.includes('\n', lineAt) ? [] : 'open';
     stops.lastIndex = next;
     NEXT_ENTRY.lastIndex = next;
     if (NEXT_ENTRY.test(text)) return [];
     let indent = next;
     while (isPadding(text[indent])) indent++;
     if (indent >= text.length) break;
-    if (indent - next < lead) return [];
+    if (indent - next < frame.lead) return [];
   }
   return 'open';
 }
@@ -915,17 +968,28 @@ const MIN_HELD_LENGTH = 8;
  * (`${TOKEN:0:12}`) can show part of a value without the rest.
  */
 const HELD_PART = 8;
+/** The chars a part still to come can have begun in: one short of a part. */
+const HELD_TAIL = HELD_PART - 1;
 
 /**
  * A terminal's escape sequences: CSI (colour, cursor), OSC (a title, a link)
  * and the charset and keypad selections. A coloured name is a name a reader
  * sees, so the rules read the text without them.
+ *
+ * Each is bounded, past any a terminal writes (a truecolor fg and bg SGR has
+ * 33 param chars): a stream holds back an escape it ends inside, and an
+ * unbounded one would let `ESC ]` and endless text hold back all that follows
+ * (ADR-0061, H1). The CSI classes are disjoint, so what matches is decided
+ * char by char, as the stream reads it.
  */
 // eslint-disable-next-line no-control-regex
-const TERMINAL_ESCAPE = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b[()][AB012]|\x1b[=>]/g;
+const TERMINAL_ESCAPE = /\x1b\[[0-?]{0,128}[ -/]{0,16}[@-~]|\x1b\][^\x07\x1b]{0,4096}(?:\x07|\x1b\\)?|\x1b[()][AB012]|\x1b[=>]/g;
+const CSI_PARAMS = 128;
+const CSI_INTERMEDIATES = 16;
+const OSC_PAYLOAD = 4096;
 
 /** `text` without terminal escapes, and where each of its characters sits in `text`. */
-function withoutEscapes(text: string): { plain: string; at: number[] } {
+function withoutEscapes(text: string, escapes: Iterable<RegExpExecArray> = text.matchAll(TERMINAL_ESCAPE)): { plain: string; at: number[] } {
   const at: number[] = [];
   let plain = '';
   let from = 0;
@@ -933,7 +997,7 @@ function withoutEscapes(text: string): { plain: string; at: number[] } {
     for (let i = from; i < to; i++) at.push(i);
     plain += text.slice(from, to);
   };
-  for (const escape of text.matchAll(TERMINAL_ESCAPE)) {
+  for (const escape of escapes) {
     take(escape.index);
     from = escape.index + escape[0].length;
   }
@@ -941,56 +1005,105 @@ function withoutEscapes(text: string): { plain: string; at: number[] } {
   return { plain, at };
 }
 
-/** Each place in `text` a held value, or a part of one, sits, overlapping runs merged. */
-function heldSpans(text: string, values: readonly string[]): Span[] {
-  const spans: Span[] = [];
-  for (const value of values) {
-    for (let at = text.indexOf(value); at >= 0; at = text.indexOf(value, at + 1)) spans.push({ start: at, end: at + value.length });
+/** What held values are matched by: see {@link heldParts}. */
+interface HeldParts {
+  /** Every {@link HELD_PART}-char part of a held value. A value is at least one part long, so its parts cover it whole. */
+  parts: ReadonlySet<string>;
+  /** Each part's first 1 to {@link HELD_TAIL} chars: what a part still to come can have begun as. */
+  begun: ReadonlySet<string>;
+}
+
+const derivedParts = new WeakMap<object, { from: readonly string[]; derived: HeldParts }>();
+
+/**
+ * The parts of the values in `held`, derived once for as long as it holds
+ * the same values: a stream asks on every write, and a key of a few thousand
+ * chars has as many parts. Compared value by value, as a set that gains one
+ * is the same object.
+ */
+function heldParts(held: Iterable<string>): HeldParts {
+  const from = [...held];
+  const cached = typeof held === 'object' ? derivedParts.get(held) : undefined;
+  if (cached && cached.from.length === from.length && cached.from.every((value, i) => value === from[i])) return cached.derived;
+  const parts = new Set<string>();
+  const begun = new Set<string>();
+  for (const value of new Set(from.map((v) => v.trim()))) {
+    if (value.length < MIN_HELD_LENGTH) continue;
+    for (let at = 0; at + HELD_PART <= value.length; at++) {
+      const part = value.slice(at, at + HELD_PART);
+      parts.add(part);
+      for (let n = 1; n < HELD_PART; n++) begun.add(part.slice(0, n));
+    }
   }
-  const parts = new Set(values.flatMap((v) => Array.from({ length: v.length - HELD_PART + 1 }, (_, i) => v.slice(i, i + HELD_PART))));
-  for (let at = 0; at + HELD_PART <= text.length; at++) {
-    if (parts.has(text.slice(at, at + HELD_PART))) spans.push({ start: at, end: at + HELD_PART });
-  }
-  spans.sort((a, b) => a.start - b.start);
-  const merged: Span[] = [];
-  for (const span of spans) {
-    const last = merged[merged.length - 1];
-    if (last && span.start <= last.end) last.end = Math.max(last.end, span.end);
-    else merged.push({ ...span });
-  }
-  return merged;
+  const derived = { parts, begun };
+  if (typeof held === 'object') derivedParts.set(held, { from, derived });
+  return derived;
 }
 
 /**
  * Every held value in `text`, whole and in every part of {@link HELD_PART}
  * chars, each run of them as one marker (ADR-0061, H1). Matched exactly, not
- * by shape, so no rule's reading of the text decides it, and through any
- * terminal escape inside it: the escapes a run covers go with it.
+ * by shape, so no rule's reading of the text decides it.
+ *
+ * Read twice: in its raw chars, where a value can sit in an escape's payload
+ * (a title, a link) or start in an escape's last byte, and as a terminal shows
+ * it, where a value can be coloured mid-value. An escape that holds a char of
+ * a part goes with the marker, as do the escapes between the parts of a run:
+ * an escape only after the run stays, so a reset still resets.
  *
  * A part of a wordy held value (`changeme-development`) is a word the text may
  * have anyway, and is hidden there too: the bar is that no part of what
  * Ordewell holds is shown, not that every word of the text stays.
  */
 export function hideHeld(text: string, held: Iterable<string>): string {
-  if (!text) return text;
-  const values = heldValues(held);
-  if (values.length === 0) return text;
-  const { plain, at } = text.includes('\x1b') ? withoutEscapes(text) : { plain: text, at: undefined };
-  const spans = heldSpans(plain, values);
-  if (spans.length === 0) return text;
+  if (text.length < HELD_PART) return text;
+  const { parts } = heldParts(held);
+  if (parts.size === 0) return text;
+  const hidden = new Uint8Array(text.length);
+  let found = false;
+  for (let at = 0; at + HELD_PART <= text.length; at++) {
+    if (!parts.has(text.slice(at, at + HELD_PART))) continue;
+    hidden.fill(1, at, at + HELD_PART);
+    found = true;
+  }
+  const escapes = text.includes('\x1b') ? [...text.matchAll(TERMINAL_ESCAPE)] : [];
+  if (escapes.length > 0) {
+    const { plain, at } = withoutEscapes(text, escapes);
+    for (let k = 0; k + HELD_PART <= plain.length; k++) {
+      if (!parts.has(plain.slice(k, k + HELD_PART))) continue;
+      for (let i = k; i < k + HELD_PART; i++) hidden[at[i]] = 1;
+      found = true;
+    }
+  }
+  if (!found) return text;
+  // Read token by token, as heldStream does: an escape whole, or one char.
   let out = '';
   let from = 0;
-  for (const span of spans) {
-    const start = at ? at[span.start] : span.start;
-    const end = at ? at[span.end - 1] + 1 : span.end;
-    out += text.slice(from, start) + marker('secret', span.end - span.start);
-    from = end;
+  let chars = 0;
+  let runEnd = -1;
+  let next = 0;
+  for (let i = 0; i < text.length; ) {
+    const escape = escapes[next]?.index === i ? escapes[next++][0] : undefined;
+    const end = i + (escape?.length ?? 1);
+    let count = 0;
+    for (let j = i; j < end; j++) count += hidden[j];
+    if (count > 0) {
+      if (runEnd < 0) out += text.slice(from, i);
+      chars += count;
+      runEnd = end;
+    } else if (escape === undefined && runEnd >= 0) {
+      out += marker('secret', chars);
+      from = runEnd;
+      runEnd = -1;
+      chars = 0;
+    }
+    i = end;
+  }
+  if (runEnd >= 0) {
+    out += marker('secret', chars);
+    from = runEnd;
   }
   return out + text.slice(from);
-}
-
-function heldValues(held: Iterable<string>): string[] {
-  return [...new Set([...held].map((v) => v.trim()).filter((v) => v.length >= MIN_HELD_LENGTH))];
 }
 
 /** A stream of text hidden as it arrives: see {@link heldStream}. */
@@ -1001,103 +1114,254 @@ export interface HeldStream {
   end(text?: string): string;
 }
 
-/** The chars of a held run a part still to come can start in: one short of a part. */
-const HELD_TAIL = HELD_PART - 1;
-/**
- * A terminal escape still being written: a bare ESC, a CSI short of its final
- * byte, a charset selection short of its set. The params are capped as no
- * terminal's are longer, so a stream of digits after `ESC [` is not held back.
- */
-// eslint-disable-next-line no-control-regex
-const PARTIAL_ESCAPE = /^\x1b(?:\[[0-?]{0,32}[ -/]{0,4}|[()])?$/;
-
-/** Where `text` ends inside an escape still being written, or its length when it does not. */
-function partialEscapeAt(text: string): number {
-  const at = text.lastIndexOf('\x1b');
-  return at >= 0 && PARTIAL_ESCAPE.test(text.slice(at)) ? at : text.length;
+/** A token read and not yet shown: an escape whole, or one char of the text. */
+interface Token {
+  text: string;
+  /** Where it ends in what the stream has read. */
+  end: number;
+  /** Its place among the chars a terminal shows, or -1 for an escape. */
+  shown: number;
 }
 
+/** An escape still being read, as {@link TERMINAL_ESCAPE} reads it. */
+type OpenEscape =
+  | { kind: 'esc' | 'charset' }
+  | { kind: 'csi'; params: number; intermediates: number }
+  | { kind: 'osc'; payload: number; escaped: boolean };
+
+const inRange = (c: string, low: number, high: number): boolean => c.charCodeAt(0) >= low && c.charCodeAt(0) <= high;
+
 /**
- * A stream's text, hidden as it arrives (ADR-0061, H1): each write shows what
- * comes before the point past which what follows can no longer change how it
- * is hidden, {@link hideHeld} applied, and holds back the rest to read with
- * what follows.
+ * A stream's text, hidden as it arrives (ADR-0061, H1): what it shows,
+ * however it was split, is what {@link hideHeld} shows of the whole.
  *
- * A part of a held value can still be completing in the last
- * {@link HELD_PART} - 1 characters, where they read as the start of one, so
- * they are held back. So is an escape the text ends inside: until it ends,
- * its bytes are not known to be no part of the text, and a value coloured
- * mid-value would read as two pieces too short to hide. Text that can start
- * no part, a line's newline among it, is shown at once: a script that prints
+ * It reads each char once. A token is shown once no part still to come can
+ * reach it: a part can only have begun in the last {@link HELD_TAIL} chars,
+ * read raw or as a terminal shows them, and only where they begin one. An
+ * escape the text ends inside is held back until it ends, as until then its
+ * bytes are not known to be no part of the text; escapes are bounded
+ * ({@link TERMINAL_ESCAPE}), so that is bounded too. Text that can start no
+ * part, a line's newline among it, is shown at once: a script that prints
  * `ready` and waits is not kept waiting.
  *
- * A run of held text that reaches the end can still grow, so it is held back
- * whole and becomes one marker however the stream was split. It is kept as
- * its length and its last chars, all a part that continues it can start in,
- * so a long run streamed in small writes is read once, not once per write.
+ * A run of held text that reaches what is shown can still grow, so it is
+ * kept as its length alone, and the escapes after it, until a char that is no
+ * part of it: it becomes one marker however the stream was split.
  *
  * `held` is read on each write: a value held after the stream started is
  * hidden from then on.
  */
 export function heldStream(held: Iterable<string>): HeldStream {
-  /** The held run that reaches the end of what has been read: its length, and its last {@link HELD_TAIL} chars. */
-  let run: { chars: number; tail: string } | null = null;
-  /** The text after the run, or after the last shown, held back. */
-  let rest = '';
+  let parts: ReadonlySet<string> = new Set();
+  /** Chars read, raw, and the last {@link HELD_PART} of them. */
+  let read = 0;
+  let readTail = '';
+  /** Chars a terminal shows, the last {@link HELD_PART} of them, and where each sits in what was read. */
+  let shown = 0;
+  let shownTail = '';
+  let shownAt: number[] = [];
+  /** For each char read and not yet let go, whether a part holds it; `hid[0]` is char `hidFrom`. */
+  let hid: number[] = [];
+  let hidFrom = 0;
+  /** Where the tokens let go end: no part can reach before it. */
+  let released = 0;
+  let tokens: Token[] = [];
+  let first = 0;
+  let escape: OpenEscape | null = null;
+  let escapeText = '';
+  /** The run of hidden chars let go and not yet shown, and the escapes since its last part. */
+  let run = 0;
+  let gap = '';
+  let out = '';
 
-  const read = (text: string, last: boolean): string => {
-    const raw = rest + text;
-    const values = heldValues(held);
-    if (values.length === 0 && run === null) {
-      rest = '';
-      return raw;
-    }
-    const partial = last ? raw.length : partialEscapeAt(raw);
-    const { plain, at } = withoutEscapes(raw.slice(0, partial));
-    // The run's tail read on into what follows: no part is shorter than the run's tail and one more char.
-    const lead = run?.tail ?? '';
-    const whole = lead + plain;
-    const rawAt = (i: number): number => (i === whole.length ? partial : at[i - lead.length]);
-    const rawAfter = (i: number): number => (i === lead.length ? 0 : at[i - lead.length - 1] + 1);
-    const spans = heldSpans(whole, values);
-    let first = 0;
-    let runEnd = lead.length;
-    if (run && spans[0] && spans[0].start <= lead.length) {
-      runEnd = spans[0].end;
-      first = 1;
-    }
-    // A part still to come takes at least one character after the text, so it starts at or past `cut`.
-    let cut = whole.length;
-    if (!last) {
-      for (let start = Math.max(0, whole.length - HELD_TAIL); start < whole.length; start++) {
-        const begun = whole.slice(start);
-        if (values.some((value) => value.includes(begun))) {
-          cut = start;
-          break;
-        }
-      }
-    }
-    if (run && !last && runEnd >= cut) {
-      run = { chars: run.chars + runEnd - lead.length, tail: whole.slice(Math.max(0, runEnd - HELD_TAIL), runEnd) };
-      rest = raw.slice(rawAfter(runEnd));
-      return '';
-    }
-    let shown = run ? marker('secret', run.chars + runEnd - lead.length) : '';
-    const from = rawAfter(runEnd);
-    run = null;
-    const open = last ? undefined : spans.slice(first).find((span) => span.end >= cut);
-    if (open) {
-      shown += hideHeld(raw.slice(from, rawAt(open.start)), values);
-      run = { chars: open.end - open.start, tail: whole.slice(Math.max(open.start, open.end - HELD_TAIL), open.end) };
-      rest = raw.slice(rawAfter(open.end));
-      return shown;
-    }
-    shown += hideHeld(raw.slice(from, rawAt(cut)), values);
-    rest = raw.slice(rawAt(cut));
-    return shown;
+  const mark = (at: number): void => {
+    if (at >= released) hid[at - hidFrom] = 1;
   };
 
-  return { write: (text) => read(text, false), end: (text = '') => read(text, true) };
+  const take = (token: Token): void => {
+    tokens.push(token);
+  };
+
+  const takeShown = (c: string, at: number): void => {
+    shownTail = (shownTail + c).slice(-HELD_PART);
+    shownAt.push(at);
+    if (shownAt.length > HELD_PART) shownAt.shift();
+    if (shownTail.length === HELD_PART && parts.has(shownTail)) for (const i of shownAt) mark(i);
+    take({ text: c, end: at + 1, shown: shown++ });
+  };
+
+  /** An escape that turned out to be none: its chars are text, and `c`, at `at`, is read afresh. */
+  const unescape = (c: string, at: number): void => {
+    const from = at - escapeText.length;
+    const chars = escapeText;
+    escape = null;
+    escapeText = '';
+    for (let k = 0; k < chars.length; k++) takeShown(chars[k], from + k);
+    tokenize(c, at);
+  };
+
+  const closeEscape = (end: number): void => {
+    take({ text: escapeText, end, shown: -1 });
+    escape = null;
+    escapeText = '';
+  };
+
+  const tokenize = (c: string, at: number): void => {
+    if (escape === null) {
+      if (c === '\x1b') {
+        escape = { kind: 'esc' };
+        escapeText = c;
+      } else {
+        takeShown(c, at);
+      }
+      return;
+    }
+    switch (escape.kind) {
+      case 'esc':
+        if (c === '[') escape = { kind: 'csi', params: 0, intermediates: 0 };
+        else if (c === ']') escape = { kind: 'osc', payload: 0, escaped: false };
+        else if (c === '(' || c === ')') escape = { kind: 'charset' };
+        else if (c !== '=' && c !== '>') return unescape(c, at);
+        escapeText += c;
+        if (c === '=' || c === '>') closeEscape(at + 1);
+        return;
+      case 'charset':
+        if (!'AB012'.includes(c)) return unescape(c, at);
+        escapeText += c;
+        return closeEscape(at + 1);
+      case 'csi':
+        if (inRange(c, 0x30, 0x3f) && escape.intermediates === 0 && escape.params < CSI_PARAMS) escape.params++;
+        else if (inRange(c, 0x20, 0x2f) && escape.intermediates < CSI_INTERMEDIATES) escape.intermediates++;
+        else if (!inRange(c, 0x40, 0x7e)) return unescape(c, at);
+        escapeText += c;
+        if (inRange(c, 0x40, 0x7e)) closeEscape(at + 1);
+        return;
+      case 'osc':
+        if (escape.escaped) {
+          if (c === '\\') {
+            escapeText += c;
+            return closeEscape(at + 1);
+          }
+          // The payload ended before an ESC that is no terminator: it starts what follows.
+          escapeText = escapeText.slice(0, -1);
+          closeEscape(at - 1);
+          tokenize('\x1b', at - 1);
+          return tokenize(c, at);
+        }
+        if (c === '\x07') {
+          escapeText += c;
+          return closeEscape(at + 1);
+        }
+        if (c === '\x1b') escape.escaped = true;
+        else if (escape.payload < OSC_PAYLOAD) escape.payload++;
+        else {
+          closeEscape(at);
+          return tokenize(c, at);
+        }
+        escapeText += c;
+        return;
+    }
+  };
+
+  /** Where a part still to come can start, in `tail`, the last chars of `length`: past them when nothing there begins one. */
+  const frontier = (tail: string, length: number, begun: ReadonlySet<string>): number => {
+    for (let n = Math.min(HELD_TAIL, tail.length); n > 0; n--) if (begun.has(tail.slice(-n))) return length - n;
+    return length;
+  };
+
+  /** Show the tokens no part still to come can reach: all of them once the stream has ended. */
+  const release = (readFrom: number, shownFrom: number): void => {
+    while (first < tokens.length) {
+      const token = tokens[first];
+      if (token.end > readFrom || token.shown >= shownFrom) break;
+      first++;
+      let count = 0;
+      for (let at = token.end - token.text.length; at < token.end; at++) count += hid[at - hidFrom] ?? 0;
+      released = token.end;
+      if (count > 0) {
+        run += count;
+        gap = '';
+      } else if (run === 0) {
+        out += token.text;
+      } else if (token.shown < 0) {
+        gap += token.text;
+      } else {
+        out += marker('secret', run) + gap + token.text;
+        run = 0;
+        gap = '';
+      }
+    }
+    // Let go of what is shown, now and then rather than on each token, so a long stream is read once.
+    if (first > 1024 && first * 2 > tokens.length) {
+      tokens = tokens.slice(first);
+      first = 0;
+    }
+    if (released - hidFrom > 1024 && (released - hidFrom) * 2 > hid.length) {
+      hid = hid.slice(released - hidFrom);
+      hidFrom = released;
+    }
+  };
+
+  const write = (text: string): string => {
+    const derived = heldParts(held);
+    parts = derived.parts;
+    if (parts.size === 0 && escape === null && first === tokens.length && run === 0) {
+      // Nothing held, nothing held back: a value held later is read from where it starts.
+      readTail = '';
+      shownTail = '';
+      shownAt = [];
+      return text;
+    }
+    for (let k = 0; k < text.length; k++) {
+      const at = read++;
+      hid.push(0);
+      readTail = (readTail + text[k]).slice(-HELD_PART);
+      if (readTail.length === HELD_PART && parts.has(readTail)) for (let i = at - HELD_TAIL; i <= at; i++) mark(i);
+      tokenize(text[k], at);
+    }
+    release(frontier(readTail, read, derived.begun), frontier(shownTail, shown, derived.begun));
+    const shownNow = out;
+    out = '';
+    return shownNow;
+  };
+
+  const end = (text = ''): string => {
+    let shownNow = write(text);
+    if (escape !== null) {
+      // An escape the text ends inside: an OSC ends with it, any other is text.
+      if (escape.kind === 'osc') {
+        const escaped = escape.escaped;
+        if (escaped) escapeText = escapeText.slice(0, -1);
+        closeEscape(read - (escaped ? 1 : 0));
+        if (escaped) takeShown('\x1b', read - 1);
+      } else {
+        const from = read - escapeText.length;
+        const chars = escapeText;
+        escape = null;
+        escapeText = '';
+        for (let k = 0; k < chars.length; k++) takeShown(chars[k], from + k);
+      }
+    }
+    release(Infinity, Infinity);
+    if (run > 0) out += marker('secret', run) + gap;
+    shownNow += out;
+    read = 0;
+    readTail = '';
+    shown = 0;
+    shownTail = '';
+    shownAt = [];
+    hid = [];
+    hidFrom = 0;
+    released = 0;
+    tokens = [];
+    first = 0;
+    run = 0;
+    gap = '';
+    out = '';
+    return shownNow;
+  };
+
+  return { write, end };
 }
 
 /** Text as a terminal shows it, its escapes dropped: what agent text is redacted as. */

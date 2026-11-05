@@ -172,7 +172,8 @@ class PlainTextChannel {
     this.written.set(runId, '');
   }
 
-  private flush(): void {
+  /** The open run's held line, written as it stands: nothing more of it will come, as when the process exits. */
+  flush(): void {
     if (!this.pending || this.open === null) return;
     this.say(this.open, this.pending);
     this.pending = '';
@@ -285,6 +286,13 @@ export class StructuredSession extends AbstractRunnerSession {
   private generation = 0;
   private output = '';
   private readonly text: PlainTextChannel;
+  /**
+   * The channel's writes, held secrets hidden as one stream rather than write
+   * by write: the channel writes a line at a time and flushes one run's open
+   * line when another speaks, so writes that each hold under a part of a value
+   * meet in the output with nothing between them (ADR-0061, H1).
+   */
+  private readonly shownText = this.secrets.stream();
   private state: 'working' | 'idle' = 'idle';
   private turn: OpenTurn | null = null;
   /** A `task_complete` report waiting for its turn to close; the verdict is published then. */
@@ -323,13 +331,7 @@ export class StructuredSession extends AbstractRunnerSession {
     this.startOptions = launch.startOptions;
     // What the runner says is written as it said it, held secrets hidden, before
     // any reader keeps or cuts it (ADR-0061, H1).
-    this.text = new PlainTextChannel((text) => {
-      const shown = this.secrets.hide(text);
-      this.say(() => {
-        this.output += shown;
-        this.outputEmitter.emit('output', shown);
-      });
-    });
+    this.text = new PlainTextChannel((text) => this.show(this.shownText.write(text)));
   }
 
   /**
@@ -470,7 +472,7 @@ export class StructuredSession extends AbstractRunnerSession {
   private discardFirstTurn(adapter: TaskModeAgentAdapter): void {
     if (this.turn) this.turn.ended = true;
     this.withdrawPermissions(adapter);
-    this.text.endTurn();
+    this.endText();
     this.discardCompletion();
     this.turn = null;
     this.sending = null;
@@ -492,6 +494,10 @@ export class StructuredSession extends AbstractRunnerSession {
     // a queued message publish before exit wins.
     this.exiting = true;
     this.undeliverQueued();
+    // Its text is out before its report and its exit: no turn end may follow a
+    // kill. The open line goes first, so the stream ends on all the text there is.
+    this.text.flush();
+    this.show(this.shownText.end());
     this.flushCompletion();
     this.ended.abort();
     this.revokeTools();
@@ -1032,7 +1038,7 @@ export class StructuredSession extends AbstractRunnerSession {
   private endTurn(turn: OpenTurn, reason: StructuredTurnEnd): void {
     if (turn.ended) return;
     turn.ended = true;
-    this.text.endTurn();
+    this.endText();
     this.emitEvent({ type: 'turn_end', reason });
     // The report waits for the turn to close, so its tool reply lands first.
     this.flushCompletion();
@@ -1063,6 +1069,20 @@ export class StructuredSession extends AbstractRunnerSession {
 
   private emitEvent(event: StructuredEvent): void {
     for (const shown of this.secrets.shownEvents(event)) this.say(() => this.structuredEmitter.emit('event', shown));
+  }
+
+  /** The turn's text written out, what the stream held back with it, so a reader told the turn ended has all of it. */
+  private endText(): void {
+    this.text.endTurn();
+    this.show(this.shownText.end());
+  }
+
+  private show(shown: string): void {
+    if (!shown) return;
+    this.say(() => {
+      this.output += shown;
+      this.outputEmitter.emit('output', shown);
+    });
   }
 
   /** Said now, or kept while the first turn is the attach check. */
