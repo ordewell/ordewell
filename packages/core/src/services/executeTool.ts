@@ -1,6 +1,6 @@
 import { IFileSystem, GrepOptions, GrepOutputMode, ToolOutcome } from '../interfaces/IFileSystem';
 import { IWebFetcher } from '../interfaces/IWebFetcher';
-import { redactSecrets } from '../utils/redactSecrets';
+import { redactSourceText } from '../utils/redactSecrets';
 
 const GREP_OUTPUT_MODES: GrepOutputMode[] = ['content', 'files', 'count'];
 
@@ -60,7 +60,7 @@ export async function executeTool(
   signal?: AbortSignal,
 ): Promise<ToolOutcome> {
   const outcome = await runTool(name, args, fs, fetcher, signal);
-  return { ...outcome, output: redactSecrets(outcome.output) };
+  return { ...outcome, output: redactSourceText(outcome.output) };
 }
 
 async function runTool(

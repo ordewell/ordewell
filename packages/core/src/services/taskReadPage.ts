@@ -1,5 +1,5 @@
 import { OUTPUT_LINES_DEFAULT, OUTPUT_LINES_MAX, OUTPUT_TAIL_MAX_CHARS } from './TaskQuery';
-import { redactSecrets } from '../utils/redactSecrets';
+import { redactSourceText } from '../utils/redactSecrets';
 
 export interface TaskReadPageOptions {
   lines?: number;
@@ -7,7 +7,7 @@ export interface TaskReadPageOptions {
 }
 
 export function taskReadPage(text: string, { lines, since }: TaskReadPageOptions) {
-  const clean = redactSecrets(text);
+  const clean = redactSourceText(text);
   const start = Math.min(since ?? 0, clean.length);
   const rest = clean.slice(start);
   const maxLines = Math.min(lines ?? OUTPUT_LINES_DEFAULT, OUTPUT_LINES_MAX);

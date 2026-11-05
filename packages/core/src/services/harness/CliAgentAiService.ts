@@ -30,7 +30,7 @@ import type { SkillLookup } from '../taskSkills';
 import { PLANNER_TURN_ENDED } from '../plannerTools';
 import { settleReply, type ReplyAttempt } from '../settleReply';
 import { ReplySplitter } from '../replyStream';
-import { redactSecrets } from '../../utils/redactSecrets';
+import { redactSourceText } from '../../utils/redactSecrets';
 import { abortScope } from '../../utils/abortScope';
 import { providerForRunner, runnerForProvider } from '../ProviderRegistry';
 import { recordRunnerAuth, signedOutFromFailure } from '../runnerAuth';
@@ -655,7 +655,7 @@ export class CliAgentAiService implements IAiService {
       // provider half of the leak is already outside our reach — but the copy
       // this step persists into the session file is ours, and it must not hold
       // credentials in plaintext.
-      const output = redactSecrets(rawOutput);
+      const output = redactSourceText(rawOutput);
       const call = pendingCalls.get(id);
       pendingCalls.delete(id);
       const subagentId = call?.subagentId ?? reportedBy;

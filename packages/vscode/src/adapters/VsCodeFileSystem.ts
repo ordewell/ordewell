@@ -14,6 +14,7 @@ import {
   filterFallbackByAnchoredInclude,
   applyHeadLimit,
   formatSearchOutput,
+  headLines,
   researchToolsPath,
   withPath,
   SEARCH_EXCLUSIONS,
@@ -300,7 +301,9 @@ export class VsCodeFileSystem extends BaseFileSystem {
       const detail = err || out || `exited with code ${result.code}`;
       // A failing command is still research — the failure output is usually
       // the answer the model was diagnosing toward.
-      return { success: false, output: `Command exited ${result.code}:\n${detail.slice(0, 20_000)}`, truncated: detail.length > 20_000, ...(result.timedOut ? { timedOut: true } : {}), ...(result.signal ? { signal: result.signal } : {}) };
+      // Whole lines only: executeTool redacts what this returns, and a cut inside
+      // a line can leave a credential's value with no name to recognise it by.
+      return { success: false, output: `Command exited ${result.code}:\n${headLines(detail, 20_000)}`, truncated: detail.length > 20_000, ...(result.timedOut ? { timedOut: true } : {}), ...(result.signal ? { signal: result.signal } : {}) };
     }
 
     const combined = err ? `${out}\n[stderr]\n${err}` : out;

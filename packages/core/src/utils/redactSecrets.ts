@@ -1,12 +1,22 @@
 /**
- * Credential redaction for research tool output.
+ * Credential redaction, in two modes named for the text they take.
  *
- * Applied once, where a research tool's result is constructed (see
- * `executeTool`), so a single call covers every sink that result reaches: the
- * persisted session file, the tool result sent to the model provider, the
- * fallback plan prompt, and the live progress stream. Redacting per-sink would
- * mean the provider payload and the session file could drift apart, and a
- * third party would end up with key material the disk copy had scrubbed.
+ * {@link redactSourceText} is for text that may be source code: research tool
+ * output, applied once where a result is constructed (see `executeTool`), so a
+ * single call covers every sink that result reaches: the persisted session
+ * file, the tool result sent to the model provider, the fallback plan prompt,
+ * and the live progress stream. Redacting per-sink would mean the provider
+ * payload and the session file could drift apart, and a third party would end
+ * up with key material the disk copy had scrubbed.
+ *
+ * {@link redactAgentText} is for what a runner wrote: its stderr, its JSON-RPC
+ * errors. That text is never code to keep byte for byte, and a CLI that dumps
+ * its settings prints keys of any shape, so a value under a credential-named
+ * key goes whatever it looks like.
+ *
+ * Both take text whole. A cut made before redaction can part a name from its
+ * value, or a key's BEGIN line from its body, and the part kept then matches
+ * no rule; cut what these return instead (see `LineTail`).
  *
  * Secrets are replaced with a visible marker carrying the length of what was
  * removed, not deleted: the planner still needs to reason about the shape of
@@ -19,11 +29,15 @@
  * annotations, paths, URLs, numbers and language keywords are all left intact.
  */
 
+import { isCredentialVariable } from '../services/harness/credentialEnv';
+
 export const REDACTION_MARKER = 'REDACTED';
 
 function marker(kind: string, length: number): string {
   return `[${REDACTION_MARKER} ${kind}: ${length} chars]`;
 }
+
+const MARKER_ONLY = new RegExp(String.raw`^\[${REDACTION_MARKER} [a-z ]+: \d+ chars\]$`);
 
 /**
  * Research output is line-oriented and usually arrives prefixed: `read_file`
@@ -94,19 +108,86 @@ const PROVIDER_KEY_PATTERNS: RegExp[] = [
 const CLOUD_ACCESS_KEY_ID =
   /(?<![A-Za-z0-9])(?:A3T[A-Z0-9]{2}|AKIA|ASIA|ABIA|ACCA|AGPA|AIDA|AIPA|ANPA|ANVA|AROA)[A-Z0-9]{16}(?![A-Za-z0-9])/g;
 
-const PEM_BEGIN = /-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?)-----/;
+const PRIVATE_KEY_LABEL = String.raw`((?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?)`;
+const PEM_BEGIN = new RegExp(`-----BEGIN ${PRIVATE_KEY_LABEL}-----`);
+const PEM_END = new RegExp(`-----END ${PRIVATE_KEY_LABEL}-----`);
 /** Base64 payload, and the `Proc-Type:`/`DEK-Info:` headers of an encrypted key. */
 const PEM_BODY_LINE = /^[A-Za-z0-9+/=:,.\- \t]*$/;
+/**
+ * Stricter than {@link PEM_BODY_LINE}, for walking up from an END line with no
+ * BEGIN to bound the walk: `debug: loading extension manifest` passes the
+ * looser test.
+ */
+const BASE64_LINE = /^[A-Za-z0-9+/]+={0,2}$/;
+/** Below a body line's usual length, so that a one-word line above the key is not taken for part of it. */
+const MIN_BODY_LINE = 16;
+
+/** `\n` as JSON escapes it, once or more. */
+const ESCAPED_BREAK = String.raw`\\+[nr]`;
+const INLINE_BODY_CHARS = String.raw`A-Za-z0-9+/=:,.\- \t\\`;
+/**
+ * A key held on one line: `\n`-escaped in a JSON value (a service-account
+ * file's `private_key`), or flattened with spaces into an environment
+ * variable. The body runs to its END, or, cut short, to the first character no
+ * body has.
+ */
+const INLINE_PEM = new RegExp(
+  String.raw`(-----BEGIN ${PRIVATE_KEY_LABEL}-----(?:${ESCAPED_BREAK}|[ \t])+)([${INLINE_BODY_CHARS}]*?)(?=${ESCAPED_BREAK}-----END \2-----|-----END|[^${INLINE_BODY_CHARS}]|$)`,
+  'g',
+);
+const ESCAPED_PEM_END = new RegExp(String.raw`${ESCAPED_BREAK}-----END ${PRIVATE_KEY_LABEL}-----`, 'g');
+const INLINE_BODY_CHAR = /[A-Za-z0-9+/=\\]/;
+
+const bodyLength = (body: string) => body.replace(new RegExp(ESCAPED_BREAK, 'g'), '').replace(/\s/g, '').length;
+
+function redactInlineBodies(text: string): string {
+  return text.replace(INLINE_PEM, (full, head: string, _label: string, body: string) => {
+    const chars = bodyLength(body);
+    if (chars === 0) return full;
+    return `${head}${marker('private key', chars)}${/[ \t]*$/.exec(body)?.[0] ?? ''}`;
+  });
+}
+
+/** The escaped body above an escaped END whose BEGIN was cut off: walked back to by hand, which keeps it linear. */
+function redactInlineBodiesBeforeEnd(text: string): string {
+  let out = '';
+  let from = 0;
+  for (const end of text.matchAll(ESCAPED_PEM_END)) {
+    let start = end.index;
+    while (start > from && INLINE_BODY_CHAR.test(text[start - 1])) start--;
+    const chars = bodyLength(text.slice(start, end.index));
+    if (chars < MIN_BODY_LINE) continue;
+    out += text.slice(from, start) + marker('private key', chars);
+    from = end.index;
+  }
+  return out + text.slice(from);
+}
+
+/** Replace the base64 lines that end `out` with one marker: a body whose BEGIN line was cut off. */
+function redactBodyAbove(out: string[]): void {
+  let lines = 0;
+  let chars = 0;
+  while (lines < out.length) {
+    const content = out[out.length - 1 - lines].replace(LINE_PREFIX_ANCHORED, '').trim();
+    if (!BASE64_LINE.test(content) || (lines > 0 && content.length < MIN_BODY_LINE)) break;
+    chars += content.length;
+    lines++;
+  }
+  if (lines > 0) out.splice(out.length - lines, lines, marker('private key', chars));
+}
 
 /**
  * Drop the body of every PEM private key block, keeping its `BEGIN`/`END`
  * lines. Done line by line rather than with one block-spanning regex because a
  * paginated `read_file` truncates mid-key: the block still carries key
  * material, but there is no `END` line to match against, and a regex reaching
- * for the end of the text would swallow whatever followed the truncation.
+ * for the end of the text would swallow whatever followed the truncation. A
+ * read that starts mid-key, or a tail whose BEGIN was evicted, has the
+ * opposite problem: an `END` line with the body above it.
  */
 function redactPrivateKeyBlocks(text: string): string {
-  if (!PEM_BEGIN.test(text)) return text;
+  if (!text.includes('PRIVATE KEY')) return text;
+  text = redactInlineBodiesBeforeEnd(redactInlineBodies(text));
 
   const out: string[] = [];
   let label: string | null = null;
@@ -121,9 +202,11 @@ function redactPrivateKeyBlocks(text: string): string {
 
   for (const line of text.split('\n')) {
     if (label === null) {
+      if (PEM_END.test(line)) redactBodyAbove(out);
       out.push(line);
       const begun = PEM_BEGIN.exec(line);
-      if (begun) label = begun[1];
+      // A body on the BEGIN line itself was an inline key, already redacted.
+      if (begun && !/[A-Za-z0-9+/]/.test(line.slice(begun.index + begun[0].length))) label = begun[1];
       continue;
     }
     const content = line.replace(LINE_PREFIX_ANCHORED, '');
@@ -142,6 +225,73 @@ function redactPrivateKeyBlocks(text: string): string {
   closeBlock();
 
   return out.join('\n');
+}
+
+/**
+ * `Authorization: Bearer …`, in a header, a curl line or a log. The token
+ * test keeps the scheme words in prose (`Basic authentication`) as they are.
+ */
+const AUTH_SCHEME_CREDENTIAL = /(?<![A-Za-z0-9])(Bearer|Basic)([^\S\n]+)([A-Za-z0-9\-._~+/]{8,}=*)/gi;
+
+function looksLikeToken(value: string): boolean {
+  return /\d/.test(value) || (/[a-z]/.test(value) && /[A-Z]/.test(value)) || /[+/=]/.test(value);
+}
+
+/**
+ * A key and what assigns it: `"KEY":`, `key =`, `:key =>`, with the key's
+ * quotes escaped any number of times, as JSON inside JSON escapes them.
+ */
+const ASSIGNED_NAME = /(?<![A-Za-z0-9_\\])(\\*["'`])?([A-Za-z_][A-Za-z0-9_.-]*)(\\*["'`])?[ \t]*(=>|:|=(?!=))[ \t]*/g;
+/** Where an unquoted value assigned with `=` ends. */
+const BARE_VALUE_END = /[\s,;&"'`)}\]\\]/;
+/** Names that carry a credential however a harness spells its own login, which {@link isCredentialVariable} leaves out. */
+const CREDENTIAL_KEY_SUFFIX = /(?:^|_)(?:API_?KEY|TOKEN|SECRET|AUTHORIZATION)$/;
+
+function credentialNamed(key: string): boolean {
+  const name = key
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
+    .replace(/[-.]/g, '_')
+    .toUpperCase();
+  return isCredentialVariable(name) || CREDENTIAL_KEY_SUFFIX.test(name);
+}
+
+/**
+ * The value at `at`: quoted, up to the same quote escaped the same way, or the
+ * end of its line when it was cut first; or, where `bare` allows, unquoted.
+ */
+function valueAt(text: string, at: number, bare: boolean): { start: number; end: number } | undefined {
+  let open = at;
+  while (text[open] === '\\') open++;
+  if (open < text.length && `"'\``.includes(text[open])) {
+    const close = text.slice(at, open + 1);
+    let end = open + 1;
+    while (end < text.length && text[end] !== '\n' && !text.startsWith(close, end)) {
+      end += close.length === 1 && text[end] === '\\' && text[end + 1] !== '\n' ? 2 : 1;
+    }
+    return { start: open + 1, end: Math.min(end, text.length) };
+  }
+  if (open > at || !bare) return undefined;
+  let end = at;
+  while (end < text.length && !BARE_VALUE_END.test(text[end])) end++;
+  return { start: at, end };
+}
+
+/** Every quoted or `=`-assigned value under a credential-named key, whatever its shape. */
+function redactCredentialNamedValues(text: string): string {
+  const names = new RegExp(ASSIGNED_NAME);
+  let out = '';
+  let from = 0;
+  for (let found = names.exec(text); found; found = names.exec(text)) {
+    const value = valueAt(text, found.index + found[0].length, found[4] !== ':');
+    if (!value || value.end === value.start || !credentialNamed(found[2])) continue;
+    const raw = text.slice(value.start, value.end);
+    if (MARKER_ONLY.test(raw)) continue;
+    out += text.slice(from, value.start) + marker('credential', raw.length);
+    from = value.end;
+    names.lastIndex = value.end;
+  }
+  return out + text.slice(from);
 }
 
 const NUMERIC = /^[-+]?\d+(?:\.\d+)?$/;
@@ -197,14 +347,29 @@ function trimTrailingPunctuation(value: string): { value: string; tail: string }
 const MIN_HELD_LENGTH = 8;
 
 /**
- * Replace credential material in `text` with visible markers. Safe to call on
- * any tool output, including output that contains no secrets — text with no
- * match is returned unchanged.
+ * Replace credential material in text that may be source code with visible
+ * markers. Safe to call on any tool output, including output that contains no
+ * secrets — text with no match is returned unchanged. A value that reads as
+ * code (`password: passwordField`) is left as it is.
  *
  * `held` are values known to be secret, replaced wherever they occur: a key
  * Ordewell handed a process need not look like any key the rules know.
  */
-export function redactSecrets(text: string, held: Iterable<string> = []): string {
+export function redactSourceText(text: string, held: Iterable<string> = []): string {
+  return redact(text, held, false);
+}
+
+/**
+ * Replace credential material in text a runner wrote — stderr, a JSON-RPC
+ * error — with visible markers: everything {@link redactSourceText} replaces,
+ * and every quoted or `=`-assigned value under a credential-named key,
+ * whatever its shape.
+ */
+export function redactAgentText(text: string, held: Iterable<string> = []): string {
+  return redact(text, held, true);
+}
+
+function redact(text: string, held: Iterable<string>, agentText: boolean): string {
   if (!text) return text;
 
   let out = text;
@@ -213,6 +378,8 @@ export function redactSecrets(text: string, held: Iterable<string> = []): string
   for (const value of values) out = out.split(value).join(marker('secret', value.length));
 
   out = redactPrivateKeyBlocks(out);
+
+  if (agentText) out = redactCredentialNamedValues(out);
 
   out = out.replace(DOTENV_CREDENTIAL, (full, head: string, quote: string, value: string) => {
     if (looksLikeCode(value) || value.startsWith('$')) return full;
@@ -245,11 +412,15 @@ export function redactSecrets(text: string, held: Iterable<string> = []): string
     // A single camelCase word or a lowercase slug is a variable reference or a
     // setting name (`vscodeApiKeyKey: 'qwenApiKey'`), never key material — and
     // config-shaped code is full of both. The dotenv rule still catches the one
-    // real case this gives up, `PASSWORD=correcthorse`.
+    // real case this gives up, `PASSWORD=correcthorse`; in agent text, the
+    // credential-named rule above already took every value this lets through.
     if (IDENTIFIER.test(value) || SLUG.test(value)) return full;
     if (!UNAMBIGUOUS_CREDENTIAL_NAME.test(head) && !looksLikeKeyMaterial(value)) return full;
     return `${head}${quote}${marker('credential', value.length)}${quote}${tail}`;
   });
+
+  out = out.replace(AUTH_SCHEME_CREDENTIAL, (full, scheme: string, space: string, token: string) =>
+    looksLikeToken(token) ? `${scheme}${space}${marker('token', token.length)}` : full);
 
   for (const pattern of PROVIDER_KEY_PATTERNS) {
     out = out.replace(pattern, (hit: string) => marker('api key', hit.length));
