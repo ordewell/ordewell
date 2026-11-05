@@ -87,13 +87,24 @@ describe('RunnerInstallation.runnerUsability', () => {
   it('reports a task-only runner usable, with the login command its manifest declares and no verdict to ask', async () => {
     const exec: ExecImpl = vi.fn(async () => ({ stdout: '1.0.105' }));
     const authExec: RunnerAuthExec = vi.fn(async () => ({ code: 0, stdout: '', stderr: '' }));
-    const inst = new RunnerInstallation(registryWith(COPILOT_CLI_MANIFEST), exec, Date.now, { authExec });
+    // The host's PATH is not this test's subject: on Windows it would be searched for a real copilot.
+    const inst = new RunnerInstallation(registryWith(COPILOT_CLI_MANIFEST), exec, Date.now, { authExec, launch: POSIX });
 
     expect(await inst.runnerUsability('copilot-cli')).toEqual({
       usable: true,
       auth: { state: 'unknown', loginCommand: ['copilot', 'login'] },
     });
     expect(authExec).not.toHaveBeenCalled();
+  });
+
+  it('reports usable on Windows a task-only runner npm installed as a .cmd shim', async () => {
+    const exec: ExecImpl = vi.fn(async () => ({ stdout: '1.0.105' }));
+    const inst = new RunnerInstallation(registryWith(COPILOT_CLI_MANIFEST), exec, Date.now, {
+      authExec: vi.fn(async () => ({ code: 0, stdout: '', stderr: '' })),
+      launch: { platform: 'win32', resolvePath: async () => 'C:\\npm', exists: (candidate) => candidate === 'C:\\npm\\copilot.cmd', comSpec: () => 'C:\\Windows\\System32\\cmd.exe' },
+    });
+
+    expect((await inst.runnerUsability('copilot-cli')).usable).toBe(true);
   });
 
   it('names the missing binary like the planner check does', async () => {
