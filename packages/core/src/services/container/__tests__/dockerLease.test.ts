@@ -55,10 +55,20 @@ const SIDECAR_READY = "console.log('ready 3128'); process.stdin.resume(); proces
 /** A container has a loopback of its own, so what its relay listens on is free whatever this host holds. */
 const OWN_LOOPBACK = "const { Server } = require('net'); Server.prototype.listen = ((listen) => function (_port, ...rest) { return listen.call(this, 0, ...rest); })(Server.prototype.listen);";
 
+/**
+ * A command as the engine reads it: `-e NAME` takes NAME's value from the CLI's
+ * environment, so a test reading a value finds it where a container would. What
+ * `ps` shows is `args`; this is what the container got.
+ */
+const asRead = (args: readonly string[], env: Readonly<Record<string, string>> = {}): string[] =>
+  args.map((arg, at) => (args[at - 1] === '-e' && Object.hasOwn(env, arg) ? `${arg}=${env[arg]}` : arg));
+
+interface Spawned { args: readonly string[]; env: Readonly<Record<string, string>>; seen: string[]; process: ChildProcess }
+
 class RecordingCli implements DockerCli {
   calls: { args: readonly string[]; opts?: DockerCall }[] = [];
-  entries: { args: readonly string[]; process: ChildProcess }[] = [];
-  sidecars: { args: readonly string[]; process: ChildProcess }[] = [];
+  entries: Spawned[] = [];
+  sidecars: Spawned[] = [];
   probe: Partial<ProbeFindings> = {};
   /** Every probe it was told to run, as it was told. */
   asked: ProbeAsked[] = [];
@@ -69,14 +79,15 @@ class RecordingCli implements DockerCli {
 
   async call(args: readonly string[], opts?: DockerCall): Promise<DockerResult> {
     this.calls.push({ args, ...(opts ? { opts } : {}) });
-    const line = args.join(' ');
+    const seen = asRead(args, opts?.env);
+    const line = seen.join(' ');
     this.heard(line);
     const set = this.answers.find(({ match }) => match.test(line));
     if (set) return { ...OK, ...set.result };
     if (line.startsWith('context inspect')) return { ...OK, stdout: 'unix:///var/run/docker.sock\n' };
     if (line.startsWith('info')) return { ...OK, stdout: `linux|2|${16 * 1024 ** 3}\n` };
     if (args.includes('rm') && args[0] === 'rm') for (const entry of this.entries) entry.process.kill('SIGKILL');
-    const told = args.find((arg) => arg.startsWith('ORDEWELL_PROBE='));
+    const told = seen.find((arg) => arg.startsWith('ORDEWELL_PROBE='));
     if (told) {
       const asked = JSON.parse(told.slice('ORDEWELL_PROBE='.length)) as ProbeAsked;
       this.asked.push(asked);
@@ -85,16 +96,23 @@ class RecordingCli implements DockerCli {
     return OK;
   }
 
-  async entry(args: readonly string[]): Promise<ChildProcess> {
+  async entry(args: readonly string[], opts?: DockerCall): Promise<ChildProcess> {
     const sidecar = args.includes(EGRESS_ENTRY);
     const child = sidecar
       ? spawn(process.execPath, ['-e', SIDECAR_READY], { stdio: ['pipe', 'pipe', 'pipe'] })
       : spawn(process.execPath, ['-e', OWN_LOOPBACK + RELAY_ENTRY], { stdio: ['pipe', 'pipe', 'pipe'] });
-    (sidecar ? this.sidecars : this.entries).push({ args, process: child });
+    const env = opts?.env ?? {};
+    (sidecar ? this.sidecars : this.entries).push({ args, env, seen: asRead(args, env), process: child });
     return child;
   }
 
-  lines(): string[] { return this.calls.map(({ args }) => args.join(' ')); }
+  /** Each call as the engine reads it. */
+  lines(): string[] { return this.calls.map(({ args, opts }) => asRead(args, opts?.env).join(' ')); }
+
+  /** Every docker command it was handed, as `ps` would show it, with what its CLI's environment held. */
+  argvs(): { args: readonly string[]; env: Readonly<Record<string, string>> }[] {
+    return [...this.calls.map(({ args, opts }) => ({ args, env: opts?.env ?? {} })), ...this.entries, ...this.sidecars].map(({ args, env }) => ({ args, env }));
+  }
 }
 
 const repo: LeaseRepo = { path: '.', root: '/repo', worktree: '/repo/.ordewell/wt/a', branch: 'ordewell/a', integrationBranch: 'ordewell/integration', linked: [] };
@@ -182,8 +200,8 @@ describe('what runs in a container (ADR-0059 L5)', () => {
     const copy = cli.lines().find((line) => line.includes('ordewell-login-opencode') && line.startsWith('run'));
     expect(copy).toContain('ordewell-login-opencode:/login:ro');
     expect(copy).toContain('/task/login/opencode');
-    expect(cli.entries[0].args.join(' ')).toContain('XDG_DATA_HOME=/task/login');
-    expect(cli.entries[0].args.join(' ')).not.toContain('CLAUDE_CONFIG_DIR');
+    expect(cli.entries[0].seen.join(' ')).toContain('XDG_DATA_HOME=/task/login');
+    expect(cli.entries[0].seen.join(' ')).not.toContain('CLAUDE_CONFIG_DIR');
     lease.lease.release('done');
   });
 
@@ -193,7 +211,7 @@ describe('what runs in a container (ADR-0059 L5)', () => {
 
     const lease = await opened(backend, { ...taskRequest, runner: 'opencode' }, spec);
 
-    const egress = cli.sidecars[0].args.find((arg) => arg.startsWith('ORDEWELL_EGRESS='))!;
+    const egress = cli.sidecars[0].seen.find((arg) => arg.startsWith('ORDEWELL_EGRESS='))!;
     const allow = JSON.parse(egress.slice('ORDEWELL_EGRESS='.length)).allow as string[];
     expect(allow).toEqual(expect.arrayContaining(['api.anthropic.com', 'opencode.ai']));
     lease.lease.release('done');
@@ -206,7 +224,7 @@ describe('what runs in a container (ADR-0059 L5)', () => {
 
     const open = await opened(handed.backend, { ...taskRequest, runner: 'opencode' }, model('openrouter/anthropic/claude-sonnet-4'));
     const closed = await opened(gated.backend, { ...taskRequest, runner: 'opencode' }, model('anthropic/claude-sonnet-4'));
-    const allowOf = (cli: RecordingCli) => JSON.parse(cli.sidecars[0].args.find((arg) => arg.startsWith('ORDEWELL_EGRESS='))!.slice('ORDEWELL_EGRESS='.length)).allow as string[];
+    const allowOf = (cli: RecordingCli) => JSON.parse(cli.sidecars[0].seen.find((arg) => arg.startsWith('ORDEWELL_EGRESS='))!.slice('ORDEWELL_EGRESS='.length)).allow as string[];
 
     expect(allowOf(handed.cli)).toContain('openrouter.ai');
     expect(allowOf(gated.cli)).not.toContain('api.anthropic.com');
@@ -220,7 +238,7 @@ describe('what runs in a container (ADR-0059 L5)', () => {
       const spec = { ...changeSpec, task: createTask({ id: 'a', order: 1, title: 'A', prompt: 'do a', assignedModel: { modelId, modelLabel: modelId, availableVariants: [] } }) };
       const lease = await opened(backend, { ...taskRequest, runner: 'opencode' }, spec);
       lease.lease.release('done');
-      return JSON.parse(cli.sidecars[0].args.find((arg) => arg.startsWith('ORDEWELL_EGRESS='))!.slice('ORDEWELL_EGRESS='.length)).allow as string[];
+      return JSON.parse(cli.sidecars[0].seen.find((arg) => arg.startsWith('ORDEWELL_EGRESS='))!.slice('ORDEWELL_EGRESS='.length)).allow as string[];
     };
 
     it('opens the handed key its provider, and leaves the gated key behind its gateway', async () => {
@@ -256,7 +274,7 @@ describe('what runs in a container (ADR-0059 L5)', () => {
 
       const lease = await opened(backend, { ...taskRequest, runner: 'opencode' }, spec);
 
-      expect(JSON.parse(cli.sidecars[0].args.find((arg) => arg.startsWith('ORDEWELL_EGRESS='))!.slice('ORDEWELL_EGRESS='.length)).allow).toContain('api.openai.com');
+      expect(JSON.parse(cli.sidecars[0].seen.find((arg) => arg.startsWith('ORDEWELL_EGRESS='))!.slice('ORDEWELL_EGRESS='.length)).allow).toContain('api.openai.com');
       lease.lease.release('done');
     });
 
@@ -466,7 +484,7 @@ describe('every container', () => {
     const { backend, cli } = backendWith();
     const lease = await opened(backend);
 
-    const args = cli.entries[0].args;
+    const args = cli.entries[0].seen;
     for (const flag of ['--init', '--read-only', '--rm', '-i']) expect(args).toContain(flag);
     expect(args.join(' ')).toContain('--pids-limit 8192');
     expect(args.join(' ')).toContain('--memory 4g --memory-swap 4g');
@@ -485,7 +503,7 @@ describe('every container', () => {
     const { backend, cli } = backendWith();
     const lease = await opened(backend);
 
-    expect(cli.entries[0].args.find((arg) => arg.endsWith(':/mirror:ro'))).toBeDefined();
+    expect(cli.entries[0].seen.find((arg) => arg.endsWith(':/mirror:ro'))).toBeDefined();
     lease.lease.release('done');
   });
 
@@ -505,7 +523,7 @@ describe('every container', () => {
     const { backend, cli } = backendWith();
     const lease = await opened(backend);
 
-    expect(cli.entries[0].args).toContain('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1');
+    expect(cli.entries[0].seen).toContain('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1');
     lease.lease.release('done');
   });
 
@@ -536,11 +554,11 @@ describe('the way out of a lease (ADR-0059 L7)', () => {
     const { backend, cli } = backendWith();
     const lease = await opened(backend);
 
-    const network = flagOf(cli.entries[0].args, '--network');
+    const network = flagOf(cli.entries[0].seen, '--network');
     const made = cli.lines().find((line) => line.startsWith('network create'))!;
     expect(made).toContain('--internal');
     expect(made.endsWith(network)).toBe(true);
-    expect(cli.entries[0].args.filter((arg) => arg === '--network')).toHaveLength(1);
+    expect(cli.entries[0].seen.filter((arg) => arg === '--network')).toHaveLength(1);
     lease.lease.release('done');
   });
 
@@ -550,7 +568,7 @@ describe('the way out of a lease (ADR-0059 L7)', () => {
 
     expect(cli.sidecars).toHaveLength(1);
     const { args } = cli.sidecars[0];
-    expect(flagOf(args, '--network')).toBe(flagOf(cli.entries[0].args, '--network'));
+    expect(flagOf(args, '--network')).toBe(flagOf(cli.entries[0].seen, '--network'));
     const sidecar = flagOf(args, '--name');
     expect(cli.lines()).toContain(`network connect bridge ${sidecar}`);
     lease.lease.release('done');
@@ -570,14 +588,14 @@ describe('the way out of a lease (ADR-0059 L7)', () => {
     const { backend, cli } = backendWith();
     const lease = await opened(backend);
 
-    const sidecar = flagOf(cli.sidecars[0].args, '--name');
-    for (const variable of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy']) expect(cli.entries[0].args).toContain(`${variable}=http://${sidecar}:3128`);
-    expect(cli.entries[0].args.find((arg) => arg.startsWith('NO_PROXY='))).toContain('127.0.0.1');
-    expect(cli.entries[0].args.find((arg) => arg.startsWith('no_proxy='))).toContain('127.0.0.1');
+    const sidecar = flagOf(cli.sidecars[0].seen, '--name');
+    for (const variable of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy']) expect(cli.entries[0].seen).toContain(`${variable}=http://${sidecar}:3128`);
+    expect(cli.entries[0].seen.find((arg) => arg.startsWith('NO_PROXY='))).toContain('127.0.0.1');
+    expect(cli.entries[0].seen.find((arg) => arg.startsWith('no_proxy='))).toContain('127.0.0.1');
     lease.lease.release('done');
   });
 
-  const listOf = (cli: RecordingCli) => (JSON.parse(cli.sidecars[0].args.find((arg) => arg.startsWith('ORDEWELL_EGRESS='))!.slice('ORDEWELL_EGRESS='.length)) as { allow: string[] }).allow;
+  const listOf = (cli: RecordingCli) => (JSON.parse(cli.sidecars[0].seen.find((arg) => arg.startsWith('ORDEWELL_EGRESS='))!.slice('ORDEWELL_EGRESS='.length)) as { allow: string[] }).allow;
 
   it('opens what the settings list, and no model host for a broker: its traffic takes the gateway', async () => {
     const { backend, cli } = backendWith({ settings: { image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] }, allow: ['github.com'] } });
@@ -609,9 +627,9 @@ describe('the way out of a lease (ADR-0059 L7)', () => {
   it('takes its way out down with its container, after it', async () => {
     const { backend, cli } = backendWith();
     const lease = await opened(backend);
-    const box = flagOf(cli.entries[0].args, '--name');
-    const sidecar = flagOf(cli.sidecars[0].args, '--name');
-    const network = flagOf(cli.entries[0].args, '--network');
+    const box = flagOf(cli.entries[0].seen, '--name');
+    const sidecar = flagOf(cli.sidecars[0].seen, '--name');
+    const network = flagOf(cli.entries[0].seen, '--network');
 
     await lease.ended!();
 
@@ -619,6 +637,62 @@ describe('the way out of a lease (ADR-0059 L7)', () => {
     const order = [`rm -f ${box}`, `rm -f ${sidecar}`, `network rm ${network}`].map((line) => lines.indexOf(line));
     expect(order.every((at) => at >= 0)).toBe(true);
     expect(order).toEqual([...order].sort((a, b) => a - b));
+  });
+});
+
+describe("what docker's command line shows, which `ps` shows every user of this host (ADR-0022 A5)", () => {
+  /** The one variable the CLI reads for itself and a container takes too, so it goes by value: always Ordewell's own path. */
+  const HOME_BY_VALUE = 'HOME=/task/home';
+  /** What docker's own `-e` takes: a `node -e` past the image is a script, not a variable. */
+  const told = (args: readonly string[]) => {
+    const ours = args.indexOf('node') === -1 ? args : args.slice(0, args.indexOf('node'));
+    return ours.filter((_arg, at) => ours[at - 1] === '-e');
+  };
+
+  /** A lease that hands a container every kind of variable it has: a gateway's token, proxies, a probe, a runner's own, an export's; and the engine's own probe. */
+  async function everyVariable() {
+    const { backend, cli } = backendWith();
+    await backend.probe();
+    const lease = await opened(backend);
+    const placed = await lease.placement!.place({ command: 'claude', args: ['-p'], env: { RUNNER_SECRET: 'runner-secret-value' }, files: [] });
+    placed.ended();
+    await backend.collect('a').catch(() => undefined);
+    lease.lease.release('done');
+    return { cli, placed, token: placed.env.ANTHROPIC_API_KEY };
+  }
+
+  it('names each variable on the command line and nothing more, its value left to the CLI to read', async () => {
+    const { cli, placed } = await everyVariable();
+
+    const argvs = [...cli.argvs(), placed];
+    const variables = argvs.flatMap(({ args }) => told(args));
+    expect(variables.length).toBeGreaterThan(10);
+    expect(variables.filter((variable) => variable !== HOME_BY_VALUE && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(variable))).toEqual([]);
+    expect(argvs.flatMap(({ args }) => args).filter((arg) => arg === '--env' || arg.startsWith('--env='))).toEqual([]);
+  });
+
+  it('hands every variable it names a value, so the CLI never hands over one of this host', async () => {
+    const { cli, placed } = await everyVariable();
+
+    for (const { args, env } of [...cli.argvs(), placed]) {
+      const named = told(args).filter((variable) => variable !== HOME_BY_VALUE);
+      expect(Object.keys(env).filter((variable) => !named.includes(variable))).toEqual([]);
+      expect(named.filter((variable) => !Object.hasOwn(env, variable))).toEqual([]);
+    }
+  });
+
+  it('keeps every secret it holds off every command line, and puts each in the environment of the command that needs it', async () => {
+    const { cli, placed, token } = await everyVariable();
+
+    expect(token).toMatch(/^ordewell-lease-/);
+    const shown = JSON.stringify([...cli.argvs(), placed].map(({ args }) => args));
+    for (const secret of [token, 'runner-secret-value', 'ORDEWELL_PROBE=', 'ORDEWELL_EGRESS=', 'http://ordewell-', 'ORDEWELL_REF=']) expect(shown).not.toContain(secret);
+    expect(placed.env).toMatchObject({ ANTHROPIC_API_KEY: token, RUNNER_SECRET: 'runner-secret-value' });
+    expect(cli.entries[0].env).toMatchObject({ CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', HTTPS_PROXY: expect.stringMatching(/^http:\/\/ordewell-.*-egress:3128$/) });
+    expect(JSON.parse(cli.sidecars[0].env.ORDEWELL_EGRESS)).toMatchObject({ port: 3128 });
+    const probes = cli.calls.flatMap(({ opts }) => (opts?.env?.ORDEWELL_PROBE ? [JSON.parse(opts.env.ORDEWELL_PROBE) as ProbeAsked] : []));
+    expect(probes.map(({ workspace }) => workspace).sort()).toEqual(['/task', '/task/work']);
+    expect(cli.calls.some(({ opts }) => opts?.env?.ORDEWELL_REF?.startsWith('refs/'))).toBe(true);
   });
 });
 
@@ -641,8 +715,8 @@ describe('what a runner holds of a broker login (ADR-0059 L7)', () => {
     const lease = await opened(backend);
 
     expect(JSON.stringify(cli.calls)).not.toContain('sk-ant-api03-test');
-    expect(JSON.stringify(cli.entries.map(({ args }) => args))).not.toContain('sk-ant-api03-test');
-    expect(JSON.stringify(cli.sidecars.map(({ args }) => args))).not.toContain('sk-ant-api03-test');
+    expect(JSON.stringify(cli.entries.map(({ seen }) => seen))).not.toContain('sk-ant-api03-test');
+    expect(JSON.stringify(cli.sidecars.map(({ seen }) => seen))).not.toContain('sk-ant-api03-test');
     lease.lease.release('done');
   });
 
@@ -743,8 +817,8 @@ describe('a script in a container', () => {
     const { backend, cli } = backendWith({ env: {}, settings: { image: 'ordewell-task', login: { kind: 'own-sign-in' } } });
     const lease = await opened(backend, scriptRequest);
 
-    expect(cli.entries[0].args.join(' ')).not.toContain('/login');
-    expect(cli.entries[0].args.join(' ')).not.toContain('CLAUDE_CONFIG_DIR');
+    expect(cli.entries[0].seen.join(' ')).not.toContain('/login');
+    expect(cli.entries[0].seen.join(' ')).not.toContain('CLAUDE_CONFIG_DIR');
     expect(cli.lines().some((line) => line.startsWith('volume inspect'))).toBe(false);
     lease.lease.release('done');
   });
@@ -761,7 +835,7 @@ describe('a script in a container', () => {
     const { backend, cli } = backendWith({ settings: { image: 'ordewell-task', login: { kind: 'own-sign-in' }, allow: [] } });
     const lease = await opened(backend, scriptRequest);
 
-    expect(cli.sidecars[0].args.find((arg) => arg.startsWith('ORDEWELL_EGRESS='))).toContain('"allow":[]');
+    expect(cli.sidecars[0].seen.find((arg) => arg.startsWith('ORDEWELL_EGRESS='))).toContain('"allow":[]');
     lease.lease.release('done');
   });
 
@@ -869,10 +943,10 @@ describe('a script in a container', () => {
       const { backend, cli } = backendWith();
       const lease = await opened(backend, scriptRequest, readOnlySpec);
 
-      expect(cli.entries[0].args.join(' ')).toContain('--network none');
+      expect(cli.entries[0].seen.join(' ')).toContain('--network none');
       expect(cli.sidecars).toEqual([]);
       expect(cli.lines().some((line) => line.startsWith('network create'))).toBe(false);
-      expect(cli.entries[0].args.some((arg) => /^HTTPS?_PROXY=/.test(arg))).toBe(false);
+      expect(cli.entries[0].seen.some((arg) => /^HTTPS?_PROXY=/.test(arg))).toBe(false);
       lease.lease.release('done');
     });
 
@@ -926,13 +1000,13 @@ describe('a script in a container', () => {
     it('keeps nothing: its volume goes with its attempt, and a retry gets its own', async () => {
       const { backend, cli } = backendWith();
       const first = await opened(backend, scriptRequest, readOnlySpec);
-      const volume = cli.entries[0].args.find((arg) => arg.endsWith(':/task'))!.split(':')[0];
+      const volume = cli.entries[0].seen.find((arg) => arg.endsWith(':/task'))!.split(':')[0];
 
       first.lease.release('verdict');
       await vi.waitFor(() => expect(cli.lines()).toContain(`volume rm -f ${volume}`));
 
       const second = await opened(backend, scriptRequest, readOnlySpec);
-      expect(cli.entries[1].args.find((arg) => arg.endsWith(':/task'))!.split(':')[0]).not.toBe(volume);
+      expect(cli.entries[1].seen.find((arg) => arg.endsWith(':/task'))!.split(':')[0]).not.toBe(volume);
       second.lease.release('verdict');
     });
   });
@@ -1151,7 +1225,7 @@ describe('what a probe reports before any task runs (L3)', () => {
 
     await backend.probe();
 
-    expect(cli.sidecars[0].args.join(' ')).toContain('api.anthropic.com');
+    expect(cli.sidecars[0].seen.join(' ')).toContain('api.anthropic.com');
   });
 });
 
@@ -1272,7 +1346,7 @@ describe('a Session closing (ADR-0059 L5)', () => {
     const { backend } = backendWith({ cli });
     const call = cli.call.bind(cli);
     cli.call = async (args, opts) => {
-      if (args.join(' ').includes('ORDEWELL_REF=')) await brought;
+      if (opts?.env?.ORDEWELL_REF) await brought;
       return call(args, opts);
     };
     (await opened(backend)).lease.release('stopped');
@@ -1325,7 +1399,7 @@ describe('a person\'s own sign-in in a task', () => {
     const { backend, cli } = backendWith(OWN);
     const lease = await opened(backend);
 
-    const entry = cli.entries[0].args.join(' ');
+    const entry = cli.entries[0].seen.join(' ');
     expect(entry).not.toContain(LOGIN_VOLUME);
     expect(entry).not.toContain('/login:');
     expect(entry).toContain('CLAUDE_CONFIG_DIR=/task/login/claude');
@@ -1380,7 +1454,7 @@ describe('package caches', () => {
     const { backend, cli } = backendWith();
     const lease = await opened(backend);
 
-    const entry = cli.entries[0].args.join(' ');
+    const entry = cli.entries[0].seen.join(' ');
     expect(entry).not.toContain('ordewell-cache-');
     expect(entry).toContain('npm_config_cache=/task/caches/npm');
     lease.lease.release('done');
@@ -1418,7 +1492,7 @@ describe('a probe that fails', () => {
 
     await expect(backend.probe()).rejects.toThrow(/probe/);
 
-    const run = cli.calls.find(({ args }) => args.some((arg) => arg.startsWith('ORDEWELL_PROBE=')))!.args;
+    const run = cli.calls.find(({ opts }) => opts?.env?.ORDEWELL_PROBE)!.args;
     const name = run[run.indexOf('--name') + 1];
     expect(run.join(' ')).toContain('ordewell.tree=');
     const lines = cli.lines();
@@ -1431,7 +1505,7 @@ describe('a probe that fails', () => {
     const route: EgressRoute = { runArgs: [], env: {}, proxied: true, gateway: null, close: closed };
     const cli = new RecordingCli();
     cli.call = async function call(args, opts) {
-      if (args.some((arg) => arg.startsWith('ORDEWELL_PROBE='))) throw new Error('the CLI fell over');
+      if (opts?.env?.ORDEWELL_PROBE) throw new Error('the CLI fell over');
       return RecordingCli.prototype.call.call(this, args, opts);
     };
     const backend = new DockerExecutionBackend(new FakeExecutionBackend(), {
@@ -1460,7 +1534,7 @@ describe('a Codex task in a container', () => {
     const placed = await lease.placement!.place({ command: 'codex', args: ['app-server'], env: {}, files: [] });
 
     expect(placed.env.OPENAI_API_KEY).toMatch(/^ordewell-lease-/);
-    expect(JSON.stringify([placed, cli.calls, cli.entries.map(({ args }) => args), cli.sidecars.map(({ args }) => args)])).not.toContain(KEY);
+    expect(JSON.stringify([placed, cli.calls, cli.entries.map(({ seen }) => seen), cli.sidecars.map(({ seen }) => seen)])).not.toContain(KEY);
     placed.ended();
     lease.lease.release('done');
   });
@@ -1511,7 +1585,7 @@ describe('a Codex task in a container', () => {
 
     await expect(opened(backend, codexRequest)).rejects.toThrow(/ordewell-task holds no codex.*docs\/containers\.md/s);
 
-    const name = cli.entries[0].args[cli.entries[0].args.indexOf('--name') + 1];
+    const name = cli.entries[0].seen[cli.entries[0].seen.indexOf('--name') + 1];
     expect(cli.lines()).toContain(`rm -f ${name}`);
   });
 
@@ -1530,7 +1604,7 @@ describe('a Codex task in a container', () => {
       const { backend, cli } = backendWith(OWN);
       const lease = await opened(backend, codexRequest);
 
-      const entry = cli.entries[0].args.join(' ');
+      const entry = cli.entries[0].seen.join(' ');
       expect(entry).not.toContain(CODEX_LOGIN_VOLUME);
       expect(entry).not.toContain('/login:');
       expect(cli.lines().filter((line) => line.includes(LOGIN_VOLUME))).toEqual([]);
@@ -1575,7 +1649,7 @@ describe('a Codex task in a container', () => {
       const { backend, cli } = backendWith(OWN);
       const lease = await opened(backend, codexRequest);
 
-      const sidecar = cli.sidecars[0].args.join(' ');
+      const sidecar = cli.sidecars[0].seen.join(' ');
       expect(sidecar).toContain('chatgpt.com');
       expect(sidecar).not.toContain('auth.openai.com');
       lease.lease.release('done');

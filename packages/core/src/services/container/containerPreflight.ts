@@ -154,7 +154,8 @@ async function signInHeld(settings: ContainerSettings, cli: DockerCli, { binary,
   const kept = await cli.call(['volume', 'inspect', volume], { timeoutMs: ASK_MS });
   if (kept.code !== 0) return false;
   if (!ask || !imageThere) return true;
-  const asked = await cli.call([...helperArgs(settings, [`${volume}:/login:ro`]), ...ask], { timeoutMs: ASK_MS });
+  const helper = helperArgs(settings, [`${volume}:/login:ro`]);
+  const asked = await cli.call([...helper.args, ...ask], { env: helper.env, timeoutMs: ASK_MS });
   if (asked.code === 0) return true;
   if (asked.code === 1) return false;
   return problem('sign-in-unasked', `The image ${settings.image} could not say whether your sign-in is there: ${asked.stderr.trim() || `\`${binary}\` ended with ${asked.code}`}.`, `Build the image with a current \`${binary}\`, as docs/containers.md shows.`);

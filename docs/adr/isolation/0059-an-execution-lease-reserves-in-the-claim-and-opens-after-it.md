@@ -147,7 +147,11 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
   file falls back to a default, since a typing mistake must not mean the host. The host's worktree stays where a task's
   result lives, so Landing, a repair and a Continue are what they were. A runner is launched by exec into one container
   per attempt, non-root, capabilities dropped, a read-only root filesystem, `--init --pids-limit 8192 --memory <limit>`
-  with swap held to the same limit, on every container a helper's included, and no Docker socket inside.
+  with swap held to the same limit, on every container a helper's included, and no Docker socket inside. What a
+  container takes in its environment goes on docker's command line by name, `-e NAME`, its value in the environment of
+  the docker CLI that starts it, since `ps` shows a command line to every user of the host (ADR-0022 A5): a run, an exec,
+  a helper's, the sidecar's and the probe's alike. HOME alone goes by value, as the CLI reads its own config by it, and
+  it is only ever the task's home.
   - The container's one process is an idle relay, and its stdin is its lease: when the host goes, by any death, the pipe
     closes, the relay exits and `--rm` takes the container with everything in it. Nothing needs a time limit to renew. A
     killed `docker exec` leaves its process running, so a runner is stopped by its pid inside. A Session that closes
@@ -485,3 +489,4 @@ for model traffic first. The interface is kept free of anything that blocks thes
 - 2026-11-02 — The real-engine suites run in CI as the `real-engine` job and by hand as `npm run test:containers`, where a skip fails the run rather than passing it.
 - 2026-11-02 — Review fixes: the gateway carries exact routes, batches and stored responses out; a login with a gated key opens a handed key's provider; a check says not ready when a required guarantee no lease could prove; an export stops an attempt's hooks and fsmonitor, a filter still runs; a clean-up takes what a dead host's check left.
 - 2026-11-02 — L7: a broker login refuses an OpenCode task on an `openai/*` model before a worktree is made, where it had started with no way to its model.
+- 2026-11-05 — L5: a container's variables reach docker by name, their values in the CLI's environment, never on its command line.

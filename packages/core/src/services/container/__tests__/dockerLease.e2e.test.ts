@@ -1291,12 +1291,15 @@ describe.skipIf(skip || !SIGNED_IN_HARNESS)("a person's own sign-in, on the real
     volumes.push(made);
     return made;
   };
-  const inHelper = (mounts: string[], script: string, input = '') => spawnSync('docker', [...helperArgs(settings, mounts), 'sh', '-c', script], { encoding: 'utf8', input, timeout: 60_000 });
+  const inHelper = (mounts: string[], script: string, input = '') => {
+    const helper = helperArgs(settings, mounts);
+    return spawnSync('docker', [...helper.args, 'sh', '-c', script], { encoding: 'utf8', env: { ...process.env, ...helper.env }, input, timeout: 60_000 });
+  };
   /** As a lease's container runs a runner, on a network that leads to the proxy and nowhere else. */
   const inTask = (task: string, script: string, variables: Record<string, string> = {}) => {
-    const args = helperArgs(settings, [`${task}:/task`], { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', CLAUDE_CONFIG_DIR: SIGN_IN_COPY, ...PROXY_ENV, ...variables });
+    const { args, env } = helperArgs(settings, [`${task}:/task`], { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', CLAUDE_CONFIG_DIR: SIGN_IN_COPY, ...PROXY_ENV, ...variables });
     args[args.indexOf('none')] = name;
-    return spawnSync('docker', [...args, 'sh', '-c', `mkdir -p "$HOME" && cd /tmp && ${script}`], { encoding: 'utf8', input: '', timeout: 90_000 });
+    return spawnSync('docker', [...args, 'sh', '-c', `mkdir -p "$HOME" && cd /tmp && ${script}`], { encoding: 'utf8', env: { ...process.env, ...env }, input: '', timeout: 90_000 });
   };
   const credentials = (refreshToken: string) => JSON.stringify({ claudeAiOauth: { accessToken: 'access-expired', refreshToken, expiresAt: 1000, scopes: ['user:inference', 'user:profile'], subscriptionType: 'pro' } });
   const signIn = (login: string, refreshToken: string) => inHelper([`${login}:/login`], 'mkdir -p /login/claude && cat > /login/claude/.credentials.json', credentials(refreshToken));
