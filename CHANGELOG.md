@@ -8,6 +8,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.12.6] - 2026-11-05
+
 ### Added
 
 - **Cursor runs tasks.** A plan can assign a task to `cursor-agent`, which
@@ -37,8 +39,9 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   repository's `.gemini/settings.json` hooks, and under a policy Ordewell hands
   it its own write, shell and web tools are refused, as is every other MCP
   server's. It reaches the workspace only through requests Ordewell answers.
-  Gemini CLI 0.66.0 or newer is required, and signing in is done by running
-  `gemini` itself.
+  Gemini CLI 0.66.0 or newer is required. Sign in by running `gemini`, or
+  save a Google Gemini key with `/key` for Ordewell to hand to Gemini CLI.
+  An explicitly configured Gemini credential route takes precedence.
 
 - **Cline runs tasks.** A plan can assign a task to `cline`, which Ordewell
   drives over the Agent Client Protocol with its models discovered. The

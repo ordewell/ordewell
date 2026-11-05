@@ -1,12 +1,12 @@
 # Ordewell for VS Code
 
-**Plan once, run it across Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor, and review one branch.**
+**Plan once, run it across Claude Code, Codex and six more coding agents, and review one branch.**
 One goal becomes an editable plan with a runner and model assigned to each AI task.
 By default, submitted build plans wait for your approval. Run settings let you
 automate execution and merging. Research tasks and consented script tasks can
 start during planning.
 
-This README describes 0.12.5. See the [published releases](https://github.com/ordewell/ordewell/releases)
+This README describes 0.12.6. See the [published releases](https://github.com/ordewell/ordewell/releases)
 for versions available to install and their release notes.
 
 ## Features
@@ -36,15 +36,15 @@ for versions available to install and their release notes.
   `done` passes its completion check. Reports marked `failed` or `blocked`, or a
   runner exit without a report, do not pass. Script tasks use their exit status.
   Review the diff and test evidence before merging.
-- **No extra API key.** Claude Code, Codex or OpenCode can be the planner, using the
-  subscription you already have.
+- **Harness planners.** Any supported coding agent can plan using its own sign-in;
+  Qwen Code, Cline and Gemini CLI can also use applicable keys saved in Ordewell.
 
 ## Getting started
 
 1. Install the extension.
 2. Open the Ordewell panel from the activity bar.
-3. Type a goal. With Claude Code, Codex or OpenCode installed, the first usable one
-   plans for you with no API key. Choose another planner in the planner bar.
+3. Type a goal. With a supported coding agent installed and signed in, the first
+   usable one can plan for you. Choose another planner in the planner bar.
 4. Review the plan, then approve it to run.
 
 Autorun and automatic merging are off by default, and the supervisor starts at
@@ -56,8 +56,8 @@ To plan with an API key instead, set `ordewell.openAiApiKey` (OpenRouter) or
 `ordewell.apiKey` (Gemini), or export `OPENROUTER_API_KEY` or `GEMINI_API_KEY`. A key
 you have set takes priority over the installed agent.
 
-Each runner you want to use (Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI or Cursor)
-must be installed and on your PATH. If a runner appears greyed out right after installing it, reload the
+Each runner you want to use must be installed and on your PATH. See the
+[full runner list](https://github.com/ordewell/ordewell#readme). If a runner appears greyed out right after installing it, reload the
 window so the extension picks up the new PATH.
 
 Skills are `SKILL.md` folders: type `/name` in the panel to load one into the

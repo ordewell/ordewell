@@ -24,14 +24,16 @@ one. Providers include OpenRouter, Google Gemini, DeepSeek, Moonshot / Kimi and 
 with the environment variable it reads, such as `(no DEEPSEEK_API_KEY)`. The
 planner's model is one of that provider's models.
 
-A provider key adds a planner, never a runner. A `DEEPSEEK_API_KEY` or
+A provider key adds an API planner, but installing a runner is separate. A `DEEPSEEK_API_KEY` or
 `MOONSHOT_API_KEY` lets DeepSeek or Kimi models plan; tasks still run on the built-in
 runners. An installed Qwen Code or Cline does run on that key, though, so neither
 needs a login of its own: the key of the provider `AI_PROVIDER` names, else the first
 one configured, is handed to it at each start, its start as the planner included.
 Qwen Code takes any OpenAI-compatible provider's key; Cline takes the key of a
-provider it offers at the same address, such as OpenRouter. Where Ordewell holds no
-such key, each agent uses its own sign-in.
+provider it offers at the same address, such as OpenRouter. Gemini CLI can also use a Google Gemini key saved in Ordewell; it is handed
+to Gemini CLI as `GEMINI_API_KEY` unless an explicit Gemini credential route
+is already configured. Where Ordewell holds no applicable key, each agent uses
+its own sign-in.
 
 ## Who runs tasks
 
@@ -84,7 +86,9 @@ Key**. Without one there, it reads its API key settings, such as
 
 Each runner starts with Ordewell's environment, so a key exported in your shell, or
 saved with `/key` or `ordewell key set` in the terminal UI or CLI, reaches the runners
-too; a key in VS Code's secret storage or settings does not. Claude Code and Codex can
+too; a key in VS Code's secret storage or settings does not generally reach runners. Ordewell
+hands applicable saved keys to Qwen Code, Cline and Gemini CLI for their starts
+and model discovery. Claude Code and Codex can
 also sign in with `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`, so such a key saved for
 the Anthropic or OpenAI planner can change which account they use.
 
