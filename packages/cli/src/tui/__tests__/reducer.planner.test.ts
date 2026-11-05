@@ -87,10 +87,23 @@ describe('/planner', () => {
     });
     const items = stepperOf(state).items;
     const claude = items.find((i) => i.id === 'claude-code');
-    expect(claude).toMatchObject({ warn: true, detail: 'not logged in · /login claude-code' });
+    expect(claude).toMatchObject({ warn: true, detail: 'Claude Code is not signed in. Sign in with /login claude-code, or run claude login.' });
     expect(claude?.disabled).toBeUndefined();
     expect(items.find((i) => i.id === 'codex')).toMatchObject({ detail: expect.stringMatching(/no API key/i) });
     expect(items.find((i) => i.id === 'codex')?.warn).toBeUndefined();
+  });
+
+  it('names the key entry, not a login it has none of, for a signed-out agent that signs in with a key', () => {
+    const { state } = run('/planner', {
+      ...ready,
+      runners: [{
+        id: 'qwen-code', name: 'Qwen Code', enabled: true,
+        auth: { state: 'signed-out', signIn: { runner: 'qwen-code', label: 'Qwen Code', key: { provider: 'openrouter', label: 'OpenRouter' } } },
+      }],
+    });
+    expect(stepperOf(state).items.find((i) => i.id === 'qwen-code')).toMatchObject({
+      warn: true, detail: 'Qwen Code is not signed in. Run /key and choose OpenRouter to hand it a key.',
+    });
   });
 
   it('leaves an agent whose CLI is not installed off the list', () => {

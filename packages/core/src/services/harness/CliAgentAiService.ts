@@ -37,6 +37,7 @@ import { abortScope } from '../../utils/abortScope';
 import { providerForRunner, runnerForProvider } from '../ProviderRegistry';
 import { recordRunnerAuth, signedOutFromFailure } from '../runnerAuth';
 import { describePlannerNotReady, TERMINAL_UI_COMMANDS, type PlannerNotReady } from '../plannerReadiness';
+import { describeSignIn } from '../signInHint';
 import { workspaceEnvOf } from '../workspaceEnv';
 import { augmentedPath, withPath } from '../../utils/shellPath';
 import { BUILTIN_MANIFESTS } from '../../plugins/builtin';
@@ -847,7 +848,7 @@ export class CliAgentAiService implements IAiService {
   /**
    * A turn that failed because the runner's own account is signed out is
    * recorded for the synchronous planner gate, and the failure opens with the
-   * same two ways back in the gate would give (ADR-0009). Only a phrase the
+   * same ways back in the gate would give (ADR-0009, ADR-0052). Only a phrase the
    * runner's manifest declares; any other failure is returned untouched.
    *
    * Judged with the workspace's own environment, the same merged env the
@@ -874,10 +875,12 @@ export class CliAgentAiService implements IAiService {
       provider: providerForRunner(this.runner) ?? this.config.aiProvider,
       label: manifest.displayName,
       runner: this.runner,
-      loginCommand: auth.loginCommand,
+      signIn: auth.signIn,
     };
     const guidance = describePlannerNotReady(reason, TERMINAL_UI_COMMANDS);
-    return failure.startsWith(guidance) ? failure : `${guidance}\n\n${failure}`;
+    // An ACP agent's refusal is already the hint (AcpAdapter); saying it twice reads as two problems.
+    if (failure.includes(describeSignIn(auth.signIn, TERMINAL_UI_COMMANDS))) return failure;
+    return `${guidance}\n\n${failure}`;
   }
 
   // --- Process lifecycle ---

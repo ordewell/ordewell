@@ -33,6 +33,7 @@ import { instructionsBlock, isRecord } from './repoConfig';
 import { awaitAttach, listed, MCP_ATTACH_TIMEOUT_MS, type AttachState } from './ordewellBinding';
 import { settleWithin } from './settleWithin';
 import { compareVersions } from '../../utils/version';
+import { describeSignIn, signInOf, TERMINAL_UI_SIGN_IN } from '../signInHint';
 import { acpPrivateDir, type AcpPrivateDir } from './acpPrivateDir';
 import { dirname } from 'path';
 import { taskCompletionContract, type McpClientConfig } from '../mcp';
@@ -545,10 +546,12 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     return response.message ? this.runner.redact(response.message) : 'no reason given';
   }
 
+  /**
+   * Worded in the terminal's syntax, as the daemon words what it says; the
+   * headless CLI re-words it (ADR-0052).
+   */
   private signedOut(): string {
-    const { auth, runner } = this.profile.manifest;
-    const routes = [auth ? `run \`${[runner.command, ...auth.loginArgs].join(' ')}\`` : null, this.profile.signInRoute].filter(Boolean).join(', or ');
-    return routes ? `${this.name} is not signed in. ${routes[0].toUpperCase()}${routes.slice(1)}.` : `${this.name} is not signed in.`;
+    return describeSignIn(signInOf(this.profile.manifest, this.profile.signInRoute), TERMINAL_UI_SIGN_IN);
   }
 
   /**

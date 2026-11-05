@@ -11,6 +11,11 @@ export interface RunnerManifest {
   modes?: RunnerMode[];
   /** How to ask whether the user is signed in. Absent when the runner offers no status command. */
   auth?: RunnerAuthSpec;
+  /**
+   * How the agent signs in where Ordewell can run no login for it, as a
+   * clause the signed-out hint ends with ("run qwen and sign in there").
+   */
+  signIn?: string;
 }
 
 /** What a runner's status command answered, with both streams kept apart. */

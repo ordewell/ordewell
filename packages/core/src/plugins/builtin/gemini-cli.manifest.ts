@@ -32,6 +32,7 @@ export const GEMINI_CLI_MANIFEST: RunnerManifest = {
   // which the adapter words as "not signed in"; Gemini's own words are kept
   // for a message that reaches the person unworded.
   auth: { loginArgs: [], signedOut: /API key is missing or not configured|Authentication required|not signed in/i },
+  signIn: 'run gemini and choose how it signs in',
   // Gemini's own session mode ids, set with `session/set_mode`. Its default
   // mode runs a command it deems safe (`echo`) without asking, as recorded, so
   // the description does not promise that every command waits. The read-only

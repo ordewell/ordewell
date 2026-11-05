@@ -6,7 +6,7 @@ import { augmentedPath, withPath } from '../utils/shellPath';
 import { isExecutableResolved, planDirectLaunch, type LaunchDeps } from '../utils/launch';
 import type { ExecImpl } from './ModelDiscovery';
 import { connectorFor } from './harness/connectors';
-import { readRunnerAuth, recordRunnerAuth, type RunnerAuth, type RunnerAuthExec } from './runnerAuth';
+import { readRunnerAuth, recordedRunnerAuth, recordRunnerAuth, type RunnerAuth, type RunnerAuthExec } from './runnerAuth';
 
 const execAsync = promisify(exec);
 
@@ -198,7 +198,13 @@ export class RunnerInstallation {
     const workspace = this.workspace();
     const key = `${workspace ?? ''}\u0000${runner}`;
     const cached = this.authCache.get(key);
-    if (cached && this.now() - cached.at < AUTH_TTL_MS) return cached.auth;
+    if (cached && this.now() - cached.at < AUTH_TTL_MS) {
+      // A record that is not this probe's was left since by a turn the agent
+      // refused, which outranks its status command: the flag and its way in
+      // show at once, not a TTL later (ADR-0052).
+      const since = recordedRunnerAuth(runner, workspace);
+      return since && since !== cached.auth ? since : cached.auth;
+    }
 
     const existing = this.authInflight.get(key);
     if (existing) return existing;

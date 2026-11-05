@@ -1,7 +1,7 @@
 import { CLI_PROVIDERS, getProviderMeta, plannerBackendEntries, runnerForProvider, type PlannerUsability } from '@ordewell/core';
 import { plannerNamesOr } from '../../runnerNames';
 import { dependencyCandidates } from '@ordewell/core/plan-utils';
-import { findTask, titledRefFor, type ModelView, type PickerItem, type PickerState, type TuiState } from '../state';
+import { findTask, runnerSignInLine, signedOutWithWayIn, titledRefFor, type ModelView, type PickerItem, type PickerState, type TuiState } from '../state';
 import { effortsForTask, modelsForRunner, modelsForTask, modesForTask } from '../taskAssignment';
 
 /** The picker id meaning "the runner's own default", as opposed to a model variant. */
@@ -141,7 +141,17 @@ export function pickerItemsFor(state: TuiState, action: PickerState['action']): 
     }));
   }
   if (action.kind === 'set-runners') {
-    return state.runners.map((runner) => ({ id: runner.id, label: runner.name }));
+    // Each row carries its own way in, so a signed-out agent can be fixed from
+    // the list that shows it (ADR-0052).
+    return state.runners.map((runner) => {
+      const way = runnerSignInLine(runner);
+      return {
+        id: runner.id,
+        label: runner.name,
+        ...(way ? { detail: way } : {}),
+        ...(way && signedOutWithWayIn(runner) ? { warn: true } : {}),
+      };
+    });
   }
   if (action.kind === 'set-task-runner') {
     const task = findTask(state.tasks, action.taskId);
@@ -245,12 +255,13 @@ export function plannerItems(state: TuiState): PickerItem[] {
   }
   const items: PickerItem[] = offered.map((entry) => {
     // A signed-out agent stays offered — auth never gates usability — but the
-    // row flags it and names its own login so it can be fixed without switching.
+    // row flags it and names its own way in so it can be fixed without switching.
     const signedOut = entry.kind === 'harness' && entry.auth?.state === 'signed-out';
+    const row = installed.get(entry.runner ?? entry.id);
     return {
       id: entry.id,
       label: entry.label,
-      detail: signedOut ? `not logged in · /login ${entry.runner ?? entry.id}` : entry.reason,
+      detail: signedOut ? (row && runnerSignInLine(row)) ?? `${entry.label} is not signed in.` : entry.reason,
       selected: state.plannerProvider === entry.id,
       ...(signedOut ? { warn: true } : {}),
     };

@@ -399,10 +399,10 @@ describe('gemini-cli, replayed from Gemini CLI 0.66.0', () => {
     const { mcp } = await taskToken();
     const { adapter } = gemini(replay('signed-out'));
 
-    await expect(adapter.start(taskStart(mcp))).rejects.toThrow('Gemini CLI is not signed in. Run `gemini`.');
+    await expect(adapter.start(taskStart(mcp))).rejects.toThrow('Gemini CLI is not signed in. Run gemini and choose how it signs in.');
     const refusal = recording('signed-out').find((e) => e.dir === 'in' && e.line.error);
     expect(refusal?.dir === 'in' && refusal.line.error?.message).toMatch(GEMINI_CLI_MANIFEST.auth?.signedOut ?? /^$/);
-    expect('Gemini CLI is not signed in. Run `gemini`.').toMatch(GEMINI_CLI_MANIFEST.auth?.signedOut ?? /^$/);
+    expect('Gemini CLI is not signed in. Run gemini and choose how it signs in.').toMatch(GEMINI_CLI_MANIFEST.auth?.signedOut ?? /^$/);
   });
 
   it('takes a call for Ordewell\'s only when its call id names a tool under Ordewell\'s server prefix', () => {

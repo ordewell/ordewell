@@ -63,7 +63,7 @@ describe('the Runners block', () => {
     const group = codex.closest('.runner-pill-group')!;
     expect(codex.className).toContain('on');
     expect(codex.className).toContain('signed-out');
-    expect(codex.title).toBe('Not logged in');
+    expect(codex.title).toBe('Codex is not signed in. Sign in with /login codex, or run codex login.');
     expect(group.className).toContain('signed-out');
     expect(group.querySelectorAll('button')).toHaveLength(2);
     expect(group.querySelector('.planner-auth-dot')).not.toBeNull();

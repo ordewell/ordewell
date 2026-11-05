@@ -524,6 +524,22 @@ describe('ordewell key', () => {
 describe('ordewell runners', () => {
   const runners = { runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }], headless: false, orchestratorModel: '' };
 
+  it("names a signed-out agent's way in under its row, in the shell's own commands", async () => {
+    const d = await fakeDaemon({ runners: { ...runners, runners: [
+      { id: 'cursor-agent', name: 'Cursor', enabled: true, auth: { state: 'signed-out', loginCommand: ['cursor-agent', 'login'], signIn: { runner: 'cursor-agent', label: 'Cursor', login: ['cursor-agent', 'login'] } } },
+      { id: 'qwen-code', name: 'Qwen Code', enabled: true, auth: { state: 'unknown', signIn: { runner: 'qwen-code', label: 'Qwen Code', key: { provider: 'openrouter', label: 'OpenRouter' } } } },
+      { id: 'copilot-cli', name: 'GitHub Copilot CLI', enabled: true, auth: { state: 'unknown', loginCommand: ['copilot', 'login'], signIn: { runner: 'copilot-cli', label: 'GitHub Copilot CLI', login: ['copilot', 'login'] } } },
+      { id: 'claude-code', name: 'Claude Code', enabled: true, auth: { state: 'signed-in' } },
+    ] } });
+    const { handleRunners } = await import('../runners');
+    const { stdout } = await capture(() => handleRunners([], new ApiClient(d.port)));
+    expect(stdout).toContain('cursor-agent   Cursor\n      Cursor is not signed in. Run cursor-agent login to sign in.\n');
+    expect(stdout).toContain('claude-code    Claude Code\n');
+    expect(stdout).toContain('copilot-cli    GitHub Copilot CLI\n      Run copilot login to sign in.\n');
+    expect(stdout).not.toContain('Qwen Code is not signed in');
+    d.close();
+  });
+
   it('toggles a known runner', async () => {
     const d = await fakeDaemon({ runners });
     const { handleRunners } = await import('../runners');

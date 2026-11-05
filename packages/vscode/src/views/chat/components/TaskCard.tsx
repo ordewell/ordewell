@@ -36,6 +36,13 @@ export interface RunnerOption {
  */
 export type TaskCardRun = Pick<RunTask, 'idleSince' | 'completionReceived' | 'attaching' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason' | 'loopStranded' | 'handoff' | 'verdict' | 'loopRound' | 'attempted' | 'attemptUsage' | 'delegation'> & { status?: Task['status'] };
 
+/** A signed-out agent's way in, as its pills word it, and the Log in that runs it where Ordewell can (ADR-0052). */
+export interface RunnerSignInView {
+  label: string;
+  hint: string;
+  logIn?: () => void;
+}
+
 interface TaskCardProps {
   task: Task;
   models: DiscoveredModel[];
@@ -101,6 +108,8 @@ interface TaskCardProps {
   /** Open (or focus) this task's log tab (ADR-0018, V1). */
   onOpenLog?: (taskId: string) => void;
   onOpenChild?: (taskId: string) => void;
+  /** Each signed-out agent's way in, keyed by runner id. */
+  runnerSignIn?: Readonly<Record<string, RunnerSignInView>>;
   /** Controlled expansion. When both are supplied the parent owns which card is
    *  open (an accordion); omitted, the card keeps its own state. */
   expanded?: boolean;
@@ -360,15 +369,24 @@ export function UsageLimitControls({ taskId, row, onResumeNow, onCancelResume }:
  * `onRetry` is a failed task's fresh retry, first as in the TUI: core refuses
  * Run Task on a failed task, so it is the task's own way back.
  */
-export function TaskActions({ taskId, actions, labels, handlers, onRetry }: {
+export function TaskActions({ taskId, actions, labels, handlers, onRetry, signIn }: {
   taskId: string;
   actions: TaskRowAction[];
   labels: Record<TaskRowAction, string>;
   handlers: Partial<Record<TaskRowAction, (taskId: string) => void>>;
   onRetry?: (taskId: string) => void;
+  /** The way into the signed-out agent a failed task ran on: a retry before it would fail the same way. */
+  signIn?: RunnerSignInView;
 }) {
+  const logIn = signIn?.logIn;
   return (
     <div className="task-actions">
+      {signIn && logIn && (
+        <button className="task-action-btn start" aria-label={`Log in to ${signIn.label}`} title={signIn.hint}
+          onClick={(e) => { e.stopPropagation(); logIn(); }}>
+          Log in
+        </button>
+      )}
       {onRetry && (
         <button className="task-action-btn start" onClick={(e) => { e.stopPropagation(); onRetry(taskId); }}>
           Retry
@@ -460,7 +478,7 @@ export function runnerOptionsFor(runners: RunnerOption[] | undefined, assignedRu
   return [...runners, { id: assignedRunner, displayName: assignedRunner }];
 }
 
-export default function TaskCard({ task, run, runsByTask, models, modes, modelsByRunner, modesByRunner, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, runActive, output, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRevert, onRunTask, onSendMessage, onSendMessageNow, onOpenLog, onOpenChild, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
+export default function TaskCard({ task, run, runsByTask, models, modes, modelsByRunner, modesByRunner, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, runActive, output, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRevert, onRunTask, onSendMessage, onSendMessageNow, onOpenLog, onOpenChild, runnerSignIn, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
   const [internalExpanded, setInternalExpanded] = useState(false);
   const isControlled = expandedProp !== undefined;
   const expanded = isControlled ? expandedProp : internalExpanded;
@@ -855,7 +873,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
                       onModelChange={onModelChange} onModelsRefreshNeeded={onModelsRefreshNeeded} onModeChange={onModeChange}
                       taskSkills={taskSkills} onSkillsChange={onSkillsChange}
                       onRemoveTask={onRemoveTask} onPromptChange={onPromptChange}
-                      onRetry={onRetry} onSkip={onSkip} onCancel={onCancel} onCancelResume={onCancelResume} onResumeNow={onResumeNow}
+                      onRetry={onRetry} runnerSignIn={runnerSignIn} onSkip={onSkip} onCancel={onCancel} onCancelResume={onCancelResume} onResumeNow={onResumeNow}
                       onForceStart={onForceStart} onMarkComplete={onMarkComplete}
                       onMarkIncomplete={onMarkIncomplete} onRevert={onRevert}
                       onRunTask={onRunTask} onOpenLog={onOpenLog} />
@@ -873,7 +891,8 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
             {(isExecuting || paused || failed) && (
               <TaskActions taskId={task.id} actions={row.actions} labels={ACTION_LABELS}
                 handlers={{ cancel: onCancel, 'resume-now': onResumeNow, 'cancel-resume': onCancelResume, skip: onSkip, 'force-start': onForceStart }}
-                onRetry={failed && task.type !== 'user' ? onRetry : undefined} />
+                onRetry={failed && task.type !== 'user' ? onRetry : undefined}
+                signIn={failed && task.assignedRunner ? runnerSignIn?.[task.assignedRunner] : undefined} />
             )}
 
             <TaskMarkControl taskId={task.id} row={row} runActive={runActive ?? !!isExecuting}

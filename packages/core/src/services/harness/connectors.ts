@@ -7,6 +7,7 @@ import { CODEX_ORDEWELL } from './codexOrdewell';
 import { OPENCODE_ORDEWELL } from './openCodeOrdewell';
 import type { OrdewellToolBinding } from './ordewellBinding';
 import type { RepoConfigReader } from './repoConfig';
+import type { KeySignInRoute } from '../signInHint';
 import { CLAUDE_REPO_CONFIG } from './claudeRepoConfig';
 import { CODEX_REPO_CONFIG } from './codexRepoConfig';
 import { OPENCODE_REPO_CONFIG } from './openCodeRepoConfig';
@@ -55,6 +56,8 @@ export interface RunnerConnector {
    * on a provider Ordewell cannot see.
    */
   promptCacheTtlMs?: number;
+  /** A key in Ordewell that signs the runner in, besides its own login. */
+  signInRoute?: KeySignInRoute;
 }
 
 /** Claude's default, and what an API login gets; a subscription's runs recorded here write the hour-long kind. OpenAI's, which Codex uses, is 5 to 10 minutes idle. */
