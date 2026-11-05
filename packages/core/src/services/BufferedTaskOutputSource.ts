@@ -52,10 +52,12 @@ function plain(raw: string): string {
 /**
  * What every read of the output starts from: runner text, redacted whole
  * before any read cuts it to its lines or a report cuts it to its budget, as a
- * cut can keep a value and drop the name that marks it.
+ * cut can keep a value and drop the name that marks it. Trimmed only after:
+ * a trim is a cut too, and taking a quoted first line's leading space parts
+ * it from the ` > ` the lines below it open with.
  */
 function clean(capture: Capture, raw: string): string {
-  return capture.redact(plain(raw).trim());
+  return capture.redact(plain(raw)).trim();
 }
 
 /** Owns one bounded output buffer per task attempt, fed from the attempt's session. */
