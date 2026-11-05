@@ -465,11 +465,11 @@ describe('cursor-agent, replayed from Cursor CLI 2026.10.22', () => {
     const { mcp } = await taskToken();
     const { adapter } = cursor(replay('signed-out'));
 
-    await expect(adapter.start(taskStart(mcp))).rejects.toThrow('Cursor is not signed in. Run `cursor-agent login`.');
+    await expect(adapter.start(taskStart(mcp))).rejects.toThrow('Cursor is not signed in. Sign in with /login cursor-agent, or run cursor-agent login.');
     const refusal = recording('signed-out').find((e) => e.dir === 'in' && e.line.error);
     expect(refusal?.dir === 'in' && refusal.line.error).toMatchObject({ code: -32000 });
     expect(refusal?.dir === 'in' && refusal.line.error?.message).toMatch(CURSOR_AGENT_MANIFEST.auth?.signedOut ?? /^$/);
-    expect('Cursor is not signed in. Run `cursor-agent login`.').toMatch(CURSOR_AGENT_MANIFEST.auth?.signedOut ?? /^$/);
+    expect('Cursor is not signed in. Sign in with /login cursor-agent, or run cursor-agent login.').toMatch(CURSOR_AGENT_MANIFEST.auth?.signedOut ?? /^$/);
     expect(note('signed-out', 'summary')?.contacted).toBe(false);
   });
 

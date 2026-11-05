@@ -41,6 +41,8 @@ export type { RefTask } from './services/TaskRefs';
 export { DEFAULT_RUNNERS, pausedOnLimit } from './models/Task';
 // A script task's body as its card and the approval card show it (ADR-0035).
 export { scriptTaskText } from './models/ScriptTask';
+// The VS Code webview words a signed-out agent from the verdict it is handed (ADR-0052).
+export { describeRunnerSignIn, describeSignIn, describeSignInWays, signInAction, signInOfVerdict, TERMINAL_UI_SIGN_IN, type RunnerSignIn } from './services/signInHint';
 // The run view is pure too: a surface seeds its state from the one empty run
 // rather than re-declaring the shape.
 export { EMPTY_RUN } from './services/runView';

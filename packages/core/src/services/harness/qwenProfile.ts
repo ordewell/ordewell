@@ -38,7 +38,9 @@ export const QWEN_CODE_PROFILE: AcpProfile = {
   // A provider key configured in Ordewell signs Qwen in through its `openai`
   // auth, so it needs no sign-in of its own (ADR-0060, R9).
   credentials: qwenCredentials,
-  signInRoute: 'set the key of an OpenAI-compatible provider, such as OpenRouter, in Ordewell with `/key`',
+  // Any OpenAI-compatible vendor of Ordewell's qualifies; OpenRouter is the
+  // one the key entry is pointed at.
+  signInRoute: { provider: 'openrouter', others: 'any OpenAI-compatible provider' },
   // Qwen has no flag that takes its write or shell tools away, and its plan
   // mode is left by a request to switch modes. In `default` it asks before
   // every write, edit and command, and the adapter refuses each by its kind,

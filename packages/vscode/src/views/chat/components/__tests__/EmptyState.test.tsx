@@ -31,8 +31,8 @@ describe('EmptyState — signed-out planners', () => {
     expect(region?.getAttribute('aria-live')).toBe('polite');
     const rows = [...container.querySelectorAll<HTMLElement>('.planner-auth-row')];
     expect(rows.map((r) => r.dataset.runner)).toEqual(['claude-code', 'codex']);
-    expect(rows[0].querySelector('.planner-auth-warning-text')?.textContent).toBe('Claude Code not logged in.');
-    expect(rows[1].querySelector('.planner-auth-warning-text')?.textContent).toBe('Codex not logged in.');
+    expect(rows[0].querySelector('.planner-auth-warning-text')?.textContent).toBe('Claude Code is not signed in.');
+    expect(rows[1].querySelector('.planner-auth-warning-text')?.textContent).toBe('Codex is not signed in.');
     expect(rows[0].querySelector('.planner-auth-dot')?.getAttribute('aria-hidden')).toBe('true');
     expect(rows[1].querySelector('.planner-auth-dot')?.getAttribute('aria-hidden')).toBe('true');
   });
@@ -107,12 +107,27 @@ describe('EmptyState — signed-out planners', () => {
     ]);
   });
 
-  it('gives a signed-out agent with no login command a row and no button', () => {
+  it('gives a signed-out agent with no way to press a row and no button', () => {
     const { container } = render(<EmptyState signedOut={[{ runner: 'codex', label: 'Codex' }]} />);
 
     expect(container.querySelector('.planner-auth-row[data-runner="codex"] .planner-auth-warning-text')?.textContent)
-      .toBe('Codex not logged in.');
+      .toBe('Codex is not signed in.');
     expect(container.querySelector('.planner-login-btn')).toBeNull();
+  });
+
+  it('names each agent\'s way in on its row, its name set apart', () => {
+    const { container } = render(
+      <EmptyState signedOut={[
+        { runner: 'cursor-agent', label: 'Cursor', hint: 'Cursor is not signed in. Sign in with /login cursor-agent, or run cursor-agent login.', onLogIn: () => {} },
+        { runner: 'gemini-cli', label: 'Gemini CLI', hint: 'Gemini CLI is not signed in. Run gemini and choose how it signs in.' },
+      ]} />,
+    );
+
+    const cursor = container.querySelector('.planner-auth-row[data-runner="cursor-agent"] .planner-auth-warning-text');
+    expect(cursor?.textContent).toBe('Cursor is not signed in. Sign in with /login cursor-agent, or run cursor-agent login.');
+    expect(cursor?.querySelector('.planner-auth-warning-agent')?.textContent).toBe('Cursor');
+    expect(container.querySelector('.planner-auth-row[data-runner="gemini-cli"] .planner-auth-warning-text')?.textContent)
+      .toBe('Gemini CLI is not signed in. Run gemini and choose how it signs in.');
   });
 });
 

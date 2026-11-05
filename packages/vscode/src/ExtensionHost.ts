@@ -216,6 +216,11 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       handleSessionMessage(msg, managerDeps);
       // A model call spent from some account — the planner's, or the task's
       // runner's — so the monitor's next poll reads it, however many calls.
+      // A task can fail because its agent signed out, which the run records;
+      // the flags and their Log in redraw from it now (ADR-0052).
+      if (msg.type === 'task_updated' && msg.changes.status === 'failed') {
+        void planner.sendState().catch((err) => log(`Planner state refresh failed: ${err instanceof Error ? err.message : String(err)}`));
+      }
       if (msg.type === 'planner_usage') accountLimits.invalidate();
       else if (msg.type === 'task_log' && msg.events.some((event) => event.type === 'turn_end')) {
         const task = findTask(msg.taskId);

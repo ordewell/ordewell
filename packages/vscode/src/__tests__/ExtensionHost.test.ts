@@ -572,6 +572,17 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     ));
   });
 
+  it('redraws the planner flags when a task fails, since the failure may be its agent signing out', async () => {
+    await h.host.start();
+    await vi.waitFor(() => expect(h.chat.provider.setPlannerBackends).toHaveBeenCalled());
+    h.chat.provider.setPlannerBackends.mockClear();
+
+    h.sessionDeps.current?.broadcast({ type: 'task_updated', taskId: 't1', changes: { status: 'in_progress' } });
+    h.sessionDeps.current?.broadcast({ type: 'task_updated', taskId: 't1', changes: { status: 'failed' } });
+
+    await vi.waitFor(() => expect(h.chat.provider.setPlannerBackends).toHaveBeenCalledTimes(1));
+  });
+
   it('seeds the run view when the webview reconnects, so a task waiting on a runner approval keeps its badge', async () => {
     await h.host.start();
     h.chat.messages.fire({ type: 'sendMessage', text: 'build a parser', typed: true });

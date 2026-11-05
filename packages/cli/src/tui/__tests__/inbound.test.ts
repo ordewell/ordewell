@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { WsEvent } from '../../apiClient';
-import type { Action } from '../reducer';
+import { initialState, reduce, type Action } from '../reducer';
+import { lastMessage } from './chat';
 import { forgetInbound, inboundFor } from '../inbound';
 
 /**
@@ -59,5 +60,15 @@ describe('a socket held on a plan', () => {
     onEvent({ type: 'notice', message: 'Heads up.', level: 'info' } as WsEvent);
 
     expect(actions).toEqual([{ type: 'notice', message: 'Heads up.', level: 'info', sessionId: 's1' }]);
+  });
+
+  it('shows a task that could not start signed out with its way in, as the daemon worded it', () => {
+    const { actions, onEvent } = subscribed();
+    const said = 'Failed to start task "One": Cursor is not signed in. Sign in with /login cursor-agent, or run cursor-agent login.';
+
+    onEvent({ type: 'notice', message: said, level: 'error' } as WsEvent);
+    const state = actions.reduce((s, action) => reduce(s, action).state, initialState({ sessionId: 's1' }));
+
+    expect(lastMessage(state)).toMatchObject({ role: 'error', text: said });
   });
 });

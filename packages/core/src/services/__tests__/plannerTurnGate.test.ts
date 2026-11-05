@@ -316,11 +316,11 @@ describe('a planner whose agent is signed out', () => {
 
     const refusal = session.continueConversation('try now');
     await expect(refusal).rejects.toBeInstanceOf(PlannerNotReadyError);
-    await expect(refusal).rejects.toThrow(/Claude Code not logged in\. Sign in with \/login, or run claude auth login and try again\./);
+    await expect(refusal).rejects.toThrow('Claude Code is not signed in. Sign in with /login claude-code, or run claude auth login. Then try again.');
 
     expect(aiService.continueConversation).not.toHaveBeenCalled();
     expect(pendingTexts(session.planState)).toEqual(['rename task 1']);
-    await vi.waitFor(() => expect(notices.join('\n')).toContain('Claude Code not logged in'));
+    await vi.waitFor(() => expect(notices.join('\n')).toContain('Claude Code is not signed in'));
     expect(notices.join('\n')).toContain('rename task 1');
   });
 

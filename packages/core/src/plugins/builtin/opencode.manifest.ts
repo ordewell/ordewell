@@ -34,6 +34,10 @@ export const OPENCODE_MANIFEST: RunnerManifest = {
   contextFile: 'AGENTS.md',
   contextFileAltPath: '.opencode/AGENTS.md',
 
+  // OpenCode signs in per provider, choosing one in its own prompt, so
+  // Ordewell has no single login to run and no status to ask.
+  signIn: 'run opencode auth login and choose a provider',
+
   modes: [
     { id: 'build', label: 'Build', description: 'Full access agent for development work', cliValue: 'build', autonomous: true, safe: true },
     { id: 'plan', label: 'Read-only', description: 'Native reads and Ordewell commands; lands nothing', cliValue: 'build', readOnly: true },

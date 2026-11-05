@@ -144,6 +144,25 @@ describe('login', () => {
     ]);
   });
 
+  it.each([
+    [
+      'qwen-code', 'Qwen Code',
+      { runner: 'qwen-code', label: 'Qwen Code', key: { provider: 'openrouter' as const, label: 'OpenRouter', others: 'any OpenAI-compatible provider' }, byHand: 'run qwen and sign in there' },
+      'Qwen Code has no login Ordewell can run. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.',
+    ],
+    [
+      'opencode', 'OpenCode',
+      { runner: 'opencode', label: 'OpenCode', byHand: 'run opencode auth login and choose a provider' },
+      'OpenCode has no login Ordewell can run. Run opencode auth login and choose a provider.',
+    ],
+  ])('names the way %s does sign in when Ordewell has no login to run', (id, name, signIn, said) => {
+    const row: RunnerView = { id, name, enabled: true, auth: { state: 'signed-out', signIn } };
+    const { effects, state } = run(`/login ${id}`, { plannerProvider: 'claude-code', runners: [claude, row], runnersKnown: true });
+
+    expect(effects).toEqual([]);
+    expect(lastMessage(state)?.text).toBe(said);
+  });
+
   it('lists the agents that can sign in when the name matches none, and runs nothing', () => {
     const { state, effects } = run('/login nobody', { plannerProvider: 'claude-code', runners: [claude, codex, opencode], runnersKnown: true });
 
@@ -175,13 +194,6 @@ describe('login', () => {
     expect(lastMessage(state)?.text).not.toContain('not installed');
   });
 
-  it("says OpenCode's login is not Ordewell's to manage", () => {
-    const { state, effects } = run('/login opencode', { plannerProvider: 'claude-code', runners: [claude, opencode], runnersKnown: true });
-
-    expect(effects).toEqual([]);
-    expect(lastMessage(state)?.text).toContain('OpenCode');
-    expect(lastMessage(state)?.text).toMatch(/not managed/);
-  });
 });
 
 describe('model allowlist', () => {
@@ -224,6 +236,36 @@ describe('runners and mouse', () => {
       kind: 'picker',
       picker: { action: { kind: 'set-runners' }, multi: true, chosen: ['opencode'] },
     });
+  });
+
+  it('/runners names the way in on each row whose agent is signed out, or whose sign-in nobody could read', () => {
+    const { state } = run('/runners', {
+      runners: [
+        {
+          id: 'cursor-agent', name: 'Cursor', enabled: true,
+          auth: { state: 'signed-out', loginCommand: ['cursor-agent', 'login'], signIn: { runner: 'cursor-agent', label: 'Cursor', login: ['cursor-agent', 'login'] } },
+        },
+        {
+          id: 'qwen-code', name: 'Qwen Code', enabled: true,
+          auth: {
+            state: 'signed-out',
+            signIn: { runner: 'qwen-code', label: 'Qwen Code', key: { provider: 'openrouter', label: 'OpenRouter', others: 'any OpenAI-compatible provider' }, byHand: 'run qwen and sign in there' },
+          },
+        },
+        { id: 'copilot-cli', name: 'GitHub Copilot CLI', enabled: true, auth: { state: 'unknown', loginCommand: ['copilot', 'login'] } },
+        { id: 'codex', name: 'Codex', enabled: true, auth: { state: 'signed-in', loginCommand: ['codex', 'login'] } },
+      ],
+    });
+    const items = state.overlay?.kind === 'picker' ? state.overlay.picker.items : [];
+    expect(items).toEqual([
+      { id: 'cursor-agent', label: 'Cursor', detail: 'Cursor is not signed in. Sign in with /login cursor-agent, or run cursor-agent login.', warn: true },
+      {
+        id: 'qwen-code', label: 'Qwen Code', warn: true,
+        detail: 'Qwen Code is not signed in. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.',
+      },
+      { id: 'copilot-cli', label: 'GitHub Copilot CLI', detail: 'Sign in with /login copilot-cli, or run copilot login.' },
+      { id: 'codex', label: 'Codex' },
+    ]);
   });
 
   it('/runners asks the daemon for the saved choice as it opens, since another surface may have changed it', () => {

@@ -356,7 +356,7 @@ describe('qwen-code, replayed from Qwen Code 0.26.6', () => {
     const { mcp } = await taskToken();
     const { spawned, adapter } = qwen(replay('signed-out'));
 
-    await expect(adapter.start(taskStart(mcp))).rejects.toThrow(/^Qwen Code is not signed in\. Run `qwen`, or set the key of an OpenAI-compatible provider, such as OpenRouter, in Ordewell with `\/key`\.$/);
+    await expect(adapter.start(taskStart(mcp))).rejects.toThrow('Qwen Code is not signed in. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.');
     expect(spawned.lastEnv()?.OPENAI_API_KEY || undefined).toBeUndefined();
   });
 
