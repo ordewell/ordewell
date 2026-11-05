@@ -232,7 +232,7 @@ export function storedHandoff(handoff: Handoff): StoredHandoff | undefined {
   const artifacts = handoff.artifacts ?? [];
   const report = handoff.report && redactAgentText(handoff.report.trim());
   // A blocked or failed attempt lands nothing, so its summary carries everything.
-  const commit = handoff.status === 'done' && handoff.commit ? withoutTrailers(handoff.commit) : undefined;
+  const commit = handoff.status === 'done' && handoff.commit ? redactedCommit(withoutTrailers(handoff.commit)) : undefined;
   if (!commit && !summary && findings.length === 0 && artifacts.length === 0 && !report) return undefined;
   return {
     ...(commit ? { commit } : {}),
@@ -280,6 +280,11 @@ function withoutTrailers({ subject, body }: HandoffCommit): HandoffCommit {
   if (paragraphs.length > 1 && last.every((line) => TRAILER.test(line.trim()))) paragraphs.pop();
   const cleaned = paragraphs.join('\n\n').trim();
   return { subject, ...(cleaned ? { body: cleaned } : {}) };
+}
+
+/** The commit as a runner wrote it is its words too, and a landed message is pushed for good. */
+function redactedCommit({ subject, body }: HandoffCommit): HandoffCommit {
+  return { subject: redactAgentText(subject), ...(body !== undefined ? { body: redactAgentText(body) } : {}) };
 }
 
 /** What the plan keeps of a handoff: no report, and at most {@link DIGEST_FINDINGS} findings. */

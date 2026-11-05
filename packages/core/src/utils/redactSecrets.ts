@@ -58,7 +58,9 @@ function markerAt(text: string, at: number): boolean {
  * line with `[2026-11-05 10:00:00] ` or `[cline] `. A rule anchored to the
  * start of a line has to see past them or it never fires on real output.
  */
-const LINE_PREFIX = String.raw`(?:[ \t]*\[[^\]\n]*\])*(?:[ \t]*\d+\||[^\s:]*:\d+:|)[ \t]*`;
+// A path opens with no `[`: else, on a line of `[a]` groups, each count of them
+// the engine gives back rescans the rest of the line for a `:`, quadratically.
+const LINE_PREFIX = String.raw`(?:[ \t]*\[[^\]\n]*\])*(?:[ \t]*\d+\||(?:[^\s:[][^\s:]*)?:\d+:|)[ \t]*`;
 const LINE_PREFIX_ANCHORED = new RegExp('^' + LINE_PREFIX);
 
 /**
@@ -239,6 +241,9 @@ function redactPrivateKeyBlocks(text: string): string {
 
   const out: string[] = [];
   let label: string | null = null;
+  // What the BEGIN line opens with, which each line of its block repeats: a
+  // `docker compose logs` service column, a markdown quote's `> `.
+  let prefix = '';
   let bodyChars = 0;
 
   const closeBlock = (): void => {
@@ -254,11 +259,15 @@ function redactPrivateKeyBlocks(text: string): string {
       out.push(line);
       const begun = PEM_BEGIN.exec(line);
       // A body on the BEGIN line itself was an inline key, already redacted.
-      if (begun && !/[A-Za-z0-9+/]/.test(line.slice(begun.index + begun[0].length))) label = begun[1];
+      if (begun && !/[A-Za-z0-9+/]/.test(line.slice(begun.index + begun[0].length))) {
+        label = begun[1];
+        prefix = line.slice(0, begun.index);
+      }
       continue;
     }
+    const own = prefix && line.startsWith(prefix) ? line.slice(prefix.length) : line;
     // A CRLF text keeps its `\r` on each line split at `\n`, and no body line has one.
-    const content = line.replace(LINE_PREFIX_ANCHORED, '').replace(/\r$/, '');
+    const content = own.replace(LINE_PREFIX_ANCHORED, '').replace(/\r$/, '');
     if (content.includes(`-----END ${label}-----`)) {
       closeBlock();
       out.push(line);
@@ -281,6 +290,30 @@ function redactPrivateKeyBlocks(text: string): string {
 }
 
 /**
+ * The start of the BEGIN line of a private key block still open at `end`, a
+ * line start in `text`: a read from `end` holds body lines with neither BEGIN
+ * nor END, which nothing marks as key material, so it has to be redacted from
+ * that BEGIN on. The same lines close a block here as in
+ * {@link redactPrivateKeyBlocks}.
+ */
+export function openPrivateKeyStart(text: string, end: number): number | undefined {
+  const head = text.slice(0, end);
+  const at = head.lastIndexOf('-----BEGIN ');
+  const begun = at < 0 ? null : PEM_BEGIN.exec(head.slice(at));
+  if (!begun || begun.index !== 0) return undefined;
+  const start = head.lastIndexOf('\n', at) + 1;
+  const lineEnd = head.indexOf('\n', at);
+  if (lineEnd < 0 || /[A-Za-z0-9+/]/.test(head.slice(at + begun[0].length, lineEnd))) return undefined;
+  const prefix = head.slice(start, at);
+  const open = head.slice(lineEnd + 1).split('\n').every((line) => {
+    const own = prefix && line.startsWith(prefix) ? line.slice(prefix.length) : line;
+    const content = own.replace(LINE_PREFIX_ANCHORED, '').replace(/\r$/, '');
+    return !content.includes('-----END ') && PEM_BODY_LINE.test(content);
+  });
+  return open ? start : undefined;
+}
+
+/**
  * `Authorization: Bearer …`, in a header, a curl line or a log. The token
  * test keeps the scheme words in prose (`Basic authentication`) as they are;
  * after an `Authorization` header's name the scheme is no prose, so its token
@@ -288,16 +321,23 @@ function redactPrivateKeyBlocks(text: string): string {
  */
 const AUTH_SCHEME_CREDENTIAL = /((?<![A-Za-z0-9-])(?:Proxy-)?Authorization["']?[ \t]*[:=][ \t]*["']?)?(?<![A-Za-z0-9])(Bearer|Basic|Token)([^\S\n]+)([A-Za-z0-9\-._~+/]{8,}=*)/gi;
 
+/** Past the longest word a scheme is followed by in prose, a token of one case and no digit is still a token. */
+const MIN_PLAIN_TOKEN = 20;
+
 function looksLikeToken(value: string): boolean {
-  return /\d/.test(value) || (/[a-z]/.test(value) && /[A-Z]/.test(value)) || /[+/=]/.test(value);
+  return /\d/.test(value) || (/[a-z]/.test(value) && /[A-Z]/.test(value)) || /[+/=]/.test(value) || value.length >= MIN_PLAIN_TOKEN;
 }
 
 /**
  * A key and what assigns it: `"KEY":`, `key =`, `:key =>`, with the key's
  * quotes escaped any number of times, as JSON inside JSON escapes them.
  */
-// A name starts only where no name runs through, so a run like `a-a-a-…` is scanned once, not once per start.
-const ASSIGNED_NAME = /(?<![A-Za-z0-9_\\]|[A-Za-z0-9_][.-])(\\*["'`])?([A-Za-z_][A-Za-z0-9_.-]*)(\\*["'`])?[ \t]*(=>|:|=(?!=))[ \t]*/g;
+// A name starts only where no name runs through, however many `.` or `-` part
+// it from the last, so a run like `a-a-…` or `x--x--…` is scanned once, not
+// once per start; the one-char tests first keep the long lookbehind off a run
+// of `-` or `\`. An escaped break (`\n`, `\t`) parts the lines of an env dump
+// inside a JSON string.
+const ASSIGNED_NAME = /(?![.-])(?<!\\)(?:(?<=\\[nrt][.-]*)|(?<![A-Za-z0-9_\\][.-]*))(\\*["'`])?([A-Za-z_][A-Za-z0-9_.-]*)(\\*["'`])?[ \t]*(=>|:|=(?!=))[ \t]*/g;
 /**
  * A long flag and the space that parts it from its value: `--api-key v`, as a
  * spawn line or a usage error prints it. A value that opens with `-` is the
@@ -305,55 +345,140 @@ const ASSIGNED_NAME = /(?<![A-Za-z0-9_\\]|[A-Za-z0-9_][.-])(\\*["'`])?([A-Za-z_]
  * (`pass --token to it`).
  */
 const SPACED_FLAG = /(?<![A-Za-z0-9_-])(--)([A-Za-z][A-Za-z0-9_-]*)()[ \t]+(?=[^\s-]\S{7})/g;
+/**
+ * A name and its value laid out as a table row, `| GITHUB_TOKEN | value |`,
+ * as an agent's report lists what it set. The one-char lookahead keeps the
+ * lookbehind off a run of spaces.
+ */
+const TABLE_NAME = /(?=[A-Za-z_\x60])(?<=\|[ \t]*)(\x60?)([A-Za-z_][A-Za-z0-9_.-]*)(\x60?)[ \t]*(\|)[ \t]*/g;
+/** A name and its value as an element, `<password>value</password>`: a settings.xml, a SOAP fault. */
+const ELEMENT_NAME = /<()([A-Za-z_][A-Za-z0-9_.-]*)()(>)/g;
 /** A scheme word {@link AUTH_SCHEME_CREDENTIAL} redacts with the token after it, which a bare value would part from it. */
 const AUTH_SCHEME_WORD = /^(?:Bearer|Basic|Token)$/i;
 /**
  * A name an env dump or a request header prints, `MISTRAL_API_KEY:` or
- * `x-api-key:`, whose bare value after a colon is the value; a lone word
- * before one (`password: required`) is as likely prose.
+ * `x-api-key:`, whose bare value after a colon is the value; after a lone word
+ * (`password: required`, `apiKey: string`) the value is taken only when it is
+ * shaped like a key.
  */
 const DUMPED_NAME = /[_-]/;
-/** Where an unquoted value assigned with `=` ends. */
+/** Where an unquoted value after a colon, `=>` or a flag ends. */
 const BARE_VALUE_END = /[\s,;&"'`)}\]\\]/;
+/**
+ * Where an unquoted value assigned with `=` ends: a shell or dotenv value runs
+ * to the next space, `,` `;` `)` and all, as `DB_PASSWORD=a,b` assigns `a,b`.
+ * A quote or `\` still ends it, as the end of the string it sits in, and `&`
+ * as the end of a query parameter.
+ */
+const ASSIGNED_VALUE_END = /[\s"'`\\&]/;
 /** Names that carry a credential however a harness spells its own login, which {@link isCredentialVariable} leaves out. */
 const CREDENTIAL_KEY_SUFFIX = /(?:^|_)(?:API_?KEY|TOKEN|SECRET|AUTHORIZATION)$/;
+/**
+ * What a name carries after its credential word to tell one of several apart:
+ * `GITHUB_TOKEN_1`, `api_key_v2`, `OPENAI_API_KEY_BACKUP`. Curated, as the
+ * shapes are, so `TOKEN_COUNT` and `MAX_TOKENS` stay counts.
+ */
+const NAME_QUALIFIER = /_(?:V?\d+|BACKUP|OLD|NEW|PREV|PREVIOUS|NEXT|CURRENT|PRIMARY|SECONDARY|FALLBACK|ROTATED|ALT|PROD|PRODUCTION|DEV|STAGING|TEST|LIVE|LOCAL)$/;
 
 function credentialNamed(key: string): boolean {
   const name = key
     .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
     .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
     .replace(/[-.]/g, '_')
-    .toUpperCase();
+    .toUpperCase()
+    .replace(NAME_QUALIFIER, '')
+    // `apiKeys` holds keys; `MAX_TOKENS` is a count, so only a plural of KEY is one.
+    .replace(/KEYS$/, 'KEY');
   return isCredentialVariable(name) || CREDENTIAL_KEY_SUFFIX.test(name);
 }
 
-/**
- * The value at `at`: quoted, up to the same quote escaped the same way, or the
- * end of its line when it was cut first; or, where `bare` allows, unquoted.
- */
-function valueAt(text: string, at: number, bare: boolean): { start: number; end: number } | undefined {
+/** A bare value a lone name or a table cell gives, taken only when it reads as a key and not as a word or code. */
+function keyShaped(value: string): boolean {
+  if (looksLikeCode(value) || value.startsWith('$')) return false;
+  if (CAMEL_IDENTIFIER.test(value) && !/\d/.test(value)) return false;
+  return looksLikeKeyMaterial(value);
+}
+
+type Span = { start: number; end: number };
+
+/** The quoted value at `at`, up to the same quote escaped the same way, or the end of its line when it was cut first. */
+function quotedAt(text: string, at: number): Span | undefined {
   let open = at;
   while (text[open] === '\\') open++;
-  if (open < text.length && `"'\``.includes(text[open])) {
-    const close = text.slice(at, open + 1);
-    let end = open + 1;
-    while (end < text.length && text[end] !== '\n' && !text.startsWith(close, end)) {
-      end += close.length === 1 && text[end] === '\\' && text[end + 1] !== '\n' ? 2 : 1;
-    }
-    return { start: open + 1, end: Math.min(end, text.length) };
+  if (open >= text.length || !`"'\``.includes(text[open])) return undefined;
+  const close = text.slice(at, open + 1);
+  let end = open + 1;
+  while (end < text.length && text[end] !== '\n' && !text.startsWith(close, end)) {
+    end += close.length === 1 && text[end] === '\\' && text[end + 1] !== '\n' ? 2 : 1;
   }
-  if (open > at || !bare) return undefined;
+  return { start: open + 1, end: Math.min(end, text.length) };
+}
+
+function bareUntil(text: string, at: number, ends: RegExp): Span {
   let end = at;
-  while (end < text.length && !BARE_VALUE_END.test(text[end])) end++;
+  while (end < text.length && !ends.test(text[end])) end++;
   return { start: at, end };
+}
+
+/** Each quoted element of the list at `at`, `["a", "b"]`, as `apiKeys` holds them. */
+function listedAt(text: string, at: number): Span[] {
+  const spans: Span[] = [];
+  let next = at + 1;
+  for (;;) {
+    while (next < text.length && /[\s,]/.test(text[next])) next++;
+    const value = quotedAt(text, next);
+    if (!value) return spans;
+    spans.push(value);
+    next = value.end + 1;
+  }
+}
+
+/**
+ * The values `name` holds after `separator` at `at`: quoted, a list of quoted
+ * values, or unquoted, ending where that separator's values end.
+ */
+function valuesAt(text: string, at: number, name: string, separator: string | undefined): Span[] {
+  const quoted = quotedAt(text, at);
+  if (quoted) return [quoted];
+  if (text[at] === '\\') return [];
+  if (text[at] === '[' && (separator === ':' || separator === '=')) return listedAt(text, at);
+  if (separator === '>') {
+    const value = bareUntil(text, at, /[<\n]/);
+    return text.startsWith(`</${name}>`, value.end) ? [value] : [];
+  }
+  if (separator === '|') {
+    const value = bareUntil(text, at, /[\s|]/);
+    return wholeCell(text, value.end) && keyShapedCell(text.slice(value.start, value.end)) ? [value] : [];
+  }
+  const value = bareUntil(text, at, separator === '=' ? ASSIGNED_VALUE_END : BARE_VALUE_END);
+  if (separator === ':' && !DUMPED_NAME.test(name) && !keyShaped(text.slice(value.start, value.end))) return [];
+  return [value];
+}
+
+/** Whether only spaces part `at` from the end of its table cell: a cell of several words is prose (`| GITHUB_TOKEN | your token |`). */
+function wholeCell(text: string, at: number): boolean {
+  let end = at;
+  while (text[end] === ' ' || text[end] === '\t') end++;
+  return end >= text.length || text[end] === '|' || text[end] === '\n' || text[end] === '\r';
+}
+
+/**
+ * A table cell's one value, of a key's length: anything but a word
+ * (`required`), code or a reference, since a cell has no quotes to tell a
+ * slug of a key from a setting.
+ */
+function keyShapedCell(value: string): boolean {
+  return value.length >= 8 && !/^[A-Za-z]+$/.test(value) && !looksLikeCode(value) && !value.startsWith('$');
 }
 
 /**
  * Every value under a credential-named key, whatever its shape: quoted,
- * assigned with `=`, given to a flag, or bare after the colon of a dumped name.
+ * assigned with `=`, given to a flag, bare after the colon of a dumped name,
+ * in a table row or an element.
  */
 function redactCredentialNamedValues(text: string): string {
-  return redactNamedValues(redactNamedValues(text, ASSIGNED_NAME), SPACED_FLAG);
+  for (const pattern of [ASSIGNED_NAME, SPACED_FLAG, TABLE_NAME, ELEMENT_NAME]) text = redactNamedValues(text, pattern);
+  return text;
 }
 
 function redactNamedValues(text: string, pattern: RegExp): string {
@@ -361,13 +486,15 @@ function redactNamedValues(text: string, pattern: RegExp): string {
   let out = '';
   let from = 0;
   for (let found = names.exec(text); found; found = names.exec(text)) {
-    const value = valueAt(text, found.index + found[0].length, found[4] !== ':' || DUMPED_NAME.test(found[2]));
-    if (!value || value.end === value.start || !credentialNamed(found[2])) continue;
-    const raw = text.slice(value.start, value.end);
-    if (markerAt(text, value.start) || AUTH_SCHEME_WORD.test(raw)) continue;
-    out += text.slice(from, value.start) + marker('credential', raw.length);
-    from = value.end;
-    names.lastIndex = value.end;
+    // The name first: a bare value runs on to its end, and on `a=a=a=…` every name would rescan the rest of the text.
+    if (!credentialNamed(found[2])) continue;
+    const values = valuesAt(text, found.index + found[0].length, found[2], found[4])
+      .filter((value) => value.end > value.start && !markerAt(text, value.start) && !AUTH_SCHEME_WORD.test(text.slice(value.start, value.end)));
+    for (const value of values) {
+      out += text.slice(from, value.start) + marker('credential', value.end - value.start);
+      from = value.end;
+    }
+    if (values.length > 0) names.lastIndex = from;
   }
   return out + text.slice(from);
 }
