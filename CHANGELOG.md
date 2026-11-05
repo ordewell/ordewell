@@ -69,6 +69,18 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   repository's `.github/hooks/` shell hooks, its own write and shell tools are
   off, and it reaches the workspace only through requests Ordewell answers.
   Copilot CLI 1.0.105 or newer is required.
+
+### Fixed
+
+- **An ACP agent's private directory is removed on Windows.** Windows refuses to
+  remove a folder a running process starts in, so the empty folder an ACP
+  agent's models were read in was left behind, and stopping an agent started in
+  its private directory could fail before the agent was ended. Both are now
+  removed once the agent has let go of them.
+- **The planner sees a repository's instruction files by their own names on
+  Windows**, as `../AGENTS.md` and `.github/instructions/app.instructions.md`
+  rather than with Windows separators.
+
 ## [0.12.5] - 2026-11-04
 
 ### Changed

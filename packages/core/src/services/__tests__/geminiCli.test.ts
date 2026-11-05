@@ -1,6 +1,6 @@
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, sep } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CONNECTORS } from '../harness/connectors';
 import { acpOrdewellBinding } from '../harness/acpOrdewell';
@@ -503,7 +503,8 @@ const refused = (events: AgentEvent[]) => events.flatMap((e) => (e.type === 'too
 
 /** The recorded launch with its private directory put back as `dir`, the one this start made. */
 function launchedAs(name: string, dir: string) {
-  const at = (path: string | undefined) => path?.replaceAll('{{START_DIR}}', dir);
+  // The recordings were made on POSIX; the product joins a file to the directory with the host's separator.
+  const at = (path: string | undefined) => path?.replaceAll('{{START_DIR}}/', `${dir}${sep}`).replaceAll('{{START_DIR}}', dir);
   const spawn = note(name, 'spawn');
   return {
     args: recordedArgs(name).map(at),

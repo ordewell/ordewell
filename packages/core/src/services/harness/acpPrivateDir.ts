@@ -1,4 +1,5 @@
 import { lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'fs';
+import { rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -42,7 +43,17 @@ export function acpPrivateDir(): AcpPrivateDir {
       mkdirSync(sub, { mode: 0o700 });
       return sub;
     },
-    remove: () => rmSync(path, { recursive: true, force: true }),
+    remove: () => {
+      try {
+        rmSync(path, { recursive: true, force: true });
+      } catch {
+        // Windows will not remove a directory a live process has as its cwd,
+        // and a dispose frees what the process owns before it kills it: the
+        // removal is retried while the process exits, rather than throwing
+        // out of the dispose before the kill. The sweep is the last resort.
+        void rm(path, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }).catch(() => {});
+      }
+    },
   };
 }
 

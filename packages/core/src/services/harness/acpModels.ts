@@ -91,6 +91,9 @@ export async function discoverAcpModels(command: string, args: string[], options
     });
   } finally {
     agent?.dispose();
-    await rm(scratch, { recursive: true, force: true }).catch(() => {});
+    // Windows refuses to remove a directory a process still has as its cwd,
+    // and the agent just killed lets go of it only once it has exited: the
+    // retries outwait that rather than leave the directory behind.
+    await rm(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }).catch(() => {});
   }
 }

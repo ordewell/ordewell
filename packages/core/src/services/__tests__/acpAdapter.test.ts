@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs';
 import { spawnSync } from 'child_process';
 import { tmpdir } from 'os';
-import { basename, dirname, join } from 'path';
+import { basename, dirname, join, sep } from 'path';
 import { AcpAdapter } from '../harness/AcpAdapter';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
 import { acpConnector, type AcpProfile } from '../harness/acpProfiles';
@@ -33,6 +33,13 @@ import { COPILOT_CLI_MANIFEST } from '../../plugins/builtin/copilot-cli.manifest
  * agent. The wire shapes are ACP v1's, as `acpSchema.ts` vendors them; the
  * words a person reads are the design's (#5, section 4).
  */
+
+/**
+ * Windows has no POSIX modes (every file stats 0o666), so there a private
+ * file's privacy is the per-user temp directory it is made in, as
+ * `privateFile.ts` has it, and only the mode check is POSIX-only.
+ */
+const POSIX_MODES = process.platform !== 'win32';
 
 const MANIFEST: RunnerManifest = {
   name: 'fake-acp',
@@ -358,7 +365,7 @@ describe('AcpAdapter turn', () => {
     expect(file.startsWith('/repo')).toBe(false);
     const { readFileSync, existsSync, statSync } = await import('fs');
     expect(readFileSync(file, 'utf8')).toContain('task_complete');
-    if (process.platform !== 'win32') expect(statSync(file).mode & 0o077).toBe(0);
+    if (POSIX_MODES) expect(statSync(file).mode & 0o077).toBe(0);
     adapter.dispose();
     expect(existsSync(file)).toBe(false);
   });
@@ -1067,11 +1074,13 @@ describe('AcpAdapter MCP settings file', () => {
 
     await adapter.start(taskStart('ask', { mcp }));
     const path = spawned.lastEnv()[SETTINGS_ENV] ?? '';
-    expect(path.startsWith(`${temp}/`)).toBe(true);
+    expect(path.startsWith(`${temp}${sep}`)).toBe(true);
     expect(path.startsWith('/repo')).toBe(false);
     expect(agent.settingsReads).toEqual([{ path, contents: readFileSync(path, 'utf8') }]);
-    expect(statSync(path).mode & 0o077).toBe(0);
-    expect(statSync(dirname(path)).mode & 0o077).toBe(0);
+    if (POSIX_MODES) {
+      expect(statSync(path).mode & 0o077).toBe(0);
+      expect(statSync(dirname(path)).mode & 0o077).toBe(0);
+    }
 
     await agent.close(0);
     await vi.waitFor(() => expect(existsSync(path)).toBe(false));
@@ -2367,7 +2376,7 @@ describe('AcpAdapter roles (ADR-0026, ADR-0046)', () => {
 
       const dir = spawned.lastCwd()!;
       expect(dir).not.toBe('/repo');
-      expect(statSync(dir).mode & 0o777).toBe(0o700);
+      if (POSIX_MODES) expect(statSync(dir).mode & 0o777).toBe(0o700);
       expect(readdirSync(dir)).toEqual([]);
       expect((agent.requests('session/new')[0].params as { cwd: string }).cwd).toBe(dir);
       // Its relative paths now name the empty directory, so it is told where the files are.
@@ -2391,7 +2400,7 @@ describe('AcpAdapter roles (ADR-0026, ADR-0046)', () => {
     const dir = spawned.lastCwd()!;
     const file = join(dir, 'AGENTS.md');
     expect(readdirSync(dir)).toEqual(['AGENTS.md']);
-    if (process.platform !== 'win32') expect(statSync(file).mode & 0o077).toBe(0);
+    if (POSIX_MODES) expect(statSync(file).mode & 0o077).toBe(0);
     expect(readFileSync(file, 'utf8')).toMatch(/^The workspace is `\/repo`, [^\n]*\n\nYou are the planner\./);
     expect(spawned.lastEnv().FAKE_INSTRUCTION_DIRS).toBeUndefined();
     expect([spawned.lastEnv().TMPDIR, spawned.lastEnv().TMP, spawned.lastEnv().TEMP]).toEqual([dir, dir, dir]);
@@ -2587,9 +2596,9 @@ describe('AcpAdapter roles (ADR-0026, ADR-0046)', () => {
     };
 
     expect(await asks({ ...ROLES_PROFILE, askedPaths: named })).toEqual([
-      ['c-rel', { kind: 'path', path: `${repo}/src/a.ts`, directory: false }],
-      ['c-abs', { kind: 'path', path: `${repo}/src`, directory: true }],
-      ['c-out', { kind: 'path', path: `${base}/etc/hosts`, directory: false }],
+      ['c-rel', { kind: 'path', path: join(repo, 'src', 'a.ts'), directory: false }],
+      ['c-abs', { kind: 'path', path: join(repo, 'src'), directory: true }],
+      ['c-out', { kind: 'path', path: join(base, 'etc', 'hosts'), directory: false }],
       ['c-many', { kind: 'other' }],
       ['c-both', { kind: 'other' }],
       ['c-other', { kind: 'other' }],
@@ -2730,10 +2739,14 @@ describe('AcpAdapter restricted start\'s own files (ADR-0060, R3)', () => {
       privateCwd: true,
       files: [
         { fileName: 'deny.sh', render: () => DENY },
-        { fileName: 'hooks.json', render: (dir) => JSON.stringify({ PreToolUse: [{ command: `sh ${join(dir, 'deny.sh')}` }] }), pass: { env: HOOK_SETTINGS } },
+        { fileName: 'hooks.json', render: (dir) => hooksJson(dir), pass: { env: HOOK_SETTINGS } },
       ],
     },
   };
+  /** The hook settings as JSON writes them, so a Windows path's backslashes are escaped there as they are in the file. */
+  function hooksJson(dir: string): string {
+    return JSON.stringify({ PreToolUse: [{ command: `sh ${join(dir, 'deny.sh')}` }] });
+  }
   const LOADS: FakeAcpAgentOptions = { loads: [HOOK_SETTINGS] };
 
   /** A temp directory of this test's own, so what is written there, and swept from it, is only this test's. */
@@ -2756,11 +2769,13 @@ describe('AcpAdapter restricted start\'s own files (ADR-0060, R3)', () => {
       expect(dirname(dir)).toBe(temp);
       const settings = join(dir, 'hooks.json');
       expect(spawned.lastEnv()[HOOK_SETTINGS]).toBe(settings);
-      expect(agent.loaded).toEqual([{ env: HOOK_SETTINGS, path: settings, found: `{"PreToolUse":[{"command":"sh ${dir}/deny.sh"}]}` }]);
+      expect(agent.loaded).toEqual([{ env: HOOK_SETTINGS, path: settings, found: hooksJson(dir) }]);
       expect(readFileSync(join(dir, 'deny.sh'), 'utf8')).toBe(DENY);
       expect(readdirSync(dir).sort()).toEqual(['deny.sh', 'hooks.json']);
-      for (const name of ['deny.sh', 'hooks.json']) expect(statSync(join(dir, name)).mode & 0o777).toBe(0o600);
-      expect(statSync(dir).mode & 0o777).toBe(0o700);
+      if (POSIX_MODES) {
+        for (const name of ['deny.sh', 'hooks.json']) expect(statSync(join(dir, name)).mode & 0o777).toBe(0o600);
+        expect(statSync(dir).mode & 0o777).toBe(0o700);
+      }
       adapter.dispose();
     }
   });
@@ -2778,7 +2793,7 @@ describe('AcpAdapter restricted start\'s own files (ADR-0060, R3)', () => {
     expect(args).toEqual([...ROLES_PROFILE.args, ...ROLES_PROFILE.restricted!.args, '--settings', path]);
     expect(dirname(dirname(path))).toBe(temp);
     expect(readFileSync(path, 'utf8')).toBe('{"deny":["write"]}');
-    expect(statSync(path).mode & 0o777).toBe(0o600);
+    if (POSIX_MODES) expect(statSync(path).mode & 0o777).toBe(0o600);
   });
 
   it('renders a file from the private directory\'s path alone, so neither the attempt\'s token nor its provider credential can reach one', async () => {
@@ -2811,7 +2826,7 @@ describe('AcpAdapter restricted start\'s own files (ADR-0060, R3)', () => {
     expect(home).not.toBe(hooks);
     expect(dirname(home)).toBe(dirname(hooks));
     expect(dirname(dirname(home))).toBe(temp);
-    for (const path of [home, hooks]) expect(statSync(path).mode & 0o777).toBe(0o700);
+    if (POSIX_MODES) for (const path of [home, hooks]) expect(statSync(path).mode & 0o777).toBe(0o700);
     // Without privateCwd the agent still starts in the worktree.
     expect(spawned.lastCwd()).toBe('/repo');
   });
@@ -2855,8 +2870,7 @@ describe('AcpAdapter restricted start\'s own files (ADR-0060, R3)', () => {
 
     const [dirA, dirB] = [a.spawned.lastCwd()!, b.spawned.lastCwd()!];
     expect(dirA).not.toBe(dirB);
-    expect(a.agent.loaded[0].found).toContain(`sh ${dirA}/deny.sh`);
-    expect(b.agent.loaded[0].found).toContain(`sh ${dirB}/deny.sh`);
+    expect([a.agent.loaded[0].found, b.agent.loaded[0].found]).toEqual([hooksJson(dirA), hooksJson(dirB)]);
     expect([a.spawned.lastEnv()[HOOK_SETTINGS], b.spawned.lastEnv()[HOOK_SETTINGS]]).toEqual([join(dirA, 'hooks.json'), join(dirB, 'hooks.json')]);
 
     await a.agent.close(0);
@@ -2924,8 +2938,9 @@ describe('AcpAdapter restricted start\'s own files (ADR-0060, R3)', () => {
       const dir = spawned.lastCwd()!;
       expect(spawned.lastCommand()).toBe('copilot');
       expect(spawned.lastArgs()).toEqual(['--acp', '--stdio', '--deny-tool=write', '--deny-tool=shell', '--deny-tool=url', '--disable-builtin-mcps']);
-      // What the spawn adds to, or changes in, the environment it inherits; PATH is the host's.
-      const added = Object.entries(spawned.lastEnv()).filter(([name, value]) => name !== 'PATH' && process.env[name] !== value);
+      // What the spawn adds to, or changes in, the environment it inherits; PATH
+      // is the host's, under the host's own spelling (Windows names it `Path`).
+      const added = Object.entries(spawned.lastEnv()).filter(([name, value]) => name.toUpperCase() !== 'PATH' && process.env[name] !== value);
       expect(Object.fromEntries(added)).toEqual({ COPILOT_ALLOW_ALL: 'false', TMPDIR: dir, TMP: dir, TEMP: dir });
       expect(dirname(dir)).toBe(temp);
       expect(readdirSync(dir)).toEqual(['AGENTS.md']);

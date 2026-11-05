@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { basename, dirname, join } from 'path';
+import { basename, dirname, join, sep } from 'path';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CONNECTORS } from '../harness/connectors';
 import { acpOrdewellBinding } from '../harness/acpOrdewell';
@@ -66,7 +66,8 @@ interface Note {
 type Recorded = { dir: 'in' | 'out'; ms: number; line: WireLine } | Note;
 
 function recording(name: string): Recorded[] {
-  return readFileSync(join(FIXTURES, `${name}.jsonl`), 'utf8').replaceAll('{{CWD}}', CWD).trim().split('\n').map((line) => JSON.parse(line) as Recorded);
+  // The placeholder sits inside JSON strings, so a Windows path's backslashes go in escaped.
+  return readFileSync(join(FIXTURES, `${name}.jsonl`), 'utf8').replaceAll('{{CWD}}', JSON.stringify(CWD).slice(1, -1)).trim().split('\n').map((line) => JSON.parse(line) as Recorded);
 }
 
 function note(name: string, event: string): Note | undefined {
@@ -265,9 +266,12 @@ describe('cline, replayed from Cline 3.0.74', () => {
     expect(env.CLINE_SESSION_BACKEND_MODE).toBe('local');
     const path = env.CLINE_MCP_SETTINGS_PATH ?? '';
     expect(basename(path)).toBe(basename(recorded?.env?.CLINE_MCP_SETTINGS_PATH ?? '-'));
-    expect(path.startsWith(`${temp}/`)).toBe(true);
-    expect(statSync(path).mode & 0o077).toBe(0);
-    expect(statSync(dirname(path)).mode & 0o077).toBe(0);
+    expect(path.startsWith(`${temp}${sep}`)).toBe(true);
+    // Windows has no POSIX modes: there the file's privacy is the per-user temp directory.
+    if (process.platform !== 'win32') {
+      expect(statSync(path).mode & 0o077).toBe(0);
+      expect(statSync(dirname(path)).mode & 0o077).toBe(0);
+    }
 
     // The file Cline read is the recorded one, with this attempt's server and token.
     const token = mcp.headers.Authorization;
@@ -542,7 +546,7 @@ describe('cline read-only tasks, replayed from Cline 3.0.74 (ADR-0028, ADR-0046,
     expect(spawned.lastArgs()).toEqual(recordedArgs(name));
     expect(spawned.lastArgs()).toEqual(['--acp', '--auto-approve', 'false']);
     expect(dir.startsWith(CWD)).toBe(false);
-    expect(dir.startsWith(`${temp}/`)).toBe(true);
+    expect(dir.startsWith(`${temp}${sep}`)).toBe(true);
     expect(dir).toBe(at(recorded?.cwd, dir));
     expect([env.TMPDIR, env.TMP, env.TEMP]).toEqual([recorded?.env?.TMPDIR, recorded?.env?.TMP, recorded?.env?.TEMP].map((v) => at(v, dir)));
     expect(env.CLINE_MCP_SETTINGS_PATH).toBe(at(recorded?.env?.CLINE_MCP_SETTINGS_PATH, dir));
@@ -809,7 +813,7 @@ describe('cline as a planner, replayed from Cline 3.0.74 (ADR-0026, ADR-0060)', 
     const recorded = note('planner', 'spawn');
     expect(spawned.lastArgs()).toEqual(recordedArgs('planner'));
     expect(spawned.lastArgs()).toEqual(['--acp', '--auto-approve', 'false']);
-    expect(dir.startsWith(`${temp}/`)).toBe(true);
+    expect(dir.startsWith(`${temp}${sep}`)).toBe(true);
     expect(dir).toBe(at(recorded?.cwd, dir));
     expect([env.TMPDIR, env.TMP, env.TEMP]).toEqual([recorded?.env?.TMPDIR, recorded?.env?.TMP, recorded?.env?.TEMP].map((v) => at(v, dir)));
     expect(env.CLINE_MCP_SETTINGS_PATH).toBe(at(recorded?.env?.CLINE_MCP_SETTINGS_PATH, dir));

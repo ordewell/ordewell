@@ -613,8 +613,11 @@ describe('cursor-agent roles, replayed from Cursor CLI 2026.10.22 (ADR-0026, ADR
     expect(spawned.lastEnv().CURSOR_CONFIG_DIR).toBe(home);
     expect(readdirSync(home)).toEqual(['cli-config.json']);
     expect(JSON.parse(readFileSync(join(home, 'cli-config.json'), 'utf8'))).toEqual(DENY_ALL);
-    expect(statSync(home).mode & 0o777).toBe(0o700);
-    expect(statSync(join(home, 'cli-config.json')).mode & 0o777).toBe(0o600);
+    // Windows has no POSIX modes: there the home's privacy is the per-user temp directory it is made in.
+    if (process.platform !== 'win32') {
+      expect(statSync(home).mode & 0o777).toBe(0o700);
+      expect(statSync(join(home, 'cli-config.json')).mode & 0o777).toBe(0o600);
+    }
     expect((agent.requests('session/new')[0].params as { cwd: string }).cwd).toBe(dir);
     expect(agent.requests('session/set_mode')).toEqual([]);
     expect(agent.requests('session/set_config_option').map((r) => r.params)).toEqual(recordedOut(name, 'session/set_config_option'));

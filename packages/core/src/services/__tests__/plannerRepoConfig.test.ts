@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { dirname, join } from 'path';
+import { dirname, join, win32 } from 'path';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
 import { fakeConfig, fakeFileSystem } from '../../testing';
 import type { IConfig } from '../../interfaces/IConfig';
@@ -9,7 +9,7 @@ import type { ConversationRequest } from '../AiService';
 import type { ApprovalRequest, IApproval } from '../../interfaces/IApproval';
 import { ApprovalPolicy } from '../ApprovalPolicy';
 import type { ProjectServerApprovals } from '../harness/projectServers';
-import { instructionsBlock } from '../harness/repoConfig';
+import { instructionsBlock, workspaceRelative } from '../harness/repoConfig';
 import { CONNECTORS, createTaskAdapter } from '../harness/connectors';
 import type { AgentProcessDeps, PlannerStartOptions, TaskStartOptions } from '../harness/AgentAdapter';
 import { fakeMcpServer, fakeSpawn, fixture, sseResponse, type FakeAgentProcess, type ScriptedReply } from './harnessTestKit';
@@ -589,6 +589,14 @@ describe.each([
     const read = reader.instructions(join(root, 'd/'.repeat(39)));
     expect(read.length).toBeLessThan(5);
     expect(instructionsBlock(read)).toContain('left out');
+  });
+});
+
+describe('an instruction file\'s name', () => {
+  // Emulates Windows: the planner is shown the repository's name for the file, not the host's.
+  it('is relative to the workspace with / on Windows too', () => {
+    expect(workspaceRelative('C:\\repo\\pkg\\app', 'C:\\repo\\.github\\instructions\\ts.instructions.md', win32)).toBe('../../.github/instructions/ts.instructions.md');
+    expect(workspaceRelative('C:\\repo', 'C:\\repo\\AGENTS.md', win32)).toBe('AGENTS.md');
   });
 });
 

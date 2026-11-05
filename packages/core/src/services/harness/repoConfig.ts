@@ -126,8 +126,18 @@ export function readInstruction(file: string, at: { workspace: string; within: s
   if (raw === undefined) return undefined;
   // Kept trimmed, as instructionsBlock charges it: padding counted here but dropped there would stop the read with room left, and the files after it would go unsaid.
   const text = raw.trim();
-  into.push({ path: path.relative(at.workspace, file), text });
+  into.push({ path: workspaceRelative(at.workspace, file), text });
   return text;
+}
+
+/**
+ * `file` as an instruction file's header names it, relative to `workspace`
+ * with `/` on every host: the planner is shown it as the repository's own
+ * name for the file, which a Windows separator would not be. `paths` is the
+ * host's `path` but for a test.
+ */
+export function workspaceRelative(workspace: string, file: string, paths: typeof path.posix = path): string {
+  return paths.relative(workspace, file).split(paths.sep).join('/');
 }
 
 /** What a file's header and the blank line before it take in {@link instructionsBlock}. */
