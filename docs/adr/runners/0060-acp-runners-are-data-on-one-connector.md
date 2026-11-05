@@ -157,7 +157,11 @@ of its provider credential and the sign-in route that reader adds.
   derived paths together name exactly one; several, or none, leave it `other`,
   and it is refused. The derived path meets the same containment check as a
   location (ADR-0008), so the hook grants no permission, only a better-shaped
-  ask for the same one. A profile without it asks exactly as before.
+  ask for the same one. A derived path that is not on disk is refused too:
+  Cline's reader opens a near match of a missing path (a name differing only
+  by Unicode whitespace, NFD form or a curly apostrophe), which may be a link
+  the repository ships pointing outside, so the path as written proves nothing
+  about what is read. A profile without it asks exactly as before.
 - **Ordewell's tools go over HTTP, with the token in `session/new` or in the
   agent's own settings file (R4).** To an agent whose `initialize` advertises
   `mcpCapabilities.http`, the server is given as one `http` entry in
@@ -1233,3 +1237,5 @@ the private directory:
 - 2026-11-05 — R3: Cline plans, on a recorded planner start whose own edit and
   command were refused and whose read-only task ran (`planner.jsonl`,
   `planner-task.jsonl`).
+- 2026-11-05 — R3: a path read from a call's arguments must be on disk, since
+  Cline reads a near match of a missing one.

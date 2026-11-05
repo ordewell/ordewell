@@ -1,7 +1,7 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, dirname, join } from 'path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CONNECTORS } from '../harness/connectors';
 import { acpOrdewellBinding } from '../harness/acpOrdewell';
 import { acpRoles } from '../harness/acpRoles';
@@ -29,8 +29,15 @@ import { fakeAcpSpawn, type FakeAcpAgent, type FakeAcpAgentOptions, type FakeAcp
 
 const FIXTURES = join(__dirname, 'fixtures/acp/cline');
 
-/** Where each test's start puts the task, which the recordings name `{{CWD}}`. */
-const CWD = '/repo';
+/**
+ * Where each test's start puts the task, which the recordings name `{{CWD}}`.
+ * It holds the files the recordings read: a path Cline names only in its
+ * arguments is refused unless it is on disk.
+ */
+const CWD = realpathSync(mkdtempSync(join(tmpdir(), 'cline-workspace-')));
+mkdirSync(join(CWD, 'src'));
+for (const file of ['README.md', 'package.json']) writeFileSync(join(CWD, file), '');
+afterAll(() => rmSync(CWD, { recursive: true, force: true }));
 
 type WireLine = { id?: number; method?: string; params?: unknown; result?: unknown; error?: { code: number; message: string } };
 interface Note {
@@ -705,6 +712,8 @@ describe('cline read-only tasks, replayed from Cline 3.0.74 (ADR-0028, ADR-0046,
     expect(await firstRead(`${CWD}/README.md`)).toEqual(refused);
     // Cline starts in a directory of its own, so that is where it would read a relative path from.
     expect(await firstRead({ files: [{ path: 'README.md' }] })).toEqual(refused);
+    // Missing, it is no proof: Cline would open a near match, which may be a link out.
+    expect(await firstRead({ files: [{ path: `${CWD}/README\u00a0.md` }] })).toEqual(refused);
   });
 
   it('leaves no private directory behind once a read-only task\'s process is gone', async () => {
