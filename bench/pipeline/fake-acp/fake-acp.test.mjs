@@ -89,16 +89,51 @@ function mcpStub() {
   });
 }
 
+/**
+ * A test's cleanups, run last-registered first and every one of them, however
+ * an earlier one ends. node:test runs `t.after` hooks in the order they were
+ * added and skips the rest once one throws. On Windows a directory that is a
+ * live process's cwd cannot be removed, so removing the workspace before the
+ * fake was stopped threw, the kill never ran, and the live fake held the test
+ * file open until CI cancelled the job.
+ */
+const cleanups = new WeakMap();
+function defer(t, cleanup) {
+  let stack = cleanups.get(t);
+  if (!stack) {
+    stack = [];
+    cleanups.set(t, stack);
+    t.after(async () => {
+      const errors = [];
+      for (const run of stack.reverse()) {
+        try { await run(); } catch (err) { errors.push(err); }
+      }
+      if (errors.length) throw errors.length === 1 ? errors[0] : new AggregateError(errors, 'cleanup failed');
+    });
+  }
+  stack.push(cleanup);
+}
+
 function workspace(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-acp-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  // Windows can hold a dead process's cwd a moment past its exit.
+  defer(t, () => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5 }));
   return dir;
 }
 
 function client(t, cwd) {
   const running = start(cwd);
-  t.after(() => running.child.kill('SIGKILL'));
+  defer(t, () => stop(running.child));
   return running;
+}
+
+/** Kill the fake and wait for its exit, so nothing it holds outlives the test. */
+function stop(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return undefined;
+  return new Promise((resolve) => {
+    child.once('exit', resolve);
+    child.kill('SIGKILL');
+  });
 }
 
 test('answers initialize and session/new as an ACP v1 agent with HTTP MCP', async (t) => {
@@ -160,7 +195,7 @@ test('a planner cue calls the planner tools with the session\'s Authorization he
   const dir = workspace(t);
   const acp = client(t, dir);
   const stub = await mcpStub();
-  t.after(() => stub.server.close());
+  defer(t, () => { stub.server.closeAllConnections(); stub.server.close(); });
   const { sessionId } = await open(acp, dir, [{
     type: 'http',
     name: 'ordewell',
