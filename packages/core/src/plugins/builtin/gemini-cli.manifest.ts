@@ -1,3 +1,4 @@
+import { geminiCredentials } from '../../services/harness/geminiCredentials';
 import type { RunnerManifest } from '../types';
 
 /** How Gemini CLI is started as an ACP agent, the words discovery asks it with. */
@@ -22,15 +23,18 @@ export const GEMINI_CLI_MANIFEST: RunnerManifest = {
     // Discovery hands it no server and writes nothing, so it runs untrusted,
     // as it was recorded doing; the task's start adds the trust (the profile).
     method: 'acp',
-    acp: { args: GEMINI_ACP_ARGS },
+    // The key Ordewell holds lets discovery list the models a task would get (ADR-0060, R9).
+    acp: { args: GEMINI_ACP_ARGS, credentials: geminiCredentials },
     discoveryCommands: [],
   },
 
   // Gemini has no login or status command: `gemini` itself offers its sign-in
   // on a first start, and a key may come from its settings or the environment.
-  // A signed-out agent refuses `session/new` with ACP's auth-required error,
-  // which the adapter words as "not signed in"; Gemini's own words are kept
-  // for a message that reaches the person unworded.
+  // A Google key saved in Ordewell is handed to it as `GEMINI_API_KEY`, the
+  // variable its API-key auth reads (ADR-0060, R9). A signed-out agent refuses
+  // `session/new` with ACP's auth-required error, which the adapter words as
+  // "not signed in"; Gemini's own words are kept for a message that reaches
+  // the person unworded.
   auth: { loginArgs: [], signedOut: /API key is missing or not configured|Authentication required|not signed in/i },
   signIn: 'run gemini and choose how it signs in',
   // Gemini's own session mode ids, set with `session/set_mode`. Its default
