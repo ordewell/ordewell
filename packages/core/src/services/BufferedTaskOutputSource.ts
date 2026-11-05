@@ -5,18 +5,26 @@ import { storedHandoff, type StoredHandoff } from '../models/Handoff';
 import { scriptHandoff } from '../models/DerivedHandoff';
 import type { ScriptExit } from '../interfaces/IRunner';
 import type { TaskCompleteArgs } from './mcp/tools';
-import { redactAgentText } from '../utils/redactSecrets';
+import { openPrivateKeyStart, redactAgentText } from '../utils/redactSecrets';
+import { tooLong } from '../utils/lineTail';
 
 /** Enough output for a summary tail and a live read, without holding a long run's whole log. */
 const DEFAULT_MAX_BUFFER_CHARS = 256 * 1024;
-const CUT_SEARCH_CHARS = 4096;
 /** What an ended attempt keeps: its verdict has read the rest, and a plan outlives thousands of them. */
 const ENDED_TAIL_CHARS = 16 * 1024;
 
 interface Capture {
   raw: string;
-  /** Characters discarded from the front of `raw` to keep it bounded. */
+  /**
+   * Where `raw` starts in the output, in characters: what was discarded from
+   * its front to keep it bounded, less the note that stands for a line too
+   * long to keep.
+   */
   dropped: number;
+  /** Length of a newest line longer than the buffer, dropped whole while it is still being written. */
+  skipped?: number;
+  /** Length of the note `raw` opens with, for such a line now ended: a reader inside that line has seen the note. */
+  noted?: number;
   attached: boolean;
   exited: boolean;
   /** The runner's `task_complete` call, whole: its handoff is what it said it did (ADR-0047). */
@@ -96,7 +104,7 @@ export class BufferedTaskOutputSource implements TaskOutputSource {
     if (!capture) return '';
     const reported = this.report(taskId);
     if (reported) return reported;
-    return clean(capture.raw.slice(Math.max(0, (capture.turnStart ?? 0) - capture.dropped)));
+    return clean(buffered(capture).slice(Math.max(0, (capture.turnStart ?? 0) - capture.dropped)));
   }
 
   report(taskId: string): string | undefined {
@@ -106,7 +114,7 @@ export class BufferedTaskOutputSource implements TaskOutputSource {
 
   handoff(taskId: string): StoredHandoff | undefined {
     const capture = this.captures.get(taskId);
-    if (capture?.script) return scriptHandoff(capture.script.exit, capture.script.durationMs, clean(capture.raw));
+    if (capture?.script) return scriptHandoff(capture.script.exit, capture.script.durationMs, clean(buffered(capture)));
     return capture?.completion && storedHandoff(capture.completion);
   }
 
@@ -114,8 +122,9 @@ export class BufferedTaskOutputSource implements TaskOutputSource {
     const capture = this.captures.get(taskId);
     if (!capture) return null;
     const total = capture.dropped + capture.raw.length;
-    const from = Math.min(Math.max(0, (opts.sinceOffset ?? 0) - capture.dropped), capture.raw.length);
-    const lines = this.readFrom(capture.raw, from).split('\n');
+    const since = Math.min(Math.max(0, (opts.sinceOffset ?? 0) - capture.dropped), capture.raw.length);
+    const from = capture.noted !== undefined && since > 0 && since < capture.noted ? capture.noted : since;
+    const lines = this.readFrom(buffered(capture), from).split('\n');
     const kept = opts.maxLines > 0 ? lines.slice(-opts.maxLines) : [];
     return {
       text: kept.join('\n'),
@@ -127,31 +136,63 @@ export class BufferedTaskOutputSource implements TaskOutputSource {
   /**
    * The output from `from`, a chunk's end the last read stopped at, redacted
    * with the start of its line: the name of a value split across two chunks
-   * is in the part already read.
+   * is in the part already read. A private key's body is known only by the
+   * BEGIN line above it, so a read inside an open key starts at that line.
    */
   private readFrom(raw: string, from: number): string {
-    const start = from === 0 ? 0 : raw.lastIndexOf('\n', from - 1) + 1;
+    const line = from === 0 ? 0 : raw.lastIndexOf('\n', from - 1) + 1;
+    const start = openPrivateKeyStart(raw, line) ?? line;
     if (start === from) return clean(raw.slice(from));
     const shown = plain(raw.slice(start, from));
-    const line = redactAgentText(plain(raw.slice(start)));
+    const redacted = redactAgentText(plain(raw.slice(start)));
     // Unless redacting the whole line changed the part already read, show only the rest of it.
-    return (line.startsWith(shown) ? line.slice(shown.length) : line).trim();
+    return (redacted.startsWith(shown) ? redacted.slice(shown.length) : redacted).trim();
   }
 
   private append(capture: Capture, text: string): void {
+    if (capture.skipped !== undefined) {
+      const end = text.indexOf('\n');
+      capture.dropped += end < 0 ? text.length : end;
+      if (end < 0) {
+        capture.skipped += text.length;
+        return;
+      }
+      const note = tooLong(capture.skipped + end, 'keep');
+      capture.raw = note;
+      capture.dropped -= note.length;
+      capture.skipped = undefined;
+      capture.noted = note.length;
+      text = text.slice(end);
+    }
     capture.raw += text;
     this.cutTo(capture, this.maxBufferChars);
   }
 
+  /**
+   * Bound the buffer by whole lines, as LineTail does: a cut inside a
+   * line can keep a value and drop the name that marks it, before any read
+   * has redacted the two together.
+   */
   private cutTo(capture: Capture, maxChars: number): void {
     const excess = capture.raw.length - maxChars;
     if (excess <= 0) return;
-    // Cut on a nearby line boundary, so the oldest line kept is whole. Output
-    // that rarely breaks lines must not cost most of the buffer, hence the
-    // short search window.
-    const newline = capture.raw.indexOf('\n', excess);
-    const cut = newline >= 0 && newline - excess < CUT_SEARCH_CHARS && newline < capture.raw.length - 1 ? newline + 1 : excess;
+    const newest = capture.raw.lastIndexOf('\n') + 1;
+    if (capture.raw.length - newest > maxChars) {
+      // Only the newest line can outgrow the buffer on its own: keep none of it, and none of the lines before it.
+      capture.skipped = capture.raw.length - newest;
+      capture.dropped += capture.raw.length;
+      capture.raw = '';
+      capture.noted = undefined;
+      return;
+    }
+    const cut = capture.raw.indexOf('\n', excess - 1) + 1;
     capture.raw = capture.raw.slice(cut);
     capture.dropped += cut;
+    if (cut > 0) capture.noted = undefined;
   }
+}
+
+/** The output a read starts from: the buffer, and the note for a line it is dropping as it comes. */
+function buffered(capture: Capture): string {
+  return capture.skipped === undefined ? capture.raw : capture.raw + tooLong(capture.skipped, 'keep');
 }

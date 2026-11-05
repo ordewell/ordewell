@@ -15,7 +15,7 @@ export interface LineTailLimits {
   showChars: number;
 }
 
-const tooLong = (chars: number, verb: string) => `[a line of ${chars} chars, too long to ${verb}]`;
+export const tooLong = (chars: number, verb: string) => `[a line of ${chars} chars, too long to ${verb}]`;
 
 /** With no line longer than `keepChars`, a newline at or after `excess - 1` exists, and dropping through it drops enough. */
 function dropOldestLines(text: string, keepChars: number): string {
