@@ -170,6 +170,19 @@ export function clearAugmentedPathCache(): void {
 }
 
 /**
+ * The value `env` gives `name`, read as `platform` reads it: on Windows a name
+ * in any case is the same variable, and the last spelling is the one
+ * {@link withPath} keeps.
+ */
+export function envValue(env: Readonly<Record<string, string | undefined>>, name: string, platform: NodeJS.Platform = process.platform): string | undefined {
+  if (platform !== 'win32') return env[name];
+  const wanted = name.toLowerCase();
+  let found: string | undefined;
+  for (const [key, value] of Object.entries(env)) if (key.toLowerCase() === wanted) found = value;
+  return found;
+}
+
+/**
  * Build a child environment whose PATH is `resolvedPath`, with exactly one
  * PATH-ish key in it.
  *
@@ -187,20 +200,21 @@ export function withPath(
   overrides: Record<string, string> = {},
   platform: NodeJS.Platform = process.platform,
 ): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {};
   // Windows names a variable in any case, and Node hands a child only the first
   // spelling in sort order, so a host's `FOO` would silently beat an override's
-  // `foo`: the override has to replace it, not sit beside it.
-  const replaced = platform === 'win32' ? new Set(Object.keys(overrides).map((key) => key.toLowerCase())) : new Set<string>();
-  for (const [key, value] of Object.entries(base)) {
-    if (key.toLowerCase() === 'path' || replaced.has(key.toLowerCase())) continue;
-    env[key] = value;
+  // `foo`: a later spelling has to replace an earlier one, not sit beside it,
+  // whether the earlier came from `base` or from `overrides` itself.
+  const name = platform === 'win32' ? (key: string) => key.toLowerCase() : (key: string) => key;
+  const entries = new Map<string, [string, string | undefined]>();
+  // Both sources are filtered, not just `base`: an `overrides` map carrying its
+  // own PATH is exactly how the duplicate reappears.
+  for (const source of [base, overrides]) {
+    for (const [key, value] of Object.entries(source)) {
+      if (key.toLowerCase() === 'path') continue;
+      entries.set(name(key), [key, value]);
+    }
   }
-  // Overrides are filtered too: an `overrides` map carrying its own PATH is
-  // exactly how the duplicate reappears.
-  for (const [key, value] of Object.entries(overrides)) {
-    if (key.toLowerCase() !== 'path') env[key] = value;
-  }
+  const env: NodeJS.ProcessEnv = Object.fromEntries(entries.values());
   // Windows canonically spells it `Path`; POSIX requires `PATH`. Matching the
   // platform keeps anything downstream that reads the raw block unsurprised.
   env[platform === 'win32' ? 'Path' : 'PATH'] = resolvedPath;

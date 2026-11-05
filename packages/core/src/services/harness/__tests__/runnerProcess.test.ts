@@ -136,6 +136,50 @@ describe('the environment a runner starts under', () => {
     adapter.dispose();
   });
 
+  /** A host that reports itself as Windows, whatever this machine is: Windows CI is where these cases otherwise first show. */
+  async function onWindowsHost<T>(run: () => Promise<T>): Promise<T> {
+    const real = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    try {
+      return await run();
+    } finally {
+      if (real) Object.defineProperty(process, 'platform', real);
+    }
+  }
+
+  const parentServer = { type: 'remote', url: 'http://127.0.0.1:4999/mcp', headers: { Authorization: 'Bearer parent-synthetic' } };
+  const hostConfig = JSON.stringify({ model: 'host/model', mcp: { ordewell: parentServer }, permission: { 'ordewell_*': 'allow' } });
+  const workspaceConfig = JSON.stringify({ model: 'workspace/model', mcp: { ordewell: parentServer, other: { type: 'local', command: ['x'] } } });
+  const configsIn = (env: NodeJS.ProcessEnv) => Object.entries(env).filter(([name]) => name.toUpperCase() === 'OPENCODE_CONFIG_CONTENT').map(([name, value]) => [name, JSON.parse(value ?? 'null') as unknown]).sort(([a], [b]) => (String(a) < String(b) ? -1 : 1));
+
+  it.each(adapters)('%s builds the environment by its runner\'s platform, not the host\'s, so a POSIX runner keeps both spellings on a Windows host', async (label, start) => {
+    vi.stubEnv('OPENCODE_CONFIG_CONTENT', hostConfig);
+    const spawned = fakeSpawn([]);
+    const envs: NodeJS.ProcessEnv[] = [];
+    const adapter = await onWindowsHost(() => start(spawned, deps(spawned, { Opencode_Config_Content: workspaceConfig }, envs)));
+    const planner = label === 'the OpenCode adapter' ? { lsp: false, permission: OPENCODE_PLANNER_PERMISSION } : {};
+    expect(configsIn(envs[0])).toEqual([
+      ['OPENCODE_CONFIG_CONTENT', { model: 'host/model', ...planner }],
+      ['Opencode_Config_Content', { model: 'workspace/model', mcp: { other: { type: 'local', command: ['x'] } } }],
+    ]);
+    adapter.dispose();
+  });
+
+  // Windows reads one variable whatever its case, and Node hands a child only the first spelling in sort order:
+  // a second spelling would be dropped there unseen, so the workspace's has to replace the host's (ADR-0016).
+  it.each(adapters)('%s on Windows hands one OpenCode configuration, the workspace\'s in its own spelling, without a parent Ordewell\'s server', async (label, start) => {
+    vi.stubEnv('OPENCODE_CONFIG_CONTENT', hostConfig);
+    const spawned = fakeSpawn([]);
+    const envs: NodeJS.ProcessEnv[] = [];
+    const adapter = await onWindowsHost(() => start(spawned, { ...deps(spawned, { Opencode_Config_Content: workspaceConfig }, envs), platform: 'win32' }));
+    expect(Object.values(envs[0]).some((value) => value?.includes('parent-synthetic'))).toBe(false);
+    const workspace = { model: 'workspace/model', mcp: { other: { type: 'local', command: ['x'] } } };
+    expect(configsIn(envs[0])).toEqual(label === 'the OpenCode adapter'
+      ? [['OPENCODE_CONFIG_CONTENT', { ...workspace, lsp: false, permission: OPENCODE_PLANNER_PERMISSION }]]
+      : [['Opencode_Config_Content', workspace]]);
+    adapter.dispose();
+  });
+
   it.each(adapters)('%s starts its runner as the leader of a process group, so Stop reaches what it starts', async (_label, start) => {
     const spawned = fakeSpawn([]);
     const detached: Array<boolean | undefined> = [];

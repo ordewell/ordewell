@@ -529,7 +529,8 @@ const READ_ONLY_MODE = CLINE_MANIFEST.modes?.find((mode) => mode.readOnly)?.id ?
 const prompts = (agent: FakeAcpAgent) => agent.requests('session/prompt').map((r) => (r.params as { prompt: Array<{ text: string }> }).prompt[0].text);
 
 /** The recorded spawn's value with its private directory put back as `dir`, the one this start made. */
-const at = (value: string | undefined, dir: string) => value?.replaceAll('{{PRIVATE_DIR}}', dir);
+// The recordings were made on POSIX; the product joins a file to the directory with the host's separator.
+const at = (value: string | undefined, dir: string) => value?.replaceAll('{{PRIVATE_DIR}}/', `${dir}${sep}`).replaceAll('{{PRIVATE_DIR}}', dir);
 
 /** What the recording found once the process was gone: the worktree as it was, and the private directory, which held only the settings file, removed. */
 const UNTOUCHED = { worktree: { gitStatus: '' }, privateDir: { entries: ['cline_mcp_settings.json'], removed: true }, leftBehind: { privateDirs: [], clineProcesses: [] } };
