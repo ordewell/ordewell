@@ -47,3 +47,55 @@ describe('a path an ACP agent names only in its arguments', () => {
     expect((await decidePlannerPermission(ask, {}, { workspaceRoot: ws })).decision).toBe('allow');
   });
 });
+
+// Cline's read_files takes the first shape of its input union that validates
+// and strips the keys that shape does not name. A range that is not a positive
+// integer fails every `files` shape, so a later `paths` or `file_paths` shape
+// is the one read; the approval is asked on the raw input all the same.
+describe('a Cline read whose judged path is not the one Cline would read', () => {
+  function site() {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'acp-union-')));
+    const ws = join(base, 'ws');
+    mkdirSync(ws);
+    mkdirSync(join(base, 'outside'));
+    writeFileSync(join(ws, 'readme.md'), 'inside');
+    writeFileSync(join(base, 'outside', 'secret.txt'), 'outside the workspace');
+    return { ws, decoy: join(ws, 'readme.md'), secret: join(base, 'outside', 'secret.txt') };
+  }
+
+  const call = (rawInput: unknown) => ({ toolCallId: 'c1', title: 'read_files', kind: 'read', rawInput }) as never;
+
+  const shapes = (decoy: string, secret: string): Record<string, unknown> => ({
+    'start_line 0 beside paths': { files: [{ path: decoy, start_line: 0 }], paths: [secret] },
+    'end_line -1 beside file_paths': { files: [{ path: decoy, end_line: -1 }], file_paths: [secret] },
+    'start_line 1.5 beside a paths string': { files: [{ path: decoy, start_line: 1.5 }], paths: secret },
+    "start_line 'abc' beside paths": { files: [{ path: decoy, start_line: 'abc' }], paths: [secret] },
+    'a root path with start_line 0 beside paths': { path: decoy, start_line: 0, paths: [secret] },
+  });
+
+  it('is refused on a read-only task', () => {
+    const { ws, decoy, secret } = site();
+    for (const [name, rawInput] of Object.entries(shapes(decoy, secret))) {
+      const ask = acpAsk(call(rawInput), { profile: CLINE_PROFILE, cwd: ws });
+      expect({ name, decision: decideReadOnlyTaskPermission(ask, { cwd: ws, workspaceRoot: ws }).decision }).toEqual({ name, decision: 'deny' });
+    }
+  });
+
+  it('is refused to a planner with nobody to ask', async () => {
+    const { ws, decoy, secret } = site();
+    for (const [name, rawInput] of Object.entries(shapes(decoy, secret))) {
+      const ask = acpAsk(call(rawInput), { profile: CLINE_PROFILE, cwd: ws });
+      expect({ name, decision: (await decidePlannerPermission(ask, {}, { workspaceRoot: ws })).decision }).toEqual({ name, decision: 'deny' });
+    }
+  });
+
+  it('is still allowed in the shape the recording shows, with positive or null bounds', async () => {
+    const { ws, decoy } = site();
+    for (const rawInput of [{ files: [{ path: decoy, start_line: 1, end_line: 20 }] }, { files: [{ path: decoy, start_line: null, end_line: null }] }, { path: decoy }]) {
+      const ask = acpAsk(call(rawInput), { profile: CLINE_PROFILE, cwd: ws });
+      expect(ask).toEqual({ kind: 'path', path: decoy, directory: false });
+      expect(decideReadOnlyTaskPermission(ask, { cwd: ws, workspaceRoot: ws }).decision).toBe('allow');
+      expect((await decidePlannerPermission(ask, {}, { workspaceRoot: ws })).decision).toBe('allow');
+    }
+  });
+});

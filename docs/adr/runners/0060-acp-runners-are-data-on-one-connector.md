@@ -476,7 +476,7 @@ OpenRouter model and its key handed in the spawn's environment (R9):
 | restriction | `--auto-approve false`, once, with nothing of the mode's route, and a private start directory that is also `TMPDIR`, `TMP` and `TEMP` and holds only the MCP settings file |
 | repository | a restricted start runs none of the hooks in `.cline/hooks/` or `.clinerules/hooks/`, and is handed none of the repository's rules: the profile has no reader for them (ADR-0028) |
 | roles | the planner and a read-only mode (`plan`), both on the restricted start (R3); a planner's goal turn is its attach check (R5) |
-| asked paths | `rawInput.files[].path` and `rawInput.path` of a `read` or `search` call; nothing when any named file has no path |
+| asked paths | of a `read` or `search` call, the paths of exactly `{ files: [{ path, start_line?, end_line? }] }` or `{ path, start_line?, end_line? }`, each bound absent, null or a positive integer; nothing for any other input, since Cline reads the first shape of its input union that validates, and a judged shape it rejects leaves a later key such as `paths` to be read |
 
 In every recording of a new session Cline has not contacted the server when
 `session/new` answers, and contacts it from the settings file once the prompt
@@ -1239,3 +1239,6 @@ the private directory:
   `planner-task.jsonl`).
 - 2026-11-05 — R3: a path read from a call's arguments must be on disk, since
   Cline reads a near match of a missing one.
+- 2026-11-05 — R3: Cline's asked paths are read only from the two input
+  shapes its `read_files` tries first, exactly, since another key is read when
+  a judged shape fails Cline's validation.
