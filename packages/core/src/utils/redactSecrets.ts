@@ -193,15 +193,26 @@ function trimTrailingPunctuation(value: string): { value: string; tail: string }
   return { value: value.slice(0, match.index), tail: match[0] };
 }
 
+/** Below this, a held value is too likely to be an ordinary word of the text (`true`, `1`, `dev`). */
+const MIN_HELD_LENGTH = 8;
+
 /**
  * Replace credential material in `text` with visible markers. Safe to call on
  * any tool output, including output that contains no secrets — text with no
  * match is returned unchanged.
+ *
+ * `held` are values known to be secret, replaced wherever they occur: a key
+ * Ordewell handed a process need not look like any key the rules know.
  */
-export function redactSecrets(text: string): string {
+export function redactSecrets(text: string, held: Iterable<string> = []): string {
   if (!text) return text;
 
-  let out = redactPrivateKeyBlocks(text);
+  let out = text;
+  // Longest first, so a value inside another (a token in its `Bearer` header) leaves none of the longer behind.
+  const values = [...new Set([...held].map((v) => v.trim()).filter((v) => v.length >= MIN_HELD_LENGTH))].sort((a, b) => b.length - a.length);
+  for (const value of values) out = out.split(value).join(marker('secret', value.length));
+
+  out = redactPrivateKeyBlocks(out);
 
   out = out.replace(DOTENV_CREDENTIAL, (full, head: string, quote: string, value: string) => {
     if (looksLikeCode(value) || value.startsWith('$')) return full;
