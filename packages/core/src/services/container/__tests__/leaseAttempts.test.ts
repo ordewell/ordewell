@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { spawn } from 'child_process';
-import { mkdtempSync, realpathSync, rmSync } from 'fs';
+import { mkdtempSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { IRunner } from '../../../interfaces/IRunner';
 import { createTask, type LegacyPlanState, type Task } from '../../../models/Task';
-import { fakeConfig, FakeExecutionBackend, FakeRunnerSession, FakeWorktreeIsolation } from '../../../testing';
+import { fakeConfig, FakeExecutionBackend, FakeRunnerSession, FakeWorktreeIsolation, removeDir } from '../../../testing';
 import { fakeFs, fakeNotification, makeSession } from '../../__tests__/sessionTestKit';
 import type { RunnerLaunch, RunnerPlacement } from '../../executionLease';
 import { ScriptRunner } from '../../ScriptRunner';
@@ -28,7 +28,10 @@ function placement() {
 }
 
 const states: string[] = [];
-afterEach(() => { for (const dir of states.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }); });
+// A script an attempt started there may still be exiting, and Windows removes
+// no directory a process works in: the retries outwait it, with the event loop
+// free to see its stop through.
+afterEach(async () => { for (const dir of states.splice(0)) await removeDir(dir); });
 
 function session(tasks: Task[], { runner }: { runner?: IRunner } = {}) {
   const state = mkdtempSync(join(realpathSync(tmpdir()), 'ordewell-lease-attempts-'));

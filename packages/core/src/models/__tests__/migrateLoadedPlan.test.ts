@@ -1,3 +1,4 @@
+import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import { createEmptyPlan, createTask, migrateLoadedPlan, type LegacyPlanState, type PendingPlanTurn } from '../Task';
 
@@ -63,11 +64,13 @@ describe('migrateLoadedPlan', () => {
   });
 
   it('brings an ADR-0013 isolation run to the grouped shape', () => {
+    // As this platform writes a workspace root: the migration joins the repo onto it natively.
+    const repo = path.resolve('/repo');
     const loaded = plan({
       isolation: {
         run: {
           id: 'run-1',
-          workspaceRoot: '/repo',
+          workspaceRoot: repo,
           baseRef: 'main',
           integrationBranch: 'ordewell/run-1/integration',
           tasks: {
@@ -81,7 +84,7 @@ describe('migrateLoadedPlan', () => {
     migrateLoadedPlan(loaded);
 
     expect(loaded.isolation?.run.repos).toEqual([
-      { path: '.', root: '/repo', baseRef: 'main', integrationBranch: 'ordewell/run-1/integration' },
+      { path: '.', root: repo, baseRef: 'main', integrationBranch: 'ordewell/run-1/integration' },
     ]);
     expect(loaded.isolation?.run.tasks.t1.repos).toEqual({ '.': { worktree: '/tmp/wt', linked: [], changed: true } });
   });

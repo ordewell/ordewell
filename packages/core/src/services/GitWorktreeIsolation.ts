@@ -786,7 +786,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       if (target.worktree) await this.removeWorktreeDir(run, repo, worktree, target.linked);
     }
     for (const repo of run.repos) await this.tryGit(repo.root, ['branch', '-D', names.branch]);
-    this.removeTaskWorkspace(run, names.dir);
+    await this.removeTaskWorkspace(run, names.dir);
     return removal;
   }
 
@@ -1930,7 +1930,8 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     if (!listed.ok) return null;
     let worktree: string | null = null;
     for (const line of listed.stdout.split(/\r?\n/)) {
-      if (line.startsWith('worktree ')) worktree = line.slice('worktree '.length);
+      // Git for Windows names it with forward slashes; the user is told it as the platform writes it.
+      if (line.startsWith('worktree ')) worktree = path.normalize(line.slice('worktree '.length));
       else if (line === `branch refs/heads/${branch}`) return { worktree };
     }
     return { worktree: null };
@@ -1954,6 +1955,14 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       if ((await this.tryGit(entry.worktree, ['check-ignore', '-q', '--', prefix + name])).ok) continue;
       excludes.push(`:(exclude,literal)${(prefix + name).replace(/\\/g, '/')}`);
     }
+    if (this.platform === 'win32') {
+      // A link under one the bootstrap made is out with it: a mirrored install's thousand packages are one exclude.
+      const made = entry.linked.map((name) => (prefix + name).replace(/\\/g, '/'));
+      const under = (link: string) => made.some((dir) => link === dir || link.startsWith(`${dir}/`));
+      for (const link of await this.linksGitWalksInto(entry.worktree)) {
+        if (!under(link)) excludes.push(`:(exclude,literal)${link}`);
+      }
+    }
     await this.git(entry.worktree, ['add', '-A', '--', '.', ...excludes]);
     const staged = await this.tryGit(entry.worktree, ['diff', '--cached', '--quiet']);
     if (staged.ok) return;
@@ -1961,6 +1970,43 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     // the commit, or a signing prompt nobody will answer, must not stop it.
     const commit = opts.rescue ? ['-c', 'commit.gpgsign=false', 'commit', '--no-verify'] : ['commit'];
     await this.git(entry.worktree, [...VERBATIM, ...commit, '-q', ...messageArgs(message)]);
+  }
+
+  /**
+   * The links git would walk into when it stages `worktree`: on Windows a
+   * junction reads to git as the directory it leads to, so staging one a task
+   * left commits what it holds, a folder of the user's as readily as anything.
+   * A symbolic link git stages as a link, as it does elsewhere, and keeps. Read
+   * from git's own listing, one call, so what git ignores, a mirrored install
+   * among it, is never walked; and a link is told by lstat, as Windows reports
+   * every reparse point, a OneDrive placeholder too, as a link in a directory
+   * listing.
+   */
+  private async linksGitWalksInto(worktree: string): Promise<string[]> {
+    // A listing git could not give leaves nothing known, and staging then would walk every junction: refused.
+    const listed = await this.tryGit(worktree, ['status', '--porcelain=v1', '-z', '--no-renames', '--untracked-files=all']);
+    if (!listed.ok) throw new Error(`git could not list what the worktree holds: ${firstLine(listed.stderr.trim() || `exit ${listed.code}`)}`);
+    const isLink = new Map<string, boolean>();
+    const linkAt = (rel: string): boolean => {
+      let link = isLink.get(rel);
+      if (link === undefined) {
+        try { link = fs.lstatSync(path.join(worktree, rel)).isSymbolicLink(); } catch { link = false; }
+        isLink.set(rel, link);
+      }
+      return link;
+    };
+    const found = new Set<string>();
+    for (const entry of listed.stdout.split('\0')) {
+      const parts = entry.slice(3).split('/');
+      for (let depth = 1; depth < parts.length; depth++) {
+        const dir = parts.slice(0, depth).join('/');
+        if (linkAt(dir)) {
+          found.add(dir);
+          break;
+        }
+      }
+    }
+    return [...found];
   }
 
   /** A message Ordewell writes, with the trailer if the user's setting says so right now. */
@@ -2017,7 +2063,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       if (entry) await this.removeWorktreeDir(run, repo, entry.worktree, entry.linked);
       await this.tryGit(repo.root, ['branch', '-D', record.branch]);
     }
-    this.removeTaskWorkspace(run, record.workspace);
+    await this.removeTaskWorkspace(run, record.workspace);
     if (opts.dropRecord) delete run.tasks[record.taskId];
     return removal;
   }
@@ -2077,11 +2123,21 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
    * links and the directories that held deeper repos. Links are unlinked
    * first, so removing the rest can never walk into the real workspace.
    */
-  private removeTaskWorkspace(run: IsolationRun, dir: string): void {
+  private async removeTaskWorkspace(run: IsolationRun, dir: string): Promise<void> {
     if (!isInside(this.runRoot(run), dir) || !fs.existsSync(dir)) return;
     this.unlinkLinksUnder(dir);
     clearImmutableFlags(this.platform, dir);
-    fs.rmSync(dir, { recursive: true, force: true });
+    await this.removeDir(dir);
+  }
+
+  /**
+   * Windows removes no directory a process works in, and a runner stopped
+   * there a moment ago may still be going: taskkill ends it from another
+   * process. So there the removal waits for it, a while, before it gives up.
+   */
+  private async removeDir(dir: string): Promise<void> {
+    if (this.platform === 'win32') await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    else fs.rmSync(dir, { recursive: true, force: true });
   }
 
   private unlinkLinksUnder(dir: string): void {
@@ -2089,8 +2145,15 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const entry of entries) {
       const target = path.join(dir, entry.name);
-      if (entry.isSymbolicLink()) this.unlinkIfLink(target);
-      else if (entry.isDirectory()) this.unlinkLinksUnder(target);
+      if (entry.isDirectory()) this.unlinkLinksUnder(target);
+      else if (entry.isSymbolicLink()) {
+        // Windows lists every reparse point as a link, a OneDrive placeholder
+        // folder among them; lstat says which are, and a folder is walked.
+        let stat: fs.Stats | undefined;
+        try { stat = fs.lstatSync(target); } catch { /* gone */ }
+        if (stat?.isSymbolicLink()) this.unlinkIfLink(target);
+        else if (stat?.isDirectory()) this.unlinkLinksUnder(target);
+      }
     }
   }
 
@@ -2126,7 +2189,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
         }
         if (!kept) continue;
         for (const repo of run.repos) await this.removeWorktreeDir(run, repo, path.join(dir, repo.path), []);
-        this.removeTaskWorkspace(run, dir);
+        await this.removeTaskWorkspace(run, dir);
       }
     }
     const taskBranches = Object.values(run.tasks).map((r) => r.branch);
@@ -2148,20 +2211,31 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     // it is found again from package.json when no record names it. Only
     // where the way to it is still the run's own directories: a link a task
     // put in place of one would lead the unlinking into a directory of the
-    // user's.
-    for (const name of new Set([...linked, ...installDirs(dir)])) {
-      const target = path.join(dir, name);
-      if (!resolvesAsNamed(this.runRoot(run), path.dirname(target))) continue;
-      this.unlinkIfLink(target);
-      this.unlinkLinksUnder(target);
+    // user's. They were made where the workspace sits in the worktree, below
+    // its top for a workspace in a folder of the repository: Git for Windows
+    // removes a junction by walking into it, so one missed empties the
+    // user's own folder.
+    // Not prefixOf, which throws: a repository git no longer reads still has its worktree removed.
+    const prefix = (await this.tryGit(repo.root, ['rev-parse', '--show-prefix'])).stdout.trim();
+    for (const base of new Set([dir, path.join(dir, prefix)])) {
+      for (const name of new Set([...linked, ...installDirs(base)])) {
+        const target = path.join(base, name);
+        if (!resolvesAsNamed(this.runRoot(run), path.dirname(target))) continue;
+        this.unlinkIfLink(target);
+        this.unlinkLinksUnder(target);
+      }
+      for (const name of resolvesAsNamed(this.runRoot(run), base) ? fs.readdirSync(base) : []) {
+        if (LINKED_ARTIFACTS.has(name) || isEnvFile(name)) this.unlinkIfLink(path.join(base, name));
+      }
     }
-    for (const name of resolvesAsNamed(this.runRoot(run), dir) ? fs.readdirSync(dir) : []) {
-      if (LINKED_ARTIFACTS.has(name) || isEnvFile(name)) this.unlinkIfLink(path.join(dir, name));
-    }
+    // On Windows every link goes, not only the ones the bootstrap made: a task
+    // can leave a junction anywhere in its worktree, and git would empty what it
+    // leads to. The walk enters no link, so it reaches nothing of the user's.
+    if (this.platform === 'win32' && resolvesAsNamed(this.runRoot(run), dir)) this.unlinkLinksUnder(dir);
     await this.tryGit(repo.root, ['worktree', 'remove', '--force', dir]);
     if (fs.existsSync(dir) && isInside(this.runRoot(run), dir)) {
       clearImmutableFlags(this.platform, dir);
-      fs.rmSync(dir, { recursive: true, force: true });
+      await this.removeDir(dir);
     }
     await this.tryGit(repo.root, ['worktree', 'prune']);
     // A deeper repo's worktree leaves the directories above it behind.

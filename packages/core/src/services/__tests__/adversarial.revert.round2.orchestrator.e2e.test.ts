@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { execFileSync } from 'child_process';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { tmpdir } from 'os';
 import { TaskOrchestrator } from '../TaskOrchestrator';
@@ -8,7 +8,7 @@ import { createWorktreeIsolation } from '../GitWorktreeIsolation';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import { createTask } from '../../models/Task';
 import type { IRunner } from '../../interfaces/IRunner';
-import { fakeConfig, FakeRunnerSession } from '../../testing';
+import { fakeConfig, FakeRunnerSession, patient, removeDir } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
 
 /**
@@ -28,7 +28,7 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd, env: cleanEnv(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 const roots: string[] = [];
-afterEach(() => { while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true }); });
+afterEach(async () => { while (roots.length) await removeDir(roots.pop()!); });
 function tempDir(): string { const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-adv2-orch-'))); roots.push(dir); return dir; }
 function repo(): string {
   const root = tempDir();
@@ -97,5 +97,5 @@ describe.skipIf(!hasGit)('ADVERSARIAL: revert and retry through the real pipelin
     expect(log.filter((line) => line === 'Merge: One')).toHaveLength(2);
     expect(log.filter((line) => line === 'Revert: One')).toHaveLength(1);
     expect(existsSync(join(root, 'one.txt'))).toBe(false);
-  }, 60000);
+  }, patient(60000));
 });

@@ -46,6 +46,10 @@ const pick = (value: string): void => {
 
 const shown = (): string => JSON.stringify(showInformationMessage.mock.calls.at(-1));
 
+// Containers are proven on Linux and macOS alone, so a Windows host is refused
+// them before Docker is asked anything (containerPreflight).
+const dockerIsNotAsked = process.platform === 'win32';
+
 describe('ordewell.containers, where this build offers them (ADR-0059 L5)', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -65,7 +69,7 @@ describe('ordewell.containers, where this build offers them (ADR-0059 L5)', () =
     expect(executeCommand).toHaveBeenCalledWith('setContext', 'ordewell.containersOffered', true);
   });
 
-  it('turns on over a Docker that answers, with the image and login still to choose', async () => {
+  it.skipIf(dockerIsNotAsked)('turns on over a Docker that answers, with the image and login still to choose', async () => {
     offered();
     const { command, saved } = registered();
     pick('on');
@@ -77,7 +81,7 @@ describe('ordewell.containers, where this build offers them (ADR-0059 L5)', () =
     expect(shown()).toContain('Assumed or left uncovered');
   });
 
-  it('stays off where there is no Docker, and says how to get one', async () => {
+  it.skipIf(dockerIsNotAsked)('stays off where there is no Docker, and says how to get one', async () => {
     offered();
     const { command, saved } = registered({ present: false });
     pick('on');

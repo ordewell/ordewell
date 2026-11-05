@@ -66,7 +66,9 @@ describe('launcherScript', () => {
   });
 });
 
-describe('createNativeShellLauncher (ADR-0036 N2)', () => {
+// The launcher is a POSIX script with its short folder under `/tmp`, and
+// `nativeShellOffer` never offers the opt-in on Windows.
+describe.skipIf(process.platform === 'win32')('createNativeShellLauncher (ADR-0036 N2)', () => {
   it.each([
     ['darwin' as NodeJS.Platform, {}, '/bin/zsh'],
     ['linux' as NodeJS.Platform, { SHELL: '/bin/fish' }, '/bin/fish'],

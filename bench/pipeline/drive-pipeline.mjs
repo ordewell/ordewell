@@ -68,10 +68,15 @@ if (RUNNER === 'opencode' && !process.env.OPENROUTER_API_KEY) {
 const RUNNER_ID = RUNNER === 'fake' ? 'claude-code' : RUNNER === 'acp' ? 'copilot-cli' : 'opencode';
 
 // Before the first spawn: the runner environment is built from this PATH, so
-// the fake shadows any real `claude` or `copilot` the machine has.
-const fakeDir = RUNNER === 'fake' ? 'fake-claude' : RUNNER === 'acp' ? 'fake-acp' : null;
-if (fakeDir) {
-  process.env.PATH = [path.join(__dirname, fakeDir), process.env.PATH].filter(Boolean).join(path.delimiter);
+// the fake shadows any real `claude` or `copilot` the machine has. A home of
+// its own too: on Windows a real claude.exe in the home's bin dirs would still
+// be started in the fake's place, and the run's ~/.ordewell is not the user's.
+const fake = RUNNER === 'fake' ? { dir: 'fake-claude', command: 'claude' } : RUNNER === 'acp' ? { dir: 'fake-acp', command: 'copilot' } : null;
+let fakeHome;
+if (fake) {
+  const testing = await import(pathToFileURL(path.join(__dirname, '../../packages/core/dist/testing.mjs')).href);
+  fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-pipeline-home-'));
+  testing.setEnv({ ...testing.homeEnv(fakeHome), PATH: testing.pathWithFake(path.join(__dirname, fake.dir), fake.command) });
 }
 
 // What the fake runner reads from a prompt (see the fake's own header).
@@ -208,7 +213,9 @@ async function main() {
   await orchestrator.approveReview();
 
   // Wait for completion
-  const timeoutMs = RUNNER === 'opencode' ? 180000 : 15000;
+  // A stall is what this catches, so a fake's room only costs a failing run: on
+  // Windows PowerShell starts each fake, which a loaded runner takes seconds over.
+  const timeoutMs = RUNNER === 'opencode' ? 180000 : 60000;
   while (!executionComplete && Date.now() - execStart < timeoutMs) {
     await new Promise(r => setTimeout(r, 200));
   }
@@ -287,6 +294,7 @@ async function main() {
   } else {
     try { fs.rmSync(workspace, { recursive: true, force: true }); } catch {}
   }
+  if (fakeHome) try { fs.rmSync(fakeHome, { recursive: true, force: true }); } catch {}
 
   process.exit(allPassed ? 0 : 1);
 }

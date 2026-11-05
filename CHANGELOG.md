@@ -69,6 +69,71 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   repository's `.github/hooks/` shell hooks, its own write and shell tools are
   off, and it reaches the workspace only through requests Ordewell answers.
   Copilot CLI 1.0.105 or newer is required.
+## [0.12.5] - 2026-11-04
+
+### Changed
+
+- **The terminal UI is supported on native Windows.** It was run there from a
+  goal to a merged plan, with the wheel and bracketed paste, which need Node
+  22.17 or newer there; WSL is no longer needed for it.
+
+### Security
+
+- **A Codex planner on Windows plans with its own shell off.** Codex's sandbox
+  there cannot keep a command off the network, so a Codex planner reads through
+  Ordewell's `run_command`, under the same command rules as every other planner
+  on Windows. Before, only Codex's own checks, and Ordewell refusing what they
+  asked to approve, kept its shell from writing or reaching the network. A
+  one-shot plan (`ordewell plan --no-chat`) runs no command, so there Codex
+  keeps its shell, with those approvals still refused.
+
+### Fixed
+
+- **An agent installed by npm starts whole on Windows.** Ordewell now starts the
+  Node script or program an npm shim names, rather than the shim through cmd.exe
+  or PowerShell. Claude Code installed that way was started through PowerShell,
+  since its system prompt spans lines, and PowerShell dropped every quote on the
+  way: its JSON settings arrived as `{disableAllHooks:true}`, and the quotes in
+  its prompt were gone. A prompt past cmd.exe's 8191 characters, a line break, a
+  `"` and a `%VAR%` now reach any npm-installed agent as written.
+- **The planner's commands are confined to the folders Git Bash reaches.** On
+  Windows a command's paths were judged as if on the current drive, so approving
+  `/etc` or `/tmp` named a different folder than the one the command read, and
+  `/dev/null` asked for approval. They are now read through Git Bash's own mount
+  table, as the shell reads them: `/c/Users` is `C:\Users`, `/tmp` is your temp
+  folder. A path whose folder Git Bash's rules leave uncertain, such as one with
+  a `..` past a mount or one in its own `/proc`, is refused with the reason,
+  rather than asked about under a folder it may not reach.
+- **Search without ripgrep reads a character class as written.** A `]` first in
+  a class, as in `[]\s]`, cut the class off there, and an escaped `^` first, as
+  in `[\^a]`, turned it into its opposite, every character but `a`.
+- **A planner on Windows is told which shell its commands run in.** A coding
+  agent there expects PowerShell, and its `Get-Content` asked for an approval
+  that would have run it in Git Bash, which has no such command. It is told to
+  read with `cat`, `ls` and `grep` (or cmd.exe's own, without Git for Windows).
+- **A one-shot plan no longer offers its planner a `run_command` it cannot
+  run.** `ordewell plan --no-chat` and the plan endpoint answered every call
+  "not available", so a planner lost turns on it before reading with its own
+  tools.
+- **A Codex task on Windows says what Codex grants it.** Until Codex's own
+  Windows sandbox is set up, Codex opens a Guarded task read-only: each edit,
+  and each command it does not judge safe, goes to its reviewer, and what the
+  reviewer approves runs unconfined. A model that read "read-only" could end
+  the task as impossible. It is now told how to write through review, and you
+  are told once, with how to set the sandbox up.
+- **A Codex task on Windows runs npm.** Its shell is PowerShell, whose default
+  execution policy refuses `npm.ps1`, so `npm test` failed before it started,
+  and a model once reported the tests passing anyway. It is now told to call
+  `npm.cmd`.
+- **The terminal UI hands the mouse back when it quits on Windows.** It turned
+  mouse reporting off after leaving raw mode, which Windows' console ignores,
+  so the terminal went on sending mouse reports to the shell. Back from a
+  login, it turned the mouse on before raw mode, and the wheel stopped working.
+  On a Node older than 22.17, which cannot pass the mouse or a paste to it on
+  Windows, it now says so at start: there the wheel does nothing and a line
+  break in a paste sends the line.
+
+## [0.12.4] - 2026-11-04
 
 ### Fixed
 
@@ -80,6 +145,41 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   login terminal is cmd.exe, so PowerShell's default Restricted execution policy
   no longer refuses an npm-installed agent's `.ps1` shim and leaves the sign-in
   waiting until it times out.
+- **Removing a task's worktree no longer empties your folders on Windows.** Git
+  for Windows removes a junction by walking into it. With the workspace in a
+  folder below its repository's top, the links a worktree makes into your
+  checkout, `.claude` among them, were left in place, and their folders were
+  emptied in your own checkout; so was any folder a task linked to itself. Every
+  link in a worktree is now taken down first. A junction a task left is kept out
+  of its commits too, where git would have copied in the folder it leads to; a
+  symbolic link is still committed as the link it is. A worktree Ordewell leaves
+  in place is now removed, as its notice says, with `rmdir /s`, which leaves a
+  junction's folder alone.
+- **Stop stops a task's runner at once on Windows.** The polite kill Windows
+  offers only asks a window to close, which no console agent has, so a stopped
+  runner went on for five more seconds, writing to its worktree and holding it
+  from a Continue.
+- **A task is held for runner settings as it is on Linux.** On Windows a task was
+  held for your own ignored `.claude/settings.local.json`, which git read through
+  the worktree's link, and was not held for a shared `.mcp.json` an earlier task
+  rewrote.
+- **A task's diff reads on Windows.** git names a worktree in its long form, and
+  Ordewell could hold a short `8.3` name or a lower-case drive letter for the same
+  folder, so the planner's `task_diff` called the worktree "no longer a
+  repository". Untracked files are in the diff too: Git for Windows could not open
+  the empty side it was handed.
+- **A `!` path exclusion holds on Windows in any case and with either slash.** An
+  exclusion such as `!C:/Users/me/.ssh/*` now applies to `C:\Users\me\.ssh\*` and
+  to any casing of it, as Windows itself would read the path.
+- **Search works on Windows and macOS without ripgrep.** The fallback search
+  matched an anchored glob such as `src/*.ts` against backslashed paths and found
+  nothing; `find_symbol` found nothing at all, since neither GNU nor BSD grep reads
+  the non-capturing groups its pattern holds; and on Windows every result came
+  back as an absolute path.
+- **A runner set by its full path is found on Windows.** A command such as
+  `C:\Tools\claude.exe` read as not installed.
+- **The daemon finds your workspaces on Windows.** Its scan read `HOME`, which
+  Windows does not set, and searched no folder of yours.
 
 ## [0.12.3] - 2026-11-03
 
@@ -3958,7 +4058,9 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.12.3...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.12.5...HEAD
+[0.12.5]: https://github.com/ordewell/ordewell/compare/v0.12.4...v0.12.5
+[0.12.4]: https://github.com/ordewell/ordewell/compare/v0.12.3...v0.12.4
 [0.12.3]: https://github.com/ordewell/ordewell/compare/v0.12.2...v0.12.3
 [0.12.2]: https://github.com/ordewell/ordewell/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/ordewell/ordewell/compare/v0.12.0...v0.12.1

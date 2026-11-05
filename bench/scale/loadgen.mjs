@@ -10,11 +10,12 @@ import http from 'node:http';
 import net from 'node:net';
 import readline from 'node:readline';
 
-const [host, count] = [process.argv[2], Number(process.argv[3])];
-const sockets = Array.from({ length: count }, (_, i) => new net.Socket({ fd: 3 + i, readable: true, writable: true }));
+const [host, count, loopback] = [process.argv[2], Number(process.argv[3]), process.argv[4]];
+// On Windows a port to dial, as no socket arrives on an extra stdio pipe there.
+const sockets = loopback ? [] : Array.from({ length: count }, (_, i) => new net.Socket({ fd: 3 + i, readable: true, writable: true }));
 
 class Pool extends http.Agent {
-  createConnection() { return sockets.pop(); }
+  createConnection() { return loopback ? net.connect(Number(loopback), '127.0.0.1') : sockets.pop(); }
 }
 const agent = new Pool({ keepAlive: true, maxSockets: count, maxFreeSockets: count });
 

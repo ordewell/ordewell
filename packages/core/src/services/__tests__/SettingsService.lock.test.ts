@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { SettingsService } from '../SettingsService';
+import { patient } from '../../testing';
 
 /** The lock file every test here uses. */
 const LOCK_NAME = 'settings.json.lock';
@@ -107,7 +108,7 @@ describe('SettingsService — a stale lock is taken over, never moved aside', ()
     // It went ahead only once the takeover's own lock had gone stale.
     expect(Date.now() - (takenOverAt ?? 0)).toBeGreaterThanOrEqual(2_000);
     expect(new SettingsService(file).getEnabledRunners()).toEqual(['codex']);
-  }, 10_000);
+  }, patient(10_000));
 
   // A save suspended past the stale age has its lock taken over by another
   // process; on waking it must not remove the lock that is no longer its own.
@@ -166,5 +167,5 @@ describe('SettingsService — a stale lock is taken over, never moved aside', ()
     expect(raised).toBeInstanceOf(Error);
     expect((raised as Error).message).toContain(lock);
     expect((raised as Error).message).toMatch(/10 seconds/);
-  }, 10_000);
+  }, patient(10_000));
 });

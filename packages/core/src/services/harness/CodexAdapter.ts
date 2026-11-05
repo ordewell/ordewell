@@ -1,6 +1,6 @@
 import { readOnlyTask } from './plannerPermissions';
 import { randomUUID } from 'crypto';
-import { isAbsolute, relative, sep } from 'path';
+import * as hostPath from 'path';
 import type { AgentEvent, AgentProcessDeps, AgentStartOptions, TaskModeAgentAdapter } from './AgentAdapter';
 import type { SubagentOutcome } from '../../models/Task';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
@@ -8,7 +8,10 @@ import type { UsageRecord } from '../../models/Usage';
 import type { RunnerCommand, RunnerMcpServer } from '../../models/RunnerCommand';
 import { StdioAgentAdapter, type SpawnSpec } from './StdioAgentAdapter';
 import { markedLines } from './fileDiff';
-import { probeCodexSandbox, codexSandboxUnavailableMessage, codexShellOffNote, type CodexSandboxDecision } from './codexSandbox';
+import {
+  probeCodexSandbox, codexSandboxUnavailableMessage, codexShellOffNote, codexWindowsReadOnlyNote,
+  CODEX_WINDOWS_READ_ONLY_ADVICE, CODEX_WINDOWS_SHELL_ADVICE, type CodexSandboxDecision, type CodexWindowsSandbox,
+} from './codexSandbox';
 import { ORDEWELL_MCP_SERVER_NAME } from '../mcp';
 import { untrustedProjects } from './codexRepoConfig';
 import { CODEX_ORDEWELL } from './codexOrdewell';
@@ -400,7 +403,9 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
   /** The row each announced file of an in-flight `fileChange` item is shown under, by the file's shown path. */
   private readonly fileChangeRows = new Map<string, Map<string, string>>();
   private sandbox: CodexSandboxDecision = 'default';
-  /** A planner on a host where no sandbox starts: Codex's own shell is off, and `run_command` is its only one (ADR-0033). */
+  /** Whether the user set up Codex's Windows sandbox, asked for a change task on a Windows host; null where nothing asked or Codex did not say. */
+  private windowsSandbox: CodexWindowsSandbox | null = null;
+  /** Codex's own shell is off, and `run_command` is the only one: a read-only task's, and a planner's on a host where no sandbox starts (ADR-0033) or on Windows (ADR-0010). */
   private ownShellOff = false;
   /** A read-only task's: every MCP server Codex would start beside Ordewell's, each switched off for its thread (ADR-0046). */
   private withheldServers: string[] = [];
@@ -446,9 +451,11 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     // A planner still reads through Ordewell's `run_command`, so it plans with
     // its own shell off instead of not at all. Read-only tasks always use
     // that profile (ADR-0046); change tasks keep their planned mode (ADR-0001).
-    this.ownShellOff = readOnly || (this.sandbox === 'unavailable' && opts.kind === 'planner' && !!opts.mcp);
+    const unsandboxedPlanner = this.sandbox === 'unavailable' && opts.kind === 'planner' && !!opts.mcp;
+    const readsThroughOrdewell = !!opts.mcp && !opts.mcp.hidden?.includes('run_command');
+    this.ownShellOff = readOnly || unsandboxedPlanner || (opts.kind === 'planner' && readsThroughOrdewell && this.onWindowsHost());
     if (this.sandbox === 'unavailable' && needsSandbox && !this.ownShellOff) throw new Error(codexSandboxUnavailableMessage(this.deps.placement ? 'container' : opts.kind));
-    if (this.ownShellOff && !readOnly) this.announce({ type: 'thinking', text: codexShellOffNote() });
+    if (unsandboxedPlanner) this.announce({ type: 'thinking', text: codexShellOffNote() });
 
     // A binary that rejects `app-server` outright dies immediately; waiting
     // out the timeout would turn a one-line diagnostic into a 30s stall.
@@ -476,6 +483,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     }
 
     if (readOnlyTask(opts)) this.withheldServers = await this.configuredServers(opts.cwd);
+    if (this.runsWindowsSandbox(opts)) this.windowsSandbox = await this.windowsSandboxReadiness();
     const resumeId = opts.resumeSessionId;
     let opened = await this.requestThread(resumeId);
     if ('reason' in opened && resumeId) {
@@ -486,7 +494,37 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     this.threadId = opened.id;
     this.sessionId = opened.id;
     this.threadModel = opened.model;
+    // The plan's mode stands (ADR-0001); what Codex granted in its place is said, not hidden.
+    if (opts.kind === 'task' && this.windowsSandbox !== null && this.windowsSandbox !== 'ready' && opened.sandbox === 'readOnly') {
+      this.announce({ type: 'thinking', text: codexWindowsReadOnlyNote(this.windowsSandbox) });
+    }
     if (opts.kind === 'task') await this.loadCommands(this.runnerCwd(opts));
+  }
+
+  /**
+   * Codex runs on this Windows host, not placed on another machine. Its
+   * sandboxes here cannot keep a planner's command off the network: with none
+   * set up there is none, and under the non-admin one Node reaches the network
+   * (measured, ADR-0010). So a planner's own shell is off here, and every
+   * command goes through Ordewell's `run_command`, as every other planner's
+   * does on Windows (ADR-0026). A one-shot plan, which runs no command, keeps
+   * Codex's shell with its approvals declined: it has no other way to read.
+   */
+  private onWindowsHost(): boolean {
+    return !this.deps.placement && (this.deps.platform ?? process.platform) === 'win32';
+  }
+
+  /** A change task whose commands Codex runs in its own Windows sandbox, which the user may not have set up. */
+  private runsWindowsSandbox(opts: AgentStartOptions): boolean {
+    return opts.kind === 'task' && this.onWindowsHost() && !this.ownShellOff && opts.flags.permissionMode === 'workspace-write';
+  }
+
+  /** Codex's answer, or null from a Codex that has no such question: that one is left as it configures itself. */
+  private async windowsSandboxReadiness(): Promise<CodexWindowsSandbox | null> {
+    const response = await this.rpc.call('windowsSandbox/readiness', {});
+    if (!response.ok && response.closed) throw this.handshakeIncomplete();
+    const status = response.ok ? response.result.status : undefined;
+    return status === 'ready' || status === 'notConfigured' || status === 'updateRequired' ? status : null;
   }
 
   commands(): RunnerCommand[] { return this.nativeCommands.map((command) => ({ ...command })); }
@@ -556,7 +594,8 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     return Object.keys(servers).filter((name) => name !== ORDEWELL_MCP_SERVER_NAME);
   }
 
-  private async requestThread(resumeSessionId?: string): Promise<{ id: string; model: string | null } | { reason: string }> {
+  /** The thread, the model it runs, and the sandbox Codex granted it, which need not be the one asked for. */
+  private async requestThread(resumeSessionId?: string): Promise<{ id: string; model: string | null; sandbox: string | null } | { reason: string }> {
     const response = await this.rpc.call(resumeSessionId ? 'thread/resume' : 'thread/start', {
       ...(resumeSessionId ? { threadId: resumeSessionId } : {}),
       ...this.threadParams(),
@@ -565,7 +604,8 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     const thread = response.ok ? response.result.thread as { id?: string } | undefined : undefined;
     if (!thread?.id) return { reason: (!response.ok && response.message) || 'no thread id returned' };
     const model = response.ok ? response.result.model : undefined;
-    return { id: thread.id, model: typeof model === 'string' ? model : null };
+    const sandbox = response.ok ? (response.result.sandbox as { type?: unknown } | undefined)?.type : undefined;
+    return { id: thread.id, model: typeof model === 'string' ? model : null, sandbox: typeof sandbox === 'string' ? sandbox : null };
   }
 
   private threadParams(): Record<string, unknown> {
@@ -584,17 +624,23 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
       ...(opts?.mcp ? { mcp_servers: CODEX_ORDEWELL.threadServers(opts.mcp) } : {}),
     };
     const threadConfig = Object.keys(config).length ? { config } : {};
+    const noWindowsSandbox = this.windowsSandbox !== null && this.windowsSandbox !== 'ready';
     if (opts?.kind === 'task') {
       // What the mode means is the manifest's (ADR-0001); this only spells it
-      // in the protocol. No `developerInstructions`: the task prompt is the
-      // first turn.
+      // in the protocol. The task prompt is the first turn, so the
+      // instructions carry only the tools and what this host does to the mode.
       const { approvalPolicy, approvalsReviewer } = opts.flags.modeSettings;
+      const developerInstructions = [
+        opts.mcp ? CODEX_ORDEWELL.taskInstructions({ readOnly: readOnlyTask(opts), ...(opts.commits ? { commits: true } : {}), ...(opts.mcp.extraTools ? { extra: opts.mcp.extraTools } : {}) }) : '',
+        this.onWindowsHost() && !this.ownShellOff ? CODEX_WINDOWS_SHELL_ADVICE : '',
+        noWindowsSandbox ? CODEX_WINDOWS_READ_ONLY_ADVICE : '',
+      ].filter(Boolean).join('\n\n');
       return {
         ...common,
         sandbox: opts.flags.permissionMode,
         ...(approvalPolicy ? { approvalPolicy } : {}),
         ...(approvalsReviewer ? { approvalsReviewer } : {}),
-        ...(opts.mcp ? { developerInstructions: CODEX_ORDEWELL.taskInstructions({ readOnly: readOnlyTask(opts), ...(opts.commits ? { commits: true } : {}), ...(opts.mcp.extraTools ? { extra: opts.mcp.extraTools } : {}) }) } : {}),
+        ...(developerInstructions ? { developerInstructions } : {}),
         ...threadConfig,
         ...(readOnlyTask(opts) ? { config: { ...config, mcp_servers: { ...withheld(this.withheldServers), ...config.mcp_servers }, projects: untrustedProjects(opts.cwd), web_search: 'disabled' } } : {}),
       };
@@ -1299,6 +1345,8 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
 
   /** Relative to the task's worktree, where every path but a stray one lies; a move names both ends. */
   private shownChangePath(change: FileUpdateChange): string {
+    // A placed runner reports its container's paths, which are POSIX whatever this host is.
+    const { isAbsolute, relative, sep } = this.deps.placement ? hostPath.posix : hostPath;
     const shown = (path: string): string => {
       const cwd = this.startOpts && this.runnerCwd(this.startOpts);
       const rel = cwd ? relative(cwd, path) : path;

@@ -12,6 +12,13 @@ import { GEMINI_CLI_MANIFEST } from '../../plugins/builtin/gemini-cli.manifest';
 import { CURSOR_AGENT_MANIFEST } from '../../plugins/builtin/cursor-agent.manifest';
 import { CONNECTORS } from '../harness/connectors';
 import { recordedRunnerAuth, resetRunnerAuth, type RunnerAuthExec } from '../runnerAuth';
+import type { LaunchDeps } from '../../utils/launch';
+
+/**
+ * Off Windows' PATH lookup: these cases are about what `--version` and the
+ * status command answer, not about which files this host's PATH holds.
+ */
+const POSIX: LaunchDeps = { platform: 'linux' };
 
 function registryWith(...manifests: Array<{ name: string; runner: { command: string } }>): RunnerRegistry {
   const byName = new Map(manifests.map((m) => [m.name, m]));
@@ -107,7 +114,7 @@ describe('RunnerInstallation.plannerUsability (ADR-0009 preflight)', () => {
   it('reports a planner-capable runner whose CLI answers as usable', async () => {
     const exec: ExecImpl = vi.fn(async () => ({ stdout: '2.0.0' }));
     const authExec: RunnerAuthExec = vi.fn(async () => ({ code: 0, stdout: '{}', stderr: '' }));
-    const inst = new RunnerInstallation(registryWith(CLAUDE_CODE_MANIFEST), exec, Date.now, { authExec });
+    const inst = new RunnerInstallation(registryWith(CLAUDE_CODE_MANIFEST), exec, Date.now, { authExec, launch: POSIX });
 
     expect(await inst.plannerUsability('claude-code')).toEqual({
       usable: true,
@@ -141,11 +148,34 @@ describe('RunnerInstallation.plannerUsability (ADR-0009 preflight)', () => {
     const exec: ExecImpl = vi.fn(async () => ({ stdout: 'ok' }));
     const authExec: RunnerAuthExec = vi.fn(async () => ({ code: -1, stdout: '', stderr: '' }));
     const manifests = [CLAUDE_CODE_MANIFEST, CODEX_MANIFEST, OPENCODE_MANIFEST, COPILOT_CLI_MANIFEST, QWEN_CODE_MANIFEST, CLINE_MANIFEST, GEMINI_CLI_MANIFEST, CURSOR_AGENT_MANIFEST, { name: 'aider', runner: { command: 'aider' } }];
-    const inst = new RunnerInstallation(registryWith(...manifests), exec, Date.now, { authExec });
+    const inst = new RunnerInstallation(registryWith(...manifests), exec, Date.now, { authExec, launch: POSIX });
 
     const plannable: string[] = [];
     for (const m of manifests) if ((await inst.plannerUsability(m.name)).usable) plannable.push(m.name);
     expect(plannable.sort()).toEqual(Object.keys(CONNECTORS).filter((runner) => CONNECTORS[runner].plans).sort());
+  });
+
+  it('refuses on Windows a CLI that answers --version through a shell but has no file to start directly', async () => {
+    const exec: ExecImpl = vi.fn(async () => ({ stdout: '2.0.0' }));
+    const inst = new RunnerInstallation(registryWith(CLAUDE_CODE_MANIFEST), exec, Date.now, {
+      launch: { platform: 'win32', resolvePath: async () => 'C:\\tools', exists: () => false },
+    });
+
+    const result = await inst.plannerUsability('claude-code');
+    expect(result.usable).toBe(false);
+    expect(result.reason).toContain('no file Ordewell can start directly');
+  });
+
+  it('starts on Windows a CLI found as a batch shim, and asks its status through the same route', async () => {
+    const exec: ExecImpl = vi.fn(async () => ({ stdout: '2.0.0' }));
+    const authExec: RunnerAuthExec = vi.fn(async () => ({ code: 0, stdout: '{}', stderr: '' }));
+    const inst = new RunnerInstallation(registryWith(CLAUDE_CODE_MANIFEST), exec, Date.now, {
+      authExec,
+      launch: { platform: 'win32', resolvePath: async () => 'C:\\tools', exists: (candidate) => candidate === 'C:\\tools\\claude.cmd', comSpec: () => 'C:\\Windows\\System32\\cmd.exe' },
+    });
+
+    expect((await inst.plannerUsability('claude-code')).usable).toBe(true);
+    expect(vi.mocked(authExec).mock.calls[0][0]).toBe('C:\\Windows\\System32\\cmd.exe');
   });
 
   it('refuses an unregistered runner without probing anything', async () => {
@@ -168,7 +198,7 @@ describe('RunnerInstallation auth (ADR-0009 preflight)', () => {
 
   it('carries the auth verdict beside usability, and never lets it make the planner unusable', async () => {
     const exec: ExecImpl = vi.fn(async () => ({ stdout: '2.0.0' }));
-    const inst = new RunnerInstallation(registryWith(CLAUDE_CODE_MANIFEST), exec, Date.now, { authExec: signedOutClaude });
+    const inst = new RunnerInstallation(registryWith(CLAUDE_CODE_MANIFEST), exec, Date.now, { authExec: signedOutClaude, launch: POSIX });
 
     const result = await inst.plannerUsability('claude-code');
 
@@ -186,6 +216,7 @@ describe('RunnerInstallation auth (ADR-0009 preflight)', () => {
     const authExec: RunnerAuthExec = vi.fn(async () => ({ code: 0, stdout: '{}', stderr: '' }));
     const inst = new RunnerInstallation(registryWith(CLAUDE_CODE_MANIFEST), exec, Date.now, {
       authExec,
+      launch: POSIX,
       env: async () => ({ CLAUDE_CONFIG_DIR: '/home/me/.claude-b' }),
     });
 
@@ -204,6 +235,7 @@ describe('RunnerInstallation auth (ADR-0009 preflight)', () => {
     const exec: ExecImpl = vi.fn(async () => ({ stdout: '2.0.0' }));
     const inst = new RunnerInstallation(registryWith(CLAUDE_CODE_MANIFEST), exec, Date.now, {
       authExec,
+      launch: POSIX,
       workspace: () => workspace,
       env,
     });
@@ -227,7 +259,7 @@ describe('RunnerInstallation auth (ADR-0009 preflight)', () => {
       stderr: '',
     }));
     const exec: ExecImpl = vi.fn(async () => ({ stdout: '2.0.0' }));
-    const inst = new RunnerInstallation(registryWith(CLAUDE_CODE_MANIFEST), exec, Date.now, { authExec });
+    const inst = new RunnerInstallation(registryWith(CLAUDE_CODE_MANIFEST), exec, Date.now, { authExec, launch: POSIX });
 
     expect((await inst.plannerUsability('claude-code')).auth?.state).toBe('signed-out');
     authMethod = 'claude.ai';
@@ -242,7 +274,7 @@ describe('RunnerInstallation auth (ADR-0009 preflight)', () => {
     let clock = 0;
     const exec: ExecImpl = vi.fn(async () => ({ stdout: '2.0.0' }));
     const authExec: RunnerAuthExec = vi.fn(async () => ({ code: 0, stdout: '{}', stderr: '' }));
-    const inst = new RunnerInstallation(registryWith(CLAUDE_CODE_MANIFEST), exec, () => clock, { authExec });
+    const inst = new RunnerInstallation(registryWith(CLAUDE_CODE_MANIFEST), exec, () => clock, { authExec, launch: POSIX });
 
     await inst.plannerUsability('claude-code');
     clock += 29_000;
@@ -257,7 +289,7 @@ describe('RunnerInstallation auth (ADR-0009 preflight)', () => {
   it('coalesces concurrent auth probes into one status call', async () => {
     const exec: ExecImpl = vi.fn(async () => ({ stdout: '2.0.0' }));
     const authExec: RunnerAuthExec = vi.fn(async () => ({ code: 0, stdout: '{}', stderr: '' }));
-    const inst = new RunnerInstallation(registryWith(CLAUDE_CODE_MANIFEST), exec, Date.now, { authExec });
+    const inst = new RunnerInstallation(registryWith(CLAUDE_CODE_MANIFEST), exec, Date.now, { authExec, launch: POSIX });
 
     const [a, b] = await Promise.all([
       inst.plannerUsability('claude-code'),

@@ -1,16 +1,17 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LINKED_ARTIFACTS } from '../worktreeBootstrap';
+import { removeDir } from '../../testing';
 
 const REPO_ROOT = join(__dirname, '../../../../..');
 const GITIGNORE = readFileSync(join(REPO_ROOT, '.gitignore'), 'utf8');
 
 const roots: string[] = [];
-afterEach(() => {
-  while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true });
+afterEach(async () => {
+  while (roots.length) await removeDir(roots.pop()!);
 });
 
 describe('the repository .gitignore', () => {

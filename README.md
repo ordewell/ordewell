@@ -40,7 +40,7 @@ and can be mixed freely within one plan. Try it in your project, with nothing to
 npx ordewell
 ```
 
-This README describes 0.12.3. See the [published releases](https://github.com/ordewell/ordewell/releases)
+This README describes 0.12.5. See the [published releases](https://github.com/ordewell/ordewell/releases)
 for versions available to install and their release notes.
 
 Ordewell is pre-1.0, so minor releases can include breaking changes. Read the
@@ -78,8 +78,11 @@ OpenCode, GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI or Cursor, and git 2.
 
 ### Windows
 
-The VS Code extension runs natively on Windows. The terminal UI has not been
-verified natively; run it under [WSL](https://learn.microsoft.com/windows/wsl/install).
+The VS Code extension, the full-screen terminal UI and the `ordewell` commands
+(`plan`, `run`, `handoff` and the rest) run natively on Windows. Install Git
+for Windows: the planner's research commands run in its shell. For Codex tasks,
+[set up Codex's own sandbox](docs/troubleshooting.md#codexs-windows-sandbox-is-not-set-up)
+once. The terminal UI's mouse and paste need Node.js 22.17 or newer there.
 See the [platform notes](https://ordewell.ai/docs#platforms) for setup and
 current limitations.
 

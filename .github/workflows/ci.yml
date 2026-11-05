@@ -31,7 +31,7 @@ jobs:
       planner: ${{ steps.select.outputs.planner }}
       integration: ${{ steps.select.outputs.integration }}
       engine: ${{ steps.select.outputs.engine }}
-      coverage_args: ${{ steps.select.outputs.coverage_args }}
+      workspace_args: ${{ steps.select.outputs.workspace_args }}
 
     steps:
       # Two commits: a pull_request run checks out a merge, and its first
@@ -46,20 +46,17 @@ jobs:
           EVENT: ${{ github.event_name }}
         run: node scripts/ci-scope.mjs select
 
-  # Linux only, deliberately.
+  # The suites on Linux, and what only needs proving once: the bubblewrap
+  # sandbox, the coverage floors, typecheck, lint and packaging. The windows
+  # jobs below run the suites again on Windows.
   #
-  # Ordewell supports macOS and Windows (ADR-0010) and it would be better to
-  # prove that here than to assert it in the README. The lockfile no longer
-  # blocks that: it records the rollup and esbuild binaries of every platform
-  # npm publishes (npm ci demands them all, not only the ones it installs), so
+  # The lockfile records the rollup and esbuild binaries of every platform npm
+  # publishes (npm ci demands them all, not only the ones it installs), so
   # `npm ci` builds on linux-x64, linux-arm64, darwin-x64, darwin-arm64 and
   # win32-x64. Keep it that way: a lockfile written beside an existing
   # node_modules has recorded only the host's binaries, so regenerate it with
   # `npm install --package-lock-only` in a copy without node_modules and check
   # that the diff removes nothing.
-  #
-  # What is still unproven off Linux is the test suite, which assumes a POSIX
-  # shell, git and sealed runs. A matrix therefore waits for that, not for npm.
   build-and-test:
     needs: scope
     if: ${{ !cancelled() }}
@@ -154,13 +151,19 @@ jobs:
         id: vscode-version
         if: needs.scope.outputs.integration != 'false'
         run: |
-          version=$(node -e "fetch('https://update.code.visualstudio.com/api/releases/stable?released=true').then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); }).then((v) => process.stdout.write(String(v[0])))")
+          # The update service can miss a connection; one miss is no verdict.
+          for attempt in 1 2 3 4; do
+            version=$(node -e "fetch('https://update.code.visualstudio.com/api/releases/stable?released=true').then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); }).then((v) => process.stdout.write(String(v[0])))") && break
+            echo "The update service did not answer (attempt $attempt of 4)."
+            sleep $((attempt * 10))
+          done
+          [ -n "$version" ] || exit 1
           echo "VS Code under test: $version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Cache the VS Code download
         if: needs.scope.outputs.integration != 'false'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: packages/vscode/.vscode-test
           key: vscode-test-${{ runner.os }}-${{ steps.vscode-version.outputs.version }}
@@ -194,16 +197,16 @@ jobs:
       # measured value so those seams cannot quietly lose their tests.
       #
       # A selected run names its workspaces; with none named this is the root
-      # script, every workspace. COVERAGE_ARGS is left unquoted to split them.
+      # script, every workspace. WORKSPACE_ARGS is left unquoted to split them.
       - name: Test with coverage
         id: coverage
         if: needs.scope.outputs.packages != 'false'
         shell: bash
         env:
-          COVERAGE_ARGS: ${{ needs.scope.outputs.coverage_args }}
+          WORKSPACE_ARGS: ${{ needs.scope.outputs.workspace_args }}
         run: |
           set -o pipefail
-          npm run test:coverage $COVERAGE_ARGS --if-present 2>&1 | tee coverage.log
+          npm run test:coverage $WORKSPACE_ARGS --if-present 2>&1 | tee coverage.log
 
       - name: Append coverage summaries to the job summary
         if: ${{ always() && needs.scope.outputs.packages != 'false' }}
@@ -230,7 +233,7 @@ jobs:
 
       - name: Upload coverage reports
         if: ${{ always() && needs.scope.outputs.packages != 'false' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-reports
           path: packages/*/coverage/
@@ -257,7 +260,7 @@ jobs:
       - name: Upload .vsix
         id: upload-vsix
         if: needs.scope.outputs.packages != 'false'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ordewell-vsix
           path: packages/vscode/*.vsix
@@ -298,12 +301,140 @@ jobs:
       - name: Real engine — every harness in a real container
         run: npm run test:containers
 
+  # The suites on Windows, which ADR-0010 supports, split four ways: a Windows
+  # runner starts processes and runs git several times slower than a Linux one,
+  # and the e2e suites do little else. Nothing here is checked that only needs
+  # proving once, which build-and-test does.
+  windows:
+    name: windows (${{ matrix.shard }}/4)
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.packages != 'false' }}
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+
+    env:
+      ORDEWELL_NO_VERSION_CHECK: '1'
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The cli, web and vscode suites read core through its dist/, and some
+      # start the built CLI and daemon.
+      - name: Build every package
+        run: npm run build
+
+      # A selected run names its workspaces, `-ws` all of them. A shard that
+      # found no test fails, as a run on Linux would.
+      - name: Test on Windows
+        env:
+          WORKSPACE_ARGS: ${{ needs.scope.outputs.workspace_args }}
+        run: npm run test ${WORKSPACE_ARGS:--ws} --if-present -- --shard=${{ matrix.shard }}/4
+
+  # What runs on Windows beside the suites: the verify scripts, the bench
+  # harnesses, the offline planner loop and the VS Code integration test, each
+  # as build-and-test runs it on Linux.
+  windows-harness:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.packages != 'false' }}
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    env:
+      ORDEWELL_NO_VERSION_CHECK: '1'
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build every package
+        run: npm run build
+
+      - name: Verify scripts on Windows
+        run: |
+          for f in scripts/verify-*.mjs; do
+            node "$f" || exit 1
+          done
+
+      - name: Bench harness tests on Windows
+        run: npm run test:bench
+
+      - name: Planner conversation loop on Windows
+        if: needs.scope.outputs.planner != 'false'
+        run: |
+          node bench/live/mock-provider.mjs &
+          MOCK_PID=$!
+          trap 'kill $MOCK_PID 2>/dev/null' EXIT
+          for i in $(seq 1 50); do
+            if node -e "require('net').connect(3799).on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"; then break; fi
+            sleep 0.2
+          done
+          node bench/live/drive-conversation.mjs
+
+      - name: Resolve the VS Code version under test
+        id: vscode-version
+        if: needs.scope.outputs.integration != 'false'
+        run: |
+          # The update service can miss a connection; one miss is no verdict.
+          for attempt in 1 2 3 4; do
+            version=$(node -e "fetch('https://update.code.visualstudio.com/api/releases/stable?released=true').then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); }).then((v) => process.stdout.write(String(v[0])))") && break
+            echo "The update service did not answer (attempt $attempt of 4)."
+            sleep $((attempt * 10))
+          done
+          [ -n "$version" ] || exit 1
+          echo "VS Code under test: $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the VS Code download
+        if: needs.scope.outputs.integration != 'false'
+        uses: actions/cache@v6
+        with:
+          path: packages/vscode/.vscode-test
+          key: vscode-test-${{ runner.os }}-${{ steps.vscode-version.outputs.version }}
+
+      # A Windows runner has a desktop, so VS Code needs no virtual display.
+      - name: VS Code integration test on Windows
+        if: needs.scope.outputs.integration != 'false'
+        env:
+          ORDEWELL_TEST_WORKSPACE: ${{ runner.temp }}/ordewell-integration-workspace
+        run: |
+          node -e "require('fs').mkdirSync(process.env.ORDEWELL_TEST_WORKSPACE, { recursive: true })"
+          npm run test:integration -w ordewell
+
   # The status to require on main. `always()`: a job that is itself skipped
   # reports nothing a branch rule can fail on, so this one always concludes.
   required-checks:
     name: Required checks
     if: always()
-    needs: [scope, build-and-test, real-engine]
+    needs: [scope, build-and-test, real-engine, windows, windows-harness]
     runs-on: ubuntu-latest
 
     steps:

@@ -1,3 +1,4 @@
+import * as path from 'path';
 import { describe, it, expect } from 'vitest';
 import { buildGrepArgs, buildGlobArgs, buildFallbackGrepArgs, grepRegexFromProbe, toPosixClasses, filterFallbackByAnchoredInclude, applyHeadLimit, formatSearchOutput } from '../ripgrepArgs';
 import { SEARCH_EXCLUSIONS } from '../../interfaces/IFileSystem';
@@ -181,8 +182,45 @@ describe('buildFallbackGrepArgs', () => {
 
 describe('toPosixClasses', () => {
   it('turns class escapes into POSIX classes', () => {
-    expect(toPosixClasses('(?:^|[\\s(,;])x')).toBe('(?:^|[[:space:](,;])x');
+    expect(toPosixClasses('(?:^|[\\s(,;])x')).toBe('(^|[[:space:](,;])x');
     expect(toPosixClasses('[\\w<>\\[\\]*&:.~]+')).toBe('[][:alnum:]_<>*&:.~[]+');
+  });
+
+  it('makes a non-capturing group a plain one, which every -E reads', () => {
+    expect(toPosixClasses('(?:class|function) (?:a|b)')).toBe('(class|function) (a|b)');
+    expect(toPosixClasses('\\(?:x[(?:]')).toBe('\\(?:x[(?:]');
+  });
+
+  it('renumbers a backreference past the groups it made, so it names the group it did', () => {
+    expect(toPosixClasses('(?:a|b)(c)\\1')).toBe('(a|b)(c)\\2');
+    expect(toPosixClasses('(x)(?:y)(z)\\2\\1')).toBe('(x)(y)(z)\\3\\1');
+    // An escaped backslash is no backreference.
+    expect(toPosixClasses('(?:a)\\\\1')).toBe('(a)\\\\1');
+    // A named group captures; a lookbehind does not.
+    expect(toPosixClasses('(?<n>a)(?:b)(c)\\2')).toBe('(?<n>a)(b)(c)\\3');
+    expect(toPosixClasses('(?<=a)(?:b)(c)\\1')).toBe('(?<=a)(b)(c)\\3');
+  });
+
+  it('keeps its non-capturing groups where a renumbered backreference would need \\10, which ERE lacks', () => {
+    const pattern = `${'(?:x)'.repeat(5)}${'(y)'.repeat(5)}\\5`;
+    expect(toPosixClasses(pattern)).toBe(pattern);
+  });
+
+  it('reads a ] first in a class as a member, so the class goes on past it', () => {
+    expect(toPosixClasses('[]\\s]')).toBe('[][:space:]]');
+    expect(toPosixClasses('[^]\\d]x')).toBe('[^][:digit:]]x');
+    // The ( is in the class, so it is no group, and \1 still names (b).
+    expect(toPosixClasses('[](](?:a)(b)\\1')).toBe('[](](a)(b)\\2');
+    expect(toPosixClasses('[]')).toBe('[]');
+  });
+
+  // First in an ERE class, `^` negates it: `[\^a]` became `[^a]`, every character but `a`.
+  it('keeps an escaped ^ a member, never first in the class', () => {
+    expect(toPosixClasses('[\\^a]')).toBe('[a^]');
+    expect(toPosixClasses('[^\\^a]')).toBe('[^a^]');
+    expect(toPosixClasses('[\\^]x')).toBe('\\^x');
+    expect(toPosixClasses('[\\^\\-]')).toBe('[-^]');
+    expect(toPosixClasses('[\\^\\[]')).toBe('[[^]');
   });
 
   it('leaves escapes outside a class, and an unterminated class, alone', () => {
@@ -225,6 +263,13 @@ describe('filterFallbackByAnchoredInclude', () => {
     const filtered = filterFallbackByAnchoredInclude(stdout, '**/*.txt', '/repo', 'content');
     expect(filtered).toBe('/repo/a/b/nested.txt:1:hit');
   });
+
+  // On Windows grep reports `C:\repo\subdir\nested.txt`, and the glob still says `subdir/*.txt`.
+  it('matches a path reported with the host separator', () => {
+    const anchor = path.resolve('/repo');
+    const hit = `${path.join(anchor, 'subdir', 'nested.txt')}:1:hit`;
+    expect(filterFallbackByAnchoredInclude(hit, 'subdir/*.txt', anchor, 'content')).toBe(hit);
+  });
 });
 
 describe('applyHeadLimit', () => {
@@ -252,7 +297,12 @@ describe('applyHeadLimit', () => {
 describe('formatSearchOutput', () => {
   it('makes paths workspace-relative so the model sees the paths it can pass back', () => {
     const capped = applyHeadLimit('/repo/src/a.ts:1:hit', 100);
-    expect(formatSearchOutput(capped, '/repo', { emptyMessage: 'none' })).toBe('src/a.ts:1:hit');
+    expect(formatSearchOutput(capped, '/repo', { emptyMessage: 'none', sep: '/' })).toBe('src/a.ts:1:hit');
+  });
+
+  it('strips a Windows root however the search joined it: ripgrep with `\\`, Git for Windows\' grep with `/`', () => {
+    const capped = applyHeadLimit('C:\\repo\\src\\a.ts:1:hit\nC:\\repo/src/b.ts:2:hit\nC:\\other\\c.ts:3:hit', 100);
+    expect(formatSearchOutput(capped, 'C:\\repo', { emptyMessage: 'none', sep: '\\' })).toBe('src\\a.ts:1:hit\nsrc/b.ts:2:hit\nC:\\other\\c.ts:3:hit');
   });
 
   it('says so when rows were dropped — a silent cut reads as a complete answer', () => {

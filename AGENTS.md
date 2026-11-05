@@ -62,7 +62,10 @@ instead of fixing it. A recorded fixture with a fixed future instant expires
 the same way. `vi.waitFor` waits up to ten seconds here, not vitest's one
 (`vitest.setup.ts`), and a test may run for thirty, because real git and
 file-system events can take past a second on a loaded machine: pass a
-`timeout` only to wait longer still.
+`timeout` only to wait longer still. On Windows, where git and processes take
+several times as long, every limit is three times longer: the defaults
+(`vitest.shared.ts`), each `vi.waitFor`'s, and a test's own, which it writes as
+`patient(ms)` from `@ordewell/core/testing`.
 
 Build order is not optional: `core` emits the types the other three packages
 compile against. Building a leaf package against a stale `core/dist` produces
@@ -103,6 +106,20 @@ node bench/live/drive-conversation.mjs
 - **The plan is the source of truth** for what runs. Modes and models are never
   silently rewritten at spawn time
   ([ADR-0001](docs/adr/routing/0001-autonomous-mode-resolution.md)).
+- **Every suite runs on Windows too** (CI's `windows` jobs,
+  [ADR-0010](docs/adr/platform/0010-windows-support.md)). Build paths with
+  `path`, never `/`-joined strings or a `:`-joined PATH, and compare a path git
+  or the OS printed with `realpathSync.native`: on Windows it may differ by an
+  8.3 short name, the drive letter's case or its slashes. A test that needs a
+  home of its own sets one with `setEnv(homeEnv(dir))` from
+  `@ordewell/core/testing`, since HOME alone moves no home on Windows, and every
+  test file already starts under a throwaway one. A fake CLI is a Node script
+  with a `.cmd` and a `.ps1` shim beside its POSIX one, put on PATH with
+  `pathWithFake`. Skip on Windows (`it.skipIf(process.platform === 'win32')`,
+  with the reason) only a test whose subject is POSIX-only: bubblewrap,
+  Seatbelt, signals and process groups, file modes, `/dev`, a file name
+  Windows cannot hold (a line break, a `"`), containers. The Windows suites run
+  under Git Bash, as CI's do, so a test may use its `sh` as a tool.
 ## Architecture decisions
 
 [docs/adr/README.md](docs/adr/README.md) is the full guide: read it before

@@ -2,8 +2,10 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { runTests } from '@vscode/test-electron';
+import { homeEnv, pathWithFake } from '@ordewell/core/testing';
 
 const PATH_KEY = Object.keys(process.env).find((key) => key.toUpperCase() === 'PATH') ?? 'PATH';
+const FAKE_CLAUDE_DIR = path.resolve(__dirname, '../../../bench/pipeline/fake-claude');
 
 async function main(): Promise<void> {
   const workspace = process.env.ORDEWELL_TEST_WORKSPACE;
@@ -21,19 +23,47 @@ async function main(): Promise<void> {
   // worktree, the default `.vscode-test/user-data` overruns it and VS Code
   // fails to start with EINVAL.
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'ow-vsc-'));
+  // A home of the instance's own: what the extension writes under ~/.ordewell
+  // is not the user's, and on Windows a claude.exe installed in the real home
+  // would be started in the fake's place.
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ow-home-'));
   try {
-    await run(workspace, userData);
+    await run(workspace, userData, home);
   } finally {
-    fs.rmSync(userData, { recursive: true, force: true });
+    removeScratch(userData);
+    removeScratch(home);
   }
 }
 
-async function run(workspace: string, userData: string): Promise<void> {
+/**
+ * On Windows VS Code's helper processes hold their logs open for a moment after
+ * it exits, so the first unlink can meet EBUSY. A scratch directory left behind
+ * is no failure of the test.
+ */
+function removeScratch(dir: string): void {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+  } catch (err) {
+    console.warn(`Could not remove ${dir}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+async function run(workspace: string, userData: string, home: string): Promise<void> {
   await runTests({
     extensionDevelopmentPath: path.resolve(__dirname, '..'),
     extensionTestsPath: path.resolve(__dirname, './index.js'),
-    launchArgs: [workspace, `--user-data-dir=${userData}`, '--disable-workspace-trust', '--skip-welcome', '--skip-release-notes'],
+    launchArgs: [
+      workspace,
+      `--user-data-dir=${userData}`,
+      '--disable-workspace-trust',
+      '--skip-welcome',
+      '--skip-release-notes',
+      // The home above has no login keychain, so on macOS the first secret
+      // read raises a keychain dialog and the run waits on it until killed.
+      ...(process.platform === 'darwin' ? ['--use-mock-keychain'] : []),
+    ],
     extensionTestsEnv: {
+      ...homeEnv(home),
       ORDEWELL_TEST_WORKSPACE: workspace,
       // Set here too, not only by CI: a bare local run must not ping ordewell.ai or write ~/.ordewell.
       ORDEWELL_NO_VERSION_CHECK: '1',
@@ -44,7 +74,7 @@ async function run(workspace: string, userData: string): Promise<void> {
       // Under the key the environment already uses: this merges over
       // process.env, where Windows spells it `Path`, and a second `PATH` beside
       // it lost to the original.
-      [PATH_KEY]: [path.resolve(__dirname, '../../../bench/pipeline/fake-claude'), process.env.PATH].filter(Boolean).join(path.delimiter),
+      [PATH_KEY]: pathWithFake(FAKE_CLAUDE_DIR, 'claude'),
       ORDEWELL_TEST_MODEL: process.env.ORDEWELL_TEST_MODEL,
       OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
     },

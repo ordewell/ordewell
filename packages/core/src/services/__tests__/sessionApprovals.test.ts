@@ -1,3 +1,4 @@
+import * as path from 'path';
 import { describe, it, expect, vi } from 'vitest';
 import { makeSession } from './sessionTestKit';
 import { BaseFileSystem } from '../BaseFileSystem';
@@ -22,6 +23,8 @@ class ProbeFileSystem extends BaseFileSystem {
   // is about the approval flow, and BaseFileSystem's tests cover sealed runs.
   constructor() {
     super(undefined, new PlannerShellSandbox(async () => ({ available: false, notice: 'no sandbox in this test' })));
+    // A shell that reads a path as the host does, on every host: how Git Bash reads one is researchShell.test.ts's subject.
+    (this as unknown as { researchShell: unknown }).researchShell = { file: null, args: [], dialect: 'posix', utilsDir: null };
   }
 
   bashCalls: string[] = [];
@@ -51,6 +54,11 @@ function sessionWithProbe(configOverrides: Parameters<typeof fakeConfig>[0] = {}
   return { session, fsAdapter, messages };
 }
 
+// Confinement judges a path with the host's `path` (pathScope.ts), so on
+// Windows `/tmp/dump` resolves onto the current drive, spelled with backslashes.
+const native = (p: string) => path.resolve(p);
+const scopeOf = (dir: string) => path.join(native(dir), '*');
+
 const approvalRequests = (messages: SessionMessage[]) =>
   messages.filter((m): m is Extract<SessionMessage, { type: 'approval_request' }> => m.type === 'approval_request');
 
@@ -66,8 +74,8 @@ describe('Session approval flow', () => {
 
     const [request] = approvalRequests(messages);
     expect(request.kind).toBe('external_path');
-    expect(request.subject).toBe('/tmp/dump/a.log');
-    expect(request.scope).toBe('/tmp/dump/*');
+    expect(request.subject).toBe(native('/tmp/dump/a.log'));
+    expect(request.scope).toBe(scopeOf('/tmp/dump'));
     expect(request.detail).toContain('outside the workspace');
 
     // Leave nothing pending for the next test's timers.
@@ -109,7 +117,7 @@ describe('Session approval flow', () => {
 
     const result = await pending;
     expect(result.success).toBe(true);
-    expect(result.output).toBe('body of /tmp/dump/a.log');
+    expect(result.output).toBe(`body of ${native('/tmp/dump/a.log')}`);
   });
 
   it('returns an actionable denial when a surface refuses', async () => {
@@ -165,7 +173,7 @@ describe('Session approval flow', () => {
     await vi.waitFor(() => expect(approvalRequests(messages)).toHaveLength(1));
 
     expect(session.outstandingApprovals()).toHaveLength(1);
-    expect(session.outstandingApprovals()[0].request.subject).toBe('/tmp/dump/a.log');
+    expect(session.outstandingApprovals()[0].request.subject).toBe(native('/tmp/dump/a.log'));
 
     session.resolveApproval(session.outstandingApprovals()[0].id, false);
     await pending;
@@ -184,7 +192,7 @@ describe('Session approval flow', () => {
 
     expect(second.success).toBe(true);
     expect(approvalRequests(messages)).toHaveLength(1);
-    expect(session.approvedScopes()).toEqual(['/tmp/dump/*']);
+    expect(session.approvedScopes()).toEqual([scopeOf('/tmp/dump')]);
   });
 
   it('drops grants on reset, because session boundaries are hard', async () => {
@@ -231,7 +239,7 @@ describe('Session approval flow', () => {
 
     const pending = fsAdapter.bash('cat /etc/passwd /tmp/dump/secret.log');
     await vi.waitFor(() => expect(approvalRequests(messages)).toHaveLength(1));
-    expect(approvalRequests(messages)[0].scope).toBe('/etc/*, /tmp/dump/*');
+    expect(approvalRequests(messages)[0].scope).toBe(`${scopeOf('/etc')}, ${scopeOf('/tmp/dump')}`);
     session.resolveApproval(approvalRequests(messages)[0].id, true);
 
     const result = await pending;
@@ -250,7 +258,7 @@ describe('Session approval flow', () => {
 
     const pending = fsAdapter.bash('cat /etc/passwd /tmp/dump/secret.log');
     await vi.waitFor(() => expect(approvalRequests(messages)).toHaveLength(2));
-    expect(approvalRequests(messages)[1].scope).toBe('/tmp/dump/*');
+    expect(approvalRequests(messages)[1].scope).toBe(scopeOf('/tmp/dump'));
     session.resolveApproval(approvalRequests(messages)[1].id, false);
 
     const result = await pending;
@@ -451,7 +459,7 @@ describe('Session approval flow', () => {
       await fsAdapter.readFile('/tmp/dump/b.log');
 
       expect(approvalDecisions(messages)).toEqual([
-        expect.objectContaining({ subject: '/tmp/dump/b.log', granted: true, source: 'remembered' }),
+        expect.objectContaining({ subject: native('/tmp/dump/b.log'), granted: true, source: 'remembered' }),
       ]);
     });
 

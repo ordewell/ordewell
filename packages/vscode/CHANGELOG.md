@@ -19,6 +19,34 @@
 - **Qwen Code runs tasks and plans.** Qwen Code 0.26.6 or newer appears among
   the runners a task can be assigned to, with its models, and among the
   planners. It can run read-only tasks too.
+## [0.12.5] - 2026-11-04
+
+### Security
+
+- **A Codex planner on Windows plans with its own shell off.** Codex's sandbox
+  there cannot keep a command off the network, so a Codex planner reads through
+  Ordewell's `run_command`, under the same command rules as every other planner
+  on Windows.
+
+### Fixed
+
+- **An agent installed by npm starts whole on Windows.** Claude Code installed
+  with npm was started through PowerShell, which dropped the quotes from its
+  JSON settings and its prompt. Ordewell now starts what the shim names
+  directly, for every npm-installed agent.
+- **The planner's commands are confined to the folders Git Bash reaches**, so
+  approving `/tmp` approves your temp folder, and `/dev/null` no longer asks.
+- **A Codex task on Windows says what Codex grants it.** Until Codex's own
+  Windows sandbox is set up, Codex runs a Guarded task read-only, with each
+  write approved by its reviewer and run unconfined. The task now says so once,
+  with how to set the sandbox up, and its model is told how to write through
+  review rather than giving up.
+- **A Codex task on Windows runs npm.** PowerShell's default execution policy
+  refused `npm.ps1`, so its tests never ran; it is now told to call `npm.cmd`.
+- **A planner on Windows is told which shell its commands run in**, so a Codex
+  planner reads with `cat` rather than asking to run PowerShell's `Get-Content`.
+
+## [0.12.4] - 2026-11-04
 
 ### Fixed
 
@@ -29,6 +57,23 @@
   cmd.exe, so PowerShell's default Restricted execution policy no longer refuses
   an npm-installed agent's `.ps1` shim and leaves the sign-in waiting until it
   times out.
+- **Removing a task's worktree no longer empties your folders on Windows.** The
+  folders a worktree linked from your checkout, such as `.claude`, and any a task
+  linked itself, were emptied when it was removed. Every link now comes down
+  first.
+- **Stop stops a task's runner at once on Windows**, rather than five seconds
+  later, when it had gone on writing to its worktree.
+- **A task is held for runner settings as it is on Linux**: not for your own
+  ignored `.claude/settings.local.json`, and for a shared `.mcp.json` an earlier
+  task rewrote.
+- **A task's diff reads on Windows.** The planner's `task_diff` no longer calls a
+  task's worktree "no longer a repository" when Windows names its folder two ways,
+  and untracked files are in the diff.
+- **A `!` path exclusion holds on Windows in any case and with either slash.**
+- **Search works on Windows without ripgrep**: an `include` filter such as
+  `src/*.ts` and `find_symbol` find what they should, and results are relative.
+- **A runner set by its full path is found on Windows**, rather than read as not
+  installed.
 
 ## [0.12.3] - 2026-11-03
 

@@ -58,7 +58,9 @@ export function nativeShellOffer(input: {
   if (input.runner === 'codex') {
     return {
       offered: false,
-      reason: 'Codex already runs its own shell, read-only and without the network (ADR-0026), so this setting changes nothing for it.',
+      reason: platform === 'win32'
+        ? "On Windows Codex plans with its own shell off, since its sandbox there cannot keep a command off the network, and runs every command through Ordewell's (ADR-0010)."
+        : 'Codex already runs its own shell, read-only and without the network (ADR-0026), so this setting changes nothing for it.',
     };
   }
   const checked = CHECKED[input.runner];

@@ -17,7 +17,7 @@ import {
   type LegacyPlanState,
   type TaskStatus,
 } from '@ordewell/core';
-import { FakeRunnerSession } from '@ordewell/core/testing';
+import { FakeRunnerSession, homeEnv, setEnv } from '@ordewell/core/testing';
 import { createApp } from '../../../web/server/app';
 import { createRequestListener } from '../../../web/server/nodeAdapter';
 import { OrchestratorPool } from '../../../web/server/pool/orchestratorPool';
@@ -73,7 +73,7 @@ function holdingRunner(spawned: FakeRunnerSession[] = []): IRunner {
 }
 
 describe('the daemon contract: ApiClient against the real daemon', () => {
-  const savedEnv: Record<string, string | undefined> = {};
+  let restoreEnv: () => void;
   let dir: string;
   let workspace: string;
   let pool: OrchestratorPool;
@@ -85,14 +85,15 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
     dir = mkdtempSync(join(tmpdir(), 'ordewell-contract-'));
     workspace = join(dir, 'ws');
     mkdirSync(join(workspace, '.git'), { recursive: true });
-    for (const key of ['HOME', 'ORDEWELL_SETTINGS_PATH', 'AI_PROVIDER', 'ORCHESTRATOR_MODEL', 'ORDEWELL_PLANNER_EFFORT', 'OPENROUTER_API_KEY']) {
-      savedEnv[key] = process.env[key];
-    }
-    process.env.HOME = dir;
-    process.env.ORDEWELL_SETTINGS_PATH = join(dir, 'settings.json');
-    process.env.AI_PROVIDER = 'openrouter';
-    process.env.ORCHESTRATOR_MODEL = 'openrouter/auto';
-    process.env.OPENROUTER_API_KEY = 'sk-or-test';
+    restoreEnv = setEnv({
+      ...homeEnv(dir),
+      ORDEWELL_SETTINGS_PATH: join(dir, 'settings.json'),
+      AI_PROVIDER: 'openrouter',
+      ORCHESTRATOR_MODEL: 'openrouter/auto',
+      // Kept as it is, only so it is put back: the daemon writes it on a planner pick.
+      ORDEWELL_PLANNER_EFFORT: process.env.ORDEWELL_PLANNER_EFFORT,
+      OPENROUTER_API_KEY: 'sk-or-test',
+    });
     vi.spyOn(OpenAiService.prototype, 'startConversation').mockResolvedValue(TEXT);
     vi.spyOn(GeminiService.prototype, 'startConversation').mockResolvedValue(TEXT);
 
@@ -110,10 +111,7 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
   afterEach(async () => {
     pool.destroyAll();
     await new Promise<void>((resolve) => { server.close(() => resolve()); });
-    for (const [key, value] of Object.entries(savedEnv)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
+    restoreEnv();
     rmSync(dir, { recursive: true, force: true });
     vi.restoreAllMocks();
   });

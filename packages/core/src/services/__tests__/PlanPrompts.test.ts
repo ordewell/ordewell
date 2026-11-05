@@ -101,6 +101,22 @@ describe('buildConversationSystemPrompt slice rules', () => {
   });
 });
 
+describe('buildConversationSystemPrompt on Windows', () => {
+  // A coding agent there expects PowerShell; run_command runs Git Bash, or cmd.exe without it (ADR-0010).
+  const harness = (researchShell?: 'git-bash' | 'cmd') => buildConversationSystemPrompt('goal', '', {}, ['codex'], undefined, { harness: true, runner: 'codex', ...(researchShell ? { researchShell } : {}) });
+
+  it('names the shell run_command runs, and changes nothing where none is named', () => {
+    expect(harness('git-bash')).toContain('run_command runs Git Bash, a POSIX shell: read with cat, ls, grep and find, not PowerShell cmdlets');
+    expect(harness('cmd')).toContain('run_command runs cmd.exe: read with type, dir and findstr');
+    expect(harness()).not.toContain('On this Windows machine');
+    expect(harness('git-bash').replace(/^- On this Windows machine.*\n/m, '')).toBe(harness());
+  });
+
+  it('says nothing of it to an API planner, whose tool is named bash', () => {
+    expect(buildConversationSystemPrompt('goal', '', {}, ['codex'], undefined, { researchShell: 'cmd' })).not.toContain('On this Windows machine');
+  });
+});
+
 describe('buildResearchPrompt model catalog', () => {
   it('lists every discovered runner provider and each model\'s variants for the planner', () => {
     const modelsByRunner: Partial<Record<RunnerId, DiscoveredModel[]>> = {

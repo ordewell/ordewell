@@ -1,12 +1,12 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { execFileSync } from 'child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createWorktreeIsolation } from '../GitWorktreeIsolation';
 import type { IsolationRun, IWorktreeIsolation } from '../../interfaces/IWorktreeIsolation';
 import type { Task } from '../../models/Task';
-import { fakeConfig } from '../../testing';
+import { fakeConfig, removeDir } from '../../testing';
 import { revertScope } from '../taskRevert';
 
 /**
@@ -38,7 +38,7 @@ function initRepo(root: string): string {
 }
 const temps: string[] = [];
 function tempDir(): string { const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-r5-'))); temps.push(dir); return dir; }
-afterEach(() => { while (temps.length) rmSync(temps.pop()!, { recursive: true, force: true }); });
+afterEach(async () => { while (temps.length) await removeDir(temps.pop()!); });
 function task(order: number, title: string): Task {
   return { id: `task-${order}`, order, title, description: '', type: 'ai', status: 'in_progress', dependencies: [], subtasks: [], assignedRunner: 'claude-code' };
 }

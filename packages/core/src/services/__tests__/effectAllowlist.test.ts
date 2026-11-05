@@ -80,7 +80,8 @@ describe('the effect allowlist', () => {
     expect(effectRuleFor(web, commands('curl -X POST https://INTERNAL.example'))).toBeNull();
     expect(effectRuleFor(web, commands('curl -X POST --url=https://internal.example/x'))).toBeNull();
 
-    const files = parseEffectAllowlist(['cat /home/me/.ssh/id_rsa', 'gh release upload v1 *', 'curl -X POST -d *'], ['!/home/me/.ssh/*']);
+    // POSIX paths, so a POSIX host: on Windows a leading `/` spells a switch.
+    const files = parseEffectAllowlist(['cat /home/me/.ssh/id_rsa', 'gh release upload v1 *', 'curl -X POST -d *'], ['!/home/me/.ssh/*'], 'linux');
     expect(files.ignored).toEqual([]);
     expect(effectRuleFor(files, commands('cat /home/me/.ssh/id_rsa'))).toBeNull();
     expect(effectRuleFor(files, commands('gh release upload v1 /home/me/.ssh/../.ssh/id_rsa'))).toBeNull();
@@ -89,7 +90,7 @@ describe('the effect allowlist', () => {
     expect(effectRuleFor(files, commands('gh release upload v1 /tmp/build.tgz'))).toBe('gh release upload v1 *');
     expect(effectRuleFor(files, commands('curl -X POST -d @/tmp/body.json'))).toBe('curl -X POST -d *');
 
-    const home = parseEffectAllowlist(['gh release upload v1 *'], [`!${path.join(os.homedir(), '.ssh')}/*`]);
+    const home = parseEffectAllowlist(['gh release upload v1 *'], [`!${path.join(os.homedir(), '.ssh', '*')}`]);
     expect(effectRuleFor(home, commands('gh release upload v1 ~/.ssh/id_rsa'))).toBeNull();
     expect(effectRuleFor(home, commands('gh release upload v1 ~/build.tgz'))).toBe('gh release upload v1 *');
   });

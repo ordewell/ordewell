@@ -15,6 +15,7 @@ import { ranSealed } from '../../researchStepSummary';
 import type { ResearchShell, ShellLaunch } from '../../researchShell';
 import { MEMORY_LIMIT_SIGNAL, type SandboxLimits } from '../SandboxBackend';
 import type { ToolOutcome } from '../../../interfaces/IFileSystem';
+import { patient } from '../../../testing';
 
 /**
  * Sealed runs on this host (ADR-0036 S1): Seatbelt on macOS, bubblewrap on
@@ -483,7 +484,7 @@ describe('sealed runs', async () => {
 
           await run(launch, 'echo written > node_modules/vitest/sealed-check', project);
           expect(existsSync(join(install, 'vitest', 'sealed-check'))).toBe(false);
-        }, 60_000);
+        }, patient(60_000));
       });
     });
 
@@ -520,7 +521,7 @@ describe('sealed runs', async () => {
         } finally {
           small.end();
         }
-      }, 40_000);
+      }, patient(40_000));
 
       it('still ends a run at the limit while a fork bomb holds its process limit', async () => {
         const small = new SmallMemorySandbox({ processes: bombProcesses });
@@ -540,7 +541,7 @@ describe('sealed runs', async () => {
         } finally {
           small.end();
         }
-      }, 40_000);
+      }, patient(40_000));
 
       it('leaves alone a run that stays under it', async () => {
         const small = new SmallMemorySandbox();
@@ -552,7 +553,7 @@ describe('sealed runs', async () => {
         } finally {
           small.end();
         }
-      }, 40_000);
+      }, patient(40_000));
     });
 
     it('backgrounds a job without a stray "Killed" line, keeping the foreground exit code', async () => {

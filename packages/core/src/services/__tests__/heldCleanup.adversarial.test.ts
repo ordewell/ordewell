@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, realpathSync, rmSync } from 'fs';
+import { mkdtempSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { EventStore } from '../eventStore';
@@ -11,6 +11,7 @@ import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import { fakeConfig, makeSession } from './sessionTestKit';
 import { heldPlanner, settled } from './supervisorTestKit';
 import { saveSession } from '../../utils/sessionStore';
+import { removeDir } from '../../testing';
 
 /**
  * A held session may not save anything (ADR-0049): `cleanupRun` discards its
@@ -62,7 +63,9 @@ describe('a held session\'s cleanup', () => {
       taker.releaseAll();
       host.releaseAll();
       session.destroy();
-      rmSync(workspace, { recursive: true, force: true });
+      // The adoption's git may still be running in the workspace, and Windows
+      // removes no folder a process works in: it goes once that git is done.
+      await removeDir(workspace);
     }
   });
 });

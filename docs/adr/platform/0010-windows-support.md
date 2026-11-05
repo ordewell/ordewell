@@ -62,6 +62,22 @@ deliberate: two installs of the same CLI are the same program, and taking the
 8191-character buffer. An unresolvable command is handed back untouched so the
 caller's own ENOENT — which names what the user typed — is what surfaces.
 
+**A batch shim npm wrote is not run through cmd.exe.** npm's shims (its
+`cmd-shim`) are two fixed templates: one runs a Node script with the `node.exe`
+beside the shim, or else the `node` on PATH, and one starts a program in the
+package itself, as OpenCode's does its `.exe`. Either only finds a file and
+hands it `%*`, so `planDirectLaunch` reads the shim and starts that file
+directly, which is what the shim does without cmd.exe's 8191-character buffer,
+its cut at a line break, its `%VAR%` expansion and a `"` it cannot carry. That
+matters most for Claude Code installed by npm: its system prompt spans lines
+and its `--settings` and `--mcp-config` are JSON, so on either shim route it
+started with a prompt or a setting it could not read. Only a shim that is
+npm's template byte for byte, but for a target holding no quote, `%` or line
+break, is read so. A `.cmd` with a line of its own may set a variable or do
+more than find a file, which only cmd.exe would do, so it keeps the batch
+route; so does a shim whose file, or a `node` to run it, is not there. pnpm's
+shims also set `NODE_PATH` and are not read.
+
 **The PowerShell tier is availability-ordered, not capacity-ordered.** It is
 reached only when neither of the others resolved: an installer that dropped a
 script rather than a binary, a hand-rolled shim. Every Node package manager
@@ -140,6 +156,11 @@ is unresolvable even with a working `grep.exe` on the box. A cmd.exe fallback
 appends `researchShellWarning` to any failed command, so a degraded research
 surface reads as degraded rather than as a repository with no answer.
 
+A harness planner is **told which of the two** its `run_command` runs. A coding
+agent on Windows expects PowerShell: a Codex planner reached for `Get-Content`,
+which the rules refused as unknown and an approval would have run in a shell
+that has no such command.
+
 POSIX resolves to `{ file: null }`, meaning "use `shell: true`" — byte for byte
 the call the adapters made before.
 
@@ -150,6 +171,30 @@ resolves the research shell once and passes its `dialect` to both
 `classifyCommand` and `pathLikeArgs`, so classifying under one language and
 executing under another is not a bug to avoid but a state the types do not
 permit. A Windows box with Git Bash classifies as POSIX, correctly.
+
+**A path is judged where the shell reads it to be.** Git Bash keeps a mount
+table of its own: `/` is its install, `/tmp` the user's temp folder, `/c` the
+`C:` drive, and `/dev/null` its null device. Read by the host, `/etc/passwd`
+was `<drive>:\etc\passwd` and `/c/Users/me` was `<drive>:\c\Users\me`, so the
+folder a user approved was not the one the command reached, `/dev/null` asked
+to reach a folder that is not there, and a workspace at `<drive>:\c` held paths
+that were not in it. So the research shell carries a `hostPath`, read from Git
+Bash's own `mount` the first time a command names a path that needs it, with
+Git for Windows' default table in its place when `mount` cannot run, and path
+confinement resolves every path a command names, and every `cd` it follows,
+through it: a backslash read as a separator, `/proc/cygdrive` as the drive
+prefix, and a mount point matched in any case only where Git Bash does, on a
+`posix=0` mount. What it cannot follow for certain is refused rather than
+guessed at: Git Bash climbs `/tmp/..` on disk and `/bin/..` by name, reads
+`../../c/Users` from a workspace on `F:` as `C:\Users` by way of its own root,
+and keeps a `/proc` and a `/dev` of its own (`/dev/clipboard` is the
+clipboard), so a POSIX path holding a `..`, a relative one that climbs off its
+drive, and the rest of `/proc` and `/dev` name no folder an approval could
+name, and a command naming one is refused with that reason. This is not a
+wider envelope ([ADR-0008](../planner-envelope/0008-planner-exploration-envelope.md)):
+the same paths are judged, each as the folder the command will reach, and
+those that reach none certainly are refused. Under cmd.exe there is no table
+and no device, so `/dev/null` is the folder it names there.
 
 Only the rules that actually diverge are modeled: escape character, whether that
 escape survives inside quotes, quote characters, expansion syntax, and stripped
@@ -171,7 +216,10 @@ nothing there.
   dispose path. Windows has no signals, and the direct child may be the cmd.exe
   shim rather than the agent — so terminating it left the agent running, holding
   the workspace and the subscription, invisible to the surface that thought it
-  had stopped. `taskkill /T` walks the tree; POSIX keeps its SIGTERM → SIGKILL
+  had stopped. `taskkill /T` walks the tree, and is forced (`/F`) at once when
+  the unforced pass is refused: that pass only asks a window to close, which a
+  console agent does not have, so it went on writing to the worktree it was
+  stopped in for the whole grace. POSIX keeps its SIGTERM → SIGKILL
   escalation, sent to the runner's process group (see CONTEXT.md, *Kill
   tree*). A leader's exit does not end that group — a crashed runner leaves its
   shells and dev servers running — so the group is signalled after the leader
@@ -212,6 +260,51 @@ nothing there.
   way the planner actually spawns it, closing the gap where `exec` said healthy
   and `spawn` said ENOENT. POSIX always agrees, since `execvp` and `exec` search
   PATH identically.
+- **Codex's own Windows sandbox is not the one ADR-0026 assumes.** Codex has
+  a Windows sandbox of its own, which the user sets up once through an
+  Administrator prompt that Ordewell never raises for them. Until then Codex
+  answers `windowsSandbox/readiness` with `notConfigured` and has nothing to
+  confine a command with: it opens a thread asked for `workspace-write` as
+  `read-only`, puts each command it does not judge safe to approval, and runs
+  an approved one unconfined (codex-cli 0.166.0, measured). Its non-admin
+  backend (`windows.sandbox = "unelevated"`, a restricted token) refuses a
+  read-only thread's writes, but runs that thread's commands without asking
+  and lets Node reach the network; only proxy variables pointed at a dead port
+  and stubs in front of `curl` and `ssh` stand in the way (measured). Under it
+  Codex also refuses every command of a `workspace-write` thread. The
+  Administrator one was not measured. So:
+  - **A planner** on Windows has Codex's own shell off, whatever the user set
+    up, and reads through `run_command` alone, as ADR-0033's profile does and
+    as every other planner does on Windows (ADR-0026). Its readiness is not
+    asked. A one-shot plan (`ordewell plan --no-chat`, the plan endpoint) runs
+    no command and is offered no `run_command`, so there Codex keeps its own
+    shell, the one way it has to read, with its approvals declined as before.
+  - **A change task** keeps the mode its plan gives it (ADR-0001), and what
+    Codex grants instead is said. Its readiness is asked before the thread.
+    Short of `ready`, the model is told that an edit goes through `apply_patch`
+    and a writing command through escalation, each decided by Codex's
+    reviewer, so it does not end the task as impossible. Where Codex then
+    grants `read-only`, the user is shown once that the task runs unconfined
+    and how to set up the Administrator sandbox, warned off the non-admin one.
+    A sandbox the user set up is left as Codex configures it, and a Codex that
+    does not know the question is left alone.
+  - **Any task with Codex's own shell** is told that shell is Windows
+    PowerShell, whose default execution policy refuses the `npm.ps1` npm puts
+    first on PATH, and to call `npm.cmd` instead. Told nothing, a task's
+    `npm test` failed before it started, and the model reported the suite
+    passing all the same. The policy is the user's and is left as it is.
+- **The TUI changes the mouse modes only in raw mode.** Windows' pseudo
+  console passes a DEC mouse-mode change on to the terminal only while the
+  console reads VT input, and drops it otherwise (measured). Node's raw mode
+  turns VT input on from Node 22.17 and 24.2 (nodejs/node#58358). `close()`
+  left raw mode before handing the mouse back, so the terminal went on
+  reporting the mouse to the shell after the TUI quit; `resume()` re-armed it
+  before entering raw mode, so the wheel was dead after a login. Both now write
+  with raw mode on, as opening and `suspend()` did. On an older Node the
+  console never reads VT input: the request for mouse reports is dropped and a
+  paste's markers are stripped, so the wheel does nothing and a line break in a
+  paste sends the line (measured on Node 20.20.2). Nothing in Node can change
+  that, so the TUI says so once at start.
 
 ## Consequences
 
@@ -219,41 +312,67 @@ The **VS Code extension and the daemon work on native Windows**: harness
 planners (Claude Code, Codex, OpenCode), API-key planners, runner execution,
 model discovery, and the exploration envelope with its gate intact.
 
-The **TUI is not verified on Windows**. WSL remains the supported answer for
-that surface. Runner execution uses structured connectors and no longer needs
+The **TUI runs on native Windows**: driven in a Windows pseudo console, it drew
+on the alternate screen, took keys, redrew on a resize, planned, ran and
+merged a plan, and gave the screen back on exit. In the same console, on Node
+22.17, the wheel scrolled, quitting handed the mouse back to the shell, and a
+bracketed paste of two lines with quotes, `$VAR` and `%PATH%` landed in the
+composer as written, unsent. Runner execution uses structured connectors and no longer needs
 tmux or per-task terminal windows (ADR-0025). The launch and kill seams are
 shared in core.
 
-Two things are **explicitly not claimed**:
+Three things are **explicitly not claimed**:
 
-1. **Codex's read-only guarantee on Windows is unverified.** `codexSandbox`
-   correctly short-circuits its bubblewrap probe off Linux, and the approvals
-   half of the invariant holds by construction (`approvalPolicy: 'on-request'`:
-   what Codex asks to run or change is declined at once, a user's MCP tool is
-   decided by Ordewell, and every other request is refused, ADR-0026). But
-   Codex's OS-level sandboxing
-   on Windows is not the equivalent of Seatbelt or Landlock, so
-   `sandbox: 'read-only'` may be enforced by Codex's tool layer rather than by
-   the kernel. "Read-only by construction" is a Linux/macOS guarantee until
-   someone tests it there. The comment in `codexSandbox.ts` says so rather than
-   asserting the stronger claim it used to.
-2. **`%VAR%` expansion on the cmd.exe shim route.** In a `cmd /c` context `%`
-   cannot be escaped — `%%` is a batch-file construct and `^%` still expands — so
-   an argument naming a *defined* environment variable is expanded. Preferring a
-   native executable skips cmd.exe and the hazard with it, which is the main
-   reason the preference is global.
-**Argument fidelity on the PowerShell shim route is measured.** `-File`
-receives an ordinary argument vector that Node quotes by the CommandLineToArgvW
-inverse. On a Windows host, a multi-line argument containing `$(…)`, a backtick
-and `%PATH%` arrived byte-exact, with no expansion — so `%VAR%` expansion is a
-hazard this route avoids too.
+1. **What Codex's Administrator sandbox does for a change task on Windows.**
+   A planner does not depend on it: its own shell is off there, and the
+   approvals half holds as everywhere (`approvalPolicy: 'on-request'`: what
+   Codex asks to run or change is declined at once, a user's MCP tool is
+   decided by Ordewell, and every other request is refused, ADR-0026). With
+   that sandbox set up, Codex grants a change task `workspace-write`; how far
+   it confines the task is Codex's claim, not measured here. Until it is set
+   up, a change task runs unconfined, and says so (see *Also*).
+2. **`%VAR%` expansion on the cmd.exe shim route,** for a shim npm did not
+   write. In a `cmd /c` context `%` cannot be escaped — `%%` is a batch-file
+   construct and `^%` still expands — so an argument naming a *defined*
+   environment variable is expanded. Preferring a native executable skips
+   cmd.exe and the hazard with it, which is the main reason the preference is
+   global, and an npm shim's file is started as one.
+3. **A `"` on the PowerShell shim route,** for a shim npm did not write. A shim
+   hands `$args` on to its program, and Windows PowerShell 5.1 re-quotes each
+   argument by its own reckoning and escapes nothing: a `"` inside one is lost
+   or splits it, an empty argument is dropped, and a trailing `\` in one with
+   whitespace escapes the quote it is closed with. Escaping the arguments for
+   the program behind the shim was tried and taken back. A subplanner's system
+   prompt, near Windows' command-line ceiling already, went over it once its
+   quotes were escaped, and 5.1's quoting decisions are not ones an escape can
+   always satisfy: a space between two quotes still splits. npm writes a `.cmd`
+   beside every `.ps1`, and its shim's file is started directly, so the route
+   is left to installs that wrote a script alone.
 
-The Windows branches are tested on Linux through injected seams. The batch
-route's line-break failure and the PowerShell route's fidelity were found and
-measured on a Windows host. So was the VS Code extension's first run: activation,
-runner detection, the login probe and Log in, with Claude Code as its native
-`.exe` and Codex and OpenCode as npm `.cmd` shims, and a Codex planner
-conversation. The rest has not been run on one.
+**Argument fidelity through an npm shim is measured** on every Windows CI run:
+a shim as npm writes it hands its script a `"`, a line break, `%PATH%`, an
+empty argument and cmd.exe's metacharacters as they were given.
+
+**Argument fidelity on the PowerShell shim route is measured** for what it does
+carry. `-File` receives an ordinary argument vector that Node quotes by the
+CommandLineToArgvW inverse. On a Windows host, a multi-line argument containing
+`$(…)`, a backtick and `%PATH%` arrived byte-exact through a shim as npm writes
+it, with no expansion, so `%VAR%` expansion is a hazard this route avoids too.
+
+The Windows branches are tested on Linux through injected seams, and **CI runs
+every suite again on a Windows runner**: each package's vitest suites, the
+bench harnesses, the offline planner loop and the VS Code integration test. A
+test whose subject is POSIX-only (bubblewrap, Seatbelt, signals, file modes,
+containers) skips there and says why. The batch route's line-break failure and
+the PowerShell route's fidelity were found and measured on a Windows host. So
+was the VS Code extension's first run: activation, runner detection, the login
+probe and Log in, with Claude Code as its native `.exe` and Codex and OpenCode
+as npm `.cmd` shims. Real plans have run there through the CLI's headless
+commands, each built-in agent as planner and as runner, with worktree isolation
+under an 8.3 short path, through to a merged handoff. A worktree's path is
+compared with git's name for it by `realpathSync.native`: git prints the long
+name with forward slashes, and a recorded path can carry a short name or a
+lower-case drive letter.
 
 ## History
 
@@ -266,3 +385,8 @@ conversation. The rest has not been run on one.
 - 2026-10-17 — Codex's approvals on Windows read `on-request`, as ADR-0026 made them on 2026-10-10; the text still said `never`.
 - 2026-10-24 — a spawn throw is held through the one spawn-failure path in `Attempts`; the text named a `TaskOrchestrator.startTask` that no longer exists.
 - 2026-11-03 — the VS Code extension's activation, runner detection and login run on a Windows host.
+- 2026-11-03 — CI runs the suites on Windows, real plans ran there through to a merged handoff, a refused unforced `taskkill` is forced at once, and a `"` on the PowerShell shim route is recorded as unclaimed.
+- 2026-11-04 — a batch shim npm wrote starts the file it names directly, so a `"`, a line break and `%VAR%` reach the program whole.
+- 2026-11-04 — path confinement reads a path through Git Bash's mount table, as the shell running the command does.
+- 2026-11-04 — a Codex planner's own shell is off on Windows, a harness planner is told which shell runs its commands, and a change task asks whether Codex's sandbox is set up and says what Codex granted it.
+- 2026-11-04 — the TUI changes the mouse modes only in raw mode, and says at start when Node cannot pass the mouse or a paste; both were measured in a Windows pseudo console.

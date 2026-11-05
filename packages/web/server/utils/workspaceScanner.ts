@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
 export interface WorkspaceScannerDeps {
@@ -40,7 +41,8 @@ export function scanWorkspaces(): string[] {
     fsModule: fs,
     pathModule: path,
     cwd: process.cwd(),
-    home: process.env.HOME || '/root',
+    // Not HOME, which Windows does not set: os.homedir() reads USERPROFILE there.
+    home: os.homedir(),
     projectDir: path.resolve(__dirname, '..', '..', '..', '..'),
   });
 }

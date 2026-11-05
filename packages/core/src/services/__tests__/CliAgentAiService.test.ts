@@ -521,13 +521,22 @@ describe('CliAgentAiService — Claude Code', () => {
   });
 
   it('asks before a read outside the workspace, and not for one inside it', async () => {
-    const outside = approvalSpy(false);
-    const { svc: outsideSvc, spawned: outsideSpawn } = service('claude-code', reachingFor('Read', { file_path: '/etc/hosts' }));
-    await outsideSvc.startConversation(request({ approval: outside }));
-    // Judged where the path points (ADR-0028): on macOS /etc is a symlink to
-    // /private/etc, on Linux it is not, so resolve the expectation the same way.
-    expect(outside.request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', subject: realpathSync.native('/etc/hosts') }));
-    expect(controlAnswer(outsideSpawn.processes[0])).toMatchObject({ behavior: 'deny' });
+    // A real file, so every host has one outside the workspace to point at.
+    const elsewhere = mkdtempSync(join(tmpdir(), 'ordewell-outside-'));
+    const hosts = join(elsewhere, 'hosts');
+    writeFileSync(hosts, '127.0.0.1 localhost\n');
+    try {
+      const outside = approvalSpy(false);
+      const { svc: outsideSvc, spawned: outsideSpawn } = service('claude-code', reachingFor('Read', { file_path: hosts }));
+      await outsideSvc.startConversation(request({ approval: outside }));
+      // Judged where the path points (ADR-0028): macOS's temp directory sits
+      // behind a symlink and Windows' can be a short name, so resolve the
+      // expectation the same way.
+      expect(outside.request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', subject: realpathSync.native(hosts) }));
+      expect(controlAnswer(outsideSpawn.processes[0])).toMatchObject({ behavior: 'deny' });
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
 
     const inside = approvalSpy(false);
     const { svc: insideSvc, spawned: insideSpawn } = service('claude-code', reachingFor('Read', { file_path: '/repo/src/a.ts' }));
@@ -1480,6 +1489,27 @@ describe('CliAgentAiService — Codex', () => {
     expect(planner.developerInstructions).toContain('your own subagents');
   });
 
+  it('tells a planner on Windows which shell run_command runs there, and one elsewhere nothing', async () => {
+    const systemPrompt = async (platform: NodeJS.Platform) => {
+      const spawned = fakeSpawn([...codexHandshake(), fixture('codex', 'tools')]);
+      const svc = new CliAgentAiService(fakeConfig({ aiProvider: 'codex' }), {
+        spawn: spawned.spawn,
+        fetch: (async () => { throw new Error('no HTTP in this test'); }) as unknown as typeof fetch,
+        resolvePath: async () => '/usr/bin',
+        workspaceRoot: () => '/repo',
+        platform,
+        isDirectory: () => true,
+        exists: () => true,
+        mcpServer: fakeMcpServer(),
+      });
+      await svc.startConversation(request({ runners: ['codex'] }));
+      return String(JSON.parse(spawned.processes[0].written[1]).params.developerInstructions);
+    };
+
+    expect(await systemPrompt('win32')).toMatch(/On this Windows machine run_command runs (Git Bash|cmd\.exe)/);
+    expect(await systemPrompt('linux')).not.toContain('On this Windows machine');
+  });
+
   it('plans with Codex\'s own shell off when no sandbox backend works', async () => {
     const { svc, spawned } = service(
       'codex',
@@ -2197,6 +2227,16 @@ describe('CliAgentAiService — one-shot plan generation', () => {
     expect(result.researchLog[0]).toMatchObject({ type: 'user_prompt', content: 'Add the thing' });
     expect(spawned.processes[0].killed).toBe(true);
     expect(svc.hasActiveConversation()).toBe(false);
+  });
+
+  it('offers a one-shot planner no run_command, which nothing here would run', async () => {
+    // The tool answered "not available" to every call, and a Codex planner told
+    // to use it, with its own shell off on Windows, had nothing left to read with.
+    const mcp = fakeMcpServer();
+    const { svc } = service('claude-code', [submitting(mcp, planTasks(), claudeSays('Submitted the plan.'))], {}, {}, mcp);
+    await svc.researchAndPlan('Add the thing', ['claude-code'], { 'claude-code': [] }, fakeFileSystem(), () => {});
+
+    expect(mcp.plannerScopes[0].hidden).toContain('run_command');
   });
 
   // Live, Haiku backgrounded its Explore agents and ended the turn "waiting

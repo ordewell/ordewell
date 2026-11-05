@@ -11,6 +11,7 @@ import type { SessionMessage } from '../SessionMessage';
 import { createTask } from '../../models/Task';
 import type { IRunner } from '../../interfaces/IRunner';
 import { FakeRunnerSession, fakeConfig, makeSession } from './sessionTestKit';
+import { patient } from '../../testing';
 
 /**
  * The opt-in live check for the Claude Code planner's Ordewell tools
@@ -95,7 +96,7 @@ async function submitsThroughTools(provider: 'claude-code' | 'codex', model: str
 describe.runIf(live)('Claude Code planner tools — live', () => {
   it('reads a runner enabled mid-conversation and commits a plan on it through submit_plan (#69)', async () => {
     await submitsThroughTools('claude-code', claudeModel, spawn);
-  }, 600_000);
+  }, patient(600_000));
 
   /** A real planner, a real Session and a plan of two tasks, `a` running behind `sessions[0]`. */
   async function plannedRun() {
@@ -160,7 +161,7 @@ describe.runIf(live)('Claude Code planner tools — live', () => {
     console.log('titles:', JSON.stringify(session.planTasks.map((t) => t.title)), 'reply:', lastReply(session));
     expect(toolCalls).toContain('mcp__ordewell__edit_plan');
     expect(session.planTasks.map((t) => t.title)).toEqual(['Write the greeting script', 'Test the greeting script with bats']);
-  }, 600_000);
+  }, patient(600_000));
 
   it('reads the live output of a running task through task_output', async () => {
     const { session, sessions, toolCalls } = await plannedRun();
@@ -175,11 +176,11 @@ describe.runIf(live)('Claude Code planner tools — live', () => {
     console.log('reply:', lastReply(session));
     expect(toolCalls).toContain('mcp__ordewell__task_output');
     expect(lastReply(session)).toContain('sentinel-7391');
-  }, 600_000);
+  }, patient(600_000));
 });
 
 describe.runIf(liveCodex)('Codex planner tools — live', () => {
   it('reads a runner enabled mid-conversation and commits a plan on it through submit_plan (#69)', async () => {
     await submitsThroughTools('codex', codexModel, spawn);
-  }, 600_000);
+  }, patient(600_000));
 });

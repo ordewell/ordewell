@@ -7,7 +7,7 @@ import { createWorktreeIsolation } from '../../GitWorktreeIsolation';
 import { defaultExecFile, type GitInvoker } from '../../gitExec';
 import { hooksLandingWouldRun, PushRefused, restoreSnapshot, takeThroughGate } from '../pushGate';
 import { createTask, type Task } from '../../../models/Task';
-import { fakeConfig } from '../../../testing';
+import { fakeConfig, removeDir } from '../../../testing';
 
 /*
  * The gate is what a hostile container meets, so it is driven with real git and
@@ -26,7 +26,7 @@ const env = () => {
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, env: env(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
 const dirs: string[] = [];
-afterEach(() => { while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true }); });
+afterEach(async () => { while (dirs.length) await removeDir(dirs.pop()!); });
 
 function tempDir(): string {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-gate-')));
@@ -247,7 +247,9 @@ describe('the hooks a landing would run on this host', () => {
     await expect(hooksLandingWouldRun(GIT, host)).resolves.toEqual(['post-merge']);
   });
 
-  it('leaves out what git would not run, and what a landing never fires', async () => {
+  // Git for Windows has no executable bit to read: it runs, or fails the
+  // landing on, any file a hook's name finds, so there this one is a hook.
+  it.skipIf(process.platform === 'win32')('leaves out what git would not run, and what a landing never fires', async () => {
     const { host } = setup();
     mkdirSync(join(host, '.git', 'hooks'), { recursive: true });
     writeFileSync(join(host, '.git', 'hooks', 'pre-commit'), 'not executable\n');
