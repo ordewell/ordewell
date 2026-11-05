@@ -6,8 +6,7 @@ import { planDirectLaunch, isExecutableResolved, ExecutableNotFoundError } from 
 import { assertWorkspaceExists } from '../../utils/workspace';
 import { killTree, spawnInOwnGroup } from '../../utils/processTree';
 import { workspaceEnvOf } from '../workspaceEnv';
-import { sensitiveEnvValues } from '../outboundSecrets';
-import { redactAgentText } from '../../utils/redactSecrets';
+import { HeldSecrets } from '../HeldSecrets';
 import { LineTail } from '../../utils/lineTail';
 import { runnerEnv } from './runnerEnv';
 import type { AgentProcessDeps } from './AgentAdapter';
@@ -94,14 +93,15 @@ export class RunnerProcess {
   private exitReported = false;
   private readonly stderr = new LineTail(STDERR_LIMITS);
   private spawnEnv: NodeJS.ProcessEnv = {};
-  /** Secrets handed to the process outside its environment, which no message of its may carry either. */
-  private readonly held = new Set<string>();
+  /** Secrets handed to the process, in its environment or some other way, which no message of its may carry. */
+  private readonly held: HeldSecrets;
   /** What a lease launched in this process's place, where one did (ADR-0059 L5). */
   private placed: PlacedLaunch | null = null;
   /** Stdout readers' end-of-stream flushes, for an end the pipe itself never reports. */
   private readonly stdoutEnds = new Set<() => void>();
 
   constructor(private readonly deps: AgentProcessDeps) {
+    this.held = deps.held ?? new HeldSecrets();
     this.ended = new Promise<void>((resolve) => { this.markEnded = resolve; });
   }
 
@@ -157,6 +157,7 @@ export class RunnerProcess {
     if (this.disposed) throw new Error('The runner was stopped before it launched.');
     // Placed, the workspace's variables stay here: they are this host's, and a lease says what crosses (ADR-0059 L5).
     this.spawnEnv = runnerEnv(PATH, placed ? {} : workspace, command.env?.(workspace), command.envDrop);
+    this.held.holdEnv(this.spawnEnv);
 
     const child = spawnInOwnGroup((detached) => this.deps.spawn(launch.file, launch.args, {
       env: this.spawnEnv,
@@ -267,7 +268,7 @@ export class RunnerProcess {
 
   /** Keep `values`, secrets the process is handed some other way than its environment, out of its messages too. */
   withhold(...values: string[]): void {
-    for (const value of values) this.held.add(value);
+    this.held.hold(...values);
   }
 
   /**
@@ -277,7 +278,7 @@ export class RunnerProcess {
    * whole, before any cut: a cut can part a credential's name from its value.
    */
   redact(text: string): string {
-    return redactAgentText(text, [...this.held, ...sensitiveEnvValues(this.spawnEnv)]);
+    return this.held.redact(text);
   }
 
   /**

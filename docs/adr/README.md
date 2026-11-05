@@ -375,6 +375,7 @@ Windows, the per-workspace environment and what Ordewell sends from the machine.
 | [0016](platform/0016-per-workspace-environment.md) | Per-workspace environment for the planner and agents | accepted | — | — |
 | [0048](platform/0048-a-daily-version-check-with-a-notice-first-and-one-install-per-machine.md) | A daily version check, with a notice first and one install per machine | accepted | — | — |
 | [0051](platform/0051-opencode-go-limits-from-the-selected-login-read-in-place.md) | OpenCode Go limits come from the selected login, read in place | accepted | — | — |
+| [0061](platform/0061-held-secrets-are-hidden-exactly-and-agent-text-by-name-in-depth.md) | Held secrets are hidden exactly at every sink; agent text is redacted by name as defence in depth | accepted | — | — |
 
 ### Retired numbers
 

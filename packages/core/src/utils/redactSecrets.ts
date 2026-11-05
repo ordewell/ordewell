@@ -213,17 +213,95 @@ function redactInlineBodiesBeforeEnd(text: string): string {
   return out + text.slice(from);
 }
 
-/** Replace the base64 lines that end `out` with one marker: a body whose BEGIN line was cut off. */
-function redactBodyAbove(out: string[]): void {
+/**
+ * The gutter a line opens with, as its parts: literal text, and `null` for a
+ * line number. A file viewer numbers each line (`     1→`, `  1│ `, `cat -n`,
+ * `nl`, `grep -n`), `docker compose logs` opens each with its service
+ * column, a markdown quote with `> `: the lines of one block repeat it with
+ * another number, padded to another width (ADR-0061, G1).
+ */
+type Gutter = ReadonlyArray<string | null>;
+
+function gutterOf(prefix: string): Gutter {
+  return prefix.split(/(\d+)/).map((part, i) => (i % 2 === 1 ? null : part));
+}
+
+const isPadding = (char: string | undefined) => char === ' ' || char === '\t';
+
+/**
+ * Where `line` starts past `gutter`, or -1 when it opens with something else.
+ * By hand rather than as a pattern: several numbers in one gutter, as
+ * patterns, backtrack polynomially on a long run of digits.
+ */
+function pastGutter(gutter: Gutter, line: string): number {
+  let at = 0;
+  for (let i = 0; i < gutter.length; i++) {
+    const part = gutter[i];
+    if (part === null) {
+      const from = at;
+      while (at < line.length && line[at] >= '0' && line[at] <= '9') at++;
+      if (at === from) return -1;
+      continue;
+    }
+    // A number is padded to its width: the spaces either side of it are any run of them.
+    let text = part;
+    if (gutter[i - 1] === null) {
+      while (isPadding(text[0])) text = text.slice(1);
+      while (isPadding(line[at])) at++;
+    }
+    const padded = gutter[i + 1] === null;
+    if (padded) text = text.trimEnd();
+    if (!line.startsWith(text, at)) return -1;
+    at += text.length;
+    if (padded) while (isPadding(line[at])) at++;
+  }
+  return at;
+}
+
+/** What a line of a key block holds once its gutter, a known line prefix and a CRLF's `\r` are taken off. */
+function blockContent(line: string, gutter: Gutter): string {
+  const past = pastGutter(gutter, line);
+  return (past < 0 ? line : line.slice(past)).replace(LINE_PREFIX_ANCHORED, '').replace(/\r$/, '');
+}
+
+/** Replace the base64 lines that end `out` with one marker: a body whose BEGIN line was cut off, read under the END line's gutter. */
+function redactBodyAbove(out: string[], gutter: Gutter): void {
   let lines = 0;
   let chars = 0;
   while (lines < out.length) {
-    const content = out[out.length - 1 - lines].replace(LINE_PREFIX_ANCHORED, '').trim();
+    const content = blockContent(out[out.length - 1 - lines], gutter).trim();
     if (!BASE64_LINE.test(content) || (lines > 0 && content.length < MIN_BODY_LINE)) break;
     chars += content.length;
     lines++;
   }
   if (lines > 0) out.splice(out.length - lines, lines, marker('private key', chars));
+}
+
+/** A run of base64 a body line's length that ends a line, whatever opens it. */
+const TRAILING_BODY = new RegExp(String.raw`(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{${MIN_BODY_LINE},}={0,2}\r?$`);
+
+type OpenBlock = { label: string; gutter: Gutter; chars: number };
+
+/**
+ * What `line` is to the key block open above it: its END, a body line (its
+ * characters counted), or the first line past a body that was cut short. A
+ * line straight after BEGIN that ends in a body line's run of base64 is body
+ * under a gutter BEGIN's did not show, and that gutter is the block's from
+ * there on: else a block would close as `0 chars` with its body below it
+ * (ADR-0061, G1).
+ */
+function blockLine(block: OpenBlock, line: string): 'end' | 'body' | 'past' {
+  const content = blockContent(line, block.gutter);
+  if (content.includes(`-----END ${block.label}-----`)) return 'end';
+  if (PEM_BODY_LINE.test(content)) {
+    block.chars += content.trim().length;
+    return 'body';
+  }
+  const run = block.chars === 0 ? TRAILING_BODY.exec(line) : null;
+  if (!run) return 'past';
+  block.gutter = gutterOf(line.slice(0, run.index));
+  block.chars += run[0].trim().length;
+  return 'body';
 }
 
 /**
@@ -240,49 +318,38 @@ function redactPrivateKeyBlocks(text: string): string {
   text = redactInlineBodiesBeforeEnd(redactInlineBodies(text));
 
   const out: string[] = [];
-  let label: string | null = null;
-  // What the BEGIN line opens with, which each line of its block repeats: a
-  // `docker compose logs` service column, a markdown quote's `> `.
-  let prefix = '';
-  let bodyChars = 0;
+  let block: OpenBlock | null = null;
 
   const closeBlock = (): void => {
-    if (label === null) return;
-    out.push(marker('private key', bodyChars));
-    label = null;
-    bodyChars = 0;
+    if (block === null) return;
+    out.push(marker('private key', block.chars));
+    block = null;
   };
 
   for (const line of text.split('\n')) {
-    if (label === null) {
-      if (PEM_END.test(line)) redactBodyAbove(out);
+    if (block === null) {
+      const ended = PEM_END.exec(line);
+      if (ended) redactBodyAbove(out, gutterOf(line.slice(0, ended.index)));
       out.push(line);
       const begun = PEM_BEGIN.exec(line);
       // A body on the BEGIN line itself was an inline key, already redacted.
       if (begun && !/[A-Za-z0-9+/]/.test(line.slice(begun.index + begun[0].length))) {
-        label = begun[1];
-        prefix = line.slice(0, begun.index);
+        block = { label: begun[1], gutter: gutterOf(line.slice(0, begun.index)), chars: 0 };
       }
       continue;
     }
-    const own = prefix && line.startsWith(prefix) ? line.slice(prefix.length) : line;
-    // A CRLF text keeps its `\r` on each line split at `\n`, and no body line has one.
-    const content = own.replace(LINE_PREFIX_ANCHORED, '').replace(/\r$/, '');
-    if (content.includes(`-----END ${label}-----`)) {
-      closeBlock();
-      out.push(line);
-    } else if (bodyChars === 0 && KEY_MARKER_LINE.test(line)) {
+    if (block.chars === 0 && KEY_MARKER_LINE.test(line)) {
       // A block an earlier pass redacted already: marking it again would say it held nothing.
       out.push(line);
-      label = null;
-    } else if (PEM_BODY_LINE.test(content)) {
-      bodyChars += content.trim().length;
-    } else {
-      // Not key material — the block was truncated, so end it here and keep
-      // whatever the tool printed next.
-      closeBlock();
-      out.push(line);
+      block = null;
+      continue;
     }
+    const read = blockLine(block, line);
+    if (read === 'body') continue;
+    // An END closes the block; any other line means it was truncated, so it
+    // ends here and whatever the tool printed next is kept.
+    closeBlock();
+    out.push(line);
   }
   closeBlock();
 
@@ -293,10 +360,10 @@ function redactPrivateKeyBlocks(text: string): string {
  * The start of the BEGIN line of a private key block still open at `end`, a
  * line start in `text`: a read from `end` holds body lines with neither BEGIN
  * nor END, which nothing marks as key material, so it has to be redacted from
- * that BEGIN on. The same lines close a block here as in
- * {@link redactPrivateKeyBlocks}.
+ * that BEGIN on. A line closes a block here exactly as it does in
+ * {@link redactPrivateKeyBlocks}, as both read it with {@link blockLine}.
  */
-export function openPrivateKeyStart(text: string, end: number): number | undefined {
+function openPrivateKeyStart(text: string, end: number): number | undefined {
   const head = text.slice(0, end);
   const at = head.lastIndexOf('-----BEGIN ');
   const begun = at < 0 ? null : PEM_BEGIN.exec(head.slice(at));
@@ -304,12 +371,8 @@ export function openPrivateKeyStart(text: string, end: number): number | undefin
   const start = head.lastIndexOf('\n', at) + 1;
   const lineEnd = head.indexOf('\n', at);
   if (lineEnd < 0 || /[A-Za-z0-9+/]/.test(head.slice(at + begun[0].length, lineEnd))) return undefined;
-  const prefix = head.slice(start, at);
-  const open = head.slice(lineEnd + 1).split('\n').every((line) => {
-    const own = prefix && line.startsWith(prefix) ? line.slice(prefix.length) : line;
-    const content = own.replace(LINE_PREFIX_ANCHORED, '').replace(/\r$/, '');
-    return !content.includes('-----END ') && PEM_BODY_LINE.test(content);
-  });
+  const block: OpenBlock = { label: begun[1], gutter: gutterOf(head.slice(start, at)), chars: 0 };
+  const open = head.slice(lineEnd + 1).split('\n').every((line) => blockLine(block, line) === 'body');
   return open ? start : undefined;
 }
 
@@ -329,30 +392,81 @@ function looksLikeToken(value: string): boolean {
 }
 
 /**
- * A key and what assigns it: `"KEY":`, `key =`, `:key =>`, with the key's
- * quotes escaped any number of times, as JSON inside JSON escapes them.
+ * A key and what assigns it: `"KEY":`, `key =`, `:key =>`, `NAME := v` and
+ * the other assignments of a Makefile or Go (`::=` `?=` `+=` `!=`), `NAME -> v`,
+ * with the key's quotes escaped any number of times, as JSON inside JSON
+ * escapes them, and in markdown's emphasis (`**NAME**:`, `**NAME:**`).
  */
 // A name starts only where no name runs through, however many `.` or `-` part
 // it from the last, so a run like `a-a-…` or `x--x--…` is scanned once, not
 // once per start; the one-char tests first keep the long lookbehind off a run
 // of `-` or `\`. An escaped break (`\n`, `\t`) parts the lines of an env dump
-// inside a JSON string.
-const ASSIGNED_NAME = /(?![.-])(?<!\\)(?:(?<=\\[nrt][.-]*)|(?<![A-Za-z0-9_\\][.-]*))(\\*["'`])?([A-Za-z_][A-Za-z0-9_.-]*)(\\*["'`])?[ \t]*(=>|:|=(?!=))[ \t]*/g;
+// inside a JSON string. Emphasis is at most three `*`, so a run of them is not
+// rescanned from each.
+const ASSIGNED_NAME = /(?![.-])(?<!\\)(?:(?<=\\[nrt][.-]*)|(?<![A-Za-z0-9_\\][.-]*))\*{0,3}(\\*["'\x60])?\*{0,3}(?<name>[A-Za-z_][A-Za-z0-9_.-]*)\*{0,3}(?:\\*["'\x60])?\*{0,3}[ \t]*(?<sep>::=|:=|\?=|\+=|!=(?!=)|->|=>|:|=(?!=))\*{0,3}[ \t]*/g;
 /**
  * A long flag and the space that parts it from its value: `--api-key v`, as a
  * spawn line or a usage error prints it. A value that opens with `-` is the
  * next flag, and one shorter than a key is as likely the next word of prose
  * (`pass --token to it`).
  */
-const SPACED_FLAG = /(?<![A-Za-z0-9_-])(--)([A-Za-z][A-Za-z0-9_-]*)()[ \t]+(?=[^\s-]\S{7})/g;
+const SPACED_FLAG = /(?<![A-Za-z0-9_-])--(?<name>[A-Za-z][A-Za-z0-9_-]*)[ \t]+(?=[^\s-]\S{7})/g;
 /**
  * A name and its value laid out as a table row, `| GITHUB_TOKEN | value |`,
- * as an agent's report lists what it set. The one-char lookahead keeps the
- * lookbehind off a run of spaces.
+ * as an agent's report lists what it set, the name in code or in bold. The
+ * one-char lookahead keeps the lookbehind off a run of spaces.
  */
-const TABLE_NAME = /(?=[A-Za-z_\x60])(?<=\|[ \t]*)(\x60?)([A-Za-z_][A-Za-z0-9_.-]*)(\x60?)[ \t]*(\|)[ \t]*/g;
+const TABLE_NAME = /(?=[A-Za-z_\x60*])(?<=\|[ \t]*)\*{0,3}\x60?(?<name>[A-Za-z_][A-Za-z0-9_.-]*)\x60?\*{0,3}[ \t]*(?<sep>\|)[ \t]*/g;
 /** A name and its value as an element, `<password>value</password>`: a settings.xml, a SOAP fault. */
-const ELEMENT_NAME = /<()([A-Za-z_][A-Za-z0-9_.-]*)()(>)/g;
+const ELEMENT_NAME = /<(?<name>[A-Za-z_][A-Za-z0-9_.-]*)(?<sep>>)/g;
+/**
+ * A quoted name as a subscript assigned to, `os.environ["GITHUB_TOKEN"] = "v"`,
+ * `headers['Authorization'] ||= 'v'`. What is assigned is taken only quoted: a
+ * bare one is a variable.
+ */
+const SUBSCRIPT_NAME = /(?=["'\x60])(?<=\[[ \t]*)(["'\x60])(?<name>[A-Za-z_][A-Za-z0-9_.-]*)\1[ \t]*\][ \t]*(?:\|\||\?\?)?=(?!=)[ \t]*/g;
+/**
+ * A quoted name as the first argument of a call, its value the next one:
+ * `os.Setenv("GITHUB_TOKEN", "v")`, `setHeader('api-key', 'v')`. Taken only
+ * quoted, as {@link SUBSCRIPT_NAME} is.
+ */
+const CALLED_NAME = /(?=["'\x60])(?<=\([ \t]*)(["'\x60])(?<name>[A-Za-z_][A-Za-z0-9_.-]*)\1[ \t]*,[ \t]*/g;
+/**
+ * A command that sets a name to the word after it: `setx NAME v`, a
+ * Dockerfile's `ENV NAME v`, fish's `set -gx NAME v`, `launchctl setenv NAME v`,
+ * `gh secret set NAME --body v`. Prose sets names too (`set GITHUB_TOKEN
+ * beforehand`), so a bare word is taken only with a key's length and shape.
+ */
+const SET_COMMAND = /(?<![A-Za-z0-9_-])(?:setx|setenv|set|ENV)(?:[ \t]+(?:--?|\/)[A-Za-z]+)*[ \t]+(?<name>[A-Za-z_][A-Za-z0-9_.-]*)[ \t]+(?:(?:--body|-b)(?:[ \t]+|=))?/g;
+/**
+ * How a value is read after its name. `assigned`: `=` and its kin, to the
+ * next space; `labelled`: after `:`, a lone word's value only when shaped
+ * like a key; `shaped`: after `!=` or `->`, more often a comparison or a
+ * pointer than a value, only a key's shape; `bare`: `=>` or a flag's;
+ * `cell` and `element` as a table and XML hold one; `quoted`: only in
+ * quotes; `spaced`: a command's next word.
+ */
+type ValueKind = 'assigned' | 'labelled' | 'shaped' | 'bare' | 'cell' | 'element' | 'quoted' | 'spaced';
+
+function kindOf(separator: string | undefined): ValueKind {
+  switch (separator) {
+    case ':': return 'labelled';
+    case '!=': case '->': return 'shaped';
+    case '=>': return 'bare';
+    default: return 'assigned';
+  }
+}
+
+/** Each pattern finds a credential's `name`, and its `sep` where the pattern's own kind does not say how its value reads. */
+const NAME_RULES: ReadonlyArray<{ pattern: RegExp; kind?: ValueKind }> = [
+  { pattern: ASSIGNED_NAME },
+  { pattern: SPACED_FLAG, kind: 'bare' },
+  { pattern: TABLE_NAME, kind: 'cell' },
+  { pattern: ELEMENT_NAME, kind: 'element' },
+  { pattern: SUBSCRIPT_NAME, kind: 'quoted' },
+  { pattern: CALLED_NAME, kind: 'quoted' },
+  { pattern: SET_COMMAND, kind: 'spaced' },
+];
 /** A scheme word {@link AUTH_SCHEME_CREDENTIAL} redacts with the token after it, which a bare value would part from it. */
 const AUTH_SCHEME_WORD = /^(?:Bearer|Basic|Token)$/i;
 /**
@@ -362,12 +476,14 @@ const AUTH_SCHEME_WORD = /^(?:Bearer|Basic|Token)$/i;
  * shaped like a key.
  */
 const DUMPED_NAME = /[_-]/;
+/** A command's next word, below which it is as likely prose as a value. */
+const MIN_SPACED_VALUE = 8;
 /** Where an unquoted value after a colon, `=>` or a flag ends. */
 const BARE_VALUE_END = /[\s,;&"'`)}\]\\]/;
 /**
  * Where an unquoted value assigned with `=` ends: a shell or dotenv value runs
  * to the next space, `,` `;` `)` and all, as `DB_PASSWORD=a,b` assigns `a,b`.
- * A quote or `\` still ends it, as the end of the string it sits in, and `&`
+ * A quote or `` still ends it, as the end of the string it sits in, and `&`
  * as the end of a query parameter.
  */
 const ASSIGNED_VALUE_END = /[\s"'`\\&]/;
@@ -382,6 +498,8 @@ const NAME_QUALIFIER = /_(?:V?\d+|BACKUP|OLD|NEW|PREV|PREVIOUS|NEXT|CURRENT|PRIM
 
 function credentialNamed(key: string): boolean {
   const name = key
+    // `__GITHUB_TOKEN__` is the name in markdown's emphasis.
+    .replace(/^_+|_+$/g, '')
     .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
     .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
     .replace(/[-.]/g, '_')
@@ -433,25 +551,38 @@ function listedAt(text: string, at: number): Span[] {
   }
 }
 
+/** A YAML block scalar's indicator, `|` `>-` `|2+`, ending its line: the value is on the lines below (ADR-0061, N1). */
+const BLOCK_INDICATOR = /[|>][1-9+-]{0,2}[ \t]*\r?(?:\n|$)/y;
+
 /**
- * The values `name` holds after `separator` at `at`: quoted, a list of quoted
- * values, or unquoted, ending where that separator's values end.
+ * The values `name` holds at `at`, read as `kind` says: quoted, a list of
+ * quoted values, or unquoted, ending where that kind's values end. An object
+ * or a block scalar is no value on this line: {@link valuesBelowNames} reads
+ * what it holds.
  */
-function valuesAt(text: string, at: number, name: string, separator: string | undefined): Span[] {
+function valuesAt(text: string, at: number, name: string, kind: ValueKind): Span[] {
   const quoted = quotedAt(text, at);
   if (quoted) return [quoted];
-  if (text[at] === '\\') return [];
-  if (text[at] === '[' && (separator === ':' || separator === '=')) return listedAt(text, at);
-  if (separator === '>') {
+  if (kind === 'quoted' || text[at] === '\\') return [];
+  if (kind === 'element') {
     const value = bareUntil(text, at, /[<\n]/);
     return text.startsWith(`</${name}>`, value.end) ? [value] : [];
   }
-  if (separator === '|') {
+  if (kind === 'cell') {
     const value = bareUntil(text, at, /[\s|]/);
     return wholeCell(text, value.end) && keyShapedCell(text.slice(value.start, value.end)) ? [value] : [];
   }
-  const value = bareUntil(text, at, separator === '=' ? ASSIGNED_VALUE_END : BARE_VALUE_END);
-  if (separator === ':' && !DUMPED_NAME.test(name) && !keyShaped(text.slice(value.start, value.end))) return [];
+  if (text[at] === '{') return [];
+  if (kind === 'labelled') {
+    BLOCK_INDICATOR.lastIndex = at;
+    if (BLOCK_INDICATOR.test(text)) return [];
+  }
+  if (text[at] === '[' && (kind === 'labelled' || kind === 'assigned')) return listedAt(text, at);
+  const value = bareUntil(text, at, kind === 'assigned' ? ASSIGNED_VALUE_END : BARE_VALUE_END);
+  const shown = text.slice(value.start, value.end);
+  if (kind === 'labelled' && !DUMPED_NAME.test(name) && !keyShaped(shown)) return [];
+  if (kind === 'shaped' && !keyShaped(shown)) return [];
+  if (kind === 'spaced' && (shown.length < MIN_SPACED_VALUE || !keyShaped(shown))) return [];
   return [value];
 }
 
@@ -473,22 +604,23 @@ function keyShapedCell(value: string): boolean {
 
 /**
  * Every value under a credential-named key, whatever its shape: quoted,
- * assigned with `=`, given to a flag, bare after the colon of a dumped name,
- * in a table row or an element.
+ * assigned, given to a flag or a command, bare after the colon of a dumped
+ * name, in a table row, an element, a subscript or a call.
  */
 function redactCredentialNamedValues(text: string): string {
-  for (const pattern of [ASSIGNED_NAME, SPACED_FLAG, TABLE_NAME, ELEMENT_NAME]) text = redactNamedValues(text, pattern);
+  for (const rule of NAME_RULES) text = redactNamedValues(text, rule.pattern, rule.kind);
   return text;
 }
 
-function redactNamedValues(text: string, pattern: RegExp): string {
+function redactNamedValues(text: string, pattern: RegExp, ruleKind: ValueKind | undefined): string {
   const names = new RegExp(pattern);
   let out = '';
   let from = 0;
   for (let found = names.exec(text); found; found = names.exec(text)) {
+    const name = found.groups?.name ?? '';
     // The name first: a bare value runs on to its end, and on `a=a=a=…` every name would rescan the rest of the text.
-    if (!credentialNamed(found[2])) continue;
-    const values = valuesAt(text, found.index + found[0].length, found[2], found[4])
+    if (!credentialNamed(name)) continue;
+    const values = valuesAt(text, found.index + found[0].length, name, ruleKind ?? kindOf(found.groups?.sep))
       .filter((value) => value.end > value.start && !markerAt(text, value.start) && !AUTH_SCHEME_WORD.test(text.slice(value.start, value.end)));
     for (const value of values) {
       out += text.slice(from, value.start) + marker('credential', value.end - value.start);
@@ -497,6 +629,219 @@ function redactNamedValues(text: string, pattern: RegExp): string {
     if (values.length > 0) names.lastIndex = from;
   }
   return out + text.slice(from);
+}
+
+/**
+ * A credential name that ends its line, its value on the lines below:
+ * `NAME:`, `NAME: |`, `NAME: >-`, in quotes or emphasis (ADR-0061, N1).
+ */
+const TRAILING_NAME = /(?<![A-Za-z0-9_.-])(?<!\\)(\\*["'\x60]?)\*{0,3}(?<name>[A-Za-z_][A-Za-z0-9_.-]*)\*{0,3}\1\*{0,3}[ \t]*:\*{0,3}[ \t]*(?<indicator>[|>][1-9+-]{0,2})?[ \t]*\r?$/;
+/** The last character a line {@link TRAILING_NAME} matches can end with: the test that keeps the pattern off every other line. */
+const TRAILING_NAME_END = /[:*|>1-9+-][ \t]*\r?$/;
+/** A field that names what its sibling `value` holds: `"name": "GITHUB_TOKEN"`, `- name: GITHUB_TOKEN`, `key="ApiKey"`. */
+const NAMING_FIELD = /(?<![A-Za-z0-9_.-])(?<!\\)(\\*["'\x60]?)(?:name|key)\1[ \t]*[:=][ \t]*(\\*["'\x60]?)(?<name>[A-Za-z_][A-Za-z0-9_.-]*)\2(?![A-Za-z0-9_.-])/gi;
+/** A credential name whose value is an object of its own: `{"GITHUB_TOKEN": {"value": "…"}}`. */
+const NESTED_NAME = /(?<![A-Za-z0-9_.-])(?<!\\)(\\*["'\x60]?)(?<name>[A-Za-z_][A-Za-z0-9_.-]*)\1[ \t]*[:=][ \t]*\{/g;
+/** What ends the search for a sibling `value`: the end of its object or element, a line, or the next entry's own name. */
+const SIBLING_STOP = /[{}<>\n]|(?<![A-Za-z0-9_.-])(?<!\\)(\\*["'\x60]?)(?<field>value|name|key)\1[ \t]*[:=][ \t]*/gi;
+/** A blank line or the next list item: the entry a sibling would be in has ended. */
+const NEXT_ENTRY = /[ \t]*(?:-[ \t]|\r?\n)/y;
+/** The lines an entry's fields span at most, `valueFrom` and the like between its name and its value. */
+const MAX_SIBLING_LINES = 4;
+
+/** A line that opens with a credential name and ends with it, and how the lines of its value open. */
+type Opener = { name: string; block: boolean; gutter: Gutter; pad: number };
+
+function openerOf(line: string): Opener | undefined {
+  if (!TRAILING_NAME_END.test(line)) return undefined;
+  const found = TRAILING_NAME.exec(line);
+  const name = found?.groups?.name;
+  if (!found || !name || !credentialNamed(name)) return undefined;
+  let end = found.index;
+  while (end > 0 && isPadding(line[end - 1])) end--;
+  // A list item's dash is indentation to the key after it.
+  if (end < found.index && line[end - 1] === '-') {
+    end--;
+    while (end > 0 && isPadding(line[end - 1])) end--;
+  }
+  // The lines below open with the same gutter, another number in it: what follows its last number is their indentation.
+  const gutter = gutterOf(line.slice(0, end));
+  const last = gutter.length - 1;
+  return {
+    name,
+    block: found.groups?.indicator !== undefined,
+    gutter: gutter[last] === '' && gutter[last - 1] === null ? gutter.slice(0, last) : gutter,
+    pad: found.index - end,
+  };
+}
+
+/** Where `line`'s content starts under `opener`'s gutter, and how far it is indented past it; undefined when the gutter differs. */
+function indentUnder(opener: Opener, line: string): { at: number; indent: number } | undefined {
+  const past = pastGutter(opener.gutter, line);
+  if (past < 0) return undefined;
+  let at = past;
+  while (isPadding(line[at])) at++;
+  return { at, indent: at - past };
+}
+
+/** Where `line`'s content ends: before a CRLF's `\r` and any padding. */
+function contentEnd(line: string): number {
+  let end = line.length;
+  while (end > 0 && (isPadding(line[end - 1]) || line[end - 1] === '\r')) end--;
+  return end;
+}
+
+/**
+ * A plain scalar on the line below its name, taken only as one token that
+ * reads as a value: not code, a list, a reference or the next key; after a
+ * lone word (`password:`) only with a key's shape.
+ */
+function plainValueBelow(value: string, name: string): boolean {
+  if (!value || /[\s()[\]{}<>,;]/.test(value) || /^[-#&*!|>$]/.test(value) || value.endsWith(':')) return false;
+  if (looksLikeCode(value) || AUTH_SCHEME_WORD.test(value)) return false;
+  return DUMPED_NAME.test(name) || keyShaped(value);
+}
+
+/**
+ * The values credential names hold on the lines below them, and beside them
+ * as a sibling field (ADR-0061, N1):
+ * - a YAML block scalar, `NAME: |` or `NAME: >-`, and every line indented past
+ *   its name;
+ * - a scalar on the next line, `NAME:` and an indented value;
+ * - a name given as a value, its value a sibling: `{"name": "NAME", "value":
+ *   "…"}`, `- name: NAME` / `  value: …`, `<env name="NAME" value="…"/>`,
+ *   `<add key="NAME" value="…"/>`, and `{"NAME": {"value": "…"}}`.
+ *
+ * `open` is the start of the line of the last such name whose value can still
+ * be to come after the text: a cut there leaves a value with no name above it.
+ */
+function valuesBelowNames(text: string): { spans: Span[]; open?: number } {
+  const spans: Span[] = [];
+  let open: number | undefined;
+  const opened = (at: number): void => { open = Math.max(open ?? 0, text.lastIndexOf('\n', at - 1) + 1); };
+  const lines = text.split('\n');
+  const starts: number[] = [];
+  for (let i = 0, at = 0; i < lines.length; at += lines[i].length + 1, i++) starts.push(at);
+  for (let i = 0; i < lines.length; i++) {
+    const opener = openerOf(lines[i]);
+    if (!opener) continue;
+    if (opener.block) {
+      let j = i + 1;
+      for (; j < lines.length; j++) {
+        const line = lines[j];
+        const under = indentUnder(opener, line);
+        const end = contentEnd(line);
+        if (line.trim() === '' || (under && end <= under.at)) continue;
+        if (!under || under.indent <= opener.pad) break;
+        spans.push({ start: starts[j] + under.at, end: starts[j] + end });
+      }
+      if (j === lines.length) opened(starts[i]);
+      // The block's lines are its value, not names of their own.
+      i = j - 1;
+      continue;
+    }
+    if (i + 1 >= lines.length || (i + 1 === lines.length - 1 && lines[i + 1] === '')) {
+      opened(starts[i]);
+      continue;
+    }
+    const line = lines[i + 1];
+    const under = indentUnder(opener, line);
+    if (!under || under.indent <= opener.pad) continue;
+    const start = starts[i + 1] + under.at;
+    const quoted = quotedAt(text, start);
+    const value = quoted ?? { start, end: starts[i + 1] + contentEnd(line) };
+    if (quoted || plainValueBelow(text.slice(value.start, value.end), opener.name)) spans.push(value);
+  }
+  for (const pattern of [NAMING_FIELD, NESTED_NAME]) {
+    const names = new RegExp(pattern);
+    for (let found = names.exec(text); found; found = names.exec(text)) {
+      const name = found.groups?.name ?? '';
+      if (!credentialNamed(name)) continue;
+      const sibling = siblingValue(text, found.index, found.index + found[0].length, name);
+      if (sibling === 'open') opened(found.index);
+      else spans.push(...sibling);
+    }
+  }
+  return { spans: shownSpans(text, spans), open };
+}
+
+/**
+ * The value of the `value` field beside the name found at `at`, read on from
+ * `from`; 'open' when the text ends before the entry does. Only a `value`
+ * after the name: an entry that gives its value first is not read.
+ */
+function siblingValue(text: string, at: number, from: number, name: string): Span[] | 'open' {
+  const stops = new RegExp(SIBLING_STOP);
+  stops.lastIndex = from;
+  let lines = 0;
+  let lead: number | undefined;
+  for (let found = stops.exec(text); found; found = stops.exec(text)) {
+    const field = found.groups?.field?.toLowerCase();
+    if (field === 'value') {
+      const valueAt = found.index + found[0].length;
+      return valueAt >= text.length ? 'open' : valuesAt(text, valueAt, name, 'labelled');
+    }
+    if (field !== undefined || found[0] !== '\n' || ++lines > MAX_SIBLING_LINES) return [];
+    const next = found.index + 1;
+    NEXT_ENTRY.lastIndex = next;
+    if (NEXT_ENTRY.test(text)) return [];
+    let indent = next;
+    while (isPadding(text[indent])) indent++;
+    if (indent >= text.length) break;
+    // Computed once a line is crossed: on one long line every name's search ends at the next name.
+    if (lead === undefined) {
+      const lineStart = text.lastIndexOf('\n', at - 1) + 1;
+      lead = lineStart;
+      while (isPadding(text[lead])) lead++;
+      lead -= lineStart;
+    }
+    if (indent - next < lead) return [];
+  }
+  return 'open';
+}
+
+/** `spans` in order, each overlap and empty span dropped, and none that is a marker already or a scheme word the scheme's rule takes with its token. */
+function shownSpans(text: string, spans: Span[]): Span[] {
+  const shown: Span[] = [];
+  for (const span of [...spans].sort((a, b) => a.start - b.start)) {
+    const last = shown[shown.length - 1];
+    if (span.end <= span.start || (last && span.start < last.end)) continue;
+    if (markerAt(text, span.start) || AUTH_SCHEME_WORD.test(text.slice(span.start, span.end))) continue;
+    shown.push(span);
+  }
+  return shown;
+}
+
+/** Every value {@link valuesBelowNames} finds, as a marker. */
+function redactValuesBelowNames(text: string): string {
+  let out = '';
+  let from = 0;
+  for (const span of valuesBelowNames(text).spans) {
+    out += text.slice(from, span.start) + marker('credential', span.end - span.start);
+    from = span.end;
+  }
+  return out + text.slice(from);
+}
+
+/**
+ * The start of the line of a credential name whose value can still be below
+ * `end`, a line start in `text`, as {@link valuesBelowNames} reads it: a read
+ * from `end` has the value with no name above it (ADR-0061, C1). Read as
+ * agent text is, without its terminal escapes.
+ */
+function openNamedValueStart(text: string, end: number): number | undefined {
+  const head = text.slice(0, end);
+  const { plain, at } = head.includes('\x1b') ? withoutEscapes(head) : { plain: head, at: undefined };
+  const { open } = valuesBelowNames(plain);
+  if (open === undefined || !at) return open;
+  // An escape can open the line the name is on: the line starts before it.
+  return open >= at.length ? undefined : head.lastIndexOf('\n', at[open] - 1) + 1;
+}
+
+/** The earliest line a read that starts at `end` must be redacted with: an open key's BEGIN line, or an open value's name. */
+export function openValueStart(text: string, end: number): number | undefined {
+  const starts = [openPrivateKeyStart(text, end), openNamedValueStart(text, end)].filter((start) => start !== undefined);
+  return starts.length > 0 ? Math.min(...starts) : undefined;
 }
 
 const NUMERIC = /^[-+]?\d+(?:\.\d+)?$/;
@@ -552,6 +897,124 @@ function trimTrailingPunctuation(value: string): { value: string; tail: string }
 
 /** Below this, a held value is too likely to be an ordinary word of the text (`true`, `1`, `dev`). */
 const MIN_HELD_LENGTH = 8;
+/**
+ * The part of a held value that is hidden on its own: the bar a redaction is
+ * held to, as a cut, a stream split into deltas, or the runner's own slice
+ * (`${TOKEN:0:12}`) can show part of a value without the rest.
+ */
+const HELD_PART = 8;
+
+/**
+ * A terminal's escape sequences: CSI (colour, cursor), OSC (a title, a link)
+ * and the charset and keypad selections. A coloured name is a name a reader
+ * sees, so the rules read the text without them.
+ */
+// eslint-disable-next-line no-control-regex
+const TERMINAL_ESCAPE = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b[()][AB012]|\x1b[=>]/g;
+
+/** `text` without terminal escapes, and where each of its characters sits in `text`. */
+function withoutEscapes(text: string): { plain: string; at: number[] } {
+  const at: number[] = [];
+  let plain = '';
+  let from = 0;
+  const take = (to: number): void => {
+    for (let i = from; i < to; i++) at.push(i);
+    plain += text.slice(from, to);
+  };
+  for (const escape of text.matchAll(TERMINAL_ESCAPE)) {
+    take(escape.index);
+    from = escape.index + escape[0].length;
+  }
+  take(text.length);
+  return { plain, at };
+}
+
+/** Each place in `text` a held value, or a part of one, sits, overlapping runs merged. */
+function heldSpans(text: string, values: readonly string[]): Span[] {
+  const spans: Span[] = [];
+  for (const value of values) {
+    for (let at = text.indexOf(value); at >= 0; at = text.indexOf(value, at + 1)) spans.push({ start: at, end: at + value.length });
+  }
+  const parts = new Set(values.flatMap((v) => Array.from({ length: v.length - HELD_PART + 1 }, (_, i) => v.slice(i, i + HELD_PART))));
+  for (let at = 0; at + HELD_PART <= text.length; at++) {
+    if (parts.has(text.slice(at, at + HELD_PART))) spans.push({ start: at, end: at + HELD_PART });
+  }
+  spans.sort((a, b) => a.start - b.start);
+  const merged: Span[] = [];
+  for (const span of spans) {
+    const last = merged[merged.length - 1];
+    if (last && span.start <= last.end) last.end = Math.max(last.end, span.end);
+    else merged.push({ ...span });
+  }
+  return merged;
+}
+
+/**
+ * Every held value in `text`, whole and in every part of {@link HELD_PART}
+ * chars, each run of them as one marker (ADR-0061, H1). Matched exactly, not
+ * by shape, so no rule's reading of the text decides it, and through any
+ * terminal escape inside it: the escapes a run covers go with it.
+ *
+ * A part of a wordy held value (`changeme-development`) is a word the text may
+ * have anyway, and is hidden there too: the bar is that no part of what
+ * Ordewell holds is shown, not that every word of the text stays.
+ */
+export function hideHeld(text: string, held: Iterable<string>): string {
+  if (!text) return text;
+  const values = heldValues(held);
+  if (values.length === 0) return text;
+  const { plain, at } = text.includes('\x1b') ? withoutEscapes(text) : { plain: text, at: undefined };
+  const spans = heldSpans(plain, values);
+  if (spans.length === 0) return text;
+  let out = '';
+  let from = 0;
+  for (const span of spans) {
+    const start = at ? at[span.start] : span.start;
+    const end = at ? at[span.end - 1] + 1 : span.end;
+    out += text.slice(from, start) + marker('secret', span.end - span.start);
+    from = end;
+  }
+  return out + text.slice(from);
+}
+
+function heldValues(held: Iterable<string>): string[] {
+  return [...new Set([...held].map((v) => v.trim()).filter((v) => v.length >= MIN_HELD_LENGTH))];
+}
+
+/**
+ * A stream's text split where what comes after it can no longer change how it
+ * is hidden (ADR-0061, H1): `shown` is the text up to there with
+ * {@link hideHeld} applied, `rest` is held back to be read with what follows.
+ * A part of a held value can still be completing in the last
+ * {@link HELD_PART} characters, where they read as the start of one, and a
+ * run of held text that reaches them can still grow, so the run is held back
+ * whole: it becomes one marker however the stream was split. Text that can
+ * start no part, a line's newline among it, is shown at once: a script that
+ * prints `ready` and waits is not kept waiting.
+ */
+export function hideHeldUpTo(text: string, held: Iterable<string>): { shown: string; rest: string } {
+  const values = heldValues(held);
+  if (values.length === 0) return { shown: text, rest: '' };
+  const { plain, at } = withoutEscapes(text);
+  // A part still to come takes at least one character after the text, so it starts at or past `cut`.
+  let cut = plain.length;
+  for (let start = Math.max(0, plain.length - (HELD_PART - 1)); start < plain.length; start++) {
+    const begun = plain.slice(start);
+    if (values.some((value) => value.includes(begun))) {
+      cut = start;
+      break;
+    }
+  }
+  const open = heldSpans(plain, values).find((span) => span.end >= cut);
+  if (open) cut = Math.min(cut, open.start);
+  const rawCut = cut === plain.length ? text.length : at[cut];
+  return { shown: hideHeld(text.slice(0, rawCut), values), rest: text.slice(rawCut) };
+}
+
+/** Text as a terminal shows it, its escapes dropped: what agent text is redacted as. */
+export function withoutTerminalEscapes(text: string): string {
+  return text.includes('\x1b') ? text.replace(TERMINAL_ESCAPE, '') : text;
+}
 
 /**
  * Replace credential material in text that may be source code with visible
@@ -580,14 +1043,12 @@ export function redactAgentText(text: string, held: Iterable<string> = []): stri
 function redact(text: string, held: Iterable<string>, agentText: boolean): string {
   if (!text) return text;
 
-  let out = text;
-  // Longest first, so a value inside another (a token in its `Bearer` header) leaves none of the longer behind.
-  const values = [...new Set([...held].map((v) => v.trim()).filter((v) => v.length >= MIN_HELD_LENGTH))].sort((a, b) => b.length - a.length);
-  for (const value of values) out = out.split(value).join(marker('secret', value.length));
+  // Agent text is read as a terminal shows it: a coloured name is still a name.
+  let out = hideHeld(agentText ? withoutTerminalEscapes(text) : text, held);
 
   out = redactPrivateKeyBlocks(out);
 
-  if (agentText) out = redactCredentialNamedValues(out);
+  if (agentText) out = redactCredentialNamedValues(redactValuesBelowNames(out));
 
   out = out.replace(DOTENV_CREDENTIAL, (full, head: string, quote: string, value: string) => {
     if (looksLikeCode(value) || value.startsWith('$')) return full;

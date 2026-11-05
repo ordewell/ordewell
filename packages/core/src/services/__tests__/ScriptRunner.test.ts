@@ -357,3 +357,28 @@ describe('ScriptRunner: on Windows', () => {
     expect(spawn).toHaveBeenCalledWith('C:\\tools\\gh.exe', ['pr', 'list'], expect.objectContaining({ shell: false, detached: false, cwd: run.cwd }));
   });
 });
+
+describe('ScriptRunner: a credential of its spawn env (ADR-0061, H1)', () => {
+  /** Fake, and no rule's shape: only the session's held record can recognise it. */
+  const HELD = 'aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xYfake';
+  const shows = (text: string) =>
+    Array.from({ length: HELD.length - 7 }, (_, i) => HELD.slice(i, i + 8)).some((piece) => text.includes(piece));
+
+  it('is hidden in its output, its log, its saved file and its error tail, though it was printed in two chunks', async () => {
+    const dir = workspace();
+    const run = await start({
+      commands: [js([
+        'const v = process.env.MISTRAL_API_KEY;',
+        "process.stdout.write('key ' + v.slice(0, 10));",
+        "setTimeout(() => { process.stdout.write(v.slice(10) + ' done\\n'); process.stderr.write('bad ' + v + '\\n'); process.exit(3); }, 50);",
+      ].join(' '))],
+    }, { env: { MISTRAL_API_KEY: HELD }, attempt: 1, deps: { fullOutputFile: () => path.join(dir, 'out.log') } });
+
+    const exit = await run.exit;
+    const logged = ofType(run.events, 'script_output').map((e) => e.text).join('');
+    const saved = exit.fullOutput ? fs.readFileSync(exit.fullOutput.file, 'utf8') : '';
+    expect({ output: shows(run.output()), logged: shows(logged), saved: shows(saved), tail: shows(JSON.stringify(exit)) })
+      .toEqual({ output: false, logged: false, saved: false, tail: false });
+    expect(run.output()).toBe('key [REDACTED secret: 36 chars] done\nbad [REDACTED secret: 36 chars]\n');
+  });
+});

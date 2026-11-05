@@ -10,6 +10,7 @@ import type { TaskShell } from './IFileSystem';
 import type { HandoffCheck } from '../models/Handoff';
 import type { TaskWebReads } from '../services/taskWebReads';
 import type { RunnerPlacement } from '../services/executionLease';
+import type { HeldSecrets } from '../services/HeldSecrets';
 /** How a structured turn ended. `failed` carries the agent's own words in the preceding `error` event. */
 export type StructuredTurnEnd = 'completed' | 'interrupted' | 'failed';
 /**
@@ -119,6 +120,12 @@ export interface QueuedTaskMessage {
 export interface IRunnerSession {
   id: string;
   taskId: string;
+  /**
+   * What Ordewell handed this attempt's runner and must never show (ADR-0061,
+   * H1), for each sink of its text to redact with. A session that hands its
+   * runner nothing secret has none.
+   */
+  readonly secrets?: HeldSecrets;
   onOutput(callback: (text: string) => void): void;
   onExit(callback: (code: number) => void): void;
   /** End the process at once. {@link stop} is how an attempt that is over lets it go. */
