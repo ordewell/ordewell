@@ -256,22 +256,23 @@ planner (above and below), and Ordewell reads them itself:
   Cursor plans without the repository's rules or `AGENTS.md`. Its user's own
   `~/.cursor/cli-config.json` does not load either, since the home moved.
 
-### Cline read-only tasks
+### Cline planners and read-only tasks
 
 - **Started outside the repository.** Under ACP, Cline 3.0.74 runs the hooks
   in `.cline/hooks/` and `.clinerules/hooks/` of the directory it starts in,
-  and pointing `CLINE_DIR` at an empty home does not stop them. A read-only
-  task's Cline starts in an empty private directory of its own instead, which
+  and pointing `CLINE_DIR` at an empty home does not stop them. A planner's
+  Cline, and a read-only task's, starts in an empty private directory of its
+  own instead, which
   is also its session's `cwd` and its temp directory
   ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md) R3).
   Checked live with hooks planted in both folders that write a marker for
   each event: a writable task's start ran them all, with `CLINE_DIR` set or
   not, and the read-only start ran none (`repo-hooks.jsonl`,
-  `repo-hooks-cline-dir.jsonl`, `read-only-hooks.jsonl`). Cline does not plan
-  (ADR-0060 R5).
+  `repo-hooks-cline-dir.jsonl`, `read-only-hooks.jsonl`). A planner's start,
+  with the same hooks planted, ran none either (`planner.jsonl`).
 - **No instructions from the repository.** Started there, Cline loads none of
   the repository's `.clinerules/` rules, and Ordewell has no reader for them,
-  so a read-only task's Cline has Ordewell's instructions alone.
+  so a planner's or a read-only task's Cline has Ordewell's instructions alone.
 
 ### What the repository's config can do, and how the planner launch stops it
 
@@ -309,8 +310,8 @@ planner (above and below), and Ordewell reads them itself:
 | Cursor | `.cursor/mcp.json` | start a command, reach a URL | started in a private directory |
 | Cursor | `.cursor/cli.json` permissions | allow its own tools | started in a private directory |
 | Cursor | `.cursor/rules/`, `AGENTS.md` | text | started in a private directory; not read |
-| Cline (read-only task) | `.cline/hooks/`, `.clinerules/hooks/` | run commands | started in a private directory |
-| Cline (read-only task) | `.clinerules/` rules | text | started in a private directory; not read |
+| Cline | `.cline/hooks/`, `.clinerules/hooks/` | run commands | started in a private directory |
+| Cline | `.clinerules/` rules | text | started in a private directory; not read |
 
 The workspace's own environment (ADR-0016) is unchanged: it holds only what
 direnv was allowed to export and an untracked `.ordewell/env`.
@@ -523,3 +524,4 @@ specifies.
 - 2026-11-04 — a Qwen Code planner or read-only task starts in a private directory, out of reach of the repository's `.qwen/settings.json` (ADR-0060).
 - 2026-11-04 — a Gemini CLI planner or read-only task starts in a private directory, out of reach of the repository's `.gemini/settings.json` (ADR-0060).
 - 2026-11-04 — a Cursor planner or read-only task starts in a private directory with a config home of its own, out of reach of the repository's `.cursor/` (ADR-0060).
+- 2026-11-05 — a Cline planner starts in a private directory too, out of reach of the repository's hooks (ADR-0060).

@@ -9,8 +9,8 @@ describe('runner names, for runners and for planners', () => {
   });
 
   it('names only the runners that can plan where the text is about planning', () => {
-    expect(plannerIdList()).toBe('claude-code, codex, opencode, copilot-cli, qwen-code, gemini-cli, cursor-agent');
-    expect(plannerIdChoice()).toBe('claude-code|codex|opencode|copilot-cli|qwen-code|gemini-cli|cursor-agent');
-    expect(plannerNamesOr()).toBe('Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Gemini CLI or Cursor');
+    expect(plannerIdList()).toBe('claude-code, codex, opencode, copilot-cli, qwen-code, cline, gemini-cli, cursor-agent');
+    expect(plannerIdChoice()).toBe('claude-code|codex|opencode|copilot-cli|qwen-code|cline|gemini-cli|cursor-agent');
+    expect(plannerNamesOr()).toBe('Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI or Cursor');
   });
 });

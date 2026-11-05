@@ -412,7 +412,10 @@ from a private directory its own reads cannot leave, so it reaches the
 worktree only through `run_command`, which the envelope decides. Cursor plans
 from a private directory too, with its own reads denied as well as its writes
 and shell, so it reads the worktree only through `run_command`, which the
-envelope decides.
+envelope decides. Cline plans from a private directory too, asking before
+each of its own tools: the envelope decides each of its reads by the one
+path its arguments name, and refuses its edits, which name none, and its
+own searches, which name no path either.
 
 An ACP runner's own read or search is a path ask only when it names exactly
 one path. That path is the call's location or, for an agent that names its
@@ -476,3 +479,4 @@ envelope can judge.
 - 2026-11-04 — Gemini CLI is a harness planner, reaching the worktree only through `run_command` (ADR-0060).
 - 2026-11-04 — Cursor is a harness planner, reading the worktree only through `run_command` (ADR-0060).
 - 2026-11-04 — an ACP runner's own read or search is judged by the one path its location or, per its profile, its arguments name; several or none are refused (ADR-0060).
+- 2026-11-05 — Cline is a harness planner, its own reads judged by the one path their arguments name (ADR-0060).
