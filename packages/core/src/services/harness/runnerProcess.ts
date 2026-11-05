@@ -158,7 +158,7 @@ export class RunnerProcess {
     // while its start runs on, and a dispose finds no child to kill yet.
     if (this.disposed) throw new Error('The runner was stopped before it launched.');
     // Placed, the workspace's variables stay here: they are this host's, and a lease says what crosses (ADR-0059 L5).
-    this.spawnEnv = runnerEnv(PATH, placed ? {} : workspace, command.env?.(workspace), command.envDrop);
+    this.spawnEnv = runnerEnv(PATH, placed ? {} : workspace, command.env?.(workspace), command.envDrop, this.deps.platform);
     this.held.holdEnv(this.spawnEnv);
 
     const child = spawnInOwnGroup((detached) => this.deps.spawn(launch.file, launch.args, {

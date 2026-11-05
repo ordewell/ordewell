@@ -6,6 +6,7 @@ import type { NativeShellLauncher } from '../sandbox/nativeShellLauncher';
 import { ProcessLifecycle } from './ProcessLifecycle';
 import { OpenCodeV2 } from './OpenCodeV2';
 import { OPENCODE_CONFIG_VARIABLE, OPENCODE_ORDEWELL, OPENCODE_PLANNER_ENV, OPENCODE_READ_ONLY_PERMISSION, leaseGateway } from './openCodeOrdewell';
+import { envValue } from '../../utils/shellPath';
 import { awaitAttach, MCP_ATTACH_TIMEOUT_MS, type AttachState } from './ordewellBinding';
 import { taskCompletionContract, type McpClientConfig } from '../mcp';
 import type { ProjectMcpServer } from './repoConfig';
@@ -340,7 +341,8 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
         // A planner always gets its permission policy (ADR-0026), with the server or without it, and
         // over content that cannot be merged too: a planner without its policy may not start.
         // A container gets Ordewell's own configuration, never this host's: an inline config here may name host paths, providers or a key, and none of it crosses (ADR-0059 L5).
-        const existing = this.deps.placement ? undefined : workspaceEnv[OPENCODE_CONFIG_VARIABLE] ?? process.env[OPENCODE_CONFIG_VARIABLE];
+        // Read in any case on Windows, where the workspace's spelling is the one the server would otherwise get.
+        const existing = this.deps.placement ? undefined : envValue(workspaceEnv, OPENCODE_CONFIG_VARIABLE, this.deps.platform) ?? process.env[OPENCODE_CONFIG_VARIABLE];
         const projectServers = opts.kind === 'planner' ? Object.fromEntries((opts.projectServers ?? []).map((server) => [server.name, server.definition])) : {};
         const readOnly = opts.kind === 'task' && readOnlyTask(opts);
         const role = readOnly ? 'readOnlyTask' : opts.kind;

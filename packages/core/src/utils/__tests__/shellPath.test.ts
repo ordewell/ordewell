@@ -128,6 +128,12 @@ describe('withPath', () => {
     expect(env).toEqual({ MISTRAL_KEY: 'handed', KEPT: '1', Path: 'C:\\new' });
   });
 
+  it('lets a later override replace an earlier one it names in any case on Windows, as it would a host variable', () => {
+    const env = withPath({ Mistral_Key: 'host', Path: 'C:\\old' }, 'C:\\new', { mistral_key: 'workspace', MISTRAL_KEY: 'launch' }, 'win32');
+
+    expect(env).toEqual({ MISTRAL_KEY: 'launch', Path: 'C:\\new' });
+  });
+
   it('keeps names that differ only in case apart on POSIX, where they are two variables', () => {
     const env = withPath({ Mistral_Key: 'host', PATH: '/old' }, '/new', { MISTRAL_KEY: 'handed' }, 'linux');
 

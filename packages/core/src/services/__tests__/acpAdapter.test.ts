@@ -1251,8 +1251,9 @@ describe('AcpAdapter provider credential', () => {
     await plain.adapter.start(taskStart());
     await none.adapter.start(taskStart());
 
-    // Today's launch: the host's variables, the workspace's, the resolved PATH, and nothing of the adapter's.
-    expect(plain.spawned.lastEnv()).toEqual(runnerEnv('/usr/bin', { FAKE_WORKSPACE_VAR: 'w' }, {}));
+    // Today's launch: the host's variables, the workspace's, the resolved PATH, and nothing of the adapter's,
+    // built for the Linux runner `setup` declares, whatever this host is.
+    expect(plain.spawned.lastEnv()).toEqual(runnerEnv('/usr/bin', { FAKE_WORKSPACE_VAR: 'w' }, {}, undefined, 'linux'));
     expect(plain.spawned.lastArgs()).toEqual(['--acp']);
     expect(none.spawned.lastEnv()).toEqual(plain.spawned.lastEnv());
     expect(none.spawned.lastArgs()).toEqual(plain.spawned.lastArgs());
