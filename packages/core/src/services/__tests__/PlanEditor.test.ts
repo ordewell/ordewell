@@ -7,6 +7,7 @@ import type { SessionMessage } from '../SessionMessage';
 import type { SkillInfo } from '../SkillsService';
 import type { SkillLookup } from '../taskSkills';
 import type { IsolationRun } from '../../interfaces/IWorktreeIsolation';
+import { QWEN_CODE_MANIFEST } from '../../plugins/builtin/qwen.manifest';
 import { createTask, type DiscoveredModel, type LegacyPlanState, type RunnerId, type Task } from '../../models/Task';
 
 const model = (modelId: string, variants: string[] = []): DiscoveredModel =>
@@ -35,11 +36,12 @@ function tasks(): Task[] {
  * is the session's contract in miniature — the op runs, and only a change is
  * saved and announced — so what the editor hands it is all that is asserted.
  */
-function setup(opts: { tasks?: Task[]; plan?: boolean; allowlist?: Partial<Record<RunnerId, string[]>>; catalogs?: Record<RunnerId, RunnerCatalog>; run?: IsolationRun | null; skills?: SkillInfo[]; uncommitted?: SkillLookup['uncommitted']; live?: (taskId: string) => boolean; plannedWith?: () => boolean } = {}) {
+function setup(opts: { tasks?: Task[]; runners?: RunnerId[]; plan?: boolean; allowlist?: Partial<Record<RunnerId, string[]>>; catalogs?: Record<RunnerId, RunnerCatalog>; run?: IsolationRun | null; skills?: SkillInfo[]; uncommitted?: SkillLookup['uncommitted']; live?: (taskId: string) => boolean; plannedWith?: () => boolean } = {}) {
   const store = new PlanStore();
   const now = '2026-01-01T00:00:00Z';
-  const plan: LegacyPlanState | null = opts.plan === false ? null : { tasks: [], generatedAt: now, status: 'approved', runners: ['claude-code'], lastUpdated: now };
-  store.load(opts.tasks ?? tasks(), ['claude-code']);
+  const runners = opts.runners ?? ['claude-code'];
+  const plan: LegacyPlanState | null = opts.plan === false ? null : { tasks: [], generatedAt: now, status: 'approved', runners, lastUpdated: now };
+  store.load(opts.tasks ?? tasks(), runners);
   const events: string[] = [];
   const sent: SessionMessage[] = [];
   const remembered: Partial<Record<RunnerId, DiscoveredModel[]>> = {};
@@ -47,7 +49,7 @@ function setup(opts: { tasks?: Task[]; plan?: boolean; allowlist?: Partial<Recor
   const catalog: PlanEditCatalog = {
     edit: () => ({
       modelsByRunner: { 'claude-code': CATALOGS['claude-code'].models, ...remembered },
-      runnerModes: { 'claude-code': CATALOGS['claude-code'].modes },
+      runnerModes: { 'claude-code': CATALOGS['claude-code'].modes, ...Object.fromEntries(runners.map((r) => [r, catalogs[r]?.modes])) },
       ...(opts.allowlist ? { perRunnerAllowlist: opts.allowlist } : {}),
       ...(opts.live ? { liveRunner: opts.live } : {}),
     }),
@@ -526,6 +528,31 @@ describe('PlanEditor.addConflictResolver', () => {
 
   it('answers null without a plan', async () => {
     expect(await setup({ plan: false, run: conflicted }).editor.addConflictResolver('t1')).toBeNull();
+  });
+
+  // Bug: a script has no mode to hand on, so its resolver spawned in `build`, which Qwen Code has no mode by.
+  const qwen = { ...CATALOGS, 'qwen-code': { models: [], modes: QWEN_CODE_MANIFEST.modes ?? [] } };
+  const script = (runner: RunnerId) => [createTask({ id: 't1', order: 1, title: 'Setup', type: 'script', commands: [['npm', 'run', 'gen']], assignedRunner: runner })];
+
+  it('gives a script task\'s resolver its runner\'s Guarded mode', async () => {
+    const { editor, store } = setup({ run: conflicted, tasks: script('qwen-code'), runners: ['qwen-code'], catalogs: qwen });
+
+    await editor.addConflictResolver('t1');
+
+    expect(store.planTasks.at(-1)).toMatchObject({ type: 'ai', assignedRunner: 'qwen-code', taskMode: 'default' });
+  });
+
+  // A script never spawns, so a hand-added one may sit on a runner the plan does not run.
+  it('admits a script task\'s runner for its resolver, which spawns there in a mode of that runner', async () => {
+    const { editor, store, plan, catalog } = setup({ run: conflicted, tasks: script('qwen-code'), catalogs: qwen });
+
+    await editor.addConflictResolver('t1');
+
+    const resolver = store.planTasks.at(-1)!;
+    expect(plan!.runners).toEqual(['claude-code', 'qwen-code']);
+    expect(store.resolveTaskRunner(resolver)).toBe('qwen-code');
+    expect(resolver.taskMode).toBe('default');
+    expect(catalog.admit).toHaveBeenCalledWith('qwen-code', []);
   });
 });
 
