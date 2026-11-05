@@ -193,6 +193,8 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     }
     this.started = { ...opts, mcp: opts.mcp };
     this.restricted = restricted;
+    // The token goes over stdin, not the environment, so the process is told it to keep out of messages.
+    this.runner.withhold(...Object.values(opts.mcp.headers).flatMap((value) => [value, value.replace(/^Bearer\s+/i, '')]));
     await super.start(opts);
   }
 
@@ -369,7 +371,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     }
     if (role === 'mode') {
       const set = await this.setupCall('session/set_mode', { sessionId: this.sessionId, modeId: value }, () => { this.currentMode = value; });
-      if (!set.ok) throw new Error(`${this.name} refused the mode "${value}": ${set.message ?? 'no reason given'}`);
+      if (!set.ok) throw new Error(`${this.name} refused the mode "${value}": ${this.reason(set)}`);
       return true;
     }
     // A model given at spawn reached the agent already (Copilot).
@@ -407,8 +409,8 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     });
     if (!response.ok) {
       throw new Error(response.code === ACP_ERROR.invalidParams
-        ? `${this.name} does not know the ${role} "${value}" (or its setting "${configId}"): ${response.message ?? 'no reason given'}`
-        : `${this.name} refused the ${role} "${value}": ${response.message ?? 'no reason given'}`);
+        ? `${this.name} does not know the ${role} "${value}" (or its setting "${configId}"): ${this.reason(response)}`
+        : `${this.name} refused the ${role} "${value}": ${this.reason(response)}`);
     }
   }
 
@@ -452,7 +454,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     });
     if (!opened.ok) {
       this.sessionRefused = true;
-      throw new Error(isAuthRequired(opened) ? this.signedOut() : `${this.name} could not open a session: ${opened.message ?? 'no reason given'}`);
+      throw new Error(isAuthRequired(opened) ? this.signedOut() : `${this.name} could not open a session: ${this.reason(opened)}`);
     }
   }
 
@@ -478,7 +480,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     });
     if (!resumed.ok) {
       this.sessionRefused = true;
-      throw new Error(isAuthRequired(resumed) ? this.signedOut() : `${this.name} could not resume session ${id}: ${resumed.message ?? 'no reason given'}`);
+      throw new Error(isAuthRequired(resumed) ? this.signedOut() : `${this.name} could not resume session ${id}: ${this.reason(resumed)}`);
     }
   }
 
@@ -490,7 +492,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
    */
   private async initialize(): Promise<void> {
     const answered = await this.setupCall('initialize', { ...ACP_INITIALIZE_PARAMS });
-    if (!answered.ok) throw new Error(isAuthRequired(answered) ? this.signedOut() : `${this.name} could not start: ${answered.message ?? 'no reason given'}`);
+    if (!answered.ok) throw new Error(isAuthRequired(answered) ? this.signedOut() : `${this.name} could not start: ${this.reason(answered)}`);
     const parsed = parseAcp(initializeResponseSchema, answered.result);
     if (!parsed.ok) throw new Error(`${this.name} answered initialize in a shape Ordewell cannot read: ${parsed.error}`);
     const { protocolVersion, agentCapabilities, agentInfo } = parsed.value;
@@ -536,6 +538,11 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     if (response.timedOut) throw new Error(`${this.name} did not answer ${method} within ${timeoutMs} ms.`);
     if (response.closed) throw new Error(this.runner.withStderrTail(`${this.name} exited before it answered ${method}.`));
     return response;
+  }
+
+  /** What the agent gave as its refusal's reason, which can quote the settings or environment it was started with. */
+  private reason(response: { message?: string }): string {
+    return response.message ? this.runner.redact(response.message) : 'no reason given';
   }
 
   private signedOut(): string {
@@ -639,7 +646,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
         // `cancelled` stop: it is still the interrupt we asked for.
         for (const event of endTurn(turn, 'cancelled', undefined, true)) this.announce(event);
       } else {
-        this.announce({ type: 'error', message: isAuthRequired(response) ? this.signedOut() : `${this.name} could not run the turn: ${response.message ?? 'no reason given'}` });
+        this.announce({ type: 'error', message: isAuthRequired(response) ? this.signedOut() : `${this.name} could not run the turn: ${this.reason(response)}` });
       }
     }
     answered?.(true);

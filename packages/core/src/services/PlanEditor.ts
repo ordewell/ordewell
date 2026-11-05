@@ -184,21 +184,23 @@ export class PlanEditor {
     const runner = changes.assignedRunner ?? target.assignedRunner;
     // Listing models spawns the runner's own CLI: a move that could not be made anyway is refused first.
     if (changes.assignedRunner) this.refuseLiveRetarget(target);
-    const discovered = changes.assignedRunner || (changes.type === 'ai' && target.type !== 'ai') ? await this.discover(runner) : undefined;
+    const becameAi = changes.type === 'ai' && target.type !== 'ai';
+    const discovered = changes.assignedRunner || becameAi ? await this.discover(runner) : undefined;
     const landed = this.landedEdit(taskId, changes, discovered, options);
     if (!landed) return null;
     const { edit, adjustments } = landed;
-    const moved = edit.assignedRunner !== undefined;
+    // A manual task's runner need not be the plan's, as it never spawns; made an AI task, it spawns there.
+    const admits = edit.assignedRunner !== undefined || becameAi;
     const plan = await this.commit(
       () => {
         const released = this.scheduler.releaseMovedResume(taskId, edit);
         if (!this.store.update(taskId, released)) return false;
         Object.assign(edit, released);
-        if (moved && discovered) this.admitRunner(runner, discovered.models);
+        if (admits && discovered) this.admitRunner(runner, discovered.models);
         return true;
       },
-      // A move can admit a runner to the plan, which only the whole plan's announcement carries.
-      moved ? undefined : () => this.broadcast({ type: 'task_updated', taskId, changes: edit as Record<string, unknown> }),
+      // Admitting a runner to the plan is carried only by the whole plan's announcement.
+      admits ? undefined : () => this.broadcast({ type: 'task_updated', taskId, changes: edit as Record<string, unknown> }),
     );
     if (plan) {
       this.tellAdjusted(adjustments);

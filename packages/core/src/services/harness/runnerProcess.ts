@@ -6,6 +6,8 @@ import { planDirectLaunch, isExecutableResolved, ExecutableNotFoundError } from 
 import { assertWorkspaceExists } from '../../utils/workspace';
 import { killTree, spawnInOwnGroup } from '../../utils/processTree';
 import { workspaceEnvOf } from '../workspaceEnv';
+import { sensitiveEnvValues } from '../outboundSecrets';
+import { redactSecrets } from '../../utils/redactSecrets';
 import { runnerEnv } from './runnerEnv';
 import type { AgentProcessDeps } from './AgentAdapter';
 import type { PlacedLaunch } from '../executionLease';
@@ -87,6 +89,8 @@ export class RunnerProcess {
   private exitReported = false;
   private stderrTail = '';
   private spawnEnv: NodeJS.ProcessEnv = {};
+  /** Secrets handed to the process outside its environment, which no message of its may carry either. */
+  private readonly held = new Set<string>();
   /** What a lease launched in this process's place, where one did (ADR-0059 L5). */
   private placed: PlacedLaunch | null = null;
   /** Stdout readers' end-of-stream flushes, for an end the pipe itself never reports. */
@@ -252,8 +256,22 @@ export class RunnerProcess {
 
   /** Fail-safe contract: a dead runner reports its own last words, never an empty bubble. */
   withStderrTail(headline: string): string {
-    const tail = this.stderrTail.trim();
+    const tail = this.redact(this.stderrTail.trim());
     return `${headline}${tail ? `\n\n${tail}` : ''}`;
+  }
+
+  /** Keep `values`, secrets the process is handed some other way than its environment, out of its messages too. */
+  withhold(...values: string[]): void {
+    for (const value of values) this.held.add(value);
+  }
+
+  /**
+   * Text the process wrote, fit for an error: a CLI that prints its settings
+   * or its environment echoes the key it was spawned with, and an error goes
+   * to the task log, the timeline and the planner chat (ADR-0060, R9).
+   */
+  redact(text: string): string {
+    return redactSecrets(text, [...this.held, ...sensitiveEnvValues(this.spawnEnv)]);
   }
 
   /**

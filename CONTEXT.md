@@ -2318,7 +2318,8 @@ carried on *the plan* and the session. Every task carries an `assignedRunner`
 drawn from the set (always present, even for single-runner plans), but only an
 AI task has a runner: a script or a manual task keeps a stored default that
 nothing runs on, and every surface reads the runner through `assignedRunnerOf`,
-which is nothing for them. Size is the
+which is nothing for them. That default need not be in the set, so a manual
+task made an AI task admits its runner (`admitRunner`) as a retarget does. Size is the
 semantics, not a sentinel: size 1 means a single-runner plan, size >1 means a
 multi-runner plan. Empty is invalid and rejected before planning.
 
