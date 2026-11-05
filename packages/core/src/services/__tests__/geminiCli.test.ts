@@ -717,8 +717,9 @@ require('readline').createInterface({ input: process.stdin }).on('line', (text) 
 
   it('lists the models a signed-in Gemini CLI 0.66.0 offers in session/new, ids as --model takes them', async () => {
     const models = await discoverAcpModels(process.execPath, geminiReplaying('discovery'), { timeout: 5000 });
+    if (!Array.isArray(models)) expect.unreachable(`answered ${String(models)}, not a list`);
 
-    expect(models?.map((m) => m.modelId)).toEqual([
+    expect(models.map((m) => m.modelId)).toEqual([
       'auto',
       'gemini-3.1-pro-preview-customtools',
       'gemini-3-flash-preview',
@@ -728,8 +729,8 @@ require('readline').createInterface({ input: process.stdin }).on('line', (text) 
     ]);
   });
 
-  it('reads a signed-out Gemini (-32000, "Gemini API key is missing") as no answer', async () => {
-    expect(await discoverAcpModels(process.execPath, geminiReplaying('signed-out'), { timeout: 5000 })).toBeNull();
+  it('reads a signed-out Gemini (-32000, "Gemini API key is missing") as signed out, not as an answer', async () => {
+    expect(await discoverAcpModels(process.execPath, geminiReplaying('signed-out'), { timeout: 5000 })).toBe('signed-out');
   });
 });
 

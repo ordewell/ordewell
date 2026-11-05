@@ -51,6 +51,19 @@ function modelDetail(m: ModelView): string | undefined {
 }
 
 /**
+ * What an empty model picker for `runner` shows: why the daemon says the
+ * runner lists nothing, or, when it said nothing, that discovery may not have
+ * landed. A signed-out runner's list stays empty after any refresh, so a
+ * refresh is offered only where no reason was given.
+ */
+function noModelsRow(state: TuiState, runner: string | undefined): PickerItem {
+  const reason = runner ? state.runnerErrors[runner] : undefined;
+  return reason
+    ? { id: '', label: `No ${runner} models discovered`, detail: reason, disabled: true }
+    : { id: '', label: `No ${runner ?? 'runner'} models discovered yet`, detail: 'run /refresh', disabled: true };
+}
+
+/**
  * The planner-model catalog for `provider` (ADR-0009), with `selectedId`
  * marked. A harness planner runs a coding agent, so the only models it can
  * serve are that agent's own — offering it the cross-provider vendor catalog
@@ -86,11 +99,8 @@ export function plannerModelItems(state: TuiState, provider: string, selectedId:
       ].filter(Boolean).join(' · '),
       selected: m.id === selectedId,
     }));
-  // An empty catalog means discovery hasn't landed (or failed); a blank picker
-  // with no explanation reads as a broken command.
-  return items.length > 0
-    ? items
-    : [{ id: '', label: `No ${runner} models discovered yet`, detail: 'run /refresh', disabled: true }];
+  // A blank picker with no explanation reads as a broken command.
+  return items.length > 0 ? items : [noModelsRow(state, runner)];
 }
 
 /** `provider`'s harness model `modelId`, when that agent lists it; a vendor planner has none. */
@@ -204,11 +214,8 @@ export function pickerItemsFor(state: TuiState, action: PickerState['action']): 
       ].filter(Boolean).join(' · '),
       selected: model.id === task.assignedModel?.modelId,
     }));
-    // An empty catalog means discovery hasn't landed for this runner (or
-    // failed) — a blank picker with no explanation reads as a broken command.
-    return items.length > 0
-      ? items
-      : [{ id: '', label: `No ${task.assignedRunner ?? 'runner'} models discovered yet`, detail: 'run /refresh', disabled: true }];
+    // A blank picker with no explanation reads as a broken command.
+    return items.length > 0 ? items : [noModelsRow(state, task.assignedRunner)];
   }
   if (action.kind === 'set-task-effort') {
     const task = findTask(state.tasks, action.taskId);

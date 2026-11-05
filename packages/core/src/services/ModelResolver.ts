@@ -1,4 +1,4 @@
-import { ModelDiscovery, clearGeminiCache, type ExecImpl } from './ModelDiscovery';
+import { ModelDiscovery, clearGeminiCache, type AcpClientImpl, type ExecImpl } from './ModelDiscovery';
 import { ModelCatalog } from './ModelCatalog';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import type { RunnerEnv } from '../plugins/types';
@@ -8,12 +8,15 @@ import type { PlannerModelCandidate } from './PlannerModelMemory';
 import { fetchAllProviderModels, collectProviderCredentials, toOrchestratorOptions, type OrchestratorOption, type ProviderModelLists } from './ProviderRouting';
 import { ORCHESTRATOR_SHORTCUTS } from './ModelShortcuts';
 import { PROVIDER_PRIORITY, isApiProvider, prefixModelId, runnerForProvider, stripModelPrefix } from './ProviderRegistry';
+import { runnerSignIn } from './runnerAuth';
+import { describeSignIn, TERMINAL_UI_SIGN_IN } from './signInHint';
 
 export interface ModelResolverDeps {
   fetchImpl?: typeof fetch;
   execImpl?: ExecImpl;
   /** The environment runners are launched with, which can move a runner's own files (`CLAUDE_CONFIG_DIR`). Defaults to this process's. */
   env?: () => Promise<RunnerEnv>;
+  acpClient?: AcpClientImpl;
 }
 
 /** The vendor catalogs, which no runner environment changes. */
@@ -41,6 +44,7 @@ export class ModelResolver {
   private discovery: ModelDiscovery;
   private fetchImpl?: typeof fetch;
   private execImpl?: ExecImpl;
+  private acpClient?: AcpClientImpl;
   private shared: SharedCatalogs;
 
   constructor(
@@ -48,9 +52,10 @@ export class ModelResolver {
     private config: IConfig,
     deps: ModelResolverDeps = {}
   ) {
-    this.discovery = new ModelDiscovery(registry, deps.execImpl, deps.fetchImpl, undefined, undefined, undefined, deps.env);
+    this.discovery = new ModelDiscovery(registry, deps.execImpl, deps.fetchImpl, undefined, undefined, undefined, deps.env, deps.acpClient);
     this.fetchImpl = deps.fetchImpl;
     this.execImpl = deps.execImpl;
+    this.acpClient = deps.acpClient;
     this.shared = { vendor: { options: null, load: null, errors: {}, generation: 0 }, root: this, views: new Map() };
   }
 
@@ -69,7 +74,7 @@ export class ModelResolver {
   withRunnerEnv(key: string, env: () => Promise<RunnerEnv>): ModelResolver {
     let view = this.shared.views.get(key);
     if (!view) {
-      view = new ModelResolver(this.registry, this.config, { fetchImpl: this.fetchImpl, execImpl: this.execImpl, env });
+      view = new ModelResolver(this.registry, this.config, { fetchImpl: this.fetchImpl, execImpl: this.execImpl, acpClient: this.acpClient, env });
       view.shared = this.shared;
       this.shared.views.set(key, view);
     }
@@ -152,6 +157,21 @@ export class ModelResolver {
    */
   getDiscoveryErrors(): Record<string, string> {
     return this.vendor.errors;
+  }
+
+  /**
+   * Why each runner whose catalog the last `modelsForRunners` found empty
+   * offers nothing, keyed by runner id, in this resolver's environment: a
+   * signed-out runner is told with the ways to sign it in, since a refresh
+   * alone cannot fill its list. Empty when no runner said why.
+   */
+  getRunnerDiscoveryErrors(): Record<string, string> {
+    return Object.fromEntries(Object.keys(this.discovery.whyUnlisted()).map((runner) => {
+      const manifest = this.registry.getManifest(runner);
+      // Worded as a refused start is, from the one RunnerSignIn every surface
+      // reads, so an empty list offers the same ways in (ADR-0052).
+      return [runner, manifest ? describeSignIn(runnerSignIn(manifest), TERMINAL_UI_SIGN_IN) : `${runner} is not signed in.`];
+    }));
   }
 
   async refresh(): Promise<ProviderModelLists> {

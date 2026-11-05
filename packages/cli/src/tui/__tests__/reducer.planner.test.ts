@@ -4,6 +4,7 @@ import type { StepperState } from '../reducers/stepper';
 import type { SessionMessage } from '@ordewell/core';
 import type { TuiState } from '../state';
 import { lastMessage, messagesOf } from './chat';
+import { normalizeCatalog } from '../../catalog';
 
 /**
  * The `/planner` picker (ADR-0009): who researches the goal and writes the
@@ -305,6 +306,17 @@ describe('/planner', () => {
     const opened = choose(run('/planner', { ...ready, models: [] }).state, 'claude-code').state;
     const { state } = reduce(opened, { type: 'modelsLoaded', models });
     expect(stepperOf(state).items.map((i) => i.id)).toEqual(['opus', 'haiku']);
+  });
+
+  it('says why a coding agent lists no models, as the daemon words it, instead of offering a refresh', () => {
+    const reason = 'Qwen Code is not signed in. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.';
+    const runners = [...(installedAll.runners ?? []), { id: 'qwen-code', name: 'Qwen Code', enabled: true }];
+    const opened = choose(run('/planner', { ...ready, runners, models: [] }).state, 'qwen-code').state;
+
+    const catalog = normalizeCatalog({ models: [], modelsByRunner: { 'qwen-code': [] }, runnerErrors: { 'qwen-code': reason } });
+    const { state } = reduce(opened, { type: 'modelsLoaded', ...catalog });
+
+    expect(stepperOf(state).items).toEqual([{ id: '', label: 'No qwen-code models discovered', detail: reason, disabled: true }]);
   });
 
   it('names a provider whose catalog failed in the model step, without offering it', () => {

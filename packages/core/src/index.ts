@@ -121,7 +121,7 @@ export { ModelResolver } from './services/ModelResolver';
 export type { ModelResolverDeps } from './services/ModelResolver';
 export { RunnerInstallation } from './services/RunnerInstallation';
 export type { RunnerInstallationOptions, RunnerUsability } from './services/RunnerInstallation';
-export { readRunnerAuth, recordRunnerAuth, recordedRunnerAuth, resetRunnerAuth, rewordSignIn, runnerSignIn, signedOutFromFailure } from './services/runnerAuth';
+export { forgetSignedOutRunnerAuth, readRunnerAuth, recordRunnerAuth, recordedRunnerAuth, resetRunnerAuth, rewordSignIn, runnerSignIn, signedOutFromFailure } from './services/runnerAuth';
 export type { RunnerAuth, RunnerAuthExec, RunnerAuthExecOptions, RunnerAuthExecResult, ReadRunnerAuthOptions } from './services/runnerAuth';
 export { workspaceEnvOf } from './services/workspaceEnv';
 export { AccountLimitMonitor } from './services/AccountLimitMonitor';

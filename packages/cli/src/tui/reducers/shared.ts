@@ -206,7 +206,7 @@ export type Action =
   | { type: 'followRestored'; sessionId: string }
   /** `read` and `sessionId` say which read this answers, so a late one cannot paint another session's values (ADR-0030). */
   | { type: 'settingsLoaded'; settings: Partial<SettingsResponse>; read?: number; sessionId?: string }
-  | { type: 'modelsLoaded'; models: ModelView[]; orchestratorModels?: ModelView[]; providers?: AiProvider[]; providerErrors?: Record<string, string>; modesByRunner?: Record<string, ModeView[]> }
+  | { type: 'modelsLoaded'; models: ModelView[]; orchestratorModels?: ModelView[]; providers?: AiProvider[]; providerErrors?: Record<string, string>; runnerErrors?: Record<string, string>; modesByRunner?: Record<string, ModeView[]> }
   | { type: 'sessionsLoaded'; sessions: SessionView[] }
   | { type: 'sessionForked'; sessionId: string; goal: string }
   | { type: 'inputPrefilled'; text: string; sessionId?: string }

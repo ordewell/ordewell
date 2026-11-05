@@ -42,6 +42,7 @@ describe('GET /api/models', () => {
       providers: ['openrouter', 'google'],
       orchestratorModels,
       providerErrors: {},
+      runnerErrors: {},
     });
 
     const res = await app.request('/api/models', { method: 'GET' });
@@ -77,6 +78,7 @@ describe('GET /api/models', () => {
         { id: 'deepseek/deepseek-v4-flash', label: 'DeepSeek V4 Flash', provider: 'OpenRouter', apiProvider: 'openrouter' as const },
       ],
       providerErrors: { openai: 'Failed to fetch models: 401 Unauthorized' },
+      runnerErrors: {},
     });
 
     const res = await app.request('/api/models', { method: 'GET' });
@@ -90,7 +92,7 @@ describe('GET /api/models', () => {
 
   it('asks for the catalog of the workspace the request names', async () => {
     vi.mocked(pool.getProviderModels).mockResolvedValue({
-      models: [], modelsByRunner: {}, modesByRunner: {}, orchestratorModel: '', providers: [], orchestratorModels: [], providerErrors: {},
+      models: [], modelsByRunner: {}, modesByRunner: {}, orchestratorModel: '', providers: [], orchestratorModels: [], providerErrors: {}, runnerErrors: {},
     });
 
     await app.request('/api/models?workspace=%2Fwork%2Fb', { method: 'GET' });
@@ -108,6 +110,7 @@ describe('GET /api/models', () => {
       providers: [],
       orchestratorModels: [],
       providerErrors: {},
+      runnerErrors: {},
     });
 
     const res = await app.request('/api/models', { method: 'GET' });

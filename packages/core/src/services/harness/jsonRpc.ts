@@ -6,7 +6,7 @@ export interface RpcMessage {
   method?: string;
   params?: Record<string, unknown>;
   result?: Record<string, unknown>;
-  error?: { message?: string; code?: number };
+  error?: { message?: string; code?: number; data?: unknown };
 }
 
 export type RpcResponse =
@@ -14,9 +14,10 @@ export type RpcResponse =
   /**
    * `closed` is the connection ending before any answer; `timedOut` is the
    * caller giving up while the connection stays up; otherwise `message` and
-   * `code` are the other side's own refusal.
+   * `code` are the other side's own refusal, and `details` what it said of it
+   * beyond the message.
    */
-  | { ok: false; closed: boolean; timedOut?: true; message?: string; code?: number };
+  | { ok: false; closed: boolean; timedOut?: true; message?: string; code?: number; details?: string };
 
 type Emit = (event: AgentEvent) => void;
 
@@ -257,6 +258,19 @@ function errorOf(error: unknown): JsonRpcError {
   return error instanceof JsonRpcError ? error : new JsonRpcError(INTERNAL_ERROR, error instanceof Error ? error.message : String(error));
 }
 
-function refusal(error: { message?: string; code?: number }): RpcResponse {
-  return { ok: false, closed: false, message: error.message, ...(typeof error.code === 'number' ? { code: error.code } : {}) };
+function refusal(error: { message?: string; code?: number; data?: unknown }): RpcResponse {
+  const details = detailsOf(error.data);
+  return { ok: false, closed: false, message: error.message, ...(typeof error.code === 'number' ? { code: error.code } : {}), ...(details ? { details } : {}) };
+}
+
+/**
+ * The words a refusal's `data` holds, which JSON-RPC leaves free: an agent
+ * that wraps a vendor's failure in a generic message, as Qwen Code 0.26.6
+ * answers one with "Internal error", puts the vendor's own reason there as
+ * `details`, or as the data itself.
+ */
+function detailsOf(data: unknown): string | undefined {
+  if (typeof data === 'string') return data.trim() || undefined;
+  if (data && typeof data === 'object' && 'details' in data && typeof data.details === 'string') return data.details.trim() || undefined;
+  return undefined;
 }

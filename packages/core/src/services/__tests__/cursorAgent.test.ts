@@ -857,14 +857,15 @@ require('readline').createInterface({ input: process.stdin }).on('line', (text) 
 
   it('lists the models a signed-in Cursor offers in session/new, ids as session/set_config_option takes them', async () => {
     const models = await discoverAcpModels(process.execPath, cursorReplaying('discovery'), { timeout: 5000 });
+    if (!Array.isArray(models)) expect.unreachable(`answered ${String(models)}, not a list`);
 
     expect(models).toHaveLength(47);
-    expect(models?.[0]).toEqual({ modelId: 'default[]', modelLabel: 'Auto', variants: [] });
-    expect(models?.map((m) => m.modelId)).toContain(MODEL);
+    expect(models[0]).toEqual({ modelId: 'default[]', modelLabel: 'Auto', variants: [] });
+    expect(models.map((m) => m.modelId)).toContain(MODEL);
   });
 
-  it('reads a signed-out Cursor (-32000, "Authentication required") as no answer', async () => {
-    expect(await discoverAcpModels(process.execPath, cursorReplaying('signed-out'), { timeout: 5000 })).toBeNull();
+  it('reads a signed-out Cursor (-32000, "Authentication required") as signed out, not as an answer', async () => {
+    expect(await discoverAcpModels(process.execPath, cursorReplaying('signed-out'), { timeout: 5000 })).toBe('signed-out');
   });
 });
 

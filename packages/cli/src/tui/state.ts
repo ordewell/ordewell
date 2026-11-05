@@ -479,6 +479,8 @@ export interface TuiState {
   orchestratorModels: ModelView[];
   /** Per-provider catalog-fetch failures, keyed by provider id. */
   providerErrors: Record<string, string>;
+  /** Why a runner with an empty catalog lists nothing, keyed by runner id: what its empty picker says in place of a refresh. */
+  runnerErrors: Record<string, string>;
   orchestratorModel: string;
   /**
    * Who plans (ADR-0009): a vendor provider id, or one of the three harness
@@ -822,6 +824,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     taskSkills: [],
     orchestratorModels: [],
     providerErrors: {},
+    runnerErrors: {},
     orchestratorModel: '',
     plannerProvider: '',
     plannerEnvOverride: '',

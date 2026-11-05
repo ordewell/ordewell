@@ -147,7 +147,11 @@ Then try again.`
 ### When the verdict is stale
 
 A login can change while a host runs, and the gate reads a recording rather than
-spawning under a turn. Two paths close the gap. When the recorded verdict is
+spawning under a turn. Three paths close the gap. A provider key saved through
+the daemon can be an agent's sign-in
+([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md) R9), so
+saving one forgets every recorded `signed-out` verdict and clears the
+installations' cached ones (`forgetSignedOutRunnerAuth`). When the recorded verdict is
 `signed-out`, both hosts ask again just before a turn (`recheckSignedOutPlanner`
 in the daemon and in VS Code), so a login done with the agent's own command is
 seen without a refresh. When a turn fails with words the manifest declares
@@ -328,3 +332,5 @@ art for the TTL and the refresh trigger.
   and names the way in (`/login <runner>`, `/key`, or the agent's own route); a
   failed task records the verdict and offers Log in, and `ordewell runners`
   prints the hint.
+- 2026-11-05 — a provider key saved through the daemon forgets the recorded
+  and cached `signed-out` verdicts, since it can sign an agent in.

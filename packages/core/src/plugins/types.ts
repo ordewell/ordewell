@@ -99,10 +99,11 @@ export type RunnerEnv = Readonly<Record<string, string | undefined>>;
  * Reads an agent's provider credential from its own store for one start: the
  * variables to add to that start's environment, null when the agent needs none
  * from Ordewell, and a throw, naming the routes that would sign it in, when it
- * has none (ADR-0060, R9). What it answers holds a secret. `kind` is the
- * start's, absent when model discovery asks.
+ * has none (ADR-0060, R9). What it answers holds a secret. `kind` and
+ * `model` are the start's, the model as the plan names it; both are absent
+ * when model discovery asks.
  */
-export type RunnerCredentials = (context: { env: RunnerEnv; kind?: 'planner' | 'task' }) => Promise<Readonly<Record<string, string>> | null>;
+export type RunnerCredentials = (context: { env: RunnerEnv; kind?: 'planner' | 'task'; model?: string }) => Promise<Readonly<Record<string, string>> | null>;
 
 export type ApiAuthMethod =
   | { type: 'env'; varName: string; header: string; prefix?: string }

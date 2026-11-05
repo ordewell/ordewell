@@ -418,6 +418,20 @@ describe('AcpAdapter turn', () => {
     expect(await turn(adapter, 'two')).toEqual([{ type: 'error', message: 'Fake Agent is not signed in. Sign in with /login fake-acp, or run fake-agent login.' }]);
   });
 
+  it('gives the details an agent puts under a refusal\'s generic message, where the vendor\'s own reason is', async () => {
+    // Qwen Code answers a vendor's 404 with "Internal error", and the vendor's
+    // words, which say what to change, only in the error's data.
+    const details = '404 No endpoints available matching your data policy. Configure at https://openrouter.ai/settings/privacy';
+    const { adapter } = setup([
+      ...handshake(),
+      { expect: 'session/prompt' },
+      { fail: { code: ACP_ERROR.internalError, message: 'Internal error', data: { details } }, to: 'session/prompt' },
+    ]);
+    await adapter.start(taskStart());
+
+    expect(await turn(adapter, 'one')).toEqual([{ type: 'error', message: `Fake Agent could not run the turn: Internal error: ${details}` }]);
+  });
+
   it('ends a turn whose prompt answer names no stop reason as an error, keeping what the agent said, never as a normal end', async () => {
     const { adapter } = setup([
       ...handshake(),

@@ -27,7 +27,9 @@ import { fakeSpawn, type FakeAgentProcess, type FakeSpawnOptions, type FakeSpawn
  * The script is a list of steps, run in order:
  *  - `expect` waits for the client to send a method, then answers it at once
  *    (`reply` or `error`), or leaves it open for a later `answer` or `fail`,
- *    which is how updates are sent between a prompt and its response. An
+ *    which is how updates are sent between a prompt and its response. A
+ *    `reply` or an `error` given as a function is asked at the request, so an
+ *    agent can answer by how it was started ({@link FakeAcpAgent.launch}). An
  *    `optional` one is passed over when another method comes first, for a
  *    request only some starts send, such as a setting a planner never makes.
  *  - `notify` and `request` are the agent speaking first; a `request` holds
@@ -49,7 +51,7 @@ import { fakeSpawn, type FakeAgentProcess, type FakeSpawnOptions, type FakeSpawn
 export type FakeAcpValue<T> = T | ((params: unknown, agent: FakeAcpAgent) => T);
 
 export type FakeAcpStep =
-  | { expect: string; reply?: FakeAcpValue<unknown>; error?: AcpRpcError; optional?: boolean }
+  | { expect: string; reply?: FakeAcpValue<unknown>; error?: FakeAcpValue<AcpRpcError | undefined>; optional?: boolean }
   | { answer: FakeAcpValue<unknown>; to?: string }
   | { fail: AcpRpcError; to?: string }
   | { notify: string; params?: FakeAcpValue<unknown> }
@@ -166,6 +168,8 @@ export class FakeAcpAgent {
   readonly settingsReads: FakeAcpSettingsRead[] = [];
   /** What the agent found where each variable of {@link FakeAcpAgentOptions.loads} pointed, at each spawn, in order. */
   readonly loaded: FakeAcpLoad[] = [];
+  /** The arguments and the environment of the latest spawn, as an agent that reads its sign-in from them sees them. */
+  launch: { args: readonly string[]; env: NodeJS.ProcessEnv } = { args: [], env: {} };
   private finish!: () => void;
   /** Resolves when the script has run to its end. */
   readonly finished: Promise<void> = new Promise((resolve) => { this.finish = resolve; });
@@ -175,8 +179,9 @@ export class FakeAcpAgent {
   }
 
   /** Start answering on `proc`, spawned with `env`: its stdin is read here and its stdout is written. */
-  attach(proc: FakeAgentProcess, env: NodeJS.ProcessEnv = {}): void {
+  attach(proc: FakeAgentProcess, env: NodeJS.ProcessEnv = {}, args: readonly string[] = []): void {
     this.proc = proc;
+    this.launch = { args: [...args], env: { ...env } };
     if (this.options.settings) this.readSettings(env[this.options.settings.env]);
     for (const name of this.options.loads ?? []) this.loaded.push({ env: name, path: env[name], found: look(env[name]) });
     proc.on('__written', (chunk: string) => {
@@ -367,7 +372,8 @@ export class FakeAcpAgent {
       this.received.push(received);
       this.last = message.params;
       if (message.id === undefined) return true;
-      if (step.error) this.respond(message.id, undefined, step.error);
+      const error = this.value(step.error);
+      if (error) this.respond(message.id, undefined, error);
       else if (step.reply !== undefined) this.respond(message.id, this.value(step.reply));
       else this.open.push({ id: message.id, method: step.expect });
       return true;
@@ -416,7 +422,7 @@ export function fakeAcpSpawn(steps: readonly FakeAcpStep[], options: FakeSpawnOp
   const kit = fakeSpawn([], options);
   const spawn: FakeSpawnResult['spawn'] = (...args) => {
     const proc = kit.spawn(...args);
-    agent.attach(proc as unknown as FakeAgentProcess, args[2]?.env);
+    agent.attach(proc as unknown as FakeAgentProcess, args[2]?.env, args[1]);
     return proc;
   };
   return { ...kit, spawn, agent };

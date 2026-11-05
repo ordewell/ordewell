@@ -1,7 +1,7 @@
 import { QWEN_ACP_ARGS, QWEN_CODE_MANIFEST } from '../../plugins/builtin/qwen.manifest';
 import { ORDEWELL_MCP_SERVER_NAME } from '../mcp/clientConfig';
 import type { AcpProfile } from './acpProfiles';
-import { qwenCredentials } from './qwenCredentials';
+import { qwenCredentials, qwenVendorModel } from './qwenCredentials';
 
 /** Qwen names an MCP tool `mcp__<server>__<tool>`, in what it shows the model and in `_meta.toolName` of its requests. */
 const SERVER_PREFIX = `mcp__${ORDEWELL_MCP_SERVER_NAME}__`;
@@ -33,8 +33,10 @@ export const QWEN_CODE_PROFILE: AcpProfile = {
     return typeof name === 'string' && name.startsWith(SERVER_PREFIX) ? name.slice(SERVER_PREFIX.length) : null;
   },
   toolName: (tool) => `${SERVER_PREFIX}${tool}`,
-  // `--model` takes the id as `session/new` lists it, provider suffix or not.
-  modelArgs: (model) => ['--model', model],
+  // `--model` takes the id as `session/new` lists it, provider suffix or not,
+  // except the runtime form, which Qwen would wrap again: that takes the
+  // vendor's own id inside it.
+  modelArgs: (model) => ['--model', qwenVendorModel(model) ?? model],
   // A provider key configured in Ordewell signs Qwen in through its `openai`
   // auth, so it needs no sign-in of its own (ADR-0060, R9).
   credentials: qwenCredentials,

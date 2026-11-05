@@ -9,7 +9,7 @@ import { augmentedPath, withPath } from '../utils/shellPath';
 import { globalDataDir } from '../utils/globalDataDir';
 import { expandRunnerHome } from '../utils/runnerHome';
 import { discoverAppServerModels, type AppServerModel } from './harness/appServerModels';
-import { discoverAcpModels } from './harness/acpModels';
+import { discoverAcpModels, type AcpModelsAnswer } from './harness/acpModels';
 
 export type { AppServerModel } from './harness/appServerModels';
 
@@ -57,15 +57,16 @@ export const defaultAppServerClient: AppServerClientImpl = (command, args, optio
 
 /**
  * Injectable ACP client: start the agent, open a session and return what it
- * offers. Null on any failure (spawn error, timeout, signed out, malformed
- * answer) so discovery falls through to the manifest's other methods; an empty
- * list means the agent answered and offered no model choice.
+ * offers. `'signed-out'` when the agent would open none until signed in, null
+ * on any other failure (spawn error, timeout, malformed answer); either way
+ * discovery falls through to the manifest's other methods. An empty list means
+ * the agent answered and offered no model choice.
  */
 export type AcpClientImpl = (
   command: string,
   args: string[],
   options?: { timeout?: number; env?: RunnerEnv }
-) => Promise<DiscoveredModel[] | null>;
+) => Promise<AcpModelsAnswer>;
 
 export const defaultAcpClient: AcpClientImpl = (command, args, options) =>
   discoverAcpModels(command, args, { timeout: options?.timeout, env: options?.env });
@@ -457,6 +458,12 @@ export class ModelDiscovery {
    * same background service.
    */
   private inflight: Map<string, Promise<DiscoveredModel[]>> = new Map();
+  /**
+   * Why a runner's last discovery listed nothing, where the runner said: a
+   * surface shows the way to sign in rather than an empty list that a refresh
+   * cannot fill (ADR-0060, R9).
+   */
+  private unlisted: Map<string, 'signed-out'> = new Map();
   /** Bumped by every `clear()`: a discovery begun before one answers its own lookups but fills no cache. */
   private generation = 0;
   private registry: RunnerRegistry;
@@ -569,13 +576,16 @@ export class ModelDiscovery {
     const models = this.withSettingsModels(found.models, manifest, env);
     // Asked before a refresh: what the runner says now is the next lookup's to learn.
     if (generation !== this.generation) return models;
+    if (found.signedOut && models.length === 0) this.unlisted.set(runner, 'signed-out');
+    else this.unlisted.delete(runner);
     if (found.cacheable && models.length > 0) this.cache.set(runner, models);
     else this.misses.set(runner, { models, at: this.now() });
     return models;
   }
 
-  private async discoverFromSources(manifest: RunnerManifest, env: RunnerEnv): Promise<{ models: DiscoveredModel[]; cacheable: boolean }> {
+  private async discoverFromSources(manifest: RunnerManifest, env: RunnerEnv): Promise<{ models: DiscoveredModel[]; cacheable: boolean; signedOut?: true }> {
     let cacheable = true;
+    let signedOut: true | undefined;
     const discovery = manifest.modelDiscovery;
 
     // 0. App-server JSON-RPC discovery (Codex). Live catalog first, the
@@ -593,12 +603,13 @@ export class ModelDiscovery {
     //     silent agent offers nothing; the remaining methods answer instead.
     if (discovery.method === 'acp' && discovery.acp) {
       const acpEnv = await acpStartEnv(discovery.acp, env);
-      const acpModels = acpEnv ? await this.acpClient(manifest.runner.command, discovery.acp.args, { env: acpEnv }) : null;
-      if (acpModels && acpModels.length > 0) return { models: mergeCanonicalAliases(acpModels, manifest), cacheable: true };
+      const answer = acpEnv ? await this.acpClient(manifest.runner.command, discovery.acp.args, { env: acpEnv }) : null;
+      if (Array.isArray(answer) && answer.length > 0) return { models: mergeCanonicalAliases(answer, manifest), cacheable: true };
       // No answer (signed out, timeout, failed start) is transient and must
       // not be cached behind a working fallback; an agent that answered with
       // no model choice is a stable answer, so the fallback may be cached.
-      if (!acpModels) cacheable = false;
+      if (!Array.isArray(answer)) cacheable = false;
+      if (answer === 'signed-out') signedOut = true;
     }
 
     // 1. Try API discovery first (e.g. Anthropic Models API for Claude Code).
@@ -607,7 +618,7 @@ export class ModelDiscovery {
     if (discovery.apiDiscovery) {
       const apiModels = await discoverFromApi(manifest, discovery.apiDiscovery, env, this.fetchImpl);
       if (apiModels && apiModels.length > 0) {
-        return { models: applyVariants(mergeCanonicalAliases(apiModels, manifest), manifest), cacheable };
+        return { models: applyVariants(mergeCanonicalAliases(apiModels, manifest), manifest), cacheable, signedOut };
       }
     }
 
@@ -617,9 +628,9 @@ export class ModelDiscovery {
       // A fallback-only result means the CLI wasn't reachable — don't cache
       // it, so a transient failure (PATH, network, cold start) heals on the
       // next lookup instead of persisting until an explicit refresh.
-      return { models: result.models, cacheable: cacheable && !result.fromFallback };
+      return { models: result.models, cacheable: cacheable && !result.fromFallback, signedOut };
     }
-    return { models: buildFallbackModels(manifest), cacheable };
+    return { models: buildFallbackModels(manifest), cacheable, signedOut };
   }
 
   /**
@@ -650,8 +661,14 @@ export class ModelDiscovery {
     this.generation++;
     this.cache.clear();
     this.misses.clear();
+    this.unlisted.clear();
     // A refresh asks again at once; it must not join a run that began before it.
     this.inflight.clear();
+  }
+
+  /** Why each runner whose last discovery listed nothing did, where it is known; never triggers discovery. */
+  whyUnlisted(): Record<string, 'signed-out'> {
+    return Object.fromEntries(this.unlisted);
   }
 
   /** Whatever `discover()` has already cached for `runner` — never triggers discovery. */

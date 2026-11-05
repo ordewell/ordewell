@@ -293,7 +293,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
    */
   private async credential(started: Started, workspace: Record<string, string>): Promise<Readonly<Record<string, string>> | null> {
     if (!this.profile.credentials || this.deps.placement) return null;
-    return this.profile.credentials({ env: { ...process.env, ...workspace }, kind: started.kind });
+    return this.profile.credentials({ env: { ...process.env, ...workspace }, kind: started.kind, ...(started.model ? { model: started.model } : {}) });
   }
 
   /**
@@ -542,8 +542,9 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
   }
 
   /** What the agent gave as its refusal's reason, which can quote the settings or environment it was started with. */
-  private reason(response: { message?: string }): string {
-    return response.message ? this.runner.redact(response.message) : 'no reason given';
+  private reason(response: { message?: string; details?: string }): string {
+    const said = [response.message, response.details].filter(Boolean).join(': ');
+    return said ? this.runner.redact(said) : 'no reason given';
   }
 
   /**

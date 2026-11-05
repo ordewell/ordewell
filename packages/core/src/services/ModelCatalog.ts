@@ -9,6 +9,8 @@ export interface CatalogModel {
   contextLength: number;
   /** The longest reply the catalog says the model is served with, when it says. */
   maxOutputTokens?: number;
+  /** Whether the model takes tool definitions, when the catalog lists what it takes. */
+  tools?: boolean;
 }
 
 interface OpenRouterModel {
@@ -19,6 +21,7 @@ interface OpenRouterModel {
   context_length?: number;
   /** The provider OpenRouter routes to by default, and the reply cap it serves. */
   top_provider?: { max_completion_tokens?: number | null };
+  supported_parameters?: string[];
 }
 
 const CACHE_KEY = 'model-catalog';
@@ -70,6 +73,7 @@ export class ModelCatalog {
       ...(typeof m.top_provider?.max_completion_tokens === 'number' && m.top_provider.max_completion_tokens > 0
         ? { maxOutputTokens: m.top_provider.max_completion_tokens }
         : {}),
+      ...(Array.isArray(m.supported_parameters) ? { tools: m.supported_parameters.includes('tools') } : {}),
     }));
 
     if (useFileCache) this.writeCache(storageKey(url), models);
@@ -91,14 +95,31 @@ export class ModelCatalog {
     } catch { /* empty */ }
   }
 
-  private static readCache(key: string): string | null {
+  /**
+   * The catalog last fetched for a base URL and still on disk, however old;
+   * null when none is. Reads only, so it never waits on the network. A key's
+   * catalog lists what that account is served, which a cached list of any age
+   * says as well as a fresh one: a changed key clears it (`clearCache`).
+   */
+  static held(baseUrl?: string): CatalogModel[] | null {
+    const url = (baseUrl || 'https://openrouter.ai/api/v1').replace(/\/+$/, '');
+    const cached = this.readCache(storageKey(url), Infinity);
+    if (!cached) return null;
+    try {
+      return JSON.parse(cached) as CatalogModel[];
+    } catch {
+      return null;
+    }
+  }
+
+  private static readCache(key: string, ttlMs: number = CACHE_TTL_MS): string | null {
     try {
       const cacheDir = globalCacheDir();
       const cacheFile = path.join(cacheDir, `${key.replace(/[:/]/g, '_')}.json`);
       if (!fs.existsSync(cacheFile)) return null;
       const raw = fs.readFileSync(cacheFile, 'utf8');
       const data = JSON.parse(raw);
-      if (Date.now() - data.cachedAt > CACHE_TTL_MS) return null;
+      if (Date.now() - data.cachedAt > ttlMs) return null;
       return JSON.stringify(data.models);
     } catch {
       return null;

@@ -167,6 +167,12 @@ export interface ModelsResponse {
   orchestratorModels: OrchestratorOption[];
   /** Per-provider catalog-fetch failures, keyed by provider id. */
   providerErrors: Record<string, string>;
+  /**
+   * Why a runner whose catalog is empty lists nothing, keyed by runner id, as
+   * its resolver words it: a signed-out runner names its sign-in routes, which
+   * a refresh alone cannot take. Absent for a runner that said nothing.
+   */
+  runnerErrors: Record<string, string>;
 }
 
 /** One-shot planning answers in the phase-tagged shape a saved session is read back in. */

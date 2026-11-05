@@ -5,7 +5,7 @@ import type { DiscoveredModel } from '../../models/Task';
 import type { RunnerEnv } from '../../plugins/types';
 import { openAppServer } from './appServerModels';
 import { currentValue, findOption, optionValues } from './acpOptions';
-import { ACP_INITIALIZE_PARAMS, newSessionResponseSchema, parseAcp, type AcpSessionState } from './acpSchema';
+import { ACP_INITIALIZE_PARAMS, isAuthRequired, newSessionResponseSchema, parseAcp, type AcpSessionState } from './acpSchema';
 import { METHOD_NOT_FOUND } from './jsonRpc';
 import { settleWithin } from './settleWithin';
 
@@ -50,14 +50,20 @@ function definedOnly(env: RunnerEnv): Record<string, string> {
 }
 
 /**
+ * An ACP agent's answer when asked for its models: what its session offers;
+ * `'signed-out'` when it refused to open one until signed in, which is the
+ * reason a surface gives for an empty list; null on any other failure.
+ */
+export type AcpModelsAnswer = DiscoveredModel[] | 'signed-out' | null;
+
+/**
  * What an ACP agent offers for a model: spawn it, `initialize`, then
  * `session/new` in an empty scratch directory with no MCP servers, and read
  * the session's options. No prompt is sent, so nothing is billed and nothing
- * is written to a workspace. Null on any failure, signed out included, so the
- * caller falls back to the manifest's other discovery; the process group is
- * always taken down.
+ * is written to a workspace. Anything but a list lets the caller fall back to
+ * the manifest's other discovery; the process group is always taken down.
  */
-export async function discoverAcpModels(command: string, args: string[], options: AcpModelsOptions = {}): Promise<DiscoveredModel[] | null> {
+export async function discoverAcpModels(command: string, args: string[], options: AcpModelsOptions = {}): Promise<AcpModelsAnswer> {
   let scratch: string;
   try {
     scratch = await mkdtemp(join(tmpdir(), 'ordewell-acp-models-'));
@@ -75,11 +81,11 @@ export async function discoverAcpModels(command: string, args: string[], options
   });
   try {
     if (!agent) return null;
-    const asked = (async (): Promise<DiscoveredModel[] | null> => {
+    const asked = (async (): Promise<AcpModelsAnswer> => {
       const initialized = await agent.rpc.call('initialize', { ...ACP_INITIALIZE_PARAMS });
       if (!initialized.ok) return null;
       const session = await agent.rpc.call('session/new', { cwd: scratch, mcpServers: [] });
-      if (!session.ok) return null;
+      if (!session.ok) return isAuthRequired(session) ? 'signed-out' : null;
       const parsed = parseAcp(newSessionResponseSchema, session.result);
       return parsed.ok ? modelsFromSession(parsed.value) : null;
     })();
