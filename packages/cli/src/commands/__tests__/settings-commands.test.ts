@@ -94,6 +94,7 @@ beforeEach(async () => {
   const { join } = await import('path');
   envDir = mkdtempSync(join(tmpdir(), 'ordewell-cli-test-'));
   vi.stubEnv('HOME', envDir);
+  vi.stubEnv('USERPROFILE', envDir);
 });
 afterEach(() => {
   vi.unstubAllEnvs();

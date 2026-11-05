@@ -1,14 +1,14 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { execFileSync } from 'child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { delimiter, join, resolve } from 'path';
+import { join, resolve } from 'path';
 import { createWorktreeIsolation } from '../GitWorktreeIsolation';
 import { LeaseHost } from '../sessionLease';
 import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import { StructuredRunner } from '../StructuredRunner';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
-import { fakeConfig } from '../../testing';
+import { fakeConfig, pathWithFake, patient, removeDir } from '../../testing';
 import { loadChildSession, saveSession } from '../../utils/sessionStore';
 import { openTaskLog } from '../../utils/taskLogStore';
 import { closeSessions, fakeFs, makeSession } from './sessionTestKit';
@@ -39,7 +39,10 @@ afterEach(async () => {
   else process.env.FAKE_CLAUDE_STATE = savedState;
   delete process.env.FAKE_CLAUDE_LOG;
   delete process.env.FAKE_CLAUDE_REFUSE_RESUME;
-  while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  // Not rmSync: on Windows a stopped runner's tree is ended by taskkill, which
+  // this process has to go on running to see through, and until it has, a
+  // directory the runner works in cannot be removed.
+  while (dirs.length) await removeDir(dirs.pop()!);
 });
 
 function tempDir(): string {
@@ -70,7 +73,7 @@ const childTask = (id: string, order: number, dependencies: string[] = []) => ({
 
 describe('a delegated task on a real harness', () => {
   it('lands a two-task child plan beside its sibling, and only the root reaches the user\'s branch', async () => {
-    process.env.PATH = [FAKE_CLAUDE, savedPath].filter(Boolean).join(delimiter);
+    process.env.PATH = pathWithFake(FAKE_CLAUDE, 'claude', savedPath);
     process.env.FAKE_CLAUDE_STATE = tempDir();
     const root = repo();
     const main = git(root, 'rev-parse', 'main');
@@ -108,10 +111,10 @@ describe('a delegated task on a real harness', () => {
     expect(await parent.execute({ command: 'merge_all' }, { kind: 'user' })).toMatchObject({ ok: true });
     for (const file of ['a.txt', 'b.txt', 's.txt']) expect(existsSync(join(root, file))).toBe(true);
     parent.destroy();
-  }, 90_000);
+  }, patient(90_000));
 
   it('stops at every process, and a Continue takes the subplanner\'s session up where it was (ADR-0055 D16, D17)', async () => {
-    process.env.PATH = [FAKE_CLAUDE, savedPath].filter(Boolean).join(delimiter);
+    process.env.PATH = pathWithFake(FAKE_CLAUDE, 'claude', savedPath);
     process.env.FAKE_CLAUDE_STATE = tempDir();
     process.env.FAKE_CLAUDE_LOG = join(process.env.FAKE_CLAUDE_STATE, 'said.log');
     const root = repo();
@@ -158,10 +161,10 @@ describe('a delegated task on a real harness', () => {
     expect(heard.at(1)?.prompt).toContain('Carry on.');
     expect(heard.slice(1).map((line) => line.prompt).join('\n')).not.toContain('Write a and b.');
     parent.destroy();
-  }, 120_000);
+  }, patient(120_000));
 
   it('replays the subplanner\'s Model context when its harness has lost the session (ADR-0055 D17)', async () => {
-    process.env.PATH = [FAKE_CLAUDE, savedPath].filter(Boolean).join(delimiter);
+    process.env.PATH = pathWithFake(FAKE_CLAUDE, 'claude', savedPath);
     process.env.FAKE_CLAUDE_STATE = tempDir();
     const root = repo();
     const turnsFrom = join(process.env.FAKE_CLAUDE_STATE, 'subplanner-turns.json');
@@ -199,10 +202,10 @@ describe('a delegated task on a real harness', () => {
     const integration = parent.planState?.isolation?.run.repos[0].integrationBranch ?? '';
     expect(git(root, 'ls-tree', '-r', '--name-only', integration).split('\n')).toEqual(expect.arrayContaining(['a.txt', 'b.txt']));
     parent.destroy();
-  }, 120_000);
+  }, patient(120_000));
 
   it('asks through the real server, parks its process, and the answer and its raise open the next turn', async () => {
-    process.env.PATH = [FAKE_CLAUDE, savedPath].filter(Boolean).join(delimiter);
+    process.env.PATH = pathWithFake(FAKE_CLAUDE, 'claude', savedPath);
     process.env.FAKE_CLAUDE_STATE = tempDir();
     const root = repo();
     const turnsFrom = join(process.env.FAKE_CLAUDE_STATE, 'subplanner-turns.json');
@@ -236,5 +239,5 @@ describe('a delegated task on a real harness', () => {
     const integration = parent.planState?.isolation?.run.repos[0].integrationBranch ?? '';
     expect(git(root, 'ls-tree', '-r', '--name-only', integration).split('\n')).toContain('a.txt');
     parent.destroy();
-  }, 120_000);
+  }, patient(120_000));
 });

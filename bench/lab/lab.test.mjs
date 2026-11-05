@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { RUNNERS, SCENARIOS, makeLab, installOnly, writeShim, removeShim, makeWorkspace, cleanLab } from './lab.mjs';
+import { RUNNERS, SCENARIOS, makeLab, labEnv, installOnly, writeShim, removeShim, makeWorkspace, cleanLab } from './lab.mjs';
 
 // The real probe against the real PATH machinery; needs core built first
 // (`npm run build:core`), like bench/pipeline.
@@ -15,17 +15,26 @@ function installation() {
   return new core.RunnerInstallation(new core.RunnerRegistry());
 }
 
+/** Set each variable, deleting one given as undefined: assigning undefined to process.env stores the string "undefined". */
+function setEnv(vars) {
+  for (const [key, value] of Object.entries(vars)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+}
+
 /** Point the process at a fresh lab for one case and always restore it. */
 async function inLab(fn) {
   const lab = makeLab();
-  const saved = { HOME: process.env.HOME, PATH: process.env.PATH, SHELL: process.env.SHELL };
+  const vars = { ...labEnv(lab), PATH: lab.bin, SHELL: '/usr/bin/true' };
+  const saved = Object.fromEntries(Object.keys(vars).map((key) => [key, process.env[key]]));
   makeWorkspace(lab);
-  Object.assign(process.env, { HOME: lab.home, PATH: lab.bin, SHELL: '/usr/bin/true' });
+  setEnv(vars);
   core.clearAugmentedPathCache();
   try {
     await fn(lab);
   } finally {
-    Object.assign(process.env, saved);
+    setEnv(saved);
     core.clearAugmentedPathCache();
     cleanLab(lab);
   }

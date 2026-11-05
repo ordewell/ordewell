@@ -45,13 +45,23 @@ export class LoadGen {
 
   constructor(server, connections, processes = 4) {
     const { http } = server;
+    // Windows hands a child no socket on an extra stdio pipe, and seals no run,
+    // so there the load processes connect to a loopback port of the server's.
+    const port = process.platform === 'win32'
+      ? new Promise((resolve) => http.listen(0, '127.0.0.1', () => resolve(http.address().port)))
+      : Promise.resolve(null);
+    this.ready = port.then((loopback) => this.start(http, connections, processes, loopback));
+    this.http = http;
+  }
+
+  start(http, connections, processes, loopback) {
     const share = Math.ceil(connections / processes);
     for (let p = 0; p < processes && p * share < connections; p += 1) {
       const fds = Math.min(share, connections - p * share);
-      const child = spawn(process.execPath, [path.join(here, 'loadgen.mjs'), HOST, String(fds)], {
-        stdio: ['pipe', 'pipe', 'inherit', ...Array.from({ length: fds }, () => 'pipe')],
+      const child = spawn(process.execPath, [path.join(here, 'loadgen.mjs'), HOST, String(fds), ...(loopback ? [String(loopback)] : [])], {
+        stdio: ['pipe', 'pipe', 'inherit', ...(loopback ? [] : Array.from({ length: fds }, () => 'pipe'))],
       });
-      for (let i = 0; i < fds; i += 1) http.emit('connection', child.stdio[3 + i]);
+      if (!loopback) for (let i = 0; i < fds; i += 1) http.emit('connection', child.stdio[3 + i]);
       readline.createInterface({ input: child.stdout }).on('line', (line) => {
         const answer = JSON.parse(line);
         const job = this.pending.get(answer.id);
@@ -66,7 +76,8 @@ export class LoadGen {
     }
   }
 
-  send(job) {
+  async send(job) {
+    await this.ready;
     const id = (this.sequence += 1);
     const child = this.children[id % this.children.length];
     return new Promise((resolve) => {
@@ -86,8 +97,12 @@ export class LoadGen {
     return this.send({ kind: 'complete', path: new URL(url).pathname, headers, args });
   }
 
+  /** Ends the load processes, once they have started, and the loopback listener Windows was given. */
   stop() {
-    for (const child of this.children) child.stdin.end();
+    return this.ready.then(() => {
+      for (const child of this.children) child.stdin.end();
+      if (this.http.listening) this.http.close();
+    });
   }
 }
 

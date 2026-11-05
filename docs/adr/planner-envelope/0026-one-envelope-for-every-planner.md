@@ -56,7 +56,10 @@ ops task when it needs judgment
   network-less sandbox; its instructions point it at `run_command`, as a
   task's point it at its tools. Where that sandbox cannot start, Codex's shell
   is switched off and `run_command` is its only one
-  ([ADR-0033](0033-codex-planner-without-its-sandbox.md)).
+  ([ADR-0033](0033-codex-planner-without-its-sandbox.md)), and so it is on
+  Windows, where Codex's sandbox cannot keep a command off the network
+  ([ADR-0010](../platform/0010-windows-support.md)). A one-shot plan runs no
+  command and is offered no `run_command`; there Codex keeps its shell.
 - A user may let a harness planner use its own shell instead
   ([ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md), N1–N6).
   The opt-in is off by default, user-level only, and offered only for the
@@ -335,4 +338,5 @@ refused from a workspace's environment files (ADR-0016). The effect allowlist
 - 2026-11-04 — an ACP runner's spawn controls may make it ask before every write and command, Ordewell's refusal by kind deciding each; Qwen Code plans so (ADR-0060).
 - 2026-11-04 — an ACP runner's spawn controls may be a policy file it is handed; Gemini CLI plans under one (ADR-0060).
 - 2026-11-04 — a restricted start's config home may hold its own settings file; Cursor plans so (ADR-0060).
+- 2026-11-04 — Codex's own shell is off for a planner on Windows, where its sandbox cannot keep a command off the network ([ADR-0010](../platform/0010-windows-support.md)).
 - 2026-11-05 — Cline plans, made to ask before every use of its own tools (ADR-0060).

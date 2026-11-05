@@ -144,7 +144,8 @@ describe('the Claude Code planner with the Ordewell server injected', () => {
 
     const args = spawned.lastArgs();
     const configPath = args[args.indexOf('--mcp-config') + 1];
-    expect(statSync(configPath).mode & 0o777).toBe(0o600);
+    // Windows keeps no mode bits: the user's own temp folder is private by its ACL.
+    if (process.platform !== 'win32') expect(statSync(configPath).mode & 0o777).toBe(0o600);
     const injected = injectedServer(args)!;
     expect(injected.url).toBe(server.url);
     expect(args.join(' ')).not.toContain(bearer(injected));

@@ -3,7 +3,7 @@ import http from 'http';
 import https from 'https';
 import type { AddressInfo } from 'net';
 import type { SpawnFn } from '@ordewell/core';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, delimiter, join } from 'path';
 
@@ -17,8 +17,9 @@ const AGENTS = ['claude', 'codex', 'opencode'];
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
   const spawn = ((command: string, args: string[], options: Parameters<SpawnFn>[2]) => {
-    if (!AGENTS.includes(basename(command))) return actual.spawn(command, args, options);
-    boundary.spawned.push(basename(command));
+    const agent = basename(command, '.exe');
+    if (!AGENTS.includes(agent)) return actual.spawn(command, args, options);
+    boundary.spawned.push(agent);
     throw new Error('stopped at the process boundary');
   }) as typeof actual.spawn;
   return { ...actual, spawn, default: { ...actual, spawn } };
@@ -34,7 +35,7 @@ import { WebConfig } from '../../../../web/server/adapters/WebConfig';
 import { OrchestratorPool } from '../../../../web/server/pool/orchestratorPool';
 import { ApiClient } from '../../apiClient';
 import { handlePlan } from '../plan';
-import { FakeRunnerSession } from '@ordewell/core/testing';
+import { FakeRunnerSession, homeEnv, setEnv, writeStandIn } from '@ordewell/core/testing';
 
 /** Discovery that never spawns a CLI or reaches the network. */
 function inertResolver(): ModelResolver {
@@ -54,9 +55,10 @@ const BINARY: Record<RunnerId, string> = { 'claude-code': 'claude', codex: 'code
 // the CLI, HTTP contract, pool, Session and planner transport all run, and
 // only the agent processes, discovery and the host probe are replaced.
 describe('with no saved runner choice, the installed agents are the enabled runners', () => {
-  const keys = ['HOME', 'PATH', 'ORDEWELL_SETTINGS_PATH', 'AI_PROVIDER', 'ORCHESTRATOR_MODEL', 'ORDEWELL_PLANNER_EFFORT',
+  const keys = ['PATH', 'ORDEWELL_SETTINGS_PATH', 'AI_PROVIDER', 'ORCHESTRATOR_MODEL', 'ORDEWELL_PLANNER_EFFORT',
     'ORDEWELL_ENABLED_RUNNERS', 'ORDEWELL_CLAUDE_CODE_ENABLED', 'ORDEWELL_CODEX_ENABLED', 'ORDEWELL_OPENCODE_ENABLED'];
   const saved: Record<string, string | undefined> = {};
+  let restoreHome: () => void;
   let dir: string;
   let workspace: string;
   let pool: OrchestratorPool;
@@ -80,17 +82,14 @@ describe('with no saved runner choice, the installed agents are the enabled runn
         delete process.env[key];
       }
     }
-    for (const key of keys.slice(3)) delete process.env[key];
-    process.env.HOME = dir;
+    for (const key of keys.slice(2)) delete process.env[key];
+    restoreHome = setEnv(homeEnv(dir));
     process.env.ORDEWELL_SETTINGS_PATH = join(dir, 'settings.json');
 
     // The spawn is faked, but each binary must still resolve on PATH first.
     const bin = join(dir, 'bin');
     mkdirSync(bin);
-    for (const agent of AGENTS) {
-      writeFileSync(join(bin, agent), '#!/bin/sh\nexit 1\n');
-      chmodSync(join(bin, agent), 0o755);
-    }
+    for (const agent of AGENTS) writeStandIn(bin, agent);
     process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ''}`;
     clearAugmentedPathCache();
     vi.spyOn(https, 'request').mockImplementation(() => { throw new Error('Unexpected external HTTPS request'); });
@@ -137,6 +136,7 @@ describe('with no saved runner choice, the installed agents are the enabled runn
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+    restoreHome();
     rmSync(dir, { recursive: true, force: true });
     vi.restoreAllMocks();
   });

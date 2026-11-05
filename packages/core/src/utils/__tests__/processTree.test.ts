@@ -4,6 +4,7 @@ import { execFileSync, spawn, type ChildProcess } from 'child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { pathToFileURL } from 'url';
 import { killTree, spawnInOwnGroup, type KillTreeDeps } from '../processTree';
 
 class FakeChild extends EventEmitter {
@@ -79,6 +80,37 @@ describe('killTree on Windows', () => {
     h.fireHardKill();
 
     expect(h.taskkill).toHaveBeenLastCalledWith('taskkill', ['/pid', '4242', '/T', '/F'], expect.any(Function));
+  });
+
+  // A console process, which every runner is, refuses the unforced pass: left
+  // for the grace, it went on writing to the workspace it was stopped in.
+  it('forces the tree at once when the unforced pass is refused', () => {
+    const calls: string[][] = [];
+    const h = harness({
+      platform: 'win32',
+      execFileImpl: (_f, args, cb) => { calls.push(args); cb(args.includes('/F') ? null : new Error('can only be terminated forcefully')); },
+    });
+    killTree(h.child as unknown as ChildProcess, h.deps);
+
+    expect(calls).toEqual([['/pid', '4242', '/T'], ['/pid', '4242', '/T', '/F']]);
+  });
+
+  it('forces nothing when the unforced pass failed for a process already gone, whose pid may be another\'s', () => {
+    const calls: string[][] = [];
+    const h = harness({
+      platform: 'win32',
+      execFileImpl: (_f, args, cb) => { calls.push(args); h.child.exitCode = 0; cb(new Error('not found')); },
+    });
+    killTree(h.child as unknown as ChildProcess, h.deps);
+
+    expect(calls).toEqual([['/pid', '4242', '/T']]);
+  });
+
+  it('waits out the grace for a process that agreed to close', () => {
+    const h = harness({ platform: 'win32' });
+    killTree(h.child as unknown as ChildProcess, h.deps);
+
+    expect(h.taskkill).toHaveBeenCalledTimes(1);
   });
 
   it('does nothing for a process that never started, since there is no tree', () => {
@@ -346,7 +378,8 @@ describe('onHostTeardown', () => {
     const host = join(dir, 'host.mts');
     writeFileSync(host, [
       `import { appendFileSync } from 'node:fs';`,
-      `import { onHostTeardown, runnerGroups } from ${JSON.stringify(join(__dirname, '..', 'processTree.ts'))};`,
+      // A URL rather than a path: an ESM import reads a Windows drive letter as a scheme.
+      `import { onHostTeardown, runnerGroups } from ${JSON.stringify(pathToFileURL(join(__dirname, '..', 'processTree.ts')).href)};`,
       `const said = (word) => () => appendFileSync(${JSON.stringify(join(dir, 'said'))}, word + ' ');`,
       ...body,
     ].join('\n'));

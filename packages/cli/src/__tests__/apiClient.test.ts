@@ -3,6 +3,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import http from 'http';
 import { WebSocketServer } from 'ws';
 import { ApiClient, DaemonError, deliveryOf } from '../apiClient';
+import { patient } from '@ordewell/core/testing';
 
 /** Spin up a throwaway server that records which port served each request. */
 function startServer(label: string): Promise<{ port: number; close: () => void }> {
@@ -454,7 +455,7 @@ describe('ApiClient — endpoints the TUI drives', () => {
       servers.push(srv);
 
       await expect(new ApiClient(srv.port).sendConversationMessage('s1', 'hi')).resolves.toEqual({ tasks: [] });
-    }, 20_000);
+    }, patient(20_000));
 
     it.each(turnCalls)('does not bound %s by socket idleness', async (_name, call) => {
       delete process.env.ORDEWELL_HTTP_TIMEOUT_MS;

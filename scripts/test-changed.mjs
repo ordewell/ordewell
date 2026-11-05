@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // Fast local loop: run only the tests affected by uncommitted changes.
 // scripts/change-scope.mjs decides, so a path is judged as CI judges it.
-import { spawnSync } from 'node:child_process';
 import { localRuns, readWorkspaces, uncommittedPaths } from './change-scope.mjs';
+import { npm as runNpm } from './npm.mjs';
 
-const npm = (...args) => spawnSync('npm', args, { stdio: 'inherit' }).status ?? 1;
+const npm = (...args) => runNpm(args);
 
 const { note, rebuild, runs } = localRuns(uncommittedPaths(), readWorkspaces());
 if (note) console.log(note);

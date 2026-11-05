@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, isAbsolute, join, sep } from 'node:path';
 import { describe, it, expect, afterEach } from 'vitest';
 import {
   PlannerShellSandbox,
@@ -194,7 +194,8 @@ describe('sealedShellProfile (ADR-0036 S1)', () => {
       limits: SEALED_LIMITS,
     });
     expect(profile.throwaway).toBeUndefined();
-    expect(profile.env).toMatchObject({ HOME: '/tmp/s', TMPDIR: '/tmp/s', PYTHONPYCACHEPREFIX: '/tmp/s/pycache' });
+    // Joined with the host's separator, which is a backslash when this runs on Windows.
+    expect(profile.env).toMatchObject({ HOME: '/tmp/s', TMPDIR: '/tmp/s', PYTHONPYCACHEPREFIX: join('/tmp/s', 'pycache') });
   });
 
   it('keeps none of the credentials the host environment holds', () => {
@@ -277,16 +278,17 @@ describe('plannerShellProfile', () => {
     const profile = plannerShellProfile(host, { scratch: '/tmp/s', network: false });
     expect(profile.read).toBe('host');
     expect(profile.write).toEqual(['/tmp/s']);
+    // Joined with the host's separator, which is a backslash when this runs on Windows.
     expect(profile.env).toEqual({
       TMPDIR: '/tmp/s',
       GIT_OPTIONAL_LOCKS: '0',
-      npm_config_cache: '/tmp/s/npm',
+      npm_config_cache: join('/tmp/s', 'npm'),
       npm_config_update_notifier: 'false',
-      GOCACHE: '/tmp/s/go-build',
-      XDG_CACHE_HOME: '/tmp/s/cache',
-      PYTHONPYCACHEPREFIX: '/tmp/s/pycache',
+      GOCACHE: join('/tmp/s', 'go-build'),
+      XDG_CACHE_HOME: join('/tmp/s', 'cache'),
+      PYTHONPYCACHEPREFIX: join('/tmp/s', 'pycache'),
     });
-    expect(plannerShellProfile({ ...host, platform: 'darwin' }, { scratch: '/tmp/s', network: false }).env.xcrun_db).toBe('/tmp/s/xcrun_db');
+    expect(plannerShellProfile({ ...host, platform: 'darwin' }, { scratch: '/tmp/s', network: false }).env.xcrun_db).toBe(join('/tmp/s', 'xcrun_db'));
   });
 
   it('withholds the network and the local services only from a command that ran without asking (B3)', () => {
@@ -361,7 +363,8 @@ describe('PlannerShellSandbox', () => {
     expect(a.write).toEqual(b.write);
     const scratch = a.write[0];
     expect(scratch.startsWith(realpathSync(tmpdir()))).toBe(true);
-    expect(statSync(scratch).mode & 0o777).toBe(0o700);
+    // Windows has no POSIX permission bits to check.
+    if (process.platform !== 'win32') expect(statSync(scratch).mode & 0o777).toBe(0o700);
     expect(first.launch.env?.TMPDIR).toBe(scratch);
     expect([a.network, b.network]).toEqual([false, true]);
 
@@ -434,9 +437,9 @@ describe('PlannerShellSandbox', () => {
       const [scratch] = sealed.write;
       expect(wider).toHaveLength(3);
       for (const profile of wider) {
-        const named = [...profile.write, ...Object.values(profile.env).filter((value) => value.startsWith('/'))];
+        const named = [...profile.write, ...Object.values(profile.env).filter((value) => isAbsolute(value))];
         expect(named.length).toBeGreaterThan(profile.write.length);
-        expect(named.filter((p) => p === scratch || p.startsWith(`${scratch}/`))).toEqual([]);
+        expect(named.filter((p) => p === scratch || p.startsWith(`${scratch}${sep}`))).toEqual([]);
       }
       expect(wider[2].env.HOME).toBe(wider[2].write[0]);
       expect(wider[2].write[0]).not.toBe(wider[0].write[0]);
@@ -498,7 +501,8 @@ describe('sandboxedFailureNote', () => {
 });
 
 describe('sweepOrphanScratch', () => {
-  it("removes the scratch directories of processes that are gone, and nothing else", () => {
+  // Ownership is a POSIX uid, and Windows makes no scratch to sweep: its planner has no sandbox.
+  it.skipIf(process.platform === 'win32')("removes the scratch directories of processes that are gone, and nothing else", () => {
     const root = mkdtempSync(join(tmpdir(), 'ordewell-sweep-'));
     try {
       const gone = spawnSync(process.execPath, ['-e', '']).pid;
@@ -519,7 +523,7 @@ describe('sweepOrphanScratch', () => {
     const backend = fakeBackend();
     const sandbox = new PlannerShellSandbox(availableWith(backend));
     await sandbox.launch(POSIX, { network: false });
-    expect(backend.profiles[0].write[0]).toMatch(new RegExp(`/ordewell-planner-${process.pid}-[^/]+$`));
+    expect(basename(backend.profiles[0].write[0])).toMatch(new RegExp(`^ordewell-planner-${process.pid}-`));
     sandbox.end();
   });
 });

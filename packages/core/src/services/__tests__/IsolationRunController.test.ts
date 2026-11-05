@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { IsolationRunController, type IsolationRunListener } from '../IsolationRunController';
+import { IsolationRunController, refusedNotice, type IsolationRunListener } from '../IsolationRunController';
 import { createTask, type Task } from '../../models/Task';
 import type { IsolationOutcome } from '../../interfaces/IWorktreeIsolation';
 import { fakeConfig, FakeWorktreeIsolation } from '../../testing';
@@ -447,7 +447,14 @@ describe('IsolationRunController', () => {
 
       const warned = vi.mocked(notifications.warn).mock.calls.map((c) => String(c[0]));
       expect(warned).toContain('Task "Task t2" had work that never landed, so before its worktree was removed it was kept on branch ordewell-preserved/run1/2-t2 (abcdef1). `git log ordewell-preserved/run1/2-t2` shows it; merge or cherry-pick it to bring it back, and delete the branch once you no longer need it.');
-      expect(warned).toContain('Left the worktree of task "Task t2" in place at /fake-worktrees/run1/2-t2: it holds work Ordewell could not keep (it is not a git worktree any more). Save what you need from it, then remove it with `git worktree remove --force /fake-worktrees/run1/2-t2`.');
+      expect(warned).toContain(refusedNotice('/fake-worktrees/run1/2-t2', 'it is not a git worktree any more', t2));
+    });
+
+    it('says how to remove a worktree it left, by a command that empties no folder of the user\'s', () => {
+      const t2 = { taskId: 't2', order: 2, title: 'Task t2' };
+      expect(refusedNotice('/w/2-t2', 'it is not a git worktree any more', t2, 'linux')).toBe('Left the worktree of task "Task t2" in place at /w/2-t2: it holds work Ordewell could not keep (it is not a git worktree any more). Save what you need from it, then remove it with `git worktree remove --force /w/2-t2`.');
+      // Git for Windows walks into a junction the worktree holds; `rmdir /s` removes the junction itself.
+      expect(refusedNotice('C:\\w\\2-t2', 'it is not a git worktree any more', t2, 'win32')).toBe('Left the worktree of task "Task t2" in place at C:\\w\\2-t2: it holds work Ordewell could not keep (it is not a git worktree any more). Save what you need from it, then remove it with `rmdir /s /q "C:\\w\\2-t2"` in a Command Prompt, then `git worktree prune`.');
     });
 
     it('clears an adopted run up only while no run has opened on it and none of its tasks is live', async () => {

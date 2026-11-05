@@ -28,15 +28,27 @@ function repo(root: string, files: Record<string, string>): void {
   git('commit', '-q', '-m', 'initial');
 }
 
-/** Every symlink under `dir`, found without following one. */
+/**
+ * Every link under `dir`, found without following one. Windows links a file
+ * with a hard link rather than a symlink (ADR-0010), so a file with a second
+ * name is one too.
+ */
 function linksUnder(dir: string): string[] {
   const found: string[] = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
     if (entry.isSymbolicLink()) found.push(full);
     else if (entry.isDirectory() && entry.name !== '.git') found.push(...linksUnder(full));
+    else if (entry.isFile() && fs.statSync(full).nlink > 1) found.push(full);
   }
   return found;
+}
+
+/** Where a link leads: a symlink's target, or for a hard link, the real file sharing its inode. */
+function leadsTo(link: string, real: string): string {
+  if (fs.lstatSync(link).isSymbolicLink()) return path.resolve(path.dirname(link), fs.readlinkSync(link));
+  const same = (file: string) => fs.statSync(file, { bigint: true });
+  return same(link).ino === same(real).ino && same(link).dev === same(real).dev ? real : link;
 }
 
 const isInside = (parent: string, child: string) => {
@@ -87,9 +99,9 @@ function withoutRipgrep(): PoolFileSystem {
 describe.skipIf(!hasGit)('the planner envelope beside a repo group\'s task workspaces (ADR-0008)', () => {
   it('links nothing out of the workspace: every link in a task workspace leads to the same path in the real one', () => {
     const links = linksUnder(taskWorkspace);
-    expect(links.map((l) => path.relative(taskWorkspace, l)).sort()).toEqual(['NOTES.md', 'api/.env', 'ext']);
+    expect(links.map((l) => path.relative(taskWorkspace, l).split(path.sep).join('/')).sort()).toEqual(['NOTES.md', 'api/.env', 'ext']);
     for (const link of links) {
-      const target = path.resolve(path.dirname(link), fs.readlinkSync(link));
+      const target = leadsTo(link, path.join(workspace, path.relative(taskWorkspace, link)));
       expect(isInside(workspace, target), link).toBe(true);
       expect(isInside(path.join(workspace, '.ordewell'), target), link).toBe(false);
       expect(path.relative(workspace, target)).toBe(path.relative(taskWorkspace, link));

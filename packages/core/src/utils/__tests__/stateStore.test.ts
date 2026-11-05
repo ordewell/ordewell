@@ -11,19 +11,21 @@ describe('loadState', () => {
   afterEach(() => { fs.rmSync(tmpDir, { recursive: true, force: true }); });
 
   it('brings an ADR-0013 isolation record to the repo-group shape', () => {
+    // As this platform writes a workspace root: the migration joins the repo onto it natively.
+    const app = path.resolve('/work/app');
     fs.mkdirSync(path.join(tmpDir, '.ordewell'), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, '.ordewell', 'state.json'), JSON.stringify({
       tasks: [], runners: ['claude-code'], status: 'approved', generatedAt: '', lastUpdated: '',
       isolation: {
-        run: { id: 'r1', workspaceRoot: '/work/app', baseRef: 'abc', integrationBranch: 'ordewell/r1/integration', tasks: {} },
+        run: { id: 'r1', workspaceRoot: app, baseRef: 'abc', integrationBranch: 'ordewell/r1/integration', tasks: {} },
         resolvers: { r: 'c' },
       },
     }));
 
     expect(loadState(tmpDir)!.plan.isolation).toEqual({
       run: {
-        id: 'r1', workspaceRoot: '/work/app', shared: [], sharedRepos: [], tasks: {},
-        repos: [{ path: '.', root: '/work/app', baseRef: 'abc', integrationBranch: 'ordewell/r1/integration' }],
+        id: 'r1', workspaceRoot: app, shared: [], sharedRepos: [], tasks: {},
+        repos: [{ path: '.', root: app, baseRef: 'abc', integrationBranch: 'ordewell/r1/integration' }],
       },
       resolvers: { r: 'c' },
     });

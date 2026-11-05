@@ -5,14 +5,15 @@ import os from 'os';
 import path from 'path';
 import { WebSocketServer } from 'ws';
 import { DAEMON_SUBPROTOCOL, DAEMON_TOKEN_SUBPROTOCOL_PREFIX, mintDaemonToken } from '@ordewell/core';
+import { homeEnv, setEnv } from '@ordewell/core/testing';
 import { ApiClient } from '../apiClient';
 
 /**
- * `os.homedir()` reads $HOME on POSIX, which is the seam both ends of the
- * handoff already go through — no module mocking required.
+ * `os.homedir()` is the seam both ends of the handoff already go through, so
+ * moving the home moves the token file — no module mocking required.
  */
 let home = '';
-let realHome: string | undefined;
+let restoreHome: () => void;
 
 function startServer(
   handler: (req: http.IncomingMessage, res: http.ServerResponse) => void,
@@ -33,15 +34,13 @@ describe('the CLI authenticating to the daemon', () => {
   const servers: Array<{ close: () => void }> = [];
 
   beforeEach(() => {
-    realHome = process.env.HOME;
     home = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-cli-token-'));
-    process.env.HOME = home;
+    restoreHome = setEnv(homeEnv(home));
   });
 
   afterEach(() => {
     servers.splice(0).forEach((s) => s.close());
-    if (realHome === undefined) delete process.env.HOME;
-    else process.env.HOME = realHome;
+    restoreHome();
     fs.rmSync(home, { recursive: true, force: true });
   });
 

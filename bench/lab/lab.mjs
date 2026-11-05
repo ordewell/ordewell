@@ -56,9 +56,40 @@ export function makeLab({ root, prefix = 'ordewell-lab-' } = {}) {
   return lab;
 }
 
+const WINDOWS = process.platform === 'win32';
+
+/**
+ * What a lab sets for one run. The probe's augmented PATH ends in well-known
+ * per-user bin dirs, found from the home on POSIX and, on Windows, from the
+ * profile and the folders installers write to (npm's prefix under APPDATA,
+ * WinGet's links under LOCALAPPDATA, Chocolatey's under ProgramData). Each is
+ * pointed into the lab, so a real CLI there is not found and "none" means none.
+ */
+export function labEnv(lab) {
+  if (!WINDOWS) return { HOME: lab.home };
+  return {
+    HOME: lab.home,
+    USERPROFILE: lab.home,
+    APPDATA: path.join(lab.home, 'AppData', 'Roaming'),
+    LOCALAPPDATA: path.join(lab.home, 'AppData', 'Local'),
+    ProgramData: path.join(lab.home, 'ProgramData'),
+    SCOOP: undefined,
+    SCOOP_GLOBAL: undefined,
+  };
+}
+
+/** A shell script on POSIX; on Windows a batch file, which is what an npm install leaves. */
+function shimFile(lab, runner) {
+  return path.join(lab.bin, WINDOWS ? `${commandFor(runner)}.cmd` : commandFor(runner));
+}
+
 /** Write one shim: a version prints it (installed), no version exits 1 (absent). */
 export function writeShim(lab, runner, { version } = {}) {
-  const file = path.join(lab.bin, commandFor(runner));
+  const file = shimFile(lab, runner);
+  if (WINDOWS) {
+    fs.writeFileSync(file, version ? `@echo ${version}\r\n` : '@exit /b 1\r\n');
+    return;
+  }
   fs.writeFileSync(file, version ? `#!/bin/sh\necho "${version}"\n` : '#!/bin/sh\nexit 1\n');
   fs.chmodSync(file, 0o755);
 }
@@ -72,7 +103,7 @@ export function installOnly(lab, installed) {
 
 /** Remove a shim, so a real CLI further down PATH (or nothing) is found. */
 export function removeShim(lab, runner) {
-  fs.rmSync(path.join(lab.bin, commandFor(runner)), { force: true });
+  fs.rmSync(shimFile(lab, runner), { force: true });
 }
 
 /** A throwaway git repo the TUI/extension can open as a workspace. */
@@ -127,11 +158,26 @@ function main() {
   installOnly(lab, installed);
   makeWorkspace(lab);
 
+  console.log(`# lab: ${lab.root}`);
+  console.log(`# installed: ${installed.join(', ') || '(none)'}\n`);
+  if (WINDOWS) {
+    // PowerShell has no `env -i`: these change this window's environment, so
+    // run them in a window of their own.
+    console.log('# PowerShell, in a window of its own');
+    for (const [key, value] of Object.entries(labEnv(lab))) {
+      console.log(value === undefined ? `Remove-Item Env:${key} -ErrorAction SilentlyContinue` : `$env:${key} = '${value}'`);
+    }
+    console.log(`$env:Path = '${lab.bin};' + $env:Path\n`);
+    console.log('# TUI');
+    console.log(`node packages/cli/dist/main.js tui --workspace '${lab.ws}'\n`);
+    console.log('# VS Code  (then press F5 in the dev host)');
+    console.log(`code --user-data-dir='${path.join(lab.root, 'vscode')}' --extensions-dir='${path.join(lab.root, 'ext')}' '${lab.ws}'`);
+    return;
+  }
+
   // The shim dir is first, so it wins; the caller's PATH follows only so that
   // `node` and `code` themselves resolve. `env -i` keeps every API key out.
   const prefix = `env -i HOME=${lab.home} PATH=${lab.bin}:$PATH SHELL=/usr/bin/true TERM=$TERM LANG=$LANG`;
-  console.log(`# lab: ${lab.root}`);
-  console.log(`# installed: ${installed.join(', ') || '(none)'}\n`);
   console.log('# TUI');
   console.log(`${prefix} \\`);
   console.log(`  node packages/cli/dist/main.js tui --workspace ${lab.ws}\n`);

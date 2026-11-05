@@ -15,7 +15,7 @@ import type { PlannerToolHandler } from '../mcp';
 import type { IRunner } from '../../interfaces/IRunner';
 import type { IWorktreeIsolation } from '../../interfaces/IWorktreeIsolation';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
-import { fakeConfig, FakeRunnerSession } from '../../testing';
+import { fakeConfig, FakeRunnerSession, removeDir } from '../../testing';
 import { listChildSessions, listSessions, loadChildSession, loadSession, saveChildSession, saveSession } from '../../utils/sessionStore';
 import { openTaskLog } from '../../utils/taskLogStore';
 import { closeSessions, fakeFs, makeSession, type PlannerTurn as Turn } from './sessionTestKit';
@@ -37,7 +37,7 @@ const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd,
 const roots: string[] = [];
 afterEach(async () => {
   await closeSessions();
-  while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  while (roots.length) await removeDir(roots.pop()!);
 });
 
 function repo(): string {

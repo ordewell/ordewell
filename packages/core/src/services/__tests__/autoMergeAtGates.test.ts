@@ -6,7 +6,7 @@ import { join } from 'path';
 import { createTask, type LegacyPlanState } from '../../models/Task';
 import type { IRunner } from '../../interfaces/IRunner';
 import type { IWorktreeIsolation } from '../../interfaces/IWorktreeIsolation';
-import { FakeWorktreeIsolation, fakeConfig } from '../../testing';
+import { fakeConfig, FakeWorktreeIsolation, patient } from '../../testing';
 import { createWorktreeIsolation } from '../GitWorktreeIsolation';
 import { TaskOrchestrator } from '../TaskOrchestrator';
 import { fromTranscript } from '../../conversation/transcript';
@@ -434,7 +434,7 @@ describe('automatic gate merging with real git', () => {
     expect(spawn).toHaveBeenCalledTimes(1);
     expect([git(root, 'rev-parse', 'HEAD'), git(root, 'ls-files', '-s'), git(root, 'status', '--porcelain'), readFileSync(join(root, 'x'), 'utf8')]).toEqual(before);
     expect(existsSync(join(root, '.git', 'MERGE_HEAD'))).toBe(false);
-  }, 15000);
+  }, patient(15000));
 
   it('persists the run\'s own copy and restores it, and the next run reads the user\'s setting', async () => {
     const root = repo();

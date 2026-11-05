@@ -45,7 +45,8 @@ vi.mock('../../apiClient', async (importOriginal) => {
   return { ...actual, ApiClient: apiClient.ApiClient };
 });
 vi.mock('../../utils/env', () => ({ findEnvFile: vi.fn(() => '/ws/.env'), writeEnvVar: vi.fn(), shellEnvValue: vi.fn(() => undefined) }));
-vi.mock('../terminal', () => ({
+vi.mock('../terminal', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../terminal')>()),
   openTerminal: vi.fn((options: { onKey(key: Key): void; mouse?: boolean }) => {
     fakeTerminal.onKey = options.onKey;
     fakeTerminal.mouse = options.mouse;
@@ -115,7 +116,8 @@ describe('handleTui', () => {
   });
 
   it('refuses to start for a workspace that does not exist, naming the path and both remedies', async () => {
-    const missing = '/definitely/does/not/exist/ordewell-workspace';
+    // Resolved, as the workspace is, so Windows names it on the current drive.
+    const missing = path.resolve('/definitely/does/not/exist/ordewell-workspace');
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     exitSpy.mockImplementation((() => { throw new Error('exit'); }) as never);
 
@@ -470,8 +472,10 @@ describe('handleTui', () => {
         await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
 
         const env = vi.mocked(spawn).mock.calls[0][2]?.env as NodeJS.ProcessEnv;
+        // The block is a plain object, and Windows spells the key its own way (`withPath`).
+        const pathKey = process.platform === 'win32' ? 'Path' : 'PATH';
         expect(await augmentedPath()).toContain(path.join(os.homedir(), '.local', 'bin'));
-        expect(env.PATH).toContain(path.join(os.homedir(), '.local', 'bin'));
+        expect(env[pathKey]).toContain(path.join(os.homedir(), '.local', 'bin'));
         child.emit('exit', 1, null);
       } finally {
         process.env.PATH = original;

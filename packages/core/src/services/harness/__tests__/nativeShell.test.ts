@@ -43,6 +43,15 @@ describe('nativeShellOffer', () => {
     if (!offer.offered) expect(offer.reason).toContain('already runs its own shell');
   });
 
+  it('says why Codex plans without its own shell on Windows, rather than claiming a sandbox it lacks there', () => {
+    const offer = nativeShellOffer({ runner: 'codex', version: '0.166.0', platform: 'win32' });
+    expect(offer.offered).toBe(false);
+    if (!offer.offered) {
+      expect(offer.reason).toMatch(/own shell off/);
+      expect(offer.reason).not.toContain('without the network (ADR-0026)');
+    }
+  });
+
   it('refuses a harness it has never checked', () => {
     const offer = nativeShellOffer({ runner: 'unknown-agent', version: '1.0.0', platform: 'darwin' });
     expect(offer.offered).toBe(false);

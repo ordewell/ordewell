@@ -184,6 +184,8 @@ export function gitRepo(dir, files) {
 
 /** Put a `git` first on PATH that writes its subcommand to the returned file before it runs the real one. */
 export function countGit() {
+  // Product code starts git.exe by name, which a batch shim cannot stand in for.
+  if (process.platform === 'win32') throw new Error('--isolate counts git calls through a sh shim, which Windows does not start: measure it on Linux or macOS.');
   const real = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
   const dir = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'ordewell-scale-git-'));
   const log = path.join(dir, 'calls.log');

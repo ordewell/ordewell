@@ -10,12 +10,13 @@
  */
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { captureConsole, core, hostSession, loadAverage, makeTasks, ms, now, numbers, planOf } from './lib.mjs';
 import { mcpServerWithoutPort } from './mcp.mjs';
 
 const { say } = captureConsole();
-const fakeClaude = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../pipeline/fake-claude');
-process.env.PATH = `${fakeClaude}:${process.env.PATH}`;
+const fakeClaude = fileURLToPath(new URL('../pipeline/fake-claude', import.meta.url));
+process.env.PATH = [fakeClaude, process.env.PATH].join(path.delimiter);
 
 say(`load ${loadAverage()}`);
 say('| processes | all answered s | s per spawn | lag p99 ms | lag max ms | daemon RSS growth KB per process | failed |');

@@ -66,7 +66,9 @@ describe('run — failure modes never reject the promise', () => {
   // resolved value with a sentinel `code` the search adapters translate to
   // "Search failed" instead of "No matches found." — `null`, never `1`,
   // because the adapter reads 1 as "ran, possibly no matches."
-  describe('on a synchronous spawn throw (cwd is a file, ENOTDIR)', () => {
+  // Windows reports a `cwd` that is a file as ENOENT, through the callback as
+  // in the case above, so nothing there throws.
+  describe.skipIf(process.platform === 'win32')('on a synchronous spawn throw (cwd is a file, ENOTDIR)', () => {
     let tmpDir: string;
     let fileForCwd: string;
 

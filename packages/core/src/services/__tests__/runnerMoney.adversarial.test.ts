@@ -123,7 +123,7 @@ describe('adversarial: every recorded attempt counts what its result lines repor
     expect(costOf(ledger)).toBeCloseTo(results.at(-1) ?? 0, 9);
     expect(tokensOf(ledger)).toEqual(expectedUsage(lines));
     adapter.dispose();
-  }, 30_000);
+  });
 });
 
 /**

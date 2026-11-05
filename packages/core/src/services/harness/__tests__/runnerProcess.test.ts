@@ -116,7 +116,8 @@ describe('the environment a runner starts under', () => {
     const adapter = await start(spawned, deps(spawned, {}, envs));
     expect(Object.keys(envs[0]).filter((name) => name.toUpperCase().startsWith('ORDEWELL_MCP_TOKEN_'))).toEqual([]);
     expect(envs[0].ORDEWELL_TEST_KEPT).toBe('yes');
-    expect(envs[0].PATH).toBe('/usr/bin');
+    // Windows spells the one PATH key `Path` (withPath).
+    expect(Object.entries(envs[0]).filter(([name]) => name.toUpperCase() === 'PATH').map(([, value]) => value)).toEqual(['/usr/bin']);
     adapter.dispose();
   });
 

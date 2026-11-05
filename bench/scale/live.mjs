@@ -22,6 +22,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { arg, captureConsole, core, countGit, flag, gitRepo, heapMb, hostSession, loadAverage, makeTasks, ms, now, planOf, tempWorkspace } from './lib.mjs';
 import { LoadGen, mcpServerWithoutPort, percentile } from './mcp.mjs';
 import { pulseReporter } from './pulse.mjs';
@@ -46,9 +47,11 @@ const lagNow = () => ({ p50: +(lag.percentile(50) / 1e6).toFixed(1), p99: +(lag.
 const server = mcpServerWithoutPort();
 const load = new LoadGen(server, Math.min(sessions, 1000), Math.min(4, Math.ceil(sessions / 25)));
 const swarm = new Swarm({ rate, eventsPerSession, mcp: load, hold: true, textKb: Number(arg('text-kb', '0')), attachMs: Number(arg('attach-ms', '0')), writes: isolate, pulse });
-const fakeClaude = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../pipeline/fake-claude');
+const fakeClaude = fileURLToPath(new URL('../pipeline/fake-claude', import.meta.url));
+// The swarm stands where the process would, so it reads claude's own arguments:
+// on Windows a launch through cmd.exe would hand it one quoted command line.
 const runner = new core.StructuredRunner({
-  process: { spawn: swarm.spawn, exists: () => true, resolvePath: async () => `${process.env.PATH}:${fakeClaude}`, isDirectory: () => true },
+  process: { spawn: swarm.spawn, exists: () => true, platform: 'linux', resolvePath: async () => [process.env.PATH, fakeClaude].join(path.delimiter), isDirectory: () => true },
   mcp: server,
   interruptGraceMs: 200,
 });
@@ -136,6 +139,6 @@ if (flag('heap')) out.heapAfterRunMb = +(heapMb() - before).toFixed(2);
 if (isolate) out.git = { commands: gitCalls(), perTask: per(gitCalls()) };
 say(JSON.stringify(out));
 swarm.stop();
-load.stop();
+await load.stop();
 host.dropWorkspace();
 process.exit(0);

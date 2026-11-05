@@ -6,7 +6,7 @@ By default, submitted build plans wait for your approval. Run settings let you
 automate execution and merging. Research tasks and consented script tasks can
 start during planning.
 
-This README describes 0.12.3. See the [published releases](https://github.com/ordewell/ordewell/releases)
+This README describes 0.12.5. See the [published releases](https://github.com/ordewell/ordewell/releases)
 for versions available to install and their release notes.
 
 ## Features
@@ -70,17 +70,22 @@ Conversation** and **Compact Conversation**. Isolation can be configured under
 
 ### On Windows
 
-The extension and its local daemon run natively on Windows. The `ordewell`
-terminal UI is not verified there; run it under
-[WSL](https://learn.microsoft.com/windows/wsl/install). Ordewell finds
-npm-installed runners (`.cmd` and `.exe` shims).
+The extension, its local daemon and the `ordewell` terminal UI run natively on
+Windows. Ordewell finds npm-installed runners and starts what their shims name.
+Install Git for Windows: the planner's research commands run in its shell.
 
-Most of the Windows support is tested on Linux, through the seams that stand
-in for Windows. On a Windows host, only how npm-installed runners are launched
-has been measured, and no first run from goal to merge has been watched end to
-end. Two things are known to be open: whether Codex's read-only sandbox is
-enforced, and `%VAR%` expansion on the `cmd.exe` shim route. The planner's
-shell has no OS sandbox on Windows and relies on its command rules alone. See
+For Codex tasks, set up Codex's own sandbox once: run `codex` in a terminal and
+choose **Set up default sandbox** (it asks for Administrator), not the non-admin
+one, under which Codex refuses a Guarded task's commands. Until then a Codex
+task runs read-only by Codex's account, each write approved by Codex's reviewer
+and run unconfined, and the task says so.
+
+Every test suite runs on Windows in CI, and real plans have run there from goal
+to merge with Claude Code, Codex and OpenCode as planner and as runner. Open
+there: what Codex's Administrator sandbox enforces for a task, and, for a shim npm did not
+write, `%VAR%` expansion on the `cmd.exe` route and a `"` on the PowerShell
+one. The planner's shell has no OS sandbox on Windows and relies on its command
+rules alone. See
 [Windows support](https://github.com/ordewell/ordewell/blob/main/docs/adr/platform/0010-windows-support.md).
 
 ## What the extension sends

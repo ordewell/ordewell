@@ -885,7 +885,8 @@ describe('task launches (ADR-0028)', () => {
       args: spawned.lastArgs().map((arg) => (arg === mcpConfig ? '<mcp-config>' : arg)),
       mcpConfig: mcpConfig ? readFileSync(mcpConfig, 'utf8') : undefined,
       env: Object.fromEntries(Object.entries(spawned.lastEnv()).filter(([key]) => key.startsWith('OPENCODE_') && key !== 'OPENCODE_SERVER_PASSWORD')),
-      thread: spawned.processes[0].written.map((line) => line.replaceAll(root, '<root>')).find((line) => line.includes('"thread/start"')),
+      // The root as JSON spells it, so a Windows path's backslashes match too.
+      thread: spawned.processes[0].written.map((line) => line.replaceAll(JSON.stringify(root).slice(1, -1), '<root>')).find((line) => line.includes('"thread/start"')),
     };
     adapter.dispose();
     return launched;

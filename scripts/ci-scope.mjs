@@ -23,8 +23,8 @@ const commands = {
     output([
       `scope=${JSON.stringify(scope)}`,
       ...CHECKS.map((check) => `${check}=${scope.checks[check]}`),
-      // Empty runs the root script, which is every workspace.
-      `coverage_args=${scope.mode === 'full' ? '' : scope.workspaces.map((dir) => `-w ${dir}`).join(' ')}`,
+      // Empty means every workspace: the root script, or `-ws`.
+      `workspace_args=${scope.mode === 'full' ? '' : scope.workspaces.map((dir) => `-w ${dir}`).join(' ')}`,
     ]);
     const off = CHECKS.filter((check) => !scope.checks[check]);
     if (GITHUB_STEP_SUMMARY) {

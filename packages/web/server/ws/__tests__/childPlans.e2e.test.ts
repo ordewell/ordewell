@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'child_process';
 import http from 'http';
 import type { AddressInfo } from 'net';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { Hono } from 'hono';
@@ -11,7 +11,7 @@ import {
   createSession, createTask, createWorktreeIsolation, DAEMON_SUBPROTOCOL, LeaseHost, ModelResolver, openTaskLog, RUN_SETTINGS_DEFAULTS, RunnerRegistry, saveSession,
   type ChildListResponse, type ChildMessageResponse, type ChildPlanResponse, type ChildTaskControlResponse, type ChildTreeFrame, type ErrorBody, type IRunner, type LegacyPlanState, type RunSnapshotFrame, type Session, type SessionDeps, type SessionFrame, type Task, type TaskLogAttemptsResponse,
 } from '@ordewell/core';
-import { fakeConfig, fakeFileSystem, FakeRunnerSession } from '@ordewell/core/testing';
+import { fakeConfig, fakeFileSystem, FakeRunnerSession, removeDir } from '@ordewell/core/testing';
 import { OrchestratorPool } from '../../pool/orchestratorPool';
 import { childrenRoute } from '../../routes/children';
 import { createWsHandler } from '../stream';
@@ -199,7 +199,7 @@ async function daemon(turns: Record<string, Turn[]>, { held = ['a'], parallel = 
     pool.destroyAll();
     await live.gone;
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    rmSync(workspace, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    await removeDir(workspace);
   });
 
   const list = async () => (await (await app.request(`/api/sessions/${ROOT}/children`)).json()) as ChildListResponse;

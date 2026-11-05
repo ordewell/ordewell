@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { delimiter, join, resolve } from 'path';
+import { join, resolve } from 'path';
 import {
   CliAgentAiService, OpenAiService, Session, clearAugmentedPathCache, getProviderMeta, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, PROVIDER_DETECT_PRIORITY,
   RunnerInstallation, createTask, recordedRunnerAuth, recordRunnerAuth, resetInstalledPlanner, resetRunnerAuth, saveSession, type ConversationTurn, type IRunner, type LegacyPlanState,
   type PlannerUsability, type RunnerSpawnOptions,
 } from '@ordewell/core';
-import { FakeRunnerSession } from '@ordewell/core/testing';
+import { FakeRunnerSession, pathWithFake } from '@ordewell/core/testing';
 import { OrchestratorPool } from '../orchestratorPool';
 
 /**
@@ -49,21 +49,26 @@ describe('OrchestratorPool default planner', () => {
   function fakeClaudeAgent(): void {
     const bin = join(dir, 'bin');
     mkdirSync(bin, { recursive: true });
-    const command = join(bin, 'claude');
-    writeFileSync(command, [
-      '#!/bin/sh',
-      'case "$1" in',
-      '  --version) echo "claude fake"; exit 0 ;;',
-      '  auth)',
-      '    if [ -f "$CLAUDE_CONFIG_DIR.logged-in" ]; then',
-      '      echo \'{"authMethod":"oauth"}\'; exit 0',
-      '    fi',
-      '    echo \'{"authMethod":"none"}\'; exit 1 ;;',
-      'esac',
+    const script = join(bin, 'fake-claude.cjs');
+    writeFileSync(script, [
+      'const [command] = process.argv.slice(2);',
+      "if (command === '--version') { console.log('claude fake'); process.exit(0); }",
+      "if (command === 'auth') {",
+      "  const signedIn = require('fs').existsSync(`${process.env.CLAUDE_CONFIG_DIR}.logged-in`);",
+      "  console.log(JSON.stringify({ authMethod: signedIn ? 'oauth' : 'none' }));",
+      '  process.exit(signedIn ? 0 : 1);',
+      '}',
       '',
     ].join('\n'));
-    chmodSync(command, 0o755);
-    process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ''}`;
+    // A batch shim on Windows, as npm installs one; `pathWithFake` keeps a real
+    // `claude.exe`, which Windows would start ahead of it (ADR-0010), off PATH.
+    if (process.platform === 'win32') {
+      writeFileSync(join(bin, 'claude.cmd'), `@"${process.execPath}" "${script}" %*\r\n`);
+    } else {
+      writeFileSync(join(bin, 'claude'), `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`);
+      chmodSync(join(bin, 'claude'), 0o755);
+    }
+    process.env.PATH = pathWithFake(bin, 'claude');
     clearAugmentedPathCache();
     // The other agents are not what these tests are about; keep detection and
     // the list to the one whose account each workspace chooses.

@@ -3814,7 +3814,9 @@ CLI on this OS", shared by structured runners, harness planners and model
 discovery. `planDirectLaunch` serves every `spawn` caller and is identity on
 POSIX: execvp already searches PATH. Windows resolves PATH × PATHEXT in order:
 a native executable, a batch shim through `cmd.exe /d /s /c` with verbatim
-arguments, then a PowerShell shim through `powershell.exe -File` (ADR-0010).
+arguments, then a PowerShell shim through `powershell.exe -File` (ADR-0010). A
+batch shim npm wrote is no route of its own: the Node script or program it names
+is started directly, as a native executable is.
 *Avoid:* calling `spawn('claude', …)` directly on Windows; CreateProcess does
 not perform PATHEXT lookup. A batch command line needs the outer quote pair
 that `cmd /s /c` strips. Capacity does not reorder the routes: an overflowing
@@ -3875,6 +3877,9 @@ POSIX shell Git for Windows ships — so `AUTO_COMMANDS` (`ls`, `cat`, `wc`,
 and falls back to cmd.exe *while saying so*. `C:\Windows\System32\bash.exe` is
 excluded deliberately: that is the WSL launcher, whose `/mnt/c/...` view would
 make every workspace path name a different file than the one confinement checks.
+Git Bash also reads a path its own way, by its mount table (`/c` is `C:\`, `/tmp`
+the temp folder), and the shell's `hostPath` is what path confinement reads a
+command's paths through.
 *Avoid:* treating the shell choice as an adapter detail. `BaseFileSystem` owns it
 because `classifyCommand` has to be told the same answer.
 
@@ -3977,11 +3982,15 @@ empty group's id may have been recycled.
 *Avoid:* `proc.kill('SIGTERM')` at a dispose site — or a bare `proc.kill()`,
 which was the last one left, in `ModelDiscovery`'s Codex app-server probe.
 
-**Platform support** — the VS Code extension and the local daemon run on Linux,
-macOS, and native Windows. The **TUI is not verified on Windows**; WSL remains
-the supported answer for
-that surface. Runner execution needs no tmux or per-task terminal windows
-(ADR-0025). Two things about Windows are explicitly unverified rather than
-claimed — Codex's read-only sandbox enforcement and `%VAR%` expansion on the
-cmd.exe shim route. Argument fidelity on the PowerShell shim route was measured
-on a Windows host. See ADR-0010.
+**Platform support** — the VS Code extension, the TUI and the local daemon run
+on Linux, macOS, and native Windows. Runner execution needs no tmux or per-task terminal windows
+(ADR-0025). Until the user sets up Codex's own Windows sandbox, a Codex change
+task runs read-only by Codex's account and its approved writes run unconfined,
+which the task says. A Codex planner on Windows plans with its own shell off,
+since Codex's sandbox there cannot keep a command off the network. Three things
+about Windows are explicitly unverified rather than claimed — what Codex's
+Administrator sandbox enforces for a change task, and, for a shim npm did not
+write, `%VAR%` expansion on the cmd.exe route and a `"` on the PowerShell one.
+Argument fidelity through an npm shim and on the PowerShell shim route was
+measured on a Windows host. On Windows the TUI's mouse and paste need Node
+22.17 or newer, and it says so on an older one. See ADR-0010.

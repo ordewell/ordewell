@@ -1,5 +1,5 @@
 import { execFileSync } from 'child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { vi } from 'vitest';
@@ -12,7 +12,7 @@ import type { IRunner } from '../../interfaces/IRunner';
 import type { IConfig } from '../../interfaces/IConfig';
 import type { PlannerToolHandler } from '../mcp';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
-import { fakeConfig, FakeRunnerSession } from '../../testing';
+import { fakeConfig, FakeRunnerSession, removeDir } from '../../testing';
 import { saveSession } from '../../utils/sessionStore';
 import { openTaskLog } from '../../utils/taskLogStore';
 import { treeEventLogFile } from '../../utils/treeEventLog';
@@ -33,7 +33,10 @@ const roots: string[] = [];
 /** Call from `afterEach`. */
 export async function removeRepos(): Promise<void> {
   await closeSessions();
-  while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  // Not rmSync: on Windows a stopped runner's tree is ended by taskkill, which
+  // this process has to go on running to see through, and until it has, a
+  // directory the runner works in cannot be removed.
+  while (roots.length) await removeDir(roots.pop()!);
 }
 
 function repo(): string {
@@ -72,9 +75,16 @@ export function writingRunner(files: Record<string, string[]>, { usage = 0, repo
       spawned.push(opts.taskId);
       const session = new FakeRunnerSession(`s-${opts.taskId}-${spawned.length}`, opts.taskId);
       setTimeout(() => {
-        for (const file of files[opts.taskId] ?? []) {
-          mkdirSync(dirname(join(opts.cwd, file)), { recursive: true });
-          writeFileSync(join(opts.cwd, file), `written by ${opts.taskId}\n`);
+        // A name the file system refuses is this runner's failure to report,
+        // not an exception thrown from a timer into whatever runs next.
+        try {
+          for (const file of files[opts.taskId] ?? []) {
+            mkdirSync(dirname(join(opts.cwd, file)), { recursive: true });
+            writeFileSync(join(opts.cwd, file), `written by ${opts.taskId}\n`);
+          }
+        } catch (err) {
+          session.reportComplete({ status: 'failed', summary: `Could not write: ${err instanceof Error ? err.message : String(err)}` } as never);
+          return;
         }
         if (usage > 0) session.emitEvent({ type: 'usage', record: { source: 'claude-code', model: 'opus', inputTokens: usage, outputTokens: 0 } } as never);
         session.reportComplete({ status: 'done', summary: 'Done.', ...reports[opts.taskId] } as never);

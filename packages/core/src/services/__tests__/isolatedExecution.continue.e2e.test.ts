@@ -106,7 +106,7 @@ describe.skipIf(!hasGit)('continued attempts keep their previous work', () => {
     expect(resumed.prompt).toContain('Your previous changes are in the working tree');
     expect(resumed.prompt).not.toContain('may not be in it');
     expect(readFileSync(join(root, 'feature.txt'), 'utf8')).toBe('initial implementation\n');
-  }, 30_000);
+  });
 
   it('a conflicting integration change falls back to the integration tip and names the branch holding the previous work', async () => {
     const root = repo();
@@ -134,7 +134,7 @@ describe.skipIf(!hasGit)('continued attempts keep their previous work', () => {
     expect(resumed.prompt).toContain(`git diff HEAD...${kept}`);
     expect(resumed.prompt).not.toContain('Your previous changes are in the working tree');
     expect(git(root, 'show', `${kept}:feature.txt`)).toBe('half implemented');
-  }, 30_000);
+  });
 
   it('a shared run continues in the checkout with its uncommitted work already in place', async () => {
     const root = repo();
@@ -155,7 +155,7 @@ describe.skipIf(!hasGit)('continued attempts keep their previous work', () => {
     expect(resumed.prompt).toContain('Your previous changes are in the working tree');
     expect(resumed.prompt).toContain('shared workspace');
     expect(resumed.resumeSessionId).toBe('native-t1');
-  }, 30_000);
+  });
 
   it('a manual continue keeps commits, staged edits and deletions while including work landed meanwhile', async () => {
     const root = repo();
@@ -195,7 +195,7 @@ describe.skipIf(!hasGit)('continued attempts keep their previous work', () => {
     await vi.waitFor(() => expect(h.task().status).toBe('completed'), { timeout: 20_000 });
     expect(git(root, 'show', 'ordewell/continue-run/integration:feature.txt')).toBe('latest implementation');
     expect(git(root, 'show', 'ordewell/continue-run/integration:landed.txt')).toBe('other task implementation');
-  }, 30_000);
+  });
 
   it('a fresh retry starts clean from the integration tip without resuming the saved session', async () => {
     const root = repo();
@@ -215,7 +215,7 @@ describe.skipIf(!hasGit)('continued attempts keep their previous work', () => {
     expect(retried.prompt).toContain('Implement the feature');
     expect(retried.prompt).not.toContain('Your previous changes are in the working tree');
     expect(git(root, 'show', 'ordewell-preserved/continue-run/1-implement-feature:feature.txt')).toBe('half implemented');
-  }, 30_000);
+  });
 
   it('a continue restores uncommitted work in every repository of a workspace group', async () => {
     const root = tempDir();
@@ -236,7 +236,7 @@ describe.skipIf(!hasGit)('continued attempts keep their previous work', () => {
     expect(readFileSync(join(firstRepo, 'feature.txt'), 'utf8')).toBe('initial implementation\n');
     expect(readFileSync(join(secondRepo, 'feature.txt'), 'utf8')).toBe('initial implementation\n');
     expect(resumed.prompt).toContain('Your previous changes are in the working tree');
-  }, 30_000);
+  });
 
   it('a conflict in one repository restores none of the previous work and names its branches in every changed repository', async () => {
     const root = tempDir();
@@ -273,7 +273,7 @@ describe.skipIf(!hasGit)('continued attempts keep their previous work', () => {
     expect(git(firstRepo, 'show', `${kept}:feature.txt`)).toBe('first half implemented');
     expect(git(firstRepo, 'show', `${kept}:new.txt`)).toBe('new implementation');
     expect(git(secondRepo, 'show', `${kept}:feature.txt`)).toBe('second half implemented');
-  }, 30_000);
+  });
 
   it('another continue after reloading a conflict fallback still identifies the unrecovered previous work', async () => {
     const root = repo();
@@ -299,7 +299,7 @@ describe.skipIf(!hasGit)('continued attempts keep their previous work', () => {
     expect(readFileSync(join(resumed.cwd, 'feature.txt'), 'utf8')).toBe('landed implementation\n');
     expect(resumed.prompt).toContain('ordewell-preserved/continue-run/1-implement-feature');
     expect(resumed.prompt).not.toContain('Your previous changes are in the working tree');
-  }, 30_000);
+  });
 
   it('an overdue usage-limit resume after a reload recovers the kept worktree in the saved session', async () => {
     vi.useFakeTimers({ now: new Date('2026-10-11T17:00:00Z') });
@@ -328,7 +328,7 @@ describe.skipIf(!hasGit)('continued attempts keep their previous work', () => {
     expect(readFileSync(join(resumed.cwd, 'feature.txt'), 'utf8')).toBe('half implemented\n');
     expect(resumed.prompt).toContain('Your previous changes are in the working tree');
     expect(resumed.prompt).toContain('Your usage limit has reset');
-  }, 30_000);
+  });
 
   it('a continue restores kept commits even if the user merged them into their own branch before continuing', async () => {
     const root = repo();
@@ -346,7 +346,7 @@ describe.skipIf(!hasGit)('continued attempts keep their previous work', () => {
 
     expect(readFileSync(join(h.requests[1].cwd, 'feature.txt'), 'utf8')).toBe('half implemented\n');
     expect(h.requests[1].prompt).toContain('Your previous changes are in the working tree');
-  }, 30_000);
+  });
 
   it('a continue of completed replacement work does not restore branches from an earlier conflict fallback', async () => {
     const root = repo();
@@ -372,5 +372,5 @@ describe.skipIf(!hasGit)('continued attempts keep their previous work', () => {
     expect(resumed.prompt).toContain('Your previous changes are in the working tree');
     expect(resumed.prompt).not.toContain('ordewell-preserved/continue-run/1-implement-feature');
     expect(git(root, 'show', 'ordewell-preserved/continue-run/1-implement-feature:feature.txt')).toBe('half implemented');
-  }, 30_000);
+  });
 });
