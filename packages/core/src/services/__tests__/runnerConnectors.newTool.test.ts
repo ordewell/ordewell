@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { CONNECTORS } from '../harness/connectors';
-import type { AgentEvent } from '../harness/AgentAdapter';
+import type { AgentEvent, AgentStartOptions } from '../harness/AgentAdapter';
 import { mcpClientConfig } from '../mcp';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
@@ -26,6 +26,11 @@ const RUNNER_NAME: Record<string, string> = {
   'claude-code': 'mcp__ordewell__board_post',
   codex: 'mcp__ordewell__board_post',
   opencode: 'ordewell_board_post',
+  'copilot-cli': 'ordewell-board_post',
+  'qwen-code': 'mcp__ordewell__board_post',
+  cline: 'ordewell__board_post',
+  'gemini-cli': 'mcp_ordewell_board_post',
+  'cursor-agent': 'board_post',
 };
 
 const runners = Object.keys(CONNECTORS).filter((runner) => CONNECTORS[runner].ordewellTools);
@@ -37,15 +42,16 @@ describe.each(runners)('a new task tool on %s', (runner) => {
     const adapter = CONNECTORS[runner].create(fake.deps);
     const manifest = manifests.get(runner)!.manifest;
     const mode = manifest.modes![0].id;
-    await adapter.start({
+    const start: AgentStartOptions = {
       kind: 'task', cwd: '/repo', mode, flags: resolveTaskRunnerFlags(manifest, { mode }),
       mcp: mcpClientConfig({ url: 'http://127.0.0.1:4555/mcp', token: 'tok' }),
-    });
+    };
+    await adapter.start(fake.withServer?.(start) ?? start);
     void adapter.send('go', (_event: AgentEvent) => {});
     await fake.turnOpen();
 
     expect(CONNECTORS[runner].ordewellTools!.toolNames('task')).toContain(RUNNER_NAME[runner]);
-    expect(fake.preAllows(RUNNER_NAME[runner])).toBe(true);
+    expect(await fake.preAllows(RUNNER_NAME[runner])).toBe(true);
     expect(await fake.askOrdewellTool('board_post')).toBe('allow');
     adapter.dispose();
   });

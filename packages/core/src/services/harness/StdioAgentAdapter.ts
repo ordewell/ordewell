@@ -20,6 +20,8 @@ export interface SpawnSpec {
   envDrop?: (name: string) => boolean;
   /** Paths on this host, named in `args`, that the process reads. */
   files?: readonly string[];
+  /** Where the process starts, when not in the workspace. */
+  cwd?: string;
 }
 
 /**
@@ -72,7 +74,7 @@ export abstract class StdioAgentAdapter extends ProcessLifecycle implements Agen
    * The command line that starts this agent in its read-only mode, given the
    * workspace's own variables (ADR-0016) the process will run under.
    */
-  protected abstract spawnSpec(opts: AgentStartOptions, workspace: Record<string, string>): SpawnSpec;
+  protected abstract spawnSpec(opts: AgentStartOptions, workspace: Record<string, string>): SpawnSpec | Promise<SpawnSpec>;
 
   /** The bytes written to stdin to open one user turn. Must end with a newline. */
   protected abstract turnPayload(message: string): string;
@@ -96,10 +98,10 @@ export abstract class StdioAgentAdapter extends ProcessLifecycle implements Agen
    * planner's or a task's launch; a launch that is neither — a query that
    * never opens a turn — comes through here with its own command line.
    */
-  protected async launch(cwd: string, spec: (workspace: Record<string, string>) => SpawnSpec, handshake: () => Promise<void>): Promise<void> {
-    await this.startProcess(cwd, (workspace) => {
-      const { command, args, env, envDrop, files } = spec(workspace);
-      return { command, args, env: () => env ?? {}, ...(envDrop ? { envDrop } : {}), ...(files ? { files } : {}) };
+  protected async launch(cwd: string, spec: (workspace: Record<string, string>) => SpawnSpec | Promise<SpawnSpec>, handshake: () => Promise<void>): Promise<void> {
+    await this.startProcess(cwd, async (workspace) => {
+      const { command, args, env, envDrop, files, cwd: startIn } = await spec(workspace);
+      return { command, args, env: () => env ?? {}, ...(envDrop ? { envDrop } : {}), ...(files ? { files } : {}), ...(startIn ? { cwd: startIn } : {}) };
     }, () => {
       this.readProtocol();
       return handshake();

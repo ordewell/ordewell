@@ -1,7 +1,7 @@
 import type { AiProvider, IConfig, PlannerBackendId } from '../interfaces/IConfig';
-import { commandLine } from '../models/ScriptTask';
 import { CLI_PROVIDERS, getProviderMeta, isApiProvider, isCliProvider, runnerForProvider } from './ProviderRegistry';
-import { recordedRunnerAuth, type RunnerAuth } from './runnerAuth';
+import { recordedRunnerAuth, runnerSignIn, type RunnerAuth } from './runnerAuth';
+import { describeSignIn, HEADLESS_CLI_SIGN_IN, TERMINAL_UI_SIGN_IN, type RunnerSignIn, type SignInSyntax } from './signInHint';
 
 /** What the preflight reads: the planner choice and whatever it needs to be reachable. */
 export type PlannerReadinessConfig = Pick<IConfig, 'aiProvider' | 'planningModel' | 'openaiCompatibleBaseUrl' | 'getProviderApiKey'>;
@@ -15,7 +15,7 @@ export type PlannerNotReady =
   | { code: 'no_key'; provider: AiProvider; label: string; keyEnvVar: string }
   | { code: 'no_base_url'; provider: AiProvider; label: string; baseUrlEnvVar: string }
   | { code: 'no_model'; provider: AiProvider; label: string }
-  | { code: 'signed_out'; provider: PlannerBackendId; label: string; runner: string; loginCommand: string[] };
+  | { code: 'signed_out'; provider: PlannerBackendId; label: string; runner: string; signIn: RunnerSignIn };
 
 /** A runner's latest login verdict, read synchronously because every planner turn is judged that way. */
 export type RunnerAuthLookup = (runner: string) => RunnerAuth | undefined;
@@ -42,15 +42,17 @@ export function plannerNotReady(
     const runner = runnerForProvider(provider);
     if (!runner) return null;
     const verdict = auth(runner);
-    // A signed-out verdict without its command has no way out to offer; the
-    // recorded fallback always carries one.
-    if (verdict?.state !== 'signed-out' || !verdict.loginCommand?.length) return null;
+    if (verdict?.state !== 'signed-out') return null;
+    // A verdict recorded before it carried its ways in is read from the
+    // manifest instead; one for a runner Ordewell does not ship has none to name.
+    const signIn = verdict.signIn ?? runnerSignIn(runner);
+    if (!signIn) return null;
     return {
       code: 'signed_out',
       provider,
       label: getProviderMeta(provider)?.label ?? provider,
       runner,
-      loginCommand: [...verdict.loginCommand],
+      signIn,
     };
   }
   if (!isApiProvider(provider)) return null;
@@ -92,12 +94,11 @@ export function plannerNotReadyFor(
   );
 }
 
-/** How one surface spells the commands a not-ready message points at. */
-export interface PlannerCommandSyntax {
+/** How one surface spells the commands a not-ready message points at, a sign-in hint's included. */
+export interface PlannerCommandSyntax extends SignInSyntax {
   pickPlanner: string;
   setKey(provider: AiProvider): string;
   setModel: string;
-  login(loginCommand: readonly string[]): string;
 }
 
 export const TERMINAL_UI_COMMANDS: PlannerCommandSyntax = {
@@ -106,8 +107,7 @@ export const TERMINAL_UI_COMMANDS: PlannerCommandSyntax = {
   // `/planner` walks harness, model and effort in one flow; there is no
   // separate `/model` (or `/planner-effort`) to point at.
   setModel: '/planner',
-  // `/login` hands the terminal to the selected runner's own login (ADR-0009).
-  login: () => '/login',
+  ...TERMINAL_UI_SIGN_IN,
 };
 
 /** The VS Code chat shares the terminal's slash commands: its Planner panel and `/planner` own the model. */
@@ -117,7 +117,7 @@ export const HEADLESS_CLI_COMMANDS: PlannerCommandSyntax = {
   pickPlanner: 'ordewell planner <id>',
   setKey: (provider) => `ordewell key set ${provider} <key>`,
   setModel: 'ordewell model set <id>',
-  login: (loginCommand) => commandLine(loginCommand),
+  ...HEADLESS_CLI_SIGN_IN,
 };
 
 /** "A, B and C" — read from the harness registrations, so it lists what can plan instead of a copy that goes stale. */
@@ -136,15 +136,7 @@ function harnessPlannerNames(): string {
 export const PLANNER_ESCAPE_HINT = `or pick a coding agent with ${TERMINAL_UI_COMMANDS.pickPlanner}: it plans with no API key`;
 
 export function describePlannerNotReady(reason: PlannerNotReady, commands: PlannerCommandSyntax): string {
-  if (reason.code === 'signed_out') {
-    const own = commandLine(reason.loginCommand);
-    const surface = commands.login(reason.loginCommand);
-    // The headless CLI's own login is the runner's command; naming both would
-    // read as two routes where there is one.
-    return surface === own
-      ? `${reason.label} not logged in. Run ${own} to sign in, then try again.`
-      : `${reason.label} not logged in. Sign in with ${surface}, or run ${own} and try again.`;
-  }
+  if (reason.code === 'signed_out') return `${describeSignIn(reason.signIn, commands)} Then try again.`;
   if (reason.code === 'no_model') {
     // The TUI and VS Code pick the model inside `/planner`; the headless CLI
     // has its own `ordewell model set`. Name the one place, not two.

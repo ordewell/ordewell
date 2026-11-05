@@ -1,6 +1,6 @@
 import { afterEach, describe, it, expect } from 'vitest';
 import { plannerNotReady, plannerNotReadyFor, describePlannerNotReady, TERMINAL_UI_COMMANDS, CHAT_COMMANDS, HEADLESS_CLI_COMMANDS, type PlannerNotReady, type PlannerReadinessConfig } from '../plannerReadiness';
-import { recordRunnerAuth, resetRunnerAuth, type RunnerAuth } from '../runnerAuth';
+import { recordRunnerAuth, resetRunnerAuth, runnerSignIn, type RunnerAuth } from '../runnerAuth';
 
 function config(over: Partial<PlannerReadinessConfig> & { key?: string }): PlannerReadinessConfig {
   const { key = '', ...rest } = over;
@@ -72,7 +72,7 @@ describe('plannerNotReady — a signed-out coding agent', () => {
       provider: 'claude-code',
       label: 'Claude Code',
       runner: 'claude-code',
-      loginCommand: ['claude', 'auth', 'login'],
+      signIn: { runner: 'claude-code', label: 'Claude Code', login: ['claude', 'auth', 'login'] },
     });
   });
 
@@ -82,7 +82,7 @@ describe('plannerNotReady — a signed-out coding agent', () => {
     expect(plannerNotReady(config({ aiProvider: 'codex' }), (runner) => {
       asked.push(runner);
       return { state: 'signed-out', loginCommand: ['codex', 'login'] };
-    })).toMatchObject({ code: 'signed_out', runner: 'codex', loginCommand: ['codex', 'login'] });
+    })).toMatchObject({ code: 'signed_out', runner: 'codex', signIn: { login: ['codex', 'login'] } });
     expect(asked).toEqual(['codex']);
   });
 
@@ -110,14 +110,14 @@ describe('describePlannerNotReady', () => {
 
   it('leads a terminal user to /planner, naming the agents from the registry, and offers /key for the vendor', () => {
     expect(describePlannerNotReady(noKey, TERMINAL_UI_COMMANDS)).toBe(
-      'No planner is ready. Pick one with /planner: Claude Code, Codex and OpenCode plan with no API key. ' +
+      'No planner is ready. Pick one with /planner: Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor plan with no API key. ' +
       'To plan with OpenRouter instead, add OPENROUTER_API_KEY with /key.',
     );
   });
 
   it('spells the same message with the headless CLI commands', () => {
     expect(describePlannerNotReady(noKey, HEADLESS_CLI_COMMANDS)).toBe(
-      'No planner is ready. Pick one with ordewell planner <id>: Claude Code, Codex and OpenCode plan with no API key. ' +
+      'No planner is ready. Pick one with ordewell planner <id>: Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor plan with no API key. ' +
       'To plan with OpenRouter instead, add OPENROUTER_API_KEY with ordewell key set openrouter <key>.',
     );
   });
@@ -136,28 +136,32 @@ describe('describePlannerNotReady', () => {
     expect(describePlannerNotReady(reason, HEADLESS_CLI_COMMANDS)).toContain('ordewell model set <id>');
   });
 
-  it('gives a signed-out agent\'s two ways back in: the chat\'s /login, or its own command', () => {
-    const reason: PlannerNotReady = {
-      code: 'signed_out', provider: 'claude-code', label: 'Claude Code', runner: 'claude-code',
-      loginCommand: ['claude', 'auth', 'login'],
-    };
+  // The planner path: every built-in's hint, as the readiness gate words it.
+  const PLANNER_TERMINAL: Record<string, string> = {
+    'claude-code': 'Claude Code is not signed in. Sign in with /login claude-code, or run claude auth login. Then try again.',
+    codex: 'Codex is not signed in. Sign in with /login codex, or run codex login. Then try again.',
+    opencode: 'OpenCode is not signed in. Run opencode auth login and choose a provider. Then try again.',
+    'copilot-cli': 'GitHub Copilot CLI is not signed in. Sign in with /login copilot-cli, or run copilot login. Then try again.',
+    'cursor-agent': 'Cursor is not signed in. Sign in with /login cursor-agent, or run cursor-agent login. Then try again.',
+    cline: 'Cline is not signed in. Sign in with /login cline, or run cline auth. Then try again.',
+    'qwen-code': 'Qwen Code is not signed in. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there. Then try again.',
+    'gemini-cli': 'Gemini CLI is not signed in. Run /key and choose Google Gemini to hand it a key, or run gemini and choose how it signs in. Then try again.',
+  };
 
-    expect(describePlannerNotReady(reason, TERMINAL_UI_COMMANDS)).toBe(
-      'Claude Code not logged in. Sign in with /login, or run claude auth login and try again.',
-    );
-    expect(describePlannerNotReady(reason, CHAT_COMMANDS)).toBe(
-      'Claude Code not logged in. Sign in with /login, or run claude auth login and try again.',
-    );
+  it.each(Object.keys(PLANNER_TERMINAL))('gives signed-out %s every way back in, in the chat\'s spelling', (runner) => {
+    const signIn = runnerSignIn(runner)!;
+    const reason: PlannerNotReady = { code: 'signed_out', provider: runner, label: signIn.label, runner, signIn };
+
+    expect(describePlannerNotReady(reason, TERMINAL_UI_COMMANDS)).toBe(PLANNER_TERMINAL[runner]);
+    expect(describePlannerNotReady(reason, CHAT_COMMANDS)).toBe(PLANNER_TERMINAL[runner]);
   });
 
   it('says the same thing once when the surface\'s own login is the runner\'s command', () => {
-    const reason: PlannerNotReady = {
-      code: 'signed_out', provider: 'claude-code', label: 'Claude Code', runner: 'claude-code',
-      loginCommand: ['claude', 'auth', 'login'],
-    };
+    const signIn = runnerSignIn('claude-code')!;
+    const reason: PlannerNotReady = { code: 'signed_out', provider: 'claude-code', label: 'Claude Code', runner: 'claude-code', signIn };
 
     expect(describePlannerNotReady(reason, HEADLESS_CLI_COMMANDS)).toBe(
-      'Claude Code not logged in. Run claude auth login to sign in, then try again.',
+      'Claude Code is not signed in. Run claude auth login to sign in. Then try again.',
     );
   });
 });

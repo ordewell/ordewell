@@ -25,6 +25,7 @@ class OpenAdapter implements TaskModeAgentAdapter {
     return new Promise<void>((resolve) => { this.turn = { onEvent, resolve }; });
   }
   emit(...events: AgentEvent[]): void { for (const event of events) this.turn?.onEvent(event); }
+  end(): void { this.turn?.resolve(); }
   async interrupt(): Promise<boolean> { return false; }
   onOutOfTurn(_listener: (event: AgentEvent) => void): void {}
   onProcessExit(_listener: (code: number) => void): void {}
@@ -37,7 +38,7 @@ const registry = new RunnerRegistry();
 const runners: StructuredRunner[] = [];
 afterEach(() => { for (const runner of runners.splice(0)) runner.stopAll(); });
 
-async function session(): Promise<{ adapter: OpenAdapter; output: () => string }> {
+async function session(): Promise<{ adapter: OpenAdapter; output: () => string; endTurn: () => Promise<void> }> {
   const adapters: OpenAdapter[] = [];
   const runner = new StructuredRunner({
     createAdapter: () => {
@@ -52,12 +53,18 @@ async function session(): Promise<{ adapter: OpenAdapter; output: () => string }
   })) as IRunnerSession;
   const adapter = adapters[0];
   await vi.waitFor(() => expect(adapter.sent).toEqual(['Do the task']));
-  return { adapter, output: () => session.getOutput() };
+  let ended = false;
+  session.onTurnEnd(() => { ended = true; });
+  const endTurn = async () => {
+    adapter.end();
+    await vi.waitFor(() => expect(ended).toBe(true));
+  };
+  return { adapter, output: () => session.getOutput(), endTurn };
 }
 
 describe('the plain-text channel when several runs settle out of order', () => {
   it('starts each of two late tails on its own line, after each had something written since', async () => {
-    const { adapter, output } = await session();
+    const { adapter, output, endTurn } = await session();
 
     adapter.emit(
       { type: 'assistant_text_delta', runId: 'r1', text: 'One\n' },
@@ -68,6 +75,9 @@ describe('the plain-text channel when several runs settle out of order', () => {
       { type: 'assistant_text', runId: 'r2', text: 'Two\n 2' },
       { type: 'assistant_text', runId: 'r3', text: 'Three 3' },
     );
+    // The session holds its MCP token, so text that ends on what could begin a
+    // part of it is held back until more comes or the turn ends (ADR-0061, H1).
+    await endTurn();
 
     const out = output();
     expect(out).toContain('Three\n 1\n 2\n 3');
@@ -76,26 +86,28 @@ describe('the plain-text channel when several runs settle out of order', () => {
   });
 
   it('starts a late tail at the line its run last reached, with no blank line punched in', async () => {
-    const { adapter, output } = await session();
+    const { adapter, output, endTurn } = await session();
 
     adapter.emit(
       { type: 'assistant_text_delta', runId: 'r1', text: 'One\n' },
       { type: 'assistant_text', runId: 'r2', text: 'Two\n' },
       { type: 'assistant_text', runId: 'r1', text: 'One\ntail' },
     );
+    await endTurn();
 
     expect(output()).toContain('Two\ntail');
     expect(output()).not.toContain('Two\n\ntail');
   });
 
   it('starts a late tail on a new line when a tool line of the channel followed its deltas', async () => {
-    const { adapter, output } = await session();
+    const { adapter, output, endTurn } = await session();
 
     adapter.emit(
       { type: 'assistant_text_delta', runId: 'r1', text: 'Looking\n' },
       { type: 'tool_call', id: 'c1', name: 'shell', args: { command: 'ls' } },
       { type: 'assistant_text', runId: 'r1', text: 'Looking\nat the tree' },
     );
+    await endTurn();
 
     const out = output();
     expect(out).toContain('› shell(ls)');

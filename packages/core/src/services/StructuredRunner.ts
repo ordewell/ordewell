@@ -172,7 +172,8 @@ class PlainTextChannel {
     this.written.set(runId, '');
   }
 
-  private flush(): void {
+  /** The open run's held line, written as it stands: nothing more of it will come, as when the process exits. */
+  flush(): void {
     if (!this.pending || this.open === null) return;
     this.say(this.open, this.pending);
     this.pending = '';
@@ -191,6 +192,35 @@ class PlainTextChannel {
   }
 }
 
+/**
+ * What a session says while the task's first turn is its runner's attach check
+ * (ADR-0060, R5): nobody holds the session yet, and the turn may not count.
+ * Said in order once the attach passed and the caller listens, or dropped with
+ * the turn when it did not.
+ */
+class HeldVoice {
+  private readonly said: Array<() => void> = [];
+  private settle!: () => void;
+  /** Settles once the voice was released or dropped. */
+  readonly settled = new Promise<void>((resolve) => { this.settle = resolve; });
+
+  keep(say: () => void): void { this.said.push(say); }
+
+  /**
+   * Called once the session stopped keeping, so what a listener says back is
+   * said at once, between what it heard and what follows, as it is unheld.
+   */
+  release(): void {
+    for (const say of this.said.splice(0)) say();
+    this.settle();
+  }
+
+  drop(): void {
+    this.said.length = 0;
+    this.settle();
+  }
+}
+
 interface OpenTurn {
   id: number;
   abort: AbortController;
@@ -198,6 +228,8 @@ interface OpenTurn {
   reason: StructuredTurnEnd;
   /** The runner refused a message into this turn, so the rest wait for its end too. */
   steerRefused: boolean;
+  /** The attach check this turn is, waiting for its end (ADR-0060, R5). */
+  onEnd?: () => void;
 }
 
 /**
@@ -254,6 +286,13 @@ export class StructuredSession extends AbstractRunnerSession {
   private generation = 0;
   private output = '';
   private readonly text: PlainTextChannel;
+  /**
+   * The channel's writes, held secrets hidden as one stream rather than write
+   * by write: the channel writes a line at a time and flushes one run's open
+   * line when another speaks, so writes that each hold under a part of a value
+   * meet in the output with nothing between them (ADR-0061, H1).
+   */
+  private readonly shownText = this.secrets.stream();
   private state: 'working' | 'idle' = 'idle';
   private turn: OpenTurn | null = null;
   /** A `task_complete` report waiting for its turn to close; the verdict is published then. */
@@ -284,27 +323,40 @@ export class StructuredSession extends AbstractRunnerSession {
   /** This attempt's MCP token, until the session ends (ADR-0022, A2). */
   private toolToken: string | null = null;
   private checkpointHandler: ((question: string, signal: AbortSignal) => Promise<CheckpointAnswer>) | null = null;
+  /** Set while the task's first turn is the attach check, until the caller hears it (ADR-0060, R5). */
+  private held: HeldVoice | null = null;
 
   constructor(id: string, taskId: string, private readonly launch: SessionLaunch) {
     super(id, taskId);
     this.startOptions = launch.startOptions;
-    this.text = new PlainTextChannel((text) => {
-      this.output += text;
-      this.outputEmitter.emit('output', text);
-    });
+    // What the runner says is written as it said it, held secrets hidden, before
+    // any reader keeps or cuts it (ADR-0061, H1).
+    this.text = new PlainTextChannel((text) => this.show(this.shownText.write(text)));
   }
 
   /**
    * Start the runner with the attempt's tools attached and send the task's
    * prompt as its first turn. `task_complete` is the only way a task reports
-   * it is done, so a runner without the tools is never sent the task: it is
-   * killed and respawned once, and a second miss is a timeout the task holds.
+   * it is done, so no result is accepted from a runner without the tools: it
+   * is killed and respawned once, and a second miss is a timeout the task
+   * holds. A runner that uses its token only once a turn starts it is sent the
+   * task as the check, and that turn counts only if the token was used before
+   * it ended (ADR-0060, R5).
    */
   async start(prompt: string): Promise<void> {
-    await this.startAttached(this.launch.startOptions);
+    await this.startAttached(this.launch.startOptions, prompt);
     // Callers attach their listeners once `spawn` resolves, so the first turn
-    // waits for that or its opening events reach nobody. Working already, so
-    // a message sent in the meantime queues behind the prompt.
+    // waits for that or its opening events reach nobody.
+    const held = this.held;
+    if (held) {
+      setImmediate(() => {
+        if (this.held !== held) return;
+        this.held = null;
+        held.release();
+      });
+      return;
+    }
+    // Working already, so a message sent in the meantime queues behind the prompt.
     this.state = 'working';
     setImmediate(() => { if (!this.exited && !this.stopping) this.deliver(prompt); });
   }
@@ -326,19 +378,33 @@ export class StructuredSession extends AbstractRunnerSession {
    * The runner on a fresh token, attached or respawned once (ADR-0025). Done
    * once the runner reports the server connected — or once the session ended
    * meanwhile, which leaves nothing to start. A runner that cannot be spawned
-   * at all throws instead: spawning it again would fail the same way.
+   * at all throws instead: spawning it again would fail the same way. With a
+   * `prompt`, a runner that attaches on its first turn is sent it as the check
+   * (ADR-0060, R5); without one, as after an interrupt, it cannot attach.
    */
-  private async startAttached(opts: TaskStartOptions): Promise<void> {
+  private async startAttached(opts: TaskStartOptions, prompt?: string): Promise<void> {
+    // Every way a start fails leaves through here, a container's last words among them (ADR-0061, H1).
+    try {
+      await this.attach(opts, prompt);
+    } catch (err) {
+      throw this.secrets.hideError(err);
+    }
+  }
+
+  private async attach(opts: TaskStartOptions, prompt?: string): Promise<void> {
     const { server, scope, shell, savePatch, webReads } = this.launch.tools;
     this.launch.onAttaching?.(1);
     const spawned = await spawnAttached({
       runner: this.launch.runner,
-      create: () => this.launch.createAdapter(this.launch.runner, this.launch.deps),
+      // The process adds its spawn env and the headers it withholds to the session's held secrets.
+      create: () => this.launch.createAdapter(this.launch.runner, { ...this.launch.deps, held: this.secrets }),
       issueToken: () => server.issueTaskToken(scope, {
         taskComplete: async (report) => {
           const checked = await this.launch.checkHandoff(report);
           if (!checked.ok) return { text: checked.refusal, isError: true };
-          this.completionReport = checked.handoff;
+          // Checked as the runner sent it, kept with what Ordewell holds hidden:
+          // a report that quotes the attempt's own token hands it to the planner.
+          this.completionReport = this.secrets.hideIn(checked.handoff);
           // The runner ends its turn on this reply. One that keeps it open has
           // its report published at the same grace; the verdict then stops it.
           if (this.completionTimer) clearTimeout(this.completionTimer);
@@ -348,6 +414,8 @@ export class StructuredSession extends AbstractRunnerSession {
           return { text: 'Recorded. End your turn now.' };
         },
         checkpoint: async ({ question }, { signal }) => {
+          // Asked during the attach check, before the caller could answer.
+          if (this.held) await this.held.settled;
           if (!this.checkpointHandler) return { text: 'checkpoint is not available in this session.', isError: true };
           return checkpointReply(await this.checkpointHandler(question, signal));
         },
@@ -362,6 +430,7 @@ export class StructuredSession extends AbstractRunnerSession {
       }),
       revoke: (token) => server.revoke(token),
       start: async (adapter, credential) => {
+        this.secrets.hold(credential.token);
         const url = await this.launch.deps.placement?.reach(credential.url) ?? credential.url;
         this.startOptions = { ...opts, mcp: mcpClientConfig({ ...credential, url }) };
         return this.startAdapter(adapter, this.startOptions);
@@ -369,12 +438,14 @@ export class StructuredSession extends AbstractRunnerSession {
       dispose: (adapter) => {
         // Its exit is this session's doing, not the end of the attempt.
         this.generation += 1;
+        if (this.held) this.discardFirstTurn(adapter);
         adapter.dispose();
       },
       cancelled: this.ended.signal,
       startupExit: () => this.startupExit,
+      ...(prompt !== undefined ? { firstTurn: () => this.sendFirstTurn(prompt) } : {}),
       onRespawn: (failure) => {
-        this.launch.onNotice?.(`${this.launch.runner} started without Ordewell's tools (${failure}); respawning once.`);
+        this.launch.onNotice?.(this.secrets.hide(`${this.launch.runner} started without Ordewell's tools (${failure}); respawning once.`));
         this.launch.onAttaching?.(2);
       },
       failed: (first, second) => `Could not start ${this.launch.runner} with Ordewell's tools, so the task was not sent to it. First spawn: ${first}. Respawn: ${second}.`,
@@ -382,6 +453,32 @@ export class StructuredSession extends AbstractRunnerSession {
     if (!spawned) return;
     this.toolToken = spawned.token;
     this.adapterAttached = true;
+  }
+
+  /** The task's prompt as the attach check: what it says is held until the check passed and the caller listens. */
+  private sendFirstTurn(prompt: string): Promise<void> {
+    this.held = new HeldVoice();
+    return new Promise((resolve) => {
+      const turn = this.deliver(prompt);
+      if (!turn || turn.ended) resolve();
+      else turn.onEnd = resolve;
+    });
+  }
+
+  /**
+   * The check failed, so its turn was never the task's: nothing it said, asked
+   * or reported is heard, and its process goes with it (ADR-0060, R5).
+   */
+  private discardFirstTurn(adapter: TaskModeAgentAdapter): void {
+    if (this.turn) this.turn.ended = true;
+    this.withdrawPermissions(adapter);
+    this.endText();
+    this.discardCompletion();
+    this.turn = null;
+    this.sending = null;
+    this.state = 'idle';
+    this.held?.drop();
+    this.held = null;
   }
 
   private revokeTools(): void {
@@ -397,10 +494,20 @@ export class StructuredSession extends AbstractRunnerSession {
     // a queued message publish before exit wins.
     this.exiting = true;
     this.undeliverQueued();
+    // Its text is out before its report and its exit: no turn end may follow a
+    // kill. The open line goes first, so the stream ends on all the text there is.
+    this.text.flush();
+    this.show(this.shownText.end());
     this.flushCompletion();
     this.ended.abort();
     this.revokeTools();
     this.undeliverQueued();
+    // Accepted but not yet heard, its first turn is told before the exit that followed it.
+    if (this.held && this.adapterAttached) {
+      if (!this.exited) this.held.keep(() => this.exitEmitter.emit('exit', code));
+      this.exited = true;
+      return;
+    }
     super.baseHandleExit(code);
   }
 
@@ -730,9 +837,9 @@ export class StructuredSession extends AbstractRunnerSession {
     return turn;
   }
 
-  private deliver(text: string, message?: Opening): void {
+  private deliver(text: string, message?: Opening): OpenTurn | undefined {
     const adapter = this.adapter;
-    if (!adapter) return;
+    if (!adapter) return undefined;
     const turn = this.openTurn(text, message);
     this.sending = turn;
     const generation = this.generation;
@@ -759,6 +866,7 @@ export class StructuredSession extends AbstractRunnerSession {
       }
     });
     this.offerNext();
+    return turn;
   }
 
   /**
@@ -908,7 +1016,7 @@ export class StructuredSession extends AbstractRunnerSession {
     }
     const report = this.completionReport;
     this.completionReport = null;
-    if (report) this.structuredEmitter.emit('taskComplete', report);
+    if (report) this.say(() => this.structuredEmitter.emit('taskComplete', report));
   }
 
   /** A message the runner reads, or a turn it opens, voids a report made before it (ADR-0023, D6). */
@@ -930,14 +1038,15 @@ export class StructuredSession extends AbstractRunnerSession {
   private endTurn(turn: OpenTurn, reason: StructuredTurnEnd): void {
     if (turn.ended) return;
     turn.ended = true;
-    this.text.endTurn();
+    this.endText();
     this.emitEvent({ type: 'turn_end', reason });
     // The report waits for the turn to close, so its tool reply lands first.
     this.flushCompletion();
     if (reason === 'failed') this.undeliverQueued();
     this.state = !this.exited && this.queue.length ? 'working' : 'idle';
-    this.structuredEmitter.emit('turnEnd', reason);
+    this.say(() => this.structuredEmitter.emit('turnEnd', reason));
     this.deliverNext();
+    turn.onEnd?.();
   }
 
   /**
@@ -959,7 +1068,27 @@ export class StructuredSession extends AbstractRunnerSession {
   }
 
   private emitEvent(event: StructuredEvent): void {
-    this.structuredEmitter.emit('event', event);
+    for (const shown of this.secrets.shownEvents(event)) this.say(() => this.structuredEmitter.emit('event', shown));
+  }
+
+  /** The turn's text written out, what the stream held back with it, so a reader told the turn ended has all of it. */
+  private endText(): void {
+    this.text.endTurn();
+    this.show(this.shownText.end());
+  }
+
+  private show(shown: string): void {
+    if (!shown) return;
+    this.say(() => {
+      this.output += shown;
+      this.outputEmitter.emit('output', shown);
+    });
+  }
+
+  /** Said now, or kept while the first turn is the attach check. */
+  private say(speak: () => void): void {
+    if (this.held) this.held.keep(speak);
+    else speak();
   }
 }
 
@@ -1035,6 +1164,8 @@ export class StructuredRunner extends AbstractRunner<StructuredSession> {
       onAttaching: opts.onAttaching,
     });
 
+    // Held before the process exists: a runner that never spawns one still echoes what it was handed.
+    session.secrets.holdEnv(env);
     console.error(`[structured] Starting ${opts.runner} [${opts.mode ?? 'default'}] (${opts.modelId || 'default'}) for task ${opts.taskId.slice(0, 8)}`);
     this.registerSession(id, session);
     // Until the start resolves the caller holds no session to stop, so its

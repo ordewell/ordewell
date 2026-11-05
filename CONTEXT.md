@@ -762,19 +762,23 @@ the directive to attach.
 *Avoid:* "skill message", "skill event".
 
 **Executor / Runner** — an external coding-agent CLI (Claude Code, Codex,
-OpenCode) that runs *one task* in its own session through a structured
-connector. `RunnerRegistry` holds their built-in manifests: identity, command,
-model discovery and mode settings. External plugin manifests are ignored with
-one notice at host startup.
+OpenCode, and GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor over ACP) that runs *one task* in its own
+session through a structured connector. `RunnerRegistry` holds their built-in
+manifests: identity, command, model discovery and mode settings. External
+plugin manifests are ignored with one notice at host startup.
 *Avoid:* "backend", "provider" (provider means the LLM vendor, below).
 
 **Runner connector** (`RunnerConnector`, in the `CONNECTORS` registry) — what
 Ordewell holds for a runner it drives over the runner's own protocol: the
 adapter that serves it as a harness planner (ADR-0009) and as a structured
 task's runner (ADR-0018), its *Ordewell tool binding*, and optionally how it
-words a usage-limit reset. The registry is keyed by runner id; a runner without a connector cannot run. Adding a runner
-to it is the one place a runner's planner, task connector and Ordewell tools are
-declared, so none of the three can drift apart.
+words a usage-limit reset. Its `plans` says whether the runner can also be the
+planner: a runner may be task-only, as an ACP agent whose profile claims no
+planner role is. The registry is
+keyed by runner id; a runner without a connector cannot run, and a runner id
+shares the planner setting's namespace with the API vendors' ids, so it never
+equals one. Adding a runner to it is the one place a runner's planner, task
+connector and Ordewell tools are declared, so none of the three can drift apart.
 *Avoid:* conflating it with `RunnerRegistry`, which holds *manifests* (identity
 and mode/discovery settings for the built-in runners); "adapter table".
 
@@ -804,8 +808,10 @@ requests are for them and so are never refused or left waiting
 another server's name could extend), what the runner's own status word for the server means
 (`attachState`), and the runner-specific injection that writes the server into
 its launch or configuration. Every supported connector has one. Task runners
-and coding-agent planners must connect their tools before receiving a prompt;
-a failed attach is respawned once, then fails (ADR-0025).
+and coding-agent planners must connect their tools before any result of theirs
+is accepted: before receiving a prompt, or, for an ACP runner that connects
+only on its first turn (a task's prompt, a planner's goal or message), before
+that turn ends, which is otherwise discarded unheard (ADR-0060 R5). A failed attach is respawned once, then fails (ADR-0025).
 *Avoid:* "MCP adapter", "tool prefix" (a prefix is how two of the runners happen
 to name a tool, not the concept).
 
@@ -828,6 +834,57 @@ replayed tagged with that subagent) and how a turn is settled are one
 implementation, so a behaviour fixed for one version is fixed for both.
 *Avoid:* "transport" alone for this — **Transport** is the runner session
 contract, and OpenCode's HTTP protocol is one implementation of it.
+
+**ACP runner** — a runner Ordewell drives over the Agent Client Protocol: JSON-RPC
+on the agent's stdio, with Ordewell as the client (ADR-0060). One `AcpAdapter`
+serves every such runner, and only an agent whose own maintainers ship its ACP
+server qualifies. Ordewell offers it no file system or terminal, so it works in
+the worktree with its own tools and reaches Ordewell only through the Ordewell
+MCP server, given over HTTP in `session/new` or in a settings file of the
+agent's own (ADR-0060 R4). It has no mid-turn steer: a
+message waits for the turn's end. Five are admitted so far. GitHub Copilot CLI
+(`copilot-cli`), Qwen Code (`qwen-code`), Cline (`cline`), Gemini CLI
+(`gemini-cli`) and Cursor (`cursor-agent`) run tasks, read-only ones included,
+and plan, and on a planner or read-only start each begins in a private
+directory, never the worktree, so the repository's hooks and config do not run
+(ADR-0060 R3). A restricted Gemini
+CLI runs under a policy file Ordewell hands it, which refuses its own write,
+shell and web tools and every MCP server but Ordewell's (ADR-0060, Gemini CLI).
+Cline takes Ordewell's server from a settings file and attaches on its first
+turn, a planner's goal turn being that check (ADR-0060 R4, R5). With no list to
+take its own tools away, a planner or read-only Cline is started asking about
+each, so its edits and commands are refused, each of its file reads is judged
+by the one path its arguments name, and it searches through Ordewell's
+`run_command` (ADR-0060 R3). A planner or read-only Cursor is also given a
+home of configuration of that start's own, whose settings deny its own reads,
+writes and shell, so it reads through `run_command` (ADR-0060, Cursor). Qwen
+Code and Cline are handed the provider key configured in Ordewell at spawn,
+Cline its own stored key where Ordewell holds none it can use (ADR-0060 R9).
+Gemini CLI is started trusting the task's worktree, since it connects no MCP
+server in a folder it does not trust (ADR-0060, Gemini CLI). A writable Cursor writes a file edit without
+asking in its default mode, and keeps a model the plan sets as the user's own
+default (ADR-0060, Cursor).
+*Avoid:* "ACP shim" or "ACP bridge" for it (a third-party adapter in front of an
+agent does not qualify); "ACP backend", "ACP provider".
+
+**ACP profile** (`AcpProfile`, `harness/acpProfiles.ts`) — everything one ACP
+agent needs beyond the protocol, as data: its manifest, ACP arguments, minimum
+version, how it names Ordewell's tools, how it is given a model, the route its
+instructions take outside the worktree, the route its mode takes, the settings
+file that hands it Ordewell's MCP server when it takes none over HTTP in
+`session/new` (`mcpConfig`, ADR-0060 R4), when it first uses its token
+(`attach`: by the time its session opens, or only on its first turn, a task's
+prompt or a planner's goal, which is then the attach check, ADR-0060 R5), what it loads
+from a repository, the roles it claims, the controls that restrict it, and the
+answers it gives to the agent's own client-bound requests (any other, and any
+in ACP's `session/`, `fs/` or `terminal/` namespaces, is "method not found").
+`acpConnector(profile)` turns it into the runner's connector, so admitting an
+agent means writing a profile and a manifest, not an adapter. A role, planner or
+read-only, is claimed only on evidence; with none claimed the runner gets
+writable tasks only.
+*Avoid:* "ACP config", "agent settings" (a profile is checked-in code reviewed
+against recordings, not a user setting); branching on a runner id inside
+`AcpAdapter` instead of adding a profile field.
 
 **Transport** — how Ordewell drives a task's runner: its programmatic
 protocol, with structured events in and messages out. Every `IRunnerSession`
@@ -2261,7 +2318,8 @@ carried on *the plan* and the session. Every task carries an `assignedRunner`
 drawn from the set (always present, even for single-runner plans), but only an
 AI task has a runner: a script or a manual task keeps a stored default that
 nothing runs on, and every surface reads the runner through `assignedRunnerOf`,
-which is nothing for them. Size is the
+which is nothing for them. That default need not be in the set, so a manual
+task made an AI task admits its runner (`admitRunner`) as a retarget does. Size is the
 semantics, not a sentinel: size 1 means a single-runner plan, size >1 means a
 multi-runner plan. Empty is invalid and rejected before planning.
 
@@ -2817,6 +2875,18 @@ output boundary. Once an attempt ends it keeps the attempt's completion and the
 end of its output. It does not discover transcripts or render a runner's PTY.
 *Avoid:* "the output buffer", "transcript capture" as the owner — a transcript
 is a separate artifact, not completion evidence.
+
+**Held secrets** (`services/HeldSecrets.ts`) — the secrets Ordewell itself
+handed one runner session: the attempt's MCP token, the credentials in its
+spawn env and the headers its process withholds. The session owns one record
+for its whole life (`IRunnerSession.secrets`). It hides what the record holds,
+exactly and in every part of eight characters or more, in everything the
+runner writes before any sink sees it. Every reader of the session's output
+redacts with the same record. A secret Ordewell never held is left to the
+name and shape rules of agent-text redaction, which are defence in depth
+([ADR-0061](docs/adr/platform/0061-held-secrets-are-hidden-exactly-and-agent-text-by-name-in-depth.md)).
+*Avoid:* "known secrets", "the secret list": the record is per session, and
+"held" says that Ordewell handed the value over.
 
 **Check** — one deterministic signal inside a verdict. `task_complete` is the
 required completion check, with `exit_code` as supporting diagnostic evidence.

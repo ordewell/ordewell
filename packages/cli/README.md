@@ -15,8 +15,8 @@ for versions available to install and their release notes.
 npm install -g @ordewell/cli        # or: npm install -g ordewell
 ```
 
-**Requirements:** Node.js 20.3 or newer, at least one of Claude Code, Codex or
-OpenCode, and git 2.38 or newer for task isolation. Linux, macOS and Windows are supported;
+**Requirements:** Node.js 20.3 or newer, at least one of Claude Code, Codex,
+OpenCode, GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI or Cursor, and git 2.38 or newer for task isolation. Linux, macOS and Windows are supported;
 on Windows, the planner's research commands run in Git for Windows' shell, and the
 terminal UI's mouse and paste need Node.js 22.17 or newer.
 

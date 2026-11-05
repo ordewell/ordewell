@@ -24,8 +24,12 @@ export interface RaisedRequest {
 
 export interface LedgerStance {
   role: 'planner' | 'task';
-  /** A read-only task answers native requests itself, without opening a user card (ADR-0046). */
-  decide?: (request: RaisedRequest) => ApprovalDecision;
+  /**
+   * The adapter's own answer, given without opening a user card: a read-only
+   * task answers every native request itself (ADR-0046). Undefined holds the
+   * request, a planner's for its envelope (ADR-0026).
+   */
+  decide?: (request: RaisedRequest) => ApprovalDecision | undefined;
   /** A task whose mode's manifest sets `approvals: auto`, answered as the runner's own auto mode would (ADR-0001). */
   autoApprove: boolean;
 }

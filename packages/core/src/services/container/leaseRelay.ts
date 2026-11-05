@@ -1,5 +1,7 @@
 import type { ChildProcess } from 'child_process';
 import { connect, createServer, type AddressInfo, type Server, type Socket } from 'net';
+import { LineTail } from '../../utils/lineTail';
+import { redactAgentText } from '../../utils/redactSecrets';
 
 /*
  * One frame, either way: its kind, its connection and its length, then that
@@ -26,7 +28,8 @@ const REVERSE_FIRST = 0x4000_0000;
 /** Past any chunk a socket reads. Anything longer is a process in the container writing to the entry's stdout. */
 const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 
-const STDERR_TAIL_CHARS = 2000;
+/** What a start error shows of the entry's stderr, of a larger tail kept whole so redaction reads every line it shows (see LineTail). */
+const STDERR_LIMITS = { keepChars: 8000, showChars: 2000 };
 
 /**
  * What a lease's container runs as its one idle process (ADR-0059 L5), handed
@@ -112,7 +115,7 @@ export class LeaseRelay {
   private readonly exposed = new Set<Server>();
   private readonly waiting = new Set<number>();
   private nextReverse = REVERSE_FIRST;
-  private stderrTail = '';
+  private readonly stderrTail = new LineTail(STDERR_LIMITS);
   private markReady!: () => void;
   private failReady!: (err: Error) => void;
 
@@ -122,15 +125,19 @@ export class LeaseRelay {
     this.ready.catch(() => undefined);
     this.ended = new Promise<void>((resolve) => {
       entry.once('close', () => { this.gone(); resolve(); });
-      entry.once('error', (err) => { this.stderrTail += err.message; this.gone(); resolve(); });
+      entry.once('error', (err) => { this.stderrTail.append(err.message); this.gone(); resolve(); });
     });
     entry.stdin?.on('error', () => undefined);
-    entry.stderr?.on('data', (chunk: Buffer) => { this.stderrTail = (this.stderrTail + chunk.toString()).slice(-STDERR_TAIL_CHARS); });
+    entry.stderr?.on('data', (chunk: Buffer) => this.stderrTail.append(chunk.toString()));
     entry.stdout?.on('data', (chunk: Buffer) => this.read(chunk));
   }
 
-  /** What the entry last wrote to stderr: the one explanation a container that would not start leaves. */
-  get lastWords(): string { return this.stderrTail.trim(); }
+  /**
+   * What the entry last wrote to stderr: the one explanation a container that
+   * would not start leaves, and runner text on its way to the task's error and
+   * the planner, so redacted as such.
+   */
+  get lastWords(): string { return this.stderrTail.read(redactAgentText); }
 
   /**
    * Have the container's loopback answer on `containerPort` with this host's on
@@ -252,7 +259,8 @@ export class LeaseRelay {
     for (const conn of [...this.sockets.keys()]) this.close(conn);
     for (const server of this.exposed) server.close();
     this.exposed.clear();
-    const failure = new Error(`The container's entry ended${this.lastWords ? `: ${this.lastWords}` : '.'}`);
+    const said = this.lastWords;
+    const failure = new Error(`The container's entry ended${said ? `: ${said}` : '.'}`);
     this.failReady(failure);
     for (const forward of this.forwards.values()) forward.failed(failure);
   }

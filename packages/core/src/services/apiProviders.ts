@@ -340,3 +340,27 @@ export const PROVIDER_DETECT_PRIORITY: AiProvider[] = [
   'zhipu', 'kimi', 'doubao', 'qwen', 'hunyuan', 'baichuan', 'minimax', 'yi', 'stepfun', 'siliconflow',
   'openai_compatible',
 ];
+
+/** The variables a vendor's key and endpoint are read from: the host's environment, or the one a spawn would start under. */
+export type VendorEnv = Readonly<Record<string, string | undefined>>;
+
+/** A vendor's key as `env` holds it, empty when it holds none. */
+export function vendorApiKeyIn(env: VendorEnv, provider: AiProvider): string {
+  if (!Object.hasOwn(VENDORS, provider)) return '';
+  const meta = VENDORS[provider];
+  for (const envVar of [meta.apiKeyEnvVar, ...meta.detectEnvVars]) {
+    // A hand-edited .env leaves stray whitespace on a key, and the provider
+    // rejects that as an unknown credential rather than a malformed one.
+    const val = env[envVar]?.trim();
+    if (val) return val;
+  }
+  return '';
+}
+
+/** The endpoint a vendor is reached at under `env`: its own variable's, else its default. */
+export function vendorBaseUrlIn(env: VendorEnv, provider: AiProvider): string {
+  if (!Object.hasOwn(VENDORS, provider)) return '';
+  const meta = VENDORS[provider];
+  const custom = meta.baseUrlEnvVar ? env[meta.baseUrlEnvVar]?.trim() : undefined;
+  return custom || meta.defaultBaseUrl;
+}

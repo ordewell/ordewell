@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { rmSync } from 'fs';
 import http from 'http';
 import { ApiClient } from '../../apiClient';
+import { findEnvFile, loadEnvFile, writeEnvVar } from '../../utils/env';
 
 interface RecordedBody {
   env?: Record<string, string>;
@@ -202,6 +203,18 @@ describe('ordewell planner', () => {
     d.close();
   });
 
+  it('refuses a runner that runs tasks but cannot plan by its name, not as an unknown planner', async () => {
+    const d = await fakeDaemon({ models: CATALOG, runners: { runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }, { id: 'acme', name: 'Acme Agent', enabled: true }], headless: false, orchestratorModel: '' } });
+    const { handlePlanner } = await import('../planner');
+    const { stderr, exitCode } = await capture(() => handlePlanner(['acme'], new ApiClient(d.port)));
+    expect(stderr).toContain('Acme Agent runs tasks but cannot plan in Ordewell yet.');
+    expect(stderr).toContain('claude-code, codex, opencode, copilot-cli, qwen-code, cline, gemini-cli, cursor-agent');
+    expect(stderr).not.toContain('Unknown planner');
+    expect(exitCode).toBe(1);
+    expect(d.sent).toEqual([]);
+    d.close();
+  });
+
   it('refuses an unknown planner without touching the daemon', async () => {
     const d = await fakeDaemon();
     const { handlePlanner } = await import('../planner');
@@ -209,6 +222,45 @@ describe('ordewell planner', () => {
     expect(stderr).toContain('Unknown planner: gpt-9');
     expect(exitCode).toBe(1);
     expect(d.sent).toEqual([]);
+    d.close();
+  });
+
+  it('says when a shell AI_PROVIDER keeps planning with another provider', async () => {
+    vi.stubEnv('AI_PROVIDER', 'claude-code');
+    loadEnvFile();
+    const d = await fakeDaemon({ models: CATALOG, runners: INSTALLED });
+    const { handlePlanner } = await import('../planner');
+    const { stdout } = await capture(() => handlePlanner(['opencode'], new ApiClient(d.port)));
+
+    expect(stdout).toContain('Saved OpenCode as your planner, but AI_PROVIDER=claude-code in this environment takes precedence: unset it to plan with OpenCode.');
+    // The switch itself still went through: the sentence qualifies it, not refuses it.
+    expect(d.sent.find((r) => r.method === 'PATCH')!.body.env).toEqual({ AI_PROVIDER: 'opencode' });
+    d.close();
+  });
+
+  it('keeps the plain confirmation when AI_PROVIDER names the planner just chosen', async () => {
+    vi.stubEnv('AI_PROVIDER', 'opencode');
+    loadEnvFile();
+    const d = await fakeDaemon({ models: CATALOG, runners: INSTALLED });
+    const { handlePlanner } = await import('../planner');
+    const { stdout } = await capture(() => handlePlanner(['opencode'], new ApiClient(d.port)));
+
+    expect(stdout).toContain('Planning with OpenCode');
+    expect(stdout).not.toContain('takes precedence');
+    d.close();
+  });
+
+  it('does not blame AI_PROVIDER when only .env supplied it, since the switch rewrites that line', async () => {
+    delete process.env.AI_PROVIDER;
+    writeEnvVar(findEnvFile(), 'AI_PROVIDER', 'claude-code');
+    loadEnvFile();
+
+    const d = await fakeDaemon({ models: CATALOG, runners: INSTALLED });
+    const { handlePlanner } = await import('../planner');
+    const { stdout } = await capture(() => handlePlanner(['opencode'], new ApiClient(d.port)));
+
+    expect(stdout).toContain('Planning with OpenCode');
+    expect(stdout).not.toContain('takes precedence');
     d.close();
   });
 });
@@ -262,6 +314,21 @@ describe('ordewell model', () => {
     const { handleModel } = await import('../model');
     await capture(() => handleModel(['set', 'anthropic/claude-sonnet-4-5'], new ApiClient(d.port)));
     expect(d.sent.find((r) => r.method === 'PATCH')!.body).toEqual({ ...{ orchestratorModel: 'anthropic/claude-sonnet-4-5' }, workspace: process.cwd() });
+    d.close();
+  });
+
+  it('says why a coding-agent planner lists no models, in the shell\'s own commands, instead of offering a refresh', async () => {
+    // As the daemon words it, for the terminal UI.
+    const reason = 'Qwen Code is not signed in. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.';
+    const d = await fakeDaemon({
+      settings: { aiProvider: 'qwen-code' },
+      models: { models: [], modelsByRunner: { 'qwen-code': [] }, providers: [], orchestratorModels: [], runnerErrors: { 'qwen-code': reason } },
+    });
+    const { handleModel } = await import('../model');
+    const { stdout } = await capture(() => handleModel(['show'], new ApiClient(d.port)));
+    expect(stdout).toContain('  No qwen-code models discovered: Qwen Code is not signed in. Run ordewell key set openrouter <key> (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.');
+    expect(stdout).not.toContain('/key');
+    expect(stdout).not.toContain('ordewell refresh');
     d.close();
   });
 
@@ -471,6 +538,22 @@ describe('ordewell key', () => {
 
 describe('ordewell runners', () => {
   const runners = { runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }], headless: false, orchestratorModel: '' };
+
+  it("names a signed-out agent's way in under its row, in the shell's own commands", async () => {
+    const d = await fakeDaemon({ runners: { ...runners, runners: [
+      { id: 'cursor-agent', name: 'Cursor', enabled: true, auth: { state: 'signed-out', loginCommand: ['cursor-agent', 'login'], signIn: { runner: 'cursor-agent', label: 'Cursor', login: ['cursor-agent', 'login'] } } },
+      { id: 'qwen-code', name: 'Qwen Code', enabled: true, auth: { state: 'unknown', signIn: { runner: 'qwen-code', label: 'Qwen Code', key: { provider: 'openrouter', label: 'OpenRouter' } } } },
+      { id: 'copilot-cli', name: 'GitHub Copilot CLI', enabled: true, auth: { state: 'unknown', loginCommand: ['copilot', 'login'], signIn: { runner: 'copilot-cli', label: 'GitHub Copilot CLI', login: ['copilot', 'login'] } } },
+      { id: 'claude-code', name: 'Claude Code', enabled: true, auth: { state: 'signed-in' } },
+    ] } });
+    const { handleRunners } = await import('../runners');
+    const { stdout } = await capture(() => handleRunners([], new ApiClient(d.port)));
+    expect(stdout).toContain('cursor-agent   Cursor\n      Cursor is not signed in. Run cursor-agent login to sign in.\n');
+    expect(stdout).toContain('claude-code    Claude Code\n');
+    expect(stdout).toContain('copilot-cli    GitHub Copilot CLI\n      Run copilot login to sign in.\n');
+    expect(stdout).not.toContain('Qwen Code is not signed in');
+    d.close();
+  });
 
   it('toggles a known runner', async () => {
     const d = await fakeDaemon({ runners });

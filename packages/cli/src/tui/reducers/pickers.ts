@@ -1,7 +1,7 @@
 import { CLI_PROVIDERS, getProviderMeta, plannerBackendEntries, runnerForProvider, type PlannerUsability } from '@ordewell/core';
-import { runnerNamesOr } from '../../runnerNames';
+import { plannerNamesOr } from '../../runnerNames';
 import { dependencyCandidates } from '@ordewell/core/plan-utils';
-import { findTask, titledRefFor, type ModelView, type PickerItem, type PickerState, type TuiState } from '../state';
+import { findTask, runnerSignInLine, signedOutWithWayIn, titledRefFor, type ModelView, type PickerItem, type PickerState, type TuiState } from '../state';
 import { effortsForTask, modelsForRunner, modelsForTask, modesForTask } from '../taskAssignment';
 
 /** The picker id meaning "the runner's own default", as opposed to a model variant. */
@@ -51,6 +51,19 @@ function modelDetail(m: ModelView): string | undefined {
 }
 
 /**
+ * What an empty model picker for `runner` shows: why the daemon says the
+ * runner lists nothing, or, when it said nothing, that discovery may not have
+ * landed. A signed-out runner's list stays empty after any refresh, so a
+ * refresh is offered only where no reason was given.
+ */
+function noModelsRow(state: TuiState, runner: string | undefined): PickerItem {
+  const reason = runner ? state.runnerErrors[runner] : undefined;
+  return reason
+    ? { id: '', label: `No ${runner} models discovered`, detail: reason, disabled: true }
+    : { id: '', label: `No ${runner ?? 'runner'} models discovered yet`, detail: 'run /refresh', disabled: true };
+}
+
+/**
  * The planner-model catalog for `provider` (ADR-0009), with `selectedId`
  * marked. A harness planner runs a coding agent, so the only models it can
  * serve are that agent's own — offering it the cross-provider vendor catalog
@@ -86,11 +99,8 @@ export function plannerModelItems(state: TuiState, provider: string, selectedId:
       ].filter(Boolean).join(' · '),
       selected: m.id === selectedId,
     }));
-  // An empty catalog means discovery hasn't landed (or failed); a blank picker
-  // with no explanation reads as a broken command.
-  return items.length > 0
-    ? items
-    : [{ id: '', label: `No ${runner} models discovered yet`, detail: 'run /refresh', disabled: true }];
+  // A blank picker with no explanation reads as a broken command.
+  return items.length > 0 ? items : [noModelsRow(state, runner)];
 }
 
 /** `provider`'s harness model `modelId`, when that agent lists it; a vendor planner has none. */
@@ -141,7 +151,17 @@ export function pickerItemsFor(state: TuiState, action: PickerState['action']): 
     }));
   }
   if (action.kind === 'set-runners') {
-    return state.runners.map((runner) => ({ id: runner.id, label: runner.name }));
+    // Each row carries its own way in, so a signed-out agent can be fixed from
+    // the list that shows it (ADR-0052).
+    return state.runners.map((runner) => {
+      const way = runnerSignInLine(runner);
+      return {
+        id: runner.id,
+        label: runner.name,
+        ...(way ? { detail: way } : {}),
+        ...(way && signedOutWithWayIn(runner) ? { warn: true } : {}),
+      };
+    });
   }
   if (action.kind === 'set-task-runner') {
     const task = findTask(state.tasks, action.taskId);
@@ -194,11 +214,8 @@ export function pickerItemsFor(state: TuiState, action: PickerState['action']): 
       ].filter(Boolean).join(' · '),
       selected: model.id === task.assignedModel?.modelId,
     }));
-    // An empty catalog means discovery hasn't landed for this runner (or
-    // failed) — a blank picker with no explanation reads as a broken command.
-    return items.length > 0
-      ? items
-      : [{ id: '', label: `No ${task.assignedRunner ?? 'runner'} models discovered yet`, detail: 'run /refresh', disabled: true }];
+    // A blank picker with no explanation reads as a broken command.
+    return items.length > 0 ? items : [noModelsRow(state, task.assignedRunner)];
   }
   if (action.kind === 'set-task-effort') {
     const task = findTask(state.tasks, action.taskId);
@@ -241,16 +258,17 @@ export function plannerItems(state: TuiState): PickerItem[] {
 
   const offered = plannerBackendEntries(usability, state.configuredProviders).filter((entry) => entry.usable);
   if (offered.length === 0) {
-    return [{ id: '', label: 'No planner available', detail: `install a coding agent (${runnerNamesOr()}) or add a key with /key`, disabled: true }];
+    return [{ id: '', label: 'No planner available', detail: `install a coding agent (${plannerNamesOr()}) or add a key with /key`, disabled: true }];
   }
   const items: PickerItem[] = offered.map((entry) => {
     // A signed-out agent stays offered — auth never gates usability — but the
-    // row flags it and names its own login so it can be fixed without switching.
+    // row flags it and names its own way in so it can be fixed without switching.
     const signedOut = entry.kind === 'harness' && entry.auth?.state === 'signed-out';
+    const row = installed.get(entry.runner ?? entry.id);
     return {
       id: entry.id,
       label: entry.label,
-      detail: signedOut ? `not logged in · /login ${entry.runner ?? entry.id}` : entry.reason,
+      detail: signedOut ? (row && runnerSignInLine(row)) ?? `${entry.label} is not signed in.` : entry.reason,
       selected: state.plannerProvider === entry.id,
       ...(signedOut ? { warn: true } : {}),
     };

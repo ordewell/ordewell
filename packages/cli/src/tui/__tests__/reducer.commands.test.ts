@@ -50,6 +50,28 @@ describe('models and providers', () => {
     expect(state.overlay).toMatchObject({ kind: 'stepper' });
   });
 
+  it('/planner names a runner that runs tasks but cannot plan, rather than calling it unknown', () => {
+    const runners: RunnerView[] = [{ id: 'acme', name: 'Acme Agent', enabled: true }];
+    const { state, effects } = run('/planner acme', { runners });
+    expect(effects).toEqual([]);
+    expect(lastMessage(state)).toMatchObject({ role: 'error' });
+    expect(JSON.stringify(lastMessage(state))).toContain('Acme Agent runs tasks but cannot plan in Ordewell yet.');
+    expect(JSON.stringify(lastMessage(state))).not.toContain('Unknown planner');
+  });
+
+  it('/planner says when a shell AI_PROVIDER overrides the planner just chosen', () => {
+    const { effects } = run('/planner opencode', { plannerEnvOverride: 'claude-code' });
+    expect(effects).toEqual([{
+      type: 'setPlanner',
+      provider: 'opencode',
+      overrideNotice: 'Saved OpenCode as your planner, but AI_PROVIDER=claude-code in this environment takes precedence: unset it to plan with OpenCode.',
+    }]);
+  });
+
+  it('/planner keeps the plain confirmation when AI_PROVIDER names the planner just chosen', () => {
+    expect(run('/planner opencode', { plannerEnvOverride: 'opencode' }).effects).toEqual([{ type: 'setPlanner', provider: 'opencode' }]);
+  });
+
   it('/key set stores a provider key', () => {
     expect(run('/key set openrouter sk-or-123').effects).toEqual([
       { type: 'setApiKey', provider: 'openrouter', key: 'sk-or-123' },
@@ -97,6 +119,17 @@ describe('login', () => {
     expect(state.plannerProvider).toBe('claude-code');
   });
 
+  it("signs in a task-only agent through its manifest's login, though no probe can confirm it", () => {
+    const copilot: RunnerView = {
+      id: 'copilot-cli', name: 'GitHub Copilot CLI', enabled: true,
+      auth: { state: 'unknown', loginCommand: ['copilot', 'login'] },
+    };
+    const { state, effects } = run('/login copilot-cli', { plannerProvider: 'claude-code', runners: [claude, copilot], runnersKnown: true });
+
+    expect(effects).toEqual([{ type: 'plannerLogin', command: ['copilot', 'login'], label: 'GitHub Copilot CLI' }]);
+    expect(state.plannerProvider).toBe('claude-code');
+  });
+
   it('matches a named runner by its display label too', () => {
     const { effects } = run('/login Claude Code', { plannerProvider: 'codex', runners: [claude, codex], runnersKnown: true });
 
@@ -109,6 +142,25 @@ describe('login', () => {
     expect(run('/login', { plannerProvider: 'claude-code', runners: [signedIn], runnersKnown: true }).effects).toEqual([
       { type: 'plannerLogin', command: ['claude', 'login'], label: 'Claude Code' },
     ]);
+  });
+
+  it.each([
+    [
+      'qwen-code', 'Qwen Code',
+      { runner: 'qwen-code', label: 'Qwen Code', key: { provider: 'openrouter' as const, label: 'OpenRouter', others: 'any OpenAI-compatible provider' }, byHand: 'run qwen and sign in there' },
+      'Qwen Code has no login Ordewell can run. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.',
+    ],
+    [
+      'opencode', 'OpenCode',
+      { runner: 'opencode', label: 'OpenCode', byHand: 'run opencode auth login and choose a provider' },
+      'OpenCode has no login Ordewell can run. Run opencode auth login and choose a provider.',
+    ],
+  ])('names the way %s does sign in when Ordewell has no login to run', (id, name, signIn, said) => {
+    const row: RunnerView = { id, name, enabled: true, auth: { state: 'signed-out', signIn } };
+    const { effects, state } = run(`/login ${id}`, { plannerProvider: 'claude-code', runners: [claude, row], runnersKnown: true });
+
+    expect(effects).toEqual([]);
+    expect(lastMessage(state)?.text).toBe(said);
   });
 
   it('lists the agents that can sign in when the name matches none, and runs nothing', () => {
@@ -142,13 +194,6 @@ describe('login', () => {
     expect(lastMessage(state)?.text).not.toContain('not installed');
   });
 
-  it("says OpenCode's login is not Ordewell's to manage", () => {
-    const { state, effects } = run('/login opencode', { plannerProvider: 'claude-code', runners: [claude, opencode], runnersKnown: true });
-
-    expect(effects).toEqual([]);
-    expect(lastMessage(state)?.text).toContain('OpenCode');
-    expect(lastMessage(state)?.text).toMatch(/not managed/);
-  });
 });
 
 describe('model allowlist', () => {
@@ -191,6 +236,36 @@ describe('runners and mouse', () => {
       kind: 'picker',
       picker: { action: { kind: 'set-runners' }, multi: true, chosen: ['opencode'] },
     });
+  });
+
+  it('/runners names the way in on each row whose agent is signed out, or whose sign-in nobody could read', () => {
+    const { state } = run('/runners', {
+      runners: [
+        {
+          id: 'cursor-agent', name: 'Cursor', enabled: true,
+          auth: { state: 'signed-out', loginCommand: ['cursor-agent', 'login'], signIn: { runner: 'cursor-agent', label: 'Cursor', login: ['cursor-agent', 'login'] } },
+        },
+        {
+          id: 'qwen-code', name: 'Qwen Code', enabled: true,
+          auth: {
+            state: 'signed-out',
+            signIn: { runner: 'qwen-code', label: 'Qwen Code', key: { provider: 'openrouter', label: 'OpenRouter', others: 'any OpenAI-compatible provider' }, byHand: 'run qwen and sign in there' },
+          },
+        },
+        { id: 'copilot-cli', name: 'GitHub Copilot CLI', enabled: true, auth: { state: 'unknown', loginCommand: ['copilot', 'login'] } },
+        { id: 'codex', name: 'Codex', enabled: true, auth: { state: 'signed-in', loginCommand: ['codex', 'login'] } },
+      ],
+    });
+    const items = state.overlay?.kind === 'picker' ? state.overlay.picker.items : [];
+    expect(items).toEqual([
+      { id: 'cursor-agent', label: 'Cursor', detail: 'Cursor is not signed in. Sign in with /login cursor-agent, or run cursor-agent login.', warn: true },
+      {
+        id: 'qwen-code', label: 'Qwen Code', warn: true,
+        detail: 'Qwen Code is not signed in. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.',
+      },
+      { id: 'copilot-cli', label: 'GitHub Copilot CLI', detail: 'Sign in with /login copilot-cli, or run copilot login.' },
+      { id: 'codex', label: 'Codex' },
+    ]);
   });
 
   it('/runners asks the daemon for the saved choice as it opens, since another surface may have changed it', () => {

@@ -127,6 +127,25 @@ How each runner raises them, checked live (Claude Code 2.1.296, codex-cli
   denies `execute`; Ordewell's own server is replaced at start with
   `codemode: false`, so `run_command` and the completion tools are tools of
   their own, and a 2.x that cannot do that is refused as a planner.
+- **An ACP runner** plans only when its profile claims the planner role on
+  evidence ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)
+  R3), as GitHub Copilot CLI 1.0.105, Qwen Code 0.26.6, Cline 3.0.74, Gemini
+  CLI 0.66.0 and Cursor CLI 2026.10.22 do. Its start is restricted by the profile's spawn
+  controls, which take the agent's own write and shell tools away or make it
+  ask before every use of them: arguments and variables for an agent with a
+  deny list or such a mode, and for an agent whose controls are a hook, a
+  settings file or a policy file, owner-only files in the process's private
+  directory, outside the worktree and holding no secret, with, where the
+  profile names them, empty config homes there so the user's global rules,
+  hooks, plugins and skills do not load. A config home may hold the start's
+  own settings file, as Cursor's holds the deny list for its reads, writes and
+  shell. An agent that loads configuration from the directory it starts in
+  starts in that private directory (ADR-0028).
+  Whatever those controls let through, `AcpAdapter` refuses every edit,
+  delete, move, command and mode switch by the kind the request or the turn's
+  report names. Ordewell's own tools are allowed by exact name before any
+  kind is read, and every other request, a read, a fetch or another MCP
+  tool, reaches the ledger and is decided here.
 
 ### Standing approvals: the allowlist
 
@@ -315,4 +334,9 @@ refused from a workspace's environment files (ADR-0016). The effect allowlist
 - 2026-10-20 — every planner command, `run_command`'s included, runs in ADR-0011's OS sandbox where the host has one.
 - 2026-10-21 — the planner performs an exact effect itself as a script task, so the `allowlist` mode's refusal points at `run_script` and an ops task, and the effect allowlist is a separate list ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)).
 - 2026-10-21 — a user may opt in to Claude Code's or OpenCode 2.x's own shell, held in Ordewell's sealed profile, while both stay withheld by default (ADR-0036 N1–N6).
+- 2026-11-04 — an ACP runner plans on its profile's evidence: its restricted start's controls, flags or owner-only files and config homes outside the worktree, then Ordewell's refusal by kind, with every other request decided here (ADR-0060 R3).
+- 2026-11-04 — an ACP runner's spawn controls may make it ask before every write and command, Ordewell's refusal by kind deciding each; Qwen Code plans so (ADR-0060).
+- 2026-11-04 — an ACP runner's spawn controls may be a policy file it is handed; Gemini CLI plans under one (ADR-0060).
+- 2026-11-04 — a restricted start's config home may hold its own settings file; Cursor plans so (ADR-0060).
 - 2026-11-04 — Codex's own shell is off for a planner on Windows, where its sandbox cannot keep a command off the network ([ADR-0010](../platform/0010-windows-support.md)).
+- 2026-11-05 — Cline plans, made to ask before every use of its own tools (ADR-0060).

@@ -57,9 +57,17 @@ A runner-facing tool joins the task side on the same mechanism.
   MCP configuration, as an HTTP header the runner sends. Prompt and transcript
   text must not expose the credential.
 - **Not on a command line either (A5).** The configuration reaches the
-  runner as a file with owner-only permissions or an environment variable the
-  runner reads, never as a process argument, where `ps` shows it to every
-  user on the host.
+  runner as a file, an environment variable the runner reads, or a message
+  over the runner's own stdin protocol, never as a process argument, where
+  `ps` shows it to every user on the host. A file that holds the token is
+  owner-only, in a private directory of its own outside the worktree, made
+  for one runner process and so never shared by two attempts, and removed
+  when that process ends. An ACP runner takes the server in `session/new`,
+  which carries it and its header, only where the agent advertises
+  `mcpCapabilities.http`; one that reads it from a settings file of its own
+  is handed that file instead, and a later start sweeps such a file that an
+  Ordewell which died left behind
+  ([ADR-0060](0060-acp-runners-are-data-on-one-connector.md) R4).
 - **What the token does not defend against (A6).** A same-user process can
   read another process's environment and the session files under
   `.ordewell/`. A task in a write-capable mode can already do anything the user
@@ -88,8 +96,13 @@ A runner-facing tool joins the task side on the same mechanism.
 
 ### Scope
 
-- **Task runners and the three coding-agent planners (S1).** Claude Code,
-  Codex and OpenCode use the required server. API planners (`OpenAiService`,
+- **Task runners and the coding-agent planners (S1).** Claude Code, Codex,
+  OpenCode, and GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor, ACP runners
+  ([ADR-0060](0060-acp-runners-are-data-on-one-connector.md)), use the
+  required server, as task runners and as planners. An ACP agent
+  that can take an HTTP MCP server neither in `session/new` nor from a
+  settings file of its own is refused, since Ordewell runs no stdio bridge to
+  carry the token. API planners (`OpenAiService`,
   `GeminiService`) keep envelopes and their existing query read loop, alongside direct task read tool calls.
 - **Tools or nothing (S2).** Neither a task nor a coding-agent planner runs
   without its tools. One automatic respawn is allowed. A task runner that stays
@@ -105,15 +118,21 @@ A runner-facing tool joins the task side on the same mechanism.
   rule per tool. Otherwise the done signal, or the plan itself, would wait on
   a person. The grant names the `ordewell` server only and loosens nothing
   else: a harness planner stays in its read-only mode for every other tool.
+  An ACP runner has no launch-time grant: the adapter answers the agent's
+  `session/request_permission` for an Ordewell tool itself, allowing it at
+  once, by the exact name its profile reads from the request and the agent's
+  report of the same call, before the call's kind is read (ADR-0060 R7).
   A request is taken for an Ordewell tool's by its exact name (Claude Code,
-  OpenCode) or server name (Codex), never by a prefix: a server named
+  OpenCode, ACP) or server name (Codex), never by a prefix: a server named
   `ordewell_x` or `ordewell__x` names its tools under Ordewell's prefix.
   OpenCode joins server and tool with `_`, so a server named `ordewell_task`
   would have its `complete` named `ordewell_task_complete`; a project server
   whose name could do that is not offered to a planner
   ([ADR-0028](../planner-envelope/0028-planners-never-run-repository-config.md)).
 - **Prompts teach the connected tools (S4).** The connector checks the runner's
-  own MCP attach state before sending the prompt. A failed attach receives no
+  own MCP attach state before sending the prompt. ACP reports none, so an ACP
+  runner's state is the server's record of its first authenticated contact
+  (`McpContact`, ADR-0060 R5). A failed attach receives no
   task or planning prompt. Attached means the model is offered the tools, for
   as long as the runner lives: OpenCode 2.x, which rebuilds its services from
   the launch configuration and so drops the runtime setting that lists them
@@ -361,3 +380,10 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-11-01 — a token whose plan has a board lists `post`, and a planner that may delegate or sits under a delegated task lists it with `read` ([ADR-0057](../supervision/0057-information-moves-by-reference.md) R8, R11).
 - 2026-11-01 — a runner in a container reaches this server through its lease's relay, on its own loopback at the same port, so T1 and T2 hold unchanged ([ADR-0059](../isolation/0059-an-execution-lease-reserves-in-the-claim-and-opens-after-it.md) L6).
 - 2026-11-01 — L3: a subplanner is told its runner's catalog in its prompt (ADR-0057 R5).
+- 2026-11-04 — A5: the configuration may travel over the runner's own stdin protocol; S1, S3, S4: how an ACP runner takes, is pre-allowed and attaches to the server (ADR-0060).
+- 2026-11-04 — S1, S3: GitHub Copilot CLI uses the server as a planner too, and an ACP runner's Ordewell tool is named before its kind is read (ADR-0060).
+- 2026-11-04 — A5, S1: a file holding the token is one runner process's own, outside the worktree and removed with it; an ACP runner may take the server from a settings file of its own, swept after a crash, and `session/new` carries it only to an agent that advertises HTTP (ADR-0060 R4).
+- 2026-11-04 — S1: Qwen Code uses the server as a planner too (ADR-0060).
+- 2026-11-04 — S1: Gemini CLI uses the server as a planner too (ADR-0060).
+- 2026-11-04 — S1: Cursor uses the server as a planner too (ADR-0060).
+- 2026-11-05 — S1: Cline uses the server, from a settings file of its own, as a planner too (ADR-0060).

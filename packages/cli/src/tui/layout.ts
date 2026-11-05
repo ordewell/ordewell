@@ -4,12 +4,12 @@ import { cursorInLines, type CursorPosition } from './editor';
 import { assignmentFlagText, checkpointCardLines, conversationLines, subplannerCardLines, tokenLine } from './blocks';
 import { bodyMode, chatEditorRoomFor, chatPaneWidth, planPaneWidth, stackRows, type BodyMode, type PaneRect } from './geometry';
 import { slashCommandTable, type SlashCategory } from './slash';
-import { checkpointsBelow, continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, questionAbove, queuedTarget, refFor, rootFrame, scriptTaskView, selectedPlanRow, signedOutWithLogin, viewOnly, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type Focus, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
+import { checkpointsBelow, continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, questionAbove, queuedTarget, refFor, rootFrame, scriptTaskView, runnerSignInLine, selectedPlanRow, signedOutWithWayIn, viewOnly, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type Focus, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
 import { DELEGATION_OFFERED, SUPERVISOR_LEVEL_LABEL, type DiscoveredModel } from '@ordewell/core';
 import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
-import { runnerNamesOr } from '../runnerNames';
+import { plannerNamesOr } from '../runnerNames';
 import { TASK_EDITOR_KEYS, planFooterHints, planKeysByGroup } from './planKeys';
 import { accountLimitsText, attachingLabel, contextMeterText, accountLimitsOf, assignedRunnerOf, describeIsolationPreview, elapsedSince, scriptTaskText, getProviderMeta, isApiProvider, blockedByLabel, handoffPeekParts, holdLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeTime, runnerForProvider, taskLogHeaderView, taskActivity, taskRowView, taskStatusKind, tasksTotalText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskLogHeaderTask, type TaskLogHeaderView, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
 
@@ -957,21 +957,18 @@ function isolationPreviewLines(state: TuiState, cols: number): string[] {
 }
 
 /**
- * One red line per signed-out agent, the active planner first so the row under
- * the workspace names the command that fixes the plan at hand. A named login
- * leaves the planner alone, so every other agent names its own `/login <id>`.
+ * One red alarm per signed-out agent, the active planner first so the row under
+ * the workspace names what fixes the plan at hand. Each names its runner's
+ * `/login <id>` or `/key`, since a named login leaves the planner alone.
  */
 function signedOutPlannerLines(state: TuiState, cols: number): string[] {
   if (!state.plannerKnown || !state.runnersKnown) return [];
   const planned = runnerForProvider(state.plannerProvider);
-  const flagged = state.runners.filter(signedOutWithLogin);
+  const flagged = state.runners.filter(signedOutWithWayIn);
   const active = flagged.find((row) => row.id === planned);
   const room = Math.max(1, cols - 1);
   return (active ? [active, ...flagged.filter((row) => row !== active)] : flagged)
-    .flatMap((row) => wrap(
-      style.red(`${row.name} not logged in. ${row === active ? '/login' : `/login ${row.id}`} to sign in.`),
-      room,
-    ));
+    .flatMap((row) => wrap(style.red(runnerSignInLine(row) ?? ''), room));
 }
 
 /**
@@ -982,7 +979,7 @@ function signedOutPlannerLines(state: TuiState, cols: number): string[] {
  */
 function plannerRowValue(state: TuiState, label: string): string {
   const alarm = state.runners.find((row) => row.id === runnerForProvider(state.plannerProvider));
-  const paint = alarm && signedOutWithLogin(alarm) ? style.red : (text: string) => text;
+  const paint = alarm && signedOutWithWayIn(alarm) ? style.red : (text: string) => text;
   const effort = plannerEffortLabel(state);
   const model = state.orchestratorModel ? paint(state.orchestratorModel) : style.yellow('no model');
   return [paint(label), model, ...(effort ? [paint(effort)] : [])].join(style.grey(' · '));
@@ -1021,7 +1018,7 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
       detecting
         ? style.grey(DETECTING)
         : enabledRunners.length > 0
-          ? enabledRunners.map((row) => (signedOutWithLogin(row) ? style.red(row.name) : row.name)).join(', ')
+          ? enabledRunners.map((row) => (signedOutWithWayIn(row) ? style.red(row.name) : row.name)).join(', ')
           : style.yellow('none enabled'),
       '/runners',
       cols,
@@ -1035,7 +1032,7 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     ? []
     : [
       ...wrap(
-        style.yellow(`Install a coding agent (${runnerNamesOr()}) and pick it with /planner. No API key needed. Or add an API key with /key and choose your provider.`),
+        style.yellow(`Install a coding agent (${plannerNamesOr()}) and pick it with /planner. No API key needed. Or add an API key with /key and choose your provider.`),
         Math.max(1, cols - 1),
       ),
       '',

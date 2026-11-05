@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Cursor runs tasks and plans.** Cursor appears among the runners a task
+  can be assigned to, with its models and a Read-only mode, and among the
+  planners. It can run read-only tasks too.
+- **Gemini CLI runs tasks and plans.** Gemini CLI 0.66.0 or newer appears
+  among the runners a task can be assigned to, with its models and a Read-only
+  mode, and among the planners.
+- **Cline runs tasks and plans.** Cline 3.0.74 or newer appears among the
+  runners a task can be assigned to, with its models and a Read-only mode, and
+  among the planners.
+- **GitHub Copilot CLI runs tasks.** Copilot CLI 1.0.105 or newer appears among
+  the runners a task can be assigned to, with its models and its login. It
+  cannot be the planner or run a read-only task.
+- **Qwen Code runs tasks and plans.** Qwen Code 0.26.6 or newer appears among
+  the runners a task can be assigned to, with its models, and among the
+  planners. It can run read-only tasks too.
 ## [0.12.5] - 2026-11-04
 
 ### Security

@@ -39,6 +39,7 @@ per-agent adapter:
 | Claude Code | `-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages` | `--permission-mode default` + `--permission-prompt-tool stdio`, direct edit, shell and native plan-mode tools disallowed (ADR-0008, ADR-0026) |
 | Codex | `app-server` stdio JSON-RPC: `initialize` → `thread/start` → `turn/start` | `sandbox: read-only`, `approvalPolicy: on-request` with only MCP tool approvals held for Ordewell (ADR-0026) |
 | OpenCode | `serve` (headless HTTP) + SSE event stream — 1.x `/event`, 2.x `/api/event` | `agent: plan`, shell and subagent tools withheld, and Ordewell's permission policy for the server (ADR-0026) |
+| an ACP agent | ACP over stdio: `initialize` → `session/new` → `session/prompt` | only where its profile claims the planner role on evidence ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md) R3); GitHub Copilot CLI's own write, shell and web tools denied, Qwen Code made to ask before each write and command, Cline made to ask before each of its own tools, Gemini CLI's own write, shell and web tools denied by a policy file it is handed, Cursor's own reads, writes and shell denied by a settings file of the start's own, each started in a private directory, every edit, delete, move and command request refused |
 
 Three details in that table were corrected during implementation, against the
 binaries themselves rather than against memory:
@@ -238,11 +239,15 @@ question ("what plans for me?") across two settings and needs new UI in four
 surfaces instead of new entries in a dropdown that already exists.
 
 The setting holds a `PlannerBackendId`: an `AiProvider`, the closed union of
-API vendors, or a runner id. The runner half is open because every built-in
-runner with a connector can plan — its manifest and its `CONNECTORS` entry are
-the whole of declaring it — so the harness planners, their labels and the
-planner lists are derived from those two, and an id is checked against them at
-runtime rather than by the compiler. One `isCliProvider()` guard covers key
+API vendors, or a runner id. The runner half is open because a built-in runner
+plans where its `CONNECTORS` entry's `plans` says so — its manifest and that
+entry are the whole of declaring it — so the harness planners, their labels
+and the planner lists are derived from those two, and an id is checked against
+them at runtime rather than by the compiler. A runner whose connector does not
+plan, such as an ACP agent whose profile claims no planner role
+([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)), runs
+tasks and never appears among the planners. Since runner ids and vendor ids
+share this one setting, a runner id must not equal a vendor's. One `isCliProvider()` guard covers key
 resolution, provider routing and the model picker (which reads
 `ModelDiscovery` instead of `ModelCatalog`); `isApiProvider()` narrows an id to
 a vendor wherever a key or base URL is read.
@@ -263,11 +268,12 @@ this backend should understand they are trading speed for not holding a key.
 
 ## Considered options
 
-- **ACP for every agent immediately.** Deferred: the built-in agents already
-  have native connectors without extra adapter installations.
-  [ADR-0025](../runners/0025-structured-only-runners.md) records a generic ACP connector
-  as the expected successor for third-party harnesses, with the protocol gaps
-  that must be addressed before adoption.
+- **ACP for every agent immediately.** Rejected: the built-in agents already
+  have native connectors without extra adapter installations, and Claude Code
+  and Codex reach ACP only through third-party shims. Agents that ship a
+  native ACP server run through one ACP connector instead
+  ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)),
+  which plans only where a profile proves its agent cannot write.
 - **One-shot respawn per turn.** Spawn with `--resume`/`exec resume`/
   `--session` each message, exit after. Trivial lifecycle, nothing to leak.
   Rejected: 1–3s cold start on every message *including each corrective
@@ -378,3 +384,9 @@ this backend should understand they are trading speed for not holding a key.
 - 2026-10-27 — a signed-out harness planner is flagged in the welcome line, the picker and the planner pills; its turn is refused before it is sent with the way to sign in, and `/login` or the chat's Log in runs the runner's own login ([ADR-0052](../routing/0052-a-signed-out-coding-agent-is-flagged-and-signs-in-from-the-chat.md)).
 - 2026-10-31 — a turn waiting on the probe for installed agents says so on every surface.
 - 2026-11-01 — a subplanner is a harness planner that parks between turns (ADR-0055 D5, D18).
+- 2026-11-04 — a runner plans where its connector's `plans` says so; an ACP agent plans only on its profile's evidence, and GitHub Copilot CLI does not ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)).
+- 2026-11-04 — GitHub Copilot CLI plans ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)).
+- 2026-11-04 — Qwen Code plans ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)).
+- 2026-11-04 — Gemini CLI plans ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)).
+- 2026-11-04 — Cursor plans ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)).
+- 2026-11-05 — Cline plans ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)).

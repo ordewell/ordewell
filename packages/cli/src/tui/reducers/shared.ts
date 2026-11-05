@@ -19,7 +19,7 @@ export type Effect =
   | { type: 'reconcileTurn'; sessionId: string }
   /** Send now in the planner chat (ADR-0023, F5): stop the turn in flight and answer `message` next. */
   | { type: 'forceSendPlannerMessage'; sessionId: string; message: string }
-  | { type: 'setPlanner'; provider: string }
+  | { type: 'setPlanner'; provider: string; /** The shell's AI_PROVIDER overrides this choice; said once the daemon accepts it. */ overrideNotice?: string }
   /** `/planner`'s three answers at once, so the daemon never holds a provider with the old backend's model. `noticeLevel` reddens the confirmation while that agent's own login is missing (ADR-0052). */
   | { type: 'setPlannerChoice'; provider: string; modelId: string; effort: string; notice: string; noticeLevel?: 'error' }
   | { type: 'setApiKey'; provider: string; key: string }
@@ -206,7 +206,7 @@ export type Action =
   | { type: 'followRestored'; sessionId: string }
   /** `read` and `sessionId` say which read this answers, so a late one cannot paint another session's values (ADR-0030). */
   | { type: 'settingsLoaded'; settings: Partial<SettingsResponse>; read?: number; sessionId?: string }
-  | { type: 'modelsLoaded'; models: ModelView[]; orchestratorModels?: ModelView[]; providers?: AiProvider[]; providerErrors?: Record<string, string>; modesByRunner?: Record<string, ModeView[]> }
+  | { type: 'modelsLoaded'; models: ModelView[]; orchestratorModels?: ModelView[]; providers?: AiProvider[]; providerErrors?: Record<string, string>; runnerErrors?: Record<string, string>; modesByRunner?: Record<string, ModeView[]> }
   | { type: 'sessionsLoaded'; sessions: SessionView[] }
   | { type: 'sessionForked'; sessionId: string; goal: string }
   | { type: 'inputPrefilled'; text: string; sessionId?: string }

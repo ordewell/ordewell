@@ -2,39 +2,12 @@ import * as path from 'path';
 import type { RunnerEnv } from '../../plugins/types';
 import { expandRunnerHome } from '../../utils/runnerHome';
 import {
-  NO_SERVERS, insideOnDisk, isRecord, readText, takesOrdewellsName,
+  NO_SERVERS, isRecord, readText, takesOrdewellsName, withImports,
   type InstructionFile, type ProjectMcpServer, type ProjectServers, type RepoConfigReader,
 } from './repoConfig';
 
 /** The memory files Claude Code loads from a project's root, in its order. */
 const MEMORY_FILES = ['CLAUDE.md', path.join('.claude', 'CLAUDE.md'), 'CLAUDE.local.md'];
-
-/** How many `@` imports deep Claude Code follows. */
-const MAX_IMPORT_DEPTH = 5;
-
-/**
- * `@path` imports in a memory file. Claude Code ignores them inside code
- * spans and fenced blocks, so those are blanked first.
- */
-function importsOf(text: string): string[] {
-  const prose = text.replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]*`/g, '');
-  return [...prose.matchAll(/(?:^|\s)@([^\s`]+)/g)].map((m) => m[1].replace(/[.,;:)]+$/, ''));
-}
-
-function withImports(workspace: string, file: string, depth: number, seen: Set<string>, into: InstructionFile[]): void {
-  if (seen.has(file)) return;
-  seen.add(file);
-  const text = readText(file);
-  if (text === undefined) return;
-  into.push({ path: path.relative(workspace, file), text });
-  if (depth >= MAX_IMPORT_DEPTH) return;
-  for (const target of importsOf(text)) {
-    // `~/` names the user's own files, which this planner reads as the user's anyway; only the repository's are given here.
-    if (target.startsWith('~')) continue;
-    const abs = path.resolve(path.dirname(file), target);
-    if (insideOnDisk(workspace, abs)) withImports(workspace, abs, depth + 1, seen, into);
-  }
-}
 
 function server(name: string, entry: unknown, source: string): ProjectMcpServer | string {
   if (!isRecord(entry)) return 'not an object';
@@ -54,7 +27,7 @@ export const CLAUDE_REPO_CONFIG: RepoConfigReader = {
   instructions(workspace) {
     const files: InstructionFile[] = [];
     const seen = new Set<string>();
-    for (const name of MEMORY_FILES) withImports(workspace, path.join(workspace, name), 0, seen, files);
+    for (const name of MEMORY_FILES) withImports(path.join(workspace, name), { workspace, within: workspace }, seen, files);
     return files;
   },
 

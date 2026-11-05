@@ -6,7 +6,7 @@ import TaskHandoff from './TaskHandoff';
 import { cardEditable, pausedOnLimit, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, TaskRowAction, AssignmentScope } from '@ordewell/core';
 import { AssignmentFlag, IsolationBadges, StatusBadge, TaskActions, TaskCheck, TaskMarkControl, TaskRevertControl, UsageLimitControls, runnerOptionsFor, statusBadge } from './TaskCard';
-import type { RunnerMode, RunnerOption, TaskCardRun } from './TaskCard';
+import type { RunnerMode, RunnerOption, RunnerSignInView, TaskCardRun } from './TaskCard';
 import { checkLabel } from '../checkLabel';
 
 interface SubTaskCardProps {
@@ -36,6 +36,7 @@ interface SubTaskCardProps {
   onRemoveTask?: (taskId: string) => void;
   onPromptChange?: (taskId: string, prompt: string) => void;
   onRetry?: (taskId: string) => void;
+  runnerSignIn?: Readonly<Record<string, RunnerSignInView>>;
   onSkip?: (taskId: string) => void;
   onCancel?: (taskId: string) => void;
   onCancelResume?: (taskId: string) => void;
@@ -58,7 +59,7 @@ const DEFAULT_MODES: RunnerMode[] = [
   { id: 'plan', label: 'Read-only', description: 'Ordewell commands; lands nothing' },
 ];
 
-export default function SubTaskCard({ task, parentTask, tasks, models, modes, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, runActive, run, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRevert, onRunTask, onOpenLog }: SubTaskCardProps) {
+export default function SubTaskCard({ task, parentTask, tasks, models, modes, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, runActive, run, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, runnerSignIn, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRevert, onRunTask, onOpenLog }: SubTaskCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [editingPrompt, setEditingPrompt] = useState<string | null>(null);
 
@@ -241,7 +242,8 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
               <TaskActions taskId={task.id} actions={row.actions}
                 labels={ACTION_LABELS}
                 handlers={{ cancel: onCancel, 'resume-now': onResumeNow, 'cancel-resume': onCancelResume, skip: onSkip, 'force-start': onForceStart }}
-                onRetry={failed && task.type !== 'user' ? onRetry : undefined} />
+                onRetry={failed && task.type !== 'user' ? onRetry : undefined}
+                signIn={failed && task.assignedRunner ? runnerSignIn?.[task.assignedRunner] : undefined} />
             )}
 
             <TaskMarkControl taskId={task.id} row={row} runActive={runActive ?? !!isExecuting}

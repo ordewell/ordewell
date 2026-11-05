@@ -54,7 +54,7 @@ export abstract class ProcessLifecycle {
    * the process down and frees what the adapter owns with it: no caller keeps
    * an adapter whose start threw.
    */
-  protected async startProcess(cwd: string, command: (workspace: Record<string, string>) => RunnerCommand, handshake: (child: ChildProcess) => Promise<void>): Promise<void> {
+  protected async startProcess(cwd: string, command: (workspace: Record<string, string>) => RunnerCommand | Promise<RunnerCommand>, handshake: (child: ChildProcess) => Promise<void>): Promise<void> {
     try {
       await this.runner.start(cwd, command, (child) => {
         this.process = child;

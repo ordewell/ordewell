@@ -53,7 +53,7 @@ describe('findInstalledPlanner', () => {
   it('skips a first agent whose version answers but whose planner is unusable', async () => {
     const installation = { plannerUsability: vi.fn(async (runner: string) => ({ usable: runner === 'codex' })) };
     expect(await findInstalledPlanner(installation)).toBe('codex');
-    expect(installation.plannerUsability.mock.calls.map(([runner]) => runner)).toEqual(['claude-code', 'codex', 'opencode']);
+    expect(installation.plannerUsability.mock.calls.map(([runner]) => runner)).toEqual(['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent']);
   });
 
   it('skips an agent with no manifest registered', async () => {
@@ -279,14 +279,16 @@ describe('defaultEnabledRunners', () => {
 
   it('is every agent the probe found usable, in the order the registry lists them', async () => {
     await detectInstalledPlanner({ plannerUsability: async (runner) => ({ usable: runner !== 'claude-code' }) });
-    expect(defaultEnabledRunners()).toEqual(['codex', 'opencode']);
+    expect(defaultEnabledRunners()).toEqual(['codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent']);
   });
 
-  it('is the only installed agent on a Codex-only or OpenCode-only host', async () => {
+  it('is the only installed agent on a Codex-only, OpenCode-only or Copilot-only host', async () => {
     await detectInstalledPlanner({ plannerUsability: async (runner) => ({ usable: runner === 'codex' }) });
     expect(defaultEnabledRunners()).toEqual(['codex']);
     await detectInstalledPlanner({ plannerUsability: async (runner) => ({ usable: runner === 'opencode' }) });
     expect(defaultEnabledRunners()).toEqual(['opencode']);
+    await detectInstalledPlanner({ plannerUsability: async (runner) => ({ usable: runner === 'copilot-cli' }) });
+    expect(defaultEnabledRunners()).toEqual(['copilot-cli']);
   });
 
   it('falls back to claude-code when nothing is installed', async () => {

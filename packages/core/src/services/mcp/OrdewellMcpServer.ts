@@ -65,6 +65,58 @@ export interface McpCredential {
   extraTools?: readonly string[];
   /** The token serves a read-only task's tools ({@link TaskTokenScope.readOnly}), so the runner is told of and pre-allows `run_command`, `fetch` and `web_search`. */
   readOnly?: true;
+  /**
+   * Whether the holder has reached the server yet. Absent on a credential the
+   * server did not issue (a test double), whose holder has no such evidence.
+   */
+  contact?: McpContact;
+}
+
+/**
+ * The server's own record that a credential's holder got through its checks
+ * (ADR-0022): the only evidence of an attach for a runner whose protocol sends
+ * no MCP-status notification (ACP). It is read here rather than reported by
+ * the runner, and it holds no matter which side finished its handshake first.
+ */
+export interface McpContact {
+  /** An authorized request has arrived, of any MCP method. Stays true after a revoke. */
+  contacted(): boolean;
+  /** True on the first authorized request; false once the token is revoked (or the server disposed) with none seen. */
+  whenContacted(): Promise<boolean>;
+}
+
+/** One grant's contact state: the {@link McpContact} the holder reads and the two edges the server drives. */
+class ContactRecord implements McpContact {
+  private seen = false;
+  private ended = false;
+  private waiters: Array<(contacted: boolean) => void> = [];
+
+  contacted(): boolean {
+    return this.seen;
+  }
+
+  whenContacted(): Promise<boolean> {
+    if (this.seen || this.ended) return Promise.resolve(this.seen);
+    return new Promise((resolve) => this.waiters.push(resolve));
+  }
+
+  mark(): void {
+    if (this.seen || this.ended) return;
+    this.seen = true;
+    this.settle(true);
+  }
+
+  /** The token will never be good again: nobody still waiting will see contact. */
+  end(): void {
+    this.ended = true;
+    this.settle(this.seen);
+  }
+
+  private settle(contacted: boolean): void {
+    const waiters = this.waiters;
+    this.waiters = [];
+    for (const resolve of waiters) resolve(contacted);
+  }
 }
 
 /**
@@ -99,8 +151,8 @@ const REFUSAL_TEXT: Record<McpRefusal, string> = {
 type InFlight = Map<string, Set<AbortController>>;
 
 type Grant =
-  | { role: 'task'; scope: TaskTokenScope; handler: TaskToolHandler; revoked: AbortController; calls: InFlight }
-  | { role: 'planner'; scope: PlannerTokenScope; handler: PlannerToolHandler; revoked: AbortController; calls: InFlight };
+  | { role: 'task'; scope: TaskTokenScope; handler: TaskToolHandler; revoked: AbortController; calls: InFlight; contact: ContactRecord }
+  | { role: 'planner'; scope: PlannerTokenScope; handler: PlannerToolHandler; revoked: AbortController; calls: InFlight; contact: ContactRecord };
 
 export class OrdewellMcpServer {
   private readonly grants = new Map<string, Grant>();
@@ -132,13 +184,13 @@ export class OrdewellMcpServer {
   }
 
   async issueTaskToken(scope: TaskTokenScope, handler: TaskToolHandler = {}): Promise<McpCredential> {
-    const credential = await this.issue({ role: 'task', scope: { ...scope }, handler, revoked: new AbortController(), calls: new Map() });
+    const credential = await this.issue({ role: 'task', scope: { ...scope }, handler, revoked: new AbortController(), calls: new Map(), contact: new ContactRecord() });
     return { ...credential, ...(scope.readOnly ? { readOnly: true } : {}), ...(scope.board ? { extraTools: ['post'] } : {}) };
   }
 
   async issuePlannerToken(scope: PlannerTokenScope, handler: PlannerToolHandler = {}): Promise<McpCredential> {
     const hidden = [...(scope.hidden ?? [])];
-    const credential = await this.issue({ role: 'planner', scope: { ...scope, hidden }, handler, revoked: new AbortController(), calls: new Map() });
+    const credential = await this.issue({ role: 'planner', scope: { ...scope, hidden }, handler, revoked: new AbortController(), calls: new Map(), contact: new ContactRecord() });
     const extraTools = plannerToolSet(scope).map((tool) => tool.name).filter((name) => !PLANNER_TOOLS.some((tool) => tool.name === name));
     return {
       ...credential,
@@ -163,6 +215,7 @@ export class OrdewellMcpServer {
       if (!oldest.done) this.revokedTokens.delete(oldest.value);
     }
     grant.revoked.abort();
+    grant.contact.end();
   }
 
   async dispose(): Promise<void> {
@@ -186,7 +239,7 @@ export class OrdewellMcpServer {
     const url = await this.start();
     const token = randomBytes(32).toString('base64url');
     this.grants.set(token, grant);
-    return { url, token };
+    return { url, token, contact: grant.contact };
   }
 
   private start(): Promise<string> {
@@ -236,6 +289,9 @@ export class OrdewellMcpServer {
       this.refuse(res, 'wrongPath', 404, 'Not found');
       return;
     }
+    // After every check, before any method is served: this request is the
+    // holder's, whatever it asks.
+    grant.contact.mark();
 
     // Stateless: a fresh server per request, built from the grant, so the tool
     // list and every call are fixed by the token on that very request.

@@ -1,7 +1,7 @@
 import * as path from 'path';
 import { parseToml } from './toml';
 import {
-  isRecord, readText, repoLevels, takesOrdewellsName,
+  isRecord, readInstruction, readText, repoLevels, repoRoot, takesOrdewellsName,
   type InstructionFile, type ProjectMcpServer, type ProjectServers, type RepoConfigReader,
 } from './repoConfig';
 
@@ -34,12 +34,10 @@ export const CODEX_REPO_CONFIG: RepoConfigReader = {
   /** Codex reads one file per directory from the repository root down, an override in place of the plain one. */
   instructions(workspace) {
     const files: InstructionFile[] = [];
+    const at = { workspace, within: repoRoot(workspace) };
     for (const dir of repoLevels(workspace)) {
       for (const name of ['AGENTS.override.md', 'AGENTS.md']) {
-        const text = readText(path.join(dir, name));
-        if (text === undefined) continue;
-        files.push({ path: path.relative(workspace, path.join(dir, name)) || name, text });
-        break;
+        if (readInstruction(path.join(dir, name), at, files) !== undefined) break;
       }
     }
     return files;

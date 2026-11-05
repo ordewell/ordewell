@@ -13,7 +13,7 @@ import { answerWords, reportError, stale, step, type Action, type Effect, type S
  */
 const SHARED_FIELDS = [
   'composerTipSeq', 'accountLimits', 'detailAll', 'runners', 'sessions', 'models', 'modesByRunner', 'taskSkills',
-  'orchestratorModels', 'providerErrors', 'orchestratorModel', 'plannerProvider', 'plannerEffort', 'plannerModels',
+  'orchestratorModels', 'providerErrors', 'runnerErrors', 'orchestratorModel', 'plannerProvider', 'plannerEffort', 'plannerModels',
   'maxParallel', 'configuredProviders', 'allowlist', 'autonomous', 'runSettings', 'runSettingsKnown', 'settingsRead',
   'runSettingsRead', 'plannerKnown', 'runnersKnown', 'providersKnown', 'isolationPreview', 'isolationPreviewRead',
   'versionCheckNotice', 'mouseCapture', 'selection', 'workspace', 'overlay', 'pendingApprovals', 'toast', 'rows', 'cols',

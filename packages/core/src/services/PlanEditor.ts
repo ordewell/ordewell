@@ -184,21 +184,23 @@ export class PlanEditor {
     const runner = changes.assignedRunner ?? target.assignedRunner;
     // Listing models spawns the runner's own CLI: a move that could not be made anyway is refused first.
     if (changes.assignedRunner) this.refuseLiveRetarget(target);
-    const discovered = changes.assignedRunner || (changes.type === 'ai' && target.type !== 'ai') ? await this.discover(runner) : undefined;
+    const becameAi = changes.type === 'ai' && target.type !== 'ai';
+    const discovered = changes.assignedRunner || becameAi ? await this.discover(runner) : undefined;
     const landed = this.landedEdit(taskId, changes, discovered, options);
     if (!landed) return null;
     const { edit, adjustments } = landed;
-    const moved = edit.assignedRunner !== undefined;
+    // A manual task's runner need not be the plan's, as it never spawns; made an AI task, it spawns there.
+    const admits = edit.assignedRunner !== undefined || becameAi;
     const plan = await this.commit(
       () => {
         const released = this.scheduler.releaseMovedResume(taskId, edit);
         if (!this.store.update(taskId, released)) return false;
         Object.assign(edit, released);
-        if (moved && discovered) this.admitRunner(runner, discovered.models);
+        if (admits && discovered) this.admitRunner(runner, discovered.models);
         return true;
       },
-      // A move can admit a runner to the plan, which only the whole plan's announcement carries.
-      moved ? undefined : () => this.broadcast({ type: 'task_updated', taskId, changes: edit as Record<string, unknown> }),
+      // Admitting a runner to the plan is carried only by the whole plan's announcement.
+      admits ? undefined : () => this.broadcast({ type: 'task_updated', taskId, changes: edit as Record<string, unknown> }),
     );
     if (plan) {
       this.tellAdjusted(adjustments);
@@ -404,18 +406,23 @@ export class PlanEditor {
    */
   async addConflictResolver(taskId: string): Promise<LegacyPlanState | null> {
     if (!this.plan()) return null;
-    const refused = this.scheduler.resolverRefusal(taskId);
-    if (refused) throw new PlanEditError(refused);
-    const task = this.store.get(taskId);
-    const draft = task ? conflictResolverTask(task, this.runs.current, this.store.planTasks, this.plannedWith()) : null;
-    if (!draft) throw new PlanEditError('Only a task whose merge conflicted can be resolved as a task');
-    // A delegated task has no mode to hand on, and with none a runner gets the spawn's `build` (ADR-0055 D14).
-    if (task?.type === 'delegated') {
+    const asked = this.resolverDraft(taskId);
+    // A script never spawns, so its runner need not be the plan's; its
+    // resolver spawns there, as a script made an AI task by an edit does.
+    const runner = asked.task.assignedRunner;
+    const discovered = this.store.planRunners.includes(runner) ? undefined : await this.discover(runner);
+    // Re-read after the wait: a repair or another resolver may have the conflict by now.
+    const { task, draft } = discovered ? this.resolverDraft(taskId) : asked;
+    const admitted = task.assignedRunner === runner ? discovered : undefined;
+    // A delegated or script task has no mode to hand on, and with none a
+    // runner gets the spawn's `build`, which not every runner has (ADR-0055 D14).
+    if (draft.taskMode === undefined) {
       const { runnerModes, autonomousDefault } = this.catalog.edit();
-      const mode = resolveDefaultMode(runnerModes?.[task.assignedRunner], autonomousDefault ?? false);
+      const mode = resolveDefaultMode(admitted?.modes ?? runnerModes?.[task.assignedRunner], autonomousDefault ?? false);
       if (mode !== undefined) draft.taskMode = mode;
     }
     return this.commit(() => {
+      if (admitted) this.admitRunner(task.assignedRunner, admitted.models);
       const resolver = this.store.add(draft);
       this.approve([resolver.id]);
       this.runs.linkResolver(resolver.id, taskId);
@@ -423,6 +430,16 @@ export class PlanEditor {
       this.scheduler.startWhenAllowed(resolver.id);
       return true;
     });
+  }
+
+  /** The resolver {@link addConflictResolver} would add for `taskId` now; throws on a refusal. */
+  private resolverDraft(taskId: string): { task: Task; draft: Partial<Task> } {
+    const refused = this.scheduler.resolverRefusal(taskId);
+    if (refused) throw new PlanEditError(refused);
+    const task = this.store.get(taskId);
+    const draft = task ? conflictResolverTask(task, this.runs.current, this.store.planTasks, this.plannedWith()) : null;
+    if (!task || !draft) throw new PlanEditError('Only a task whose merge conflicted can be resolved as a task');
+    return { task, draft };
   }
 
   /**

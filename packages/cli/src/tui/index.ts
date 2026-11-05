@@ -4,7 +4,7 @@ import { assertWorkspaceExists, augmentedPath, createSkillsService, EnvConfig, m
 import { ensureDaemonOwned, findFreePort, resolvePort, stopDaemon } from '../daemon';
 import { ApiClient } from '../apiClient';
 import { flag, saveLastSession } from '../utils';
-import { findEnvFile, writeEnvVar } from '../utils/env';
+import { findEnvFile, shellEnvValue, writeEnvVar } from '../utils/env';
 import { createApp } from './app';
 import { runEffect } from './effects';
 import { registerSkillCommands } from './slash';
@@ -135,6 +135,7 @@ export async function handleTui(subArgs: string[], options: HandleTuiOptions = {
     initial: {
       workspace,
       autonomous: settings.autonomousMode(),
+      plannerEnvOverride: shellEnvValue('AI_PROVIDER') ?? '',
       ...(ownedAtLaunch ? { runSettings: settings.getRunSettings(), runSettingsKnown: true } : {}),
       mouseCapture,
       taskSkills,

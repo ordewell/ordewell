@@ -5,8 +5,13 @@ import type { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { CLAUDE_CODE_MANIFEST } from '../../plugins/builtin/claude-code.manifest';
 import { OPENCODE_MANIFEST } from '../../plugins/builtin/opencode.manifest';
 import { CODEX_MANIFEST } from '../../plugins/builtin/codex.manifest';
+import { COPILOT_CLI_MANIFEST } from '../../plugins/builtin/copilot-cli.manifest';
+import { QWEN_CODE_MANIFEST } from '../../plugins/builtin/qwen.manifest';
+import { CLINE_MANIFEST } from '../../plugins/builtin/cline.manifest';
+import { GEMINI_CLI_MANIFEST } from '../../plugins/builtin/gemini-cli.manifest';
+import { CURSOR_AGENT_MANIFEST } from '../../plugins/builtin/cursor-agent.manifest';
 import { CONNECTORS } from '../harness/connectors';
-import { recordedRunnerAuth, resetRunnerAuth, type RunnerAuthExec } from '../runnerAuth';
+import { recordedRunnerAuth, recordRunnerAuth, resetRunnerAuth, signedOutFromFailure, type RunnerAuthExec } from '../runnerAuth';
 import type { LaunchDeps } from '../../utils/launch';
 
 /**
@@ -76,6 +81,46 @@ describe('RunnerInstallation', () => {
   });
 });
 
+// Signing in and being offered belong to an installed agent, not to its being
+// able to plan: a task runner that cannot plan yet still has a login.
+describe('RunnerInstallation.runnerUsability', () => {
+  it('reports a task-only runner usable, with the login command its manifest declares and no verdict to ask', async () => {
+    const exec: ExecImpl = vi.fn(async () => ({ stdout: '1.0.105' }));
+    const authExec: RunnerAuthExec = vi.fn(async () => ({ code: 0, stdout: '', stderr: '' }));
+    // The host's PATH is not this test's subject: on Windows it would be searched for a real copilot.
+    const inst = new RunnerInstallation(registryWith(COPILOT_CLI_MANIFEST), exec, Date.now, { authExec, launch: POSIX });
+
+    expect(await inst.runnerUsability('copilot-cli')).toEqual({
+      usable: true,
+      auth: { state: 'unknown', loginCommand: ['copilot', 'login'], signIn: { runner: 'copilot-cli', label: 'GitHub Copilot CLI', login: ['copilot', 'login'] } },
+    });
+    expect(authExec).not.toHaveBeenCalled();
+  });
+
+  it('reports usable on Windows a task-only runner npm installed as a .cmd shim', async () => {
+    const exec: ExecImpl = vi.fn(async () => ({ stdout: '1.0.105' }));
+    const inst = new RunnerInstallation(registryWith(COPILOT_CLI_MANIFEST), exec, Date.now, {
+      authExec: vi.fn(async () => ({ code: 0, stdout: '', stderr: '' })),
+      launch: { platform: 'win32', resolvePath: async () => 'C:\\npm', exists: (candidate) => candidate === 'C:\\npm\\copilot.cmd', comSpec: () => 'C:\\Windows\\System32\\cmd.exe' },
+    });
+
+    expect((await inst.runnerUsability('copilot-cli')).usable).toBe(true);
+  });
+
+  it('names the missing binary like the planner check does', async () => {
+    const exec: ExecImpl = vi.fn(async () => { throw new Error('command not found'); });
+    const inst = new RunnerInstallation(registryWith(COPILOT_CLI_MANIFEST), exec);
+
+    expect(await inst.runnerUsability('copilot-cli')).toEqual({ usable: false, reason: 'copilot is not installed or is not on PATH.' });
+  });
+
+  it('refuses a runner no manifest names', async () => {
+    const inst = new RunnerInstallation(registryWith(COPILOT_CLI_MANIFEST), vi.fn(async () => ({ stdout: '' })));
+
+    expect((await inst.runnerUsability('nonexistent')).usable).toBe(false);
+  });
+});
+
 describe('RunnerInstallation.plannerUsability (ADR-0009 preflight)', () => {
   it('reports a planner-capable runner whose CLI answers as usable', async () => {
     const exec: ExecImpl = vi.fn(async () => ({ stdout: '2.0.0' }));
@@ -84,7 +129,7 @@ describe('RunnerInstallation.plannerUsability (ADR-0009 preflight)', () => {
 
     expect(await inst.plannerUsability('claude-code')).toEqual({
       usable: true,
-      auth: { state: 'signed-in', loginCommand: ['claude', 'auth', 'login'] },
+      auth: { state: 'signed-in', loginCommand: ['claude', 'auth', 'login'], signIn: { runner: 'claude-code', label: 'Claude Code', login: ['claude', 'auth', 'login'] } },
     });
   });
 
@@ -110,15 +155,15 @@ describe('RunnerInstallation.plannerUsability (ADR-0009 preflight)', () => {
     expect(result.reason).toContain('no planner transport');
   });
 
-  it('plans with exactly the runners the connector registry holds', async () => {
+  it('plans with exactly the runners whose connectors plan', async () => {
     const exec: ExecImpl = vi.fn(async () => ({ stdout: 'ok' }));
     const authExec: RunnerAuthExec = vi.fn(async () => ({ code: -1, stdout: '', stderr: '' }));
-    const manifests = [CLAUDE_CODE_MANIFEST, CODEX_MANIFEST, OPENCODE_MANIFEST, { name: 'aider', runner: { command: 'aider' } }];
+    const manifests = [CLAUDE_CODE_MANIFEST, CODEX_MANIFEST, OPENCODE_MANIFEST, COPILOT_CLI_MANIFEST, QWEN_CODE_MANIFEST, CLINE_MANIFEST, GEMINI_CLI_MANIFEST, CURSOR_AGENT_MANIFEST, { name: 'aider', runner: { command: 'aider' } }];
     const inst = new RunnerInstallation(registryWith(...manifests), exec, Date.now, { authExec, launch: POSIX });
 
     const plannable: string[] = [];
     for (const m of manifests) if ((await inst.plannerUsability(m.name)).usable) plannable.push(m.name);
-    expect(plannable.sort()).toEqual(Object.keys(CONNECTORS).sort());
+    expect(plannable.sort()).toEqual(Object.keys(CONNECTORS).filter((runner) => CONNECTORS[runner].plans).sort());
   });
 
   it('refuses on Windows a CLI that answers --version through a shell but has no file to start directly', async () => {
@@ -173,6 +218,7 @@ describe('RunnerInstallation auth (ADR-0009 preflight)', () => {
       state: 'signed-out',
       loginCommand: ['claude', 'auth', 'login'],
       detail: 'not logged in',
+      signIn: { runner: 'claude-code', label: 'Claude Code', login: ['claude', 'auth', 'login'] },
     });
     expect(recordedRunnerAuth('claude-code')).toEqual(result.auth);
   });
@@ -234,6 +280,23 @@ describe('RunnerInstallation auth (ADR-0009 preflight)', () => {
     inst.refresh();
     expect((await inst.plannerUsability('claude-code')).auth?.state).toBe('signed-in');
     expect(authExec).toHaveBeenCalledTimes(2);
+  });
+
+  it('answers with the sign-out a failed turn recorded since its last probe, until it asks again', async () => {
+    const exec: ExecImpl = vi.fn(async () => ({ stdout: '2.0.0' }));
+    // Cursor has no status command: only a refused turn can say it is signed out.
+    const inst = new RunnerInstallation(registryWith(CURSOR_AGENT_MANIFEST), exec, () => 0, { launch: POSIX, workspace: () => '/w' });
+    expect((await inst.runnerUsability('cursor-agent')).auth?.state).toBe('unknown');
+
+    recordRunnerAuth('cursor-agent', signedOutFromFailure(CURSOR_AGENT_MANIFEST, 'Cursor is not signed in.')!, '/w');
+
+    expect((await inst.runnerUsability('cursor-agent')).auth).toMatchObject({
+      state: 'signed-out',
+      signIn: { runner: 'cursor-agent', label: 'Cursor', login: ['cursor-agent', 'login'] },
+    });
+
+    inst.refresh();
+    expect((await inst.runnerUsability('cursor-agent')).auth?.state).toBe('unknown');
   });
 
   it('re-probes a verdict once its short TTL expires', async () => {

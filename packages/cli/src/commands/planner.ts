@@ -11,8 +11,9 @@ import {
 import type { ApiClient } from '../apiClient';
 import { positionals } from '../utils';
 import { connect, fail, fetchCatalog, persistEnv, writeEnv } from './shared';
-import { plannerSwitchRecall, uninstalledPlannerRefusal } from '../plannerModelSwitch';
-import { runnerIdChoice } from '../runnerNames';
+import { plannerSwitchOverrideNotice, plannerSwitchRecall, taskOnlyRunnerRefusal, uninstalledPlannerRefusal } from '../plannerModelSwitch';
+import { plannerIdChoice } from '../runnerNames';
+import { shellEnvValue } from '../utils/env';
 
 /**
  * Everything that can plan, in one list (ADR-0009) — the `/planner` picker's
@@ -32,6 +33,8 @@ export async function handlePlanner(subArgs: string[], injectedApi?: ApiClient):
   const provider = wanted.toLowerCase();
   const meta = getProviderMeta(provider);
   if (!meta) {
+    const taskOnly = taskOnlyRunnerRefusal(provider, (await api.getRunners()).runners, HEADLESS_CLI_COMMANDS.pickPlanner);
+    if (taskOnly) fail(taskOnly);
     fail(`Unknown planner: ${provider}`, 'Run `ordewell planner` with no arguments to see the list.');
   }
   if (isCliProvider(provider)) {
@@ -42,16 +45,20 @@ export async function handlePlanner(subArgs: string[], injectedApi?: ApiClient):
 
   // The daemon owns the model decision now: remember what this provider was
   // last using, its catalog default, or nothing. Only the provider is ours to
-  // send — see PlannerModelMemory.
+  // send — see PlannerModelMemory. Read the shell's AI_PROVIDER before the
+  // write: persistEnv replaces it in this process, and it is what every later
+  // `ordewell plan` forwards to the daemon.
+  const inherited = shellEnvValue('AI_PROVIDER');
   const settings = await persistEnv(api, { AI_PROVIDER: provider });
   const recall = plannerSwitchRecall(settings);
   writeEnv({ ORCHESTRATOR_MODEL: recall.model, ORDEWELL_PLANNER_EFFORT: recall.effort });
 
   const catalog = await fetchCatalog(api);
+  const override = plannerSwitchOverrideNotice(provider, inherited);
   console.log(
-    isCliProvider(provider)
+    override ?? (isCliProvider(provider)
       ? `Planning with ${meta.label}: no API key needed, it uses that agent's own subscription.`
-      : `Planner set to ${meta.label}.`,
+      : `Planner set to ${meta.label}.`),
   );
   console.log(plannerModelLine(recall));
   if (isApiProvider(provider) && !catalog.providers.includes(provider)) {
@@ -116,7 +123,7 @@ export async function handlePlannerEffort(subArgs: string[], injectedApi?: ApiCl
   if (!runner) {
     fail(
       'Thinking effort applies to a coding-agent planner.',
-      `Switch with: ordewell planner ${runnerIdChoice()}`,
+      `Switch with: ordewell planner ${plannerIdChoice()}`,
     );
   }
 

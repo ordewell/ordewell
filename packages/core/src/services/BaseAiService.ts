@@ -12,7 +12,7 @@ import type { RunnerModeInfo } from './ModeResolver';
 import type { PlanIntake } from './PlanChangeCheck';
 import { collectResearchContext } from './ContextCollector';
 import { PLANNER_EXECUTION_TOOLS, PLANNER_POST, PLANNER_TASK_READ_TOOLS, type PlannerToolHandler } from './mcp/tools';
-import { redactSecrets } from '../utils/redactSecrets';
+import { redactSourceText } from '../utils/redactSecrets';
 import { executeTool, STOPPED_TOOL_RESULT } from './executeTool';
 import { runResearchAgent, mapWithConcurrency, SUBAGENT_LIMITS } from './ResearchSubagents';
 import { SPAWN_RESEARCH_AGENT, isExecutionTool } from './researchTools';
@@ -45,7 +45,7 @@ async function callPlannerTool(handler: PlannerToolHandler | undefined, name: st
   if (!handler || !tool) return undefined;
   if (signal?.aborted) return { success: false, output: STOPPED_TOOL_RESULT, truncated: false };
   const reply = await tool.call(handler, args, { signal: signal ?? new AbortController().signal });
-  return { success: !reply.isError, output: read ? redactSecrets(reply.text) : reply.text, truncated: false };
+  return { success: !reply.isError, output: read ? redactSourceText(reply.text) : reply.text, truncated: false };
 }
 
 /**

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { bearerHeaderValue } from '../../utils/daemonToken';
-import type { McpCredential } from './OrdewellMcpServer';
+import type { McpContact, McpCredential } from './OrdewellMcpServer';
 
 /** The server's name in every runner's MCP configuration, and so in its tool names (`mcp__ordewell__*`). */
 export const ORDEWELL_MCP_SERVER_NAME = 'ordewell';
@@ -17,12 +17,19 @@ export interface McpClientConfig {
   extraTools?: readonly string[];
   /** A read-only task's token (ADR-0046): `run_command`, `fetch` and `web_search` are among its tools, for the runner to pre-allow and name. */
   readOnly?: true;
+  /**
+   * The server's record of this token's first use, for a runner whose
+   * protocol reports no MCP status of its own (ACP): its only evidence of an
+   * attach (ADR-0022, S4).
+   */
+  contact?: McpContact;
 }
 
 /**
  * The one shape every runner adapter renders its own MCP configuration from.
  * The token travels only in `headers`: the adapter writes it to an owner-only
- * file or an environment variable, never a prompt or a process argument
+ * file or an environment variable, or hands it over the runner's own stdin
+ * protocol (ACP's `session/new`), never a prompt or a process argument
  * (ADR-0022, A4/A5).
  */
 export function mcpClientConfig(credential: McpCredential): McpClientConfig {
@@ -33,6 +40,7 @@ export function mcpClientConfig(credential: McpCredential): McpClientConfig {
     ...(credential.hidden?.length ? { hidden: credential.hidden } : {}),
     ...(credential.extraTools?.length ? { extraTools: credential.extraTools } : {}),
     ...(credential.readOnly ? { readOnly: true } : {}),
+    ...(credential.contact ? { contact: credential.contact } : {}),
   };
 }
 

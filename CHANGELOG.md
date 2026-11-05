@@ -8,6 +8,79 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **Cursor runs tasks.** A plan can assign a task to `cursor-agent`, which
+  Ordewell drives over the Agent Client Protocol with the Ordewell tools
+  attached and its models discovered. It can also be the planner and run
+  read-only tasks: those start it in a private directory instead of the
+  worktree, so it never loads a repository's `.cursor/` rules, hooks or MCP
+  servers, and with a settings file of that start's own that denies Cursor's
+  file reads, writes and shell, so the user's own Cursor settings do not load
+  either. It reads the workspace through Ordewell's commands, and Ordewell
+  refuses every web fetch or search it asks for in a read-only task. In its
+  default mode a writable task's Cursor asks before a command outside its own
+  allowlist and before each MCP tool call, but writes file edits without
+  asking. A model the plan sets for a writable task becomes Cursor's own
+  default model for later sessions too. Cursor reports no version, so none is
+  checked; it was tested on Cursor CLI 2026.10.22. Signing in is done with
+  `cursor-agent login`; a planner or read-only start keeps that sign-in on
+  macOS, where it was tested.
+
+- **Gemini CLI runs tasks.** A plan can assign a task to `gemini-cli`, which
+  Ordewell drives over the Agent Client Protocol with the Ordewell tools
+  attached and its models discovered. Gemini starts each task trusting the
+  task's worktree for that run only, since an untrusted folder gets no MCP
+  servers; with that trust it also loads the worktree's own `.gemini/`
+  settings. It can also be the planner and run read-only tasks: those start it
+  in a private directory instead of the worktree, so it never runs a
+  repository's `.gemini/settings.json` hooks, and under a policy Ordewell hands
+  it its own write, shell and web tools are refused, as is every other MCP
+  server's. It reaches the workspace only through requests Ordewell answers.
+  Gemini CLI 0.66.0 or newer is required, and signing in is done by running
+  `gemini` itself.
+
+- **Cline runs tasks.** A plan can assign a task to `cline`, which Ordewell
+  drives over the Agent Client Protocol with its models discovered. The
+  Ordewell tools reach it through a settings file of its own, written for each
+  task outside the worktree and removed after, and the provider key `cline auth`
+  stored is handed to it for that task, or for listing its models, only. It
+  can also be the planner and run read-only tasks: those start it in a
+  private directory instead of the worktree, so it never runs a repository's
+  `.clinerules/hooks/`, and every edit and command of its own is refused. It
+  reads one workspace file at a time, each read decided by the path it names,
+  and searches through Ordewell's commands.
+  Cline 3.0.74 or newer is required.
+
+- **Qwen Code runs tasks.** A plan can assign a task to `qwen-code`, which
+  Ordewell drives over the Agent Client Protocol with the Ordewell tools
+  attached and its models discovered. It can also be the planner and run
+  read-only tasks: those start it in a private directory instead of the
+  worktree, so it never runs a repository's `.qwen/settings.json` hooks, and
+  Ordewell refuses every write, command and mode switch it asks for. It
+  reaches the workspace only through requests Ordewell answers. Qwen Code
+  0.26.6 or newer is required, and signing in is done by running `qwen` itself.
+
+- **GitHub Copilot CLI runs tasks.** A plan can assign a task to `copilot-cli`,
+  which Ordewell drives over the Agent Client Protocol with the Ordewell tools
+  attached, its models discovered and a signed-out Copilot flagged with its
+  `copilot login`. It can also be the planner and run read-only tasks: those
+  start it in a private directory instead of the worktree, so it never runs a
+  repository's `.github/hooks/` shell hooks, its own write and shell tools are
+  off, and it reaches the workspace only through requests Ordewell answers.
+  Copilot CLI 1.0.105 or newer is required.
+
+### Fixed
+
+- **An ACP agent's private directory is removed on Windows.** Windows refuses to
+  remove a folder a running process starts in, so the empty folder an ACP
+  agent's models were read in was left behind, and stopping an agent started in
+  its private directory could fail before the agent was ended. Both are now
+  removed once the agent has let go of them.
+- **The planner sees a repository's instruction files by their own names on
+  Windows**, as `../AGENTS.md` and `.github/instructions/app.instructions.md`
+  rather than with Windows separators.
+
 ## [0.12.5] - 2026-11-04
 
 ### Changed

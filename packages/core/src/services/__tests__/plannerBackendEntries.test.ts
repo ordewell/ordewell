@@ -1,14 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import { plannerBackendEntries, HARNESS_PLANNER_REASON, HARNESS_PLANNER_UNAVAILABLE_REASON, type PlannerUsability } from '../ProviderRegistry';
+import { VENDORS } from '../apiProviders';
+import { CONNECTORS } from '../harness/connectors';
+import { BUILTIN_MANIFESTS } from '../../plugins/builtin';
 
 describe('plannerBackendEntries', () => {
   it('lists harness planners first, then configured vendors in PROVIDER_PRIORITY order', () => {
     const entries = plannerBackendEntries({}, ['anthropic', 'openrouter']);
     expect(entries.map((e) => e.id)).toEqual([
-      'claude-code', 'codex', 'opencode', 'openrouter', 'anthropic',
+      'claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent', 'openrouter', 'anthropic',
     ]);
     expect(entries.map((e) => e.kind)).toEqual([
-      'harness', 'harness', 'harness', 'vendor', 'vendor',
+      'harness', 'harness', 'harness', 'harness', 'harness', 'harness', 'harness', 'harness', 'vendor', 'vendor',
     ]);
   });
 
@@ -23,7 +26,7 @@ describe('plannerBackendEntries', () => {
       id: 'claude-code', label: 'Claude Code', kind: 'harness',
       runner: 'claude-code', usable: true, reason: HARNESS_PLANNER_REASON,
     });
-    expect(entries.map((e) => e.runner)).toEqual(['claude-code', 'codex', 'opencode']);
+    expect(entries.map((e) => e.runner)).toEqual(['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent']);
   });
 
   it('keeps an unusable harness planner listed with the reason it was given', () => {
@@ -72,6 +75,18 @@ describe('plannerBackendEntries', () => {
   it('lists only the harness planners when nothing is configured', () => {
     const entries = plannerBackendEntries({}, []);
     expect(entries.every((e) => e.kind === 'harness')).toBe(true);
-    expect(entries).toHaveLength(3);
+    expect(entries).toHaveLength(8);
+  });
+});
+
+describe('the planner backend id space', () => {
+  // A runner that can plan is a backend under its runner id, beside the
+  // vendors: one sharing a vendor's id would replace it in ALL_PROVIDERS, and a
+  // runner that cannot plan yet would on the day it can.
+  it('gives no runner a vendor\'s id', () => {
+    const runners = new Set([...BUILTIN_MANIFESTS.map((manifest) => manifest.name), ...Object.keys(CONNECTORS)]);
+
+    expect(runners).toContain('copilot-cli');
+    expect(Object.keys(VENDORS).filter((vendor) => runners.has(vendor))).toEqual([]);
   });
 });

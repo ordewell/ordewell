@@ -24,7 +24,7 @@ function config(aiProvider: PlannerBackendId, apiKey: string, planningModel: str
  * answered "API key not configured" instead of planning.
  */
 describe('plannerPreflightError', () => {
-  for (const provider of ['claude-code', 'codex', 'opencode']) {
+  for (const provider of ['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent']) {
     it(`lets ${provider} plan with no API key`, () => {
       expect(plannerPreflightError(config(provider, '', 'sonnet'), '/repo')).toBeNull();
     });
@@ -36,7 +36,7 @@ describe('plannerPreflightError', () => {
 
   it('sends a vendor planner with no key to /planner first, then offers /key', () => {
     expect(plannerPreflightError(config('openrouter', '', 'openai/gpt-5'), '/repo')).toBe(
-      'No planner is ready. Pick one with /planner: Claude Code, Codex and OpenCode plan with no API key. ' +
+      'No planner is ready. Pick one with /planner: Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor plan with no API key. ' +
       'To plan with OpenRouter instead, add OPENROUTER_API_KEY with /key.',
     );
   });
@@ -81,7 +81,7 @@ describe('plannerPreflightError scopes the signed-out verdict to the workspace',
   it('refuses on this workspace\'s own signed-out verdict', () => {
     recordRunnerAuth('claude-code', SIGNED_OUT, '/repo');
 
-    expect(plannerPreflightError(config('claude-code', '', 'sonnet'), '/repo')).toContain('Claude Code not logged in');
+    expect(plannerPreflightError(config('claude-code', '', 'sonnet'), '/repo')).toContain('Claude Code is not signed in. Sign in with /login claude-code, or run claude auth login. Then try again.');
   });
 });
 
@@ -120,7 +120,7 @@ describe('plannerPreflightError on the extension\'s own config', () => {
     const config = new VsCodeConfig(await store({ openrouterKey: 'sk-or-secret' }));
 
     expect(plannerPreflightError(config, '/repo')).toBe(
-      'No planner is ready. Pick one with /planner: Claude Code, Codex and OpenCode plan with no API key. ' +
+      'No planner is ready. Pick one with /planner: Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor plan with no API key. ' +
       'To plan with OpenAI instead, add OPENAI_API_KEY with /key.',
     );
   });
@@ -231,7 +231,7 @@ describe('a turn after a login done outside the extension', () => {
       if (recordedRunnerAuth('claude-code', workspace)?.state !== 'signed-out') return;
       throw new PlannerNotReadyError({
         code: 'signed_out', provider: 'claude-code', label: 'Claude Code', runner: 'claude-code',
-        loginCommand: ['claude', 'auth', 'login'],
+        signIn: { runner: 'claude-code', label: 'Claude Code', login: ['claude', 'auth', 'login'] },
       });
     };
     const session = {
@@ -289,7 +289,7 @@ describe('a turn after a login done outside the extension', () => {
     await handleSendMessageNow('Use SQLite instead', h.deps);
 
     expect(h.chatProvider.showError).toHaveBeenCalledTimes(2);
-    expect(h.chatProvider.showError.mock.calls[0][0]).toContain('Claude Code not logged in');
-    expect(h.chatProvider.showError.mock.calls[1][0]).toContain('Claude Code not logged in');
+    expect(h.chatProvider.showError.mock.calls[0][0]).toContain('Claude Code is not signed in. Sign in with /login claude-code, or run claude auth login. Then try again.');
+    expect(h.chatProvider.showError.mock.calls[1][0]).toContain('Claude Code is not signed in. Sign in with /login claude-code, or run claude auth login. Then try again.');
   });
 });

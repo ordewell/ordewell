@@ -62,7 +62,7 @@ describe('a signed-out planner', () => {
     expect(pill().className).toContain('signed-out');
     expect(pill().className).toContain('active');
     expect(pill().querySelector('.planner-auth-dot')).toBeTruthy();
-    expect(pill().title).toContain('Not logged in');
+    expect(pill().title).toBe('Claude Code is not signed in. Sign in with /login claude-code, or run claude auth login.');
   });
 
   it('keeps a signed-out agent pickable', () => {
@@ -92,7 +92,7 @@ describe('a signed-out planner', () => {
     const region = document.querySelector('.planner-auth-rows');
     expect(region?.getAttribute('role')).toBe('status');
     expect(region?.getAttribute('aria-live')).toBe('polite');
-    expect(authRow('claude-code')?.querySelector('.planner-auth-warning-text')?.textContent).toBe('Claude Code not logged in.');
+    expect(authRow('claude-code')?.querySelector('.planner-auth-warning-text')?.textContent).toBe('Claude Code is not signed in. Sign in with /login claude-code, or run claude auth login.');
     expect(rowLogin('claude-code')?.textContent).toBe('Log in');
     expect(rowLogin('claude-code')?.getAttribute('aria-label')).toBe('Log in to Claude Code');
   });
@@ -109,15 +109,15 @@ describe('a signed-out planner', () => {
     post({ type: 'setPlannerBackends', backends: [signedInClaude, signedOutCodex, opencode], provider: 'opencode', runner: 'opencode' });
 
     expect(authRows().map((r) => r.dataset.runner)).toEqual(['opencode', 'codex']);
-    expect(authRow('opencode')?.querySelector('.planner-auth-warning-text')?.textContent).toBe('OpenCode not logged in.');
-    expect(authRow('codex')?.querySelector('.planner-auth-warning-text')?.textContent).toBe('Codex not logged in.');
+    expect(authRow('opencode')?.querySelector('.planner-auth-warning-text')?.textContent).toBe('OpenCode is not signed in. Sign in with /login opencode, or run opencode auth login.');
+    expect(authRow('codex')?.querySelector('.planner-auth-warning-text')?.textContent).toBe('Codex is not signed in. Sign in with /login codex, or run codex login.');
   });
 
   it('gives a signed-out agent with no login command a row but no button', () => {
     const noCommand: PlannerBackend = { ...signedOutCodex, auth: { state: 'signed-out' } };
     post({ type: 'setPlannerBackends', backends: [signedInClaude, noCommand], provider: 'claude-code', runner: 'claude-code' });
 
-    expect(authRow('codex')?.querySelector('.planner-auth-warning-text')?.textContent).toBe('Codex not logged in.');
+    expect(authRow('codex')?.querySelector('.planner-auth-warning-text')?.textContent).toBe('Codex is not signed in.');
     expect(rowLogin('codex')).toBeNull();
     expect(plannerLogin('Codex')).toBeUndefined();
   });
@@ -146,7 +146,7 @@ describe('a signed-out planner', () => {
     // Codex, while the saved config still points at Claude Code.
     fireEvent.click(pill('Codex'));
     expect(authRows()[0].dataset.runner).toBe('codex');
-    expect(authRow('codex')?.querySelector('.planner-auth-warning-text')?.textContent).toBe('Codex not logged in.');
+    expect(authRow('codex')?.querySelector('.planner-auth-warning-text')?.textContent).toBe('Codex is not signed in. Sign in with /login codex, or run codex login.');
     api.postMessage.mockClear();
 
     fireEvent.click(rowLogin('codex')!);
@@ -205,7 +205,7 @@ describe('a signed-out planner', () => {
     expect(dot?.getAttribute('aria-hidden')).toBe('true');
     expect(toggle.querySelector('.setup-panel-toggle-row .visually-hidden')?.textContent)
       .toBe('not logged in: Claude Code');
-    expect(toggle.title).toBe('Claude Code is not logged in — open Settings to sign in');
+    expect(toggle.title).toBe('Claude Code is not signed in. Sign in with /login claude-code, or run claude auth login.');
   });
 
   it('keeps the collapsed Settings row to its label when the planner is signed in', () => {
@@ -330,7 +330,7 @@ describe('a signed-out runner', () => {
     const codex = runnerPill('Codex');
     expect(codex.className).toContain('signed-out');
     expect(codex.querySelector('.planner-auth-dot')).not.toBeNull();
-    expect(codex.title).toBe('Not logged in');
+    expect(codex.title).toBe('Codex is not signed in. Sign in with /login codex, or run codex login.');
     expect(runnerLogin('Codex')?.getAttribute('aria-label')).toBe('Log in to Codex');
     api.postMessage.mockClear();
 
@@ -360,7 +360,119 @@ describe('a signed-out runner', () => {
     post({ type: 'setPlannerBackends', backends: [signedInClaude, noCommand], provider: 'claude-code', runner: 'claude-code' });
 
     expect(runnerPill('Codex').className).toContain('signed-out');
-    expect(runnerPill('Codex').title).toBe('Not logged in');
+    expect(runnerPill('Codex').title).toBe('Codex is not signed in.');
     expect(runnerLogin('Codex')).toBeNull();
+  });
+});
+
+// The ways in as the verdict carries them, as the host's probe builds them.
+const signedOutCursor: PlannerBackend = {
+  id: 'cursor-agent',
+  label: 'Cursor',
+  kind: 'harness',
+  runner: 'cursor-agent',
+  usable: true,
+  auth: {
+    state: 'signed-out',
+    loginCommand: ['cursor-agent', 'login'],
+    signIn: { runner: 'cursor-agent', label: 'Cursor', login: ['cursor-agent', 'login'] },
+  },
+};
+const signedOutQwen: PlannerBackend = {
+  id: 'qwen-code',
+  label: 'Qwen Code',
+  kind: 'harness',
+  runner: 'qwen-code',
+  usable: true,
+  auth: {
+    state: 'signed-out',
+    signIn: {
+      runner: 'qwen-code',
+      label: 'Qwen Code',
+      key: { provider: 'openrouter', label: 'OpenRouter', others: 'any OpenAI-compatible provider' },
+      byHand: 'run qwen and sign in there',
+    },
+  },
+};
+const signedOutGemini: PlannerBackend = {
+  id: 'gemini-cli',
+  label: 'Gemini CLI',
+  kind: 'harness',
+  runner: 'gemini-cli',
+  usable: true,
+  auth: { state: 'signed-out', signIn: { runner: 'gemini-cli', label: 'Gemini CLI', key: { provider: 'google', label: 'Google Gemini' }, byHand: 'run gemini and choose how it signs in' } },
+};
+const CURSOR = 'Cursor is not signed in. Sign in with /login cursor-agent, or run cursor-agent login.';
+const QWEN = 'Qwen Code is not signed in. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.';
+const GEMINI = 'Gemini CLI is not signed in. Run /key and choose Google Gemini to hand it a key, or run gemini and choose how it signs in.';
+
+/** Every signed-out agent names its way in, and its Log in runs whichever one Ordewell can (ADR-0052). */
+describe('the way into a signed-out agent', () => {
+  beforeEach(() => {
+    render(<App />);
+    post({ type: 'setConfiguredProviders', providers: [] });
+    post({
+      type: 'setRunners',
+      runners: [
+        { id: 'cursor-agent', displayName: 'Cursor', enabled: true },
+        { id: 'qwen-code', displayName: 'Qwen Code', enabled: true },
+        { id: 'gemini-cli', displayName: 'Gemini CLI', enabled: true },
+      ],
+    });
+    post({ type: 'setPlannerBackends', backends: [signedOutCursor, signedOutQwen, signedOutGemini], provider: 'cursor-agent', runner: 'cursor-agent' });
+  });
+
+  it('names each agent\'s way in on its empty-state row and its pills', () => {
+    expect(authRow('cursor-agent')?.querySelector('.planner-auth-warning-text')?.textContent).toBe(CURSOR);
+    expect(authRow('qwen-code')?.querySelector('.planner-auth-warning-text')?.textContent).toBe(QWEN);
+    expect(authRow('gemini-cli')?.querySelector('.planner-auth-warning-text')?.textContent).toBe(GEMINI);
+    expect(pill('Cursor').title).toBe(CURSOR);
+    expect(pill('Qwen Code').title).toBe(QWEN);
+    expect(runnerPill('Cursor').title).toBe(CURSOR);
+    expect(runnerPill('Gemini CLI').title).toBe(GEMINI);
+  });
+
+  it('runs a declared login from the row, the planner pill and the runner pill', () => {
+    for (const press of [() => rowLogin('cursor-agent')!, () => plannerLogin('Cursor')!, () => runnerLogin('Cursor')!]) {
+      post({ type: 'plannerLoginEnded', runner: 'cursor-agent', ok: true });
+      api.postMessage.mockClear();
+      fireEvent.click(press());
+      expect(api.postMessage).toHaveBeenCalledWith({ type: 'loginPlanner', runner: 'cursor-agent' });
+    }
+  });
+
+  it('opens the key entry on the agent\'s vendor for a key-based agent, and waits on nothing', () => {
+    for (const press of [() => rowLogin('qwen-code')!, () => plannerLogin('Qwen Code')!, () => runnerLogin('Qwen Code')!]) {
+      api.postMessage.mockClear();
+      fireEvent.click(press());
+      expect(api.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'sendMessage', text: '/key openrouter' }));
+      expect(api.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'loginPlanner' }));
+      // A key entry reports no end, so the button must not spin for one.
+      expect(press()).not.toBeDisabled();
+    }
+    for (const press of [() => rowLogin('gemini-cli')!, () => runnerLogin('Gemini CLI')!]) {
+      api.postMessage.mockClear();
+      fireEvent.click(press());
+      expect(api.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'sendMessage', text: '/key google' }));
+      expect(api.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'loginPlanner' }));
+      expect(press()).not.toBeDisabled();
+    }
+  });
+
+  it('gives an agent Ordewell can sign in by no means the words but no button', () => {
+    post({
+      type: 'setPlannerBackends',
+      backends: [{ ...signedOutGemini, auth: { state: 'signed-out', signIn: { runner: 'gemini-cli', label: 'Gemini CLI', byHand: 'run gemini and choose how it signs in' } } }],
+      provider: 'cursor-agent',
+      runner: 'cursor-agent',
+    });
+    expect(rowLogin('gemini-cli')).toBeNull();
+    expect(runnerLogin('Gemini CLI')).toBeNull();
+  });
+
+  it('names the planner\'s way in on the collapsed Settings row', () => {
+    const toggle = [...document.querySelectorAll<HTMLButtonElement>('.setup-panel-toggle')]
+      .find((b) => b.textContent?.includes('Settings'))!;
+    expect(toggle.title).toBe(CURSOR);
   });
 });

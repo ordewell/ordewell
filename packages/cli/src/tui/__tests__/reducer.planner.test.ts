@@ -4,6 +4,7 @@ import type { StepperState } from '../reducers/stepper';
 import type { SessionMessage } from '@ordewell/core';
 import type { TuiState } from '../state';
 import { lastMessage, messagesOf } from './chat';
+import { normalizeCatalog } from '../../catalog';
 
 /**
  * The `/planner` picker (ADR-0009): who researches the goal and writes the
@@ -87,10 +88,23 @@ describe('/planner', () => {
     });
     const items = stepperOf(state).items;
     const claude = items.find((i) => i.id === 'claude-code');
-    expect(claude).toMatchObject({ warn: true, detail: 'not logged in · /login claude-code' });
+    expect(claude).toMatchObject({ warn: true, detail: 'Claude Code is not signed in. Sign in with /login claude-code, or run claude login.' });
     expect(claude?.disabled).toBeUndefined();
     expect(items.find((i) => i.id === 'codex')).toMatchObject({ detail: expect.stringMatching(/no API key/i) });
     expect(items.find((i) => i.id === 'codex')?.warn).toBeUndefined();
+  });
+
+  it('names the key entry, not a login it has none of, for a signed-out agent that signs in with a key', () => {
+    const { state } = run('/planner', {
+      ...ready,
+      runners: [{
+        id: 'qwen-code', name: 'Qwen Code', enabled: true,
+        auth: { state: 'signed-out', signIn: { runner: 'qwen-code', label: 'Qwen Code', key: { provider: 'openrouter', label: 'OpenRouter' } } },
+      }],
+    });
+    expect(stepperOf(state).items.find((i) => i.id === 'qwen-code')).toMatchObject({
+      warn: true, detail: 'Qwen Code is not signed in. Run /key and choose OpenRouter to hand it a key.',
+    });
   });
 
   it('leaves an agent whose CLI is not installed off the list', () => {
@@ -104,7 +118,7 @@ describe('/planner', () => {
   it('names the agents to install when nothing can plan', () => {
     const { state } = run('/planner', { ...ready, runners: [], configuredProviders: [] });
 
-    expect(stepperOf(state).items[0]?.detail).toContain('Claude Code, Codex or OpenCode');
+    expect(stepperOf(state).items[0]?.detail).toContain('Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI or Cursor');
   });
 
   const saved = (provider: string, modelId: string, effort: string, notice: string, noticeLevel?: 'error') =>
@@ -294,6 +308,17 @@ describe('/planner', () => {
     expect(stepperOf(state).items.map((i) => i.id)).toEqual(['opus', 'haiku']);
   });
 
+  it('says why a coding agent lists no models, as the daemon words it, instead of offering a refresh', () => {
+    const reason = 'Qwen Code is not signed in. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.';
+    const runners = [...(installedAll.runners ?? []), { id: 'qwen-code', name: 'Qwen Code', enabled: true }];
+    const opened = choose(run('/planner', { ...ready, runners, models: [] }).state, 'qwen-code').state;
+
+    const catalog = normalizeCatalog({ models: [], modelsByRunner: { 'qwen-code': [] }, runnerErrors: { 'qwen-code': reason } });
+    const { state } = reduce(opened, { type: 'modelsLoaded', ...catalog });
+
+    expect(stepperOf(state).items).toEqual([{ id: '', label: 'No qwen-code models discovered', detail: reason, disabled: true }]);
+  });
+
   it('names a provider whose catalog failed in the model step, without offering it', () => {
     const state = run('/planner', {
       ...ready,
@@ -315,6 +340,13 @@ describe('/planner', () => {
     const { state, effects } = run('/planner opencode', installedAll);
     expect(effects).toEqual([{ type: 'setPlanner', provider: 'opencode' }]);
     expect(state.overlay).toBeNull();
+  });
+
+  it('/planner copilot-cli switches like any runner that plans', () => {
+    const runners = [...(installedAll.runners ?? []), { id: 'copilot-cli', name: 'GitHub Copilot CLI', enabled: true }];
+    const { state, effects } = run('/planner copilot-cli', { runners });
+    expect(effects).toEqual([{ type: 'setPlanner', provider: 'copilot-cli' }]);
+    expect(lastMessage(state)?.role).not.toBe('error');
   });
 
   it('rejects a provider it does not know', () => {

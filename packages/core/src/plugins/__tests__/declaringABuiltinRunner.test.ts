@@ -8,6 +8,7 @@ import {
 import { ModelResolver } from '../../services/ModelResolver';
 import { supportsTaskMode, type RunnerConnector } from '../../services/harness/connectors';
 import { readUsageLimitReset } from '../../services/runnerExit';
+import { RunnerInstallation } from '../../services/RunnerInstallation';
 
 // A built-in runner is declared in exactly two places: its manifest in the
 // built-in list and its entry in CONNECTORS. This file adds a fake one there and
@@ -24,9 +25,19 @@ const ACME = vi.hoisted((): RunnerManifest => ({
   modes: [{ id: 'build', label: 'Build', description: 'Edits files', safe: true, autonomous: true }],
 }));
 
+// One whose connector runs tasks but cannot plan yet, as an ACP agent's first slice.
+const TASKER = vi.hoisted((): RunnerManifest => ({
+  name: 'tasker',
+  displayName: 'Tasker',
+  runner: { command: 'tasker' },
+  features: {},
+  modelDiscovery: { method: 'command', discoveryCommands: [] },
+  modes: [{ id: 'build', label: 'Build', description: 'Edits files', safe: true, autonomous: true }],
+}));
+
 vi.mock('../builtin', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../builtin')>();
-  return { ...actual, BUILTIN_MANIFESTS: [...actual.BUILTIN_MANIFESTS, ACME] };
+  return { ...actual, BUILTIN_MANIFESTS: [...actual.BUILTIN_MANIFESTS, ACME, TASKER] };
 });
 
 vi.mock('../../services/harness/connectors', async (importOriginal) => {
@@ -36,18 +47,19 @@ vi.mock('../../services/harness/connectors', async (importOriginal) => {
     ...borrowed,
     usageLimitReset: (tail) => (tail.includes('acme quota, back at noon') ? new Date('2026-10-14T12:00:00Z') : null),
   };
-  Object.assign(actual.CONNECTORS, { acme });
+  const tasker: RunnerConnector = { ...borrowed, plans: false };
+  Object.assign(actual.CONNECTORS, { acme, tasker });
   return actual;
 });
 
 describe('a built-in runner declared by manifest and connector only', () => {
   it('is in the runner list core exposes, after the shipped runners', () => {
     const ids = new RunnerRegistry().list().map((entry) => entry.manifest.name);
-    expect(ids).toEqual(['claude-code', 'codex', 'opencode', 'acme']);
+    expect(ids).toEqual(['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent', 'acme', 'tasker']);
   });
 
   it('can plan: it is a harness planner, labelled from its manifest', () => {
-    expect(CLI_PROVIDERS).toEqual(['claude-code', 'codex', 'opencode', 'acme']);
+    expect(CLI_PROVIDERS).toEqual(['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent', 'acme']);
     expect(isCliProvider('acme')).toBe(true);
     expect(runnerForProvider('acme')).toBe('acme');
     expect(providerForRunner('acme')).toBe('acme');
@@ -78,5 +90,20 @@ describe('a built-in runner declared by manifest and connector only', () => {
   it('reads its own usage-limit reset through its connector', () => {
     const now = new Date('2026-10-14T09:00:00Z');
     expect(readUsageLimitReset('acme', 'usage limit: acme quota, back at noon', now)?.toISOString()).toBe('2026-10-14T12:00:00.000Z');
+  });
+
+  it('runs tasks without planning when its connector does not plan', () => {
+    expect(supportsTaskMode('tasker')).toBe(true);
+    expect(isCliProvider('tasker')).toBe(false);
+    expect(CLI_PROVIDERS).not.toContain('tasker');
+    expect(plannerBackendEntries({ tasker: { usable: true } }, []).some((e) => e.id === 'tasker')).toBe(false);
+  });
+
+  it('is refused as a planner, in words that say it runs tasks, without starting it', async () => {
+    const exec = vi.fn(async () => ({ stdout: 'ok' }));
+    const installation = new RunnerInstallation(new RunnerRegistry(), exec);
+
+    expect(await installation.plannerUsability('tasker')).toEqual({ usable: false, reason: 'Tasker can run tasks but cannot plan in Ordewell yet.' });
+    expect(exec).not.toHaveBeenCalled();
   });
 });

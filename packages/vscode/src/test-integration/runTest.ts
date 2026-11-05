@@ -52,7 +52,16 @@ async function run(workspace: string, userData: string, home: string): Promise<v
   await runTests({
     extensionDevelopmentPath: path.resolve(__dirname, '..'),
     extensionTestsPath: path.resolve(__dirname, './index.js'),
-    launchArgs: [workspace, `--user-data-dir=${userData}`, '--disable-workspace-trust', '--skip-welcome', '--skip-release-notes'],
+    launchArgs: [
+      workspace,
+      `--user-data-dir=${userData}`,
+      '--disable-workspace-trust',
+      '--skip-welcome',
+      '--skip-release-notes',
+      // The home above has no login keychain, so on macOS the first secret
+      // read raises a keychain dialog and the run waits on it until killed.
+      ...(process.platform === 'darwin' ? ['--use-mock-keychain'] : []),
+    ],
     extensionTestsEnv: {
       ...homeEnv(home),
       ORDEWELL_TEST_WORKSPACE: workspace,

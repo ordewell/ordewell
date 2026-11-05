@@ -6,7 +6,7 @@ import { augmentedPath, withPath } from '../utils/shellPath';
 import { isExecutableResolved, planDirectLaunch, type LaunchDeps } from '../utils/launch';
 import type { ExecImpl } from './ModelDiscovery';
 import { connectorFor } from './harness/connectors';
-import { readRunnerAuth, recordRunnerAuth, type RunnerAuth, type RunnerAuthExec } from './runnerAuth';
+import { readRunnerAuth, recordedRunnerAuth, recordRunnerAuth, type RunnerAuth, type RunnerAuthExec } from './runnerAuth';
 
 const execAsync = promisify(exec);
 
@@ -63,6 +63,9 @@ export interface RunnerInstallationOptions {
  * augmented PATH, per-process cache. A runner that isn't installed should never
  * be offered for selection in any surface.
  */
+/** Whether an agent can be started, why not, and its login verdict beside it. */
+export interface RunnerUsability { usable: boolean; reason?: string; auth?: RunnerAuth }
+
 export class RunnerInstallation {
   private cache: Map<string, { installed: boolean; at: number }> = new Map();
   private inflight: Map<string, Promise<boolean>> = new Map();
@@ -147,12 +150,28 @@ export class RunnerInstallation {
    * it is installed, and the user may log in from the same picker — so the
    * auth verdict rides beside usability, never inside it.
    */
-  async plannerUsability(runner: string): Promise<{ usable: boolean; reason?: string; auth?: RunnerAuth }> {
+  async plannerUsability(runner: string): Promise<RunnerUsability> {
     const manifest = this.registry.getManifest(runner);
     if (!manifest) return { usable: false, reason: `No runner manifest is registered for "${runner}".` };
-    if (!connectorFor(runner)) {
+    const connector = connectorFor(runner);
+    if (!connector) {
       return { usable: false, reason: `${manifest.displayName ?? runner} has no planner transport yet.` };
     }
+    if (!connector.plans) {
+      return { usable: false, reason: `${manifest.displayName ?? runner} can run tasks but cannot plan in Ordewell yet.` };
+    }
+    return this.runnerUsability(runner);
+  }
+
+  /**
+   * {@link plannerUsability} without the question of planning: whether the
+   * agent's CLI is installed and can be started, with its login verdict. The
+   * runner list and the login flows ask this, because a task runner that cannot
+   * plan yet (an ACP agent) is still offered and still needs signing in.
+   */
+  async runnerUsability(runner: string): Promise<RunnerUsability> {
+    const manifest = this.registry.getManifest(runner);
+    if (!manifest) return { usable: false, reason: `No runner manifest is registered for "${runner}".` };
     if (!(await this.isInstalled(runner))) {
       return { usable: false, reason: `${manifest.runner.command} is not installed or is not on PATH.` };
     }
@@ -179,7 +198,13 @@ export class RunnerInstallation {
     const workspace = this.workspace();
     const key = `${workspace ?? ''}\u0000${runner}`;
     const cached = this.authCache.get(key);
-    if (cached && this.now() - cached.at < AUTH_TTL_MS) return cached.auth;
+    if (cached && this.now() - cached.at < AUTH_TTL_MS) {
+      // A record that is not this probe's was left since by a turn the agent
+      // refused, which outranks its status command: the flag and its way in
+      // show at once, not a TTL later (ADR-0052).
+      const since = recordedRunnerAuth(runner, workspace);
+      return since && since !== cached.auth ? since : cached.auth;
+    }
 
     const existing = this.authInflight.get(key);
     if (existing) return existing;

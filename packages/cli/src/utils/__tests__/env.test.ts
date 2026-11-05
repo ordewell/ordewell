@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { homeEnv, setEnv } from '@ordewell/core/testing';
-import { findEnvFile, writeEnvVar, loadEnvFile } from '../env';
+import { findEnvFile, writeEnvVar, loadEnvFile, shellEnvValue } from '../env';
 
 let home: string;
 let restoreHome: () => void;
@@ -108,6 +108,19 @@ describe('loadEnvFile', () => {
   it('is a no-op when no .env file exists', () => {
     expect(() => loadEnvFile()).not.toThrow();
     expect(process.env[key]).toBeUndefined();
+  });
+
+  it('remembers which values the shell supplied before .env filled gaps', () => {
+    const file = findEnvFile();
+    delete process.env[key];
+    writeEnvVar(file, key, 'from-file');
+    loadEnvFile();
+    expect(shellEnvValue(key)).toBeUndefined();
+    expect(process.env[key]).toBe('from-file');
+
+    process.env[key] = 'from-shell';
+    loadEnvFile();
+    expect(shellEnvValue(key)).toBe('from-shell');
   });
 });
 

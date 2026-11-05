@@ -46,6 +46,9 @@ import type { IWebFetcher } from '../interfaces/IWebFetcher';
 import type { OrchestratorObserver, StartAdmission } from './TaskOrchestrator';
 import { KeptWorkError, type ExecutionBackend, type OpenLease, type ReservedLease } from './executionLease';
 import type { BudgetHold, NodeBudget } from './TreeLedger';
+import { BUILTIN_MANIFESTS } from '../plugins/builtin';
+import { recordRunnerAuth, signedOutFromFailure } from './runnerAuth';
+import { describeSignIn, TERMINAL_UI_SIGN_IN } from './signInHint';
 
 class TaskStartConfigError extends Error {
   constructor(paths: string[]) {
@@ -115,6 +118,8 @@ interface TaskAttempt extends EndedAttempt {
   skills: readonly TaskSkillSnapshot[];
   /** Why the running turn failed, as the runner reported it, if it did. */
   turnError: TurnFailure | null;
+  /** The workspace's variables the runner started with: the account its sign-in failure is judged against (ADR-0016). */
+  env: Record<string, string>;
   /** Where the running turn's output starts in the session's. */
   turnOutputFrom: number;
   /** The completion reminder went out: once per attempt, so a second turn without `task_complete` waits for input. */
@@ -230,7 +235,7 @@ export type SpawnFailure =
 export type AttemptEnded =
   | { kind: 'passed'; task: Task; attempt: EndedAttempt; verdict: Verdict; landing: LandingOutcome }
   | { kind: 'files-changed'; task: Task; attempt: EndedAttempt; verdict: Verdict; files: string[] }
-  | { kind: 'failed'; task: Task; attempt: EndedAttempt; verdict: Verdict; unresumed: string | null }
+  | { kind: 'failed'; task: Task; attempt: EndedAttempt; verdict: Verdict; unresumed: string | null; signedOut: string | null }
   | { kind: 'repaired'; task: Task; attempt: EndedAttempt; verdict: Verdict; landing: LandingOutcome }
   | { kind: 'usage-limited'; taskId: string; attempt: EndedAttempt; said: string | TurnFailure; output: string }
   | { kind: 'spawn-failed'; task: Task; attempt: EndedAttempt; failure: SpawnFailure }
@@ -498,6 +503,7 @@ export class Attempts {
       admission: claim.admission,
       autoResumed: claim.autoResumed === true,
       turnError: null,
+      env: {},
       turnOutputFrom: 0,
       reminded: false,
       runnerStopped: false,
@@ -879,6 +885,22 @@ export class Attempts {
   }
 
   /**
+   * The way back in, worded for the terminal as the daemon words everything,
+   * when the runner's own words are its signed-out line; recorded, so the
+   * agent shows signed out wherever its login is read (ADR-0052). Only the
+   * phrase its manifest declares counts, so no other failure becomes a login.
+   */
+  private signedOut(attempt: TaskAttempt, said: string): string | null {
+    if (attempt.script || attempt.delegated || !said) return null;
+    const manifest = this.deps.registry?.get(attempt.runner)?.manifest ?? BUILTIN_MANIFESTS.find((m) => m.name === attempt.runner);
+    if (!manifest) return null;
+    const auth = signedOutFromFailure(manifest, said, { ...process.env, ...attempt.env });
+    if (!auth) return null;
+    recordRunnerAuth(attempt.runner, auth, this.deps.workspaceRoot());
+    return describeSignIn(auth.signIn, TERMINAL_UI_SIGN_IN);
+  }
+
+  /**
    * How a spawn that threw leaves its task ({@link SpawnFailure}), the
    * attempt already ended; a usage limit that refused the start is a pause.
    */
@@ -911,10 +933,11 @@ export class Attempts {
     }
     if (attempt.kind.kind === 'repair') return failed({ leaves: 'conflict', why: `could not start: ${message}` });
     if (attachTimeout) {
-      // The runner stayed up but never connected. Nothing was sent to it
-      // and no verdict exists, so the task is held with a reason rather
-      // than failed: its dependents stay on the plan, and a later start
-      // can still run it (ADR-0022, S2).
+      // The runner stayed up but never connected, so no verdict exists, and
+      // a task sent to it as the attach check goes with the worktree
+      // (ADR-0060, R5). The task is held with a reason rather than failed:
+      // its dependents stay on the plan, and a later start can still run it
+      // (ADR-0022, S2).
       return failed({ leaves: 'held', hold: 'could not connect to Ordewell\'s tools; start it again', settles: true, notice: { level: 'warn', text: `Task "${task.title}" is on hold: could not connect to Ordewell's tools. Start it again.` } });
     }
     if (err instanceof TaskSkillsError) {
@@ -927,8 +950,16 @@ export class Attempts {
     if (err instanceof UnsealedScriptError) {
       return failed({ leaves: 'failed', summary: summarizeOutput(message, ''), keepWorktree: false, notice: { level: 'error', text: message } });
     }
+    const signedOut = this.signedOut(attempt, message);
     if (err instanceof McpAttachError || err instanceof RunnerStartupExit) {
-      return failed({ leaves: 'failed', summary: summarizeOutput(message, message), keepWorktree: true, notice: { level: 'error', text: message } });
+      const said = signedOut ? withSignIn(signedOut, message) : message;
+      return failed({ leaves: 'failed', summary: summarizeOutput(said, message), keepWorktree: true, notice: { level: 'error', text: said } });
+    }
+    if (signedOut) {
+      // Held as any start that threw is, and worded as the way back in: a
+      // login is all this start lacks (ADR-0052).
+      const said = withSignIn(signedOut, message);
+      return failed({ leaves: 'held', hold: `${said} Then start it again.`, settles: false, notice: { level: 'error', text: `Failed to start task "${task.title}": ${said}` } });
     }
     // Couldn't spawn — the task was never executed, so it stays "to do".
     // Held out of auto-scheduling to avoid a spawn-throw retry loop.
@@ -966,6 +997,7 @@ export class Attempts {
     const pins = board && takesSkills(kind) ? board.pins() : [];
     const finalPrompt = pins.length > 0 ? `${prompt}\n\n${pins.join('\n')}` : prompt;
     const env = await this.envForTask(cwd);
+    attempt.env = env;
     if (landsNothing(kind)) {
       // Each repo worktree's `.git` must stay the repository's, so a sealed run
       // cannot plant one for the runner's own git to load (ADR-0046).
@@ -1273,6 +1305,9 @@ export class Attempts {
       this.message(taskId, COMPLETION_REMINDER, 'message', (live, message) => live.sendMessage(message, 'ordewell'));
       return;
     }
+    // The task waits for the person either way; flagging the agent is what
+    // puts a Log in beside it (ADR-0052).
+    if (reason === 'failed' && attempt.turnError !== null) this.signedOut(attempt, attempt.turnError.message);
     store.markAwaitingUser(taskId, 'input');
     this.verifier.pauseIdle(taskId);
     this.host.emit('onTaskSettled', { taskId });
@@ -1356,6 +1391,7 @@ export class Attempts {
     const landing = verdict.outcome === 'pass' ? await this.land(attempt, () => this.deps.landing.landPassed(task, attempt, handoff?.commit)) : null;
     const changedFiles = landing && checksTree(attempt.kind) ? await runs.filesChangedSince(attempt.snapshot) : [];
     const unresumed = this.unresumed(attempt) ? unresumedMessage(task, `${attempt.runner} could not find its saved session`) : null;
+    const signedOut = landing ? null : this.signedOut(attempt, lastWords(attempt, verdict, summary));
     if (this.live.get(taskId) !== attempt) return;
     this.end(taskId, 'verdict');
     // A pause is no verdict, however the limit arrived (ADR-0018, U1).
@@ -1363,13 +1399,14 @@ export class Attempts {
       return this.host.settle({ kind: 'usage-limited', taskId, attempt, said: stoppedMidTurn, output: summary });
     }
     store.setTaskVerdict(taskId, verdict);
-    this.handOver(taskId, summarizeOutput(unresumed ?? verdict.reason, authored ? '' : summary), handoff, attempt);
+    const reason = unresumed ?? (signedOut ? `${signedOut}\n\n${verdict.reason}` : verdict.reason);
+    this.handOver(taskId, summarizeOutput(reason, authored ? '' : summary), handoff, attempt);
     console.error(`[Attempts] Output summary:\n${summary || '(empty: no output captured)'}`);
     // The evidence the ops rule rests on: a runner cannot be kept from
     // writing, only caught.
     if (changedFiles.length > 0) return this.host.settle({ kind: 'files-changed', task, attempt, verdict, files: changedFiles });
     if (landing) return this.host.settle({ kind: 'passed', task, attempt, verdict, landing });
-    return this.host.settle({ kind: 'failed', task, attempt, verdict, unresumed });
+    return this.host.settle({ kind: 'failed', task, attempt, verdict, unresumed, signedOut });
   }
 
   /**
@@ -1515,4 +1552,20 @@ function saidInFlight(attempt: TaskAttempt): string | TurnFailure | null {
   if (!session || session.turnState() !== 'working') return null;
   if (attempt.turnError?.usageLimit !== undefined) return attempt.turnError;
   return session.getOutput().slice(attempt.turnOutputFrom);
+}
+
+/** The failure with the sign-in hint ahead of it, once: an ACP agent's refusal already is the hint. */
+function withSignIn(hint: string, said: string): string {
+  return said.includes(hint) ? said : `${hint}\n\n${said}`;
+}
+
+/**
+ * What a runner said as it failed: its turn's error, or the last line it
+ * printed before an exit. Not the whole log: work that prints "not signed in"
+ * is not the runner refusing to work.
+ */
+function lastWords(attempt: TaskAttempt, verdict: Verdict, output: string): string {
+  if (attempt.turnError) return attempt.turnError.message;
+  if (verdict.outcome === 'pass' || !endedByExit(verdict)) return '';
+  return output.trimEnd().split('\n').pop() ?? '';
 }
