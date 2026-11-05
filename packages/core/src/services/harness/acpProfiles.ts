@@ -1,10 +1,10 @@
 import type { RunnerManifest } from '../../plugins/types';
+import type { KeySignInRoute } from '../signInHint';
 import type { TaskRunnerFlags } from './AgentAdapter';
 import type { AcpToolCall } from './acpSchema';
 import { AcpAdapter } from './AcpAdapter';
 import { acpOrdewellBinding } from './acpOrdewell';
 import { acpRoles } from './acpRoles';
-import { acpSignedOut } from './acpSignedOut';
 import type { RunnerConnector } from './connectors';
 import { NO_SERVERS, type RepoConfigReader } from './repoConfig';
 
@@ -194,10 +194,10 @@ export interface AcpProfile {
   /** Absent: the agent finds its own provider credential, and its spawn carries none from Ordewell. */
   credentials?: AcpCredentials;
   /**
-   * A route besides the agent's own login that signs it in, as a clause the
-   * signed-out message offers after that login: the one `credentials` reads.
+   * The key in Ordewell that signs the agent in besides its own login: the one
+   * `credentials` reads, which the signed-out hint names (ADR-0052).
    */
-  signInRoute?: string;
+  signInRoute?: KeySignInRoute;
   /** The oldest agent version this profile was checked against, compared with `agentInfo.version`. */
   minVersion?: string;
   /** How long `initialize`, `session/new` and the mode switch may each take; 30 s when absent. */
@@ -277,9 +277,9 @@ export function acpConnector(profile: AcpProfile): RunnerConnector {
     plans: acpRoles(profile).plans,
     ordewellTools: acpOrdewellBinding(profile),
     repoConfig: profile.repoConfig ?? NO_REPO_CONFIG,
-    signedOut: acpSignedOut(profile),
     ...(profile.attach === 'firstTurn' ? { attachesOnFirstTurn: true } : {}),
     ...(profile.usageLimitReset ? { usageLimitReset: profile.usageLimitReset } : {}),
     ...(profile.promptCacheTtlMs !== undefined ? { promptCacheTtlMs: profile.promptCacheTtlMs } : {}),
+    ...(profile.signInRoute ? { signInRoute: profile.signInRoute } : {}),
   };
 }

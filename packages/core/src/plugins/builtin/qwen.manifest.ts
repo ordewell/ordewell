@@ -32,6 +32,7 @@ export const QWEN_CODE_MANIFEST: RunnerManifest = {
   // sign-in on a first start. A signed-out agent is learned from ACP's
   // auth-required error, which the adapter words as "not signed in".
   auth: { loginArgs: [], signedOut: /Authentication required|not signed in/i },
+  signIn: 'run qwen and sign in there',
   // Qwen's own mode ids; the profile sets them with `session/set_config_option`.
   // Its default session mode is `auto`, which asks an LLM classifier whether to
   // allow an action: that is not a decision the plan's mode may leave to a

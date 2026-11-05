@@ -3172,14 +3172,28 @@ describe('CliAgentAiService — a turn that says the agent is signed out', () =>
       kind: 'message',
       failed: true,
       text:
-        'Claude Code not logged in. Sign in with /login, or run claude auth login and try again.\n\n' +
+        'Claude Code is not signed in. Sign in with /login claude-code, or run claude auth login. Then try again.\n\n' +
         'Not logged in · Please run /login',
     });
     expect(recordedRunnerAuth('claude-code', '/repo')).toEqual({
       state: 'signed-out',
       loginCommand: ['claude', 'auth', 'login'],
       detail: 'not logged in',
+      signIn: { runner: 'claude-code', label: 'Claude Code', login: ['claude', 'auth', 'login'] },
     });
+  });
+
+  // An ACP agent's refusal is already worded as the hint (AcpAdapter), so the
+  // planner's turn says it once rather than twice over.
+  it.each([
+    ['cursor-agent', 'Cursor is not signed in. Sign in with /login cursor-agent, or run cursor-agent login.'],
+    ['copilot-cli', 'GitHub Copilot CLI is not signed in. Sign in with /login copilot-cli, or run copilot login.'],
+    ['qwen-code', 'Qwen Code is not signed in. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.'],
+  ])('names the way into a signed-out %s planner once', async (runner, hint) => {
+    const turn = await failing(hint, runner).startConversation(request({ runners: [runner] }));
+
+    expect(turn).toMatchObject({ kind: 'message', failed: true, text: hint });
+    expect(recordedRunnerAuth(runner, '/repo')?.state).toBe('signed-out');
   });
 
   it('leaves an unrelated failure exactly as the runner said it', async () => {
@@ -3233,6 +3247,7 @@ describe('CliAgentAiService — a turn that says the agent is signed out', () =>
         state: 'signed-out',
         loginCommand: ['codex', 'login'],
         detail: 'not logged in',
+        signIn: { runner: 'codex', label: 'Codex', login: ['codex', 'login'] },
       });
     } finally {
       rmSync(home, { recursive: true, force: true });

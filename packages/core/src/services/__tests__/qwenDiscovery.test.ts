@@ -154,7 +154,7 @@ describe('qwen-code model discovery', () => {
     expect(await resolver.modelsForRunners(['qwen-code'])).toEqual({ 'qwen-code': [] });
     // What the user was told when Qwen, signed out, was asked to plan.
     expect(resolver.getRunnerDiscoveryErrors()).toEqual({
-      'qwen-code': 'Qwen Code is not signed in. Run `qwen`, or set the key of an OpenAI-compatible provider, such as OpenRouter, in Ordewell with `/key`.',
+      'qwen-code': 'Qwen Code is not signed in. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.',
     });
 
     // As the daemon does on a saved key: the variable is set, then the catalogs are forgotten.

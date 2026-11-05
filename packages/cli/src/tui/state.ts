@@ -1,5 +1,5 @@
 import { taskPlacement } from '@ordewell/core/plan-utils';
-import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, logContinues, logResumes, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type AccountLimitSnapshot, type GlobalRunSettings, type OverrideDirection, type TaskStatus, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ChildPlanEntry, type ConversationView, type HandoffDigest, type IsolationHandoff, type IsolationLandedTask, type IsolationPreview, type PromptHold, type RunTask, type RunView, type SupervisorLevel, type TaskIsolation, type TaskLogFollow, type TaskType, type TurnGate } from '@ordewell/core';
+import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, TERMINAL_UI_SIGN_IN, describeRunnerSignIn, signInOfVerdict, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, logContinues, logResumes, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type AccountLimitSnapshot, type GlobalRunSettings, type OverrideDirection, type TaskStatus, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ChildPlanEntry, type ConversationView, type HandoffDigest, type IsolationHandoff, type IsolationLandedTask, type IsolationPreview, type PromptHold, type RunTask, type RunView, type SupervisorLevel, type TaskIsolation, type TaskLogFollow, type TaskType, type TurnGate } from '@ordewell/core';
 import { emptyEditor, type EditorState } from './editor';
 import type { RunnersResponse } from '../apiClient';
 import type { SaveSettingsEffect } from './reducers/settings';
@@ -148,13 +148,19 @@ export interface RewindTargetView {
 /** The daemon's runner row, as `getRunners` hands it over — auth included, never restated. */
 export type RunnerView = RunnersResponse['runners'][number];
 
+/** What a runner's row says about its sign-in, in the terminal UI's commands, or null (ADR-0052). */
+export function runnerSignInLine(row: RunnerView): string | null {
+  const signIn = signInOfVerdict(row.id, row.name, row.auth);
+  return row.auth ? describeRunnerSignIn({ state: row.auth.state, ...(signIn ? { signIn } : {}) }, TERMINAL_UI_SIGN_IN) : null;
+}
+
 /**
  * Only a runner's own signed-out verdict, with a way in, raises an alarm:
- * `unknown` must never read as one, and a verdict without a login command has
- * nowhere to send the user (ADR-0052).
+ * `unknown` must never read as one, and a verdict with no way in has nowhere
+ * to send the user (ADR-0052).
  */
-export function signedOutWithLogin(row: RunnerView): boolean {
-  return row.auth?.state === 'signed-out' && (row.auth.loginCommand?.length ?? 0) > 0;
+export function signedOutWithWayIn(row: RunnerView): boolean {
+  return row.auth?.state === 'signed-out' && runnerSignInLine(row) !== null;
 }
 
 export interface SessionView {

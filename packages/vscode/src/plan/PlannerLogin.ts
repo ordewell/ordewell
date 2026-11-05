@@ -1,5 +1,5 @@
 import type * as vscode from 'vscode';
-import { augmentedPath, runnerForProvider, withPath, workspaceEnvOf, type INotification, type PlannerBackendId, type RunnerInstallation, type RunnerRegistry } from '@ordewell/core';
+import { augmentedPath, describeSignInWays, runnerForProvider, TERMINAL_UI_SIGN_IN, withPath, workspaceEnvOf, type INotification, type PlannerBackendId, type RunnerInstallation, type RunnerRegistry } from '@ordewell/core';
 import type { HostToWebview } from '../shared/protocol';
 
 const POLL_MS = 2_000;
@@ -122,8 +122,10 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
   }
   const command = usability.auth?.loginCommand ?? [];
   if (command.length === 0) {
-    // Nothing to run: say so, and still close the surface's pending state.
-    const message = `Ordewell has no login for ${label}.`;
+    // Nothing to run: say so, with the ways in it does have, as the terminal
+    // UI's /login does (ADR-0052), and still close the surface's pending state.
+    const ways = usability.auth?.signIn ? describeSignInWays(usability.auth.signIn, TERMINAL_UI_SIGN_IN) : '';
+    const message = ways ? `${label} has no login Ordewell can run. ${ways}` : `Ordewell has no login for ${label}.`;
     deps.post({ type: 'plannerLoginEnded', runner, ok: false, message });
     deps.notifications.info(message);
     return;

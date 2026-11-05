@@ -246,15 +246,15 @@ describe('signed-out planners', () => {
   });
   const plain = (over: Partial<TuiState>): string[] => screen(over).map(stripAnsi).map((l) => l.trimEnd());
   const welcome = (over: Partial<TuiState>): string[] =>
-    plain({ cols: 80, rows: 24, workspace: '/w', ...over });
+    plain({ cols: 160, rows: 24, workspace: '/w', ...over });
   const underWorkspace = (lines: string[]): string[] => {
     const workspace = lines.findIndex((l) => l.startsWith('/w'));
     expect(workspace).toBeGreaterThanOrEqual(0);
-    return lines.slice(workspace + 1).filter((l) => l.includes('not logged in'));
+    return lines.slice(workspace + 1).filter((l) => l.includes('not signed in'));
   };
-  const warnings = (lines: string[]): string[] => lines.filter((l) => l.includes('not logged in'));
-  const CLAUDE = 'Claude Code not logged in. /login to sign in.';
-  const CODEX = 'Codex not logged in. /login codex to sign in.';
+  const warnings = (lines: string[]): string[] => lines.filter((l) => l.includes('not signed in'));
+  const CLAUDE = 'Claude Code is not signed in. Sign in with /login claude-code, or run claude auth login.';
+  const CODEX = 'Codex is not signed in. Sign in with /login codex, or run codex login.';
 
   it('warns directly under the workspace row when the active agent is signed out', () => {
     const lines = welcome({
@@ -269,17 +269,34 @@ describe('signed-out planners', () => {
       ...DETECTED, plannerProvider: 'claude-code', runners: [codex(), claude('signed-out', ['claude', 'auth', 'login'])],
     });
     expect(warnings(lines)).toEqual([CLAUDE, CODEX]);
-    expect(lines.join('\n')).not.toContain('/login claude-code');
+  });
+
+  it('names the key entry for a signed-out agent Ordewell signs in with a key', () => {
+    const qwen = {
+      id: 'qwen-code', name: 'Qwen Code', enabled: true,
+      auth: {
+        state: 'signed-out' as const,
+        signIn: {
+          runner: 'qwen-code', label: 'Qwen Code',
+          key: { provider: 'openrouter' as const, label: 'OpenRouter', others: 'any OpenAI-compatible provider' },
+          byHand: 'run qwen and sign in there',
+        },
+      },
+    };
+    const lines = welcome({ ...DETECTED, plannerProvider: 'claude-code', runners: [qwen] });
+    expect(warnings(lines)).toEqual([
+      'Qwen Code is not signed in. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.',
+    ]);
   });
 
   it('names the login of a signed-out agent that is not the planner', () => {
     const lines = welcome({
       ...DETECTED, plannerProvider: 'openrouter', configuredProviders: ['openrouter'], runners: [claude('signed-out', ['claude', 'auth', 'login'])],
     });
-    expect(warnings(lines)).toEqual(['Claude Code not logged in. /login claude-code to sign in.']);
+    expect(warnings(lines)).toEqual([CLAUDE]);
   });
 
-  it('says nothing when signed in, unknown, without a login command, or before detection', () => {
+  it('says nothing when signed in, unknown, without any way in, or before detection', () => {
     const cases: Partial<TuiState>[] = [
       { ...DETECTED, plannerProvider: 'claude-code', runners: [claude('signed-in', ['claude', 'auth', 'login'])] },
       { ...DETECTED, plannerProvider: 'claude-code', runners: [claude('unknown', ['claude', 'auth', 'login'])] },
@@ -287,7 +304,7 @@ describe('signed-out planners', () => {
       { ...DETECTED, plannerProvider: 'claude-code', runners: [{ id: 'opencode', name: 'OpenCode', enabled: true }] },
       { ...DETECTED, runnersKnown: false, plannerProvider: 'claude-code', runners: [claude('signed-out', ['claude', 'auth', 'login'])] },
     ];
-    for (const over of cases) expect(welcome(over).join('\n')).not.toContain('not logged in');
+    for (const over of cases) expect(welcome(over).join('\n')).not.toContain('not signed in');
   });
 
   it('paints each warning red and keeps every line inside the pane', () => {
@@ -298,7 +315,7 @@ describe('signed-out planners', () => {
           ...DETECTED, cols, rows: 40, workspace: '/w', plannerProvider: 'claude-code',
           runners: [codex(), claude('signed-out', ['claude', 'auth', 'login'])],
         });
-        const painted = out.filter((l) => stripAnsi(l).includes('not logged in.'));
+        const painted = out.filter((l) => stripAnsi(l).includes('not signed in.'));
         // One alarm line per agent; the rest of a wrapped sentence inherits its colour.
         expect(painted).toHaveLength(2);
         for (const line of painted) expect(line).toContain('\x1b[31m');

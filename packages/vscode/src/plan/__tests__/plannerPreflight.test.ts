@@ -81,7 +81,7 @@ describe('plannerPreflightError scopes the signed-out verdict to the workspace',
   it('refuses on this workspace\'s own signed-out verdict', () => {
     recordRunnerAuth('claude-code', SIGNED_OUT, '/repo');
 
-    expect(plannerPreflightError(config('claude-code', '', 'sonnet'), '/repo')).toContain('Claude Code not logged in');
+    expect(plannerPreflightError(config('claude-code', '', 'sonnet'), '/repo')).toContain('Claude Code is not signed in. Sign in with /login claude-code, or run claude auth login. Then try again.');
   });
 });
 
@@ -231,7 +231,7 @@ describe('a turn after a login done outside the extension', () => {
       if (recordedRunnerAuth('claude-code', workspace)?.state !== 'signed-out') return;
       throw new PlannerNotReadyError({
         code: 'signed_out', provider: 'claude-code', label: 'Claude Code', runner: 'claude-code',
-        loginCommand: ['claude', 'auth', 'login'],
+        signIn: { runner: 'claude-code', label: 'Claude Code', login: ['claude', 'auth', 'login'] },
       });
     };
     const session = {
@@ -289,7 +289,7 @@ describe('a turn after a login done outside the extension', () => {
     await handleSendMessageNow('Use SQLite instead', h.deps);
 
     expect(h.chatProvider.showError).toHaveBeenCalledTimes(2);
-    expect(h.chatProvider.showError.mock.calls[0][0]).toContain('Claude Code not logged in');
-    expect(h.chatProvider.showError.mock.calls[1][0]).toContain('Claude Code not logged in');
+    expect(h.chatProvider.showError.mock.calls[0][0]).toContain('Claude Code is not signed in. Sign in with /login claude-code, or run claude auth login. Then try again.');
+    expect(h.chatProvider.showError.mock.calls[1][0]).toContain('Claude Code is not signed in. Sign in with /login claude-code, or run claude auth login. Then try again.');
   });
 });

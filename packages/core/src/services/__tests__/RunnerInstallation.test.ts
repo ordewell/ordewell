@@ -11,7 +11,7 @@ import { CLINE_MANIFEST } from '../../plugins/builtin/cline.manifest';
 import { GEMINI_CLI_MANIFEST } from '../../plugins/builtin/gemini-cli.manifest';
 import { CURSOR_AGENT_MANIFEST } from '../../plugins/builtin/cursor-agent.manifest';
 import { CONNECTORS } from '../harness/connectors';
-import { recordedRunnerAuth, resetRunnerAuth, type RunnerAuthExec } from '../runnerAuth';
+import { recordedRunnerAuth, recordRunnerAuth, resetRunnerAuth, signedOutFromFailure, type RunnerAuthExec } from '../runnerAuth';
 import type { LaunchDeps } from '../../utils/launch';
 
 /**
@@ -92,7 +92,7 @@ describe('RunnerInstallation.runnerUsability', () => {
 
     expect(await inst.runnerUsability('copilot-cli')).toEqual({
       usable: true,
-      auth: { state: 'unknown', loginCommand: ['copilot', 'login'] },
+      auth: { state: 'unknown', loginCommand: ['copilot', 'login'], signIn: { runner: 'copilot-cli', label: 'GitHub Copilot CLI', login: ['copilot', 'login'] } },
     });
     expect(authExec).not.toHaveBeenCalled();
   });
@@ -129,7 +129,7 @@ describe('RunnerInstallation.plannerUsability (ADR-0009 preflight)', () => {
 
     expect(await inst.plannerUsability('claude-code')).toEqual({
       usable: true,
-      auth: { state: 'signed-in', loginCommand: ['claude', 'auth', 'login'] },
+      auth: { state: 'signed-in', loginCommand: ['claude', 'auth', 'login'], signIn: { runner: 'claude-code', label: 'Claude Code', login: ['claude', 'auth', 'login'] } },
     });
   });
 
@@ -218,6 +218,7 @@ describe('RunnerInstallation auth (ADR-0009 preflight)', () => {
       state: 'signed-out',
       loginCommand: ['claude', 'auth', 'login'],
       detail: 'not logged in',
+      signIn: { runner: 'claude-code', label: 'Claude Code', login: ['claude', 'auth', 'login'] },
     });
     expect(recordedRunnerAuth('claude-code')).toEqual(result.auth);
   });
@@ -279,6 +280,23 @@ describe('RunnerInstallation auth (ADR-0009 preflight)', () => {
     inst.refresh();
     expect((await inst.plannerUsability('claude-code')).auth?.state).toBe('signed-in');
     expect(authExec).toHaveBeenCalledTimes(2);
+  });
+
+  it('answers with the sign-out a failed turn recorded since its last probe, until it asks again', async () => {
+    const exec: ExecImpl = vi.fn(async () => ({ stdout: '2.0.0' }));
+    // Cursor has no status command: only a refused turn can say it is signed out.
+    const inst = new RunnerInstallation(registryWith(CURSOR_AGENT_MANIFEST), exec, () => 0, { launch: POSIX, workspace: () => '/w' });
+    expect((await inst.runnerUsability('cursor-agent')).auth?.state).toBe('unknown');
+
+    recordRunnerAuth('cursor-agent', signedOutFromFailure(CURSOR_AGENT_MANIFEST, 'Cursor is not signed in.')!, '/w');
+
+    expect((await inst.runnerUsability('cursor-agent')).auth).toMatchObject({
+      state: 'signed-out',
+      signIn: { runner: 'cursor-agent', label: 'Cursor', login: ['cursor-agent', 'login'] },
+    });
+
+    inst.refresh();
+    expect((await inst.runnerUsability('cursor-agent')).auth?.state).toBe('unknown');
   });
 
   it('re-probes a verdict once its short TTL expires', async () => {

@@ -219,7 +219,7 @@ describe('AcpAdapter start', () => {
       { expect: 'initialize', reply: INITIALIZED },
       { expect: 'session/new', error: { code: ACP_ERROR.authRequired, message: 'Authentication required' } },
     ]);
-    await expect(adapter.start(taskStart())).rejects.toThrow('Fake Agent is not signed in. Run `fake-agent login`.');
+    await expect(adapter.start(taskStart())).rejects.toThrow('Fake Agent is not signed in. Sign in with /login fake-acp, or run fake-agent login.');
     expect(agent.unexpected.map((m) => m.method)).not.toContain('authenticate');
   });
 
@@ -237,12 +237,12 @@ describe('AcpAdapter start', () => {
       { expect: 'initialize', reply: INITIALIZED },
       { expect: 'session/new', error: { code: ACP_ERROR.authRequired, message: 'Authentication required' } },
     ];
-    const signInRoute = 'set FAKE_API_KEY in Ordewell';
+    const signInRoute = { provider: 'openrouter' as const, others: 'any OpenAI-compatible provider' };
     const both = setup(signedOutSteps(), { ...PROFILE, signInRoute });
     const alone = setup(signedOutSteps(), { ...PROFILE, signInRoute, manifest: { ...MANIFEST, auth: undefined } });
 
-    await expect(both.adapter.start(taskStart())).rejects.toThrow(/^Fake Agent is not signed in\. Run `fake-agent login`, or set FAKE_API_KEY in Ordewell\.$/);
-    await expect(alone.adapter.start(taskStart())).rejects.toThrow(/^Fake Agent is not signed in\. Set FAKE_API_KEY in Ordewell\.$/);
+    await expect(both.adapter.start(taskStart())).rejects.toThrow(/^Fake Agent is not signed in\. Sign in with \/login fake-acp, or run fake-agent login, or run \/key and choose OpenRouter \(or any OpenAI-compatible provider\) to hand it a key\.$/);
+    await expect(alone.adapter.start(taskStart())).rejects.toThrow(/^Fake Agent is not signed in\. Run \/key and choose OpenRouter \(or any OpenAI-compatible provider\) to hand it a key\.$/);
   });
 
   it('reports the agent\'s own refusal of session/new', async () => {
@@ -415,7 +415,7 @@ describe('AcpAdapter turn', () => {
     await adapter.start(taskStart());
 
     expect(await turn(adapter, 'one')).toEqual([{ type: 'error', message: 'Fake Agent could not run the turn: model overloaded' }]);
-    expect(await turn(adapter, 'two')).toEqual([{ type: 'error', message: 'Fake Agent is not signed in. Run `fake-agent login`.' }]);
+    expect(await turn(adapter, 'two')).toEqual([{ type: 'error', message: 'Fake Agent is not signed in. Sign in with /login fake-acp, or run fake-agent login.' }]);
   });
 
   it('gives the details an agent puts under a refusal\'s generic message, where the vendor\'s own reason is', async () => {
@@ -1416,7 +1416,7 @@ describe('AcpAdapter provider credential', () => {
       const refused = await adapter.start(taskStart()).then(() => null, (e: unknown) => e as Error);
 
       expect(refused?.message).toBe(`Cline has no provider key Ordewell can hand it: Ordewell holds none for a provider Cline offers, and \`${providers()}\` names no provider it last used. Set the key of a provider Cline offers, such as OpenRouter, in Ordewell with \`/key\`, or sign in with \`cline auth\` (a Cline or ClinePass account, or a provider's key), or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell's environment.`);
-      expect(refused?.message).not.toContain('Run `fake-agent login`');
+      expect(refused?.message).not.toContain('fake-agent login');
       expect(spawned.processes).toHaveLength(0);
     });
 
@@ -1849,7 +1849,7 @@ describe('AcpAdapter resume (K1)', () => {
       { expect: 'initialize', reply: initializedWith({ sessionCapabilities: { resume: {} } }) },
       { expect: 'session/resume', error: { code: ACP_ERROR.authRequired, message: 'Authentication required' } },
     ]);
-    await expect(adapter.start(taskStart('ask', { resumeSessionId: 'sess-old' }))).rejects.toThrow('Fake Agent is not signed in. Run `fake-agent login`.');
+    await expect(adapter.start(taskStart('ask', { resumeSessionId: 'sess-old' }))).rejects.toThrow('Fake Agent is not signed in. Sign in with /login fake-acp, or run fake-agent login.');
   });
 
   it('fails in words when the agent answers a resume in a shape Ordewell cannot read', async () => {

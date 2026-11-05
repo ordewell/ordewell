@@ -66,7 +66,7 @@ describe('a retry compaction after a login done outside the extension', () => {
       if (recordedRunnerAuth('claude-code', '/ws')?.state === 'signed-out') {
         throw new PlannerNotReadyError({
           code: 'signed_out', provider: 'claude-code', label: 'Claude Code', runner: 'claude-code',
-          loginCommand: ['claude', 'auth', 'login'],
+          signIn: { runner: 'claude-code', label: 'Claude Code', login: ['claude', 'auth', 'login'] },
         });
       }
       return {};
@@ -99,6 +99,6 @@ describe('a retry compaction after a login done outside the extension', () => {
     expect(h.installation.refresh).toHaveBeenCalledTimes(1);
     expect(h.installation.plannerUsability).toHaveBeenCalledWith('claude-code');
     expect(h.session.retryPlannerCompaction).toHaveBeenCalledTimes(1);
-    expect(h.chatProvider.showError).toHaveBeenCalledWith(expect.stringContaining('Claude Code not logged in'));
+    expect(h.chatProvider.showError).toHaveBeenCalledWith(expect.stringContaining('Claude Code is not signed in. Sign in with /login claude-code, or run claude auth login. Then try again.'));
   });
 });

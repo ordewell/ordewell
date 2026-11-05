@@ -1,5 +1,5 @@
 import {
-  EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, PROVIDER_PRIORITY, TERMINAL_UI_COMMANDS, getProviderMeta, isApiProvider, isPlannerBackend, runnerForProvider, type AiProvider,
+  EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, PROVIDER_PRIORITY, TERMINAL_UI_COMMANDS, TERMINAL_UI_SIGN_IN, describeSignInWays, getProviderMeta, isApiProvider, isPlannerBackend, runnerForProvider, type AiProvider,
 } from '@ordewell/core';
 import { handoffCommand } from '../handoff';
 import { plannerSwitchOverrideNotice, taskOnlyRunnerRefusal } from '../../plannerModelSwitch';
@@ -413,9 +413,10 @@ function login(state: TuiState, args: string[]): Step {
     return step(state, [{ type: 'plannerLogin', command, label: row.name }]);
   }
 
-  if (row.id === 'opencode') {
-    return step(say(state, 'system', "OpenCode's login is not managed by Ordewell: sign in with OpenCode itself."));
-  }
+  // The agent's own route, or the key it can be handed: the same ways in the
+  // signed-out hint names (ADR-0052).
+  const ways = row.auth?.signIn ? describeSignInWays(row.auth.signIn, TERMINAL_UI_SIGN_IN) : '';
+  if (ways) return step(say(state, 'system', `${row.name} has no login Ordewell can run. ${ways}`));
   if (!row.auth) {
     return step(say(state, 'system', `Ordewell could not tell whether ${row.name} is signed in. If it needs a login, run its own command.`));
   }

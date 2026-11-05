@@ -264,7 +264,7 @@ describe('allowlist picker chain', () => {
   });
 
   it('refusing a runner with no models says why it lists none, as the daemon words it', () => {
-    const reason = 'Qwen Code is not signed in. Run `qwen`, or set the key of an OpenAI-compatible provider, such as OpenRouter, in Ordewell with `/key`.';
+    const reason = 'Qwen Code is not signed in. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.';
     const picking = withPicker(
       { action: { kind: 'choose-allowlist-runner' }, items: [{ id: 'qwen-code', label: 'Qwen Code' }] },
       { models: [], runnerErrors: { 'qwen-code': reason } },
@@ -560,7 +560,7 @@ describe('plan pane', () => {
   });
 
   it("a task's model picker says why its runner lists no models, as the daemon words it, once the catalog lands", () => {
-    const reason = 'Qwen Code is not signed in. Run `qwen`, or set the key of an OpenAI-compatible provider, such as OpenRouter, in Ordewell with `/key`.';
+    const reason = 'Qwen Code is not signed in. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.';
     const opened = press(initialState({ sessionId: 's1', focus: 'plan', tasks: [{ ...tasks[0], assignedRunner: 'qwen-code' }] }), 'char', 'o').state;
 
     const catalog = normalizeCatalog({ models: [], modelsByRunner: { 'qwen-code': [] }, runnerErrors: { 'qwen-code': reason } });

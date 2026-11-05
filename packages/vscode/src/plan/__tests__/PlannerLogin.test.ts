@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { delimiter } from 'node:path';
-import { RunnerRegistry, type RunnerAuth } from '@ordewell/core';
+import { RunnerRegistry, runnerSignIn, type RunnerAuth } from '@ordewell/core';
 import { commandLine, loginPlanner, type PlannerLoginDeps } from '../PlannerLogin';
 
 interface FakeTerminal {
@@ -199,6 +199,19 @@ describe('loginPlanner', () => {
     expect(h.ended()).toEqual({
       type: 'plannerLoginEnded', runner: 'opencode', ok: false, message: 'Ordewell has no login for OpenCode.',
     });
+  });
+
+  it.each([
+    ['opencode', 'OpenCode has no login Ordewell can run. Run opencode auth login and choose a provider.'],
+    ['qwen-code', 'Qwen Code has no login Ordewell can run. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.'],
+  ])('names the other ways into %s where it has no login to run', async (runner, message) => {
+    const h = harness({ verdict: () => ({ state: 'signed-out', signIn: runnerSignIn(runner)! }) });
+
+    await loginPlanner(h.deps, runner);
+
+    expect(h.createTerminal).not.toHaveBeenCalled();
+    expect(h.deps.notifications.info).toHaveBeenCalledWith(message);
+    expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner, ok: false, message });
   });
 
   it('tells a vendor planner there is no coding agent to sign in', async () => {

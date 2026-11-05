@@ -338,9 +338,10 @@ of its provider credential and the sign-in route that reader adds.
      sign in with `cline auth` (a Cline or ClinePass account, or a provider's
      key), or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell's
      environment." Qwen learns it is signed out from its own `-32000`, and its
-     profile's `signInRoute` adds Ordewell's route to the login the message
-     names: "Qwen Code is not signed in. Run `qwen`, or set the key of an
-     OpenAI-compatible provider, such as OpenRouter, in Ordewell with `/key`."
+     profile's `signInRoute` adds Ordewell's route to the one its manifest
+     names, as the terminal words it: "Qwen Code is not signed in. Run /key and
+     choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or
+     run qwen and sign in there."
 
   A model the user's environment chooses for the agent stays theirs. What the
   hook answers holds a secret and goes into that spawn's environment, the
@@ -364,8 +365,9 @@ of its provider credential and the sign-in route that reader adds.
     spawned and the miss is not cached past a sign-in. An agent that refuses
     discovery's `session/new` with `-32000` is signed out, and a catalog left
     empty says so: `/api/models` carries the reason by runner
-    (`runnerErrors`), worded as a refused start is (`acpSignedOut`), and a
-    surface shows it in place of a refresh, which cannot fill that list.
+    (`runnerErrors`), worded as a refused start is, from the runner's one
+    `RunnerSignIn` ([ADR-0052](../routing/0052-a-signed-out-coding-agent-is-flagged-and-signs-in-from-the-chat.md)),
+    and a surface shows it in place of a refresh, which cannot fill that list.
 
   A profile without the hook spawns exactly as before, whatever Ordewell holds.
 

@@ -33,8 +33,8 @@ import { instructionsBlock, isRecord } from './repoConfig';
 import { awaitAttach, listed, MCP_ATTACH_TIMEOUT_MS, type AttachState } from './ordewellBinding';
 import { settleWithin } from './settleWithin';
 import { compareVersions } from '../../utils/version';
+import { describeSignIn, signInOf, TERMINAL_UI_SIGN_IN } from '../signInHint';
 import { acpPrivateDir, type AcpPrivateDir } from './acpPrivateDir';
-import { acpSignedOut } from './acpSignedOut';
 import { dirname } from 'path';
 import { taskCompletionContract, type McpClientConfig } from '../mcp';
 
@@ -547,8 +547,12 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     return said ? this.runner.redact(said) : 'no reason given';
   }
 
+  /**
+   * Worded in the terminal's syntax, as the daemon words what it says; the
+   * headless CLI re-words it (ADR-0052).
+   */
   private signedOut(): string {
-    return acpSignedOut(this.profile);
+    return describeSignIn(signInOf(this.profile.manifest, this.profile.signInRoute), TERMINAL_UI_SIGN_IN);
   }
 
   /**

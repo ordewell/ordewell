@@ -8,7 +8,8 @@ import type { PlannerModelCandidate } from './PlannerModelMemory';
 import { fetchAllProviderModels, collectProviderCredentials, toOrchestratorOptions, type OrchestratorOption, type ProviderModelLists } from './ProviderRouting';
 import { ORCHESTRATOR_SHORTCUTS } from './ModelShortcuts';
 import { PROVIDER_PRIORITY, isApiProvider, prefixModelId, runnerForProvider, stripModelPrefix } from './ProviderRegistry';
-import { connectorFor } from './harness/connectors';
+import { runnerSignIn } from './runnerAuth';
+import { describeSignIn, TERMINAL_UI_SIGN_IN } from './signInHint';
 
 export interface ModelResolverDeps {
   fetchImpl?: typeof fetch;
@@ -167,7 +168,9 @@ export class ModelResolver {
   getRunnerDiscoveryErrors(): Record<string, string> {
     return Object.fromEntries(Object.keys(this.discovery.whyUnlisted()).map((runner) => {
       const manifest = this.registry.getManifest(runner);
-      return [runner, connectorFor(runner)?.signedOut ?? `${manifest?.displayName ?? runner} is not signed in.`];
+      // Worded as a refused start is, from the one RunnerSignIn every surface
+      // reads, so an empty list offers the same ways in (ADR-0052).
+      return [runner, manifest ? describeSignIn(runnerSignIn(manifest), TERMINAL_UI_SIGN_IN) : `${runner} is not signed in.`];
     }));
   }
 

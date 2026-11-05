@@ -49,6 +49,11 @@ const AZURE_PROVIDER = [
 /** The status command as named, off Windows' PATH lookup: the routes it takes there are pinned under 'on Windows'. */
 const POSIX: LaunchDeps = { platform: 'linux' };
 
+// Every verdict carries the ways in, so a surface can name them whatever it reads (ADR-0052).
+const CLAUDE_SIGN_IN = { runner: 'claude-code', label: 'Claude Code', login: ['claude', 'auth', 'login'] };
+const CODEX_SIGN_IN = { runner: 'codex', label: 'Codex', login: ['codex', 'login'] };
+const COPILOT_SIGN_IN = { runner: 'copilot-cli', label: 'GitHub Copilot CLI', login: ['copilot', 'login'] };
+
 describe('readRunnerAuth', () => {
   it('asks the runner its own status command and reads Claude signed in from a clean exit', async () => {
     const exec = execAnswering({ code: 0, stdout: '{"loggedIn":true,"authMethod":"claude.ai"}' });
@@ -56,6 +61,7 @@ describe('readRunnerAuth', () => {
     expect(await readRunnerAuth(CLAUDE_CODE_MANIFEST, { exec, launch: POSIX })).toEqual({
       state: 'signed-in',
       loginCommand: ['claude', 'auth', 'login'],
+      signIn: CLAUDE_SIGN_IN,
     });
     expect(exec).toHaveBeenCalledWith('claude', ['auth', 'status'], expect.anything());
   });
@@ -70,6 +76,7 @@ describe('readRunnerAuth', () => {
     expect(await readRunnerAuth(CLAUDE_CODE_MANIFEST, { exec })).toEqual({
       state: 'signed-out',
       loginCommand: ['claude', 'auth', 'login'],
+      signIn: CLAUDE_SIGN_IN,
       detail: 'not logged in',
     });
   });
@@ -86,6 +93,7 @@ describe('readRunnerAuth', () => {
     expect(await readRunnerAuth(CLAUDE_CODE_MANIFEST, { exec })).toEqual({
       state: 'signed-out',
       loginCommand: ['claude', 'auth', 'login'],
+      signIn: CLAUDE_SIGN_IN,
       detail: 'not logged in',
     });
   });
@@ -96,6 +104,7 @@ describe('readRunnerAuth', () => {
     expect(await readRunnerAuth(CLAUDE_CODE_MANIFEST, { exec })).toEqual({
       state: 'unknown',
       loginCommand: ['claude', 'auth', 'login'],
+      signIn: CLAUDE_SIGN_IN,
     });
   });
 
@@ -106,6 +115,7 @@ describe('readRunnerAuth', () => {
     expect(await readRunnerAuth(CODEX_MANIFEST, { exec, launch: POSIX })).toEqual({
       state: 'signed-out',
       loginCommand: ['codex', 'login'],
+      signIn: CODEX_SIGN_IN,
       detail: 'not logged in',
     });
     expect(exec).toHaveBeenCalledWith('codex', ['login', 'status'], expect.anything());
@@ -117,6 +127,7 @@ describe('readRunnerAuth', () => {
     expect(await readRunnerAuth(CODEX_MANIFEST, { exec })).toEqual({
       state: 'signed-in',
       loginCommand: ['codex', 'login'],
+      signIn: CODEX_SIGN_IN,
     });
   });
 
@@ -128,6 +139,7 @@ describe('readRunnerAuth', () => {
     expect(await readRunnerAuth(CLAUDE_CODE_MANIFEST, { exec: missing })).toEqual({
       state: 'unknown',
       loginCommand: ['claude', 'auth', 'login'],
+      signIn: CLAUDE_SIGN_IN,
     });
   });
 
@@ -153,13 +165,14 @@ describe('readRunnerAuth', () => {
     expect(await readRunnerAuth(manifest, { exec })).toEqual({
       state: 'unknown',
       loginCommand: ['claude', 'auth', 'login'],
+      signIn: CLAUDE_SIGN_IN,
     });
   });
 
   it('reports a runner with no status command unknown and offers it no login', async () => {
     const exec: RunnerAuthExec = vi.fn(async () => ({ code: 0, stdout: '', stderr: '' }));
 
-    expect(await readRunnerAuth(OPENCODE_MANIFEST, { exec })).toEqual({ state: 'unknown' });
+    expect(await readRunnerAuth(OPENCODE_MANIFEST, { exec })).toEqual({ state: 'unknown', signIn: { runner: 'opencode', label: 'OpenCode', byHand: 'run opencode auth login and choose a provider' } });
     expect(exec).not.toHaveBeenCalled();
   });
 
@@ -169,7 +182,7 @@ describe('readRunnerAuth', () => {
   it('runs nothing for a runner with a login but no status command, and offers its login', async () => {
     const exec: RunnerAuthExec = vi.fn(async () => ({ code: 0, stdout: '', stderr: '' }));
 
-    expect(await readRunnerAuth(COPILOT_CLI_MANIFEST, { exec })).toEqual({ state: 'unknown', loginCommand: ['copilot', 'login'] });
+    expect(await readRunnerAuth(COPILOT_CLI_MANIFEST, { exec })).toEqual({ state: 'unknown', loginCommand: ['copilot', 'login'], signIn: COPILOT_SIGN_IN });
     expect(exec).not.toHaveBeenCalled();
   });
 
@@ -201,7 +214,7 @@ describe('readRunnerAuth', () => {
         const exec = execAnswering({ code: 1, stdout: 'Not logged in\n' });
         const auth = await readRunnerAuth(CODEX_MANIFEST, { exec, env: { CODEX_HOME: home, AZURE_OPENAI_API_KEY: 'sk-test' } });
 
-        expect(auth).toEqual({ state: 'unknown', loginCommand: ['codex', 'login'] });
+        expect(auth).toEqual({ state: 'unknown', loginCommand: ['codex', 'login'], signIn: CODEX_SIGN_IN });
         recordRunnerAuth('codex', auth);
         expect(gate()).toBeNull();
       } finally {
@@ -233,7 +246,7 @@ describe('readRunnerAuth', () => {
         const exec = execAnswering({ code: 1, stdout: 'Not logged in\n' });
         const auth = await readRunnerAuth(CODEX_MANIFEST, { exec, env: { CODEX_HOME: home, OPENAI_API_KEY: 'sk-test' } });
 
-        expect(auth).toEqual({ state: 'unknown', loginCommand: ['codex', 'login'] });
+        expect(auth).toEqual({ state: 'unknown', loginCommand: ['codex', 'login'], signIn: CODEX_SIGN_IN });
         recordRunnerAuth('codex', auth);
         expect(gate()).toBeNull();
       } finally {
@@ -256,7 +269,7 @@ describe('readRunnerAuth', () => {
         const exec = execAnswering({ code: 1, stdout: 'Not logged in\n' });
         const auth = await readRunnerAuth(CODEX_MANIFEST, { exec, env: { CODEX_HOME: home } });
 
-        expect(auth).toEqual({ state: 'unknown', loginCommand: ['codex', 'login'] });
+        expect(auth).toEqual({ state: 'unknown', loginCommand: ['codex', 'login'], signIn: CODEX_SIGN_IN });
         recordRunnerAuth('codex', auth);
         expect(gate()).toBeNull();
       } finally {
@@ -270,7 +283,7 @@ describe('readRunnerAuth', () => {
         const exec = execAnswering({ code: 1, stdout: 'Not logged in\n' });
         const auth = await readRunnerAuth(CODEX_MANIFEST, { exec, env: { CODEX_HOME: home } });
 
-        expect(auth).toEqual({ state: 'signed-out', loginCommand: ['codex', 'login'], detail: 'not logged in' });
+        expect(auth).toEqual({ state: 'signed-out', loginCommand: ['codex', 'login'], detail: 'not logged in', signIn: CODEX_SIGN_IN });
         recordRunnerAuth('codex', auth);
         expect(gate()).toMatchObject({ code: 'signed_out', runner: 'codex' });
       } finally {
@@ -318,7 +331,7 @@ describe('readRunnerAuth', () => {
           const exec = execAnswering({ code: 1, stdout: 'Not logged in\n' });
           const auth = await readRunnerAuth(CODEX_MANIFEST, { exec, env: { HOME: home, AZURE_OPENAI_API_KEY: 'sk-test' } });
 
-          expect(auth).toEqual({ state: 'unknown', loginCommand: ['codex', 'login'] });
+          expect(auth).toEqual({ state: 'unknown', loginCommand: ['codex', 'login'], signIn: CODEX_SIGN_IN });
         } finally {
           rmSync(home, { recursive: true, force: true });
         }
@@ -349,7 +362,7 @@ describe('readRunnerAuth', () => {
           const exec = execAnswering({ code: 1, stdout: 'Not logged in\n' });
           const auth = await readRunnerAuth(CODEX_MANIFEST, { exec, env: { HOME: home } });
 
-          expect(auth).toEqual({ state: 'signed-out', loginCommand: ['codex', 'login'], detail: 'not logged in' });
+          expect(auth).toEqual({ state: 'signed-out', loginCommand: ['codex', 'login'], detail: 'not logged in', signIn: CODEX_SIGN_IN });
         } finally {
           rmSync(home, { recursive: true, force: true });
         }
@@ -370,6 +383,7 @@ describe('readRunnerAuth', () => {
       expect(await readRunnerAuth(manifest, { timeoutMs: 1000 })).toEqual({
         state: 'unknown',
         loginCommand: [cli, 'login'],
+        signIn: { ...CODEX_SIGN_IN, login: [cli, 'login'] },
       });
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -390,6 +404,7 @@ describe('readRunnerAuth', () => {
       expect(await readRunnerAuth(manifest, { timeoutMs: 500 })).toEqual({
         state: 'unknown',
         loginCommand: [cli, 'login'],
+        signIn: { ...CODEX_SIGN_IN, login: [cli, 'login'] },
       });
       expect(Date.now() - started).toBeLessThan(3000);
     } finally {
@@ -449,7 +464,7 @@ describe('readRunnerAuth', () => {
           env: { CODEX_HOME: home }, launch: { resolvePath: async () => dir },
         });
 
-        expect(auth).toEqual({ state: 'signed-out', loginCommand: ['codex', 'login'], detail: 'not logged in' });
+        expect(auth).toEqual({ state: 'signed-out', loginCommand: ['codex', 'login'], detail: 'not logged in', signIn: CODEX_SIGN_IN });
       } finally {
         rmSync(dir, { recursive: true, force: true });
         rmSync(home, { recursive: true, force: true });
@@ -463,6 +478,7 @@ describe('signedOutFromFailure', () => {
     expect(signedOutFromFailure(CLAUDE_CODE_MANIFEST, 'Not logged in · Please run /login')).toEqual({
       state: 'signed-out',
       loginCommand: ['claude', 'auth', 'login'],
+      signIn: CLAUDE_SIGN_IN,
       detail: 'not logged in',
     });
   });
@@ -473,6 +489,7 @@ describe('signedOutFromFailure', () => {
       expect(signedOutFromFailure(CODEX_MANIFEST, 'Not logged in\n', { HOME: home })).toEqual({
         state: 'signed-out',
         loginCommand: ['codex', 'login'],
+      signIn: CODEX_SIGN_IN,
         detail: 'not logged in',
       });
     } finally {
@@ -493,6 +510,7 @@ describe('signedOutFromFailure', () => {
     expect(signedOutFromFailure(COPILOT_CLI_MANIFEST, 'Authentication required')).toEqual({
       state: 'signed-out',
       loginCommand: ['copilot', 'login'],
+      signIn: COPILOT_SIGN_IN,
       detail: 'not logged in',
     });
     // The adapter's own words for the same error, which is what a task's failure carries.

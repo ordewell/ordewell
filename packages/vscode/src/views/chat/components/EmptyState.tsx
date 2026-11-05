@@ -11,6 +11,8 @@ export interface SignedOutPlannerRow {
   /** The runner whose login the row's action runs; also the key of its pending and failure state. */
   runner: string;
   label: string;
+  /** The agent's way in, worded by core's one sign-in hint (ADR-0052); absent, the row says only that it is signed out. */
+  hint?: string;
   onLogIn?: () => void;
   pending?: boolean;
   failure?: string;
@@ -52,6 +54,12 @@ function RunValue({ run }: { run: GlobalRunSettings }) {
       {DELEGATION_OFFERED && run.delegationTokens > 0 && <>{' · '}<span className="warn">delegation on</span></>}
     </>
   );
+}
+
+/** The hint past the agent's name, which the row sets apart; the hint always opens with it. */
+function afterLabel(row: SignedOutPlannerRow): string {
+  const said = row.hint ?? `${row.label} is not signed in.`;
+  return said.startsWith(row.label) ? said.slice(row.label.length) : ` ${said}`;
 }
 
 export default function EmptyState({ onLoadSession, runSettings, signedOut, isolationPreview }: EmptyStateProps) {
@@ -128,7 +136,7 @@ export default function EmptyState({ onLoadSession, runSettings, signedOut, isol
                   : (
                     <span className="planner-auth-warning-text">
                       <span className="planner-auth-warning-agent">{row.label}</span>
-                      {' not logged in.'}
+                      {afterLabel(row)}
                     </span>
                   )}
               </div>

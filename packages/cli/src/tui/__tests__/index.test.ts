@@ -433,7 +433,7 @@ describe('handleTui', () => {
       vi.stubEnv('NO_COLOR', '1');
       void handleTui([], { spawn: spawn as unknown as LoginSpawn });
 
-      await vi.waitFor(() => expect(frame()).toContain('Claude Code not logged in'));
+      await vi.waitFor(() => expect(frame()).toContain('Claude Code is not signed in'));
       return { child, spawn };
     }
 
@@ -456,7 +456,7 @@ describe('handleTui', () => {
 
       await vi.waitFor(() => expect(fakeTerminal.resume).toHaveBeenCalled());
       await vi.waitFor(() => expect(frame()).toContain('Claude Code is signed in.'));
-      expect(frame()).not.toContain('Claude Code not logged in');
+      expect(frame()).not.toContain('Claude Code is not signed in');
       vi.unstubAllEnvs();
     });
 

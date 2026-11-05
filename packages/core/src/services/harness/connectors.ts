@@ -7,6 +7,7 @@ import { CODEX_ORDEWELL } from './codexOrdewell';
 import { OPENCODE_ORDEWELL } from './openCodeOrdewell';
 import type { OrdewellToolBinding } from './ordewellBinding';
 import type { RepoConfigReader } from './repoConfig';
+import type { KeySignInRoute } from '../signInHint';
 import { CLAUDE_REPO_CONFIG } from './claudeRepoConfig';
 import { CODEX_REPO_CONFIG } from './codexRepoConfig';
 import { OPENCODE_REPO_CONFIG } from './openCodeRepoConfig';
@@ -37,12 +38,6 @@ export interface RunnerConnector {
   /** What the runner would load from a repository, which Ordewell reads for its planner instead (ADR-0028). */
   repoConfig: RepoConfigReader;
   /**
-   * What the user is told when the runner is not signed in, with the ways to
-   * sign it in: a catalog it cannot list says this rather than leave the list
-   * empty. Absent where the runner's discovery never learns it is signed out.
-   */
-  signedOut?: string;
-  /**
    * The runner uses its Ordewell token only once a prompt runs, so its first
    * turn is the attach check and a planner spawns it with that turn, not
    * before (ADR-0060, R5). Absent: it attaches as its session opens.
@@ -61,6 +56,8 @@ export interface RunnerConnector {
    * on a provider Ordewell cannot see.
    */
   promptCacheTtlMs?: number;
+  /** A key in Ordewell that signs the runner in, besides its own login. */
+  signInRoute?: KeySignInRoute;
 }
 
 /** Claude's default, and what an API login gets; a subscription's runs recorded here write the hour-long kind. OpenAI's, which Codex uses, is 5 to 10 minutes idle. */
