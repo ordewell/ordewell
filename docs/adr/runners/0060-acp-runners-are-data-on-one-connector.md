@@ -284,8 +284,9 @@ of its provider credential and the sign-in route that reader adds.
   a `credentials` hook, which answers, under the host's and the workspace's
   variables, the variables to add to that spawn's environment. In order:
   1. **The user's own variables for the agent.** Where they already hand it a
-     provider (`CLINE_API_KEY` for Cline, `OPENAI_BASE_URL` for Qwen), the
-     hook adds nothing and reads nothing.
+     provider (`CLINE_API_KEY` for Cline, `OPENAI_BASE_URL` for Qwen,
+     `GOOGLE_API_KEY` or a Vertex route for Gemini), the hook adds nothing and
+     reads nothing.
   2. **Ordewell's provider** (`ordewellProvider.ts`): the vendor `AI_PROVIDER`
      names, else the first configured in `PROVIDER_PRIORITY`, read by the same
      key and base-URL rules the planner's config uses (`vendorApiKeyIn`,
@@ -323,7 +324,17 @@ of its provider credential and the sign-in route that reader adds.
      `/api/models` therefore loads the vendor catalogs before it discovers
      the runners, so the model Qwen lists is one the account is served.
      This route comes before the agent's own store: the key the person gave
-     Ordewell is their choice for every agent.
+     Ordewell is their choice for every agent. Gemini CLI's key is its own
+     vendor's rather than an OpenAI-compatible one: `/key set google` writes
+     `GEMINI_API_KEY`, the variable its API-key auth reads, and the hook hands
+     it back unchanged on the next start and the next discovery. Gemini 0.66
+     resolves its settings file's `security.auth.selectedType` first, then
+     `GOOGLE_GENAI_USE_GCA`, `GOOGLE_GENAI_USE_VERTEXAI`, a gateway endpoint
+     and `GEMINI_API_KEY`; `GOOGLE_API_KEY` belongs to its Vertex route, not
+     the API-key one. A person who chose one of those, or another auth type in
+     the settings file, keeps it: the hook adds nothing to those variables,
+     reads no settings file, and never sets `GEMINI_CLI_AUTH_OVERRIDE`, which
+     would replace a choice made there.
   3. **The agent's own store**, where it has one and ignores it over ACP: read
      as [ADR-0051](../platform/0051-opencode-go-limits-from-the-selected-login-read-in-place.md)
      reads OpenCode's, from the store the agent itself names and nowhere else
@@ -627,7 +638,7 @@ made with a Gemini API key from Gemini's own settings, on
 | model | `--model` at spawn, with the id as `session/new` lists it |
 | Ordewell's tools | the call id up to its first `__`, `mcp_ordewell_<tool>`: Gemini's call ids are the name it looked the tool up by, then a counter; the title is the call as the model wrote it (`task_complete(summary: ok, status: done)`), the kind is a guess (`other`), and there is no `_meta` or raw input, so none of those is read |
 | trust | `--skip-trust`: the task's worktree is trusted for that process only |
-| credentials | none: Gemini reads the key in its own settings over ACP, as the recordings show, so its spawn carries none from Ordewell (R9) |
+| credentials | the Google key configured in Ordewell, handed as `GEMINI_API_KEY`, else Gemini's own settings sign-in (R9) |
 | restriction | `--approval-mode default`; a policy file Ordewell renders, handed with both `--admin-policy` and `--policy`, that denies Gemini's own write, shell and web tools and every MCP server's tools but Ordewell's; and a private start directory that is also its temp directory |
 | repository | no reader: a restricted start is handed none of the repository's instruction files (`GEMINI.md`) |
 | roles | the planner, and a read-only mode (`plan`) |
@@ -664,10 +675,13 @@ Gemini's source words it; no recording has such a call. Gemini
 has no login or status command: `gemini` itself offers the sign-in, and a
 signed-out `session/new` fails with `-32000` "Gemini API key is missing or not
 configured." (`signed-out.jsonl`), which is how a signed-out Gemini is learned.
-Its models come from ACP discovery alone, started bare (`--acp`) and so
-untrusted, since discovery hands it no server: `session/new` lists `auto` and
-five Gemini models (`discovery.jsonl`), and there is no command to fall back
-to.
+A Google key saved in Ordewell signs it in without that dialog, handed as
+`GEMINI_API_KEY`, so the signed-out hint names both routes (R9): "Gemini CLI is
+not signed in. Run /key and choose Google Gemini to hand it a key, or run gemini
+and choose how it signs in." Its models come from ACP discovery alone, started
+bare (`--acp`) and so untrusted, since discovery hands it no server: `session/new`
+lists `auto` and five Gemini models (`discovery.jsonl`), and there is no command
+to fall back to.
 
 Gemini's own `plan` mode cannot be the control for its roles: live, it denied
 Ordewell's tools and let the model write a `.md` file. Its `default` mode
@@ -1285,3 +1299,7 @@ the private directory:
   catalogs; a catalog empty because its agent is signed out says so
   (`runnerErrors`); the model is one the key's held catalog serves the
   account, loaded before discovery.
+- 2026-11-05 — R9: Gemini CLI is handed the Google key configured in Ordewell
+  as `GEMINI_API_KEY`, which its API-key auth reads; a `GOOGLE_API_KEY` or a
+  Vertex or settings-file route stays the person's choice. Its model discovery
+  uses the same hook, and its signed-out hint names the key entry.

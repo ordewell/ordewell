@@ -400,11 +400,11 @@ const signedOutGemini: PlannerBackend = {
   kind: 'harness',
   runner: 'gemini-cli',
   usable: true,
-  auth: { state: 'signed-out', signIn: { runner: 'gemini-cli', label: 'Gemini CLI', byHand: 'run gemini and choose how it signs in' } },
+  auth: { state: 'signed-out', signIn: { runner: 'gemini-cli', label: 'Gemini CLI', key: { provider: 'google', label: 'Google Gemini' }, byHand: 'run gemini and choose how it signs in' } },
 };
 const CURSOR = 'Cursor is not signed in. Sign in with /login cursor-agent, or run cursor-agent login.';
 const QWEN = 'Qwen Code is not signed in. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.';
-const GEMINI = 'Gemini CLI is not signed in. Run gemini and choose how it signs in.';
+const GEMINI = 'Gemini CLI is not signed in. Run /key and choose Google Gemini to hand it a key, or run gemini and choose how it signs in.';
 
 /** Every signed-out agent names its way in, and its Log in runs whichever one Ordewell can (ADR-0052). */
 describe('the way into a signed-out agent', () => {
@@ -450,11 +450,23 @@ describe('the way into a signed-out agent', () => {
       // A key entry reports no end, so the button must not spin for one.
       expect(press()).not.toBeDisabled();
     }
+    for (const press of [() => rowLogin('gemini-cli')!, () => runnerLogin('Gemini CLI')!]) {
+      api.postMessage.mockClear();
+      fireEvent.click(press());
+      expect(api.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'sendMessage', text: '/key google' }));
+      expect(api.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'loginPlanner' }));
+      expect(press()).not.toBeDisabled();
+    }
   });
 
   it('gives an agent Ordewell can sign in by no means the words but no button', () => {
+    post({
+      type: 'setPlannerBackends',
+      backends: [{ ...signedOutGemini, auth: { state: 'signed-out', signIn: { runner: 'gemini-cli', label: 'Gemini CLI', byHand: 'run gemini and choose how it signs in' } } }],
+      provider: 'cursor-agent',
+      runner: 'cursor-agent',
+    });
     expect(rowLogin('gemini-cli')).toBeNull();
-    expect(plannerLogin('Gemini CLI')).toBeUndefined();
     expect(runnerLogin('Gemini CLI')).toBeNull();
   });
 

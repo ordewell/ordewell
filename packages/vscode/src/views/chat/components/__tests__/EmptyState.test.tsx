@@ -119,7 +119,7 @@ describe('EmptyState — signed-out planners', () => {
     const { container } = render(
       <EmptyState signedOut={[
         { runner: 'cursor-agent', label: 'Cursor', hint: 'Cursor is not signed in. Sign in with /login cursor-agent, or run cursor-agent login.', onLogIn: () => {} },
-        { runner: 'gemini-cli', label: 'Gemini CLI', hint: 'Gemini CLI is not signed in. Run gemini and choose how it signs in.' },
+        { runner: 'gemini-cli', label: 'Gemini CLI', hint: 'Gemini CLI is not signed in. Run /key and choose Google Gemini to hand it a key, or run gemini and choose how it signs in.' },
       ]} />,
     );
 
@@ -127,7 +127,7 @@ describe('EmptyState — signed-out planners', () => {
     expect(cursor?.textContent).toBe('Cursor is not signed in. Sign in with /login cursor-agent, or run cursor-agent login.');
     expect(cursor?.querySelector('.planner-auth-warning-agent')?.textContent).toBe('Cursor');
     expect(container.querySelector('.planner-auth-row[data-runner="gemini-cli"] .planner-auth-warning-text')?.textContent)
-      .toBe('Gemini CLI is not signed in. Run gemini and choose how it signs in.');
+      .toBe('Gemini CLI is not signed in. Run /key and choose Google Gemini to hand it a key, or run gemini and choose how it signs in.');
   });
 });
 

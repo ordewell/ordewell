@@ -145,7 +145,7 @@ describe('describePlannerNotReady', () => {
     'cursor-agent': 'Cursor is not signed in. Sign in with /login cursor-agent, or run cursor-agent login. Then try again.',
     cline: 'Cline is not signed in. Sign in with /login cline, or run cline auth. Then try again.',
     'qwen-code': 'Qwen Code is not signed in. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there. Then try again.',
-    'gemini-cli': 'Gemini CLI is not signed in. Run gemini and choose how it signs in. Then try again.',
+    'gemini-cli': 'Gemini CLI is not signed in. Run /key and choose Google Gemini to hand it a key, or run gemini and choose how it signs in. Then try again.',
   };
 
   it.each(Object.keys(PLANNER_TERMINAL))('gives signed-out %s every way back in, in the chat\'s spelling', (runner) => {

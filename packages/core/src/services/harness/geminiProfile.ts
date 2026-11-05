@@ -2,6 +2,7 @@ import { GEMINI_ACP_ARGS, GEMINI_CLI_MANIFEST } from '../../plugins/builtin/gemi
 import { ORDEWELL_MCP_SERVER_NAME } from '../mcp/clientConfig';
 import { plannerToolSet, taskToolSet } from '../mcp/tools';
 import type { AcpProfile } from './acpProfiles';
+import { geminiCredentials } from './geminiCredentials';
 
 /** Gemini names an MCP tool `mcp_<server>_<tool>`, in what it shows the model and at the head of its call ids. */
 const SERVER_PREFIX = `mcp_${ORDEWELL_MCP_SERVER_NAME}_`;
@@ -120,6 +121,13 @@ export const GEMINI_CLI_PROFILE: AcpProfile = {
   // `--model` takes the id as `session/new` lists it; with it on the command
   // line the adapter does not set the model again in the session.
   modelArgs: (model) => ['--model', model],
+  // A Google key saved in Ordewell signs Gemini in through the API-key auth
+  // it already reads from its environment, so it needs no sign-in of its own
+  // (ADR-0060, R9).
+  credentials: geminiCredentials,
+  // The Google key entry is the one Ordewell points at; Gemini CLI takes no
+  // other vendor's key.
+  signInRoute: { provider: 'google' },
   // Gemini's `plan` mode is no restriction: it denies Ordewell's tools and
   // allows writing a `.md` file, so a restricted start runs `default` under a
   // policy file instead. `default` runs a command it deems safe and a web

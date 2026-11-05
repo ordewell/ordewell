@@ -15,7 +15,9 @@ import { BUILTIN_MANIFESTS } from '../../plugins/builtin';
 import { GEMINI_ACP_ARGS, GEMINI_CLI_MANIFEST } from '../../plugins/builtin/gemini-cli.manifest';
 import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
 import { OrdewellMcpServer, mcpClientConfig, type McpClientConfig } from '../mcp';
+import { HeldSecrets } from '../HeldSecrets';
 import { fakeAcpSpawn, type FakeAcpAgent, type FakeAcpStep } from './fakeAcpAgent';
+import { fakeSecret } from './fakeSecret';
 
 /**
  * The gemini-cli connector against Gemini CLI 0.66.0 as it was recorded over
@@ -153,7 +155,7 @@ async function taskToken(): Promise<{ mcp: McpClientConfig; completed: ReturnTyp
   return { mcp: mcpClientConfig(credential), completed };
 }
 
-function gemini(steps: FakeAcpStep[]) {
+function gemini(steps: FakeAcpStep[], overrides: Partial<AgentProcessDeps> = {}) {
   const spawned = fakeAcpSpawn(steps);
   const deps: AgentProcessDeps = {
     spawn: spawned.spawn,
@@ -163,6 +165,7 @@ function gemini(steps: FakeAcpStep[]) {
     isDirectory: () => true,
     exists: () => true,
     workspaceEnv: async () => ({}),
+    ...overrides,
   };
   const adapter = CONNECTORS['gemini-cli'].create(deps);
   adapters.push(adapter);
@@ -395,14 +398,15 @@ describe('gemini-cli, replayed from Gemini CLI 0.66.0', () => {
     expect(await Promise.race([adapter.mcpAttached?.(), waited])).toBe('still waiting');
   });
 
-  it('reads Gemini\'s missing key as signed out, and names the command that signs it in', async () => {
+  it('reads Gemini\'s missing key as signed out, and names every way in: Ordewell\'s key, then its own sign-in', async () => {
     const { mcp } = await taskToken();
     const { adapter } = gemini(replay('signed-out'));
 
-    await expect(adapter.start(taskStart(mcp))).rejects.toThrow('Gemini CLI is not signed in. Run gemini and choose how it signs in.');
+    const hint = 'Gemini CLI is not signed in. Run /key and choose Google Gemini to hand it a key, or run gemini and choose how it signs in.';
+    await expect(adapter.start(taskStart(mcp))).rejects.toThrow(hint);
     const refusal = recording('signed-out').find((e) => e.dir === 'in' && e.line.error);
     expect(refusal?.dir === 'in' && refusal.line.error?.message).toMatch(GEMINI_CLI_MANIFEST.auth?.signedOut ?? /^$/);
-    expect('Gemini CLI is not signed in. Run gemini and choose how it signs in.').toMatch(GEMINI_CLI_MANIFEST.auth?.signedOut ?? /^$/);
+    expect(hint).toMatch(GEMINI_CLI_MANIFEST.auth?.signedOut ?? /^$/);
   });
 
   it('takes a call for Ordewell\'s only when its call id names a tool under Ordewell\'s server prefix', () => {
@@ -432,6 +436,46 @@ describe('gemini-cli, replayed from Gemini CLI 0.66.0', () => {
     const recorded = note('ordewell-tool', 'summary')?.permissions?.[0].toolCallId ?? '';
     expect(GEMINI_CLI_PROFILE.toolName?.('task_complete')).toBe(recorded.slice(0, recorded.indexOf('__')));
     expect(GEMINI_CLI_PROFILE.toolName?.('task_complete')).toBe('mcp_ordewell_task_complete');
+  });
+});
+
+describe('gemini-cli signed in by a Google key saved in Ordewell (ADR-0060 R9)', () => {
+  const KEY = fakeSecret('google');
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('hands the key as GEMINI_API_KEY to a task and a planner alike, and says it nowhere over stdio', async () => {
+    vi.stubEnv('GEMINI_API_KEY', KEY);
+
+    const task = await taskToken();
+    const taskRun = gemini(replay('ordewell-tool', CONTACT_ON));
+    await taskRun.adapter.start(taskStart(task.mcp));
+    expect(taskRun.spawned.lastEnv()).toMatchObject({ GEMINI_API_KEY: KEY });
+    expect(JSON.stringify(taskRun.agent.received)).not.toContain(KEY);
+
+    const planner = await plannerToken();
+    const plannerRun = gemini(replay('ordewell-tool', CONTACT_ON));
+    await plannerRun.adapter.start(plannerStart(planner.mcp));
+    expect(plannerRun.spawned.lastEnv()).toMatchObject({ GEMINI_API_KEY: KEY });
+    expect(JSON.stringify(plannerRun.agent.received)).not.toContain(KEY);
+  });
+
+  it('holds the key it hands Gemini with the attempt\'s secrets, so every output hides it (ADR-0061, H1)', async () => {
+    vi.stubEnv('GEMINI_API_KEY', KEY);
+    const held = new HeldSecrets();
+    const { mcp } = await taskToken();
+    const { agent, adapter } = gemini(replay('ordewell-tool', CONTACT_ON), { held });
+    await adapter.start(taskStart(mcp));
+
+    // hide() applies what is held alone, no shape rules, so this is the key held.
+    expect(held.hide(`Gemini echoed ${KEY} back`)).not.toContain(KEY);
+    expect(JSON.stringify(agent.received)).not.toContain(KEY);
+  });
+
+  it('asks Gemini\'s model list with the same hook its tasks use', () => {
+    expect(GEMINI_CLI_PROFILE.credentials).toBeDefined();
+    expect(GEMINI_CLI_PROFILE.credentials).toBe(GEMINI_CLI_MANIFEST.modelDiscovery.acp?.credentials);
+    expect(GEMINI_CLI_PROFILE.signInRoute).toEqual({ provider: 'google' });
   });
 });
 
@@ -710,7 +754,7 @@ require('readline').createInterface({ input: process.stdin }).on('line', (text) 
 
   it('asks Gemini untrusted, as it was recorded: discovery hands it no server, so it needs no trust', () => {
     expect(GEMINI_CLI_MANIFEST.modelDiscovery.method).toBe('acp');
-    expect(GEMINI_CLI_MANIFEST.modelDiscovery.acp).toEqual({ args: recordedArgs('discovery') });
+    expect(GEMINI_CLI_MANIFEST.modelDiscovery.acp).toEqual({ args: recordedArgs('discovery'), credentials: GEMINI_CLI_PROFILE.credentials });
     expect(GEMINI_CLI_MANIFEST.modelDiscovery.acp?.args).toBe(GEMINI_ACP_ARGS);
     expect(GEMINI_CLI_PROFILE.args).toEqual([...GEMINI_ACP_ARGS, '--skip-trust']);
   });

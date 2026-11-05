@@ -92,8 +92,9 @@ manifest's `signIn` clause for an agent whose login only it can run. One functio
 So `Cursor is not signed in. Sign in with /login cursor-agent, or run
 cursor-agent login.`, `Qwen Code is not signed in. Run /key and choose OpenRouter
 (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in
-there.`, and `Gemini CLI is not signed in. Run gemini and choose how it signs
-in.` The daemon words for the terminal, since it cannot know who reads, and
+there.`, and `Gemini CLI is not signed in. Run /key and choose Google Gemini to
+hand it a key, or run gemini and choose how it signs in.` The daemon words for
+the terminal, since it cannot know who reads, and
 `rewordSignIn` re-spells a shipped runner's hint for the headless CLI. VS Code's
 chat takes the same `/login <runner>` and `/key`, so it uses the terminal's
 words. A runner row (`describeRunnerSignIn`) carries the hint when its agent is
@@ -334,3 +335,5 @@ art for the TTL and the refresh trigger.
   prints the hint.
 - 2026-11-05 — a provider key saved through the daemon forgets the recorded
   and cached `signed-out` verdicts, since it can sign an agent in.
+- 2026-11-05 — Gemini CLI names Ordewell's Google key route in its signed-out
+  hint, beside its own sign-in, now that a saved Google key signs it in.
