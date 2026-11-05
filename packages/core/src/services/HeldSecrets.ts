@@ -1,6 +1,6 @@
 import type { StructuredEvent } from '../interfaces/IRunner';
 import { sensitiveEnvValues } from './outboundSecrets';
-import { hideHeld, hideHeldUpTo, redactAgentText } from '../utils/redactSecrets';
+import { heldStream, hideHeld, redactAgentText, type HeldStream } from '../utils/redactSecrets';
 
 type Delta = Extract<StructuredEvent, { type: 'assistant_text_delta' | 'thinking_delta' }>;
 
@@ -17,8 +17,8 @@ type Delta = Extract<StructuredEvent, { type: 'assistant_text_delta' | 'thinking
  */
 export class HeldSecrets {
   private readonly values = new Set<string>();
-  /** The end of the stream the last delta was in, not yet safe to show. */
-  private pending: Delta | null = null;
+  /** The stream the last delta was in, and its end not yet safe to show. */
+  private pending: { delta: Delta; stream: HeldStream } | null = null;
 
   hold(...values: ReadonlyArray<string | undefined>): void {
     for (const value of values) if (value) this.values.add(value);
@@ -69,10 +69,11 @@ export class HeldSecrets {
    */
   shownEvents(event: StructuredEvent): StructuredEvent[] {
     if (this.values.size === 0) return [event];
-    const out = this.pending && !sameStream(this.pending, event) ? this.flush() : [];
+    const out = this.pending && !sameStream(this.pending.delta, event) ? this.flush() : [];
     if (event.type !== 'assistant_text_delta' && event.type !== 'thinking_delta') return [...out, this.hideIn(event)];
-    const { shown, rest } = hideHeldUpTo((this.pending?.text ?? '') + event.text, this.values);
-    this.pending = rest ? { ...event, text: rest } : null;
+    const stream = this.pending?.stream ?? heldStream(this.values);
+    this.pending = { delta: event, stream };
+    const shown = stream.write(event.text);
     return shown ? [...out, { ...event, text: shown }] : out;
   }
 
@@ -83,27 +84,15 @@ export class HeldSecrets {
    * chunks split wherever its buffer fills, through a held value as readily
    * as anywhere else.
    */
-  stream(): { write: (text: string) => string; end: (text?: string) => string } {
-    let pending = '';
-    return {
-      write: (text) => {
-        if (this.values.size === 0) return text;
-        const { shown, rest } = hideHeldUpTo(pending + text, this.values);
-        pending = rest;
-        return shown;
-      },
-      end: (text = '') => {
-        const last = this.hide(pending + text);
-        pending = '';
-        return last;
-      },
-    };
+  stream(): HeldStream {
+    return heldStream(this.values);
   }
 
   private flush(): StructuredEvent[] {
     const pending = this.pending;
     this.pending = null;
-    return pending ? [{ ...pending, text: this.hide(pending.text) }] : [];
+    const text = pending?.stream.end() ?? '';
+    return pending && text ? [{ ...pending.delta, text }] : [];
   }
 }
 

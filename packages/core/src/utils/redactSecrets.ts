@@ -357,14 +357,13 @@ function redactPrivateKeyBlocks(text: string): string {
 }
 
 /**
- * The start of the BEGIN line of a private key block still open at `end`, a
- * line start in `text`: a read from `end` holds body lines with neither BEGIN
- * nor END, which nothing marks as key material, so it has to be redacted from
- * that BEGIN on. A line closes a block here exactly as it does in
+ * The start of the BEGIN line of a private key block still open at the end of
+ * `head`: a read from there holds body lines with neither BEGIN nor END,
+ * which nothing marks as key material, so it has to be redacted from that
+ * BEGIN on. A line closes a block here exactly as it does in
  * {@link redactPrivateKeyBlocks}, as both read it with {@link blockLine}.
  */
-function openPrivateKeyStart(text: string, end: number): number | undefined {
-  const head = text.slice(0, end);
+function openPrivateKeyStart(head: string): number | undefined {
   const at = head.lastIndexOf('-----BEGIN ');
   const begun = at < 0 ? null : PEM_BEGIN.exec(head.slice(at));
   if (!begun || begun.index !== 0) return undefined;
@@ -646,6 +645,8 @@ const NESTED_NAME = /(?<![A-Za-z0-9_.-])(?<!\\)(\\*["'\x60]?)(?<name>[A-Za-z_][A
 const SIBLING_STOP = /[{}<>\n]|(?<![A-Za-z0-9_.-])(?<!\\)(\\*["'\x60]?)(?<field>value|name|key)\1[ \t]*[:=][ \t]*/gi;
 /** A blank line or the next list item: the entry a sibling would be in has ended. */
 const NEXT_ENTRY = /[ \t]*(?:-[ \t]|\r?\n)/y;
+/** A markdown quote's `> ` or `>> ` opening a line, as an agent quotes the output it read. */
+const QUOTE_PREFIX = /[ \t]*(?:>[ \t]?)+/y;
 /** The lines an entry's fields span at most, `valueFrom` and the like between its name and its value. */
 const MAX_SIBLING_LINES = 4;
 
@@ -765,6 +766,12 @@ function valuesBelowNames(text: string): { spans: Span[]; open?: number } {
   return { spans: shownSpans(text, spans), open };
 }
 
+/** The markdown quote opening the line at `lineStart`, or '' when it opens with none. */
+function quoteAt(text: string, lineStart: number): string {
+  QUOTE_PREFIX.lastIndex = lineStart;
+  return QUOTE_PREFIX.test(text) ? text.slice(lineStart, QUOTE_PREFIX.lastIndex) : '';
+}
+
 /**
  * The value of the `value` field beside the name found at `at`, read on from
  * `from`; 'open' when the text ends before the entry does. Only a `value`
@@ -774,7 +781,8 @@ function siblingValue(text: string, at: number, from: number, name: string): Spa
   const stops = new RegExp(SIBLING_STOP);
   stops.lastIndex = from;
   let lines = 0;
-  let lead: number | undefined;
+  let quote: string | undefined;
+  let lead = 0;
   for (let found = stops.exec(text); found; found = stops.exec(text)) {
     const field = found.groups?.field?.toLowerCase();
     if (field === 'value') {
@@ -782,19 +790,24 @@ function siblingValue(text: string, at: number, from: number, name: string): Spa
       return valueAt >= text.length ? 'open' : valuesAt(text, valueAt, name, 'labelled');
     }
     if (field !== undefined || found[0] !== '\n' || ++lines > MAX_SIBLING_LINES) return [];
-    const next = found.index + 1;
+    // Computed once a line is crossed: on one long line every name's search ends at the next name.
+    if (quote === undefined) {
+      const lineStart = text.lastIndexOf('\n', at - 1) + 1;
+      quote = quoteAt(text, lineStart);
+      lead = lineStart + quote.length;
+      while (isPadding(text[lead])) lead++;
+      lead -= lineStart + quote.length;
+    }
+    // The entry's lines all open with its quote, whose `>` is no end of an element.
+    const opens = text.slice(found.index + 1, found.index + 1 + quote.length);
+    if (opens !== quote) return quote.startsWith(opens) && found.index + 1 + opens.length === text.length ? 'open' : [];
+    const next = found.index + 1 + quote.length;
+    stops.lastIndex = next;
     NEXT_ENTRY.lastIndex = next;
     if (NEXT_ENTRY.test(text)) return [];
     let indent = next;
     while (isPadding(text[indent])) indent++;
     if (indent >= text.length) break;
-    // Computed once a line is crossed: on one long line every name's search ends at the next name.
-    if (lead === undefined) {
-      const lineStart = text.lastIndexOf('\n', at - 1) + 1;
-      lead = lineStart;
-      while (isPadding(text[lead])) lead++;
-      lead -= lineStart;
-    }
     if (indent - next < lead) return [];
   }
   return 'open';
@@ -824,24 +837,23 @@ function redactValuesBelowNames(text: string): string {
 }
 
 /**
- * The start of the line of a credential name whose value can still be below
- * `end`, a line start in `text`, as {@link valuesBelowNames} reads it: a read
- * from `end` has the value with no name above it (ADR-0061, C1). Read as
- * agent text is, without its terminal escapes.
+ * The earliest line a read that starts at `end`, a line start in `text`, must
+ * be redacted with: an open key's BEGIN line, or the line of a credential name
+ * whose value can still be below, as {@link valuesBelowNames} reads it. A read
+ * from `end` has that value with no name above it (ADR-0061, C1).
+ *
+ * Read as agent text is, without its terminal escapes: a reset or an
+ * erase-line after `-----BEGIN … KEY-----` is no body on its line.
  */
-function openNamedValueStart(text: string, end: number): number | undefined {
+export function openValueStart(text: string, end: number): number | undefined {
   const head = text.slice(0, end);
   const { plain, at } = head.includes('\x1b') ? withoutEscapes(head) : { plain: head, at: undefined };
-  const { open } = valuesBelowNames(plain);
-  if (open === undefined || !at) return open;
-  // An escape can open the line the name is on: the line starts before it.
+  const starts = [openPrivateKeyStart(plain), valuesBelowNames(plain).open].filter((start) => start !== undefined);
+  if (starts.length === 0) return undefined;
+  const open = Math.min(...starts);
+  if (!at) return open;
+  // An escape can open the line the value is named on: the line starts before it.
   return open >= at.length ? undefined : head.lastIndexOf('\n', at[open] - 1) + 1;
-}
-
-/** The earliest line a read that starts at `end` must be redacted with: an open key's BEGIN line, or an open value's name. */
-export function openValueStart(text: string, end: number): number | undefined {
-  const starts = [openPrivateKeyStart(text, end), openNamedValueStart(text, end)].filter((start) => start !== undefined);
-  return starts.length > 0 ? Math.min(...starts) : undefined;
 }
 
 const NUMERIC = /^[-+]?\d+(?:\.\d+)?$/;
@@ -981,34 +993,111 @@ function heldValues(held: Iterable<string>): string[] {
   return [...new Set([...held].map((v) => v.trim()).filter((v) => v.length >= MIN_HELD_LENGTH))];
 }
 
+/** A stream of text hidden as it arrives: see {@link heldStream}. */
+export interface HeldStream {
+  /** What is safe to show of `text`, read on from what was written before it. */
+  write(text: string): string;
+  /** The rest, `text` with it, once the stream has no more. */
+  end(text?: string): string;
+}
+
+/** The chars of a held run a part still to come can start in: one short of a part. */
+const HELD_TAIL = HELD_PART - 1;
 /**
- * A stream's text split where what comes after it can no longer change how it
- * is hidden (ADR-0061, H1): `shown` is the text up to there with
- * {@link hideHeld} applied, `rest` is held back to be read with what follows.
- * A part of a held value can still be completing in the last
- * {@link HELD_PART} characters, where they read as the start of one, and a
- * run of held text that reaches them can still grow, so the run is held back
- * whole: it becomes one marker however the stream was split. Text that can
- * start no part, a line's newline among it, is shown at once: a script that
- * prints `ready` and waits is not kept waiting.
+ * A terminal escape still being written: a bare ESC, a CSI short of its final
+ * byte, a charset selection short of its set. The params are capped as no
+ * terminal's are longer, so a stream of digits after `ESC [` is not held back.
  */
-export function hideHeldUpTo(text: string, held: Iterable<string>): { shown: string; rest: string } {
-  const values = heldValues(held);
-  if (values.length === 0) return { shown: text, rest: '' };
-  const { plain, at } = withoutEscapes(text);
-  // A part still to come takes at least one character after the text, so it starts at or past `cut`.
-  let cut = plain.length;
-  for (let start = Math.max(0, plain.length - (HELD_PART - 1)); start < plain.length; start++) {
-    const begun = plain.slice(start);
-    if (values.some((value) => value.includes(begun))) {
-      cut = start;
-      break;
+// eslint-disable-next-line no-control-regex
+const PARTIAL_ESCAPE = /^\x1b(?:\[[0-?]{0,32}[ -/]{0,4}|[()])?$/;
+
+/** Where `text` ends inside an escape still being written, or its length when it does not. */
+function partialEscapeAt(text: string): number {
+  const at = text.lastIndexOf('\x1b');
+  return at >= 0 && PARTIAL_ESCAPE.test(text.slice(at)) ? at : text.length;
+}
+
+/**
+ * A stream's text, hidden as it arrives (ADR-0061, H1): each write shows what
+ * comes before the point past which what follows can no longer change how it
+ * is hidden, {@link hideHeld} applied, and holds back the rest to read with
+ * what follows.
+ *
+ * A part of a held value can still be completing in the last
+ * {@link HELD_PART} - 1 characters, where they read as the start of one, so
+ * they are held back. So is an escape the text ends inside: until it ends,
+ * its bytes are not known to be no part of the text, and a value coloured
+ * mid-value would read as two pieces too short to hide. Text that can start
+ * no part, a line's newline among it, is shown at once: a script that prints
+ * `ready` and waits is not kept waiting.
+ *
+ * A run of held text that reaches the end can still grow, so it is held back
+ * whole and becomes one marker however the stream was split. It is kept as
+ * its length and its last chars, all a part that continues it can start in,
+ * so a long run streamed in small writes is read once, not once per write.
+ *
+ * `held` is read on each write: a value held after the stream started is
+ * hidden from then on.
+ */
+export function heldStream(held: Iterable<string>): HeldStream {
+  /** The held run that reaches the end of what has been read: its length, and its last {@link HELD_TAIL} chars. */
+  let run: { chars: number; tail: string } | null = null;
+  /** The text after the run, or after the last shown, held back. */
+  let rest = '';
+
+  const read = (text: string, last: boolean): string => {
+    const raw = rest + text;
+    const values = heldValues(held);
+    if (values.length === 0 && run === null) {
+      rest = '';
+      return raw;
     }
-  }
-  const open = heldSpans(plain, values).find((span) => span.end >= cut);
-  if (open) cut = Math.min(cut, open.start);
-  const rawCut = cut === plain.length ? text.length : at[cut];
-  return { shown: hideHeld(text.slice(0, rawCut), values), rest: text.slice(rawCut) };
+    const partial = last ? raw.length : partialEscapeAt(raw);
+    const { plain, at } = withoutEscapes(raw.slice(0, partial));
+    // The run's tail read on into what follows: no part is shorter than the run's tail and one more char.
+    const lead = run?.tail ?? '';
+    const whole = lead + plain;
+    const rawAt = (i: number): number => (i === whole.length ? partial : at[i - lead.length]);
+    const rawAfter = (i: number): number => (i === lead.length ? 0 : at[i - lead.length - 1] + 1);
+    const spans = heldSpans(whole, values);
+    let first = 0;
+    let runEnd = lead.length;
+    if (run && spans[0] && spans[0].start <= lead.length) {
+      runEnd = spans[0].end;
+      first = 1;
+    }
+    // A part still to come takes at least one character after the text, so it starts at or past `cut`.
+    let cut = whole.length;
+    if (!last) {
+      for (let start = Math.max(0, whole.length - HELD_TAIL); start < whole.length; start++) {
+        const begun = whole.slice(start);
+        if (values.some((value) => value.includes(begun))) {
+          cut = start;
+          break;
+        }
+      }
+    }
+    if (run && !last && runEnd >= cut) {
+      run = { chars: run.chars + runEnd - lead.length, tail: whole.slice(Math.max(0, runEnd - HELD_TAIL), runEnd) };
+      rest = raw.slice(rawAfter(runEnd));
+      return '';
+    }
+    let shown = run ? marker('secret', run.chars + runEnd - lead.length) : '';
+    const from = rawAfter(runEnd);
+    run = null;
+    const open = last ? undefined : spans.slice(first).find((span) => span.end >= cut);
+    if (open) {
+      shown += hideHeld(raw.slice(from, rawAt(open.start)), values);
+      run = { chars: open.end - open.start, tail: whole.slice(Math.max(open.start, open.end - HELD_TAIL), open.end) };
+      rest = raw.slice(rawAfter(open.end));
+      return shown;
+    }
+    shown += hideHeld(raw.slice(from, rawAt(cut)), values);
+    rest = raw.slice(rawAt(cut));
+    return shown;
+  };
+
+  return { write: (text) => read(text, false), end: (text = '') => read(text, true) };
 }
 
 /** Text as a terminal shows it, its escapes dropped: what agent text is redacted as. */
