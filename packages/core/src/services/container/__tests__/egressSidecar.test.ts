@@ -6,6 +6,9 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import type { DockerCall, DockerCli, DockerResult } from '../dockerCli';
 import { EGRESS_ENTRY, SidecarEgress } from '../egressSidecar';
+import { EventEmitter } from 'events';
+import { PassThrough } from 'stream';
+import { fakeSecret } from '../../__tests__/fakeSecret';
 
 /*
  * The sidecar as itself, on this host's node. A preload stands in for the
@@ -234,5 +237,23 @@ describe('a route that could not be opened', () => {
     await expect(new SidecarEgress(cli).open({ name: 'ordewell-probe-x', labels: [], limits: [], image: 'img', allow: [], gated: null })).rejects.toThrow('docker would not start');
 
     expect(calls).toEqual(['network create --internal ordewell-probe-x-net', 'network rm ordewell-probe-x-net']);
+  });
+
+  it("keeps a key out of the start error of a sidecar that ended before it listened, which quotes its stderr", async () => {
+    const key = fakeSecret('openai');
+    const entry = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
+    const cli: DockerCli = {
+      call: async (): Promise<DockerResult> => ({ code: 0, stdout: '', stderr: '' }),
+      entry: async () => entry as unknown as ChildProcess,
+    };
+    const opened = new SidecarEgress(cli).open({ name: 'ordewell-probe-y', labels: [], limits: [], image: 'img', allow: [], gated: null });
+    await new Promise((resolve) => setImmediate(resolve));
+    entry.stderr.write(`node: bad option\nOPENAI_API_KEY=${key}\n`);
+    await new Promise((resolve) => setImmediate(resolve));
+    entry.emit('close', 1, null);
+
+    const err = await opened.then(() => null, (e: Error) => e);
+    expect(err?.message).toContain('The egress sidecar ended before it listened: node: bad option');
+    expect(err?.message).not.toContain(key.slice(-12));
   });
 });

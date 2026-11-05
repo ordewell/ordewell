@@ -2,6 +2,7 @@ import type { ScriptExit } from '../interfaces/IRunner';
 import { HANDOFF_LIMITS, storedHandoff, type StoredHandoff } from './Handoff';
 import { secondsText } from './TaskLog';
 import type { UserStep } from './Task';
+import { redactAgentText } from '../utils/redactSecrets';
 
 /*
  * The handoff of a task with no model to write one (ADR-0047): Ordewell
@@ -43,13 +44,15 @@ export function scriptHandoff(exit: ScriptExit, durationMs: number, output: stri
     case 'stopped':
       return undefined;
   }
-  const tail = output.trim();
+  // Redacted whole before the summary and report cut their ends from it.
+  const text = redactAgentText(output);
+  const tail = text.trim();
   const statusBudget = HANDOFF_LIMITS.summary - (tail ? 2 : 0);
   if (summary.length > statusBudget) summary = `${summary.slice(0, statusBudget - 1)}…`;
   if (tail) summary += `\n${endOf(tail, HANDOFF_LIMITS.summary - summary.length - 1)}`;
   return storedHandoff({
     summary,
-    report: endOf(output, HANDOFF_LIMITS.report),
+    report: endOf(text, HANDOFF_LIMITS.report),
     ...(exit.fullOutput ? { artifacts: [{ kind: 'file', path: exit.fullOutput.file }] } : {}),
   });
 }

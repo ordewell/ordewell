@@ -3,6 +3,8 @@ import { settleWithin } from '../harness/settleWithin';
 import type { IssuedLogin } from './credentialBroker';
 import type { DockerCli } from './dockerCli';
 import { ModelGateway } from './modelGateway';
+import { LineTail } from '../../utils/lineTail';
+import { redactAgentText } from '../../utils/redactSecrets';
 
 /**
  * What an egress sidecar runs (ADR-0059 L7), handed to `node -e`, so it needs
@@ -89,7 +91,8 @@ process.stdin.on('error', () => process.exit(0));
 
 const EGRESS_PORT = 3128;
 const SIDECAR_START_MS = 60_000;
-const STDERR_TAIL_CHARS = 2000;
+/** What its start error shows of the sidecar's stderr, of a larger tail kept whole so redaction reads every line it shows (see LineTail). */
+const STDERR_LIMITS = { keepChars: 8000, showChars: 2000 };
 
 /** One lease, as its way out needs it. */
 export interface EgressLease {
@@ -134,12 +137,15 @@ function proxyEnv(url: string): Record<string, string> {
 }
 
 function listening(entry: ChildProcess): Promise<void> {
-  let said = '';
-  entry.stderr?.on('data', (chunk: Buffer) => { said = (said + chunk.toString()).slice(-STDERR_TAIL_CHARS); });
+  const tail = new LineTail(STDERR_LIMITS);
+  entry.stderr?.on('data', (chunk: Buffer) => tail.append(chunk.toString()));
   return new Promise<void>((resolve, reject) => {
     entry.stdout?.once('data', () => resolve());
     entry.once('error', reject);
-    entry.once('close', () => reject(new Error(`The egress sidecar ended before it listened${said.trim() ? `: ${said.trim()}` : '.'}`)));
+    entry.once('close', () => {
+      const said = tail.read(redactAgentText);
+      reject(new Error(`The egress sidecar ended before it listened${said ? `: ${said}` : '.'}`));
+    });
   });
 }
 

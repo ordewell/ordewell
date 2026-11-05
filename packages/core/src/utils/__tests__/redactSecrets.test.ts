@@ -344,3 +344,20 @@ describe('a private key in every form, in both modes', () => {
     });
   }
 });
+
+describe('a second pass, as text redacted at its source is again where it is quoted', () => {
+  const KEY = 'MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7FAKEFAKEFAKE';
+  for (const text of [
+    'GITHUB_TOKEN=qwertyuiopasdfghjklzxcvbnmfake git push',
+    'MISTRAL_API_KEY: qwertyuiopasdfghjklzxcvbnmfake',
+    '--api-key aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xYfake',
+    `-----BEGIN PRIVATE KEY-----\n${KEY}\n-----END PRIVATE KEY-----`,
+  ]) {
+    it(`leaves redacted text as it is: ${text.split('\n')[0]}`, () => {
+      const once = redactAgentText(text);
+      expect(once).toContain('[REDACTED');
+      expect(redactAgentText(once)).toBe(once);
+      expect(redactSourceText(once)).toBe(once);
+    });
+  }
+});
