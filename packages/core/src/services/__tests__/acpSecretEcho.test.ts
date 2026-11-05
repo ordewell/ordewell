@@ -106,4 +106,29 @@ describe('a secret an ACP agent echoes back stays out of Ordewell\'s messages (A
     expect(err?.message).not.toContain(SHAPELESS_KEY);
     expect(err?.message).not.toContain(MCP_TOKEN);
   });
+
+  // The tail an error carries is the last few thousand chars of stderr, so a
+  // key printed well before the agent died can straddle where it starts.
+  const LOG = '\n' + 'debug: loading extension manifest\n'.repeat(200);
+  const TAIL_CHARS = 4000;
+  const fragmentOf = (message: string, key: string): string | undefined => {
+    for (let i = 0; i + 12 <= key.length; i += 1) if (message.includes(key.slice(i, i + 12))) return key.slice(i, i + 12);
+    return undefined;
+  };
+  it.each([
+    ['right after its prefix', FAKE_KEY, 'sk-or-v1-'.length],
+    ['in its middle', FAKE_KEY, 20],
+    ['inside a key of no known shape', SHAPELESS_KEY, 5],
+  ])('keeps a key out of the tail when the tail starts %s', async (_where, key, cutAt) => {
+    const after = LOG.slice(0, TAIL_CHARS - (key.length - cutAt));
+    const { adapter } = setup((s) => [
+      { expect: 'initialize', reply: INITIALIZED },
+      { expect: 'session/new' },
+      { run: (agent) => { s.processes[0].emitStderr(`settings: {"apiKey":"${key}${after}`); void agent.close(1); } },
+    ]);
+    const err = await adapter.start(start()).then(() => null, (e: Error) => e);
+    expect(err?.message).toContain('exited before it answered session/new');
+    expect(err?.message).toContain('debug: loading extension manifest');
+    expect(fragmentOf(err?.message ?? '', key)).toBeUndefined();
+  });
 });

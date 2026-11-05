@@ -16,6 +16,14 @@ import type { PlacedLaunch } from '../executionLease';
 const STDERR_TAIL_CHARS = 4000;
 
 /**
+ * The word a cut tail starts with: a run of what a key can be made of. The cut
+ * can fall inside a key the process printed, and the part it keeps matches
+ * neither that key's whole value nor its prefix's shape, so no redaction rule
+ * would know it.
+ */
+const CUT_WORD = /^[^\s"'`,;{}[\]()<>]*/;
+
+/**
  * How long after 'exit' the pipes get to close before the process is ended
  * anyway. Long enough for a dead CLI's buffered output to drain; short enough
  * that a descendant still holding its stdout or stderr does not hang the turn.
@@ -88,6 +96,8 @@ export class RunnerProcess {
   /** The process itself reported its end, before its pipes drained; see {@link hasExited}. */
   private exitReported = false;
   private stderrTail = '';
+  /** The tail no longer starts where the process's stderr did. */
+  private stderrCut = false;
   private spawnEnv: NodeJS.ProcessEnv = {};
   /** Secrets handed to the process outside its environment, which no message of its may carry either. */
   private readonly held = new Set<string>();
@@ -256,7 +266,8 @@ export class RunnerProcess {
 
   /** Fail-safe contract: a dead runner reports its own last words, never an empty bubble. */
   withStderrTail(headline: string): string {
-    const tail = this.redact(this.stderrTail.trim());
+    const kept = this.stderrCut ? this.stderrTail.replace(CUT_WORD, '') : this.stderrTail;
+    const tail = this.redact(kept.trim());
     return `${headline}${tail ? `\n\n${tail}` : ''}`;
   }
 
@@ -301,6 +312,8 @@ export class RunnerProcess {
   }
 
   private appendStderr(text: string): void {
-    this.stderrTail = (this.stderrTail + text).slice(-STDERR_TAIL_CHARS);
+    const joined = this.stderrTail + text;
+    if (joined.length > STDERR_TAIL_CHARS) this.stderrCut = true;
+    this.stderrTail = joined.slice(-STDERR_TAIL_CHARS);
   }
 }

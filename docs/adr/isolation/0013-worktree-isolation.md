@@ -316,7 +316,11 @@ everything below applies per repo of the group.
 - **Resolve as a task.** `resolveConflictAsTask` adds an AI task on the
   conflicted task's runner and model whose prompt is to `git merge --no-ff` the
   conflicted branch in its own worktree (which starts at the integration tip)
-  and resolve it. When that task lands, the conflicted task is integrated again
+  and resolve it. A script or delegated task has no mode to hand on, so its
+  resolver takes its runner's default for the plan's autonomy, never the
+  spawn's `build`, which is no mode at all on some runners. A script never
+  spawns, so its runner need not be one of the plan's; its resolver's runner
+  is admitted to the plan, as a script turned into an AI task by an edit is. When that task lands, the conflicted task is integrated again
   through the same queue: its branch is an ancestor by then, so it merges clean
   — and if the resolver did not really bring it along, it conflicts again rather
   than being taken at its word. A resolver lands only a task that is still
@@ -561,3 +565,4 @@ literal git command lines or private fields.
 - 2026-11-01 — a subplanner starts in its delegated task's worktree (ADR-0055 D5).
 - 2026-11-01 — landed work whose check has not passed holds the automatic merges (ADR-0055 D9).
 - 2026-11-01 — a delegated task may declare an advisory scope: overlap is answered at plan time, and a landing that touches one sends one line (ADR-0057 R6).
+- 2026-11-05 — a script task's resolver takes its runner's default mode, and its runner is admitted to the plan when it is not one of its runners.
