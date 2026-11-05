@@ -2,6 +2,7 @@ import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { PlannerAsk, TaskStartOptions } from './AgentAdapter';
 import type { AcpToolCall } from './acpSchema';
 import type { AcpAskedCall, AcpProfile, AcpRoles } from './acpProfiles';
+import { existsSync } from 'fs';
 import { resolveWithin } from '../pathScope';
 import { decideReadOnlyTaskPermission } from './plannerPermissions';
 
@@ -21,6 +22,8 @@ export function acpRoles(profile: Pick<AcpProfile, 'manifest' | 'roles' | 'restr
   return roles;
 }
 
+const MISSING_PATH = 'This path is not on disk, and the agent would read a near match in its place, so it was not read. Name a file or directory that exists.';
+
 /**
  * A request in the envelope's terms. A read or a search is a path only when it
  * names exactly one: several cannot be put to the envelope as one ask, and
@@ -29,10 +32,16 @@ export function acpRoles(profile: Pick<AcpProfile, 'manifest' | 'roles' | 'restr
  * resolved where the agent runs: it reads a relative path from there, not
  * from the workspace (ADR-0008). Both are counted together, so a derived path
  * never stands in for a location it disagrees with.
+ *
+ * A derived path must be on disk: an agent that names its files only in its
+ * arguments may open a near match in place of a missing one (Cline tries
+ * Unicode-whitespace, NFD and apostrophe variants), and that entry can be a
+ * link out of the workspace, so the path as written proves nothing.
  */
 export function acpAsk(call: AcpToolCall, site: { profile: Pick<AcpProfile, 'askedPaths'>; cwd: string }): PlannerAsk {
   if (call.kind === 'read' || call.kind === 'search') {
     const derived = (site.profile.askedPaths?.(call) ?? []).map((path) => resolveWithin(site.cwd, path).abs);
+    if (derived.some((path) => !existsSync(path))) return { kind: 'other', note: MISSING_PATH };
     const paths = [...(call.locations ?? []).map((location) => location.path), ...derived];
     if (paths.length === 1) return { kind: 'path', path: paths[0], directory: call.kind === 'search' };
   }

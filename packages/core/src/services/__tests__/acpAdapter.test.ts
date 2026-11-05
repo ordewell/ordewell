@@ -2552,6 +2552,11 @@ describe('AcpAdapter roles (ADR-0026, ADR-0046)', () => {
   });
 
   it('puts the path a profile reads from a call\'s arguments to the planner\'s envelope, resolved where the agent runs, only for a read or a search that names one', async () => {
+    // The derived paths must be on disk to be put to the envelope at all.
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'acp-asked-')));
+    const repo = join(base, 'repo');
+    for (const dir of ['repo/src', 'etc']) mkdirSync(join(base, dir), { recursive: true });
+    for (const file of ['repo/src/a.ts', 'repo/a', 'repo/b', 'etc/hosts']) writeFileSync(join(base, file), '');
     const named = (call: AcpToolCall) => {
       const input = call.rawInput as { paths?: unknown } | undefined;
       return Array.isArray(input?.paths) ? input.paths.filter((p): p is string => typeof p === 'string') : [];
@@ -2560,17 +2565,18 @@ describe('AcpAdapter roles (ADR-0026, ADR-0046)', () => {
       ...handshake(),
       { expect: 'session/prompt' },
       ask('read', 'c-rel', { rawInput: { paths: ['src/a.ts'] } }),
-      ask('search', 'c-abs', { rawInput: { paths: ['/repo/src'] } }),
+      ask('search', 'c-abs', { rawInput: { paths: [`${repo}/src`] } }),
       ask('read', 'c-out', { rawInput: { paths: ['../etc/hosts'] } }),
-      ask('read', 'c-many', { rawInput: { paths: ['/repo/a', '/repo/b'] } }),
-      ask('read', 'c-both', { rawInput: { paths: ['/repo/a'] }, locations: [{ path: '/repo/a' }] }),
-      ask('other', 'c-other', { rawInput: { paths: ['/repo/a'] } }),
+      ask('read', 'c-many', { rawInput: { paths: [`${repo}/a`, `${repo}/b`] } }),
+      ask('read', 'c-both', { rawInput: { paths: [`${repo}/a`] }, locations: [{ path: `${repo}/a` }] }),
+      ask('other', 'c-other', { rawInput: { paths: [`${repo}/a`] } }),
+      ask('read', 'c-missing', { rawInput: { paths: ['src/missing.ts'] } }),
       ask('read', 'c-none', { rawInput: {} }),
       { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
     ];
     const asks = async (profile: AcpProfile) => {
       const { adapter } = setup(calls(), profile);
-      await adapter.start(plannerStart());
+      await adapter.start(plannerStart({ cwd: repo }));
       const pending: Array<[string | undefined, unknown]> = [];
       await adapter.send('go', (e) => {
         if (e.type !== 'permission_request' || e.decided) return;
@@ -2581,12 +2587,13 @@ describe('AcpAdapter roles (ADR-0026, ADR-0046)', () => {
     };
 
     expect(await asks({ ...ROLES_PROFILE, askedPaths: named })).toEqual([
-      ['c-rel', { kind: 'path', path: '/repo/src/a.ts', directory: false }],
-      ['c-abs', { kind: 'path', path: '/repo/src', directory: true }],
-      ['c-out', { kind: 'path', path: '/etc/hosts', directory: false }],
+      ['c-rel', { kind: 'path', path: `${repo}/src/a.ts`, directory: false }],
+      ['c-abs', { kind: 'path', path: `${repo}/src`, directory: true }],
+      ['c-out', { kind: 'path', path: `${base}/etc/hosts`, directory: false }],
       ['c-many', { kind: 'other' }],
       ['c-both', { kind: 'other' }],
       ['c-other', { kind: 'other' }],
+      ['c-missing', { kind: 'other', note: expect.stringContaining('not on disk') }],
       ['c-none', { kind: 'other' }],
     ]);
     // Without the hook, only the location counts.
@@ -2595,10 +2602,12 @@ describe('AcpAdapter roles (ADR-0026, ADR-0046)', () => {
       ['c-abs', { kind: 'other' }],
       ['c-out', { kind: 'other' }],
       ['c-many', { kind: 'other' }],
-      ['c-both', { kind: 'path', path: '/repo/a', directory: false }],
+      ['c-both', { kind: 'path', path: `${repo}/a`, directory: false }],
       ['c-other', { kind: 'other' }],
+      ['c-missing', { kind: 'other' }],
       ['c-none', { kind: 'other' }],
     ]);
+    rmSync(base, { recursive: true, force: true });
   });
 
   it('fails a read-only task that leaves the mode it started in, mid-turn, and takes no further turn', async () => {

@@ -232,7 +232,8 @@ export interface AcpProfile {
    * Read only on a restricted start, for a call whose kind is `read` or
    * `search`; each is resolved against the session's cwd and judged by the
    * same envelope as a location, so it grants nothing a location would not
-   * (ADR-0008, ADR-0060 R3). None when absent, or when the call names none.
+   * (ADR-0008, ADR-0060 R3), and one not on disk refuses the call. None when
+   * absent, or when the call names none.
    */
   askedPaths?(call: AcpToolCall): readonly string[];
   /** The name the agent calls an Ordewell tool by, given its name on the server; the server's own name when absent. */
