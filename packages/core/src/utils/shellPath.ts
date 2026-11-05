@@ -185,18 +185,24 @@ export function withPath(
   base: NodeJS.ProcessEnv,
   resolvedPath: string,
   overrides: Record<string, string> = {},
+  platform: NodeJS.Platform = process.platform,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
-  // Both sources are filtered, not just `base`: an `overrides` map carrying its
-  // own PATH is exactly how the duplicate reappears.
-  for (const source of [base, overrides]) {
-    for (const [key, value] of Object.entries(source)) {
-      if (key.toLowerCase() === 'path') continue;
-      env[key] = value;
-    }
+  // Windows names a variable in any case, and Node hands a child only the first
+  // spelling in sort order, so a host's `FOO` would silently beat an override's
+  // `foo`: the override has to replace it, not sit beside it.
+  const replaced = platform === 'win32' ? new Set(Object.keys(overrides).map((key) => key.toLowerCase())) : new Set<string>();
+  for (const [key, value] of Object.entries(base)) {
+    if (key.toLowerCase() === 'path' || replaced.has(key.toLowerCase())) continue;
+    env[key] = value;
+  }
+  // Overrides are filtered too: an `overrides` map carrying its own PATH is
+  // exactly how the duplicate reappears.
+  for (const [key, value] of Object.entries(overrides)) {
+    if (key.toLowerCase() !== 'path') env[key] = value;
   }
   // Windows canonically spells it `Path`; POSIX requires `PATH`. Matching the
   // platform keeps anything downstream that reads the raw block unsurprised.
-  env[process.platform === 'win32' ? 'Path' : 'PATH'] = resolvedPath;
+  env[platform === 'win32' ? 'Path' : 'PATH'] = resolvedPath;
   return env;
 }

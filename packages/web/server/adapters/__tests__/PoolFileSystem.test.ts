@@ -345,8 +345,10 @@ describe('PoolFileSystem', () => {
     });
 
     it('cuts the output of a failing command between lines, so a credential keeps its name for redaction', async () => {
+      // The shell the bash tool itself resolves: Git Bash on Windows, where a
+      // `/bin/sh` does not start and leaves no output to cut.
       class Exposed extends PoolFileSystem {
-        exec(command: string) { return this.execBashImpl(command, { file: '/bin/sh', args: ['-c'], wallTimeMs: 5_000 }, undefined, tmpDir); }
+        exec(command: string) { return this.execBashImpl(command, this.researchShell, undefined, tmpDir); }
       }
       const line = 'MISTRAL_API_KEY="aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xYfake"';
       // The 20,000-char cut falls inside the name, then inside the value.

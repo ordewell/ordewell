@@ -27,7 +27,10 @@ describe('SpawnedDockerCli', () => {
     expect(absent.code).toBe(-1);
   });
 
-  it('hands what `-e NAME` names to the CLI in its environment, for a call and an entry alike (ADR-0022 A5)', async () => {
+  // Windows is refused before any docker call (containerPreflight), and starts
+  // no script as `docker`: only a native `docker.exe`. How a handed name beats a
+  // host variable in another case there is withPath's, and its test's.
+  it.skipIf(process.platform === 'win32')('hands what `-e NAME` names to the CLI in its environment, for a call and an entry alike (ADR-0022 A5)', async () => {
     const cli = cliRunning('printf "%s|%s" "$ORDEWELL_HANDED" "$*"');
 
     const called = await cli.call(['exec', '-e', 'ORDEWELL_HANDED', 'box'], { env: { ORDEWELL_HANDED: 'by-call' } });

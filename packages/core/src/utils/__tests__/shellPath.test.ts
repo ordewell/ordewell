@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as path from 'path';
-import { augmentedPath, clearAugmentedPathCache, wellKnownBinDirs } from '../shellPath';
+import { augmentedPath, clearAugmentedPathCache, wellKnownBinDirs, withPath } from '../shellPath';
 
 const posixOnly = process.platform === 'win32' ? describe.skip : describe;
 
@@ -115,5 +115,22 @@ describe('wellKnownBinDirs on Windows', () => {
     const d = wellKnownBinDirs({ platform: 'linux', env: ENV, home: HOME });
     expect(d).toContain('/opt/homebrew/bin');
     expect(d.some((p) => p.includes('scoop'))).toBe(false);
+  });
+});
+
+describe('withPath', () => {
+  // Windows reads a variable's name in any case, and Node hands a child only
+  // the first of several spellings in sort order: a host's `FOO` would beat an
+  // override's `foo`, and `docker -e foo` would read the host's value.
+  it('lets an override replace the host variable it names in any case on Windows', () => {
+    const env = withPath({ Mistral_Key: 'host', Path: 'C:\\old', KEPT: '1' }, 'C:\\new', { MISTRAL_KEY: 'handed' }, 'win32');
+
+    expect(env).toEqual({ MISTRAL_KEY: 'handed', KEPT: '1', Path: 'C:\\new' });
+  });
+
+  it('keeps names that differ only in case apart on POSIX, where they are two variables', () => {
+    const env = withPath({ Mistral_Key: 'host', PATH: '/old' }, '/new', { MISTRAL_KEY: 'handed' }, 'linux');
+
+    expect(env).toEqual({ Mistral_Key: 'host', MISTRAL_KEY: 'handed', PATH: '/new' });
   });
 });
