@@ -5,6 +5,8 @@
  * is base64'd, reversed or split across requests passes.
  */
 
+import { isCredentialVariable } from './harness/credentialEnv';
+
 const SENSITIVE_ENV_NAME = /(?:^|_)(?:KEY|API_KEY|TOKEN|SECRET|PASSWORD|CREDENTIALS?)(?:_|$)/i;
 /** Below this, a value is too likely to occur in an ordinary URL (`true`, `1`, `dev`) to mean anything. */
 const MIN_SECRET_LENGTH = 8;
@@ -58,12 +60,40 @@ function forms(text: string): string[] {
   return seen;
 }
 
-/** The values of environment variables named like a credential. */
+/**
+ * The secret a URL's userinfo carries: its password, or, with none, its user,
+ * which is where a DSN puts its key. A tool that fails to connect tends to
+ * print the URL with its parts rearranged, so the whole value alone is not enough.
+ */
+function userinfoSecret(value: string): string | undefined {
+  const userinfo = /^[a-z][a-z0-9+.-]*:\/\/([^/?#@\s]+)@/i.exec(value)?.[1];
+  if (!userinfo) return undefined;
+  const colon = userinfo.indexOf(':');
+  const secret = colon >= 0 ? userinfo.slice(colon + 1) : userinfo;
+  try {
+    return decodeURIComponent(secret);
+  } catch {
+    return secret;
+  }
+}
+
+/**
+ * The values of environment variables named like a credential: by the generic
+ * name test, or by the curated names and shapes the native shell withholds
+ * (ADR-0036 N2.2), whose `*_URL` and `PGPASSWORD` the generic test cannot know.
+ */
 export function sensitiveEnvValues(env: Record<string, string | undefined>): string[] {
   // A slash or colon can be part of a secret, so only the name identifies a reference.
-  return Object.entries(env)
-    .filter(([name, value]) => SENSITIVE_ENV_NAME.test(name) && !/_(?:URL|URI|PATH|FILE|DIR)$/i.test(name) && value !== undefined)
-    .map(([, value]) => (value ?? '').trim());
+  const values: string[] = [];
+  for (const [name, value] of Object.entries(env)) {
+    if (value === undefined) continue;
+    const generic = SENSITIVE_ENV_NAME.test(name) && !/_(?:URL|URI|PATH|FILE|DIR)$/i.test(name);
+    if (!generic && !isCredentialVariable(name)) continue;
+    values.push(value.trim());
+    const part = userinfoSecret(value.trim());
+    if (part) values.push(part);
+  }
+  return values;
 }
 
 /** Whether any of `texts`, raw or decoded, contains a held secret or a well-known token. */

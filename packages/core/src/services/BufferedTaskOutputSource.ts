@@ -5,6 +5,7 @@ import { storedHandoff, type StoredHandoff } from '../models/Handoff';
 import { scriptHandoff } from '../models/DerivedHandoff';
 import type { ScriptExit } from '../interfaces/IRunner';
 import type { TaskCompleteArgs } from './mcp/tools';
+import { redactAgentText } from '../utils/redactSecrets';
 
 /** Enough output for a summary tail and a live read, without holding a long run's whole log. */
 const DEFAULT_MAX_BUFFER_CHARS = 256 * 1024;
@@ -27,8 +28,18 @@ interface Capture {
   turnStart?: number;
 }
 
+/** Output as a reader sees it, each line's trailing space dropped. */
+function plain(raw: string): string {
+  return outputLines(raw).map((line) => line.trimEnd()).join('\n');
+}
+
+/**
+ * What every read of the output starts from: runner text, redacted whole
+ * before any read cuts it to its lines or a report cuts it to its budget, as a
+ * cut can keep a value and drop the name that marks it.
+ */
 function clean(raw: string): string {
-  return outputLines(raw).map((line) => line.trimEnd()).join('\n').trim();
+  return redactAgentText(plain(raw).trim());
 }
 
 /** Owns one bounded output buffer per task attempt, fed from the attempt's session. */
@@ -89,7 +100,8 @@ export class BufferedTaskOutputSource implements TaskOutputSource {
   }
 
   report(taskId: string): string | undefined {
-    return this.captures.get(taskId)?.completion?.summary.trim() || undefined;
+    const summary = this.captures.get(taskId)?.completion?.summary.trim();
+    return summary ? redactAgentText(summary) : undefined;
   }
 
   handoff(taskId: string): StoredHandoff | undefined {
@@ -103,13 +115,27 @@ export class BufferedTaskOutputSource implements TaskOutputSource {
     if (!capture) return null;
     const total = capture.dropped + capture.raw.length;
     const from = Math.min(Math.max(0, (opts.sinceOffset ?? 0) - capture.dropped), capture.raw.length);
-    const lines = clean(capture.raw.slice(from)).split('\n');
+    const lines = this.readFrom(capture.raw, from).split('\n');
     const kept = opts.maxLines > 0 ? lines.slice(-opts.maxLines) : [];
     return {
       text: kept.join('\n'),
       nextOffset: total,
       running: capture.attached && !capture.exited,
     };
+  }
+
+  /**
+   * The output from `from`, a chunk's end the last read stopped at, redacted
+   * with the start of its line: the name of a value split across two chunks
+   * is in the part already read.
+   */
+  private readFrom(raw: string, from: number): string {
+    const start = from === 0 ? 0 : raw.lastIndexOf('\n', from - 1) + 1;
+    if (start === from) return clean(raw.slice(from));
+    const shown = plain(raw.slice(start, from));
+    const line = redactAgentText(plain(raw.slice(start)));
+    // Unless redacting the whole line changed the part already read, show only the rest of it.
+    return (line.startsWith(shown) ? line.slice(shown.length) : line).trim();
   }
 
   private append(capture: Capture, text: string): void {

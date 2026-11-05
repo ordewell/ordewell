@@ -2,6 +2,7 @@ import { flattenTasks, type Task } from './Task';
 import { checkOf } from './Loop';
 import { onOneLine, splitLines } from './lineBreaks';
 import { resolveTaskRef, taskRefOf, taskRefsOf, titledTaskRefOf } from '../services/TaskRefs';
+import { redactAgentText } from '../utils/redactSecrets';
 
 /*
  * A task's handoff (ADR-0047): what it tells the tasks that read it, as its
@@ -214,12 +215,22 @@ export const HANDOFF_LIMITS = {
 /** Findings the plan's digest keeps of a handoff. */
 export const DIGEST_FINDINGS = 25;
 
-/** The handoff a call stated, its findings numbered in the author's order; undefined when it stated nothing. */
+/**
+ * The handoff a call stated, its findings numbered in the author's order;
+ * undefined when it stated nothing. Its words are a runner's, and go on to
+ * the planner's prompt and the plan on disk, so they are redacted here, where
+ * every handoff is stored from.
+ */
 export function storedHandoff(handoff: Handoff): StoredHandoff | undefined {
-  const summary = handoff.summary.trim();
-  const findings = (handoff.findings ?? []).map((f, i): HandoffFinding => ({ id: `F${i + 1}`, ...f }));
+  const summary = redactAgentText(handoff.summary.trim());
+  const findings = (handoff.findings ?? []).map((f, i): HandoffFinding => ({
+    id: `F${i + 1}`,
+    ...f,
+    title: redactAgentText(f.title),
+    ...(f.detail !== undefined ? { detail: redactAgentText(f.detail) } : {}),
+  }));
   const artifacts = handoff.artifacts ?? [];
-  const report = handoff.report?.trim();
+  const report = handoff.report && redactAgentText(handoff.report.trim());
   // A blocked or failed attempt lands nothing, so its summary carries everything.
   const commit = handoff.status === 'done' && handoff.commit ? withoutTrailers(handoff.commit) : undefined;
   if (!commit && !summary && findings.length === 0 && artifacts.length === 0 && !report) return undefined;

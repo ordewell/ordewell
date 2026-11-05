@@ -37,14 +37,28 @@ function marker(kind: string, length: number): string {
   return `[${REDACTION_MARKER} ${kind}: ${length} chars]`;
 }
 
-const MARKER_ONLY = new RegExp(String.raw`^\[${REDACTION_MARKER} [a-z ]+: \d+ chars\]$`);
+/**
+ * A marker where a value starts. Text is redacted again on its way on (a
+ * task's output, then the report quoting it), and a bare value ends at the
+ * marker's first space, so without this a second pass would mark the marker.
+ */
+const MARKER_AT = new RegExp(String.raw`\[${REDACTION_MARKER} [a-z ]+: \d+ chars\]`, 'y');
+
+/** Tested on the whole line: a log prefix's brackets would take the marker's own. */
+const KEY_MARKER_LINE = new RegExp(String.raw`\[${REDACTION_MARKER} private key: \d+ chars\]\s*$`);
+
+function markerAt(text: string, at: number): boolean {
+  MARKER_AT.lastIndex = at;
+  return MARKER_AT.test(text);
+}
 
 /**
  * Research output is line-oriented and usually arrives prefixed: `read_file`
- * emits `  12|content`, ripgrep emits `path:12:content`. A rule anchored to the
- * start of a line has to see past both or it never fires on real tool output.
+ * emits `  12|content`, ripgrep emits `path:12:content`, and a log opens each
+ * line with `[2026-11-05 10:00:00] ` or `[cline] `. A rule anchored to the
+ * start of a line has to see past them or it never fires on real output.
  */
-const LINE_PREFIX = String.raw`(?:[ \t]*\d+\||[^\s:]*:\d+:|)[ \t]*`;
+const LINE_PREFIX = String.raw`(?:[ \t]*\[[^\]\n]*\])*(?:[ \t]*\d+\||[^\s:]*:\d+:|)[ \t]*`;
 const LINE_PREFIX_ANCHORED = new RegExp('^' + LINE_PREFIX);
 
 /**
@@ -57,9 +71,14 @@ const CREDENTIAL_WORD = String.raw`(?:api[_-]?keys?|secrets?|passwords?|passwd|p
  * `KEY=value` / `"key": "value"` in any of the shapes a config file, shell
  * export or JSON blob uses. The name may sit anywhere inside a longer
  * identifier, so `AWS_SECRET_ACCESS_KEY` and `stripeApiKeyLive` both match.
+ *
+ * The name is one whole run, entered only where none runs through, and the
+ * word is found in it by a lookahead: a run split around the word at every
+ * start backtracks cubically, and a 16k stderr line of `-token-token…` hangs
+ * the extension host.
  */
 const NAMED_CREDENTIAL = new RegExp(
-  String.raw`((?:^|[^A-Za-z0-9_])["']?[A-Za-z0-9_.\-]*` + CREDENTIAL_WORD + String.raw`[A-Za-z0-9_.\-]*["']?[ \t]*(?:=>|[:=])[ \t]*)(["'\x60]?)([A-Za-z0-9_\-./+=:~!@#%^&*]{8,})\2`,
+  String.raw`((?:^|[^A-Za-z0-9_.\-])["']?(?=[A-Za-z0-9_.\-]*` + CREDENTIAL_WORD + String.raw`)[A-Za-z0-9_.\-]+["']?[ \t]*(?:=>|[:=])[ \t]*)(["'\x60]?)([A-Za-z0-9_\-./+=:~!@#%^&*]{8,})\2`,
   'gi',
 );
 
@@ -75,7 +94,8 @@ const NAMED_CREDENTIAL = new RegExp(
  * reach this rule's much looser value test.
  */
 const DOTENV_CREDENTIAL = new RegExp(
-  String.raw`^(` + LINE_PREFIX + String.raw`(?:export[ \t]+)?[A-Z0-9_]*` + CREDENTIAL_WORD.toUpperCase() + String.raw`[A-Z0-9_]*[ \t]*=[ \t]*)(["'\x60]?)([^\s"'\x60]{3,})\2[ \t]*$`,
+  // The name found by a lookahead, as in NAMED_CREDENTIAL, or a line of `TOKEN_TOKEN_…` backtracks quadratically.
+  String.raw`^(` + LINE_PREFIX + String.raw`(?:export[ \t]+)?(?=[A-Z0-9_]*` + CREDENTIAL_WORD.toUpperCase() + String.raw`)[A-Z0-9_]+[ \t]*=[ \t]*)(["'\x60]?)([^\s"'\x60]{3,})\2[ \t]*$`,
   'gm',
 );
 
@@ -122,8 +142,12 @@ const BASE64_LINE = /^[A-Za-z0-9+/]+={0,2}$/;
 /** Below a body line's usual length, so that a one-word line above the key is not taken for part of it. */
 const MIN_BODY_LINE = 16;
 
-/** `\n` as JSON escapes it, once or more. */
-const ESCAPED_BREAK = String.raw`\\+[nr]`;
+/**
+ * `\n` as JSON escapes it, once or more: up to four levels of JSON inside
+ * JSON. Unbounded, a run of backslashes is rescanned from each of its
+ * characters, quadratically.
+ */
+const ESCAPED_BREAK = String.raw`\\{1,16}[nr]`;
 const INLINE_BODY_CHARS = String.raw`A-Za-z0-9+/=:,.\- \t\\`;
 /**
  * A key held on one line: `\n`-escaped in a JSON value (a service-account
@@ -135,7 +159,7 @@ const INLINE_PEM = new RegExp(
   String.raw`(-----BEGIN ${PRIVATE_KEY_LABEL}-----(?:${ESCAPED_BREAK}|[ \t])+)([${INLINE_BODY_CHARS}]*?)(?=${ESCAPED_BREAK}-----END \2-----|-----END|[^${INLINE_BODY_CHARS}]|$)`,
   'g',
 );
-const ESCAPED_PEM_END = new RegExp(String.raw`${ESCAPED_BREAK}-----END ${PRIVATE_KEY_LABEL}-----`, 'g');
+const PEM_END_ANYWHERE = new RegExp(PEM_END.source, 'g');
 const INLINE_BODY_CHAR = /[A-Za-z0-9+/=\\]/;
 
 const bodyLength = (body: string) => body.replace(new RegExp(ESCAPED_BREAK, 'g'), '').replace(/\s/g, '').length;
@@ -148,17 +172,41 @@ function redactInlineBodies(text: string): string {
   });
 }
 
-/** The escaped body above an escaped END whose BEGIN was cut off: walked back to by hand, which keeps it linear. */
+/** Whether `text[at]` is the `n` or `r` that ends an escaped break. */
+const endsEscapedBreak = (text: string, at: number) => (text[at] === 'n' || text[at] === 'r') && text[at - 1] === '\\';
+
+/**
+ * The body before an END on the same line whose BEGIN was cut off, escaped
+ * (`…\nMIIE…\n-----END`) or flattened with spaces (`…MIIE… -----END`):
+ * walked back to by hand, which keeps it linear, a token at a time. As with
+ * {@link redactBodyAbove}, the token above the END may be short and each one
+ * further up must be a body line's length, so the words of a message before
+ * the key are kept.
+ */
 function redactInlineBodiesBeforeEnd(text: string): string {
   let out = '';
   let from = 0;
-  for (const end of text.matchAll(ESCAPED_PEM_END)) {
-    let start = end.index;
-    while (start > from && INLINE_BODY_CHAR.test(text[start - 1])) start--;
-    const chars = bodyLength(text.slice(start, end.index));
+  for (const end of text.matchAll(PEM_END_ANYWHERE)) {
+    let at = end.index;
+    let top = at;
+    let bottom = -1;
+    let chars = 0;
+    for (;;) {
+      while (at > from && (text[at - 1] === ' ' || text[at - 1] === '\t' || endsEscapedBreak(text, at - 1))) {
+        at--;
+        if (text[at] !== ' ' && text[at] !== '\t') while (at > from && text[at - 1] === '\\') at--;
+      }
+      const tokenEnd = at;
+      while (at > from && INLINE_BODY_CHAR.test(text[at - 1]) && !endsEscapedBreak(text, at - 1)) at--;
+      const token = text.slice(at, tokenEnd).replace(/\\/g, '');
+      if (!BASE64_LINE.test(token) || (bottom >= 0 && token.length < MIN_BODY_LINE)) break;
+      if (bottom < 0) bottom = tokenEnd;
+      top = at;
+      chars += token.length;
+    }
     if (chars < MIN_BODY_LINE) continue;
-    out += text.slice(from, start) + marker('private key', chars);
-    from = end.index;
+    out += text.slice(from, top) + marker('private key', chars);
+    from = bottom;
   }
   return out + text.slice(from);
 }
@@ -209,10 +257,15 @@ function redactPrivateKeyBlocks(text: string): string {
       if (begun && !/[A-Za-z0-9+/]/.test(line.slice(begun.index + begun[0].length))) label = begun[1];
       continue;
     }
-    const content = line.replace(LINE_PREFIX_ANCHORED, '');
+    // A CRLF text keeps its `\r` on each line split at `\n`, and no body line has one.
+    const content = line.replace(LINE_PREFIX_ANCHORED, '').replace(/\r$/, '');
     if (content.includes(`-----END ${label}-----`)) {
       closeBlock();
       out.push(line);
+    } else if (bodyChars === 0 && KEY_MARKER_LINE.test(line)) {
+      // A block an earlier pass redacted already: marking it again would say it held nothing.
+      out.push(line);
+      label = null;
     } else if (PEM_BODY_LINE.test(content)) {
       bodyChars += content.trim().length;
     } else {
@@ -229,9 +282,11 @@ function redactPrivateKeyBlocks(text: string): string {
 
 /**
  * `Authorization: Bearer …`, in a header, a curl line or a log. The token
- * test keeps the scheme words in prose (`Basic authentication`) as they are.
+ * test keeps the scheme words in prose (`Basic authentication`) as they are;
+ * after an `Authorization` header's name the scheme is no prose, so its token
+ * goes whatever its shape.
  */
-const AUTH_SCHEME_CREDENTIAL = /(?<![A-Za-z0-9])(Bearer|Basic)([^\S\n]+)([A-Za-z0-9\-._~+/]{8,}=*)/gi;
+const AUTH_SCHEME_CREDENTIAL = /((?<![A-Za-z0-9-])(?:Proxy-)?Authorization["']?[ \t]*[:=][ \t]*["']?)?(?<![A-Za-z0-9])(Bearer|Basic|Token)([^\S\n]+)([A-Za-z0-9\-._~+/]{8,}=*)/gi;
 
 function looksLikeToken(value: string): boolean {
   return /\d/.test(value) || (/[a-z]/.test(value) && /[A-Z]/.test(value)) || /[+/=]/.test(value);
@@ -241,7 +296,23 @@ function looksLikeToken(value: string): boolean {
  * A key and what assigns it: `"KEY":`, `key =`, `:key =>`, with the key's
  * quotes escaped any number of times, as JSON inside JSON escapes them.
  */
-const ASSIGNED_NAME = /(?<![A-Za-z0-9_\\])(\\*["'`])?([A-Za-z_][A-Za-z0-9_.-]*)(\\*["'`])?[ \t]*(=>|:|=(?!=))[ \t]*/g;
+// A name starts only where no name runs through, so a run like `a-a-a-…` is scanned once, not once per start.
+const ASSIGNED_NAME = /(?<![A-Za-z0-9_\\]|[A-Za-z0-9_][.-])(\\*["'`])?([A-Za-z_][A-Za-z0-9_.-]*)(\\*["'`])?[ \t]*(=>|:|=(?!=))[ \t]*/g;
+/**
+ * A long flag and the space that parts it from its value: `--api-key v`, as a
+ * spawn line or a usage error prints it. A value that opens with `-` is the
+ * next flag, and one shorter than a key is as likely the next word of prose
+ * (`pass --token to it`).
+ */
+const SPACED_FLAG = /(?<![A-Za-z0-9_-])(--)([A-Za-z][A-Za-z0-9_-]*)()[ \t]+(?=[^\s-]\S{7})/g;
+/** A scheme word {@link AUTH_SCHEME_CREDENTIAL} redacts with the token after it, which a bare value would part from it. */
+const AUTH_SCHEME_WORD = /^(?:Bearer|Basic|Token)$/i;
+/**
+ * A name an env dump or a request header prints, `MISTRAL_API_KEY:` or
+ * `x-api-key:`, whose bare value after a colon is the value; a lone word
+ * before one (`password: required`) is as likely prose.
+ */
+const DUMPED_NAME = /[_-]/;
 /** Where an unquoted value assigned with `=` ends. */
 const BARE_VALUE_END = /[\s,;&"'`)}\]\\]/;
 /** Names that carry a credential however a harness spells its own login, which {@link isCredentialVariable} leaves out. */
@@ -277,16 +348,23 @@ function valueAt(text: string, at: number, bare: boolean): { start: number; end:
   return { start: at, end };
 }
 
-/** Every quoted or `=`-assigned value under a credential-named key, whatever its shape. */
+/**
+ * Every value under a credential-named key, whatever its shape: quoted,
+ * assigned with `=`, given to a flag, or bare after the colon of a dumped name.
+ */
 function redactCredentialNamedValues(text: string): string {
-  const names = new RegExp(ASSIGNED_NAME);
+  return redactNamedValues(redactNamedValues(text, ASSIGNED_NAME), SPACED_FLAG);
+}
+
+function redactNamedValues(text: string, pattern: RegExp): string {
+  const names = new RegExp(pattern);
   let out = '';
   let from = 0;
   for (let found = names.exec(text); found; found = names.exec(text)) {
-    const value = valueAt(text, found.index + found[0].length, found[4] !== ':');
+    const value = valueAt(text, found.index + found[0].length, found[4] !== ':' || DUMPED_NAME.test(found[2]));
     if (!value || value.end === value.start || !credentialNamed(found[2])) continue;
     const raw = text.slice(value.start, value.end);
-    if (MARKER_ONLY.test(raw)) continue;
+    if (markerAt(text, value.start) || AUTH_SCHEME_WORD.test(raw)) continue;
     out += text.slice(from, value.start) + marker('credential', raw.length);
     from = value.end;
     names.lastIndex = value.end;
@@ -296,6 +374,8 @@ function redactCredentialNamedValues(text: string): string {
 
 const NUMERIC = /^[-+]?\d+(?:\.\d+)?$/;
 const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+/** An identifier whose case turns inside it: `passwordField`, `hashedPassword`. */
+const CAMEL_IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*[a-z][A-Z][A-Za-z0-9_$]*$/;
 const MEMBER_EXPRESSION = /^[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+$/;
 /** `a-different-token`, `secret_store_key` — a slug or setting name, not key material. */
 const SLUG = /^[a-z]+(?:[-_][a-z]+)+$/;
@@ -361,9 +441,10 @@ export function redactSourceText(text: string, held: Iterable<string> = []): str
 
 /**
  * Replace credential material in text a runner wrote — stderr, a JSON-RPC
- * error — with visible markers: everything {@link redactSourceText} replaces,
- * and every quoted or `=`-assigned value under a credential-named key,
- * whatever its shape.
+ * error, a task's output — with visible markers: everything
+ * {@link redactSourceText} replaces, and every value under a credential-named
+ * key whatever its shape: quoted, assigned with `=`, given to a flag, or bare
+ * after the colon of a dumped name (`X-Api-Key: …`, `GITHUB_TOKEN: …`).
  */
 export function redactAgentText(text: string, held: Iterable<string> = []): string {
   return redact(text, held, true);
@@ -390,6 +471,11 @@ function redact(text: string, held: Iterable<string>, agentText: boolean): strin
     const { value, tail } = trimTrailingPunctuation(raw);
     if (value.length < 8) return full;
     if (looksLikeCode(value) || value.startsWith('$')) return full;
+    // A camelCase word with no digit is a variable (`password: passwordField`),
+    // whatever the name claims; a secret that is one is the false negative
+    // given up for source that stays byte for byte, and in agent text the
+    // credential-named rule above has already taken a quoted or assigned one.
+    if (CAMEL_IDENTIFIER.test(value) && !/\d/.test(value)) return full;
     // An unambiguous name (`password`, `secret`, `privateKey`, ...) means the
     // value is claimed to *be* the secret, not a reference to one — so once it
     // also carries a digit, it stops being the "settings-name pointing at
@@ -413,14 +499,16 @@ function redact(text: string, held: Iterable<string>, agentText: boolean): strin
     // setting name (`vscodeApiKeyKey: 'qwenApiKey'`), never key material — and
     // config-shaped code is full of both. The dotenv rule still catches the one
     // real case this gives up, `PASSWORD=correcthorse`; in agent text, the
-    // credential-named rule above already took every value this lets through.
+    // credential-named rule above already took every quoted or assigned value
+    // this lets through, and every bare colon value under a header- or
+    // env-shaped name.
     if (IDENTIFIER.test(value) || SLUG.test(value)) return full;
     if (!UNAMBIGUOUS_CREDENTIAL_NAME.test(head) && !looksLikeKeyMaterial(value)) return full;
     return `${head}${quote}${marker('credential', value.length)}${quote}${tail}`;
   });
 
-  out = out.replace(AUTH_SCHEME_CREDENTIAL, (full, scheme: string, space: string, token: string) =>
-    looksLikeToken(token) ? `${scheme}${space}${marker('token', token.length)}` : full);
+  out = out.replace(AUTH_SCHEME_CREDENTIAL, (full, header: string | undefined, scheme: string, space: string, token: string) =>
+    header || looksLikeToken(token) ? `${header ?? ''}${scheme}${space}${marker('token', token.length)}` : full);
 
   for (const pattern of PROVIDER_KEY_PATTERNS) {
     out = out.replace(pattern, (hit: string) => marker('api key', hit.length));
