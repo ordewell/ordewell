@@ -34,6 +34,7 @@ import { awaitAttach, listed, MCP_ATTACH_TIMEOUT_MS, type AttachState } from './
 import { settleWithin } from './settleWithin';
 import { compareVersions } from '../../utils/version';
 import { acpPrivateDir, type AcpPrivateDir } from './acpPrivateDir';
+import { acpSignedOut } from './acpSignedOut';
 import { dirname } from 'path';
 import { taskCompletionContract, type McpClientConfig } from '../mcp';
 
@@ -292,7 +293,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
    */
   private async credential(started: Started, workspace: Record<string, string>): Promise<Readonly<Record<string, string>> | null> {
     if (!this.profile.credentials || this.deps.placement) return null;
-    return this.profile.credentials({ env: { ...process.env, ...workspace }, kind: started.kind });
+    return this.profile.credentials({ env: { ...process.env, ...workspace }, kind: started.kind, ...(started.model ? { model: started.model } : {}) });
   }
 
   /**
@@ -541,14 +542,13 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
   }
 
   /** What the agent gave as its refusal's reason, which can quote the settings or environment it was started with. */
-  private reason(response: { message?: string }): string {
-    return response.message ? this.runner.redact(response.message) : 'no reason given';
+  private reason(response: { message?: string; details?: string }): string {
+    const said = [response.message, response.details].filter(Boolean).join(': ');
+    return said ? this.runner.redact(said) : 'no reason given';
   }
 
   private signedOut(): string {
-    const { auth, runner } = this.profile.manifest;
-    const routes = [auth ? `run \`${[runner.command, ...auth.loginArgs].join(' ')}\`` : null, this.profile.signInRoute].filter(Boolean).join(', or ');
-    return routes ? `${this.name} is not signed in. ${routes[0].toUpperCase()}${routes.slice(1)}.` : `${this.name} is not signed in.`;
+    return acpSignedOut(this.profile);
   }
 
   /**

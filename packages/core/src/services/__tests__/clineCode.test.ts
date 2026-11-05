@@ -982,9 +982,10 @@ ${replay}
 
   it('lists the models Cline 3.0.74 offers in session/new, as the recording kept them', async () => {
     const models = await discoverAcpModels(process.execPath, clineReplaying('ordewell-tool'), { timeout: 5000 });
+    if (!Array.isArray(models)) expect.unreachable(`answered ${String(models)}, not a list`);
 
     expect(note('ordewell-tool', 'trimmed')).toBeDefined();
-    expect(models?.map((m) => m.modelId)).toEqual(['moonshotai/kimi-k3.1-pro', 'recursive/flint-v1.0:free', MODEL]);
+    expect(models.map((m) => m.modelId)).toEqual(['moonshotai/kimi-k3.1-pro', 'recursive/flint-v1.0:free', MODEL]);
   });
 });
 

@@ -640,4 +640,26 @@ describe('OrchestratorPool default planner', () => {
       pool.destroyAll();
     }
   });
+
+  // What the user did: Qwen Code picked as planner with no sign-in of its own,
+  // a turn refused as signed out, then a key saved with `/key`. The key is
+  // enough to sign Qwen in (ADR-0060 R9), so the refusal is no longer evidence.
+  it('forgets a signed-out verdict once a provider key is saved, which can sign an agent in', () => {
+    const pool = new OrchestratorPool({
+      codexSandbox: { ensure: async () => undefined, refresh: async () => undefined },
+    });
+    try {
+      resetRunnerAuth();
+      pool.updateSettings({ env: { AI_PROVIDER: 'qwen-code' } });
+      recordRunnerAuth('qwen-code', { state: 'signed-out', loginCommand: ['qwen'], detail: 'not logged in' }, workspace);
+      pool.updateSettings({ env: { ORDEWELL_MAX_PARALLEL: '2' } });
+      expect(recordedRunnerAuth('qwen-code', workspace)?.state).toBe('signed-out');
+
+      pool.updateSettings({ env: { OPENROUTER_API_KEY: 'sk-or-v1-saved-by-key-command' } });
+
+      expect(recordedRunnerAuth('qwen-code', workspace)?.state).not.toBe('signed-out');
+    } finally {
+      pool.destroyAll();
+    }
+  });
 });

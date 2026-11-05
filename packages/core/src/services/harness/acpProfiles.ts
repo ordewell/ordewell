@@ -4,6 +4,7 @@ import type { AcpToolCall } from './acpSchema';
 import { AcpAdapter } from './AcpAdapter';
 import { acpOrdewellBinding } from './acpOrdewell';
 import { acpRoles } from './acpRoles';
+import { acpSignedOut } from './acpSignedOut';
 import type { RunnerConnector } from './connectors';
 import { NO_SERVERS, type RepoConfigReader } from './repoConfig';
 
@@ -276,6 +277,7 @@ export function acpConnector(profile: AcpProfile): RunnerConnector {
     plans: acpRoles(profile).plans,
     ordewellTools: acpOrdewellBinding(profile),
     repoConfig: profile.repoConfig ?? NO_REPO_CONFIG,
+    signedOut: acpSignedOut(profile),
     ...(profile.attach === 'firstTurn' ? { attachesOnFirstTurn: true } : {}),
     ...(profile.usageLimitReset ? { usageLimitReset: profile.usageLimitReset } : {}),
     ...(profile.promptCacheTtlMs !== undefined ? { promptCacheTtlMs: profile.promptCacheTtlMs } : {}),

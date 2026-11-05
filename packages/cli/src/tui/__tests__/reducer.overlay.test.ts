@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { initialState, reduce, type Step } from '../reducer';
 import type { ConfirmAction, Overlay, PickerState, PromptAction, TaskView, TuiState } from '../state';
 import { chatOf, messagesOf } from './chat';
+import { normalizeCatalog } from '../../catalog';
 
 const key = (name: string, char?: string) => ({ type: 'key' as const, key: { name, char } });
 const press = (state: TuiState, name: string, char?: string): Step => reduce(state, key(name, char));
@@ -260,6 +261,16 @@ describe('allowlist picker chain', () => {
     const { state, effects } = press(chooser({ models: [] }), 'enter');
     expect(state.overlay).toMatchObject({ kind: 'picker', picker: { action: { kind: 'choose-allowlist-runner' } } });
     expect(effects).toEqual([]);
+  });
+
+  it('refusing a runner with no models says why it lists none, as the daemon words it', () => {
+    const reason = 'Qwen Code is not signed in. Run `qwen`, or set the key of an OpenAI-compatible provider, such as OpenRouter, in Ordewell with `/key`.';
+    const picking = withPicker(
+      { action: { kind: 'choose-allowlist-runner' }, items: [{ id: 'qwen-code', label: 'Qwen Code' }] },
+      { models: [], runnerErrors: { 'qwen-code': reason } },
+    );
+    const { state } = press(picking, 'enter');
+    expect(messagesOf(state).at(-1)).toMatchObject({ role: 'error', text: `No models discovered for Qwen Code: ${reason}` });
   });
 
   it('pre-selects the models already on that runner allowlist', () => {
@@ -546,6 +557,16 @@ describe('plan pane', () => {
       picker: { action: { kind: 'set-task-model', taskId: 'a' }, items: [{ id: 'gpt-5' }] },
     });
     expect(opened.effects).toEqual([{ type: 'loadModels' }]);
+  });
+
+  it("a task's model picker says why its runner lists no models, as the daemon words it, once the catalog lands", () => {
+    const reason = 'Qwen Code is not signed in. Run `qwen`, or set the key of an OpenAI-compatible provider, such as OpenRouter, in Ordewell with `/key`.';
+    const opened = press(initialState({ sessionId: 's1', focus: 'plan', tasks: [{ ...tasks[0], assignedRunner: 'qwen-code' }] }), 'char', 'o').state;
+
+    const catalog = normalizeCatalog({ models: [], modelsByRunner: { 'qwen-code': [] }, runnerErrors: { 'qwen-code': reason } });
+    const { state } = reduce(opened, { type: 'modelsLoaded', ...catalog });
+
+    expect(pickerOf(state).items).toEqual([{ id: '', label: 'No qwen-code models discovered', detail: reason, disabled: true }]);
   });
 
   it('choosing a task model persists the assignment and supported efforts', () => {

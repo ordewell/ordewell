@@ -76,9 +76,14 @@ async function showModels(api: ApiClient): Promise<void> {
   console.log(`Planner backend: ${provider || '(default)'}${runner ? `: showing ${runner} models only` : ''}\n`);
 
   if (options.length === 0) {
-    console.log(runner
-      ? `  No ${runner} models discovered yet: try \`ordewell refresh\`.`
-      : '  No models discovered. Configure a provider key with `ordewell key set <provider> <key>`.');
+    // A signed-out agent's list stays empty after any refresh, so its reason
+    // replaces the refresh hint.
+    const reason = runner ? catalog.runnerErrors[runner] : undefined;
+    console.log(reason
+      ? `  No ${runner} models discovered: ${reason}`
+      : runner
+        ? `  No ${runner} models discovered yet: try \`ordewell refresh\`.`
+        : '  No models discovered. Configure a provider key with `ordewell key set <provider> <key>`.');
   }
 
   for (const m of options) {

@@ -317,6 +317,19 @@ describe('ordewell model', () => {
     d.close();
   });
 
+  it('says why a coding-agent planner lists no models, as the daemon words it, instead of offering a refresh', async () => {
+    const reason = 'Qwen Code is not signed in. Run `qwen`, or set the key of an OpenAI-compatible provider, such as OpenRouter, in Ordewell with `/key`.';
+    const d = await fakeDaemon({
+      settings: { aiProvider: 'qwen-code' },
+      models: { models: [], modelsByRunner: { 'qwen-code': [] }, providers: [], orchestratorModels: [], runnerErrors: { 'qwen-code': reason } },
+    });
+    const { handleModel } = await import('../model');
+    const { stdout } = await capture(() => handleModel(['show'], new ApiClient(d.port)));
+    expect(stdout).toContain(`  No qwen-code models discovered: ${reason}`);
+    expect(stdout).not.toContain('ordewell refresh');
+    d.close();
+  });
+
   it('does not scope a vendor planner to a runner catalog', async () => {
     const d = await fakeDaemon({ settings: { aiProvider: 'openrouter' }, models: CATALOG });
     const { handleModel } = await import('../model');

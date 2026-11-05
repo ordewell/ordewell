@@ -12,6 +12,8 @@ export interface Catalog {
   /** Providers with a working API key — the `key` command's checkmarks. */
   providers: AiProvider[];
   providerErrors: Record<string, string>;
+  /** Why a runner with an empty catalog lists nothing, keyed by runner id, as the daemon words it. */
+  runnerErrors: Record<string, string>;
   modesByRunner: Record<string, ModeView[]>;
 }
 
@@ -61,6 +63,7 @@ export function normalizeCatalog(result: RawCatalog): Catalog {
     orchestratorModels,
     providers: result.providers ?? [],
     providerErrors: result.providerErrors ?? {},
+    runnerErrors: result.runnerErrors ?? {},
     modesByRunner: Object.fromEntries(
       Object.entries(result.modesByRunner ?? {}).map(([runner, modes]) => [
         runner,

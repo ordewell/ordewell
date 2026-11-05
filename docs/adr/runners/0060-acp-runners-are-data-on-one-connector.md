@@ -303,6 +303,25 @@ of its provider credential and the sign-in route that reader adds.
      when `AI_PROVIDER` named that vendor, since no other model of Ordewell's
      is that vendor's for certain; the plan's model still reaches the agent
      at spawn or as a config option, so this is only the agent's default.
+     Qwen 0.26.6 takes its `openai` sign-in from the environment only with a
+     model there too: a key and an endpoint alone leave `session/new`
+     refused with `-32000`, so a saved key would sign it in to nothing. Its
+     hook therefore always hands `OPENAI_MODEL` with the key: the vendor's id
+     inside the plan's model where Qwen listed that model in its runtime form
+     (`$runtime|openai|<id>(openai)`), else the planner's as above, else
+     Qwen's own default as the vendor names it (`qwen/qwen3.7-max` on
+     OpenRouter), listed only for a vendor whose catalog was checked for it.
+     A vendor that filters its catalog by the account may not serve that
+     default to this key: OpenRouter lists to a key only what the account's
+     privacy settings let it reach, and refuses `qwen/qwen3.7-max` to one
+     that requires zero data retention. Where the catalog Ordewell last
+     fetched with the key leaves the default out, the hook hands the first
+     model of Qwen's family it lists (`qwen/` on OpenRouter) that the
+     catalog does not say takes no tools, since Qwen works by calling them.
+     The hook reads only the catalog held (`ModelCatalog.held`), never the
+     network, so a start waits on no vendor; with none held, Qwen's default.
+     `/api/models` therefore loads the vendor catalogs before it discovers
+     the runners, so the model Qwen lists is one the account is served.
      This route comes before the agent's own store: the key the person gave
      Ordewell is their choice for every agent.
   3. **The agent's own store**, where it has one and ignores it over ACP: read
@@ -328,7 +347,11 @@ of its provider credential and the sign-in route that reader adds.
   only place the key goes, under ADR-0051's rules:
   - read afresh at each spawn and held by nothing after it, so two attempts
     running at once each have their own, and a sign-in or `/key` between two
-    spawns is the second's;
+    spawns is the second's. A provider key saved through the daemon forgets
+    every signed-out verdict recorded or cached before it
+    ([ADR-0052](../routing/0052-a-signed-out-coding-agent-is-flagged-and-signs-in-from-the-chat.md))
+    and every runner catalog, since the key may be the agent's sign-in: the
+    next start and the next listing read it, with no restart and no refresh;
   - never logged, never in an error, never written to disk, never in the
     arguments, and never sent over ACP, so not to a model, the planner or a
     webview;
@@ -338,7 +361,11 @@ of its provider credential and the sign-in route that reader adds.
   - read for model discovery's start too, which the manifest's
     `modelDiscovery.acp` gives the profile's own `env` and hook: the agent is
     asked as it runs, and a hook that finds no key is no answer, so nothing is
-    spawned and the miss is not cached past a sign-in.
+    spawned and the miss is not cached past a sign-in. An agent that refuses
+    discovery's `session/new` with `-32000` is signed out, and a catalog left
+    empty says so: `/api/models` carries the reason by runner
+    (`runnerErrors`), worded as a refused start is (`acpSignedOut`), and a
+    surface shows it in place of a refresh, which cannot fill that list.
 
   A profile without the hook spawns exactly as before, whatever Ordewell holds.
 
@@ -418,7 +445,10 @@ status command: it signs in from its settings file or its provider's key, a
 signed-out `session/new` fails with `-32000` "Authentication required", and
 that is how a signed-out Qwen is learned. Its profile's `credentials` hands
 it the provider key configured in Ordewell through the `OPENAI_*` variables
-its `openai` sign-in reads, and its `signInRoute` names that route (R9).
+its `openai` sign-in reads, a model among them, and its `signInRoute` names
+that route (R9). Signed in so, Qwen lists the one model its environment
+started it on, as `$runtime|openai|<id>(openai)`; `--model` takes the vendor's
+`<id>` inside it, since Qwen wraps the runtime form again.
 
 Qwen has no flag that takes its write or shell tools away, and its own
 `plan` mode cannot be the control: live, it refused a write itself but
@@ -868,7 +898,13 @@ the private directory:
   (`ordewellProviderEnv.ts`), so a developer's own key decides nothing.
   `clineCredentials.test.ts` covers the precedence, Ordewell's vendors Cline
   is and is not handed, the store path, the last-used entry, and each
-  refusal; `qwenCredentials.test.ts` covers Qwen's precedence and variables;
+  refusal; `qwenCredentials.test.ts` covers Qwen's precedence and variables,
+  its model among them, chosen from the account's held catalog and passing
+  over a model that takes no tools; `orchestratorPool.providers.test.ts`
+  shows the vendor catalogs loaded before the runners are discovered;
+  `qwenDiscovery.test.ts` runs discovery against a Qwen
+  stand-in that refuses `session/new` without a key, an endpoint and a model,
+  and shows the catalog's reason giving way to a saved key;
   and `qwenCode.test.ts` replays Qwen's recordings with Ordewell's key in the
   spawn and signed out, and its restricted recordings as a planner and a
   read-only task: the spawn's arguments and private directory, the write and
@@ -1242,3 +1278,8 @@ the private directory:
 - 2026-11-05 — R3: Cline's asked paths are read only from the two input
   shapes its `read_files` tries first, exactly, since another key is read when
   a judged shape fails Cline's validation.
+- 2026-11-05 — R9: Qwen is handed a model with Ordewell's key, which its
+  `openai` sign-in needs; a saved key forgets signed-out verdicts and runner
+  catalogs; a catalog empty because its agent is signed out says so
+  (`runnerErrors`); the model is one the key's held catalog serves the
+  account, loaded before discovery.

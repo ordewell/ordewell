@@ -37,6 +37,12 @@ export interface RunnerConnector {
   /** What the runner would load from a repository, which Ordewell reads for its planner instead (ADR-0028). */
   repoConfig: RepoConfigReader;
   /**
+   * What the user is told when the runner is not signed in, with the ways to
+   * sign it in: a catalog it cannot list says this rather than leave the list
+   * empty. Absent where the runner's discovery never learns it is signed out.
+   */
+  signedOut?: string;
+  /**
    * The runner uses its Ordewell token only once a prompt runs, so its first
    * turn is the attach check and a planner spawns it with that turn, not
    * before (ADR-0060, R5). Absent: it attaches as its session opens.

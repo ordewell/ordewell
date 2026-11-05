@@ -12,6 +12,7 @@ import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
 import { OrdewellMcpServer, mcpClientConfig, type McpClientConfig } from '../mcp';
 import { fakeAcpSpawn, type FakeAcpAgent, type FakeAcpStep } from './fakeAcpAgent';
 import { stubNoOrdewellProvider } from './ordewellProviderEnv';
+import { HeldSecrets } from '../HeldSecrets';
 
 /**
  * The qwen-code connector against Qwen Code 0.26.6 as it was recorded over ACP
@@ -147,7 +148,7 @@ async function taskToken(): Promise<{ mcp: McpClientConfig; completed: ReturnTyp
   return { mcp: mcpClientConfig(credential), completed };
 }
 
-function qwen(steps: FakeAcpStep[], workspace: Record<string, string> = {}) {
+function qwen(steps: FakeAcpStep[], workspace: Record<string, string> = {}, more: Partial<AgentProcessDeps> = {}) {
   const spawned = fakeAcpSpawn(steps);
   const deps: AgentProcessDeps = {
     spawn: spawned.spawn,
@@ -157,6 +158,7 @@ function qwen(steps: FakeAcpStep[], workspace: Record<string, string> = {}) {
     isDirectory: () => true,
     exists: () => true,
     workspaceEnv: async () => workspace,
+    ...more,
   };
   const adapter = CONNECTORS['qwen-code'].create(deps);
   adapters.push(adapter);
@@ -558,5 +560,110 @@ describe('qwen-code roles, replayed from Qwen Code 0.26.6 (ADR-0026, ADR-0028, A
     expect(completed).toHaveBeenCalledWith(expect.objectContaining({ status: 'done', summary: expect.stringContaining('HERON') }), expect.anything());
     expect(agent.problems).toEqual([]);
     await agent.finished;
+  });
+});
+
+/** What Qwen answered Ordewell's request `id` with in a recording. */
+function recordedReply(name: string, id: number): { result?: unknown; error?: { code: number; message: string } } {
+  const found = recording(name).find((entry) => entry.dir === 'in' && entry.line.method === undefined && entry.line.id === id);
+  return found?.dir === 'in' ? found.line : {};
+}
+
+/** The model Qwen 0.26.6 starts on with no settings of its own: `--model`'s, else the environment's. */
+function startedModel({ args, env }: FakeAcpAgent['launch']): string | undefined {
+  const at = args.indexOf('--model');
+  return (at >= 0 ? args[at + 1] : undefined) || env.OPENAI_MODEL || env.QWEN_MODEL || undefined;
+}
+
+/** How Qwen 0.26.6 names a model it was started on by the environment, as its ACP session lists it. */
+const runtimeId = (model: string) => `$runtime|openai|${model}(openai)`;
+
+type ConfigOption = { id: string; currentValue: string; options: Array<{ value: string; name: string }> };
+
+/**
+ * Qwen 0.26.6 with no sign-in or settings of its own, as it ran live under a
+ * scratch home: it takes its openai auth from the environment only when the
+ * key, the endpoint and a model are all there, and otherwise refuses
+ * `session/new` as the signed-out recording shows. Signed in so, its session
+ * offers one model, the one it started on, in its runtime form, and refuses
+ * any other value of an option with the invalid-params error.
+ */
+function keyedQwen(after: FakeAcpStep[] = []): FakeAcpStep[] {
+  const opened = recordedReply('planner', 2).result as { models: unknown; configOptions: ConfigOption[] };
+  let options: ConfigOption[] = [];
+  const signedIn = ({ env, ...launch }: FakeAcpAgent['launch']) => Boolean(env.OPENAI_API_KEY && env.OPENAI_BASE_URL && startedModel({ env, ...launch }));
+  const session = (agent: FakeAcpAgent) => {
+    const id = runtimeId(startedModel(agent.launch) ?? '');
+    options = opened.configOptions.map((option) => (option.id === 'model' ? { ...option, currentValue: id, options: [{ value: id, name: id }] } : option));
+    return { ...opened, models: { currentModelId: id, availableModels: [{ modelId: id, name: id, description: null }] }, configOptions: options };
+  };
+  const set = (params: unknown) => params as { configId: string; value: string };
+  const known = (params: unknown) => options.find((o) => o.id === set(params).configId)?.options.some((o) => o.value === set(params).value);
+  const setting: FakeAcpStep = {
+    expect: 'session/set_config_option',
+    optional: true,
+    error: (params) => (known(params) ? undefined : { code: -32602, message: `Model '${set(params).value}' not found for authType 'openai'` }),
+    reply: (params: unknown) => {
+      options = options.map((o) => (o.id === set(params).configId ? { ...o, currentValue: set(params).value } : o));
+      return { configOptions: options };
+    },
+  };
+  return [
+    { expect: 'initialize', reply: recordedReply('signed-out', 1).result },
+    {
+      expect: 'session/new',
+      error: (_params, agent) => (signedIn(agent.launch) ? undefined : recordedReply('signed-out', 2).error),
+      reply: (_params: unknown, agent: FakeAcpAgent) => session(agent),
+    },
+    setting,
+    setting,
+    ...after,
+  ];
+}
+
+describe('qwen-code signed in by a key saved in Ordewell, with no sign-in of its own (ADR-0060 R9)', () => {
+  const KEY = 'sk-or-v1-qwen-saved-with-key-0000';
+
+  /** The OpenRouter key as `/key` saves it: into the daemon's own environment, which the next spawn reads. */
+  function saveKey(): void {
+    stubNoOrdewellProvider();
+    vi.stubEnv('AI_PROVIDER', 'qwen-code');
+    vi.stubEnv('OPENROUTER_API_KEY', KEY);
+  }
+
+  it('plans, on a planner with no model, on Qwen\'s own default model as OpenRouter names it', async () => {
+    saveKey();
+    const { mcp } = await plannerToken();
+    const { spawned, agent, adapter } = qwen(keyedQwen());
+    await adapter.start({ ...plannerStart(mcp), model: undefined });
+
+    // Qwen's default for its openai auth is qwen3.7-max (DEFAULT_MODELS in its
+    // 0.26.6 bundle); OpenRouter lists it as qwen/qwen3.7-max.
+    expect(spawned.lastEnv()).toMatchObject({ OPENAI_API_KEY: KEY, OPENAI_BASE_URL: 'https://openrouter.ai/api/v1', OPENAI_MODEL: 'qwen/qwen3.7-max' });
+    expect(agent.problems).toEqual([]);
+  });
+
+  it('runs a task on the model the plan chose from Qwen\'s list, which names it in its runtime form, and holds it there', async () => {
+    saveKey();
+    const { mcp } = await taskToken();
+    const { spawned, agent, adapter } = qwen(keyedQwen());
+    const model = runtimeId('qwen/qwen3-coder');
+    await adapter.start({ ...taskStart(mcp), model, flags: resolveTaskRunnerFlags(QWEN_CODE_MANIFEST, { mode: 'default', model }) });
+
+    expect(spawned.lastEnv()).toMatchObject({ OPENAI_API_KEY: KEY, OPENAI_BASE_URL: 'https://openrouter.ai/api/v1', OPENAI_MODEL: 'qwen/qwen3-coder' });
+    expect(agent.requests('session/set_config_option').map((r) => settingsOf(r.params))).toContainEqual({ configId: 'model', value: model });
+    expect(agent.problems).toEqual([]);
+  });
+
+  it('holds the key it hands Qwen with the attempt\'s secrets, so every output hides it, and never says it over stdio (ADR-0061, H1)', async () => {
+    saveKey();
+    const held = new HeldSecrets();
+    const { mcp } = await plannerToken();
+    const { agent, adapter } = qwen(keyedQwen(), {}, { held });
+    await adapter.start({ ...plannerStart(mcp), model: undefined });
+
+    // hide() applies what is held alone, no shape rules, so this is the key held.
+    expect(held.hide(`Qwen echoed ${KEY} back`)).not.toContain(KEY);
+    expect(JSON.stringify(agent.received)).not.toContain(KEY);
   });
 });

@@ -196,6 +196,16 @@ export function recordedRunnerAuth(runner: string, workspace?: string): RunnerAu
   return recorded.get(recordKey(runner, workspace));
 }
 
+/**
+ * Forget every signed-out verdict, in every workspace. A provider key saved in
+ * Ordewell can sign an agent in with no login of its own (ADR-0060, R9), so a
+ * refusal recorded before it says nothing about the next start, which records
+ * its own.
+ */
+export function forgetSignedOutRunnerAuth(): void {
+  for (const [key, auth] of recorded) if (auth.state === 'signed-out') recorded.delete(key);
+}
+
 /** For tests: the record is process-wide, so one case's verdict must not decide the next's. */
 export function resetRunnerAuth(): void {
   recorded.clear();

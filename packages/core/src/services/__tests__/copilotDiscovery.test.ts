@@ -55,8 +55,8 @@ describe('copilot-cli model discovery', () => {
     expect(await discoverAcpModels(process.execPath, copilotReplaying('discovery'), { timeout: 5000 })).toEqual([]);
   });
 
-  it('reads a signed-out Copilot (-32000) as no answer', async () => {
-    expect(await discoverAcpModels(process.execPath, copilotReplaying('signed-out'), { timeout: 5000 })).toBeNull();
+  it('reads a signed-out Copilot (-32000) as signed out, not as an answer', async () => {
+    expect(await discoverAcpModels(process.execPath, copilotReplaying('signed-out'), { timeout: 5000 })).toBe('signed-out');
   });
 
   it('lists the models of `copilot help config` plus the auto alias when ACP offers none, signed in or out', async () => {

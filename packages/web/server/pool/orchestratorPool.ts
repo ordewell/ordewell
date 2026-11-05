@@ -61,6 +61,7 @@ import {
   selectPlanner,
   admitSettingsEnv,
   PROVIDER_CREDENTIAL_ENV,
+  forgetSignedOutRunnerAuth,
   type PlannerBackendId,
   type PlannerModelCandidate,
   type PlannerSelectionChange,
@@ -701,6 +702,11 @@ export class OrchestratorPool {
       if (touched) {
         this.modelResolver.invalidate();
         this.dropUnkeyedProviderLists();
+        // A saved key can sign an agent in with no login of its own (ADR-0060,
+        // R9): a signed-out verdict taken before it, recorded or cached, is no
+        // longer evidence, and the next start must not be refused on it.
+        forgetSignedOutRunnerAuth();
+        for (const installation of new Set([this.runnerInstallation, ...this.workspaceInstallations.values()])) installation.refresh?.();
       }
     }
 
@@ -778,16 +784,22 @@ export class OrchestratorPool {
     const resolver = this.resolverFor(workspace);
 
     const runnerIds = this.registry.list().map((p) => p.manifest.name);
-    const [runnerModels, providerLists] = await Promise.all([
-      resolver.modelsForRunners(runnerIds),
-      resolver.refresh(),
-      this.codexSandbox.ensure(),
-    ]);
+    const sandbox = this.codexSandbox.ensure();
+    // Awaited below; marked handled now, so a failed catalog load before then
+    // does not leave its rejection unhandled.
+    sandbox.catch(() => {});
+    // The vendor catalogs first: a runner started on a key Ordewell holds can
+    // be handed the model that key's catalog says its account is served
+    // (Qwen's, ADR-0060 R9), and a discovery begun before the catalog is held
+    // would list a model the account may be refused, until the next refresh.
+    const providerLists = await resolver.refresh();
+    const [runnerModels] = await Promise.all([resolver.modelsForRunners(runnerIds), sandbox]);
 
     // `refresh()` populates the picker cache, so this is the same fetch — no
     // second network round-trip. Errors are whatever that fetch recorded.
     const orchestratorModels = await resolver.pickerOptions();
     const providerErrors = resolver.getDiscoveryErrors();
+    const runnerErrors = resolver.getRunnerDiscoveryErrors();
 
     this.cachedProviderLists = providerLists;
 
@@ -815,6 +827,7 @@ export class OrchestratorPool {
       providers,
       orchestratorModels,
       providerErrors,
+      runnerErrors,
     };
   }
 

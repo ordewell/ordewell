@@ -46,8 +46,9 @@ function alive(pid: number): boolean {
 describe('the ACP model client', () => {
   it('opens a session in an empty scratch directory with no MCP servers, sends no prompt, and removes the directory', async () => {
     const models = await discoverAcpModels(process.execPath, stub(SESSION), { timeout: 5000 });
+    if (!Array.isArray(models)) expect.unreachable(`answered ${String(models)}, not a list`);
 
-    expect(models?.map((m) => [m.modelId, m.variants.map((v) => v.id)])).toEqual([['small', ['low', 'high']], ['large', []]]);
+    expect(models.map((m) => [m.modelId, m.variants.map((v) => v.id)])).toEqual([['small', ['low', 'high']], ['large', []]]);
     const sent = seen();
     expect(sent.map((m) => m.method)).toEqual(['initialize', 'session/new']);
     const params = sent[1].params as { cwd: string; mcpServers: unknown[] };
@@ -56,11 +57,11 @@ describe('the ACP model client', () => {
     expect(readdirSync(dir).sort()).toEqual(['seen.jsonl', 'stub.cjs']);
   });
 
-  it('answers null for a signed-out agent (-32000) instead of throwing', async () => {
+  it('answers signed-out for an agent that will not open a session until signed in (-32000), instead of throwing', async () => {
     const models = await discoverAcpModels(process.execPath, stub(`
       if (msg.method === 'session/new') return send({ id: msg.id, error: { code: -32000, message: 'Authentication required' } });`), { timeout: 5000 });
 
-    expect(models).toBeNull();
+    expect(models).toBe('signed-out');
   });
 
   it('answers null at the deadline and takes the agent down', async () => {
@@ -97,7 +98,8 @@ describe('the ACP model client', () => {
     const models = await discoverAcpModels(process.execPath, stub(`
       if (msg.method === 'session/new') return send({ id: msg.id, result: { sessionId: 's', models: { currentModelId: 'm', availableModels: [{ modelId: process.env.ACCOUNT_HOME, name: 'x' }] } } });`),
     { timeout: 5000, env: { ...process.env, ACCOUNT_HOME: '/accounts/work' } });
+    if (!Array.isArray(models)) expect.unreachable(`answered ${String(models)}, not a list`);
 
-    expect(models?.map((m) => m.modelId)).toEqual(['/accounts/work']);
+    expect(models.map((m) => m.modelId)).toEqual(['/accounts/work']);
   });
 });
