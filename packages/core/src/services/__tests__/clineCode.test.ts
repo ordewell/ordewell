@@ -6,6 +6,7 @@ import { CONNECTORS } from '../harness/connectors';
 import { acpOrdewellBinding } from '../harness/acpOrdewell';
 import { acpRoles } from '../harness/acpRoles';
 import { discoverAcpModels } from '../harness/acpModels';
+import { decidePlannerPermission } from '../harness/plannerPermissions';
 import { ModelDiscovery, type AcpClientImpl, type ExecImpl } from '../ModelDiscovery';
 import type { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { CLINE_PROFILE } from '../harness/clineProfile';
@@ -44,6 +45,8 @@ interface Note {
   tool?: string;
   contacted?: boolean;
   completed?: Array<Record<string, unknown>>;
+  /** The Ordewell tools the recording's server was called on, in order. */
+  calls?: string[];
   permissions?: Array<{ title: string; kind: string; options: string[]; answer: unknown }>;
   /** The marker each of the workspace's planted hooks writes when it runs, as the recording found them. */
   hooksRan?: string[];
@@ -461,9 +464,10 @@ describe('cline, replayed from Cline 3.0.74', () => {
     await vi.waitFor(() => expect(readdirSync(temp)).toEqual([]));
   });
 
-  it('claims the read-only role and not the planner\'s, which a first-turn attach cannot hold (ADR-0060, R5)', () => {
-    expect(CONNECTORS.cline.plans).toBe(false);
-    expect(CLINE_PROFILE.roles).toEqual({ plans: false, readOnly: true });
+  it('claims both roles, the planner\'s attaching on its goal turn (ADR-0060, R3, R5)', () => {
+    expect(CONNECTORS.cline.plans).toBe(true);
+    expect(CLINE_PROFILE.roles).toEqual({ plans: true, readOnly: true });
+    expect(acpRoles(CLINE_PROFILE)).toEqual({ plans: true, readOnly: true });
     expect(CLINE_PROFILE.attach).toBe('firstTurn');
     expect(CLINE_MANIFEST.modes?.filter((mode) => mode.readOnly).map((mode) => mode.id)).toEqual(['plan']);
     expect(CLINE_MANIFEST.modes?.map((mode) => mode.id)).toEqual(['default', 'plan', 'autoApprove']);
@@ -520,7 +524,7 @@ const at = (value: string | undefined, dir: string) => value?.replaceAll('{{PRIV
 const UNTOUCHED = { worktree: { gitStatus: '' }, privateDir: { entries: ['cline_mcp_settings.json'], removed: true }, leftBehind: { privateDirs: [], clineProcesses: [] } };
 
 describe('cline read-only tasks, replayed from Cline 3.0.74 (ADR-0028, ADR-0046, ADR-0060)', () => {
-  it.each(['read-only', 'read-only-write', 'read-only-shell', 'read-only-hooks'])('starts %s in a directory of its own with --auto-approve false once, as it was recorded', async (name) => {
+  it.each(['read-only', 'read-only-write', 'read-only-shell', 'read-only-hooks', 'planner-task'])('starts %s in a directory of its own with --auto-approve false once, as it was recorded', async (name) => {
     const { mcp } = await readOnlyToken();
     const { spawned, agent, adapter } = cline(replay(name));
     await adapter.start(taskStart(mcp, READ_ONLY_MODE));
@@ -714,15 +718,166 @@ describe('cline read-only tasks, replayed from Cline 3.0.74 (ADR-0028, ADR-0046,
     await vi.waitFor(() => expect(readdirSync(temp)).toEqual([]));
   });
 
-  it('refuses to plan, since its profile claims no planner role (ADR-0060, R3)', async () => {
-    const { mcp } = await readOnlyToken();
-    const { spawned, adapter } = cline(replay('read-only'));
-    const planner: PlannerStartOptions = { kind: 'planner', cwd: CWD, model: MODEL, systemPrompt: 'You are the planner.', mcp };
+  it('runs the read-only task its planner submitted, reading the workspace by the path its arguments name and completing through Ordewell', async () => {
+    const { mcp, completed } = await readOnlyToken();
+    const { agent, adapter } = cline(replay('planner-task'));
+    await adapter.start(taskStart(mcp, READ_ONLY_MODE));
+    const events = await turn(adapter);
 
-    await expect(adapter.start(planner)).rejects.toThrow('Cline cannot plan in Ordewell: its profile claims no planner role.');
-    expect(spawned.processes).toHaveLength(0);
-    // Not for how it attaches: a planner's goal can be its attach check too (R5).
-    expect(acpRoles({ ...CLINE_PROFILE, roles: { plans: true, readOnly: true } })).toEqual({ plans: true, readOnly: true });
+    // The prompt the planner wrote is the one the recorded task was given.
+    const planned = recording('planner').flatMap((e) => (e.dir === 'in' ? [rawInput(e.line)] : [])).find((call) => call?.title.startsWith('ordewell__submit_plan'));
+    const [task] = (planned?.input.tasks ?? []) as Array<{ prompt: string; assignedRunner: string; readOnly: boolean }>;
+    const given = recording('planner-task').find((e) => e.dir === 'out' && e.line.method === 'session/prompt');
+    expect(task).toMatchObject({ assignedRunner: 'cline', readOnly: true });
+    expect(given?.dir === 'out' ? JSON.stringify(given.line.params) : '').toContain(JSON.stringify(task.prompt).slice(1, -1));
+    expect(asked(events).map((e) => [e.name.split(':')[0], e.decided?.decision])).toEqual([['read_files', 'allow'], ['ordewell__task_complete', 'allow']]);
+    expect(permissionAnswers(agent)).toEqual(recordedAnswers('planner-task'));
+    expect(reports(completed)).toEqual(recordedReports('planner-task').map((r) => expect.objectContaining(r)));
+    expect(completed).toHaveBeenCalledWith(expect.objectContaining({ status: 'done' }), expect.anything());
+    // Read once the task's process was gone, by when its settings file was too.
+    expect(note('planner-task', 'summary')).toMatchObject({ ...UNTOUCHED, worktree: { entries: ['.cline', '.clinerules', '.git', 'README.md'], gitStatus: '' }, privateDir: { entries: [], removed: true }, hooksRan: [] });
+    expect(agent.problems).toEqual([]);
+    await agent.finished;
+  });
+});
+
+/** A planner's token, with a handler of its own for each planner tool the recording called. */
+async function plannerToken() {
+  const server = new OrdewellMcpServer();
+  servers.push(server);
+  const submitted = vi.fn(async () => ({ text: 'Plan received.' }));
+  const listed = vi.fn(async () => ({ text: '[]' }));
+  const models = vi.fn(async () => ({ text: '[]' }));
+  const credential = await server.issuePlannerToken({ sessionId: 's1' }, { submitPlan: submitted, listRunners: listed, listModels: models } as never);
+  return { mcp: mcpClientConfig(credential), submitted, listed, models };
+}
+
+function plannerStart(mcp: McpClientConfig): PlannerStartOptions {
+  return { kind: 'planner', cwd: CWD, model: MODEL, systemPrompt: 'You are the planner.', mcp };
+}
+
+/** A request of a planner's turn: the tool its title names, the decision, and whether the start or the planner's envelope made it. */
+type PlannerAsked = [tool: string, decision: string, by: 'start' | 'envelope'];
+
+/** A planner's turn, every request the start held put to its envelope as `CliAgentAiService` puts it (ADR-0026). */
+async function plannerTurn(adapter: TaskModeAgentAdapter): Promise<PlannerAsked[]> {
+  const asks: Array<Promise<PlannerAsked>> = [];
+  await adapter.send('go', (event) => {
+    if (event.type !== 'permission_request') return;
+    const tool = event.name.split(':')[0];
+    if (event.decided) asks.push(Promise.resolve([tool, event.decided.decision, 'start']));
+    else asks.push(decidePlannerPermission(event.ask, event.input ?? {}, { workspaceRoot: CWD }).then(async (decision): Promise<PlannerAsked> => {
+      await adapter.answerPermission?.(event.id, decision);
+      return [tool, decision.decision, 'envelope'];
+    }));
+  });
+  return Promise.all(asks);
+}
+
+/**
+ * The recorded planner start, driven turn by turn as it ran: the goal, which
+ * is its attach check (ADR-0060, R5); the run update that the task's end
+ * brought; then a turn asking for its own edit and one asking for its own shell.
+ */
+async function plannerRun() {
+  const token = await plannerToken();
+  const { spawned, agent, adapter } = cline(replay('planner'));
+  await adapter.start(plannerStart(token.mcp));
+  let goal: Promise<PlannerAsked[]> = Promise.resolve([]);
+  const attached = await adapter.mcpAttached?.(() => (goal = plannerTurn(adapter)));
+  const turns = { goal: await goal, update: await plannerTurn(adapter), write: await plannerTurn(adapter), shell: await plannerTurn(adapter) };
+  return { ...token, spawned, agent, attached, turns };
+}
+
+describe('cline as a planner, replayed from Cline 3.0.74 (ADR-0026, ADR-0060)', () => {
+  it('starts a planner in a directory of its own with --auto-approve false, its server in the settings file alone, as it was recorded', async () => {
+    const { mcp } = await plannerToken();
+    const { spawned, agent, adapter } = cline(replay('planner'));
+    await adapter.start(plannerStart(mcp));
+
+    const dir = spawned.lastCwd() ?? '';
+    const env = spawned.lastEnv();
+    const recorded = note('planner', 'spawn');
+    expect(spawned.lastArgs()).toEqual(recordedArgs('planner'));
+    expect(spawned.lastArgs()).toEqual(['--acp', '--auto-approve', 'false']);
+    expect(dir.startsWith(`${temp}/`)).toBe(true);
+    expect(dir).toBe(at(recorded?.cwd, dir));
+    expect([env.TMPDIR, env.TMP, env.TEMP]).toEqual([recorded?.env?.TMPDIR, recorded?.env?.TMP, recorded?.env?.TEMP].map((v) => at(v, dir)));
+    expect(env.CLINE_MCP_SETTINGS_PATH).toBe(at(recorded?.env?.CLINE_MCP_SETTINGS_PATH, dir));
+    expect(readdirSync(dir)).toEqual(['cline_mcp_settings.json']);
+    const token = mcp.headers.Authorization;
+    const expected = JSON.stringify(recorded?.settings).replace('{{MCP_URL}}', mcp.url).replace('Bearer [REDACTED]', token);
+    expect(agent.settingsReads.map((read) => JSON.parse(read.contents ?? ''))).toEqual([JSON.parse(expected)]);
+    expect(agent.requests('session/new').map((r) => r.params)).toEqual([expect.objectContaining({ cwd: dir, mcpServers: [] })]);
+    expect(agent.requests('session/set_config_option').map((r) => settingsOf(r.params))).toEqual(recordedSettings('planner'));
+    expect(agent.problems).toEqual([]);
+  });
+
+  it('takes the goal turn as the attach check, since Cline reaches the server only once a prompt runs (ADR-0060, R5)', async () => {
+    const { attached, agent } = await plannerRun();
+
+    expect(note('planner', 'contact-before-prompt')?.contacted).toBe(false);
+    expect(note('planner', 'prompt-answered')?.contacted).toBe(true);
+    expect(attached).toBe('connected');
+    expect(agent.problems).toEqual([]);
+  });
+
+  it('carries the planner\'s contract in the goal turn, where the workspace is named and its own edits, shell and web are said to be off', async () => {
+    const { mcp } = await plannerToken();
+    const { agent, adapter } = cline(replay('planner'));
+    await adapter.start(plannerStart(mcp));
+    void plannerTurn(adapter);
+    await vi.waitFor(() => expect(agent.requests('session/prompt')).toHaveLength(1));
+
+    const recorded = recording('planner').find((e) => e.dir === 'out' && e.line.method === 'session/prompt');
+    const said = recorded?.dir === 'out' ? (recorded.line.params as { prompt: Array<{ text: string }> }).prompt[0].text.split('\n\n') : [];
+    const [sent] = prompts(agent);
+    expect(sent.startsWith('You are the planner.')).toBe(false);
+    expect(sent.split('\n\n')[0]).toBe(said[0]);
+    expect(said[0]).toBe(`The workspace is \`${CWD}\`, not the directory you start in: name its files by their full path there.`);
+    expect(sent).toContain('You are the planner.');
+    const off = (paragraphs: string[]) => paragraphs.find((p) => p.startsWith('Your Ordewell tools come from'));
+    expect(off(sent.split('\n\n'))).toBe(off(said));
+    expect(off(said)).toContain('Your own file edits, shell and web tools are off in this session');
+  });
+
+  it('plans with Ordewell\'s planner tools, each allowed by its name in the title, and reads workspace files by the paths their arguments name', async () => {
+    const { agent, submitted, listed, models, turns } = await plannerRun();
+
+    // Ordewell's own calls are allowed by the start at once; Cline's reads are
+    // put to the planner's envelope, which allows a path inside the workspace.
+    const reads = Array.from({ length: 5 }, () => ['read_files', 'allow', 'envelope']);
+    const tools = ['list_runners', 'list_models', 'submit_plan'].map((tool) => [`ordewell__${tool}`, 'allow', 'start']);
+    expect(turns.goal).toEqual([...reads, ...tools]);
+    expect(note('planner', 'summary')?.calls).toEqual(['list_runners', 'list_models', 'submit_plan']);
+    expect(listed).toHaveBeenCalledOnce();
+    expect(models).toHaveBeenCalledWith(expect.objectContaining({ runner: 'cline' }), expect.anything());
+    expect(submitted).toHaveBeenCalledWith(expect.objectContaining({
+      tasks: [expect.objectContaining({ assignedRunner: 'cline', readOnly: true, assignedModel: { modelId: MODEL } })],
+    }), expect.anything());
+    expect(turns.update).toEqual([]);
+    expect(permissionAnswers(agent).slice(0, 8)).toEqual(recordedAnswers('planner').slice(0, 8));
+    expect(agent.problems).toEqual([]);
+  });
+
+  it('refuses the planner\'s own edit, which Cline names `other`, and its own shell, by the kind it names, in the same start, and nothing reaches the worktree', async () => {
+    const { agent, submitted, turns } = await plannerRun();
+
+    const permissions = note('planner', 'summary')?.permissions ?? [];
+    expect(permissions.slice(-2).map((p) => [p.title.split(':')[0], p.kind])).toEqual([['apply_patch', 'other'], ['run_commands', 'execute']]);
+    // An `other` is no kind the start refuses outright, so the envelope does,
+    // as it refuses any tool it cannot judge; `execute` the start refuses itself.
+    expect(turns.write).toEqual([['apply_patch', 'deny', 'envelope']]);
+    expect(turns.shell).toEqual([['run_commands', 'deny', 'start']]);
+    expect(permissionAnswers(agent)).toEqual(recordedAnswers('planner'));
+    expect(permissionAnswers(agent).slice(-2)).toEqual([
+      { outcome: 'selected', optionId: 'reject_once' },
+      { outcome: 'selected', optionId: 'reject_once' },
+    ]);
+    expect(submitted).toHaveBeenCalledOnce();
+    expect(note('planner', 'summary')).toMatchObject({ ...UNTOUCHED, worktree: { entries: ['.cline', '.clinerules', '.git', 'README.md'], gitStatus: '' }, hooksRan: [], completed: [] });
+    expect(agent.problems).toEqual([]);
+    await agent.finished;
   });
 });
 

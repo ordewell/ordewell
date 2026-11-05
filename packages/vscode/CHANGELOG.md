@@ -10,9 +10,9 @@
 - **Gemini CLI runs tasks and plans.** Gemini CLI 0.66.0 or newer appears
   among the runners a task can be assigned to, with its models and a Read-only
   mode, and among the planners.
-- **Cline runs tasks.** Cline 3.0.74 or newer appears among the runners a task
-  can be assigned to, with its models and a Read-only mode. It cannot be the
-  planner.
+- **Cline runs tasks and plans.** Cline 3.0.74 or newer appears among the
+  runners a task can be assigned to, with its models and a Read-only mode, and
+  among the planners.
 - **GitHub Copilot CLI runs tasks.** Copilot CLI 1.0.105 or newer appears among
   the runners a task can be assigned to, with its models and its login. It
   cannot be the planner or run a read-only task.

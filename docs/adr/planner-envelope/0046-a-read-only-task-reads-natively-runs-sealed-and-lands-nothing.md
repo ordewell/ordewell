@@ -212,8 +212,9 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
   request this ADR's rules answer. Cline claims it too (its `plan` mode), from
   a private directory as well. It has no list to take its own tools away, so
   it is started asking before each use, and its edits and commands are
-  refused. Its file reads name no location, so they are refused too, and it
-  reads through `run_command`. Gemini CLI claims it too (its `plan` mode,
+  refused. Each of its file reads names its file only in the model's
+  arguments, so it is judged by that one path, and a search of its own,
+  which names none, is refused. Gemini CLI claims it too (its `plan` mode,
   which runs Gemini's `default` under a policy file Ordewell hands it,
   denying Gemini's own write, shell and web tools and every MCP server's but
   Ordewell's), from a private directory its own reads cannot leave, so it
@@ -490,3 +491,4 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
 - 2026-11-04 — Cline runs read-only tasks, from a private start directory, asking before each of its own tools (ADR-0060 R3).
 - 2026-11-04 — Gemini CLI runs read-only tasks, from a private start directory, under a policy file that denies its own write, shell and web tools (ADR-0060 R3).
 - 2026-11-04 — Cursor runs read-only tasks, from a private start directory, its own reads, writes and shell denied (ADR-0060 R3).
+- 2026-11-05 — a read-only task's Cline reads by the one path its arguments name (ADR-0060 R3).

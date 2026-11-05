@@ -28,11 +28,9 @@ they connect to them, and whether their own tools can be taken away.
 an `AcpProfile`: data, not code.** `acpConnector(profile)` turns a profile into
 the runner's entry in `CONNECTORS`, so a new ACP agent is a manifest and a
 profile. GitHub Copilot CLI (`copilot-cli`, `copilot --acp --stdio`) is the
-reference agent. Qwen Code (`qwen-code`, `qwen --acp`), Gemini CLI
-(`gemini-cli`, `gemini --acp --skip-trust`) and Cursor (`cursor-agent`,
-`cursor-agent acp`) plan and run read-only tasks too; Cline (`cline`,
-`cline --acp`) takes writable and read-only tasks but does not claim the
-planner role.
+reference agent. Qwen Code (`qwen-code`, `qwen --acp`), Cline (`cline`,
+`cline --acp`), Gemini CLI (`gemini-cli`, `gemini --acp --skip-trust`) and
+Cursor (`cursor-agent`, `cursor-agent acp`) plan and run read-only tasks too.
 
 Ordewell is the ACP client and does no I/O for the agent: it advertises no
 file-system and no terminal capability, so the agent works in the worktree
@@ -473,7 +471,7 @@ OpenRouter model and its key handed in the spawn's environment (R9):
 | environment | `CLINE_SESSION_BACKEND_MODE=local`, so the session lives in the process Ordewell starts and stops, never in a hub daemon that outlives it |
 | restriction | `--auto-approve false`, once, with nothing of the mode's route, and a private start directory that is also `TMPDIR`, `TMP` and `TEMP` and holds only the MCP settings file |
 | repository | a restricted start runs none of the hooks in `.cline/hooks/` or `.clinerules/hooks/`, and is handed none of the repository's rules: the profile has no reader for them (ADR-0028) |
-| roles | a read-only mode (`plan`), not the planner: the profile does not claim that role (R3), though attaching on its first turn no longer stands in the way (R5) |
+| roles | the planner and a read-only mode (`plan`), both on the restricted start (R3); a planner's goal turn is its attach check (R5) |
 | asked paths | `rawInput.files[].path` and `rawInput.path` of a `read` or `search` call; nothing when any named file has no path |
 
 In every recording of a new session Cline has not contacted the server when
@@ -531,7 +529,32 @@ show it:
 
 In each the worktree is as it was (`git status` empty), the private directory
 held only the settings file and is gone, and no Cline process is left behind.
-So a read-only Cline reads one file at a time of the worktree or workspace
+
+A planner's Cline is the same restricted start: `--auto-approve false`, a
+private directory holding only the settings file, and the contract in its
+first prompt, so the goal turn is the attach check (R5). Its requests reach
+the planner's envelope once the start has refused what it refuses by kind
+(ADR-0026). One live start, on `openai/gpt-4.1-mini`, was recorded as
+`planner.jsonl`:
+- on the goal, Cline read the workspace with five `read_files` calls, each
+  naming one path in it in full, which the envelope allowed, then
+  called `list_runners`, `list_models` and `submit_plan`, and Ordewell
+  recorded a plan of one read-only task for `cline`;
+- autorun started that task (`planner-task.jsonl`): a read-only Cline in a
+  private directory of its own read the file with one `read_files` and
+  completed through `task_complete`, and the planner's next turn, its run
+  update, reported the result;
+- in the same start, an `apply_patch` adding a file, which Cline names
+  `other` and which names no path, was refused by the envelope, and a
+  `run_commands` running `touch` in the workspace, which Cline names
+  `execute`, was refused by kind, each reported refused in the model's own
+  words.
+
+The worktree is as it was, no hook planted in it ran, and both private
+directories are gone. The planner's instructions were the contract every
+ACP planner is sent; it was not told any more to plan.
+
+So a read-only Cline, or a planner's, reads one file at a time of the worktree or workspace
 with its own `read_files`, and anything else through Ordewell's
 `run_command`: a read of several files at once, of a path outside, or of a
 relative path, which Cline would read from its private directory, is refused,
@@ -892,11 +915,9 @@ the private directory:
 - **The repository's rules for a read-only Cline.** Cline reads `.clinerules/`
   from the directory it starts in, and its profile has no `repoConfig` reader
   to hand them over, so a read-only Cline task runs without them.
-- **Cline's own reads under a restricted start.** Its `read_files` and
-  `search_codebase` requests carry no location, so the read-only task's rules
-  refuse them; judging the path in the model's arguments would widen what a
-  read-only task may read on the agent's word, and needs a decision of its
-  own (ADR-0046).
+- **Cline's own searches under a restricted start.** Its `search_codebase`
+  names no path, only `queries`, so it is refused, on a planner's start and a
+  read-only task's alike; it searches through Ordewell's `run_command`.
 - **ACP v2.** Its prompt lifecycle separates acceptance from processing and
   does not yet specify queueing or steering; nothing here relies on it.
 
@@ -1003,9 +1024,11 @@ the private directory:
   `yolo` and let Ordewell's tools through, so `restricted.files` could hand
   it as a second layer. It is left out while the refusal by kind holds alone
   in every recording, since each layer is one more file per start.
-- **Cline as a planner.** Deferred under R3: its `firstTurn` attach no longer
-  bars the role (R5), but no recording of Cline as a planner was made, so the
-  profile does not claim it.
+- **Cline as a planner told outright to call `list_runners`, then
+  `submit_plan`.** Not needed: an earlier probe saw a Cline planner call
+  `run_command` and never submit a plan, but recorded on the contract every
+  ACP planner gets, it listed the runners and submitted one (`planner.jsonl`).
+  The profile adds no planner text of its own.
 - **`CLINE_DIR` as Cline's control for the repository's hooks.** Rejected on
   the recordings: with it naming an empty home, every hook planted in the
   worktree still ran (`repo-hooks-cline-dir.jsonl`), since Cline reads them
@@ -1100,15 +1123,17 @@ the private directory:
 - A runner can be task-only: where a profile claims no planner role, `plans`
   is false, and the runner runs tasks, is listed and signs in like any runner
   but never appears among the planners. Copilot CLI and Qwen Code claim the
-  role, as does Gemini CLI, so they plan like the native runners; Cline
-  claims only a read-only mode, so it runs read-only tasks and never plans.
+  role, as do Cline, Gemini CLI and Cursor, so they plan like the native
+  runners.
 - A restricted Copilot or Cline names the worktree's files by their full
   path, since its own relative paths name the private directory; its
   instructions tell it where the workspace is.
-- A read-only Cline keeps its own tools and loses only their approval, so its
-  role rests on Cline asking about every one of them under `--auto-approve
-  false`, as 3.0.74 does. It reads only through Ordewell's `run_command`, and
-  without the repository's rules.
+- A planner's or a read-only task's Cline keeps its own tools and loses only
+  their approval, so its roles rest on Cline asking about every one of them
+  under `--auto-approve false`, as 3.0.74 does. It reads one file at a time
+  with its own `read_files`, judged by the path its arguments name, anything
+  else through Ordewell's `run_command`, and plans and reads without the
+  repository's rules.
 - An agent that connects its MCP servers only on its first turn can run
   tasks and plan, but each missed attach costs a model turn, two when the
   respawn misses too, and a discarded turn may have changed the worktree the
@@ -1205,3 +1230,6 @@ the private directory:
   message that takes its session up, is the check, discarded with its process
   when the server is not contacted before it ends; Cline still does not claim
   the role (R3).
+- 2026-11-05 — R3: Cline plans, on a recorded planner start whose own edit and
+  command were refused and whose read-only task ran (`planner.jsonl`,
+  `planner-task.jsonl`).

@@ -110,14 +110,14 @@ describe('describePlannerNotReady', () => {
 
   it('leads a terminal user to /planner, naming the agents from the registry, and offers /key for the vendor', () => {
     expect(describePlannerNotReady(noKey, TERMINAL_UI_COMMANDS)).toBe(
-      'No planner is ready. Pick one with /planner: Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Gemini CLI and Cursor plan with no API key. ' +
+      'No planner is ready. Pick one with /planner: Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor plan with no API key. ' +
       'To plan with OpenRouter instead, add OPENROUTER_API_KEY with /key.',
     );
   });
 
   it('spells the same message with the headless CLI commands', () => {
     expect(describePlannerNotReady(noKey, HEADLESS_CLI_COMMANDS)).toBe(
-      'No planner is ready. Pick one with ordewell planner <id>: Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Gemini CLI and Cursor plan with no API key. ' +
+      'No planner is ready. Pick one with ordewell planner <id>: Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor plan with no API key. ' +
       'To plan with OpenRouter instead, add OPENROUTER_API_KEY with ordewell key set openrouter <key>.',
     );
   });

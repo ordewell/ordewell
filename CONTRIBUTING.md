@@ -239,9 +239,10 @@ home of configuration.
   a writable start and not on a restricted one, as Copilot's
   `repo-hooks.jsonl`, `planner.jsonl` and `read-only.jsonl` do, Qwen Code's,
   Gemini CLI's and Cursor's `planted-hook.jsonl`, and Cline's
-  `repo-hooks.jsonl` and `read-only-hooks.jsonl`. A variable that moves the agent's config home is
-  not that switch unless a recording shows it: Cline's `CLINE_DIR` left the
-  worktree's hooks running (`repo-hooks-cline-dir.jsonl`).
+  `repo-hooks.jsonl`, `read-only-hooks.jsonl` and `planner.jsonl`. A variable
+  that moves the agent's config home is not that switch unless a recording
+  shows it: Cline's `CLINE_DIR` left the worktree's hooks running
+  (`repo-hooks-cline-dir.jsonl`).
 
   An agent made to ask before every use of its tools leaves the adapter to
   refuse each by its kind, a request to switch modes included, and the
