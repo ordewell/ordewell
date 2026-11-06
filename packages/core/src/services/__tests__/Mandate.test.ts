@@ -60,6 +60,24 @@ describe('the root\'s mandate is derived from today\'s settings (ADR-0056 M1, M2
     expect([limits.depth, limits.delegatedTasks, limits.tasksPerPlan]).toEqual([2, 8, 30]);
   });
 
+  it('takes the shape the user set (ADR-0055 D19)', () => {
+    const { limits } = root({ shape: { depth: 3, delegatedTasks: 12, tasksPerPlan: 50 } });
+    expect([limits.depth, limits.delegatedTasks, limits.tasksPerPlan]).toEqual([3, 12, 50]);
+  });
+
+  it('never passes the hard caps, nor goes below one, whatever the settings say', () => {
+    expect(root({ shape: { depth: 9, delegatedTasks: 99, tasksPerPlan: 500 } }).limits).toMatchObject({ depth: 4, delegatedTasks: 30, tasksPerPlan: 100 });
+    expect(root({ shape: { depth: 0, delegatedTasks: -3, tasksPerPlan: 0 } }).limits).toMatchObject({ depth: 1, delegatedTasks: 1, tasksPerPlan: 1 });
+  });
+
+  it('hands a child no more than the shape the user set (ADR-0056 M4)', () => {
+    const parent = root({ delegationTokens: 1_000, shape: { depth: 1, delegatedTasks: 3, tasksPerPlan: 5 } });
+    const narrowed = narrow(parent, { level: 0, tokens: 100, delegatedTasks: 30, tasksPerPlan: 100 });
+    if (!narrowed.ok) throw new Error(mandateRefusalText(narrowed.refusal));
+    expect(narrowed.mandate.limits).toMatchObject({ depth: 0, delegatedTasks: 3, tasksPerPlan: 5 });
+    expect(narrow(narrowed.mandate, { level: 1, tokens: 10 })).toMatchObject({ ok: false, refusal: { field: 'limits.depth' } });
+  });
+
   it('has no token budget with delegation off', () => {
     expect(root().limits.tokens).toBe(0);
     expect(root().grants.has('delegate')).toBe(false);

@@ -67,6 +67,15 @@ route, what it loads from a repository
 answers to the agent's own requests, and where an agent needs one, the reader
 of its provider credential and the sign-in route that reader adds.
 
+The minimum version is enforced twice, because the two moments answer different
+questions. The adapter's `initialize` check is the last word at start, on the
+`agentInfo.version` the agent itself reports. Discovery also compares the
+version the CLI's own `--version` prints, in `RunnerInstallation`, so an agent
+below the floor is listed unavailable with "found X, needs Y or later" before a
+planner is picked or a goal typed; an agent whose `--version` names no number
+stays usable rather than being refused on a guess, and the start check remains
+the judge.
+
 ## Key properties
 
 - **A new agent is a profile and a manifest (R1).** The adapter holds no
@@ -1303,3 +1312,7 @@ the private directory:
   as `GEMINI_API_KEY`, which its API-key auth reads; a `GOOGLE_API_KEY` or a
   Vertex or settings-file route stays the person's choice. Its model discovery
   uses the same hook, and its signed-out hint names the key entry.
+- 2026-11-05 — discovery compares the CLI's `--version` against the profile's
+  `minVersion`, so an agent below the floor is listed unavailable with "found X,
+  needs Y or later" instead of failing at `initialize` after a goal was typed;
+  the start check stays the last word.

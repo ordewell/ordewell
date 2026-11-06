@@ -1,0 +1,21 @@
+.scope-switcher { min-width: 0; }
+.scope-chip { max-width: 100%; min-width: 0; border: 0; background: transparent; font: var(--ow-type-body); cursor: pointer; }
+.scope-chip > .ow-icon { flex: none; }
+.scope-chip:hover, .scope-chip[aria-expanded='true'] { background: var(--ow-bg-hover); color: var(--ow-fg); }
+.scope-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scope-menu { left: 0; right: auto; min-width: 320px; max-width: min(480px, 90vw); }
+.scope-menu .scope-repo { padding: var(--ow-space-1) var(--ow-space-3) 0; }
+/* Fixed boxes for the check and the state, with only the label and the detail shrinking, so no text runs under a mark. */
+.scope-menu button { display: flex; align-items: center; gap: var(--ow-space-2); min-height: var(--ow-row); }
+.scope-mark { flex: none; display: inline-flex; width: 16px; height: 16px; color: var(--ow-accent); }
+.scope-label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scope-detail { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ow-fg-secondary); font: var(--ow-type-code-small); }
+.scope-state { flex: none; margin-left: auto; display: inline-flex; color: var(--ow-fg-secondary); }
+.scope-state-passed { color: var(--ow-status-passed); }
+.scope-state-failed { color: var(--ow-status-failed); }
+.scope-state-running { color: var(--ow-status-running); }
+/* A long branch keeps its tail and loses its middle, down to 12 characters (design.md, Title bar priority). */
+.scope-branch { display: inline-flex; min-width: 0; max-width: 100%; font: var(--ow-type-code); white-space: nowrap; }
+.scope-repo-name { flex: none; }
+.scope-branch-head { flex: 0 1 auto; min-width: 6ch; overflow: hidden; text-overflow: ellipsis; }
+.scope-branch-tail { flex: none; }

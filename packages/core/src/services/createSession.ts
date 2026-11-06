@@ -76,6 +76,7 @@ import { plannerContextFill } from '../models/Usage';
 import { TurnBudgets, contextLine, taskReadsLine, webReadsLine } from './PlannerBudgets';
 import { mintSessionId } from '../utils/sessionId';
 import { savePrdMarkdown, extractPrdBlock } from '../utils/prdStore';
+import { takeUserActions } from '../utils/userActionLog';
 import { approvalRecordOf, flattenTasks, keepExecutionState, migrateLoadedPlan, stampOrigin, type LegacyPlanState, type PlanState, type Task, type TaskReportTo, type TaskSnapshot, type RunnerId } from '../models/Task';
 import { AlreadyExecutingError, NoPlanError } from './SessionErrors';
 import { childLease, describeHeld, describeLost, processLeaseHost, SessionHeldError, UNLEASED, type LeaseHost, type SessionHeld, type SessionLease } from './sessionLease';
@@ -700,10 +701,10 @@ export function createSession(deps: SessionDeps): Session {
     fetcher,
     skillsService: deps.skillsService ?? new SkillsService(deps.workspaceRoot()),
     saveSession: deps.saveSession ?? (deps.placement ? saveUnder(deps.placement) : saveSession),
-    lease: (onLost) => {
+    lease: (onLost, runLive) => {
       if (deps.placement) return childLease(deps.placement.held);
       const host = deps.leaseHost ?? (deps.saveSession ? undefined : processLeaseHost());
-      return host ? host.lease(onLost) : UNLEASED;
+      return host ? host.lease(onLost, runLive) : UNLEASED;
     },
     conversation: (host) => (conversation = new PlannerConversation(host)),
     child: deps.child,
@@ -779,8 +780,8 @@ export interface SessionParts {
   fetcher: IWebFetcher;
   skillsService: Pick<SkillsService, 'findSkill' | 'listSkills' | 'searchedDirs' | 'forRoot'>;
   saveSession: SaveSession;
-  /** Its lease, told by the Session what to do when another host takes it (ADR-0049). */
-  lease: (onLost: (held: SessionHeld) => void) => SessionLease;
+  /** Its lease, told by the Session what to do when another host takes it (ADR-0049), and whether its run is live (ADR-0062 G7). */
+  lease: (onLost: (held: SessionHeld) => void, runLive: () => boolean) => SessionLease;
   /** The conversation's host is the Session itself, so only the Session can make it. */
   conversation: (host: PlannerConversationHost) => PlannerConversation;
   /** The node this session is, below the root. */
@@ -1041,7 +1042,7 @@ export class Session {
     this.fetcher = parts.fetcher;
     this.skillsService = parts.skillsService;
     this.save = parts.saveSession;
-    this.lease = parts.lease((held) => this.leaseLost(held));
+    this.lease = parts.lease((held) => this.leaseLost(held), () => this.runIsLive);
 
     this.conversation = parts.conversation({
       plan: () => this.plan,
@@ -1251,7 +1252,7 @@ export class Session {
         merge: this.runMergeView(),
         mergeHold: this.mergeHold(),
         id: this.runs.planIsolation?.run.id ?? null,
-        blocked: this.runs.blocked ? this.runs.blockedStarts : null,
+        blocked: this.runs.blocked ? { start: this.runs.blockedStarts, repos: this.runs.blockedIn } : null,
       },
     });
   }
@@ -1583,11 +1584,12 @@ export class Session {
 
   /** Each value where it lives today; the level is the caller's to name (ADR-0056 M1). */
   private rootSettings(): Omit<RootSettings, 'level'> {
-    const { autorun, delegationTokens } = this.userRunSettings();
+    const { autorun, delegationTokens, delegationDepth, delegatedTasksPerPlan, tasksPerChildPlan } = this.userRunSettings();
     return {
       autorun,
       autonomous: this.config.autonomousMode,
       delegationTokens,
+      shape: { depth: delegationDepth, delegatedTasks: delegatedTasksPerPlan, tasksPerPlan: tasksPerChildPlan },
       effects: this.effectRules(),
       runners: this.catalog.runnersFor('plan') ?? [],
       models: this.catalog.allowlist(),
@@ -2200,7 +2202,7 @@ export class Session {
     const planTasks = this.store.planTasks;
     const tasks = flattenTasks(planTasks);
     const label = (task: Task) => `${taskRefOf(planTasks, task.id) ?? `#${task.order}`} "${task.title}"`;
-    const live = this.runOpening !== null || this.orchestrator.movesUnasked || this.orchestrator.isMerging;
+    const live = this.runIsLive;
     const open = tasks.filter((task) => task.status !== 'completed' && task.status !== 'skipped');
     return {
       unfinished: [
@@ -2725,6 +2727,29 @@ export class Session {
    * {@link TaskOrchestrator.hasLiveWork}: a spawned runner, not merely an armed scheduler.
    */
   get isExecuting(): boolean { return this.orchestrator.hasLiveWork; }
+  /**
+   * The run has not settled: an attempt at work, a start pending, or a landing
+   * or Merge all under way. While it holds, so does its landing branch (ADR-0062 G7).
+   */
+  get runIsLive(): boolean { return this.runOpening !== null || this.orchestrator.movesUnasked || this.orchestrator.isMerging; }
+
+  /**
+   * A person's git action on this run's landing branch, as one line of the
+   * timeline (ADR-0062 G6). The action has happened by now, so a failed save
+   * is said rather than thrown.
+   */
+  recordUserAction(text: string, at: string = new Date().toISOString()): void {
+    this.mutatePlan(() => {
+      this.conversation.recordUserAction(text, at);
+      return true;
+    }, undefined, () => this.tryPersist());
+  }
+
+  /** The lines a host that does not hold this session left for it, folded into the timeline (ADR-0062 G6). */
+  foldUserActions(): void {
+    if (!this.plan) return;
+    for (const line of takeUserActions(this.currentSessionId, this.stateRoot)) this.recordUserAction(line.text, line.at);
+  }
   get status(): 'approved' | 'running' | 'completed' { return this.orchestrator.status; }
 
   /**
@@ -3300,10 +3325,22 @@ export class Session {
       const to = researchReportTo(this.turnActor());
       this.store.update(task.id, { reportTo: to, researchOrigin: to });
       this.record.approveResearch(task.id);
+      // Behind work only the plan's approval starts, a queued start would hold the session as advancing,
+      // Stop in place of Approve, while nothing can move: the run that approval opens starts it instead.
+      if (!this.startsUnapproved(task.id)) continue;
       if (actorAuthority(this.turnActor().kind) === 'user') this.supervision.userStarting();
       // Queue only as it lands: re-queuing on each turn would undo the user's Stop (ADR-0037 R4).
       this.orchestrator.startAtGate(task.id);
     }
+  }
+
+  /** Whether a task, and the unfinished work it builds on, may start before anyone approves the plan. */
+  private startsUnapproved(taskId: string, seen = new Set<string>()): boolean {
+    const task = this.store.get(taskId);
+    if (!task || task.status === 'completed' || task.status === 'skipped' || this.record.planApproved) return true;
+    if (seen.has(taskId) || !this.record.isApproved(taskId)) return false;
+    seen.add(taskId);
+    return task.dependencies.every((dep) => this.startsUnapproved(dep, seen));
   }
 
   private preparePlannerTaskUpdates(tasks: Task[]): Task[] {
@@ -3376,8 +3413,13 @@ export class Session {
       await this.orchestrator.beginRun(origin, keepFailed);
     });
     this.runOpening = opening;
+    // Another host's interlock reads the start in the lease record (ADR-0062 G7),
+    // and a start that came to nothing there too, not a heartbeat later.
+    this.lease.publish();
     return opening.finally(() => {
-      if (this.runOpening === opening) this.runOpening = null;
+      if (this.runOpening !== opening) return;
+      this.runOpening = null;
+      this.lease.publish();
     });
   }
 
@@ -3618,7 +3660,11 @@ export class Session {
   private async mergeAll(): Promise<IsolationMergeResult> {
     // Ahead of the ops refusal: with no run there is nothing to merge once the ops task ends either.
     this.runs.requireRun();
-    const result = await this.withSave(() => this.orchestrator.mergeRun());
+    const merging = this.withSave(() => this.orchestrator.mergeRun());
+    // The merge has begun by now: another host's interlock reads it in the lease
+    // record (ADR-0062 G7), and reads its end there too, not a heartbeat later.
+    this.lease.publish();
+    const result = await merging.finally(() => this.lease.publish());
     this.broadcast({ type: 'isolation_merge', result });
     this.announceClosed();
     return result;

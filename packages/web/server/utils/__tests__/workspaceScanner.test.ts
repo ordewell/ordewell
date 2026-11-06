@@ -51,6 +51,21 @@ describe('scanWorkspacesImpl', () => {
     expect(results).not.toContain(path.join(tmpDir, 'ordewell-project'));
   });
 
+  it('filters nothing out when there is no source checkout to hide', () => {
+    fs.mkdirSync(path.join(tmpDir, 'ordewell-checkout', '.ordewell'), { recursive: true });
+
+    const results = scanWorkspacesImpl({
+      fsModule: fs,
+      pathModule: path,
+      cwd: tmpDir,
+      home: tmpDir,
+      projectDir: undefined,
+    });
+
+    expect(results).toContain(path.join(tmpDir, 'ordewell-checkout'));
+    expect(results).toContain(path.join(tmpDir, 'project_a'));
+  });
+
   it('returns sorted results', () => {
     const results = scanWorkspacesImpl({
       fsModule: fs,

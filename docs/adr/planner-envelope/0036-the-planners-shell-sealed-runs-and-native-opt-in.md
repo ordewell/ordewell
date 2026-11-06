@@ -137,7 +137,8 @@ below, and on Linux but for what `/etc/hosts` lists), so no path is asked about.
 Part of S1. `SandboxLimits` holds four numbers, and only numbers from it enter
 the script that runs before the sandbox, outside it.
 
-- **Processes** are the kernel's limit, 256 beyond what the user runs now.
+- **Processes** are the kernel's limit, 256 beyond what the user runs now
+  (on Linux, where each thread counts as one, beyond the host's threads).
   macOS, and older Linux kernels, count them per user rather than per run, so a
   run's fork bomb can make the forks of another sealed run beside it fail until
   it ends. Processes of the user's that run outside a sealed run hold no such
@@ -569,3 +570,4 @@ shell.
 - 2026-10-31 — a run killed as it starts dies with its launcher: on Linux the watcher kills what carries the launcher's mark once the launcher has gone, since bubblewrap arms `--die-with-parent` only after setting up, and ends the launcher if its parent goes; on macOS a subshell starts the sandbox and its reaper, and the watcher reaps too.
 - 2026-10-31 — the launcher reads no startup file and starts with only what the profile keeps of the host's environment; what names scratch is set inside the sandbox.
 - 2026-10-31 — a scratch directory for each profile, so nothing a sealed run writes takes effect under a wider profile (S8); a planner command's `$TMPDIR` and a native shell's `HOME` are no longer a sealed run's.
+- 2026-11-06 — on Linux the process limit is set above the host's threads, not its processes, since the kernel counts each thread: a host with many left a sealed test run's workers failing to start.

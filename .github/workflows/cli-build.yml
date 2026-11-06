@@ -1,0 +1,344 @@
+name: CLI build
+
+# The standalone `ordewell` binary (ADR-0065), one native runner per target: the
+# binary is the build host's own Node with the CLI injected (C1), so each target
+# is built where it runs, and each runner drives the binary it just built with
+# no Node on PATH. Proved here, before a release, as desktop-build.yml is:
+#   - a pull request to main that touches what can change the binary;
+#   - workflow_dispatch, from the Actions tab once this file is on main, and
+#     with `rehearse_signing` as a signing rehearsal (below);
+#   - release.yml, which calls it with `attach` and the tag to put the
+#     versioned archives on the GitHub Release. The fixed-name copies,
+#     install.sh and SHA256SUMS are release.yml's `release-assets` job, which
+#     waits for this and for the desktop build (ADR-0065 C5).
+# Signing (ADR-0065 C4): every macOS binary is re-signed after injection. The
+# release path signs with the Developer ID and notarizes when the desktop app's
+# credentials (ADR-0063 H9) exist; a pull request, a plain manual run, a fork
+# and a release without them sign ad hoc, which scripts/sea/build.mjs does on
+# its own. A signing rehearsal (`gh workflow run cli-build.yml --ref main -f
+# rehearse_signing=true`) runs the release's signing and notarization steps on
+# main with nothing attached to any Release, so a bad certificate or API key
+# shows before a tag does; it fails on a missing credential or off main rather
+# than sign ad hoc. Only main's copy can start one: a pull request has no
+# inputs, and a dispatch needs write access.
+on:
+  workflow_call:
+    inputs:
+      attach:
+        description: Attach the archives to the GitHub Release named by `tag`
+        type: boolean
+        default: false
+      tag:
+        description: The release tag; checked against the package versions before anything is built
+        type: string
+        default: ''
+    # Each optional: a release without them signs the macOS binaries ad hoc.
+    # The App Store Connect API key is the one notarization route here.
+    secrets:
+      CSC_LINK:
+        required: false
+      CSC_KEY_PASSWORD:
+        required: false
+      APPLE_API_KEY:
+        required: false
+      APPLE_API_KEY_ID:
+        required: false
+      APPLE_API_ISSUER:
+        required: false
+  workflow_dispatch:
+    inputs:
+      rehearse_signing:
+        description: Sign the macOS binaries with the Developer ID and notarize them as a release does, attaching nothing (main only)
+        type: boolean
+        default: false
+  pull_request:
+    branches: [ "main" ]
+    # What reaches the binary: the three packages it bundles (core's skills/
+    # and docker/ ride in as assets), the manifests that fix what is installed,
+    # the build script and its entitlements, the driver that proves the result,
+    # the version guard and this file.
+    paths:
+      - 'packages/cli/**'
+      - 'packages/core/**'
+      - 'packages/web/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.nvmrc'
+      - 'scripts/sea/**'
+      - 'packaging/sea/**'
+      - 'bench/live/drive-binary.mjs'
+      - 'bench/live/mock-provider.mjs'
+      - '.github/workflows/verify-release-tag.mjs'
+      - '.github/workflows/cli-build.yml'
+
+# Read-only unless a job below asks for more; only `attach` writes.
+permissions:
+  contents: read
+
+# A new push to a PR makes the in-flight build obsolete. A release's build is
+# never cancelled: a second tag is a different release.
+concurrency:
+  group: cli-build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# On the release path the macOS jobs hold the signing certificate and the App
+# Store Connect key, and `attach` holds a token that writes the Release, so
+# every action here is pinned to a commit SHA, as release.yml's package-manager
+# jobs are.
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Labels from GitHub's runner list (docs.github.com/en/actions/reference/
+        # runners/github-hosted-runners, read November 2026): `macos-15` is
+        # arm64; `macos-15-intel` is the Intel image (macos-13 and macos-14 are
+        # retired; `macos-26-intel` is the other Intel label offered);
+        # `ubuntu-24.04-arm` is the arm64 Linux runner for public repositories.
+        # The embedded Node is setup-node's official build, so the binary's
+        # glibc and macOS floors are Node's, not the runner image's.
+        include:
+          - target: darwin-arm64
+            os: macos-15
+          - target: darwin-x64
+            os: macos-15-intel
+          - target: linux-x64
+            os: ubuntu-24.04
+          - target: linux-arm64
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    env:
+      # Nothing here may reach ordewell.ai (ADR-0048).
+      ORDEWELL_NO_VERSION_CHECK: '1'
+      # A secret cannot be read in an `if`, so the tests are variables, and
+      # they are false off macOS and off the two signing routes: the release
+      # path (`attach`) and a rehearsal dispatched on main. The secrets
+      # themselves reach only the steps that use them.
+      MAC_REHEARSAL: ${{ github.event_name == 'workflow_dispatch' && inputs.rehearse_signing && startsWith(matrix.target, 'darwin-') }}
+      MAC_SIGNING_SET: ${{ (inputs.attach || (github.event_name == 'workflow_dispatch' && inputs.rehearse_signing && github.ref == 'refs/heads/main')) && startsWith(matrix.target, 'darwin-') && secrets.CSC_LINK != '' && secrets.CSC_KEY_PASSWORD != '' }}
+      MAC_NOTARIZE_SET: ${{ (inputs.attach || (github.event_name == 'workflow_dispatch' && inputs.rehearse_signing && github.ref == 'refs/heads/main')) && startsWith(matrix.target, 'darwin-') && secrets.APPLE_API_KEY != '' && secrets.APPLE_API_KEY_ID != '' && secrets.APPLE_API_ISSUER != '' }}
+
+    steps:
+      # A rehearsal exists to prove the credentials, so one that would sign
+      # ad hoc or skip notarization fails here instead, naming what is
+      # missing. Only whether each secret is set reaches this step.
+      - name: Check the signing rehearsal can sign and notarize
+        if: env.MAC_REHEARSAL == 'true'
+        shell: bash
+        env:
+          REF: ${{ github.ref }}
+          HAS_CSC_LINK: ${{ secrets.CSC_LINK != '' }}
+          HAS_CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD != '' }}
+          HAS_APPLE_API_KEY: ${{ secrets.APPLE_API_KEY != '' }}
+          HAS_APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID != '' }}
+          HAS_APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER != '' }}
+        run: |
+          failed=0
+          if [ "$REF" != 'refs/heads/main' ]; then
+            echo "::error::a signing rehearsal runs on main only, not $REF"
+            failed=1
+          fi
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER; do
+            has="HAS_$name"
+            if [ "${!has}" != 'true' ]; then
+              echo "::error::$name is not set, so this signing rehearsal cannot sign with the Developer ID and notarize"
+              failed=1
+            fi
+          done
+          exit "$failed"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      # The embedded Node is this one (ADR-0065 C1): the build refuses anything
+      # but a 22.x at 22.17 or newer.
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22.x
+          cache: 'npm'
+
+      # Fails the build before the slow steps when the tag and the versions
+      # disagree: the archives are named for the version.
+      - name: Verify tag matches package versions
+        if: inputs.attach
+        env:
+          TAG: ${{ inputs.tag }}
+        run: node .github/workflows/verify-release-tag.mjs "$TAG"
+        shell: bash
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The bundle compiles the CLI's and web's sources itself and reads only
+      # core's dist, so core is the one build the binary needs.
+      - name: Build
+        run: npm run build:core
+
+      # The certificate goes into a keychain of this job's own, made here and
+      # deleted at the end, never the login keychain. CSC_LINK is read as the
+      # base64 of the .p12, the form electron-builder takes it in on CI.
+      - name: Import the Developer ID certificate
+        if: env.MAC_SIGNING_SET == 'true'
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/ordewell-sea.keychain-db"
+          certificate="$RUNNER_TEMP/ordewell-sea.p12"
+          password="$(openssl rand -hex 24)"
+          trap 'rm -f "$certificate"' EXIT
+          if ! printf '%s' "$CSC_LINK" | base64 --decode > "$certificate" 2>/dev/null || [ ! -s "$certificate" ]; then
+            echo "::error::CSC_LINK is not the base64 of a .p12 certificate"
+            exit 1
+          fi
+          security create-keychain -p "$password" "$keychain"
+          echo "SEA_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$certificate" -k "$keychain" -P "$CSC_KEY_PASSWORD" -f pkcs12 -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" > /dev/null
+          # codesign finds an identity only in the search list.
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          # By its SHA-1, which no second certificate can share.
+          identity="$(security find-identity -v -p codesigning "$keychain" | awk '/"Developer ID Application: / { print $2; exit }')"
+          if [ -z "$identity" ]; then
+            echo "::error::the certificate in CSC_LINK holds no Developer ID Application identity"
+            exit 1
+          fi
+          echo "ORDEWELL_SEA_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+
+      # ORDEWELL_SEA_SIGN_IDENTITY, set above only on the signed route, makes
+      # the build sign with the Developer ID, the hardened runtime and
+      # packaging/sea/entitlements.plist; without it a macOS binary is signed
+      # ad hoc and a Linux binary is not signed.
+      - name: Build the standalone binary
+        run: node scripts/sea/build.mjs
+
+      - name: Verify the macOS signature
+        if: runner.os == 'macOS'
+        run: codesign --verify --strict --verbose=2 "dist-sea/${{ matrix.target }}/ordewell"
+
+      # The evidence a signed run leaves in its log: the identity that signed,
+      # read back from the binary. codesign prints the leaf certificate's
+      # authority first.
+      - name: Show the signing authority
+        if: env.MAC_SIGNING_SET == 'true'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          details="$(codesign -dv --verbose=2 "dist-sea/$TARGET/ordewell" 2>&1)"
+          echo "$details"
+          authority="$(printf '%s\n' "$details" | sed -n 's/^Authority=//p' | head -n 1)"
+          case "$authority" in
+            'Developer ID Application: '*) echo "Signing authority: $authority" ;;
+            *)
+              echo "::error::the $TARGET binary is signed by '${authority:-no authority}', not a Developer ID Application identity"
+              exit 1
+              ;;
+          esac
+
+      - name: Smoke-test the binary (--version)
+        run: '"dist-sea/${{ matrix.target }}/ordewell" --version'
+
+      - name: Drive the binary offline, no Node on PATH
+        run: node bench/live/drive-binary.mjs --bin "dist-sea/${{ matrix.target }}/ordewell"
+
+      # A bare executable cannot be stapled, so Gatekeeper looks the ticket up
+      # online; the archive the build wrote holds these same bytes. `--wait`
+      # returns once Apple has decided, and only "Accepted" passes: a release
+      # whose macOS binary was signed for notarization and refused is stopped.
+      - name: Notarize the binary
+        if: env.MAC_SIGNING_SET == 'true' && env.MAC_NOTARIZE_SET == 'true'
+        shell: bash
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/AuthKey_ordewell-sea.p8"
+          zip="$RUNNER_TEMP/ordewell-$TARGET-notarize.zip"
+          trap 'rm -f "$key" "$zip"' EXIT
+          printf '%s\n' "$APPLE_API_KEY" > "$key"
+          ditto -c -k --keepParent "dist-sea/$TARGET/ordewell" "$zip"
+          auth=(--key "$key" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER")
+          if ! result="$(xcrun notarytool submit "$zip" "${auth[@]}" --wait --timeout 1h --output-format json)"; then
+            echo "$result"
+            echo "::error::notarytool submit failed for $TARGET"
+            exit 1
+          fi
+          echo "$result"
+          status="$(node -e 'const r = JSON.parse(process.argv[1]); console.log(r.status ?? "")' "$result")"
+          id="$(node -e 'const r = JSON.parse(process.argv[1]); console.log(r.id ?? "")' "$result")"
+          if [ "$status" != "Accepted" ]; then
+            [ -n "$id" ] && xcrun notarytool log "$id" "${auth[@]}" || true
+            echo "::error::Apple did not accept the $TARGET binary for notarization (status: ${status:-none})"
+            exit 1
+          fi
+          echo "Notarization status: $status (submission $id)"
+
+      - name: Say why the macOS binary was not notarized
+        if: runner.os == 'macOS' && !(env.MAC_SIGNING_SET == 'true' && env.MAC_NOTARIZE_SET == 'true')
+        run: |
+          if [ "$MAC_SIGNING_SET" = 'true' ]; then
+            echo "::notice::APPLE_API_KEY, APPLE_API_KEY_ID or APPLE_API_ISSUER is not set, so the Developer ID-signed ${{ matrix.target }} binary was not notarized (ADR-0065 C4)."
+          elif [ "${{ inputs.attach }}" = 'true' ]; then
+            echo "::notice::CSC_LINK or CSC_KEY_PASSWORD is not set, so the ${{ matrix.target }} binary is signed ad hoc and not notarized (ADR-0065 C4)."
+          else
+            echo "Not a release: the ${{ matrix.target }} binary is signed ad hoc."
+          fi
+
+      - name: Remove the signing keychain
+        if: always() && env.SEA_KEYCHAIN != ''
+        run: security delete-keychain "$SEA_KEYCHAIN"
+
+      - name: Upload the archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cli-${{ matrix.target }}
+          path: dist-sea/ordewell-*-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+          # A rehearsal's archives are Developer ID-signed and notarized but
+          # belong to no release: kept a day, for trying Gatekeeper on a Mac.
+          retention-days: ${{ github.event_name == 'workflow_dispatch' && inputs.rehearse_signing && 1 || 7 }}
+
+  # Every target built and was driven, so the Release gets all four archives or
+  # none. This is the only job that can write.
+  attach:
+    if: inputs.attach
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download the archives
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: cli-*
+          merge-multiple: true
+          path: release
+
+      # --clobber: a re-run replaces the file it uploaded before.
+      - name: Attach the archives to the GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          cd release
+          shopt -s nullglob
+          files=(ordewell-*-darwin-arm64.tar.gz ordewell-*-darwin-x64.tar.gz ordewell-*-linux-arm64.tar.gz ordewell-*-linux-x64.tar.gz)
+          if [ ${#files[@]} -ne 4 ]; then
+            echo "::error::expected the four CLI archives, got: ${files[*]:-none}"
+            exit 1
+          fi
+          gh release upload "$TAG" "${files[@]}" --clobber --repo "$REPO"

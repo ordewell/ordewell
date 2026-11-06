@@ -22,8 +22,8 @@ module.exports = {
     {
       // Typecheck and jsdom tests pass such an import, and only `vite build`
       // fails on it. Tests are left out: they run in Node and reach no browser.
-      files: ['packages/vscode/src/views/**/*.ts', 'packages/vscode/src/views/**/*.tsx'],
-      excludedFiles: ['**/__tests__/**'],
+      files: ['packages/ui/src/**/*.ts', 'packages/ui/src/**/*.tsx', 'packages/vscode/src/views/**/*.ts', 'packages/vscode/src/views/**/*.tsx'],
+      excludedFiles: ['**/__tests__/**', 'packages/ui/src/test/**'],
       rules: {
         '@typescript-eslint/no-restricted-imports': ['error', {
           paths: [{

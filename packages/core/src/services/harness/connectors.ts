@@ -58,6 +58,13 @@ export interface RunnerConnector {
   promptCacheTtlMs?: number;
   /** A key in Ordewell that signs the runner in, besides its own login. */
   signInRoute?: KeySignInRoute;
+  /**
+   * The oldest agent version this connector was checked against. An ACP
+   * profile declares it for `initialize`'s `agentInfo.version`; discovery also
+   * compares what the CLI's `--version` prints, so a too-old agent is listed
+   * unavailable with its reason before a planner is picked (ADR-0060).
+   */
+  minVersion?: string;
 }
 
 /** Claude's default, and what an API login gets; a subscription's runs recorded here write the hour-long kind. OpenAI's, which Codex uses, is 5 to 10 minutes idle. */

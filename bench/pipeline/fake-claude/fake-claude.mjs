@@ -21,6 +21,7 @@
  *   crash       exit non-zero before completing
  *   untilFile   a file to wait for before the work, for a task that must still run when something else ends
  *   calls       tool calls made on the Ordewell server before the file writes, each `[tool, arguments]`
+ *   awaitMessage  after the file writes, wait for a message handed into the turn (a steer) before completing
  *
  * A planner's first message may carry `turnsFrom` instead: a file holding one
  * list of tool calls per turn, each `[tool, arguments]`, made on the Ordewell
@@ -31,6 +32,11 @@
  *
  * With FAKE_CLAUDE_LOG set, every prompt taken and every call's reply is
  * appended to that file as a line of JSON, for a test to read what was said.
+ *
+ * The host's probes are answered as the real CLI answers them and exit at once:
+ * `--version`, `--help` and `auth status` (signed in). The host runs them with
+ * stdin left open, so a probe read as a turn would wait out its timeout and the
+ * runner would read as not installed.
  *
  * A `--resume` of the session named by FAKE_CLAUDE_REFUSE_RESUME is answered as
  * the real CLI answers one it cannot find: an error result, no `init`, and a wait
@@ -52,6 +58,19 @@ const flag = (name) => {
   return i >= 0 ? argv[i + 1] : undefined;
 };
 
+if (argv[0] === '--version') {
+  process.stdout.write('2.0.0 (Claude Code)\n');
+  process.exit(0);
+}
+if (argv[0] === '--help') {
+  process.stdout.write('Usage: claude [options] [prompt]\n\n  --model <model>  Model for the current session. Provide an alias for the latest model (e.g. \'sonnet\' or \'opus\').\n');
+  process.exit(0);
+}
+if (argv[0] === 'auth' && argv[1] === 'status') {
+  process.stdout.write(`${JSON.stringify({ loggedIn: true, authMethod: 'fake' })}\n`);
+  process.exit(0);
+}
+
 const sessionId = flag('--resume') ?? `fake-claude-${randomUUID()}`;
 const permissionMode = flag('--permission-mode') ?? 'default';
 const mcpConfigPath = flag('--mcp-config');
@@ -59,6 +78,8 @@ const cwd = process.cwd();
 
 let messageCount = 0;
 let turnAbort = null;
+/** Set while a turn waits for a steer: the next user line resolves it instead of queuing a turn. */
+let steerWaiter = null;
 
 function emit(line) {
   process.stdout.write(`${JSON.stringify({ session_id: sessionId, parent_tool_use_id: null, ...line })}\n`);
@@ -205,6 +226,17 @@ async function runTurn(text, signal) {
     toolResult(id, `File created successfully at: ${name}`, false, { type: 'create', content: contents });
   }
 
+  if (cue.awaitMessage) {
+    const steer = await new Promise((resolve) => {
+      steerWaiter = resolve;
+      signal.addEventListener('abort', () => resolve(null), { once: true });
+    });
+    steerWaiter = null;
+    if (signal.aborted) return;
+    logged({ steer: promptText(steer.message) });
+    assistant([{ type: 'text', text: 'Read your message.' }]);
+  }
+
   const server = mcpServer();
   if (server && !cue.noComplete) {
     const status = cue.status ?? 'done';
@@ -269,7 +301,8 @@ function acceptInput() {
     if (msg.type === 'control_request') control(msg);
     else if (msg.type === 'user') {
       if (msg.uuid) emit({ type: 'user', isReplay: true, uuid: msg.uuid, message: msg.message });
-      turns = turns.then(() => handleUser(msg));
+      if (steerWaiter) steerWaiter(msg);
+      else turns = turns.then(() => handleUser(msg));
     }
   });
   input.on('close', () => { turns.then(() => process.exit(0)); });

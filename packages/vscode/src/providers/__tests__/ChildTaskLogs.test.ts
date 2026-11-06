@@ -5,7 +5,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { openTaskLog, type ChildDirectory, type ChildPlanEntry, type ChildPlanHandle, type ChildControlOutcome, type ChildTaskControl, type TaskLogLocation } from '@ordewell/core';
 import { CHILD_TASK_LOG_VIEW_TYPE, ChildTaskLogs } from '../ChildTaskLogs';
-import type { HostToTaskLog, TaskLogStatus } from '../../shared/taskLogProtocol';
+import type { HostToTaskLog, TaskLogStatus } from '@ordewell/ui/protocol';
 import { __panels, __resetPanels, createFakeWebviewPanel, window } from '../../test/vscode.mock';
 
 const createWebviewPanel = vscode.window.createWebviewPanel as unknown as ReturnType<typeof vi.fn>;

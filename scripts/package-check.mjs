@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// What a user actually installs: the four npm tarballs and the VSIX. Nothing
-// else in CI looks inside them, so a missing main/exports/bin target, a LICENSE
+// What a user actually installs: the four npm tarballs, the VSIX and the
+// desktop app's installers. Nothing else in CI looks inside them, so a missing main/exports/bin target, a LICENSE
 // or NOTICE npm left out of the allowlist, or a bundle that dies before --help
 // is otherwise first found by `npm publish` or by a user. The CLI's CJS bundle
 // once required ESM-only string-width at load and failed exactly that way on
@@ -9,6 +9,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { checkDesktopPackage } from './desktop-package-check.mjs';
 
 const root = process.cwd();
 let failures = 0;
@@ -177,6 +178,13 @@ try {
       ok(`${vsix} keeps containers behind ordewell.containersOffered`);
     }
   }
+
+  // The desktop installers, after "Package the desktop app". Its own module
+  // holds the checks so a test can drive them without packaging anything.
+  console.log('\nDesktop app');
+  const desktop = await checkDesktopPackage(root);
+  for (const message of desktop) fail(message);
+  if (!desktop.length) ok('installers, unpacked daemon closure, fuses and notices');
 } finally {
   rmSync(packDir, { recursive: true, force: true });
 }

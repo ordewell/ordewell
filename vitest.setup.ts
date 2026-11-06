@@ -9,6 +9,13 @@ import { homeEnv, patient, removeDir, setEnv } from './packages/core/src/testEnv
 // starts one as a side effect, and every child process they spawn.
 process.env.ORDEWELL_NO_VERSION_CHECK = '1';
 
+// A host agent session (an Ordewell planner, say) exports the planner it chose.
+// CI has none, and a test must not plan with the host's agent: the settings
+// route would spawn that CLI's model discovery and hang on a fresh HOME.
+delete process.env.AI_PROVIDER;
+delete process.env.ORCHESTRATOR_MODEL;
+delete process.env.ORDEWELL_PLANNER_EFFORT;
+
 // Every test file runs under a home of its own, on every platform. One that
 // started a daemon or the CLI without setting a home wrote the user's real
 // ~/.ordewell, and on Windows so did every one that set HOME alone, which no

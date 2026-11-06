@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { removalPrompt, taskFromDraft } from '../taskEdit';
-import type { TaskDraft } from '../../shared/protocol';
+import type { TaskDraft } from '@ordewell/ui/protocol';
 import { createTask, type Task } from '@ordewell/core';
 
 function chain(): Task[] {

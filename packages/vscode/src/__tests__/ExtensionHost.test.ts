@@ -21,6 +21,7 @@ vi.mock('@ordewell/core', async (importOriginal) => ({
   get DELEGATION_OFFERED() { return delegation.offered; },
 }));
 
+import { SessionView } from '@ordewell/ui/host';
 import { ChatViewProvider as RealChatViewProvider } from '../providers/ChatViewProvider';
 import { createExtension, type ExtensionServices } from '../ExtensionHost';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
@@ -28,7 +29,7 @@ import type { SecretStore, ApiProvider } from '../adapters/SecretStore';
 import type { VsCodeConfig } from '../adapters/VsCodeConfig';
 import type { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
 import type { VsCodeNotification } from '../adapters/VsCodeNotification';
-import type { HostToWebview, WebviewToHost } from '../shared/protocol';
+import type { HostToWebview, WebviewToHost } from '@ordewell/ui/protocol';
 import type { ChildPlanHandle } from '@ordewell/core';
 import { __panels, __resetPanels, commands, createFakeWebviewPanel, window } from '../test/vscode.mock';
 
@@ -49,13 +50,19 @@ function planWithOneTask(goal: string): LegacyPlanState {
 
 function fakeChat() {
   const messages = new vscode.EventEmitter<WebviewToHost>();
+  const conversation = {
+    receive: vi.fn(), note: vi.fn(), holdPrompt: vi.fn(), unsendPrompt: vi.fn(),
+    nextPrompt: vi.fn(() => undefined), stop: vi.fn(), reset: vi.fn(), reload: vi.fn(), resync: vi.fn(), waiting: vi.fn(),
+  };
+  const run = { receive: vi.fn(), adopt: vi.fn(), reset: vi.fn(), clearIsolation: vi.fn() };
+  // The real fold's cues over spied folds: what the host does with a message
+  // is under test, and every message still reaches the two spies.
+  const view = Object.assign(new SessionView(() => {}), { conversation, run });
   const provider = {
     onMessage: messages.event,
-    conversation: {
-      receive: vi.fn(), note: vi.fn(), holdPrompt: vi.fn(), unsendPrompt: vi.fn(),
-      nextPrompt: vi.fn(() => undefined), stop: vi.fn(), reset: vi.fn(), reload: vi.fn(), resync: vi.fn(), waiting: vi.fn(),
-    },
-    run: { receive: vi.fn(), adopt: vi.fn(), reset: vi.fn(), clearIsolation: vi.fn() },
+    view,
+    conversation,
+    run,
     resendAllState: vi.fn(),
     restoreChat: vi.fn(),
     replaceConversation: vi.fn(),
@@ -80,7 +87,6 @@ function fakeChat() {
     setModelDiscoveryErrors: vi.fn(),
     setPlannerBackends: vi.fn(),
     clearIsolationHandoff: vi.fn(),
-    sendTaskOutput: vi.fn(),
     reveal: vi.fn(),
     setAccountLimits: vi.fn(),
     postMessage: vi.fn(),
@@ -582,6 +588,55 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     h.sessionDeps.current?.broadcast({ type: 'task_updated', taskId: 't1', changes: { status: 'failed' } });
 
     await vi.waitFor(() => expect(h.chat.provider.setPlannerBackends).toHaveBeenCalledTimes(1));
+  });
+
+  it('says detection is under way, and the planner list that arrives ends it', async () => {
+    const installation = fakeRunnerInstallation(['claude-code']);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    installation.plannerUsability.mockImplementation(async () => {
+      await gate;
+      return { usable: true };
+    });
+    const local = harness({ runnerInstallation: installation });
+    try {
+      const started = local.host.start();
+      await vi.waitFor(() => expect(local.chat.provider.postMessage)
+        .toHaveBeenCalledWith({ type: 'agentDetection', state: 'detecting' }));
+      release();
+      await vi.waitFor(() => expect(local.chat.provider.setPlannerBackends).toHaveBeenCalled());
+      await started;
+    } finally {
+      release();
+      fs.rmSync(local.workspace, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a failed detection with why, and Retry asks the host again', async () => {
+    const installation = fakeRunnerInstallation(['claude-code']);
+    let fail = true;
+    installation.plannerUsability.mockImplementation(async () => {
+      if (fail) throw new Error('the install probe failed');
+      return { usable: true };
+    });
+    const local = harness({ runnerInstallation: installation });
+    try {
+      await local.host.start();
+      await vi.waitFor(() => expect(local.chat.provider.postMessage).toHaveBeenCalledWith({
+        type: 'agentDetection', state: 'failed', error: 'the install probe failed',
+      }));
+
+      fail = false;
+      local.chat.provider.postMessage.mockClear();
+      local.chat.provider.setPlannerBackends.mockClear();
+      local.chat.messages.fire({ type: 'refreshModels' });
+
+      await vi.waitFor(() => expect(local.chat.provider.postMessage)
+        .toHaveBeenCalledWith({ type: 'agentDetection', state: 'detecting' }));
+      await vi.waitFor(() => expect(local.chat.provider.setPlannerBackends).toHaveBeenCalled());
+    } finally {
+      fs.rmSync(local.workspace, { recursive: true, force: true });
+    }
   });
 
   it('seeds the run view when the webview reconnects, so a task waiting on a runner approval keeps its badge', async () => {

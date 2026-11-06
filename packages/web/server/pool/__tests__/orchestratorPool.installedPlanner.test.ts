@@ -409,12 +409,13 @@ describe('OrchestratorPool default planner', () => {
     pool.destroyAll();
   });
 
-  it('leaves an installed runner its own usability refuses out of the list', async () => {
-    // An installed CLI can still be unspawnable (a Windows `.cmd` shim).
-    // Offering it would fail at spawn; VS Code already hides it.
+  it('keeps an installed runner its own usability refuses, with the reason it cannot start', async () => {
+    // An installed CLI can still be unspawnable (a Windows `.cmd` shim) or too
+    // old for its ACP profile. Dropping it would leave every surface calling a
+    // present binary "not installed"; the row says why instead (ADR-0009).
     const usability = async (runner: string): Promise<PlannerUsability> => ({
       usable: runner === 'claude-code',
-      ...(runner === 'codex' ? { reason: 'codex is not directly spawnable' } : {}),
+      ...(runner === 'codex' ? { reason: 'codex: found 0.9.0, needs 1.0.0 or later.' } : {}),
     });
     const installation = {
       plannerUsability: vi.fn(usability),
@@ -429,7 +430,11 @@ describe('OrchestratorPool default planner', () => {
 
     const runners = await pool.getInstalledRunners();
 
-    expect(runners.map((r) => r.id)).toEqual(['claude-code']);
+    expect(runners).toEqual([
+      expect.objectContaining({ id: 'claude-code' }),
+      expect.objectContaining({ id: 'codex', usable: false, reason: 'codex: found 0.9.0, needs 1.0.0 or later.' }),
+    ]);
+    expect(runners.find((r) => r.id === 'claude-code')).not.toHaveProperty('usable');
     pool.destroyAll();
   });
 

@@ -1,0 +1,920 @@
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { taskCommand, useRunnerCommands, useTaskCommands } from './RunnerCommands';
+import SubTaskCard from './SubTaskCard';
+import { TaskAssignmentReadout } from './TaskAssignment';
+import TaskSummary, { TaskSummaryBadges } from './TaskSummary';
+import type { StatusLook } from '../../design/status';
+import ModelSelector from './ModelSelector';
+import DependencyPicker from './DependencyPicker';
+import SkillChips from './SkillChips';
+import TaskHandoff from './TaskHandoff';
+import { QUEUE_TITLE, SendKeyHint, isSendNowKey } from './PendingMessages';
+import { lastLine } from '../taskOutput';
+import { useDelegationOffered } from '../delegationOffered';
+import { checkLabel, verdictSummary } from '../checkLabel';
+import { useFollowOutput } from '../followOutput';
+import { blockedByLabel, dependencyCandidates, capConflictFiles, cardEditable, handoffFindingsText, holdLabel, pausedOnLimit, scriptTaskText, skippedLabel, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
+import type { Task, DiscoveredModel, TaskModelAssignment, RunTask, TaskRowAction, TaskRowView, TaskStatusKind, AssignmentScope } from '@ordewell/core';
+
+export interface RunnerMode {
+  id: string;
+  label: string;
+  description: string;
+  /** Tagged `autonomous: true` on the manifest — runs without permission prompts. */
+  autonomous?: boolean;
+  /** Why this host cannot run the mode; the option is listed, not selectable. */
+  unavailable?: string;
+}
+
+function modeText(mode: RunnerMode | undefined): string | undefined {
+  return mode && `${mode.label}: ${mode.unavailable ?? mode.description}`;
+}
+
+export interface RunnerOption {
+  id: string;
+  displayName: string;
+}
+
+/**
+ * A task's entry in the run view. Its status is the newest word while a run
+ * streams — `task_started` reaches it before the plan refresh does — so the
+ * card's editability reads it when present.
+ */
+export type TaskCardRun = Pick<RunTask, 'idleSince' | 'completionReceived' | 'attaching' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason' | 'loopStranded' | 'handoff' | 'verdict' | 'loopRound' | 'attempted' | 'attemptUsage' | 'delegation'> & { status?: Task['status'] };
+
+/** A signed-out agent's way in, as its pills word it, and the Log in that runs it where Ordewell can (ADR-0052). */
+export interface RunnerSignInView {
+  label: string;
+  hint: string;
+  logIn?: () => void;
+}
+
+interface TaskCardProps {
+  task: Task;
+  models: DiscoveredModel[];
+  modes?: RunnerMode[];
+  /** Every runner's catalog, keyed by runner id — used to re-scope a subtask's
+   *  own pickers to ITS `assignedRunner` rather than the parent's (a subtask
+   *  can run on a different runner than its parent). */
+  modelsByRunner?: Partial<Record<string, DiscoveredModel[]>>;
+  modesByRunner?: Record<string, RunnerMode[]>;
+  runners?: RunnerOption[];
+  /** The enabled runners and allowlist an assignment is read against; absent until the host has sent them, and then no task is flagged. */
+  runnerScope?: AssignmentScope;
+  effectiveRunner?: string;
+  configuredProviders?: ('openrouter' | 'google' | 'openai_compatible')[];
+  modelApiMapping?: Record<string, ('openrouter' | 'google' | 'openai_compatible')[]>;
+  isExecuting?: boolean;
+  /** Anything that could still move a task on without being asked: a queued start or usage-limit hold too, not only a live attempt. Defaults to `isExecuting`. */
+  runActive?: boolean;
+  /** Tail of this task's live runner output, if any has arrived. */
+  output?: string;
+  /**
+   * This task's own status as the run view holds it (#S8c): its stall mark,
+   * runner approvals, isolation and merge gate. Absent before the host has
+   * folded the run, in which case the plan's own fields are all there is.
+   */
+  run?: TaskCardRun;
+  /** Every task's run entry, keyed by id, so a subtask card can read its own hold. */
+  runsByTask?: ReadonlyMap<string, RunTask>;
+  /** Opt in to resolving this task's merge conflict as an AI task. */
+  onResolveConflict?: (taskId: string) => void;
+  dependentCount?: number;
+  /** The task list this task belongs to — the dependency editor's candidates and the tree its dependency references are labelled against. */
+  siblings?: Task[];
+  onDependenciesChange?: (taskId: string, dependencies: string[]) => void;
+  onRunnerChange?: (taskId: string, runner: string) => void;
+  onModelChange?: (taskId: string, assignment: TaskModelAssignment) => void;
+  /** Called when this task's model dropdown opens, so a stale/degraded catalog self-heals. */
+  onModelsRefreshNeeded?: () => void;
+  onModeChange?: (taskId: string, mode: string) => void;
+  /** Change versus ops (ADR-0020); offered until the task starts. */
+  onOpsChange?: (taskId: string, ops: boolean) => void;
+  taskSkills?: { name: string; description: string }[];
+  onSkillsChange?: (taskId: string, skills: string[]) => void;
+  onRemoveTask?: (taskId: string) => void;
+  onPromptChange?: (taskId: string, prompt: string) => void;
+  onRetry?: (taskId: string) => void;
+  onSkip?: (taskId: string) => void;
+  onCancel?: (taskId: string) => void;
+  /** Keep a task paused on a usage limit from resuming on its own (#84). */
+  onCancelResume?: (taskId: string) => void;
+  /** Resume a task paused on a usage limit now, in its saved session, once the user says the limit has reset. */
+  onResumeNow?: (taskId: string) => void;
+  onForceStart?: (taskId: string) => void;
+  onMarkComplete?: (taskId: string) => void;
+  onMarkIncomplete?: (taskId: string) => void;
+  /** Revert the task's landed work (ADR-0054); the host confirms what goes with it. */
+  onRevert?: (taskId: string) => void;
+  onRunTask?: (taskId: string) => void;
+  /** Message the running or waiting task from its card (ADR-0018, M1); a plain message goes through the command seam. */
+  onSendMessage?: (taskId: string, text: string) => void;
+  /** Force send to the running task from its card (ADR-0023, F1): interrupt its turn and deliver this next. */
+  onSendMessageNow?: (taskId: string, text: string) => void;
+  /** Open (or focus) this task's log tab (ADR-0018, V1). */
+  onOpenLog?: (taskId: string) => void;
+  onOpenChild?: (taskId: string) => void;
+  /** Each signed-out agent's way in, keyed by runner id. */
+  runnerSignIn?: Readonly<Record<string, RunnerSignInView>>;
+  /** Controlled expansion. When both are supplied the parent owns which card is
+   *  open (an accordion); omitted, the card keeps its own state. */
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
+  /**
+   * A row is the plan panel's (docs/desktop/design.md, W4): collapsed, only
+   * the three-line summary, its attention actions on the status line; open,
+   * the same editors and actions as a card.
+   */
+  variant?: 'card' | 'row';
+  /** The status a row draws, where the host knows more than the task: a passed task whose work is not merged waits for merge. */
+  status?: StatusLook;
+}
+
+const STATUS_BADGE: Record<TaskStatusKind, { label: string; cls: string }> = {
+  done: { label: 'Done', cls: 'status-completed' },
+  failed: { label: 'Failed', cls: 'status-failed' },
+  running: { label: 'Running', cls: 'status-running' },
+  quiet: { label: 'Stalled', cls: 'status-stalled' },
+  blocked: { label: 'Blocked', cls: 'status-blocked' },
+  skipped: { label: 'Skipped', cls: 'status-skipped' },
+  todo: { label: 'To do', cls: 'status-pending' },
+  awaiting: { label: 'Awaiting User', cls: 'status-blocked' },
+};
+
+/** The status badge: what an awaiting task waits on, a report received, a runner still connecting Ordewell's tools, why it is held, the failure a blocked one waits on, or why one was skipped, outranks the generic word. */
+export function statusBadge(row: Pick<TaskRowView, 'status' | 'awaiting' | 'receipt' | 'attaching' | 'blockedBy' | 'skipReason' | 'holdReason'>): { label: string; cls: string } {
+  const badge = STATUS_BADGE[row.status];
+  if (row.status === 'skipped') return { ...badge, label: skippedLabel(row.skipReason) };
+  if (row.awaiting) return { ...badge, label: row.awaiting };
+  if (row.receipt) return { ...badge, label: row.receipt };
+  if (row.attaching) return { ...badge, label: row.attaching };
+  if (row.holdReason) return { ...badge, label: holdLabel(row.holdReason) };
+  return { ...badge, label: row.blockedBy ? blockedByLabel(row.blockedBy) : badge.label };
+}
+
+/** A skip or block reason can run to a sentence: it is cut to the row it
+ *  shares with the dependency badges, and a click unfolds the whole of it. */
+export function StatusBadge({ status }: { status: { label: string; cls: string } }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [clipped, setClipped] = useState(false);
+  const [open, setOpen] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => setClipped(el.scrollWidth > el.clientWidth));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  // Once open it no longer overflows, so it stays a toggle until folded back.
+  const toggles = clipped || open;
+  const toggle = (): void => setOpen(o => !o);
+  return (
+    <span className="task-status-slot">
+      <span ref={ref} className={`task-status-badge ${status.cls}${open ? ' expanded' : ''}${toggles ? ' toggles' : ''}`}
+        title={toggles && !open ? status.label : undefined}
+        {...(toggles && {
+          role: 'button', tabIndex: 0, 'aria-expanded': open,
+          onClick: (e: React.MouseEvent) => { e.stopPropagation(); toggle(); },
+          onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); toggle(); } },
+        })}>
+        {status.label}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * Mark complete / Mark not done, at the bottom of a task's expanded details and
+ * nowhere else. The host asks the user to confirm an AI or script task's
+ * override, and the core refuses it while a run could advance the task
+ * (ADR-0029); the button is held back here as well so the refusal is explained
+ * before the click. A manual task is the user's own sign-off, so a run never
+ * holds it up.
+ */
+export function TaskMarkControl({ taskId, row, runActive, hint, onMarkComplete, onMarkIncomplete }: {
+  taskId: string;
+  row: Pick<TaskRowView, 'status' | 'mark' | 'kind'>;
+  /** The run could still move this task on without being asked — a queued start or a usage-limit hold included. */
+  runActive: boolean;
+  /** Why a manual task cannot be signed off yet; the button waits for it. */
+  hint?: string;
+  onMarkComplete?: (taskId: string) => void;
+  onMarkIncomplete?: (taskId: string) => void;
+}) {
+  const handler = row.mark === 'uncomplete' ? onMarkIncomplete : onMarkComplete;
+  if (!handler || row.status === 'running' || row.status === 'quiet') return null;
+  const stopFirst = runActive && row.kind !== 'user';
+  const label = row.mark === 'uncomplete' ? 'Mark not done' : 'Mark complete';
+  const why = stopFirst ? 'Stop the run first: the run could still move this task on' : hint;
+  return (
+    <div className="task-mark-control">
+      <button type="button" className="task-mark-btn" disabled={!!why} title={why ?? label}
+        onClick={(e) => { e.stopPropagation(); handler(taskId); }}>
+        {label}
+      </button>
+      {why && <span className="task-mark-hint">{why}</span>}
+    </div>
+  );
+}
+
+/**
+ * Revert, beside the mark control: only where core's isolation mark says the
+ * landing can be reverted. The button names its task, since a plan holds many
+ * of them; the host's modal lists what else goes with it.
+ */
+export function TaskRevertControl({ taskId, title, row, onRevert }: {
+  taskId: string;
+  title: string;
+  row: Pick<TaskRowView, 'revertible' | 'orderLabel'>;
+  onRevert?: (taskId: string) => void;
+}) {
+  if (!onRevert || !row.revertible) return null;
+  return (
+    <div className="task-mark-control">
+      <button type="button" className="task-mark-btn" aria-label={`Revert task #${row.orderLabel} ${title}`}
+        title="Take this landed work back off the integration branch, with the tasks that landed on top of it"
+        onClick={(e) => { e.stopPropagation(); onRevert(taskId); }}>
+        Revert
+      </button>
+    </div>
+  );
+}
+
+const ACTION_CLASS: Record<TaskRowAction, string> = {
+  cancel: 'cancel', 'resume-now': 'start', 'cancel-resume': 'cancel', skip: 'skip', 'force-start': 'start', complete: 'start', uncomplete: 'skip',
+};
+
+const ACTION_LABELS: Record<TaskRowAction, string> = {
+  cancel: 'Cancel', 'resume-now': 'Resume Now', 'cancel-resume': 'Don\'t Resume', skip: 'Skip', 'force-start': 'Start', complete: 'Mark Complete', uncomplete: 'Mark Not Done',
+};
+
+/**
+ * The header's controls for a task paused on a usage limit (#84), shown
+ * whether or not the plan reads as executing: the pause holds the run, so a
+ * held run's card would otherwise hide them.
+ */
+export function UsageLimitControls({ taskId, row, onResumeNow, onCancelResume }: {
+  taskId: string;
+  row: Pick<TaskRowView, 'resumes' | 'actions'>;
+  onResumeNow?: (taskId: string) => void;
+  onCancelResume?: (taskId: string) => void;
+}) {
+  return (
+    <>
+      {row.resumes && (
+        <span className="task-isolation-badge gate" title="Its runner hit its usage limit. The task resumes on its own once the limit resets.">
+          {row.resumes}
+        </span>
+      )}
+      {row.actions.includes('resume-now') && onResumeNow && (
+        <button type="button" className="task-log-open-btn"
+          onClick={(e) => { e.stopPropagation(); onResumeNow(taskId); }}
+          title="The limit has reset: resume it in its saved session now">
+          Resume now
+        </button>
+      )}
+      {row.resumes && onCancelResume && (
+        <button type="button" className="task-log-open-btn"
+          onClick={(e) => { e.stopPropagation(); onCancelResume(taskId); }}
+          title="Keep it from resuming on its own: resume or retry it yourself once the limit resets">
+          Don't resume
+        </button>
+      )}
+    </>
+  );
+}
+
+/**
+ * The buttons a running plan offers on a card, in the order core lays them out.
+ * `onRetry` is a failed task's fresh retry, first as in the TUI: core refuses
+ * Run Task on a failed task, so it is the task's own way back.
+ */
+export function TaskActions({ taskId, actions, labels, handlers, onRetry, signIn }: {
+  taskId: string;
+  actions: TaskRowAction[];
+  labels: Record<TaskRowAction, string>;
+  handlers: Partial<Record<TaskRowAction, (taskId: string) => void>>;
+  onRetry?: (taskId: string) => void;
+  /** The way into the signed-out agent a failed task ran on: a retry before it would fail the same way. */
+  signIn?: RunnerSignInView;
+}) {
+  const logIn = signIn?.logIn;
+  return (
+    <div className="task-actions">
+      {signIn && logIn && (
+        <button className="task-action-btn start" aria-label={`Log in to ${signIn.label}`} title={signIn.hint}
+          onClick={(e) => { e.stopPropagation(); logIn(); }}>
+          Log in
+        </button>
+      )}
+      {onRetry && (
+        <button className="task-action-btn start" onClick={(e) => { e.stopPropagation(); onRetry(taskId); }}>
+          Retry
+        </button>
+      )}
+      {actions.filter((action) => action !== 'complete' && action !== 'uncomplete').map((action) => {
+        const handler = handlers[action];
+        return handler && (
+          <button key={action} className={`task-action-btn ${ACTION_CLASS[action]}`} onClick={(e) => { e.stopPropagation(); handler(taskId); }}>
+            {labels[action]}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * A compact composer on a running or waiting task's card (ADR-0018, M1;
+ * ADR-0023, F1). Send is the plain task message the log sends; Ctrl+Enter
+ * interrupts the running turn and delivers this one next, as `ctrl-s` does in
+ * the TUI and in the log. A task paused on a usage limit has no turn to
+ * interrupt: its message resumes it, after the reset notice.
+ */
+export function TaskMessageBox({ taskId, onSend, onSendNow, working = false, resumes = false }: {
+  taskId: string;
+  onSend: (taskId: string, text: string) => void;
+  onSendNow: (taskId: string, text: string) => void;
+  /** A turn is live, so Enter queues and Ctrl+Enter sends now. */
+  working?: boolean;
+  resumes?: boolean;
+}) {
+  const [text, setText] = useState('');
+  const [error, setError] = useState('');
+  const { commands, invoke } = useTaskCommands(taskId);
+  const completion = useRunnerCommands(text, setText, commands);
+  const canSend = text.trim().length > 0;
+  const send = () => {
+    if (!canSend) return;
+    try {
+      const command = taskCommand(text.trim(), commands);
+      if (command && !resumes) invoke(command.name, command.args);
+      else onSend(taskId, text.trim());
+      setError('');
+      setText('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+  const nativeSlash = text.trim().startsWith('/') && commands.length > 0;
+  const queues = working && canSend && !resumes && !nativeSlash;
+  const sendNow = () => { if (nativeSlash) { send(); return; } if (canSend) { onSendNow(taskId, text.trim()); setText(''); } };
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.nativeEvent.isComposing || completion.keyDown(e)) return;
+    if (e.key !== 'Enter' || e.shiftKey) return;
+    e.preventDefault();
+    if (isSendNowKey(e) && !resumes) sendNow(); else send();
+  };
+  return (
+    <div className="task-message-box" onClick={(e) => e.stopPropagation()}>
+      {completion.palette}
+      {error && <span className="task-command-error" role="alert">{error}</span>}
+      {/* One row in a card as narrow as the plan panel: the key lives on the button's title, so the placeholder fits. */}
+      <textarea className="task-message-input" value={text} rows={1}
+        placeholder={resumes ? 'A message to resume it with…' : 'Message the task…'}
+        onChange={(e) => completion.change(e.target.value)} onKeyDown={onKeyDown} />
+      <button type="button" className="task-message-send" disabled={!canSend} onClick={send}
+        title={queues ? QUEUE_TITLE : `${resumes ? 'Resume' : 'Send'} (Enter)`}>
+        {resumes ? 'Resume' : 'Send'}
+      </button>
+      {queues && <SendKeyHint />}
+    </div>
+  );
+}
+
+const DEFAULT_MODES: RunnerMode[] = [
+  { id: 'build', label: 'Build', description: 'Edit files and run commands' },
+  { id: 'plan', label: 'Read-only', description: 'Ordewell commands; lands nothing' },
+];
+
+/**
+ * The runner list a task's picker offers. The task's own runner is always in it,
+ * even when missing from the installed set (uninstalled since planning, or a
+ * model discovery didn't see): a select that dropped it would fall back to
+ * displaying some other runner and misreport what the task will be spawned on.
+ */
+/** The first line with words on it: a prompt or summary often opens on a blank one. */
+function firstLine(text: string): string {
+  return text.split(/\r?\n/).map((line) => line.trim()).find((line) => line !== '') ?? '';
+}
+
+/**
+ * A long part of an open card, folded to its name and one line of it so the
+ * card stays a summary until the reader asks for more. It starts folded each
+ * time the card opens, since the fold unmounts with the card's body.
+ */
+function TaskFold({ label, preview, className, children }: {
+  label: string;
+  preview: string;
+  className: string;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={`task-fold ${className}${open ? ' open' : ''}`}>
+      <button type="button" className="task-fold-head" aria-expanded={open} title={preview}
+        onClick={(e) => { e.stopPropagation(); setOpen(!open); }}>
+        <span className="task-fold-chevron" aria-hidden="true">{open ? '\u25BE' : '\u25B8'}</span>
+        <span className="task-fold-label">{label}</span>
+        {!open && preview && <span className="task-fold-preview">{preview}</span>}
+      </button>
+      {open && <div className="task-fold-body">{children}</div>}
+    </div>
+  );
+}
+
+export function runnerOptionsFor(runners: RunnerOption[] | undefined, assignedRunner: string): RunnerOption[] {
+  if (!runners || runners.length === 0) return [];
+  if (runners.some((r) => r.id === assignedRunner)) return runners;
+  return [...runners, { id: assignedRunner, displayName: assignedRunner }];
+}
+
+/**
+ * A task's row as its card draws it: the plan's task with the run's word on
+ * everything status-only. Exported so a list's header counts each task by the
+ * same reading its row shows.
+ */
+export function cardRowView(task: Task, run: TaskCardRun | undefined, context: { tasks?: Task[]; modes?: RunnerMode[]; runnerScope?: AssignmentScope }): TaskRowView {
+  // The run's verdict and round are the newer word on a loop's check: they say whether it is between rounds (ADR-0045).
+  return taskRowView({
+    ...task,
+    handoff: run ? run.handoff : task.handoff,
+    idleSince: run?.idleSince ?? null,
+    completionReceived: run?.completionReceived,
+    attaching: run?.attaching,
+    awaitingApproval: run?.awaitingApproval ?? 0,
+    isolation: run?.isolation ?? null,
+    mergeGate: run?.mergeGate,
+    holdReason: run?.holdReason,
+    loopStranded: run?.loopStranded === true,
+    continuable: run?.continuable === true,
+    waitsForApproval: run?.waitsForApproval === true,
+    attempted: run?.attempted ?? task.attempted,
+    ...(run?.attemptUsage ? { attemptUsage: run.attemptUsage } : {}),
+    ...(run?.delegation ? { delegation: run.delegation } : {}),
+    ...(run ? { verdict: run.verdict ?? task.verdict, loopRound: run.loopRound } : {}),
+  }, { tasks: context.tasks, modes: context.modes ?? DEFAULT_MODES, runnerScope: context.runnerScope });
+}
+
+export default function TaskCard({ task, run, runsByTask, models, modes, modelsByRunner, modesByRunner, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, runActive, output, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRevert, onRunTask, onSendMessage, onSendMessageNow, onOpenLog, onOpenChild, runnerSignIn, expanded: expandedProp, onExpandedChange, variant = 'card', status: statusLook }: TaskCardProps) {
+  const [internalExpanded, setInternalExpanded] = useState(false);
+  const isControlled = expandedProp !== undefined;
+  const expanded = isControlled ? expandedProp : internalExpanded;
+  const setExpanded = (next: boolean) => {
+    if (isControlled) onExpandedChange?.(next);
+    else setInternalExpanded(next);
+  };
+  const [editingPrompt, setEditingPrompt] = useState<string | null>(null);
+  const [editingDeps, setEditingDeps] = useState(false);
+  const [completedSteps, setCompletedSteps] = useState<Set<number>>(new Set());
+  const [offeringResolve, setOfferingResolve] = useState(false);
+  const sortedSubtasks = [...task.subtasks].sort((a, b) => a.order - b.order);
+
+  // The run's word on this task: absent until the host has folded a run, and
+  // then authoritative over the plan for everything status-only.
+  const idleSince = run?.idleSince ?? null;
+  const awaitingApproval = run?.awaitingApproval ?? 0;
+  const isolation = run?.isolation ?? null;
+  const handoff = run ? run.handoff : task.handoff;
+
+  const isolatedWork = isolation && isolation.state !== 'none' ? isolation : null;
+  const activeModes = modes && modes.length > 0 ? modes : DEFAULT_MODES;
+  const modeId = task.taskMode ?? activeModes[0]?.id ?? 'build';
+  const row = cardRowView(task, run, { tasks: siblings, modes: activeModes, runnerScope });
+  // Nothing of a delegated task's child shows where delegation is not offered (ADR-0055 D21).
+  const delegated = useDelegationOffered() ? row.delegated : null;
+  // Its chat exists only once an attempt has started; status alone never says so.
+  const chatAvailable = row.chatAvailable;
+  const conflictFiles = isolatedWork?.conflictFiles ?? [];
+  const repair = isolatedWork?.repair ?? null;
+
+  const outputRef = useFollowOutput<HTMLPreElement>([output]);
+
+  const status = statusBadge(row);
+  const isUserTask = task.type === 'user';
+  // While anything could still move the plan on (a live attempt, a start, a
+  // scheduler waiting on a manual task or a hold), a task that has not itself
+  // started keeps its editors; execution, a start the run already shows, and a
+  // settled task do not. The host's edit guard reads the same fact. The run's
+  // status is the newer word: `task_started` reaches it first.
+  const canEdit = cardEditable(runActive ?? !!isExecuting, { status: run?.status ?? task.status }, run
+    ? { awaitingApproval, isolation }
+    : undefined);
+
+  // A draft is not the plan's: once execution reaches the task, drop it rather
+  // than bring it back if the task returns to pending.
+  useEffect(() => {
+    if (canEdit) return;
+    setEditingPrompt(null);
+    setEditingDeps(false);
+  }, [canEdit]);
+
+  const handlePromptSave = () => {
+    if (editingPrompt !== null && editingPrompt !== task.prompt) {
+      onPromptChange?.(task.id, editingPrompt);
+    }
+    setEditingPrompt(null);
+  };
+
+  const handlePromptKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handlePromptSave();
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      setEditingPrompt(null);
+    }
+  };
+
+  const toggleStep = (order: number) => {
+    setCompletedSteps((prev) => {
+      const next = new Set(prev);
+      if (next.has(order)) next.delete(order); else next.add(order);
+      return next;
+    });
+  };
+
+  const allStepsComplete = task.userSteps?.every((s) => completedSteps.has(s.order)) ?? false;
+
+
+
+  const runnerOptions = runnerOptionsFor(runners, task.assignedRunner);
+  const canEditDeps = canEdit && !!onDependenciesChange;
+  // Only a running or waiting AI task has a runner turn to reach; a manual task
+  // or one not yet started has none. One paused on a usage limit is reached
+  // by resuming it, which needs its saved session.
+  const paused = pausedOnLimit(task);
+  const failed = task.status === 'failed';
+  const resumable = row.actions.includes('resume-now');
+  const canMessage = task.type === 'ai'
+    && (row.status === 'running' || row.status === 'quiet' || (row.status === 'awaiting' && (!paused || resumable)))
+    && !!onSendMessage && !!onSendMessageNow;
+
+  const asRow = variant === 'row';
+  // A force start: core approves it, and never starts it before its dependencies finish.
+  const approveButton = row.waitsForApproval && onForceStart && (
+    <button type="button" className={asRow ? 'task-row-action primary' : 'task-log-open-btn'}
+      onClick={(e) => { e.stopPropagation(); onForceStart(task.id); }}
+      title="Approve it to run: it starts once its dependencies finish">
+      Approve
+    </button>
+  );
+  // Approvals arrive mid-turn and leave the status alone (ADR-0018, A1), so
+  // waiting on one is a badge beside it, which opens the log where the
+  // request is answered.
+  const approvalsButton = row.approvals && chatAvailable && (
+    <button type="button" className={asRow ? 'task-row-action' : 'task-approval-badge'}
+      onClick={(e) => { e.stopPropagation(); onOpenLog?.(task.id); }}
+      title="The runner is waiting for you to allow or deny a tool call: open the chat to answer">
+      {asRow ? 'Answer' : row.approvals}
+    </button>
+  );
+  // Run Task starts a task that has not run yet, or runs a passed one again
+  // only through Retry: never one already running, stalled, done or skipped.
+  const runnable = task.type === 'ai' && !failed && row.status !== 'running' && row.status !== 'quiet'
+    && row.status !== 'done' && row.status !== 'skipped';
+
+  return (
+    <div className={`task-with-controls task-with-controls-top${asRow ? ' task-row-item' : ''}${asRow && expanded ? ' expanded' : ''}`}>
+      <div className={`task-card task-${task.type} ${expanded ? 'expanded' : ''}${asRow ? ' task-row-card' : ''}`}>
+        <TaskSummary task={task} row={row} expanded={expanded} onToggle={() => setExpanded(!expanded)}
+          onOpenChat={onOpenLog && (() => onOpenLog(task.id))} badges={asRow}
+          density={asRow ? 'row' : undefined} idleSince={idleSince} status={statusLook}>
+          {delegated && onOpenChild && <button type="button" className={asRow ? 'task-row-action' : undefined} onClick={(e) => { e.stopPropagation(); onOpenChild(task.id); }}>Open subplanner</button>}
+          {delegated && (delegated.counts || delegated.tokens || delegated.stopping) && (
+            <span className="task-delegated-meta">
+              {(delegated.counts || delegated.tokens) && <span className="task-delegated-line">{[delegated.counts, delegated.tokens].filter(Boolean).join(' · ')}</span>}
+              {delegated.stopping && <span className="task-delegated-stopping">{delegated.stopping}</span>}
+            </span>
+          )}
+          {asRow && approveButton}
+          {asRow && approvalsButton}
+        </TaskSummary>
+
+        {/* Collapsed, the newest line is the whole signal — "which test is it on"
+            without having to open the card. A row's status line says enough. */}
+        {!expanded && !asRow && output && (
+          <div className="task-output-peek" onClick={() => setExpanded(true)} title="Show the full tail">
+            {lastLine(output)}
+          </div>
+        )}
+
+        {expanded && (
+          <div className="task-card-body">
+            <p className="task-description">{task.description}</p>
+            {delegated?.goal && <div className="task-delegated-goal"><span className="task-isolation-label">Goal</span> {delegated.goal}</div>}
+
+            {handoff && (
+              <TaskFold label="Handoff" className="task-fold-handoff"
+                preview={[firstLine(handoff.summary), handoffFindingsText(handoff.findingCount)].filter(Boolean).join(' · ')}>
+                <TaskHandoff handoff={handoff} taskName={(id) => taskRefOf(siblings ?? [], id)}
+                  onReadFull={onOpenLog && chatAvailable ? () => onOpenLog(task.id) : undefined} />
+              </TaskFold>
+            )}
+
+            {/* Worktrees are an implementation detail unless something needs the
+                user's attention (US34) — so the branch and path live in the
+                details, and only a conflict earns a header badge. */}
+            {isolatedWork && (
+              <div className="task-isolation">
+                <div className="task-isolation-row"><span className="task-isolation-label">Branch</span><code>{isolatedWork.branch}</code></div>
+                <div className="task-isolation-row"><span className="task-isolation-label">Worktree</span><code>{isolatedWork.worktree}</code></div>
+                {row.repos.length > 0 && (
+                  <div className="task-isolation-row task-isolation-repos"><span className="task-isolation-label">Repos</span><code>{row.repos.join(', ')}</code></div>
+                )}
+                {row.conflict?.repo && (
+                  <div className="task-isolation-row task-isolation-conflict-repo"><span className="task-isolation-label">Conflict</span><code>{row.conflict.repo}</code></div>
+                )}
+                {conflictFiles.length > 0 && (
+                  <div className="task-isolation-row task-isolation-conflict-files"><span className="task-isolation-label">Files</span><code>{capConflictFiles(conflictFiles)}</code></div>
+                )}
+                {repair && (
+                  <div className="task-isolation-row task-isolation-repair"><span className="task-isolation-label">Repair</span><code>{repair.attempt} of {repair.limit}</code></div>
+                )}
+                {row.repaired && (
+                  <div className="task-isolation-row task-isolation-repaired-note">Landed after repairing a conflict in {row.repaired.files}.</div>
+                )}
+                {row.conflict && !row.conflict.resolver && onResolveConflict && (
+                  offeringResolve ? (
+                    <div className="task-isolation-resolve">
+                      <span>Resolve this conflict as a new AI task?</span>
+                      <button className="task-action-btn run" onClick={(e) => { e.stopPropagation(); onResolveConflict(task.id); setOfferingResolve(false); }}>Resolve as a task</button>
+                      <button className="task-action-btn" onClick={(e) => { e.stopPropagation(); setOfferingResolve(false); }}>Cancel</button>
+                    </div>
+                  ) : (
+                    <button className="task-action-btn run" onClick={(e) => { e.stopPropagation(); setOfferingResolve(true); }}>Resolve</button>
+                  )
+                )}
+              </div>
+            )}
+
+            {row.opsChangedFiles && (
+              <div className="task-ops-note warn">This ops task changed tracked files in your checkout, and nothing was committed. Check the changes, then mark it complete or retry it.</div>
+            )}
+            {row.forcedPastGate && (
+              <div className="task-ops-note">Force-started before the work of {row.forcedPastGate.join(', ')} was merged into your branch.</div>
+            )}
+
+            {output && (
+              <div className="task-output">
+                <div className="task-output-header">Runner output (tail)</div>
+                <pre className="task-output-pre" ref={outputRef}>{output}</pre>
+              </div>
+            )}
+
+            {canEditDeps ? (
+              <div className="task-deps">
+                <span className="task-deps-label" onClick={(e) => { e.stopPropagation(); setEditingDeps(!editingDeps); }}
+                  title="Edit dependencies">
+                  Depends on: {row.dependencies.length > 0 ? row.dependencies.join(', ') : 'nothing'}
+                  <span className="task-prompt-edit-icon">&#9998;</span>
+                </span>
+                {editingDeps && (
+                  <DependencyPicker candidates={dependencyCandidates(siblings ?? [], task.id)}
+                    selected={task.dependencies}
+                    onChange={(ids) => onDependenciesChange!(task.id, ids)}
+                    onDone={() => setEditingDeps(false)} />
+                )}
+              </div>
+            ) : task.dependencies.length > 0 && (
+              <div className="task-deps">Depends on: {row.dependencies.join(', ')}</div>
+            )}
+
+            {task.verdict && (
+              <div className={`task-review ${task.verdict.outcome === 'pass' ? 'review-pass' : 'review-neutral'}`}>
+                <div className="task-review-summary">
+                  {verdictSummary(task.verdict)}
+                </div>
+                {task.verdict.checks.length > 0 && (
+                  <div className="task-review-checks">
+                    {task.verdict.checks.map((check) => (
+                      <div key={check.name} className={`check-item ${check.skipped ? 'check-skipped' : check.passed ? 'check-passed' : 'check-failed'}`}>
+                        <span className="check-icon">{check.skipped ? '×' : check.passed ? '✓' : '✗'}</span>
+                        <span className="check-name">{checkLabel(check.name)}</span>
+                        <span className="check-status">{check.skipped ? 'skipped' : check.passed ? 'passed' : 'failed'}</span>
+                        {check.detail && <span className="check-detail">{check.detail}</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!isExecuting && isUserTask && task.userSteps && task.userSteps.length > 0 && (
+              <div className="user-step-guide">
+                <div className="user-step-guide-header">Step-by-Step Guide</div>
+                {task.userSteps.map((step) => (
+                  <div key={step.order} className="user-step-item">
+                    <span className="user-step-number">{step.order}</span>
+                    <span className="user-step-text">{step.instruction}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {isExecuting && isUserTask && task.userSteps && task.userSteps.length > 0 && (
+              <div className="steps-section">
+                <div className="steps-section-header">Steps</div>
+                <ol className="steps-list">
+                  {task.userSteps.sort((a, b) => a.order - b.order).map((step) => (
+                    <li key={step.order} className={`step-item ${completedSteps.has(step.order) ? 'completed' : ''}`}
+                      onClick={(e) => { e.stopPropagation(); toggleStep(step.order); }}>
+                      <span className="step-checkbox">{completedSteps.has(step.order) ? '✓' : '○'}</span>
+                      <span className="step-text">{step.instruction}</span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            )}
+
+            {/* Where the prompt goes, read-only: only the planner writes a script's body, and it is what the user consents to (ADR-0035). */}
+            {row.kind === 'script' && (
+              <div className="task-script">
+                <pre className="task-script-body" aria-label="Script body">{scriptTaskText(task)}</pre>
+                <div className="task-ops-note">Runs in your checkout with no model, once the work it depends on is merged.</div>
+              </div>
+            )}
+
+            {task.type === 'ai' && task.prompt && (
+              <TaskFold label="Prompt" className="task-fold-prompt" preview={firstLine(task.prompt)}>
+                {!canEdit ? (
+                  <div className="task-prompt task-prompt-readonly">{task.prompt}</div>
+                ) : editingPrompt === null ? (
+                  <button type="button" className="task-prompt task-prompt-editable" aria-label={`Edit task prompt: ${task.prompt}`}
+                    onClick={(e) => { e.stopPropagation(); setEditingPrompt(task.prompt ?? ''); }} title="Click to edit prompt">
+                    {task.prompt}
+                    <span className="task-prompt-edit-icon">&#9998;</span>
+                  </button>
+                ) : (
+                  <div className="task-prompt-edit-wrapper">
+                    <textarea className="task-prompt-textarea" value={editingPrompt} onChange={(e) => setEditingPrompt(e.target.value)}
+                      onBlur={handlePromptSave} onKeyDown={handlePromptKeyDown} onClick={(e) => e.stopPropagation()}
+                      rows={Math.min(editingPrompt.split('\n').length, 20)} autoFocus />
+                    <div className="task-prompt-edit-actions">
+                      <span className="task-prompt-edit-hint">Ctrl+Enter to save &middot; Esc to cancel</span>
+                      <button className="task-prompt-save-btn" onMouseDown={(e) => { e.preventDefault(); handlePromptSave(); }}>Save</button>
+                    </div>
+                  </div>
+                )}
+              </TaskFold>
+            )}
+
+            {/* A task execution has reached shows what its pickers decided; one still queued keeps them. */}
+            {!canEdit && <TaskAssignmentReadout task={task} />}
+
+            {/* Runner first: it decides which models, efforts and modes exist below it. */}
+            {canEdit && task.type === 'ai' && runnerOptions.length > 0 && onRunnerChange && (
+              <div className="model-selector" style={{ marginTop: '8px' }}>
+                <label htmlFor={`task-runner-${task.id}`}>Runner</label>
+                <select className="ow-select" id={`task-runner-${task.id}`} value={task.assignedRunner}
+                  onChange={(e) => onRunnerChange(task.id, e.target.value)}>
+                  {runnerOptions.map((r) => (
+                    <option key={r.id} value={r.id}>{r.displayName}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {canEdit && task.type === 'ai' && models.length > 0 && onModelChange && (
+              <ModelSelector models={models} currentModel={task.assignedModel}
+                configuredProviders={configuredProviders} modelApiMapping={modelApiMapping}
+                onChange={(assignment) => onModelChange(task.id, assignment)}
+                onOpen={onModelsRefreshNeeded} />
+            )}
+
+            {canEdit && task.type === 'ai' && onModeChange && (
+              <div className="model-selector" style={{ marginTop: '8px' }}>
+                <label htmlFor={`task-mode-${task.id}`}
+                  title={row.autonomous ? 'Full: runs without permission prompts. /settings changes the level' : undefined}>
+                  Mode{row.autonomous && ' ⚡'}
+                </label>
+                <select className="ow-select" id={`task-mode-${task.id}`} value={modeId} title={modeText(activeModes.find((m) => m.id === modeId))}
+                  onChange={(e) => onModeChange(task.id, e.target.value)}>
+                  {activeModes.map((m) => (
+                    <option key={m.id} value={m.id} disabled={!!m.unavailable}>{modeText(m)}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {task.type === 'ai' && (
+              <SkillChips idPrefix="task" taskId={task.id} skills={task.skills} catalog={taskSkills}
+                onChange={canEdit ? onSkillsChange : undefined} />
+            )}
+
+            {canEdit && onOpsChange && row.opsEditable && (
+              <label className="task-ops-toggle" title="An ops task changes no repository files: it acts on outside systems or on your branch's refs, from your checkout, once the work it depends on is merged.">
+                <input type="checkbox" checked={!!task.ops} onChange={(e) => onOpsChange(task.id, e.target.checked)} />
+                Ops task: runs in your checkout, not a worktree
+              </label>
+            )}
+
+            {!isExecuting && runnable && onRunTask && (
+              <div className="task-run-btn-wrapper">
+                <button className="task-action-btn run" onClick={(e) => { e.stopPropagation(); onRunTask(task.id); }}>
+                  Run Task
+                </button>
+              </div>
+            )}
+
+            {sortedSubtasks.length > 0 && (
+              <div className="subtasks">
+                {sortedSubtasks.map((sub) => {
+                  // A subtask can run on a different runner than its parent, so its
+                  // pickers must be scoped to ITS OWN assignedRunner, not the
+                  // parent's — reusing the parent's `models`/`modes` here would
+                  // show the wrong runner's catalog (or none at all).
+                  const subRunner = sub.assignedRunner;
+                  const subRunnerModels = subRunner ? modelsByRunner?.[subRunner] : undefined;
+                  const subModels = subRunnerModels && subRunnerModels.length > 0 ? subRunnerModels : models;
+                  const subModes = subRunner ? (modesByRunner?.[subRunner] ?? []) : [];
+                  return (
+                    <SubTaskCard key={sub.id} task={sub} parentTask={task} tasks={siblings} models={subModels}
+                      modes={subModes} runners={runners} runnerScope={runnerScope} effectiveRunner={subRunner}
+                      configuredProviders={configuredProviders} modelApiMapping={modelApiMapping}
+                      isExecuting={isExecuting} runActive={runActive} run={runsByTask?.get(sub.id)}
+                      onRunnerChange={onRunnerChange}
+                      onModelChange={onModelChange} onModelsRefreshNeeded={onModelsRefreshNeeded} onModeChange={onModeChange}
+                      taskSkills={taskSkills} onSkillsChange={onSkillsChange}
+                      onRemoveTask={onRemoveTask} onPromptChange={onPromptChange}
+                      onRetry={onRetry} runnerSignIn={runnerSignIn} onSkip={onSkip} onCancel={onCancel} onCancelResume={onCancelResume} onResumeNow={onResumeNow}
+                      onForceStart={onForceStart} onMarkComplete={onMarkComplete}
+                      onMarkIncomplete={onMarkIncomplete} onRevert={onRevert}
+                      onRunTask={onRunTask} onOpenLog={onOpenLog} />
+                  );
+                })}
+              </div>
+            )}
+
+            {canMessage && <TaskMessageBox taskId={task.id} onSend={onSendMessage!} onSendNow={onSendMessageNow!}
+              working={row.status === 'running' || row.status === 'quiet'} resumes={paused} />}
+
+            {/* A usage-limit pause holds the run, which then reads as not
+                executing; a failure usually ends it, and the failed task
+                still needs its Retry and Skip. */}
+            {(isExecuting || paused || failed) && (
+              <TaskActions taskId={task.id} actions={row.actions} labels={ACTION_LABELS}
+                handlers={{ cancel: onCancel, 'resume-now': onResumeNow, 'cancel-resume': onCancelResume, skip: onSkip, 'force-start': onForceStart }}
+                onRetry={failed && task.type !== 'user' ? onRetry : undefined}
+                signIn={failed && task.assignedRunner ? runnerSignIn?.[task.assignedRunner] : undefined} />
+            )}
+
+            <TaskMarkControl taskId={task.id} row={row} runActive={runActive ?? !!isExecuting}
+              hint={isExecuting && isUserTask && task.userSteps && task.userSteps.length > 0 && !allStepsComplete ? 'Complete all steps above first' : undefined}
+              onMarkComplete={onMarkComplete} onMarkIncomplete={onMarkIncomplete} />
+
+            <TaskRevertControl taskId={task.id} title={task.title} row={row} onRevert={onRevert} />
+          </div>
+        )}
+      </div>
+      {(!asRow || expanded) && <div className="task-footer-controls">
+        {/* As plain as a task that waits on the user (ADR-0020). */}
+        <UsageLimitControls taskId={task.id} row={row} onResumeNow={onResumeNow} onCancelResume={onCancelResume} />
+
+        {/* The scheduler leaves it for the user (ADR-0035): it must read as waiting on them, not as next in line. */}
+        {row.waitsForApproval && (
+          <span className="task-isolation-badge approval"
+            title="Added after you approved the plan, so it does not start on its own. Approve it, or Approve all, and it starts once its dependencies finish.">
+            {row.waitsForApproval}
+          </span>
+        )}
+        {!asRow && approveButton}
+        {!asRow && <TaskSummaryBadges row={row} />}
+        {!asRow && approvalsButton}
+
+        {/* A row's dependencies are edited in its open body, and the panel's stages already say what comes first. */}
+        {asRow ? null : canEditDeps ? (
+          <button className="task-dep-badge dep-in task-dep-badge-btn"
+            title={task.dependencies.length > 0
+              ? `Depends on: ${row.dependencies.join(', ')}. Click to edit`
+              : 'Click to set dependencies'}
+            onClick={(e) => { e.stopPropagation(); setExpanded(true); setEditingDeps(true); }}>
+            &#8593;{task.dependencies.length}
+          </button>
+        ) : task.dependencies.length > 0 && (
+          <span className="task-dep-badge dep-in" title={`Depends on: ${row.dependencies.join(', ')}`}>
+            &#8593;{task.dependencies.length}
+          </span>
+        )}
+        {!asRow && !!dependentCount && (
+          <span className="task-dep-badge dep-out" title={`Required by ${dependentCount} task${dependentCount > 1 ? 's' : ''}`}>
+            &#8595;{dependentCount}
+          </span>
+        )}
+
+        {/* The awaiting reason is a badge in its own right (ADR-0018, W1): a
+            task held for the user must read as such whether or not a run is
+            still being drawn as active — and so must one a failure blocks,
+            one on hold, or a skipped one. */}
+        {!asRow && (isExecuting || row.holdReason || row.status === 'failed' || row.status === 'awaiting' || row.status === 'blocked' || row.status === 'skipped') && (
+          <StatusBadge status={status} />
+        )}
+        {/* In the footer rather than in the header, where it held the title's
+            last stretch for a button only shown on hover. The host confirms
+            removal with a real modal: a `confirm()` here would never fire — VS
+            Code sandboxes the webview without `allow-modals`. */}
+        {!isExecuting && onRemoveTask && (
+          <button className="task-remove-btn" onClick={(e) => { e.stopPropagation(); onRemoveTask(task.id); }} title="Remove task" aria-label={asRow ? 'Remove task' : undefined}>{asRow ? 'Remove' : <>&#10005;</>}</button>
+        )}
+      </div>}
+    </div>
+  );
+}

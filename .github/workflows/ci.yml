@@ -30,7 +30,9 @@ jobs:
       sandbox: ${{ steps.select.outputs.sandbox }}
       planner: ${{ steps.select.outputs.planner }}
       integration: ${{ steps.select.outputs.integration }}
+      desktop: ${{ steps.select.outputs.desktop }}
       engine: ${{ steps.select.outputs.engine }}
+      binary: ${{ steps.select.outputs.binary }}
       workspace_args: ${{ steps.select.outputs.workspace_args }}
 
     steps:
@@ -125,19 +127,38 @@ jobs:
           done
           node bench/live/drive-conversation.mjs
 
+      # The standalone binary (ADR-0065), linux-x64 only: cli-build.yml builds
+      # every target on its own runner for a pull request that touches it and
+      # for a release. It bundles from the sources and core's dist alone, so
+      # it needs no build but core's. The drive starts its own mock on 3799,
+      # which the planner loop above has let go, and takes Node off PATH.
+      - name: Build the standalone CLI binary
+        id: build-binary
+        if: needs.scope.outputs.binary != 'false'
+        run: node scripts/sea/build.mjs
+
+      - name: CLI binary — offline e2e, no Node on PATH
+        id: drive-binary
+        if: needs.scope.outputs.binary != 'false'
+        run: |
+          dist-sea/linux-x64/ordewell --version
+          node bench/live/drive-binary.mjs --bin dist-sea/linux-x64/ordewell
+
       # node:test suites, not vitest: the runner-detection lab makes the real
       # install probe run against shimmed CLIs in a throwaway HOME, and the
       # pipeline test drives plan -> execute -> verify through the fake claude.
-      # scripts/*.test.mjs run here too, selection's own among them.
+      # scripts/**/*.test.mjs run here too: selection's own, the installer's
+      # (scripts/install/) and the binary build's (scripts/sea/) among them.
       - name: Bench harness tests (offline, against the built core)
         id: bench
         if: needs.scope.outputs.packages != 'false'
         run: npm run test:bench
 
-      - name: Build (vscode, cli & web)
+      # Desktop last: its renderer is built from ui's dist, and the app forks web's.
+      - name: Build (ui, vscode, cli, web & desktop)
         id: build-rest
         if: needs.scope.outputs.packages != 'false'
-        run: npm run build -w packages/vscode -w packages/cli -w packages/web --if-present
+        run: npm run build -w packages/ui -w packages/vscode -w packages/cli -w packages/web -w packages/desktop --if-present
 
       # The extension integration test drives a real VS Code instance. Cache the
       # ~320 MB download so only the first run on a new VS Code version pays for
@@ -169,7 +190,7 @@ jobs:
           key: vscode-test-${{ runner.os }}-${{ steps.vscode-version.outputs.version }}
 
       - name: Install xvfb if the image lacks it
-        if: needs.scope.outputs.integration != 'false'
+        if: needs.scope.outputs.integration != 'false' || needs.scope.outputs.desktop != 'false'
         run: |
           if ! command -v xvfb-run >/dev/null 2>&1; then
             sudo apt-get update
@@ -184,6 +205,42 @@ jobs:
         run: |
           mkdir -p "$ORDEWELL_TEST_WORKSPACE"
           xvfb-run -a npm run test:integration -w ordewell
+
+      # The built Electron app, walked from its welcome window to a merge on the
+      # checkout's branch: the planner is bench/live's mock provider and the
+      # runner bench/pipeline's fake-claude, so it needs no key and no network.
+      - name: Desktop app — offline e2e (mock planner, fake runner)
+        id: desktop-e2e
+        if: needs.scope.outputs.desktop != 'false'
+        run: xvfb-run -a npm run test:desktop-e2e
+
+      - name: Upload the desktop e2e report
+        if: ${{ failure() && needs.scope.outputs.desktop != 'false' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-e2e-report
+          path: |
+            packages/desktop/test-results
+            packages/desktop/playwright-report
+          if-no-files-found: ignore
+
+      # The same offline run, walked for screenshots and layout checks in both
+      # themes at three sizes. TOUR_STRICT makes a failing layout check fail the
+      # step, as it does for a local `TOUR_STRICT=1 npm run desktop:tour`.
+      - name: Desktop app — visual tour and layout checks
+        id: desktop-tour
+        if: needs.scope.outputs.desktop != 'false'
+        env:
+          TOUR_STRICT: '1'
+        run: xvfb-run -a npm run desktop:tour
+
+      - name: Upload the desktop tour report
+        if: ${{ failure() && needs.scope.outputs.desktop != 'false' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-tour-report
+          path: packages/desktop/test-results/tour
+          if-no-files-found: ignore
 
       - name: Typecheck
         id: typecheck
@@ -249,9 +306,18 @@ jobs:
         if: needs.scope.outputs.packages != 'false'
         run: npm run package -w packages/vscode
 
-      # What a user installs: the four npm tarballs and this VSIX. This fails on
-      # a missing entry target, a LICENSE or NOTICE npm left out of `files`, a
-      # bundle that cannot start, and a third-party notice the VSIX dropped.
+      # The desktop app's Linux installers (AppImage and deb) and its unpacked
+      # app, unsigned: proof the packaging config builds on every change. The
+      # other two platforms are built by release.yml's desktop job, on a tag.
+      - name: Package the desktop app
+        id: package-desktop
+        if: needs.scope.outputs.packages != 'false'
+        run: npm run desktop:package
+
+      # What a user installs: the four npm tarballs, this VSIX and the desktop
+      # installers. This fails on a missing entry target, a LICENSE or NOTICE npm
+      # left out of `files`, a bundle that cannot start, a third-party notice the
+      # VSIX dropped, and a desktop daemon closure left inside app.asar.
       - name: Verify packaged npm and VS Code artifacts
         id: verify-artifacts
         if: needs.scope.outputs.packages != 'false'
@@ -340,12 +406,10 @@ jobs:
       - name: Build every package
         run: npm run build
 
-      # A selected run names its workspaces, `-ws` all of them. A shard that
-      # found no test fails, as a run on Linux would.
+      # The daemon, CLI, core and extension exercise Windows support here.
+      # The shared UI and desktop suites run on Linux in build-and-test.
       - name: Test on Windows
-        env:
-          WORKSPACE_ARGS: ${{ needs.scope.outputs.workspace_args }}
-        run: npm run test ${WORKSPACE_ARGS:--ws} --if-present -- --shard=${{ matrix.shard }}/4
+        run: npm run test --workspace packages/core --workspace packages/cli --workspace packages/web --workspace packages/vscode --if-present -- --shard=${{ matrix.shard }}/4
 
   # What runs on Windows beside the suites: the verify scripts, the bench
   # harnesses, the offline planner loop and the VS Code integration test, each

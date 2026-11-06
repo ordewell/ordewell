@@ -1,0 +1,355 @@
+import React from 'react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent, act } from '@testing-library/react';
+import PlanCardGroup from '../PlanCardGroup';
+
+import type { Task, DiscoveredModel } from '@ordewell/core';
+import { EMPTY_RUN } from '@ordewell/core/plan-utils';
+
+function makeTask(overrides: Partial<Task> = {}): Task {
+  return {
+    id: 't1',
+    order: 1,
+    title: 'Test task',
+    description: 'A task',
+    type: 'ai',
+    status: 'pending',
+    dependencies: [],
+    subtasks: [],
+    assignedRunner: 'claude-code',
+    taskMode: 'build',
+    ...overrides,
+  };
+}
+
+const emptyModels: DiscoveredModel[] = [];
+
+describe('PlanCardGroup — Execute Plan / Stop', () => {
+  it('renders Execute Plan button when not executing', () => {
+    render(
+      <PlanCardGroup run={EMPTY_RUN}
+        tasks={[makeTask()]}
+        models={emptyModels}
+        isExecuting={false}
+        onExecutePlan={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('Execute Plan')).toBeTruthy();
+  });
+
+  it('renders Stop button when executing', () => {
+    render(
+      <PlanCardGroup run={EMPTY_RUN}
+        tasks={[makeTask()]}
+        models={emptyModels}
+        isExecuting={true}
+        onStopExecution={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('Stop')).toBeTruthy();
+  });
+
+  it('offers Stop for a queued start or a usage-limit hold, though nothing executes', () => {
+    const onStopExecution = vi.fn();
+    render(
+      <PlanCardGroup run={EMPTY_RUN}
+        tasks={[makeTask()]}
+        models={emptyModels}
+        isExecuting={false}
+        runActive
+        onExecutePlan={vi.fn()}
+        onStopExecution={onStopExecution}
+      />,
+    );
+
+    expect(screen.queryByText('Execute Plan')).toBeNull();
+    fireEvent.click(screen.getByText('Stop'));
+    expect(onStopExecution).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads the run activity when no explicit runActive is passed', () => {
+    const run = { ...EMPTY_RUN, activity: { ...EMPTY_RUN.activity!, advancesOnItsOwn: true } };
+    render(
+      <PlanCardGroup run={run}
+        tasks={[makeTask()]}
+        models={emptyModels}
+        isExecuting={false}
+        onExecutePlan={vi.fn()}
+        onStopExecution={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText('Execute Plan')).toBeNull();
+    expect(screen.getByText('Stop')).toBeTruthy();
+  });
+
+  it('calls onExecutePlan when Execute Plan is clicked', () => {
+    const onExecutePlan = vi.fn();
+    render(
+      <PlanCardGroup run={EMPTY_RUN}
+        tasks={[makeTask()]}
+        models={emptyModels}
+        isExecuting={false}
+        onExecutePlan={onExecutePlan}
+      />,
+    );
+    fireEvent.click(screen.getByText('Execute Plan'));
+    expect(onExecutePlan).toHaveBeenCalledTimes(1);
+  });
+
+  it('calls onStopExecution when Stop is clicked', () => {
+    const onStopExecution = vi.fn();
+    render(
+      <PlanCardGroup run={EMPTY_RUN}
+        tasks={[makeTask()]}
+        models={emptyModels}
+        isExecuting={true}
+        onStopExecution={onStopExecution}
+      />,
+    );
+    fireEvent.click(screen.getByText('Stop'));
+    expect(onStopExecution).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides action bar when neither callback is provided', () => {
+    render(
+      <PlanCardGroup run={EMPTY_RUN}
+        tasks={[makeTask()]}
+        models={emptyModels}
+        isExecuting={false}
+      />,
+    );
+    expect(document.querySelector('.plan-action-bar')).toBeNull();
+  });
+
+  it('offers Approve all while a task waits for approval, beside Stop, and not otherwise', () => {
+    const onApproveAll = vi.fn();
+    const waiting = makeTask({ id: 't2', order: 2, title: 'Added since' });
+    const run = { ...EMPTY_RUN, tasks: [{ ...waiting, subtasks: [], waitsForApproval: true }] };
+    const { unmount } = render(
+      <PlanCardGroup run={run} tasks={[makeTask(), waiting]} models={emptyModels} isExecuting={true}
+        onStopExecution={vi.fn()} onApproveAll={onApproveAll} />,
+    );
+    expect(screen.getByText('Stop')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve all' }));
+
+    expect(onApproveAll).toHaveBeenCalledOnce();
+    unmount();
+    render(<PlanCardGroup run={EMPTY_RUN} tasks={[makeTask()]} models={emptyModels} isExecuting={true} onStopExecution={vi.fn()} onApproveAll={onApproveAll} />);
+    expect(screen.queryByRole('button', { name: 'Approve all' })).toBeNull();
+  });
+
+  it('offers Approve all for a script task that waits for approval, like any other (ADR-0035)', () => {
+    const onApproveAll = vi.fn();
+    const script = makeTask({ id: 't2', order: 2, title: 'Push the tag', type: 'script', commands: [['git', 'push']] });
+    const run = { ...EMPTY_RUN, tasks: [{ ...script, subtasks: [], waitsForApproval: true }] };
+    render(
+      <PlanCardGroup run={run} tasks={[makeTask(), script]} models={emptyModels} isExecuting={true}
+        onStopExecution={vi.fn()} onApproveAll={onApproveAll} />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve all' }));
+
+    expect(onApproveAll).toHaveBeenCalledOnce();
+  });
+
+  it('renders per-task Run Task button via onRunTask when not executing', () => {
+    render(
+      <PlanCardGroup run={EMPTY_RUN}
+        tasks={[makeTask()]}
+        models={emptyModels}
+        isExecuting={false}
+        onRunTask={vi.fn()}
+      />,
+    );
+    act(() => {
+      fireEvent.click(screen.getByText('Test task'));
+    });
+    expect(screen.getByText('Run Task')).toBeTruthy();
+  });
+});
+
+describe('PlanCardGroup — no reordering', () => {
+  // Display order is not execution order: independent tasks fan out, so a
+  // control that moves a card promised something the orchestrator never honoured.
+  const twoTasks = [
+    makeTask({ id: 't1', order: 1, title: 'First' }),
+    makeTask({ id: 't2', order: 2, title: 'Second', dependencies: ['t1'] }),
+  ];
+
+  const renderGroup = () => render(
+    <PlanCardGroup run={EMPTY_RUN} tasks={twoTasks} models={emptyModels} isExecuting={false}
+      onExecutePlan={vi.fn()} />,
+  );
+
+  it('offers no drag handle', () => {
+    renderGroup();
+    expect(document.querySelector('.task-drag-handle')).toBeNull();
+    expect(document.querySelector('[draggable="true"]')).toBeNull();
+  });
+
+  it('offers no move up/down buttons', () => {
+    renderGroup();
+    expect(document.querySelector('.task-order-btn')).toBeNull();
+    expect(screen.queryByTitle('Move up')).toBeNull();
+    expect(screen.queryByTitle('Move down')).toBeNull();
+  });
+
+  it('never explains why a task cannot be moved', () => {
+    renderGroup();
+    expect(document.querySelector('.reorder-error-banner')).toBeNull();
+    expect(document.body.textContent).not.toMatch(/reorder/i);
+  });
+
+  // The drag handle was a 20px sibling ahead of every card, which is what pushed
+  // the cards right of the action bar. Cards now start where the bar does.
+  it('starts each card at the list edge, with nothing ahead of it', () => {
+    renderGroup();
+    const list = document.querySelector('.task-list')!;
+    expect([...list.children].map((c) => c.className.split(' ')[0]))
+      .toEqual(['task-card-with-actions', 'task-card-with-actions']);
+  });
+
+  it('keeps the action bar and the task list as siblings under one edge', () => {
+    renderGroup();
+    const group = document.querySelector('.plan-card-group')!;
+    expect(document.querySelector('.plan-action-bar')!.parentElement).toBe(group);
+    expect(document.querySelector('.task-list')!.parentElement).toBe(group);
+  });
+
+  it('drops the action row entirely when it would have no buttons', () => {
+    render(<PlanCardGroup run={EMPTY_RUN} tasks={twoTasks} models={emptyModels} isExecuting={false} />);
+    expect(document.querySelector('.task-inline-actions')).toBeNull();
+  });
+});
+
+describe('PlanCardGroup — no dedicated merge or split controls', () => {
+  // The planner edits the plan in natural language; a Merge/Split button only
+  // re-worded that request, so the cards carry neither control nor its banner.
+  it('offers no Merge or Split control, selection banner or error banner on a task card', () => {
+    render(
+      <PlanCardGroup run={EMPTY_RUN}
+        tasks={[makeTask({ id: 't1', order: 1, title: 'First' }), makeTask({ id: 't2', order: 2, title: 'Second', dependencies: ['t1'] })]}
+        models={emptyModels}
+        isExecuting={false}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: /^Merge/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Split/ })).toBeNull();
+    expect(screen.queryByTitle(/select.*merge|merge.*select|split this task/i)).toBeNull();
+    expect(document.querySelector('.plan-merge-banner')).toBeNull();
+    expect(document.querySelector('.merge-validation-error-banner')).toBeNull();
+    expect(document.querySelector('.task-inline-actions')).toBeNull();
+    expect(document.querySelector('.task-merge-btn')).toBeNull();
+    expect(document.querySelector('.task-split-btn')).toBeNull();
+  });
+});
+
+describe('PlanCardGroup — per-task model list fallback', () => {
+  const flatModels: DiscoveredModel[] = [
+    { modelId: 'claude-code/opus', modelLabel: 'Opus', runnerProvider: 'claude-code', variants: [] },
+    { modelId: 'claude-code/sonnet', modelLabel: 'Sonnet', runnerProvider: 'claude-code', variants: [] },
+  ];
+
+  // An empty array is truthy — the old `?? models` guard would have handed the
+  // picker `[]` and rendered nothing. The length check must fall back to the
+  // flat merged list so a degraded/empty runner never shows an empty picker.
+  it('falls back to the flat model list when the runner discovered zero models', () => {
+    render(
+      <PlanCardGroup run={EMPTY_RUN}
+        tasks={[makeTask({ assignedRunner: 'claude-code' })]}
+        models={flatModels}
+        modelsByRunner={{ 'claude-code': [] }}
+        isExecuting={false}
+        onModelChange={vi.fn()}
+      />,
+    );
+    act(() => {
+      fireEvent.click(screen.getByText('Test task'));
+    });
+    act(() => {
+      fireEvent.click(screen.getByText('Select model...'));
+    });
+    expect(screen.getByText('Opus')).toBeTruthy();
+    expect(screen.getByText('Sonnet')).toBeTruthy();
+  });
+});
+
+describe('PlanCardGroup — accordion expansion', () => {
+  const tasks = [
+    makeTask({ id: 't1', order: 1, title: 'First', description: 'First detail' }),
+    makeTask({ id: 't2', order: 2, title: 'Second', description: 'Second detail' }),
+  ];
+
+  it('keeps at most one task body open at a time', () => {
+    render(<PlanCardGroup run={EMPTY_RUN} tasks={tasks} models={emptyModels} isExecuting={false} />);
+    fireEvent.click(screen.getByText('First'));
+    expect(document.querySelectorAll('.task-card-body')).toHaveLength(1);
+
+    fireEvent.click(screen.getByText('Second'));
+    const bodies = document.querySelectorAll('.task-card-body');
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0].textContent).toContain('Second detail');
+    expect(bodies[0].textContent).not.toContain('First detail');
+  });
+
+  it('collapses an open task when its header is clicked again', () => {
+    render(<PlanCardGroup run={EMPTY_RUN} tasks={tasks} models={emptyModels} isExecuting={false} />);
+    fireEvent.click(screen.getByText('First'));
+    expect(document.querySelectorAll('.task-card-body')).toHaveLength(1);
+    fireEvent.click(screen.getByText('First'));
+    expect(document.querySelectorAll('.task-card-body')).toHaveLength(0);
+  });
+});
+
+describe('PlanCardGroup — the plan panel\'s rows', () => {
+  const heading = (name: RegExp) => screen.getByRole('button', { name });
+
+  it('heads each stage once, with every task of that stage under it', () => {
+    render(
+      <PlanCardGroup run={EMPTY_RUN} models={emptyModels} rows
+        tasks={[
+          makeTask({ id: 'a', order: 1, title: 'Alpha' }),
+          makeTask({ id: 'b', order: 2, title: 'Beta', dependencies: ['a'] }),
+          makeTask({ id: 'c', order: 3, title: 'Gamma' }),
+        ]}
+      />,
+    );
+    const heads = [...document.querySelectorAll('.plan-stage-head')].map((h) => h.textContent);
+    expect(heads).toEqual(['Stage 1', 'Stage 2']);
+    const order = [...document.querySelectorAll<HTMLElement>('[data-task-id]')].map((row) => row.dataset.taskId);
+    expect(order).toEqual(['a', 'c', 'b']);
+  });
+
+  it('opens a row\'s subtasks on → and folds them on ←, from the row or a subtask', () => {
+    render(
+      <PlanCardGroup run={EMPTY_RUN} models={emptyModels} rows
+        tasks={[
+          makeTask({ id: 'p', order: 1, title: 'Parent', subtasks: [makeTask({ id: 's', order: 1, title: 'Child' })] }),
+          makeTask({ id: 'q', order: 2, title: 'Plain' }),
+        ]}
+      />,
+    );
+    const parent = heading(/^#1 Parent/);
+    fireEvent.keyDown(parent, { key: 'ArrowRight' });
+    expect(parent.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText('Child')).toBeTruthy();
+
+    fireEvent.keyDown(parent, { key: 'ArrowLeft' });
+    expect(parent.getAttribute('aria-expanded')).toBe('false');
+
+    fireEvent.keyDown(parent, { key: 'ArrowRight' });
+    const child = document.querySelector<HTMLElement>('.subtasks .task-heading');
+    expect(child).not.toBeNull();
+    fireEvent.keyDown(child!, { key: 'ArrowLeft' });
+    expect(parent.getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(parent);
+
+    // A row with no subtasks has nothing for → to open.
+    const plain = heading(/^#2 Plain/);
+    fireEvent.keyDown(plain, { key: 'ArrowRight' });
+    expect(plain.getAttribute('aria-expanded')).toBe('false');
+  });
+});

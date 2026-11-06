@@ -1,6 +1,6 @@
 import type * as vscode from 'vscode';
 import { augmentedPath, describeSignInWays, runnerForProvider, TERMINAL_UI_SIGN_IN, withPath, workspaceEnvOf, type INotification, type PlannerBackendId, type RunnerInstallation, type RunnerRegistry } from '@ordewell/core';
-import type { HostToWebview } from '../shared/protocol';
+import type { HostToWebview } from '@ordewell/ui/protocol';
 
 const POLL_MS = 2_000;
 /** Long enough for a browser OAuth or a device code, short enough to end a forgotten one. */

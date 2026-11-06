@@ -1,0 +1,9 @@
+/* One stylesheet module for both entries, so Vite emits the single
+   assets/styles.css that webviewHtml.ts links. The mapping sits between the
+   package's defaults and the rules that read them; the design kit's sizes
+   and primitives (the runner badge) come before the chat's own rules. */
+@import '@ordewell/ui/tokens.css';
+@import './vscode-tokens.css';
+@import '@ordewell/ui/scale.css';
+@import '@ordewell/ui/design.css';
+@import '@ordewell/ui/styles.css';

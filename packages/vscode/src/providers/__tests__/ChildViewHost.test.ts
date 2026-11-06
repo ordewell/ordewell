@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ChildPlanHandle } from '@ordewell/core';
 import { ChildViewHost } from '../ChildViewHost';
-import type { HostToWebview } from '../../shared/protocol';
+import type { HostToWebview } from '@ordewell/ui/protocol';
 
 function selected(overrides: Partial<ChildPlanHandle>) {
   const entry = { sessionId: 'child', parent: 'root', node: '0/1', taskId: 'd', title: 'Delegate', depth: 1, state: 'parked' as const };

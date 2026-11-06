@@ -9,6 +9,10 @@ dist/
 dist-test/
 out/
 *.vsix
+# electron-builder output (packages/desktop/electron-builder.yml)
+packages/desktop/release/
+# Standalone binaries and their archives (scripts/sea/build.mjs)
+dist-sea/
 
 # Copied from @ordewell/core by scripts/copy-skills.mjs at build time — not source.
 packages/vscode/skills/
@@ -16,6 +20,8 @@ packages/vscode/skills/
 # Generated from the installed dependency tree by scripts/generate-third-party-notices.mjs.
 packages/cli/THIRD-PARTY-NOTICES.md
 packages/vscode/THIRD-PARTY-NOTICES.md
+packages/desktop/THIRD-PARTY-NOTICES.md
+packages/ui/THIRD-PARTY-NOTICES.md
 
 # Downloaded VS Code build used by the extension integration tests (~320 MB)
 .vscode-test/
@@ -61,3 +67,7 @@ __pycache__/
 Thumbs.db
 
 *.tsbuildinfo
+
+# Playwright output of the desktop app's offline acceptance test
+packages/desktop/test-results/
+packages/desktop/playwright-report/

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import * as vscode from 'vscode';
 import { listSessions, loadSession } from '@ordewell/core';
 import { handleSlashCommand, isKnownSlashCommand, type SlashDeps } from '../SlashParser';
-import { resolveSlashAlias, isBuiltinSlashCommand, slashHelp } from '../slashCommands';
+import { resolveSlashAlias, isBuiltinSlashCommand, slashHelp } from '@ordewell/ui/protocol';
 
 vi.mock('@ordewell/core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@ordewell/core')>();

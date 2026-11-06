@@ -1,0 +1,57 @@
+/* The Session view: ui's shared chat drawn inside the frame's panes and tabs. */
+
+/* ui sizes its chats to the webview's viewport; here each fills the pane or tab it is drawn in. */
+.session-planner, .session-plan, .session-task, .session-task-chat { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+.session-planner:focus { outline: none; }
+.session-planner .chat-container, .session-plan .chat-container, .session-task-chat .task-log-container { flex: 1; height: 100%; min-height: 0; }
+.session-plan > .chat-container, .session-planner > .chat-container { flex: 1; }
+
+.session-task-header { flex: none; border-bottom: 1px solid var(--ow-border); }
+/* Two lines (docs/desktop/design.md, W6): what the task is and where it stands, then who runs it and what can be done. */
+.session-task-line { display: flex; align-items: center; gap: var(--ow-space-2); min-width: 0; min-height: var(--ow-height-header); padding: 0 var(--ow-space-3); }
+.session-task-header h2 { flex: 0 1 auto; min-width: 0; margin: 0; font: var(--ow-type-heading); color: var(--ow-fg); text-transform: none; letter-spacing: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-task-status { flex: 1 1 auto; min-width: 0; color: var(--ow-fg-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-task-views.ow-tabs { flex: none; height: var(--ow-height-header); border-bottom: 0; }
+.session-task-meta { flex-wrap: wrap; gap: var(--ow-space-1) var(--ow-space-3); min-height: var(--ow-height-header); padding-block: var(--ow-space-1); font: var(--ow-type-small); color: var(--ow-fg-secondary); }
+.session-task-auth { margin: 0; padding: 0 var(--ow-space-3) var(--ow-space-2); color: var(--ow-status-attention); font: var(--ow-type-small); overflow-wrap: anywhere; }
+.session-task-assignment { white-space: nowrap; }
+.session-task-links { display: inline-flex; align-items: center; gap: var(--ow-space-1); }
+.session-task-link { min-height: var(--ow-hit); min-width: var(--ow-hit); padding: 0 var(--ow-space-1); border: 0; border-radius: var(--ow-radius-md); background: transparent; color: var(--ow-fg-link, var(--ow-accent)); font: inherit; cursor: pointer; }
+.session-task-link:hover { background: var(--ow-bg-hover); text-decoration: underline; }
+.session-task-branch { min-width: 0; max-width: 24ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--ow-font-mono); }
+.session-task-actions { display: inline-flex; align-items: center; gap: var(--ow-space-1); margin-inline-start: auto; }
+
+.session-task-view { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+/* A readable line: the details and the changes keep to the chat's centred column (L7). */
+.session-task-details { flex: 1; overflow: auto; padding: var(--ow-space-4) var(--ow-space-3); display: flex; flex-direction: column; gap: var(--ow-space-4); }
+.session-task-details > section, .session-task-changes > * { width: 100%; max-width: 800px; margin-inline: auto; }
+.session-task-details h3 { margin: 0 0 var(--ow-space-1); font: var(--ow-type-label); font-weight: 600; color: var(--ow-fg-secondary); }
+.session-task-details ul, .session-attempts { margin: 0; padding-inline-start: var(--ow-space-4); }
+.session-prompt { margin: 0; padding: var(--ow-space-2); border: 1px solid var(--ow-border); border-radius: var(--ow-radius-md); background: var(--ow-bg-input); font-family: var(--ow-font-mono); white-space: pre-wrap; word-break: break-word; }
+.session-task-changes { flex: 1; overflow: auto; padding: var(--ow-space-3); }
+/* The task's chat, like the planner's, uses its tab's full width; the activity line and composer share the body's gutter so they sit under what they answer. */
+.session-task-chat :is(.task-log-body, .task-log-activity, .task-log-composer) { padding-inline: var(--ow-space-3); }
+
+.sessions { margin: 0; padding: 0 0 var(--ow-space-1); list-style: none; }
+.sessions li:has(> .session-row) { display: block; padding: 0; }
+/* Two lines: the goal, then the status as a shape and a word and when it last moved. */
+.session-row { position: relative; display: flex; flex-direction: column; gap: var(--ow-space-half); width: 100%; min-height: 44px; padding: var(--ow-space-1) var(--ow-space-3); border: 0; background: transparent; color: inherit; font: inherit; text-align: start; cursor: pointer; }
+.session-row:not(:disabled):hover { background: var(--ow-bg-hover); }
+.session-row[aria-current='true'] { background: var(--ow-bg-selected); }
+.session-row[aria-current='true']::before { content: ''; position: absolute; left: 0; top: var(--ow-space-1); bottom: var(--ow-space-1); width: 2px; background: var(--ow-accent); }
+.session-goal { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-meta { display: flex; align-items: center; gap: var(--ow-space-1); min-width: 0; font: var(--ow-type-small); color: var(--ow-fg-secondary); white-space: nowrap; overflow: hidden; }
+.session-meta .muted { overflow: hidden; text-overflow: ellipsis; }
+
+.session-confirm-scrim { align-items: center; padding-top: 0; }
+.session-confirm { width: min(480px, 90vw); padding: var(--ow-space-3); background: var(--ow-surface-overlay); border: 1px solid var(--ow-border-widget); border-radius: var(--ow-radius-lg); box-shadow: var(--ow-elevation-raised); }
+.session-confirm-message { margin: 0 0 var(--ow-space-1); font-weight: 600; }
+.session-confirm-detail { margin: 0 0 var(--ow-space-2); color: var(--ow-fg-secondary); white-space: pre-wrap; }
+.session-confirm-actions { display: flex; justify-content: flex-end; gap: var(--ow-space-2); }
+
+.session-holder { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ow-space-1) var(--ow-space-2); padding: var(--ow-space-2) var(--ow-space-3); border-bottom: 1px solid var(--ow-border); font: var(--ow-type-small); }
+.session-holder-chip { padding: var(--ow-space-half) var(--ow-space-2); border: 1px solid var(--ow-border); border-radius: var(--ow-radius-md); white-space: nowrap; }
+.session-holder-note { flex-basis: 100%; color: var(--ow-fg-secondary); }
+.session-holder-refresh { min-height: 24px; padding: var(--ow-space-half) var(--ow-space-2); border: 1px solid var(--ow-border); border-radius: var(--ow-radius-md); background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.session-holder-refresh:hover { background: var(--ow-bg-hover); }
+.session-row .session-joined { color: var(--ow-accent); }

@@ -7,7 +7,7 @@ import { createSession, flattenTasks, RunnerRegistry, BufferedTaskOutputSource, 
 import type { IAiService, IRunner, LegacyPlanState, ModelResolver, Session, SurfacePlan } from '@ordewell/core';
 import { fakeConfig, fakeFileSystem, FakeRunnerSession } from '@ordewell/core/testing';
 import { ChatViewProvider } from '../../providers/ChatViewProvider';
-import type { HostToWebview } from '../../shared/protocol';
+import type { HostToWebview } from '@ordewell/ui/protocol';
 import { handleApprovePlan, handleSessionMessage, type PlanManagerDeps } from '../PlanManager';
 import { persistState, restoreState, type PersistenceDeps } from '../../state/StatePersistence';
 

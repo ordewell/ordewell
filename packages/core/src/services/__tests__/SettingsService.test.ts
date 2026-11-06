@@ -559,6 +559,9 @@ describe('SettingsService', () => {
         wakeUpReadBudget: 12,
         delegationTokens: 0,
         delegationBudget: 0,
+        delegationDepth: 2,
+        delegatedTasksPerPlan: 8,
+        tasksPerChildPlan: 30,
       });
     });
 
@@ -574,6 +577,9 @@ describe('SettingsService', () => {
         wakeUpReadBudget: 12,
         delegationTokens: 0,
         delegationBudget: 0,
+        delegationDepth: 2,
+        delegatedTasksPerPlan: 8,
+        tasksPerChildPlan: 30,
       });
     });
 
@@ -583,6 +589,23 @@ describe('SettingsService', () => {
       expect(() => service.updateRunSettings({ wakeUpReadBudget: 2.5 })).toThrow(/read budget/i);
 
       expect(service.getRunSettings().supervisorLevel).toBe('watch');
+    });
+
+    it('holds the tree\'s shape within 1 and the hard caps ADR-0055 D19 sets', () => {
+      service.updateRunSettings({ delegationDepth: 4, delegatedTasksPerPlan: 30, tasksPerChildPlan: 100 });
+      expect(new SettingsService(tempFile).getRunSettings()).toMatchObject({ delegationDepth: 4, delegatedTasksPerPlan: 30, tasksPerChildPlan: 100 });
+
+      expect(() => service.updateRunSettings({ delegationDepth: 5 })).toThrow(/depth must be a whole number of levels, 1 to 4/i);
+      expect(() => service.updateRunSettings({ delegationDepth: 0 })).toThrow(/depth/i);
+      expect(() => service.updateRunSettings({ delegatedTasksPerPlan: 31 })).toThrow(/delegated tasks per plan must be a whole number, 1 to 30/i);
+      expect(() => service.updateRunSettings({ tasksPerChildPlan: 101 })).toThrow(/tasks per child plan must be a whole number, 1 to 100/i);
+      expect(() => service.updateRunSettings({ tasksPerChildPlan: 1.5 })).toThrow(/tasks per child plan/i);
+      expect(service.getRunSettings()).toMatchObject({ delegationDepth: 4, delegatedTasksPerPlan: 30, tasksPerChildPlan: 100 });
+    });
+
+    it('reads a hand-edited shape past the caps as the default', () => {
+      fs.writeFileSync(tempFile, JSON.stringify({ delegationDepth: 12, tasksPerChildPlan: 0 }));
+      expect(new SettingsService(tempFile).getRunSettings()).toMatchObject({ delegationDepth: 2, tasksPerChildPlan: 30 });
     });
 
     it('keeps a hand-supplied read budget through an unrelated save and a reload', () => {

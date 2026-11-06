@@ -1,0 +1,23 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
+# The winget installer manifest, rendered by scripts/render-package-manifests.mjs
+# (ADR-0063 H11). The NSIS installer is per-user (electron-builder.yml's
+# `perMachine: false`), so its scope is user and it needs no elevation; `/S` is
+# the silent switch the one-line PowerShell installer also uses.
+#
+# Publisher and PackageName are what the installer writes to Add/Remove
+# Programs, which is what winget matches a manifest against: the NSIS publisher
+# is package.json's author, and the display name is "Ordewell <version>".
+PackageIdentifier: Ordewell.Ordewell
+PackageVersion: {{version}}
+InstallerType: nullsoft
+Installers:
+  - Architecture: x64
+    Scope: user
+    UpgradeBehavior: install
+    MinimumOSVersion: 10.0.0.0
+    InstallerUrl: https://github.com/ordewell/ordewell/releases/download/v{{version}}/Ordewell-{{version}}-win-x64.exe
+    InstallerSha256: {{sha256_win_x64}}
+    InstallerSwitches:
+      Silent: /S
+ManifestType: installer
+ManifestVersion: 1.12.0

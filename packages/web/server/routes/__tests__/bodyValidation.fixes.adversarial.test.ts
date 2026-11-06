@@ -91,6 +91,25 @@ describe('the runner list', () => {
     expect(discoverPlannerCatalogs).toHaveBeenCalledWith(undefined, '/projects/a');
     expect(discoverPlannerCatalogs.mock.invocationCallOrder[0]).toBeLessThan(getRunnerState.mock.invocationCallOrder[0]);
   });
+
+  it('carries an installed but unavailable runner through, with its reason', async () => {
+    const unavailable = {
+      id: 'copilot-cli',
+      name: 'GitHub Copilot CLI',
+      enabled: true,
+      usable: false,
+      reason: 'GitHub Copilot CLI is too old for Ordewell: found 1.0.104, needs 1.0.105 or later.',
+    };
+    const pool = {
+      getInstalledRunners: vi.fn(async () => [unavailable]),
+      getRunnerState: vi.fn(() => ({ enabledRunners: [], orchestratorModel: '' })),
+      discoverPlannerCatalogs: vi.fn(async () => undefined),
+    } as unknown as OrchestratorPool;
+
+    const res = await new Hono().route('/api/runners', runnersRoute(pool)).request('/api/runners');
+
+    expect(await res.json()).toEqual({ runners: [unavailable], orchestratorModel: '' });
+  });
 });
 
 describe('the runner toggle', () => {

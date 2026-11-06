@@ -281,5 +281,6 @@ export function acpConnector(profile: AcpProfile): RunnerConnector {
     ...(profile.usageLimitReset ? { usageLimitReset: profile.usageLimitReset } : {}),
     ...(profile.promptCacheTtlMs !== undefined ? { promptCacheTtlMs: profile.promptCacheTtlMs } : {}),
     ...(profile.signInRoute ? { signInRoute: profile.signInRoute } : {}),
+    ...(profile.minVersion ? { minVersion: profile.minVersion } : {}),
   };
 }

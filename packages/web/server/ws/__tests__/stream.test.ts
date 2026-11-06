@@ -140,6 +140,24 @@ describe('the session socket', () => {
     expect(next).toMatchObject({ stream: snapshot.stream, seq: snapshot.seq! + 1 });
   });
 
+  // The desktop app joins a session another client's daemon holds (ADR-0063):
+  // both are subscribers of one host, so each must see every change.
+  it('sends one broadcast to every client of the session, numbered alike', async () => {
+    const meta = saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');
+    pool.adoptSavedSession(meta.id, workspace);
+    const holder = joinSocket(port, meta.id);
+    const joined = joinSocket(port, meta.id);
+    await Promise.all([holder.until(3), joined.until(3)]);
+    const seen = Promise.all([holder.until(4), joined.until(4)]);
+    await pool.session(meta.id).execute({ command: 'mark_complete', task: 't2' }, { kind: 'user' });
+    const [byHolder, byJoined] = await seen;
+    holder.close();
+    joined.close();
+
+    expect(byHolder[3]).toMatchObject({ seq: expect.any(Number) });
+    expect(byJoined[3]).toEqual(byHolder[3]);
+  });
+
   // A compaction has no turn, so a surface that joins or reconnects while one
   // runs would otherwise show a planner that is simply silent. The replay is
   // the start as it was announced, the same message the live frame carried.

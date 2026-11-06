@@ -1,0 +1,286 @@
+name: Desktop build
+
+# The desktop installers, one runner per OS: an installer is built where it
+# runs (Windows and macOS cannot be cross-built from Linux), and each runner
+# checks the app it just packaged. The build is proved here, before a release,
+# so a tag push is not the first time any OS packages the app:
+#   - a pull request to main that touches what can change an installer;
+#   - workflow_dispatch, from the Actions tab once this file is on main;
+#   - release.yml, which calls it with `attach` and the tag to put the
+#     installers on the GitHub Release (ADR-0063). The fixed-name copies and
+#     SHA256SUMS are release.yml's `release-assets` job, which waits for this
+#     and for cli-build.yml, so the one sums file covers the CLI archives too
+#     (ADR-0063 H10, ADR-0065 C5).
+# Signing (ADR-0063 H9): only the release path signs. release.yml hands this
+# workflow the signing secrets one by one, and the package step passes each to
+# its own OS only when `attach` is set, so a pull request, a manual run and a
+# fork build unsigned (macOS: ad hoc) with updates off, as a release does until
+# the secrets exist. scripts/package.mjs picks the route from what is set and
+# names every variable it reads.
+on:
+  workflow_call:
+    inputs:
+      attach:
+        description: Attach the installers to the GitHub Release named by `tag`
+        type: boolean
+        default: false
+      tag:
+        description: The release tag; checked against the package versions before anything is built
+        type: string
+        default: ''
+    # Each optional: a release without them builds unsigned.
+    secrets:
+      CSC_LINK:
+        required: false
+      CSC_KEY_PASSWORD:
+        required: false
+      APPLE_API_KEY:
+        required: false
+      APPLE_API_KEY_ID:
+        required: false
+      APPLE_API_ISSUER:
+        required: false
+      APPLE_ID:
+        required: false
+      APPLE_APP_SPECIFIC_PASSWORD:
+        required: false
+      APPLE_TEAM_ID:
+        required: false
+      AZURE_TENANT_ID:
+        required: false
+      AZURE_CLIENT_ID:
+        required: false
+      AZURE_CLIENT_SECRET:
+        required: false
+      WIN_CSC_LINK:
+        required: false
+      WIN_CSC_KEY_PASSWORD:
+        required: false
+      ES_USERNAME:
+        required: false
+      ES_PASSWORD:
+        required: false
+      ES_CREDENTIAL_ID:
+        required: false
+      ES_TOTP_SECRET:
+        required: false
+  workflow_dispatch:
+  pull_request:
+    branches: [ "main" ]
+    # What reaches an installer: the app, the three packages bundled or unpacked
+    # into it, the manifests that fix what is installed, and the files packaging
+    # reads from outside the workspaces (extraResources, the notices generator,
+    # the version guard, the package check and this file).
+    paths:
+      - 'packages/desktop/**'
+      - 'packages/ui/**'
+      - 'packages/core/**'
+      - 'packages/web/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.nvmrc'
+      - 'LICENSE'
+      - 'NOTICE'
+      - 'AUTHORS.md'
+      - 'scripts/desktop-package-check.mjs'
+      - 'scripts/generate-third-party-notices.mjs'
+      - '.github/workflows/verify-release-tag.mjs'
+      - '.github/workflows/desktop-build.yml'
+
+# Read-only unless a job below asks for more; only `attach` writes.
+permissions:
+  contents: read
+
+# A new push to a PR makes the in-flight build obsolete. A release's build is
+# never cancelled: a second tag is a different release.
+concurrency:
+  group: desktop-build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    # Nothing here may reach ordewell.ai (ADR-0048); the daemon smoke starts.
+    env:
+      ORDEWELL_NO_VERSION_CHECK: '1'
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.x
+          cache: 'npm'
+
+      # Fails the build before the slow steps when the tag and the versions
+      # disagree: the installers are named for the version.
+      - name: Verify tag matches package versions
+        if: inputs.attach
+        env:
+          TAG: ${{ inputs.tag }}
+        run: node .github/workflows/verify-release-tag.mjs "$TAG"
+        shell: bash
+
+      # node-pty compiles with Spectre-mitigated libraries (its binding.gyp sets
+      # SpectreMitigation). windows-latest's Visual Studio lists the component
+      # today, but an image is not a contract: a missing component fails
+      # node-gyp deep inside electron-builder's rebuild with an MSB8040 error.
+      # This finds it with vswhere and installs it only when it is absent.
+      - name: Ensure the Visual Studio Spectre-mitigated libraries
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $component = 'Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre'
+          $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer"
+          $vswhere = Join-Path $installer 'vswhere.exe'
+          $found = & $vswhere -latest -products '*' -requires $component -property installationPath
+          if ($found) {
+            Write-Host "$component is installed at $found"
+            exit 0
+          }
+          $path = & $vswhere -latest -products '*' -property installationPath
+          if (-not $path) { throw 'no Visual Studio installation found' }
+          Write-Host "Installing $component into $path"
+          $process = Start-Process -FilePath (Join-Path $installer 'setup.exe') -Wait -PassThru -ArgumentList @(
+            'modify', '--installPath', "`"$path`"", '--add', $component, '--quiet', '--norestart', '--nocache'
+          )
+          # 3010: installed, a reboot is pending, which a build does not need.
+          if ($process.ExitCode -notin 0, 3010) { throw "the Visual Studio installer exited with $($process.ExitCode)" }
+          if (-not (& $vswhere -latest -products '*' -requires $component -property installationPath)) {
+            throw "$component is still missing after the install"
+          }
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      # The SSL.com eSigner route signs through CodeSignTool, SSL.com's Java
+      # signer (packages/desktop/scripts/esigner-sign.mjs). Fetched only on the
+      # release path and only when that route's secret is set, from SSL.com's
+      # GitHub release at a pinned version, and refused unless its SHA-256 is
+      # the one recorded here: the tool holds the signing credentials. The step
+      # learns only whether the secret is set, never its value.
+      - name: Download CodeSignTool for SSL.com eSigner
+        if: inputs.attach && runner.os == 'Windows'
+        shell: pwsh
+        env:
+          ESIGNER_SET: ${{ secrets.ES_USERNAME != '' }}
+        run: |
+          if ($env:ESIGNER_SET -ne 'true') {
+            Write-Host 'ES_USERNAME is not set: the SSL.com eSigner route is not configured.'
+            exit 0
+          }
+          $zip = Join-Path $env:RUNNER_TEMP 'CodeSignTool.zip'
+          $dir = Join-Path $env:RUNNER_TEMP 'CodeSignTool'
+          Invoke-WebRequest -Uri 'https://github.com/SSLcom/CodeSignTool/releases/download/v1.3.2/CodeSignTool-v1.3.2-windows.zip' -OutFile $zip
+          $expected = '4afc32e8b7f79bbe1de7e4e7049aaad4e0f754357613b9bbec0e3052f06fd36b'
+          $actual = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "CodeSignTool's SHA-256 is $actual, not $expected" }
+          Expand-Archive -Path $zip -DestinationPath $dir
+          Remove-Item $zip
+          "CODE_SIGN_TOOL_PATH=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      # Unsigned unless this is a release and the secrets exist; the variables
+      # are gated too, since Azure's names without its secrets are refused.
+      # Notarization runs only here, so only on a release.
+      - name: Package the desktop app
+        env:
+          CSC_LINK: ${{ inputs.attach && runner.os == 'macOS' && secrets.CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ inputs.attach && runner.os == 'macOS' && secrets.CSC_KEY_PASSWORD || '' }}
+          APPLE_API_KEY: ${{ inputs.attach && runner.os == 'macOS' && secrets.APPLE_API_KEY || '' }}
+          APPLE_API_KEY_ID: ${{ inputs.attach && runner.os == 'macOS' && secrets.APPLE_API_KEY_ID || '' }}
+          APPLE_API_ISSUER: ${{ inputs.attach && runner.os == 'macOS' && secrets.APPLE_API_ISSUER || '' }}
+          APPLE_ID: ${{ inputs.attach && runner.os == 'macOS' && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ inputs.attach && runner.os == 'macOS' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ inputs.attach && runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
+          AZURE_TENANT_ID: ${{ inputs.attach && runner.os == 'Windows' && secrets.AZURE_TENANT_ID || '' }}
+          AZURE_CLIENT_ID: ${{ inputs.attach && runner.os == 'Windows' && secrets.AZURE_CLIENT_ID || '' }}
+          AZURE_CLIENT_SECRET: ${{ inputs.attach && runner.os == 'Windows' && secrets.AZURE_CLIENT_SECRET || '' }}
+          WIN_CSC_LINK: ${{ inputs.attach && runner.os == 'Windows' && secrets.WIN_CSC_LINK || '' }}
+          WIN_CSC_KEY_PASSWORD: ${{ inputs.attach && runner.os == 'Windows' && secrets.WIN_CSC_KEY_PASSWORD || '' }}
+          ES_USERNAME: ${{ inputs.attach && runner.os == 'Windows' && secrets.ES_USERNAME || '' }}
+          ES_PASSWORD: ${{ inputs.attach && runner.os == 'Windows' && secrets.ES_PASSWORD || '' }}
+          ES_CREDENTIAL_ID: ${{ inputs.attach && runner.os == 'Windows' && secrets.ES_CREDENTIAL_ID || '' }}
+          ES_TOTP_SECRET: ${{ inputs.attach && runner.os == 'Windows' && secrets.ES_TOTP_SECRET || '' }}
+          AZURE_SIGNING_ENDPOINT: ${{ inputs.attach && runner.os == 'Windows' && vars.AZURE_SIGNING_ENDPOINT || '' }}
+          AZURE_SIGNING_ACCOUNT: ${{ inputs.attach && runner.os == 'Windows' && vars.AZURE_SIGNING_ACCOUNT || '' }}
+          AZURE_CERTIFICATE_PROFILE: ${{ inputs.attach && runner.os == 'Windows' && vars.AZURE_CERTIFICATE_PROFILE || '' }}
+          WIN_PUBLISHER_NAME: ${{ inputs.attach && runner.os == 'Windows' && vars.WIN_PUBLISHER_NAME || '' }}
+        run: npm run desktop:package
+
+      - name: Verify the installers and the unpacked app
+        run: node scripts/desktop-package-check.mjs
+
+      # What the packaging decided about signing, which release.yml's
+      # package-manager jobs read: a Homebrew cask is published only for a
+      # notarized macOS build, because Homebrew will not install an app that
+      # Gatekeeper stops. Named apart from `desktop-*` so the attach job's
+      # download of the installers never picks it up.
+      - name: Upload the signing manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: signing-${{ runner.os }}
+          path: packages/desktop/release/signing.json
+          if-no-files-found: error
+          retention-days: 7
+
+      # latest*.yml is the feed electron-updater reads once updates are on;
+      # blockmaps let it download a difference. A glob with no match is an
+      # error, not an empty artifact, because only this OS's files exist.
+      - name: Upload the installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ runner.os }}
+          path: |
+            packages/desktop/release/Ordewell-*.dmg
+            packages/desktop/release/Ordewell-*.zip
+            packages/desktop/release/Ordewell-*.exe
+            packages/desktop/release/Ordewell-*.AppImage
+            packages/desktop/release/Ordewell-*.deb
+            packages/desktop/release/Ordewell-*.blockmap
+            packages/desktop/release/latest*.yml
+          if-no-files-found: error
+          retention-days: 7
+
+  # Every OS built and checked its installers, so the Release gets all of them
+  # or none: a Release with one OS missing is worse than one to re-run. This is
+  # the only job that can write, so its one action is pinned to a commit SHA.
+  attach:
+    if: inputs.attach
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download the installers
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: desktop-*
+          merge-multiple: true
+          path: release
+
+      # --clobber: a re-run replaces the file it uploaded before.
+      - name: Attach installers to the GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          cd release
+          # A glob with no match stays literal in bash.
+          shopt -s nullglob
+          files=(Ordewell-*.dmg Ordewell-*.zip Ordewell-*.exe Ordewell-*.AppImage Ordewell-*.deb Ordewell-*.blockmap latest*.yml)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::no installers were downloaded"
+            exit 1
+          fi
+          gh release upload "$TAG" "${files[@]}" --clobber --repo "$REPO"

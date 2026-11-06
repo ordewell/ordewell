@@ -3,22 +3,23 @@ import { Hono } from 'hono';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { createWorktreeIsolation, listChildSessions, listSessions, loadSessionPlanState, openTaskLog, saveChildSession, saveSession, SessionHeldError, SessionNotFoundError } from '@ordewell/core';
+import { createWorktreeIsolation, listChildSessions, listSessions, loadSession, openTaskLog, saveChildSession, saveSession, SessionHeldError, SessionNotFoundError } from '@ordewell/core';
 import { sessionsRoute } from '../sessions';
 import type { OrchestratorPool } from '../../pool/orchestratorPool';
 
 vi.mock('@ordewell/core', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@ordewell/core')>()),
-  loadSessionPlanState: vi.fn(),
+  loadSession: vi.fn(),
   createWorktreeIsolation: vi.fn((await importOriginal<typeof import('@ordewell/core')>()).createWorktreeIsolation),
 }));
 
-const readSaved = vi.mocked(loadSessionPlanState);
+const readSaved = vi.mocked(loadSession);
 
 function fakePool(overrides: Partial<OrchestratorPool> = {}): OrchestratorPool {
   return {
     adoptSavedSession: vi.fn().mockReturnValue({ tasks: [{ id: 't1' }], runners: ['opencode'] }),
     getGoal: vi.fn().mockReturnValue('Rate limiting'),
+    getPlan: vi.fn().mockReturnValue(null),
     getPlanState: vi.fn().mockReturnValue(null),
     runSnapshot: vi.fn().mockReturnValue(null),
     plannerTurnId: vi.fn().mockReturnValue(undefined),
@@ -39,14 +40,20 @@ describe('GET /api/sessions/:id', () => {
     history: [],
     message: '',
     executionLog: [],
-    // What the file gives back: the disk boundary rewrites a live in_progress
-    // to pending, because a session off disk has no runners behind it.
     pendingTasks: [{ id: 't1', order: 1, title: 'One', status: 'pending' }],
     goal: 'g',
     runners: ['opencode'],
     status: 'running',
   };
-  const saved = { meta: { id: 's1', goal: 'g' }, plan: savedPlan };
+  // What the file gives back: the disk boundary rewrites a live in_progress
+  // to pending, because a session off disk has no runners behind it.
+  const savedFile = {
+    tasks: [{ id: 't1', order: 1, title: 'One', status: 'pending' }],
+    runners: ['opencode'],
+    status: 'running',
+    conversationHistory: [{ role: 'user', content: 'Add rate limiting', timestamp: '2026-10-25T10:00:00.000Z' }],
+  };
+  const saved = { meta: { id: 's1', goal: 'g' }, plan: savedFile };
 
   beforeEach(() => {
     readSaved.mockReset();
@@ -94,10 +101,23 @@ describe('GET /api/sessions/:id', () => {
     expect(pool.plannerCompaction).toHaveBeenCalledWith('s1');
   });
 
-  it('leaves the compaction out when none is running', async () => {
+  // A client that joined the session at its holder (ADR-0063 H8) reads it
+  // here, never by loading it again, which could restart a first turn.
+  it('names the planner turn the live session is running', async () => {
+    const pool = fakePool({ getPlanState: vi.fn().mockReturnValue(savedPlan), plannerTurnId: vi.fn().mockReturnValue('turn-7') } as Partial<OrchestratorPool>);
+
+    const res = await appWith(pool).request('/api/sessions/s1?workspace=/ws');
+
+    expect(((await res.json()) as { plannerTurnId?: string }).plannerTurnId).toBe('turn-7');
+    expect(pool.plannerTurnId).toHaveBeenCalledWith('s1');
+  });
+
+  it('leaves the compaction and the turn out when neither is running', async () => {
     const res = await appWith(fakePool()).request('/api/sessions/s1?workspace=/ws');
 
-    expect(await res.json()).not.toHaveProperty('plannerCompaction');
+    const body = await res.json();
+    expect(body).not.toHaveProperty('plannerTurnId');
+    expect(body).not.toHaveProperty('plannerCompaction');
   });
 
   it('leaves the run view out for a session nobody holds', async () => {
@@ -111,6 +131,24 @@ describe('GET /api/sessions/:id', () => {
 
     const body = (await res.json()) as { plan: { pendingTasks: Array<{ status: string }> } };
     expect(body.plan.pendingTasks[0].status).toBe('pending');
+  });
+
+  // The phase-tagged plan keeps no transcript, and a joined or read-only window redraws its chat from this (W16).
+  it('carries the saved planner transcript for a session nobody here holds', async () => {
+    const res = await appWith(fakePool()).request('/api/sessions/s1?workspace=/ws');
+
+    const body = (await res.json()) as { conversation?: { conversationHistory?: Array<{ content: string }> } };
+    expect(body.conversation?.conversationHistory?.map((m) => m.content)).toEqual(['Add rate limiting']);
+  });
+
+  it('carries the live session\'s transcript over the saved one', async () => {
+    const live = { ...savedFile, conversationHistory: [...savedFile.conversationHistory, { role: 'assistant', content: 'Three tasks.', timestamp: '2026-10-25T10:01:00.000Z' }] };
+    const pool = fakePool({ getPlan: vi.fn().mockReturnValue(live), getPlanState: vi.fn().mockReturnValue(savedPlan) } as Partial<OrchestratorPool>);
+
+    const res = await appWith(pool).request('/api/sessions/s1?workspace=/ws');
+
+    const body = (await res.json()) as { conversation?: { conversationHistory?: Array<{ content: string }> } };
+    expect(body.conversation?.conversationHistory?.map((m) => m.content)).toEqual(['Add rate limiting', 'Three tasks.']);
   });
 
   it('answers 404 when there is no saved session in that workspace', async () => {
@@ -395,14 +433,20 @@ describe('skill bodies on the sessions routes', () => {
     return app;
   };
 
-  it('GET /:id sends task attempts as notices', async () => {
-    readSaved.mockReturnValue({ meta: { id: 's1' }, plan: { phase: 'planning', history: [], message: '', pendingTasks: [{ id: 't1', subtasks: [], attemptSkills: [attempt] }] } } as never);
+  it('GET /:id sends task attempts and the transcript\'s skill loads as notices', async () => {
+    readSaved.mockReturnValue({ meta: { id: 's1' }, plan: {
+      tasks: [{ id: 't1', subtasks: [], attemptSkills: [attempt] }],
+      runners: [],
+      conversationHistory: [{ role: 'user', content: 'x', timestamp: 't', kind: 'skill_load', skill: load }],
+      pendingTurns: [{ id: 'turn-1', source: 'user', text: 'go', timestamp: 't', skills: [load] }],
+    } } as never);
 
     const res = await appWith(fakePool()).request('/api/sessions/s1?workspace=/ws');
 
     const text = await res.text();
     expect(text).not.toContain(BODY);
     expect(JSON.parse(text).plan.pendingTasks[0].attemptSkills).toEqual([{ name: 'tdd', source: 'global', path: attempt.path }]);
+    expect(JSON.parse(text).conversation.conversationHistory[0].skill).toEqual({ invokedBy: 'user', name: 'grilling', source: 'global', path: load.path });
   });
 
   it('POST /:id/load sends the loaded plan with notices for its skill loads and pending turns', async () => {

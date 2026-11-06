@@ -18,7 +18,7 @@
  *   npm run build -w packages/core -w packages/vscode   # build the bundles first
  *   node bench/live/webview-harness.mjs                 # serves on http://127.0.0.1:3798
  *
- * `?theme=dark|light|high-contrast|high-contrast-light` sets the `--vscode-*`
+ * `?theme=dark|light|dark-plus|light-plus|high-contrast|high-contrast-light` sets the `--vscode-*`
  * custom properties a driving script wants for contrast screenshots; dark is
  * the default. `/tasklog` serves the task log panel's bundle the same way: it
  * draws nothing until a driving script posts it an `init` through `__send`.
@@ -53,6 +53,7 @@ const THEMES = {
     '--vscode-editorWarning-foreground': '#cca700',
     '--vscode-list-warningForeground': '#cca700',
     '--vscode-focusBorder': '#007fd4',
+    '--vscode-widget-shadow': 'rgba(0, 0, 0, 0.36)',
     '--vscode-button-background': '#0e639c',
     '--vscode-testing-iconPassed': '#73c991',
     '--vscode-testing-iconFailed': '#f14c4c',
@@ -78,6 +79,7 @@ const THEMES = {
     '--vscode-editorWarning-foreground': '#bf8803',
     '--vscode-list-warningForeground': '#895503',
     '--vscode-focusBorder': '#0090f1',
+    '--vscode-widget-shadow': 'rgba(0, 0, 0, 0.16)',
     '--vscode-button-background': '#005fb8',
     '--vscode-testing-iconPassed': '#388a34',
     '--vscode-testing-iconFailed': '#a1260d',
@@ -101,6 +103,7 @@ const THEMES = {
     '--vscode-panel-border': '#6fc3df',
     '--vscode-widget-border': '#6fc3df',
     '--vscode-contrastBorder': '#6fc3df',
+    '--vscode-contrastActiveBorder': '#f38518',
     '--vscode-foreground': '#ffffff',
     '--vscode-descriptionForeground': '#ffffff',
     '--vscode-errorForeground': '#f48771',
@@ -127,6 +130,7 @@ const THEMES = {
     '--vscode-panel-border': '#0f4a85',
     '--vscode-widget-border': '#0f4a85',
     '--vscode-contrastBorder': '#0f4a85',
+    '--vscode-contrastActiveBorder': '#006bbd',
     '--vscode-foreground': '#292929',
     '--vscode-descriptionForeground': '#292929',
     '--vscode-errorForeground': '#a1260d',
@@ -144,10 +148,28 @@ const THEMES = {
   },
 };
 
-const themeName = (raw) => (raw === 'light' ? 'light'
-  : raw === 'high-contrast' ? 'high-contrast'
-  : raw === 'high-contrast-light' ? 'high-contrast-light'
-  : 'dark');
+// Dark+ and Light+, the older defaults: their side bar sits further off the
+// editor than the Modern themes', which the derived card surfaces must survive.
+THEMES['dark-plus'] = {
+  ...THEMES.dark,
+  '--vscode-editor-background': '#1e1e1e',
+  '--vscode-sideBar-background': '#252526',
+  '--vscode-quickInput-background': '#252526',
+  '--vscode-foreground': '#cccccc',
+  '--vscode-descriptionForeground': 'rgba(204, 204, 204, 0.7)',
+};
+THEMES['light-plus'] = {
+  ...THEMES.light,
+  '--vscode-editor-background': '#ffffff',
+  '--vscode-sideBar-background': '#f3f3f3',
+  '--vscode-quickInput-background': '#f3f3f3',
+  '--vscode-foreground': '#616161',
+  '--vscode-descriptionForeground': '#717171',
+};
+/** The class VS Code puts on the webview's body: Dark+ and Light+ are plain dark and light themes. */
+const BODY_CLASS = { dark: 'dark', light: 'light', 'high-contrast': 'high-contrast', 'high-contrast-light': 'high-contrast-light', 'dark-plus': 'dark', 'light-plus': 'light' };
+
+const themeName = (raw) => (Object.hasOwn(THEMES, raw ?? '') ? raw : 'dark');
 
 function themeStyle(name) {
   const vars = THEMES[name];
@@ -169,7 +191,7 @@ function page(rawTheme, script) {
   body { margin: 0; }
 </style>
 </head>
-<body class="vscode-${theme}">
+<body class="vscode-${BODY_CLASS[theme]}">
 <div id="root"></div>
 <script>
   window.__posted = [];

@@ -13,6 +13,7 @@ import type {
   ChildPlanResponse,
   ChildTaskControlResponse,
   ChildTreeFrame,
+  ConfirmDifference,
   ContainerChange,
   ContainerChangeResponse,
   ContainerStatus,
@@ -26,6 +27,29 @@ import type {
   ExecuteCommandResponse,
   ExecuteResponse,
   ExecutionCommand,
+  FileContentResponse,
+  FileFindResponse,
+  FileTreeResponse,
+  FileSaveRequest,
+  GitActionResponse,
+  GitBranchCreateRequest,
+  GitBranchDeleteRequest,
+  GitChangesRequest,
+  GitCommitRequest,
+  GitDiscardRequest,
+  GitRemoteRequest,
+  GitStashRequest,
+  LandingBranchHeld,
+  MergePreflightResponse,
+  UserGitTarget,
+  GitBranchesResponse,
+  GitCommitResponse,
+  GitDiffResponse,
+  GitLogResponse,
+  GitReposResponse,
+  GitStatusResponse,
+  ReadTarget,
+  TaskDiffResponse,
   GeneratePlanResponse,
   IsolationDiffResponse,
   IsolationMergeResponse,
@@ -98,6 +122,10 @@ export class DaemonError extends Error {
     readonly plannerNotReady?: PlannerNotReady,
     /** With `session_held`: the host that runs the session (ADR-0049). */
     readonly sessionHeld?: SessionHeld,
+    /** With `landing_branch_held`: the live run that lands on the branch (ADR-0062 G7). */
+    readonly landingBranchHeld?: LandingBranchHeld,
+    /** With `confirm_stale`: what the person was shown against what is there now (ADR-0062 G3). */
+    readonly confirmStale?: ConfirmDifference,
   ) {
     super(message);
     this.name = 'DaemonError';
@@ -215,10 +243,13 @@ const SESSION_PATH = /^\/api\/(?:plans|sessions)\/([^/?]+)/;
 
 /** A non-200 answer as an error. The body is not trusted to be JSON: an HTML error page arrives as a string. */
 function daemonError(status: number, data: unknown, fallback: string): DaemonError {
-  const { error, code, workspace, plannerNotReady, sessionHeld } = (typeof data === 'object' && data !== null ? data : {}) as Partial<ErrorBody>;
+  const { error, code, workspace, plannerNotReady, sessionHeld, landingBranchHeld, confirmStale } = (typeof data === 'object' && data !== null ? data : {}) as Partial<ErrorBody>;
   if (code === 'workspace_not_a_project') return new WorkspaceInitNeededError(error || 'Not a project directory', workspace ?? '');
-  return new DaemonError(error || fallback, status, code, plannerNotReady, sessionHeld);
+  return new DaemonError(error || fallback, status, code, plannerNotReady, sessionHeld, landingBranchHeld, confirmStale);
 }
+
+/** A read's target (ADR-0064), its workspace the client's own unless named. */
+export type ReadQuery = Partial<ReadTarget>;
 
 export class ApiClient {
   /** Where a CLI invocation's sessions live, when a client is built without one: `--workspace`, else the cwd. */
@@ -545,6 +576,132 @@ export class ApiClient {
   async reviewRunDiff(sessionId: string): Promise<string> {
     const res = await this.call<IsolationDiffResponse>('GET', `/api/plans/${sessionId}/isolation/diff`, 'Could not read the diff');
     return res.diff;
+  }
+
+  /** A directory of one view scope (ADR-0064), `dir` `''` for its root. */
+  getFileTree(target: ReadQuery, dir = ''): Promise<FileTreeResponse> {
+    return this.read('/api/files/tree', target, { dir }, 'Could not read the folder');
+  }
+
+  getFileContent(target: ReadQuery, path: string): Promise<FileContentResponse> {
+    return this.read('/api/files/content', target, { path }, 'Could not read the file');
+  }
+
+  /** Paths whose name holds `query`, or with `text` lines that do; `truncated` once the cap is hit. */
+  findFiles(target: ReadQuery, options: { query: string; text?: boolean; limit?: number }): Promise<FileFindResponse> {
+    return this.read('/api/files/find', target, { query: options.query, text: options.text ? '1' : undefined, limit: options.limit?.toString() }, 'Could not search the files');
+  }
+
+  getGitRepos(workspace?: string): Promise<GitReposResponse> {
+    return this.read('/api/git/repos', { workspace }, {}, 'Could not read the repositories');
+  }
+
+  getGitStatus(target: ReadQuery): Promise<GitStatusResponse> {
+    return this.read('/api/git/status', target, {}, 'Could not read the status');
+  }
+
+  getGitDiff(target: ReadQuery, options: { kind?: 'staged' | 'unstaged'; from?: string; to?: string; path?: string } = {}): Promise<GitDiffResponse> {
+    return this.read('/api/git/diff', target, options, 'Could not read the diff');
+  }
+
+  /** One page of history; pass back the page's `cursor` for the next. */
+  getGitLog(target: ReadQuery, options: { ref?: string; cursor?: string; limit?: number } = {}): Promise<GitLogResponse> {
+    return this.read('/api/git/log', target, { ref: options.ref, cursor: options.cursor, limit: options.limit?.toString() }, 'Could not read the history');
+  }
+
+  getGitCommit(target: ReadQuery, sha: string, path?: string): Promise<GitCommitResponse> {
+    return this.read('/api/git/commit', target, { sha, path }, 'Could not read the commit');
+  }
+
+  getGitBranches(target: ReadQuery): Promise<GitBranchesResponse> {
+    return this.read('/api/git/branches', target, {}, 'Could not read the branches');
+  }
+
+  /** One task's diff from its saved run: the changed names with `names`, one file's patch with `path`. */
+  getTaskDiff(sessionId: string, taskId: string, options: { workspace?: string; repo?: string; path?: string; names?: boolean } = {}): Promise<TaskDiffResponse> {
+    const { workspace, repo, path, names } = options;
+    return this.read(`/api/plans/${sessionId}/tasks/${encodeURIComponent(taskId)}/diff`, { workspace, repo }, { path, names: names ? '1' : undefined }, 'Could not read the task\'s diff');
+  }
+
+  /** Saves a file read at `baseHash` (ADR-0062 G10); a file changed since answers `stale`. */
+  saveFile(target: UserGitTarget, file: Omit<FileSaveRequest, keyof UserGitTarget>): Promise<GitActionResponse> {
+    return this.act('PUT', '/api/files/content', target, file, 'Could not save the file');
+  }
+
+  gitStage(target: UserGitTarget, changes: Omit<GitChangesRequest, keyof UserGitTarget>): Promise<GitActionResponse> {
+    return this.act('POST', '/api/git/stage', target, changes, 'Could not stage');
+  }
+
+  gitUnstage(target: UserGitTarget, changes: Omit<GitChangesRequest, keyof UserGitTarget>): Promise<GitActionResponse> {
+    return this.act('POST', '/api/git/unstage', target, changes, 'Could not unstage');
+  }
+
+  gitCommit(target: UserGitTarget, commit: Omit<GitCommitRequest, keyof UserGitTarget>): Promise<GitActionResponse> {
+    return this.act('POST', '/api/git/commit', target, commit, 'Could not commit');
+  }
+
+  gitDiscard(target: UserGitTarget, discard: Omit<GitDiscardRequest, keyof UserGitTarget>): Promise<GitActionResponse> {
+    return this.act('POST', '/api/git/discard', target, discard, 'Could not discard');
+  }
+
+  gitCreateBranch(target: UserGitTarget, branch: Omit<GitBranchCreateRequest, keyof UserGitTarget>): Promise<GitActionResponse> {
+    return this.act('POST', '/api/git/branch', target, branch, 'Could not create the branch');
+  }
+
+  /** Refused with `landing_branch_held` while a live run lands on the branch checked out now (ADR-0062 G7). */
+  gitSwitch(target: UserGitTarget, branch: string): Promise<GitActionResponse> {
+    return this.act('POST', '/api/git/switch', target, { branch }, 'Could not switch branch');
+  }
+
+  gitDeleteBranch(target: UserGitTarget, branch: string, confirm: GitBranchDeleteRequest['confirm']): Promise<GitActionResponse> {
+    return this.act('POST', '/api/git/branch-delete', target, { branch, confirm }, 'Could not delete the branch');
+  }
+
+  /** The answer's `stash` names the stash made, by the sha `gitStashPop` and `gitStashDrop` take. */
+  gitStash(target: UserGitTarget, stash: Omit<GitStashRequest, keyof UserGitTarget> = {}): Promise<GitActionResponse> {
+    return this.act('POST', '/api/git/stash', target, stash, 'Could not stash');
+  }
+
+  gitStashPop(target: UserGitTarget, stash: string): Promise<GitActionResponse> {
+    return this.act('POST', '/api/git/stash-pop', target, { stash }, 'Could not apply the stash');
+  }
+
+  gitStashDrop(target: UserGitTarget, stash: string): Promise<GitActionResponse> {
+    return this.act('POST', '/api/git/stash-drop', target, { stash }, 'Could not drop the stash');
+  }
+
+  gitFetch(target: UserGitTarget): Promise<GitActionResponse> {
+    return this.act('POST', '/api/git/fetch', target, {}, 'Could not fetch');
+  }
+
+  /** `confirm` is the tracking remote and branch the person was shown. */
+  gitPull(target: UserGitTarget, confirm: GitRemoteRequest['confirm']): Promise<GitActionResponse> {
+    return this.act('POST', '/api/git/pull', target, { confirm }, 'Could not pull');
+  }
+
+  gitPush(target: UserGitTarget, confirm: GitRemoteRequest['confirm']): Promise<GitActionResponse> {
+    return this.act('POST', '/api/git/push', target, { confirm }, 'Could not push');
+  }
+
+  /** Per repository, the user's uncommitted files Merge all would collide with (ADR-0062 G8). */
+  mergePreflight(sessionId: string, workspace?: string): Promise<MergePreflightResponse> {
+    const query = new URLSearchParams({ workspace: workspace ?? this.workspace });
+    return this.call('GET', `/api/plans/${sessionId}/isolation/merge-preflight?${query.toString()}`, 'Could not read the run');
+  }
+
+  /** A user git action's body: its target first, its workspace the client's own unless named, then the action's own fields. */
+  private act(method: string, route: string, target: UserGitTarget, fields: object, fallback: string): Promise<GitActionResponse> {
+    const scope = { workspace: target.workspace ?? this.workspace, ...(target.repo !== undefined ? { repo: target.repo } : {}) };
+    return this.call(method, route, fallback, { ...scope, ...fields });
+  }
+
+  /** A user read's query: the target first, as every read route takes it, then the route's own parameters. */
+  private read<T>(route: string, target: ReadQuery, extra: Record<string, string | undefined>, fallback: string): Promise<T> {
+    const query = new URLSearchParams({ workspace: target.workspace ?? this.workspace });
+    for (const [key, value] of Object.entries({ repo: target.repo, scope: target.scope, sessionId: target.sessionId, taskId: target.taskId, ...extra })) {
+      if (value !== undefined) query.set(key, value);
+    }
+    return this.call('GET', `${route}?${query.toString()}`, fallback);
   }
 
   /**

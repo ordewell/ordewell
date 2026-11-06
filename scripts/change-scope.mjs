@@ -18,7 +18,7 @@ const DOCS = /^(docs\/.+|(README|CHANGELOG|CONTEXT|CONTRIBUTING|AGENTS|CLAUDE|SE
 const SOURCE = /^(src|server)\/.+\.tsx?$/;
 
 /** Each is a check a scope turns on or off; ci.yml reads them as job outputs. */
-export const CHECKS = ['packages', 'sandbox', 'planner', 'integration', 'engine'];
+export const CHECKS = ['packages', 'sandbox', 'planner', 'integration', 'desktop', 'engine', 'binary'];
 
 /** Step ids in ci.yml's build-and-test that every change owes. */
 export const ALWAYS_STEPS = ['build-core', 'verify-scripts', 'repo-guards'];
@@ -30,10 +30,12 @@ export const ALWAYS_STEPS = ['build-core', 'verify-scripts', 'repo-guards'];
  * fails the step they serve, or costs nothing a verdict rests on.
  */
 export const STEPS_BY_CHECK = {
-  packages: ['bench', 'build-rest', 'typecheck', 'coverage', 'lint', 'package-vscode', 'verify-artifacts', 'upload-vsix'],
+  packages: ['bench', 'build-rest', 'typecheck', 'coverage', 'lint', 'package-vscode', 'package-desktop', 'verify-artifacts', 'upload-vsix'],
   sandbox: ['sandbox'],
   planner: ['planner-loop'],
   integration: ['vscode-integration'],
+  desktop: ['desktop-e2e', 'desktop-tour'],
+  binary: ['build-binary', 'drive-binary'],
 };
 
 /**
@@ -96,6 +98,22 @@ export function fullScope(reason, workspaces) {
  * drive core's dist and no other package. Every package gets the same builds,
  * typecheck, lint and artifact checks: those cover the packages together, and
  * what selection saves is the suites and the checks each package owns.
+ *
+ * Nothing under scripts/ belongs to a workspace, so the installers
+ * (scripts/install/), the release-asset script they read
+ * (scripts/desktop-release-assets.mjs, ADR-0063 H10), the script that picks
+ * the release marked latest (scripts/release-latest.mjs, ADR-0065 C11) and the package-manager
+ * manifests a release renders (packaging/, scripts/render-package-manifests.mjs,
+ * ADR-0063 H11, ADR-0065) mean the full run: their tests run in the bench step, which a
+ * narrowed run could skip.
+ *
+ * The standalone binary (ADR-0065) bundles the CLI with web and core, so a
+ * change that reaches the CLI owes its build and its drive, and the CLI depends
+ * on both, so a change to either reaches it. What else makes the binary is
+ * outside every workspace and so already the full run: the build script and
+ * its entitlements (scripts/sea/, packaging/sea/), the driver
+ * (bench/live/drive-binary.mjs), the root manifests and lockfile, and the
+ * installer that fetches it (scripts/install/).
  */
 export function selectScope(paths, workspaces) {
   if (paths.length === 0) return fullScope('git reported no changed path', workspaces);
@@ -112,7 +130,11 @@ export function selectScope(paths, workspaces) {
     sandbox: core,
     planner: core,
     integration: affected.has('packages/vscode'),
+    // The app's acceptance test drives bench/, but bench/ is outside every
+    // workspace, so a change there already means the full run.
+    desktop: affected.has('packages/desktop'),
     engine: core,
+    binary: affected.has('packages/cli'),
   };
   return {
     mode: affected.size > 0 ? 'selected' : 'docs',

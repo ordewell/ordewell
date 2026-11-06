@@ -5,23 +5,11 @@ import { dropRetiredPlanFields, failInterruptedTasks, migratePlanState, migrateL
 import { migratePlanStateIsolation } from '../services/isolationRecord';
 import type { SessionMeta, SessionData } from '../models/Session';
 import { defaultLogger, type ILogger } from '../interfaces/ILogger';
-import { getStateDir, ensureDir, ensureStateDirIgnored, writeFileAtomic } from './fsHelpers';
+import { ensureDir, ensureStateDirIgnored, writeFileAtomic } from './fsHelpers';
 import { mintSessionId } from './sessionId';
+import { getSessionsDir, idSegment } from './sessionDir';
 
-const SESSIONS_SUBDIR = 'sessions';
-
-function getSessionsDir(baseDir?: string): string {
-  return path.join(getStateDir(baseDir), SESSIONS_SUBDIR);
-}
-
-/**
- * A path segment for an id that came from outside — a session id from a URL,
- * a task id a planner wrote. A plain id is used as is; anything that could
- * climb out of its directory, or is not portable as a file name, is hex-encoded.
- */
-export function idSegment(id: string): string {
-  return /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}$/.test(id) ? id : `~${Buffer.from(id, 'utf-8').toString('hex')}`;
-}
+export { idSegment };
 
 /**
  * The directory beside a session's file for what it keeps outside that file —

@@ -36,7 +36,7 @@ describe('run settings over /api/settings', () => {
   it('answers the run settings, each at its default until the user sets it', async () => {
     const body = await (await app.request('/api/settings')).json() as SettingsResponse;
 
-    expect(body.run).toEqual({ supervisorLevel: 'watch', mergeAtGatesAutomatically: false, plannedWithTrailer: true, autorun: false, supervisorRetryLimit: 2, wakeUpReadBudget: 12, delegationTokens: 0, delegationBudget: 0 });
+    expect(body.run).toEqual({ supervisorLevel: 'watch', mergeAtGatesAutomatically: false, plannedWithTrailer: true, autorun: false, supervisorRetryLimit: 2, wakeUpReadBudget: 12, delegationTokens: 0, delegationBudget: 0, delegationDepth: 2, delegatedTasksPerPlan: 8, tasksPerChildPlan: 30 });
   });
 
   it('saves a change for every session and answers the settings as they now stand', async () => {
@@ -102,6 +102,18 @@ describe('run settings over /api/settings', () => {
     expect(((await res.json()) as { error: string }).error).toMatch(/retry limit/i);
     expect(new SettingsService().getRunSettings().supervisorLevel).toBe('watch');
     expect(applyRunSettings).not.toHaveBeenCalled();
+  });
+
+  it('saves the tree\'s shape within ADR-0055 D19\'s caps, and refuses one past them', async () => {
+    const saved = await patch({ run: { delegationDepth: 4, delegatedTasksPerPlan: 30, tasksPerChildPlan: 100 } });
+    expect(saved.status).toBe(200);
+    expect(((await saved.json()) as SettingsResponse).run).toMatchObject({ delegationDepth: 4, delegatedTasksPerPlan: 30, tasksPerChildPlan: 100 });
+
+    const deep = await patch({ run: { delegationDepth: 5 } });
+    expect(deep.status).toBe(400);
+    expect(((await deep.json()) as { error: string }).error).toBe("The tree's depth must be a whole number of levels, 1 to 4.");
+    expect((await patch({ run: { tasksPerChildPlan: 0 } })).status).toBe(400);
+    expect(new SettingsService().getRunSettings()).toMatchObject({ delegationDepth: 4, tasksPerChildPlan: 100 });
   });
 
   it('has no per-plan settings route any more', async () => {

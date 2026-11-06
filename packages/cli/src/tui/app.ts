@@ -111,11 +111,7 @@ export function createApp(deps: AppDeps): App {
     if (session && session !== previousSession) deps.onSessionChange?.(session, state);
 
     if (state.exiting) {
-      exited = true;
-      clearInterval(spinnerInterval);
-      if (renderTimer) clearTimeout(renderTimer);
-      renderTimer = null;
-      renderPending = false;
+      halt();
       deps.onExit();
       return;
     }
@@ -127,16 +123,23 @@ export function createApp(deps: AppDeps): App {
     for (const effect of result.effects) fire(effect);
   }
 
+  /** Draws nothing more and acts on nothing more: the terminal is about to be someone else's. */
+  function halt(): void {
+    exited = true;
+    clearInterval(spinnerInterval);
+    if (renderTimer) clearTimeout(renderTimer);
+    renderTimer = null;
+    renderPending = false;
+  }
+
   function fire(effect: Effect): void {
     if (effect.type === 'exit') {
-      exited = true;
-      clearInterval(spinnerInterval);
-      if (renderTimer) clearTimeout(renderTimer);
-      renderTimer = null;
-      renderPending = false;
+      halt();
       deps.onExit();
       return;
     }
+    // The update runs on this terminal in the TUI's place, and the TUI does not come back.
+    if (effect.type === 'selfUpdate') halt();
     // A failing effect already reports itself as an error turn; swallow the
     // rejection here so one bad call cannot take the whole session down.
     void deps.perform(effect).catch(() => {});

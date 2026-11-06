@@ -5,7 +5,7 @@ import type { ApiProvider } from '../adapters/SecretStore';
 import type { ChatViewProvider, PlannerBackend } from '../providers/ChatViewProvider';
 import type { VendorModelOption } from '../plan/PlannerModelSwitch';
 import { configureModelAllowlist } from './configureModelAllowlist';
-import { isBuiltinSlashCommand, resolveSlashAlias, slashHelp } from './slashCommands';
+import { isBuiltinSlashCommand, resolveSlashAlias, slashHelp } from '@ordewell/ui/protocol';
 import { runPlannerWizard } from './plannerWizard';
 
 // A '/' text whose first word the table does not name is a discovered skill

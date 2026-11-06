@@ -21,6 +21,7 @@ function settingsState(overrides: Partial<SettingsState> = {}): SettingsState {
     orchestratorModel: '',
     aiProvider: 'openrouter',
     plannerThinkingEffort: '',
+    autonomousMode: false,
     maxParallel: 3,
     modelAllowlist: undefined,
     plannerModels: undefined,
@@ -73,6 +74,7 @@ describe('GET /api/settings', () => {
       // Who plans (ADR-0009) — the planner picker reads it from here.
       aiProvider: 'openrouter',
       plannerThinkingEffort: '',
+      autonomousMode: false,
       // How many tasks run at once — `/parallel` shows it from here.
       maxParallel: 3,
       run: { ...RUN_SETTINGS_DEFAULTS },
@@ -184,6 +186,21 @@ describe('PATCH /api/settings', () => {
     const body = (await res.json()) as { modelAllowlist: Record<string, string[]> };
     expect(body.modelAllowlist).toEqual({ opencode: ['model-a', 'model-b'] });
     expect(pool.writeSettings).toHaveBeenCalledWith({ modelAllowlist: { opencode: ['model-a', 'model-b'] } }, undefined, undefined);
+  });
+
+  it('updates the saved autonomy level, which is a setting and not an environment write', async () => {
+    vi.mocked(pool.writeSettings).mockResolvedValue(settingsState({ autonomousMode: true }));
+    vi.mocked(pool.getSettings).mockReturnValue(settingsState({ autonomousMode: true }));
+
+    const res = await app.request('/api/settings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ autonomousMode: true }),
+    });
+
+    expect(res.status).toBe(200);
+    expect((await res.json()) as { autonomousMode: boolean }).toMatchObject({ autonomousMode: true });
+    expect(pool.writeSettings).toHaveBeenCalledWith({ autonomousMode: true }, undefined, undefined);
   });
 
   it('returns 400 for no body', async () => {

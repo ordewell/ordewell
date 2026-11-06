@@ -492,13 +492,19 @@ the child cannot reach follows it in the parent's plan.**
 ### Shape, surfaces and the setting
 
 - **Limits on shape (D19).** Mandate limits with hard caps in core, refused rather
-  than dropped, naming the level (ADR-0056 M3):
+  than dropped, naming the level (ADR-0056 M3). Each is a run setting
+  ([ADR-0030](0030-global-run-settings.md)) whose default is the table's, and the
+  user may set it from 1 to its hard cap: a value past the cap is refused when it is
+  saved, and the root's mandate clamps what it reads to the same bounds, so a root
+  never passes a cap and a child, narrowed from its parent, never passes the root
+  (ADR-0056 M3). At least 1, so a tree turned on can always delegate a level. The
+  values hold while delegation is on and are kept while it is off, as its budget is:
 
-  | limit | default | hard |
-  |---|---|---|
-  | depth, the root plan being 0 | 2 | 4 |
-  | delegated tasks per plan | 8 | 30 |
-  | tasks per child plan | 30 | 100 |
+  | limit | run setting | default | hard |
+  |---|---|---|---|
+  | depth, the root plan being 0 | `delegationDepth` | 2 | 4 |
+  | delegated tasks per plan | `delegatedTasksPerPlan` | 8 | 30 |
+  | tasks per child plan | `tasksPerChildPlan` | 30 | 100 |
 
   A root plan has no task limit, so a flat run does not change.
 - **Surfaces (D20).** The root shows a delegated task as one row, of `kind`
@@ -565,8 +571,11 @@ the child cannot reach follows it in the parent's plan.**
   ([ADR-0030](0030-global-run-settings.md)), and turning it on sets the tree's token
   budget (ADR-0056 M5). While the rest of this ADR is unbuilt a build holds it back
   as well: `DELEGATION_OFFERED` is on only with `ORDEWELL_DELEGATION=1` in a build run
-  from a git checkout of this repository, so a published package ignores the variable,
-  no surface shows the setting, and what a saved setting asks for stays inert. A
+  from a git checkout of this repository, so a published package ignores the variable
+  and what a saved setting asks for stays inert. The TUI and VS Code show the setting
+  only where it is offered; the desktop shows it as **Subplanners** in Advanced's
+  Experimental group, with the tree budget and D19's limits beside it, since its
+  renderer cannot read the checkout it was built from. A
   saved plan that holds a delegated task there ends it `blocked`. The planner is
   taught delegation only where its mandate holds `delegate`: anywhere else its
   prompts and its tools do not change by a byte. A flat plan
@@ -793,3 +802,4 @@ the child cannot reach follows it in the parent's plan.**
 - 2026-11-02 — D20's TUI walks a tree: Enter and Esc move a plan at a time, a child stays followed on its own socket, and the root's run keeps its keys and overlays from any depth.
 - 2026-11-02 — D20: the daemon's message route refuses a raise or a force aloud, a held message a Stop ends is told on its child's stream, a child a retry let go says no Continue reaches it, and the list reads the tree's log after a restart.
 - 2026-11-02 — from review: D7's list holds every path a branch changes, beside a folder workspace too, and nothing starts behind a report, whose branch is read again as it is published. D17: a Continue whose worktree cannot open keeps the child, and one whose restore falls back says so.
+- 2026-11-05 — D19's three limits are run settings, defaulting to the table and bounded by its caps; D21's desktop shows Subplanners in Advanced's Experimental group.

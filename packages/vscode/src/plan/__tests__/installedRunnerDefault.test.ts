@@ -30,7 +30,7 @@ import { fakeFileSystem, homeEnv, setEnv, writeStandIn } from '@ordewell/core/te
 import { __resetConfig, __setConfig, configUpdates } from '../../test/vscode.mock';
 import { VsCodeConfig } from '../../adapters/VsCodeConfig';
 import { ChatViewProvider } from '../../providers/ChatViewProvider';
-import type { HostToWebview } from '../../shared/protocol';
+import type { HostToWebview } from '@ordewell/ui/protocol';
 import { handleStartPlanning, type PlanManagerDeps } from '../PlanManager';
 
 function deferred<T>() {

@@ -3,7 +3,7 @@ import type * as vscode from 'vscode';
 import type { Task, TaskIsolation, TaskLogEvent } from '@ordewell/core';
 import { createFakeWebviewPanel } from '../../test/vscode.mock';
 import { TaskLogPanel, type TaskLogSession } from '../TaskLogPanel';
-import type { HostToTaskLog } from '../../shared/taskLogProtocol';
+import type { HostToTaskLog } from '@ordewell/ui/protocol';
 
 // The plan stores a runner for every task it holds, whatever its type.
 const task = (over: Partial<Task>): Task => ({

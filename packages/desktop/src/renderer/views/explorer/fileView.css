@@ -1,0 +1,37 @@
+/* The header, banners and loading look the file and diff tabs share (fileView.tsx). */
+
+.fv-head { flex-wrap: wrap; flex: none; min-height: var(--ow-height-header); padding: var(--ow-space-half) var(--ow-space-3); row-gap: var(--ow-space-half); border-bottom: 1px solid var(--ow-border); }
+.fv-path { display: inline-flex; flex: 1 1 var(--ow-space-8); min-width: 0; max-width: max-content; font: var(--ow-type-code); white-space: nowrap; }
+/* The path asks for room worth a file's name before the badges and buttons do, so a narrow bar wraps them under it instead of squeezing the name to a few letters. */
+.fv-path { flex-basis: calc(var(--ow-space-8) * 5); }
+/* Folders give way first: the file's name is what the tab is about. */
+.fv-dir { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--ow-fg-secondary); }
+.fv-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--ow-fg); }
+.fv-name:only-child { flex: 1 1 auto; }
+.fv-dir + .fv-name { flex-shrink: 0; max-width: 100%; }
+.fv-meta { display: inline-flex; align-items: center; flex: none; gap: var(--ow-space-1); max-width: 100%; min-width: 0; }
+.fv-meta > * { flex: none; }
+.fv-meta > .ow-badge { max-width: 200px; }
+.fv-actions { display: inline-flex; align-items: center; flex: none; gap: var(--ow-space-1); }
+
+.fv-banner { display: flex; align-items: flex-start; flex: none; gap: var(--ow-space-2); padding: var(--ow-space-2) var(--ow-space-3); border-bottom: 1px solid var(--ow-border); background: var(--ow-bg-selected); color: var(--ow-fg); font: var(--ow-type-small); }
+.fv-banner-attention { background: var(--ow-bg-overlay); }
+.fv-banner-icon { flex: none; margin-top: var(--ow-space-half); color: var(--ow-fg-secondary); }
+.fv-banner-attention .fv-banner-icon { color: var(--ow-status-attention); }
+.fv-banner-text { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; line-height: var(--ow-space-4); }
+.fv-banner-actions { display: inline-flex; flex-wrap: wrap; flex: 0 1 auto; justify-content: flex-end; gap: var(--ow-space-1); }
+
+.fv-skeleton { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; padding: var(--ow-space-2) var(--ow-space-3); overflow: hidden; }
+.fv-skeleton-line { display: flex; align-items: center; flex: none; height: var(--ow-row); }
+.fv-skeleton-bar { display: block; height: var(--ow-space-2); border-radius: var(--ow-radius-sm); background: var(--ow-bg-hover); }
+
+.fv-state { display: flex; flex: 1 1 auto; align-items: center; justify-content: center; min-height: 0; overflow: auto; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .fv-skeleton-bar { animation: fv-pulse 1.4s ease-in-out infinite; }
+}
+@keyframes fv-pulse { 50% { opacity: 0.5; } }
+
+.fv-segment { display: inline-flex; flex: none; border: 1px solid var(--ow-border-widget); border-radius: var(--ow-radius-md); overflow: hidden; }
+.fv-segment > .ow-icon-button { border-radius: 0; }
+.fv-segment > .ow-icon-button + .ow-icon-button { border-left: 1px solid var(--ow-border-widget); }

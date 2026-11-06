@@ -3,7 +3,7 @@ import { PlannerModelMemory, type DiscoveredModel, type PlannerModelStore } from
 import { __quickPicks, __resetQuickPicks, window, type FakeQuickPick } from '../../test/vscode.mock';
 import { runPlannerWizard, type PlannerWizardDeps } from '../plannerWizard';
 import { recallPlannerModel } from '../../plan/PlannerModelSwitch';
-import type { PlannerBackend } from '../../shared/protocol';
+import type { PlannerBackend } from '@ordewell/ui/protocol';
 
 const CLAUDE: PlannerBackend = { id: 'claude-code', label: 'Claude Code', kind: 'harness', runner: 'claude-code', usable: true };
 const CODEX: PlannerBackend = { id: 'codex', label: 'Codex', kind: 'harness', runner: 'codex', usable: false, reason: 'codex is not installed' };

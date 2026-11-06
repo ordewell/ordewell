@@ -6,8 +6,11 @@ type Vscode = Pick<typeof vscode, 'env' | 'window'>;
 /**
  * The daily version check (ADR-0048) for one extension host. VS Code's own
  * telemetry setting is the off switch: off means no notice, no file and no
- * ping, and turning it off mid-session stops the daily re-check. There is no
- * update line here: the Marketplace updates the extension.
+ * ping, and turning it off mid-session stops the daily re-check.
+ *
+ * The update line is a message pointing at the Extensions view, since the
+ * Marketplace updates the extension, and comes at most once a day: every
+ * window starts an extension host, and a message interrupts each one.
  */
 export function startExtensionVersionCheck(
   host: Vscode,
@@ -18,7 +21,9 @@ export function startExtensionVersionCheck(
     version,
     telemetryEnabled: host.env.isTelemetryEnabled,
     onNotice: (text) => { void host.window.showInformationMessage(text); },
-    onUpdate: () => {},
+    onUpdate: (text) => { void host.window.showInformationMessage(text); },
+    howToUpdate: 'update it from the Extensions view',
+    updateLine: 'daily',
     ...options,
   });
   const subscription = host.env.onDidChangeTelemetryEnabled((enabled) => {

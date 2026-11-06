@@ -1,6 +1,6 @@
 import type { ChildDirectory, ChildPlanHandle } from '@ordewell/core';
-import { ConversationViewHost } from '../ConversationViewHost';
-import type { ChildCheckpointAnswer, HostToWebview } from '../shared/protocol';
+import { ChildView } from '@ordewell/ui/host';
+import type { ChildCheckpointAnswer, HostToWebview } from '@ordewell/ui/protocol';
 
 const NOT_OPEN = 'The child plan is no longer open.';
 
@@ -17,7 +17,7 @@ function errorText(error: unknown): string { return error instanceof Error ? err
 
 /** Keeps a selected child behind the root directory's tree membership check. */
 export class ChildViewHost {
-  private selected: { id: string; handle: ChildPlanHandle; unwatch: () => void; conversation: ConversationViewHost } | undefined;
+  private selected: { id: string; handle: ChildPlanHandle; unwatch: () => void; view: ChildView } | undefined;
   private generation = 0;
   private unlisten: (() => void) | undefined;
   private root: string | undefined;
@@ -45,8 +45,7 @@ export class ChildViewHost {
   /** A webview that comes back holds nothing; what it had open is still open here. */
   resend(): void {
     if (!this.selected) return;
-    this.post({ type: 'childView', view: this.selected.handle.view() });
-    this.selected.conversation.resync();
+    this.selected.view.resend();
   }
 
   start(): void {
@@ -74,25 +73,13 @@ export class ChildViewHost {
       this.post({ type: 'childNotice', childId: id, message: 'Child plan not found.' });
       return;
     }
-    const conversation = new ConversationViewHost((message) => {
-      if (generation === this.generation && message.type === 'conversationPatch') this.post({ type: 'childConversation', childId: id, message });
-    });
-    const unwatch = handle.watch((frame) => {
-      if (generation !== this.generation) return;
-      if (frame.type === 'notice') this.post({ type: 'childNotice', childId: id, message: frame.message });
-      else {
-        conversation.receive(frame);
-        if (frame.type === 'status_update' || frame.type === 'plan_generated' || frame.type === 'task_started' || frame.type === 'task_updated' || frame.type === 'execution_complete' || frame.type === 'execution_stopped') {
-          this.post({ type: 'childView', view: handle.view() });
-        }
-      }
-    });
-    this.selected = { id, handle, unwatch, conversation };
-    const view = handle.view();
-    this.post({ type: 'childView', view });
-    if (view.plan) conversation.reload(view.plan);
-    else conversation.resync();
-    if (view.plannerTurnId) conversation.receive({ type: 'planner_turn_started', turnId: view.plannerTurnId });
+    // The pane is folded host-neutrally, as a daemon's child socket folds it
+    // (`@ordewell/ui/host`); a later open or a close silences this one.
+    const found = handle;
+    const view = new ChildView(id, (message) => { if (generation === this.generation) this.post(message); }, () => found.view());
+    const unwatch = found.watch((frame) => { if (generation === this.generation) view.receive(frame); });
+    this.selected = { id, handle: found, unwatch, view };
+    view.open();
   }
 
   async message(id: string, text: string): Promise<void> {

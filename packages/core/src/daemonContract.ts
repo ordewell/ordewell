@@ -19,6 +19,7 @@ import type { Escalation } from './services/escalations';
 import type { TaskRevertPreview } from './services/taskRevert';
 import type { ContainerStatus } from './services/container/containerSetup';
 import type { ContainerProblem } from './services/container/containerPreflight';
+import type { TaskDiffResult } from './services/taskDiffRead';
 
 /**
  * The daemon contract: every HTTP body the local daemon sends, in one place.
@@ -32,6 +33,7 @@ import type { ContainerProblem } from './services/container/containerPreflight';
  *
  * Types only. Core is the one package both the daemon and its clients already
  * depend on; importing from the daemon would pull its runtime into the CLI.
+ * An incompatible change here raises `DAEMON_CONTRACT` (utils/daemonProcess.ts).
  */
 
 /**
@@ -68,7 +70,27 @@ export type DaemonErrorCode =
   /** That child plan holds no such task: a task's id, exactly. Nothing falls back to the root (ADR-0055 D20). */
   | 'child_task_not_found'
   /** The child plan is open, but its mandate, its grants, the tree's budget or the task's state refuses this now; the message says which. */
-  | 'child_refused';
+  | 'child_refused'
+  /** A user read's view scope no longer exists, or cannot be read: the message says why. It never falls back to another scope (ADR-0064 R2). */
+  | 'gone'
+  /** A user read named a path outside its scope: absolute, `..`, `.git`, Ordewell's state, or a link out of the root (ADR-0064 R3). */
+  | 'path_refused'
+  /** A user read named a path, ref or commit its scope does not hold. */
+  | 'path_not_found'
+  /** A user git action would move a live run's repository off its landing branch, or delete it; `landingBranchHeld` names the run (ADR-0062 G7). */
+  | 'landing_branch_held'
+  /** A user git action's `confirm` no longer matches the repository; `confirmStale` names the difference (ADR-0062 G3). */
+  | 'confirm_stale'
+  /** A save's `baseHash` is not the file's content on disk now, or a named stash is gone (ADR-0062 G10). */
+  | 'stale'
+  /** A user git action named a task worktree or another tree that is not the user's checkout (ADR-0062 G1). */
+  | 'not_checkout'
+  /** A user git action named, or would act on, a branch Ordewell made (`ordewell/*`) (ADR-0062 G1). */
+  | 'ordewell_branch'
+  /** An amend of a commit a remote-tracking branch already holds (ADR-0062 G4). */
+  | 'pushed'
+  /** The user's own git refused the action; the message is git's text (ADR-0062 G5). */
+  | 'git_failed';
 
 /** The body of every non-2xx answer a route gives. */
 export interface ErrorBody {
@@ -82,6 +104,10 @@ export interface ErrorBody {
   sessionHeld?: SessionHeld;
   /** Set on a command the seam refused after the act ran and stopped: the Merge all git would not take. */
   payload?: CommandPayload;
+  /** Set with `landing_branch_held`: the live run that lands on the branch (ADR-0062 G7). */
+  landingBranchHeld?: LandingBranchHeld;
+  /** Set with `confirm_stale`: what the person was shown against what is there now (ADR-0062 G3). */
+  confirmStale?: ConfirmDifference;
 }
 
 /**
@@ -97,10 +123,24 @@ export interface OkResponse extends Worded {
   ok: boolean;
 }
 
-/** `GET /api/server`: which process owns the port, so a stop can be verified before it signals one. */
+/**
+ * `GET /api/server`: which process owns the port, so a stop can be verified
+ * before it signals one, and which daemon it is, so a client it did not start
+ * can tell whether it speaks the same contract (ADR-0063 H3).
+ */
 export interface ServerInfoResponse {
   pid: number;
   port: number;
+  /** The daemon's `@ordewell/web` package version. */
+  version: string;
+  /** `DAEMON_CONTRACT` as the daemon was built. */
+  contract: number;
+  /**
+   * Work is under way in a session it holds: a run not yet settled, or a
+   * planner turn answering. A newer CLI replaces an idle daemon it cannot
+   * drive, and leaves a live one running (ADR-0048).
+   */
+  live: boolean;
 }
 
 /**
@@ -249,8 +289,19 @@ export interface RunnerEntry {
   id: string;
   name: string;
   enabled: boolean;
+  /**
+   * False when the CLI is installed but Ordewell cannot start it — a Windows
+   * `.cmd` shim with no direct-spawnable file, or an ACP agent below its
+   * profile's minimum version — with `reason` saying why. Absent on a row from
+   * a daemon that predates the field, and on every usable one.
+   */
+  usable?: boolean;
+  /** Why `usable` is false, in core's words, for the surface to show beside the row. */
+  reason?: string;
   /** The runner's own login verdict, beside `enabled`: a signed-out agent is still offered, flagged. */
   auth?: RunnerAuth;
+  /** What the CLI's `--version` printed, as a number; absent when it printed none. */
+  version?: string;
 }
 
 export interface RunnersResponse {
@@ -265,11 +316,23 @@ export interface SessionResponse {
   meta: SessionMeta;
   plan: SurfacePlanState;
   /**
+   * The planner transcript, which the phase-tagged `plan` does not keep: what
+   * a client that joins the session or only reads it redraws its conversation
+   * from. Absent from a daemon that predates it.
+   */
+  conversation?: Pick<SurfacePlan, 'conversationHistory' | 'researchLog' | 'plannerUsage' | 'pendingTurns'>;
+  /**
    * The live session's run as `Session.runSnapshot()` holds it, isolation
    * marks and handoff included. Absent for a session nobody holds: the saved
    * file has no run to speak of, and a surface does not rebuild one from it.
    */
   run?: RunView;
+  /**
+   * The planner turn running now, as {@link AdoptSessionResponse.plannerTurnId}:
+   * how a client that joined the session at its holder (ADR-0063 H8), and so
+   * never loads it, tells a live turn from one whose end it missed.
+   */
+  plannerTurnId?: string;
   /** The planner compaction running now, as {@link AdoptSessionResponse.plannerCompaction}. */
   plannerCompaction?: PlannerCompactionMessage;
 }
@@ -346,6 +409,8 @@ export interface SettingsResponse {
   /** Who plans (ADR-0009) — a vendor id, or a runner serving as a harness planner. */
   aiProvider: PlannerBackendId;
   plannerThinkingEffort: string;
+  /** Full (true) or Guarded (false), ADR-0001; the user's saved level (ADR-0030). */
+  autonomousMode: boolean;
   maxParallel: number;
   modelAllowlist: UserSettings['modelAllowlist'];
   plannerModels: UserSettings['plannerModels'];
@@ -462,4 +527,339 @@ export interface AccountLimitsFrame extends AccountLimitsMessage {
   sessionId: string;
   stream: string;
   revision: number;
+}
+
+/**
+ * Which tree a user read looks at, per repository (ADR-0064 R2): the user's
+ * checkout on disk, a run's integration branch from git objects, or a task's
+ * worktree on disk while it exists and its branch after.
+ */
+export type ViewScopeKind = 'checkout' | 'integration' | 'task';
+
+/**
+ * The query every file and git read takes. `repo` is a repository of the
+ * workspace relative to it, `.` for the root; `scope` defaults to the checkout.
+ * An integration scope names its session, a task scope its session and task.
+ */
+export interface ReadTarget {
+  workspace: string;
+  repo?: string;
+  scope?: ViewScopeKind;
+  sessionId?: string;
+  taskId?: string;
+}
+
+/**
+ * What an answer was read at (ADR-0064 R5), so a later write can say what it
+ * saw: the files on disk over `commit` (null for a repository with none yet),
+ * or the tree of `commit` alone. `branch` is the scope's branch, for the
+ * breadcrumb: the checkout's, the integration branch or the task's.
+ */
+export interface ReadAt {
+  repo: string;
+  scope: ViewScopeKind;
+  source: 'disk' | 'commit';
+  commit: string | null;
+  branch: string | null;
+}
+
+/**
+ * A path's change in its scope: against HEAD in the checkout, against the
+ * run's base on the integration branch, against the task's start in a task.
+ * `?` untracked, `U` conflicted.
+ */
+export type FileChangeStatus = 'M' | 'A' | 'D' | '?' | 'U';
+
+export interface FileTreeEntry {
+  name: string;
+  /** From the repository's scope root, `/`-separated: what every other read takes. */
+  path: string;
+  /** A link is listed as one and never followed (ADR-0064 R3); a nested repository is a `repository`. */
+  kind: 'file' | 'directory' | 'symlink' | 'repository';
+  ignored: boolean;
+  /** A directory's is `M` when anything below it changed, or `?` when all of it is untracked. */
+  status?: FileChangeStatus;
+  /** The task whose work changed it: the task itself in its own scope, the task that landed it on an integration branch. */
+  taskId?: string;
+}
+
+/** `GET /api/files/tree`: one directory's entries, `dir` `''` for the root. */
+export interface FileTreeResponse {
+  at: ReadAt;
+  dir: string;
+  entries: FileTreeEntry[];
+}
+
+/** `GET /api/files/content`: a file's text and the sha256 of its bytes, or why there is none (ADR-0064 R5). */
+export type FileContentResponse =
+  | { at: ReadAt; path: string; kind: 'text'; text: string; hash: string; size: number }
+  | { at: ReadAt; path: string; kind: 'binary'; size: number }
+  | { at: ReadAt; path: string; kind: 'too-large'; size: number; limit: number };
+
+export interface FileFindMatch {
+  path: string;
+  /** Set on a text match: its 1-based line and the line itself, trimmed to a preview. */
+  line?: number;
+  preview?: string;
+}
+
+/** `GET /api/files/find`: paths whose name holds `query`, or lines holding it with `text`; `truncated` once the cap is hit. */
+export interface FileFindResponse {
+  at: ReadAt;
+  query: string;
+  mode: 'name' | 'text';
+  matches: FileFindMatch[];
+  truncated: boolean;
+}
+
+export interface GitRepoInfo {
+  repo: string;
+  /** Null on a detached HEAD. */
+  branch: string | null;
+  detached: boolean;
+  /** Null in a repository with no commit yet. */
+  head: string | null;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+}
+
+/** `GET /api/git/repos`: the workspace's repositories (ADR-0014), as the checkout has them. */
+export interface GitReposResponse {
+  repos: GitRepoInfo[];
+}
+
+export interface GitStatusChange {
+  path: string;
+  /** git's letter: `M`, `A`, `D`, `R`, `C` or `T`. */
+  status: string;
+  /** A rename's or copy's old path. */
+  from?: string;
+}
+
+/** `GET /api/git/status`: the checkout's own changes, as `git status` sorts them. */
+export interface GitStatusResponse {
+  at: ReadAt;
+  staged: GitStatusChange[];
+  unstaged: GitStatusChange[];
+  untracked: string[];
+  conflicted: string[];
+}
+
+export interface GitDiffFile {
+  path: string;
+  status: string;
+  /** Null for a binary change. */
+  added: number | null;
+  removed: number | null;
+}
+
+/**
+ * `GET /api/git/diff`: the changed files first, and with `path` that one file's
+ * patch (ADR-0064 R5). `from` and `to` name what was compared, null for the
+ * index or the working tree.
+ */
+export interface GitDiffResponse {
+  at: ReadAt;
+  from: string | null;
+  to: string | null;
+  files: GitDiffFile[];
+  patch?: string;
+}
+
+export interface GitCommitSummary {
+  sha: string;
+  parents: string[];
+  /** The refs pointing at it, as `git log --decorate` names them (`HEAD -> main`, `tag: v1`, `origin/main`). */
+  refs: string[];
+  subject: string;
+  author: string;
+  email: string;
+  /** ISO 8601, the author date. */
+  date: string;
+}
+
+/** `GET /api/git/log`: one page of commits, newest first, with parents for the graph; `cursor` fetches the next, null at the end. */
+export interface GitLogResponse {
+  repo: string;
+  ref: string;
+  commits: GitCommitSummary[];
+  cursor: string | null;
+}
+
+/** `GET /api/git/commit`: one commit and the files it changed against its first parent; with `path`, that file's patch. */
+export interface GitCommitResponse {
+  repo: string;
+  commit: GitCommitSummary & { body: string };
+  files: GitDiffFile[];
+  patch?: string;
+}
+
+/** The session, run and task a branch or worktree of Ordewell's belongs to, as the saved isolation records name them. */
+export interface OrdewellRefOwner {
+  sessionId: string;
+  runId: string;
+  /** Absent on a run's integration branch. */
+  taskId?: string;
+}
+
+export interface GitBranchInfo {
+  name: string;
+  sha: string;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  current: boolean;
+  /** Set on a branch Ordewell made, when a saved run still names it. */
+  owner?: OrdewellRefOwner;
+  /** The saved runs that land on this branch at Merge all: their landing branch (ADR-0062 G7). */
+  landingFor?: Array<{ sessionId: string; runId: string }>;
+}
+
+export interface GitWorktreeInfo {
+  /** Absolute, as git lists it. */
+  path: string;
+  branch: string | null;
+  head: string | null;
+  /** The user's own checkout, which every linked worktree hangs off. */
+  main: boolean;
+  owner?: OrdewellRefOwner;
+}
+
+/**
+ * `GET /api/git/branches`: the repository's local branches, Ordewell's in their
+ * own group (`ordewell/` and `ordewell-preserved/`), remote-tracking branches as
+ * of the last fetch, its stashes and its worktrees.
+ */
+export interface GitBranchesResponse {
+  repo: string;
+  current: string | null;
+  detached: boolean;
+  local: GitBranchInfo[];
+  ordewell: GitBranchInfo[];
+  remote: GitBranchInfo[];
+  stashes: Array<{ ref: string; sha: string; message: string }>;
+  worktrees: GitWorktreeInfo[];
+}
+
+/** `GET /api/plans/:sessionId/tasks/:taskId/diff`: a task's diff as `readTaskDiff` reads it for VS Code, from the saved run. */
+export type TaskDiffResponse = TaskDiffResult;
+
+/*
+ * The user's git actions on their checkout (ADR-0062). Every request names its
+ * workspace and repository in the body, and every answer is the repository's
+ * new state as `GET /api/git/repos` rows it.
+ */
+
+/** The run that holds a repository on its landing branch while it is live (ADR-0062 G7). */
+export interface LandingBranchHeld {
+  sessionId: string;
+  runId: string;
+  repo: string;
+  branch: string;
+}
+
+export type ConfirmValue = string | boolean | string[] | null;
+
+/** One field of a `confirm` that no longer matches: what the person was shown, and what is there now. */
+export interface ConfirmDifference {
+  field: string;
+  shown: ConfirmValue;
+  now: ConfirmValue;
+}
+
+export interface UserGitTarget {
+  /** The daemon's working directory when absent, as for a read. */
+  workspace?: string;
+  /** Required when the workspace holds more than one repository. */
+  repo?: string;
+}
+
+/** `PUT /api/files/content`: `baseHash` is the `hash` the file was read at, or null for a file that must not exist yet (ADR-0062 G10). */
+export interface FileSaveRequest extends UserGitTarget {
+  path: string;
+  text: string;
+  baseHash: string | null;
+}
+
+/**
+ * Stage, unstage and discard name whole files in `paths`, or hunks in `hunks`:
+ * a unified diff holding only the chosen hunks, cut from what `GET /api/git/diff`
+ * showed (staged hunks to unstage, unstaged hunks otherwise).
+ */
+export interface GitChangesRequest extends UserGitTarget {
+  paths?: string[];
+  hunks?: string;
+}
+
+export interface GitDiscardRequest extends GitChangesRequest {
+  /** The files the person was shown as discarded. */
+  confirm: { files: string[] };
+}
+
+export interface GitCommitRequest extends UserGitTarget {
+  message: string;
+  amend?: boolean;
+  /** Required with `amend`: the commit the person saw as the one amended. */
+  confirm?: { head: string };
+}
+
+export interface GitBranchCreateRequest extends UserGitTarget {
+  name: string;
+  /** The commit or branch it starts at; `HEAD` when absent. */
+  from?: string;
+  switch?: boolean;
+}
+
+export interface GitSwitchRequest extends UserGitTarget {
+  branch: string;
+}
+
+export interface GitBranchDeleteRequest extends UserGitTarget {
+  branch: string;
+  /** `unmerged`: whether the person was told the branch holds commits its upstream, or else `HEAD`, does not. */
+  confirm: { branch: string; unmerged: boolean };
+}
+
+export interface GitStashRequest extends UserGitTarget {
+  /** Only these paths; every change, untracked files included, when absent. */
+  paths?: string[];
+  message?: string;
+}
+
+/** `stash-pop` and `stash-drop`: a stash by the commit `stash` answered with or the branches read listed, never by its place in the stack. */
+export interface GitStashRefRequest extends UserGitTarget {
+  stash: string;
+}
+
+/** `pull` and `push`: always the checked-out branch's tracking remote and branch, as the person was shown them. */
+export interface GitRemoteRequest extends UserGitTarget {
+  confirm: { remote: string; branch: string };
+}
+
+export interface GitActionResponse {
+  repo: GitRepoInfo;
+  /** Said with an action that is allowed but has a cost: a switch away from a settled run's landing branch (ADR-0062 G7). */
+  warning?: string;
+  /** Set by `stash`: the stash it made, by the name `stash-pop` takes. */
+  stash?: { sha: string; message: string };
+}
+
+/** One repository a run lands in, as Merge all would find it now (ADR-0062 G8). */
+export interface MergePreflightRepo {
+  repo: string;
+  /** The branch Merge all lands on; null for a run that started detached. */
+  branch: string | null;
+  /** The user's uncommitted files that the incoming work also changes. */
+  overlap: string[];
+  /** Whether other uncommitted files exist beside the overlap. */
+  otherDirty: boolean;
+}
+
+/** `GET /api/plans/:sessionId/isolation/merge-preflight`. */
+export interface MergePreflightResponse {
+  runId: string;
+  repos: MergePreflightRepo[];
+  /** The message a Stash choice gives `POST /api/git/stash` with the overlapping paths. */
+  stashMessage: string;
 }

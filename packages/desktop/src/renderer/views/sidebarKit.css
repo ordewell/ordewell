@@ -1,0 +1,73 @@
+/*
+ * Rows and sections for the Checkout and Git sidebars. Every row is a flex
+ * line with a gap: icons and badges are `flex: none` boxes, the label is the
+ * one part that shrinks, and a row's actions keep their room whether they are
+ * shown or not, so nothing is ever drawn over text (design.md, Layout rules).
+ */
+
+.sgroup { display: flex; flex-direction: column; min-width: 0; }
+.sgroup-head { display: flex; align-items: center; gap: var(--ow-space-1); min-height: var(--ow-row); padding: 0 var(--ow-space-2) 0 var(--ow-space-1); }
+.sgroup-title { flex: 1; min-width: 0; margin: 0; font: var(--ow-type-overline); letter-spacing: var(--ow-overline-tracking); text-transform: uppercase; color: var(--ow-fg-secondary); }
+.sgroup-toggle { display: flex; align-items: center; gap: var(--ow-space-1); width: 100%; min-width: 0; height: var(--ow-row); border: 0; border-radius: var(--ow-radius-md); background: transparent; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; text-align: left; cursor: pointer; padding: 0 var(--ow-space-1); }
+.sgroup-toggle:hover { background: var(--ow-bg-hover); }
+.sgroup-toggle:focus-visible { outline: 1px solid var(--ow-focus-ring); outline-offset: -1px; }
+.sgroup-toggle .ow-icon { flex: none; }
+.sgroup-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sgroup-actions { flex: none; display: flex; align-items: center; gap: var(--ow-space-half); }
+.sgroup-body { display: flex; flex-direction: column; min-width: 0; }
+
+/* A text shortened in the middle: the head gives way, the tail stays. */
+.mid { display: flex; min-width: 0; overflow: hidden; white-space: nowrap; }
+/*
+ * The tail gives way only once the head is gone, so a narrow box clips the end instead of spilling over its neighbour.
+ * The head's weight does the ordering: a tail left shrinking alone with a factor under 1 would take only that share of what overflows.
+ */
+.mid-head { flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.mid-tail { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.mid-whole { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* One row: [icon or badge] label … [hover actions]. */
+.srow { display: flex; align-items: center; gap: var(--ow-space-2); min-height: var(--ow-row); padding: 0 var(--ow-space-2) 0 var(--ow-space-3); min-width: 0; }
+.srow:hover, .srow:focus-within { background: var(--ow-bg-hover); }
+.srow-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--ow-space-2); height: var(--ow-row); border: 0; background: transparent; color: var(--ow-fg); font: var(--ow-type-body); text-align: left; padding: 0; cursor: pointer; }
+.srow-main:focus-visible { outline: 1px solid var(--ow-focus-ring); outline-offset: -1px; }
+.srow-main .ow-icon, .srow-lead { flex: none; }
+.srow-plain { cursor: default; }
+.srow-label { flex: 1; min-width: 0; }
+.srow[aria-current='true'] .srow-label { font: var(--ow-type-body-strong); }
+.srow-note { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ow-fg-secondary); font: var(--ow-type-code-small); }
+/* Hidden, not removed: the label's room does not change when the pointer arrives. */
+.srow-actions { flex: none; display: flex; align-items: center; gap: var(--ow-space-half); visibility: hidden; }
+.srow:hover .srow-actions, .srow:focus-within .srow-actions { visibility: visible; }
+
+/* A status letter (M, A, D…) in its fixed box; the colour is the status vocabulary's. */
+.sbadge { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 16px; font: var(--ow-type-code-small); color: var(--ow-fg-secondary); }
+.sbadge-M, .sbadge-R, .sbadge-C { color: var(--ow-status-attention); }
+.sbadge-A, .sbadge-untracked, .sbadge-\? { color: var(--ow-status-passed); }
+.sbadge-D, .sbadge-U { color: var(--ow-status-failed); }
+
+/* A notice is a card on the sidebar's panel: the overlay fill is the light canvas's white, too faint a step to hold it apart. */
+.snotice { display: flex; align-items: flex-start; gap: var(--ow-space-2); margin: 0 var(--ow-space-3); padding: var(--ow-space-1) var(--ow-space-2); border: 1px solid var(--ow-surface-card-border); border-left: 2px solid var(--ow-border-widget); border-radius: var(--ow-radius-md); background: var(--ow-surface-card); box-shadow: var(--ow-elevation-card); color: var(--ow-fg-secondary); font: var(--ow-type-small); overflow-wrap: anywhere; white-space: pre-wrap; }
+.snotice .ow-icon { flex: none; margin-top: var(--ow-space-half); }
+.snotice-text { flex: 1; min-width: 0; }
+.snotice-error .ow-icon { color: var(--ow-status-failed); }
+.snotice-info .ow-icon { color: var(--ow-accent); }
+.snotice-error { border-left-color: var(--ow-status-failed); color: var(--ow-fg); }
+.snotice-info { border-left-color: var(--ow-accent); }
+.snotice strong { font: var(--ow-type-body-strong); }
+
+/* The sync line: ↓ n ↑ n, then the three actions. */
+.sync { display: flex; flex-direction: column; gap: var(--ow-space-1); padding: 0 var(--ow-space-3); min-width: 0; }
+.sync-counts { display: flex; align-items: center; gap: var(--ow-space-2); color: var(--ow-fg-secondary); font: var(--ow-type-code); font-variant-numeric: tabular-nums; }
+.sync-counts .sync-count { flex: none; }
+.sync-actions { display: flex; flex-wrap: wrap; gap: var(--ow-space-2); }
+.sync-actions .ow-button { flex: 0 1 auto; min-width: 0; }
+.sync-why { margin: 0; color: var(--ow-fg-secondary); font: var(--ow-type-small); overflow-wrap: anywhere; }
+
+.sform { display: flex; flex-direction: column; gap: var(--ow-space-2); padding: var(--ow-space-1) var(--ow-space-3); min-width: 0; }
+.sform label { display: flex; flex-direction: column; gap: var(--ow-space-half); color: var(--ow-fg-secondary); font: var(--ow-type-small); min-width: 0; }
+.sform .sform-check { flex-direction: row; align-items: center; gap: var(--ow-space-2); }
+.sform input[type='text'], .sform select, .sform textarea { box-sizing: border-box; width: 100%; min-width: 0; height: var(--ow-height-input); padding: 0 var(--ow-space-2); border: 1px solid var(--ow-border-control); border-radius: var(--ow-radius-md); background: var(--ow-bg-input); color: var(--ow-fg); font: var(--ow-type-body); }
+.sform textarea { height: auto; padding: var(--ow-space-1) var(--ow-space-2); }
+.sform input:focus-visible, .sform select:focus-visible, .sform textarea:focus-visible { outline: 1px solid var(--ow-focus-ring); outline-offset: -1px; }
+.sform-actions { display: flex; gap: var(--ow-space-2); }

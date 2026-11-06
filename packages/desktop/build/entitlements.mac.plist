@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  What the hardened runtime lets a signed Ordewell do (ADR-0063 H9). One file
+  serves the app and, as entitlementsInherit, every binary inside it: the
+  helpers (renderer, GPU, and the utility process the daemon runs in) and
+  node-pty's spawn-helper. electron-builder.yml names it for both, so neither
+  falls back to electron-builder's template, which grants more.
+
+  An ad hoc build carries it too but runs without the hardened runtime, where
+  these keys change nothing.
+
+  Deliberately not granted:
+  - allow-unsigned-executable-memory: V8 maps its code pages with MAP_JIT,
+    which allow-jit covers.
+  - disable-library-validation: every native module (node-pty's pty.node, the
+    daemon closure's addons) and spawn-helper are signed with this app's own
+    identity, so library validation accepts them.
+  - allow-dyld-environment-variables: nothing here loads code by DYLD_*.
+  - App Sandbox, and with it the network and file entitlements: the app is
+    distributed outside the Mac App Store, and the daemon must reach the
+    repository, the runners and 127.0.0.1 as the person who started it.
+-->
+<plist version="1.0">
+  <dict>
+    <!--
+      V8 compiles JavaScript to machine code at run time in the main process,
+      every helper and the daemon's utility process. Without it the hardened
+      runtime refuses the writable, executable pages and the app crashes at
+      start.
+    -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+  </dict>
+</plist>

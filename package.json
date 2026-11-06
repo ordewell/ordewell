@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "ordewell-monorepo",
-  "version": "0.12.6",
+  "version": "0.13.0",
   "description": "Turn one goal into an ordered plan of coding-agent tasks, then execute and verify it.",
   "license": "Apache-2.0",
   "author": "Alessandro Costanzo Ciano",
@@ -15,28 +15,36 @@
   },
   "workspaces": [
     "packages/core",
+    "packages/ui",
     "packages/vscode",
     "packages/cli",
-    "packages/web"
+    "packages/web",
+    "packages/desktop"
   ],
   "scripts": {
-    "build": "npm run build -w packages/core && npm run build -w packages/vscode && npm run build -w packages/cli && npm run build -w packages/web",
+    "build": "npm run build -w packages/core && npm run build -w packages/ui && npm run build -w packages/vscode && npm run build -w packages/cli && npm run build -w packages/web && npm run build -w packages/desktop",
     "build:core": "npm run build -w packages/core",
+    "build:ui": "npm run build -w packages/ui",
     "build:vscode": "npm run build -w packages/vscode",
     "build:cli": "npm run build -w packages/cli",
     "watch": "npm run watch -w packages/core",
     "lint": "eslint . --ext .ts,.tsx",
     "package": "npm run package -w packages/vscode",
-    "typecheck": "npm run typecheck -ws --if-present",
-    "test": "npm run test -ws --if-present",
-    "test:quick": "npm run test:quick -ws --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:quick": "npm run test:quick --workspaces --if-present",
     "test:changed": "node scripts/test-changed.mjs",
-    "test:coverage": "npm run test:coverage -ws --if-present",
+    "test:coverage": "npm run test:coverage --workspaces --if-present",
     "test:bench": "node --test \"bench/**/*.test.mjs\" \"scripts/**/*.test.mjs\"",
     "test:guards": "npm exec -w packages/core -- vitest run src/services/__tests__/fakeSecretsGuard.test.ts src/services/__tests__/gitExec.test.ts",
     "test:containers": "node scripts/container-e2e.mjs",
+    "test:desktop-e2e": "npm run test:desktop-e2e -w packages/desktop",
     "ci": "node scripts/ci.mjs",
     "build:web": "npm run build -w packages/web",
+    "build:desktop": "npm run build -w packages/desktop",
+    "desktop:dev": "npm run dev -w packages/desktop",
+    "desktop:tour": "npm run test:desktop-tour --workspace packages/desktop",
+    "desktop:package": "npm run package -w packages/desktop --",
     "start": "node packages/cli/dist/main.js tui"
   },
   "devDependencies": {
@@ -45,8 +53,13 @@
     "@typescript-eslint/parser": "^8.64.0",
     "@vitest/coverage-v8": "^2.1.9",
     "@vscode/vsce": "^3.9.2",
+    "esbuild": "^0.27.7",
     "eslint": "^8.57.1",
+    "postject": "1.0.0-alpha.6",
     "tsup": "^8.3.0",
     "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "dompurify": "^3.4.17"
   }
 }

@@ -29,6 +29,9 @@ import {
   RunnerInstallation,
   listSessions,
   loadSession,
+  appendUserAction,
+  processLeaseHost,
+  savedRunLooksLive,
   deleteSession,
   reclaimContainers,
   changeContainers,
@@ -373,6 +376,36 @@ export class OrchestratorPool {
 
   hasSession(sessionId: string): boolean { return this.sessions.has(sessionId); }
 
+  /** The session open here under this id for this workspace, if any: an id names a session only within its workspace. */
+  private heldHere(sessionId: string, workspace: string): Session | undefined {
+    const held = this.sessionWorkspaces.get(sessionId);
+    return held !== undefined && resolve(held) === resolve(workspace) ? this.sessions.get(sessionId) : undefined;
+  }
+
+  /**
+   * Whether a session's run holds its landing branch (ADR-0062 G7): this
+   * host's own word for a session open here; for one another live host holds,
+   * that host's word in its lease record, or the saved record where the holder
+   * says nothing; and for one nobody holds, nothing is at work.
+   */
+  userRunIsLive(sessionId: string, workspace: string, plan: LegacyPlanState): boolean {
+    const session = this.heldHere(sessionId, workspace);
+    if (session) return session.runIsLive;
+    const held = (this.leaseHost ?? processLeaseHost()).peek(sessionId, workspace);
+    return held !== null && (held.holder.runLive === true || savedRunLooksLive(plan));
+  }
+
+  /**
+   * A user git action into the session's timeline (ADR-0062 G6): straight in
+   * for a session open here, else left in its directory for whichever host
+   * holds it, or next opens it, to fold (ADR-0049 L5).
+   */
+  recordUserAction(sessionId: string, workspace: string, text: string): void {
+    const session = this.heldHere(sessionId, workspace);
+    if (session?.planState) session.recordUserAction(text);
+    else appendUserAction(sessionId, workspace, { text, at: new Date().toISOString() });
+  }
+
   /** Answer an approval prompt, the planner's or a task runner's. False means the id was unknown or already settled. */
   resolveApproval(sessionId: string, approvalId: string, answer: ApprovalAnswer): boolean {
     return this.sessions.get(sessionId)?.resolveApproval(approvalId, answer) ?? false;
@@ -386,6 +419,13 @@ export class OrchestratorPool {
     return this.sessions.get(sessionId)?.approvedScopes() ?? [];
   }
   isExecuting(sessionId: string): boolean { return this.sessions.get(sessionId)?.isExecuting ?? false; }
+  /** Work under way in any session held here, which stopping this daemon would cut off: a run not settled, or a planner turn answering. */
+  workLive(): boolean {
+    for (const session of this.sessions.values()) {
+      if (session.runIsLive || session.plannerTurnId !== undefined) return true;
+    }
+    return false;
+  }
   getPlan(sessionId: string): LegacyPlanState | null { return this.sessions.get(sessionId)?.planState ?? null; }
   /**
    * The plan of a session this process is holding, straight from its store —
@@ -517,6 +557,9 @@ export class OrchestratorPool {
       // to render the current level; without it the picker shows "default"
       // for a planner that is running at "high".
       plannerThinkingEffort: config.plannerThinkingEffort ?? '',
+      // The saved level, read through the service so an environment override
+      // is reported the way the next plan will read it (ADR-0001, ADR-0030).
+      autonomousMode: this.settingsService.autonomousMode(),
       maxParallel: config.maxParallelSessions,
       modelAllowlist: userSettings.modelAllowlist,
       // The model remembered per planner backend (this task), so a surface can
@@ -734,6 +777,12 @@ export class OrchestratorPool {
       }
     }
 
+    // Full/Guarded is a saved user setting (ADR-0030), not an environment
+    // write: ORDEWELL_AUTONOMOUS_MODE is refused below on purpose.
+    if (typeof changes.autonomousMode === 'boolean') {
+      this.settingsService.setAutonomousMode(changes.autonomousMode);
+    }
+
     if (envChanges) for (const monitor of this.accountLimits.values()) monitor.refresh();
 
     if (selection?.remember) {
@@ -893,23 +942,25 @@ export class OrchestratorPool {
     // The auth verdict rides along, never gating the list: a signed-out agent
     // is installed and offered, and a surface flags it. The probe was just
     // asked above and its answer is cached, so this costs no second spawn.
-    // Its `usable` does gate: an installed CLI that cannot be spawned (a
-    // Windows `.cmd` shim) must not be offered (ADR-0009).
-    const rows = await Promise.all(
+    // An installed CLI that cannot be started — a Windows `.cmd` shim, or an
+    // ACP agent below its minimum version — stays in the list as unavailable
+    // with its reason, so a surface can say why instead of hiding it (ADR-0009,
+    // ADR-0060).
+    return Promise.all(
       runners
         .filter((p) => installedIds.has(p.manifest.name))
-        .map(async (p): Promise<RunnersResponse['runners'][number] | null> => {
-          const { usable, auth } = await installation.runnerUsability(p.manifest.name);
-          if (!usable) return null;
+        .map(async (p): Promise<RunnersResponse['runners'][number]> => {
+          const { usable, reason, auth, version } = await installation.runnerUsability(p.manifest.name);
           return {
             id: p.manifest.name,
             name: p.manifest.displayName,
             enabled: enabled.has(p.manifest.name),
+            ...(usable ? {} : { usable: false, ...(reason ? { reason } : {}) }),
             ...(auth ? { auth } : {}),
+            ...(version ? { version } : {}),
           };
         }),
     );
-    return rows.filter((row): row is RunnersResponse['runners'][number] => row !== null);
   }
 
   async generatePlan(sessionId: string, goal: string, runners: RunnerId[] | undefined, workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Promise<PlanState> {
@@ -1067,6 +1118,8 @@ export class OrchestratorPool {
     // A live session with no plan yet is mid-planning; replacing it must stop that turn.
     this.destroy(sessionId);
     this.registerSession(sessionId, workspace, session);
+    // What another host recorded while it held the session, before this one took it (ADR-0062 G6).
+    session.foldUserActions();
 
     return session.planState ?? saved.plan;
   }

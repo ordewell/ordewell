@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Drive the webview harness with a real `ConversationViewHost` (ADR-0017) and
- * capture screenshots of every state packages/vscode/src/views/chat draws,
+ * capture screenshots of every state packages/ui/src/chat draws,
  * asserting the DOM at each one:
  *
  *   - a reply streams in place as message text, settles, then loses its cursor
@@ -533,9 +533,21 @@ async function taskCards(width, theme) {
     fillOf(page, '.task-card:hover'), fillOf(page, '.task-card.expanded'), fillOf(page, '.subtask-card'),
   ]);
   console.log(`    fills: dock ${dock} · card ${rest} · hover ${hover} · expanded ${expanded} · subtask ${subtask}`);
-  check(rest !== dock, `task-cards ${label}: a resting card is filled apart from the plan behind it`);
-  check(expanded !== rest && hover !== rest, `task-cards ${label}: hover and expanded are a step beyond the resting card`);
-  check(subtask !== expanded, `task-cards ${label}: a subtask separates from its expanded parent`);
+  if (theme.startsWith('high-contrast')) {
+    // High contrast draws a card as its edge alone (docs/desktop/design.md, Surfaces).
+    const edge = await page.locator('.task-card:not(.expanded):not(:hover)').first().evaluate((el) => getComputedStyle(el).borderTopColor);
+    check(edge === await resolvedColour(page, 'var(--vscode-contrastBorder)'), `task-cards ${label}: a tintless card keeps the theme's contrast border (${edge})`);
+  } else {
+    check(rest !== dock, `task-cards ${label}: a resting card is filled apart from the plan behind it`);
+    check(expanded !== rest && hover !== rest, `task-cards ${label}: hover and expanded are a step beyond the resting card`);
+    check(subtask !== expanded, `task-cards ${label}: a subtask separates from its expanded parent`);
+    // The surface ladder's lift: each step stands off what it sits on.
+    for (const [what, selector, behind] of [
+      ['a resting card on the plan', '.task-card:not(.expanded):not(:hover)', '.plan-dock-body'],
+      ['the open card on the plan', '.task-card.expanded', '.plan-dock-body'],
+      ['a subtask in its open card', '.subtask-card', '.task-card.expanded'],
+    ]) await checkSurface(page, `task-cards ${label}`, what, { selector, prop: 'backgroundColor' }, behind, 1.05);
+  }
   await checkContrast(page, `task-cards ${label}`, CARD_CONTRAST);
   await page.screenshot({ path: path.join(OUT, `task-cards-${width}-${theme}.png`) });
   await page.close();
@@ -1412,6 +1424,9 @@ const COMBOS = [
   { width: 420, theme: 'light' },
   { width: 900, theme: 'light' },
 ];
+/** Cards are where the derived surfaces show, so they also meet the older defaults and both high-contrast themes. */
+const CARD_COMBOS = [...COMBOS, { width: 420, theme: 'dark-plus' }, { width: 420, theme: 'light-plus' },
+  { width: 420, theme: 'high-contrast' }, { width: 420, theme: 'high-contrast-light' }];
 const PLANNER_AUTH_COMBOS = [...COMBOS, { width: 420, theme: 'high-contrast' }, { width: 420, theme: 'high-contrast-light' }];
 /** The first screen also gets the light high-contrast theme both widths: its white page is where the light tokens have to hold. */
 const FIRST_SCREEN_COMBOS = [...COMBOS, { width: 420, theme: 'high-contrast-light' }, { width: 900, theme: 'high-contrast-light' }];
@@ -1480,7 +1495,7 @@ for (const combo of runs('script') ? COMBOS : []) {
   await scriptTaskLog(combo.width, combo.theme);
 }
 
-for (const combo of runs('cards') ? COMBOS : []) {
+for (const combo of runs('cards') ? CARD_COMBOS : []) {
   console.log(`\n== task cards, ${combo.width}px, ${combo.theme} theme ==`);
   await taskCards(combo.width, combo.theme);
 }

@@ -463,11 +463,12 @@ describe('ordewell supervisor, automerge, trailer and autorun (ADR-0030)', () =>
   });
 
   it('turns delegation on with the tree\'s budget, and off again, saying what it accepts', async () => {
-    const d = await fakeDaemon({ settings: { run: { ...RUN, delegationTokens: 0 } } });
+    const d = await fakeDaemon({ settings: { run: { ...RUN, delegationTokens: 0, delegationDepth: 3, delegatedTasksPerPlan: 8, tasksPerChildPlan: 30 } } });
     const { handleDelegation } = await import('../runSettings');
 
     const shown = await capture(() => handleDelegation([], new ApiClient(d.port)));
     expect(shown.stdout).toContain('Delegation: off');
+    expect(shown.stdout).toContain('Tree shape: up to 3 levels below the root, 8 delegated tasks per plan, 30 tasks per child plan');
     expect(d.sent).toEqual([]);
 
     const on = await capture(() => handleDelegation(['5000000'], new ApiClient(d.port)));

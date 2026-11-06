@@ -2769,6 +2769,11 @@ describe('AcpAdapter restricted start\'s own files (ADR-0060, R3)', () => {
   beforeEach(() => {
     temp = realpathSync(mkdtempSync(join(tmpdir(), 'acp-restricted-test-')));
     for (const name of ['TMPDIR', 'TMP', 'TEMP']) vi.stubEnv(name, temp);
+    // A host that is itself an OpenCode runner's child carries its parent's
+    // config, which the spawn rewrites to strip that parent's server (ADR-0022
+    // A5). That rewrite is runnerEnv's test, not this one's: here the host
+    // environment is held still so "what the spawn adds" means only that.
+    vi.stubEnv('OPENCODE_CONFIG_CONTENT', undefined);
   });
   afterEach(() => {
     vi.unstubAllEnvs();

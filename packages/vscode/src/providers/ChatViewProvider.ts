@@ -1,11 +1,10 @@
 import * as vscode from 'vscode';
 import { DELEGATION_OFFERED, type AccountLimitSnapshot, type GlobalRunSettings, type IsolationPreview, surfacePlan, type AiProvider, type LegacyPlanState, type DiscoveredModel, type PlanStatus, type RunnerId, type RunActivity, type RunView } from '@ordewell/core';
-import { ConversationViewHost, type SavedConversation } from '../ConversationViewHost';
-import { RunViewHost } from '../RunViewHost';
+import { SessionView, type SavedConversation } from '@ordewell/ui/host';
 import { renderWebviewHtml } from './webviewHtml';
-import type { ChatState, HostToWebview, ModelOption, PlannerBackend, RunnerMeta, RunnerModeMeta, WebviewToHost } from '../shared/protocol';
+import type { ChatState, HostToWebview, ModelOption, PlannerBackend, RunnerMeta, RunnerModeMeta, WebviewToHost } from '@ordewell/ui/protocol';
 
-export type { PlannerBackend, RunnerMeta } from '../shared/protocol';
+export type { PlannerBackend, RunnerMeta } from '@ordewell/ui/protocol';
 
 // The union core owns, not a copy of it: a hand-maintained duplicate silently
 // diverged the moment ADR-0009 added the three harness planners.
@@ -16,10 +15,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _viewDisposables: { dispose(): unknown }[] = [];
   private _onMessage = new vscode.EventEmitter<WebviewToHost>();
   readonly onMessage = this._onMessage.event;
-  /** The planner conversation as the webview draws it; every planner event and local notice goes through here. */
-  readonly conversation = new ConversationViewHost((msg) => this.postMessage(msg));
-  /** The run as the webview draws it; every session event and adopted snapshot goes through here (#S8c). */
-  readonly run = new RunViewHost((msg) => this.postMessage(msg));
+  /**
+   * The session as the webview draws it, assembled the way a daemon client
+   * assembles it from frames: every session event goes through `view.receive`,
+   * and what it cues back is the host's to do.
+   */
+  readonly view = new SessionView((msg) => this.postMessage(msg));
+  /** The planner conversation; a local notice or a held prompt goes to it directly. */
+  readonly conversation = this.view.conversation;
+  /** The run (#S8c); an adopted snapshot goes to it directly. */
+  readonly run = this.view.run;
   /**
    * What the dock shows as each plan's status, kept here rather than written
    * onto the plan: the plan object is the Session's own, and its status once
@@ -74,8 +79,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
   /** What a webview that joined mid-run is owed: the run as folding every message would show it. */
   adoptRun(view: RunView): void { this.run.adopt(view); }
-  /** Live runner output for one task; the webview keeps the tail and renders it in that task's card. */
-  sendTaskOutput(taskId: string, text: string): void { this.postMessage({ type: 'taskOutput', taskId, text }); }
   setModels(models: DiscoveredModel[]): void {
     this.postMessage({ type: 'setModels', models });
   }
@@ -155,9 +158,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this._configuredProviders = providers;
     this.postMessage({ type: 'setConfiguredProviders', providers });
   }
-  setModelDiscoveryErrors(errors: Record<string, string>): void {
+  setModelDiscoveryErrors(errors: Record<string, string>, runnerErrors: Record<string, string> = {}): void {
     this._modelDiscoveryErrors = errors;
-    this.postMessage({ type: 'setModelDiscoveryErrors', errors });
+    this._runnerDiscoveryErrors = runnerErrors;
+    this.postMessage({ type: 'setModelDiscoveryErrors', errors, runnerErrors });
   }
   /** Every runner account's limits as the host's monitor last published them; kept to replay to a webview that loads later. */
   setAccountLimits(limits: readonly AccountLimitSnapshot[]): void {
@@ -183,6 +187,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _modelOptions: ModelOption[] = [];
   private _configuredProviders: ApiProvider[] = [];
   private _modelDiscoveryErrors: Record<string, string> = {};
+  private _runnerDiscoveryErrors: Record<string, string> = {};
   private _plannerState: { backends: PlannerBackend[]; provider: string; runner?: string; effort?: string } | null = null;
   private _accountLimits: readonly AccountLimitSnapshot[] | null = null;
 
@@ -216,8 +221,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (this._configuredProviders.length > 0) {
       this.postMessage({ type: 'setConfiguredProviders', providers: this._configuredProviders });
     }
-    if (Object.keys(this._modelDiscoveryErrors).length > 0) {
-      this.postMessage({ type: 'setModelDiscoveryErrors', errors: this._modelDiscoveryErrors });
+    if (Object.keys(this._modelDiscoveryErrors).length > 0 || Object.keys(this._runnerDiscoveryErrors).length > 0) {
+      this.postMessage({ type: 'setModelDiscoveryErrors', errors: this._modelDiscoveryErrors, runnerErrors: this._runnerDiscoveryErrors });
     }
     if (this._modesByRunner && Object.keys(this._modesByRunner).length > 0) {
       this.postMessage({ type: 'setModesByRunner', modesByRunner: this._modesByRunner, notice: this._runnerNotice });

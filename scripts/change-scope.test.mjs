@@ -24,20 +24,22 @@ const workspaces = readWorkspaces();
 const CORE = 'packages/core';
 const CLI = 'packages/cli';
 const WEB = 'packages/web';
+const UI = 'packages/ui';
 const VSCODE = 'packages/vscode';
+const DESKTOP = 'packages/desktop';
 const selected = (...paths) => selectScope(paths, workspaces);
 const offChecks = (scope) => Object.entries(scope.checks).filter(([, on]) => !on).map(([check]) => check).sort();
 
 describe('the workspace graph', () => {
-  it('comes from the manifests: web and cli on core, cli on web, vscode on core', () => {
+  it('comes from the manifests: web, cli and ui on core, cli on web, vscode on core and ui, desktop on core, ui and web', () => {
     const edges = Object.fromEntries(workspaces.map((w) => [w.dir, [...w.deps].sort()]));
-    assert.deepEqual(edges, { [CORE]: [], [VSCODE]: [CORE], [CLI]: [CORE, WEB], [WEB]: [CORE] });
+    assert.deepEqual(edges, { [CORE]: [], [UI]: [CORE], [VSCODE]: [CORE, UI], [CLI]: [CORE, WEB], [WEB]: [CORE], [DESKTOP]: [CORE, UI, WEB] });
   });
 
   it('holds every package a source file reaches by a relative path', () => {
     // vitest mocks @ordewell/core with core's source and cli reaches into web
     // the same way, so a manifest could understate what a test imports.
-    const reach = /(?:from |import\(|require\()['"](?:\.\.\/)+(core|cli|web|vscode)\//g;
+    const reach = /(?:from |import\(|require\()['"](?:\.\.\/)+(core|cli|web|ui|vscode|desktop)\//g;
     const scan = (dir, owner) => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         const path = join(dir, entry.name);
@@ -58,43 +60,86 @@ describe('a change inside workspaces', () => {
   it('takes core\'s dependents with core: vitest cannot follow them through dist', () => {
     const scope = selected('packages/core/src/services/createSession.ts');
     assert.equal(scope.mode, 'selected');
-    assert.deepEqual([...scope.workspaces].sort(), [CLI, CORE, VSCODE, WEB]);
+    assert.deepEqual([...scope.workspaces].sort(), [CLI, CORE, DESKTOP, UI, VSCODE, WEB]);
     assert.deepEqual(offChecks(scope), []);
   });
 
-  it('takes the cli with web, and leaves core, vscode and what only they prove', () => {
+  it('takes the cli and desktop with web, drives the app on the daemon, and leaves core, vscode and what only they prove', () => {
     const scope = selected('packages/web/server/routes/settings.ts');
-    assert.deepEqual([...scope.workspaces].sort(), [CLI, WEB]);
+    assert.deepEqual([...scope.workspaces].sort(), [CLI, DESKTOP, WEB]);
     assert.deepEqual(offChecks(scope), ['engine', 'integration', 'planner', 'sandbox']);
   });
 
   it('keeps a cli change to the cli', () => {
     const scope = selected('packages/cli/src/tui/view.ts');
     assert.deepEqual(scope.workspaces, [CLI]);
-    assert.deepEqual(offChecks(scope), ['engine', 'integration', 'planner', 'sandbox']);
+    assert.deepEqual(offChecks(scope), ['desktop', 'engine', 'integration', 'planner', 'sandbox']);
   });
 
-  it('runs the real VS Code for a vscode change, and no container', () => {
+  it('takes vscode and desktop with ui, and runs the real VS Code and the app for it: both draw from ui\'s dist', () => {
+    const scope = selected('packages/ui/src/chat/App.tsx');
+    assert.deepEqual(scope.workspaces, [UI, VSCODE, DESKTOP]);
+    assert.deepEqual(offChecks(scope), ['binary', 'engine', 'planner', 'sandbox']);
+  });
+
+  it('runs the real VS Code for a vscode change, and no container or app', () => {
     const scope = selected('packages/vscode/src/extension.ts');
     assert.deepEqual(scope.workspaces, [VSCODE]);
-    assert.deepEqual(offChecks(scope), ['engine', 'planner', 'sandbox']);
+    assert.deepEqual(offChecks(scope), ['binary', 'desktop', 'engine', 'planner', 'sandbox']);
+  });
+
+  it('keeps a desktop change to desktop and drives the app for it: nothing is built on it, and no container or VS Code proves it', () => {
+    const scope = selected('packages/desktop/src/main/daemon/DaemonManager.ts');
+    assert.deepEqual(scope.workspaces, [DESKTOP]);
+    assert.deepEqual(offChecks(scope), ['binary', 'engine', 'integration', 'planner', 'sandbox']);
+    assert.equal(scope.checks.desktop, true);
+  });
+
+  it('drives the app for a change to the fakes and mock it runs on: bench/ means the full run', () => {
+    for (const path of ['bench/live/mock-provider.mjs', 'bench/pipeline/fake-claude/fake-claude.mjs']) {
+      const scope = selected(path);
+      assert.equal(scope.mode, 'full', path);
+      assert.equal(scope.checks.desktop, true, path);
+    }
+  });
+
+  it('builds and drives the standalone binary for whatever reaches the cli: it bundles the cli, web and core', () => {
+    for (const path of ['packages/cli/src/sea.ts', 'packages/web/server/daemon.ts', 'packages/core/src/index.ts']) {
+      const scope = selected(path);
+      assert.equal(scope.mode, 'selected', path);
+      assert.equal(scope.checks.binary, true, path);
+    }
+    for (const path of ['packages/ui/src/chat/App.tsx', 'packages/vscode/src/extension.ts', 'packages/desktop/src/main/index.ts']) {
+      assert.equal(selected(path).checks.binary, false, path);
+    }
+    assert.deepEqual(STEPS_BY_CHECK.binary, ['build-binary', 'drive-binary']);
   });
 
   it('treats a package\'s own build or test config as that package', () => {
-    assert.deepEqual([...selected('packages/web/vitest.config.ts').workspaces].sort(), [CLI, WEB]);
-    assert.deepEqual([...selected('packages/core/vitest.config.ts').workspaces].sort(), [CLI, CORE, VSCODE, WEB]);
+    assert.deepEqual([...selected('packages/web/vitest.config.ts').workspaces].sort(), [CLI, DESKTOP, WEB]);
+    assert.deepEqual([...selected('packages/core/vitest.config.ts').workspaces].sort(), [CLI, CORE, DESKTOP, UI, VSCODE, WEB]);
+    assert.deepEqual(selected('packages/desktop/electron-builder.yml').workspaces, [DESKTOP]);
+  });
+
+  it('keeps the packaging scripts to desktop, with the bench step that holds their tests', () => {
+    for (const path of ['packages/desktop/scripts/package.mjs', 'packages/desktop/scripts/esigner-sign.mjs']) {
+      const scope = selected(path);
+      assert.deepEqual(scope.workspaces, [DESKTOP], path);
+      assert.equal(scope.checks.packages, true, path);
+      assert.ok(STEPS_BY_CHECK.packages.includes('bench'));
+    }
   });
 
   it('unions what several changes need, docs among them', () => {
     const scope = selected('docs/containers.md', 'packages/vscode/src/extension.ts', 'packages/web/server/main.ts');
     assert.equal(scope.mode, 'selected');
-    assert.deepEqual([...scope.workspaces].sort(), [CLI, VSCODE, WEB]);
+    assert.deepEqual([...scope.workspaces].sort(), [CLI, DESKTOP, VSCODE, WEB]);
   });
 });
 
 describe('a change to docs alone', () => {
   it('needs no workspace, and still owes the checks every change owes', () => {
-    const scope = selected('docs/adr/README.md', 'CHANGELOG.md', 'AGENTS.md');
+    const scope = selected('docs/adr/README.md', 'docs/desktop/README.md', 'CHANGELOG.md', 'AGENTS.md');
     assert.equal(scope.mode, 'docs');
     assert.deepEqual(scope.workspaces, []);
     assert.deepEqual(offChecks(scope).length, Object.keys(scope.checks).length);
@@ -114,9 +159,28 @@ describe('the full fallback', () => {
     ['.gitignore', 'read by worktreeLinksIgnored'],
     ['.nvmrc', 'the Node in use'],
     ['.github/workflows/ci.yml', 'this workflow'],
+    ['.github/workflows/release.yml', 'the release'],
+    ['.github/workflows/desktop-build.yml', 'the desktop build: ci.yml cannot judge it, so the full run does'],
     ['.github/workflows/verify-release-tag.mjs', 'the release'],
+    ['.github/workflows/cli-build.yml', 'the binary build on every target: ci.yml cannot judge it, so the full run does'],
+    ['scripts/sea/build.mjs', 'builds the standalone binary'],
+    ['scripts/sea/build.test.mjs', 'the binary build\'s tests'],
+    ['packaging/sea/entitlements.plist', 'the entitlements the macOS binary is signed with'],
+    ['bench/live/drive-binary.mjs', 'drives the standalone binary'],
+    ['scripts/install/cli.sh', 'the CLI\'s one-line installer, which fetches the binary'],
+    ['scripts/install/cli.test.mjs', 'the CLI installer\'s tests'],
     ['scripts/change-scope.mjs', 'selection itself'],
     ['scripts/verify-skills.mjs', 'a verify script'],
+    ['scripts/install/desktop.sh', 'the one-line installer, tested by the bench step'],
+    ['scripts/install/desktop.ps1', 'the Windows one-line installer'],
+    ['scripts/install/desktop.test.mjs', 'the installers\' tests'],
+    ['scripts/desktop-release-assets.mjs', 'writes the fixed-name assets and SHA256SUMS the installers read'],
+    ['scripts/release-latest.mjs', 'decides which release release.yml marks latest'],
+    ['scripts/render-package-manifests.mjs', 'renders the Homebrew formula and cask and the winget manifests from a release'],
+    ['scripts/render-package-manifests.test.mjs', 'the package-manager manifests\' tests'],
+    ['packaging/homebrew/ordewell.rb.tmpl', 'the Homebrew formula template'],
+    ['packaging/homebrew/ordewell-desktop.rb.tmpl', 'the Homebrew cask template'],
+    ['packaging/winget/Ordewell.Ordewell.installer.yaml.tmpl', 'the winget manifest templates'],
     ['bench/pipeline/fake-claude/fake-claude.mjs', 'read by core e2e tests'],
     ['bench/containers/verdict.mjs', 'the real engine verdict'],
     ['assets/logo.png', 'unknown'],
@@ -135,7 +199,7 @@ describe('the full fallback', () => {
       assert.equal(scope.mode, 'full');
       assert.ok(scope.reason.includes(path), scope.reason);
       assert.deepEqual(offChecks(scope), []);
-      assert.deepEqual([...scope.workspaces].sort(), [CLI, CORE, VSCODE, WEB]);
+      assert.deepEqual([...scope.workspaces].sort(), [CLI, CORE, DESKTOP, UI, VSCODE, WEB]);
     });
   }
 
@@ -272,21 +336,32 @@ describe('the local inner loop', () => {
     const plan = runs('packages/core/src/index.ts');
     assert.deepEqual(plan.rebuild, [CORE]);
     assert.equal(script(plan, CORE), 'test:changed');
-    for (const dependent of [CLI, VSCODE, WEB]) assert.equal(script(plan, dependent), 'test:quick');
+    for (const dependent of [CLI, DESKTOP, UI, VSCODE, WEB]) assert.equal(script(plan, dependent), 'test:quick');
   });
 
-  it('rebuilds web for a web change, and runs the cli whole', () => {
+  it('rebuilds web for a web change, and runs the cli and desktop whole', () => {
     const plan = runs('packages/web/server/main.ts');
     assert.deepEqual(plan.rebuild, [WEB]);
     assert.equal(script(plan, WEB), 'test:changed');
     assert.equal(script(plan, CLI), 'test:quick');
+    assert.equal(script(plan, DESKTOP), 'test:quick');
     assert.equal(script(plan, CORE), undefined);
     assert.equal(script(plan, VSCODE), undefined);
+  });
+
+  it('rebuilds ui for a ui change, and runs vscode and desktop whole', () => {
+    const plan = runs('packages/ui/src/chat/hostState.ts');
+    assert.deepEqual(plan.rebuild, [UI]);
+    assert.equal(script(plan, UI), 'test:changed');
+    assert.equal(script(plan, VSCODE), 'test:quick');
+    assert.equal(script(plan, DESKTOP), 'test:quick');
+    assert.equal(script(plan, CORE), undefined);
   });
 
   it('rebuilds nothing for a package nothing depends on', () => {
     assert.deepEqual(runs('packages/vscode/src/extension.ts').rebuild, []);
     assert.deepEqual(runs('packages/cli/src/main.ts').rebuild, []);
+    assert.deepEqual(runs('packages/desktop/src/main/index.ts').rebuild, []);
   });
 
   it('runs a package whole when what changed is no source vitest can follow', () => {
@@ -300,8 +375,8 @@ describe('the local inner loop', () => {
 
   it('runs every quick suite on the full fallback, building what is depended on, in order', () => {
     const plan = runs('scripts/verify-skills.mjs');
-    assert.deepEqual(plan.rebuild, [CORE, WEB]);
-    for (const dir of [CORE, CLI, VSCODE, WEB]) assert.equal(script(plan, dir), 'test:quick');
+    assert.deepEqual(plan.rebuild, [CORE, UI, WEB]);
+    for (const dir of [CORE, CLI, UI, VSCODE, WEB, DESKTOP]) assert.equal(script(plan, dir), 'test:quick');
     assert.match(plan.note, /scripts\/verify-skills\.mjs/);
   });
 
@@ -320,6 +395,14 @@ describe('the steps a run owes', () => {
   it('accepts a selected run that ran what it selected', () => {
     const scope = selected('packages/web/server/main.ts');
     assert.deepEqual(missedSteps(scope, ran(scope)), []);
+  });
+
+  it('owes the app\'s drive and its visual tour for a desktop change', () => {
+    const scope = selected('packages/desktop/src/renderer/views/task/TaskTab.tsx');
+    const steps = ran(scope);
+    delete steps['desktop-e2e'];
+    delete steps['desktop-tour'];
+    assert.deepEqual(missedSteps(scope, steps), ['desktop-e2e: did not run', 'desktop-tour: did not run']);
   });
 
   it('names a required step that was skipped', () => {
@@ -414,7 +497,7 @@ describe('the repository-wide guards', () => {
       ['packages/core/src/services/__tests__/fakeSecretsGuard.test.ts', 'guard'],
       ['packages/core/src/services/__tests__/gitExec.test.ts', 'guard'],
       ['packages/core/src/services/__tests__/worktreeLinksIgnored.test.ts', '.gitignore is a full fallback'],
-      ['packages/vscode/src/views/__tests__/webviewImports.lint.test.ts', '.eslintrc.js is a full fallback'],
+      ['packages/ui/src/__tests__/webviewImports.lint.test.ts', '.eslintrc.js is a full fallback'],
     ]);
     const climbing = /\b(?:resolve|join)\(__dirname,\s*((?:'[^']*'(?:,\s*)?)+)\)/g;
     const found = new Set();
@@ -467,7 +550,7 @@ describe('ci-scope.mjs, as ci.yml runs it', () => {
     const { status, outputs } = run('select', { EVENT: 'push' });
     assert.equal(status, 0);
     assert.equal(outputs.workspace_args, '');
-    for (const check of ['packages', 'sandbox', 'planner', 'integration', 'engine']) assert.equal(outputs[check], 'true', check);
+    for (const check of ['packages', 'sandbox', 'planner', 'integration', 'desktop', 'engine', 'binary']) assert.equal(outputs[check], 'true', check);
     assert.equal(JSON.parse(outputs.scope).mode, 'full');
   });
 
@@ -501,6 +584,7 @@ describe('ci-scope.mjs, as ci.yml runs it', () => {
     assert.equal(outputs.packages, 'true');
     assert.equal(outputs.engine, 'false');
     assert.equal(outputs.integration, 'false');
+    assert.equal(outputs.desktop, 'false');
   });
 
   it('confirms a run that did what it owed', () => {
@@ -572,6 +656,12 @@ describe('ci.yml', () => {
     }
   });
 
+  it('hands every check on from the scope job: a missing output reads as empty, and the step would run on every change', () => {
+    for (const check of Object.keys(STEPS_BY_CHECK)) {
+      assert.ok(jobBlock('scope').includes(`${check}: \${{ steps.select.outputs.${check} }}`), `the scope job does not output ${check}`);
+    }
+  });
+
   it('lets no required step fail quietly', () => {
     assert.doesNotMatch(workflow, /continue-on-error/);
   });
@@ -611,6 +701,16 @@ describe('ci.yml', () => {
     assert.ok(gate.includes(`needs: [scope, build-and-test, real-engine, ${WINDOWS_JOBS.join(', ')}]`), 'the gate does not need every job');
     assert.match(gate, /toJSON\(needs\)/);
     assert.match(gate, /node scripts\/ci-scope\.mjs gate/);
+  });
+
+  it('runs the visual tour strict, beside the app e2e, and uploads its report when it fails', () => {
+    const tour = stepOf('desktop-tour');
+    assert.match(tour, /TOUR_STRICT: '1'/);
+    assert.match(tour, /xvfb-run -a npm run desktop:tour/);
+    const report = workflow.match(/^ {6}- name: Upload the desktop tour report\n([\s\S]*?)(?=^ {6}- name: )/m);
+    assert.ok(report, 'no tour report upload');
+    assert.match(report[0], /failure\(\)/);
+    assert.match(report[0], /path: packages\/desktop\/test-results\/tour/);
   });
 
   it('reads two commits, so a pull request\'s merge has its parents', () => {

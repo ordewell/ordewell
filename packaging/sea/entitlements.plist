@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The standalone ordewell binary is Node with a script injected (ADR-0065), signed
+  with the hardened runtime by scripts/sea/build.mjs. V8 compiles to memory it
+  writes and then executes, which the hardened runtime forbids unless these two
+  allow it. Node's own release signs with more (dyld environment variables,
+  library validation off, debugger) for native add-ons and debugging; this
+  binary loads no add-on, so it asks for no more.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+</dict>
+</plist>

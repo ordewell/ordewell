@@ -87,7 +87,10 @@ lets go of nothing.
   another host holds the session, and says so once. The orchestrator's
   isolation is wrapped (`leasedIsolation`) so that every change to the run —
   start, prepare, reopen, land, release, prune, merge, discard, sweep — is
-  refused without the lease; reads of git go through. VS Code's own direct
+  refused without the lease; reads of git go through, and a host reads the
+  files, diffs and branches of a held session's run from its saved record
+  without the lease
+  ([ADR-0064](../surfaces/0064-a-host-reads-files-and-git-for-the-user-confined-to-the-workspace.md)). VS Code's own direct
   save checks too. A planner turn on the session is refused the same way, and
   so is resolving a conflict as a task: a turn runs the user's agent and writes
   a PRD into their checkout, and the task would start work the host could not
@@ -96,7 +99,10 @@ lets go of nothing.
   nodes close. A child's turns go by its root's hold. A new goal is judged by the
   session it writes: under a host's fixed id that is the held session, and
   under a minted id it is a new one, so a Session that lost its lease may still
-  plan.
+  plan. One write is the exception: a host that does not hold a session may
+  append one line to its `user-actions.jsonl` under the file lock, naming the
+  user's action on the run's landing branch, for the holder to fold into the
+  timeline ([ADR-0062](0062-user-git-actions-are-confirmed-at-a-host-and-a-live-run-holds-only-its-landing-branch.md) G6).
 - **A lost lease stays lost (L6).** A holder whose heartbeat finds another host
   in its lease file has lost the session: it is told so, stops its run, and
   saves nothing more. What it holds is older than what the new holder has saved,
@@ -124,6 +130,7 @@ lets go of nothing.
 | `since` | When this host took the lease. |
 | `heartbeatAt` | Refreshed every `LEASE_HEARTBEAT_MS` by a timer that never keeps the host up. |
 | `runnerGroups` | `runnerGroups()` from `processTree`: the groups this host leads that still have members, refreshed with every heartbeat and as each runner starts. |
+| `runLive` | Whether the holder's run is live (ADR-0062 G7), written with every heartbeat and as a run starts or merges; a Session that cannot say counts as live. Absent from a holder that predates it. |
 
 A record naming this very pid under another host id is a host that died and
 whose pid this process was given, unless that id is another `LeaseHost` alive
@@ -206,3 +213,6 @@ throwaway HTTP server, the TUI effect and the CLI command against a refusal.
 - 2026-11-01 — L5 reaches a turn already live at a takeover, and a cleanup's write to the tree log: both ran on past the lease.
 - 2026-11-01 — from a real run: L3's runners no longer wait for a next host, a small shell stops a group whose host has gone.
 - 2026-11-01 — L7 waits out what the run has under way: a release still in git as a Session closed ran with the lease let go, in a tree a next host could hold.
+- 2026-11-03 — L5 lets a host read a held session's run files, diffs and branches without the lease (ADR-0064).
+- 2026-11-03 — the record carries `runLive`, for ADR-0062 G7's interlock in another host.
+- 2026-11-03 — L5's one exception: a non-holder appends a user-action line to `user-actions.jsonl` under the lock (ADR-0062 G6).

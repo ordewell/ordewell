@@ -34,6 +34,20 @@ interface DiffFile {
   patch(): Promise<string>;
 }
 
+/**
+ * The global options a read of a repository's files runs git with: no pager, no
+ * fsmonitor, and every configured filter emptied, since a worktree comparison
+ * may run clean filters even with textconv disabled. The caller still passes
+ * `--no-ext-diff` and `--no-textconv` to a diff.
+ */
+export async function readOnlyGitArgs(invoker: GitInvoker, cwd: string): Promise<string[]> {
+  const common = ['--no-pager', '-c', 'core.fsmonitor=false'];
+  const filters = await tryGit(invoker, cwd, [...common, 'config', '--name-only', '--get-regexp', '^filter\\..*\\.(clean|smudge|process|required)$']);
+  if (!filters.ok && filters.code !== 1) throw new Error('Could not inspect git filter configuration.');
+  for (const key of filters.stdout.trim().split('\n').filter(Boolean)) common.push('-c', `${key}=${key.endsWith('.required') ? 'false' : ''}`);
+  return common;
+}
+
 export function allowedPath(file: string): boolean {
   return file.length > 0 && !path.isAbsolute(file) && !/^[A-Za-z]:/.test(file)
     && !file.split(/[\\/]/).some((part) => part === '..' || part === '.git' || part === '.ordewell');
@@ -194,11 +208,7 @@ export async function readTaskDiff(invoker: GitInvoker, run: IsolationRun, taskI
         if (realPathOf(toplevel) !== realPathOf(entry.worktree)) throw new Error('The recorded task worktree is no longer a repository.');
       }
       const prefix = (await git(reader, repo.root, ['rev-parse', '--show-prefix'])).trim();
-      const common = ['--no-pager', '-c', 'core.fsmonitor=false'];
-      // A worktree comparison may run clean filters even with textconv disabled.
-      const filters = await tryGit(reader, cwd, [...common, 'config', '--name-only', '--get-regexp', '^filter\\..*\\.(clean|smudge|process|required)$']);
-      if (!filters.ok && filters.code !== 1) throw new Error('Could not inspect git filter configuration.');
-      for (const key of filters.stdout.trim().split('\n').filter(Boolean)) common.push('-c', `${key}=${key.endsWith('.required') ? 'false' : ''}`);
+      const common = await readOnlyGitArgs(reader, cwd);
       let target: string[] = [];
       if (!live) {
         const tip = entry.taskTip ?? (await git(reader, repo.root, [...common, 'rev-parse', '--verify', `refs/heads/${record.branch}^{commit}`])).trim();

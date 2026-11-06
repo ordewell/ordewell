@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EMPTY_RUN, reduceRun, type LegacyPlanState, type RunView, type SerializedTask, type SessionMessage, type SerializedTaskStatus } from '@ordewell/core';
-import { RunViewHost } from '../../RunViewHost';
+import { SessionView } from '@ordewell/ui/host';
 import { handleSessionMessage } from '../PlanManager';
 import type { PlanManagerDeps } from '../PlanManager';
 
@@ -15,7 +15,8 @@ function planned(id: string, order: number): SerializedTask {
 /** A host-like deps where the run view is real, so the fold is the thing under test. */
 function deps(): { d: PlanManagerDeps; posted: RunView[] } {
   const posted: RunView[] = [];
-  const run = new RunViewHost((m) => { if (m.type === 'runView') posted.push(m.view); });
+  const view = new SessionView((m) => { if (m.type === 'runView') posted.push(m.view); });
+  const { run } = view;
   run.adopt(reduceRun(EMPTY_RUN, {
     type: 'plan_generated',
     plan: { tasks: [planned('t1', 1), planned('t2', 2)], runners: ['claude-code'], generatedAt: 'x' },
@@ -25,7 +26,7 @@ function deps(): { d: PlanManagerDeps; posted: RunView[] } {
   const plan = { status: 'draft', tasks: [] } as unknown as LegacyPlanState;
   const d = {
     session: { isExecuting: true, status: 'running' },
-    chatProvider: { run, conversation: { receive: vi.fn() }, showPlan: vi.fn() },
+    chatProvider: { view, run, showPlan: vi.fn() },
     getCurrentPlan: () => plan,
     isGeneratingPlan: () => false,
   } as unknown as PlanManagerDeps;

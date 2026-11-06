@@ -2,7 +2,7 @@ import { act, fireEvent } from '@testing-library/react';
 import type * as vscode from 'vscode';
 import type { SessionMessage } from '@ordewell/core';
 import { ChatViewProvider } from '../../../providers/ChatViewProvider';
-import type { HostToWebview, PlannerBackend } from '../../../shared/protocol';
+import type { HostToWebview, PlannerBackend } from '@ordewell/ui/protocol';
 
 export function post(msg: HostToWebview): void {
   act(() => {

@@ -343,7 +343,11 @@ this backend should understand they are trading speed for not holding a key.
   live ones reads as clutter and invites a click whose only outcome is why it
   did nothing. A picker now offers only the agents that can plan and states what
   to install when none can — the send-time preflight still names every agent, so
-  the missing-CLI explanation survives where it bites. A signed-out agent can
+  the missing-CLI explanation survives where it bites. An agent the daemon lists
+  as installed but refused — below its ACP minimum version, or with no file
+  Ordewell can start directly — is the exception: it stays as a disabled row
+  carrying that reason, since the fix is a reinstall or an upgrade and hiding it
+  would read as "not installed". A signed-out agent can
   plan once signed in, so it stays listed, flagged, with the login action beside
   it rather than vanishing
   ([ADR-0052](../routing/0052-a-signed-out-coding-agent-is-flagged-and-signs-in-from-the-chat.md)).
@@ -388,5 +392,8 @@ this backend should understand they are trading speed for not holding a key.
 - 2026-11-04 — GitHub Copilot CLI plans ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)).
 - 2026-11-04 — Qwen Code plans ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)).
 - 2026-11-04 — Gemini CLI plans ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)).
+- 2026-11-05 — an installed agent the preflight refuses (too old for its ACP
+  profile, or not directly spawnable) is listed disabled with its reason in the
+  planner picker; a missing CLI is still left off and named in the install hint.
 - 2026-11-04 — Cursor plans ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)).
 - 2026-11-05 — Cline plans ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)).

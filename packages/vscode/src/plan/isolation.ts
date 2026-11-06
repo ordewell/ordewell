@@ -1,5 +1,10 @@
 import * as vscode from 'vscode';
 import { checkoutRule, mergeTarget } from '@ordewell/core';
+import {
+  discardRunConfirmation, mergeAllConfirmation, mergePastChecksQuestion,
+  type ConfirmationRequest, type IsolationBlockedChoice,
+} from '@ordewell/ui/host';
+import { confirm } from './confirm';
 import type { PlanManagerDeps } from './PlanManager';
 
 export type IsolationActionKind = 'reviewDiff' | 'merge' | 'discard' | 'cleanup' | 'resolveConflict';
@@ -10,21 +15,17 @@ export type IsolationActionKind = 'reviewDiff' | 'merge' | 'discard' | 'cleanup'
  * is a change to the user's real tree, so it must be asked for in a modal that
  * names the alternative.
  */
-export function handleIsolationBlocked(message: string, deps: PlanManagerDeps): void {
-  void vscode.window.showWarningMessage(
-    message,
-    { modal: true },
-    'Stash and continue',
-    'Run without isolation',
-    'Cancel',
-  ).then(async (choice) => {
-    try {
-      if (choice === 'Stash and continue') await deps.session.continueWithStash();
-      else if (choice === 'Run without isolation') await deps.session.continueWithoutIsolation();
-    } catch (err) {
-      deps.chatProvider.showError(`Could not continue the run: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  });
+export async function handleIsolationBlocked(
+  request: ConfirmationRequest<IsolationBlockedChoice>,
+  deps: Pick<PlanManagerDeps, 'session' | 'chatProvider'>,
+): Promise<void> {
+  const choice = await confirm(request);
+  try {
+    if (choice === 'stash') await deps.session.continueWithStash();
+    else if (choice === 'shared_root') await deps.session.continueWithoutIsolation();
+  } catch (err) {
+    deps.chatProvider.showError(`Could not continue the run: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 /**
@@ -48,14 +49,7 @@ export async function handleIsolationAction(
         const handoff = deps.session.isolationView()?.handoff;
         const target = handoff ? mergeTarget(handoff) : 'the branch you have checked out';
         const rule = handoff ? checkoutRule(handoff) : '';
-        const confirm = await vscode.window.showWarningMessage(
-          deps.session.isExecuting
-            ? `Merge what the run has landed so far into ${target}.${rule} This cannot be undone from Ordewell. The run goes on: tasks waiting for Merge all start once it has merged, and later tasks land on the same branch.`
-            : `Merge the isolated run into ${target}.${rule} This cannot be undone from Ordewell. Once it has merged, the run's worktrees and branches are removed unless a task still has work in its worktree that has not landed: then the run stays, and so does that work.`,
-          { modal: true },
-          'Merge',
-        );
-        if (confirm !== 'Merge') return;
+        if (!(await confirm(mergeAllConfirmation(target, rule, deps.session.isExecuting)))) return;
         // The user's Merge all, through the command seam (ADR-0029) as the
         // other controls are. A merge git stopped is an outcome the handoff
         // card shows, not an error here; a refusal without one is thrown for
@@ -63,8 +57,7 @@ export async function handleIsolationAction(
         let merged = await deps.session.execute({ command: 'merge_all' }, { kind: 'user' });
         // Work whose check has not passed is the seam's to name, and the yes goes with the next call (ADR-0055 D9).
         if (merged.payload?.kind === 'merge_hold') {
-          const past = await vscode.window.showWarningMessage(`${merged.message} Merge ${target} anyway?`, { modal: true }, 'Merge anyway');
-          if (past !== 'Merge anyway') return;
+          if (!(await confirm(mergePastChecksQuestion(merged.message, target)))) return;
           merged = await deps.session.execute({ command: 'merge_all', pastChecks: true }, { kind: 'user' });
         }
         if (merged.payload?.kind === 'merge') break;
@@ -72,12 +65,7 @@ export async function handleIsolationAction(
         throw new Error('Merge all answered without its result.');
       }
       case 'discard': {
-        const confirm = await vscode.window.showWarningMessage(
-          'Discard the whole run? Its worktrees, task branches and integration branch are removed. Tasks it completed stay completed.',
-          { modal: true },
-          'Discard',
-        );
-        if (confirm !== 'Discard') return;
+        if (!(await confirm(discardRunConfirmation()))) return;
         await deps.session.discardRun();
         break;
       }

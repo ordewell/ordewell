@@ -4,6 +4,7 @@ import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import type { RunnerManifest } from '../plugins/types';
 import { augmentedPath, withPath } from '../utils/shellPath';
 import { isExecutableResolved, planDirectLaunch, type LaunchDeps } from '../utils/launch';
+import { compareVersions } from '../utils/version';
 import type { ExecImpl } from './ModelDiscovery';
 import { connectorFor } from './harness/connectors';
 import { readRunnerAuth, recordedRunnerAuth, recordRunnerAuth, type RunnerAuth, type RunnerAuthExec } from './runnerAuth';
@@ -63,11 +64,19 @@ export interface RunnerInstallationOptions {
  * augmented PATH, per-process cache. A runner that isn't installed should never
  * be offered for selection in any surface.
  */
+/**
+ * The version a CLI printed for `--version`: its first dotted number, so
+ * "claude 1.4.2 (Claude Code)" and "codex-cli 0.9.1" both read as the number.
+ * Undefined when there is none, and a surface then shows no version at all.
+ */
+export function parseCliVersion(stdout: string): string | undefined {
+  return /\bv?(\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?)/.exec(stdout)?.[1];
+}
 /** Whether an agent can be started, why not, and its login verdict beside it. */
-export interface RunnerUsability { usable: boolean; reason?: string; auth?: RunnerAuth }
+export interface RunnerUsability { usable: boolean; reason?: string; auth?: RunnerAuth; version?: string }
 
 export class RunnerInstallation {
-  private cache: Map<string, { installed: boolean; at: number }> = new Map();
+  private cache: Map<string, { installed: boolean; at: number; version?: string }> = new Map();
   private inflight: Map<string, Promise<boolean>> = new Map();
   private authCache: Map<string, { auth: RunnerAuth; at: number }> = new Map();
   private authInflight: Map<string, Promise<RunnerAuth>> = new Map();
@@ -111,13 +120,13 @@ export class RunnerInstallation {
 
     const probe = (async () => {
       try {
-        await this.execImpl(`${command} --version`, { timeout: CHECK_TIMEOUT_MS });
-        return true;
+        const { stdout } = await this.execImpl(`${command} --version`, { timeout: CHECK_TIMEOUT_MS });
+        return { installed: true, version: parseCliVersion(String(stdout ?? '')) };
       } catch {
-        return false;
+        return { installed: false, version: undefined };
       }
-    })().then((installed) => {
-      this.cache.set(runner, { installed, at: this.now() });
+    })().then(({ installed, version }) => {
+      this.cache.set(runner, { installed, at: this.now(), ...(version ? { version } : {}) });
       this.inflight.delete(runner);
       return installed;
     });
@@ -127,13 +136,14 @@ export class RunnerInstallation {
   }
 
   /**
-   * Forget cached "not installed" verdicts so the next probe re-runs them. A
-   * runner-list refresh calls this, so a CLI installed while the host runs is
-   * offered without a restart. An installed verdict stays: it cannot have
-   * changed without the binary going away, and re-probing one costs a spawn.
+   * Forget every cached install verdict so the next probe re-runs it. A
+   * runner-list refresh calls this, so a CLI installed, upgraded or removed
+   * while the host runs is offered, or refused, without a restart: the
+   * version decides whether an ACP agent is new enough, so a present binary
+   * can go stale too.
    */
   refresh(): void {
-    for (const [runner, probe] of this.cache) if (!probe.installed) this.cache.delete(runner);
+    this.cache.clear();
     // A login can change in either direction while a host runs, and a refresh
     // is the moment the user expects a fixed one to show.
     this.authCache.clear();
@@ -175,6 +185,17 @@ export class RunnerInstallation {
     if (!(await this.isInstalled(runner))) {
       return { usable: false, reason: `${manifest.runner.command} is not installed or is not on PATH.` };
     }
+    const version = this.cache.get(runner)?.version;
+    // An ACP agent below the version its profile was checked against fails at
+    // initialize, after a planner was picked and a goal typed. Comparing the
+    // CLI's own version here lists it with the reason instead (ADR-0060).
+    const minVersion = connectorFor(runner)?.minVersion;
+    if (minVersion && version && compareVersions(version, minVersion) < 0) {
+      return {
+        usable: false,
+        reason: `${manifest.displayName ?? manifest.name} is too old for Ordewell: found ${version}, needs ${minVersion} or later.`,
+      };
+    }
     const spawnable = await this.isSpawnable(manifest.runner.command);
     if (!spawnable) {
       return {
@@ -184,7 +205,7 @@ export class RunnerInstallation {
           `Reinstall with the CLI's own installer, or add its install directory to PATH.`,
       };
     }
-    return { usable: true, auth: await this.authFor(runner, manifest) };
+    return { usable: true, auth: await this.authFor(runner, manifest), ...(version ? { version } : {}) };
   }
 
   /**

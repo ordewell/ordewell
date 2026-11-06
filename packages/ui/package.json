@@ -1,0 +1,92 @@
+{
+  "name": "@ordewell/ui",
+  "version": "0.13.0",
+  "private": true,
+  "description": "Ordewell's chat and task-log surfaces as React components, drawn by any host that supplies a HostBridge.",
+  "license": "Apache-2.0",
+  "author": "Alessandro Costanzo Ciano",
+  "homepage": "https://ordewell.ai",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ordewell/ordewell.git",
+    "directory": "packages/ui"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./protocol": {
+      "types": "./dist/protocol.d.ts",
+      "import": "./dist/protocol.mjs",
+      "require": "./dist/protocol.js"
+    },
+    "./host": {
+      "types": "./dist/host.d.ts",
+      "import": "./dist/host.mjs",
+      "require": "./dist/host.js"
+    },
+    "./design": {
+      "types": "./dist/design.d.ts",
+      "import": "./dist/design.mjs",
+      "require": "./dist/design.js"
+    },
+    "./styles.css": "./src/styles.css",
+    "./tokens.css": "./src/tokens.css",
+    "./scale.css": "./src/scale.css",
+    "./design.css": "./src/design.css",
+    "./package.json": "./package.json"
+  },
+  "typesVersions": {
+    "*": {
+      "protocol": [
+        "./dist/protocol.d.ts"
+      ],
+      "host": [
+        "./dist/host.d.ts"
+      ],
+      "design": [
+        "./dist/design.d.ts"
+      ]
+    }
+  },
+  "sideEffects": [
+    "*.css"
+  ],
+  "scripts": {
+    "build": "tsup && node ../../scripts/generate-third-party-notices.mjs ui",
+    "lint": "eslint src --ext .ts,.tsx",
+    "test": "vitest run",
+    "test:quick": "vitest run",
+    "test:changed": "vitest run --changed --passWithNoTests",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@ordewell/core": "^0.13.0",
+    "lucide-react": "^1.67.0"
+  },
+  "peerDependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0"
+  },
+  "devDependencies": {
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/node": "^25.9.1",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "jsdom": "^25.0.1",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.0"
+  }
+}

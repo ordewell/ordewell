@@ -1,0 +1,79 @@
+.changes { display: flex; flex-direction: column; gap: var(--ow-space-2); padding-bottom: var(--ow-space-3); }
+.changes-search { display: flex; align-items: center; gap: var(--ow-space-2); padding: var(--ow-space-1) var(--ow-space-3) 0; }
+.changes-search .frame-input { flex: 1; min-width: 0; padding: var(--ow-space-1) var(--ow-space-2); }
+.changes-note { display: flex; align-items: center; gap: var(--ow-space-2); margin: 0; padding: var(--ow-space-1) var(--ow-space-3); color: var(--ow-fg-secondary); font: var(--ow-type-body); overflow-wrap: anywhere; }
+.changes-note > .ow-icon { flex: none; }
+.changes-note.error { color: var(--ow-status-failed); }
+
+.changes-link { min-width: 0; min-height: var(--ow-hit); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 0; background: transparent; color: var(--ow-fg-link, var(--ow-accent)); padding: 0; font: var(--ow-type-label); cursor: pointer; text-align: left; }
+.changes-link:hover { text-decoration: underline; }
+.changes-link:focus-visible { outline: var(--ow-focus-width) solid var(--ow-focus-ring, var(--ow-accent)); outline-offset: var(--ow-focus-offset); }
+
+/* A conflict or a gated task: a line naming it, a line saying why, a line of actions. Every line wraps or shrinks inside the row. */
+.changes-rows, .changes-files { margin: 0; padding: 0; list-style: none; }
+.changes-item { display: flex; flex-direction: column; gap: var(--ow-space-1); padding: var(--ow-space-2) var(--ow-space-3); border-top: 1px solid var(--ow-border); }
+.changes-item-line { display: flex; align-items: center; gap: var(--ow-space-2); min-width: 0; }
+.changes-item-line > .ow-badge { flex: none; }
+.changes-item-text { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ow-fg-secondary); font: var(--ow-type-small); }
+.changes-item-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--ow-space-2); }
+.changes-item-actions:empty { display: none; }
+
+.changes-group { display: flex; flex-direction: column; }
+/* A task's summary is a card, its files flat rows under it (design.md, Surfaces): the card's hairline separates the groups, so no rule above it. */
+.changes-group-head { display: flex; align-items: flex-start; gap: var(--ow-space-1); margin: var(--ow-space-1) var(--ow-space-2) 0; padding-left: var(--ow-space-1); border: 1px solid var(--ow-surface-card-border); border-radius: var(--ow-radius-lg); background: var(--ow-surface-card); box-shadow: var(--ow-elevation-card); transition: background var(--ow-motion-fast) var(--ow-motion-easing); }
+.changes-group-head:has(> .task-summary-row:hover) { background: var(--ow-surface-card-hover); }
+.changes-group-head > .changes-chevron { margin-top: calc((var(--ow-hit) - 16px) / 2 + var(--ow-space-1)); }
+/* nowrap: a wrapping column sizes its lines by their content, so the rows inside would outgrow the sidebar instead of shrinking to it. */
+.changes-group-head > .task-summary-row { flex: 1; min-width: 0; display: flex; flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 0; padding: var(--ow-space-1) var(--ow-space-2) var(--ow-space-1) var(--ow-space-1); cursor: pointer; }
+.changes-group-head > .task-summary-row, .changes-group-head > .task-summary-row:hover { background: transparent; border-radius: var(--ow-radius-lg); }
+.changes-chevron { flex: none; color: var(--ow-fg-secondary); }
+.changes-file-count { flex: none; padding: 0 var(--ow-space-1); border-radius: var(--ow-radius-sm); background: var(--ow-surface-inset); color: var(--ow-fg-secondary); font: var(--ow-type-caption); font-variant-numeric: tabular-nums; }
+.changes-run-head { display: flex; align-items: center; gap: var(--ow-space-1); width: 100%; min-height: var(--ow-height-header); box-sizing: border-box; padding: 0 var(--ow-space-3) 0 var(--ow-space-2); border: 0; border-top: 1px solid var(--ow-border); background: transparent; color: var(--ow-fg); text-align: left; cursor: pointer; font: var(--ow-type-label); }
+.changes-run-head:hover { background: var(--ow-bg-hover); }
+.changes-run-head:focus-visible { outline: var(--ow-focus-width) solid var(--ow-focus-ring, var(--ow-accent)); outline-offset: calc(var(--ow-focus-offset) * -1); }
+.changes-run-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.changes-task-actions { display: flex; gap: var(--ow-space-2); padding: var(--ow-space-1) var(--ow-space-3); }
+
+/* A file row is a fixed-height line of fixed boxes; only the name and the directory shrink, so nothing runs under a badge or a count. */
+.changes-file { display: flex; align-items: center; gap: var(--ow-space-2); width: 100%; height: var(--ow-row); box-sizing: border-box; border: 0; background: transparent; color: var(--ow-fg); padding: 0 var(--ow-space-3) 0 var(--ow-space-8); text-align: left; cursor: pointer; white-space: nowrap; font: var(--ow-type-body); }
+.changes-file:hover { background: var(--ow-bg-hover); }
+.changes-file:focus-visible { background: var(--ow-bg-hover); outline: var(--ow-focus-width) solid var(--ow-focus-ring, var(--ow-accent)); outline-offset: calc(var(--ow-focus-offset) * -1); }
+.changes-file-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.changes-file-dir { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; font: var(--ow-type-small); }
+.changes-file > .ex-badge { margin-left: 0; }
+.changes-counts { flex: none; margin-left: auto; font: var(--ow-type-code-small); font-variant-numeric: tabular-nums; }
+.changes-added { color: var(--ow-status-passed); }
+.changes-removed { color: var(--ow-status-failed); }
+.changes-merge { display: flex; padding: var(--ow-space-2) var(--ow-space-3) 0; }
+.changes-merge .ow-button { min-width: 0; }
+
+.changes-skeleton { padding: var(--ow-space-half) 0; }
+.changes-skeleton-row { display: flex; align-items: center; height: var(--ow-row); padding: 0 var(--ow-space-3) 0 var(--ow-space-8); }
+.changes-skeleton-bar { height: 10px; border-radius: var(--ow-radius-sm); background: var(--ow-bg-hover); }
+
+.changes-diff { flex: 1; min-height: 0; }
+.changes-unplaced { display: flex; flex-direction: column; gap: var(--ow-space-1); margin: 0; padding: var(--ow-space-2) var(--ow-space-3); border-bottom: 1px solid var(--ow-border); }
+
+/* The comment widgets sit inside Monaco's view zones, so they take their colours from the tokens, not from the editor.
+   A comment is a card on the diff: the overlay step is the editor's own white in light. */
+.changes-zone { padding: var(--ow-space-1) var(--ow-space-2); font: var(--ow-type-body); color: var(--ow-fg); }
+.changes-comment-box, .changes-comment { display: flex; flex-direction: column; gap: var(--ow-space-2); min-width: 0; background: var(--ow-surface-card, var(--ow-bg-overlay)); }
+.changes-comment-input { box-sizing: border-box; width: 100%; min-height: calc(var(--ow-row) * 2); resize: vertical; padding: var(--ow-space-1) var(--ow-space-2); border: 1px solid var(--ow-border-widget); border-radius: var(--ow-radius-md); background: var(--ow-surface-inset, var(--ow-bg-input, var(--ow-bg))); color: var(--ow-fg); font: var(--ow-type-body); }
+.changes-comment-input:focus-visible { outline: var(--ow-focus-width) solid var(--ow-focus-ring, var(--ow-accent)); outline-offset: calc(var(--ow-focus-offset) * -1); }
+.changes-comment-place, .changes-comment-to { margin: 0; color: var(--ow-fg-secondary); font: var(--ow-type-small); overflow-wrap: anywhere; }
+.changes-comment-note { margin: 0; color: var(--ow-fg-secondary); font: var(--ow-type-small); }
+.changes-comment-note.error { color: var(--ow-status-failed); }
+.changes-comment-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--ow-space-2); }
+.changes-comment p:not(.changes-comment-place) { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.changes-preflight { margin: var(--ow-space-2) 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--ow-space-2); }
+/* Each repository is a card on the confirm's overlay: the light inset is the overlay's own white. */
+.changes-preflight-repo { display: flex; flex-direction: column; gap: var(--ow-space-1); min-width: 0; padding: var(--ow-space-2); border: 1px solid var(--ow-surface-card-border); border-radius: var(--ow-radius-lg); background: var(--ow-surface-card); }
+.changes-preflight-line { display: flex; align-items: center; gap: var(--ow-space-2); min-width: 0; }
+.changes-preflight-line > .ow-icon, .changes-preflight-line > .ow-badge { flex: none; }
+.changes-preflight-landing { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.changes-preflight-warning { display: flex; align-items: flex-start; gap: var(--ow-space-2); margin: 0; font: var(--ow-type-small); color: var(--ow-status-attention); }
+.changes-preflight-warning > .ow-icon { flex: none; }
+.changes-preflight-files { margin: 0; padding: 0 0 0 calc(16px + var(--ow-space-2)); list-style: none; }
+.changes-preflight-files li { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--ow-type-code-small); }
+.changes-preflight-other { margin: 0; padding-left: calc(16px + var(--ow-space-2)); color: var(--ow-fg-secondary); font: var(--ow-type-small); }

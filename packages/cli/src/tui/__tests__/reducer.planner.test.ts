@@ -115,6 +115,21 @@ describe('/planner', () => {
     expect(ids).toContain('codex');
   });
 
+  it('lists an installed agent it cannot start as disabled, with the reason', () => {
+    const reason = 'GitHub Copilot CLI is too old for Ordewell: found 1.0.104, needs 1.0.105 or later.';
+    const { state } = run('/planner', {
+      ...ready,
+      runners: [
+        { id: 'codex', name: 'Codex', enabled: true },
+        { id: 'copilot-cli', name: 'GitHub Copilot CLI', enabled: true, usable: false, reason },
+      ],
+    });
+
+    const copilot = stepperOf(state).items.find((i) => i.id === 'copilot-cli');
+    expect(copilot).toMatchObject({ label: 'GitHub Copilot CLI', detail: reason, disabled: true });
+    expect(stepperOf(state).items.find((i) => i.id === 'codex')?.disabled).toBeUndefined();
+  });
+
   it('names the agents to install when nothing can plan', () => {
     const { state } = run('/planner', { ...ready, runners: [], configuredProviders: [] });
 

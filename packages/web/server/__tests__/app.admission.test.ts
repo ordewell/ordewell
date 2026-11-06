@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import http from 'http';
 import { AddressInfo } from 'net';
 import WebSocket from 'ws';
-import { bearerHeaderValue, tokenSubprotocols } from '@ordewell/core';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+import { bearerHeaderValue, DAEMON_CONTRACT, tokenSubprotocols } from '@ordewell/core';
 import { createApp, attachWsHandler } from '../app';
 import { createRequestListener } from '../nodeAdapter';
 import type { OrchestratorPool } from '../pool/orchestratorPool';
@@ -26,6 +28,7 @@ function fakePool(overrides: Partial<OrchestratorPool> = {}): OrchestratorPool {
     runSnapshot: vi.fn().mockReturnValue(null),
     plannerCompaction: vi.fn().mockReturnValue(undefined),
     plannerDetection: () => undefined,
+    workLive: vi.fn().mockReturnValue(false),
     ...overrides,
   } as unknown as OrchestratorPool;
 }
@@ -170,6 +173,28 @@ describe('daemon admission control', () => {
       expect(result.outcome === 'open' && result.protocol).not.toContain(TOKEN);
     });
 
+    it('learns which process, package version and contract owns the port', async () => {
+      const res = await request(daemon.port, '/api/server', { headers: AUTH });
+      const manifest = JSON.parse(readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf8')) as { version: string };
+      expect(res.status).toBe(200);
+      expect(JSON.parse(res.body)).toEqual({
+        pid: process.pid,
+        port: daemon.port,
+        version: manifest.version,
+        contract: DAEMON_CONTRACT,
+        live: false,
+      });
+    });
+
+    it('says when work is under way, so a newer CLI leaves it running rather than replace it', async () => {
+      await daemon.close();
+      daemon = await startDaemon(fakePool({ workLive: vi.fn().mockReturnValue(true) }));
+
+      const res = await request(daemon.port, '/api/server', { headers: AUTH });
+
+      expect(JSON.parse(res.body)).toMatchObject({ live: true });
+    });
+
     it('reaches the API when it dials localhost by name', async () => {
       const res = await request(daemon.port, '/api/runners', {
         headers: { ...AUTH, host: `localhost:${daemon.port}` },
@@ -189,6 +214,17 @@ describe('daemon admission control', () => {
       ['GET', '/api/commands', undefined],
       ['GET', '/api/workspaces', undefined],
       ['GET', '/api/workspaces/isolation-preview', undefined],
+      // The user's reads of files and git (ADR-0064) sit behind the same admission.
+      ['GET', '/api/files/tree?dir=', undefined],
+      ['GET', '/api/files/content?path=README.md', undefined],
+      ['GET', '/api/files/find?query=a', undefined],
+      ['GET', '/api/git/repos', undefined],
+      ['GET', '/api/git/status', undefined],
+      ['GET', '/api/git/diff', undefined],
+      ['GET', '/api/git/log', undefined],
+      ['GET', '/api/git/commit?sha=HEAD', undefined],
+      ['GET', '/api/git/branches', undefined],
+      ['GET', '/api/plans/s1/tasks/t1/diff', undefined],
       ['POST', '/api/approvals/s1/ap-1', JSON.stringify({ granted: true })],
       ['POST', '/api/plans/s1/generate', JSON.stringify({ goal: 'x' })],
       ['PATCH', '/api/settings', JSON.stringify({ env: { NODE_OPTIONS: '--require /tmp/x.js' } })],
@@ -258,6 +294,9 @@ describe('daemon admission control', () => {
       ['GET', '/api/runners', undefined],
       ['GET', '/api/settings', undefined],
       ['GET', '/api/sessions', undefined],
+      ['GET', '/api/files/content?path=README.md', undefined],
+      ['GET', '/api/git/log', undefined],
+      ['GET', '/api/plans/s1/tasks/t1/diff', undefined],
       ['POST', '/api/approvals/s1/ap-1', JSON.stringify({ granted: true })],
       ['POST', '/api/plans/s1/generate', JSON.stringify({ goal: 'x' })],
       ['POST', '/api/settings', JSON.stringify({ env: { FOO: 'bar' } })],

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as vscode from 'vscode';
 import { handleIsolationAction, handleIsolationBlocked } from '../isolation';
+import { isolationBlockedConfirmation } from '@ordewell/ui/host';
 import type { PlanManagerDeps } from '../PlanManager';
 
 const showWarningMessage = vscode.window.showWarningMessage as unknown as ReturnType<typeof vi.fn>;
@@ -40,10 +41,10 @@ function deps() {
 describe('isolation_blocked host modal (ADR-0013)', () => {
   beforeEach(() => showWarningMessage.mockReset());
 
-  it('offers stash, run-without-isolation and cancel in one modal', () => {
+  it('offers stash, run-without-isolation and cancel in one modal', async () => {
     showWarningMessage.mockResolvedValue(undefined);
     const { d } = deps();
-    handleIsolationBlocked('Tracked files have uncommitted changes.', d);
+    await handleIsolationBlocked(isolationBlockedConfirmation('Tracked files have uncommitted changes.'), d);
 
     const [message, options, ...choices] = showWarningMessage.mock.calls[0] as unknown as [string, { modal?: boolean }, ...string[]];
     expect(message).toContain('uncommitted changes');
@@ -54,9 +55,7 @@ describe('isolation_blocked host modal (ADR-0013)', () => {
   it('stashes and replays the parked run when asked', async () => {
     showWarningMessage.mockResolvedValue('Stash and continue');
     const { d, session } = deps();
-    handleIsolationBlocked('blocked', d);
-    await Promise.resolve();
-    await Promise.resolve();
+    await handleIsolationBlocked(isolationBlockedConfirmation('blocked'), d);
 
     expect(session.continueWithStash).toHaveBeenCalledTimes(1);
     expect(session.continueWithoutIsolation).not.toHaveBeenCalled();
@@ -65,9 +64,7 @@ describe('isolation_blocked host modal (ADR-0013)', () => {
   it('runs in the shared root when the user declines isolation', async () => {
     showWarningMessage.mockResolvedValue('Run without isolation');
     const { d, session } = deps();
-    handleIsolationBlocked('blocked', d);
-    await Promise.resolve();
-    await Promise.resolve();
+    await handleIsolationBlocked(isolationBlockedConfirmation('blocked'), d);
 
     expect(session.continueWithoutIsolation).toHaveBeenCalledTimes(1);
     expect(session.continueWithStash).not.toHaveBeenCalled();
@@ -76,9 +73,7 @@ describe('isolation_blocked host modal (ADR-0013)', () => {
   it('does nothing when the modal is dismissed', async () => {
     showWarningMessage.mockResolvedValue(undefined);
     const { d, session } = deps();
-    handleIsolationBlocked('blocked', d);
-    await Promise.resolve();
-    await Promise.resolve();
+    await handleIsolationBlocked(isolationBlockedConfirmation('blocked'), d);
 
     expect(session.continueWithStash).not.toHaveBeenCalled();
     expect(session.continueWithoutIsolation).not.toHaveBeenCalled();
@@ -88,9 +83,7 @@ describe('isolation_blocked host modal (ADR-0013)', () => {
     showWarningMessage.mockResolvedValue('Stash and continue');
     const { d, session } = deps();
     const message = 'Tracked files have uncommitted changes in api, web, so tasks cannot run in isolated worktrees. Stash them, or run this plan without isolation.';
-    handleIsolationBlocked(message, d);
-    await Promise.resolve();
-    await Promise.resolve();
+    await handleIsolationBlocked(isolationBlockedConfirmation(message), d);
 
     const [shown] = showWarningMessage.mock.calls[0] as unknown as [string];
     expect(shown).toContain('api, web');

@@ -783,7 +783,7 @@ function plannerSetup(state: TuiState): { label: string; ready: boolean } {
   if (!registration) return { label: 'not set', ready: false };
   const runner = runnerForProvider(provider);
   const ready = runner
-    ? state.runners.some((r) => r.id === runner)
+    ? state.runners.some((r) => r.id === runner && r.usable !== false)
     : isApiProvider(provider) && state.configuredProviders.includes(provider);
   return { label: registration.label, ready };
 }

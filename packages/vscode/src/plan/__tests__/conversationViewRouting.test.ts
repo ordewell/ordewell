@@ -3,8 +3,7 @@ import type * as vscode from 'vscode';
 import type { SessionMessage } from '@ordewell/core';
 import { handleSessionMessage, type PlanManagerDeps } from '../PlanManager';
 import { ChatViewProvider } from '../../providers/ChatViewProvider';
-import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks, type PatchedView } from '../../shared/conversationPatch';
-import type { HostToWebview } from '../../shared/protocol';
+import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks, type HostToWebview, type PatchedView } from '@ordewell/ui/protocol';
 
 function chat() {
   const provider = new ChatViewProvider({ toString: () => 'file:///ext' } as unknown as vscode.Uri);
@@ -53,7 +52,7 @@ describe('planner events reach the webview through the conversation view', () =>
     send({ type: 'task_started', taskId: 'x', order: 1, title: 'Add a parser', runner: 'claude-code' });
 
     expect(screen.blocks()).toEqual([
-      expect.objectContaining({ type: 'message', role: 'system', text: 'Started "Add a parser" · claude-code' }),
+      expect.objectContaining({ type: 'message', role: 'system', text: 'Started "Add a parser" · Claude Code' }),
     ]);
   });
 

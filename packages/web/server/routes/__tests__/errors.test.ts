@@ -11,6 +11,7 @@ import {
   PlannerTurnStoppedError,
   SessionNotFoundError,
   TaskControlError,
+  UserGitError,
   WorkspaceNotAProjectError,
   WorkspaceNotFoundError,
 } from '@ordewell/core';
@@ -92,5 +93,32 @@ describe('failure', () => {
     expect(log).not.toHaveBeenCalled();
     expect((await answer(new Error('boom'))).status).toBe(500);
     expect(log).toHaveBeenCalledOnce();
+  });
+
+  describe('a user git action (ADR-0062)', () => {
+    it.each([
+      ['landing_branch_held', 409],
+      ['confirm_stale', 409],
+      ['stale', 409],
+      ['not_checkout', 400],
+      ['ordewell_branch', 400],
+      ['pushed', 400],
+      ['refused', 400],
+      ['git_failed', 400],
+    ] as const)('answers %s with %i, and logs nothing', async (code, status) => {
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const res = await answer(new UserGitError(code, 'no'));
+
+      expect(res).toEqual({ status, body: { error: 'no', code } });
+      expect(log).not.toHaveBeenCalled();
+    });
+
+    it('names the run holding the branch, and what changed since the person confirmed', async () => {
+      const held = { sessionId: 's1', runId: 'r1', repo: 'api', branch: 'main' };
+      expect((await answer(new UserGitError('landing_branch_held', 'held', { held }))).body).toMatchObject({ landingBranchHeld: held });
+      const difference = { field: 'files', shown: ['a.ts'], now: ['a.ts', 'b.ts'] };
+      expect((await answer(new UserGitError('confirm_stale', 'stale', { difference }))).body).toMatchObject({ confirmStale: difference });
+    });
   });
 });

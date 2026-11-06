@@ -34,13 +34,14 @@ plans wait for your approval by default; run settings let you automate execution
 and merging.
 
 Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor are supported out of the box,
-and can be mixed freely within one plan. Try it in your project, with nothing to install:
+and can be mixed freely within one plan. Install it on Linux or macOS with one
+line, with no Node.js needed:
 
 ```bash
-npx ordewell
+curl -fsSL https://ordewell.ai/install.sh | sh
 ```
 
-This README describes 0.12.6. See the [published releases](https://github.com/ordewell/ordewell/releases)
+This README describes 0.13.0. See the [published releases](https://github.com/ordewell/ordewell/releases)
 for versions available to install and their release notes.
 
 Ordewell is pre-1.0, so minor releases can include breaking changes. Read the
@@ -56,25 +57,51 @@ Ordewell is pre-1.0, so minor releases can include breaking changes. Read the
   <tr><td><b>Run controls</b></td><td>Watch tasks live, review their reports and choose whether to automate execution or merging.</td></tr>
   <tr><td><b>Usage limits</b></td><td>Tasks pause when an agent hits its account limit. Resume later or move unfinished work to another agent.</td></tr>
   <tr><td><b>Planner choices</b></td><td>Plan with a supported coding agent without an extra API key, or use an API provider. The planner reads your repository; changes run through tasks in the plan.</td></tr>
-  <tr><td><b>Interfaces</b></td><td>Use the terminal UI, VS Code extension, CLI or local API.</td></tr>
+  <tr><td><b>Interfaces</b></td><td>Use the terminal UI, VS Code extension, CLI or local API. A desktop app is coming.</td></tr>
   <tr><td><b>Skills</b></td><td>Share your team's instructions in repository skills that the planner attaches to tasks across runners.</td></tr>
 </table>
 
 ## Installation
 
-`npx ordewell` runs it without installing. To keep it:
+On Linux and macOS the CLI and terminal UI install as one standalone binary:
+
+```bash
+curl -fsSL https://ordewell.ai/install.sh | sh
+```
+
+It installs to `~/.local/bin/ordewell`; set `ORDEWELL_INSTALL_DIR` to put it
+elsewhere. Pass options after `sh -s --`: `--version X.Y.Z` for a specific
+release, `--dry-run` to see what it would do and `--uninstall` to remove it.
+The binary is for glibc-based Linux; Alpine and other musl systems install with
+npm (below). With Homebrew:
+
+```bash
+brew install ordewell/tap/ordewell
+```
+
+Prefer npm, or on Windows, where the standalone binary is not available yet?
+`npx ordewell` runs it without installing (Node.js 20.3 or newer). To keep it:
 
 ```bash
 npm install -g ordewell
 ```
+
+`ordewell update` updates the CLI the way it was installed: it runs the
+installer again into the binary's own folder, `brew upgrade ordewell`, or
+`npm install -g ordewell@latest`, and `ordewell update --dry-run` prints the
+command without running it. In the terminal UI, `/update` does the same.
 
 For VS Code, install [Ordewell from the Marketplace](https://marketplace.visualstudio.com/items?itemName=ordewell.ordewell)
 or run `code --install-extension ordewell.ordewell`. In Cursor, Windsurf or VSCodium,
 get it from [Open VSX](https://open-vsx.org/extension/ordewell/ordewell). The
 extension bundles its own core and needs nothing from npm.
 
-**Requirements:** Node.js 20.3 or newer, at least one supported coding agent,
-and git 2.38 or newer for task isolation.
+**Requirements:** a supported coding agent, installed and signed in. Node.js is
+not required for the standalone binary; only the npm install needs 20.3 or
+newer. git is optional: without it, or outside a git repository, tasks run
+directly in the folder without worktrees. git 2.38 or newer is recommended, for
+isolated worktrees, delegated tasks (a child plan needs its own worktree) and
+Merge all.
 
 The five ACP runners can also plan and run read-only tasks. Install GitHub
 Copilot CLI 1.0.105+, Qwen Code 0.26.6+, Cline 3.0.74+, or Gemini CLI
@@ -90,7 +117,8 @@ The VS Code extension, the full-screen terminal UI and the `ordewell` commands
 (`plan`, `run`, `handoff` and the rest) run natively on Windows. Install Git
 for Windows: the planner's research commands run in its shell. For Codex tasks,
 [set up Codex's own sandbox](docs/troubleshooting.md#codexs-windows-sandbox-is-not-set-up)
-once. The terminal UI's mouse and paste need Node.js 22.17 or newer there.
+once. Windows installs with npm for now, and the terminal UI's mouse and paste
+need Node.js 22.17 or newer there.
 See the [platform notes](https://ordewell.ai/docs#platforms) for setup and
 current limitations.
 
@@ -106,6 +134,15 @@ Ordewell also supports [command-line workflows](https://ordewell.ai/docs#first-p
 for scripting.
 
 Tried it? [Tell us how your first run went](https://github.com/ordewell/ordewell/discussions/115).
+
+## Desktop app
+
+A desktop app for macOS, Windows and Linux is coming: the planner, the plan and
+its tasks, your repository's files, diffs and git, and a terminal, in one
+window. It is a client of the same local daemon, so a run started there is the
+one `ordewell status` reports. It is not in a release yet, so there is no
+installer to download. The [desktop guide](docs/desktop/README.md) covers
+running it from source and what the window holds.
 
 ## See it in action
 
@@ -176,7 +213,11 @@ adapted from [Matt Pocock's skills](https://github.com/mattpocock/skills) (MIT).
 ## What Ordewell sends
 
 Ordewell checks for updates daily, sending its version and a random install ID
-to ordewell.ai after a one-time notice. To turn the check off, set
+to ordewell.ai after a one-time notice, and nothing else. When the answer names
+a newer release, Ordewell remembers it until you update and says so: the
+terminal UI on every start, a command run in a terminal once a day, and VS Code
+once a day. `ordewell update` and `/update` run the update; they send nothing to
+ordewell.ai. To turn the check off, set
 `ORDEWELL_NO_VERSION_CHECK=1` or `DO_NOT_TRACK=1`, or turn off VS Code's
 telemetry for the extension. See [version check details](https://ordewell.ai/docs#version-check).
 

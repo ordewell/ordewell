@@ -2,17 +2,21 @@ import * as vscode from 'vscode';
 import { latestTaskCommands } from '../shared/taskCommands';
 import {
   Session, LegacyPlanState, Task, flattenTasks, RunnerId, DiscoveredModel, enabledRunners,
-  saveState, clearState, ModelResolver, RunnerRegistry, plannerNotReadyFor, describePlannerNotReady, CHAT_COMMANDS, taskStartedNotice,
-  createEmptyPlan, installedPlannerAnswered, isRunnerApproval, loopRemovalRefusal, pastGateConfirmation, titledRefs, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner,
-  taskActionCommand, revertEffect, revertListLine, revertTaskRef, runHoldsEditors, cardEditNeedsUnstarted, confirmedOverride, manualOverrideConfirmation, manualOverrideStopFirst, overrideNeedsConfirmation, titledTaskRefOf, type ExecutionCommand, type OverrideDirection, type TaskAction, type TaskEditOptions,
+  saveState, clearState, ModelResolver, RunnerRegistry, plannerNotReadyFor, describePlannerNotReady, CHAT_COMMANDS,
+  createEmptyPlan, installedPlannerAnswered, isRunnerApproval, loopRemovalRefusal, titledRefs, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner,
+  taskActionCommand, runHoldsEditors, cardEditNeedsUnstarted, confirmedOverride, manualOverrideStopFirst, overrideNeedsConfirmation, titledTaskRefOf, type ExecutionCommand, type OverrideDirection, type TaskAction, type TaskEditOptions,
   recordedRunnerAuth, runnerForProvider, type RunnerInstallation,
 } from '@ordewell/core';
-import type { TaskDraft, TaskEdit, WebviewToHost } from '../shared/protocol';
+import type { TaskDraft, TaskEdit, WebviewToHost } from '@ordewell/ui/protocol';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
 import { VsCodeConfig } from '../adapters/VsCodeConfig';
 import { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
+import {
+  overrideConfirmation, removeTaskConfirmation, revertConfirmation, startPastGateConfirmation, type SessionCue,
+} from '@ordewell/ui/host';
+import { confirm } from './confirm';
 import { handleIsolationBlocked } from './isolation';
-import { removalPrompt, taskFromDraft } from './taskEdit';
+import { taskFromDraft } from './taskEdit';
 
 export interface PlanManagerDeps {
   session: Session;
@@ -400,8 +404,7 @@ export async function handleRemoveTask(taskId: string, deps: PlanManagerDeps): P
     void vscode.window.showWarningMessage(refusal);
     return;
   }
-  const confirm = await vscode.window.showWarningMessage(removalPrompt(deps.session.planTasks, taskId), { modal: true }, 'Remove');
-  if (confirm !== 'Remove') return;
+  if (!(await confirm(removeTaskConfirmation(deps.session.planTasks, taskId)))) return;
   await deps.session.removeTask(taskId);
   if (deps.session.planTasks.length > 0) {
     settleDirectEdit(deps);
@@ -549,12 +552,7 @@ export function handleNewSession(deps: Pick<PlanManagerDeps,
 export async function confirmPastGate(taskId: string, session: Pick<Session, 'mergeGate' | 'planState'>): Promise<boolean> {
   const unmerged = session.mergeGate(taskId);
   if (unmerged.length === 0) return true;
-  const choice = await vscode.window.showWarningMessage(
-    pastGateConfirmation(titledRefs(unmerged, session.planState?.tasks ?? [])),
-    { modal: true },
-    'Start anyway',
-  );
-  return choice === 'Start anyway';
+  return (await confirm(startPastGateConfirmation(titledRefs(unmerged, session.planState?.tasks ?? [])))) === 'start';
 }
 
 /**
@@ -594,9 +592,7 @@ export async function markTaskByHand(direction: OverrideDirection, taskId: strin
     showRefusal(new Error(manualOverrideStopFirst(direction, label)));
     return;
   }
-  const yes = direction === 'complete' ? 'Mark complete' : 'Mark not done';
-  const choice = await vscode.window.showWarningMessage(manualOverrideConfirmation(direction, label), { modal: true }, yes);
-  if (choice !== yes) return;
+  if (!(await confirm(overrideConfirmation(direction, label)))) return;
   await executeUserCommand(session, confirmedOverride(command, task.status));
 }
 
@@ -614,14 +610,7 @@ export async function revertTaskByHand(taskId: string, deps: Pick<PlanManagerDep
     showRefusal(new Error(preview.message));
     return;
   }
-  const asked = preview.tasks.find((t) => t.taskId === taskId) ?? preview.tasks.at(-1);
-  const list = preview.tasks.map(revertListLine);
-  const choice = await vscode.window.showWarningMessage(
-    `Revert task ${asked ? `${revertTaskRef(asked)} ${asked.title}` : 'this task'}? ${revertEffect}`,
-    { modal: true, detail: `Reverting, newest first:\n${list.join('\n')}` },
-    'Revert',
-  );
-  if (choice !== 'Revert') return;
+  if (!(await confirm(revertConfirmation(preview, taskId)))) return;
   await executeUserCommand(session, { command: 'revert_task', task: taskId, confirmed: true, seen: preview.tasks.map((t) => t.taskId) });
 }
 
@@ -719,105 +708,42 @@ export function handleSessionMessage(
   msg: import('@ordewell/core').SessionMessage,
   deps: PlanManagerDeps,
 ): void {
-  deps.chatProvider.conversation.receive(msg);
-  // Every session event feeds the run view too; the card badges, isolation
-  // marks and merge/handoff cards are drawn from it, not from the plan.
-  deps.chatProvider.run.receive(msg);
-  if (msg.type === 'approval_request') {
+  // The view itself is folded host-neutrally (`@ordewell/ui/host`), the same
+  // fold a daemon's socket feeds; what is left here reads or changes what only
+  // this host holds: its plan, its session, its modals.
+  const cue = deps.chatProvider.view.receive(msg);
+  if (cue) applySessionCue(cue, deps);
+}
+
+function applySessionCue(cue: SessionCue, deps: PlanManagerDeps): void {
+  const { chatProvider, session } = deps;
+  switch (cue.type) {
     // The chat card is the question now, so make sure the user is looking at
     // it. Nothing blocks here: the session's research loop awaits the answer on
     // the broadcast seam, and the webview answers through `resolveApproval`.
-    deps.chatProvider.reveal();
-    return;
-  }
-  switch (msg.type) {
-    // Runner chatter was dropped here entirely, so a task that failed mid-run
-    // showed a red card and nothing else. The webview keeps only the tail.
-    case 'task_output':
-      deps.chatProvider.sendTaskOutput(msg.taskId, msg.text);
-      break;
-    case 'task_started':
-      deps.chatProvider.postMessage({ type: 'taskCommands', taskId: msg.taskId, commands: [] });
-      deps.chatProvider.conversation.note('system', taskStartedNotice(msg.title, msg.runner));
-      break;
-    case 'status_update': {
-      // The run view already holds each task's status; the dock reads a
-      // plan-level one, the provider's to keep, never the Session's plan's.
-      deps.chatProvider.showPlan(deps.getCurrentPlan(), deps.session.isExecuting
-        ? 'running'
-        : deps.session.status === 'completed'
-          ? 'completed'
-          : 'draft');
-      break;
-    }
-    // The Session changes the plan itself (a live turn's edits, a run setting)
-    // and announces the result; the card follows it.
-    case 'plan_generated':
-      deps.chatProvider.showPlan(deps.getCurrentPlan());
-      break;
-    case 'execution_complete': {
-      const plan = deps.getCurrentPlan();
-      deps.chatProvider.showPlan(plan);
-      deps.chatProvider.showRunActivity(deps.session.activity);
+    case 'reveal':
+      chatProvider.reveal();
+      return;
+    case 'plan':
+      chatProvider.showPlan(deps.getCurrentPlan(), cue.dock === 'run'
+        ? session.isExecuting ? 'running' : session.status === 'completed' ? 'completed' : 'draft'
+        : cue.dock);
+      return;
+    case 'settled':
+      chatProvider.showPlan(deps.getCurrentPlan(), cue.dock);
+      chatProvider.showRunActivity(session.activity);
       deps.persistState();
-      break;
-    }
-    case 'execution_stopped': {
-      deps.chatProvider.showPlan(deps.getCurrentPlan(), 'draft');
-      // A Stop can come from another surface while this webview still shows a
-      // starting plan: the run's own word clears it.
-      deps.chatProvider.showRunActivity(deps.session.activity);
-      deps.persistState();
-      break;
-    }
-    case 'review_needed': {
-      const plan = deps.getCurrentPlan();
-      deps.chatProvider.showPlan(plan);
-      break;
-    }
+      return;
     // A dirty tree parked the run. The user's way out is a real modal: stash
     // and continue, run in the shared root this once, or cancel.
-    case 'isolation_blocked':
-      handleIsolationBlocked(msg.message, deps);
-      break;
-    // Drawn by the conversation view or the run view above, or not by this
-    // surface at all. Named so a new SessionMessage variant fails to compile
-    // until someone decides what it means here. `isolation_merge` and
-    // `run_closed` fold onto the run view: what Merge all did, and the
-    // Session's word that the run is closed, which takes the marks and cards.
-    case 'checkpoint':
-    case 'isolation_handoff':
-    case 'isolation_merge':
-    case 'run_closed':
-    case 'planner_message':
-    case 'plan_token':
-    case 'planner_text_delta':
-    case 'planner_thinking_delta':
-    case 'planner_liveness':
-    case 'research_step':
-    case 'research_step_done':
-    case 'review_approved':
-    case 'task_updated':
-    case 'planner_turn_started':
-    case 'planner_skill_loaded':
-    case 'planner_turn_ended':
-    case 'planner_text_retracted':
-    case 'planner_usage':
-    case 'planner_compaction':
-    case 'planner_detection':
-    case 'subagent_started':
-    case 'subagent_finished':
-    case 'approval_settled':
-    case 'approval_decided':
-    case 'execution_action':
-      break;
-    case 'task_log':
-      if (msg.events.some((event) => event.type === 'runner_loaded')) {
-        deps.chatProvider.postMessage({ type: 'taskCommands', taskId: msg.taskId, commands: latestTaskCommands(deps.session, msg.taskId) });
-      }
-      break;
+    case 'confirm':
+      void handleIsolationBlocked(cue.request, deps);
+      return;
+    case 'commands':
+      chatProvider.postMessage({ type: 'taskCommands', taskId: cue.taskId, commands: latestTaskCommands(session, cue.taskId) });
+      return;
     default: {
-      const exhaustive: never = msg;
+      const exhaustive: never = cue;
       return exhaustive;
     }
   }

@@ -1,0 +1,71 @@
+/* Settings (W2's planner, ADR-0030's run rules, the runner catalog and this app's preferences). */
+
+.settings-view { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: var(--ow-space-4) var(--ow-space-6) var(--ow-space-8); display: flex; flex-direction: column; gap: var(--ow-space-4); }
+.settings-head h2 { margin: 0 0 var(--ow-space-1); font: var(--ow-type-title); }
+.settings-head p { margin: 0; max-width: 72ch; color: var(--ow-fg-secondary); font: var(--ow-type-body); }
+/* A section is a card: its fields stack inside it and nothing leaves it, however narrow the tab is. */
+.settings-section { display: flex; flex-direction: column; gap: var(--ow-space-3); width: 100%; max-width: 780px; box-sizing: border-box; padding: var(--ow-space-3) var(--ow-space-4); border: 1px solid var(--ow-surface-card-border); border-radius: var(--ow-radius-lg); background: var(--ow-surface-card); box-shadow: var(--ow-elevation-card); }
+.settings-section h3 { margin: 0; font: var(--ow-type-heading); }
+/* Run's Restore defaults sits at the right of its heading and wraps under it when the tab is too narrow for both. */
+.settings-section-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--ow-space-2); }
+.settings-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ow-space-2); }
+.settings-confirm-text { font: var(--ow-type-small); color: var(--ow-fg); }
+/* Advanced is a disclosure: the whole heading is the button, so the hit area is the row, not the chevron. */
+.settings-section h3:has(> .settings-disclosure) { display: flex; }
+.settings-disclosure { flex: 1 1 auto; display: flex; align-items: center; gap: var(--ow-space-2); min-height: var(--ow-hit); margin: 0; padding: 0; border: 0; border-radius: var(--ow-radius-sm); background: none; color: inherit; font: inherit; text-align: start; cursor: pointer; }
+.settings-disclosure:hover { color: var(--ow-fg-link, var(--ow-accent)); }
+.settings-disclosure:focus-visible { outline: var(--ow-focus-width) solid var(--ow-focus-ring); outline-offset: var(--ow-focus-offset); }
+/* A rule that sets display would otherwise show a closed body: hidden has to win. */
+.settings-advanced-body { display: flex; flex-direction: column; gap: var(--ow-space-3); }
+.settings-advanced-body[hidden] { display: none; }
+.settings-group { display: flex; flex-direction: column; gap: var(--ow-space-1); padding-top: var(--ow-space-2); border-top: 1px solid var(--ow-surface-card-border); }
+.settings-group h4 { margin: 0; font: var(--ow-type-body-strong); color: var(--ow-fg-secondary); }
+.settings-field { display: flex; flex-direction: column; gap: var(--ow-space-1); max-width: 560px; min-width: 0; }
+.settings-label { font: var(--ow-type-body-strong); color: var(--ow-fg); }
+.settings-field select,
+.settings-number input,
+.settings-allowlist {
+  box-sizing: border-box;
+  min-height: var(--ow-height-input);
+  max-width: 100%;
+  padding: 0 var(--ow-space-2);
+  border: 1px solid var(--ow-border-control);
+  border-radius: var(--ow-radius-sm);
+  /* The input fill is the light card's own step; a field in a card steps back to the inset instead. */
+  background: var(--ow-surface-inset);
+  color: var(--ow-fg);
+  font: var(--ow-type-body);
+}
+.settings-field select:focus-visible,
+.settings-field input:focus-visible,
+.settings-allowlist:focus-visible,
+.settings-pill:focus-visible { outline: 1px solid var(--ow-focus-ring); outline-offset: var(--ow-focus-offset); }
+.settings-allowlist { width: 100%; padding: var(--ow-space-1) var(--ow-space-2); resize: vertical; font: var(--ow-type-code); }
+.settings-number { display: flex; flex-direction: column; gap: var(--ow-space-half); }
+.settings-number input { width: 10ch; }
+.settings-number input[aria-invalid='true'] { border-color: var(--ow-status-failed); }
+.settings-hint { margin: 0; color: var(--ow-fg-secondary); font: var(--ow-type-small); overflow-wrap: anywhere; }
+.settings-pills { display: flex; flex-wrap: wrap; gap: var(--ow-space-1); }
+.settings-pill { min-height: var(--ow-hit); padding: 0 var(--ow-space-3); border: 1px solid var(--ow-border-control); border-radius: var(--ow-radius-pill); background: var(--ow-surface-inset); color: var(--ow-fg); font: var(--ow-type-small); cursor: pointer; }
+.settings-pill:hover { background: var(--ow-bg-hover); }
+.settings-pill.active { border-color: var(--ow-accent); background: var(--ow-accent-tint); color: var(--ow-fg); }
+.settings-toggle { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: var(--ow-space-half) var(--ow-space-2); align-items: center; max-width: 620px; font: var(--ow-type-body); cursor: pointer; }
+.settings-toggle input { width: 16px; height: 16px; margin: 0; accent-color: var(--ow-accent); }
+.settings-toggle input:focus-visible { outline: 1px solid var(--ow-focus-ring); outline-offset: var(--ow-focus-offset); }
+.settings-toggle .settings-hint { grid-column: 2; }
+.settings-toggle-label { display: inline-flex; align-items: center; gap: var(--ow-space-2); }
+/* Subplanners' fields and its confirmation sit under the switch's label, so they read as its, not as the group's. */
+.settings-subplanners,
+.settings-subplanners-confirm { margin-inline-start: calc(16px + var(--ow-space-2)); }
+.settings-subplanners { display: flex; flex-direction: column; gap: var(--ow-space-3); padding-top: var(--ow-space-2); }
+.settings-subplanners-confirm { flex-direction: column; align-items: flex-start; max-width: 620px; margin-top: var(--ow-space-2); padding: var(--ow-space-2) var(--ow-space-3); border: 1px solid var(--ow-surface-card-border); border-radius: var(--ow-radius-md); background: var(--ow-surface-inset); }
+.settings-confirm-actions { display: flex; gap: var(--ow-space-2); }
+.settings-runners { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--ow-space-2); }
+.settings-runner { display: flex; flex-direction: column; gap: var(--ow-space-2); min-width: 0; padding: var(--ow-space-2) var(--ow-space-3); border: 1px solid var(--ow-surface-card-border); border-radius: var(--ow-radius-md); background: var(--ow-surface-inset); }
+.settings-runner .settings-field { max-width: none; }
+.settings-runner-actions { display: flex; flex-wrap: wrap; gap: var(--ow-space-2); }
+.settings-runner-actions:empty { display: none; }
+.settings-error { display: flex; align-items: flex-start; gap: var(--ow-space-2); max-width: 780px; margin: 0; padding: var(--ow-space-2) var(--ow-space-3); border: 1px solid var(--ow-status-failed); border-radius: var(--ow-radius-lg); color: var(--ow-fg); background: var(--ow-surface-card); box-shadow: var(--ow-elevation-card); font: var(--ow-type-body); overflow-wrap: anywhere; }
+.settings-error svg { flex: none; margin-top: var(--ow-space-half); color: var(--ow-status-failed); }
+.settings-error span { flex: 1; min-width: 0; }
+.settings-saving { margin: 0; color: var(--ow-fg-secondary); font: var(--ow-type-small); }

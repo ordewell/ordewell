@@ -21,7 +21,7 @@ describe('what the plan pane says the run waits on', () => {
     const { state } = reduce(running(), { type: 'taskStarted', taskId: 't1', title: 'Add multiply', runner: 'claude-code', sessionId: 's1' });
 
     expect(state.conversation.blocks.some((b) => b.type === 'tool')).toBe(false);
-    expect(lastMessage(state)).toMatchObject({ role: 'system', text: 'Started "Add multiply" · claude-code' });
+    expect(lastMessage(state)).toMatchObject({ role: 'system', text: 'Started "Add multiply" · Claude Code' });
   });
 
   it('names nothing while tasks are only running', () => {

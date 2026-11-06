@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import App from '../App';
 import { api, hostBridge, post } from './hostBridge';
-import type { PlannerBackend } from '../../../shared/protocol';
+import type { PlannerBackend } from '@ordewell/ui/protocol';
 
 const backends = (usable: string[]): PlannerBackend[] => [
   { id: 'claude-code', label: 'Claude Code', kind: 'harness', runner: 'claude-code', usable: usable.includes('claude-code') },

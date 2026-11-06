@@ -10,6 +10,9 @@ import { workspacesRoute } from './routes/workspaces';
 import { approvalsRoute } from './routes/approvals';
 import { settingsRoute } from './routes/settings';
 import { commandsRoute } from './routes/commands';
+import { filesRoute, gitRoute, taskDiffRoute } from './routes/workspaceRead';
+import { fileWriteRoute, gitWriteRoute, mergePreflightRoute } from './routes/workspaceWrite';
+import { WebConfig } from './adapters/WebConfig';
 import { createWsHandler } from './ws/stream';
 import {
   decideAdmission,
@@ -17,9 +20,35 @@ import {
   type AdmissionDecision,
 } from './security/admission';
 import { OrchestratorPool } from './pool/orchestratorPool';
-import type { ServerInfoResponse } from '@ordewell/core';
+import {
+  DAEMON_CONTRACT,
+  createUserGit,
+  createWorkspaceReader,
+  landingRuns,
+  type ServerInfoResponse,
+  type UserGit,
+  type WorkspaceReader,
+} from '@ordewell/core';
+import { serverVersion } from './utils/serverVersion';
 
-export function createApp(pool: OrchestratorPool, admission: AdmissionContext) {
+/**
+ * The user's git actions (ADR-0062). The pool answers only whether a run is
+ * live and where its timeline is: an action never takes a session's lease.
+ */
+export function userGitFor(pool: OrchestratorPool, reader: WorkspaceReader): UserGit {
+  return createUserGit({
+    reader,
+    landingRuns: (checkout) => landingRuns(checkout, (workspace, sessionId, plan) => pool.userRunIsLive(sessionId, workspace, plan)),
+    record: (workspace, held, text) => pool.recordUserAction(held.sessionId, workspace, text),
+  });
+}
+
+export function createApp(
+  pool: OrchestratorPool,
+  admission: AdmissionContext,
+  reader: WorkspaceReader = createWorkspaceReader({ config: new WebConfig() }),
+  userGit: UserGit = userGitFor(pool, reader),
+) {
   const app = new Hono();
 
   // There is no CORS allowlist: the daemon ships no browser front end, so a
@@ -40,18 +69,35 @@ export function createApp(pool: OrchestratorPool, admission: AdmissionContext) {
 
   // `ordewell stop --server` verifies a PID file against the process that
   // actually owns the port before signalling anything, so a stale file cannot
-  // terminate an unrelated process. Behind admission like every other route.
-  app.get('/api/server', (c) => c.json({ pid: process.pid, port: admission.port } satisfies ServerInfoResponse));
+  // terminate an unrelated process. The desktop app reads the version and the
+  // contract before it drives a daemon it did not start (ADR-0063 H3), and a
+  // newer CLI whether it may replace one it cannot drive (ADR-0048). Behind
+  // admission like every other route.
+  app.get('/api/server', (c) => c.json({
+    pid: process.pid,
+    port: admission.port,
+    version: serverVersion(),
+    contract: DAEMON_CONTRACT,
+    live: pool.workLive(),
+  } satisfies ServerInfoResponse));
 
   app.route('/api/sessions', sessionsRoute(pool));
   app.route('/api/sessions', childrenRoute(pool));
   app.route('/api/plans', plansRoute(pool));
+  app.route('/api/plans', taskDiffRoute(reader));
+  app.route('/api/plans', mergePreflightRoute(reader));
   app.route('/api/runners', runnersRoute(pool));
   app.route('/api/models', modelsRoute(pool));
   app.route('/api/settings', settingsRoute(pool));
   app.route('/api/commands', commandsRoute());
   app.route('/api/workspaces', workspacesRoute(pool));
   app.route('/api/approvals', approvalsRoute(pool));
+  // The user's reads of files and git (ADR-0064): the reader, never the pool.
+  app.route('/api/files', filesRoute(reader));
+  app.route('/api/git', gitRoute(reader));
+  // The user's actions on their own checkout (ADR-0062), beside those reads.
+  app.route('/api/files', fileWriteRoute(userGit));
+  app.route('/api/git', gitWriteRoute(userGit));
 
   return app;
 }

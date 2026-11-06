@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { RunnerInstallation } from '../RunnerInstallation';
+import { RunnerInstallation, parseCliVersion } from '../RunnerInstallation';
 import type { ExecImpl } from '../ModelDiscovery';
 import type { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { CLAUDE_CODE_MANIFEST } from '../../plugins/builtin/claude-code.manifest';
@@ -81,6 +81,15 @@ describe('RunnerInstallation', () => {
   });
 });
 
+describe('parseCliVersion', () => {
+  it('reads the first dotted number of what a CLI prints', () => {
+    expect(parseCliVersion('1.4.2 (Claude Code)\n')).toBe('1.4.2');
+    expect(parseCliVersion('codex-cli 0.9.1')).toBe('0.9.1');
+    expect(parseCliVersion('opencode v0.15.0-beta.2')).toBe('0.15.0-beta.2');
+    expect(parseCliVersion('ok')).toBeUndefined();
+  });
+});
+
 // Signing in and being offered belong to an installed agent, not to its being
 // able to plan: a task runner that cannot plan yet still has a login.
 describe('RunnerInstallation.runnerUsability', () => {
@@ -93,6 +102,7 @@ describe('RunnerInstallation.runnerUsability', () => {
     expect(await inst.runnerUsability('copilot-cli')).toEqual({
       usable: true,
       auth: { state: 'unknown', loginCommand: ['copilot', 'login'], signIn: { runner: 'copilot-cli', label: 'GitHub Copilot CLI', login: ['copilot', 'login'] } },
+      version: '1.0.105',
     });
     expect(authExec).not.toHaveBeenCalled();
   });
@@ -114,6 +124,24 @@ describe('RunnerInstallation.runnerUsability', () => {
     expect(await inst.runnerUsability('copilot-cli')).toEqual({ usable: false, reason: 'copilot is not installed or is not on PATH.' });
   });
 
+  it('lists an ACP agent below the version its profile was checked against as unavailable, with both versions', async () => {
+    const exec: ExecImpl = vi.fn(async () => ({ stdout: '1.0.104' }));
+    const inst = new RunnerInstallation(registryWith(COPILOT_CLI_MANIFEST), exec, Date.now, { launch: POSIX });
+
+    expect(await inst.runnerUsability('copilot-cli')).toEqual({
+      usable: false,
+      reason: 'GitHub Copilot CLI is too old for Ordewell: found 1.0.104, needs 1.0.105 or later.',
+    });
+  });
+
+  it('keeps an ACP agent at or above its minimum usable, with its version', async () => {
+    const exec: ExecImpl = vi.fn(async () => ({ stdout: '1.1.0' }));
+    const authExec: RunnerAuthExec = vi.fn(async () => ({ code: 0, stdout: '', stderr: '' }));
+    const inst = new RunnerInstallation(registryWith(COPILOT_CLI_MANIFEST), exec, Date.now, { authExec, launch: POSIX });
+
+    expect(await inst.runnerUsability('copilot-cli')).toMatchObject({ usable: true, version: '1.1.0' });
+  });
+
   it('refuses a runner no manifest names', async () => {
     const inst = new RunnerInstallation(registryWith(COPILOT_CLI_MANIFEST), vi.fn(async () => ({ stdout: '' })));
 
@@ -130,7 +158,18 @@ describe('RunnerInstallation.plannerUsability (ADR-0009 preflight)', () => {
     expect(await inst.plannerUsability('claude-code')).toEqual({
       usable: true,
       auth: { state: 'signed-in', loginCommand: ['claude', 'auth', 'login'], signIn: { runner: 'claude-code', label: 'Claude Code', login: ['claude', 'auth', 'login'] } },
+      version: '2.0.0',
     });
+  });
+
+  it('leaves the version out when `--version` printed no number', async () => {
+    const exec: ExecImpl = vi.fn(async () => ({ stdout: 'ok' }));
+    const authExec: RunnerAuthExec = vi.fn(async () => ({ code: 0, stdout: '{}', stderr: '' }));
+    const inst = new RunnerInstallation(registryWith(CLAUDE_CODE_MANIFEST), exec, Date.now, { authExec, launch: POSIX });
+
+    const result = await inst.plannerUsability('claude-code');
+    expect(result.usable).toBe(true);
+    expect(result).not.toHaveProperty('version');
   });
 
   it('names the missing binary so the picker can say why an agent is greyed out', async () => {
@@ -380,13 +419,17 @@ describe('RunnerInstallation verdict freshness', () => {
     expect(await inst.filterInstalled(['opencode'])).toEqual(['opencode']);
   });
 
-  it('refresh() keeps an installed verdict', async () => {
-    const exec: ExecImpl = vi.fn(async () => ({ stdout: '1.0.0' }));
-    const inst = new RunnerInstallation(registryWith(OPENCODE_MANIFEST), exec);
+  it('refresh() re-checks an installed verdict, so an upgrade or a removed binary is seen', async () => {
+    let output = '1.0.0';
+    const exec: ExecImpl = vi.fn(async () => ({ stdout: output }));
+    const authExec: RunnerAuthExec = vi.fn(async () => ({ code: 0, stdout: '', stderr: '' }));
+    const inst = new RunnerInstallation(registryWith(OPENCODE_MANIFEST), exec, Date.now, { authExec, launch: POSIX });
 
     expect(await inst.isInstalled('opencode')).toBe(true);
+    output = '2.0.0';
     inst.refresh();
     expect(await inst.isInstalled('opencode')).toBe(true);
-    expect(exec).toHaveBeenCalledTimes(1);
+    expect(exec).toHaveBeenCalledTimes(2);
+    expect((await inst.runnerUsability('opencode')).version).toBe('2.0.0');
   });
 });

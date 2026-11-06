@@ -152,14 +152,18 @@ export function pickerItemsFor(state: TuiState, action: PickerState['action']): 
   }
   if (action.kind === 'set-runners') {
     // Each row carries its own way in, so a signed-out agent can be fixed from
-    // the list that shows it (ADR-0052).
+    // the list that shows it (ADR-0052). An installed agent Ordewell cannot
+    // start says why it is unavailable and cannot be switched on for tasks.
     return state.runners.map((runner) => {
+      const unavailable = runner.usable === false;
       const way = runnerSignInLine(runner);
+      const detail = unavailable ? runner.reason : way;
       return {
         id: runner.id,
         label: runner.name,
-        ...(way ? { detail: way } : {}),
-        ...(way && signedOutWithWayIn(runner) ? { warn: true } : {}),
+        ...(detail ? { detail } : {}),
+        ...(!unavailable && way && signedOutWithWayIn(runner) ? { warn: true } : {}),
+        ...(unavailable ? { disabled: true } : {}),
       };
     });
   }
@@ -169,8 +173,11 @@ export function pickerItemsFor(state: TuiState, action: PickerState['action']): 
     return state.runners.map((runner) => ({
       id: runner.id,
       label: runner.name,
-      detail: runner.enabled ? undefined : 'not enabled for planning',
+      detail: runner.usable === false
+        ? runner.reason
+        : runner.enabled ? undefined : 'not enabled for planning',
       selected: runner.id === task.assignedRunner,
+      ...(runner.usable === false ? { disabled: true } : {}),
     }));
   }
   if (action.kind === 'set-task-deps') {
@@ -244,21 +251,35 @@ export function pickerItemsFor(state: TuiState, action: PickerState['action']): 
  */
 export function plannerItems(state: TuiState): PickerItem[] {
   // The daemon's runner list is the TUI's only preflight: it holds the
-  // installed and usable runners, and an absent one is dropped from the
-  // offered set (ADR-0009).
+  // installed runners, and one it calls unusable (too old, or not directly
+  // spawnable) is shown disabled with the reason rather than hidden (ADR-0009).
   const installed = new Map(state.runners.map((runner) => [runner.id, runner]));
   const usability: Record<string, PlannerUsability> = {};
   for (const id of CLI_PROVIDERS) {
     const runner = runnerForProvider(id)!;
     const known = installed.get(runner);
     usability[runner] = known
-      ? { usable: true, ...(known.auth ? { auth: known.auth } : {}) }
+      ? {
+        usable: known.usable !== false,
+        ...(known.usable === false && known.reason ? { reason: known.reason } : {}),
+        ...(known.auth ? { auth: known.auth } : {}),
+      }
       : { usable: false, reason: 'CLI not installed or not on PATH' };
   }
 
-  const offered = plannerBackendEntries(usability, state.configuredProviders).filter((entry) => entry.usable);
+  const backends = plannerBackendEntries(usability, state.configuredProviders);
+  const offered = backends.filter((entry) => entry.usable);
+  // An absent runner is a missing install, which the empty hint names; one
+  // the daemon listed but refused is a fact about this machine, and its own
+  // reason is what the picker shows.
+  const unusable: PickerItem[] = backends
+    .filter((entry) => entry.kind === 'harness' && !entry.usable && installed.has(entry.runner ?? entry.id))
+    .map((entry) => ({ id: entry.id, label: entry.label, detail: entry.reason, disabled: true }));
   if (offered.length === 0) {
-    return [{ id: '', label: 'No planner available', detail: `install a coding agent (${plannerNamesOr()}) or add a key with /key`, disabled: true }];
+    return [
+      ...unusable,
+      { id: '', label: 'No planner available', detail: `install a coding agent (${plannerNamesOr()}) or add a key with /key`, disabled: true },
+    ];
   }
   const items: PickerItem[] = offered.map((entry) => {
     // A signed-out agent stays offered — auth never gates usability — but the
@@ -274,7 +295,11 @@ export function plannerItems(state: TuiState): PickerItem[] {
     };
   });
 
-  return offered.some((entry) => entry.kind === 'vendor')
-    ? items
-    : [...items, { id: '', label: 'No API providers configured', detail: 'add a key with /key', disabled: true }];
+  return [
+    ...items,
+    ...unusable,
+    ...(offered.some((entry) => entry.kind === 'vendor')
+      ? []
+      : [{ id: '', label: 'No API providers configured', detail: 'add a key with /key', disabled: true }]),
+  ];
 }

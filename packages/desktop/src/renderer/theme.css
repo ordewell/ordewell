@@ -1,0 +1,211 @@
+/*
+ * The desktop's values for @ordewell/ui's tokens, light and dark, from
+ * docs/desktop/design.md (Design tokens). The user's theme preference picks
+ * the scheme (dark until they choose otherwise, or "system" to follow the OS):
+ * main sets nativeTheme.themeSource from it, and prefers-color-scheme
+ * follows, so a change repaints every window with no reload.
+ *
+ * Every token tokens.css declares is set in both schemes, so nothing falls
+ * back to tokens.css's dark default in a light window. The two contrast
+ * borders stay unset: they belong to a high-contrast theme, which the
+ * desktop does not ship. The contrast test reads this file
+ * (__tests__/contrast.test.ts) and checks every text and mark pair the doc
+ * names, so a value changed here is checked there. An alias the doc names
+ * (placeholder for muted, warning for attention, error for failed) is
+ * written as a var(), so the two can never drift apart.
+ */
+:root {
+  color-scheme: light dark;
+  --ow-font-sans: 'Inter Variable', Inter, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --ow-font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --ow-border-contrast: initial;
+  --ow-border-contrast-active: initial;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --ow-bg-chrome: #f1f2f4;
+    --ow-bg-sidebar: #f9fafb;
+    --ow-bg: #ffffff;
+    --ow-bg-widget: #ffffff;
+    --ow-bg-overlay: #ffffff;
+    --ow-bg-input: #f1f2f4;
+    --ow-bg-code: #f1f2f4;
+    --ow-bg-hover: #ebedf0;
+    --ow-bg-selected: #e1f1f5;
+
+    --ow-surface-canvas: var(--ow-bg);
+    --ow-surface-panel: var(--ow-bg-sidebar);
+    --ow-surface-card: #f2f4f6;
+    --ow-surface-card-hover: #eceff2;
+    --ow-surface-card-selected: #e6f2f6;
+    --ow-surface-card-border: #dfe3e8;
+    --ow-surface-card-selected-border: #8dc3d3;
+    --ow-surface-card-shadow: rgb(16 24 40 / 0.06);
+    --ow-surface-card-highlight: transparent;
+    --ow-surface-inset: #ffffff;
+    --ow-surface-overlay: var(--ow-bg-overlay);
+
+    --ow-border: #e3e5e9;
+    --ow-border-widget: #c9cdd3;
+    --ow-border-control: #7d848e;
+    --ow-sash-hover: #1393b3;
+
+    --ow-fg: #1a1c1f;
+    --ow-fg-secondary: #525963;
+    --ow-fg-muted: #646b75;
+    --ow-fg-placeholder: var(--ow-fg-muted);
+    --ow-fg-link: #0b6f89;
+
+    --ow-accent: #1393b3;
+    --ow-accent-emphasis: #0e7c99;
+    --ow-accent-fill: var(--ow-accent-emphasis);
+    --ow-accent-fill-hover: var(--ow-fg-link);
+    --ow-accent-tint: #e1f1f5;
+    --ow-accent-on: #ffffff;
+    --ow-focus-ring: #1393b3;
+
+    --ow-status-idle: #646b75;
+    --ow-status-running: #1f62d6;
+    --ow-status-attention: #995c00;
+    --ow-status-passed: #18793f;
+    --ow-status-failed: #ba322d;
+    --ow-status-blocked: #8e4716;
+    --ow-status-merge: #5f47c2;
+    --ow-status-warning: var(--ow-status-attention);
+    --ow-status-warning-text: var(--ow-status-attention);
+    --ow-status-error: var(--ow-status-failed);
+
+    --ow-area-planner: #0b6f89;
+    --ow-area-sessions: #a8325c;
+    --ow-area-explorer: #4650bf;
+    --ow-area-changes: #0d7258;
+    --ow-area-git: #8838a6;
+
+    --ow-runner-claude-code: #a24a2a;
+    --ow-runner-claude-code-tint: #f6edea;
+    --ow-runner-codex: #4a5a70;
+    --ow-runner-codex-tint: #edeff1;
+    --ow-runner-opencode: #56670f;
+    --ow-runner-opencode-tint: #eef0e7;
+    --ow-runner-copilot-cli: #8f2fa6;
+    --ow-runner-copilot-cli-tint: #f4eaf6;
+    --ow-runner-qwen-code: #096d5d;
+    --ow-runner-qwen-code-tint: #e6f0ef;
+    --ow-runner-cline: #b0276a;
+    --ow-runner-cline-tint: #f7e9f0;
+    --ow-runner-gemini-cli: #0b6a85;
+    --ow-runner-gemini-cli-tint: #e7f0f3;
+    --ow-runner-cursor-agent: #6b5a35;
+    --ow-runner-cursor-agent-tint: #f0efeb;
+
+    --ow-diff-inserted: #e6f4ea;
+    --ow-diff-removed: #fbe9e8;
+    --ow-diff-inserted-word: #b7e1c1;
+    --ow-diff-removed-word: #f4c2bf;
+
+    --ow-shadow-color: rgb(16 24 40 / 0.12);
+    --ow-shadow-color-overlay: rgb(16 24 40 / 0.16);
+
+    /* @ordewell/ui keys its light-page tuning on body.vscode-light, a class
+       only the VS Code webview has. This is that block for the desktop's light
+       scheme: without it the dark-tuned hues, the black label on an accent
+       fill and the hairline a separator inside a card needs all carry over. */
+    --on-accent: #fff;
+    --orange: #7d4e00;
+    --on-orange: #fff;
+    --purple: #6639ba;
+    --cyan: #075e66;
+    --red-boundary: color-mix(in srgb, var(--red) 62%, transparent);
+    --red-divider: color-mix(in srgb, var(--red) 60%, var(--border-color));
+    --accent: var(--ow-fg-link);
+    --card-hairline: color-mix(in srgb, var(--text-primary) 12%, transparent);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ow-bg-chrome: #141619;
+    --ow-bg-sidebar: #181a1e;
+    --ow-bg: #1c1f23;
+    --ow-bg-widget: #23262b;
+    --ow-bg-overlay: #2a2e35;
+    --ow-bg-input: #121417;
+    --ow-bg-code: #121417;
+    --ow-bg-hover: #272b31;
+    --ow-bg-selected: #1a3640;
+
+    --ow-surface-canvas: var(--ow-bg);
+    --ow-surface-panel: var(--ow-bg-sidebar);
+    --ow-surface-card: #23272d;
+    --ow-surface-card-hover: #292e35;
+    --ow-surface-card-selected: #1d2e35;
+    --ow-surface-card-border: #2f343c;
+    --ow-surface-card-selected-border: #346d7f;
+    --ow-surface-card-shadow: rgb(0 0 0 / 0.3);
+    --ow-surface-card-highlight: rgb(255 255 255 / 0.04);
+    --ow-surface-inset: #15181c;
+    --ow-surface-overlay: var(--ow-bg-overlay);
+
+    --ow-border: #2a2e34;
+    --ow-border-widget: #3a3f47;
+    --ow-border-control: #767d88;
+    --ow-sash-hover: #3bb3d1;
+
+    --ow-fg: #e6e8eb;
+    --ow-fg-secondary: #a3a9b3;
+    --ow-fg-muted: #969da7;
+    --ow-fg-placeholder: var(--ow-fg-muted);
+    --ow-fg-link: #4fc0dc;
+
+    --ow-accent: #3bb3d1;
+    --ow-accent-emphasis: #5cc4de;
+    --ow-accent-fill: var(--ow-accent);
+    --ow-accent-fill-hover: var(--ow-accent-emphasis);
+    --ow-accent-tint: #1a3640;
+    --ow-accent-on: #0e1a1f;
+    --ow-focus-ring: #4fc0dc;
+
+    --ow-status-idle: #969da7;
+    --ow-status-running: #6aa6ff;
+    --ow-status-attention: #e8ae55;
+    --ow-status-passed: #55c784;
+    --ow-status-failed: #f27c76;
+    --ow-status-blocked: #e09358;
+    --ow-status-merge: #a898f3;
+    --ow-status-warning: var(--ow-status-attention);
+    --ow-status-warning-text: var(--ow-status-attention);
+    --ow-status-error: var(--ow-status-failed);
+
+    --ow-area-planner: #4fc0dc;
+    --ow-area-sessions: #ee93b0;
+    --ow-area-explorer: #9da8fa;
+    --ow-area-changes: #5ecdb0;
+    --ow-area-git: #d292e9;
+
+    --ow-runner-claude-code: #e3967a;
+    --ow-runner-claude-code-tint: #38302f;
+    --ow-runner-codex: #aebcd0;
+    --ow-runner-codex-tint: #30353b;
+    --ow-runner-opencode: #bcd05e;
+    --ow-runner-opencode-tint: #32382b;
+    --ow-runner-copilot-cli: #d68be3;
+    --ow-runner-copilot-cli-tint: #362e3e;
+    --ow-runner-qwen-code: #6fd6c4;
+    --ow-runner-qwen-code-tint: #28393a;
+    --ow-runner-cline: #f08ab8;
+    --ow-runner-cline-tint: #3a2e38;
+    --ow-runner-gemini-cli: #6fd0e6;
+    --ow-runner-gemini-cli-tint: #28383e;
+    --ow-runner-cursor-agent: #d4c3a0;
+    --ow-runner-cursor-agent-tint: #363635;
+
+    --ow-diff-inserted: #16301f;
+    --ow-diff-removed: #3a1b1a;
+    --ow-diff-inserted-word: #1f5a33;
+    --ow-diff-removed-word: #6b2522;
+
+    --ow-shadow-color: rgb(0 0 0 / 0.5);
+    --ow-shadow-color-overlay: rgb(0 0 0 / 0.6);
+  }
+}

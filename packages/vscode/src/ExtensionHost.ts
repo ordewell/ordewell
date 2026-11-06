@@ -18,7 +18,7 @@ import { ModelDiscovery, sendModelConfig } from './ModelDiscovery';
 import { PlannerSelection } from './PlannerSelection';
 import { recallPlannerModel } from './plan/PlannerModelSwitch';
 import type { ChatViewProvider } from './providers/ChatViewProvider';
-import type { SettingsChange } from './shared/protocol';
+import type { SettingsChange } from '@ordewell/ui/protocol';
 import { TaskLogRegistry } from './providers/TaskLogRegistry';
 import { SecretStore } from './adapters/SecretStore';
 import type { VsCodeConfig } from './adapters/VsCodeConfig';
@@ -261,6 +261,36 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     },
   });
 
+  /**
+   * Detect the agents behind the planner list, telling the webview that it is
+   * under way or why it failed. Without the first, a probe that never answers
+   * leaves the chat on "Detecting coding agents…" for good; without the
+   * second, it leaves it there after a rejection too (ADR-0052). A list that
+   * arrives clears the state on the webview's own fold.
+   */
+  async function detectAgents(): Promise<void> {
+    services.chatProvider.postMessage({ type: 'agentDetection', state: 'detecting' });
+    try {
+      await detectInstalledPlanner(services.runnerInstallation);
+      sendModelConfig(services.config, services.chatProvider, services.modelResolver);
+      await planner.sendState();
+    } catch (err) {
+      services.chatProvider.postMessage({
+        type: 'agentDetection',
+        state: 'failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+  }
+
+  /** The Retry the webview offers, and a model dropdown opening: ask the host again. */
+  function refreshAgentsAndModels(): void {
+    void detectAgents()
+      .then(() => discovery.refresh())
+      .catch((err) => log(`Agent detection refresh failed: ${err instanceof Error ? err.message : String(err)}`));
+  }
+
   // Command, router and slash layers derive from the one managerDeps rather
   // than rebuilding their own bags over the same state.
   const commandDeps: CommandDeps = {
@@ -299,7 +329,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     ...managerDeps,
     extension: {
       ready: onWebviewReady,
-      refreshModels: () => { void discovery.refresh().catch((err) => log(`Model dropdown refresh failed: ${err}`)); },
+      refreshModels: () => refreshAgentsAndModels(),
       runSlashCommand: (text) => handleSlashCommand(text, slashDeps()),
       setPlanner: (provider) => planner.apply(provider),
       setPlannerModel: (modelId, effort) => planner.setModel(modelId, effort),
@@ -529,12 +559,9 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
 
     // Who plans when no planner is chosen and no key is held (ADR-0009). Not
     // awaited: the preflight and every planner turn wait on it instead, and
-    // the pills are drawn again once it answers.
-    void detectInstalledPlanner(services.runnerInstallation)
-      .then(async () => {
-        sendModelConfig(services.config, services.chatProvider, services.modelResolver);
-        await planner.sendState();
-      })
+    // the pills are drawn again once it answers. The chat says it is
+    // detecting until a list arrives, or why detection failed.
+    void detectAgents()
       .catch((err) => log(`Planner state refresh failed: ${err instanceof Error ? err.message : String(err)}`));
 
     services.context.subscriptions.push(

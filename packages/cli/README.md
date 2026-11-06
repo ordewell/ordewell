@@ -6,20 +6,40 @@ and model assigned to each AI task. With worktree isolation enabled, code tasks
 run in separate worktrees; ops and script tasks run at the workspace root.
 Ordewell records task outcomes and combines code changes for review and merging.
 
-This README describes 0.12.6. See the [published releases](https://github.com/ordewell/ordewell/releases)
+This README describes 0.13.0. See the [published releases](https://github.com/ordewell/ordewell/releases)
 for versions available to install and their release notes.
 
 ## Installation
+
+On Linux and macOS, install the standalone binary, which needs no Node.js:
+
+```bash
+curl -fsSL https://ordewell.ai/install.sh | sh
+# or: brew install ordewell/tap/ordewell
+```
+
+Or install from npm (Node.js 20.3 or newer), which is also how to install on
+Windows:
 
 ```bash
 npm install -g @ordewell/cli        # or: npm install -g ordewell
 ```
 
-**Requirements:** Node.js 20.3 or newer, a supported coding agent such as
-Claude Code or Codex, and git 2.38 or newer for task isolation. See the
+To update, run `ordewell update`. It runs what this copy's install method
+would: the installer again, into the folder the binary is in; `brew upgrade
+ordewell`; or `npm install -g` with the package you installed. Add `--dry-run`
+to print the command without running it. An npx run or a source checkout is told
+how to update instead. The terminal UI names a newer release on every start, and
+`/update` updates from there once no run is live.
+
+**Requirements:** a supported coding agent such as Claude Code or Codex,
+installed and signed in. git is optional: without it, tasks run directly in the
+folder, and git 2.38 or newer is recommended for isolated worktrees, delegated
+tasks and Merge all. See the
 [full runner list](https://github.com/ordewell/ordewell#readme). Linux, macOS and Windows are supported;
-on Windows, the planner's research commands run in Git for Windows' shell, and the
-terminal UI's mouse and paste need Node.js 22.17 or newer.
+on Windows, install with npm, the planner's research commands run in Git for
+Windows' shell (required), and the terminal UI's mouse and paste need Node.js
+22.17 or newer.
 
 ## Usage
 
@@ -68,7 +88,10 @@ list the ones a workspace sees and `ordewell task-skills` to attach them to a
 task. [Writing skills](https://github.com/ordewell/ordewell/blob/main/docs/skills.md) covers the format.
 
 This package also installs `@ordewell/web`, the local API server that the CLI and
-terminal UI talk to over `127.0.0.1`. It starts on demand.
+terminal UI talk to over `127.0.0.1`. It starts on demand. After an update, the
+next command replaces an idle server the earlier version left running; one with
+a run going is left alone, and the command says to stop it with
+`ordewell stop --server` once that run is done.
 
 ## Documentation
 

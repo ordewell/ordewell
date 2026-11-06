@@ -103,6 +103,13 @@ export { checkoutRule, handoffBaseLine, handoffBranchName, isRepoGroup, mergePas
 export type { HandoffForkRepo, MergeWordingHandoff } from './services/mergeWording';
 export type { Adr0013PlanIsolation, Adr0013IsolationRun, Adr0013TaskRecord } from './services/isolationRecord';
 export type { WorktreeIsolationDeps, GitExecFn } from './services/GitWorktreeIsolation';
+export { createWorkspaceReader, userPath, WorkspaceReadError } from './services/workspaceReader';
+export type { CheckoutScope, DiffOptions, FindOptions, LogOptions, WorkspaceReader, WorkspaceReadErrorCode, WorkspaceReaderDeps } from './services/workspaceReader';
+export { createUserGit, UserGitError } from './services/userGitActions';
+export type { UserGit, UserGitDeps, UserGitErrorCode, UserGitScope } from './services/userGitActions';
+export { interlock, landingRuns, savedRunLooksLive } from './services/landingInterlock';
+export type { InterlockAnswer, LandingCheckout, LandingMove, LandingRun } from './services/landingInterlock';
+export { appendUserAction, takeUserActions, type UserActionLine } from './utils/userActionLog';
 export * from './interfaces/ILogger';
 export { BaseAiService } from './services/BaseAiService';
 export type { ResearchChat, ResearchTurn, ToolCall, ToolResult } from './services/BaseAiService';
@@ -137,7 +144,7 @@ export { ModelCatalog } from './services/ModelCatalog';
 export type { CatalogModel } from './services/ModelCatalog';
 export { resolveProvider, fetchAllProviderModels, collectProviderCredentials, toOrchestratorOptions } from './services/ProviderRouting';
 export type { ProviderModelLists, FetchAllProviderModelsOptions, AllProviderModels, OrchestratorOption, ProviderModelsResult, ProviderCredentialSource } from './services/ProviderRouting';
-export { ALL_PROVIDERS, getProviderMeta, isApiProvider, isPlannerBackend, prefixModelId, stripModelPrefix, resolveProviderFromPrefix, isOpenAiProvider, isCliProvider, runnerForProvider, providerForRunner, plannerBackendEntries, configuredProviders, PROVIDER_LABEL, PROVIDER_SHORT_LABEL, HARNESS_PLANNER_REASON, PROVIDER_PRIORITY, PROVIDER_DETECT_PRIORITY, CLI_PROVIDERS, type ByPlannerBackend } from './services/ProviderRegistry';
+export { ALL_PROVIDERS, getProviderMeta, isApiProvider, isPlannerBackend, prefixModelId, stripModelPrefix, resolveProviderFromPrefix, isOpenAiProvider, isCliProvider, runnerForProvider, providerForRunner, plannerBackendEntries, configuredProviders, PROVIDER_LABEL, PROVIDER_SHORT_LABEL, HARNESS_PLANNER_REASON, HARNESS_PLANNER_UNAVAILABLE_REASON, PROVIDER_PRIORITY, PROVIDER_DETECT_PRIORITY, CLI_PROVIDERS, type ByPlannerBackend } from './services/ProviderRegistry';
 export type { ProviderRegistration, PlannerUsability, PlannerBackendEntry } from './services/ProviderRegistry';
 export {
   admitSettingsEnv,
@@ -193,7 +200,7 @@ export { ExecutionCommands } from './services/ExecutionCommands';
 export type { ExecutionCommand, CommandOutcome, CommandPayload, Consent, LoopGuard, ExecutionHost } from './services/ExecutionCommands';
 export { FLOOR_GRANTS, GRANTS, SHAPE_LIMITS, heldMandate, mandateRefusalText, narrow, rootAuthority, rootMandate, type Grant, type Mandate, type MandateExclusions, type MandateLimits, type MandateRefusal, type MandateRequest, type Narrowed, type NodeAuthority, type RootSettings } from './services/Mandate';
 export { parseExecutionCommand, type ParsedCommand } from './services/executionCommandShape';
-export { DEFAULT_SUPERVISOR_RETRY_LIMIT } from './services/LoopGuards';
+export { DEFAULT_AUTONOMOUS_MODE, DEFAULT_SUPERVISOR_RETRY_LIMIT, DEFAULT_WAKE_UP_READ_BUDGET } from './services/runSettingsDefaults';
 export type { GuardTrip, GuardTarget } from './services/LoopGuards';
 export { ConversationEditError, ConversationBusyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, PlannerUsageLimitError } from './services/PlannerConversation';
 export type { RewindTarget, ConversationCompaction, PlannerSubmission } from './services/PlannerConversation';
@@ -211,6 +218,8 @@ export {
 } from './services/SkillsService';
 export { globalDataDir, migrateOldConfigDir } from './utils/globalDataDir';
 export { writePrivateFile, ensurePrivateDir } from './utils/privateFile';
+export { installMethod, isSea, seaRuntimeDir, seaVersion, upgradeCommand } from './utils/seaRuntime';
+export type { InstallMethod, SeaDeps, SeaModule } from './utils/seaRuntime';
 export type {
   AccountLimitsMessage,
   SessionMessage,
@@ -292,6 +301,21 @@ export {
   DAEMON_TOKEN_SUBPROTOCOL_PREFIX,
 } from './utils/daemonToken';
 export type { TokenCarriers } from './utils/daemonToken';
+export {
+  DEFAULT_DAEMON_PORT,
+  DAEMON_CONTRACT,
+  daemonPidFilePath,
+  legacyDaemonPidFilePath,
+  daemonLogPath,
+  readPidFile,
+  resolveDaemonPort,
+  isConnectionRefused,
+  daemonHttpGet,
+  isDaemonRunning,
+  probeDaemon,
+  stopDaemonAt,
+} from './utils/daemonProcess';
+export type { DaemonHttpResponse, DaemonIdentity, DaemonProbe, DaemonStopOutcome } from './utils/daemonProcess';
 export { killTree } from './utils/processTree';
 export type { KillTreeDeps } from './utils/processTree';
 export { augmentedPath, clearAugmentedPathCache, withPath, wellKnownBinDirs } from './utils/shellPath';
@@ -312,6 +336,8 @@ export type { HasBinFn } from './utils/clipboard';
 export { RunnerRegistry } from './plugins/RunnerRegistry';
 export { removedPluginNotice } from './plugins/removedPluginNotice';
 export { resolveTaskRunnerFlags } from './plugins/resolveArgs';
+export { RUNNER_CATALOG, RUNNER_IDS, RUNNER_LABELS, RUNNER_INSTALL_DOCS, type RunnerCatalogEntry } from './services/runnerCatalog';
+export { builtinPlannerBackends } from './services/plannerBackends';
 export { CLAUDE_CODE_MANIFEST } from './plugins/builtin/claude-code.manifest';
 export { OPENCODE_MANIFEST } from './plugins/builtin/opencode.manifest';
 export type { RunnerManifest, RunnerEntry, RunnerAuthSpec, RunnerAuthStatus, RunnerFeatures, RunnerModelDiscovery, RunnerMode, DiscoveryCommand } from './plugins/types';
@@ -322,8 +348,9 @@ export * from './utils/taskLogStore';
 export { mintSessionId } from './utils/sessionId';
 export { extractPrdBlock, savePrdMarkdown, sanitizeSlug } from './utils/prdStore';
 export type { PrdBlock } from './utils/prdStore';
-export { ACT_RISK, AUTORUN_RISK, DELEGATION_OFFERED, containersOffered, DELEGATION_RISK, PLANNED_WITH_LABEL, SUPERVISOR_LEVEL_LABEL, automergeSummary, autorunSummary, delegationSummary, keptDelegationBudget, rememberDelegationBudget, SUBPLANNER_ACCOUNTING, SUBPLANNER_CHILD, SUBPLANNER_SCOPE, parseCount, parseDelegation, parseSwitch, supervisorSummary, trailerSummary } from './services/runSettingsText';
-export { SettingsService, getSettingsPath, runSettingsOf, RUN_SETTINGS_DEFAULTS, RunSettingsError, type GlobalRunSettings, type UserSettings } from './services/SettingsService';
+export { ACT_RISK, AUTORUN_RISK, DELEGATION_OFFERED, containersOffered, DELEGATION_NETWORK_RISK, DELEGATION_RISK, PLANNED_WITH_LABEL, SUPERVISOR_LEVEL_LABEL, automergeSummary, autorunSummary, delegationSummary, keptDelegationBudget, rememberDelegationBudget, SUBPLANNER_ACCOUNTING, SUBPLANNER_CHILD, SUBPLANNER_SCOPE, parseCount, parseDelegation, parseSwitch, supervisorSummary, trailerSummary, treeShapeSummary } from './services/runSettingsText';
+export { SettingsService, getSettingsPath, runSettingsOf, RunSettingsError, type UserSettings } from './services/SettingsService';
+export { RUN_SETTINGS_DEFAULTS, type GlobalRunSettings, type TreeShape } from './services/runSettingsDefaults';
 export {
   PlannerModelMemory,
   type PlannerModelChoice,

@@ -4,9 +4,8 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { createTask, type AccountLimitSnapshot, type AttemptUsage, type CommandOutcome, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
 import { TASK_LOG_VIEW_TYPE, TaskLogRegistry } from '../providers/TaskLogRegistry';
-import type { HostToTaskLog } from '../shared/taskLogProtocol';
+import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks, type HostToTaskLog } from '@ordewell/ui/protocol';
 import { __panels, __resetPanels, createFakeWebviewPanel, window } from '../test/vscode.mock';
-import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks } from '../shared/conversationPatch';
 
 const createWebviewPanel = vscode.window.createWebviewPanel as unknown as ReturnType<typeof vi.fn>;
 

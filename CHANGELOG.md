@@ -8,6 +8,165 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-06
+
+### Added
+
+- **A desktop app.** An orchestration-first window for macOS, Windows and Linux:
+  the planner, the plan and its tasks, your checkout's files, diffs and git, and
+  a terminal, with one session at a time and one window per workspace. It is a
+  client of the local daemon, so a run started there is the one the CLI and
+  `ordewell status` see. Closing a window during a run keeps the app in the tray,
+  and quitting asks first, saying whether the run stops with it (#129, #136).
+  It is not in this release: releases leave the desktop app out until it is
+  ready, so there is no installer to download yet. The
+  [desktop guide](docs/desktop/README.md) covers running it from source, the
+  views and the shortcuts.
+- **A chat in the centre and the plan on the right.** The planner conversation
+  takes the window's centre, the plan panel sits beside it on the right, and
+  your repository is a click away on the left. A narrow window opens the plan
+  as a drawer, and the panel folds so a chat can use the whole tab.
+- **The plan graph in stage columns.** Each task is a card in the column for
+  its stage, with its runner, model and effort on its face and the edges routed
+  between columns. The stage chips scroll to a column, and a card's chat button
+  opens the task while clicking the card reveals it in the plan panel.
+- **A welcome screen for the projects you return to.** The folders you opened
+  before are cards with their branch, their last session's goal and status, and
+  what needs you there; a folder that has gone missing says so. Open a folder,
+  drop one on the window, or take a recent card.
+- **A session another Ordewell daemon holds is joined, not taken.** When the
+  terminal UI or another daemon already holds a session, the app drives it
+  live and says who holds it, and carries it on when that holder exits. A
+  session a VS Code window holds is offered to watch read-only or to start
+  fresh here.
+- **Dark and light themes, with colour that carries meaning.** Dark is the
+  default and Light is its equal; **System** follows your OS. Every text colour
+  reaches WCAG AA on every background it is drawn on, and the area and status
+  colours keep one meaning everywhere.
+- **Installers built for every change, and one line to install one.** A pull
+  request that can change the app builds and checks its installers on macOS,
+  Windows and Linux before any release does. One command installs the right
+  file for your OS and architecture, checks it against the release's checksums,
+  and stops if they do not match; fixed-name links work for the latest release
+  and for a named version.
+- **Signing, notarization, Homebrew and winget when configured.** A release
+  signs its installers and has Apple notarize the macOS ones once the project's
+  credentials exist, and publishes the Homebrew cask and winget manifests once
+  their tokens exist; without them it still builds and publishes unsigned
+  installers. A signed macOS build is the only kind that updates itself.
+- **Your repository's files, diffs and git actions in the app.** The daemon
+  reads your checkout, a run's integration branch and a task's worktree, and
+  performs the git actions you ask for on your own checkout with your own git:
+  stage and unstage by file or hunk, commit and amend, discard, branches, stash,
+  fetch, pull and push. A destructive or remote action confirms what it is about
+  to do, a live run refuses only a switch away from or a delete of its landing
+  branch, and Merge all asks about your overlapping uncommitted work before it
+  merges.
+- **Settings that read at a glance.** Every dropdown shares one chevron, counts
+  are whole-number fields that take digits and group thousands, and Run's
+  **Restore defaults** puts autonomy, supervisor, retries, merge at gates,
+  autorun and parallel tasks back to core's own defaults in one write. Advanced
+  folds away the commit trailer line, the wake-up reads and the experimental
+  settings, and remembers whether it was open.
+- **A model allowlist you can search and tick.** Settings summarises a runner's
+  allowlist as "All models" or "3 of 14 models", and Edit opens a searchable
+  list where you tick the models it may use, untick one it no longer lists, or
+  take **Allow all models**. The ticking order is the allowlist's priority, and
+  a refused write says so and falls back to what the host holds.
+- **Subplanners as an experimental setting with tree limits.** Advanced's
+  Experimental group holds the Subplanners switch, asks before turning it on,
+  and while it is on offers the tree budget, maximum depth, delegated tasks per
+  plan and tasks per child plan, each within core's caps. `ordewell delegation`
+  prints the shape read-only.
+- **Sign in, set an API key, and see every runner in the desktop app.** Where
+  an agent is signed out, Welcome, Settings, a failed task and the plan graph
+  say so and offer Log in, which runs the agent's own login command in a
+  terminal in the app and then asks again, and Set API key… for the vendors
+  Ordewell keeps a key for. Settings lists every runner with its sign-in state
+  and a Refresh, and discovery asks each one, so a runner Ordewell knows is
+  listed with an install link even when it is not installed.
+- **An agent too old for Ordewell, or one it cannot start, says so before you
+  pick it.** Discovery compares an ACP agent's version with the one its profile
+  was checked against, and keeps a runner that answers `--version` through a
+  shell but has no file Ordewell can start, so the terminal UI, VS Code and the
+  desktop list it as unavailable with the reason instead of failing on its first
+  task. A refresh asks again, so an agent upgraded or removed meanwhile is
+  offered, or refused, without a restart.
+- **The desktop planner lists the chosen agent's models.** When a coding agent
+  is the planner, picking it fills the model dropdown from that agent's own
+  catalog, instead of leaving the list empty or offering another runner's
+  models. Changing who plans, its model or its allowlist in Settings reads the
+  catalog again, so the chat's pickers follow it.
+- **The desktop chat behaves as the VS Code chat does.** It lists every model a
+  vendor planner can use, shows the model allowlist in its own Settings, draws
+  the workspace's isolation preview, restores the plan dock's height, opens
+  Settings from `/settings`, and sends a fresh session's first plan with the
+  runners its pills have on, including one still being saved.
+- **An older Ordewell is explained when the desktop app cannot join it.** A
+  terminal UI from a release without desktop join support says so rather than
+  failing to connect, and its session's saved state stays on screen read-only
+  until that holder exits, when **Continue here** carries the session on.
+
+- **A standalone `ordewell` binary for Linux and macOS.** The CLI and terminal
+  UI install as one file with no Node.js:
+  `curl -fsSL https://ordewell.ai/install.sh | sh` puts it in
+  `~/.local/bin` (`ORDEWELL_INSTALL_DIR` changes that; `--version`,
+  `--uninstall` and `--dry-run` are options), checking the
+  download against the release's checksums. When an older `ordewell` from npm,
+  Homebrew or another folder comes first on PATH, a relative PATH entry
+  included, it names that copy and says how to use the new one. `npm install -g ordewell` and
+  `npx ordewell` work as before, and remain the way to install on Windows and
+  on musl Linux such as Alpine, where the installer stops and says so instead of
+  leaving a binary that cannot start.
+  Node.js is no longer a requirement of the binary, and git is optional: without
+  it tasks run in the folder directly, and git 2.38 or newer adds worktrees,
+  delegated tasks and Merge all.
+- **A Homebrew formula for the CLI.** `brew install ordewell/tap/ordewell`.
+- **`ordewell update`, and `/update` in the terminal UI.** It updates Ordewell
+  the way it was installed: the installer into the binary's own folder,
+  `brew upgrade ordewell`, or `npm install -g ordewell@latest`. A folder it
+  cannot write to gets the command to run with `sudo` instead, and an `npx` run
+  or a source checkout is told what to do. `--dry-run` prints the command
+  without running it, and it sends nothing to ordewell.ai. `/update` is refused
+  while a run is live.
+
+### Changed
+
+- **`ordewell` in the Homebrew tap is now the CLI formula.** The desktop app's
+  cask is to be `ordewell-desktop`, and that rename takes effect with the first
+  release that carries the desktop app: until then the tap's cask is left as it
+  is. When it ships, an installed `ordewell` cask is renamed on `brew update`.
+- **The update line names both versions and stays until you update.** It reads
+  "Ordewell X is out (you have Y)" and says how to update for the way you
+  installed: `ordewell update`, `/update` in the terminal UI, the Extensions
+  view in VS Code, `npx ordewell@latest`, or pull and rebuild a source
+  checkout. The terminal UI shows it on every start while a newer release
+  exists; a terminal command prints it once a day on stderr, and VS Code shows
+  it once a day. Turning the version check off still means no file, no request
+  and no line.
+- **A newer CLI replaces an idle server it cannot drive.** After an update, the
+  CLI stops a server left over from the old version when no run is going on it,
+  and starts a new one. A server with a run going is left alone, and the CLI
+  says to `ordewell stop --server` once the run is done. Coming from 0.12.6,
+  whose server cannot say whether a run is going, stop it once with
+  `ordewell stop --server`.
+- **The version check finds the latest complete release by itself.** The
+  version ordewell.ai advertises is now the latest GitHub release that has its
+  checksums attached, discovered automatically and kept when GitHub is
+  unavailable.
+- **A release becomes the latest only once it is complete.** A new GitHub
+  Release is marked latest after its CLI archives, `install.sh` and
+  `SHA256SUMS` are attached, and only when it is the highest version, so
+  `curl -fsSL https://ordewell.ai/install.sh | sh` never lands on a release that
+  is still being built.
+
+### Fixed
+
+- **VS Code says when it cannot detect the installed agents, and offers
+  Retry.** A failed read behind the planner and model lists no longer leaves the
+  chat on "Detecting coding agents…" with no way forward: it says what failed,
+  Retry asks again, and the error clears when a list arrives.
+
 ## [0.12.6] - 2026-11-05
 
 ### Added
@@ -4073,7 +4232,9 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.12.5...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/ordewell/ordewell/compare/v0.12.6...v0.13.0
+[0.12.6]: https://github.com/ordewell/ordewell/compare/v0.12.5...v0.12.6
 [0.12.5]: https://github.com/ordewell/ordewell/compare/v0.12.4...v0.12.5
 [0.12.4]: https://github.com/ordewell/ordewell/compare/v0.12.3...v0.12.4
 [0.12.3]: https://github.com/ordewell/ordewell/compare/v0.12.2...v0.12.3

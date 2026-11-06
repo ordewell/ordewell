@@ -63,7 +63,9 @@ vi.mock('../terminal', async (importOriginal) => ({
 }));
 
 import { handleTui, type LoginSpawn } from '../index';
+import type { SelfUpdateDeps } from '../../selfUpdate';
 import { augmentedPath, clearAugmentedPathCache } from '@ordewell/core';
+import { fakeSea } from '@ordewell/core/testing';
 
 type SignalName = 'SIGINT' | 'SIGTERM' | 'SIGHUP' | 'SIGCONT' | 'uncaughtException';
 const SIGNALS: SignalName[] = ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGCONT', 'uncaughtException'];
@@ -103,6 +105,15 @@ describe('handleTui', () => {
     exitSpy.mockRestore();
     if (isTtyDescriptor) Object.defineProperty(process.stdin, 'isTTY', isTtyDescriptor);
   });
+
+  const frame = (): string =>
+    // eslint-disable-next-line no-control-regex
+    (fakeTerminal.draw.mock.calls.at(-1)![0] as string[]).join('\n').replace(/\x1b\[[0-9;]*m/g, '');
+
+  const type = (text: string): void => {
+    for (const char of text) fakeTerminal.onKey!({ name: 'char', char });
+    fakeTerminal.onKey!({ name: 'enter' });
+  };
 
   it('refuses to start without an interactive terminal', async () => {
     Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
@@ -415,15 +426,6 @@ describe('handleTui', () => {
       auth: { state: 'signed-in', loginCommand: ['claude', 'login'] },
     };
 
-    const frame = (): string =>
-      // eslint-disable-next-line no-control-regex
-      (fakeTerminal.draw.mock.calls.at(-1)![0] as string[]).join('\n').replace(/\x1b\[[0-9;]*m/g, '');
-
-    const type = (text: string): void => {
-      for (const char of text) fakeTerminal.onKey!({ name: 'char', char });
-      fakeTerminal.onKey!({ name: 'enter' });
-    };
-
     /** A `/login` typed at a TUI whose active planner is a signed-out Claude Code. */
     async function signedOutTui(): Promise<{ child: EventEmitter; spawn: ReturnType<typeof vi.fn> }> {
       apiClient.getSettings.mockImplementation(async () => ({ aiProvider: 'claude-code' }));
@@ -509,6 +511,135 @@ describe('handleTui', () => {
       child.emit('exit', 130, null);
       await vi.waitFor(() => expect(fakeTerminal.resume).toHaveBeenCalled());
       vi.unstubAllEnvs();
+    });
+  });
+
+  describe('/update', () => {
+    const binary = { sea: fakeSea('0.12.6'), execPath: '/home/me/.local/bin/ordewell', realpath: (p: string) => p };
+
+    /** A copy the installer put in ~/.local/bin, whose every effect is recorded in order. */
+    function installed(overrides: Partial<SelfUpdateDeps> = {}) {
+      const events: string[] = [];
+      const said: string[] = [];
+      const deps: SelfUpdateDeps = {
+        sea: binary,
+        env: {},
+        platform: 'linux',
+        writable: () => true,
+        download: async () => '#!/bin/sh\n',
+        run: async (command, args) => {
+          events.push(`ran ${[command, ...args].join(' ')}`);
+          return 0;
+        },
+        output: (command, args) => (command === '/home/me/.local/bin/ordewell' && args[0] === '--version' ? '0.13.0' : null),
+        say: (line) => said.push(line),
+        warn: (line) => said.push(line),
+        ...overrides,
+      };
+      daemon.stopDaemon.mockImplementation(async () => { events.push('daemon stopped'); });
+      fakeTerminal.close.mockImplementation(() => { events.push('terminal closed'); });
+      return { deps, events, said };
+    }
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      daemon.stopDaemon.mockImplementation(async () => {});
+      fakeTerminal.close.mockImplementation(() => {});
+    });
+
+    it('names the newer version an earlier answer remembered, and /update, on every start', async () => {
+      vi.stubEnv('ORDEWELL_NO_VERSION_CHECK', '');
+      vi.stubEnv('DO_NOT_TRACK', '');
+      vi.stubEnv('NO_COLOR', '1');
+      const now = new Date().toISOString();
+      const dir = path.join(os.homedir(), '.ordewell');
+      const file = path.join(dir, 'version-check.json');
+      fs.mkdirSync(dir, { recursive: true });
+      // A ping within the day, so this start sends nothing and shows what the last one answered.
+      fs.writeFileSync(file, JSON.stringify({
+        installId: '3f0c1d9e-0000-4000-8000-000000000000', installIdAt: now, noticeShownAt: now, lastCheckAt: now, latest: '999.0.0', latestAt: now,
+      }));
+      try {
+        for (let start = 0; start < 2; start++) {
+          fakeTerminal.draw.mockClear();
+          void handleTui([], { selfUpdate: installed().deps });
+
+          await vi.waitFor(() => expect(frame()).toContain('Ordewell 999.0.0 is out (you have 0.12.6)'));
+          expect(frame()).toContain('type /update');
+        }
+      } finally {
+        fs.rmSync(file, { force: true });
+      }
+    });
+
+    it('asks first, naming the command, then leaves the screen, stops its daemon, updates and exits 0', async () => {
+      vi.stubEnv('NO_COLOR', '1');
+      const copy = installed();
+      void handleTui([], { selfUpdate: copy.deps });
+      await vi.waitFor(() => expect(fakeTerminal.onKey).toBeDefined());
+
+      type('/update');
+
+      await vi.waitFor(() => expect(frame()).toContain('Update Ordewell?'));
+      expect(frame()).toContain('ORDEWELL_INSTALL_DIR=/home/me/.local/bin');
+      expect(copy.events).toEqual([]);
+
+      fakeTerminal.onKey!({ name: 'enter' });
+
+      await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(0));
+      // The daemon goes first: an update may replace the files it runs from.
+      expect(copy.events).toEqual(['terminal closed', 'daemon stopped', 'ran sh -s']);
+      expect(copy.said).toContain('Ordewell 0.12.6 → 0.13.0');
+      expect(copy.said.at(-1)).toBe('Start ordewell again to use the new version.');
+      expect(exitSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('exits with the update’s own status when it fails', async () => {
+      vi.stubEnv('NO_COLOR', '1');
+      const copy = installed({ run: async () => 3 });
+      void handleTui([], { selfUpdate: copy.deps });
+      await vi.waitFor(() => expect(fakeTerminal.onKey).toBeDefined());
+
+      type('/update');
+      await vi.waitFor(() => expect(frame()).toContain('Update Ordewell?'));
+      fakeTerminal.onKey!({ name: 'enter' });
+
+      await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(3));
+      expect(copy.said.at(-1)).toBe('Start ordewell again to carry on with this version.');
+    });
+
+    it('leaves Ctrl-C to the update while it runs', async () => {
+      vi.stubEnv('NO_COLOR', '1');
+      let finish!: (status: number) => void;
+      const copy = installed({ run: () => new Promise<number>((resolve) => { finish = resolve; }) });
+      void handleTui([], { selfUpdate: copy.deps });
+      await vi.waitFor(() => expect(fakeTerminal.onKey).toBeDefined());
+
+      type('/update');
+      await vi.waitFor(() => expect(frame()).toContain('Update Ordewell?'));
+      fakeTerminal.onKey!({ name: 'enter' });
+      await vi.waitFor(() => expect(finish).toBeDefined());
+
+      process.emit('SIGINT');
+      expect(exitSpy).not.toHaveBeenCalled();
+
+      finish(130);
+      await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(130));
+    });
+
+    it('stays open and says what would update a copy no command can', async () => {
+      vi.stubEnv('NO_COLOR', '1');
+      const copy = installed({ sea: { sea: null, realpath: (p: string) => p }, entry: path.join(os.tmpdir(), 'ordewell-src', 'packages', 'cli', 'dist', 'main.js') });
+      void handleTui([], { selfUpdate: copy.deps });
+      await vi.waitFor(() => expect(fakeTerminal.onKey).toBeDefined());
+
+      type('/update');
+
+      // The notice names the copy's folder, under this host's temp folder, so where its words wrap varies.
+      await vi.waitFor(() => expect(frame().replace(/\s+/g, ' ')).toContain('pull and rebuild it to update. Nothing was run.'));
+      expect(frame()).not.toContain('Update Ordewell?');
+      expect(copy.events).toEqual([]);
+      expect(exitSpy).not.toHaveBeenCalled();
     });
   });
 });

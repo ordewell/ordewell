@@ -297,6 +297,11 @@ what a VS Code user sees), commit as `release: X.Y.Z`, then:
 git tag v0.4.6 && git push origin v0.4.6
 ```
 
+Before tagging a release that signs the macOS CLI binaries, rehearse the
+signing on `main`: `gh workflow run cli-build.yml --ref main -f
+rehearse_signing=true` signs with the Developer ID and notarizes, as the
+release will, and attaches nothing to any Release (ADR-0065 C4).
+
 The tag triggers `.github/workflows/release.yml`, which first runs the full CI
 workflow — every check, the real engine included — so a tag cannot publish a
 commit that has not passed all of them. The publish jobs then verify the tag

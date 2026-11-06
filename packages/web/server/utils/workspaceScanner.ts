@@ -1,13 +1,15 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { isSea, type SeaDeps } from '@ordewell/core';
 
 export interface WorkspaceScannerDeps {
   fsModule: typeof fs;
   pathModule: typeof path;
   cwd: string;
   home: string;
-  projectDir: string;
+  /** A folder never to list; undefined lists every one found. */
+  projectDir: string | undefined;
 }
 
 export function scanWorkspacesImpl(deps: WorkspaceScannerDeps): string[] {
@@ -33,16 +35,22 @@ export function scanWorkspacesImpl(deps: WorkspaceScannerDeps): string[] {
       }
     } catch { /* empty */ }
   }
-  return [...paths].filter(p => p !== pathModule.resolve(projectDir)).sort();
+  const hidden = projectDir === undefined ? undefined : pathModule.resolve(projectDir);
+  return [...paths].filter(p => p !== hidden).sort();
 }
 
-export function scanWorkspaces(): string[] {
+export function scanWorkspaces(sea: SeaDeps = {}): string[] {
   return scanWorkspacesImpl({
     fsModule: fs,
     pathModule: path,
     cwd: process.cwd(),
     // Not HOME, which Windows does not set: os.homedir() reads USERPROFILE there.
     home: os.homedir(),
-    projectDir: path.resolve(__dirname, '..', '..', '..', '..'),
+    // Four up from dist/server/ is the root of an Ordewell source checkout,
+    // whose own `.ordewell/` (its committed skills) is no workspace of the
+    // user's. The binary has no checkout: its `__dirname` is the executable's
+    // folder, and four up from there could be the home or a projects folder
+    // that does hold one, so nothing is hidden (ADR-0065 C2).
+    projectDir: isSea(sea) ? undefined : path.resolve(__dirname, '..', '..', '..', '..'),
   });
 }

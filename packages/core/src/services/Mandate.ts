@@ -1,6 +1,9 @@
 import type { ExecutionCommandName, SupervisorLevel } from '../models/Execution';
 import type { RunnerId, Task } from '../models/Task';
 import type { EffectRules } from './effectAllowlist';
+import { SHAPE_LIMITS, type TreeShape } from './runSettingsDefaults';
+
+export { SHAPE_LIMITS, type TreeShape };
 
 /**
  * The mandate (ADR-0056): what a node may do without a person, and within what
@@ -17,13 +20,6 @@ export type Grant = (typeof GRANTS)[number];
 
 /** What a mandate could not finish without: a child holds these unasked, and `narrow` refuses one that would lack any (M2). */
 export const FLOOR_GRANTS: readonly Grant[] = ['observe', 'steer', 'control', 'replan', 'approve', 'merge'];
-
-/** The shape of a tree, by ADR-0055 D19: refused past the hard cap, never dropped. */
-export const SHAPE_LIMITS = {
-  depth: { default: 2, hard: 4 },
-  delegatedTasks: { default: 8, hard: 30 },
-  tasksPerPlan: { default: 30, hard: 100 },
-} as const;
 
 /** What a child is given to run in when its task states no time (M3). */
 export const DEFAULT_CHILD_WALL_CLOCK_MS = 24 * 60 * 60 * 1000;
@@ -70,6 +66,8 @@ export interface RootSettings {
   autonomous: boolean;
   /** The tree's budget; 0 is delegation off (ADR-0055 D21). */
   delegationTokens: number;
+  /** The tree's shape as the user set it; what it leaves out is at its default (ADR-0055 D19). */
+  shape?: Partial<TreeShape>;
   /** The effect allowlist, absent where nothing was read. */
   effects?: EffectRules;
   runners: readonly RunnerId[];
@@ -117,6 +115,13 @@ const LEVEL_GRANTS: Record<SupervisorLevel, readonly Grant[]> = {
 /** What delegation on lets a subplanner hold, whatever the root's level: the level is what the root planner does in its own turns (M2). */
 const DELEGATED_GRANTS: readonly Grant[] = [...FLOOR_GRANTS, 'research', 'delegate'];
 
+/** A root's shape limit: the user's, held within 1 and D19's hard cap, as a child's is held within its parent's (ADR-0055 D19). */
+function rootShape(shape: Partial<TreeShape> | undefined, limit: keyof TreeShape): number {
+  const { default: fallback, hard } = SHAPE_LIMITS[limit];
+  const set = shape?.[limit];
+  return set === undefined || !Number.isFinite(set) ? fallback : Math.min(hard, Math.max(1, Math.floor(set)));
+}
+
 /**
  * The root's mandate, as it stands now (M1): built afresh on each read, so an
  * Act that a guard lowered reads Watch at the next check, and nothing saved
@@ -138,9 +143,9 @@ export function rootMandate(settings: RootSettings): Mandate {
     limits: {
       tokens: settings.delegationTokens,
       wallClockMs: null,
-      depth: SHAPE_LIMITS.depth.default,
-      delegatedTasks: SHAPE_LIMITS.delegatedTasks.default,
-      tasksPerPlan: SHAPE_LIMITS.tasksPerPlan.default,
+      depth: rootShape(settings.shape, 'depth'),
+      delegatedTasks: rootShape(settings.shape, 'delegatedTasks'),
+      tasksPerPlan: rootShape(settings.shape, 'tasksPerPlan'),
       runners: settings.runners,
       models: settings.models,
     },

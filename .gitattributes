@@ -10,3 +10,6 @@
 # so two independent appends land together instead of conflicting.
 CHANGELOG.md merge=union
 packages/*/CHANGELOG.md merge=union
+
+# The installers are piped into sh by URL; a CRLF checkout would break desktop.sh.
+scripts/install/*.sh text eol=lf

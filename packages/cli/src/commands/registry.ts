@@ -27,6 +27,7 @@ import { handleApprove } from './approve';
 import {
   handleTaskDeps, handleTaskEffort, handleTaskMode, handleTaskModel, handleTaskOps, handleTaskRunner, handleTaskSkills,
 } from './task-assign';
+import { handleUpdate } from './update';
 import { handleTui } from '../tui';
 
 /**
@@ -94,5 +95,6 @@ export const COMMANDS: Record<string, (args: string[]) => Promise<void> | void> 
   rewind: handleRewind,
   resend: handleResend,
   handoff: handleHandoff,
+  update: handleUpdate,
   tui: handleTui,
 };

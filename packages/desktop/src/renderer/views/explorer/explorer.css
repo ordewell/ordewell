@@ -1,0 +1,83 @@
+/*
+ * The Explorer sidebar. Every row is a flex row of fixed boxes with one part
+ * that shrinks, the name, so an ellipsis never runs under an icon; hover
+ * actions share a cell with the status marks instead of appearing beside them
+ * (design.md, Layout rules that prevent overlap).
+ */
+.ex { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+.ex-scope { display: flex; align-items: center; gap: var(--ow-space-2); min-height: var(--ow-row); padding: 0 var(--ow-space-3); border-bottom: 1px solid var(--ow-border); }
+.ex-scope-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--ow-type-body-strong); }
+.ex-scope .ow-badge { flex: none; }
+.ex-repo { margin: var(--ow-space-2) var(--ow-space-3) 0; width: auto; }
+.ex-notice { display: flex; align-items: center; gap: var(--ow-space-2); margin: var(--ow-space-2) var(--ow-space-3) 0; padding: var(--ow-space-1) var(--ow-space-2); border-radius: var(--ow-radius-md); background: var(--ow-bg-hover); color: var(--ow-fg-secondary); font: var(--ow-type-body); }
+.ex-notice-text { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.ex-notice .ow-button { flex: none; }
+.ex-search { display: flex; align-items: center; gap: var(--ow-space-2); padding: var(--ow-space-2) var(--ow-space-1) var(--ow-space-2) var(--ow-space-3); }
+.ex-search > .ow-icon { color: var(--ow-fg-secondary); }
+.ex-search .frame-input { flex: 1 1 auto; min-width: 0; }
+.ex-state { flex: 1 1 auto; padding: var(--ow-space-6) var(--ow-space-3); }
+
+/* A double-click opens a file; it must not also leave a text selection across the sidebar. */
+.ex-tree { flex: 1; min-height: 0; overflow: auto; user-select: none; }
+.ex-tree:focus-visible { outline: var(--ow-focus-width) solid var(--ow-focus-ring, var(--ow-accent)); outline-offset: calc(var(--ow-focus-offset) * -1); }
+.ex-row, .ex-note { position: absolute; left: 0; right: 0; display: flex; align-items: center; box-sizing: border-box; padding: 0 var(--ow-space-2); white-space: nowrap; }
+.ex-row { gap: var(--ow-space-2); cursor: pointer; color: var(--ow-fg); }
+.ex-row > .ow-icon { color: var(--ow-fg-secondary); }
+.ex-row:hover { background: var(--ow-bg-hover); }
+.ex-row:focus-visible { background: var(--ow-bg-hover); outline: var(--ow-focus-width) solid var(--ow-focus-ring, var(--ow-accent)); outline-offset: calc(var(--ow-focus-offset) * -1); }
+.ex-inert { cursor: default; }
+.ex-ignored .ex-name { color: var(--ow-fg-placeholder); }
+/* One guide per level, 16 wide to line up under the parent's chevron box. */
+.ex-guide { flex: none; align-self: stretch; width: 16px; margin-right: calc(var(--ow-space-2) * -1); background: linear-gradient(var(--ow-border), var(--ow-border)) 7px 0 / 1px 100% no-repeat; }
+.ex-chevron { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 16px; }
+.ex-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font: var(--ow-type-body); }
+.ex-note { gap: var(--ow-space-2); color: var(--ow-fg-secondary); font: var(--ow-type-body); }
+.ex-note-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ex-note-error { color: var(--ow-status-error, var(--ow-fg)); }
+
+.ex-trail { flex: none; display: grid; align-items: center; justify-items: end; }
+.ex-marks, .ex-actions { grid-area: 1 / 1; display: inline-flex; align-items: center; gap: var(--ow-space-1); }
+.ex-actions { visibility: hidden; }
+.ex-row:hover .ex-marks, .ex-row:focus-within .ex-marks { visibility: hidden; }
+.ex-row:hover .ex-actions, .ex-row:focus-within .ex-actions { visibility: visible; }
+.ex-badge { flex: none; width: 16px; font: var(--ow-type-code-small); text-align: center; color: var(--ow-fg-secondary); }
+.ex-badge-M { color: var(--ow-status-attention); }
+.ex-badge-A, .ex-badge-untracked { color: var(--ow-status-passed); }
+.ex-badge-D, .ex-badge-U { color: var(--ow-status-failed); }
+.ex-task { flex: none; min-width: var(--ow-hit); height: var(--ow-hit); padding: 0 var(--ow-space-1); border: 0; border-radius: var(--ow-radius-sm); background: var(--ow-bg-hover); color: var(--ow-fg-secondary); font: var(--ow-type-code-small); font-variant-numeric: tabular-nums; cursor: pointer; }
+.ex-task:hover { color: var(--ow-fg); }
+.ex-actions button { display: inline-flex; align-items: center; justify-content: center; flex: none; width: var(--ow-hit); height: var(--ow-hit); padding: 0; border: 0; border-radius: var(--ow-radius-md); background: transparent; color: var(--ow-fg-secondary); cursor: pointer; }
+.ex-actions button:hover { background: var(--ow-bg-selected); color: var(--ow-fg); }
+
+.ex-skeleton { padding: var(--ow-space-1) 0; }
+.ex-skeleton-row { display: flex; align-items: center; gap: var(--ow-space-2); padding: 0 var(--ow-space-3) 0 calc(var(--ow-space-2) + 16px + var(--ow-space-2)); }
+.ex-skeleton-icon { flex: none; width: 16px; height: 16px; border-radius: var(--ow-radius-sm); background: var(--ow-bg-hover); }
+.ex-skeleton-bar { height: 10px; border-radius: var(--ow-radius-sm); background: var(--ow-bg-hover); }
+
+.ex-results { margin: 0; padding: 0; list-style: none; overflow: auto; flex: 1; min-height: 0; }
+.ex-result { display: flex; flex-direction: column; align-items: stretch; gap: var(--ow-space-half); width: 100%; min-height: var(--ow-row); box-sizing: border-box; border: 0; background: transparent; color: var(--ow-fg); text-align: left; padding: var(--ow-space-1) var(--ow-space-3); cursor: pointer; }
+.ex-result:hover, .ex-result-chosen { background: var(--ow-bg-hover); }
+.ex-result:focus-visible { outline: var(--ow-focus-width) solid var(--ow-focus-ring, var(--ow-accent)); outline-offset: calc(var(--ow-focus-offset) * -1); }
+.ex-result-path { display: flex; min-width: 0; font: var(--ow-type-body); white-space: nowrap; }
+.ex-result-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
+.ex-result-line { flex: none; color: var(--ow-fg-secondary); font-variant-numeric: tabular-nums; }
+.ex-result-preview { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ow-fg-secondary); font: var(--ow-type-code-small); }
+.ex-more { padding: var(--ow-space-2) var(--ow-space-3); color: var(--ow-fg-secondary); font: var(--ow-type-small); }
+
+.ft { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+/* The centre can be as narrow as 560 beside the plan panel: the bar's controls wrap there, never overlap. */
+.ft-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ow-space-1) var(--ow-space-2); padding: var(--ow-space-1) var(--ow-space-3); border-bottom: 1px solid var(--ow-border); }
+.ft-path { font: var(--ow-type-code); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.ft-scope { color: var(--ow-fg-secondary); white-space: nowrap; }
+.ft-dirty { color: var(--ow-fg-secondary); white-space: nowrap; }
+.ft-spacer { flex: 1; }
+.ft-button { height: var(--ow-hit); padding: 0 var(--ow-space-2); border: 1px solid var(--ow-border-widget); border-radius: var(--ow-radius-md); background: transparent; color: var(--ow-fg); font: var(--ow-type-body); cursor: pointer; white-space: nowrap; }
+.ft-button:hover:not(:disabled) { background: var(--ow-bg-hover); }
+.ft-button:disabled { opacity: 0.5; cursor: default; }
+.ft-primary { background: var(--ow-accent-fill); border-color: var(--ow-accent-fill); color: var(--ow-accent-on); }
+.ft-primary:hover:not(:disabled) { background: var(--ow-accent-fill-hover); border-color: var(--ow-accent-fill-hover); }
+.ft-banner { display: flex; align-items: center; gap: var(--ow-space-2); padding: var(--ow-space-1) var(--ow-space-3); background: var(--ow-bg-selected); border-bottom: 1px solid var(--ow-border); margin: 0; }
+.ft-banner > span { flex: 1; }
+.ft-conflict { background: var(--ow-bg-overlay); }
+.ft-editor { flex: 1; min-height: 0; }
+.ft-message { display: flex; flex-direction: column; align-items: flex-start; gap: var(--ow-space-2); padding: var(--ow-space-3); }
