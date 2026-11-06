@@ -73,6 +73,7 @@ Other:
   ordewell web                    Start the API server (foreground; --daemon for background)
   ordewell setup                  Write a starter .env configuration file
   ordewell skills                 List installed skills and shadowed workspace duplicates
+  ordewell update [--dry-run]     Update Ordewell the way it was installed (--dry-run: print the command, run nothing)
   ordewell --help               Show this help
   ordewell --version            Print the installed version (alias: version, -v)
 

@@ -117,6 +117,20 @@ describe('task starts and Stop sent to the daemon at once', () => {
     expect(status(session, 't1')).toBe('pending');
   });
 
+  it('says work is live while a task runs, and not once Stop has settled it', async () => {
+    const { pool, post, run: runTask, id, session, spawnedIds } = adopted('session-live-work');
+    // The word a newer CLI reads before it replaces this daemon (ADR-0048).
+    expect(pool.workLive()).toBe(false);
+
+    expect((await runTask(id, 't1')).status).toBe(200);
+    await vi.waitFor(() => expect(spawnedIds()).toEqual(['t1']));
+    expect(pool.workLive()).toBe(true);
+
+    await post(id, 'stop');
+    await vi.waitFor(() => expect(session.isExecuting).toBe(false));
+    await vi.waitFor(() => expect(pool.workLive()).toBe(false));
+  });
+
   it('starts one of two Runs sent at once for the last slot, and refuses the other', async () => {
     process.env.ORDEWELL_MAX_PARALLEL = '1';
     const { run: runTask, id, spawnedIds } = adopted('session-two-runs');

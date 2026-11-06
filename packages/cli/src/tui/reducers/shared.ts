@@ -27,6 +27,10 @@ export type Effect =
   | { type: 'setRunnerEnabled'; runner: string; enabled: boolean }
   /** Hands the terminal to the login command a runner's manifest declared; `label` names it in the notice. */
   | { type: 'plannerLogin'; command: readonly string[]; label: string }
+  /** Works out how `/update` would update this copy; answered with `updatePlanned` (ADR-0048). */
+  | { type: 'planUpdate' }
+  /** Exits the TUI and runs the update on its terminal in its place. */
+  | { type: 'selfUpdate' }
   /** The runner picker's whole confirmed set, so one visit reports one result. */
   | { type: 'setRunners'; changes: { runner: string; enabled: boolean }[]; message: string }
   | { type: 'setMouseCapture'; enabled: boolean }
@@ -240,6 +244,8 @@ export type Action =
    */
   /** `sessionId` names the session a notice is about, so one the user has left is not shown on another. */
   | { type: 'notice'; message: string; level?: 'info' | 'warn' | 'error'; holdPlace?: boolean; sessionId?: string }
+  /** What `/update` would run, or why it runs nothing (`status` non-zero when that is a failure). */
+  | { type: 'updatePlanned'; plan: { kind: 'run'; shown: string } | { kind: 'none'; message: string; status: number } }
   | { type: 'resize'; rows: number; cols: number }
   /** Every plan below `sessionId`, the root, whole: the list replaces the one held (ADR-0055 D20). */
   | { type: 'childTree'; sessionId: string; children: ChildPlanEntry[] }

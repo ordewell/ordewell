@@ -35,4 +35,10 @@ describe('ordewell --help', () => {
     expect(line).toContain('set only here or in settings.json');
     expect(line).not.toContain('/settings');
   });
+
+  it('lists ordewell update, and that --dry-run only prints what it would run', () => {
+    const line = help().split('\n').find((l) => l.includes('ordewell update'));
+
+    expect(line).toContain('--dry-run');
+  });
 });

@@ -821,6 +821,21 @@ describe('plain confirms', () => {
   const asking = (action: ConfirmAction): TuiState =>
     initialState({ sessionId: 's1', tasks: [task('t1')], overlay: { kind: 'confirm', title: 'Sure?', message: 'Really?', action } });
 
+  it('enter on the update confirm hands over to the update', () => {
+    const { state, effects } = press(asking({ kind: 'update' }), 'enter');
+
+    expect(state.overlay).toBeNull();
+    expect(effects).toEqual([{ type: 'selfUpdate' }]);
+  });
+
+  it('enter on the update confirm refuses once a run has started', () => {
+    const { state, effects } = press({ ...asking({ kind: 'update' }), status: 'executing' }, 'enter');
+
+    expect(state.overlay).toBeNull();
+    expect(effects).toEqual([]);
+    expect(JSON.stringify(state.conversation)).toContain('/stop');
+  });
+
   it('enter runs a remove-task confirm and closes it', () => {
     const { state, effects } = press(asking({ kind: 'remove-task', taskId: 't1' }), 'enter');
 

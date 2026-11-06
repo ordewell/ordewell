@@ -419,6 +419,13 @@ export class OrchestratorPool {
     return this.sessions.get(sessionId)?.approvedScopes() ?? [];
   }
   isExecuting(sessionId: string): boolean { return this.sessions.get(sessionId)?.isExecuting ?? false; }
+  /** Work under way in any session held here, which stopping this daemon would cut off: a run not settled, or a planner turn answering. */
+  workLive(): boolean {
+    for (const session of this.sessions.values()) {
+      if (session.runIsLive || session.plannerTurnId !== undefined) return true;
+    }
+    return false;
+  }
   getPlan(sessionId: string): LegacyPlanState | null { return this.sessions.get(sessionId)?.planState ?? null; }
   /**
    * The plan of a session this process is holding, straight from its store —

@@ -70,13 +70,15 @@ export function createApp(
   // `ordewell stop --server` verifies a PID file against the process that
   // actually owns the port before signalling anything, so a stale file cannot
   // terminate an unrelated process. The desktop app reads the version and the
-  // contract before it drives a daemon it did not start (ADR-0063 H3). Behind
+  // contract before it drives a daemon it did not start (ADR-0063 H3), and a
+  // newer CLI whether it may replace one it cannot drive (ADR-0048). Behind
   // admission like every other route.
   app.get('/api/server', (c) => c.json({
     pid: process.pid,
     port: admission.port,
     version: serverVersion(),
     contract: DAEMON_CONTRACT,
+    live: pool.workLive(),
   } satisfies ServerInfoResponse));
 
   app.route('/api/sessions', sessionsRoute(pool));

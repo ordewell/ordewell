@@ -360,6 +360,10 @@ describe('the help sheet footer', () => {
     expect(helpFooter()).toContain('alt-enter inserts a newline');
   });
 
+  it('lists /update among the system commands, saying it waits for a live run', () => {
+    expect(helpFooter()).toMatch(/\/update\s+Update Ordewell the way it was installed.*not while a run is live/);
+  });
+
   it('drops the arrow keys and the removed per-block expansion mentions', () => {
     const footer = helpFooter();
     expect(footer).not.toContain('↑↓');

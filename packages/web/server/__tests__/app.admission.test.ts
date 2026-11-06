@@ -28,6 +28,7 @@ function fakePool(overrides: Partial<OrchestratorPool> = {}): OrchestratorPool {
     runSnapshot: vi.fn().mockReturnValue(null),
     plannerCompaction: vi.fn().mockReturnValue(undefined),
     plannerDetection: () => undefined,
+    workLive: vi.fn().mockReturnValue(false),
     ...overrides,
   } as unknown as OrchestratorPool;
 }
@@ -181,7 +182,17 @@ describe('daemon admission control', () => {
         port: daemon.port,
         version: manifest.version,
         contract: DAEMON_CONTRACT,
+        live: false,
       });
+    });
+
+    it('says when work is under way, so a newer CLI leaves it running rather than replace it', async () => {
+      await daemon.close();
+      daemon = await startDaemon(fakePool({ workLive: vi.fn().mockReturnValue(true) }));
+
+      const res = await request(daemon.port, '/api/server', { headers: AUTH });
+
+      expect(JSON.parse(res.body)).toMatchObject({ live: true });
     });
 
     it('reaches the API when it dials localhost by name', async () => {

@@ -3,17 +3,21 @@ import { existsSync, mkdirSync, openSync } from 'fs';
 import { dirname, join, resolve } from 'path';
 import { createServer } from 'net';
 import {
+  DAEMON_CONTRACT,
   DEFAULT_DAEMON_PORT,
   daemonLogPath,
   daemonPidFilePath,
   globalDataDir,
   isDaemonRunning,
   isSea,
+  probeDaemon,
   readPidFile,
   resolveDaemonPort,
   stopDaemonAt,
+  type DaemonProbe,
 } from '@ordewell/core';
 import { flag } from './utils/args';
+import { cliVersion } from './version';
 
 // The probe, token and PID-file helpers live in core so the desktop app reads
 // the same files the same way (ADR-0063 H2); this module keeps the CLI's
@@ -173,10 +177,60 @@ export async function ensureDaemonOwned(
   opts?: { detached?: boolean; quiet?: boolean; cwd?: string },
 ): Promise<{ port: number; owned: boolean }> {
   const p = port || DEFAULT_PORT;
-  if (await isDaemonRunning(p)) return { port: p, owned: false };
-  if (!opts?.quiet) console.error(`Server not running. Starting daemon on port ${p}...`);
+  const note = opts?.quiet ? () => {} : (msg: string) => console.error(msg);
+  if (await isDaemonRunning(p)) {
+    const found = await probeDaemon(p);
+    if (drivable(found)) return { port: p, owned: false };
+    await stopIdleDaemon(p, found);
+    note(`Stopped the idle server on port ${p}, which ran ${ranBy(found)}. Starting one for Ordewell ${cliVersion()}...`);
+  } else {
+    note(`Server not running. Starting daemon on port ${p}...`);
+  }
   await startDaemon(p, opts);
   return { port: p, owned: true };
+}
+
+/**
+ * A daemon this CLI may drive: one with the contract it was built against
+ * (ADR-0063 H3). A refused token says nothing of the version, and the next
+ * request names the token file; a daemon gone since the first probe leaves
+ * the port to the start that follows.
+ */
+function drivable(found: DaemonProbe): boolean {
+  return found.kind === 'unauthorized' || found.kind === 'unreachable'
+    || (found.kind === 'daemon' && found.identity.contract === DAEMON_CONTRACT);
+}
+
+function ranBy(found: DaemonProbe): string {
+  return found.kind === 'daemon' && found.identity.version ? `Ordewell ${found.identity.version}` : 'an older Ordewell';
+}
+
+/** How long a stopped daemon may take to let go of its port. */
+const PORT_RELEASE_MS = 10_000;
+
+/**
+ * After an upgrade the daemon left on a port may be an older one this CLI
+ * cannot drive (ADR-0048). One idle there is stopped, so a new one can take
+ * the port. One with work under way, or too old to say, is left running: a
+ * stop would cut that work off, so the user is told how to go on instead.
+ */
+async function stopIdleDaemon(port: number, found: DaemonProbe): Promise<void> {
+  const stopCommand = `ordewell stop --server${port === DEFAULT_PORT ? '' : ` --port ${port}`}`;
+  const cannotDrive = `The server on port ${port} runs ${ranBy(found)}, which this Ordewell ${cliVersion()} cannot drive.`;
+  const goOn = `Once nothing runs there, stop it with \`${stopCommand}\` and run this again.`;
+  const live = found.kind === 'daemon' ? found.identity.live : undefined;
+  if (live !== false) {
+    const why = live ? 'It has work under way' : 'It cannot say whether work is under way there';
+    throw new Error(`${cannotDrive} ${why}, so it was left running. ${goOn}`);
+  }
+  const outcome = await stopDaemonAt(port);
+  if (outcome.kind !== 'stopped' && outcome.kind !== 'stale') {
+    throw new Error(`${cannotDrive} It could not be stopped from here (${outcome.kind}), so it was left running. ${goOn}`);
+  }
+  for (const until = Date.now() + PORT_RELEASE_MS; await isDaemonRunning(port);) {
+    if (Date.now() > until) throw new Error(`${cannotDrive} It was asked to stop, but still holds the port after ${PORT_RELEASE_MS / 1000}s. ${goOn}`);
+    await new Promise((r) => setTimeout(r, 100));
+  }
 }
 
 /**
