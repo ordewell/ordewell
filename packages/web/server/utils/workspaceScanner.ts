@@ -50,7 +50,7 @@ export function scanWorkspaces(sea: SeaDeps = {}): string[] {
     // whose own `.ordewell/` (its committed skills) is no workspace of the
     // user's. The binary has no checkout: its `__dirname` is the executable's
     // folder, and four up from there could be the home or a projects folder
-    // that does hold one, so nothing is hidden.
+    // that does hold one, so nothing is hidden (ADR-0065 C2).
     projectDir: isSea(sea) ? undefined : path.resolve(__dirname, '..', '..', '..', '..'),
   });
 }

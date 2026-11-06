@@ -4,7 +4,7 @@
  * Node on its PATH. This is the check that a standalone binary (the Node SEA)
  * carries everything it needs: its own runtime, its daemon and the planner loop.
  * `drive-conversation.mjs` imports the built core in-process and so proves none
- * of that.
+ * of that. It is ADR-0065's proof that the binary starts and runs.
  *
  *   node bench/live/drive-binary.mjs --bin <path-to-ordewell> [--mock-port 3799]
  *
