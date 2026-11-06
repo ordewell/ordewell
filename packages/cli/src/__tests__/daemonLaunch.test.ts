@@ -18,12 +18,10 @@ vi.mock('child_process', async (original) => {
   };
 });
 
-vi.mock('../seaMode', () => ({ runningAsSea: () => sea.value }));
-
 // Down until something is spawned, so a start probes, spawns once and is done.
 vi.mock('@ordewell/core', async (original) => {
   const actual = await original<typeof import('@ordewell/core')>();
-  return { ...actual, isDaemonRunning: async () => spawned.calls.length > 0 };
+  return { ...actual, isDaemonRunning: async () => spawned.calls.length > 0, isSea: () => sea.value };
 });
 
 import { daemonCommand, startDaemon } from '../daemon';
