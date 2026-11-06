@@ -130,8 +130,11 @@ is already served by `npm`.
   formula `ordewell` (`Formula/ordewell.rb` in `ordewell/homebrew-tap`) installs
   the CLI archive on macOS and on Linux, since Homebrew on Linux installs
   formulae and casks are for macOS apps. It is rendered from the release's
-  version and `SHA256SUMS` like the other manifests and published whenever
-  `HOMEBREW_TAP_TOKEN` exists. Unlike the cask it does not wait for a notarized
+  version and `SHA256SUMS` like the other manifests and published whenever the
+  `homebrew` job holds a tap credential: `HOMEBREW_TAP_TOKEN`, or else the
+  narrower `HOMEBREW_TAP_DEPLOY_KEY`, a deploy key bound to the tap alone, as
+  [ADR-0063 H11](0063-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)
+  says, with how to rotate it. Unlike the cask it does not wait for a notarized
   build: the macOS binary is signed either way (C4), and the formula installs a
   command-line tool, not an app bundle Gatekeeper checks on launch. The
   desktop cask is named `ordewell-desktop` (`Casks/ordewell-desktop.rb`, the
@@ -289,3 +292,4 @@ their unit tests run under plain Node.
 - 2026-11-06 — C4 names the CLI's signing narrowings: a base64 `CSC_LINK` and notarization by API key only.
 - 2026-11-06 — C10: the desktop app is in a release only when `ORDEWELL_RELEASE_DESKTOP` is `true`; C5, C7 and C8 say what a release without it carries.
 - 2026-11-06 — C11: a Release is created without the latest mark and marked latest only once `SHA256SUMS` is attached, and only when it is the highest version; C5 says so.
+- 2026-11-06 — C8: the formula publishes with either tap credential, the token or the `HOMEBREW_TAP_DEPLOY_KEY` deploy key (ADR-0063 H11).

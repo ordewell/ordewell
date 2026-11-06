@@ -1,6 +1,6 @@
 ---
 status: accepted
-note: "Settles the host half of #129 and #136; the design is docs/desktop/design.md. packages/desktop holds the app: the daemon manager, the token-holding proxy, the hardened windows, the tray and quit rules, and every view the design lists. It is packaged for macOS, Windows and Linux (electron-builder.yml), built in CI and attached to a release when the repository variable ORDEWELL_RELEASE_DESKTOP is true (ADR-0065 C10), signed and notarized when the release has the credentials, with updates on only for a signed build (H9). Such a release also carries fixed-name copies of the installers and one SHA256SUMS, shared with the CLI binaries of ADR-0065, which one-line install scripts read (H10). A Homebrew formula and cask (ordewell-desktop) and winget manifests are rendered from that version and SHA256SUMS, and published when their tokens exist (H11)."
+note: "Settles the host half of #129 and #136; the design is docs/desktop/design.md. packages/desktop holds the app: the daemon manager, the token-holding proxy, the hardened windows, the tray and quit rules, and every view the design lists. It is packaged for macOS, Windows and Linux (electron-builder.yml), built in CI and attached to a release when the repository variable ORDEWELL_RELEASE_DESKTOP is true (ADR-0065 C10), signed and notarized when the release has the credentials, with updates on only for a signed build (H9). Such a release also carries fixed-name copies of the installers and one SHA256SUMS, shared with the CLI binaries of ADR-0065, which one-line install scripts read (H10). A Homebrew formula and cask (ordewell-desktop) and winget manifests are rendered from that version and SHA256SUMS, and published when their credentials exist (H11)."
 ---
 
 # 0063 — The desktop app is an Electron client of the shared daemon, and its renderer never holds the token
@@ -200,9 +200,22 @@ holds the token.**
   so a package manager installs the release's own bytes and checks them against
   the release's own hash; each is rendered apart (`--only formula`, `cask`,
   `winget`). The `homebrew` job writes `ordewell/homebrew-tap` in one commit,
-  only when `HOMEBREW_TAP_TOKEN` exists. The formula `ordewell`
+  only when it holds a credential for the tap, and either one serves: the
+  secret `HOMEBREW_TAP_TOKEN`, a token cloned and pushed over HTTPS, or else
+  the secret `HOMEBREW_TAP_DEPLOY_KEY`, the private half of a write deploy key
+  on the tap, pushed over SSH. The token wins when both are set, and the
+  publish step receives only the one it uses. The deploy key is the narrower
+  credential: it is bound to the tap repository alone, cannot call GitHub's API
+  and belongs to no person's account, and it can be made from the command line
+  where a fine-grained token cannot. Its private key is written to a 0600 file
+  under `$RUNNER_TEMP`, never echoed or put on a command line, and deleted when
+  the step exits, failed or not; ssh trusts only GitHub's published host keys,
+  pinned in the workflow, and never a key scanned at run time. To rotate it,
+  generate a new ed25519 pair, add the public half to the tap as a deploy key
+  with write access, replace the secret with the private half, and delete the
+  old deploy key from the tap. The formula `ordewell`
   (`Formula/ordewell.rb`) installs the CLI archive on macOS and Linux and is
-  published whenever the token exists
+  published whenever a tap credential exists
   ([ADR-0065](0065-the-cli-also-ships-as-a-standalone-node-binary.md) C8). The
   cask `ordewell-desktop` (`Casks/ordewell-desktop.rb`, the installer's
   `BIN_NAME`, so it does not clash with the formula) is published only when the macOS build's `signing.json` says it was notarized: Homebrew
@@ -211,7 +224,8 @@ holds the token.**
   job submits the rendered manifests to `microsoft/winget-pkgs` with
   Microsoft's `wingetcreate`, pinned to a version and checked against the
   SHA256 that version publishes, and only when `WINGET_TOKEN` exists. A missing
-  token is a notice, not a failure: a release is complete without either. Both
+  credential is a notice, not a failure: a release is complete without either
+  package manager. Both
   jobs are read-only on this repository and pin every action they use to a
   commit SHA, because they hold the only tokens that reach outside it. The
   first submission of a package to winget-pkgs is reviewed by hand.
@@ -491,8 +505,8 @@ allows script only from the app's own bundle, with no inline script.
 - Main's bundle is built with the decision baked in, off unless the packaging
   says on, so a build made without `scripts/package.mjs` (`npm run build`,
   electron-builder run by hand) has updates off.
-- A Homebrew install depends on the tap repository and a token that can write
-  to it; the cask also depends on a notarized macOS build. A release without
+- A Homebrew install depends on the tap repository and a token or deploy key
+  that can write to it; the cask also depends on a notarized macOS build. A release without
   either publishes no cask, and its users install from the Release as before.
 - The first winget submission of the package is reviewed by hand by Microsoft,
   so `winget install Ordewell.Ordewell` works only once that pull request is
@@ -518,3 +532,4 @@ allows script only from the app's own bundle, with no inline script.
 - 2026-11-06 — H10, H11: ADR-0065 puts the CLI archives and `install.sh` in the release; one `SHA256SUMS` over all of it and the fixed-name copies are written by `release.yml`'s `release-assets` job after both builds, and the cask is renamed `ordewell-desktop` beside a new `ordewell` formula.
 - 2026-11-06 — H10, H11: a release carries the app only when `ORDEWELL_RELEASE_DESKTOP` is `true` (ADR-0065 C10); without it there are no installers, no cask and no winget submission.
 - 2026-11-06 — H10: the Release becomes latest only once `SHA256SUMS` is attached (ADR-0065 C11), so the updater and the fixed-name links never see an incomplete release.
+- 2026-11-06 — H11: the `homebrew` job publishes with the `HOMEBREW_TAP_DEPLOY_KEY` deploy key over SSH when `HOMEBREW_TAP_TOKEN` is not set.
