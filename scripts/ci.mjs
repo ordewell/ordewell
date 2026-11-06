@@ -122,6 +122,21 @@ function testWithCoverage() {
   return failed.length ? 1 : 0;
 }
 
+/**
+ * The standalone binary (ADR-0065) is built for this host, as CI builds it for
+ * its linux-x64 runner. Windows has none: it installs the CLI with npm.
+ */
+const SEA_BINARY = join('dist-sea', `${process.platform}-${process.arch}`, 'ordewell');
+function seaStep(run) {
+  return () => {
+    if (process.platform === 'win32') {
+      console.log('Skipping the standalone binary: it is built for macOS and Linux, and Windows installs the CLI with npm.');
+      return 0;
+    }
+    return run();
+  };
+}
+
 /** Run here, keyed by the step's name in ci.yml. */
 const STEPS = {
   'Build (core first — cli, web and vscode compile against its dist/)': () => npm('run', 'build:core'),
@@ -134,6 +149,8 @@ const STEPS = {
   },
   'Repository-wide guards': () => npm('run', 'test:guards'),
   'Planner conversation loop — offline e2e (mock model, no API key)': plannerE2e,
+  'Build the standalone CLI binary': seaStep(() => sh('node', ['scripts/sea/build.mjs'])),
+  'CLI binary — offline e2e, no Node on PATH': seaStep(() => sh(SEA_BINARY, ['--version']) || sh('node', ['bench/live/drive-binary.mjs', '--bin', SEA_BINARY])),
   'Bench harness tests (offline, against the built core)': () => npm('run', 'test:bench'),
   'Build (ui, vscode, cli, web & desktop)': () => npm('run', 'build', '-w', 'packages/ui', '-w', 'packages/vscode', '-w', 'packages/cli', '-w', 'packages/web', '-w', 'packages/desktop', '--if-present'),
   'VS Code integration test (synthetic runner — no API key)': integrationTest,

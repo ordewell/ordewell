@@ -58,7 +58,7 @@ describe('desktop-build.yml', () => {
     assert.match(build, /^ {2}workflow_dispatch:$/m);
     assert.match(build, /^ {2}pull_request:\n {4}branches: \[ "main" \]\n(?: {4}#.*\n)* {4}paths:\n/m);
     const paths = [...build.matchAll(/^ {6}- '([^']+)'$/gm)].map((m) => m[1]);
-    for (const path of ['packages/desktop/**', 'packages/ui/**', 'packages/core/**', 'packages/web/**', 'package.json', 'package-lock.json', '.github/workflows/desktop-build.yml', 'scripts/desktop-package-check.mjs', 'scripts/desktop-release-assets.mjs', 'scripts/generate-third-party-notices.mjs']) {
+    for (const path of ['packages/desktop/**', 'packages/ui/**', 'packages/core/**', 'packages/web/**', 'package.json', 'package-lock.json', '.github/workflows/desktop-build.yml', 'scripts/desktop-package-check.mjs', 'scripts/generate-third-party-notices.mjs']) {
       assert.ok(paths.includes(path), `${path} can change an installer but does not trigger a build`);
     }
   });
@@ -83,15 +83,16 @@ describe('desktop-build.yml', () => {
     assert.match(attach, /needs: build/);
   });
 
-  it('attaches the fixed-name copies and SHA256SUMS from the one job that holds every installer, sums last', () => {
-    assert.doesNotMatch(builds, /desktop-release-assets|SHA256SUMS/, 'a per-OS job would see only its own installers');
-    const installers = attach.indexOf('gh release upload "$TAG" "${files[@]}"');
-    const assets = attach.indexOf('node scripts/desktop-release-assets.mjs release');
-    const fixed = attach.indexOf('Ordewell-mac-arm64.dmg Ordewell-mac-x64.dmg Ordewell-win-x64.exe');
-    const sums = attach.indexOf('gh release upload "$TAG" SHA256SUMS');
-    assert.ok(installers >= 0 && assets > installers && fixed > assets && sums > fixed, 'installers, then the script, then the fixed names, then SHA256SUMS');
-    assert.match(attach, /actions\/checkout@/, 'the script is in the repository, not in the artifacts');
-    for (const name of FIXED_ASSETS) assert.ok(attach.includes(name), `${name} is not uploaded`);
+  it('attaches only the versioned installers: the fixed names and SHA256SUMS wait for the CLI archives too (ADR-0065 C5)', () => {
+    assert.doesNotMatch(build.replace(/^\s*#.*$/gm, ''), /desktop-release-assets|SHA256SUMS/, 'a sums file here would not list the CLI archives');
+    for (const name of FIXED_ASSETS) assert.ok(!attach.includes(name), `${name} is uploaded here, before the CLI archives exist`);
+    assert.match(job(release, 'release-assets'), /needs: \[desktop, cli\]/);
+  });
+
+  it('pins its attach job\'s action to a commit SHA: it holds a token that writes the Release', () => {
+    const uses = [...attach.matchAll(/uses: (\S+)/g)].map(([, ref]) => ref);
+    assert.ok(uses.length > 0);
+    for (const ref of uses) assert.match(ref, /^actions\/[\w-]+@[0-9a-f]{40}$/, ref);
   });
 
   it('packages, verifies the packaged app and uploads the installers, in that order', () => {
@@ -206,8 +207,9 @@ describe('the desktop job in release.yml', () => {
   it('leaves the existing jobs as they were: only the package managers wait for the installers', () => {
     for (const name of ['ci', 'npm-publish', 'vscode-publish', 'github-release']) assert.ok(job(release, name));
     assert.match(job(release, 'github-release'), /needs: \[npm-publish, vscode-publish\]/);
-    const rest = [desktop, job(release, 'homebrew'), job(release, 'winget')].reduce((text, part) => text.replace(part, ''), release);
+    const rest = [desktop, job(release, 'release-assets'), job(release, 'homebrew'), job(release, 'winget')].reduce((text, part) => text.replace(part, ''), release);
     assert.doesNotMatch(rest, /needs:.*desktop/);
+    for (const name of ['homebrew', 'winget']) assert.match(job(release, name), /needs: release-assets\n/, name);
   });
 });
 
@@ -217,7 +219,7 @@ describe('the package-manager jobs in release.yml (ADR-0063 H11)', () => {
 
   it('wait for the installers and the sums, and read nothing else of the release', () => {
     for (const text of [homebrew, winget]) {
-      assert.match(text, /needs: desktop/);
+      assert.match(text, /needs: release-assets/);
       assert.match(text, /permissions:\n\s+contents: read/);
       assert.doesNotMatch(text, /contents: write/);
       assert.match(text, /gh release download "\$TAG" --pattern SHA256SUMS --dir sums --repo "\$REPO"|gh release download \$env:TAG --pattern SHA256SUMS --dir sums --repo \$env:REPO/);
@@ -241,15 +243,24 @@ describe('the package-manager jobs in release.yml (ADR-0063 H11)', () => {
   });
 
   it('render the cask and the manifests from the release\'s own version and SHA256SUMS', () => {
-    assert.match(homebrew, /node scripts\/render-package-manifests\.mjs --version "\$\{TAG#v\}" --sums sums\/SHA256SUMS --out rendered/);
-    assert.match(winget, /node scripts\/render-package-manifests\.mjs --version \$tag\.TrimStart\('v'\) --sums sums\/SHA256SUMS --out rendered/);
+    for (const only of ['formula', 'cask']) {
+      assert.match(homebrew, new RegExp(`node scripts/render-package-manifests\\.mjs --version "\\$\\{TAG#v\\}" --sums sums/SHA256SUMS --only ${only} --out rendered`), only);
+    }
+    assert.match(winget, /node scripts\/render-package-manifests\.mjs --version \$tag\.TrimStart\('v'\) --sums sums\/SHA256SUMS --only winget --out rendered/);
     assert.ok(homebrew.indexOf('render-package-manifests.mjs') < homebrew.indexOf('homebrew-tap'));
     assert.ok(winget.indexOf('render-package-manifests.mjs') < winget.indexOf('wingetcreate.exe submit'));
   });
 
-  it('publish the cask only with the token, and only for a notarized macOS build', () => {
+  it('publish the formula whenever the token exists, and the cask only for a notarized macOS build', () => {
     assert.match(homebrew, /HOMEBREW_TAP_TOKEN_SET: \$\{\{ secrets\.HOMEBREW_TAP_TOKEN != '' \}\}/);
-    const publish = homebrew.slice(homebrew.indexOf('- name: Publish the cask'), homebrew.indexOf('- name: Say why no cask'));
+    const publish = homebrew.slice(homebrew.indexOf('- name: Publish to ordewell/homebrew-tap'), homebrew.indexOf('- name: Say why nothing was published to the tap'));
+    assert.ok(publish.length > 0);
+    const formula = publish.indexOf('cp rendered/homebrew/Formula/ordewell.rb tap/Formula/ordewell.rb');
+    const notarized = publish.indexOf('notarized === true');
+    const cask = publish.indexOf('cp rendered/homebrew/Casks/ordewell-desktop.rb');
+    const otherwise = publish.indexOf('else\n');
+    assert.ok(formula >= 0 && formula < notarized, 'the formula is copied before, and apart from, the notarization test');
+    assert.ok(notarized < cask && cask < otherwise, 'the cask is copied only on the notarized branch');
     assert.match(publish, /if: env\.HOMEBREW_TAP_TOKEN_SET == 'true'/);
     assert.match(publish, /signing\/signing\.json/);
     assert.match(publish, /notarized === true/);
@@ -259,6 +270,12 @@ describe('the package-manager jobs in release.yml (ADR-0063 H11)', () => {
     assert.match(publish, /git -C tap remote set-url origin https:\/\/github\.com\/ordewell\/homebrew-tap\.git/);
     assert.match(publish, /git -C tap push origin HEAD/);
     assert.ok(publish.indexOf('remote set-url') < publish.indexOf('git -C tap commit'), 'the token is out of the remote before the commit');
+    // The cask was `ordewell` before the formula took the name (ADR-0065 C8).
+    const renamed = publish.slice(publish.indexOf('if [ -f tap/Casks/ordewell-desktop.rb ]'));
+    assert.match(renamed, /git -C tap rm --quiet --ignore-unmatch Casks\/ordewell\.rb/);
+    assert.match(renamed, /tap\/cask_renames\.json/);
+    assert.match(renamed, /renames\.ordewell = "ordewell-desktop"/);
+    assert.ok(renamed.indexOf('git -C tap add cask_renames.json') < renamed.indexOf('git -C tap commit'));
     assert.match(homebrew, /::notice::HOMEBREW_TAP_TOKEN is not set/);
   });
 
@@ -286,7 +303,7 @@ describe('the package-manager jobs in release.yml (ADR-0063 H11)', () => {
   });
 
   it('say why nothing was published when a token is missing, rather than failing the release', () => {
-    assert.match(homebrew, /- name: Say why no cask was published\n\s+if: env\.HOMEBREW_TAP_TOKEN_SET != 'true'/);
+    assert.match(homebrew, /- name: Say why nothing was published to the tap\n\s+if: env\.HOMEBREW_TAP_TOKEN_SET != 'true'/);
     assert.match(winget, /- name: Say why no pull request was opened\n\s+if: env\.WINGET_TOKEN_SET != 'true'/);
   });
 });

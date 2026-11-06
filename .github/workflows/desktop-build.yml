@@ -7,7 +7,10 @@ name: Desktop build
 #   - a pull request to main that touches what can change an installer;
 #   - workflow_dispatch, from the Actions tab once this file is on main;
 #   - release.yml, which calls it with `attach` and the tag to put the
-#     installers on the GitHub Release (ADR-0063).
+#     installers on the GitHub Release (ADR-0063). The fixed-name copies and
+#     SHA256SUMS are release.yml's `release-assets` job, which waits for this
+#     and for cli-build.yml, so the one sums file covers the CLI archives too
+#     (ADR-0063 H10, ADR-0065 C5).
 # Signing (ADR-0063 H9): only the release path signs. release.yml hands this
 # workflow the signing secrets one by one, and the package step passes each to
 # its own OS only when `attach` is set, so a pull request, a manual run and a
@@ -80,7 +83,6 @@ on:
       - 'NOTICE'
       - 'AUTHORS.md'
       - 'scripts/desktop-package-check.mjs'
-      - 'scripts/desktop-release-assets.mjs'
       - 'scripts/generate-third-party-notices.mjs'
       - '.github/workflows/verify-release-tag.mjs'
       - '.github/workflows/desktop-build.yml'
@@ -249,7 +251,7 @@ jobs:
 
   # Every OS built and checked its installers, so the Release gets all of them
   # or none: a Release with one OS missing is worse than one to re-run. This is
-  # the only job that can write.
+  # the only job that can write, so its one action is pinned to a commit SHA.
   attach:
     if: inputs.attach
     needs: build
@@ -258,13 +260,8 @@ jobs:
       contents: write
 
     steps:
-      # Only for scripts/desktop-release-assets.mjs, below; nothing is built here.
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
       - name: Download the installers
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: desktop-*
           merge-multiple: true
@@ -287,27 +284,3 @@ jobs:
             exit 1
           fi
           gh release upload "$TAG" "${files[@]}" --clobber --repo "$REPO"
-
-      # The one-line installers (scripts/install/) read two kinds of asset that
-      # no OS builds: fixed-name copies, so releases/latest/download/<name>
-      # always resolves, and SHA256SUMS over every installer. They are made
-      # here, from the files this job just attached, because this is the one
-      # place that holds all three OSes' output: each runner uploads on its own,
-      # and a sums file per runner would leave the installer scripts to join
-      # them. SHA256SUMS goes last, so a Release that has one has every
-      # installer. latest*.yml and the blockmaps are not touched or listed:
-      # electron-updater reads them by their own names (ADR-0063 H10).
-      - name: Attach the fixed-name copies and SHA256SUMS
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ inputs.tag }}
-          REPO: ${{ github.repository }}
-        run: |
-          node scripts/desktop-release-assets.mjs release
-          cd release
-          gh release upload "$TAG" \
-            Ordewell-mac-arm64.dmg Ordewell-mac-x64.dmg Ordewell-win-x64.exe \
-            Ordewell-linux-x64.AppImage Ordewell-linux-x64.deb \
-            --clobber --repo "$REPO"
-          gh release upload "$TAG" SHA256SUMS --clobber --repo "$REPO"

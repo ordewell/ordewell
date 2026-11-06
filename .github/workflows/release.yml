@@ -165,19 +165,113 @@ jobs:
       ES_CREDENTIAL_ID: ${{ secrets.ES_CREDENTIAL_ID }}
       ES_TOTP_SECRET: ${{ secrets.ES_TOTP_SECRET }}
 
-  # The package managers (ADR-0063 H11), from what the Release already carries:
-  # both render the cask and the winget manifests from the version and the
-  # SHA256SUMS the desktop build attached, so a package manager installs the
-  # release's own file and checks it against the release's own hash. Each
-  # publishes only when its token exists, and a release without one is complete:
-  # a notice says why nothing was published. The cask needs one thing more, a
-  # notarized macOS build, because Homebrew refuses an app Gatekeeper stops.
+  # The standalone CLI binary (ADR-0065): built on a native runner per target
+  # and its versioned archives attached to the Release github-release made. The
+  # build is cli-build.yml, which a pull request and a manual run also use. Only
+  # the macOS signing and notarization secrets are passed, by name, so the
+  # build never holds the publishing tokens; with none set the macOS binaries
+  # are signed ad hoc (ADR-0065 C4).
+  cli:
+    needs: github-release
+    uses: ./.github/workflows/cli-build.yml
+    # A called workflow's token cannot exceed the caller's grant.
+    permissions:
+      contents: write
+    with:
+      attach: true
+      tag: ${{ github.ref_name }}
+    secrets:
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+
+  # The assets no one build makes (ADR-0063 H10, ADR-0065 C5): the fixed-name
+  # copies, so releases/latest/download/<name> always resolves, the CLI's
+  # install.sh, and the one SHA256SUMS over all of it. Made here, from what the
+  # Release already carries, because only after both builds have attached does
+  # one place hold every installer and archive: a sums file per build would
+  # leave the installers and the package managers to join them. SHA256SUMS goes
+  # last, so a Release that has it has everything it lists. latest*.yml and the
+  # blockmaps are not touched or listed: electron-updater reads them by their
+  # own names. This job writes the Release, so its actions are pinned to a
+  # commit SHA.
+  release-assets:
+    needs: [desktop, cli]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      # For scripts/desktop-release-assets.mjs and scripts/install/cli.sh;
+      # nothing is built here.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22.x
+
+      # Only versioned names: a fixed-name copy (one dash fewer) from a run
+      # before is rewritten below, not read.
+      - name: Download the installers and the CLI archives from the Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh release download "$TAG" --dir release --repo "$REPO" \
+            --pattern 'Ordewell-*-*-*.dmg' --pattern 'Ordewell-*-*-*.zip' --pattern 'Ordewell-*-*-*.exe' \
+            --pattern 'Ordewell-*-*-*.AppImage' --pattern 'Ordewell-*-*-*.deb' \
+            --pattern 'ordewell-*-*-*.tar.gz'
+
+      # Refuses a Release missing any fixed-name source, or whose files
+      # disagree on the version.
+      - name: Write the fixed-name copies and SHA256SUMS
+        run: |
+          cp scripts/install/cli.sh release/install.sh
+          node scripts/desktop-release-assets.mjs release
+
+      # --clobber: a re-run replaces the file it uploaded before.
+      - name: Attach the fixed-name copies and install.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          cd release
+          gh release upload "$TAG" \
+            Ordewell-mac-arm64.dmg Ordewell-mac-x64.dmg Ordewell-win-x64.exe \
+            Ordewell-linux-x64.AppImage Ordewell-linux-x64.deb \
+            ordewell-darwin-arm64.tar.gz ordewell-darwin-x64.tar.gz \
+            ordewell-linux-arm64.tar.gz ordewell-linux-x64.tar.gz \
+            install.sh \
+            --clobber --repo "$REPO"
+
+      - name: Attach SHA256SUMS, last
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: gh release upload "$TAG" release/SHA256SUMS --clobber --repo "$REPO"
+
+  # The package managers (ADR-0063 H11, ADR-0065 C8), from what the Release
+  # already carries: each renders from the version and the SHA256SUMS
+  # release-assets attached, so a package manager installs the release's own
+  # file and checks it against the release's own hash. Each publishes only when
+  # its token exists, and a release without one is complete: a notice says why
+  # nothing was published. Homebrew gets the CLI formula whenever the token
+  # exists; the desktop cask needs one thing more, a notarized macOS build,
+  # because Homebrew refuses an app Gatekeeper stops.
   #
   # These two jobs hold the only tokens that reach outside this repository, so
   # every action they use is pinned to a commit SHA, unlike the tag pins the
   # rest of the workflows use.
   homebrew:
-    needs: desktop
+    needs: release-assets
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -203,51 +297,79 @@ jobs:
           REPO: ${{ github.repository }}
         run: gh release download "$TAG" --pattern SHA256SUMS --dir sums --repo "$REPO"
 
+      # The desktop build's, from this same run.
       - name: Download the macOS signing manifest
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: signing-macOS
           path: signing
 
+      # Rendered apart, so neither depends on the other's lines in SHA256SUMS.
+      - name: Render the formula
+        env:
+          TAG: ${{ github.ref_name }}
+        run: node scripts/render-package-manifests.mjs --version "${TAG#v}" --sums sums/SHA256SUMS --only formula --out rendered
+
       - name: Render the cask
         env:
           TAG: ${{ github.ref_name }}
-        run: node scripts/render-package-manifests.mjs --version "${TAG#v}" --sums sums/SHA256SUMS --out rendered
+        run: node scripts/render-package-manifests.mjs --version "${TAG#v}" --sums sums/SHA256SUMS --only cask --out rendered
 
-      - name: Publish the cask to ordewell/homebrew-tap
+      # One clone, one commit: the formula always, the cask only from a
+      # notarized build. The cask was `ordewell` until the formula took the
+      # name (ADR-0065 C8): once `ordewell-desktop` is in the tap the old file
+      # goes, and cask_renames.json, at the tap's root as Homebrew reads it,
+      # moves an installed `ordewell` cask to `ordewell-desktop` on upgrade.
+      # The rename waits for the new cask, since Homebrew needs its target to
+      # exist in the same tap.
+      - name: Publish to ordewell/homebrew-tap
         if: env.HOMEBREW_TAP_TOKEN_SET == 'true'
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          if ! node -e 'process.exit(JSON.parse(require("fs").readFileSync("signing/signing.json", "utf8")).notarized === true ? 0 : 1)'; then
-            echo "::notice::the macOS build was not notarized, so no cask was published: Homebrew requires an app Gatekeeper accepts."
-            exit 0
-          fi
           version="${TAG#v}"
           # The token is in the clone URL only; the remote is reset before the
           # commit so it is not left in the checkout's config.
           git clone --depth 1 "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/ordewell/homebrew-tap.git" tap
           git -C tap remote set-url origin https://github.com/ordewell/homebrew-tap.git
-          mkdir -p tap/Casks
-          cp rendered/homebrew/Casks/ordewell.rb tap/Casks/ordewell.rb
+          mkdir -p tap/Formula
+          cp rendered/homebrew/Formula/ordewell.rb tap/Formula/ordewell.rb
+          git -C tap add Formula/ordewell.rb
+          if node -e 'process.exit(JSON.parse(require("fs").readFileSync("signing/signing.json", "utf8")).notarized === true ? 0 : 1)'; then
+            mkdir -p tap/Casks
+            cp rendered/homebrew/Casks/ordewell-desktop.rb tap/Casks/ordewell-desktop.rb
+            git -C tap add Casks/ordewell-desktop.rb
+          else
+            echo "::notice::the macOS build was not notarized, so no cask was published, only the formula: Homebrew requires an app Gatekeeper accepts."
+          fi
+          if [ -f tap/Casks/ordewell-desktop.rb ]; then
+            git -C tap rm --quiet --ignore-unmatch Casks/ordewell.rb
+            node -e '
+              const fs = require("fs");
+              const file = "tap/cask_renames.json";
+              const renames = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
+              renames.ordewell = "ordewell-desktop";
+              fs.writeFileSync(file, JSON.stringify(renames, null, 2) + "\n");
+            '
+            git -C tap add cask_renames.json
+          fi
           git -C tap config user.name 'github-actions[bot]'
           git -C tap config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git -C tap add Casks/ordewell.rb
           if git -C tap diff --cached --quiet; then
-            echo "the tap already carries the cask for ${version}"
+            echo "the tap already carries Ordewell ${version}"
             exit 0
           fi
           git -C tap commit -m "Ordewell ${version}"
           git -C tap push origin HEAD
 
-      - name: Say why no cask was published
+      - name: Say why nothing was published to the tap
         if: env.HOMEBREW_TAP_TOKEN_SET != 'true'
-        run: echo "::notice::HOMEBREW_TAP_TOKEN is not set, so no cask was published (ADR-0063 H11)."
+        run: echo "::notice::HOMEBREW_TAP_TOKEN is not set, so neither the formula nor the cask was published (ADR-0063 H11, ADR-0065 C8)."
 
   winget:
-    needs: desktop
+    needs: release-assets
     runs-on: windows-latest
     permissions:
       contents: read
@@ -278,7 +400,7 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           $tag = $env:TAG
-          node scripts/render-package-manifests.mjs --version $tag.TrimStart('v') --sums sums/SHA256SUMS --out rendered
+          node scripts/render-package-manifests.mjs --version $tag.TrimStart('v') --sums sums/SHA256SUMS --only winget --out rendered
 
       # Pinned to the release and the SHA256 it publishes: the one third-party
       # program a release runs, and it runs with a token that opens pull
