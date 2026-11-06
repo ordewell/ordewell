@@ -18,25 +18,46 @@ const DOCS = /^(docs\/.+|(README|CHANGELOG|CONTEXT|CONTRIBUTING|AGENTS|CLAUDE|SE
 const SOURCE = /^(src|server)\/.+\.tsx?$/;
 
 /** Each is a check a scope turns on or off; ci.yml reads them as job outputs. */
-export const CHECKS = ['packages', 'sandbox', 'planner', 'integration', 'desktop', 'engine', 'binary'];
-
-/** Step ids in ci.yml's build-and-test that every change owes. */
-export const ALWAYS_STEPS = ['build-core', 'verify-scripts', 'repo-guards'];
+export const CHECKS = ['packages', 'sandbox', 'planner', 'integration', 'desktop', 'tour', 'engine', 'binary'];
 
 /**
- * The step ids each check stands for. `engine` is the real-engine job, which
- * the required status accounts for by its own result. Steps that only serve
- * these (the VS Code download, the coverage upload) are left out: their loss
- * fails the step they serve, or costs nothing a verdict rests on.
+ * The jobs of ci.yml that confirm their own steps, each with the step ids it
+ * owes: `always` on every change, the rest when their check is on. A job owes
+ * nothing, and a pull request may skip it, when every check it names is off.
+ * `engine` is the real-engine job, which the required status accounts for by
+ * its own result, as it does the Windows jobs.
+ *
+ * Steps that only serve these (each job's own builds, the VS Code download, the
+ * coverage upload) are left out: their loss fails the step they serve, or
+ * costs nothing a verdict rests on. A step id is owed in one job only.
  */
-export const STEPS_BY_CHECK = {
-  packages: ['bench', 'build-rest', 'typecheck', 'coverage', 'lint', 'package-vscode', 'package-desktop', 'verify-artifacts', 'upload-vsix'],
-  sandbox: ['sandbox'],
-  planner: ['planner-loop'],
-  integration: ['vscode-integration'],
-  desktop: ['desktop-e2e', 'desktop-tour'],
-  binary: ['build-binary', 'drive-binary'],
+export const STEPS_BY_JOB = {
+  'build-and-test': {
+    always: ['build-core', 'verify-scripts', 'repo-guards'],
+    packages: ['bench', 'build-rest'],
+    sandbox: ['sandbox'],
+    planner: ['planner-loop'],
+    integration: ['vscode-integration'],
+    desktop: ['desktop-e2e'],
+    binary: ['build-binary', 'drive-binary'],
+  },
+  // The visual tour is one long walk (21.9 min in CI), so it has a job of its own.
+  'desktop-tour': { tour: ['desktop-tour'] },
+  typecheck: { packages: ['typecheck'] },
+  // One leg per selected workspace, each under that workspace's own floors.
+  coverage: { packages: ['coverage'] },
+  lint: { packages: ['lint'] },
+  package: { packages: ['package-vscode', 'package-desktop', 'verify-artifacts', 'upload-vsix'] },
 };
+
+/** Step ids that every change owes, all in build-and-test. */
+export const ALWAYS_STEPS = STEPS_BY_JOB['build-and-test'].always;
+
+/** The step ids each check stands for, whichever job runs them. */
+export const STEPS_BY_CHECK = Object.fromEntries(CHECKS.flatMap((check) => {
+  const ids = Object.values(STEPS_BY_JOB).flatMap((owed) => owed[check] ?? []);
+  return ids.length ? [[check, ids]] : [];
+}));
 
 /**
  * The jobs that run the suites on Windows (ADR-0010). A package change owes
@@ -133,6 +154,7 @@ export function selectScope(paths, workspaces) {
     // The app's acceptance test drives bench/, but bench/ is outside every
     // workspace, so a change there already means the full run.
     desktop: affected.has('packages/desktop'),
+    tour: affected.has('packages/desktop'),
     engine: core,
     binary: affected.has('packages/cli'),
   };
@@ -208,20 +230,24 @@ export function localRuns(paths, workspaces, exists = existsSync) {
 }
 
 /**
- * What build-and-test owed and did not do, as `id: why`. `outcome` is read, not
+ * What a job owed and did not do, as `id: why`. `outcome` is read, not
  * `conclusion`: a step let through by `continue-on-error` concludes success.
  * A scope that cannot be read owes everything, as the steps' own conditions do.
  */
-export function missedSteps(scope, steps) {
-  const owed = [
-    ...ALWAYS_STEPS,
-    ...Object.entries(STEPS_BY_CHECK).filter(([check]) => !scope || scope.checks[check]).flatMap(([, ids]) => ids),
-  ];
+export function missedSteps(scope, steps, job = 'build-and-test') {
+  const table = STEPS_BY_JOB[job];
+  if (!table) return [`${job || 'an unnamed job'}: not a job ci.yml confirms (STEPS_BY_JOB in scripts/change-scope.mjs)`];
+  const owed = Object.entries(table).filter(([check]) => check === 'always' || !scope || scope.checks[check]).flatMap(([, ids]) => ids);
   return owed.flatMap((id) => {
     const outcome = steps[id]?.outcome;
     if (outcome === 'success') return [];
     return [`${id}: ${outcome ?? 'did not run'}`];
   });
+}
+
+/** The coverage matrix for a scope: a leg per workspace it reaches. */
+export function coverageLegs(scope) {
+  return scope.workspaces.map((dir) => ({ workspace: dir, name: dir.split('/').at(-1) }));
 }
 
 /** The scope a `scope` job's output holds, or null when it holds none. */
@@ -249,8 +275,16 @@ export function gateFailures(event, needs) {
   if (!scope) failures.push('scope: gave no readable scope');
   if (event !== 'pull_request' && scope?.mode !== 'full') failures.push(`${event} ran a narrowed scope`);
 
-  if (result('build-and-test') !== 'success') failures.push(`build-and-test: ${result('build-and-test')}`);
-  else if (needs['build-and-test'].outputs?.confirmed !== 'true') failures.push('build-and-test: did not confirm its steps');
+  // Only a pull request may leave a job out, and only when its scope owes it nothing.
+  const owes = (job) => event !== 'pull_request' || !scope
+    || Object.keys(STEPS_BY_JOB[job]).some((check) => check === 'always' || scope.checks[check]);
+  for (const job of Object.keys(STEPS_BY_JOB)) {
+    const outcome = result(job);
+    if (!owes(job)) {
+      if (outcome !== 'success' && outcome !== 'skipped') failures.push(`${job}: ${outcome}`);
+    } else if (outcome !== 'success') failures.push(`${job}: ${outcome}`);
+    else if (needs[job].outputs?.confirmed !== 'true') failures.push(`${job}: did not confirm its steps`);
+  }
 
   const owed = (job, check) => {
     const outcome = result(job);

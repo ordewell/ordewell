@@ -8,8 +8,10 @@ import {
   ALWAYS_STEPS,
   GUARD_TESTS,
   STEPS_BY_CHECK,
+  STEPS_BY_JOB,
   WINDOWS_JOBS,
   changedInPullRequest,
+  coverageLegs,
   fullScope,
   gateFailures,
   localRuns,
@@ -73,7 +75,7 @@ describe('a change inside workspaces', () => {
   it('keeps a cli change to the cli', () => {
     const scope = selected('packages/cli/src/tui/view.ts');
     assert.deepEqual(scope.workspaces, [CLI]);
-    assert.deepEqual(offChecks(scope), ['desktop', 'engine', 'integration', 'planner', 'sandbox']);
+    assert.deepEqual(offChecks(scope), ['desktop', 'engine', 'integration', 'planner', 'sandbox', 'tour']);
   });
 
   it('takes vscode and desktop with ui, and runs the real VS Code and the app for it: both draw from ui\'s dist', () => {
@@ -85,7 +87,7 @@ describe('a change inside workspaces', () => {
   it('runs the real VS Code for a vscode change, and no container or app', () => {
     const scope = selected('packages/vscode/src/extension.ts');
     assert.deepEqual(scope.workspaces, [VSCODE]);
-    assert.deepEqual(offChecks(scope), ['binary', 'desktop', 'engine', 'planner', 'sandbox']);
+    assert.deepEqual(offChecks(scope), ['binary', 'desktop', 'engine', 'planner', 'sandbox', 'tour']);
   });
 
   it('keeps a desktop change to desktop and drives the app for it: nothing is built on it, and no container or VS Code proves it', () => {
@@ -93,6 +95,14 @@ describe('a change inside workspaces', () => {
     assert.deepEqual(scope.workspaces, [DESKTOP]);
     assert.deepEqual(offChecks(scope), ['binary', 'engine', 'integration', 'planner', 'sandbox']);
     assert.equal(scope.checks.desktop, true);
+    assert.equal(scope.checks.tour, true);
+  });
+
+  it('owes the visual tour exactly where it owes the app\'s drive', () => {
+    for (const path of ['packages/desktop/src/main/index.ts', 'packages/ui/src/chat/App.tsx', 'packages/web/server/main.ts', 'packages/core/src/index.ts', 'packages/cli/src/tui/view.ts', 'packages/vscode/src/extension.ts', 'docs/a.md', 'bench/live/mock-provider.mjs']) {
+      const { checks } = selected(path);
+      assert.equal(checks.tour, checks.desktop, path);
+    }
   });
 
   it('drives the app for a change to the fakes and mock it runs on: bench/ means the full run', () => {
@@ -387,35 +397,54 @@ describe('the local inner loop', () => {
 });
 
 describe('the steps a run owes', () => {
-  const ran = (scope, outcome = 'success') => Object.fromEntries(
-    [...ALWAYS_STEPS, ...Object.entries(STEPS_BY_CHECK).filter(([check]) => scope.checks[check]).flatMap(([, ids]) => ids)]
-      .map((id) => [id, { outcome, conclusion: outcome }]),
+  const owedIn = (scope, job) => Object.entries(STEPS_BY_JOB[job])
+    .filter(([check]) => check === 'always' || scope.checks[check]).flatMap(([, ids]) => ids);
+  const ran = (scope, job = 'build-and-test', outcome = 'success') => Object.fromEntries(
+    owedIn(scope, job).map((id) => [id, { outcome, conclusion: outcome }]),
   );
 
-  it('accepts a selected run that ran what it selected', () => {
+  it('accepts a selected run that ran what it selected, in every job', () => {
     const scope = selected('packages/web/server/main.ts');
-    assert.deepEqual(missedSteps(scope, ran(scope)), []);
+    for (const job of Object.keys(STEPS_BY_JOB)) assert.deepEqual(missedSteps(scope, ran(scope, job), job), [], job);
   });
 
-  it('owes the app\'s drive and its visual tour for a desktop change', () => {
+  it('owes the app\'s drive in build-and-test and its visual tour in a job of its own, for a desktop change', () => {
     const scope = selected('packages/desktop/src/renderer/views/task/TaskTab.tsx');
     const steps = ran(scope);
     delete steps['desktop-e2e'];
-    delete steps['desktop-tour'];
-    assert.deepEqual(missedSteps(scope, steps), ['desktop-e2e: did not run', 'desktop-tour: did not run']);
+    assert.deepEqual(missedSteps(scope, steps), ['desktop-e2e: did not run']);
+    assert.deepEqual(missedSteps(scope, {}, 'desktop-tour'), ['desktop-tour: did not run']);
+    assert.ok(!STEPS_BY_JOB['build-and-test'].tour, 'build-and-test owes no tour');
+  });
+
+  it('holds each job to its own steps alone', () => {
+    const scope = fullScope('a push', workspaces);
+    assert.deepEqual(missedSteps(scope, ran(scope, 'lint'), 'lint'), []);
+    assert.deepEqual(missedSteps(scope, ran(scope, 'lint'), 'typecheck'), ['typecheck: did not run']);
+  });
+
+  it('owes a step in one job only, and every step a check owes is in some job', () => {
+    const ids = Object.values(STEPS_BY_JOB).flatMap((table) => Object.values(table).flat());
+    assert.equal(new Set(ids).size, ids.length);
+    assert.deepEqual([...ALWAYS_STEPS, ...Object.values(STEPS_BY_CHECK).flat()].sort(), [...ids].sort());
+  });
+
+  it('refuses to confirm for a job it does not know, or none', () => {
+    const scope = fullScope('a push', workspaces);
+    for (const job of ['nonsense', '']) assert.equal(missedSteps(scope, ran(scope), job).length, 1, job);
   });
 
   it('names a required step that was skipped', () => {
     const scope = fullScope('a push', workspaces);
-    const steps = { ...ran(scope), coverage: { outcome: 'skipped', conclusion: 'skipped' } };
-    assert.deepEqual(missedSteps(scope, steps), ['coverage: skipped']);
+    const steps = { ...ran(scope, 'coverage'), coverage: { outcome: 'skipped', conclusion: 'skipped' } };
+    assert.deepEqual(missedSteps(scope, steps, 'coverage'), ['coverage: skipped']);
   });
 
   it('names a required step the run never reported', () => {
     const scope = fullScope('a push', workspaces);
-    const steps = ran(scope);
+    const steps = ran(scope, 'package');
     delete steps['verify-artifacts'];
-    assert.deepEqual(missedSteps(scope, steps), ['verify-artifacts: did not run']);
+    assert.deepEqual(missedSteps(scope, steps, 'package'), ['verify-artifacts: did not run']);
   });
 
   it('counts a failure let through by continue-on-error as a failure', () => {
@@ -426,8 +455,10 @@ describe('the steps a run owes', () => {
 
   it('owes everything when the scope cannot be read', () => {
     const scope = fullScope('a push', workspaces);
-    const missed = missedSteps(null, ran(selected('docs/a.md')));
-    assert.deepEqual(missed.length, missedSteps(scope, {}).length - ALWAYS_STEPS.length);
+    for (const job of Object.keys(STEPS_BY_JOB)) {
+      const missed = missedSteps(null, ran(selected('docs/a.md'), job), job);
+      assert.deepEqual(missed.length, owedIn(scope, job).length - (STEPS_BY_JOB[job].always ?? []).length, job);
+    }
   });
 });
 
@@ -439,42 +470,65 @@ describe('the required status', () => {
   const failed = { result: 'failure', outputs: {} };
   const full = fullScope('a push', workspaces);
   const webOnly = selected('packages/web/server/main.ts');
+  const cliOnly = selected('packages/cli/src/tui/view.ts');
   const coreChange = selected('packages/core/src/index.ts');
   const docsOnly = selected('docs/a.md');
   const onWindows = (result) => Object.fromEntries(WINDOWS_JOBS.map((job) => [job, result]));
+  // Every job that confirms its steps, each confirmed; `over` replaces some.
+  const linux = (over = {}) => ({ ...Object.fromEntries(Object.keys(STEPS_BY_JOB).map((job) => [job, confirmed])), ...over });
+  const docsJobs = linux({ 'desktop-tour': skipped, typecheck: skipped, coverage: skipped, lint: skipped, package: skipped });
+  const without = (needs, job) => Object.fromEntries(Object.entries(needs).filter(([name]) => name !== job));
 
   it('passes a push whose every job ran', () => {
-    assert.deepEqual(gateFailures('push', { scope: scoped(full), 'build-and-test': confirmed, 'real-engine': passed, ...onWindows(passed) }), []);
+    assert.deepEqual(gateFailures('push', { scope: scoped(full), ...linux(), 'real-engine': passed, ...onWindows(passed) }), []);
   });
 
   it('passes a pull request that left out only what its scope let it', () => {
-    assert.deepEqual(gateFailures('pull_request', { scope: scoped(webOnly), 'build-and-test': confirmed, 'real-engine': skipped, ...onWindows(passed) }), []);
+    assert.deepEqual(gateFailures('pull_request', { scope: scoped(webOnly), ...linux(), 'real-engine': skipped, ...onWindows(passed) }), []);
+  });
+
+  it('passes a pull request that owed no tour without one', () => {
+    assert.deepEqual(gateFailures('pull_request', { scope: scoped(cliOnly), ...linux({ 'desktop-tour': skipped }), 'real-engine': skipped, ...onWindows(passed) }), []);
   });
 
   it('passes a pull request of docs alone, which owes Windows nothing', () => {
-    assert.deepEqual(gateFailures('pull_request', { scope: scoped(docsOnly), 'build-and-test': confirmed, 'real-engine': skipped, ...onWindows(skipped) }), []);
+    assert.deepEqual(gateFailures('pull_request', { scope: scoped(docsOnly), ...docsJobs, 'real-engine': skipped, ...onWindows(skipped) }), []);
   });
 
   for (const [title, event, needs] of [
-    ['the scope job failed, though the rest ran', 'pull_request', { scope: { result: 'failure', outputs: {} }, 'build-and-test': confirmed, 'real-engine': passed, ...onWindows(passed) }],
-    ['the scope job gave nothing to read', 'pull_request', { scope: { result: 'success', outputs: {} }, 'build-and-test': confirmed, 'real-engine': passed, ...onWindows(passed) }],
-    ['the scope is not JSON', 'pull_request', { scope: { result: 'success', outputs: { scope: '{' } }, 'build-and-test': confirmed, 'real-engine': passed, ...onWindows(passed) }],
-    ['a push ran a narrowed scope, every job green', 'push', { scope: scoped(webOnly), 'build-and-test': confirmed, 'real-engine': passed, ...onWindows(passed) }],
-    ['the scope job failed after giving a scope', 'pull_request', { scope: { ...scoped(webOnly), result: 'failure' }, 'build-and-test': confirmed, 'real-engine': skipped, ...onWindows(passed) }],
-    ['a push skipped the engine on a full scope that turned it off', 'push', { scope: scoped({ ...full, checks: { ...full.checks, engine: false } }), 'build-and-test': confirmed, 'real-engine': skipped, ...onWindows(passed) }],
-    ['build-and-test failed', 'pull_request', { scope: scoped(webOnly), 'build-and-test': failed, 'real-engine': skipped, ...onWindows(passed) }],
-    ['build-and-test was skipped', 'push', { scope: scoped(full), 'build-and-test': skipped, 'real-engine': passed, ...onWindows(passed) }],
-    ['build-and-test was cancelled', 'pull_request', { scope: scoped(webOnly), 'build-and-test': { result: 'cancelled', outputs: {} }, 'real-engine': skipped, ...onWindows(passed) }],
-    ['build-and-test never confirmed its steps', 'push', { scope: scoped(full), 'build-and-test': passed, 'real-engine': passed, ...onWindows(passed) }],
-    ['the engine was skipped on a push', 'push', { scope: scoped(full), 'build-and-test': confirmed, 'real-engine': skipped, ...onWindows(passed) }],
-    ['the engine was skipped for a core change', 'pull_request', { scope: scoped(coreChange), 'build-and-test': confirmed, 'real-engine': skipped, ...onWindows(passed) }],
-    ['the engine failed on a change that did not need it', 'pull_request', { scope: scoped(webOnly), 'build-and-test': confirmed, 'real-engine': failed, ...onWindows(passed) }],
-    ['a Windows job failed', 'pull_request', { scope: scoped(webOnly), 'build-and-test': confirmed, 'real-engine': skipped, ...onWindows(passed), windows: failed }],
-    ['Windows was skipped on a push', 'push', { scope: scoped(full), 'build-and-test': confirmed, 'real-engine': passed, ...onWindows(skipped) }],
-    ['Windows was skipped for a package change', 'pull_request', { scope: scoped(webOnly), 'build-and-test': confirmed, 'real-engine': skipped, ...onWindows(passed), 'windows-harness': skipped }],
-    ['Windows failed on a change that did not need it', 'pull_request', { scope: scoped(docsOnly), 'build-and-test': confirmed, 'real-engine': skipped, ...onWindows(skipped), windows: failed }],
-    ['a job is missing altogether', 'push', { scope: scoped(full), 'build-and-test': confirmed, ...onWindows(passed) }],
-    ['a Windows job is missing altogether', 'push', { scope: scoped(full), 'build-and-test': confirmed, 'real-engine': passed, windows: passed }],
+    ['the scope job failed, though the rest ran', 'pull_request', { scope: { result: 'failure', outputs: {} }, ...linux(), 'real-engine': passed, ...onWindows(passed) }],
+    ['the scope job gave nothing to read', 'pull_request', { scope: { result: 'success', outputs: {} }, ...linux(), 'real-engine': passed, ...onWindows(passed) }],
+    ['the scope is not JSON', 'pull_request', { scope: { result: 'success', outputs: { scope: '{' } }, ...linux(), 'real-engine': passed, ...onWindows(passed) }],
+    ['a push ran a narrowed scope, every job green', 'push', { scope: scoped(webOnly), ...linux(), 'real-engine': passed, ...onWindows(passed) }],
+    ['the scope job failed after giving a scope', 'pull_request', { scope: { ...scoped(webOnly), result: 'failure' }, ...linux(), 'real-engine': skipped, ...onWindows(passed) }],
+    ['a push skipped the engine on a full scope that turned it off', 'push', { scope: scoped({ ...full, checks: { ...full.checks, engine: false } }), ...linux(), 'real-engine': skipped, ...onWindows(passed) }],
+    ['build-and-test failed', 'pull_request', { scope: scoped(webOnly), ...linux({ 'build-and-test': failed }), 'real-engine': skipped, ...onWindows(passed) }],
+    ['build-and-test was skipped', 'push', { scope: scoped(full), ...linux({ 'build-and-test': skipped }), 'real-engine': passed, ...onWindows(passed) }],
+    ['build-and-test was skipped for docs alone', 'pull_request', { scope: scoped(docsOnly), ...docsJobs, 'build-and-test': skipped, 'real-engine': skipped, ...onWindows(skipped) }],
+    ['build-and-test was cancelled', 'pull_request', { scope: scoped(webOnly), ...linux({ 'build-and-test': { result: 'cancelled', outputs: {} } }), 'real-engine': skipped, ...onWindows(passed) }],
+    ['build-and-test never confirmed its steps', 'push', { scope: scoped(full), ...linux({ 'build-and-test': passed }), 'real-engine': passed, ...onWindows(passed) }],
+    ['the tour failed', 'pull_request', { scope: scoped(webOnly), ...linux({ 'desktop-tour': failed }), 'real-engine': skipped, ...onWindows(passed) }],
+    ['the tour was skipped for a desktop change', 'pull_request', { scope: scoped(selected('packages/desktop/src/main/index.ts')), ...linux({ 'desktop-tour': skipped }), 'real-engine': skipped, ...onWindows(passed) }],
+    ['the tour was skipped on a push', 'push', { scope: scoped(full), ...linux({ 'desktop-tour': skipped }), 'real-engine': passed, ...onWindows(passed) }],
+    ['the tour failed on a change that did not owe it', 'pull_request', { scope: scoped(cliOnly), ...linux({ 'desktop-tour': failed }), 'real-engine': skipped, ...onWindows(passed) }],
+    ['the tour never confirmed its steps', 'push', { scope: scoped(full), ...linux({ 'desktop-tour': passed }), 'real-engine': passed, ...onWindows(passed) }],
+    ['a coverage leg failed', 'pull_request', { scope: scoped(webOnly), ...linux({ coverage: failed }), 'real-engine': skipped, ...onWindows(passed) }],
+    ['coverage was skipped for a package change', 'pull_request', { scope: scoped(webOnly), ...linux({ coverage: skipped }), 'real-engine': skipped, ...onWindows(passed) }],
+    ['typecheck failed', 'push', { scope: scoped(full), ...linux({ typecheck: failed }), 'real-engine': passed, ...onWindows(passed) }],
+    ['lint was skipped on a push', 'push', { scope: scoped(full), ...linux({ lint: skipped }), 'real-engine': passed, ...onWindows(passed) }],
+    ['packaging never confirmed its steps', 'push', { scope: scoped(full), ...linux({ package: passed }), 'real-engine': passed, ...onWindows(passed) }],
+    ['lint failed on docs alone, which did not owe it', 'pull_request', { scope: scoped(docsOnly), ...docsJobs, lint: failed, 'real-engine': skipped, ...onWindows(skipped) }],
+    ['the engine was skipped on a push', 'push', { scope: scoped(full), ...linux(), 'real-engine': skipped, ...onWindows(passed) }],
+    ['the engine was skipped for a core change', 'pull_request', { scope: scoped(coreChange), ...linux(), 'real-engine': skipped, ...onWindows(passed) }],
+    ['the engine failed on a change that did not need it', 'pull_request', { scope: scoped(webOnly), ...linux(), 'real-engine': failed, ...onWindows(passed) }],
+    ['a Windows job failed', 'pull_request', { scope: scoped(webOnly), ...linux(), 'real-engine': skipped, ...onWindows(passed), windows: failed }],
+    ['Windows was skipped on a push', 'push', { scope: scoped(full), ...linux(), 'real-engine': passed, ...onWindows(skipped) }],
+    ['Windows was skipped for a package change', 'pull_request', { scope: scoped(webOnly), ...linux(), 'real-engine': skipped, ...onWindows(passed), 'windows-harness': skipped }],
+    ['Windows failed on a change that did not need it', 'pull_request', { scope: scoped(docsOnly), ...docsJobs, 'real-engine': skipped, ...onWindows(skipped), windows: failed }],
+    ['a job is missing altogether', 'push', { scope: scoped(full), ...linux(), ...onWindows(passed) }],
+    ['the tour job is missing altogether', 'push', without({ scope: scoped(full), ...linux(), 'real-engine': passed, ...onWindows(passed) }, 'desktop-tour')],
+    ['the coverage job is missing on docs alone', 'pull_request', without({ scope: scoped(docsOnly), ...docsJobs, 'real-engine': skipped, ...onWindows(skipped) }, 'coverage')],
+    ['a Windows job is missing altogether', 'push', { scope: scoped(full), ...linux(), 'real-engine': passed, windows: passed }],
   ]) {
     it(`fails when ${title}`, () => {
       assert.notDeepEqual(gateFailures(event, needs), []);
@@ -544,14 +598,21 @@ describe('ci-scope.mjs, as ci.yml runs it', () => {
     return { status, stderr, outputs: Object.fromEntries(pairs) };
   };
   const passed = (ids) => JSON.stringify(Object.fromEntries(ids.map((id) => [id, { outcome: 'success', conclusion: 'success' }])));
-  const allSteps = [...ALWAYS_STEPS, ...Object.values(STEPS_BY_CHECK).flat()];
+  const jobSteps = (job) => Object.values(STEPS_BY_JOB[job]).flat();
 
-  it('gives a push every check, and no workspace list, so a step runs every workspace', () => {
-    const { status, outputs } = run('select', { EVENT: 'push' });
-    assert.equal(status, 0);
-    assert.equal(outputs.workspace_args, '');
-    for (const check of ['packages', 'sandbox', 'planner', 'integration', 'desktop', 'engine', 'binary']) assert.equal(outputs[check], 'true', check);
-    assert.equal(JSON.parse(outputs.scope).mode, 'full');
+  it('gives a push every check, and a coverage leg for every workspace', () => {
+    for (const EVENT of ['push', 'schedule', 'workflow_dispatch']) {
+      const { status, outputs } = run('select', { EVENT });
+      assert.equal(status, 0);
+      assert.deepEqual(JSON.parse(outputs.coverage), workspaces.map((w) => ({ workspace: w.dir, name: w.dir.split('/').at(-1) })), EVENT);
+      for (const check of ['packages', 'sandbox', 'planner', 'integration', 'desktop', 'tour', 'engine', 'binary']) assert.equal(outputs[check], 'true', `${EVENT} ${check}`);
+      assert.equal(JSON.parse(outputs.scope).mode, 'full');
+    }
+  });
+
+  it('names each coverage leg by its directory, which an artifact name can hold', () => {
+    for (const { name } of coverageLegs(fullScope('a push', workspaces))) assert.match(name, /^[\w-]+$/);
+    assert.deepEqual(coverageLegs(selected('docs/a.md')), []);
   });
 
   it('names the workspaces of a narrowed pull request, in outputs ci.yml can compare', () => {
@@ -580,31 +641,52 @@ describe('ci-scope.mjs, as ci.yml runs it', () => {
 
     const { status, outputs } = run('select', { EVENT: 'pull_request' }, root);
     assert.equal(status, 0);
-    assert.equal(outputs.workspace_args, '-w packages/a -w packages/b');
+    assert.equal(outputs.coverage, '[{"workspace":"packages/a","name":"a"},{"workspace":"packages/b","name":"b"}]');
     assert.equal(outputs.packages, 'true');
     assert.equal(outputs.engine, 'false');
     assert.equal(outputs.integration, 'false');
     assert.equal(outputs.desktop, 'false');
+    assert.equal(outputs.tour, 'false');
   });
 
   it('confirms a run that did what it owed', () => {
     const scope = JSON.stringify(selected('docs/a.md'));
-    const { status, outputs } = run('confirm', { SCOPE: scope, STEPS: passed(ALWAYS_STEPS) });
+    const { status, outputs } = run('confirm', { JOB: 'build-and-test', SCOPE: scope, STEPS: passed(ALWAYS_STEPS) });
     assert.equal(status, 0);
     assert.equal(outputs.confirmed, 'true');
   });
 
+  it('confirms each job on its own steps', () => {
+    const scope = JSON.stringify(fullScope('a push', workspaces));
+    for (const job of Object.keys(STEPS_BY_JOB)) {
+      assert.equal(run('confirm', { JOB: job, SCOPE: scope, STEPS: passed(jobSteps(job)) }).status, 0, job);
+    }
+  });
+
   it('refuses to confirm, and writes no proof, when an owed step is missing', () => {
     const scope = JSON.stringify(selected('packages/core/src/index.ts'));
-    const { status, stderr, outputs } = run('confirm', { SCOPE: scope, STEPS: passed(ALWAYS_STEPS) });
+    const { status, stderr, outputs } = run('confirm', { JOB: 'coverage', SCOPE: scope, STEPS: passed([]) });
     assert.equal(status, 1);
     assert.match(stderr, /coverage: did not run/);
     assert.equal(outputs.confirmed, undefined);
   });
 
+  it('refuses to confirm a job it is not told, rather than proving build-and-test\'s steps', () => {
+    const scope = JSON.stringify(selected('docs/a.md'));
+    const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== 'JOB'));
+    const dir = scratch();
+    const GITHUB_OUTPUT = join(dir, 'output');
+    writeFileSync(GITHUB_OUTPUT, '');
+    const { status } = spawnSync('node', [cli, 'confirm'], { encoding: 'utf8', env: { ...env, GITHUB_OUTPUT, GITHUB_STEP_SUMMARY: join(dir, 'summary'), SCOPE: scope, STEPS: passed(ALWAYS_STEPS) } });
+    assert.equal(status, 1);
+    assert.equal(readFileSync(GITHUB_OUTPUT, 'utf8'), '');
+    assert.equal(run('confirm', { JOB: 'nonsense', SCOPE: scope, STEPS: passed(ALWAYS_STEPS) }).status, 1);
+  });
+
   it('owes everything when the scope output is empty, as after a failed scope job', () => {
-    assert.equal(run('confirm', { SCOPE: '', STEPS: passed(ALWAYS_STEPS) }).status, 1);
-    assert.equal(run('confirm', { SCOPE: '', STEPS: passed(allSteps) }).status, 0);
+    assert.equal(run('confirm', { JOB: 'build-and-test', SCOPE: '', STEPS: passed(ALWAYS_STEPS) }).status, 1);
+    assert.equal(run('confirm', { JOB: 'build-and-test', SCOPE: '', STEPS: passed(jobSteps('build-and-test')) }).status, 0);
+    assert.equal(run('confirm', { JOB: 'desktop-tour', SCOPE: '', STEPS: passed([]) }).status, 1);
   });
 
   it('fails the gate on unreadable input rather than passing it', () => {
@@ -615,7 +697,7 @@ describe('ci-scope.mjs, as ci.yml runs it', () => {
   it('passes and fails the gate by exit status, which is all GitHub reads', () => {
     const scope = { result: 'success', outputs: { scope: JSON.stringify(fullScope('a push', workspaces)) } };
     const job = { result: 'success', outputs: { confirmed: 'true' } };
-    const good = { scope, 'build-and-test': job, 'real-engine': { result: 'success', outputs: {} }, ...Object.fromEntries(WINDOWS_JOBS.map((name) => [name, { result: 'success', outputs: {} }])) };
+    const good = { scope, ...Object.fromEntries(Object.keys(STEPS_BY_JOB).map((name) => [name, job])), 'real-engine': { result: 'success', outputs: {} }, ...Object.fromEntries(WINDOWS_JOBS.map((name) => [name, { result: 'success', outputs: {} }])) };
     assert.equal(run('gate', { EVENT: 'push', NEEDS: JSON.stringify(good) }).status, 0);
     const skipped = { ...good, 'real-engine': { result: 'skipped', outputs: {} } };
     const refused = run('gate', { EVENT: 'push', NEEDS: JSON.stringify(skipped) });
@@ -638,26 +720,34 @@ describe('ci.yml', () => {
     return end < 0 ? rest : rest.slice(0, end);
   };
   const steps = (job) => jobBlock(job).split(/^ {6}- /m).slice(1);
-  const stepOf = (id) => steps('build-and-test').find((s) => new RegExp(`^\\s*id: ${id}$`, 'm').test(s));
+  const stepIn = (job, id) => steps(job).find((s) => new RegExp(`^\\s*id: ${id}$`, 'm').test(s));
+  const stepNamed = (job, name) => steps(job).find((s) => s.startsWith(`name: ${name}\n`));
+  const jobGate = (check) => new RegExp(`needs: scope\\n\\s+if: \\$\\{\\{ !cancelled\\(\\) && needs\\.scope\\.outputs\\.${check} != 'false' \\}\\}`);
+  const owedSteps = Object.entries(STEPS_BY_JOB).flatMap(([job, table]) => Object.entries(table).flatMap(([check, ids]) => ids.map((id) => ({ job, check, id }))));
 
-  it('has every step the tables name, in build-and-test', () => {
-    for (const id of [...ALWAYS_STEPS, ...Object.values(STEPS_BY_CHECK).flat()]) assert.ok(stepOf(id), `no step ${id}`);
+  it('has every step the tables name, in the job that owes it', () => {
+    for (const { job, id } of owedSteps) assert.ok(stepIn(job, id), `no step ${id} in ${job}`);
   });
 
   it('skips an always step for no reason of its own', () => {
-    for (const id of ALWAYS_STEPS) assert.doesNotMatch(stepOf(id), /^\s*if:/m, id);
+    for (const id of ALWAYS_STEPS) assert.doesNotMatch(stepIn('build-and-test', id), /^\s*if:/m, id);
   });
 
   it('runs a selected step unless its check says no, so a lost output runs it', () => {
-    for (const [check, ids] of Object.entries(STEPS_BY_CHECK)) {
-      for (const id of ids) {
-        assert.ok(stepOf(id).includes(`if: needs.scope.outputs.${check} != 'false'`), `step ${id} is not gated on ${check} as a default-run`);
+    for (const { job, check, id } of owedSteps.filter(({ check }) => check !== 'always')) {
+      if (job === 'build-and-test') {
+        assert.ok(stepIn(job, id).includes(`if: needs.scope.outputs.${check} != 'false'`), `step ${id} is not gated on ${check} as a default-run`);
+      } else {
+        // A job of one check is gated as a whole, so its steps need no gate.
+        assert.deepEqual(Object.keys(STEPS_BY_JOB[job]), [check], job);
+        assert.match(jobBlock(job), jobGate(check), `job ${job} is not gated on ${check} as a default-run`);
+        assert.doesNotMatch(stepIn(job, id), /^\s*if:/m, `${job} ${id}`);
       }
     }
   });
 
   it('hands every check on from the scope job: a missing output reads as empty, and the step would run on every change', () => {
-    for (const check of Object.keys(STEPS_BY_CHECK)) {
+    for (const check of [...Object.keys(STEPS_BY_CHECK), 'engine', 'coverage']) {
       assert.ok(jobBlock('scope').includes(`${check}: \${{ steps.select.outputs.${check} }}`), `the scope job does not output ${check}`);
     }
   });
@@ -668,49 +758,110 @@ describe('ci.yml', () => {
 
   it('keeps build-and-test and the engine alive when the scope job fails', () => {
     assert.match(jobBlock('build-and-test'), /needs: scope\n\s+if: \$\{\{ !cancelled\(\) \}\}/);
-    assert.match(jobBlock('real-engine'), /needs: scope\n\s+if: \$\{\{ !cancelled\(\) && needs\.scope\.outputs\.engine != 'false' \}\}/);
+    assert.match(jobBlock('real-engine'), jobGate('engine'));
   });
 
   it('runs Windows for every package change, and keeps it alive when the scope job fails', () => {
     for (const job of WINDOWS_JOBS) {
-      assert.match(jobBlock(job), /needs: scope\n\s+if: \$\{\{ !cancelled\(\) && needs\.scope\.outputs\.packages != 'false' \}\}/, job);
+      assert.match(jobBlock(job), jobGate('packages'), job);
       assert.match(jobBlock(job), /runs-on: windows-latest/, job);
     }
   });
 
+  it('splits the Windows suites into shards numbered from one, and names each by the matrix\'s own total', () => {
+    const windows = jobBlock('windows');
+    const shards = JSON.parse(windows.match(/^\s+shard: (\[[\d, ]+\])$/m)[1]);
+    assert.deepEqual(shards, shards.map((_, i) => i + 1));
+    assert.equal(shards.length, 6);
+    assert.ok(windows.includes('name: windows (${{ matrix.shard }}/${{ strategy.job-total }})'));
+    assert.ok(windows.includes('--shard=${{ matrix.shard }}/${{ strategy.job-total }}'));
+    assert.match(windows, /fail-fast: false/);
+  });
+
   it('runs a Windows harness step unless its check says no', () => {
-    const harness = steps('windows-harness');
     for (const [name, check] of [['Planner conversation loop on Windows', 'planner'], ['VS Code integration test on Windows', 'integration']]) {
-      const step = harness.find((s) => s.startsWith(`name: ${name}\n`));
+      const step = stepNamed('windows-harness', name);
       assert.ok(step, `no step ${name}`);
       assert.ok(step.includes(`if: needs.scope.outputs.${check} != 'false'`), `step ${name} is not gated on ${check} as a default-run`);
     }
   });
 
-  it('confirms its steps last, and hands the proof to the required status', () => {
-    const last = steps('build-and-test').at(-1);
-    assert.match(last, /id: confirm/);
-    assert.match(last, /node scripts\/ci-scope\.mjs confirm/);
-    assert.match(last, /toJSON\(steps\)/);
-    assert.match(jobBlock('build-and-test'), /confirmed: \$\{\{ steps\.confirm\.outputs\.confirmed \}\}/);
+  it('confirms each job\'s steps last, as that job, and hands the proof to the required status', () => {
+    for (const job of Object.keys(STEPS_BY_JOB)) {
+      const last = steps(job).at(-1);
+      assert.match(last, /id: confirm/, job);
+      assert.match(last, /node scripts\/ci-scope\.mjs confirm/, job);
+      assert.match(last, /toJSON\(steps\)/, job);
+      assert.ok(last.includes('JOB: ${{ github.job }}'), `${job} does not name itself to confirm`);
+      assert.match(jobBlock(job), /confirmed: \$\{\{ steps\.confirm\.outputs\.confirmed \}\}/, job);
+    }
   });
 
   it('has a required status that always reports, over every job', () => {
     const gate = jobBlock('required-checks');
+    assert.match(gate, /name: Required checks\n/);
     assert.match(gate, /if: always\(\)/);
-    assert.ok(gate.includes(`needs: [scope, build-and-test, real-engine, ${WINDOWS_JOBS.join(', ')}]`), 'the gate does not need every job');
+    const jobs = ['scope', ...Object.keys(STEPS_BY_JOB), 'real-engine', ...WINDOWS_JOBS];
+    assert.ok(gate.includes(`needs: [${jobs.join(', ')}]`), 'the gate does not need every job');
+    const declared = [...workflow.slice(workflow.indexOf('\njobs:\n')).matchAll(/^  ([\w-]+):$/gm)].map((m) => m[1]).filter((job) => job !== 'required-checks');
+    assert.deepEqual([...declared].sort(), [...jobs].sort(), 'a job the gate does not judge');
     assert.match(gate, /toJSON\(needs\)/);
     assert.match(gate, /node scripts\/ci-scope\.mjs gate/);
   });
 
-  it('runs the visual tour strict, beside the app e2e, and uploads its report when it fails', () => {
-    const tour = stepOf('desktop-tour');
+  it('runs the visual tour strict, in a job of its own that builds what it walks and nothing more', () => {
+    const tour = stepIn('desktop-tour', 'desktop-tour');
     assert.match(tour, /TOUR_STRICT: '1'/);
     assert.match(tour, /xvfb-run -a npm run desktop:tour/);
-    const report = workflow.match(/^ {6}- name: Upload the desktop tour report\n([\s\S]*?)(?=^ {6}- name: )/m);
-    assert.ok(report, 'no tour report upload');
-    assert.match(report[0], /failure\(\)/);
-    assert.match(report[0], /path: packages\/desktop\/test-results\/tour/);
+    assert.match(jobBlock('desktop-tour'), jobGate('tour'));
+    assert.match(jobBlock('desktop-tour'), /timeout-minutes: \d+/);
+    const names = steps('desktop-tour').map((s) => s.match(/^(?:name|uses): (.+)$/m)[1]);
+    assert.deepEqual(names, [
+      'actions/checkout@v7',
+      'Use Node.js 22.x',
+      'Install dependencies',
+      'Build (core first — cli, web and vscode compile against its dist/)',
+      'Build (ui, vscode, cli, web & desktop)',
+      'Install xvfb if the image lacks it',
+      'Desktop app — visual tour and layout checks',
+      'Upload the desktop tour report',
+      'Confirm every step this change owed ran',
+    ]);
+    const report = stepNamed('desktop-tour', 'Upload the desktop tour report');
+    assert.match(report, /failure\(\)/);
+    assert.match(report, /path: packages\/desktop\/test-results\/tour/);
+  });
+
+  it('runs coverage one leg per workspace, every leg to the end, and the root script when the scope gave none', () => {
+    const coverage = jobBlock('coverage');
+    assert.match(coverage, /fail-fast: false/);
+    assert.ok(coverage.includes('name: coverage (${{ matrix.name }})'));
+    const fallback = coverage.match(/include: \$\{\{ fromJSON\(needs\.scope\.outputs\.coverage \|\| '(.+)'\) \}\}/);
+    assert.ok(fallback, 'the matrix does not fall back when the scope output is lost');
+    assert.deepEqual(JSON.parse(fallback[1]), [{ workspace: '', name: 'every workspace' }]);
+    const step = stepIn('coverage', 'coverage');
+    assert.ok(step.includes('WORKSPACE: ${{ matrix.workspace }}'));
+    assert.ok(step.includes('npm run test:coverage ${WORKSPACE:+-w "$WORKSPACE"} --if-present'), 'a leg does not run its own workspace');
+    assert.match(step, /set -o pipefail/);
+    assert.ok(stepNamed('coverage', 'Upload coverage reports').includes('name: coverage-reports-${{ matrix.name }}'), 'legs would upload over one another');
+  });
+
+  it('lints without building, and builds before typecheck and packaging', () => {
+    assert.doesNotMatch(jobBlock('lint'), /id: build-/);
+    for (const job of ['typecheck', 'package', 'coverage', 'desktop-tour']) {
+      const block = jobBlock(job);
+      const owed = Object.values(STEPS_BY_JOB[job]).flat()[0];
+      assert.ok(block.indexOf('id: build-core') < block.indexOf('id: build-rest'), job);
+      assert.ok(block.indexOf('id: build-rest') < block.indexOf(`id: ${owed}`), job);
+    }
+  });
+
+  it('runs in full every night and on demand, and cancels only a pull request\'s superseded run', () => {
+    assert.match(workflow, /^ {2}schedule:\n {4}- cron: '\d+ \d+ \* \* \*'$/m);
+    assert.match(workflow, /^ {2}workflow_dispatch:$/m);
+    const concurrency = workflow.match(/^concurrency:\n((?: {2}.*\n)+)/m)[1];
+    assert.ok(concurrency.includes("group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}"), 'a run on main shares a group and can be cancelled');
+    assert.ok(concurrency.includes("cancel-in-progress: ${{ github.event_name == 'pull_request' }}"));
   });
 
   it('reads two commits, so a pull request\'s merge has its parents', () => {
