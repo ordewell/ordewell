@@ -37,7 +37,7 @@ const write = (path, text, mode) => {
  * coding agents on the machine running the test cannot leak into what it
  * reports. The real sha256sum is optional: macOS has shasum instead.
  */
-const TOOLS = ['awk', 'basename', 'cat', 'chmod', 'cp', 'cut', 'gzip', 'head', 'id', 'mkdir', 'mktemp', 'mv', 'rm', 'sed', 'sh', 'sha256sum', 'shasum', 'tar', 'tr'];
+const TOOLS = ['awk', 'basename', 'cat', 'chmod', 'cp', 'cut', 'gzip', 'head', 'id', 'mkdir', 'mktemp', 'mv', 'readlink', 'rm', 'sed', 'sh', 'sha256sum', 'shasum', 'tar', 'tr'];
 const toolbox = (() => {
   const dir = scratch('tools');
   for (const tool of TOOLS) {
@@ -399,6 +399,74 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
       assert.match(zsh.stdout, new RegExp(`export PATH="${zsh.target}:\\$PATH"' >> ~/\\.zshrc`));
       assert.match(install([], { env: { SHELL: '/usr/bin/fish' } }).stdout, /fish_add_path ".*\/bin"/);
       assert.match(install([], { env: { SHELL: '/bin/bash' } }).stdout, />> ~\/\.bashrc/);
+    });
+
+    it('says nothing about another ordewell when the installed one is the one PATH finds, by any spelling of its folder', () => {
+      const home = scratch('home');
+      const target = join(home, 'bin');
+      mkdirSync(target, { recursive: true });
+      const alias = join(scratch('alias'), 'bin');
+      symlinkSync(target, alias);
+      for (const first of [target, `${target}/`, alias]) {
+        const result = install([], { home, target, env: { PATH: [first, linux(), toolbox, target].join(delimiter) } });
+        assert.equal(result.status, 0, result.stderr);
+        assert.doesNotMatch(result.stdout, /Another ordewell/);
+      }
+    });
+
+    /**
+     * An npm global install: `<prefix>/bin/ordewell` links into
+     * `<prefix>/lib/node_modules`, and that bin folder comes before the
+     * installer's, which is itself on PATH.
+     */
+    function npmInstall() {
+      const prefix = scratch('npm-prefix');
+      write(join(prefix, 'lib/node_modules/ordewell/dist/cli.js'), '#!/bin/sh\necho "ordewell 0.12.6"\n', 0o755);
+      mkdirSync(join(prefix, 'bin'));
+      symlinkSync('../lib/node_modules/ordewell/dist/cli.js', join(prefix, 'bin/ordewell'));
+      return join(prefix, 'bin');
+    }
+
+    for (const shell of ['sh', 'dash']) {
+      it(`names an older ordewell earlier on PATH and how to use the new one, under ${shell}`, (t) => {
+        if (!has(shell)) return t.skip(`${shell} is not installed`);
+        const home = scratch('home');
+        const target = join(home, 'bin');
+        mkdirSync(target, { recursive: true });
+        const npmBin = npmInstall();
+        const PATH = [npmBin, linux(), toolbox, target].join(delimiter);
+        const result = spawnSync(whichSh(shell), [SH], { env: { PATH, HOME: home, TMPDIR: tmpdir(), ORDEWELL_CLI_FROM: release(), ORDEWELL_INSTALL_DIR: target }, encoding: 'utf8' });
+        assert.equal(result.status, 0, result.stderr);
+        // The case being reported: what the next `ordewell` runs is the old one.
+        assert.equal(spawnSync(whichSh(shell), ['-c', 'ordewell --version'], { env: { PATH }, encoding: 'utf8' }).stdout.trim(), 'ordewell 0.12.6');
+        assert.match(result.stdout, new RegExp(`Another ordewell comes first on your PATH: ${npmBin}/ordewell`));
+        assert.match(result.stdout, /npm uninstall -g ordewell/);
+        assert.match(result.stdout, new RegExp(`put ${target} before ${npmBin} on your PATH`));
+      });
+    }
+
+    it('names a Homebrew or any other earlier ordewell, with the way to remove it', () => {
+      const brew = join(scratch('brew'), 'homebrew');
+      write(join(brew, 'Cellar/ordewell/0.12.6/bin/ordewell'), '#!/bin/sh\necho "ordewell 0.12.6"\n', 0o755);
+      mkdirSync(join(brew, 'bin'));
+      symlinkSync('../Cellar/ordewell/0.12.6/bin/ordewell', join(brew, 'bin/ordewell'));
+      const other = commands({ ordewell: 'echo "ordewell 0.11.0"' });
+      for (const [bin, hint] of [[join(brew, 'bin'), /brew uninstall ordewell/], [other, new RegExp(`remove ${other}/ordewell`)]]) {
+        const home = scratch('home');
+        const target = join(home, 'bin');
+        const result = install([], { home, target, env: { PATH: [bin, linux(), toolbox, target].join(delimiter) } });
+        assert.equal(result.status, 0, result.stderr);
+        assert.match(result.stdout, new RegExp(`Another ordewell comes first on your PATH: ${bin}/ordewell`));
+        assert.match(result.stdout, hint);
+      }
+    });
+
+    it('names an earlier ordewell beside the PATH hint, when the install folder is not on PATH', () => {
+      const npmBin = npmInstall();
+      const result = install([], { env: { PATH: [npmBin, linux(), toolbox].join(delimiter), SHELL: '/bin/zsh' } });
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /is not on your PATH/);
+      assert.match(result.stdout, /Another ordewell comes first on your PATH/);
     });
 
     it('leaves every profile alone', () => {

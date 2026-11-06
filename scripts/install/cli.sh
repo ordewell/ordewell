@@ -364,6 +364,33 @@ case ":${PATH:-}:" in
     ;;
 esac
 
+# An older install (npm's, Homebrew's, another folder's) earlier on PATH would
+# still be the `ordewell` a new shell runs, so say which one and how to switch.
+resolved=$(command -v "$BIN_NAME" 2>/dev/null || true)
+case $resolved in
+  /*)
+    # -ef is not in POSIX but every sh this runs under has it; it sees the same
+    # file through a symlinked folder or a doubled slash.
+    # shellcheck disable=SC3013
+    if [ "$resolved" != "$bin_path" ] && ! [ "$resolved" -ef "$bin_path" ]; then
+      link=$resolved
+      if command -v readlink >/dev/null 2>&1; then
+        link=$(readlink "$resolved" 2>/dev/null || printf '%s' "$resolved")
+      fi
+      say ""
+      say "Another ordewell comes first on your PATH: $resolved"
+      say "Typing ordewell runs that one, not the copy just installed. To use $bin_path:"
+      case "$resolved $link" in
+        *node_modules*|*/npm/*) say "  npm uninstall -g ordewell      # it was installed with npm" ;;
+        *Cellar*|*homebrew*|*linuxbrew*) say "  brew uninstall ordewell        # it was installed with Homebrew" ;;
+        *) say "  remove $resolved" ;;
+      esac
+      say "  or put $install_dir before ${resolved%/*} on your PATH."
+      say "Then run: hash -r    (or open a new terminal)"
+    fi
+    ;;
+esac
+
 # ---- what Ordewell works with: reported, never installed -----------------------
 
 say ""
