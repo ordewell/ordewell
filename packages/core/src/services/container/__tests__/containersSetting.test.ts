@@ -10,6 +10,24 @@ import type { IRunner } from '../../../interfaces/IRunner';
 
 /** The `containers` setting through a real Session: what opts in, and what never falls back to the host. */
 
+/** Every docker command a Session here would run: none reaches an engine, whose answer can take minutes on a CI runner. */
+const docker = vi.hoisted(() => ({ calls: [] as (readonly string[])[] }));
+
+vi.mock('../dockerCli', async (actual) => {
+  const real = await actual<typeof import('../dockerCli')>();
+  class AbsentDockerCli {
+    async call(args: readonly string[]) {
+      docker.calls.push(args);
+      return { code: -1, stdout: '', stderr: 'spawn docker ENOENT' };
+    }
+
+    async entry(): Promise<never> {
+      throw new Error('spawn docker ENOENT');
+    }
+  }
+  return { ...real, SpawnedDockerCli: AbsentDockerCli };
+});
+
 vi.mock('../../GitWorktreeIsolation', async (actual) => {
   const real = await actual<typeof import('../../GitWorktreeIsolation')>();
   return { ...real, createWorktreeIsolation: vi.fn(real.createWorktreeIsolation) };
@@ -50,6 +68,7 @@ describe('the containers setting', () => {
 
     await vi.waitFor(() => expect(vi.mocked(env.notifications.error).mock.calls.join()).toContain('the containers setting must be an object'));
     expect(env.spawn).not.toHaveBeenCalled();
+    expect(docker.calls, 'no engine could take it, so none is asked').toEqual([]);
     env.parent.destroy();
   });
 
