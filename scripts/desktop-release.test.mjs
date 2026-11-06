@@ -442,7 +442,7 @@ describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', ()
    * builds that ran attached, and fake gh and git on PATH. Runs one job's steps
    * in order as GitHub would, and returns what each printed.
    */
-  const workspace = ({ desktop, tap = [] }) => {
+  const workspace = ({ desktop, tap = [], releases = [{ tag_name: `v${VERSION}`, draft: false, prerelease: false }], existing = false, apiFails = false }) => {
     const root = mkdtempSync(join(tmpdir(), 'release-switch-'));
     const work = join(root, 'work');
     const assets = join(root, 'release-assets');
@@ -472,6 +472,18 @@ describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', ()
       } else if (tool === 'gh' && args[0] === 'release' && args[1] === 'upload') {
         const files = args.slice(3).filter((arg, at, all) => !arg.startsWith('--') && !['--repo'].includes(all[at - 1]));
         for (const file of files) copyFileSync(file, join(${JSON.stringify(assets)}, basename(file)));
+      } else if (tool === 'gh' && args[0] === 'release' && args[1] === 'view') {
+        process.exit(${JSON.stringify(existing)} ? 0 : 1);
+      } else if (tool === 'gh' && args[0] === 'release' && ['create', 'edit'].includes(args[1])) {
+        // Recorded in the log only.
+      } else if (tool === 'gh' && args[0] === 'api') {
+        // The one read release.yml makes, and the jq filter it reads it with:
+        // a different filter would need this fake to learn it.
+        if (!args.includes('repos/ordewell/ordewell/releases?per_page=100') || !args.includes('--paginate')) process.exit(4);
+        if (after('--jq')[0] !== '.[] | select(.draft == false and .prerelease == false) | .tag_name') process.exit(4);
+        if (${JSON.stringify(apiFails)}) { console.error('HTTP 502: Bad Gateway'); process.exit(1); }
+        const releases = ${JSON.stringify(releases)};
+        for (const release of releases) if (!release.draft && !release.prerelease) console.log(release.tag_name);
       } else if (tool === 'git' && args[0] === 'clone') {
         cpSync(${JSON.stringify(join(root, 'tap'))}, args.at(-1), { recursive: true });
       } else if (tool === 'git' && args[2] === 'rm') {
@@ -523,6 +535,7 @@ describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', ()
 
   const notices = (printed) => printed.flatMap(({ stdout }) => stdout.split('\n').filter((line) => line.startsWith('::notice::')));
   const FIXED_CLI = ['ordewell-darwin-arm64.tar.gz', 'ordewell-darwin-x64.tar.gz', 'ordewell-linux-arm64.tar.gz', 'ordewell-linux-x64.tar.gz'];
+  const LATEST = `::notice::v${VERSION} is complete and the highest release, so it is now latest: releases/latest/download/ and ordewell.ai/install.sh serve it (ADR-0065 C11).`;
 
   it('releases the CLI alone with the switch off: its archives, their fixed copies, install.sh and a SHA256SUMS of just those', { skip: posixOnly }, () => {
     const space = workspace({ desktop: false });
@@ -539,7 +552,7 @@ describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', ()
       assert.deepEqual(uploads.at(-1).slice(4).filter((arg) => !arg.startsWith('--') && arg !== 'ordewell/ordewell'), ['release/SHA256SUMS']);
       const downloaded = space.calls().find(([, , verb]) => verb === 'download');
       assert.deepEqual(downloaded.filter((arg, at) => downloaded[at - 1] === '--pattern'), ['ordewell-*-*-*.tar.gz']);
-      assert.deepEqual(notices(printed), ["::notice::ORDEWELL_RELEASE_DESKTOP is not 'true', so the desktop app was not built: this release carries the CLI archives, install.sh and SHA256SUMS, Homebrew gets the formula and no cask, and winget no pull request (ADR-0065 C10)."]);
+      assert.deepEqual(notices(printed), [LATEST, "::notice::ORDEWELL_RELEASE_DESKTOP is not 'true', so the desktop app was not built: this release carries the CLI archives, install.sh and SHA256SUMS, Homebrew gets the formula and no cask, and winget no pull request (ADR-0065 C10)."]);
     } finally {
       space.done();
     }
@@ -553,7 +566,7 @@ describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', ()
       const carried = [...CLI_ARCHIVES, ...FIXED_CLI, ...INSTALLERS, ...FIXED_ASSETS, 'install.sh'].sort();
       assert.deepEqual(readdirSync(space.assets).sort(), [...carried, 'SHA256SUMS'].sort());
       assert.deepEqual(space.listed(), carried);
-      assert.deepEqual(notices(printed), []);
+      assert.deepEqual(notices(printed), [LATEST]);
     } finally {
       space.done();
     }
@@ -607,5 +620,104 @@ describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', ()
     } finally {
       space.done();
     }
+  });
+
+  describe('the latest mark (ADR-0065 C11)', () => {
+    /** Each gh call of the log, as its arguments after `gh`. */
+    const gh = (space) => space.calls().filter(([tool]) => tool === 'gh').map(([, ...args]) => args);
+    const marks = (space) => gh(space).filter(([group, verb]) => group === 'release' && verb === 'edit');
+
+    it('creates the Release without the mark, so the previous release stays latest while this one fills', { skip: posixOnly }, () => {
+      const space = workspace({ desktop: false });
+      try {
+        space.run('github-release', { results: simulate({}) });
+        assert.deepEqual(gh(space), [
+          ['release', 'view', `v${VERSION}`],
+          ['release', 'create', `v${VERSION}`, '--title', `v${VERSION}`, '--notes-from-tag', '--latest=false'],
+        ]);
+      } finally {
+        space.done();
+      }
+    });
+
+    it('leaves a Release that already exists as it is, its mark too', { skip: posixOnly }, () => {
+      const space = workspace({ desktop: false, existing: true });
+      try {
+        const printed = space.run('github-release', { results: simulate({}) });
+        assert.deepEqual(gh(space), [['release', 'view', `v${VERSION}`]]);
+        assert.match(printed[0].stdout, new RegExp(`Release v${VERSION.replace(/\./g, '\\.')} already exists, skipping`));
+      } finally {
+        space.done();
+      }
+    });
+
+    it('is given only in release-assets, and nowhere is a Release made latest any other way', () => {
+      const given = [...release.matchAll(/--latest\b(=\w+)?/g)].map(([flag]) => flag);
+      assert.deepEqual(given, ['--latest=false', '--latest']);
+      assert.match(job(release, 'github-release'), /--latest=false/);
+      assert.match(parseSteps(job(release, 'release-assets')).find(({ name }) => name === 'Mark the Release latest, if it is the highest version').run, /gh release edit "\$TAG" --latest --repo "\$REPO"/);
+      assert.doesNotMatch(release, /make_latest/);
+    });
+
+    for (const [switchName, vars, desktop] of [['off', {}, false], ['on', { ORDEWELL_RELEASE_DESKTOP: 'true' }, true]]) {
+      it(`marks the Release latest only after SHA256SUMS is attached, with the switch ${switchName}`, { skip: posixOnly }, () => {
+        const space = workspace({ desktop });
+        try {
+          space.run('release-assets', { results: simulate({ vars }) });
+          const calls = gh(space);
+          const sums = calls.findLastIndex(([group, verb, , file]) => group === 'release' && verb === 'upload' && file === 'release/SHA256SUMS');
+          const mark = calls.findIndex(([group, verb]) => group === 'release' && verb === 'edit');
+          assert.ok(sums >= 0 && mark > sums, 'the mark comes before SHA256SUMS');
+          assert.equal(mark, calls.length - 1, 'the Release changed after it was marked');
+          assert.deepEqual(calls[mark], ['release', 'edit', `v${VERSION}`, '--latest', '--repo', 'ordewell/ordewell']);
+        } finally {
+          space.done();
+        }
+      });
+    }
+
+    it('never takes latest back from a higher release when an older tag\'s release is re-run', { skip: posixOnly }, () => {
+      const space = workspace({ desktop: false, releases: [{ tag_name: 'v10.0.0' }, { tag_name: `v${VERSION}` }, { tag_name: 'v9.8.6' }] });
+      try {
+        const printed = space.run('release-assets', { results: simulate({}) });
+        assert.deepEqual(marks(space), []);
+        assert.ok(notices(printed).includes(`::notice::v${VERSION} is complete, but v10.0.0 is a higher release, so latest stays where it is (ADR-0065 C11).`), notices(printed).join('\n'));
+      } finally {
+        space.done();
+      }
+    });
+
+    it('passes over a higher draft or prerelease, which are never latest', { skip: posixOnly }, () => {
+      const space = workspace({
+        desktop: false,
+        releases: [{ tag_name: 'v10.0.0', draft: true }, { tag_name: 'v9.9.0-rc.1', prerelease: true }, { tag_name: `v${VERSION}` }, { tag_name: 'v9.8.7-rc.1' }, { tag_name: 'not-a-version' }],
+      });
+      try {
+        const printed = space.run('release-assets', { results: simulate({}) });
+        assert.equal(marks(space).length, 1);
+        assert.ok(notices(printed).includes(LATEST));
+      } finally {
+        space.done();
+      }
+    });
+
+    it('marks nothing and fails the job when the release list cannot be read, or does not hold this release', { skip: posixOnly }, () => {
+      for (const options of [{ apiFails: true }, { releases: [{ tag_name: 'v1.0.0' }] }, { releases: [] }]) {
+        const space = workspace({ desktop: false, ...options });
+        try {
+          assert.throws(() => space.run('release-assets', { results: simulate({}) }), /Mark the Release latest, if it is the highest version failed/);
+          assert.deepEqual(marks(space), [], JSON.stringify(options));
+        } finally {
+          space.done();
+        }
+      }
+    });
+
+    it('is not given when the CLI build fails, so latest stays on the last complete release', () => {
+      for (const vars of [{}, { ORDEWELL_RELEASE_DESKTOP: 'true' }]) {
+        assert.equal(simulate({ vars, outcome: { cli: 'failure' } })['release-assets'], 'skipped');
+      }
+      assert.equal(simulate({ vars: { ORDEWELL_RELEASE_DESKTOP: 'true' }, outcome: { desktop: 'failure' } })['release-assets'], 'skipped');
+    });
   });
 });

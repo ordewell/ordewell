@@ -170,7 +170,7 @@ describe('the cli and release-assets jobs in release.yml', () => {
     assert.deepEqual(passed.map(([, name, from]) => [name, from]), SIGNING_SECRETS.map((name) => [name, name]));
   });
 
-  it('writes the fixed names, install.sh and SHA256SUMS once both builds have attached, sums last', () => {
+  it('writes the fixed names, install.sh and SHA256SUMS once both builds have attached, sums last, then marks the Release latest (ADR-0065 C11)', () => {
     assert.match(assets, /needs: \[desktop, cli\]/);
     assert.match(assets, /permissions:\n\s+contents: write/);
     const at = [
@@ -179,8 +179,10 @@ describe('the cli and release-assets jobs in release.yml', () => {
       'node scripts/desktop-release-assets.mjs release',
       'Ordewell-mac-arm64.dmg',
       'gh release upload "$TAG" release/SHA256SUMS',
+      'node scripts/release-latest.mjs "$TAG"',
+      'gh release edit "$TAG" --latest',
     ].map((needle) => assets.indexOf(needle));
-    assert.ok(at.every((i) => i >= 0), 'download, install.sh, the script, the fixed names, SHA256SUMS');
+    assert.ok(at.every((i) => i >= 0), 'download, install.sh, the script, the fixed names, SHA256SUMS, the latest mark');
     assert.deepEqual([...at].sort((a, b) => a - b), at);
     const fixed = step(assets, 'Attach the fixed-name copies and install.sh');
     for (const name of [...FIXED_ASSETS, ...CLI_FIXED_ASSETS, INSTALL_SCRIPT]) assert.ok(fixed.includes(name), `${name} is not uploaded`);

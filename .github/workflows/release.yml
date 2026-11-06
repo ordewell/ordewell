@@ -120,14 +120,19 @@ jobs:
           fetch-depth: 0
 
       # Idempotent: a re-pushed tag (e.g. after retriggering a stuck run) must not fail this step.
+      # Not marked latest (ADR-0065 C11): releases/latest/download/ is what
+      # ordewell.ai/install.sh and the desktop updater read, and this Release
+      # has none of its files yet. release-assets marks it once SHA256SUMS is
+      # attached. A Release that already exists keeps the mark it has.
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
         run: |
-          if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
-            echo "Release ${{ github.ref_name }} already exists, skipping"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists, skipping"
           else
-            gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --notes-from-tag
+            gh release create "$TAG" --title "$TAG" --notes-from-tag --latest=false
           fi
 
   # The desktop installers: built on each OS and attached to the Release
@@ -198,7 +203,8 @@ jobs:
   # Release already carries, because only after both builds have attached does
   # one place hold every installer and archive: a sums file per build would
   # leave the installers and the package managers to join them. SHA256SUMS goes
-  # last, so a Release that has it has everything it lists. latest*.yml and the
+  # last, so a Release that has it has everything it lists, and then the
+  # Release is marked latest (ADR-0065 C11). latest*.yml and the
   # blockmaps are not touched or listed: electron-updater reads them by their
   # own names. This job writes the Release, so its actions are pinned to a
   # commit SHA.
@@ -282,6 +288,29 @@ jobs:
           TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
         run: gh release upload "$TAG" release/SHA256SUMS --clobber --repo "$REPO"
+
+      # Only now does the Release hold everything releases/latest/download/
+      # is asked for, so only now is it marked latest (ADR-0065 C11). Only the
+      # highest version among the published, non-draft, non-prerelease
+      # releases takes the mark, so a re-run of an older tag never takes it
+      # back. release-latest.mjs fails on a list that lacks this tag, so a read
+      # that came back short marks nothing.
+      - name: Mark the Release latest, if it is the highest version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -o pipefail
+          highest=$(gh api --paginate "repos/$REPO/releases?per_page=100" \
+            --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name' \
+            | node scripts/release-latest.mjs "$TAG")
+          if [ "$highest" = "$TAG" ]; then
+            gh release edit "$TAG" --latest --repo "$REPO"
+            echo "::notice::$TAG is complete and the highest release, so it is now latest: releases/latest/download/ and ordewell.ai/install.sh serve it (ADR-0065 C11)."
+          else
+            echo "::notice::$TAG is complete, but $highest is a higher release, so latest stays where it is (ADR-0065 C11)."
+          fi
 
       - name: Say why the release carries no desktop app
         if: env.DESKTOP_RELEASED != 'true'
