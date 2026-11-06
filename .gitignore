@@ -11,6 +11,8 @@ out/
 *.vsix
 # electron-builder output (packages/desktop/electron-builder.yml)
 packages/desktop/release/
+# Standalone binaries and their archives (scripts/sea/build.mjs)
+dist-sea/
 
 # Copied from @ordewell/core by scripts/copy-skills.mjs at build time — not source.
 packages/vscode/skills/

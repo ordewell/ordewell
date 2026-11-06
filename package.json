@@ -53,7 +53,9 @@
     "@typescript-eslint/parser": "^8.64.0",
     "@vitest/coverage-v8": "^2.1.9",
     "@vscode/vsce": "^3.9.2",
+    "esbuild": "^0.27.7",
     "eslint": "^8.57.1",
+    "postject": "1.0.0-alpha.6",
     "tsup": "^8.3.0",
     "typescript": "^5.9.3"
   },
