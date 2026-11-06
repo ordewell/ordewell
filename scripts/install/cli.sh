@@ -10,7 +10,8 @@
 # mismatch, then installs the `ordewell` binary into ~/.local/bin without sudo.
 # Running it again upgrades. It never edits a shell profile: when the install
 # folder is not on PATH it says which line to add. On Windows, install with
-# `npm install -g ordewell`.
+# `npm install -g ordewell`; so does musl Linux (Alpine), which the glibc-linked
+# binary cannot run on.
 #
 # Options:
 #   --version X.Y.Z   install that release instead of the latest (or ORDEWELL_VERSION)
@@ -91,7 +92,7 @@ Environment:
                          desktop.sh as its ORDEWELL_INSTALL_DIR (the CLI's
                          ORDEWELL_INSTALL_DIR is not passed on)
 
-On Windows, install with: npm install -g ordewell
+On Windows and on musl Linux (Alpine), install with: npm install -g ordewell
 EOF
 }
 
@@ -236,6 +237,32 @@ esac
 # the native build is the one to install.
 if [ "$os" = darwin ] && [ "$arch" = x64 ] && [ "$(sysctl -n sysctl.proc_translated 2>/dev/null || true)" = 1 ]; then
   arch=arm64
+fi
+
+# The Linux binaries are linked against glibc, so on musl (Alpine and many
+# Docker images) one would install and then fail with a bare "not found". ldd
+# names its libc on the first line it prints (musl's goes to stderr and exits
+# 1, so both are read); only without an answer from ldd are the musl loader
+# files looked for, since a glibc system can have the musl package installed.
+# ORDEWELL_TEST_LIBC (musl or glibc) is for the tests and is not documented.
+is_musl() {
+  case ${ORDEWELL_TEST_LIBC:-} in
+    musl) return 0 ;;
+    glibc) return 1 ;;
+  esac
+  if command -v ldd >/dev/null 2>&1; then
+    case $(ldd --version 2>&1 || true) in
+      *[Mm][Uu][Ss][Ll]*) return 0 ;;
+      *[Gg][Ll][Ii][Bb][Cc]*|*'GNU libc'*) return 1 ;;
+    esac
+  fi
+  for loader in /lib/ld-musl-*.so.1 /usr/lib/ld-musl-*.so.1; do
+    [ -e "$loader" ] && return 0
+  done
+  return 1
+}
+if [ "$os" = linux ] && is_musl; then
+  die "the standalone binary needs a glibc-based Linux, and this system uses musl (Alpine, for example). Install with npm instead: npm install -g ordewell (Node.js 20.3 or newer)"
 fi
 
 if [ -n "$version" ]; then

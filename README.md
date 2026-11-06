@@ -72,7 +72,8 @@ curl -fsSL https://ordewell.ai/install.sh | sh
 It installs to `~/.local/bin/ordewell`; set `ORDEWELL_INSTALL_DIR` to put it
 elsewhere. Pass options after `sh -s --`: `--version X.Y.Z` for a specific
 release, `--dry-run` to see what it would do and `--uninstall` to remove it.
-With Homebrew:
+The binary is for glibc-based Linux; Alpine and other musl systems install with
+npm (below). With Homebrew:
 
 ```bash
 brew install ordewell/tap/ordewell

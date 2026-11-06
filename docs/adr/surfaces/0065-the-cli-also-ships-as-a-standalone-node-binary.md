@@ -123,7 +123,11 @@ is already served by `npm`.
   `ORDEWELL_INSTALL_DIR` instead. On a release without the desktop app (C10),
   `--desktop` installs the CLI, says the release has no desktop app yet and
   exits 1. It reports whether `git` is present (recommended, not required) and
-  which coding agents it finds, and installs neither. It lowers no OS protection, as the
+  which coding agents it finds, and installs neither. The Linux binaries are
+  linked against glibc, so on musl Linux (Alpine) it installs nothing, `--dry-run`
+  included, and exits 1 pointing to `npm install -g ordewell`; `--uninstall`
+  still works. Musl is read from `ldd --version`, and from the musl loader files only when
+  `ldd` gives no answer. It lowers no OS protection, as the
   desktop installers do (ADR-0063 H10).
 
 - **A Homebrew formula, and the desktop cask under its own name (C8).** A
@@ -293,3 +297,4 @@ their unit tests run under plain Node.
 - 2026-11-06 — C10: the desktop app is in a release only when `ORDEWELL_RELEASE_DESKTOP` is `true`; C5, C7 and C8 say what a release without it carries.
 - 2026-11-06 — C11: a Release is created without the latest mark and marked latest only once `SHA256SUMS` is attached, and only when it is the highest version; C5 says so.
 - 2026-11-06 — C8: the formula publishes with either tap credential, the token or the `HOMEBREW_TAP_DEPLOY_KEY` deploy key (ADR-0063 H11).
+- 2026-11-06 — C7: the installer refuses musl Linux (Alpine) and points to npm.

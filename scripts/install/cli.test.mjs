@@ -102,7 +102,9 @@ function run(args, { env = {}, shims = [] } = {}) {
   const home = env.HOME ?? scratch('home');
   const path = [...shims, toolbox].join(delimiter);
   const result = spawnSync(REAL_SH, [SH, ...args], {
-    env: { PATH: path, HOME: home, TMPDIR: tmpdir(), ...env },
+    // The libc is glibc unless a test says otherwise (an empty value leaves the real detection on),
+    // so a suite run on Alpine itself still tests the glibc install.
+    env: { PATH: path, HOME: home, TMPDIR: tmpdir(), ORDEWELL_TEST_LIBC: 'glibc', ...env },
     encoding: 'utf8',
   });
   return { ...result, home };
@@ -200,6 +202,69 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
       assert.match(other.stderr, /npm install -g ordewell/);
       assert.match(run(['--dry-run'], { shims: [unameShim('FreeBSD', 'x86_64')] }).stderr, /npm install -g ordewell/);
       assert.match(run(['--dry-run'], { shims: [unameShim('Linux', 'i686')] }).stderr, /no Ordewell build for the i686/);
+    });
+  });
+
+  describe('musl Linux (Alpine)', () => {
+    const MUSL_LDD = 'echo "musl libc (x86_64)" >&2; echo "Version 1.2.5" >&2; exit 1';
+    const GLIBC_LDD = 'echo "ldd (Debian GLIBC 2.36-9+deb12u7) 2.36"';
+
+    it('refuses to install, says why and points to npm, and leaves nothing behind', () => {
+      const { status, stdout, stderr, target } = install([], { env: { ORDEWELL_TEST_LIBC: 'musl' } });
+      assert.equal(status, 1);
+      assert.equal(stdout, '');
+      assert.match(stderr, /glibc/);
+      assert.match(stderr, /npm install -g ordewell/);
+      assert.match(stderr, /Node\.js 20\.3 or newer/);
+      assert.ok(!existsSync(target));
+    });
+
+    it('is recognised from ldd saying musl, with no override', () => {
+      const result = install([], { shims: [commands({ ldd: MUSL_LDD })], env: { ORDEWELL_TEST_LIBC: '' } });
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /npm install -g ordewell/);
+      assert.ok(!existsSync(result.target));
+    });
+
+    it('installs as before when ldd says glibc, whatever loader files are around', () => {
+      const result = install([], { shims: [commands({ ldd: GLIBC_LDD })], env: { ORDEWELL_TEST_LIBC: '' } });
+      assert.equal(result.status, 0, result.stderr);
+      assert.ok(existsSync(join(result.target, 'ordewell')));
+    });
+
+    it('installs as before on glibc', () => {
+      const result = install([], { env: { ORDEWELL_TEST_LIBC: 'glibc' } });
+      assert.equal(result.status, 0, result.stderr);
+      assert.ok(existsSync(join(result.target, 'ordewell')));
+    });
+
+    it('does not apply to macOS', () => {
+      const result = run(['--dry-run'], { shims: [unameShim('Darwin', 'arm64')], env: { ORDEWELL_TEST_LIBC: 'musl' } });
+      assert.equal(result.status, 0, result.stderr);
+    });
+
+    it('--dry-run reports the same and exits the same way', () => {
+      const result = run(['--dry-run'], { shims: [linux()], env: { ORDEWELL_TEST_LIBC: 'musl' } });
+      assert.equal(result.status, 1);
+      assert.equal(result.stdout, '');
+      assert.match(result.stderr, /npm install -g ordewell/);
+    });
+
+    it('--uninstall still works', () => {
+      const home = scratch('home');
+      const first = install([], { home });
+      assert.equal(first.status, 0, first.stderr);
+      const result = run(['--uninstall'], { shims: [linux()], env: { HOME: home, ORDEWELL_INSTALL_DIR: first.target, ORDEWELL_TEST_LIBC: 'musl' } });
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /Removed /);
+      assert.ok(!existsSync(join(first.target, 'ordewell')));
+    });
+
+    it('runs under dash', (t) => {
+      if (!has('dash')) return t.skip('dash is not installed');
+      const result = spawnSync(whichSh('dash'), [SH, '--dry-run'], { env: { PATH: [linux(), commands({ ldd: MUSL_LDD }), toolbox].join(delimiter), HOME: scratch('home') }, encoding: 'utf8' });
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /npm install -g ordewell/);
     });
   });
 

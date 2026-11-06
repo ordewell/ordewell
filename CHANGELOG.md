@@ -115,7 +115,9 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   download against the release's checksums. When an older `ordewell` from npm,
   Homebrew or another folder comes first on PATH, a relative PATH entry
   included, it names that copy and says how to use the new one. `npm install -g ordewell` and
-  `npx ordewell` work as before, and remain the way to install on Windows.
+  `npx ordewell` work as before, and remain the way to install on Windows and
+  on musl Linux such as Alpine, where the installer stops and says so instead of
+  leaving a binary that cannot start.
   Node.js is no longer a requirement of the binary, and git is optional: without
   it tasks run in the folder directly, and git 2.38 or newer adds worktrees,
   delegated tasks and Merge all.
