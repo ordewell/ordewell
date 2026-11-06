@@ -8,12 +8,12 @@ import {
   daemonPidFilePath,
   globalDataDir,
   isDaemonRunning,
+  isSea,
   readPidFile,
   resolveDaemonPort,
   stopDaemonAt,
 } from '@ordewell/core';
 import { flag } from './utils/args';
-import { runningAsSea } from './seaMode';
 
 // The probe, token and PID-file helpers live in core so the desktop app reads
 // the same files the same way (ADR-0063 H2); this module keeps the CLI's
@@ -53,7 +53,7 @@ function getWebServerPath(): string {
 export function daemonCommand(
   daemonArgs: string[],
   serverPath: () => string,
-  sea: boolean = runningAsSea(),
+  sea: boolean = isSea(),
 ): { file: string; args: string[] } {
   return { file: process.execPath, args: sea ? ['__daemon', ...daemonArgs] : [serverPath(), ...daemonArgs] };
 }
