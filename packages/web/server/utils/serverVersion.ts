@@ -10,7 +10,8 @@ let cached: string | undefined;
  * `..`: the tsup bundle runs from `dist/server/` and the tests from
  * `server/utils/`, and a fixed hop count breaks on whichever moves next.
  * Inside the standalone binary there is no manifest to walk to, and the daemon
- * is the binary itself, so its version is the one the build embedded.
+ * is the binary itself, so its version is the one the build embedded
+ * (ADR-0065 C2, C3).
  */
 export function serverVersion(from: string = __dirname, sea: SeaDeps = {}): string {
   const embedded = embeddedVersion(sea);
