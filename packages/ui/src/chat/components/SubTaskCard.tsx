@@ -136,7 +136,7 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
 
           {/* Confirmed by the host's modal — a webview `confirm()` is sandboxed away. */}
           {!isExecuting && onRemoveTask && (
-            <button className="task-remove-btn" onClick={(e) => { e.stopPropagation(); onRemoveTask(task.id); }} title="Remove subtask">&#10005;</button>
+            <button className="task-remove-btn" onClick={(e) => { e.stopPropagation(); onRemoveTask(task.id); }} title="Remove subtask" aria-label={`Remove subtask ${task.title}`}><span aria-hidden="true">&#10005;</span></button>
           )}
         </div>
 

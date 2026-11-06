@@ -10,6 +10,9 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
+- **The remove buttons on tasks and subtasks have accessible names.** Both
+  now read "Remove task <title>" / "Remove subtask <title>" to a screen
+  reader, in the VS Code extension and the desktop app (#130).
 - **An unusable containers setting is refused at once.** A setting that can
   never be used, or one on a host where containers do not run, now refuses the
   task right away, instead of after the Docker engine answers, which could take
