@@ -165,7 +165,12 @@ holds the token.**
   `releases/latest/download/<name>` always resolves. The one `SHA256SUMS`, in
   `sha256sum -c` format, covers every installer (versioned and fixed name), the
   CLI archives and `install.sh`; the job uploads it last, so a release that has
-  it has everything it lists. The script refuses a release that lacks a fixed asset or mixes versions. `latest*.yml`
+  it has everything it lists, and only then marks the Release latest, as
+  ADR-0065 C11 says: GitHub's latest is always a complete release. electron-updater
+  (H9) takes the tag of `releases/latest` and reads that Release's
+  `latest*.yml`, so an installed app is offered a version only once its
+  release is complete; desktop-build.yml attaches `latest*.yml` with the
+  installers, before the mark. The script refuses a release that lacks a fixed asset or mixes versions. `latest*.yml`
   and the blockmaps keep their own names and are not listed: electron-updater
   reads them by those names. `scripts/install/desktop.sh` (macOS and Linux) and
   `scripts/install/desktop.ps1` (Windows, PowerShell 5.1 and 7) download by
@@ -512,3 +517,4 @@ allows script only from the app's own bundle, with no inline script.
 - 2026-11-05 — renumbered before publication to avoid a collision with main.
 - 2026-11-06 — H10, H11: ADR-0065 puts the CLI archives and `install.sh` in the release; one `SHA256SUMS` over all of it and the fixed-name copies are written by `release.yml`'s `release-assets` job after both builds, and the cask is renamed `ordewell-desktop` beside a new `ordewell` formula.
 - 2026-11-06 — H10, H11: a release carries the app only when `ORDEWELL_RELEASE_DESKTOP` is `true` (ADR-0065 C10); without it there are no installers, no cask and no winget submission.
+- 2026-11-06 — H10: the Release becomes latest only once `SHA256SUMS` is attached (ADR-0065 C11), so the updater and the fixed-name links never see an incomplete release.

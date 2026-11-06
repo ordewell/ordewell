@@ -95,7 +95,8 @@ is already served by `npm`.
   over the desktop installers, the CLI archives and `install.sh` after the CLI
   build, and the desktop build when the release carries the app (C10), have
   attached their files, and uploads it last, so a release that has the file has
-  everything it lists. Whoever installs checks
+  everything it lists; only then is the Release marked latest (C11). Whoever
+  installs checks
   the SHA-256 against that file from the same release; as in
   [ADR-0063 H10](0063-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)
   it proves the download is whole, and signing is what proves who made it.
@@ -167,6 +168,26 @@ is already served by `npm`.
   install text the README and `docs/desktop/README.md` hold back while it is
   off.
 
+- **A Release becomes latest only once it is complete (C11).**
+  `releases/latest/download/` is what `ordewell.ai/install.sh` (C6) redirects
+  to, what the installer fetches the archives and `SHA256SUMS` from, and what
+  the binary's upgrade line (C9) and the desktop updater (ADR-0063 H9) read, so
+  GitHub's latest Release must always be one that holds every file they ask
+  for. `github-release` therefore creates the Release with `--latest=false`,
+  and leaves a Release that already exists as it is, mark included, and the
+  builds attach to a Release nobody is sent to. `release-assets` marks it
+  latest with `gh release edit --latest` right after `SHA256SUMS`, the last
+  file, is attached, and only when its tag is the highest semantic version
+  among the repository's published, non-draft, non-prerelease releases
+  (`scripts/release-latest.mjs`), so re-running an older tag's release never
+  takes latest back; a list that does not include the tag itself is a short
+  read and fails the step without marking anything. A `::notice::` says which
+  way it went. Until then, and for good if a build fails, latest stays on the
+  previous complete release, which keeps serving installs and upgrades. A tag
+  pinned with `--version` is read by tag, not through latest, and so are the
+  formula, the cask and the winget manifests, which `homebrew` and `winget`
+  render from `SHA256SUMS` downloaded by tag.
+
 ## Testing decisions
 
 The build and the installer are tested at their seams: `scripts/sea/build.mjs`
@@ -221,6 +242,17 @@ their unit tests run under plain Node.
   and a second tag pattern would be one more thing a release manager must get
   right each time. A repository variable is read in a job's `if`, changes
   without a commit, and stays as set until the app is ready.
+- **Letting `gh release create` mark the Release latest, as it does by
+  default.** Rejected: for the whole time the builds take, latest is a Release
+  with no `install.sh`, no archives and no `SHA256SUMS`, so every `curl
+  ordewell.ai/install.sh | sh` and every suggested upgrade 404s, and a failed
+  build leaves latest on that incomplete Release.
+- **Creating the Release as a draft and publishing it at the end.** Rejected:
+  it changes more than the mark. A draft has no public download URLs, so a
+  by-tag `--version` install cannot be tried while the release is built; the
+  attach jobs and the "already exists" re-run path would have to find a draft
+  by its tag; and publishing would still need the highest-version rule for a
+  re-run older tag. `--latest=false` changes only the mark.
 - **The binary for Windows too.** Deferred, not rejected: the TUI's Windows
   behaviour has its own measured quirks (ADR-0010), and npm works there today.
 
@@ -244,9 +276,16 @@ their unit tests run under plain Node.
   so `releases/latest/download/Ordewell-*` does not resolve and `desktop.sh` and
   `desktop.ps1` fail against the latest release until one carries the app.
 
+- While a release is being built, `releases/latest` and the version it
+  reports are still the previous release's: a user is offered the new version
+  only once it can be installed. A release that only fails to be marked (its
+  step failed after `SHA256SUMS`) is complete but not latest until
+  `release-assets` is re-run.
+
 ## History
 
 - 2026-11-06 — accepted.
 - 2026-11-06 — C7 names the installer's flags and variables; C8 says how the old `ordewell` cask is renamed in the tap.
 - 2026-11-06 — C4 names the CLI's signing narrowings: a base64 `CSC_LINK` and notarization by API key only.
 - 2026-11-06 — C10: the desktop app is in a release only when `ORDEWELL_RELEASE_DESKTOP` is `true`; C5, C7 and C8 say what a release without it carries.
+- 2026-11-06 — C11: a Release is created without the latest mark and marked latest only once `SHA256SUMS` is attached, and only when it is the highest version; C5 says so.

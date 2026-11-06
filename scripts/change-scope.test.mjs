@@ -175,6 +175,7 @@ describe('the full fallback', () => {
     ['scripts/install/desktop.ps1', 'the Windows one-line installer'],
     ['scripts/install/desktop.test.mjs', 'the installers\' tests'],
     ['scripts/desktop-release-assets.mjs', 'writes the fixed-name assets and SHA256SUMS the installers read'],
+    ['scripts/release-latest.mjs', 'decides which release release.yml marks latest'],
     ['scripts/render-package-manifests.mjs', 'renders the Homebrew formula and cask and the winget manifests from a release'],
     ['scripts/render-package-manifests.test.mjs', 'the package-manager manifests\' tests'],
     ['packaging/homebrew/ordewell.rb.tmpl', 'the Homebrew formula template'],

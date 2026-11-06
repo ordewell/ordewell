@@ -101,7 +101,8 @@ export function fullScope(reason, workspaces) {
  *
  * Nothing under scripts/ belongs to a workspace, so the installers
  * (scripts/install/), the release-asset script they read
- * (scripts/desktop-release-assets.mjs, ADR-0063 H10) and the package-manager
+ * (scripts/desktop-release-assets.mjs, ADR-0063 H10), the script that picks
+ * the release marked latest (scripts/release-latest.mjs, ADR-0065 C11) and the package-manager
  * manifests a release renders (packaging/, scripts/render-package-manifests.mjs,
  * ADR-0063 H11, ADR-0065) mean the full run: their tests run in the bench step, which a
  * narrowed run could skip.
