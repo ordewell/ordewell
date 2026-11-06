@@ -8,6 +8,13 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **An unusable containers setting is refused at once.** A setting that can
+  never be used, or one on a host where containers do not run, now refuses the
+  task right away, instead of after the Docker engine answers, which could take
+  minutes when Docker was slow or stuck.
+
 ## [0.13.0] - 2026-11-06
 
 ### Added

@@ -85,9 +85,7 @@ const CGROUP_V1 = 'Boot the host with cgroup v2, by adding `systemd.unified_cgro
 export async function inspectEngine({ cli, platform = process.platform }: PreflightDeps): Promise<EngineCheck> {
   const install = INSTALL[platform];
   const start = START[platform];
-  if (install === undefined || start === undefined) {
-    return refused('platform-unsupported', `Containers have only been proven on Linux and macOS, and this host is ${platform}.`, 'Run Ordewell on Linux, or on a Mac with Docker Desktop or Colima.');
-  }
+  if (install === undefined || start === undefined) return { problems: platformProblems(platform) };
   const ask = (args: readonly string[]) => cli.call(args, { timeoutMs: ASK_MS });
   const context = await ask(['context', 'inspect', '--format', '{{.Endpoints.docker.Host}}']);
   if (context.code === -1) return refused('docker-missing', 'The docker command was not found.', install);
@@ -110,6 +108,20 @@ export async function inspectEngine({ cli, platform = process.platform }: Prefli
   }
   if (cgroup === '1') return refused('cgroup-v1', 'This engine uses cgroup v1, and the memory limit can only be proven on cgroup v2.', CGROUP_V1);
   return { problems: [], engine: { version: version.stdout.trim(), endpoint, memoryBytes } };
+}
+
+function platformProblems(platform: NodeJS.Platform): ContainerProblem[] {
+  if (INSTALL[platform] !== undefined && START[platform] !== undefined) return [];
+  return [problem('platform-unsupported', `Containers have only been proven on Linux and macOS, and this host is ${platform}.`, 'Run Ordewell on Linux, or on a Mac with Docker Desktop or Colima.')];
+}
+
+/**
+ * What refuses every start whatever the engine would say: a host containers have
+ * not been proven on, and a setting that cannot be used as it stands. It asks
+ * docker nothing, so a start it refuses waits on no engine, however slow.
+ */
+export function standingProblems(raw: unknown, platform: NodeJS.Platform = process.platform): ContainerProblem[] {
+  return [...platformProblems(platform), ...readSetting(raw).problems];
 }
 
 /**
