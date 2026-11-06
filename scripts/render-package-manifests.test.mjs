@@ -1,18 +1,22 @@
-// The cask and winget manifests the release renders (ADR-0063 H11), on fixed
-// inputs: the templates are the ones the workflow uses, so a placeholder that
+// The Homebrew formula and cask and the winget manifests the release renders
+// (ADR-0063 H11, ADR-0065), on fixed inputs: the templates are the ones the workflow uses, so a placeholder that
 // moved or a URL that stopped matching the release's names fails here.
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after } from 'node:test';
 import { describe, it } from 'node:test';
 import {
   CASK,
+  FORMULA,
   WINGET_TEMPLATES,
+  cliArchives,
   parseSums,
   releaseInstallers,
   renderCask,
+  renderFormula,
   renderManifests,
   renderWinget,
   wingetDirectory,
@@ -24,6 +28,10 @@ const HASH = {
   macArm64: '1'.repeat(64),
   macX64: '2'.repeat(64),
   winX64: '3'.repeat(64),
+  darwinArm64: '4'.repeat(64),
+  darwinX64: '5'.repeat(64),
+  linuxArm64: '6'.repeat(64),
+  linuxX64: '7'.repeat(64),
 };
 
 /**
@@ -38,6 +46,15 @@ const sumsText = (changes = {}) => {
     ['Ordewell-mac-arm64.dmg', HASH.macArm64],
     ['Ordewell-mac-x64.dmg', HASH.macX64],
     ['Ordewell-win-x64.exe', HASH.winX64],
+    [`ordewell-${VERSION}-darwin-arm64.tar.gz`, HASH.darwinArm64],
+    [`ordewell-${VERSION}-darwin-x64.tar.gz`, HASH.darwinX64],
+    [`ordewell-${VERSION}-linux-arm64.tar.gz`, HASH.linuxArm64],
+    [`ordewell-${VERSION}-linux-x64.tar.gz`, HASH.linuxX64],
+    ['ordewell-darwin-arm64.tar.gz', HASH.darwinArm64],
+    ['ordewell-darwin-x64.tar.gz', HASH.darwinX64],
+    ['ordewell-linux-arm64.tar.gz', HASH.linuxArm64],
+    ['ordewell-linux-x64.tar.gz', HASH.linuxX64],
+    ['install.sh', '8'.repeat(64)],
   ];
   return `${lines
     .filter(([name]) => changes[name] !== null)
@@ -87,11 +104,94 @@ describe('the installers a release publishes', () => {
   });
 });
 
+describe('the CLI archives a release publishes', () => {
+  const archives = () => cliArchives(VERSION, parseSums(sumsText()));
+
+  it('names the four versioned archives the formula downloads', () => {
+    assert.deepEqual(archives(), {
+      darwinArm64: { name: `ordewell-${VERSION}-darwin-arm64.tar.gz`, sha256: HASH.darwinArm64 },
+      darwinX64: { name: `ordewell-${VERSION}-darwin-x64.tar.gz`, sha256: HASH.darwinX64 },
+      linuxArm64: { name: `ordewell-${VERSION}-linux-arm64.tar.gz`, sha256: HASH.linuxArm64 },
+      linuxX64: { name: `ordewell-${VERSION}-linux-x64.tar.gz`, sha256: HASH.linuxX64 },
+    });
+  });
+
+  it('refuses a version that is not x.y.z', () => {
+    assert.throws(() => cliArchives('0.0.0-beta.1', parseSums(sumsText())), /is not a version/);
+  });
+
+  it('refuses a release whose SHA256SUMS lacks any one archive, naming it', () => {
+    for (const target of ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64']) {
+      const name = `ordewell-${VERSION}-${target}.tar.gz`;
+      assert.throws(() => cliArchives(VERSION, parseSums(sumsText({ [name]: null }))), new RegExp(`no ${name.replaceAll('.', '\\.')}`), target);
+    }
+  });
+
+  it('refuses a fixed copy that is not the versioned archive it duplicates', () => {
+    const sums = parseSums(sumsText({ 'ordewell-linux-arm64.tar.gz': '9'.repeat(64) }));
+    assert.throws(() => cliArchives(VERSION, sums), /ordewell-linux-arm64\.tar\.gz and ordewell-0\.0\.0-linux-arm64\.tar\.gz disagree on the hash/);
+  });
+
+  it('takes a release whose fixed copies are not listed, as the cask does', () => {
+    const fixed = ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64'].map((t) => `ordewell-${t}.tar.gz`);
+    const sums = parseSums(sumsText(Object.fromEntries(fixed.map((name) => [name, null]))));
+    assert.deepEqual(archives(), cliArchives(VERSION, sums));
+  });
+
+  it('refuses a hash that is not 64 hex digits in the sums', () => {
+    const sums = new Map([[`ordewell-${VERSION}-darwin-arm64.tar.gz`, 'zz']]);
+    assert.throws(() => cliArchives(VERSION, sums), /no sha256/);
+  });
+});
+
+describe('the Homebrew formula', () => {
+  const formula = renderFormula(VERSION, cliArchives(VERSION, parseSums(sumsText())));
+
+  it('is Formula/ordewell.rb in the tap, a class named for the token', () => {
+    assert.equal(FORMULA.path, 'homebrew/Formula/ordewell.rb');
+    assert.match(formula, /^class Ordewell < Formula$/m);
+    assert.doesNotMatch(formula, /\{\{/);
+    assert.match(readFileSync('packaging/homebrew/ordewell.rb.tmpl', 'utf8'), /\{\{sha256_linux_x64\}\}/, 'the template is a template');
+  });
+
+  it('states what the tool is, where it lives and its licence', () => {
+    assert.ok(formula.includes('desc "Turn one goal into an ordered plan of coding-agent tasks"'));
+    assert.ok(formula.includes('homepage "https://ordewell.ai/"'));
+    assert.match(formula, /^ {2}version "0\.0\.0"$/m);
+    const licence = /^\s*(Apache License)/m.exec(readFileSync('LICENSE', 'utf8'));
+    assert.ok(licence, 'LICENSE is the Apache licence');
+    assert.match(formula, /^ {2}license "Apache-2\.0"$/m);
+  });
+
+  it('downloads the versioned archive of each platform with that archive\'s own checksum', () => {
+    const block = (os, cpu) => new RegExp(`on_${os} do\\n(?:.*\\n)*? {4}on_${cpu} do\\n {6}url "([^"]+)"\\n {6}sha256 "([0-9a-f]{64})"\\n {4}end`);
+    const expected = [
+      ['macos', 'arm', 'darwin-arm64', HASH.darwinArm64],
+      ['macos', 'intel', 'darwin-x64', HASH.darwinX64],
+      ['linux', 'arm', 'linux-arm64', HASH.linuxArm64],
+      ['linux', 'intel', 'linux-x64', HASH.linuxX64],
+    ];
+    for (const [os, cpu, target, hash] of expected) {
+      const section = formula.slice(formula.indexOf(`on_${os} do`));
+      const match = block(os, cpu).exec(section);
+      assert.ok(match, `${os} ${cpu}`);
+      assert.equal(match[1], `https://github.com/ordewell/ordewell/releases/download/v#{version}/ordewell-#{version}-${target}.tar.gz`);
+      assert.equal(match[2], hash);
+    }
+  });
+
+  it('installs the one executable, checks its version, and follows the latest release', () => {
+    assert.match(formula, /^ {2}def install\n {4}bin\.install "ordewell"\n {2}end$/m);
+    assert.match(formula, /^ {2}test do\n {4}assert_match version\.to_s, shell_output\("#\{bin\}\/ordewell --version"\)\n {2}end$/m);
+    assert.match(formula, /^ {2}livecheck do\n {4}url :stable\n {4}strategy :github_latest\n {2}end$/m);
+  });
+});
+
 describe('the Homebrew cask', () => {
   const cask = renderCask(VERSION, installers());
 
   it('pins the version, both architectures and their checksums', () => {
-    assert.match(cask, /^cask "ordewell" do$/m);
+    assert.match(cask, /^cask "ordewell-desktop" do$/m);
     assert.match(cask, /^ {2}arch arm: "arm64", intel: "x64"$/m);
     assert.match(cask, /^ {2}version "0\.0\.0"$/m);
     assert.match(cask, new RegExp(`^ {2}sha256 arm: {3}"${HASH.macArm64}",\\n {9}intel: "${HASH.macX64}"$`, 'm'));
@@ -118,9 +218,9 @@ describe('the Homebrew cask', () => {
   });
 
   it('is a cask file for the tap, and leaves no placeholder behind', () => {
-    assert.equal(CASK.path, 'homebrew/Casks/ordewell.rb');
+    assert.equal(CASK.path, 'homebrew/Casks/ordewell-desktop.rb');
     assert.doesNotMatch(cask, /\{\{/);
-    assert.match(readFileSync('packaging/homebrew/ordewell.rb.tmpl', 'utf8'), /\{\{version\}\}/, 'the template is a template');
+    assert.match(readFileSync('packaging/homebrew/ordewell-desktop.rb.tmpl', 'utf8'), /\{\{version\}\}/, 'the template is a template');
   });
 });
 
@@ -181,11 +281,34 @@ describe('the winget manifests', () => {
 });
 
 describe('rendering a release', () => {
-  it('is the cask and the three winget manifests, from the version and the sums', () => {
+  const tapAndWinget = [FORMULA.path, CASK.path, ...WINGET_TEMPLATES.map(({ name }) => `${wingetDirectory(VERSION)}/${name}`)];
+
+  it('is the formula, the cask and the three winget manifests, from the version and the sums', () => {
     const files = renderManifests(VERSION, sumsText());
-    assert.equal(files.length, 4);
-    assert.equal(files[0].path, 'homebrew/Casks/ordewell.rb');
-    assert.deepEqual(files.slice(1).map(({ path }) => path), WINGET_TEMPLATES.map(({ name }) => `${wingetDirectory(VERSION)}/${name}`));
+    assert.deepEqual(files.map(({ path }) => path), tapAndWinget);
+    assert.equal(FORMULA.path, 'homebrew/Formula/ordewell.rb');
+    assert.equal(CASK.path, 'homebrew/Casks/ordewell-desktop.rb');
+  });
+
+  it('renders one target alone, which needs only the files that target names', () => {
+    const noDmgs = sumsText({ [`Ordewell-${VERSION}-mac-arm64.dmg`]: null, [`Ordewell-${VERSION}-mac-x64.dmg`]: null });
+    assert.deepEqual(renderManifests(VERSION, noDmgs, { only: ['formula'] }).map(({ path }) => path), [FORMULA.path]);
+    assert.throws(() => renderManifests(VERSION, noDmgs, { only: ['cask'] }), /no Ordewell-0\.0\.0-mac-arm64\.dmg/);
+    assert.throws(() => renderManifests(VERSION, noDmgs), /no Ordewell-0\.0\.0-mac-arm64\.dmg/);
+
+    const noArchives = sumsText({ [`ordewell-${VERSION}-linux-x64.tar.gz`]: null });
+    assert.deepEqual(renderManifests(VERSION, noArchives, { only: ['cask'] }).map(({ path }) => path), [CASK.path]);
+    assert.deepEqual(renderManifests(VERSION, noArchives, { only: ['winget'] }).map(({ path }) => path), tapAndWinget.slice(2));
+    assert.throws(() => renderManifests(VERSION, noArchives, { only: ['formula'] }), /no ordewell-0\.0\.0-linux-x64\.tar\.gz/);
+  });
+
+  it('fails the whole render, not just one file, when a hash disagrees', () => {
+    assert.throws(() => renderManifests(VERSION, sumsText({ 'ordewell-darwin-x64.tar.gz': '9'.repeat(64) })), /disagree on the hash/);
+    assert.throws(() => renderManifests(VERSION, sumsText({ 'Ordewell-mac-x64.dmg': '9'.repeat(64) })), /disagree on the hash/);
+  });
+
+  it('refuses a target it does not know', () => {
+    assert.throws(() => renderManifests(VERSION, sumsText(), { only: ['scoop'] }), /unknown target "scoop"/);
   });
 
   const made = [];
@@ -195,9 +318,49 @@ describe('rendering a release', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ordewell-manifests-'));
     made.push(dir);
     const written = writeManifests(dir, renderManifests(VERSION, sumsText()));
-    assert.equal(written.length, 4);
-    assert.match(readFileSync(join(dir, 'homebrew', 'Casks', 'ordewell.rb'), 'utf8'), /^cask "ordewell" do$/m);
+    assert.equal(written.length, 5);
+    assert.match(readFileSync(join(dir, 'homebrew', 'Casks', 'ordewell-desktop.rb'), 'utf8'), /^cask "ordewell-desktop" do$/m);
+    assert.match(readFileSync(join(dir, 'homebrew', 'Formula', 'ordewell.rb'), 'utf8'), /^class Ordewell < Formula$/m);
     const version = readFileSync(join(dir, 'winget', 'manifests', 'o', 'Ordewell', 'Ordewell', VERSION, 'Ordewell.Ordewell.yaml'), 'utf8');
     assert.match(version, /^PackageVersion: 0\.0\.0$/m);
+  });
+
+  const render = (dir, ...args) => {
+    const sums = join(dir, 'SHA256SUMS');
+    writeFileSync(sums, sumsText());
+    return spawnSync(process.execPath, ['scripts/render-package-manifests.mjs', '--version', VERSION, '--sums', sums, ...args], { encoding: 'utf8' });
+  };
+
+  it('is a command: --only picks the files, --out names the folder, a bad flag exits 2', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ordewell-manifests-cli-'));
+    made.push(dir);
+    const out = join(dir, 'out');
+    const formula = render(dir, '--only', 'formula', '--out', out);
+    assert.equal(formula.status, 0, formula.stderr);
+    assert.deepEqual(readdirSync(out, { recursive: true }).map((p) => p.replaceAll('\\', '/')).filter((p) => p.endsWith('.rb')), ['homebrew/Formula/ordewell.rb']);
+    const both = render(dir, '--only', 'formula', '--only', 'cask');
+    assert.equal(both.status, 0, both.stderr);
+    assert.match(both.stdout, /^==> homebrew\/Formula\/ordewell\.rb$/m);
+    assert.match(both.stdout, /^==> homebrew\/Casks\/ordewell-desktop\.rb$/m);
+    assert.doesNotMatch(both.stdout, /==> winget/);
+    const bad = render(dir, '--only', 'scoop');
+    assert.equal(bad.status, 1);
+    assert.match(bad.stderr, /unknown target "scoop"/);
+    assert.equal(render(dir, '--only').status, 2);
+  });
+
+  // The syntax check is the only thing here that needs Ruby, which Windows runners and
+  // most dev machines lack; it is skipped, not faked, when `ruby` is not on PATH.
+  const ruby = spawnSync('ruby', ['-v'], { encoding: 'utf8' });
+  const hasRuby = ruby.status === 0;
+  it('renders Ruby that `ruby -c` accepts', { skip: hasRuby ? false : 'ruby is not on PATH' }, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ordewell-ruby-'));
+    made.push(dir);
+    for (const { path, text } of renderManifests(VERSION, sumsText(), { only: ['formula', 'cask'] })) {
+      const file = join(dir, path.slice(path.lastIndexOf('/') + 1));
+      writeFileSync(file, text);
+      const check = spawnSync('ruby', ['-c', file], { encoding: 'utf8' });
+      assert.equal(check.status, 0, `${path}: ${check.stdout}${check.stderr}`);
+    }
   });
 });

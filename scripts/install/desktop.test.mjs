@@ -9,7 +9,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import { after, describe, it } from 'node:test';
-import { FIXED_ASSETS, readInstallers, writeReleaseAssets } from '../desktop-release-assets.mjs';
+import { CLI_FIXED_ASSETS, FIXED_ASSETS, INSTALL_SCRIPT, readInstallers, writeReleaseAssets } from '../desktop-release-assets.mjs';
 
 const SH = resolve('scripts/install/desktop.sh');
 const PS1 = resolve('scripts/install/desktop.ps1');
@@ -41,6 +41,15 @@ const INSTALLERS = [
   `Ordewell-${VERSION}-linux-x64.deb`,
 ];
 
+/** The CLI's four archives and the installer script, which the release also carries (ADR-0065). */
+const CLI_ARCHIVES = ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64'].map((target) => `ordewell-${VERSION}-${target}.tar.gz`);
+const CLI_FIXED = ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64'].map((target) => `ordewell-${target}.tar.gz`);
+
+/** Writes the CLI archives and install.sh a release holds next to the desktop installers. */
+function writeCli(dir) {
+  for (const name of [...CLI_ARCHIVES, 'install.sh']) write(join(dir, name), `contents of ${name}\n`);
+}
+
 /** A fake `uname`, so one machine can play every OS and architecture. */
 function unameShim(os, machine) {
   const bin = scratch('shim');
@@ -63,6 +72,7 @@ async function release(contents = {}) {
   for (const name of INSTALLERS) {
     write(join(dir, name), contents[name] ?? (name.endsWith('.AppImage') ? FAKE_APPIMAGE : `contents of ${name}\n`));
   }
+  writeCli(dir);
   await writeReleaseAssets(dir);
   return dir;
 }
@@ -94,7 +104,7 @@ describe('the release assets script', () => {
     for (const name of FIXED_ASSETS) assert.ok(existsSync(join(dir, name)), name);
     const sums = readFileSync(join(dir, 'SHA256SUMS'), 'utf8').trimEnd().split('\n');
     const names = sums.map((line) => line.replace(/^[0-9a-f]{64} {2}/, ''));
-    for (const name of [...INSTALLERS, ...FIXED_ASSETS]) assert.ok(names.includes(name), `${name} is in SHA256SUMS`);
+    for (const name of [...INSTALLERS, ...FIXED_ASSETS, ...CLI_ARCHIVES, ...CLI_FIXED, 'install.sh']) assert.ok(names.includes(name), `${name} is in SHA256SUMS`);
     assert.ok(!names.includes('SHA256SUMS'));
     assert.deepEqual(names, [...names].sort());
     const hash = (name) => sums.find((line) => line.endsWith(`  ${name}`)).slice(0, 64);
@@ -104,6 +114,56 @@ describe('the release assets script', () => {
       const check = spawnSync('shasum', ['-a', '256', '-c', 'SHA256SUMS'], { cwd: dir, encoding: 'utf8' });
       assert.equal(check.status, 0, check.stdout + check.stderr);
     }
+  });
+
+  it('names the four CLI fixed copies and the installer script', () => {
+    assert.deepEqual([...CLI_FIXED_ASSETS].sort(), [...CLI_FIXED].sort());
+    assert.equal(INSTALL_SCRIPT, 'install.sh');
+  });
+
+  it('reads the CLI archives, versioned to fixed, and leaves a fixed name or an unknown platform alone', () => {
+    const { installers, claimed } = readInstallers([...CLI_ARCHIVES, ...CLI_FIXED, 'ordewell-9.8.7-win32-x64.tar.gz', 'ordewell-9.8.7-linux-x64.zip']);
+    assert.equal(installers.length, CLI_ARCHIVES.length);
+    assert.deepEqual([...claimed.keys()].sort(), [...CLI_FIXED].sort());
+    assert.equal(claimed.get('ordewell-linux-arm64.tar.gz').name, `ordewell-${VERSION}-linux-arm64.tar.gz`);
+    assert.equal(claimed.get('ordewell-linux-arm64.tar.gz').version, VERSION);
+  });
+
+  it('refuses two versions of one CLI archive', () => {
+    assert.throws(() => readInstallers(['ordewell-1.0.0-linux-x64.tar.gz', 'ordewell-1.0.1-linux-x64.tar.gz']), /would both become ordewell-linux-x64\.tar\.gz/);
+  });
+
+  it('writes the four CLI fixed copies byte for byte, and lists install.sh', async () => {
+    const dir = await release();
+    for (const [i, name] of CLI_FIXED.entries()) {
+      assert.equal(readFileSync(join(dir, name), 'utf8'), readFileSync(join(dir, CLI_ARCHIVES[i]), 'utf8'));
+    }
+    const names = readFileSync(join(dir, 'SHA256SUMS'), 'utf8').trimEnd().split('\n').map((line) => line.replace(/^[0-9a-f]{64} {2}/, ''));
+    assert.equal(names.length, INSTALLERS.length + FIXED_ASSETS.length + CLI_ARCHIVES.length + CLI_FIXED.length + 1);
+  });
+
+  it('refuses a release without a CLI archive, without install.sh, or with a CLI version that differs', async () => {
+    const noArchive = await release();
+    rmSync(join(noArchive, `ordewell-${VERSION}-linux-arm64.tar.gz`));
+    await assert.rejects(writeReleaseAssets(noArchive), /missing .*ordewell-linux-arm64\.tar\.gz/);
+    const noScript = await release();
+    rmSync(join(noScript, 'install.sh'));
+    await assert.rejects(writeReleaseAssets(noScript), /missing .*install\.sh/);
+
+    const mixed = await release();
+    rmSync(join(mixed, `ordewell-${VERSION}-linux-x64.tar.gz`));
+    write(join(mixed, 'ordewell-1.0.0-linux-x64.tar.gz'), 'older');
+    await assert.rejects(writeReleaseAssets(mixed), /disagree on the version: .*(9\.8\.7.*1\.0\.0|1\.0\.0.*9\.8\.7)/);
+  });
+
+  it('lets --partial skip the CLI and install.sh, and still lists what a local folder has', async () => {
+    const dir = scratch('cli-only');
+    write(join(dir, `ordewell-${VERSION}-linux-x64.tar.gz`), 'tar');
+    write(join(dir, 'install.sh'), 'sh');
+    const partial = await writeReleaseAssets(dir, { partial: true });
+    assert.deepEqual(partial.fixed, ['ordewell-linux-x64.tar.gz']);
+    assert.deepEqual(partial.sums, ['install.sh', 'ordewell-9.8.7-linux-x64.tar.gz', 'ordewell-linux-x64.tar.gz']);
+    await assert.rejects(writeReleaseAssets(dir), /the release is missing/);
   });
 
   it('does not touch the update feeds', async () => {
@@ -372,6 +432,7 @@ describe('desktop.sh', () => {
       const dir = scratch('release');
       const dmg = dmgWith(marker);
       for (const name of INSTALLERS) write(join(dir, name), name.endsWith('.dmg') ? dmg : `contents of ${name}\n`);
+      writeCli(dir);
       await writeReleaseAssets(dir);
       return dir;
     }

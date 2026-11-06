@@ -255,7 +255,7 @@ describe('the package-manager jobs in release.yml (ADR-0063 H11)', () => {
     assert.match(publish, /notarized === true/);
     assert.match(publish, /::notice::the macOS build was not notarized/);
     assert.match(publish, /git clone --depth 1 "https:\/\/x-access-token:\$\{HOMEBREW_TAP_TOKEN\}@github\.com\/ordewell\/homebrew-tap\.git"/);
-    assert.match(publish, /cp rendered\/homebrew\/Casks\/ordewell\.rb tap\/Casks\/ordewell\.rb/);
+    assert.match(publish, /cp rendered\/homebrew\/Casks\/ordewell-desktop\.rb tap\/Casks\/ordewell-desktop\.rb/);
     assert.match(publish, /git -C tap remote set-url origin https:\/\/github\.com\/ordewell\/homebrew-tap\.git/);
     assert.match(publish, /git -C tap push origin HEAD/);
     assert.ok(publish.indexOf('remote set-url') < publish.indexOf('git -C tap commit'), 'the token is out of the remote before the commit');
