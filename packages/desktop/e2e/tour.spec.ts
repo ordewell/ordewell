@@ -19,7 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { bandDefaults, paneBounds } from '../src/renderer/frame/layout';
 import {
-  appEnv, DESKTOP, DETECTION_FAILED, fakedRunners, fakeDaemon, freePort, launchApp, makeSandbox, MIXED, MIXED_RUNNERS, NONE_INSTALLED, openFolder, removeSandbox, ROOT, startMock, untilListening,
+  appEnv, closeApp, DESKTOP, DETECTION_FAILED, fakedRunners, fakeDaemon, freePort, launchApp, makeSandbox, MIXED, MIXED_RUNNERS, NONE_INSTALLED, openFolder, removeSandbox, ROOT, startMock, untilListening,
   type Sandbox,
 } from './fixtures';
 import { CARD_SELECTORS, LIFT_MIN, liftChecks, TEXT_MIN, type LiftResult } from './surfaces';
@@ -885,14 +885,16 @@ test.beforeAll(() => {
 });
 
 test.afterAll(async () => {
+  const visible: unknown[] = [];
   for (const app of apps) {
     await stubDialogs(app).catch(() => undefined);
-    await app.close().catch(() => undefined);
+    await closeApp(app).catch((error: unknown) => { visible.push(error); });
   }
   for (const daemon of daemons) daemon.kill('SIGKILL');
   mock?.kill();
   for (const port of ports) await untilListening(port, false);
   if (sandbox) removeSandbox(sandbox);
+  if (visible.length) throw visible[0];
 });
 
 test('the visual tour', async () => {
@@ -1366,7 +1368,7 @@ test('the visual tour', async () => {
     return bridge.prefs.set('layouts', { [repo]: {} });
   }, box.repo).catch(() => undefined);
   await stubDialogs(app).catch(() => undefined);
-  await app.close().catch(() => undefined);
+  await closeApp(app);
   apps.splice(apps.indexOf(app), 1);
   await untilListening(ownedPort, false);
 
@@ -1533,7 +1535,7 @@ test('the visual tour', async () => {
   // The runners the machine does not have. The daemon is the real one, with the
   // runner list and the model errors answered in main's proxy (fixtures.ts), so
   // each window draws what a daemon that found these agents would make it draw.
-  await app2?.close().catch(() => undefined);
+  await closeApp(app2);
   if (app2) apps.splice(apps.indexOf(app2), 1);
   const thirdPort = await freePort();
   const app3 = await launchApp(box, appEnv(box, thirdPort, started.port, { persona: 'desktop-tour-runners', runners: ALL_RUNNERS }));
@@ -1642,6 +1644,38 @@ test('the visual tour', async () => {
       await expect(plan.locator(`.ow-runner-${runner}`).first()).toBeAttached();
     }
     await settle(page, 600);
+  });
+
+
+  await state(win3, 'planner-harness-models', 'A coding agent as the planner: its own models and thinking effort', async (record) => {
+    const page = need(win3);
+    await page.getByRole('main', { name: 'Centre' }).getByRole('tab', { name: 'Planner' }).click().catch(() => undefined);
+    const setup = page.locator('.setup-panel-toggle');
+    if (await setup.getAttribute('aria-expanded') === 'false') await setup.click();
+    await page.locator('.planner-pill', { hasText: 'Claude Code' }).first().click();
+
+    // The chat lists Claude Code's own catalog, not the vendor's.
+    const trigger = page.locator('.setup-panel .model-picker-trigger');
+    await expect(trigger).toContainText(/Sonnet|Opus|Haiku|Fable/, { timeout: 60_000 });
+    await trigger.click();
+    const models = page.locator('.setup-panel .model-picker-item');
+    await expect(models.first()).toBeVisible({ timeout: 30_000 });
+    record.notes.push(`Claude Code as the planner offers ${await models.count()} models`);
+    await models.filter({ hasText: 'Sonnet' }).first().click();
+    await page.locator('.setup-panel .variant-select').selectOption('high');
+    await settle(page, 800);
+  });
+
+  await state(win3, 'planner-model-reopened', 'The picked model and effort after reopening the window', async (record) => {
+    const page = need(win3);
+    await page.reload();
+    await page.getByRole('main', { name: 'Centre' }).getByRole('tab', { name: 'Planner' }).click().catch(() => undefined);
+    await expect(page.locator('.setup-panel-toggle')).toBeVisible({ timeout: 60_000 });
+    const setup = page.locator('.setup-panel-toggle');
+    if (await setup.getAttribute('aria-expanded') === 'false') await setup.click();
+    await expect(page.locator('.setup-panel .model-picker-trigger')).toContainText('Sonnet', { timeout: 60_000 });
+    await expect(page.locator('.setup-panel .variant-select')).toHaveValue('high');
+    record.notes.push('the planner model and effort came back from the shared settings after a reload');
   });
 
 

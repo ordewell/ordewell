@@ -46,3 +46,15 @@ export function plannerBackendsFor(
   }
   return backends;
 }
+
+/**
+ * The runner a planner provider drives, or none for a vendor. The backend list
+ * is core's one planner list (ADR-0009), the same `runnerForProvider` mapping
+ * VS Code sends, so a workspace manifest's own agent resolves too; it is read
+ * here rather than from core's main barrel because that barrel is Node-only.
+ */
+export function plannerRunnerFor(provider: string, backends: readonly PlannerBackend[]): string | undefined {
+  if (!provider) return undefined;
+  const backend = backends.find((candidate) => candidate.id === provider);
+  return backend?.kind === 'harness' ? backend.runner ?? backend.id : undefined;
+}

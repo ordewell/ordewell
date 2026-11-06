@@ -11,6 +11,7 @@ import { validPref, type PrefsStore } from './prefs';
 import { droppedFolder } from './droppedFolder';
 import type { RecentsStore } from './recents';
 import { Shell } from './shell';
+import { bringForward } from './testWindows';
 import { webLink } from './terminal/link';
 import type { TerminalChannel } from './terminal/TerminalChannel';
 import type { TerminalHost } from './terminal/TerminalHost';
@@ -231,9 +232,7 @@ export function registerIpc(deps: IpcDeps): void {
     return deps.notifications.show(request, () => {
       const win = BrowserWindow.fromWebContents(event.sender);
       if (win && !win.isDestroyed()) {
-        if (win.isMinimized()) win.restore();
-        win.show();
-        win.focus();
+        bringForward(win);
       } else {
         // The window that asked is gone: the user still asked for the item, so the app comes forward.
         windows.show();

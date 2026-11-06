@@ -2,7 +2,7 @@ import type { ModelsResponse, RunnersResponse, SettingsResponse } from '@ordewel
 import { DELEGATION_OFFERED, RUNNER_LABELS } from '@ordewell/core/plan-utils';
 import type { HostToWebview, RunnerMeta } from '@ordewell/ui/protocol';
 import { callDaemon, messageOf } from './daemon';
-import { plannerBackendsFor } from './plannerBackends';
+import { plannerBackendsFor, plannerRunnerFor } from './plannerBackends';
 
 /**
  * Long enough for a daemon to probe every agent's CLI and its login on a
@@ -75,11 +75,16 @@ export class AgentDetection {
       if (!runners || !current()) return;
       const backends = plannerBackendsFor(runners.runners, providers);
       if (!catalogSettled && !backends.some((b) => b.usable)) return;
+      const provider = settings?.aiProvider ?? '';
+      // A harness planner's models come from its own runner's catalog, so the
+      // chat needs the runner, not only the provider id (ADR-0009).
+      const runner = plannerRunnerFor(provider, backends);
       this.emit({ type: 'setConfiguredProviders', providers });
       this.emit({
         type: 'setPlannerBackends',
         backends,
-        provider: settings?.aiProvider ?? '',
+        provider,
+        ...(runner ? { runner } : {}),
         ...(settings?.plannerThinkingEffort ? { effort: settings.plannerThinkingEffort } : {}),
       });
     };
@@ -100,6 +105,7 @@ export class AgentDetection {
         this.emit({ type: 'setModels', models: models.models });
         this.emit({ type: 'setModelsByRunner', modelsByRunner: models.modelsByRunner });
         this.emit({ type: 'setModesByRunner', modesByRunner: models.modesByRunner });
+        this.emit({ type: 'setModelOptions', modelOptions: models.orchestratorModels ?? [] });
         this.emit({ type: 'setModelConfig', modelConfig: { orchestrator: models.orchestratorModel } });
         this.emit({
           type: 'setModelDiscoveryErrors',
@@ -112,6 +118,7 @@ export class AgentDetection {
       .then((data) => {
         if (!current()) return;
         settings = data;
+        this.emit({ type: 'setModelAllowlist', allowlist: data.modelAllowlist ?? {} });
         // The chat's Settings panel draws its Run block from this: the open
         // session answers with its own values, and a daemon that answers
         // without a run (an old fake) leaves the block closed.

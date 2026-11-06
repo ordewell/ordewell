@@ -16,7 +16,7 @@
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import type { ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
-import { appEnv, freePort, git as gitIn, launchApp, makeSandbox, openFolder, removeSandbox, startMock, untilListening, type Sandbox } from './fixtures';
+import { appEnv, closeApp, freePort, git as gitIn, launchApp, makeSandbox, openFolder, removeSandbox, startMock, untilListening, type Sandbox } from './fixtures';
 
 const GOAL = 'Add greeting and farewell modules';
 const COMMENT = 'Export it as a named constant, please.';
@@ -55,11 +55,12 @@ test.afterEach(async ({}, testInfo) => {
 });
 
 test.afterAll(async () => {
-  await app?.close().catch(() => undefined);
+  const closed = await closeApp(app).then(() => undefined, (error: unknown) => ({ error }));
   mock?.kill();
   // The daemon stops a moment after the window closes, and until then it can
   // write under the temp HOME, which would leave the directory behind.
   if (daemonPort) await untilListening(daemonPort, false);
+  if (closed) throw closed.error;
   if (sandbox) removeSandbox(sandbox);
 });
 

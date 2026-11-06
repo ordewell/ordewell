@@ -4,6 +4,7 @@ import { BrowserWindow, type BrowserWindowConstructorOptions, type WebContents }
 import type { WindowContext } from '../shared/bridge';
 import { canvasColour, titleBarOverlay, workspaceChrome } from './chrome';
 import { guardClose } from './lifecycle';
+import { bringForward, showWhenReady, windowsHidden } from './testWindows';
 
 export interface WindowManagerOptions {
   preloadPath: string;
@@ -103,19 +104,21 @@ export class WindowManager {
   }
 
   private focus(win: BrowserWindow): BrowserWindow {
-    if (win.isMinimized()) win.restore();
-    win.show();
-    win.focus();
+    bringForward(win);
     return win;
   }
 
   private create(context: WindowContext, title: string, shape: BrowserWindowConstructorOptions): BrowserWindow {
+    // A test run never shows its windows (testWindows.ts). A hidden page would
+    // otherwise be throttled and stop painting, so it keeps rendering at its real size.
+    const hidden = windowsHidden();
     const win = new BrowserWindow({
       ...shape,
       minWidth: 720,
       minHeight: 520,
       title,
       show: false,
+      paintWhenInitiallyHidden: true,
       backgroundColor: canvasColour(this.options.dark()),
       webPreferences: {
         preload: this.options.preloadPath,
@@ -132,6 +135,7 @@ export class WindowManager {
         safeDialogs: true,
         spellcheck: false,
         devTools: this.options.devTools,
+        backgroundThrottling: !hidden,
       },
     });
     const id = win.webContents.id;
@@ -139,7 +143,7 @@ export class WindowManager {
     win.on('closed', () => { this.contexts.delete(id); });
     const confirmClose = this.options.confirmClose;
     if (confirmClose) win.on('close', guardClose(() => confirmClose(win), () => win.close()));
-    win.once('ready-to-show', () => win.show());
+    showWhenReady(win);
     void win.loadURL(this.options.pageUrl);
     return win;
   }

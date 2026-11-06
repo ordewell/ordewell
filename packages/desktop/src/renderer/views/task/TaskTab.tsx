@@ -7,6 +7,7 @@ import {
   Button, IconButton, RunnerBadge, RunnerGlyph, StatusIndicator, Tabs, runnerName as nameOf, statusLineOf, statusOf,
 } from '@ordewell/ui/design';
 import type { FrameApi, Tab, Unregister } from '../../frame/api';
+import { SETTINGS_TAB } from '../../frame/commands';
 import { daemonHost, type DaemonHost } from '../../session/DaemonHost';
 import { useSession } from '../../session/useSession';
 import { signedOutByRunner } from '../../signIn';
@@ -247,6 +248,7 @@ export function register(api: FrameApi): Unregister {
     },
     showPlan: () => api.showPlan(),
     showSessions: () => api.showActivity('sessions'),
+    showSettings: () => api.openTab(SETTINGS_TAB),
   });
   const follow = (): void => api.showSession(host.sessionId);
   follow();

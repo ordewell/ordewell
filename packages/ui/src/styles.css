@@ -2047,6 +2047,12 @@ section.isolation-notice {
   color: var(--ow-fg-secondary);
 }
 
+/* The approval card is already a card, so its notice steps into the card
+   instead of lifting again: the same tint twice reads as one flat block. */
+.plan-approval-card > .isolation-notice {
+  background: var(--bg-inset);
+}
+
 /* A card lifts off the page, so its small text needs the token that clears AA
    on a tint: --text-secondary is tuned for the page behind it. */
 .isolation-notice-title {

@@ -81,7 +81,19 @@ export class HolderConnections {
     }
     const { version, contract } = probe.identity;
     if (contract !== this.deps.contract) {
-      const speaks = `${version ?? 'an older version'} (contract ${contract ?? 'unknown'})`;
+      // A release from before the contract existed (0.12.6 on main answers
+      // /api/server with only {pid, port}) is not an older build of this app:
+      // say what it lacks, and how the session can still go on here.
+      if (contract === undefined) {
+        const name = holderName(record, port);
+        const started = version ? `${name} is Ordewell ${version}, started by` : `${name} was started by`;
+        return {
+          ok: false,
+          reason: 'mismatch',
+          message: `${started} a release without desktop join support, so this app can't join it. Quit it and choose Continue here to carry the session on, or update Ordewell.`,
+        };
+      }
+      const speaks = `${version ?? 'an older version'} (contract ${contract})`;
       return {
         ok: false,
         reason: 'mismatch',

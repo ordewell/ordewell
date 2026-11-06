@@ -83,7 +83,8 @@ export interface HolderView {
   /** The TUI the daemon serves, when it is a TUI's private daemon. */
   ownerPid?: number;
   version?: string;
-  contract: number;
+  /** Absent when the holder is known only from the lease, as after it exited. */
+  contract?: number;
   /** When it took the session. */
   since: string;
 }

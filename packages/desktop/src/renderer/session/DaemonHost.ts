@@ -1,7 +1,7 @@
 import type {
-  AdoptSessionResponse, AiProvider, AnswerEscalationRequest, ExecutionCommand, MergeGateResponse, PlanResponse, RunnerId, RunTask,
-  RunnersResponse, SessionHeld, SessionMessage, SessionResponse, SettingsResponse, SettingsUpdateResponse, StreamStamp, SurfacePlan,
-  SurfacePlanState, Task, TaskRevertPreviewResponse,
+  AdoptSessionResponse, AiProvider, AnswerEscalationRequest, ConversationCompactResponse, ConversationForkResponse, ConversationRewindResponse, ExecutionCommand, GlobalRunSettings, IsolationPreviewResponse, MergeGateResponse, PlanResponse, RunnerId, RunTask,
+  RunnersResponse, SessionHeld, SessionMessage, RewindTargetsResponse, RunnerCommand, SessionResponse, SettingsResponse, SettingsUpdateResponse, StreamStamp, SurfacePlan,
+  SurfacePlanState, Task, TaskLogAttemptsResponse, TaskLogResponse, TaskRevertPreviewResponse,
 } from '@ordewell/core';
 import {
   checkoutRule, confirmedOverride, DELEGATION_OFFERED, loopRemovalRefusal, manualOverrideStopFirst, mergeTarget, overrideNeedsConfirmation,
@@ -13,7 +13,10 @@ import {
   overrideConfirmation, removeTaskConfirmation, revertConfirmation, runSettingRiskConfirmations, startPastGateConfirmation,
   type ConfirmationRequest, type DaemonFrame, type DaemonSessionState, type SessionCue,
 } from '@ordewell/ui/host';
-import type { HostToWebview, IsolationActionKind, SettingsChange, TaskEdit, WebviewToHost } from '@ordewell/ui/protocol';
+import {
+  isBuiltinSlashCommand, resolveSlashAlias, slashHelp,
+  type HostToWebview, type IsolationActionKind, type SettingsChange, type TaskEdit, type WebviewToHost,
+} from '@ordewell/ui/protocol';
 import { runnerName } from '@ordewell/ui/design';
 import { confirm as askInWindow } from './ConfirmDialog';
 import { askForKey, type KeyEntryAnswer, type KeyEntryRequest } from './KeyEntryDialog';
@@ -24,7 +27,7 @@ import { openLoginTerminal, type OpenLoginTerminal } from './loginTerminal';
 import { revealTask as revealInPlan } from './selection';
 import { SIGN_IN_TIMEOUT, waitForSignIn } from './signInWait';
 import { TaskLogHost } from './TaskLogHost';
-import type { HolderView, JoinRefusal } from '../../shared/bridge';
+import type { HolderView, JoinRefusal, JoinResult } from '../../shared/bridge';
 
 /** What the frame shows of the session; the chat instances read their own state off the messages instead. */
 export interface SessionSnapshotView {
@@ -63,6 +66,8 @@ export interface SessionNavigator {
   showPlan(): void;
   /** Show the workspace's sessions, for the chat's own Load session. */
   showSessions?(): void;
+  /** Open the Settings tab, where the chat's /planner and /allowlist pick. */
+  showSettings?(): void;
 }
 
 /** What the Changes view does for the session: show the run's review, and Merge all behind its preflight. */
@@ -73,10 +78,15 @@ export interface Reviewer {
 
 export type Confirm = <C extends string>(request: ConfirmationRequest<C>) => Promise<C | null>;
 
-/** What the workspace's agent detection says: it holds across a session switch, held or joined, because no session changes which agents are installed. */
+/**
+ * What the workspace's agent detection says: it holds across a session switch,
+ * held or joined, because no session changes which agents are installed. The
+ * settings detection reads with them go too, since a mounted chat's state
+ * keeps them across a switch and a chat that mounts later must match it.
+ */
 const CATALOG: ReadonlySet<HostToWebview['type']> = new Set<HostToWebview['type']>([
   'setRunners', 'setModels', 'setModelsByRunner', 'setModesByRunner', 'setConfiguredProviders', 'setModelConfig',
-  'setPlannerBackends', 'agentDetection', 'setModelDiscoveryErrors',
+  'setPlannerBackends', 'agentDetection', 'setModelDiscoveryErrors', 'setModelOptions', 'setModelAllowlist', 'setRunSettings',
 ]);
 
 // The last of each of these says all there is: a chat that mounts after it was sent is given it again.
@@ -94,6 +104,27 @@ export interface TakeOverOutcome {
 const WATCH_MS = 2000;
 
 const LOGIN_NO_TERMINAL = 'The login terminal could not be opened.';
+
+/** Where the chat's dragged plan-dock height is kept between sessions, as VS Code keeps it in its global state. */
+const PLAN_DOCK_HEIGHT_KEY = 'ordewell.planDockHeight';
+
+/** A window with no storage (a test's jsdom) still keeps a height for its own session. */
+const rememberedDockHeights = new Map<string, string>();
+
+/** The app's own window storage; a test's jsdom has none, and Node's global one is not the window's. */
+function windowStorage(): Storage | undefined {
+  if (typeof window === 'undefined' || !window.navigator?.userAgent.includes('Electron')) return undefined;
+  return window.localStorage;
+}
+
+function storedItem(key: string): string | null {
+  return windowStorage()?.getItem(key) ?? rememberedDockHeights.get(key) ?? null;
+}
+
+function storeItem(key: string, value: string): void {
+  windowStorage()?.setItem(key, value);
+  rememberedDockHeights.set(key, value);
+}
 
 /** What a host may replace in a test, or let the window supply in the app. */
 export interface DaemonHostOptions {
@@ -160,6 +191,17 @@ function hasRunHistory(plan: SurfacePlan): boolean {
 
 function isFrame(value: unknown): value is DaemonFrame {
   return isRecord(value) && typeof value.type === 'string';
+}
+
+/** The holder as a link to a gone one keeps it: the lease names who, and the version was never proved. */
+function holderViewOf(record: SessionHeld['holder']): HolderView {
+  const host = record.host;
+  return {
+    port: host?.kind === 'daemon' ? host.port : 0,
+    pid: record.pid,
+    ...(host?.kind === 'daemon' && host.ownerPid !== undefined ? { ownerPid: host.ownerPid } : {}),
+    since: record.since,
+  };
 }
 
 /** A field edit from a card, as the daemon's task PUT takes it: the extension's own mapping (PlanManager). */
@@ -232,7 +274,12 @@ export class DaemonHost {
   private unsubscribe: (() => void) | null = null;
   /** A session the planner is starting: the daemon has no file for it until its first turn returns. */
   private fresh = true;
-  private turns = 0;
+  /**
+   * Planner turns in flight, by the session each was asked in: a switch does
+   * not end the last session's turn, and its end must not count against the
+   * next session's.
+   */
+  private readonly turns = new Map<string, number>();
   private catalogRead = false;
   private readonly agents: AgentDetection;
   /** What each chat instance keeps across a remount, by the place it is drawn in. */
@@ -252,6 +299,8 @@ export class DaemonHost {
   /** The session main has joined a holder's daemon for on this window's behalf, until the window leaves it. */
   private holderSession: string | null = null;
   private stopWatching: (() => void) | null = null;
+  /** A refused join's holder is watched for its exit, so Continue here can be offered (W16). */
+  private stopHolderWatch: (() => void) | null = null;
   private readonly watchMs: number;
   private readonly options: DaemonHostOptions;
   /** Views that re-read the catalog after a sign-in or a key: Settings draws its own copy of it. */
@@ -298,6 +347,26 @@ export class DaemonHost {
   private async refreshCatalog(): Promise<void> {
     await this.agents.detect();
     for (const listener of [...this.catalogListeners]) listener();
+  }
+
+  /** The height the person last dragged the plan dock to, as the chat expects it on its ready. */
+  private replayPlanDockHeight(): void {
+    const saved = Number(storedItem(PLAN_DOCK_HEIGHT_KEY));
+    if (Number.isFinite(saved) && saved > 0) this.emit({ type: 'planDockHeight', height: saved });
+  }
+
+  /**
+   * The workspace's isolation as the startup view and the approval card show
+   * it (W2, W4). Read per chat that mounts, as VS Code reads it per webview;
+   * a failed read is a `failed` preview, never a missing one.
+   */
+  private async readIsolationPreview(): Promise<void> {
+    try {
+      const answer = await callDaemon('workspaces.isolationPreview', { workspace: this.workspace }) as IsolationPreviewResponse;
+      this.emit({ type: 'isolationPreview', preview: answer.preview });
+    } catch (error) {
+      this.emit({ type: 'isolationPreview', preview: { status: 'failed', repos: [], shared: [], error: messageOf(error) } });
+    }
   }
 
   /**
@@ -468,12 +537,14 @@ export class DaemonHost {
    * (ADR-0049). A join main refuses shows why, over the saved state.
    */
   private async join(sessionId: string, held: SessionHeld): Promise<void> {
+    this.cancelHolderWatch();
     const host = held.holder.host;
     if (host?.kind === 'daemon') this.update({ held, link: { kind: 'joining', port: host.port } });
     const joined = await window.ordewell.daemon.join(sessionId);
     if (!joined.ok) {
       this.update({ held, link: { kind: 'refused', reason: joined.reason, message: joined.message } });
       await this.viewHeld(sessionId);
+      this.watchRefused(sessionId, held);
       return;
     }
     let saved: SessionResponse | null;
@@ -559,6 +630,61 @@ export class DaemonHost {
     next();
   }
 
+  /**
+   * A refused join leaves no socket to close, so its holder's exit is read
+   * from the lease instead: asking main to join again answers `free` once the
+   * lease is gone, which is the moment Continue here may adopt the session
+   * (W16). A holder that becomes joinable is joined then, and the saved state
+   * stays on screen read-only until either answer arrives.
+   */
+  private watchRefused(sessionId: string, held: SessionHeld): void {
+    this.cancelHolderWatch();
+    const link = this.snapshot.link;
+    if (link?.kind !== 'refused' || held.holder.host?.kind !== 'daemon') return;
+    if (link.reason === 'free') {
+      this.update({ link: { kind: 'gone', holder: holderViewOf(held.holder) } });
+      return;
+    }
+    if (link.reason === 'own' || link.reason === 'vscode' || link.reason === 'no-host') return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const stop = (): void => {
+      stopped = true;
+      clearTimeout(timer);
+      if (this.stopHolderWatch === stop) this.stopHolderWatch = null;
+    };
+    this.stopHolderWatch = stop;
+    const current = (): boolean => !stopped && this.sessionId === sessionId && this.snapshot.link === link;
+    const tick = async (): Promise<void> => {
+      if (!current()) { stop(); return; }
+      let joined: JoinResult;
+      try {
+        joined = await window.ordewell.daemon.join(sessionId);
+      } catch {
+        if (!stopped) timer = setTimeout(() => { void tick(); }, this.watchMs);
+        return;
+      }
+      if (!current()) { stop(); return; }
+      if (!joined.ok && joined.reason === 'free') {
+        stop();
+        this.update({ link: { kind: 'gone', holder: holderViewOf(held.holder) } });
+        return;
+      }
+      if (joined.ok) {
+        stop();
+        await this.open(sessionId);
+        return;
+      }
+      timer = setTimeout(() => { void tick(); }, this.watchMs);
+    };
+    timer = setTimeout(() => { void tick(); }, this.watchMs);
+  }
+
+  private cancelHolderWatch(): void {
+    this.stopHolderWatch?.();
+    this.stopHolderWatch = null;
+  }
+
   /** Adopt a session whose holder has exited into the app's own daemon (W16): a run it left is drawn as W17's restored one. */
   async continueHere(): Promise<void> {
     // The banner and the read-only view stay until the adoption is through: a
@@ -631,7 +757,6 @@ export class DaemonHost {
     for (const log of this.taskLogs.values()) log.setState(undefined);
     this.taskLogs.clear();
     this.fresh = false;
-    this.turns = 0;
     this.dock = null;
     this.emit({ type: 'restoreChat' });
     this.view.conversation.reset();
@@ -660,6 +785,7 @@ export class DaemonHost {
 
   dispose(): void {
     this.cancelRejoin();
+    this.cancelHolderWatch();
     this.stopWatching?.();
     this.stopWatching = null;
     this.stream?.close();
@@ -675,58 +801,31 @@ export class DaemonHost {
     switch (msg.type) {
       case 'ready':
         this.view.conversation.resync();
+        this.replayPlanDockHeight();
+        void this.readIsolationPreview();
         if (!this.catalogRead) { this.catalogRead = true; await this.agents.detect(); }
         return;
       case 'refreshModels':
         await this.agents.detect();
         return;
       case 'sendMessage': {
-        // The extension's slash commands run in its own process; the desktop
-        // answers the few its own controls send, and never hands one to the
-        // planner as a goal (a button's message is not typed).
         const text = msg.text.trim();
         if (text.startsWith('/')) {
-          const [command, ...args] = text.split(/\s+/);
-          if (command === '/key') {
-            // `/key set <provider>` is the terminal's spelling; the dialog is the desktop's.
-            const named = args[0] === 'set' ? args[1] : args[0];
-            if (named !== undefined && !Object.hasOwn(VENDORS, named)) {
-              this.showError(new Error(`Unknown provider: ${named}. Run /key with no provider to see the list.`));
-              return;
-            }
-            await this.enterApiKey(named as AiProvider | undefined);
+          // A '/' word no built-in names is a skill the planner resolves, as in
+          // the extension and the TUI; a button's message is never one.
+          if (isBuiltinSlashCommand(text)) {
+            const [word, ...args] = text.split(/\s+/);
+            await this.slashCommand(resolveSlashAlias(word ?? ''), args);
             return;
           }
-          if (command === '/login') {
-            const named = args.join(' ').trim();
-            if (!named) { await this.loginPlanner(); return; }
-            const backend = this.snapshot.state.planner.backends.find((b) => (
-              (b.runner ?? b.id) === named || b.label.toLowerCase() === named.toLowerCase()
-            ));
-            if (!backend) {
-              this.showError(new Error(`Unknown coding agent: ${named}.`));
-              return;
-            }
-            await this.loginPlanner(backend.runner ?? backend.id);
+          if (!msg.typed) {
+            this.view.conversation.note('system', `${text.split(/\s+/)[0]} is not available in the desktop app yet.`);
             return;
           }
-          if (command === '/refresh') {
-            await this.agents.detect();
-            return;
-          }
-          if (command === '/sessions') {
-            if (this.navigator?.showSessions) this.navigator.showSessions();
-            else this.view.conversation.note('system', 'Open a session from the Sessions list in the sidebar.');
-            return;
-          }
-          const refusal = `${command} is not available in the desktop app yet.`;
-          if (msg.typed) throw new Error(refusal);
-          this.view.conversation.note('system', refusal);
-          return;
         }
         // A prompt typed while a turn is still the planner's waits for it, as in the extension's sendChat.
         if (msg.typed && this.generating) { this.view.conversation.holdPrompt(msg.text); return; }
-        await (msg.typed ? this.say(msg.text, false) : this.turn(msg.text, false));
+        await (msg.typed ? this.say(msg.text, false, msg.runners) : this.turn(msg.text, false, msg.runners));
         return;
       }
       case 'loginPlanner':
@@ -747,8 +846,10 @@ export class DaemonHost {
       case 'sendMessageNow':
         await this.say(msg.text, true);
         return;
+      // Typed while the chat saw a turn in flight: one that has ended since leaves nothing to wait for, as in the extension.
       case 'holdPrompt':
-        this.view.conversation.holdPrompt(msg.text);
+        if (this.generating) this.view.conversation.holdPrompt(msg.text);
+        else await this.handle({ type: 'sendMessage', text: msg.text, typed: true });
         return;
       case 'unsendPrompt':
         this.view.conversation.unsendPrompt();
@@ -802,9 +903,13 @@ export class DaemonHost {
       case 'addTask':
         await this.planEdit(callDaemon('plans.addTask', { sessionId: this.sessionId }, msg.draft));
         return;
-      case 'sendSystemCommand':
+      case 'sendSystemCommand': {
         await this.systemCommand(msg.command, msg.taskId ?? '', msg.requestId);
+        // A Retry compaction is a planner turn the chat did not send, so no
+        // turn() of ours ends to release what was typed while it ran.
+        if (!this.generating) await this.sendHeldPrompt();
         return;
+      }
       case 'sendTaskMessage':
       case 'sendTaskMessageNow':
       case 'removeQueuedTaskMessage':
@@ -814,7 +919,7 @@ export class DaemonHost {
         this.taskLog(msg.taskId).post(msg);
         return;
       case 'getTaskCommands':
-        this.emit({ type: 'taskCommands', taskId: msg.taskId, commands: [] });
+        await this.postTaskCommands(msg.taskId);
         return;
       case 'invokeTaskCommand':
         await callDaemon('plans.taskCommands', { sessionId: this.sessionId, taskId: msg.taskId }, { name: msg.name, args: msg.args });
@@ -828,6 +933,9 @@ export class DaemonHost {
       case 'openFile':
         this.navigator?.openFile(msg.path);
         return;
+      case 'setPlanDockHeight':
+        storeItem(PLAN_DOCK_HEIGHT_KEY, String(msg.height));
+        return;
       // Child plans are the frame's other views' (#16): nothing here answers for them yet.
       default:
         return;
@@ -835,18 +943,22 @@ export class DaemonHost {
   }
 
   private get generating(): boolean {
-    return this.snapshot.state.isResearchActive || this.turns > 0;
+    return this.snapshot.state.isResearchActive || this.turnsIn(this.sessionId) > 0;
+  }
+
+  private turnsIn(sessionId: string): number {
+    return this.turns.get(sessionId) ?? 0;
   }
 
   /** One planner turn: the first of a fresh session starts it, every later one is a message. */
-  private async turn(text: string, now: boolean): Promise<void> {
-    this.turns += 1;
-    const sessionId = this.sessionId;
-    try {
+  private async turn(text: string, now: boolean, runners?: readonly RunnerId[]): Promise<void> {
+    await this.plannerTurn(async (sessionId) => {
       let response: PlanResponse;
       if (this.fresh) {
-        const runners = this.snapshot.state.enabledRunnerIds;
-        response = await callDaemon('plans.converseStart', { sessionId, workspace: this.workspace }, { goal: text, ...(runners.length ? { runners } : {}) }) as PlanResponse;
+        // The chat sends the runners its pills have on, including a click still
+        // being saved; the daemon's list is only the fallback (as VS Code does).
+        const chosen = runners ?? this.snapshot.state.enabledRunnerIds;
+        response = await callDaemon('plans.converseStart', { sessionId, workspace: this.workspace }, { goal: text, ...(chosen.length ? { runners: chosen } : {}) }) as PlanResponse;
         if (sessionId !== this.sessionId) return;
         this.fresh = false;
         this.update({ goal: text });
@@ -855,20 +967,198 @@ export class DaemonHost {
         if (sessionId !== this.sessionId) return;
       }
       this.showPlan(response.plan);
+    }, (error) => this.showError(error));
+  }
+
+  /**
+   * A call that is a planner turn: what is typed meanwhile is held, and the
+   * oldest held prompt goes once it ends, whoever asked for the turn.
+   */
+  private async plannerTurn(run: (sessionId: string) => Promise<void>, failed: (error: unknown) => void): Promise<void> {
+    const sessionId = this.sessionId;
+    this.turns.set(sessionId, this.turnsIn(sessionId) + 1);
+    try {
+      await run(sessionId);
     } catch (error) {
-      if (sessionId === this.sessionId) this.showError(error);
+      if (sessionId === this.sessionId) failed(error);
     } finally {
-      this.turns -= 1;
+      const left = this.turnsIn(sessionId) - 1;
+      if (left > 0) this.turns.set(sessionId, left);
+      else this.turns.delete(sessionId);
     }
     if (sessionId !== this.sessionId) return;
-    const next = this.turns === 0 ? this.view.conversation.nextPrompt() : undefined;
+    if (this.turnsIn(sessionId) === 0) await this.sendHeldPrompt();
+  }
+
+  /** The oldest prompt typed while the planner was busy, sent now that it is not. */
+  private async sendHeldPrompt(): Promise<void> {
+    const next = this.view.conversation.nextPrompt();
     if (next !== undefined) await this.say(next, false);
   }
 
   /** A prompt the user sent, shown as theirs and answered in a turn, as the extension's sendChat does (webviewRouter). */
-  private async say(text: string, now: boolean): Promise<void> {
+  private async say(text: string, now: boolean, runners?: readonly RunnerId[]): Promise<void> {
     if (text.trim()) this.view.conversation.note('user', text);
-    await this.turn(text, now);
+    await this.turn(text, now, runners);
+  }
+
+  /**
+   * A built-in the composer offers, as the extension's SlashParser and the
+   * TUI answer it. The extension's quick picks are the Settings tab's rows here.
+   */
+  private async slashCommand(command: string, args: readonly string[]): Promise<void> {
+    switch (command) {
+      case '/key': {
+        // `/key set <provider>` is the terminal's spelling; the dialog is the desktop's.
+        const named = args[0] === 'set' ? args[1] : args[0];
+        if (named !== undefined && !Object.hasOwn(VENDORS, named)) {
+          this.showError(new Error(`Unknown provider: ${named}. Run /key with no provider to see the list.`));
+          return;
+        }
+        await this.enterApiKey(named as AiProvider | undefined);
+        return;
+      }
+      case '/login': {
+        const named = args.join(' ').trim();
+        if (!named) { await this.loginPlanner(); return; }
+        const backend = this.snapshot.state.planner.backends.find((b) => (
+          (b.runner ?? b.id) === named || b.label.toLowerCase() === named.toLowerCase()
+        ));
+        if (!backend) {
+          this.showError(new Error(`Unknown coding agent: ${named}.`));
+          return;
+        }
+        await this.loginPlanner(backend.runner ?? backend.id);
+        return;
+      }
+      case '/refresh':
+        await this.agents.detect();
+        return;
+      case '/sessions':
+        if (this.navigator?.showSessions) this.navigator.showSessions();
+        else this.view.conversation.note('system', 'Open a session from the Sessions list in the sidebar.');
+        return;
+      case '/settings':
+        this.emit({ type: 'openSettings' });
+        return;
+      case '/planner':
+        if (args[0] !== undefined) { await this.pickPlanner(args[0]); return; }
+        this.showSettings('Pick the planner, its model and its effort in Settings.');
+        return;
+      case '/allowlist':
+        this.showSettings('Pick the models each coding agent may use in Settings, under its row.');
+        return;
+      case '/compact':
+        await this.compact();
+        return;
+      case '/fork':
+        await this.fork();
+        return;
+      case '/rewind':
+        await this.rewind(args[0]);
+        return;
+      case '/help':
+        this.view.conversation.note('system', slashHelp());
+        return;
+      // The chat answers /new and /inbox itself; nothing else is a built-in.
+      default:
+        this.view.conversation.note('system', `${command} is not available in the desktop app yet.`);
+    }
+  }
+
+  private showSettings(fallback: string): void {
+    if (this.navigator?.showSettings) this.navigator.showSettings();
+    else this.view.conversation.note('system', fallback);
+  }
+
+  /** `/planner <id>`: straight to that planner, refused with why when it cannot plan, as SlashParser does. */
+  private async pickPlanner(arg: string): Promise<void> {
+    const chosen = this.snapshot.state.planner.backends.find((b) => b.id === arg.toLowerCase());
+    if (!chosen) {
+      this.view.conversation.note('system', `Unknown planner: ${arg}. Run /planner with no argument to see the list.`);
+      return;
+    }
+    if (!chosen.usable) {
+      this.view.conversation.note('system', chosen.reason ?? `${chosen.label} is not available.`);
+      return;
+    }
+    await this.setPlanner(chosen.id);
+  }
+
+  /**
+   * These edit the transcript a planner turn is writing to, so they wait it
+   * out. A note rather than an error: the chat takes an error as the end of
+   * the turn, which would unlock the input under a live one.
+   */
+  private plannerIsAnswering(): boolean {
+    if (!this.generating) return false;
+    this.view.conversation.note('system', 'The planner is still answering: wait for its reply, or stop it first.');
+    return true;
+  }
+
+  /** The session's own events draw the compaction where it happens (ADR-0017); the answer only carries the plan. */
+  private async compact(): Promise<void> {
+    if (this.plannerIsAnswering()) return;
+    await this.plannerTurn(async (sessionId) => {
+      const response = await callDaemon('plans.compact', { sessionId }) as ConversationCompactResponse;
+      if (sessionId === this.sessionId) this.showPlan(response.plan);
+    }, (error) => this.showError(new Error(`Could not condense the conversation: ${messageOf(error)}: nothing was changed.`)));
+  }
+
+  /**
+   * The daemon has already adopted the fork, so the window only follows it,
+   * without the extension's run question: the original is not closed and may
+   * go on running, as in the TUI.
+   */
+  private async fork(): Promise<void> {
+    if (this.plannerIsAnswering()) return;
+    const original = this.sessionId;
+    let fork: ConversationForkResponse;
+    try {
+      fork = await callDaemon('plans.fork', { sessionId: original }) as ConversationForkResponse;
+    } catch (error) {
+      this.showError(new Error(`Could not fork the conversation: ${messageOf(error)}`));
+      return;
+    }
+    await this.open(fork.sessionId);
+    if (this.sessionId !== fork.sessionId) return;
+    this.view.conversation.note('system', `Forked ${original} into ${fork.sessionId}: you are in the fork now, and the original is kept. Use /sessions to go back.`);
+  }
+
+  /**
+   * A rewind is a fork from just before the chosen message, followed as /fork
+   * is; the message comes back into the composer to edit and send again. With
+   * no message named, the chat lists the ones it can go back to.
+   */
+  private async rewind(arg: string | undefined): Promise<void> {
+    if (this.plannerIsAnswering()) return;
+    const original = this.sessionId;
+    if (arg === undefined) {
+      try {
+        const { targets } = await callDaemon('plans.rewindTargets', { sessionId: original }) as RewindTargetsResponse;
+        this.view.conversation.note('system', targets.length === 0
+          ? 'Nothing to rewind to yet: the only message so far is the goal.'
+          : ['Send /rewind <message> to fork from just before one of these; the original is kept.', ...[...targets].reverse().map((t) => `/rewind ${t.index}  ${t.preview}`)].join('\n'));
+      } catch (error) {
+        this.showError(new Error(`Could not rewind the conversation: ${messageOf(error)}`));
+      }
+      return;
+    }
+    if (!/^\d+$/.test(arg)) {
+      this.view.conversation.note('system', 'Usage: /rewind [<message>]: or /rewind alone to list them.');
+      return;
+    }
+    let fork: ConversationRewindResponse;
+    try {
+      fork = await callDaemon('plans.rewind', { sessionId: original }, { index: Number(arg) }) as ConversationRewindResponse;
+    } catch (error) {
+      this.showError(new Error(`Could not rewind the conversation: ${messageOf(error)}`));
+      return;
+    }
+    await this.open(fork.sessionId);
+    if (this.sessionId !== fork.sessionId) return;
+    this.askPlanner(fork.rewoundMessage);
+    this.view.conversation.note('system', `Rewound ${original} into a fork, ${fork.sessionId}: you are in the fork now, and the original is kept. Use /sessions to go back.`);
   }
 
   /** The planner backend a runner id names, if the daemon listed it. */
@@ -1033,6 +1323,26 @@ export class DaemonHost {
     if (change.maxParallel !== undefined) body.env = { ORDEWELL_MAX_PARALLEL: String(change.maxParallel) };
     const next = await callDaemon('settings.update', undefined, body) as SettingsUpdateResponse;
     this.emitRunSettings(next);
+  }
+
+  /**
+   * A write from the Settings tab: the Run block's risk questions first, so
+   * the tab is no way round them, then the values as the daemon holds them to
+   * every chat, whose Run block and approval note would otherwise show the old
+   * ones until the next detection. Null when the user declined and nothing
+   * was written.
+   */
+  async saveSettings(body: Record<string, unknown>): Promise<SettingsUpdateResponse | null> {
+    const run = body.run;
+    if (typeof run === 'object' && run !== null) {
+      // Delegation is left out: the Subplanners row asks its own question before it writes.
+      for (const request of runSettingRiskConfirmations(run as Partial<GlobalRunSettings>, 0, false)) {
+        if (await this.ask(request) === null) return null;
+      }
+    }
+    const next = await callDaemon('settings.update', undefined, { ...body, workspace: this.workspace }) as SettingsUpdateResponse;
+    this.emitRunSettings(next);
+    return next;
   }
 
   private emitRunSettings(settings: SettingsResponse): void {
@@ -1318,10 +1628,36 @@ export class DaemonHost {
       case 'confirm':
         void this.isolationBlocked(cue.request);
         return;
-      // The runner's own commands are read off its log, which the task tab holds; the card offers none here.
       case 'commands':
+        void this.postTaskCommands(cue.taskId);
         return;
     }
+  }
+
+  /**
+   * The commands a task's runner loaded, read off its latest attempt's log as
+   * the extension's latestTaskCommands does. The daemon writes a batch before
+   * it sends the frame that cued this, so the read already holds it. A log
+   * that cannot be read offers none: the card still sends what is typed.
+   */
+  private async postTaskCommands(taskId: string): Promise<void> {
+    const sessionId = this.sessionId;
+    const params = { id: sessionId, workspace: this.workspace, taskId };
+    let commands: readonly RunnerCommand[] = [];
+    try {
+      const { attempts } = await callDaemon('sessions.taskLog', params) as TaskLogAttemptsResponse;
+      const latest = attempts.at(-1);
+      if (latest !== undefined) {
+        const { events } = await callDaemon('sessions.taskLogAttempt', { ...params, attempt: String(latest) }) as TaskLogResponse;
+        for (let index = events.length - 1; index >= 0; index -= 1) {
+          const event = events[index];
+          if (event?.type === 'runner_loaded') { commands = event.commands; break; }
+        }
+      }
+    } catch {
+      commands = [];
+    }
+    if (sessionId === this.sessionId) this.emit({ type: 'taskCommands', taskId, commands });
   }
 
   private async isolationBlocked(request: Extract<SessionCue, { type: 'confirm' }>['request']): Promise<void> {
@@ -1336,11 +1672,11 @@ export class DaemonHost {
 
   private switchTo(sessionId: string, fresh: boolean, goal: string, link: Pick<SessionSnapshotView, 'held' | 'link'> = { held: null, link: null }): void {
     this.leaveHolder(sessionId);
+    this.cancelHolderWatch();
     this.dispose();
     for (const log of this.taskLogs.values()) log.setState(undefined);
     this.taskLogs.clear();
     this.fresh = fresh;
-    this.turns = 0;
     this.dock = null;
     this.emit({ type: 'restoreChat' });
     this.view.conversation.reset();
@@ -1350,6 +1686,21 @@ export class DaemonHost {
     this.sticky.delete('children');
     this.update({ sessionId, goal, ...link, restored: false, readOnly: false, state: reduceHost(this.snapshot.state, { type: 'restoreChat', now: Date.now() }) });
     this.follow(sessionId);
+    void this.readRunSettings(sessionId);
+  }
+
+  /**
+   * The daemon answers a live session with its own run settings, so the Run
+   * block and the approval note the catalog kept from the last session are
+   * read again for this one, as the extension sends them on each load.
+   */
+  private async readRunSettings(sessionId: string): Promise<void> {
+    try {
+      const settings = await callDaemon('settings.get', { workspace: this.workspace, sessionId }) as SettingsResponse;
+      if (sessionId === this.sessionId && typeof settings.run === 'object' && settings.run !== null) this.emitRunSettings(settings);
+    } catch (error) {
+      if (sessionId === this.sessionId) this.emit({ type: 'showError', error: `Could not read this session's run settings: ${messageOf(error)}` });
+    }
   }
 
   /** A window that moves off a session it joined lets main close the holder's connection once nothing else uses it. */
@@ -1378,8 +1729,12 @@ export class DaemonHost {
       }
       if (!isFrame(event.frame)) return;
       this.rejoinDelay = REJOIN_MIN_MS;
+      const wasGenerating = this.generating;
       stream.receive(event.frame);
       this.toTaskLogs(event.frame);
+      // A turn's ended frame can trail the answer of the route that ran it, so
+      // the frame releases what that answer could not (a Retry compaction's).
+      if (wasGenerating && !this.generating) void this.sendHeldPrompt();
     });
   }
 
