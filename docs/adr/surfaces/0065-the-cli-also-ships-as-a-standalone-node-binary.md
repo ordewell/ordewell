@@ -103,9 +103,15 @@ is already served by `npm`.
   `scripts/install/cli.sh` downloads the fixed-name archive over https, checks
   it against `SHA256SUMS`, stops on a mismatch before anything is written, and
   installs `~/.local/bin/ordewell` (`ORDEWELL_INSTALL_DIR` moves it), with no
-  sudo. With `--desktop` it then runs `desktop.sh` without that variable,
-  which means the app's folder there; `ORDEWELL_DESKTOP_INSTALL_DIR` is passed
-  on as desktop.sh's `ORDEWELL_INSTALL_DIR` instead. It reports whether `git` is present (recommended, not required) and
+  sudo. `--version X.Y.Z` (or `ORDEWELL_VERSION`) pins a release, `--dry-run`
+  says what it would do, `--uninstall` removes the binary and
+  `~/.ordewell/runtime` and leaves sessions and other data, and
+  `ORDEWELL_CLI_FROM` (a directory or an https base URL) stands in for the
+  Release. With `--desktop` it then runs `desktop.sh` (from
+  `ORDEWELL_DESKTOP_SCRIPT_FROM` if set), passing those flags on but not
+  `ORDEWELL_INSTALL_DIR`, which means the app's folder there;
+  `ORDEWELL_DESKTOP_INSTALL_DIR` is passed on as desktop.sh's
+  `ORDEWELL_INSTALL_DIR` instead. It reports whether `git` is present (recommended, not required) and
   which coding agents it finds, and installs neither. It lowers no OS protection, as the
   desktop installers do (ADR-0063 H10).
 
@@ -121,7 +127,10 @@ is already served by `npm`.
   `BIN_NAME` of the desktop installer), and still publishes only from a
   notarized build, as
   [ADR-0063 H11](0063-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)
-  says.
+  says. The cask was `ordewell` before: once `ordewell-desktop` is in the tap,
+  the same commit removes `Casks/ordewell.rb` and maps `ordewell` to
+  `ordewell-desktop` in the tap's `cask_renames.json`, so an installed cask
+  moves to the new name on upgrade.
 
 - **The update notice names how this copy was installed (C9).** The line
   [ADR-0048](../platform/0048-a-daily-version-check-with-a-notice-first-and-one-install-per-machine.md)
@@ -201,3 +210,4 @@ their unit tests run under plain Node.
 ## History
 
 - 2026-11-06 — accepted.
+- 2026-11-06 — C7 names the installer's flags and variables; C8 says how the old `ordewell` cask is renamed in the tap.

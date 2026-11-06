@@ -115,6 +115,11 @@ linux:
   category: Development
   synopsis: Turn one goal into an ordered plan of coding-agent tasks.
   maintainer: Alessandro Costanzo Ciano
+  # ${arch} is not x64 here: electron-builder writes x86_64 for an AppImage and
+  # amd64 for a deb, and the release's fixed names, the installer scripts and
+  # package-check all read linux-x64. x64 is the only Linux build, so it is
+  # named outright; an arm64 target would need a name of its own.
+  artifactName: Ordewell-${version}-linux-x64.${ext}
   target:
     - target: AppImage
       arch: [x64]
