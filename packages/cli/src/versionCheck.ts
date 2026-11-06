@@ -1,4 +1,5 @@
-import { installMethod, startVersionCheck, upgradeCommand, type SeaDeps, type VersionCheck, type VersionCheckOptions } from '@ordewell/core';
+import { startVersionCheck, type VersionCheck, type VersionCheckOptions } from '@ordewell/core';
+import { updateHint, type SelfUpdateDeps } from './selfUpdate';
 import { cliVersion } from './version';
 
 /**
@@ -8,26 +9,41 @@ import { cliVersion } from './version';
  * on its port, so it could neither show the notice before its first ping nor
  * tell which client should see the update line.
  *
- * A headless command shows both the one-time notice and the update line on
- * stderr ({@link toStderr}), so stdout stays the command's own; the TUI draws
- * them in its frame, which a stray write would tear.
+ * A headless command writes the one-time notice to stderr, so stdout stays
+ * the command's own, and the update line only to a stderr that is a terminal,
+ * at most once a day ({@link startHeadlessVersionCheck}): a script's log is
+ * no place for it, and a command run many times a day would repeat it. The TUI
+ * draws both in its frame, which a stray write would tear, and names the
+ * update on every start.
  *
- * The update line names the upgrade for the way this copy was installed: an
- * npm upgrade does nothing for the standalone binary (ADR-0065 C9).
+ * The update line says how this copy updates: `ordewell update` (or the TUI's
+ * `/update`) for an install it can update in place, and what would otherwise.
  */
 export function startCliVersionCheck(
   show: Pick<VersionCheckOptions, 'onNotice' | 'onUpdate'>,
   options: Partial<Omit<VersionCheckOptions, 'onNotice' | 'onUpdate'>> = {},
-  sea: SeaDeps = {},
+  copy: Pick<SelfUpdateDeps, 'sea' | 'entry'> = {},
 ): VersionCheck {
   return startVersionCheck({
-    version: cliVersion(sea),
-    upgradeCommand: upgradeCommand(installMethod(sea)),
+    version: cliVersion(copy.sea),
+    howToUpdate: updateHint('run `ordewell update`', copy),
     ...options,
     ...show,
   });
 }
 
-const writeLine = (line: string): void => console.error(line);
-
-export const toStderr: Pick<VersionCheckOptions, 'onNotice' | 'onUpdate'> = { onNotice: writeLine, onUpdate: writeLine };
+/** The check a headless command starts, writing to `stderr`. */
+export function startHeadlessVersionCheck(
+  stderr: { isTTY?: boolean; write(text: string): unknown } = process.stderr,
+  options: Partial<Omit<VersionCheckOptions, 'onNotice' | 'onUpdate'>> = {},
+  copy: Pick<SelfUpdateDeps, 'sea' | 'entry'> = {},
+): VersionCheck {
+  const writeLine = (line: string): void => {
+    stderr.write(`${line}\n`);
+  };
+  return startCliVersionCheck(
+    { onNotice: writeLine, ...(stderr.isTTY ? { onUpdate: writeLine } : {}) },
+    { updateLine: 'daily', ...options },
+    copy,
+  );
+}

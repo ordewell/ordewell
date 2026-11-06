@@ -135,6 +135,12 @@ export interface ServerInfoResponse {
   version: string;
   /** `DAEMON_CONTRACT` as the daemon was built. */
   contract: number;
+  /**
+   * Work is under way in a session it holds: a run not yet settled, or a
+   * planner turn answering. A newer CLI replaces an idle daemon it cannot
+   * drive, and leaves a live one running (ADR-0048).
+   */
+  live: boolean;
 }
 
 /**

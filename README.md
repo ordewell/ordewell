@@ -72,7 +72,7 @@ curl -fsSL https://ordewell.ai/install.sh | sh
 It installs to `~/.local/bin/ordewell`; set `ORDEWELL_INSTALL_DIR` to put it
 elsewhere. Pass options after `sh -s --`: `--version X.Y.Z` for a specific
 release, `--dry-run` to see what it would do and `--uninstall` to remove it.
-Run it again to upgrade. With Homebrew:
+With Homebrew:
 
 ```bash
 brew install ordewell/tap/ordewell
@@ -84,6 +84,11 @@ Prefer npm, or on Windows, where the standalone binary is not available yet?
 ```bash
 npm install -g ordewell
 ```
+
+`ordewell update` updates the CLI the way it was installed: it runs the
+installer again into the binary's own folder, `brew upgrade ordewell`, or
+`npm install -g ordewell@latest`, and `ordewell update --dry-run` prints the
+command without running it. In the terminal UI, `/update` does the same.
 
 For VS Code, install [Ordewell from the Marketplace](https://marketplace.visualstudio.com/items?itemName=ordewell.ordewell)
 or run `code --install-extension ordewell.ordewell`. In Cursor, Windsurf or VSCodium,
@@ -207,9 +212,11 @@ adapted from [Matt Pocock's skills](https://github.com/mattpocock/skills) (MIT).
 ## What Ordewell sends
 
 Ordewell checks for updates daily, sending its version and a random install ID
-to ordewell.ai after a one-time notice. When a newer release exists, the CLI
-says so: in a standalone install it points at re-running the installer or
-`brew upgrade ordewell`, and in an npm install at `npm install -g`. To turn the check off, set
+to ordewell.ai after a one-time notice, and nothing else. When the answer names
+a newer release, Ordewell remembers it until you update and says so: the
+terminal UI on every start, a command run in a terminal once a day, and VS Code
+once a day. `ordewell update` and `/update` run the update; they send nothing to
+ordewell.ai. To turn the check off, set
 `ORDEWELL_NO_VERSION_CHECK=1` or `DO_NOT_TRACK=1`, or turn off VS Code's
 telemetry for the extension. See [version check details](https://ordewell.ai/docs#version-check).
 

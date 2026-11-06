@@ -146,6 +146,8 @@ export interface DaemonIdentity {
   version?: string;
   /** The daemon contract it speaks (ADR-0063 H3); absent from a daemon older than the field. */
   contract?: number;
+  /** Work is under way in a session it holds; absent from a daemon older than the field, which cannot say. */
+  live?: boolean;
 }
 
 export type DaemonProbe =
@@ -192,13 +194,14 @@ function parseIdentity(body: string): DaemonIdentity | undefined {
     return undefined;
   }
   if (typeof parsed !== 'object' || parsed === null) return undefined;
-  const fields = parsed as Partial<Record<'pid' | 'version' | 'contract', unknown>>;
-  const { pid, version, contract } = fields;
+  const fields = parsed as Partial<Record<'pid' | 'version' | 'contract' | 'live', unknown>>;
+  const { pid, version, contract, live } = fields;
   if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return undefined;
   return {
     pid,
     ...(typeof version === 'string' ? { version } : {}),
     ...(typeof contract === 'number' && Number.isInteger(contract) ? { contract } : {}),
+    ...(typeof live === 'boolean' ? { live } : {}),
   };
 }
 

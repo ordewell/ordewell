@@ -75,6 +75,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   // System
   { name: 'help', usage: '/help', description: 'Show available commands', category: 'system' },
   { name: 'mouse', usage: '/mouse [on|off]', description: "Wheel scrolling and drag-select, per-pane in the body and full-width in the composer (on), or the terminal's own selection (off)", category: 'system' },
+  { name: 'update', usage: '/update', description: 'Update Ordewell the way it was installed, then exit (not while a run is live)', category: 'system' },
   { name: 'quit', usage: '/quit', description: 'Exit the TUI', category: 'system' },
 ];
 

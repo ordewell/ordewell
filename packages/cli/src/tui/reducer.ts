@@ -11,7 +11,7 @@ import { handleOverlayKey } from './reducers/overlays';
 import { syncApprovals } from './reducers/approvals';
 import { handlePlanKey } from './reducers/planPane';
 import { announceApprovals, announceCheckpoint, answerCheckpoint, continueTaskStep, handleTaskViewKey, openTaskView, taskLogAbandoned, taskLogArrived, taskLogLoaded } from './reducers/taskView';
-import { newSession, pickRewindTarget, runCommand } from './reducers/commands';
+import { newSession, pickRewindTarget, runCommand, updatePlanned } from './reducers/commands';
 import { revertPreviewed } from './reducers/revert';
 import { adoptCompaction, followCompaction } from './reducers/compaction';
 import { disarmStop, drainQueue, forceSendPlanner, plannerEscape, queueToEditor, restoreForced } from './reducers/turnQueue';
@@ -636,6 +636,9 @@ function reduceAction(state: TuiState, action: Action): Step {
       const retry: Effect = { type: 'startConversation', goal: action.goal, sessionId: action.sessionId, ...(action.allowInit ? { allowInit: true } : {}) };
       return step(say(state, 'system', `${restarted} and retried.`), [retry]);
     }
+
+    case 'updatePlanned':
+      return updatePlanned(state, action.plan);
 
     case 'notice':
       if (stale(state, action.sessionId)) return step(state);

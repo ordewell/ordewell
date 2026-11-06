@@ -7,7 +7,7 @@ import { describeConnectionRefused, isConnectionRefused, resolvePort } from './d
 import { ApiClient } from './apiClient';
 import { COMMANDS } from './commands/registry';
 import { cliVersion } from './version';
-import { startCliVersionCheck, toStderr } from './versionCheck';
+import { startHeadlessVersionCheck } from './versionCheck';
 import { expandSessionId, flag } from './utils';
 
 const TUI_FLAGS = new Set(['--workspace', '--port']);
@@ -47,8 +47,9 @@ async function main(): Promise<void> {
     console.error('Run `ordewell --help` for usage.');
     process.exit(1);
   }
-  // The TUI starts its own, to draw it in its frame: one check per start either way.
-  if (command !== 'tui') startCliVersionCheck(toStderr);
+  // The TUI starts its own, to draw it in its frame: one check per start either
+  // way. `update` asks the tool it runs for the latest, and never pings (ADR-0048).
+  if (command !== 'tui' && command !== 'update') startHeadlessVersionCheck();
   try {
     await handler(argv.slice(1));
   } catch (err) {

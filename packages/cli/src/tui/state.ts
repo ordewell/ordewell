@@ -320,6 +320,8 @@ export type PromptAction =
 /** A confirmation overlay for destructive actions — enter confirms, escape cancels, unless it offers a `choice`. */
 export type ConfirmAction =
   | { kind: 'new-session' }
+  /** `/update`: the TUI exits and the update runs on its terminal (ADR-0048). */
+  | { kind: 'update' }
   | { kind: 'remove-task'; taskId: string }
   | { kind: 'force-start-gated'; taskId: string }
   /** Mark complete or Mark not done; `seen` is the status the user was asked about, which the daemon holds the task to (ADR-0029). */

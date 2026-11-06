@@ -10,6 +10,7 @@ import { runEffect } from './effects';
 import { registerSkillCommands } from './slash';
 import { openTerminal, windowsInputNotice } from './terminal';
 import { startCliVersionCheck } from '../versionCheck';
+import { carryOutUpdate, planUpdate, updateHint, type SelfUpdateDeps, type UpdatePlan } from '../selfUpdate';
 
 /** Past the stop's own two-second check that the port's daemon is the one it means to signal. */
 const DAEMON_STOP_GRACE_MS = 3000;
@@ -46,6 +47,8 @@ async function runLogin(
 export interface HandleTuiOptions {
   /** Injected so a test drives the login without starting a real coding agent. */
   spawn?: LoginSpawn;
+  /** Injected so a test drives `/update` without updating this machine's Ordewell. */
+  selfUpdate?: SelfUpdateDeps;
 }
 
 /**
@@ -107,6 +110,13 @@ export async function handleTui(subArgs: string[], options: HandleTuiOptions = {
   // login is the child's too: the parent must not exit on it.
   let loginRunning = false;
   const spawnLogin = options.spawn ?? spawn;
+  // Set once the TUI is on its way out, by a quit or by `/update`; nothing
+  // after that may start a daemon again.
+  let exiting = false;
+  // While `/update` runs it owns the tty, and its Ctrl-C is its own, as a login's is.
+  let updating = false;
+  const selfUpdate = options.selfUpdate ?? {};
+  let updatePlan: UpdatePlan | undefined;
 
   // On unless explicitly refused. It used to be opt-in, but the opt-in was
   // persisted per workspace (`.env`), so the wheel died again in every other
@@ -115,13 +125,24 @@ export async function handleTui(subArgs: string[], options: HandleTuiOptions = {
   const mouseCapture = process.env.ORDEWELL_TUI_MOUSE !== 'false' && process.env.ORDEWELL_TUI_MOUSE !== '0';
 
   // Started once the daemon is up, with nothing awaited between here and
-  // `createApp`: the notice is synchronous and lands in the first frame, and an
-  // update line, which only a later tick can bring, always finds the app.
+  // `createApp`: the notice is synchronous and lands in the first frame. The
+  // update line comes at once for a newer version an earlier ping remembered,
+  // and on every start while it is newer (ADR-0048), or with a later ping; it
+  // waits for the app to start, so the transcript it lands in is the one shown.
   let versionCheckNotice = '';
-  startCliVersionCheck({
-    onNotice: (text) => { versionCheckNotice = text; },
-    onUpdate: (line) => app.dispatch({ type: 'notice', message: line }),
-  });
+  let appStarted = false;
+  let startupUpdateLine: string | undefined;
+  startCliVersionCheck(
+    {
+      onNotice: (text) => { versionCheckNotice = text; },
+      onUpdate: (line) => {
+        if (appStarted) app.dispatch({ type: 'notice', message: line });
+        else startupUpdateLine = line;
+      },
+    },
+    { howToUpdate: updateHint('type /update', selfUpdate) },
+    selfUpdate,
+  );
 
   const settings = new SettingsService();
   const app = createApp({
@@ -197,6 +218,9 @@ export async function handleTui(subArgs: string[], options: HandleTuiOptions = {
         // nothing — the terminal reads it and answers by taking the clipboard.
         writeTerminal: (data) => process.stdout.write(data),
         reviveDaemon: async () => {
+          // A stream the stop cut off asks for a daemon again: on the way out,
+          // a fresh one would only outlive the TUI, or run beside an update.
+          if (exiting) return false;
           // `quiet`, because this runs with the full-screen frame on the
           // terminal — the usual "Starting daemon..." lines would be painted
           // into it. `detached: false` matches launch, so the replacement dies
@@ -206,6 +230,13 @@ export async function handleTui(subArgs: string[], options: HandleTuiOptions = {
           return true;
         },
         exit: () => shutdown(0),
+        update: {
+          plan: () => {
+            updatePlan = planUpdate(selfUpdate);
+            return updatePlan.kind === 'run' ? { kind: 'run', shown: updatePlan.shown } : updatePlan;
+          },
+          run: runSelfUpdate,
+        },
       }),
     onExit: () => shutdown(0),
     // The same pointer `ordewell plan` leaves, so `ordewell handoff`,
@@ -237,6 +268,8 @@ export async function handleTui(subArgs: string[], options: HandleTuiOptions = {
   const { rows, cols } = terminal.size();
   app.dispatch({ type: 'resize', rows, cols });
   app.start();
+  appStarted = true;
+  if (startupUpdateLine) app.dispatch({ type: 'notice', message: startupUpdateLine });
   const inputNotice = windowsInputNotice();
   if (inputNotice) app.dispatch({ type: 'notice', message: inputNotice });
 
@@ -248,18 +281,48 @@ export async function handleTui(subArgs: string[], options: HandleTuiOptions = {
   // request, leaving the daemon to notice the parent is gone on its own. A
   // daemon that does not answer only gets the grace below, and a second
   // signal while it is out exits at once.
-  let exiting = false;
   function shutdown(code: number): void {
     if (exiting) return process.exit(code);
+    leaveTerminal();
+    if (!owned) return process.exit(code);
+    void stopOwnedDaemon().then(() => process.exit(code));
+  }
+
+  function leaveTerminal(): void {
     exiting = true;
     watchingSettings.dispose();
     terminal?.close();
-    if (!owned) return process.exit(code);
-    const grace = setTimeout(() => process.exit(code), DAEMON_STOP_GRACE_MS);
-    void stopDaemon(port).catch(() => {}).finally(() => {
-      clearTimeout(grace);
-      process.exit(code);
+  }
+
+  /** Settles once the daemon this TUI started has stopped, or the grace is out. */
+  function stopOwnedDaemon(): Promise<void> {
+    return new Promise((done) => {
+      const grace = setTimeout(done, DAEMON_STOP_GRACE_MS);
+      void stopDaemon(port).catch(() => {}).finally(() => {
+        clearTimeout(grace);
+        done();
+      });
     });
+  }
+
+  /**
+   * `/update`, once confirmed: the TUI gives the terminal to the update and
+   * exits with its status rather than carry on as the old version over files
+   * the update replaced. The daemon it started stops first, since the update
+   * may replace the files that daemon runs from; the reducer has already
+   * refused while a run or a planner turn needed it.
+   */
+  async function runSelfUpdate(): Promise<void> {
+    const plan = updatePlan;
+    if (!plan || exiting) return;
+    updating = true;
+    leaveTerminal();
+    if (owned) await stopOwnedDaemon();
+    const status = await carryOutUpdate(plan, selfUpdate);
+    (selfUpdate.say ?? ((line: string) => console.log(line)))(status === 0 && plan.kind === 'run'
+      ? 'Start ordewell again to use the new version.'
+      : 'Start ordewell again to carry on with this version.');
+    process.exit(status);
   }
 
   // Restore the terminal even if something below us throws, the shell kills
@@ -269,7 +332,8 @@ export async function handleTui(subArgs: string[], options: HandleTuiOptions = {
     // A login's Ctrl-C is the child's: the tty sent it to the whole foreground
     // group, and quitting here would take the TUI down with a login the user
     // only meant to cancel. The child exits and `/login` resumes the screen.
-    if (loginRunning) return;
+    // An update's Ctrl-C is its own the same way, and the TUI exits with its status.
+    if (loginRunning || updating) return;
     shutdown(0);
   });
   process.on('SIGTERM', () => shutdown(0));

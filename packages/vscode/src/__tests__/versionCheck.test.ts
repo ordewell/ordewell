@@ -40,15 +40,29 @@ describe('startExtensionVersionCheck', () => {
     expect(fs.existsSync(stateFile())).toBe(true);
   });
 
-  it('shows no update line when a newer version is out', async () => {
+  const shown = (fake: ReturnType<typeof fakeHost>) =>
+    (fake.host as { window: { showInformationMessage: ReturnType<typeof vi.fn> } }).window.showInformationMessage.mock.calls.map((call) => call[0] as string);
+
+  it('names the version a ping answered, and the Extensions view, which updates it', async () => {
     fs.writeFileSync(stateFile(), JSON.stringify({ installId: 'abc', installIdAt: new Date().toISOString(), noticeShownAt: new Date().toISOString() }));
     const fetch = vi.fn(async () => ({ status: 200, text: async () => '{"latest":"9.9.9"}' }));
     const fake = fakeHost(true);
     startExtensionVersionCheck(fake.host, '1.0.0', { env, stateDir, fetch });
-    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    const show = (fake.host as { window: { showInformationMessage: ReturnType<typeof vi.fn> } }).window.showInformationMessage;
-    expect(show).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(shown(fake)).toEqual(['Ordewell 9.9.9 is out (you have 1.0.0) — update it from the Extensions view']));
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('names a newer version an earlier ping remembered without asking again, once a day', () => {
+    const now = new Date().toISOString();
+    fs.writeFileSync(stateFile(), JSON.stringify({ installId: 'abc', installIdAt: now, noticeShownAt: now, lastCheckAt: now, latest: '9.9.9', latestAt: now }));
+    const fetch = vi.fn();
+    // Every window starts an extension host, and a message interrupts each one.
+    const windows = [fakeHost(true), fakeHost(true)];
+    for (const fake of windows) startExtensionVersionCheck(fake.host, '1.0.0', { env, stateDir, fetch });
+
+    expect(shown(windows[0])).toEqual(['Ordewell 9.9.9 is out (you have 1.0.0) — update it from the Extensions view']);
+    expect(shown(windows[1])).toEqual([]);
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('does nothing with VS Code telemetry off: no message, no file, no ping', () => {

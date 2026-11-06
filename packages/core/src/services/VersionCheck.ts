@@ -8,7 +8,7 @@ import { upgradeCommand } from '../utils/seaRuntime';
 /**
  * The daily version check (ADR-0048): one ping a day that counts installs
  * under an install ID replaced every 30 days, and may answer with a newer
- * version.
+ * version, which the state file keeps until an answer says otherwise.
  */
 
 export const VERSION_CHECK_URL = 'https://ordewell.ai/api/v1/ping';
@@ -46,13 +46,19 @@ export interface VersionCheckOptions {
   version: string;
   /** The one-time notice, on the first start on a machine. */
   onNotice(text: string): void;
-  /** A newer version is out; `text` is the line to show. */
-  onUpdate(text: string, latest: string): void;
+  /** A newer version is out; `text` is the line to show. Without it no line is shown, and none recorded. */
+  onUpdate?(text: string, latest: string): void;
   /**
-   * What the update line tells the user to run; the npm upgrade by default,
+   * How often the update line is shown: on every start, as the TUI's notice
+   * is, or at most once a day across the machine, for a headless command that
+   * may run many times a day.
+   */
+  updateLine?: 'every-start' | 'daily';
+  /**
+   * How the update line tells the user to update; the npm upgrade by default,
    * so only a caller that knows it was installed another way names one.
    */
-  upgradeCommand?: string;
+  howToUpdate?: string;
   /** False turns the whole check off, as the off-switch variables do. */
   telemetryEnabled?: boolean;
   env?: Record<string, string | undefined>;
@@ -75,18 +81,33 @@ interface State {
   installIdAt?: string;
   noticeShownAt?: string;
   lastCheckAt?: string;
+  /**
+   * The newer version the last answer named, kept so that every start can
+   * name it, not just the one start a day that pings. Cleared by an answer
+   * that names none.
+   */
+  latest?: string;
+  /** When {@link State.latest} was learned. */
+  latestAt?: string;
+  /** When a once-a-day update line was last shown. */
+  updateShownAt?: string;
 }
+
+const isDate = (value: unknown): value is string => typeof value === 'string' && !Number.isNaN(Date.parse(value));
 
 function readState(file: string): State {
   try {
     const raw: unknown = JSON.parse(readFileSync(file, 'utf8'));
     if (!raw || typeof raw !== 'object') return {};
-    const { installId, installIdAt, noticeShownAt, lastCheckAt } = raw as Record<string, unknown>;
+    const { installId, installIdAt, noticeShownAt, lastCheckAt, latest, latestAt, updateShownAt } = raw as Record<string, unknown>;
     return {
       ...(typeof installId === 'string' && installId ? { installId } : {}),
-      ...(typeof installIdAt === 'string' && !Number.isNaN(Date.parse(installIdAt)) ? { installIdAt } : {}),
-      ...(typeof noticeShownAt === 'string' && !Number.isNaN(Date.parse(noticeShownAt)) ? { noticeShownAt } : {}),
-      ...(typeof lastCheckAt === 'string' && !Number.isNaN(Date.parse(lastCheckAt)) ? { lastCheckAt } : {}),
+      ...(isDate(installIdAt) ? { installIdAt } : {}),
+      ...(isDate(noticeShownAt) ? { noticeShownAt } : {}),
+      ...(isDate(lastCheckAt) ? { lastCheckAt } : {}),
+      ...(typeof latest === 'string' && SEMVER.test(latest) ? { latest } : {}),
+      ...(isDate(latestAt) ? { latestAt } : {}),
+      ...(isDate(updateShownAt) ? { updateShownAt } : {}),
     };
   } catch {
     return {};
@@ -149,13 +170,21 @@ function compareVersions(a: string, b: string): number | null {
   return 0;
 }
 
-/** The `latest` of a 200 answer, if it is newer than `version`; anything else is no news. */
-async function newerVersion(response: Awaited<ReturnType<PingFetch>>, version: string): Promise<string | null> {
-  if (response.status !== 200) return null;
+const isNewer = (latest: string, version: string): boolean => (compareVersions(latest, version) ?? 0) > 0;
+
+/**
+ * What an answer says: a newer version, or null for no news, which a 204 is
+ * and so is a 200 whose JSON object names nothing newer. Undefined for no
+ * answer at all (any other status, or a body that is not a JSON object),
+ * which leaves the version already known as it was.
+ */
+async function readAnswer(response: Awaited<ReturnType<PingFetch>>, version: string): Promise<string | null | undefined> {
+  if (response.status === 204) return null;
+  if (response.status !== 200) return undefined;
   const body: unknown = JSON.parse(await response.text());
-  const latest = body && typeof body === 'object' ? (body as { latest?: unknown }).latest : undefined;
-  if (typeof latest !== 'string') return null;
-  return (compareVersions(latest, version) ?? 0) > 0 ? latest : null;
+  if (!body || typeof body !== 'object') return undefined;
+  const { latest } = body as { latest?: unknown };
+  return typeof latest === 'string' && isNewer(latest, version) ? latest : null;
 }
 
 const truthy = (value: string | undefined): boolean => /^(1|true|yes)$/i.test(value?.trim() ?? '');
@@ -164,9 +193,10 @@ const OFF: VersionCheck = { settled: async () => {}, stop: () => {} };
 
 /**
  * Starts the check for this process: the one-time notice on the first start
- * on a machine, otherwise a ping if a day has passed since the last one, and
- * the same test again on an unref'd timer for as long as the process lives.
- * Never throws and never waits on the network.
+ * on a machine; otherwise the update line for a newer version an earlier
+ * answer named, a ping if a day has passed since the last one, and the same
+ * test again on an unref'd timer for as long as the process lives. Never
+ * throws and never waits on the network.
  */
 export function startVersionCheck(options: VersionCheckOptions): VersionCheck {
   const env = options.env ?? process.env;
@@ -177,6 +207,31 @@ export function startVersionCheck(options: VersionCheckOptions): VersionCheck {
   const file = join(options.stateDir ?? globalDataDir(), STATE_FILE);
   let inFlight: Promise<void> = Promise.resolve();
   let pinging = false;
+
+  /** The version this process last named, so that a ping repeating it does not repeat the line. */
+  let named: string | undefined;
+  const lessThanADayAgo = (at: string | undefined): boolean => {
+    if (!at) return false;
+    const since = now() - Date.parse(at);
+    // A time in the future is a clock that went back; waiting it out could
+    // silence the check for as long as the clock was wrong.
+    return since >= 0 && since < DAY_MS;
+  };
+
+  const showUpdate = (latest: string): void => {
+    if (!options.onUpdate || latest === named) return;
+    if (options.updateLine === 'daily') {
+      const state = readState(file);
+      // As for the notice: a line that cannot be recorded would be shown on every start.
+      if (lessThanADayAgo(state.updateShownAt) || !writeState(file, { ...state, updateShownAt: new Date(now()).toISOString() })) return;
+    }
+    named = latest;
+    try {
+      options.onUpdate(`Ordewell ${latest} is out (you have ${options.version}) — ${options.howToUpdate ?? upgradeCommand('npm')}`, latest);
+    } catch {
+      // As for the notice: a closed stderr does not fail the caller's start.
+    }
+  };
 
   const ping = async (version: string, installId: string): Promise<void> => {
     const query = new URLSearchParams({ v: version, id: installId });
@@ -191,8 +246,14 @@ export function startVersionCheck(options: VersionCheckOptions): VersionCheck {
         signal: abort.signal,
         redirect: 'manual',
       });
-      const latest = await newerVersion(response, version);
-      if (latest) options.onUpdate(`Ordewell ${latest} is out — ${options.upgradeCommand ?? upgradeCommand('npm')}`, latest);
+      const latest = await readAnswer(response, version);
+      if (latest === undefined) return;
+      // Read again: another process may have written the file while this ping was out.
+      const state = readState(file);
+      delete state.latest;
+      delete state.latestAt;
+      writeState(file, latest ? { ...state, latest, latestAt: new Date(now()).toISOString() } : state);
+      if (latest) showUpdate(latest);
     } finally {
       clearTimeout(timer);
     }
@@ -202,12 +263,7 @@ export function startVersionCheck(options: VersionCheckOptions): VersionCheck {
     if (pinging) return;
     const state = readState(file);
     if (!state.installId) return;
-    if (state.lastCheckAt) {
-      const since = now() - Date.parse(state.lastCheckAt);
-      // A last check in the future is a clock that went back; waiting it out
-      // could silence the check for as long as the clock was wrong.
-      if (since >= 0 && since < DAY_MS) return;
-    }
+    if (lessThanADayAgo(state.lastCheckAt)) return;
     // Recorded before the ping, and no ping without it: a write that fails
     // would otherwise let every start ping.
     if (!writeState(file, { ...state, lastCheckAt: new Date(now()).toISOString() })) return;
@@ -239,6 +295,7 @@ export function startVersionCheck(options: VersionCheckOptions): VersionCheck {
     }
     return OFF;
   }
+  if (state.latest && isNewer(state.latest, options.version)) showUpdate(state.latest);
   check();
   const timer = setInterval(check, RECHECK_MS);
   timer.unref?.();

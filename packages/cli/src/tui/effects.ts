@@ -72,7 +72,18 @@ export interface EffectDeps {
   /** Writes raw bytes to the terminal — the OSC 52 fallback's only route out. */
   writeTerminal(data: string): void;
   exit(): void;
+  /**
+   * `/update` (ADR-0048): `plan` says what would update this copy, `run` gives
+   * the terminal to it and never hands it back, since the process exits with
+   * the update's status. Absent where nothing should update, as in a test.
+   */
+  update?: {
+    plan(): UpdatePlanView;
+    run(): Promise<void>;
+  };
 }
+
+type UpdatePlanView = Extract<Action, { type: 'updatePlanned' }>['plan'];
 
 /**
  * Performs one effect and feeds results back as actions. Every path is
@@ -889,6 +900,17 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
 
     case 'exit':
       deps.exit();
+      return;
+
+    case 'planUpdate':
+      dispatch({
+        type: 'updatePlanned',
+        plan: deps.update?.plan() ?? { kind: 'none', status: 1, message: 'This TUI cannot update itself: run `ordewell update` in a terminal instead.' },
+      });
+      return;
+
+    case 'selfUpdate':
+      await deps.update?.run();
       return;
   }
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { initialState, reduce, type Effect } from '../reducer';
+import { initialState, reduce, type Action, type Effect } from '../reducer';
 import { registerSkillCommands } from '../slash';
 import type { RunnerView, TaskView, TuiState } from '../state';
 import { chatOf, lastMessage, messagesOf } from './chat';
@@ -606,3 +606,62 @@ describe('a runner mode this host cannot run', () => {
   });
 });
 
+
+describe('/update', () => {
+  it.each([
+    ['a run is executing', { sessionId: 'session-1', status: 'executing' as const }],
+    ['a run is starting', { sessionId: 'session-1', status: 'starting' as const }],
+    ['the planner is answering', { sessionId: 'session-1', planner: 'planning' as const }],
+  ])('is refused while %s, and nothing runs', (_, overrides) => {
+    const { state, effects } = run('/update', overrides);
+
+    expect(effects).toEqual([]);
+    expect(state.overlay).toBeNull();
+    expect(lastMessage(state)).toMatchObject({ role: 'error' });
+    expect(JSON.stringify(lastMessage(state))).toContain('/stop');
+  });
+
+  it('otherwise works out how this copy updates before asking anything', () => {
+    const { state, effects } = run('/update', { sessionId: 'session-1' });
+
+    expect(effects).toEqual([{ type: 'planUpdate' }]);
+    expect(state.overlay).toBeNull();
+  });
+
+  const planned = (plan: Extract<Action, { type: 'updatePlanned' }>['plan'], overrides: Partial<TuiState> = {}) =>
+    reduce(initialState({ sessionId: 'session-1', ...overrides }), { type: 'updatePlanned', plan });
+
+  it('asks before running the command it names, saying the TUI exits for it', () => {
+    const shown = 'brew upgrade ordewell';
+    const { state, effects } = planned({ kind: 'run', shown });
+
+    expect(effects).toEqual([]);
+    expect(state.overlay).toMatchObject({ kind: 'confirm', action: { kind: 'update' } });
+    expect(JSON.stringify(state.overlay)).toContain(shown);
+    expect(JSON.stringify(state.overlay)).toContain('exit');
+  });
+
+  it('says what would update a copy no command can, and stays open', () => {
+    const message = 'This copy runs through npx, so there is no install to update: `npx ordewell@latest` runs the latest. Nothing was run.';
+    const { state, effects } = planned({ kind: 'none', message, status: 0 });
+
+    expect(effects).toEqual([]);
+    expect(state.overlay).toBeNull();
+    expect(state.exiting).toBe(false);
+    expect(lastMessage(state)).toMatchObject({ role: 'system' });
+    expect(JSON.stringify(lastMessage(state))).toContain('npx ordewell@latest');
+  });
+
+  it('shows a copy that cannot replace itself as an error', () => {
+    const { state } = planned({ kind: 'none', message: '/usr/local/bin is not writable', status: 1 });
+
+    expect(lastMessage(state)).toMatchObject({ role: 'error' });
+  });
+
+  it('asks nothing when a run started while the copy was being looked at', () => {
+    const { state } = planned({ kind: 'run', shown: 'brew upgrade ordewell' }, { status: 'executing' });
+
+    expect(state.overlay).toBeNull();
+    expect(lastMessage(state)).toMatchObject({ role: 'error' });
+  });
+});

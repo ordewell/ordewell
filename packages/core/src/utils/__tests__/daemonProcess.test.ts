@@ -125,6 +125,16 @@ describe('probeDaemon', () => {
     expect(server.seen[0].host).toBe(`127.0.0.1:${server.port}`);
   });
 
+  it('says whether work is under way there, and nothing of it when the word is not a boolean', async () => {
+    let live: unknown = true;
+    server = await serve(() => ({ status: 200, body: JSON.stringify({ pid: 42, port: 1, version: '1.2.3', contract: 7, live }) }));
+    expect(await probeDaemon(server.port)).toEqual({ kind: 'daemon', identity: { pid: 42, version: '1.2.3', contract: 7, live: true } });
+    live = false;
+    expect(await probeDaemon(server.port)).toMatchObject({ identity: { live: false } });
+    live = 'no';
+    expect(await probeDaemon(server.port)).toEqual({ kind: 'daemon', identity: { pid: 42, version: '1.2.3', contract: 7 } });
+  });
+
   it('leaves out the version and contract a daemon older than them never sends', async () => {
     server = await serve(() => ({ status: 200, body: JSON.stringify({ pid: 42, port: 1 }) }));
     expect(await probeDaemon(server.port)).toEqual({ kind: 'daemon', identity: { pid: 42 } });

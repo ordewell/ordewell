@@ -19,7 +19,7 @@ import {
 import { stopPlanning } from './turnQueue';
 import { withRun } from './incoming';
 import { openSettings } from './settings';
-import { fail, step, withSession, type Effect, type Step, type TaskAction } from './shared';
+import { fail, step, withSession, type Action, type Effect, type Step, type TaskAction } from './shared';
 
 export const unknownCommand = (state: TuiState, name: string): Step =>
   fail(state, `Unknown command: /${name}. Type /help to see what's available.`);
@@ -71,6 +71,8 @@ export function runCommand(state: TuiState, parsed: ParsedCommand): Step {
       return openSettings(state);
     case 'mouse':
       return setMouseCapture(state, args[0]);
+    case 'update':
+      return requestUpdate(state);
 
     case 'sessions':
       return step(
@@ -193,6 +195,39 @@ function resolveToggle(arg: string | undefined, current: boolean): boolean | nul
 
 // Only asks when there is something to lose; an empty/idle session resets
 // silently. Mirrors the VS Code extension's confirm-before-reset.
+/**
+ * Why `/update` must wait, or null when it need not. Exiting stops the daemon
+ * this TUI started, and with it a run or a planner turn, so neither is cut off
+ * for an update the user can as well run once it ends.
+ */
+export function updateRefusal(state: TuiState): string | null {
+  if (state.status !== 'idle') return 'A run is live: /update once it ends, or /stop it first.';
+  if (plannerInFlight(state)) return 'The planner is still answering: /update once it replies, or /stop it first.';
+  return null;
+}
+
+function requestUpdate(state: TuiState): Step {
+  const refusal = updateRefusal(state);
+  return refusal ? fail(state, refusal) : step(state, [{ type: 'planUpdate' }]);
+}
+
+/** Asks before the TUI exits for an update, naming the command; a copy nothing updates is only told why. */
+export function updatePlanned(state: TuiState, plan: Extract<Action, { type: 'updatePlanned' }>['plan']): Step {
+  if (plan.kind === 'none') return step(say(state, plan.status === 0 ? 'system' : 'error', plan.message));
+  // The run may have started while the copy was being looked at.
+  const refusal = updateRefusal(state);
+  if (refusal) return fail(state, refusal);
+  return step({
+    ...state,
+    overlay: {
+      kind: 'confirm',
+      title: 'Update Ordewell?',
+      message: `The TUI will exit and run ${plan.shown} in this terminal. Start ordewell again afterwards to use the new version.`,
+      action: { kind: 'update' },
+    },
+  });
+}
+
 function requestNewSession(state: TuiState): Step {
   const hasContent = state.tasks.length > 0 || state.conversation.blocks.length > 0 || state.goal !== '' || state.status !== 'idle' || plannerInFlight(state);
   if (!state.sessionId || !hasContent) return newSession(state);

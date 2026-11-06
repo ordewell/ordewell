@@ -128,17 +128,205 @@ describe('VersionCheck', () => {
     seenNotice();
     const { check, updates } = start({ fetch: fakeFetch(reply(200, '{"latest":"0.11.0"}')).fetch });
     await check.settled();
-    expect(updates).toEqual(['Ordewell 0.11.0 is out — npm i -g ordewell']);
+    expect(updates).toEqual(['Ordewell 0.11.0 is out (you have 0.10.12) — npm i -g ordewell']);
+  });
+
+  describe('the latest version it was told of', () => {
+    it('is remembered, and named again on a later start that sends nothing', async () => {
+      seenNotice();
+      await start({ fetch: fakeFetch(reply(200, '{"latest":"0.11.0"}')).fetch }).check.settled();
+      expect(readState()).toMatchObject({ latest: '0.11.0', latestAt: '2026-10-23T09:00:00.000Z' });
+
+      now += 60 * 60_000;
+      const net = fakeFetch(reply(204));
+      const { check, updates } = start({ fetch: net.fetch });
+      await check.settled();
+      expect(net.calls).toEqual([]);
+      expect(updates).toEqual(['Ordewell 0.11.0 is out (you have 0.10.12) — npm i -g ordewell']);
+    });
+
+    it('is named once by a start whose ping names it again', async () => {
+      seenNotice(DAY);
+      fs.writeFileSync(stateFile(), JSON.stringify({ ...readState(), latest: '0.11.0', latestAt: '2026-10-22T09:00:00.000Z' }));
+      const net = fakeFetch(reply(200, '{"latest":"0.11.0"}'));
+      const { check, updates } = start({ fetch: net.fetch });
+      await check.settled();
+      expect(net.calls).toHaveLength(1);
+      expect(updates).toEqual(['Ordewell 0.11.0 is out (you have 0.10.12) — npm i -g ordewell']);
+      expect(readState()).toMatchObject({ latest: '0.11.0', latestAt: '2026-10-23T09:00:00.000Z' });
+    });
+
+    it('is replaced by the next answer that names a newer one', async () => {
+      seenNotice(DAY);
+      fs.writeFileSync(stateFile(), JSON.stringify({ ...readState(), latest: '0.11.0', latestAt: '2026-10-22T09:00:00.000Z' }));
+      const { check, updates } = start({ fetch: fakeFetch(reply(200, '{"latest":"0.11.1"}')).fetch });
+      await check.settled();
+      expect(updates).toEqual([
+        'Ordewell 0.11.0 is out (you have 0.10.12) — npm i -g ordewell',
+        'Ordewell 0.11.1 is out (you have 0.10.12) — npm i -g ordewell',
+      ]);
+      expect(readState()).toMatchObject({ latest: '0.11.1', latestAt: '2026-10-23T09:00:00.000Z' });
+    });
+
+    it.each([
+      ['a 204', reply(204)],
+      ['an answer naming the running version', reply(200, '{"latest":"0.10.12"}')],
+      ['an answer naming no version', reply(200, '{}')],
+    ])('is forgotten after %s, so a later start names nothing', async (_, answer) => {
+      seenNotice(DAY);
+      fs.writeFileSync(stateFile(), JSON.stringify({ ...readState(), latest: '0.11.0', latestAt: '2026-10-22T09:00:00.000Z' }));
+      await start({ fetch: fakeFetch(answer).fetch }).check.settled();
+      expect(readState()).not.toHaveProperty('latest');
+      expect(readState()).not.toHaveProperty('latestAt');
+
+      now += 60 * 60_000;
+      const { check, updates } = start({ fetch: fakeFetch(reply(204)).fetch });
+      await check.settled();
+      expect(updates).toEqual([]);
+    });
+
+    it.each([
+      ['it', '0.11.0'],
+      ['a newer version', '0.12.0'],
+    ])('is not named to a start running %s', async (_, version) => {
+      seenNotice(60_000);
+      fs.writeFileSync(stateFile(), JSON.stringify({ ...readState(), latest: '0.11.0', latestAt: '2026-10-22T09:00:00.000Z' }));
+      const { check, updates } = start({ version, fetch: fakeFetch(reply(204)).fetch });
+      await check.settled();
+      expect(updates).toEqual([]);
+    });
+
+    it.each([
+      ['not a version', 'latest'],
+      ['a partial version', '0.11'],
+      ['a number', 11],
+      ['an object', { major: 0, minor: 11 }],
+      ['a version with trailing text', '0.11.0; rm -rf ~'],
+    ])('is ignored when the file holds %s', async (_, latest) => {
+      seenNotice(60_000);
+      fs.writeFileSync(stateFile(), JSON.stringify({ ...readState(), latest, latestAt: 'yesterday-ish' }));
+      const { check, updates } = start({ fetch: fakeFetch(reply(204)).fetch });
+      await check.settled();
+      expect(updates).toEqual([]);
+    });
+
+    it('is lost harmlessly when an older Ordewell rewrites the file without it', async () => {
+      seenNotice(DAY);
+      await start({ fetch: fakeFetch(reply(200, '{"latest":"0.11.0"}')).fetch }).check.settled();
+
+      // What 0.12.6 writes when it checks: the four fields it knows, no others.
+      now += 60 * 60_000;
+      const { installId, installIdAt, noticeShownAt } = readState();
+      fs.writeFileSync(stateFile(), JSON.stringify({ installId, installIdAt, noticeShownAt, lastCheckAt: new Date(now).toISOString() }, null, 2));
+
+      now += 60 * 60_000;
+      const quiet = fakeFetch(reply(200, '{"latest":"0.11.0"}'));
+      const later = start({ fetch: quiet.fetch });
+      await later.check.settled();
+      expect(later.updates).toEqual([]);
+      expect(later.notices).toEqual([]);
+      expect(quiet.calls).toEqual([]);
+
+      now += DAY;
+      const next = start({ fetch: quiet.fetch });
+      await next.check.settled();
+      expect(quiet.calls).toHaveLength(1);
+      expect(next.updates).toEqual(['Ordewell 0.11.0 is out (you have 0.10.12) — npm i -g ordewell']);
+      expect(readState()).toMatchObject({ installId, latest: '0.11.0' });
+    });
+
+    describe('named at most once a day', () => {
+      const remembered = () => {
+        seenNotice(60_000);
+        fs.writeFileSync(stateFile(), JSON.stringify({ ...readState(), latest: '0.11.0', latestAt: '2026-10-22T09:00:00.000Z' }));
+      };
+      const line = 'Ordewell 0.11.0 is out (you have 0.10.12) — npm i -g ordewell';
+
+      it('names it once, records when, and names it again once the day is up', async () => {
+        remembered();
+        expect(start({ updateLine: 'daily', fetch: fakeFetch(reply(204)).fetch }).updates).toEqual([line]);
+        expect(readState().updateShownAt).toBe('2026-10-23T09:00:00.000Z');
+
+        now += DAY - 60_000;
+        expect(start({ updateLine: 'daily', fetch: fakeFetch(reply(204)).fetch }).updates).toEqual([]);
+        now += 60_000;
+        expect(start({ updateLine: 'daily', fetch: fakeFetch(reply(204)).fetch }).updates).toEqual([line]);
+      });
+
+      it('names it once across the start and the ping that learns it', async () => {
+        seenNotice(DAY);
+        const { check, updates } = start({ updateLine: 'daily', fetch: fakeFetch(reply(200, '{"latest":"0.11.0"}')).fetch });
+        await check.settled();
+        expect(updates).toEqual([line]);
+        expect(start({ updateLine: 'daily', fetch: fakeFetch(reply(204)).fetch }).updates).toEqual([]);
+      });
+
+      it('is not silenced by a time recorded in the future', async () => {
+        remembered();
+        fs.writeFileSync(stateFile(), JSON.stringify({ ...readState(), updateShownAt: '2027-01-01T00:00:00.000Z' }));
+        expect(start({ updateLine: 'daily', fetch: fakeFetch(reply(204)).fetch }).updates).toEqual([line]);
+      });
+
+      it('leaves the every-start line alone', async () => {
+        remembered();
+        start({ updateLine: 'daily', fetch: fakeFetch(reply(204)).fetch });
+        expect(start({ fetch: fakeFetch(reply(204)).fetch }).updates).toEqual([line]);
+        expect(start({ fetch: fakeFetch(reply(204)).fetch }).updates).toEqual([line]);
+        expect(readState().updateShownAt).toBe('2026-10-23T09:00:00.000Z');
+      });
+
+      it('records nothing for a caller with nowhere to show it', async () => {
+        remembered();
+        startVersionCheck({ version: '0.10.12', stateDir, env: {}, now: () => now, onNotice: () => {}, updateLine: 'daily', fetch: fakeFetch(reply(204)).fetch }).stop();
+        expect(readState()).not.toHaveProperty('updateShownAt');
+        expect(start({ updateLine: 'daily', fetch: fakeFetch(reply(204)).fetch }).updates).toEqual([line]);
+      });
+
+      // POSIX permissions: Windows ignores the chmod.
+      it.skipIf(process.platform === 'win32')('names nothing when it cannot record it, since every start would name it again', async () => {
+        remembered();
+        fs.chmodSync(stateDir, 0o500);
+        try {
+          expect(start({ updateLine: 'daily', fetch: fakeFetch(reply(204)).fetch }).updates).toEqual([]);
+        } finally {
+          fs.chmodSync(stateDir, 0o700);
+        }
+      });
+    });
+
+    it('drops a corrupt field when the file is next written, and keeps the rest', async () => {
+      seenNotice(DAY);
+      fs.writeFileSync(stateFile(), JSON.stringify({ ...readState(), latest: 'soon', latestAt: 'yesterday-ish' }));
+      await start({ fetch: fakeFetch(reply(500)).fetch }).check.settled();
+      expect(readState()).toEqual({
+        installId: '7d5c1c8e-2f8a-4c43-9d0e-1d6f4c2a9b11',
+        installIdAt: '2026-10-21T09:00:00.000Z',
+        noticeShownAt: '2026-10-21T09:00:00.000Z',
+        lastCheckAt: '2026-10-23T09:00:00.000Z',
+      });
+    });
+
+    it.each([
+      ['a network failure', () => Promise.reject(new Error('offline'))],
+      ['a 500', reply(500)],
+      ['a redirect', reply(302)],
+      ['a body that is not JSON', reply(200, 'not json')],
+    ])('is kept through %s, which is no answer', async (_, answer) => {
+      seenNotice(DAY);
+      fs.writeFileSync(stateFile(), JSON.stringify({ ...readState(), latest: '0.11.0', latestAt: '2026-10-22T09:00:00.000Z' }));
+      await start({ fetch: fakeFetch(answer as () => ReturnType<PingFetch>).fetch }).check.settled();
+      expect(readState()).toMatchObject({ latest: '0.11.0', latestAt: '2026-10-22T09:00:00.000Z' });
+    });
   });
 
   it('names the upgrade command the caller gives, for an install npm did not make', async () => {
     seenNotice();
     const { check, updates } = start({
       fetch: fakeFetch(reply(200, '{"latest":"0.11.0"}')).fetch,
-      upgradeCommand: 'brew upgrade ordewell',
+      howToUpdate: 'brew upgrade ordewell',
     });
     await check.settled();
-    expect(updates).toEqual(['Ordewell 0.11.0 is out — brew upgrade ordewell']);
+    expect(updates).toEqual(['Ordewell 0.11.0 is out (you have 0.10.12) — brew upgrade ordewell']);
   });
 
   it.each([
@@ -161,7 +349,7 @@ describe('VersionCheck', () => {
     seenNotice();
     const { check, updates } = start({ fetch: fakeFetch(reply(200, JSON.stringify({ latest }))).fetch });
     await check.settled();
-    expect(updates).toEqual([`Ordewell ${latest} is out — npm i -g ordewell`]);
+    expect(updates).toEqual([`Ordewell ${latest} is out (you have 0.10.12) — npm i -g ordewell`]);
   });
 
   it.each([
@@ -215,17 +403,21 @@ describe('VersionCheck', () => {
 
     const clock = { now: () => Date.now() };
 
-    it('pings again a day later without being started again', async () => {
+    it('pings again a day later without being started again, naming each newer version once', async () => {
       seenNotice();
-      const net = fakeFetch(reply(200, '{"latest":"0.11.0"}'));
+      const answers = ['0.11.0', '0.11.0', '0.11.1'];
+      const net = fakeFetch(() => reply(200, JSON.stringify({ latest: answers.shift() }))());
       const { updates } = start({ fetch: net.fetch, ...clock });
       await vi.advanceTimersByTimeAsync(DAY - 60 * 60 * 1000);
       expect(net.calls).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
       expect(net.calls).toHaveLength(2);
-      expect(updates).toHaveLength(2);
       await vi.advanceTimersByTimeAsync(DAY);
       expect(net.calls).toHaveLength(3);
+      expect(updates).toEqual([
+        'Ordewell 0.11.0 is out (you have 0.10.12) — npm i -g ordewell',
+        'Ordewell 0.11.1 is out (you have 0.10.12) — npm i -g ordewell',
+      ]);
     });
 
     it('counts a check another process made in the shared file', async () => {
@@ -446,6 +638,20 @@ describe('VersionCheck', () => {
       expect(fs.readFileSync(stateFile(), 'utf8')).toBe(before);
     });
 
+    it.each([
+      ['ORDEWELL_NO_VERSION_CHECK=1', { env: { ORDEWELL_NO_VERSION_CHECK: '1' } }],
+      ['DO_NOT_TRACK=1', { env: { DO_NOT_TRACK: '1' } }],
+      ['telemetryEnabled: false', { telemetryEnabled: false }],
+    ])('%s: no line for a newer version the file remembers, and the file untouched', async (_, off) => {
+      seenNotice(60_000);
+      fs.writeFileSync(stateFile(), JSON.stringify({ ...readState(), latest: '0.11.0', latestAt: '2026-10-22T09:00:00.000Z' }));
+      const before = fs.readFileSync(stateFile(), 'utf8');
+      const { check, updates } = start({ fetch: fakeFetch(reply(204)).fetch, ...off });
+      await check.settled();
+      expect(updates).toEqual([]);
+      expect(fs.readFileSync(stateFile(), 'utf8')).toBe(before);
+    });
+
     it.each(['0', 'false', 'no', ''])('stays on for ORDEWELL_NO_VERSION_CHECK=%j and DO_NOT_TRACK=%j', async (value) => {
       const { notices } = start({ fetch: fakeFetch(reply(204)).fetch, env: { ORDEWELL_NO_VERSION_CHECK: value, DO_NOT_TRACK: value } });
       expect(notices).toEqual([NOTICE]);
@@ -456,6 +662,6 @@ describe('VersionCheck', () => {
     seenNotice();
     const { check, updates } = start({ version: '0.11.0-beta.2', fetch: fakeFetch(reply(200, '{"latest":"0.11.0"}')).fetch });
     await check.settled();
-    expect(updates).toEqual(['Ordewell 0.11.0 is out — npm i -g ordewell']);
+    expect(updates).toEqual(['Ordewell 0.11.0 is out (you have 0.11.0-beta.2) — npm i -g ordewell']);
   });
 });

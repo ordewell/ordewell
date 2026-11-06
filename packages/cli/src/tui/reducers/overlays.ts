@@ -3,7 +3,7 @@ import { bodyRows, helpScrollMax } from '../layout';
 import { findTask, refFor, visibleItems, type PickerItem, type PickerState, type TuiState } from '../state';
 import type { Key } from '../keys';
 import { handleApprovalKey, scrollApproval } from './approvals';
-import { keyPrompt, newSession, pickRewindTarget, withIdlePlanner } from './commands';
+import { keyPrompt, newSession, pickRewindTarget, updateRefusal, withIdlePlanner } from './commands';
 import { chooseBlocked, confirmedHandoff, handleHandoffKey, type BlockedChoice } from '../handoff';
 import { DEFAULT_EFFORT, pickerItemsFor } from './pickers';
 import { WHEEL_NOTCH, isWheel, pageNotch, scrollPointed } from './pointer';
@@ -73,6 +73,11 @@ function runConfirm(
 ): Step {
   const closed = { ...state, overlay: null };
   if (overlay.action.kind === 'new-session') return newSession(closed);
+  if (overlay.action.kind === 'update') {
+    // Events keep arriving while the question is open, a run's start among them.
+    const refusal = updateRefusal(state);
+    return refusal ? fail(closed, refusal) : step(closed, [{ type: 'selfUpdate' }]);
+  }
   if (overlay.action.kind === 'remove-task') {
     if (!state.sessionId) return step(closed);
     return step(closed, [{ type: 'removeTask', sessionId: state.sessionId, taskId: overlay.action.taskId }]);
