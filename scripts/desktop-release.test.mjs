@@ -2,7 +2,11 @@
 // scripts that mirror them. change-scope.test.mjs already holds every step id to the workflow's
 // rules; this pins what is specific to packaging the desktop app.
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { delimiter, dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { RELEASE_SECRETS, RELEASE_VARIABLES } from '../packages/desktop/scripts/package.mjs';
 import { FIXED_ASSETS } from './desktop-release-assets.mjs';
@@ -209,7 +213,9 @@ describe('the desktop job in release.yml', () => {
     assert.match(job(release, 'github-release'), /needs: \[npm-publish, vscode-publish\]/);
     const rest = [desktop, job(release, 'release-assets'), job(release, 'homebrew'), job(release, 'winget')].reduce((text, part) => text.replace(part, ''), release);
     assert.doesNotMatch(rest, /needs:.*desktop/);
-    for (const name of ['homebrew', 'winget']) assert.match(job(release, name), /needs: release-assets\n/, name);
+    // Homebrew names desktop only to read whether it ran (ADR-0065 C10).
+    assert.match(job(release, 'homebrew'), /needs: \[desktop, release-assets\]\n/);
+    assert.match(job(release, 'winget'), /needs: release-assets\n/);
   });
 });
 
@@ -219,7 +225,7 @@ describe('the package-manager jobs in release.yml (ADR-0063 H11)', () => {
 
   it('wait for the installers and the sums, and read nothing else of the release', () => {
     for (const text of [homebrew, winget]) {
-      assert.match(text, /needs: release-assets/);
+      assert.match(text, /needs: (?:\[desktop, )?release-assets\]?\n/);
       assert.match(text, /permissions:\n\s+contents: read/);
       assert.doesNotMatch(text, /contents: write/);
       assert.match(text, /gh release download "\$TAG" --pattern SHA256SUMS --dir sums --repo "\$REPO"|gh release download \$env:TAG --pattern SHA256SUMS --dir sums --repo \$env:REPO/);
@@ -319,5 +325,287 @@ describe('node-pty in the desktop package (ADR-0062 G11)', () => {
   it('is built by the package step that ci.yml and every desktop-build.yml runner run', () => {
     assert.match(job(build, 'build'), /run: npm run desktop:package\n/);
     assert.match(ci, /run: npm run desktop:package\n/);
+  });
+});
+
+// The ORDEWELL_RELEASE_DESKTOP switch (ADR-0065 C10), run rather than read:
+// the jobs' own conditions are evaluated as GitHub does, and the bash of the
+// two Ubuntu jobs that write is run against a fake gh holding a Release and a
+// fake git holding the tap, so what a release carries is what the steps did.
+
+/** A job's top-level field (`needs`, `if`), or undefined. */
+const jobField = (text, key) => new RegExp(`^ {4}${key}: (.*)$`, 'm').exec(text)?.[1];
+
+/** A job's `env:` block, as written. */
+const jobEnv = (text) => {
+  const block = /^ {4}env:\n((?: {6}.*\n| *#.*\n)+)/m.exec(text)?.[1] ?? '';
+  return Object.fromEntries([...block.matchAll(/^ {6}(\w+): (.+)$/gm)].map(([, key, value]) => [key, value]));
+};
+
+/** A job's steps: its fields as written, the env block, and the run script dedented. */
+const parseSteps = (text) => {
+  const lines = text.slice(text.indexOf('\n    steps:\n') + '\n    steps:\n'.length).split('\n');
+  const steps = [];
+  for (let i = 0; i < lines.length; i++) {
+    const first = /^ {6}- ([\w-]+): ?(.*)$/.exec(lines[i]);
+    const field = first ?? /^ {8}([\w-]+): ?(.*)$/.exec(lines[i]);
+    if (!field) continue;
+    if (first) steps.push({ env: {} });
+    const current = steps.at(-1);
+    const [, key, value] = field;
+    const block = [];
+    while (i + 1 < lines.length && (lines[i + 1].trim() === '' || lines[i + 1].startsWith('          '))) block.push(lines[++i]);
+    if (key === 'env') for (const [, name, entry] of block.join('\n').matchAll(/^ {10}(\w+): (.+)$/gm)) current.env[name] = entry;
+    else if (key === 'run' && value === '|') current.run = `${block.map((line) => line.slice(10)).join('\n').trimEnd()}\n`;
+    else current[key] = value;
+  }
+  return steps;
+};
+
+/**
+ * One GitHub Actions expression, in the forms release.yml uses: `!`, `&&`,
+ * `||`, parentheses, `==`/`!=` (which GitHub compares ignoring case), string
+ * literals, status functions and the needs, vars, env, secrets and github
+ * contexts. A bare condition with no status function is `success() && (...)`.
+ */
+const evaluate = (expression, context, { condition = false } = {}) => {
+  let source = expression.trim().replace(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/, '$1');
+  if (condition && !/\b(?:success|failure|cancelled|always)\(\)/.test(source)) source = `success() && (${source})`;
+  const tokens = source.match(/'[^']*'|==|!=|&&|\|\||[!()]|[\w.-]+\(\)|[\w-]+(?:\.[\w-]+)+/g);
+  assert.equal(tokens.join(''), source.replace(/\s+/g, ''), `release.yml uses an expression this test cannot read: ${source}`);
+  const lookup = (path) => {
+    const [scope, ...rest] = path.split('.');
+    if (scope === 'needs') return context.needs[rest[0]];
+    return context[scope]?.[rest.join('.')] ?? '';
+  };
+  const js = tokens.map((token) => {
+    if (token.startsWith("'")) return JSON.stringify(token.slice(1, -1).toLowerCase());
+    if (token === '==') return '===';
+    if (token === '!=') return '!==';
+    if (['&&', '||', '!', '(', ')'].includes(token)) return token;
+    if (token.endsWith('()')) return JSON.stringify({ 'success()': context.success, 'cancelled()': false, 'failure()': !context.success, 'always()': true }[token]);
+    const value = lookup(token);
+    return JSON.stringify(typeof value === 'string' ? value.toLowerCase() : value);
+  }).join(' ');
+  return new Function(`return (${js});`)();
+};
+
+/** Each release job's result, given the switch's value and how each job that ran came out. */
+const simulate = ({ vars = {}, outcome = {} }) => {
+  const needs = {};
+  const results = { ci: 'success', 'npm-publish': 'success', 'vscode-publish': 'success', 'github-release': 'success' };
+  for (const name of ['desktop', 'cli', 'release-assets', 'homebrew', 'winget']) {
+    const text = job(release, name);
+    needs[name] = (jobField(text, 'needs') ?? '').replace(/[[\]]/g, '').split(',').map((n) => n.trim()).filter(Boolean);
+    // A skipped or failed job anywhere upstream fails the implied success().
+    const upstream = (n) => (needs[n] ?? []).flatMap((m) => [m, ...upstream(m)]);
+    const success = upstream(name).every((n) => results[n] === 'success');
+    const runs = evaluate(jobField(text, 'if') ?? 'success()', { needs: results, vars, success }, { condition: true });
+    results[name] = runs ? outcome[name] ?? 'success' : 'skipped';
+  }
+  return results;
+};
+
+describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', () => {
+  const pick = (results) => ['desktop', 'cli', 'release-assets', 'homebrew', 'winget'].map((name) => `${name}=${results[name]}`).join(' ');
+
+  it('builds and releases the desktop app only when the variable is true', () => {
+    const on = 'desktop=success cli=success release-assets=success homebrew=success winget=success';
+    const off = 'desktop=skipped cli=success release-assets=success homebrew=success winget=skipped';
+    assert.equal(pick(simulate({ vars: { ORDEWELL_RELEASE_DESKTOP: 'true' } })), on);
+    for (const value of [undefined, '', 'false', '1', 'yes']) {
+      assert.equal(pick(simulate({ vars: value === undefined ? {} : { ORDEWELL_RELEASE_DESKTOP: value } })), off, `ORDEWELL_RELEASE_DESKTOP=${value}`);
+    }
+  });
+
+  it('still lets a desktop build that fails with the switch on stop the release assets and the package managers', () => {
+    assert.equal(
+      pick(simulate({ vars: { ORDEWELL_RELEASE_DESKTOP: 'true' }, outcome: { desktop: 'failure' } })),
+      'desktop=failure cli=success release-assets=skipped homebrew=skipped winget=skipped',
+    );
+  });
+
+  it('writes nothing after a CLI build or the release assets fail, with the switch either way', () => {
+    for (const vars of [{}, { ORDEWELL_RELEASE_DESKTOP: 'true' }]) {
+      assert.match(pick(simulate({ vars, outcome: { cli: 'failure' } })), /release-assets=skipped homebrew=skipped winget=skipped$/);
+      assert.match(pick(simulate({ vars, outcome: { 'release-assets': 'failure' } })), /homebrew=skipped winget=skipped$/);
+    }
+  });
+
+  const posixOnly = process.platform === 'win32' ? 'runs the bash of jobs that run only on ubuntu-latest' : false;
+  const VERSION = '9.8.7';
+  const CLI_ARCHIVES = ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64'].map((target) => `ordewell-${VERSION}-${target}.tar.gz`);
+  const INSTALLERS = ['mac-arm64.dmg', 'mac-x64.dmg', 'mac-arm64.zip', 'mac-x64.zip', 'win-x64.exe', 'linux-x64.AppImage', 'linux-x64.deb'].map((rest) => `Ordewell-${VERSION}-${rest}`);
+
+  /**
+   * A checkout of this repository's scripts, a fake Release holding what the
+   * builds that ran attached, and fake gh and git on PATH. Runs one job's steps
+   * in order as GitHub would, and returns what each printed.
+   */
+  const workspace = ({ desktop, tap = [] }) => {
+    const root = mkdtempSync(join(tmpdir(), 'release-switch-'));
+    const work = join(root, 'work');
+    const assets = join(root, 'release-assets');
+    const bin = join(root, 'bin');
+    for (const dir of [work, assets, bin, join(root, 'tap')]) mkdirSync(dir, { recursive: true });
+    // Copied, not linked: a script run through a link reads its own path as
+    // the link's target and skips its command line.
+    for (const dir of ['scripts', 'packaging']) cpSync(dir, join(work, dir), { recursive: true });
+    for (const name of [...CLI_ARCHIVES, ...(desktop ? INSTALLERS : [])]) writeFileSync(join(assets, name), `asset ${name}\n`);
+    for (const name of tap) {
+      mkdirSync(dirname(join(root, 'tap', name)), { recursive: true });
+      writeFileSync(join(root, 'tap', name), 'old\n');
+    }
+    const log = join(root, 'log');
+    writeFileSync(join(bin, 'fake.mjs'), `
+      import { appendFileSync, copyFileSync, cpSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+      import { basename, join } from 'node:path';
+      const [tool, ...args] = process.argv.slice(2);
+      appendFileSync(${JSON.stringify(log)}, JSON.stringify([tool, ...args]) + '\\n');
+      const after = (flag) => args.flatMap((arg, at) => (arg === flag ? [args[at + 1]] : []));
+      if (tool === 'gh' && args[0] === 'release' && args[1] === 'download') {
+        const globs = after('--pattern').map((p) => new RegExp('^' + p.replace(/[.]/g, '\\\\.').replace(/[*]/g, '.*') + '$'));
+        const names = readdirSync(${JSON.stringify(assets)}).filter((name) => globs.some((glob) => glob.test(name)));
+        if (names.length === 0) { console.error('no assets match the file pattern'); process.exit(1); }
+        mkdirSync(after('--dir')[0], { recursive: true });
+        for (const name of names) copyFileSync(join(${JSON.stringify(assets)}, name), join(after('--dir')[0], name));
+      } else if (tool === 'gh' && args[0] === 'release' && args[1] === 'upload') {
+        const files = args.slice(3).filter((arg, at, all) => !arg.startsWith('--') && !['--repo'].includes(all[at - 1]));
+        for (const file of files) copyFileSync(file, join(${JSON.stringify(assets)}, basename(file)));
+      } else if (tool === 'git' && args[0] === 'clone') {
+        cpSync(${JSON.stringify(join(root, 'tap'))}, args.at(-1), { recursive: true });
+      } else if (tool === 'git' && args[2] === 'rm') {
+        rmSync(join(args[1], args.at(-1)), { force: true });
+      } else if (tool === 'git' && args[2] === 'diff') {
+        process.exit(1);
+      } else if (tool !== 'git') {
+        process.exit(3);
+      }
+    `);
+    for (const tool of ['gh', 'git']) {
+      writeFileSync(join(bin, tool), `#!/bin/sh\nexec "${process.execPath}" "$(dirname "$0")/fake.mjs" ${tool} "$@"\n`);
+      chmodSync(join(bin, tool), 0o755);
+    }
+    const github = { ref_name: `v${VERSION}`, repository: 'ordewell/ordewell' };
+    const run = (name, { results, secrets = {}, artifacts = {} }) => {
+      const text = job(release, name);
+      const context = { needs: results, github, secrets, vars: {}, success: true };
+      const resolved = (values) => Object.fromEntries(Object.entries(values).map(([key, value]) => [key, String(value.includes('${{') ? evaluate(value, context) : value)]));
+      const env = resolved(jobEnv(text));
+      const printed = [];
+      for (const step of parseSteps(text)) {
+        if (step.if && !evaluate(step.if, { ...context, env }, { condition: true })) continue;
+        if (step.uses) {
+          const action = step.uses.split('@')[0];
+          if (action === 'actions/download-artifact') {
+            const artifact = /name: (\S+)/.exec(text.slice(text.indexOf(step.uses)))[1];
+            assert.ok(artifact in artifacts, `${name} downloads the artifact ${artifact}, which no job of this run uploaded`);
+            mkdirSync(join(work, 'signing'), { recursive: true });
+            writeFileSync(join(work, 'signing', 'signing.json'), JSON.stringify(artifacts[artifact]));
+          } else assert.ok(['actions/checkout', 'actions/setup-node'].includes(action), action);
+          continue;
+        }
+        assert.doesNotMatch(step.run, /\$\{\{/, `${step.name} expands an expression inside its script`);
+        const out = spawnSync('bash', ['--noprofile', '--norc', '-eo', 'pipefail', '-c', step.run], {
+          cwd: work,
+          encoding: 'utf8',
+          env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}`, ...env, ...resolved(step.env) },
+        });
+        printed.push({ step: step.name, stdout: out.stdout, stderr: out.stderr });
+        assert.equal(out.status, 0, `${name}: ${step.name} failed:\n${out.stdout}${out.stderr}`);
+      }
+      return printed;
+    };
+    const calls = () => readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    const listed = () => readFileSync(join(assets, 'SHA256SUMS'), 'utf8').trim().split('\n').map((line) => line.split(/\s+\*?/)[1]).sort();
+    return { root, work, assets, run, calls, listed, done: () => rmSync(root, { recursive: true, force: true }) };
+  };
+
+  const notices = (printed) => printed.flatMap(({ stdout }) => stdout.split('\n').filter((line) => line.startsWith('::notice::')));
+  const FIXED_CLI = ['ordewell-darwin-arm64.tar.gz', 'ordewell-darwin-x64.tar.gz', 'ordewell-linux-arm64.tar.gz', 'ordewell-linux-x64.tar.gz'];
+
+  it('releases the CLI alone with the switch off: its archives, their fixed copies, install.sh and a SHA256SUMS of just those', { skip: posixOnly }, () => {
+    const space = workspace({ desktop: false });
+    try {
+      const results = simulate({});
+      const printed = space.run('release-assets', { results });
+      const carried = [...CLI_ARCHIVES, ...FIXED_CLI, 'install.sh'].sort();
+      assert.deepEqual(readdirSync(space.assets).sort(), [...carried, 'SHA256SUMS'].sort());
+      assert.deepEqual(space.listed(), carried);
+      for (const [, hash, name] of readFileSync(join(space.assets, 'SHA256SUMS'), 'utf8').matchAll(/^([0-9a-f]{64}) [ *](\S+)$/gm)) {
+        assert.equal(hash, createHash('sha256').update(readFileSync(join(space.assets, name))).digest('hex'), name);
+      }
+      const uploads = space.calls().filter(([, , verb]) => verb === 'upload');
+      assert.deepEqual(uploads.at(-1).slice(4).filter((arg) => !arg.startsWith('--') && arg !== 'ordewell/ordewell'), ['release/SHA256SUMS']);
+      const downloaded = space.calls().find(([, , verb]) => verb === 'download');
+      assert.deepEqual(downloaded.filter((arg, at) => downloaded[at - 1] === '--pattern'), ['ordewell-*-*-*.tar.gz']);
+      assert.deepEqual(notices(printed), ["::notice::ORDEWELL_RELEASE_DESKTOP is not 'true', so the desktop app was not built: this release carries the CLI archives, install.sh and SHA256SUMS, Homebrew gets the formula and no cask, and winget no pull request (ADR-0065 C10)."]);
+    } finally {
+      space.done();
+    }
+  });
+
+  it('releases the desktop installers too with the switch on, and says nothing about the switch', { skip: posixOnly }, () => {
+    const space = workspace({ desktop: true });
+    try {
+      const results = simulate({ vars: { ORDEWELL_RELEASE_DESKTOP: 'true' } });
+      const printed = space.run('release-assets', { results });
+      const carried = [...CLI_ARCHIVES, ...FIXED_CLI, ...INSTALLERS, ...FIXED_ASSETS, 'install.sh'].sort();
+      assert.deepEqual(readdirSync(space.assets).sort(), [...carried, 'SHA256SUMS'].sort());
+      assert.deepEqual(space.listed(), carried);
+      assert.deepEqual(notices(printed), []);
+    } finally {
+      space.done();
+    }
+  });
+
+  it('publishes the formula and no cask with the switch off, and leaves the tap\'s old cask and its rename alone', { skip: posixOnly }, () => {
+    const space = workspace({ desktop: false, tap: ['Casks/ordewell.rb'] });
+    try {
+      const results = simulate({});
+      space.run('release-assets', { results });
+      const printed = space.run('homebrew', { results, secrets: { HOMEBREW_TAP_TOKEN: 'token' } });
+      const tap = join(space.work, 'tap');
+      assert.ok(existsSync(join(tap, 'Formula', 'ordewell.rb')));
+      assert.match(readFileSync(join(tap, 'Formula', 'ordewell.rb'), 'utf8'), new RegExp(`version "${VERSION.replace(/\./g, '\\.')}"`));
+      assert.ok(!existsSync(join(tap, 'Casks', 'ordewell-desktop.rb')), 'a cask was published for a release without the desktop app');
+      assert.ok(existsSync(join(tap, 'Casks', 'ordewell.rb')), 'the old cask went before its successor exists');
+      assert.ok(!existsSync(join(tap, 'cask_renames.json')));
+      assert.ok(!existsSync(join(space.work, 'rendered', 'homebrew', 'Casks')), 'the cask was rendered');
+      assert.ok(space.calls().some(([tool, , , verb]) => tool === 'git' && verb === 'push'));
+      assert.deepEqual(notices(printed), ["::notice::ORDEWELL_RELEASE_DESKTOP is not 'true', so this release has no desktop app and no cask was published, only the formula (ADR-0065 C10)."]);
+    } finally {
+      space.done();
+    }
+  });
+
+  it('says why nothing reached the tap when the token is missing too, with the switch off', { skip: posixOnly }, () => {
+    const space = workspace({ desktop: false });
+    try {
+      const results = simulate({});
+      space.run('release-assets', { results });
+      const printed = space.run('homebrew', { results });
+      assert.deepEqual(notices(printed), ['::notice::HOMEBREW_TAP_TOKEN is not set, so neither the formula nor the cask was published (ADR-0063 H11, ADR-0065 C8).']);
+      assert.ok(!space.calls().some(([tool]) => tool === 'git'));
+    } finally {
+      space.done();
+    }
+  });
+
+  it('publishes the cask from a notarized build with the switch on, and renames the old cask', { skip: posixOnly }, () => {
+    const space = workspace({ desktop: true, tap: ['Casks/ordewell.rb'] });
+    try {
+      const results = simulate({ vars: { ORDEWELL_RELEASE_DESKTOP: 'true' } });
+      space.run('release-assets', { results });
+      const printed = space.run('homebrew', { results, secrets: { HOMEBREW_TAP_TOKEN: 'token' }, artifacts: { 'signing-macOS': { notarized: true } } });
+      const tap = join(space.work, 'tap');
+      assert.ok(existsSync(join(tap, 'Formula', 'ordewell.rb')));
+      assert.match(readFileSync(join(tap, 'Casks', 'ordewell-desktop.rb'), 'utf8'), new RegExp(`version "${VERSION.replace(/\./g, '\\.')}"`));
+      assert.ok(!existsSync(join(tap, 'Casks', 'ordewell.rb')));
+      assert.deepEqual(JSON.parse(readFileSync(join(tap, 'cask_renames.json'), 'utf8')), { ordewell: 'ordewell-desktop' });
+      assert.deepEqual(notices(printed), []);
+    } finally {
+      space.done();
+    }
   });
 });

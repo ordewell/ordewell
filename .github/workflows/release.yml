@@ -137,8 +137,13 @@ jobs:
   # name, not inherited, so the desktop build never holds the publishing
   # tokens; with none set the installers are unsigned and updates are off
   # (ADR-0063 H9).
+  #
+  # Built only when the repository variable ORDEWELL_RELEASE_DESKTOP is true
+  # (ADR-0065 C10). Off, the release is the CLI's alone: release-assets says
+  # so, Homebrew gets the formula and no cask, and winget is skipped.
   desktop:
     needs: github-release
+    if: vars.ORDEWELL_RELEASE_DESKTOP == 'true'
     uses: ./.github/workflows/desktop-build.yml
     # A called workflow's token cannot exceed the caller's grant.
     permissions:
@@ -197,11 +202,19 @@ jobs:
   # blockmaps are not touched or listed: electron-updater reads them by their
   # own names. This job writes the Release, so its actions are pinned to a
   # commit SHA.
+  #
+  # With the desktop job skipped by its switch, the implied success() would
+  # skip this job too, so the condition names each result: the CLI built, and
+  # the desktop app either built or was left out on purpose. A desktop build
+  # that fails with the switch on still stops it.
   release-assets:
     needs: [desktop, cli]
+    if: ${{ !cancelled() && needs.cli.result == 'success' && (needs.desktop.result == 'success' || (needs.desktop.result == 'skipped' && vars.ORDEWELL_RELEASE_DESKTOP != 'true')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      DESKTOP_RELEASED: ${{ needs.desktop.result == 'success' }}
 
     steps:
       # For scripts/desktop-release-assets.mjs and scripts/install/cli.sh;
@@ -222,18 +235,27 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
+        # The installers' patterns only when the desktop job attached them.
         run: |
-          gh release download "$TAG" --dir release --repo "$REPO" \
-            --pattern 'Ordewell-*-*-*.dmg' --pattern 'Ordewell-*-*-*.zip' --pattern 'Ordewell-*-*-*.exe' \
-            --pattern 'Ordewell-*-*-*.AppImage' --pattern 'Ordewell-*-*-*.deb' \
+          desktop=()
+          if [ "$DESKTOP_RELEASED" = true ]; then
+            desktop=(--pattern 'Ordewell-*-*-*.dmg' --pattern 'Ordewell-*-*-*.zip' --pattern 'Ordewell-*-*-*.exe'
+              --pattern 'Ordewell-*-*-*.AppImage' --pattern 'Ordewell-*-*-*.deb')
+          fi
+          gh release download "$TAG" --dir release --repo "$REPO" "${desktop[@]}" \
             --pattern 'ordewell-*-*-*.tar.gz'
 
       # Refuses a Release missing any fixed-name source, or whose files
-      # disagree on the version.
+      # disagree on the version. Without the desktop app, the CLI's are the
+      # only sources and SHA256SUMS lists nothing else.
       - name: Write the fixed-name copies and SHA256SUMS
         run: |
           cp scripts/install/cli.sh release/install.sh
-          node scripts/desktop-release-assets.mjs release
+          if [ "$DESKTOP_RELEASED" = true ]; then
+            node scripts/desktop-release-assets.mjs release
+          else
+            node scripts/desktop-release-assets.mjs release --without-desktop
+          fi
 
       # --clobber: a re-run replaces the file it uploaded before.
       - name: Attach the fixed-name copies and install.sh
@@ -243,9 +265,12 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           cd release
-          gh release upload "$TAG" \
-            Ordewell-mac-arm64.dmg Ordewell-mac-x64.dmg Ordewell-win-x64.exe \
-            Ordewell-linux-x64.AppImage Ordewell-linux-x64.deb \
+          desktop=()
+          if [ "$DESKTOP_RELEASED" = true ]; then
+            desktop=(Ordewell-mac-arm64.dmg Ordewell-mac-x64.dmg Ordewell-win-x64.exe
+              Ordewell-linux-x64.AppImage Ordewell-linux-x64.deb)
+          fi
+          gh release upload "$TAG" "${desktop[@]}" \
             ordewell-darwin-arm64.tar.gz ordewell-darwin-x64.tar.gz \
             ordewell-linux-arm64.tar.gz ordewell-linux-x64.tar.gz \
             install.sh \
@@ -257,6 +282,11 @@ jobs:
           TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
         run: gh release upload "$TAG" release/SHA256SUMS --clobber --repo "$REPO"
+
+      - name: Say why the release carries no desktop app
+        if: env.DESKTOP_RELEASED != 'true'
+        run: |
+          echo "::notice::ORDEWELL_RELEASE_DESKTOP is not 'true', so the desktop app was not built: this release carries the CLI archives, install.sh and SHA256SUMS, Homebrew gets the formula and no cask, and winget no pull request (ADR-0065 C10)."
 
   # The package managers (ADR-0063 H11, ADR-0065 C8), from what the Release
   # already carries: each renders from the version and the SHA256SUMS
@@ -270,8 +300,14 @@ jobs:
   # These two jobs hold the only tokens that reach outside this repository, so
   # every action they use is pinned to a commit SHA, unlike the tag pins the
   # rest of the workflows use.
+  #
+  # Homebrew runs with the desktop app left out too (ADR-0065 C10): the formula
+  # needs only the CLI. It waits on desktop only to know whether it ran, and
+  # names release-assets' result because a skipped desktop job would otherwise
+  # skip it. winget installs nothing but the desktop app, so it is skipped.
   homebrew:
-    needs: release-assets
+    needs: [desktop, release-assets]
+    if: ${{ !cancelled() && needs.release-assets.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -279,6 +315,7 @@ jobs:
       # A secret cannot be read in an `if`, so the test is a variable; the
       # token itself reaches only the step that pushes.
       HOMEBREW_TAP_TOKEN_SET: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
+      DESKTOP_RELEASED: ${{ needs.desktop.result == 'success' }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -297,8 +334,9 @@ jobs:
           REPO: ${{ github.repository }}
         run: gh release download "$TAG" --pattern SHA256SUMS --dir sums --repo "$REPO"
 
-      # The desktop build's, from this same run.
+      # The desktop build's, from this same run, so only when it ran.
       - name: Download the macOS signing manifest
+        if: env.DESKTOP_RELEASED == 'true'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: signing-macOS
@@ -311,12 +349,13 @@ jobs:
         run: node scripts/render-package-manifests.mjs --version "${TAG#v}" --sums sums/SHA256SUMS --only formula --out rendered
 
       - name: Render the cask
+        if: env.DESKTOP_RELEASED == 'true'
         env:
           TAG: ${{ github.ref_name }}
         run: node scripts/render-package-manifests.mjs --version "${TAG#v}" --sums sums/SHA256SUMS --only cask --out rendered
 
       # One clone, one commit: the formula always, the cask only from a
-      # notarized build. The cask was `ordewell` until the formula took the
+      # notarized build of a release that carries the desktop app. The cask was `ordewell` until the formula took the
       # name (ADR-0065 C8): once `ordewell-desktop` is in the tap the old file
       # goes, and cask_renames.json, at the tap's root as Homebrew reads it,
       # moves an installed `ordewell` cask to `ordewell-desktop` on upgrade.
@@ -337,7 +376,9 @@ jobs:
           mkdir -p tap/Formula
           cp rendered/homebrew/Formula/ordewell.rb tap/Formula/ordewell.rb
           git -C tap add Formula/ordewell.rb
-          if node -e 'process.exit(JSON.parse(require("fs").readFileSync("signing/signing.json", "utf8")).notarized === true ? 0 : 1)'; then
+          if [ "$DESKTOP_RELEASED" != true ]; then
+            echo "::notice::ORDEWELL_RELEASE_DESKTOP is not 'true', so this release has no desktop app and no cask was published, only the formula (ADR-0065 C10)."
+          elif node -e 'process.exit(JSON.parse(require("fs").readFileSync("signing/signing.json", "utf8")).notarized === true ? 0 : 1)'; then
             mkdir -p tap/Casks
             cp rendered/homebrew/Casks/ordewell-desktop.rb tap/Casks/ordewell-desktop.rb
             git -C tap add Casks/ordewell-desktop.rb
@@ -370,6 +411,7 @@ jobs:
 
   winget:
     needs: release-assets
+    if: vars.ORDEWELL_RELEASE_DESKTOP == 'true'
     runs-on: windows-latest
     permissions:
       contents: read

@@ -18,7 +18,10 @@
 #                     ~/.ordewell/runtime; sessions and other data stay
 #   --dry-run         say what would be downloaded and installed, and do nothing
 #   --desktop         also run the desktop app installer (desktop.sh), passing
-#                     --version, --uninstall and --dry-run on
+#                     --version, --uninstall and --dry-run on; when the
+#                     release's SHA256SUMS lists no desktop installer, the CLI
+#                     is installed, the script says the release has no desktop
+#                     app and exits 1 (ADR-0065 C10)
 #   -h, --help        this text
 #
 # Environment:
@@ -71,7 +74,7 @@ Usage: install.sh [--version X.Y.Z] [--uninstall] [--dry-run] [--desktop]
                    data in ~/.ordewell stay
   --dry-run        say what would be downloaded and installed, and do nothing
   --desktop        also run the desktop app installer, passing --version,
-                   --uninstall and --dry-run on
+                   --uninstall and --dry-run on, when the release carries it
   -h, --help       this text
 
 Environment:
@@ -397,4 +400,13 @@ else
   say "No coding agent was found on PATH. Ordewell needs one, installed and signed in: $all_agents."
 fi
 
-[ "$want_desktop" = 0 ] || run_desktop
+[ "$want_desktop" = 1 ] || exit 0
+# A release made with the desktop app left out (release.yml's
+# ORDEWELL_RELEASE_DESKTOP off, ADR-0065 C10) lists only the CLI's files. The
+# CLI stays installed; the exit status tells a calling script the app is not.
+if ! awk '{ name = $2; sub(/^\*/, "", name); if (name ~ /^Ordewell-/) { found = 1; exit } } END { exit !found }' "$tmp/SHA256SUMS"; then
+  note ""
+  note "ordewell: this release does not include the desktop app yet, so only the command-line app was installed."
+  exit 1
+fi
+run_desktop

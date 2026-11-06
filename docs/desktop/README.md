@@ -17,6 +17,11 @@ window holds, and what to do when it will not start.
 
 ## Install
 
+> **Not in a release yet.** Releases do not carry the desktop installers yet:
+> they are made with the app left out until it is ready (ADR-0065 C10). Until
+> then, [run it from source](#run-it-from-source). The instructions below are
+> how it installs once a release carries it.
+
 Each [release](https://github.com/ordewell/ordewell/releases) attaches the
 installers, named `Ordewell-<version>-<os>-<arch>.<ext>`:
 

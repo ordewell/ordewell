@@ -75,8 +75,11 @@ function archive(binary = FAKE_BINARY, member = 'ordewell') {
   return readFileSync(out);
 }
 
-/** A release folder: the fixed and the versioned archive for every os/arch, and its SHA256SUMS. */
-function release({ binary = FAKE_BINARY, omitFromSums = [] } = {}) {
+/**
+ * A release folder: the fixed and the versioned archive for every os/arch, and its SHA256SUMS.
+ * `desktop` lists the desktop installers in SHA256SUMS too, as a release that carries the app does.
+ */
+function release({ binary = FAKE_BINARY, omitFromSums = [], desktop = false } = {}) {
   const dir = scratch('release');
   const lines = [];
   const tgz = archive(binary);
@@ -87,6 +90,9 @@ function release({ binary = FAKE_BINARY, omitFromSums = [] } = {}) {
         if (!omitFromSums.includes(name)) lines.push(`${sha256(tgz)}  ${name}`);
       }
     }
+  }
+  if (desktop) {
+    for (const name of ['Ordewell-mac-arm64.dmg', `Ordewell-${VERSION}-mac-arm64.dmg`, 'Ordewell-linux-x64.AppImage', `Ordewell-${VERSION}-linux-x64.AppImage`]) lines.push(`${'0'.repeat(64)}  ${name}`);
   }
   writeFileSync(join(dir, 'SHA256SUMS'), `${lines.sort((a, b) => a.slice(66).localeCompare(b.slice(66))).join('\n')}\n`);
   return dir;
@@ -468,6 +474,8 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
   });
 
   describe('--desktop', () => {
+    const withDesktop = () => release({ desktop: true });
+
     /** A desktop installer that records the arguments it was run with. */
     function desktopScript() {
       const dir = scratch('desktop');
@@ -479,7 +487,7 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
 
     it('runs the desktop installer after the CLI, with --version passed on', () => {
       const { script, log } = desktopScript();
-      const result = install(['--desktop', '--version', VERSION], { env: { ORDEWELL_DESKTOP_SCRIPT_FROM: script } });
+      const result = install(['--desktop', '--version', VERSION], { dir: withDesktop(), env: { ORDEWELL_DESKTOP_SCRIPT_FROM: script } });
       assert.equal(result.status, 0, result.stderr);
       assert.ok(existsSync(join(result.target, 'ordewell')));
       assert.match(result.stdout, /desktop installer ran/);
@@ -496,7 +504,7 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
 
     it('passes nothing on when there is nothing to pass', () => {
       const { script, log } = desktopScript();
-      assert.equal(install(['--desktop'], { env: { ORDEWELL_DESKTOP_SCRIPT_FROM: script } }).status, 0);
+      assert.equal(install(['--desktop'], { dir: withDesktop(), env: { ORDEWELL_DESKTOP_SCRIPT_FROM: script } }).status, 0);
       assert.equal(readFileSync(log, 'utf8'), 'desktop.sh \n');
     });
 
@@ -512,7 +520,7 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
     for (const args of [[], ['--dry-run'], ['--uninstall']]) {
       it(`does not pass the CLI's ORDEWELL_INSTALL_DIR on to desktop.sh (${args.join(' ') || 'install'})`, () => {
         const { script, log } = desktopEnvScript();
-        const result = install(['--desktop', ...args], { env: { ORDEWELL_DESKTOP_SCRIPT_FROM: script } });
+        const result = install(['--desktop', ...args], { dir: withDesktop(), env: { ORDEWELL_DESKTOP_SCRIPT_FROM: script } });
         assert.equal(result.status, 0, result.stderr);
         assert.equal(readFileSync(log, 'utf8'), 'ORDEWELL_INSTALL_DIR=<unset>\n');
       });
@@ -520,7 +528,7 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
       it(`passes ORDEWELL_DESKTOP_INSTALL_DIR on as desktop.sh's ORDEWELL_INSTALL_DIR (${args.join(' ') || 'install'})`, () => {
         const { script, log } = desktopEnvScript();
         const where = join(scratch('desktop-prefix'), 'apps');
-        const result = install(['--desktop', ...args], { env: { ORDEWELL_DESKTOP_SCRIPT_FROM: script, ORDEWELL_DESKTOP_INSTALL_DIR: where } });
+        const result = install(['--desktop', ...args], { dir: withDesktop(), env: { ORDEWELL_DESKTOP_SCRIPT_FROM: script, ORDEWELL_DESKTOP_INSTALL_DIR: where } });
         assert.equal(result.status, 0, result.stderr);
         assert.equal(readFileSync(log, 'utf8'), `ORDEWELL_INSTALL_DIR=${where}\n`);
         if (args.length === 0) assert.ok(existsSync(join(result.target, 'ordewell')));
@@ -541,6 +549,25 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
       assert.doesNotMatch(result.stdout, /cli-only-bin\/bin\/ordewell-desktop/);
     });
 
+    it('installs the CLI from a release without the desktop app, says so plainly and exits non-zero (ADR-0065 C10)', () => {
+      const { script, log } = desktopScript();
+      const result = install(['--desktop'], { env: { ORDEWELL_DESKTOP_SCRIPT_FROM: script } });
+      assert.equal(result.status, 1, result.stdout + result.stderr);
+      assert.ok(existsSync(join(result.target, 'ordewell')), 'the CLI is installed');
+      assert.match(result.stdout, /^Installed ordewell /m);
+      assert.match(result.stderr, /this release does not include the desktop app yet/);
+      assert.ok(!existsSync(log), 'desktop.sh was run');
+    });
+
+    it('takes a desktop installer listed as binary, with *, as the release carrying the app', () => {
+      const { script, log } = desktopScript();
+      const dir = release();
+      writeFileSync(join(dir, 'SHA256SUMS'), `${readFileSync(join(dir, 'SHA256SUMS'), 'utf8')}${'0'.repeat(64)} *Ordewell-win-x64.exe\n`);
+      const result = install(['--desktop'], { dir, env: { ORDEWELL_DESKTOP_SCRIPT_FROM: script } });
+      assert.equal(result.status, 0, result.stderr);
+      assert.ok(existsSync(log));
+    });
+
     it('is not run without --desktop', () => {
       const { script, log } = desktopScript();
       assert.equal(install([], { env: { ORDEWELL_DESKTOP_SCRIPT_FROM: script } }).status, 0);
@@ -558,7 +585,7 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
     it('reports a failing desktop installer, with the CLI installed', () => {
       const dir = scratch('desktop');
       write(join(dir, 'desktop.sh'), '#!/bin/sh\nexit 4\n');
-      const result = install(['--desktop'], { env: { ORDEWELL_DESKTOP_SCRIPT_FROM: join(dir, 'desktop.sh') } });
+      const result = install(['--desktop'], { dir: withDesktop(), env: { ORDEWELL_DESKTOP_SCRIPT_FROM: join(dir, 'desktop.sh') } });
       assert.equal(result.status, 1);
       assert.match(result.stderr, /desktop app installer failed/);
       assert.ok(existsSync(join(result.target, 'ordewell')));

@@ -5,7 +5,7 @@
 // download/<name> always resolves, and one SHA256SUMS file over every
 // installer, archive, fixed copy and the CLI's install.sh.
 //
-//   node scripts/desktop-release-assets.mjs <dir> [--partial]
+//   node scripts/desktop-release-assets.mjs <dir> [--partial] [--without-desktop]
 //
 // <dir> holds the installers electron-builder wrote, named
 // Ordewell-<version>-<os>-<arch>.<ext>, the CLI archives named
@@ -16,6 +16,13 @@
 // the installers. --partial is for a local directory (`npm run desktop:package`
 // on one OS builds some of them), so the installer scripts can be run against
 // it.
+//
+// --without-desktop is a release that leaves the desktop app out (ADR-0065
+// C10, release.yml's ORDEWELL_RELEASE_DESKTOP switch off): only the CLI's
+// fixed names are made and SHA256SUMS lists only the CLI archives, their copies
+// and install.sh, so the CLI's install.sh and the formula need no desktop build.
+// A desktop installer in <dir> is then left out, not listed: a SHA256SUMS that
+// named one would tell `install.sh --desktop` the release carries the app.
 import { createHash } from 'node:crypto';
 import { copyFileSync, createReadStream, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -86,12 +93,17 @@ function sha256(path) {
  * Writes the fixed-name copies and SHA256SUMS into `dir`, in `sha256sum -c`
  * format (two spaces between the hash and the name). Returns what it wrote.
  */
-export async function writeReleaseAssets(dir, { partial = false } = {}) {
-  const { installers, claimed } = readInstallers(readdirSync(dir));
-  if (installers.length === 0) throw new Error(`no Ordewell-<version>-<os>-<arch> installer or ordewell-<version>-<os>-<arch>.tar.gz in ${dir}`);
+export async function writeReleaseAssets(dir, { partial = false, withoutDesktop = false } = {}) {
+  const read = readInstallers(readdirSync(dir));
+  const isCli = (installer) => CLI_FIXED_ASSETS.includes(installer.fixed);
+  const installers = withoutDesktop ? read.installers.filter(isCli) : read.installers;
+  const claimed = withoutDesktop ? new Map([...read.claimed].filter(([, installer]) => isCli(installer))) : read.claimed;
+  if (installers.length === 0) {
+    throw new Error(withoutDesktop ? `no ordewell-<version>-<os>-<arch>.tar.gz in ${dir}` : `no Ordewell-<version>-<os>-<arch> installer or ordewell-<version>-<os>-<arch>.tar.gz in ${dir}`);
+  }
 
   const hasScript = readdirSync(dir).includes(INSTALL_SCRIPT);
-  const missing = [...FIXED_ASSETS, ...CLI_FIXED_ASSETS].filter((name) => !claimed.has(name));
+  const missing = [...(withoutDesktop ? [] : FIXED_ASSETS), ...CLI_FIXED_ASSETS].filter((name) => !claimed.has(name));
   if (!hasScript) missing.push(INSTALL_SCRIPT);
   if (!partial && missing.length > 0) throw new Error(`the release is missing ${missing.join(', ')}`);
   const versions = new Set([...claimed.values()].map((installer) => installer.version));
@@ -108,14 +120,14 @@ export async function writeReleaseAssets(dir, { partial = false } = {}) {
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const args = process.argv.slice(2);
-  const partial = args.includes('--partial');
+  const flags = args.filter((arg) => arg.startsWith('--'));
   const dirs = args.filter((arg) => !arg.startsWith('--'));
-  if (dirs.length !== 1) {
-    console.error('usage: node scripts/desktop-release-assets.mjs <dir> [--partial]');
+  if (dirs.length !== 1 || flags.some((flag) => flag !== '--partial' && flag !== '--without-desktop')) {
+    console.error('usage: node scripts/desktop-release-assets.mjs <dir> [--partial] [--without-desktop]');
     process.exit(2);
   }
   try {
-    const { fixed, sums, missing } = await writeReleaseAssets(dirs[0], { partial });
+    const { fixed, sums, missing } = await writeReleaseAssets(dirs[0], { partial: flags.includes('--partial'), withoutDesktop: flags.includes('--without-desktop') });
     console.log(`${SUMS_FILE}: ${sums.length} files; fixed-name copies: ${fixed.join(', ')}`);
     if (missing.length > 0) console.log(`(partial: no ${missing.join(', ')})`);
   } catch (error) {

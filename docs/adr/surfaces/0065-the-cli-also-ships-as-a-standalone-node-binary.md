@@ -92,9 +92,10 @@ is already served by `npm`.
   `releases/latest/download/<name>` always resolves, and attaches
   `scripts/install/cli.sh` as `install.sh`. The archive holds the executable and
   keeps its mode bit. A job in `release.yml` writes the single `SHA256SUMS`
-  over the desktop installers, the CLI archives and `install.sh` after both the
-  desktop and the CLI builds have attached their files, and uploads it last, so
-  a release that has the file has everything it lists. Whoever installs checks
+  over the desktop installers, the CLI archives and `install.sh` after the CLI
+  build, and the desktop build when the release carries the app (C10), have
+  attached their files, and uploads it last, so a release that has the file has
+  everything it lists. Whoever installs checks
   the SHA-256 against that file from the same release; as in
   [ADR-0063 H10](0063-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)
   it proves the download is whole, and signing is what proves who made it.
@@ -118,7 +119,9 @@ is already served by `npm`.
   `ORDEWELL_DESKTOP_SCRIPT_FROM` if set), passing those flags on but not
   `ORDEWELL_INSTALL_DIR`, which means the app's folder there;
   `ORDEWELL_DESKTOP_INSTALL_DIR` is passed on as desktop.sh's
-  `ORDEWELL_INSTALL_DIR` instead. It reports whether `git` is present (recommended, not required) and
+  `ORDEWELL_INSTALL_DIR` instead. On a release without the desktop app (C10),
+  `--desktop` installs the CLI, says the release has no desktop app yet and
+  exits 1. It reports whether `git` is present (recommended, not required) and
   which coding agents it finds, and installs neither. It lowers no OS protection, as the
   desktop installers do (ADR-0063 H10).
 
@@ -137,13 +140,32 @@ is already served by `npm`.
   says. The cask was `ordewell` before: once `ordewell-desktop` is in the tap,
   the same commit removes `Casks/ordewell.rb` and maps `ordewell` to
   `ordewell-desktop` in the tap's `cask_renames.json`, so an installed cask
-  moves to the new name on upgrade.
+  moves to the new name on upgrade. That happens with the first release that
+  carries the desktop app (C10); until then the tap's cask is left as it is.
 
 - **The update notice names how this copy was installed (C9).** The line
   [ADR-0048](../platform/0048-a-daily-version-check-with-a-notice-first-and-one-install-per-machine.md)
   prints says `brew upgrade ordewell` for a Homebrew install, to run the
   installer again for another binary install, and `npm i -g ordewell` otherwise.
   The request, the notice, the off switches and the state file are unchanged.
+
+- **A release carries the desktop app only when `ORDEWELL_RELEASE_DESKTOP` is
+  `true` (C10).** The repository variable gates the `desktop` job of
+  `release.yml`; unset or any other value leaves the app out of the release,
+  and GitHub compares it without regard to case, so `TRUE` turns it on too.
+  With it off, a release carries the CLI archives, their fixed-name copies,
+  `install.sh` and a `SHA256SUMS` over those alone: `release-assets` runs on the
+  CLI build by itself (`!cancelled()` and each upstream job's result, because a
+  job's implied `success()` fails once any job before it was skipped),
+  downloads only the CLI archives and runs
+  `scripts/desktop-release-assets.mjs --without-desktop`. `homebrew` publishes
+  the formula and no cask, so the rename of C8 waits for the first release that
+  carries the app, and `winget` does not run. Each skip prints a `::notice::`
+  naming the variable. With it on, every job runs as before, and a desktop
+  build that fails still holds back `SHA256SUMS` and the publishing jobs.
+  Turning the app on is setting the variable to `true` and restoring the
+  install text the README and `docs/desktop/README.md` hold back while it is
+  off.
 
 ## Testing decisions
 
@@ -194,6 +216,11 @@ their unit tests run under plain Node.
 - **Keeping the cask named `ordewell`.** Rejected: it would clash with the
   formula's name in the same tap. `ordewell-desktop` matches the installer's
   `BIN_NAME`.
+- **Deciding per release whether to build the desktop app, by a workflow input
+  or a tag pattern.** Rejected: a release is a tag push, which takes no input,
+  and a second tag pattern would be one more thing a release manager must get
+  right each time. A repository variable is read in a job's `if`, changes
+  without a commit, and stays as set until the app is ready.
 - **The binary for Windows too.** Deferred, not rejected: the TUI's Windows
   behaviour has its own measured quirks (ADR-0010), and npm works there today.
 
@@ -212,10 +239,14 @@ their unit tests run under plain Node.
 - A macOS binary re-signed ad hoc is not notarized: notarization is what
   settles Gatekeeper, as it does for the app.
 - The desktop cask's name changes, so a Homebrew user of the app reinstalls it
-  under `ordewell-desktop`.
+  under `ordewell-desktop`, once a release carries the app (C10).
+- A release made with `ORDEWELL_RELEASE_DESKTOP` off has no desktop installers,
+  so `releases/latest/download/Ordewell-*` does not resolve and `desktop.sh` and
+  `desktop.ps1` fail against the latest release until one carries the app.
 
 ## History
 
 - 2026-11-06 — accepted.
 - 2026-11-06 — C7 names the installer's flags and variables; C8 says how the old `ordewell` cask is renamed in the tap.
 - 2026-11-06 — C4 names the CLI's signing narrowings: a base64 `CSC_LINK` and notarization by API key only.
+- 2026-11-06 — C10: the desktop app is in a release only when `ORDEWELL_RELEASE_DESKTOP` is `true`; C5, C7 and C8 say what a release without it carries.

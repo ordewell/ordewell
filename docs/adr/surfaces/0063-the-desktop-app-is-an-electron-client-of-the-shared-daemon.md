@@ -1,6 +1,6 @@
 ---
 status: accepted
-note: "Settles the host half of #129 and #136; the design is docs/desktop/design.md. packages/desktop holds the app: the daemon manager, the token-holding proxy, the hardened windows, the tray and quit rules, and every view the design lists. It is packaged for macOS, Windows and Linux (electron-builder.yml), built in CI and attached to each release, signed and notarized when the release has the credentials, with updates on only for a signed build (H9). Each release also carries fixed-name copies of the installers and one SHA256SUMS, shared with the CLI binaries of ADR-0065, which one-line install scripts read (H10). A Homebrew formula and cask (ordewell-desktop) and winget manifests are rendered from that version and SHA256SUMS, and published when their tokens exist (H11)."
+note: "Settles the host half of #129 and #136; the design is docs/desktop/design.md. packages/desktop holds the app: the daemon manager, the token-holding proxy, the hardened windows, the tray and quit rules, and every view the design lists. It is packaged for macOS, Windows and Linux (electron-builder.yml), built in CI and attached to a release when the repository variable ORDEWELL_RELEASE_DESKTOP is true (ADR-0065 C10), signed and notarized when the release has the credentials, with updates on only for a signed build (H9). Such a release also carries fixed-name copies of the installers and one SHA256SUMS, shared with the CLI binaries of ADR-0065, which one-line install scripts read (H10). A Homebrew formula and cask (ordewell-desktop) and winget manifests are rendered from that version and SHA256SUMS, and published when their tokens exist (H11)."
 ---
 
 # 0063 — The desktop app is an Electron client of the shared daemon, and its renderer never holds the token
@@ -49,12 +49,14 @@ holds the token.**
   host-neutral view-assembly layer; only the transport under them differs.
 - The app starts dark and the user picks Dark, Light or System (which follows the OS), chrome is native (inset traffic lights on
   macOS, a title-bar overlay on Windows), and one window shows one workspace.
-- Installers are built in CI and attached to the GitHub Release. A release
-  signs them (and on macOS notarizes them) when the repository holds the
+- Installers are built in CI and attached to the GitHub Release, when the
+  repository variable `ORDEWELL_RELEASE_DESKTOP` is `true`
+  ([ADR-0065](0065-the-cli-also-ships-as-a-standalone-node-binary.md) C10); a
+  release made with it off leaves the app out. A release signs them (and on macOS notarizes them) when the repository holds the
   credentials, and builds them unsigned when it does not. Whether the app
   updates itself is decided when it is packaged and baked into it: on only for
-  a signed build (H9). Each release also carries fixed-name copies and a
-  `SHA256SUMS`, which the one-line install scripts read (H10). A release also
+  a signed build (H9). A release that carries the app also carries fixed-name
+  copies and a `SHA256SUMS`, which the one-line install scripts read (H10), and
   publishes to Homebrew and winget, from that same `SHA256SUMS` (H11).
 
 ## Key properties
@@ -153,7 +155,9 @@ holds the token.**
 - **A stable download link and a one-line install per OS, both verified
   against one `SHA256SUMS` (H10).** `release.yml`'s `release-assets` job
   runs once both the desktop and the CLI builds have attached their files, the
-  only point where one place holds every installer, and with
+  only point where one place holds every installer (on a release that leaves the
+  app out it runs on the CLI build alone and lists only the CLI's files,
+  ADR-0065 C10), and with
   `scripts/desktop-release-assets.mjs` makes the fixed-name copies
   (`Ordewell-mac-arm64.dmg`, `Ordewell-mac-x64.dmg`, `Ordewell-win-x64.exe`,
   `Ordewell-linux-x64.AppImage`, `Ordewell-linux-x64.deb`, and the CLI's of
@@ -182,7 +186,9 @@ holds the token.**
 
 - **A formula, a cask and winget manifests rendered from the release itself
   (H11).** Two jobs in `release.yml` run after `SHA256SUMS` is written:
-  `homebrew` and `winget`. `scripts/render-package-manifests.mjs` fills the
+  `homebrew` and `winget`. On a release that leaves the app out
+  ([ADR-0065](0065-the-cli-also-ships-as-a-standalone-node-binary.md) C10),
+  `homebrew` publishes the formula and no cask, and `winget` does not run. `scripts/render-package-manifests.mjs` fills the
   formula template, the cask template and the three `packaging/winget/`
   templates from the version and that `SHA256SUMS`, refusing a missing asset or
   a fixed-name copy whose hash disagrees with the versioned file it duplicates,
@@ -505,3 +511,4 @@ allows script only from the app's own bundle, with no inline script.
 
 - 2026-11-05 — renumbered before publication to avoid a collision with main.
 - 2026-11-06 — H10, H11: ADR-0065 puts the CLI archives and `install.sh` in the release; one `SHA256SUMS` over all of it and the fixed-name copies are written by `release.yml`'s `release-assets` job after both builds, and the cask is renamed `ordewell-desktop` beside a new `ordewell` formula.
+- 2026-11-06 — H10, H11: a release carries the app only when `ORDEWELL_RELEASE_DESKTOP` is `true` (ADR-0065 C10); without it there are no installers, no cask and no winget submission.
