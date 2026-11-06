@@ -76,8 +76,15 @@ is already served by `npm`.
   notarization when the signing and notarization credentials of
   [ADR-0063 H9](0063-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)
   exist for the release, and ad hoc otherwise. Linux binaries are not signed.
-  The credentials are the desktop app's, read the same way and only on the
-  release path.
+  The credentials are the desktop app's, read only on the release path, with
+  two narrowings: `CSC_LINK` must be the base64 of the `.p12` (not a path or
+  URL), and the App Store Connect API key (`APPLE_API_KEY`, `APPLE_API_KEY_ID`,
+  `APPLE_API_ISSUER`) is the one notarization route, so a release that holds
+  only the Apple ID route ships a Developer ID-signed binary that is not
+  notarized. `cli-build.yml` imports the certificate and hands the identity to
+  the build as `ORDEWELL_SEA_SIGN_IDENTITY`, signs with
+  `packaging/sea/entitlements.plist`, and submits the binary with `notarytool`;
+  a bare executable cannot be stapled, so Gatekeeper looks the ticket up online.
 
 - **Assets named for the OS and architecture, all in the one `SHA256SUMS`
   (C5).** The release attaches `ordewell-<version>-<os>-<arch>.tar.gz` and a
@@ -211,3 +218,4 @@ their unit tests run under plain Node.
 
 - 2026-11-06 — accepted.
 - 2026-11-06 — C7 names the installer's flags and variables; C8 says how the old `ordewell` cask is renamed in the tap.
+- 2026-11-06 — C4 names the CLI's signing narrowings: a base64 `CSC_LINK` and notarization by API key only.
