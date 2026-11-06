@@ -12,6 +12,7 @@ import type { IConfig } from '../interfaces/IConfig';
 import type { IsolationRun } from '../interfaces/IWorktreeIsolation';
 import { savedPatchOf } from '../models/Handoff';
 import type { LegacyPlanState } from '../models/Task';
+import { realPathOf } from '../utils/realPath';
 import { listSessions, loadSession } from '../utils/sessionStore';
 import { readTaskPatch } from '../utils/taskLogStore';
 import { augmentedPath, withPath } from '../utils/shellPath';
@@ -164,9 +165,14 @@ function byKindThenName(a: FileTreeEntry, b: FileTreeEntry): number {
   return x < y ? -1 : x > y ? 1 : 0;
 }
 
+/**
+ * A folder as the file system names it, to compare the names a run's record,
+ * its state root and git give one place: on Windows a record may hold an 8.3
+ * short name where git prints the long one, which the JS realpath keeps apart.
+ */
 function realOrSelf(file: string): string {
   try {
-    return fs.realpathSync(file);
+    return realPathOf(file);
   } catch {
     return path.resolve(file);
   }
@@ -236,7 +242,7 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
     const entry = run.repos.find((r) => r.path === repo);
     if (!entry) gone(`The run of session "${target.sessionId}" does not cover repository ${repo}.`);
     // The record is on disk, where a task can write: a repository it names outside the run's state root is not the run's.
-    if (!fs.existsSync(entry.root) || !inside(fs.realpathSync(stateRootOf(run)), fs.realpathSync(entry.root))) gone(`Repository ${repo} of this run is no longer where its record says.`);
+    if (!fs.existsSync(entry.root) || !inside(realOrSelf(stateRootOf(run)), realOrSelf(entry.root))) gone(`Repository ${repo} of this run is no longer where its record says.`);
     return { run, repo: entry };
   }
 
@@ -276,9 +282,9 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
     const changedBy = { task: record.taskId };
     if (record.status !== 'merged' && fs.existsSync(entry.worktree)) {
       const worktree = fs.realpathSync(entry.worktree);
-      if (!inside(fs.realpathSync(stateRootOf(run)), worktree)) gone(`The worktree of task "${target.taskId}" is no longer where its record says.`);
+      if (!inside(realOrSelf(stateRootOf(run)), realOrSelf(worktree))) gone(`The worktree of task "${target.taskId}" is no longer where its record says.`);
       const toplevel = await tryGit(invoker, worktree, ['rev-parse', '--show-toplevel']);
-      if (!toplevel.ok || fs.realpathSync(toplevel.stdout.trim()) !== worktree) gone(`The worktree of task "${target.taskId}" is no longer a repository.`);
+      if (!toplevel.ok || realOrSelf(toplevel.stdout.trim()) !== realOrSelf(worktree)) gone(`The worktree of task "${target.taskId}" is no longer a repository.`);
       const root = fs.realpathSync(path.join(worktree, prefix));
       const head = await tryGit(invoker, root, ['rev-parse', '--verify', '-q', 'HEAD^{commit}']);
       return {

@@ -165,9 +165,11 @@ describe('RunnerInstallation.plannerUsability (ADR-0009 preflight)', () => {
   it('leaves the version out when `--version` printed no number', async () => {
     const exec: ExecImpl = vi.fn(async () => ({ stdout: 'ok' }));
     const authExec: RunnerAuthExec = vi.fn(async () => ({ code: 0, stdout: '{}', stderr: '' }));
-    const inst = new RunnerInstallation(registryWith(CLAUDE_CODE_MANIFEST), exec, Date.now, { authExec });
+    const inst = new RunnerInstallation(registryWith(CLAUDE_CODE_MANIFEST), exec, Date.now, { authExec, launch: POSIX });
 
-    expect(await inst.plannerUsability('claude-code')).not.toHaveProperty('version');
+    const result = await inst.plannerUsability('claude-code');
+    expect(result.usable).toBe(true);
+    expect(result).not.toHaveProperty('version');
   });
 
   it('names the missing binary so the picker can say why an agent is greyed out', async () => {
@@ -420,7 +422,8 @@ describe('RunnerInstallation verdict freshness', () => {
   it('refresh() re-checks an installed verdict, so an upgrade or a removed binary is seen', async () => {
     let output = '1.0.0';
     const exec: ExecImpl = vi.fn(async () => ({ stdout: output }));
-    const inst = new RunnerInstallation(registryWith(OPENCODE_MANIFEST), exec);
+    const authExec: RunnerAuthExec = vi.fn(async () => ({ code: 0, stdout: '', stderr: '' }));
+    const inst = new RunnerInstallation(registryWith(OPENCODE_MANIFEST), exec, Date.now, { authExec, launch: POSIX });
 
     expect(await inst.isInstalled('opencode')).toBe(true);
     output = '2.0.0';

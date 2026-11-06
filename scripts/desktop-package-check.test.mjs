@@ -166,12 +166,14 @@ describe('checkResources', () => {
         chmodSync(join(resources, 'app.asar.unpacked', entry), 0o755);
       }
     };
+    // Windows keeps no execute bit for chmod to set; the mode has its own case above, and this one is the architecture.
+    const modeOf = process.platform === 'win32' ? () => 0o755 : undefined;
     put(arm, 'arm64');
     put(intel, 'x64');
-    assert.deepEqual(checkResources(arm, undefined, 'darwin'), []);
-    assert.deepEqual(checkResources(intel, undefined, 'darwin'), []);
+    assert.deepEqual(checkResources(arm, undefined, 'darwin', modeOf), []);
+    assert.deepEqual(checkResources(intel, undefined, 'darwin', modeOf), []);
     put(intel, 'arm64');
-    const failures = checkResources(intel, undefined, 'darwin');
+    const failures = checkResources(intel, undefined, 'darwin', modeOf);
     assert.equal(failures.length, 2, 'pty.node and spawn-helper');
     assert.match(failures[0], /holds arm64, expected x64/);
   });
@@ -410,7 +412,8 @@ describe('signatureChecks', () => {
   });
 
   it('verifies both macOS apps deeply and strictly, their hardened runtime, and Gatekeeper and the stapled ticket when notarized', () => {
-    const apps = ['/r/mac-arm64/Ordewell.app', '/r/mac/Ordewell.app'];
+    // Joined as the host joins a path: the checks run on a Mac, and are built here on every OS.
+    const apps = [join('/r', 'mac-arm64', 'Ordewell.app'), join('/r', 'mac', 'Ordewell.app')];
     const signed = commands(signatureChecks({ platform: 'darwin', signing: 'certificate', notarized: false }, release, '1.0.0', 'darwin'));
     for (const app of apps) {
       assert.ok(signed.includes(`codesign --verify --deep --strict --verbose=2 ${app}`));

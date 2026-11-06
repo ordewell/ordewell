@@ -206,11 +206,13 @@ describe('stopDaemonAt', () => {
   it('signals the PID the daemon reports, not the one the file names', async () => {
     child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
     const pid = child.pid ?? 0;
-    const exited = new Promise<NodeJS.Signals | null>((resolve) => child?.once('exit', (_code, signal) => resolve(signal)));
+    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => child?.once('exit', (code, signal) => resolve({ code, signal })));
     server = await serve(() => ({ status: 200, body: JSON.stringify({ pid, port: 1 }) }));
     const file = writePid(server.port, '777');
     expect(await stopDaemonAt(server.port)).toEqual({ kind: 'stopped', pid, filePid: 777 });
-    expect(await exited).toBe('SIGTERM');
+    // Windows has no signals: process.kill ends the process with TerminateProcess,
+    // which libuv gives exit code 1, and a parent that sent nothing sees no signal.
+    expect(await exited).toEqual(process.platform === 'win32' ? { code: 1, signal: null } : { code: null, signal: 'SIGTERM' });
     expect(fs.existsSync(file)).toBe(false);
   });
 });

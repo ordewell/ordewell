@@ -57,11 +57,12 @@ function unameShim(os, machine) {
   return bin;
 }
 
-/** The fake AppImage: a shell script that, like a real one, can extract an icon. */
+/** The fake AppImage: a shell script that, like a real one, can extract its icon in two sizes, the larger listed last. */
 const FAKE_APPIMAGE = `#!/bin/sh
 case "$1" in
   --appimage-extract)
-    mkdir -p squashfs-root/usr/share/icons/hicolor/512x512/apps
+    mkdir -p squashfs-root/usr/share/icons/hicolor/16x16/apps squashfs-root/usr/share/icons/hicolor/512x512/apps
+    printf 'p' > squashfs-root/usr/share/icons/hicolor/16x16/apps/ordewell.png
     printf 'png' > squashfs-root/usr/share/icons/hicolor/512x512/apps/ordewell.png
     ;;
 esac
@@ -86,6 +87,10 @@ function runSh(args, { env = {}, shims = [] } = {}) {
   });
   return { ...result, home };
 }
+
+/** HOME as the script's sh names it: Git Bash's turns a Windows path into its own form, so it prints /tmp/… for C:\…\Temp\…. */
+const shHome = (home) => spawnSync('sh', ['-c', 'printf %s "$HOME"'], { env: { ...process.env, HOME: home }, encoding: 'utf8' }).stdout;
+const literal = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 describe('the release assets script', () => {
   it('reads a fixed name only from an installer that carries a version', () => {
@@ -349,7 +354,7 @@ describe('desktop.sh', () => {
       const home = scratch('home');
       const first = install(await release(), home);
       assert.equal(first.status, 0, first.stderr);
-      assert.match(first.stdout, new RegExp(`Installed Ordewell ${VERSION} to ${home}/\\.local/bin/ordewell-desktop`));
+      assert.match(first.stdout, new RegExp(`^Installed Ordewell ${literal(VERSION)} to ${literal(shHome(home))}/\\.local/bin/ordewell-desktop$`, 'm'));
       const bin = join(home, '.local/bin/ordewell-desktop');
       assert.equal(readFileSync(bin, 'utf8'), FAKE_APPIMAGE);
       assert.ok(spawnSync('test', ['-x', bin]).status === 0, 'the AppImage is executable');
