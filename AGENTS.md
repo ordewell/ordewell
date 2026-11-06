@@ -41,8 +41,12 @@ full suite before pushing.
 
 `scripts/change-scope.mjs` holds what a change has to prove, for `test:changed`
 and for CI alike. Only a pull request is narrowed: a push to main and a release
-tag always run everything, and a path outside `docs/`, the root docs and the four
-workspaces' files means the full run. A new root config, a new package or a test
+tag always run everything. A changed workspace owes its full suite and its
+dependents their quick ones, unless the change is to core's exported surface,
+which runs the dependents in full. A path outside the workspaces owes what reads
+it, as `ROOT_OWNERS` lists (`.eslintrc.js` lint, `vitest.setup.ts` the suites, a
+`bench/` fake the suites that start it), and one that list does not name means
+the full run. A new root config, a new `bench/` harness, a new package or a test
 that reads past its own package belongs in that file's decisions and its tests.
 `Required checks` is the status to require on main: a skipped job reads as a pass
 to GitHub, so that job judges the others by what the change owed them.

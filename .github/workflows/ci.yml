@@ -11,8 +11,10 @@
 #   windows (n/6), windows-harness
 #
 # and `Required checks` last, the one status a branch rule requires. A pull
-# request runs what its change can reach; a push to main, a release (through
-# workflow_call), the nightly schedule and a manual run run everything.
+# request runs what its change can reach: a changed workspace's full suite, its
+# dependents' quick ones (full when core's exports change), and for a path
+# outside the workspaces only the jobs that read it. A push to main, a release
+# (through workflow_call), the nightly schedule and a manual run run everything.
 # CONTRIBUTING.md's "The checks" describes it for contributors, and
 # `npm run ci` runs the same steps locally, in this file's order.
 name: CI
@@ -50,7 +52,13 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       scope: ${{ steps.select.outputs.scope }}
-      packages: ${{ steps.select.outputs.packages }}
+      suites: ${{ steps.select.outputs.suites }}
+      typecheck: ${{ steps.select.outputs.typecheck }}
+      lint: ${{ steps.select.outputs.lint }}
+      package: ${{ steps.select.outputs.package }}
+      bench: ${{ steps.select.outputs.bench }}
+      windows: ${{ steps.select.outputs.windows }}
+      harness: ${{ steps.select.outputs.harness }}
       sandbox: ${{ steps.select.outputs.sandbox }}
       planner: ${{ steps.select.outputs.planner }}
       integration: ${{ steps.select.outputs.integration }}
@@ -177,13 +185,14 @@ jobs:
       # (scripts/install/) and the binary build's (scripts/sea/) among them.
       - name: Bench harness tests (offline, against the built core)
         id: bench
-        if: needs.scope.outputs.packages != 'false'
+        if: needs.scope.outputs.bench != 'false'
         run: npm run test:bench
 
       # Desktop last: its renderer is built from ui's dist, and the app forks web's.
+      # Only the integration test and the desktop e2e below read these builds.
       - name: Build (ui, vscode, cli, web & desktop)
         id: build-rest
-        if: needs.scope.outputs.packages != 'false'
+        if: needs.scope.outputs.integration != 'false' || needs.scope.outputs.desktop != 'false'
         run: npm run build -w packages/ui -w packages/vscode -w packages/cli -w packages/web -w packages/desktop --if-present
 
       # The extension integration test drives a real VS Code instance. Cache the
@@ -326,7 +335,7 @@ jobs:
   # The packages compile against core's and ui's dist/, so it builds them first.
   typecheck:
     needs: scope
-    if: ${{ !cancelled() && needs.scope.outputs.packages != 'false' }}
+    if: ${{ !cancelled() && needs.scope.outputs.typecheck != 'false' }}
     runs-on: ubuntu-latest
     outputs:
       confirmed: ${{ steps.confirm.outputs.confirmed }}
@@ -367,13 +376,15 @@ jobs:
         run: node scripts/ci-scope.mjs confirm
 
   # The suites on Linux with coverage, one leg per workspace the change reaches,
-  # so core's long suite sets the pace instead of the sum of all six. Each leg
-  # runs its workspace's own `test:coverage`, under that workspace's own
-  # vitest.config.ts: the per-file floors are where they always were.
+  # so core's long suite sets the pace instead of the sum of all six. A leg the
+  # scope owes in full runs its workspace's own `test:coverage`, under that
+  # workspace's own vitest.config.ts: the per-file floors are where they always
+  # were. A leg owed only because a dependency changed runs `test:quick`, and
+  # judges no floor: a floor read off part of a suite would be a false one.
   coverage:
     name: coverage (${{ matrix.name }})
     needs: scope
-    if: ${{ !cancelled() && needs.scope.outputs.packages != 'false' }}
+    if: ${{ !cancelled() && needs.scope.outputs.suites != 'false' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -418,9 +429,10 @@ jobs:
         shell: bash
         env:
           WORKSPACE: ${{ matrix.workspace }}
+          SCRIPT: ${{ matrix.script }}
         run: |
           set -o pipefail
-          npm run test:coverage ${WORKSPACE:+-w "$WORKSPACE"} --if-present 2>&1 | tee coverage.log
+          npm run "${SCRIPT:-test:coverage}" ${WORKSPACE:+-w "$WORKSPACE"} --if-present 2>&1 | tee coverage.log
 
       - name: Append coverage summaries to the job summary
         if: ${{ always() }}
@@ -446,7 +458,7 @@ jobs:
           NODE
 
       - name: Upload coverage reports
-        if: ${{ always() }}
+        if: ${{ always() && matrix.script != 'test:quick' }}
         uses: actions/upload-artifact@v7
         with:
           name: coverage-reports-${{ matrix.name }}
@@ -464,7 +476,7 @@ jobs:
   # Lint reads the sources alone: no rule needs types, so nothing is built.
   lint:
     needs: scope
-    if: ${{ !cancelled() && needs.scope.outputs.packages != 'false' }}
+    if: ${{ !cancelled() && needs.scope.outputs.lint != 'false' }}
     runs-on: ubuntu-latest
     outputs:
       confirmed: ${{ steps.confirm.outputs.confirmed }}
@@ -500,7 +512,7 @@ jobs:
   # the desktop app's Linux installers, each checked as it would ship.
   package:
     needs: scope
-    if: ${{ !cancelled() && needs.scope.outputs.packages != 'false' }}
+    if: ${{ !cancelled() && needs.scope.outputs.package != 'false' }}
     runs-on: ubuntu-latest
     outputs:
       confirmed: ${{ steps.confirm.outputs.confirmed }}
@@ -599,7 +611,7 @@ jobs:
   windows:
     name: windows (${{ matrix.shard }}/${{ strategy.job-total }})
     needs: scope
-    if: ${{ !cancelled() && needs.scope.outputs.packages != 'false' }}
+    if: ${{ !cancelled() && needs.scope.outputs.windows != 'false' }}
     runs-on: windows-latest
     timeout-minutes: 45
     strategy:
@@ -632,16 +644,21 @@ jobs:
         run: npm run build
 
       # The daemon, CLI, core and extension exercise Windows support here.
-      # The shared UI and desktop suites run on Linux, in coverage.
+      # The shared UI and desktop suites run on Linux, in coverage. Each of
+      # the four runs in full (`test`) or quick (`test:quick`) as the scope
+      # owes it, and a lost scope runs all four in full.
       - name: Test on Windows
-        run: npm run test --workspace packages/core --workspace packages/cli --workspace packages/web --workspace packages/vscode --if-present -- --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+        env:
+          SCOPE: ${{ needs.scope.outputs.scope }}
+          SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
+        run: node scripts/ci-scope.mjs windows-tests
 
   # What runs on Windows beside the suites: the verify scripts, the bench
   # harnesses, the offline planner loop and the VS Code integration test, each
   # as build-and-test runs it on Linux.
   windows-harness:
     needs: scope
-    if: ${{ !cancelled() && needs.scope.outputs.packages != 'false' }}
+    if: ${{ !cancelled() && needs.scope.outputs.harness != 'false' }}
     runs-on: windows-latest
     timeout-minutes: 45
 
