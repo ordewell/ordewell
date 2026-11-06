@@ -96,14 +96,14 @@ protected instead is that the file matches the checksum the release published.
 Two package managers install the same release, once it has published there:
 
 ```bash
-brew install --cask ordewell/tap/ordewell
+brew install --cask ordewell/tap/ordewell-desktop
 ```
 
 ```powershell
 winget install Ordewell.Ordewell
 ```
 
-`brew upgrade --cask ordewell` and `winget upgrade Ordewell.Ordewell` move to a
+`brew upgrade --cask ordewell-desktop` and `winget upgrade Ordewell.Ordewell` move to a
 later release, and a signed, notarized build also updates itself. Neither is
 published yet: the release renders the cask and the manifests and pushes them
 only when the maintainers have configured the tokens for it ([Signed
@@ -196,8 +196,8 @@ deliberate: the CLI's `ordewell` binary keeps its own name.
 
 A desktop build carries Electron and its own copy of the daemon, so it needs no
 Node.js. It uses the runners already on your machine — at least one of Claude
-Code, Codex or OpenCode, installed and signed in — and git 2.38 or newer for
-task isolation. The welcome window says which runners it found.
+Code, Codex or OpenCode, installed and signed in. git is optional; 2.38 or
+newer gives isolated worktrees, delegated tasks and Merge all. The welcome window says which runners it found.
 
 ## Run it from source
 

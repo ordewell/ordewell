@@ -11,15 +11,28 @@ for versions available to install and their release notes.
 
 ## Installation
 
+On Linux and macOS, install the standalone binary, which needs no Node.js:
+
+```bash
+curl -fsSL https://ordewell.ai/install.sh | sh
+# or: brew install ordewell/tap/ordewell
+```
+
+Or install from npm (Node.js 20.3 or newer), which is also how to install on
+Windows:
+
 ```bash
 npm install -g @ordewell/cli        # or: npm install -g ordewell
 ```
 
-**Requirements:** Node.js 20.3 or newer, a supported coding agent such as
-Claude Code or Codex, and git 2.38 or newer for task isolation. See the
+**Requirements:** a supported coding agent such as Claude Code or Codex,
+installed and signed in. git is optional: without it, tasks run directly in the
+folder, and git 2.38 or newer is recommended for isolated worktrees, delegated
+tasks and Merge all. See the
 [full runner list](https://github.com/ordewell/ordewell#readme). Linux, macOS and Windows are supported;
-on Windows, the planner's research commands run in Git for Windows' shell, and the
-terminal UI's mouse and paste need Node.js 22.17 or newer.
+on Windows, install with npm, the planner's research commands run in Git for
+Windows' shell (required), and the terminal UI's mouse and paste need Node.js
+22.17 or newer.
 
 ## Usage
 

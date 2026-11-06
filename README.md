@@ -34,10 +34,11 @@ plans wait for your approval by default; run settings let you automate execution
 and merging.
 
 Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor are supported out of the box,
-and can be mixed freely within one plan. Try it in your project, with nothing to install:
+and can be mixed freely within one plan. Install it on Linux or macOS with one
+line, with no Node.js needed:
 
 ```bash
-npx ordewell
+curl -fsSL https://ordewell.ai/install.sh | sh
 ```
 
 This README describes 0.12.6. See the [published releases](https://github.com/ordewell/ordewell/releases)
@@ -62,7 +63,24 @@ Ordewell is pre-1.0, so minor releases can include breaking changes. Read the
 
 ## Installation
 
-`npx ordewell` runs it without installing. To keep it:
+On Linux and macOS the CLI and terminal UI install as one standalone binary:
+
+```bash
+curl -fsSL https://ordewell.ai/install.sh | sh
+```
+
+It installs to `~/.local/bin/ordewell`; set `ORDEWELL_INSTALL_DIR` to put it
+elsewhere. Pass options after `sh -s --`: `--version X.Y.Z` for a specific
+release, `--dry-run` to see what it would do, `--uninstall` to remove it, and
+`--desktop` to install the [desktop app](#desktop-app) too. Run it again to
+upgrade. With Homebrew:
+
+```bash
+brew install ordewell/tap/ordewell
+```
+
+Prefer npm, or on Windows, where the standalone binary is not available yet?
+`npx ordewell` runs it without installing (Node.js 20.3 or newer). To keep it:
 
 ```bash
 npm install -g ordewell
@@ -73,8 +91,12 @@ or run `code --install-extension ordewell.ordewell`. In Cursor, Windsurf or VSCo
 get it from [Open VSX](https://open-vsx.org/extension/ordewell/ordewell). The
 extension bundles its own core and needs nothing from npm.
 
-**Requirements:** Node.js 20.3 or newer, at least one supported coding agent,
-and git 2.38 or newer for task isolation.
+**Requirements:** a supported coding agent, installed and signed in. Node.js is
+not required for the standalone binary; only the npm install needs 20.3 or
+newer. git is optional: without it, or outside a git repository, tasks run
+directly in the folder without worktrees. git 2.38 or newer is recommended, for
+isolated worktrees, delegated tasks (a child plan needs its own worktree) and
+Merge all.
 
 The five ACP runners can also plan and run read-only tasks. Install GitHub
 Copilot CLI 1.0.105+, Qwen Code 0.26.6+, Cline 3.0.74+, or Gemini CLI
@@ -90,7 +112,8 @@ The VS Code extension, the full-screen terminal UI and the `ordewell` commands
 (`plan`, `run`, `handoff` and the rest) run natively on Windows. Install Git
 for Windows: the planner's research commands run in its shell. For Codex tasks,
 [set up Codex's own sandbox](docs/troubleshooting.md#codexs-windows-sandbox-is-not-set-up)
-once. The terminal UI's mouse and paste need Node.js 22.17 or newer there.
+once. Windows installs with npm for now, and the terminal UI's mouse and paste
+need Node.js 22.17 or newer there.
 See the [platform notes](https://ordewell.ai/docs#platforms) for setup and
 current limitations.
 
@@ -142,13 +165,17 @@ A package manager can install the same release once it has published there:
 
 ```bash
 # macOS
-brew install --cask ordewell/tap/ordewell
+brew install --cask ordewell/tap/ordewell-desktop
 ```
 
 ```powershell
 # Windows
 winget install Ordewell.Ordewell
 ```
+
+The cask was named `ordewell` before; it is `ordewell-desktop` now, and
+`brew install ordewell/tap/ordewell` is the CLI. If you installed the cask
+under its old name, Homebrew follows the rename on `brew update`.
 
 Both are set up when the project's package-manager accounts and tokens exist;
 the [desktop guide](docs/desktop/README.md#homebrew-and-winget) says what each
@@ -234,7 +261,9 @@ adapted from [Matt Pocock's skills](https://github.com/mattpocock/skills) (MIT).
 ## What Ordewell sends
 
 Ordewell checks for updates daily, sending its version and a random install ID
-to ordewell.ai after a one-time notice. To turn the check off, set
+to ordewell.ai after a one-time notice. When a newer release exists, the CLI
+says so: in a standalone install it points at re-running the installer or
+`brew upgrade ordewell`, and in an npm install at `npm install -g`. To turn the check off, set
 `ORDEWELL_NO_VERSION_CHECK=1` or `DO_NOT_TRACK=1`, or turn off VS Code's
 telemetry for the extension. See [version check details](https://ordewell.ai/docs#version-check).
 

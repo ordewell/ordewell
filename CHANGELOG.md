@@ -92,6 +92,28 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   task. A refresh asks again, so an agent upgraded or removed meanwhile is
   offered, or refused, without a restart.
 
+- **A standalone `ordewell` binary for Linux and macOS.** The CLI and terminal
+  UI install as one file with no Node.js:
+  `curl -fsSL https://ordewell.ai/install.sh | sh` puts it in
+  `~/.local/bin` (`ORDEWELL_INSTALL_DIR` changes that; `--version`,
+  `--uninstall`, `--dry-run` and `--desktop` are options), checking the
+  download against the release's checksums. `npm install -g ordewell` and
+  `npx ordewell` work as before, and remain the way to install on Windows.
+  Node.js is no longer a requirement of the binary, and git is optional: without
+  it tasks run in the folder directly, and git 2.38 or newer adds worktrees,
+  delegated tasks and Merge all.
+- **A Homebrew formula for the CLI.** `brew install ordewell/tap/ordewell`.
+
+### Changed
+
+- **The desktop app's Homebrew cask is now `ordewell-desktop`.** Install it with
+  `brew install --cask ordewell/tap/ordewell-desktop`. If you installed the cask
+  as `ordewell`, Homebrew renames it on `brew update`; if it does not, run
+  `brew uninstall --cask ordewell` and install the new name. `ordewell` alone is
+  now the CLI formula.
+- **The update notice matches how you installed.** A standalone install is
+  pointed at re-running the installer or `brew upgrade ordewell`, not at npm.
+
 ### Fixed
 
 - **VS Code says when it cannot detect the installed agents, and offers
