@@ -16,7 +16,7 @@ import type { Session } from '../createSession';
 import type { IApproval } from '../../interfaces/IApproval';
 import type { IRunner } from '../../interfaces/IRunner';
 import { createTask } from '../../models/Task';
-import { FakeRunnerSession, removeDir } from '../../testing';
+import { FakeRunnerSession, patient, removeDir } from '../../testing';
 import { closeSessions, fakeFs } from './sessionTestKit';
 import { env, git, roots, writingRunner, heldTasks, delegated, check, SUBMIT, childTask, NOTHING_THEN_BLOCKED, DONE, tree, statusOf } from './delegatedTaskKit';
 
@@ -24,6 +24,14 @@ afterEach(async () => {
   await closeSessions();
   while (roots.length) await removeDir(roots.pop()!);
 });
+
+/**
+ * A child's clock starts before it plans and before its first task's worktree
+ * is made, some two dozen git processes on these real repositories: past two
+ * seconds on a loaded Windows runner. A shorter clock runs out before the task
+ * it is meant to time has started.
+ */
+const CHILD_CLOCK_MS = patient(4000);
 
 describe('a landing that conflicts (ADR-0055 D14)', () => {
   const task = (session: Session, id: string) => session.planTasks.find((t) => t.id === id);
@@ -177,7 +185,7 @@ describe('what ends a child with nobody to ask (ADR-0056 M3, M8, M10)', () => {
     const held = heldTasks({ a: ['a.txt'], s: ['s.txt'] }, ['a', 's']);
     const { parent } = tree([SUBMIT([childTask('a', 1)])], {
       runner: held.runner,
-      tasks: [delegated({ budget: { tokens: 2_000_000, wallClockMs: 2500 } }), check(), createTask({ id: 's', order: 3, title: 'Sibling', prompt: 'sibling' })],
+      tasks: [delegated({ budget: { tokens: 2_000_000, wallClockMs: CHILD_CLOCK_MS } }), check(), createTask({ id: 's', order: 3, title: 'Sibling', prompt: 'sibling' })],
     });
     await parent.execute({ command: 'run_plan' }, { kind: 'user' });
     // A run's own start clears what is live, with nothing to stop yet.
@@ -193,7 +201,7 @@ describe('what ends a child with nobody to ask (ADR-0056 M3, M8, M10)', () => {
 
   it('ends blocked when its time runs out, its run stopped first', async () => {
     const held = heldTasks({ a: ['a.txt'] }, ['a']);
-    const { parent } = tree([SUBMIT([childTask('a', 1)])], { runner: held.runner, tasks: [delegated({ budget: { tokens: 2_000_000, wallClockMs: 2500 } }), check()] });
+    const { parent } = tree([SUBMIT([childTask('a', 1)])], { runner: held.runner, tasks: [delegated({ budget: { tokens: 2_000_000, wallClockMs: CHILD_CLOCK_MS } }), check()] });
     await parent.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(held.runner.spawned).toContain('a'));
     await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('failed'), { timeout: 20_000 });
@@ -224,7 +232,8 @@ describe('wall-clock time (ADR-0056 M3)', () => {
     const hours = at.getUTCHours() % 12 || 12;
     return `You've hit your session limit · resets ${hours}:${String(at.getUTCMinutes()).padStart(2, '0')}${at.getUTCHours() < 12 ? 'am' : 'pm'} (UTC)`;
   };
-  const shortly = () => new Promise((resolve) => { setTimeout(resolve, 3500); });
+  /** Its clock started before the hold was seen, so one left running has run out by then, and its halt had two seconds more to show. */
+  const pastTheClock = () => new Promise((resolve) => { setTimeout(resolve, CHILD_CLOCK_MS + patient(2000)); });
 
   it('stops while the tree is held on a usage limit found by a task, so its time does not run out', async () => {
     const spawned: string[] = [];
@@ -244,20 +253,22 @@ describe('wall-clock time (ADR-0056 M3)', () => {
       stopAll: vi.fn(),
       activeCount: 0,
     };
-    const { parent, planner } = tree([SUBMIT([childTask('a', 1)])], { runner, tasks: [delegated({ budget: { tokens: 2_000_000, wallClockMs: 1500 } }), check()] });
+    const { parent, planner } = tree([SUBMIT([childTask('a', 1)])], { runner, tasks: [delegated({ budget: { tokens: 2_000_000, wallClockMs: CHILD_CLOCK_MS } }), check()] });
     await parent.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(spawned).toContain('a'), { timeout: 20_000 });
-    await shortly();
+    await pastTheClock();
     expect(statusOf(parent, 'd')).toBe('in_progress');
-    expect(planner.asked).toHaveLength(1);
+    // The limit wakes the subplanner once its debounce is over (ADR-0057 R4), to say so; nothing reminds it to end.
+    expect(planner.asked.slice(1).every((text) => text.includes('waits:usage-limit'))).toBe(true);
+    expect(planner.asked.filter((text) => text.includes('no `task_complete` call'))).toEqual([]);
     parent.destroy();
   });
 
   it('stops for a subplanner\'s own limit too, and sends it no reminder while it waits to resend', async () => {
-    const { parent, planner } = tree([async () => undefined, async () => ({ kind: 'message', text: limitWords(), failed: true, researchLog: [] })], { tasks: [delegated({ budget: { tokens: 2_000_000, wallClockMs: 1500 } }), check()] });
+    const { parent, planner } = tree([async () => undefined, async () => ({ kind: 'message', text: limitWords(), failed: true, researchLog: [] })], { tasks: [delegated({ budget: { tokens: 2_000_000, wallClockMs: CHILD_CLOCK_MS } }), check()] });
     await parent.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(planner.asked).toHaveLength(2), { timeout: 20_000 });
-    await shortly();
+    await pastTheClock();
     expect(parent.planTasks.find((t) => t.id === 'd')?.verdict?.reason).toBeUndefined();
     expect(statusOf(parent, 'd')).toBe('in_progress');
     expect(planner.asked).toHaveLength(2);
