@@ -102,7 +102,7 @@ export function fullScope(reason, workspaces) {
  * (scripts/install/), the release-asset script they read
  * (scripts/desktop-release-assets.mjs, ADR-0063 H10) and the package-manager
  * manifests a release renders (packaging/, scripts/render-package-manifests.mjs,
- * ADR-0063 H11) mean the full run: their tests run in the bench step, which a
+ * ADR-0063 H11, ADR-0065) mean the full run: their tests run in the bench step, which a
  * narrowed run could skip.
  */
 export function selectScope(paths, workspaces) {
