@@ -367,6 +367,14 @@ esac
 # An older install (npm's, Homebrew's, another folder's) earlier on PATH would
 # still be the `ordewell` a new shell runs, so say which one and how to switch.
 resolved=$(command -v "$BIN_NAME" 2>/dev/null || true)
+# A relative PATH entry is printed relative to this folder (`old/ordewell`), and
+# dash prints an empty entry's match as the bare name, so make it absolute.
+relative=
+case $resolved in
+  /*|'') ;;
+  */*) relative=1; resolved=$PWD/${resolved#./} ;;
+  *) if [ -f "./$resolved" ]; then relative=1; resolved=$PWD/$resolved; else resolved=; fi ;;
+esac
 case $resolved in
   /*)
     # -ef is not in POSIX but every sh this runs under has it; it sees the same
@@ -379,6 +387,7 @@ case $resolved in
       fi
       say ""
       say "Another ordewell comes first on your PATH: $resolved"
+      [ -n "$relative" ] && say "(found through a PATH entry relative to the folder you are in, $PWD)"
       say "Typing ordewell runs that one, not the copy just installed. To use $bin_path:"
       case "$resolved $link" in
         *node_modules*|*/npm/*) say "  npm uninstall -g ordewell      # it was installed with npm" ;;
