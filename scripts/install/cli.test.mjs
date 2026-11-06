@@ -443,7 +443,39 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
         assert.match(result.stdout, /npm uninstall -g ordewell/);
         assert.match(result.stdout, new RegExp(`put ${target} before ${npmBin} on your PATH`));
       });
+
+      // `command -v` prints a relative PATH entry's match as `old/ordewell`,
+      // and an empty entry's (the current folder) as a bare `ordewell` under dash.
+      for (const [label, entry] of [['a relative entry', 'old'], ['an empty entry', ''], ['a dot entry', '.']]) {
+        it(`names an older ordewell found through ${label} on PATH, under ${shell}`, (t) => {
+          if (!has(shell)) return t.skip(`${shell} is not installed`);
+          const home = scratch('home');
+          const target = join(home, 'bin');
+          mkdirSync(target, { recursive: true });
+          const cwd = scratch('cwd');
+          const old = join(cwd, entry);
+          write(join(old, 'ordewell'), '#!/bin/sh\necho "ordewell 0.12.6"\n', 0o755);
+          // Joined with ':' by hand: an empty entry is what is being tested, and this suite is POSIX-only.
+          const PATH = [entry, linux(), toolbox, target].join(':');
+          const result = spawnSync(whichSh(shell), [SH], { cwd, env: { PATH, HOME: home, TMPDIR: tmpdir(), ORDEWELL_CLI_FROM: release(), ORDEWELL_INSTALL_DIR: target }, encoding: 'utf8' });
+          assert.equal(result.status, 0, result.stderr);
+          assert.equal(spawnSync(whichSh(shell), ['-c', 'ordewell --version'], { cwd, env: { PATH }, encoding: 'utf8' }).stdout.trim(), 'ordewell 0.12.6');
+          const shown = join(old, 'ordewell');
+          assert.match(result.stdout, new RegExp(`Another ordewell comes first on your PATH: ${shown}\\n`));
+          assert.match(result.stdout, new RegExp(`remove ${shown}\\n`));
+          assert.match(result.stdout, new RegExp(`put ${target} before ${old.replace(/\/$/, '')} on your PATH`));
+          assert.match(result.stdout, /relative to the folder you are in/);
+        });
+      }
     }
+
+    it('says nothing about another ordewell when a relative PATH entry is the install folder', () => {
+      const home = scratch('home');
+      mkdirSync(join(home, 'bin'), { recursive: true });
+      const result = spawnSync(REAL_SH, [SH], { cwd: home, env: { PATH: ['bin', linux(), toolbox].join(':'), HOME: home, TMPDIR: tmpdir(), ORDEWELL_CLI_FROM: release(), ORDEWELL_INSTALL_DIR: join(home, 'bin') }, encoding: 'utf8' });
+      assert.equal(result.status, 0, result.stderr);
+      assert.doesNotMatch(result.stdout, /Another ordewell/);
+    });
 
     it('names a Homebrew or any other earlier ordewell, with the way to remove it', () => {
       const brew = join(scratch('brew'), 'homebrew');
