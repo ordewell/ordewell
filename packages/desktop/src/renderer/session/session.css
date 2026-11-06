@@ -13,6 +13,7 @@
 .session-task-status { flex: 1 1 auto; min-width: 0; color: var(--ow-fg-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-task-views.ow-tabs { flex: none; height: var(--ow-height-header); border-bottom: 0; }
 .session-task-meta { flex-wrap: wrap; gap: var(--ow-space-1) var(--ow-space-3); min-height: var(--ow-height-header); padding-block: var(--ow-space-1); font: var(--ow-type-small); color: var(--ow-fg-secondary); }
+.session-task-auth { margin: 0; padding: 0 var(--ow-space-3) var(--ow-space-2); color: var(--ow-status-attention); font: var(--ow-type-small); overflow-wrap: anywhere; }
 .session-task-assignment { white-space: nowrap; }
 .session-task-links { display: inline-flex; align-items: center; gap: var(--ow-space-1); }
 .session-task-link { min-height: var(--ow-hit); min-width: var(--ow-hit); padding: 0 var(--ow-space-1); border: 0; border-radius: var(--ow-radius-md); background: transparent; color: var(--ow-fg-link, var(--ow-accent)); font: inherit; cursor: pointer; }

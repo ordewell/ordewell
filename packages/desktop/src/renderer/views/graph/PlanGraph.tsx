@@ -6,6 +6,7 @@ import type { FrameApi } from '../../frame/api';
 import type { DaemonHost } from '../../session/DaemonHost';
 import { useTaskSelection } from '../../session/selection';
 import { useSession } from '../../session/useSession';
+import { signedOutByRunner, signInMessage } from '../../signIn';
 import { routeEdges, type Box, type RouteColumn } from './edgeRoutes';
 import { buildGraph, graphTasks, type GraphNode } from './graphModel';
 import { navigate, stageAt, stagesInView, stepStage, type NavKey } from './graphNav';
@@ -72,9 +73,10 @@ export function PlanGraph({ host, api, onCannotDraw }: PlanGraphProps): JSX.Elem
   const handoffPending = !!state.run.handoff || (state.run.runMerge?.landed.length ?? 0) > 0;
   const drawCritical = executing && showCritical;
   const tasks = useMemo(() => graphTasks(state.plan, state.run), [state.plan, state.run]);
+  const signInByRunner = useMemo(() => signedOutByRunner(state.planner.backends), [state.planner.backends]);
   const model = useMemo(() => buildGraph(tasks, {
-    expanded, executing: drawCritical, handoffPending, modesByRunner: state.modesByRunner,
-  }), [tasks, expanded, drawCritical, handoffPending, state.modesByRunner]);
+    expanded, executing: drawCritical, handoffPending, modesByRunner: state.modesByRunner, signInByRunner,
+  }), [tasks, expanded, drawCritical, handoffPending, state.modesByRunner, signInByRunner]);
 
   const placeStages = useMemo(memoStageLayout, []);
   const layout = useMemo(() => placeStages(model.ok ? model.layoutKey : '', model.ok ? model.nodes : []), [model, placeStages]);
@@ -301,6 +303,10 @@ export function PlanGraph({ host, api, onCannotDraw }: PlanGraphProps): JSX.Elem
     const ref = `#${menuNode.orderLabel}`;
     closeMenu();
     switch (command as NodeCommandId) {
+      case 'login':
+        if (menuNode.signIn) void host.handle(signInMessage(menuNode.signIn));
+        api.announce(`Signing in to ${menuNode.signIn?.label ?? 'the agent'} for ${ref}`);
+        return;
       case 'message':
         impl.openChat(menuNode.id);
         return;

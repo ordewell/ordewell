@@ -140,7 +140,7 @@ describe('the session socket', () => {
     expect(next).toMatchObject({ stream: snapshot.stream, seq: snapshot.seq! + 1 });
   });
 
-  // The desktop app joins a session another client's daemon holds (ADR-0060):
+  // The desktop app joins a session another client's daemon holds (ADR-0063):
   // both are subscribers of one host, so each must see every change.
   it('sends one broadcast to every client of the session, numbered alike', async () => {
     const meta = saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');

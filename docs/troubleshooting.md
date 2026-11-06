@@ -75,6 +75,34 @@ Codex runs with no sandbox at all.
 Inside a [container](containers.md) none of this applies: Codex's sandbox cannot start
 there, whatever this host allows, and a Codex change task runs at Full access.
 
+## Codex's Windows sandbox is not set up
+
+A Codex task's log on Windows says **Codex's Windows sandbox is not set up on
+this machine, so Codex runs this task read-only with no sandbox** (or that it
+**needs its setup run again**).
+
+### Cause
+
+Codex has a Windows sandbox of its own, which you set up once and which asks
+for Administrator. Until you do, Codex opens a task in Guarded (`agent`) mode
+as read-only and has nothing to confine its commands with. An edit, and a
+command Codex does not judge safe, goes to Codex's reviewer, and what the
+reviewer approves runs unconfined. The task still runs and lands its work;
+Ordewell keeps the mode the plan gave it and tells the model how to write
+through review. A Codex planner is not affected: on Windows it plans with its
+own shell off and reads through Ordewell's `run_command`
+([ADR-0010](adr/platform/0010-windows-support.md)).
+
+### Fix
+
+Run `codex` in a terminal and choose **Set up default sandbox** when it offers,
+or run `/setup-default-sandbox` there. It asks for Administrator once. See
+[Codex on Windows](https://developers.openai.com/codex/windows). Ordewell
+reads the setup when each Codex task starts, so nothing needs a restart.
+
+Do not choose Codex's non-admin sandbox instead: under it, codex-cli 0.166.0
+refuses every command of a Guarded task.
+
 ## Planner shell not sandboxed
 
 Ordewell says **The planner's shell runs without an OS sandbox on this
@@ -440,7 +468,7 @@ it without the prompts below. The script does not add or remove that attribute.
 A signed release opens without these steps. When a release is signed, and how
 to check one, is in
 [Signed releases](desktop/README.md#signed-releases)
-([ADR-0060 H9](adr/surfaces/0060-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)).
+([ADR-0063 H9](adr/surfaces/0063-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)).
 
 ## The desktop app cannot reach its daemon
 
@@ -452,7 +480,7 @@ daemon…**.
 
 The app is a client of the local daemon on `127.0.0.1:3742`, and it either
 attaches to one that already runs or starts the one it bundles
-([ADR-0060](adr/surfaces/0060-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)).
+([ADR-0063](adr/surfaces/0063-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)).
 Each message names a different problem:
 
 | Card | What happened |
@@ -484,7 +512,7 @@ numbers and versions.
 
 A daemon and a surface exchange a version and a contract number on
 `GET /api/server` before the surface drives them
-([ADR-0060](adr/surfaces/0060-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)).
+([ADR-0063](adr/surfaces/0063-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)).
 The same contract attaches whatever the patch version; a different one means the
 daemon or the app is from another release, and the app will not drive it.
 

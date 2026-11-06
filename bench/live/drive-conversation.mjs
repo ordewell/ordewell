@@ -34,11 +34,11 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { GOAL_SCENARIOS } from './scenarios.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const core = await import(path.join(__dirname, '../../packages/core/dist/index.mjs'));
+const core = await import(pathToFileURL(path.join(__dirname, '../../packages/core/dist/index.mjs')).href);
 const { OpenAiService, extractPrdBlock } = core;
 
 // ---------- CLI args ----------
@@ -507,7 +507,8 @@ async function approvalsSuite() {
     await new Promise((r) => setTimeout(r, 50));
     const req = approvalReqs(broadcasts)[0];
     assert(req && req.kind === 'external_path', 'out-of-workspace read requests external_path', failures);
-    assert(req.scope === '/tmp/ordewell-live-external/*', 'scope is the containing directory', failures);
+    // Native: on Windows /tmp resolves onto the workspace's drive, with backslashes.
+    assert(req.scope === path.join(path.resolve(root, '/tmp/ordewell-live-external'), '*'), 'scope is the containing directory', failures);
     session.resolveApproval(req.id, true);
     const result = await pending;
     assert(result.success === true, 'granted external read succeeds', failures);

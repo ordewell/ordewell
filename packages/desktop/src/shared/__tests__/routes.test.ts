@@ -124,7 +124,7 @@ describe('buildRequest: the IPC allowlist', () => {
   });
 });
 
-// A joined session's live host is another daemon (ADR-0060 H8): what it runs
+// A joined session's live host is another daemon (ADR-0063 H8): what it runs
 // goes there, and what the app's own daemon serves stays here.
 describe('liveSessionOf', () => {
   it('names the session of a call its live host must answer', () => {

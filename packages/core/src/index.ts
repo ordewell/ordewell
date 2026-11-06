@@ -127,8 +127,8 @@ export type { ExecImpl } from './services/ModelDiscovery';
 export { ModelResolver } from './services/ModelResolver';
 export type { ModelResolverDeps } from './services/ModelResolver';
 export { RunnerInstallation } from './services/RunnerInstallation';
-export type { RunnerInstallationOptions } from './services/RunnerInstallation';
-export { readRunnerAuth, recordRunnerAuth, recordedRunnerAuth, resetRunnerAuth } from './services/runnerAuth';
+export type { RunnerInstallationOptions, RunnerUsability } from './services/RunnerInstallation';
+export { forgetSignedOutRunnerAuth, readRunnerAuth, recordRunnerAuth, recordedRunnerAuth, resetRunnerAuth, rewordSignIn, runnerSignIn, signedOutFromFailure } from './services/runnerAuth';
 export type { RunnerAuth, RunnerAuthExec, RunnerAuthExecOptions, RunnerAuthExecResult, ReadRunnerAuthOptions } from './services/runnerAuth';
 export { workspaceEnvOf } from './services/workspaceEnv';
 export { AccountLimitMonitor } from './services/AccountLimitMonitor';
@@ -144,7 +144,7 @@ export { ModelCatalog } from './services/ModelCatalog';
 export type { CatalogModel } from './services/ModelCatalog';
 export { resolveProvider, fetchAllProviderModels, collectProviderCredentials, toOrchestratorOptions } from './services/ProviderRouting';
 export type { ProviderModelLists, FetchAllProviderModelsOptions, AllProviderModels, OrchestratorOption, ProviderModelsResult, ProviderCredentialSource } from './services/ProviderRouting';
-export { ALL_PROVIDERS, getProviderMeta, isApiProvider, isPlannerBackend, prefixModelId, stripModelPrefix, resolveProviderFromPrefix, isOpenAiProvider, isCliProvider, runnerForProvider, providerForRunner, plannerBackendEntries, configuredProviders, PROVIDER_LABEL, PROVIDER_SHORT_LABEL, HARNESS_PLANNER_REASON, PROVIDER_PRIORITY, PROVIDER_DETECT_PRIORITY, CLI_PROVIDERS, type ByPlannerBackend } from './services/ProviderRegistry';
+export { ALL_PROVIDERS, getProviderMeta, isApiProvider, isPlannerBackend, prefixModelId, stripModelPrefix, resolveProviderFromPrefix, isOpenAiProvider, isCliProvider, runnerForProvider, providerForRunner, plannerBackendEntries, configuredProviders, PROVIDER_LABEL, PROVIDER_SHORT_LABEL, HARNESS_PLANNER_REASON, HARNESS_PLANNER_UNAVAILABLE_REASON, PROVIDER_PRIORITY, PROVIDER_DETECT_PRIORITY, CLI_PROVIDERS, type ByPlannerBackend } from './services/ProviderRegistry';
 export type { ProviderRegistration, PlannerUsability, PlannerBackendEntry } from './services/ProviderRegistry';
 export {
   admitSettingsEnv,
@@ -191,6 +191,7 @@ export { PlanEditError } from './services/PlanEditError';
 export type * from './daemonContract';
 export { SessionNotFoundError, NoPlanError, AlreadyExecutingError } from './services/SessionErrors';
 export { LeaseHost, processLeaseHost, SessionHeldError, describeHeld, describeHolder, LEASE_HEARTBEAT_MS, LEASE_STALE_MS, type LeaseHostKind, type LeaseHostOptions, type SessionHeld, type SessionLease, type SessionLeaseRecord } from './services/sessionLease';
+export { describeRunnerSignIn, describeSignIn, describeSignInWays, signInAction, signInOf, signInOfVerdict, TERMINAL_UI_SIGN_IN, HEADLESS_CLI_SIGN_IN, type KeySignInRoute, type RunnerSignIn, type SignInSyntax } from './services/signInHint';
 export { plannerNotReady, plannerNotReadyFor, describePlannerNotReady, PlannerNotReadyError, TERMINAL_UI_COMMANDS, CHAT_COMMANDS, HEADLESS_CLI_COMMANDS, type PlannerNotReady, type PlannerCommandSyntax, type PlannerReadinessConfig } from './services/plannerReadiness';
 export type { ChildPlacement, SessionDeps, SessionRuntimeSettings, SessionPlanner, SaveSession, ConversationFork, ConversationRewind } from './services/createSession';
 export type { TaskEditOptions } from './services/PlanEditor';
@@ -270,6 +271,7 @@ export { TaskLogRecorder } from './services/TaskLogRecorder';
 export type { TaskLogRecorderDeps } from './services/TaskLogRecorder';
 export * from './services/mcp';
 export * from './utils/shell';
+export { headLines } from './utils/lineTail';
 export {
   planDirectLaunch,
   windowsCommandLine,
@@ -332,6 +334,8 @@ export type { HasBinFn } from './utils/clipboard';
 export { RunnerRegistry } from './plugins/RunnerRegistry';
 export { removedPluginNotice } from './plugins/removedPluginNotice';
 export { resolveTaskRunnerFlags } from './plugins/resolveArgs';
+export { RUNNER_CATALOG, RUNNER_IDS, RUNNER_LABELS, RUNNER_INSTALL_DOCS, type RunnerCatalogEntry } from './services/runnerCatalog';
+export { builtinPlannerBackends } from './services/plannerBackends';
 export { CLAUDE_CODE_MANIFEST } from './plugins/builtin/claude-code.manifest';
 export { OPENCODE_MANIFEST } from './plugins/builtin/opencode.manifest';
 export type { RunnerManifest, RunnerEntry, RunnerAuthSpec, RunnerAuthStatus, RunnerFeatures, RunnerModelDiscovery, RunnerMode, DiscoveryCommand } from './plugins/types';

@@ -124,6 +124,6 @@ describe('every recorded Claude Code stream draws what its runner reported', () 
       const fill = plannerContextFill(ledger);
       expect(fill?.usedTokens).toBe(want.meter);
       expect(fill?.windowTokens).toBe(want.window);
-    }, 30_000);
+    });
   });
 });

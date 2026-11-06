@@ -66,6 +66,21 @@ describe('ChatViewProvider.setRunSettings', () => {
   });
 });
 
+describe('ChatViewProvider.setModelDiscoveryErrors', () => {
+  it("carries each runner's own reason beside the providers', and replays both", () => {
+    const { provider, posted } = providerWithCapture();
+    const errors = { openai: 'bad key' };
+    const runnerErrors = { 'qwen-code': 'Qwen Code is not signed in. Run qwen and sign in there.' };
+
+    provider.setModelDiscoveryErrors(errors, runnerErrors);
+    expect(posted).toEqual([{ type: 'setModelDiscoveryErrors', errors, runnerErrors }]);
+
+    posted.length = 0;
+    provider.resendAllState();
+    expect(posted).toContainEqual({ type: 'setModelDiscoveryErrors', errors, runnerErrors });
+  });
+});
+
 describe('ChatViewProvider after its webview is disposed', () => {
   it('stops posting to the dead webview and focuses the view again on reveal', () => {
     const { provider, posted, view, dispose } = providerWithCapture();

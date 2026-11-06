@@ -91,14 +91,32 @@ afterEach(() => {
 });
 
 describe('handlePlan — a turn that fails signed out', () => {
-  it("rewords the terminal UI's /login sentence in the shell's own command", async () => {
+  const rewordings: [string, string, string][] = [
+    [
+      'claude-code',
+      'Claude Code is not signed in. Sign in with /login claude-code, or run claude auth login. Then try again.\n\nNot logged in · Please run /login',
+      'Claude Code is not signed in. Run claude auth login to sign in. Then try again.',
+    ],
+    [
+      'cursor-agent',
+      'Cursor is not signed in. Sign in with /login cursor-agent, or run cursor-agent login.',
+      'Cursor is not signed in. Run cursor-agent login to sign in.',
+    ],
+    [
+      'qwen-code',
+      'Qwen Code is not signed in. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.',
+      'Qwen Code is not signed in. Run ordewell key set openrouter <key> (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.',
+    ],
+  ];
+
+  it.each(rewordings)("rewords %s's terminal UI hint in the shell's own commands", async (_runner, said, reworded) => {
     const srv = await startServer((req, res) => {
       if ((req.url || '').includes('/api/runners')) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify(RUNNERS));
       }
       res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Claude Code not logged in. Sign in with /login, or run claude auth login and try again.' }));
+      res.end(JSON.stringify({ error: said }));
     });
     const { handlePlan } = await import('../plan');
     const { stderr, exitCode } = await capture(() => handlePlan(
@@ -108,8 +126,9 @@ describe('handlePlan — a turn that fails signed out', () => {
     srv.close();
 
     expect(exitCode).toBe(1);
-    expect(stderr).toContain('Claude Code not logged in. Run claude auth login to sign in, then try again.');
-    expect(stderr).not.toContain('/login');
+    expect(stderr).toContain(reworded);
+    expect(stderr).not.toContain('/login ');
+    expect(stderr).not.toContain('/key');
   });
 });
 
@@ -486,7 +505,7 @@ describe('handlePlan', () => {
       handlePlan(['--goal', 'ship it', '--workspace', '/tmp'], { api: new ApiClient(srv.port) }),
     );
     expect(stderr).toContain(
-      'No planner is ready. Pick one with ordewell planner <id>: Claude Code, Codex and OpenCode plan with no API key. ' +
+      'No planner is ready. Pick one with ordewell planner <id>: Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor plan with no API key. ' +
       'To plan with OpenRouter instead, add OPENROUTER_API_KEY with ordewell key set openrouter <key>.',
     );
     expect(stderr).not.toContain('/planner');

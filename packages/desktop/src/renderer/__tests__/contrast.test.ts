@@ -40,7 +40,7 @@ const SURFACES = ['bg-chrome', 'bg', 'bg-sidebar', 'bg-widget', 'bg-overlay', 'b
 const INSETS = ['bg-input', 'bg-code', 'surface-inset'];
 const STATUSES = ['idle', 'running', 'attention', 'passed', 'failed', 'blocked', 'merge', 'warning', 'warning-text', 'error'];
 const AREAS = ['planner', 'sessions', 'explorer', 'changes', 'git'];
-const RUNNERS = ['claude-code', 'codex', 'opencode'];
+const RUNNERS = ['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent'];
 
 const TEXT: Array<[string, string[]]> = [
   ['fg', [...SURFACES, ...INSETS, 'accent-tint', 'diff-inserted', 'diff-removed', 'diff-inserted-word', 'diff-removed-word']],
@@ -62,6 +62,8 @@ const MARKS: Array<[string, string[]]> = [
   ['focus-ring', [...SURFACES, 'bg-input']],
   ['border-control', [...SURFACES, 'bg-input']],
   ...AREAS.map((area): [string, string[]] => [`area-${area}`, SURFACES]),
+  // The runner's mark (the colour as a graphic) is seen on every surface a badge sits on.
+  ...RUNNERS.map((runner): [string, string[]] => [`runner-${runner}`, SURFACES]),
 ];
 
 /**
@@ -100,6 +102,37 @@ describe.each(['light', 'dark'] as const)('the %s theme', (name) => {
 
   it.each(MARKS.flatMap(([fg, on]) => on.map((bg) => [fg, bg])))('sees %s on %s at 3:1', (fg, bg) => {
     expect(contrast(value(fg), value(bg))).toBeGreaterThanOrEqual(3);
+  });
+});
+
+/** Distance in OKLab, x100: about 5 is two colours that read as different hues at a glance. */
+function distance(a: string, b: string): number {
+  const lab = (hex: string): number[] => {
+    const [r, g, b2] = [1, 3, 5].map((at) => {
+      const channel = parseInt(hex.slice(at, at + 2), 16) / 255;
+      return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+    });
+    const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b2);
+    const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b2);
+    const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b2);
+    return [0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s, 1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s, 0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s];
+  };
+  const [x, y] = [lab(a), lab(b)];
+  return Math.hypot(...x.map((value, at) => value - y[at])) * 100;
+}
+
+describe.each(['light', 'dark'] as const)('the %s theme\'s runner colours', (name) => {
+  const tokens = scheme(name);
+  const hex = (token: string): string => tokens.get(token)!;
+  const pairs = RUNNERS.flatMap((runner, at) => RUNNERS.slice(at + 1).map((other): [string, string] => [runner, other]));
+
+  it.each(pairs)('tells %s from %s', (runner, other) => {
+    expect(distance(hex(`runner-${runner}`), hex(`runner-${other}`))).toBeGreaterThanOrEqual(5);
+  });
+
+  // Claude Code's clay predates this check and sits near blocked's orange; the five newer runners keep clear of every status.
+  it.each(RUNNERS.slice(3).flatMap((runner) => STATUSES.map((status): [string, string] => [runner, status])))('tells %s from status %s', (runner, status) => {
+    expect(distance(hex(`runner-${runner}`), hex(`status-${status}`))).toBeGreaterThanOrEqual(5);
   });
 });
 

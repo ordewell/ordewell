@@ -88,6 +88,8 @@
 .welcome-tone-idle > .ow-icon { color: var(--ow-status-idle); }
 .welcome-tone-failed > .ow-icon { color: var(--ow-status-failed); }
 .welcome-runner .welcome-line { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A reason ends in what to do about it (Update, then Refresh), so it gets two lines before the ellipsis. */
+.welcome-runner .welcome-hint { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; white-space: normal; overflow-wrap: anywhere; }
 .welcome-card-actions { display: flex; flex-wrap: wrap; gap: var(--ow-space-2); margin-top: var(--ow-space-1); }
 
 /* Skeleton bars sit at a line's own height, so nothing moves when the text arrives. */
@@ -181,3 +183,22 @@
   border-radius: var(--ow-radius-lg);
 }
 .welcome-drop span { font: var(--ow-type-heading); color: var(--ow-fg); }
+
+/* A login from the launcher: the agent's own terminal in a modal, with its answer beneath. */
+.welcome-login-scrim { z-index: 40; }
+.welcome-login {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ow-space-2);
+  width: min(880px, calc(100vw - var(--ow-space-8)));
+  padding: var(--ow-space-4);
+  border: 1px solid var(--ow-border-widget);
+  border-radius: var(--ow-radius-lg);
+  background: var(--ow-surface-overlay);
+  box-shadow: var(--ow-elevation-raised);
+}
+.welcome-login-title { margin: 0; font: var(--ow-type-heading); color: var(--ow-fg); }
+.welcome-login-terminal { height: min(420px, 55vh); background: var(--ow-bg); border: 1px solid var(--ow-border); border-radius: var(--ow-radius-sm); padding: var(--ow-space-1); }
+.welcome-login-status { margin: 0; font: var(--ow-type-body); color: var(--ow-fg-secondary); }
+.welcome-login-hint { margin: 0; font: var(--ow-type-small); color: var(--ow-fg-muted); }
+.welcome-login-actions { display: flex; justify-content: flex-end; gap: var(--ow-space-2); }

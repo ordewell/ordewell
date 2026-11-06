@@ -1,17 +1,19 @@
 import { useId, useState } from 'react';
-import { ChevronDown, ChevronRight, CircleAlert, Settings as SettingsIcon } from 'lucide-react';
+import { ChevronDown, ChevronRight, CircleAlert, KeyRound, LogIn, RotateCw, Settings as SettingsIcon } from 'lucide-react';
 import { Button, EmptyState, Icon } from '@ordewell/ui/design';
 import type { DiscoveredModel, SettingsResponse, SupervisorLevel } from '@ordewell/core';
-import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core/plan-utils';
+import type { PlannerBackend } from '@ordewell/ui/protocol';
+import { describeSignInWays, signInAction, signInOfVerdict, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_SIGN_IN } from '@ordewell/core/plan-utils';
 import type { FrameApi, Unregister } from '../../frame/api';
 import { THEME_CHOICES, type ThemePref } from '../../frame/themePref';
 import { daemonHost, type DaemonHost } from '../../session/DaemonHost';
 import { useSession } from '../../session/useSession';
+import { all } from '../Stub';
 import NumberField from './NumberField';
 import { atRunDefaults, runDefaultsChange } from './runDefaults';
 import { ModelAllowlist } from './ModelAllowlist';
 import { Subplanners } from './Subplanners';
-import { useSettings, type RunnerSetting } from './useSettings';
+import { runnerRowsFor, useSettings, type RunnerRow } from './useSettings';
 import './settings.css';
 
 const AUTONOMY = [
@@ -49,10 +51,10 @@ function Pills<T extends string | boolean>({ label, options, current, onPick }: 
   );
 }
 
-function Toggle({ label, checked, hint, onChange }: { label: string; checked: boolean; hint?: string; onChange(checked: boolean): void }): JSX.Element {
+function Toggle({ label, checked, hint, disabled, onChange }: { label: string; checked: boolean; hint?: string; disabled?: boolean; onChange(checked: boolean): void }): JSX.Element {
   return (
     <label className="settings-toggle">
-      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+      <input type="checkbox" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} />
       <span>{label}</span>
       {hint && <span className="settings-hint">{hint}</span>}
     </label>
@@ -74,10 +76,9 @@ function RestoreRunDefaults({ disabled, onRestore }: { disabled: boolean; onRest
   );
 }
 
-function Planner({ settings, runners, providers, models, busy, onPlanner, onModel, onEffort }: {
+function Planner({ settings, backends, models, busy, onPlanner, onModel, onEffort }: {
   settings: SettingsResponse;
-  runners: readonly RunnerSetting[];
-  providers: readonly string[];
+  backends: readonly PlannerBackend[];
   models: DiscoveredModel[] | undefined;
   busy: boolean;
   onPlanner(provider: string): void;
@@ -95,19 +96,27 @@ function Planner({ settings, runners, providers, models, busy, onPlanner, onMode
   const plannerId = useId();
   const modelFieldId = useId();
   const effortId = useId();
-  const backends = [
-    ...runners.map((runner) => ({ id: runner.id, label: `${runner.name} (agent)`, usable: true })),
-    ...providers.filter((provider) => !runners.some((runner) => runner.id === provider)).map((provider) => ({ id: provider, label: `${provider} (vendor)`, usable: true })),
-    ...(settings.aiProvider && !runners.some((runner) => runner.id === settings.aiProvider) && !providers.includes(settings.aiProvider) ? [{ id: settings.aiProvider, label: settings.aiProvider, usable: true }] : []),
-  ];
+  // core's list always names the shipped agents, so an uninstalled one keeps
+  // its row and says why instead of vanishing from the picker.
+  const offered: PlannerBackend[] = backends.some((backend) => backend.id === settings.aiProvider)
+    ? [...backends]
+    : [{ id: settings.aiProvider, label: settings.aiProvider, kind: 'vendor', usable: true }, ...backends];
+  const active = backends.find((backend) => backend.id === settings.aiProvider);
   return (
     <>
       <label className="settings-field" htmlFor={plannerId}>
         <span className="settings-label">Planner</span>
         <select className="ow-select" id={plannerId} aria-label="Planner" value={settings.aiProvider} disabled={busy} onChange={(event) => onPlanner(event.target.value)}>
-          {backends.map((backend) => <option key={backend.id} value={backend.id}>{backend.label}</option>)}
+          {offered.map((backend) => (
+            <option key={backend.id} value={backend.id} disabled={!backend.usable}>
+              {backend.label}{backend.usable ? '' : ` — ${backend.reason ?? 'not available'}`}
+            </option>
+          ))}
         </select>
-        <span className="settings-hint">Who turns a goal into a plan. An agent plans with its own models.</span>
+        <span className="settings-hint">
+          Who turns a goal into a plan. An agent plans with its own models.
+          {active && (!active.usable || active.auth?.state === 'signed-out') && active.reason ? ` ${active.reason}` : ''}
+        </span>
       </label>
       <label className="settings-field" htmlFor={modelFieldId}>
         <span className="settings-label">Planner model</span>
@@ -136,8 +145,8 @@ function Planner({ settings, runners, providers, models, busy, onPlanner, onMode
  */
 function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
   const { sessionId } = useSession(host);
-  const { view, refresh, update, updateRun, setRunner, savePref, setTheme } = useSettings(host, sessionId);
-  const { settings, runners, models, prefs, busy, loading, error } = view;
+  const { view, refresh, rescan, update, updateRun, setRunner, savePref, setTheme } = useSettings(host, sessionId);
+  const { settings, runners, models, prefs, busy, loading, error, backends } = view;
   // Held here as well as in the prefs so the disclosure answers the click at once, not after the write.
   const [advancedChoice, setAdvancedChoice] = useState<boolean | undefined>(undefined);
   const advancedOpen = advancedChoice ?? prefs?.settingsAdvancedOpen ?? false;
@@ -160,6 +169,18 @@ function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
       modelLabel: option.label,
       variants: [],
     }));
+  const runnerRows = runnerRowsFor(runners, backends);
+  const runnerHint = (row: RunnerRow): string => {
+    const parts: string[] = [];
+    const state = row.auth?.state;
+    const signIn = signInOfVerdict(row.id, row.name, row.auth);
+    if (state) parts.push(state === 'signed-in' ? 'Signed in' : state === 'signed-out' ? 'Signed out' : 'Sign-in unknown');
+    const ways = signIn && state !== 'signed-in' ? describeSignInWays(signIn, TERMINAL_UI_SIGN_IN) : '';
+    if (ways) parts.push(ways);
+    if (row.reason) parts.push(row.reason);
+    else if (!row.installed) parts.push('not installed');
+    return parts.join(' · ');
+  };
 
   return (
     <div className="settings-view">
@@ -185,8 +206,7 @@ function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
         <h3 id="settings-planner">Planner</h3>
         <Planner
           settings={settings}
-          runners={runners}
-          providers={models?.providers ?? []}
+          backends={backends}
           models={runnerModels as DiscoveredModel[] | undefined}
           busy={busy}
           onPlanner={(provider) => { void update({ env: { AI_PROVIDER: provider } }); }}
@@ -196,26 +216,54 @@ function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
       </section>
 
       <section className="settings-section" aria-labelledby="settings-runners">
-        <h3 id="settings-runners">Runners</h3>
+        <div className="settings-section-head">
+          <h3 id="settings-runners">Runners</h3>
+          <Button size="sm" icon={RotateCw} disabled={busy} onClick={() => { void rescan(); }}>Refresh</Button>
+        </div>
         <p className="settings-hint">Which coding agents a task may run on, and which models each may offer.</p>
         <ul className="settings-runners">
-          {runners.map((runner) => (
-            <li key={runner.id} className="settings-runner">
-              <Toggle
-                label={runner.name}
-                checked={runner.enabled}
-                hint={runner.auth ? `Signed ${runner.auth.state === 'signed-in' ? 'in' : runner.auth.state === 'signed-out' ? 'out' : 'in unknown'}` : undefined}
-                onChange={(enabled) => { void setRunner(runner.id, enabled); }}
-              />
-              <ModelAllowlist
-                runnerName={runner.name}
-                models={models?.modelsByRunner[runner.id] ?? []}
-                ids={settings.modelAllowlist?.[runner.id]}
-                disabled={!runner.enabled}
-                onCommit={(next) => update({ modelAllowlist: { [runner.id]: next } })}
-              />
-            </li>
-          ))}
+          {runnerRows.map((row) => {
+            const signIn = signInOfVerdict(row.id, row.name, row.auth);
+            const state = row.auth?.state;
+            const action = state === 'signed-out' ? signInAction(signIn) : null;
+            return (
+              <li key={row.id} className="settings-runner">
+                <Toggle
+                  label={row.name}
+                  checked={row.enabled}
+                  disabled={!row.installed}
+                  hint={runnerHint(row) || undefined}
+                  onChange={(enabled) => { void setRunner(row.id, enabled); }}
+                />
+                {row.installed ? (
+                  <ModelAllowlist
+                    runnerName={row.name}
+                    models={models?.modelsByRunner[row.id] ?? []}
+                    ids={settings.modelAllowlist?.[row.id]}
+                    disabled={!row.enabled}
+                    error={models?.runnerErrors?.[row.id]}
+                    onCommit={(next) => update({ modelAllowlist: { [row.id]: next } })}
+                  />
+                ) : (
+                  <p className="settings-hint">Install {row.name}, then Refresh.</p>
+                )}
+                {row.installed && (action === 'login' || signIn?.key) && (
+                  <span className="settings-runner-actions">
+                    {action === 'login' && (
+                      <Button size="sm" icon={LogIn} disabled={busy} onClick={() => { void host.handle({ type: 'loginPlanner', runner: row.id }); }}>
+                        Log in
+                      </Button>
+                    )}
+                    {signIn?.key && (
+                      <Button size="sm" icon={KeyRound} disabled={busy} onClick={() => { void host.enterApiKey(signIn.key?.provider, row.name); }}>
+                        Set API key…
+                      </Button>
+                    )}
+                  </span>
+                )}
+              </li>
+            );
+          })}
         </ul>
       </section>
 
@@ -316,5 +364,14 @@ function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
 
 export function register(api: FrameApi): Unregister {
   const host = daemonHost(api.workspace);
-  return api.registerTabKind({ kind: 'settings', render: () => <SettingsTab host={host} /> });
+  return all(
+    api.registerTabKind({ kind: 'settings', render: () => <SettingsTab host={host} /> }),
+    // The key entry is one dialog for every surface: Settings' rows, each
+    // signed-out agent's Log in, and this command all reach the host's path.
+    api.registerCommand({
+      id: 'settings.apiKey',
+      title: 'Set API key…',
+      run: () => { void host.enterApiKey(); },
+    }),
+  );
 }

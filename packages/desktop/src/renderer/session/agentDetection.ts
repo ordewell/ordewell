@@ -1,9 +1,8 @@
 import type { ModelsResponse, RunnersResponse, SettingsResponse } from '@ordewell/core';
-import { API_PROVIDER_LABELS } from '@ordewell/ui';
-import type { HostToWebview, PlannerBackend, RunnerMeta } from '@ordewell/ui/protocol';
-import { runnerName } from '@ordewell/ui/design';
-import { KNOWN_RUNNERS } from '../runners';
+import { DELEGATION_OFFERED, RUNNER_LABELS } from '@ordewell/core/plan-utils';
+import type { HostToWebview, RunnerMeta } from '@ordewell/ui/protocol';
 import { callDaemon, messageOf } from './daemon';
+import { plannerBackendsFor } from './plannerBackends';
 
 /**
  * Long enough for a daemon to probe every agent's CLI and its login on a
@@ -11,11 +10,6 @@ import { callDaemon, messageOf } from './daemon';
  * rather than drawing "Detecting coding agents…" for good.
  */
 export const DETECTION_TIMEOUT_MS = 20_000;
-
-// core's ProviderRegistry words for a harness planner, kept equal so the
-// desktop's planner picker reads as the TUI's and the extension's do.
-const HARNESS_REASON = 'coding agent · no API key needed';
-const HARNESS_UNAVAILABLE = 'not available';
 
 function within<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -30,36 +24,11 @@ function isRunners(data: unknown): data is RunnersResponse {
 }
 
 function runnerMeta(data: RunnersResponse): RunnerMeta[] {
-  return data.runners.map((entry) => ({ id: entry.id, displayName: entry.name || runnerName(entry.id), enabled: entry.enabled !== false }));
-}
-
-/**
- * The planners the chat offers, as core's `plannerBackendEntries` builds them:
- * every agent the daemon found installed and spawnable plans with no key, a
- * known one it did not find is listed unavailable, and each configured vendor
- * follows.
- */
-function plannerBackends(runners: RunnersResponse, providers: ModelsResponse['providers']): PlannerBackend[] {
-  const found = new Map(runners.runners.map((entry) => [entry.id, entry]));
-  const ids = [...new Set([...KNOWN_RUNNERS, ...found.keys()])];
-  const harness = ids.map((id): PlannerBackend => {
-    const entry = found.get(id);
-    if (!entry) return { id, label: runnerName(id), kind: 'harness', runner: id, usable: false, reason: HARNESS_UNAVAILABLE };
-    const signedOut = entry.auth?.state === 'signed-out';
-    return {
-      id,
-      label: entry.name || runnerName(id),
-      kind: 'harness',
-      runner: id,
-      usable: true,
-      reason: signedOut ? (entry.auth?.detail ?? 'not logged in') : HARNESS_REASON,
-      ...(entry.auth ? { auth: entry.auth } : {}),
-    };
-  });
-  const vendors = providers.map((id): PlannerBackend => ({
-    id, label: API_PROVIDER_LABELS[id as keyof typeof API_PROVIDER_LABELS] ?? id, kind: 'vendor', usable: true,
+  return data.runners.map((entry) => ({
+    id: entry.id,
+    displayName: entry.name || RUNNER_LABELS[entry.id] || entry.id,
+    enabled: entry.enabled !== false,
   }));
-  return [...harness, ...vendors];
 }
 
 /**
@@ -84,6 +53,8 @@ export class AgentDetection {
     private readonly workspace: string,
     private readonly emit: (msg: HostToWebview) => void,
     private readonly timeoutMs = DETECTION_TIMEOUT_MS,
+    /** The session whose settings answer, so the Run block shows that session's values. */
+    private readonly sessionId?: () => string,
   ) {}
 
   /** Detect again; a detection still under way is overtaken, its late answers dropped. */
@@ -94,13 +65,15 @@ export class AgentDetection {
     this.offStatus = null;
     this.emit({ type: 'agentDetection', state: 'detecting' });
     const workspace = { workspace: this.workspace };
+    const sessionId = this.sessionId?.();
+    const settingsQuery = { workspace: this.workspace, ...(sessionId ? { sessionId } : {}) };
     let runners: RunnersResponse | null = null;
     let providers: ModelsResponse['providers'] = [];
     let settings: SettingsResponse | null = null;
     let catalogSettled = false;
     const publish = () => {
       if (!runners || !current()) return;
-      const backends = plannerBackends(runners, providers);
+      const backends = plannerBackendsFor(runners.runners, providers);
       if (!catalogSettled && !backends.some((b) => b.usable)) return;
       this.emit({ type: 'setConfiguredProviders', providers });
       this.emit({
@@ -128,12 +101,29 @@ export class AgentDetection {
         this.emit({ type: 'setModelsByRunner', modelsByRunner: models.modelsByRunner });
         this.emit({ type: 'setModesByRunner', modesByRunner: models.modesByRunner });
         this.emit({ type: 'setModelConfig', modelConfig: { orchestrator: models.orchestratorModel } });
+        this.emit({
+          type: 'setModelDiscoveryErrors',
+          errors: models.providerErrors ?? {},
+          runnerErrors: models.runnerErrors ?? {},
+        });
       })
       .finally(() => { catalogSettled = true; publish(); });
-    const chosen = within(callDaemon('settings.get', workspace) as Promise<SettingsResponse>, this.timeoutMs, 'its settings')
+    const chosen = within(callDaemon('settings.get', settingsQuery) as Promise<SettingsResponse>, this.timeoutMs, 'its settings')
       .then((data) => {
         if (!current()) return;
         settings = data;
+        // The chat's Settings panel draws its Run block from this: the open
+        // session answers with its own values, and a daemon that answers
+        // without a run (an old fake) leaves the block closed.
+        if (data.run && typeof data.run === 'object') {
+          this.emit({
+            type: 'setRunSettings',
+            autonomous: data.autonomousMode,
+            run: data.run,
+            maxParallel: data.maxParallel,
+            delegationOffered: DELEGATION_OFFERED,
+          });
+        }
         publish();
       });
 

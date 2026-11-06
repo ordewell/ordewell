@@ -136,7 +136,7 @@ jobs:
   # same recipe is proved before a tag. The signing secrets are passed by
   # name, not inherited, so the desktop build never holds the publishing
   # tokens; with none set the installers are unsigned and updates are off
-  # (ADR-0060 H9).
+  # (ADR-0063 H9).
   desktop:
     needs: github-release
     uses: ./.github/workflows/desktop-build.yml
@@ -165,7 +165,7 @@ jobs:
       ES_CREDENTIAL_ID: ${{ secrets.ES_CREDENTIAL_ID }}
       ES_TOTP_SECRET: ${{ secrets.ES_TOTP_SECRET }}
 
-  # The package managers (ADR-0060 H11), from what the Release already carries:
+  # The package managers (ADR-0063 H11), from what the Release already carries:
   # both render the cask and the winget manifests from the version and the
   # SHA256SUMS the desktop build attached, so a package manager installs the
   # release's own file and checks it against the release's own hash. Each
@@ -244,7 +244,7 @@ jobs:
 
       - name: Say why no cask was published
         if: env.HOMEBREW_TAP_TOKEN_SET != 'true'
-        run: echo "::notice::HOMEBREW_TAP_TOKEN is not set, so no cask was published (ADR-0060 H11)."
+        run: echo "::notice::HOMEBREW_TAP_TOKEN is not set, so no cask was published (ADR-0063 H11)."
 
   winget:
     needs: desktop
@@ -313,4 +313,4 @@ jobs:
       - name: Say why no pull request was opened
         if: env.WINGET_TOKEN_SET != 'true'
         shell: pwsh
-        run: Write-Host '::notice::WINGET_TOKEN is not set, so no winget pull request was opened (ADR-0060 H11).'
+        run: Write-Host '::notice::WINGET_TOKEN is not set, so no winget pull request was opened (ADR-0063 H11).'

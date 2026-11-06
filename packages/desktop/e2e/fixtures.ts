@@ -96,6 +96,8 @@ export interface EnvOptions {
   readonly noProvider?: boolean;
   /** The mock planner's persona (bench/live/mock-provider.mjs), which decides the plan it answers with. */
   readonly persona?: string;
+  /** The agents enabled in Settings, where the default is Claude Code alone. */
+  readonly runners?: string;
 }
 
 /** The environment of the app, or of a daemon started beside it: the same HOME, PATH and planner. */
@@ -112,7 +114,7 @@ export function appEnv(sandbox: Sandbox, daemonPort: number, mockPort: number, o
     PATH: hermeticPath(sandbox),
     ORDEWELL_PORT: String(daemonPort),
     ORDEWELL_NO_VERSION_CHECK: '1',
-    ORDEWELL_ENABLED_RUNNERS: 'claude-code',
+    ORDEWELL_ENABLED_RUNNERS: options.runners ?? 'claude-code',
     ...(options.noProvider ? {} : {
       AI_PROVIDER: 'openrouter',
       ORCHESTRATOR_MODEL: `mock/${options.persona ?? 'desktop-e2e'}`,
@@ -158,3 +160,140 @@ export async function openFolder(app: ElectronApplication, welcome: Page, dir: s
 export function removeSandbox(sandbox: Sandbox): void {
   fs.rmSync(sandbox.tmp, { recursive: true, force: true, maxRetries: 5 });
 }
+
+// ------------------------------------------------- what the daemon says of runners
+
+/** What a faked answer carries: a body, and the status the daemon sent it with. */
+export interface FakedAnswer {
+  readonly status?: number;
+  readonly body: unknown;
+}
+
+/**
+ * What the app's main process answers in the daemon's place. `runners` replaces
+ * GET /api/runners; `models` is laid over the daemon's own GET /api/models, so
+ * the planner's catalog stays real while a runner's list or error is not.
+ */
+export interface FakedDaemon {
+  readonly runners?: FakedAnswer;
+  readonly models?: { readonly modelsByRunner?: Record<string, unknown[]>; readonly runnerErrors?: Record<string, string> };
+}
+
+/**
+ * The tour has one installed agent, so most of what the app shows of the other
+ * seven (an install card, a signed-out flag, a too-old reason, a model error) is
+ * a state of the machine the tour cannot create offline. This answers for the
+ * daemon in main's `DaemonProxy`, the renderer's only way to it (ADR-0063 H4),
+ * so every window draws what a real daemon's answer would make it draw.
+ * Calling it again replaces the answers; `undefined` gives the real daemon back.
+ */
+export async function fakeDaemon(app: ElectronApplication, faked: FakedDaemon | undefined): Promise<void> {
+  await app.evaluate((_electron, answers) => {
+    // This function is serialised into main, where this file's imports do not exist and `require`
+    // may not either (main is a module); the same builtin objects the proxy imports come from here.
+    const builtin = <T>(name: string): T => (process as unknown as { getBuiltinModule(id: string): T }).getBuiltinModule(name);
+    const http = builtin<typeof import('node:http')>('node:http');
+    const { Readable } = builtin<typeof import('node:stream')>('node:stream');
+    const { EventEmitter } = builtin<typeof import('node:events')>('node:events');
+    type Call = (options: import('node:http').RequestOptions, callback?: (res: import('node:http').IncomingMessage) => void) => import('node:http').ClientRequest;
+    const slot = globalThis as unknown as { tourFaked?: FakedDaemon | undefined; tourRealRequest?: Call };
+    slot.tourFaked = answers ?? undefined;
+    if (slot.tourRealRequest) return;
+    const real = http.request as unknown as Call;
+    slot.tourRealRequest = real;
+    const respond = (callback: ((res: import('node:http').IncomingMessage) => void) | undefined, status: number, body: unknown): void => {
+      const res = Readable.from([Buffer.from(JSON.stringify(body))]) as unknown as import('node:http').IncomingMessage;
+      (res as { statusCode: number }).statusCode = status;
+      callback?.(res);
+    };
+    // The proxy passes (options, callback) and never a URL.
+    http.request = ((options, callback) => {
+      const faked = slot.tourFaked;
+      const path = String(options.path ?? '').split('?')[0];
+      if (faked?.runners && path === '/api/runners' && options.method === 'GET') {
+        const stand = new EventEmitter() as unknown as import('node:http').ClientRequest;
+        (stand as { destroy: () => void }).destroy = () => undefined;
+        (stand as unknown as { end: () => void }).end = () => { setImmediate(() => respond(callback, faked.runners?.status ?? 200, faked.runners?.body)); };
+        return stand;
+      }
+      if (faked?.models && path === '/api/models' && options.method === 'GET') {
+        const models = faked.models;
+        return real.call(http, options, (res: import('node:http').IncomingMessage) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (chunk: Buffer) => { chunks.push(chunk); });
+          res.on('end', () => {
+            const text = Buffer.concat(chunks).toString('utf8');
+            let body: unknown;
+            try { body = JSON.parse(text); } catch { body = undefined; }
+            if (typeof body !== 'object' || body === null) { respond(callback, res.statusCode ?? 502, text); return; }
+            const daemons = body as { modelsByRunner?: Record<string, unknown[]>; runnerErrors?: Record<string, string> };
+            respond(callback, res.statusCode ?? 200, {
+              ...daemons,
+              modelsByRunner: { ...daemons.modelsByRunner, ...models.modelsByRunner },
+              runnerErrors: { ...daemons.runnerErrors, ...models.runnerErrors },
+            });
+          });
+        });
+      }
+      return real.call(http, options, callback);
+    }) as Call as unknown as typeof http.request;
+  }, faked);
+}
+
+interface FakeRunner {
+  readonly id: string;
+  readonly name: string;
+  readonly enabled?: boolean;
+  readonly usable?: boolean;
+  readonly reason?: string;
+  readonly version?: string;
+  readonly auth?: Record<string, unknown>;
+}
+
+const loginSignIn = (runner: string, label: string, login: string[]): Record<string, unknown> => ({
+  state: 'signed-out', loginCommand: login, signIn: { runner, label, login },
+});
+
+/** Eight runners as a machine that has them all in different states would answer. */
+export const MIXED_RUNNERS: readonly FakeRunner[] = [
+  { id: 'claude-code', name: 'Claude Code', enabled: true, version: '2.1.0', auth: { state: 'signed-in' } },
+  { id: 'codex', name: 'Codex', enabled: true, version: '0.58.0', auth: loginSignIn('codex', 'Codex', ['codex', 'login']) },
+  { id: 'opencode', name: 'OpenCode', enabled: false, version: '1.0.0', auth: { state: 'signed-in' } },
+  { id: 'copilot-cli', name: 'GitHub Copilot CLI', enabled: true, version: '1.2.3', auth: { state: 'signed-in' } },
+  {
+    id: 'qwen-code', name: 'Qwen Code', enabled: true, version: '0.2.0',
+    auth: { state: 'signed-out', signIn: { runner: 'qwen-code', label: 'Qwen Code', key: { provider: 'openrouter', label: 'OpenRouter', others: 'any OpenAI-compatible provider' } } },
+  },
+  {
+    id: 'cline', name: 'Cline', enabled: true, version: '1.0.0', usable: false,
+    reason: 'Cline 1.0.0 is older than the 1.3.0 Ordewell needs for its agent protocol. Update it, then Refresh.',
+    auth: { state: 'unknown' },
+  },
+  {
+    id: 'gemini-cli', name: 'Gemini CLI', enabled: true, version: '0.9.0',
+    auth: { state: 'signed-out', signIn: { runner: 'gemini-cli', label: 'Gemini CLI', key: { provider: 'google', label: 'Google' } } },
+  },
+  { id: 'cursor-agent', name: 'Cursor', enabled: true, version: '2025.10.1', auth: { state: 'signed-in' } },
+];
+
+export const fakedRunners = (runners: readonly FakeRunner[]): FakedAnswer => ({ body: { runners, orchestratorModel: 'mock/desktop-tour' } });
+
+export const MIXED: FakedDaemon = {
+  runners: fakedRunners(MIXED_RUNNERS),
+  models: {
+    modelsByRunner: { codex: [], 'qwen-code': [], cline: [] },
+    runnerErrors: {
+      codex: 'Codex is not signed in. Sign in with /login codex, or run codex login. Then Refresh.',
+      'qwen-code': 'Qwen Code is not signed in. Choose OpenRouter in /key to hand it a key. Then Refresh.',
+      cline: 'Cline 1.0.0 is older than the 1.3.0 Ordewell needs. Update it, then Refresh.',
+    },
+  },
+};
+
+/** No agent on the machine at all: the daemon lists none. */
+export const NONE_INSTALLED: FakedDaemon = { runners: fakedRunners([]) };
+
+/** The daemon answers, but not with a runner list. */
+export const DETECTION_FAILED: FakedDaemon = {
+  runners: { status: 500, body: { error: 'Runner detection failed: spawn EMFILE while looking for installed agents.' } },
+};

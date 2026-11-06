@@ -9,7 +9,7 @@
 // The current OS is checked: each runner of desktop-build.yml proves its own platform.
 // Whether the build was signed is read from release/signing.json, which
 // scripts/package.mjs writes: a signed build has its signatures verified, and
-// every build has its baked update gate held to what it was (ADR-0060 H9).
+// every build has its baked update gate held to what it was (ADR-0063 H9).
 import { spawn, spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { createServer } from 'node:net';
@@ -58,7 +58,7 @@ export function ptyEntries(platform = process.platform) {
   return [`${release}/pty.node`, ...(platform === 'darwin' ? [`${release}/spawn-helper`] : [])];
 }
 
-/** ADR-0060 H4, as electron-builder.yml sets them: fuse name -> whether it is on. */
+/** ADR-0063 H4, as electron-builder.yml sets them: fuse name -> whether it is on. */
 export const EXPECTED_FUSES = {
   RunAsNode: false,
   EnableCookieEncryption: true,
@@ -296,7 +296,7 @@ export function bakedAutoUpdate(source) {
 
 /**
  * What is wrong between release/signing.json and the gate the app carries
- * (ADR-0060 H9): updates on only where that platform's build is signed, on
+ * (ADR-0063 H9): updates on only where that platform's build is signed, on
  * macOS signed and notarized, and never on Linux.
  */
 export function signingProblems(manifest, baked, platform = process.platform) {
@@ -383,7 +383,7 @@ function checkSigning(releaseDir, dirs, version, platform, ok) {
   const baked = asar ? bakedAutoUpdate(asarFile(readFileSync(asar), 'dist/main/index.js')) : null;
   const problems = signingProblems(manifest, baked, platform);
   failures.push(...problems.map((problem) => `signing: ${problem}`));
-  if (!problems.length) ok(`${manifest.signing ? `signed (${manifest.signing})${manifest.notarized ? ' and notarized' : ''}` : 'unsigned'}, so updates are ${manifest.autoUpdate ? 'on' : 'off'} (ADR-0060 H9)`);
+  if (!problems.length) ok(`${manifest.signing ? `signed (${manifest.signing})${manifest.notarized ? ' and notarized' : ''}` : 'unsigned'}, so updates are ${manifest.autoUpdate ? 'on' : 'off'} (ADR-0063 H9)`);
 
   for (const check of signatureChecks(manifest, releaseDir, version, platform)) {
     const result = spawnSync(check.file, check.args, { encoding: 'utf8' });
@@ -435,7 +435,7 @@ export async function checkDesktopPackage(root, platform = process.platform) {
     const { getCurrentFuseWire, FuseV1Options } = await import('@electron/fuses');
     const drift = fuseDrift(await getCurrentFuseWire(target), FuseV1Options);
     for (const d of drift) failures.push(`fuses: ${d}`);
-    if (!drift.length) ok('Electron fuses are flipped as ADR-0060 H4 lists');
+    if (!drift.length) ok('Electron fuses are flipped as ADR-0063 H4 lists');
   } else {
     failures.push(`no app binary at ${target.slice(releaseDir.length + 1)} to read fuses from`);
   }

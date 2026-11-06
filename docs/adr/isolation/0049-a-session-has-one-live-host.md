@@ -90,7 +90,7 @@ lets go of nothing.
   refused without the lease; reads of git go through, and a host reads the
   files, diffs and branches of a held session's run from its saved record
   without the lease
-  ([ADR-0061](../surfaces/0061-a-host-reads-files-and-git-for-the-user-confined-to-the-workspace.md)). VS Code's own direct
+  ([ADR-0064](../surfaces/0064-a-host-reads-files-and-git-for-the-user-confined-to-the-workspace.md)). VS Code's own direct
   save checks too. A planner turn on the session is refused the same way, and
   so is resolving a conflict as a task: a turn runs the user's agent and writes
   a PRD into their checkout, and the task would start work the host could not
@@ -213,6 +213,6 @@ throwaway HTTP server, the TUI effect and the CLI command against a refusal.
 - 2026-11-01 — L5 reaches a turn already live at a takeover, and a cleanup's write to the tree log: both ran on past the lease.
 - 2026-11-01 — from a real run: L3's runners no longer wait for a next host, a small shell stops a group whose host has gone.
 - 2026-11-01 — L7 waits out what the run has under way: a release still in git as a Session closed ran with the lease let go, in a tree a next host could hold.
-- 2026-11-03 — L5 lets a host read a held session's run files, diffs and branches without the lease (ADR-0061).
+- 2026-11-03 — L5 lets a host read a held session's run files, diffs and branches without the lease (ADR-0064).
 - 2026-11-03 — the record carries `runLive`, for ADR-0062 G7's interlock in another host.
 - 2026-11-03 — L5's one exception: a non-holder appends a user-action line to `user-actions.jsonl` under the lock (ADR-0062 G6).

@@ -8,6 +8,7 @@ import { ScriptRunner, type ScriptRunnerDeps, type ScriptSpawnFn } from '../Scri
 import type { ScriptExit, StructuredEvent } from '../../interfaces/IRunner';
 import { DEFAULT_SCRIPT_TIMEOUT_MS, type ScriptBody } from '../../models/ScriptTask';
 import type { PlacedLaunch, RunnerLaunch, RunnerPlacement } from '../executionLease';
+import { patient } from '../../testing';
 
 /**
  * A script task's body as it really runs (ADR-0035): real processes, at a real
@@ -189,9 +190,11 @@ describe('ScriptRunner: ending early', () => {
 
     const exit = await run.exit;
     expect(exit).toMatchObject({ outcome: 'timed-out', timeoutMs: 300 });
-    expect(ofType(run.events, 'script_exit')).toEqual([expect.objectContaining({ timedOut: true, signal: 'SIGTERM' })]);
+    // Windows ends the tree with taskkill, which leaves an exit code and no signal.
+    const ended = process.platform === 'win32' ? {} : { signal: 'SIGTERM' };
+    expect(ofType(run.events, 'script_exit')).toEqual([expect.objectContaining({ timedOut: true, ...ended })]);
     expect(fs.existsSync(path.join(run.cwd, 'after'))).toBe(false);
-  }, 15_000);
+  }, patient(15_000));
 
   it('ends the running command on Stop, runs none after it, and resolves once the session has exited', async () => {
     const run = await start({ commands: [js("console.log('up'); setTimeout(() => {}, 60_000)"), js("require('fs').writeFileSync('after', '')")] });
@@ -203,7 +206,7 @@ describe('ScriptRunner: ending early', () => {
     expect(await run.exited).toBe(1);
     expect(run.runner.activeCount).toBe(0);
     expect(fs.existsSync(path.join(run.cwd, 'after'))).toBe(false);
-  }, 15_000);
+  }, patient(15_000));
 
   it('runs nothing at all when stopped before its first command', async () => {
     const run = await start({ commands: [js("require('fs').writeFileSync('first', '')")] });
@@ -355,5 +358,30 @@ describe('ScriptRunner: on Windows', () => {
 
     expect(await run.exit).toEqual({ outcome: 'passed' });
     expect(spawn).toHaveBeenCalledWith('C:\\tools\\gh.exe', ['pr', 'list'], expect.objectContaining({ shell: false, detached: false, cwd: run.cwd }));
+  });
+});
+
+describe('ScriptRunner: a credential of its spawn env (ADR-0061, H1)', () => {
+  /** Fake, and no rule's shape: only the session's held record can recognise it. */
+  const HELD = 'aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xYfake';
+  const shows = (text: string) =>
+    Array.from({ length: HELD.length - 7 }, (_, i) => HELD.slice(i, i + 8)).some((piece) => text.includes(piece));
+
+  it('is hidden in its output, its log, its saved file and its error tail, though it was printed in two chunks', async () => {
+    const dir = workspace();
+    const run = await start({
+      commands: [js([
+        'const v = process.env.MISTRAL_API_KEY;',
+        "process.stdout.write('key ' + v.slice(0, 10));",
+        "setTimeout(() => { process.stdout.write(v.slice(10) + ' done\\n'); process.stderr.write('bad ' + v + '\\n'); process.exit(3); }, 50);",
+      ].join(' '))],
+    }, { env: { MISTRAL_API_KEY: HELD }, attempt: 1, deps: { fullOutputFile: () => path.join(dir, 'out.log') } });
+
+    const exit = await run.exit;
+    const logged = ofType(run.events, 'script_output').map((e) => e.text).join('');
+    const saved = exit.fullOutput ? fs.readFileSync(exit.fullOutput.file, 'utf8') : '';
+    expect({ output: shows(run.output()), logged: shows(logged), saved: shows(saved), tail: shows(JSON.stringify(exit)) })
+      .toEqual({ output: false, logged: false, saved: false, tail: false });
+    expect(run.output()).toBe('key [REDACTED secret: 36 chars] done\nbad [REDACTED secret: 36 chars]\n');
   });
 });

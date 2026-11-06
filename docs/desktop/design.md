@@ -13,12 +13,12 @@ these ADRs:
 
 | ADR | Title | Rules |
 |---|---|---|
-| [ADR-0060](../adr/surfaces/0060-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md) | The desktop app is an Electron client of the shared daemon, and its renderer never holds the token | H1–H10 |
-| [ADR-0061](../adr/surfaces/0061-a-host-reads-files-and-git-for-the-user-confined-to-the-workspace.md) | A host reads files and git for the user, confined to the workspace and needing no lease | R1–R6 |
+| [ADR-0063](../adr/surfaces/0063-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md) | The desktop app is an Electron client of the shared daemon, and its renderer never holds the token | H1–H10 |
+| [ADR-0064](../adr/surfaces/0064-a-host-reads-files-and-git-for-the-user-confined-to-the-workspace.md) | A host reads files and git for the user, confined to the workspace and needing no lease | R1–R6 |
 | [ADR-0062](../adr/isolation/0062-user-git-actions-are-confirmed-at-a-host-and-a-live-run-holds-only-its-landing-branch.md) | User git actions are confirmed at a host, and a live run holds only its landing branch | G1–G11 |
 
 [W16](#w16-a-session-another-host-holds)'s joined session also depends on the
-session lease of ADR-0049, and on ADR-0060 H8, which says how main joins a
+session lease of ADR-0049, and on ADR-0063 H8, which says how main joins a
 holder's daemon. This spec gives only the user experience of a joined session.
 
 The vocabulary is [CONTEXT.md](../../CONTEXT.md)'s. The terms this design adds
@@ -57,7 +57,7 @@ the app, run it from source and find your way around it, see
 The app is `packages/desktop`, built on Electron 45.x with electron-builder.
 Its main process is a client of the shared local daemon (`packages/web`) on
 `127.0.0.1:3742`. After a version handshake (H3), it attaches to a daemon that
-is already running, or starts and owns one (ADR-0060 H1, H2). The renderer
+is already running, or starts and owns one (ADR-0063 H1, H2). The renderer
 holds no token. It reaches the daemon only through the daemon bridge (H4). The
 renderer's UI is `packages/ui`, which the VS Code webview also draws (H7).
 
@@ -382,8 +382,9 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
     - its Needs you count, when one of its sessions is live and waiting;
     - a relative time ("4 minutes ago"), with the full date in the tooltip;
     - a Forget button (`✕`), which appears on hover and focus.
-  - *Runners,* one card each for Claude Code, Codex and OpenCode. Each card
-    shows:
+  - *Runners,* one card for each coding agent core ships: Claude Code, Codex,
+    OpenCode, GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor. Each
+    card shows:
     - the runner's badge, in its [runner colour](#visual-language);
     - its state: *Signed in*, *Signed out*, *Not checked* (unknown) or *Not
       installed* (missing), as a status shape plus a word;
@@ -408,7 +409,9 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
   - *Forget* removes a card from the list without asking: the folder itself is
     untouched, and the toast offers Undo.
   - For a runner that is signed out, the hint names its own CLI sign-in, as the
-    chat does (ADR-0052).
+    chat does (ADR-0052), and the card offers that agent's own way in: *Log
+    in*, which runs the manifest's login in a terminal, or *Set API key…*,
+    which opens the key entry for a key-based agent.
   - For a runner that is missing, the hint reads "Install <runner>, then
     Retry". *Docs ↗* opens the runner's own install page through
     `shell.openExternal`.
@@ -850,7 +853,7 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
   - *The tree* of the current [view scope](#the-scope-model), one directory at
     a time (`GET /api/files/tree`), with git status letters and ignored entries
     marked. `.ordewell/skills/` is shown; the rest of `.ordewell` and `.git`
-    never are (ADR-0061 R3).
+    never are (ADR-0064 R3).
   - *A file* opens in Monaco as a file tab (indigo marker), editable only in
     the checkout.
   - *The sidebar header* names the scope, with a lock (⊡) when it is
@@ -1167,7 +1170,7 @@ What happens depends on the session lease's host kind (ADR-0049,
   extension host, so there is no daemon to join. The app offers to start a new
   session here, or to watch the session read-only.
 
-The connection itself, the token and the route table are ADR-0060 H8's. This
+The connection itself, the token and the route table are ADR-0063 H8's. This
 section specifies only what the person sees.
 
 ```
@@ -1213,7 +1216,7 @@ A VS Code holder
     - *The session's row* in the Sessions sidebar carries the same ⇄ glyph.
 
     Files, diffs, branches and the terminal still come from the app's own
-    daemon and Electron main, since reads need no lease (ADR-0061 R4).
+    daemon and Electron main, since reads need no lease (ADR-0064 R4).
   - **Watch read-only** (a VS Code holder, or a join that was refused).
     - The saved state, from `GET /api/sessions/:id`, with a ⊡ *Read-only ·
       held by VS Code (pid 51234)* chip in the session header and "· read-only"
@@ -1454,17 +1457,32 @@ The rules:
    fill bigger than an icon, and never text.
 2. Area hues and runner colours sit in the part of the colour wheel farthest
    from the status colours they appear near. Runners sit on rows next to
-   status shapes, so they take clay, ice and lime, which no status uses. Areas
+   status shapes, so the first three take clay, ice and lime, which no status
+   uses, and the five added later (orchid, mint, rose, sky and sand) are each
+   kept a measured distance from every status and from one another, which the
+   token test checks. Areas
    only appear in the frame, where no status sits beside them.
 3. A runner badge is the runner's colour as text on a tint of that colour (14 %
    on dark, 10 % on light), with the runner's name: *Claude Code*, *Codex*,
-   *OpenCode*. In a narrow row the name may shorten to *Claude*, but it is
+   *OpenCode*, *GitHub Copilot CLI*, *Qwen Code*, *Cline*, *Gemini CLI* and
+   *Cursor*. In a narrow row the name may shorten to *Claude*, but it is
    never dropped.
 4. Settings is neutral: it has no area hue, and its marker is `--ow-fg`.
 5. Status colours keep their meaning everywhere. Amber means Needs you, red
    means failed, and no decoration borrows them.
 6. Dark is the default theme. Light is its equal, with every pair below
    checked in both.
+7. A runner's state is a word and a shape, never a new colour. *Signed out* is
+   an attention badge and *Unavailable* or *too old* a failed one, each with the
+   reason beside it: one line that ends in an ellipsis with the whole reason in
+   its tooltip, or two lines on a Welcome card, where the reason is the thing
+   to act on. The action (*Log in*, *Set API key…*) sits at the card's end, in
+   the same place on Welcome cards, Settings rows and graph cards, and an
+   unavailable runner has none. The key dialog is an overlay: it takes the
+   overlay surface and raised elevation, and names the vendor in its title.
+   A runner whose models could not be listed shows the error in the allowlist
+   as an alert icon and text on the panel, not as an empty list. The tour
+   (`packages/desktop/e2e/tour.spec.ts`) shows each of these in light and dark.
 
 ## Design tokens
 
@@ -1565,9 +1583,26 @@ heading.
 | `--ow-runner-codex-tint` | `#30353B` | `#EDEFF1` |
 | `--ow-runner-opencode` | `#BCD05E` lime | `#56670F` |
 | `--ow-runner-opencode-tint` | `#32382B` | `#EEF0E7` |
+| `--ow-runner-copilot-cli` | `#D68BE3` orchid | `#8F2FA6` |
+| `--ow-runner-copilot-cli-tint` | `#362E3E` | `#F4EAF6` |
+| `--ow-runner-qwen-code` | `#6FD6C4` mint | `#096D5D` |
+| `--ow-runner-qwen-code-tint` | `#28393A` | `#E6F0EF` |
+| `--ow-runner-cline` | `#F08AB8` rose | `#B0276A` |
+| `--ow-runner-cline-tint` | `#3A2E38` | `#F7E9F0` |
+| `--ow-runner-gemini-cli` | `#6FD0E6` sky | `#0B6A85` |
+| `--ow-runner-gemini-cli-tint` | `#28383E` | `#E7F0F3` |
+| `--ow-runner-cursor-agent` | `#D4C3A0` sand | `#6B5A35` |
+| `--ow-runner-cursor-agent-tint` | `#363635` | `#F0EFEB` |
 
-Badge text against its tint, at its lowest (drawn on raised on dark, on
-surface on light): 4.99 on dark and 4.85 on light. A runner Ordewell does not
+The five added later keep clear of the status colours and of each other (the
+test measures the distance in OKLab and fails under 5). A badge is a name on a
+tint, so none of them is read as a status shape. Their text against their tint, dark then light:
+Copilot 5.36 and 5.74, Qwen Code 6.96 and 5.38, Cline 5.55 and 5.34, Gemini
+6.86 and 5.32, Cursor 6.98 and 5.81. The mark (the colour as a graphic) reaches
+3:1 on every surface it sits on.
+
+Badge text against its tint, at its lowest of the first three (drawn on raised
+on dark, on surface on light): 4.99 on dark and 4.85 on light. A runner Ordewell does not
 know draws a neutral badge (`--ow-fg-secondary` on `--ow-bg-hover`) with its
 name.
 
@@ -2150,7 +2185,7 @@ are permanent, so findings can cite them.
 ## The scope model
 
 A [view scope](../../CONTEXT.md) is per repository, chosen in the title bar's
-scope switcher (ADR-0061 R2). The Explorer, file tabs, Changes and the
+scope switcher (ADR-0064 R2). The Explorer, file tabs, Changes and the
 terminal follow it. The planner tab, task tabs, the plan panel and the graph do
 not.
 
@@ -2174,7 +2209,7 @@ saying why. The breadcrumb names the scope's branch: the checkout's own branch,
 
 ## IPC bridge
 
-The preload exposes `window.ordewell`, and nothing else (ADR-0060 H4). Each
+The preload exposes `window.ordewell`, and nothing else (ADR-0063 H4). Each
 call's arguments are checked in main. Daemon calls name a route id from a fixed
 table; the renderer never gives a URL, a header or a method.
 
@@ -2189,7 +2224,7 @@ table; the renderer never gives a URL, a header or a method.
 | `daemon.retry()` / `daemon.start()` / `daemon.restart()` | The actions of W15, each refused as H3 says |
 | `daemon.call(routeId, params, body?)` | One request from the route table, with the bearer token added in main |
 | `daemon.subscribe(sessionId, cb)` → `unsubscribe` | Frames of `/ws/session/:sessionId` |
-| `daemon.join(sessionId)` / `daemon.leave(sessionId)` | Joins the daemon the session's lease names, or says why not; until `leave`, that session's live routes and socket go there (ADR-0060 H8) |
+| `daemon.join(sessionId)` / `daemon.leave(sessionId)` | Joins the daemon the session's lease names, or says why not; until `leave`, that session's live routes and socket go there (ADR-0063 H8) |
 | `daemon.subscribeChild(rootId, childId, cb)` → `unsubscribe` | Frames of a child plan's socket |
 | `dialog.confirm(spec)` | A native confirm for quit and other app-level asks; in-app confirms are drawn by the UI |
 | `shell.openInEditor(workspace, repo, path, line?)` | Hands a checkout file to the user's editor (G10) |
@@ -2199,11 +2234,11 @@ table; the renderer never gives a URL, a header or a method.
 | `terminal.write(id, data)` / `terminal.resize(id, cols, rows)` / `terminal.close(id)` | PTY input and size |
 | `terminal.openLink(url)` | Opens an `http:` or `https:` address the terminal printed; any other scheme is refused in main |
 | `prefs.get()` / `prefs.set(key, value)` | App-local preferences: window bounds, theme, and the [layout](#persistence-and-reset-layout) per workspace |
-| `update.state()` | "disabled" in a build that is not signed (macOS: and notarized); see ADR-0060 H9 |
+| `update.state()` | "disabled" in a build that is not signed (macOS: and notarized); see ADR-0063 H9 |
 
 Joining a session another daemon holds ([W16](#w16-a-session-another-host-holds))
 means main reads that daemon's token and sends that session's calls and frames
-to its port, after checking its pid and contract (ADR-0060 H8). The page names
+to its port, after checking its pid and contract (ADR-0063 H8). The page names
 only the session, through `daemon.join`. The renderer still never sees a token,
 or a port it could call.
 
@@ -2220,7 +2255,7 @@ existing route that gains a field.
 
 | Method | Path | Main fields | New? |
 |---|---|---|---|
-| GET | `/api/server` | `pid`, `port`, **`version`, `contract`** | changed — ADR-0060 H3 |
+| GET | `/api/server` | `pid`, `port`, **`version`, `contract`** | changed — ADR-0063 H3 |
 | GET | `/api/workspaces`, `/api/workspaces/isolation-preview` | repositories, the branch each lands on, or why not isolated | |
 | GET | `/api/sessions` | id, goal, updated, lease holder | |
 | GET | `/api/sessions/:id` | plan, conversation, isolation view | |
@@ -2240,16 +2275,16 @@ existing route that gains a field.
 | GET | `/api/models`, `/api/settings`, `/api/settings/containers` | | |
 | GET, POST | `/api/approvals/:sessionId`, `/api/approvals/:sessionId/:approvalId` | pending approvals; the decision | |
 | WS | `/ws/session/:sessionId`, `/ws/session/:rootId/child/:childId` | `run_snapshot`, then stamped `SessionMessage`s | |
-| GET | `/api/plans/:sessionId/tasks/:taskId/diff` | `names?`, `repo?`, `path?` → `TaskDiffResult` | **new** — ADR-0061 R2, R3 |
-| GET | `/api/files/tree` | `repo`, `scope`, `sessionId?`, `taskId?`, `dir` → entries with kind, ignored, git status | **new** — ADR-0061 |
-| GET | `/api/files/content` | `repo`, `scope`, `path` → `text` + `hash`, or `binary` / `too-large` / `gone` | **new** — ADR-0061 R5 |
-| GET | `/api/files/find` | `repo`, `scope`, `query`, `text?`, `limit?` → paths, or matching lines; capped | **new** — ADR-0061 |
-| GET | `/api/git/repos` | branch, upstream, ahead/behind, detached | **new** — ADR-0061 |
-| GET | `/api/git/status` | staged, unstaged, untracked, conflicted | **new** — ADR-0061 R6 |
-| GET | `/api/git/diff` | `staged` / `unstaged` / `from`,`to`; `path?` | **new** — ADR-0061 R5 |
-| GET | `/api/git/log` | `ref?`, `cursor?` → commits with parents and refs | **new** — ADR-0061 R5 |
-| GET | `/api/git/commit` | `sha`, `path?` → message, author, files, patch | **new** — ADR-0061 |
-| GET | `/api/git/branches` | local, Ordewell's, remote-tracking, stashes, landing-branch marks | **new** — ADR-0061, ADR-0062 G7 |
+| GET | `/api/plans/:sessionId/tasks/:taskId/diff` | `names?`, `repo?`, `path?` → `TaskDiffResult` | **new** — ADR-0064 R2, R3 |
+| GET | `/api/files/tree` | `repo`, `scope`, `sessionId?`, `taskId?`, `dir` → entries with kind, ignored, git status | **new** — ADR-0064 |
+| GET | `/api/files/content` | `repo`, `scope`, `path` → `text` + `hash`, or `binary` / `too-large` / `gone` | **new** — ADR-0064 R5 |
+| GET | `/api/files/find` | `repo`, `scope`, `query`, `text?`, `limit?` → paths, or matching lines; capped | **new** — ADR-0064 |
+| GET | `/api/git/repos` | branch, upstream, ahead/behind, detached | **new** — ADR-0064 |
+| GET | `/api/git/status` | staged, unstaged, untracked, conflicted | **new** — ADR-0064 R6 |
+| GET | `/api/git/diff` | `staged` / `unstaged` / `from`,`to`; `path?` | **new** — ADR-0064 R5 |
+| GET | `/api/git/log` | `ref?`, `cursor?` → commits with parents and refs | **new** — ADR-0064 R5 |
+| GET | `/api/git/commit` | `sha`, `path?` → message, author, files, patch | **new** — ADR-0064 |
+| GET | `/api/git/branches` | local, Ordewell's, remote-tracking, stashes, landing-branch marks | **new** — ADR-0064, ADR-0062 G7 |
 | PUT | `/api/files/content` | `repo`, `path`, `text`, `baseHash` | **new** — ADR-0062 G10 |
 | POST | `/api/git/stage`, `/api/git/unstage` | `paths` or `hunks` | **new** — ADR-0062 |
 | POST | `/api/git/commit` | `message`, `amend?`, `confirm { head }` when amending | **new** — ADR-0062 G3, G4 |
@@ -2326,7 +2361,7 @@ How it is built:
 ## Out of scope
 
 - A cloud-HSM signing integration, and signing the Linux packages
-  (ADR-0060 H9).
+  (ADR-0063 H9).
 - On the graph:
   - dragging, panning by drag, free zoom and a minimap;
   - drag-to-connect, and any structural editing.
@@ -2354,7 +2389,7 @@ routes and the views' data stay as they are.
 1. **Joining a held session.** [W16](#w16-a-session-another-host-holds): join a
    session another daemon holds, Continue here, and, for a VS Code holder,
    Start a new session here or Watch read-only. A refused take-over always
-   says why. The amendment to ADR-0060, and to ADR-0049 if it needs one. Done:
+   says why. The amendment to ADR-0063, and to ADR-0049 if it needs one. Done:
    the app drives a session that a TUI's private daemon holds, and continues
    it after the TUI quits.
 2. **Design tokens v2, shared primitives and `TaskSummary`.** The
@@ -2414,8 +2449,8 @@ them.
    Done: VS Code drives it in-process, and a test drives it from recorded
    daemon frames to the same view.
 3. **Daemon read routes.** The workspace reader in core and the routes of
-   ADR-0061, plus `GET /api/plans/:sessionId/tasks/:taskId/diff`, and
-   `version` and `contract` on `GET /api/server` (H3). Done: ADR-0061's
+   ADR-0064, plus `GET /api/plans/:sessionId/tasks/:taskId/diff`, and
+   `version` and `contract` on `GET /api/server` (H3). Done: ADR-0064's
    testing decisions.
 4. **Daemon git-action routes and interlock.** The routes and refusals of
    ADR-0062 G1–G8 and G10's save, the interlock function,
@@ -2440,11 +2475,11 @@ them.
      and deb (x64), unsigned at first. Unsigned macOS is signed ad hoc: the
      fuses rewrite the executable, and an arm64 Mac refuses one whose seal is
      broken. Signing and notarization when a release has the credentials came
-     later (ADR-0060 H9).
+     later (ADR-0063 H9).
    - `desktop-build.yml` builds them on macOS, Windows and Linux for a pull
      request, by hand and for a release; `release.yml` calls it to attach them
      to the GitHub Release.
-   - Auto-update is wired, and baked on only for a signed build (ADR-0060 H9).
+   - Auto-update is wired, and baked on only for a signed build (ADR-0063 H9).
    - The build is in `scripts/ci.mjs` and `change-scope.mjs`.
 
    Done: a tag build produces the seven installers. node-pty's native rebuild

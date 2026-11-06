@@ -3,7 +3,7 @@ import type { RunnerId } from '../models/Task';
 import { BUILTIN_MANIFESTS } from '../plugins/builtin';
 import { connectorFor } from './harness/connectors';
 import { PROVIDER_PRIORITY, VENDORS, type ProviderRegistration } from './apiProviders';
-import type { RunnerAuth } from './runnerAuth';
+import { plannerBackendEntriesFor, type PlannerBackendEntry, type PlannerUsability } from './plannerBackends';
 
 export { PROVIDER_DETECT_PRIORITY, PROVIDER_PRIORITY, type ProviderRegistration } from './apiProviders';
 
@@ -14,15 +14,15 @@ export { PROVIDER_DETECT_PRIORITY, PROVIDER_PRIORITY, type ProviderRegistration 
 export type ByPlannerBackend<T> = Readonly<Record<AiProvider, T>> & Readonly<Partial<Record<RunnerId, T>>>;
 
 /**
- * The harness planners (ADR-0009): every built-in runner with a connector can
- * plan, in manifest order and under its manifest's name. No key, no base URL,
+ * The harness planners (ADR-0009): every built-in runner whose connector plans,
+ * in manifest order and under its manifest's name. No key, no base URL,
  * no HTTP catalog: the binary is local, the credential is the user's existing
  * subscription, and the model list comes from the runner's own discovery.
  * `apiKeyEnvVar` is empty on purpose — anything that resolves keys must skip
  * these, which is what `isCliProvider` is for.
  */
 const HARNESS_PLANNERS: readonly ProviderRegistration[] = BUILTIN_MANIFESTS
-  .filter((manifest) => connectorFor(manifest.name) !== undefined)
+  .filter((manifest) => connectorFor(manifest.name)?.plans === true)
   .map((manifest) => ({
     id: manifest.name, label: manifest.displayName, shortLabel: manifest.displayName,
     serviceType: 'cli', runnerId: manifest.name,
@@ -118,35 +118,8 @@ export function providerForRunner(runner: RunnerId): PlannerBackendId | null {
 }
 
 /** One runner's planner usability, as `RunnerInstallation.plannerUsability` reports it. */
-export interface PlannerUsability {
-  usable: boolean;
-  reason?: string;
-  /** The runner's own login verdict, beside usability: a signed-out agent is still offered. */
-  auth?: RunnerAuth;
-}
-
-/**
- * One entry of the planner backend list (ADR-0009). `id` is the
- * `PlannerBackendId` either way; `runner` is set only for a harness planner, whose model catalog
- * comes from that runner, and `reason` is the second line a surface renders —
- * the block detail for a harness planner, the API-key variable for a vendor.
- */
-export interface PlannerBackendEntry {
-  id: PlannerBackendId;
-  label: string;
-  kind: 'harness' | 'vendor';
-  runner?: string;
-  usable: boolean;
-  reason?: string;
-  /** Set for a harness planner whose login status was asked; never a gate on `usable`. */
-  auth?: RunnerAuth;
-}
-
-/** The detail a usable harness planner is always shown with. */
-export const HARNESS_PLANNER_REASON = 'coding agent · no API key needed';
-
-/** Shown for a harness planner no host has reported a status for: it may not be installed. */
-export const HARNESS_PLANNER_UNAVAILABLE_REASON = 'not available';
+export type { PlannerUsability, PlannerBackendEntry } from './plannerBackends';
+export { HARNESS_PLANNER_REASON, HARNESS_PLANNER_UNAVAILABLE_REASON } from './plannerBackends';
 
 /**
  * The planner backends every surface offers, in order: the harness planners
@@ -161,32 +134,11 @@ export function plannerBackendEntries(
   usability: Readonly<Record<string, PlannerUsability>>,
   configured: readonly AiProvider[],
 ): PlannerBackendEntry[] {
-  const harness: PlannerBackendEntry[] = HARNESS_PLANNERS.map(({ id, label, runnerId }) => {
-    const runner = runnerId ?? id;
-    const status = usability[runner];
-    const signedOut = status?.auth?.state === 'signed-out';
-    return {
-      id,
-      label,
-      kind: 'harness' as const,
-      runner,
-      usable: status?.usable ?? false,
-      reason: status
-        ? (status.reason ?? (signedOut ? (status.auth?.detail ?? 'not logged in') : HARNESS_PLANNER_REASON))
-        : HARNESS_PLANNER_UNAVAILABLE_REASON,
-      ...(status?.auth ? { auth: status.auth } : {}),
-    };
-  });
-  const vendors: PlannerBackendEntry[] = PROVIDER_PRIORITY
-    .filter((id) => configured.includes(id))
-    .map((id) => ({
-      id,
-      label: getProviderMeta(id).label,
-      kind: 'vendor' as const,
-      usable: true,
-      reason: getProviderMeta(id).apiKeyEnvVar,
-    }));
-  return [...harness, ...vendors];
+  return plannerBackendEntriesFor(
+    HARNESS_PLANNERS.map(({ id, label, runnerId }) => ({ id, label, runner: runnerId ?? id })),
+    usability,
+    configured,
+  );
 }
 
 /**

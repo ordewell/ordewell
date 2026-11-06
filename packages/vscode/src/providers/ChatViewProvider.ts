@@ -158,9 +158,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this._configuredProviders = providers;
     this.postMessage({ type: 'setConfiguredProviders', providers });
   }
-  setModelDiscoveryErrors(errors: Record<string, string>): void {
+  setModelDiscoveryErrors(errors: Record<string, string>, runnerErrors: Record<string, string> = {}): void {
     this._modelDiscoveryErrors = errors;
-    this.postMessage({ type: 'setModelDiscoveryErrors', errors });
+    this._runnerDiscoveryErrors = runnerErrors;
+    this.postMessage({ type: 'setModelDiscoveryErrors', errors, runnerErrors });
   }
   /** Every runner account's limits as the host's monitor last published them; kept to replay to a webview that loads later. */
   setAccountLimits(limits: readonly AccountLimitSnapshot[]): void {
@@ -186,6 +187,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _modelOptions: ModelOption[] = [];
   private _configuredProviders: ApiProvider[] = [];
   private _modelDiscoveryErrors: Record<string, string> = {};
+  private _runnerDiscoveryErrors: Record<string, string> = {};
   private _plannerState: { backends: PlannerBackend[]; provider: string; runner?: string; effort?: string } | null = null;
   private _accountLimits: readonly AccountLimitSnapshot[] | null = null;
 
@@ -219,8 +221,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (this._configuredProviders.length > 0) {
       this.postMessage({ type: 'setConfiguredProviders', providers: this._configuredProviders });
     }
-    if (Object.keys(this._modelDiscoveryErrors).length > 0) {
-      this.postMessage({ type: 'setModelDiscoveryErrors', errors: this._modelDiscoveryErrors });
+    if (Object.keys(this._modelDiscoveryErrors).length > 0 || Object.keys(this._runnerDiscoveryErrors).length > 0) {
+      this.postMessage({ type: 'setModelDiscoveryErrors', errors: this._modelDiscoveryErrors, runnerErrors: this._runnerDiscoveryErrors });
     }
     if (this._modesByRunner && Object.keys(this._modesByRunner).length > 0) {
       this.postMessage({ type: 'setModesByRunner', modesByRunner: this._modesByRunner, notice: this._runnerNotice });

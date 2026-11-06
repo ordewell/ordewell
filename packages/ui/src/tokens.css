@@ -118,6 +118,16 @@
   --ow-runner-codex-tint: #30353b;
   --ow-runner-opencode: #bcd05e;
   --ow-runner-opencode-tint: #32382b;
+  --ow-runner-copilot-cli: #d68be3;
+  --ow-runner-copilot-cli-tint: #362e3e;
+  --ow-runner-qwen-code: #6fd6c4;
+  --ow-runner-qwen-code-tint: #28393a;
+  --ow-runner-cline: #f08ab8;
+  --ow-runner-cline-tint: #3a2e38;
+  --ow-runner-gemini-cli: #6fd0e6;
+  --ow-runner-gemini-cli-tint: #28383e;
+  --ow-runner-cursor-agent: #d4c3a0;
+  --ow-runner-cursor-agent-tint: #363635;
 
   /* What a raised surface and an overlay drawer cast: scale.css composes them into elevations. */
   --ow-shadow-color: rgb(0 0 0 / 0.5);

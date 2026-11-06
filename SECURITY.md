@@ -300,8 +300,8 @@ Planned, not yet built:
 
 ## What is out of scope
 
-- The behaviour of the coding agents Ordewell spawns (Claude Code, Codex,
-  OpenCode). Report those to their maintainers.
+- The behaviour of the coding agents Ordewell spawns. Report issues in those
+  agents to their maintainers.
 - Ordewell executing a task you asked it to execute. Running agents against your
   code is the product, not a flaw — the boundary that matters is the *planner's*
   read-only envelope.

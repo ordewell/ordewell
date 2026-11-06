@@ -1,3 +1,11 @@
+# One line ending in every working tree, whatever the host's core.autocrlf:
+# Git for Windows turns it on system-wide, and a CRLF checkout breaks what reads
+# a file byte for byte (the ADR checks, fixtures, snapshots) on Windows alone.
+* text=auto eol=lf
+# cmd.exe reads a batch file by byte offset, and an LF-only one can lose a line.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
 # Parallel task branches each append an entry under [Unreleased]; union-merge
 # so two independent appends land together instead of conflicting.
 CHANGELOG.md merge=union

@@ -172,6 +172,7 @@ turn-scoped and never touches the run's tasks.**
 | **Codex** (app-server) | `turn/steer` with `expectedTurnId` and `clientUserMessageId`; native | a `userMessage` item whose `clientId` is that id | `turn/interrupt`, wait for `turn/completed: interrupted`, then `turn/start` |
 | **OpenCode 1.x** (serve) | `prompt_async` while the session is busy; native | an assistant message whose `parentID` is that user message or a later one | `POST /session/:id/abort`, then `prompt_async` |
 | **OpenCode 2.x** | not verified — no 2.x binary on the probe host | — | turn-end queue until verified |
+| **ACP runners** (GitHub Copilot CLI) | none: ACP v1 has no mid-turn injection; turn-end queue | the next `session/prompt`, which the queued message opens | `session/cancel`, wait for the prompt's response, then `session/prompt` |
 
 - **Claude Code.** The CLI queues a `user` line that arrives mid-turn and
   attaches it to the next tool result as "The user sent a new message while
@@ -212,6 +213,11 @@ turn-scoped and never touches the run's tasks.**
   turn-end re-send does not show the model the message twice.
 - **OpenCode 2.x.** Its adapter refuses every steer, so messages keep the
   turn-end queue until a mid-turn path is verified on a 2.x server.
+- **ACP runners.** `AcpAdapter` offers no steer
+  ([ADR-0060](0060-acp-runners-are-data-on-one-connector.md) R8): every
+  message waits for the turn's end, which only the `session/prompt` response
+  marks. A force send's `session/cancel` also answers each permission request
+  still pending with the `cancelled` outcome, as the protocol requires.
 
 ### The supervisor
 
@@ -357,3 +363,4 @@ interrupt (D4 covers it either way).
 - 2026-10-18 — F2: turn-end delivery waits for every message the runner still holds, including one behind a newly forced message.
 - 2026-10-24 — the daemon's force send routes are replaced by the one `execute-command` route (ADR-0006 S3).
 - 2026-10-26 — F5: a force send keeps what the stopped turn's tool calls already committed; nothing is deferred behind an edit (ADR-0022, P2).
+- 2026-11-04 — ACP runners take the turn-end queue, with `session/cancel` then `session/prompt` for force send (ADR-0060).

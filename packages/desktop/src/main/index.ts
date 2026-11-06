@@ -76,7 +76,7 @@ async function main(): Promise<void> {
     token: () => readDaemonToken(port),
     onUnreachable: () => late.daemon?.noteUnreachable(),
   });
-  // A session another Ordewell daemon holds is joined there (ADR-0060 H8).
+  // A session another Ordewell daemon holds is joined there (ADR-0063 H8).
   const holders = new HolderConnections({
     contract: DAEMON_CONTRACT,
     ownPort: () => port,
@@ -146,6 +146,8 @@ async function main(): Promise<void> {
     host: terminalHost,
     placement: { ...fileSystemPlacement, call: get },
     platform: process.platform,
+    // A login from the launcher runs in home, as the daemon itself does.
+    home: app.getPath('home'),
     // The same PATH the daemon and its runners get, not the GUI launch's.
     env: async () => withPath(process.env, await augmentedPath()),
   });
@@ -211,7 +213,7 @@ async function main(): Promise<void> {
   };
   app.on('browser-window-created', hideTray);
 
-  // ADR-0060 H5: a window closed during a run leaves the run, and the app
+  // ADR-0063 H5: a window closed during a run leaves the run, and the app
   // that can show it again, behind; the tray is how the user gets back.
   app.on('window-all-closed', () => {
     void liveRuns().then((live) => {

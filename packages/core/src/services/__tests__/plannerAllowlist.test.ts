@@ -146,6 +146,16 @@ describe('allowlist entries', () => {
     expect(scopeAllowed(list, 'https://docs.example.com/*')).toBe(true);
     expect(scopeAllowed(list, 'https://example.com/*')).toBe(false);
   });
+
+  it('hold a Windows path exclusion however the path is cased or slashed', () => {
+    const list = parseAllowlist(['C:\\Users\\me\\*', '!C:/Users/me/.ssh/*']);
+    expect(scopeAllowed(list, 'C:\\Users\\me\\notes\\*')).toBe(true);
+    for (const scope of ['C:\\Users\\me\\.ssh\\*', 'c:\\users\\ME\\.SSH\\*', 'C:/Users/me/.ssh/*']) {
+      expect(scopeAllowed(list, scope), scope).toBe(false);
+    }
+    const backslashed = parseAllowlist(['C:\\Users\\me\\*', '!C:\\Users\\me\\.ssh\\*']);
+    expect(scopeAllowed(backslashed, 'c:\\Users\\me\\.ssh\\*')).toBe(false);
+  });
 });
 
 it('matches each curl origin after safe flags and requires coverage of every URL', () => {

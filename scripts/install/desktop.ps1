@@ -1,5 +1,5 @@
 # Installs the Ordewell desktop app for the current user on Windows
-# (PowerShell 5.1 and 7; ADR-0060 H10):
+# (PowerShell 5.1 and 7; ADR-0063 H10):
 #
 #   irm https://raw.githubusercontent.com/ordewell/ordewell/main/scripts/install/desktop.ps1 | iex
 #

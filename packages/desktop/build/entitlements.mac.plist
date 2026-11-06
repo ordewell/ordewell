@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  What the hardened runtime lets a signed Ordewell do (ADR-0060 H9). One file
+  What the hardened runtime lets a signed Ordewell do (ADR-0063 H9). One file
   serves the app and, as entitlementsInherit, every binary inside it: the
   helpers (renderer, GPU, and the utility process the daemon runs in) and
   node-pty's spawn-helper. electron-builder.yml names it for both, so neither

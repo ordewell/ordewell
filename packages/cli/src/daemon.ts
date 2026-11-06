@@ -15,7 +15,7 @@ import {
 import { flag } from './utils/args';
 
 // The probe, token and PID-file helpers live in core so the desktop app reads
-// the same files the same way (ADR-0060 H2); this module keeps the CLI's
+// the same files the same way (ADR-0063 H2); this module keeps the CLI's
 // spawning and its wording.
 export const DEFAULT_PORT = DEFAULT_DAEMON_PORT;
 export { isConnectionRefused, isDaemonRunning } from '@ordewell/core';

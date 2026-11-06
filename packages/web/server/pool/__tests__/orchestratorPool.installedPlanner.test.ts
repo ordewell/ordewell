@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { delimiter, join, resolve } from 'path';
+import { join, resolve } from 'path';
 import {
   CliAgentAiService, OpenAiService, Session, clearAugmentedPathCache, getProviderMeta, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, PROVIDER_DETECT_PRIORITY,
   RunnerInstallation, createTask, recordedRunnerAuth, recordRunnerAuth, resetInstalledPlanner, resetRunnerAuth, saveSession, type ConversationTurn, type IRunner, type LegacyPlanState,
   type PlannerUsability, type RunnerSpawnOptions,
 } from '@ordewell/core';
-import { FakeRunnerSession } from '@ordewell/core/testing';
+import { FakeRunnerSession, pathWithFake } from '@ordewell/core/testing';
 import { OrchestratorPool } from '../orchestratorPool';
 
 /**
@@ -49,21 +49,26 @@ describe('OrchestratorPool default planner', () => {
   function fakeClaudeAgent(): void {
     const bin = join(dir, 'bin');
     mkdirSync(bin, { recursive: true });
-    const command = join(bin, 'claude');
-    writeFileSync(command, [
-      '#!/bin/sh',
-      'case "$1" in',
-      '  --version) echo "claude fake"; exit 0 ;;',
-      '  auth)',
-      '    if [ -f "$CLAUDE_CONFIG_DIR.logged-in" ]; then',
-      '      echo \'{"authMethod":"oauth"}\'; exit 0',
-      '    fi',
-      '    echo \'{"authMethod":"none"}\'; exit 1 ;;',
-      'esac',
+    const script = join(bin, 'fake-claude.cjs');
+    writeFileSync(script, [
+      'const [command] = process.argv.slice(2);',
+      "if (command === '--version') { console.log('claude fake'); process.exit(0); }",
+      "if (command === 'auth') {",
+      "  const signedIn = require('fs').existsSync(`${process.env.CLAUDE_CONFIG_DIR}.logged-in`);",
+      "  console.log(JSON.stringify({ authMethod: signedIn ? 'oauth' : 'none' }));",
+      '  process.exit(signedIn ? 0 : 1);',
+      '}',
       '',
     ].join('\n'));
-    chmodSync(command, 0o755);
-    process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ''}`;
+    // A batch shim on Windows, as npm installs one; `pathWithFake` keeps a real
+    // `claude.exe`, which Windows would start ahead of it (ADR-0010), off PATH.
+    if (process.platform === 'win32') {
+      writeFileSync(join(bin, 'claude.cmd'), `@"${process.execPath}" "${script}" %*\r\n`);
+    } else {
+      writeFileSync(join(bin, 'claude'), `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`);
+      chmodSync(join(bin, 'claude'), 0o755);
+    }
+    process.env.PATH = pathWithFake(bin, 'claude');
     clearAugmentedPathCache();
     // The other agents are not what these tests are about; keep detection and
     // the list to the one whose account each workspace chooses.
@@ -75,7 +80,7 @@ describe('OrchestratorPool default planner', () => {
     let answer!: (value: PlannerUsability) => void;
     const gate = new Promise<PlannerUsability>((resolve) => { answer = resolve; });
     return {
-      installation: { plannerUsability: vi.fn(() => gate), filterInstalled: vi.fn(async () => []) },
+      installation: { plannerUsability: vi.fn(() => gate), runnerUsability: vi.fn(() => gate), filterInstalled: vi.fn(async () => []) },
       answer: () => answer(usable ? { usable: true } : { usable: false, reason: 'not installed' }),
     };
   }
@@ -324,6 +329,7 @@ describe('OrchestratorPool default planner', () => {
   it('probes once at startup, not once for each planning turn', async () => {
     const installation = {
       plannerUsability: vi.fn(async (runner: string): Promise<PlannerUsability> => ({ usable: runner === 'codex' })),
+      runnerUsability: vi.fn(async (runner: string): Promise<PlannerUsability> => ({ usable: runner === 'codex' })),
       filterInstalled: vi.fn(async () => []),
     };
     const pool = new OrchestratorPool({ runnerInstallation: installation });
@@ -357,6 +363,7 @@ describe('OrchestratorPool default planner', () => {
     let installed: string[] = [];
     const installation = {
       plannerUsability: vi.fn(async (runner: string): Promise<PlannerUsability> => ({ usable: installed.includes(runner) })),
+      runnerUsability: vi.fn(async (runner: string): Promise<PlannerUsability> => ({ usable: installed.includes(runner) })),
       filterInstalled: vi.fn(async (runners: string[]) => runners.filter((r) => installed.includes(r))),
       refresh: vi.fn(),
     };
@@ -386,6 +393,7 @@ describe('OrchestratorPool default planner', () => {
     writeFileSync(join(ws, '.ordewell', 'env'), 'CLAUDE_CONFIG_DIR=/accounts/a\n');
     vi.spyOn(RunnerInstallation.prototype, 'filterInstalled').mockResolvedValue([]);
     vi.spyOn(RunnerInstallation.prototype, 'plannerUsability').mockResolvedValue({ usable: true });
+    vi.spyOn(RunnerInstallation.prototype, 'runnerUsability').mockResolvedValue({ usable: true });
     const pool = new OrchestratorPool({
       codexSandbox: { ensure: async () => undefined, refresh: async () => undefined },
     });
@@ -401,14 +409,17 @@ describe('OrchestratorPool default planner', () => {
     pool.destroyAll();
   });
 
-  it('leaves an installed runner its own usability refuses out of the list', async () => {
-    // An installed CLI can still be unspawnable (a Windows `.cmd` shim).
-    // Offering it would fail at spawn; VS Code already hides it.
+  it('keeps an installed runner its own usability refuses, with the reason it cannot start', async () => {
+    // An installed CLI can still be unspawnable (a Windows `.cmd` shim) or too
+    // old for its ACP profile. Dropping it would leave every surface calling a
+    // present binary "not installed"; the row says why instead (ADR-0009).
+    const usability = async (runner: string): Promise<PlannerUsability> => ({
+      usable: runner === 'claude-code',
+      ...(runner === 'codex' ? { reason: 'codex: found 0.9.0, needs 1.0.0 or later.' } : {}),
+    });
     const installation = {
-      plannerUsability: vi.fn(async (runner: string): Promise<PlannerUsability> => ({
-        usable: runner === 'claude-code',
-        ...(runner === 'codex' ? { reason: 'codex is not directly spawnable' } : {}),
-      })),
+      plannerUsability: vi.fn(usability),
+      runnerUsability: vi.fn(usability),
       filterInstalled: vi.fn(async (runners: string[]) => runners.filter((r) => r === 'claude-code' || r === 'codex')),
       refresh: vi.fn(),
     };
@@ -419,16 +430,22 @@ describe('OrchestratorPool default planner', () => {
 
     const runners = await pool.getInstalledRunners();
 
-    expect(runners.map((r) => r.id)).toEqual(['claude-code']);
+    expect(runners).toEqual([
+      expect.objectContaining({ id: 'claude-code' }),
+      expect.objectContaining({ id: 'codex', usable: false, reason: 'codex: found 0.9.0, needs 1.0.0 or later.' }),
+    ]);
+    expect(runners.find((r) => r.id === 'claude-code')).not.toHaveProperty('usable');
     pool.destroyAll();
   });
 
   it('carries each installed runner\'s auth verdict without dropping a signed-out one from the list', async () => {    const auth = { state: 'signed-out' as const, loginCommand: ['claude', 'auth', 'login'], detail: 'not logged in' };
+    const usability = async (runner: string): Promise<PlannerUsability> => ({
+      usable: runner === 'claude-code',
+      ...(runner === 'claude-code' ? { auth } : { auth: { state: 'unknown' as const } }),
+    });
     const installation = {
-      plannerUsability: vi.fn(async (runner: string): Promise<PlannerUsability> => ({
-        usable: runner === 'claude-code',
-        ...(runner === 'claude-code' ? { auth } : { auth: { state: 'unknown' as const } }),
-      })),
+      plannerUsability: vi.fn(usability),
+      runnerUsability: vi.fn(usability),
       filterInstalled: vi.fn(async (runners: string[]) => runners.filter((r) => r === 'claude-code')),
       refresh: vi.fn(),
     };
@@ -442,6 +459,26 @@ describe('OrchestratorPool default planner', () => {
     expect(runners).toEqual([expect.objectContaining({ id: 'claude-code', auth })]);
     pool.destroyAll();
   });
+
+  it('lists an installed task-only runner with its login, though it cannot plan', async () => {
+    // Copilot runs tasks over ACP and cannot plan yet; it is still an installed
+    // agent a user signs in to, from `/login` or the runner row.
+    const auth = { state: 'unknown' as const, loginCommand: ['copilot', 'login'] };
+    const installation = {
+      plannerUsability: vi.fn(async (): Promise<PlannerUsability> => ({ usable: false, reason: 'cannot plan in Ordewell yet' })),
+      runnerUsability: vi.fn(async (): Promise<PlannerUsability> => ({ usable: true, auth })),
+      filterInstalled: vi.fn(async (runners: string[]) => runners.filter((r) => r === 'copilot-cli')),
+      refresh: vi.fn(),
+    };
+    const pool = new OrchestratorPool({
+      runnerInstallation: installation,
+      codexSandbox: { ensure: async () => undefined, refresh: async () => undefined },
+    });
+
+    expect(await pool.getInstalledRunners()).toEqual([expect.objectContaining({ id: 'copilot-cli', name: 'GitHub Copilot CLI', auth })]);
+    pool.destroyAll();
+  });
+
   /** A workspace whose `.ordewell/env` selects `accountDir` as its Claude account. */
   function workspaceWithAccount(name: string, accountDir: string): string {
     const ws = join(dir, name);
@@ -604,6 +641,28 @@ describe('OrchestratorPool default planner', () => {
       await expect(pool.continuePlanning('s1', 'Use Postgres')).rejects.toBeInstanceOf(PlannerNotReadyError);
       await expect(pool.forceSendPrompt('s1', 'Use SQLite instead')).rejects.toBeInstanceOf(PlannerNotReadyError);
       await expect(pool.compactConversation('s1')).rejects.toBeInstanceOf(PlannerNotReadyError);
+    } finally {
+      pool.destroyAll();
+    }
+  });
+
+  // What the user did: Qwen Code picked as planner with no sign-in of its own,
+  // a turn refused as signed out, then a key saved with `/key`. The key is
+  // enough to sign Qwen in (ADR-0060 R9), so the refusal is no longer evidence.
+  it('forgets a signed-out verdict once a provider key is saved, which can sign an agent in', () => {
+    const pool = new OrchestratorPool({
+      codexSandbox: { ensure: async () => undefined, refresh: async () => undefined },
+    });
+    try {
+      resetRunnerAuth();
+      pool.updateSettings({ env: { AI_PROVIDER: 'qwen-code' } });
+      recordRunnerAuth('qwen-code', { state: 'signed-out', loginCommand: ['qwen'], detail: 'not logged in' }, workspace);
+      pool.updateSettings({ env: { ORDEWELL_MAX_PARALLEL: '2' } });
+      expect(recordedRunnerAuth('qwen-code', workspace)?.state).toBe('signed-out');
+
+      pool.updateSettings({ env: { OPENROUTER_API_KEY: 'sk-or-v1-saved-by-key-command' } });
+
+      expect(recordedRunnerAuth('qwen-code', workspace)?.state).not.toBe('signed-out');
     } finally {
       pool.destroyAll();
     }

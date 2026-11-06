@@ -2,7 +2,7 @@
   "name": "ordewell",
   "displayName": "Ordewell",
   "description": "Plan once, run it across Claude Code, Codex and OpenCode, and review one branch.",
-  "version": "0.12.3",
+  "version": "0.12.6",
   "private": true,
   "publisher": "ordewell",
   "license": "Apache-2.0",
@@ -340,8 +340,8 @@
     }
   },
   "dependencies": {
-    "@ordewell/core": "^0.12.3",
-    "@ordewell/ui": "^0.12.3"
+    "@ordewell/core": "^0.12.6",
+    "@ordewell/ui": "^0.12.6"
   },
   "devDependencies": {
     "@testing-library/dom": "^10.4.1",

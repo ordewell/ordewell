@@ -1,7 +1,7 @@
 /**
  * The only daemon requests the renderer can cause. It names a route id from
  * this table with its parameters; main builds the method, path and query from
- * the row and adds the bearer itself (ADR-0060 H4). A URL, a header or a method
+ * the row and adds the bearer itself (ADR-0063 H4). A URL, a header or a method
  * never crosses the bridge, so a compromised renderer can reach these routes
  * and nothing else the daemon serves.
  *
@@ -25,7 +25,7 @@ interface RouteSpec {
   /**
    * The path param naming a session whose live host answers this route. For
    * a session the window joined, main sends it to the holder's daemon
-   * (ADR-0060 H8); anything else, and every route without it, stays on the
+   * (ADR-0063 H8); anything else, and every route without it, stays on the
    * app's own daemon: files, git, the catalog, and opening, closing or
    * deleting a session here.
    */
@@ -33,7 +33,7 @@ interface RouteSpec {
 }
 
 const WS = ['workspace'] as const;
-/** What the file read routes take to pick the tree (ADR-0061 R2): the repo and the view scope. */
+/** What the file read routes take to pick the tree (ADR-0064 R2): the repo and the view scope. */
 const AT = ['workspace', 'repo', 'scope', 'sessionId', 'taskId'] as const;
 
 // Rows follow the daemon's routers in packages/web/server/routes, named
@@ -70,7 +70,7 @@ export const ROUTES = {
   'plans.mergeGate': { method: 'GET', path: '/api/plans/:sessionId/tasks/:taskId/merge-gate', live: 'sessionId' },
   'plans.revertPreview': { method: 'GET', path: '/api/plans/:sessionId/tasks/:taskId/revert-preview', live: 'sessionId' },
   'plans.isolationDiff': { method: 'GET', path: '/api/plans/:sessionId/isolation/diff', live: 'sessionId' },
-  // Reads of the saved run (ADR-0061, ADR-0062 G8): neither needs the session open here.
+  // Reads of the saved run (ADR-0064, ADR-0062 G8): neither needs the session open here.
   'plans.taskDiff': { method: 'GET', path: '/api/plans/:sessionId/tasks/:taskId/diff', query: ['workspace', 'repo', 'path', 'names'], live: 'sessionId' },
   'plans.mergePreflight': { method: 'GET', path: '/api/plans/:sessionId/isolation/merge-preflight', query: WS, live: 'sessionId' },
   'plans.isolationMerge': { method: 'POST', path: '/api/plans/:sessionId/isolation/merge', live: 'sessionId' },

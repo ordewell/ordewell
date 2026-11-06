@@ -57,18 +57,9 @@ export async function probeCodexSandbox(
   // elsewhere: macOS uses Seatbelt, which cannot fail this way. A placed Codex
   // runs on another machine, whichever this one is, and that one is asked.
   //
-  // Windows is a weaker statement and deliberately not dressed up as a stronger
-  // one. Codex's own sandboxing there is not the OS-enforced equivalent of
-  // Seatbelt or Landlock, so `sandbox: 'read-only'` in `CodexAdapter.startThread`
-  // may be honoured by Codex's tool layer rather than by the kernel. The
-  // approvals side of the invariant still holds by construction
-  // (`approvalPolicy: 'on-request'`, where what Codex asks to run or change is
-  // declined and every other server→client request gets a definite refusal or
-  // an Ordewell decision, ADR-0026), and the planner prompt never asks for a
-  // write — but "read-only by
-  // construction" (ADR-0009) is a Linux/macOS guarantee, not yet a verified
-  // Windows one. Returning 'default' declines to invent a workaround for a
-  // failure mode nobody has observed; it does not claim the guarantee is proven.
+  // Windows has no bubblewrap to fail. A planner there runs with Codex's own
+  // shell off, and a change task asks Codex over the protocol whether its
+  // sandbox is set up (`windowsSandbox/readiness`, in `CodexAdapter`).
   if (!deps.placement && (deps.platform ?? process.platform) !== 'linux') return 'default';
 
   const bubblewrap = await runProbe(deps, cwd, env, []);
@@ -78,6 +69,47 @@ export async function probeCodexSandbox(
   const landlock = await runProbe(deps, cwd, env, ['--enable', 'use_legacy_landlock']);
   return landlock.code === 0 ? 'legacy-landlock' : 'unavailable';
 }
+
+/**
+ * Whether the user has set up Codex's own Windows sandbox, as Codex answers
+ * `windowsSandbox/readiness` (codex-cli 0.166.0). Not set up, Codex opens a
+ * thread that asks for `workspace-write` as `read-only` instead and has no
+ * sandbox to run a command in: a command it does not judge safe goes to
+ * approval, and one approved runs unconfined (ADR-0010).
+ */
+export type CodexWindowsSandbox = 'ready' | 'notConfigured' | 'updateRequired';
+
+const CODEX_WINDOWS_DOCS = 'https://developers.openai.com/codex/windows';
+
+/**
+ * Shown once on a change task Codex opened read-only because its Windows
+ * sandbox is not ready. The non-admin sandbox Codex also offers is no way out:
+ * under it Codex refuses every command of a `workspace-write` thread
+ * (measured, codex-cli 0.166.0).
+ */
+export function codexWindowsReadOnlyNote(readiness: Exclude<CodexWindowsSandbox, 'ready'>): string {
+  const state = readiness === 'updateRequired' ? 'needs its setup run again' : 'is not set up';
+  return [
+    `Codex's Windows sandbox ${state} on this machine, so Codex runs this task read-only with no sandbox: each edit, and each command it does not judge safe, goes to Codex's reviewer, and what the reviewer approves runs unconfined.`,
+    '',
+    `To give Codex its sandbox, run \`codex\` in a terminal and choose "Set up default sandbox" (it asks for Administrator once), or run /setup-default-sandbox there. Not the non-admin sandbox: under it Codex refuses every command of a task like this one. ${CODEX_WINDOWS_DOCS}`,
+  ].join('\n');
+}
+
+/**
+ * What a change task's model is told on such a host. A model that reads
+ * "read-only" in its own environment can decide the task cannot be done and
+ * end it; the writes are possible, through review.
+ */
+export const CODEX_WINDOWS_READ_ONLY_ADVICE = "Codex's Windows sandbox is not ready on this machine, so your sandbox may be read-only. That does not stop this task: make edits with apply_patch, and run a command that must write (a build, an install, tests that write files) with escalated permissions. A reviewer decides each such request. Do not end the task because the sandbox is read-only.";
+
+/**
+ * What a Codex task with its own shell is told on Windows, where that shell is
+ * Windows PowerShell. Its default execution policy refuses the `.ps1` script
+ * npm puts first on PATH, so `npm test` fails before it starts; a model told
+ * nothing has reported the suite passing all the same.
+ */
+export const CODEX_WINDOWS_SHELL_ADVICE = "Your shell on this Windows machine is PowerShell. Where its execution policy refuses an npm-installed tool's .ps1 script (npm, npx, pnpm), call the .cmd beside it instead, as in npm.cmd test. Report a test run as passed only when you saw it pass.";
 
 const NAMESPACE_CAUSE = "Its Linux sandbox needs unprivileged user namespaces, which this kernel restricts (Ubuntu 24.04's AppArmor default), and the legacy Landlock backend did not work either.";
 

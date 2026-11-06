@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import { describe, it, expect } from 'vitest';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
+import { connectorFor } from '../harness/connectors';
 import { fakeConfig, fakeFileSystem } from '../../testing';
 import type { PlannerToolsOffer } from '../AiService';
 import type { ResearchStep } from '../../models/Task';
@@ -49,15 +50,19 @@ const liveModel = process.env.ORDEWELL_LIVE_MODEL;
 // A harness planner plans only through Ordewell's tools (ADR-0022), so it
 // refuses to start without them; these turns never submit, so none answer.
 const LIVE_PLANNER_TOOLS: PlannerToolsOffer = { sessionId: 'live', handler: {} };
-const CHEAPEST: Record<'claude-code' | 'codex' | 'opencode', { model: string; effort?: string }> = {
+type LiveAgent = 'claude-code' | 'codex' | 'opencode' | 'copilot-cli';
+const CHEAPEST: Record<LiveAgent, { model: string; effort?: string }> = {
   // A full id, not the `haiku` alias: under `--permission-mode plan` the alias
   // has run Sonnet, and a task may still spawn in that mode.
   'claude-code': { model: 'claude-haiku-4-5-20251001' },
   codex: { model: 'gpt-5.6-luna', effort: 'low' },
   opencode: { model: 'opencode-go/deepseek-v4.1-flash', effort: 'low' },
+  // No effort: Copilot offers no effort setting over ACP, and the adapter
+  // refuses one an agent does not offer.
+  'copilot-cli': { model: 'gpt-5-mini' },
 };
 
-function liveService(provider: 'claude-code' | 'codex' | 'opencode') {
+function liveService(provider: LiveAgent) {
   const { model, effort } = CHEAPEST[provider];
   return new CliAgentAiService(
     fakeConfig({ aiProvider: provider, enabledRunners: [provider], orchestratorModel: liveModel ?? model, plannerThinkingEffort: liveModel ? undefined : effort }),
@@ -66,8 +71,16 @@ function liveService(provider: 'claude-code' | 'codex' | 'opencode') {
 }
 
 describe.runIf(requested.length > 0)('harness planners — live smoke', () => {
-  for (const agent of ['claude-code', 'codex', 'opencode'] as const) {
-    it.runIf(requested.includes(agent))(`${agent} reads the workspace and answers`, async () => {
+  for (const agent of ['claude-code', 'codex', 'opencode', 'copilot-cli'] as const) {
+    // A runner whose connector does not claim the planner role is held to its
+    // refusal instead, and the planner checks start running the day it does.
+    const plans = connectorFor(agent)?.plans === true;
+
+    it.runIf(requested.includes(agent) && !plans)(`${agent} is refused as a planner, in plain words`, () => {
+      expect(() => liveService(agent)).toThrow(`${agent} is not a coding-agent planner.`);
+    });
+
+    it.runIf(requested.includes(agent) && plans)(`${agent} reads the workspace and answers`, async () => {
       const svc = liveService(agent);
       const steps: ResearchStep[] = [];
       try {
@@ -97,7 +110,7 @@ describe.runIf(requested.length > 0)('harness planners — live smoke', () => {
       }
     }, TIMEOUT_MS);
 
-    it.runIf(requested.includes(agent))(`${agent} survives a tool it is not allowed to use`, async () => {
+    it.runIf(requested.includes(agent) && plans)(`${agent} survives a tool it is not allowed to use`, async () => {
       // Each agent has at least one way to block on a human — an interactive
       // question, a permission prompt, a path outside the workspace. All of
       // them must come back denied, and the turn must still settle.
@@ -119,7 +132,7 @@ describe.runIf(requested.length > 0)('harness planners — live smoke', () => {
       }
     }, TIMEOUT_MS);
 
-    it.runIf(requested.includes(agent))(`${agent} generates a plan the validator accepts`, async () => {
+    it.runIf(requested.includes(agent) && plans)(`${agent} generates a plan the validator accepts`, async () => {
       const svc = liveService(agent);
       try {
         const { tasks } = await svc.researchAndPlan(
@@ -132,7 +145,7 @@ describe.runIf(requested.length > 0)('harness planners — live smoke', () => {
 
         expect(tasks.length).toBeGreaterThan(0);
         expect(tasks[0].assignedRunner).toBe(agent);
-        expect(tasks[0].prompt?.trim().length).toBeGreaterThan(0);
+        expect(tasks[0].prompt?.trim().length ?? 0, `a task without a prompt: ${JSON.stringify(tasks[0])}`).toBeGreaterThan(0);
       } finally {
         svc.reset();
       }

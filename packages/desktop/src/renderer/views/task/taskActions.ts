@@ -1,5 +1,6 @@
 import type { TaskRowAction, TaskRowView } from '@ordewell/core';
 import type { SystemCommand, WebviewToHost } from '@ordewell/ui/protocol';
+import { signInMessage, type SignInView } from '../../signIn';
 
 /** One thing the task tab's header can ask, as the message the session host answers. */
 export interface TaskTabAction {
@@ -28,9 +29,15 @@ export function taskTabActions(
   task: { id: string; type: string; status: string },
   row: Pick<TaskRowView, 'actions' | 'revertible' | 'status'>,
   executing: boolean,
+  /** The task's runner when its own status command says it is signed out (ADR-0052). */
+  signIn?: SignInView,
 ): TaskTabAction[] {
   const system = (label: string, command: SystemCommand): TaskTabAction => ({ label, message: { type: 'sendSystemCommand', command, taskId: task.id } });
   const actions: TaskTabAction[] = [];
+  // A failed task's way back can be its agent's sign-in, before a same-failure retry.
+  if (task.status === 'failed' && signIn) {
+    actions.push({ label: signIn.action === 'key' ? 'Set API key…' : 'Log in', message: signInMessage(signIn) });
+  }
   if (task.status === 'failed' && task.type !== 'user') actions.push(system('Retry', 'retry'));
   const runnable = task.type === 'ai' && task.status !== 'failed' && !['running', 'quiet', 'done', 'skipped'].includes(row.status);
   const run = runnable && !executing;

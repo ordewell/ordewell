@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { execFileSync } from 'child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { dirname, join } from 'path';
+import { dirname, join, normalize } from 'path';
 import { TaskOrchestrator } from '../TaskOrchestrator';
 import { IsolationRunController } from '../IsolationRunController';
 import { createWorktreeIsolation } from '../GitWorktreeIsolation';
@@ -13,7 +13,7 @@ import type { IsolationHandoff } from '../../interfaces/IWorktreeIsolation';
 import type { SessionMessage } from '../SessionMessage';
 import type { Session } from '../createSession';
 import * as sessionStore from '../../utils/sessionStore';
-import { fakeConfig, FakeRunnerSession } from '../../testing';
+import { fakeConfig, FakeRunnerSession, patient, removeDir } from '../../testing';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { fakeNotification, makeSession } from './sessionTestKit';
 
@@ -31,11 +31,22 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd, env: cleanEnv(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
+/**
+ * The worktrees git lists for `root`, as this platform writes a path: Git for
+ * Windows names them with forward slashes.
+ */
+function worktrees(root: string): string[] {
+  return git(root, 'worktree', 'list', '--porcelain').split('\n').filter((l) => l.startsWith('worktree ')).map((l) => normalize(l.slice('worktree '.length)));
+}
+
 const roots: string[] = [];
-afterEach(() => { while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true }); });
+// A run that ended as its test did can still be running git in a repository,
+// and Windows removes no directory a process works in: the retries outwait it.
+afterEach(async () => { while (roots.length) await removeDir(roots.pop()!); });
 
 function tempDir(): string {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-e2e-')));
+  // Native, as git names a path: on Windows the JS realpath keeps the 8.3 short name of the temp folder.
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'ordewell-e2e-')));
   roots.push(dir);
   return dir;
 }
@@ -340,7 +351,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     // The state dir's own ignore file is meant to be committed (it carves out .ordewell/skills); nothing else may show.
     expect(git(root, 'status', '--porcelain', '--untracked-files=all')).toBe('?? .ordewell/.gitignore');
     expect(git(root, 'worktree', 'list', '--porcelain').split('\n').filter((l) => l.startsWith('worktree '))).toHaveLength(1);
-  }, 30_000);
+  });
 
   it('lands each task across a folder of repositories as a whole, starts a dependent only once all of it has, and merges every repository at handoff', async () => {
     const dir = tempDir();
@@ -386,12 +397,12 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     // Nothing left to hand over: every branch and worktree of the run is gone, and the work is on the user's branch.
     for (const root of [api, web]) {
       expect(git(root, 'branch', '--list', 'ordewell/*')).toBe('');
-      expect(git(root, 'worktree', 'list', '--porcelain').split('\n').filter((l) => l.startsWith('worktree '))).toEqual([`worktree ${root}`]);
+      expect(worktrees(root)).toEqual([root]);
       expect(git(root, 'symbolic-ref', '--short', 'HEAD')).toBe('main');
     }
     expect(git(web, 'show', 'main:page.txt')).toBe('written by t3');
     expect(orchestrator.runs.view()).toBeNull();
-  }, 30_000);
+  });
 
   it('a later run clears an earlier one the user merged by hand, and keeps one they have not', async () => {
     const root = repo();
@@ -418,7 +429,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     expect(git(root, 'branch', '--list', 'ordewell/*', '--format=%(refname:short)').split('\n').sort()).toEqual([later, unmerged].sort());
     expect(git(root, 'show', `${unmerged}:unmerged.txt`)).toBe('written by u1');
     expect(readFileSync(join(root, 'merged.txt'), 'utf8')).toBe('written by m1\n');
-  }, 60_000);
+  }, patient(60_000));
 
   /** The run controller over a real repository, as a plan's session drives it. */
   function controllerOver(root: string): IsolationRunController {
@@ -452,7 +463,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
 
     expect(runs.current!.repos[0].integrationBranch).not.toBe(integration);
     expect(git(root, 'show', `${integration}:landed.txt`)).toBe('landed');
-  }, 30_000);
+  });
 
   it('a run started after one that landed nothing replaces it whole', async () => {
     const root = repo();
@@ -467,7 +478,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
 
     expect(git(root, 'branch', '--list', 'ordewell/*', '--format=%(refname:short)')).toBe(runs.current!.repos[0].integrationBranch);
     expect(runs.current!.repos[0].integrationBranch).not.toBe(first);
-  }, 30_000);
+  });
 
   it('resumes a session 0.4.23 saved mid-run: drops the attempt the crash cut off, continues the run, and hands it off whole', async () => {
     const root = repo();
@@ -544,7 +555,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     expect(merged).toMatchObject({ ok: true, payload: { kind: 'merge', result: { outcome: 'merged' } } });
     expect(readFileSync(join(root, 'a.txt'), 'utf8')).toBe('written by t1\n');
     expect(readFileSync(join(root, 'b.txt'), 'utf8')).toBe('written by t2\n');
-  }, 30_000);
+  });
 
   /** The repair's agent, acting in the kept worktree: the job tells it whether to really merge the tip in or only say done. */
   type RepairJob = { merge: boolean } | undefined;
@@ -667,7 +678,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     const runIntegration = secondHandoff!.repos[0].integrationBranch;
     expect(git(root, 'show', `${runIntegration}:shared.txt`)).toContain('written by t2');
     expect(git(root, 'ls-tree', '--name-only', runIntegration, 'follow.txt')).toBe('follow.txt');
-  }, 60_000);
+  }, patient(60_000));
 
   it('a repair that only claims to have merged is refused: the conflict waits for the user with the attempts used up', async () => {
     const root = repo(tempDir(), { 'shared.txt': 'base\n' });
@@ -708,5 +719,5 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     expect(second.runs.taskIsolation('t2')).toMatchObject({ state: 'conflict', conflictFiles: ['shared.txt'], repair: { attempt: 1, limit: 2 } });
     expect(second.storeInstance.get('t2')!.verdict?.outcome).toBe('pass');
     expect(git(root, 'show', `${integration}:shared.txt`)).toBe('written by t1');
-  }, 60_000);
+  }, patient(60_000));
 });

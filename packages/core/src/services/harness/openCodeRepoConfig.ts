@@ -1,6 +1,6 @@
 import * as path from 'path';
 import {
-  isRecord, parseJsonc, readText, repoLevels,
+  isRecord, parseJsonc, readInstruction, readText, repoLevels, repoRoot,
   type InstructionFile, type ProjectMcpServer, type ProjectServers, type RepoConfigReader,
 } from './repoConfig';
 import { shadowsOrdewell } from './openCodeOrdewell';
@@ -27,11 +27,10 @@ function server(name: string, entry: unknown, source: string): ProjectMcpServer 
 export const OPENCODE_REPO_CONFIG: RepoConfigReader = {
   instructions(workspace) {
     const levels = repoLevels(workspace);
+    const at = { workspace, within: repoRoot(workspace) };
     for (const name of INSTRUCTION_NAMES) {
-      const files: InstructionFile[] = levels.flatMap((dir) => {
-        const text = readText(path.join(dir, name));
-        return text === undefined ? [] : [{ path: path.relative(workspace, path.join(dir, name)) || name, text }];
-      });
+      const files: InstructionFile[] = [];
+      for (const dir of levels) readInstruction(path.join(dir, name), at, files);
       if (files.length > 0) return files;
     }
     return [];

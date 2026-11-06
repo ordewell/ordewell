@@ -28,7 +28,7 @@ export function bundledDaemonEntry(): string {
 }
 
 /**
- * Start the bundled daemon as a utility process the app owns (ADR-0060 H2):
+ * Start the bundled daemon as a utility process the app owns (ADR-0063 H2):
  * never `process.execPath`, which in a packaged app is the app itself, and
  * with `RunAsNode` fused off could not be made to run a script anyway.
  *

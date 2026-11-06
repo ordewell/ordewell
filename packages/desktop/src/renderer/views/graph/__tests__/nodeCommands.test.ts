@@ -43,4 +43,22 @@ describe('nodeCommands', () => {
     expect(nodeCommands(model.nodes[0]!, true).find((c) => c.id === 'fold')?.label).toBe('Fold subtasks');
     expect(commandsOf(runTask({ id: 'a', order: 1 }))).not.toContain('fold');
   });
+
+  it('offers a signed-out agent\'s Log in first, or the key entry its way in names', () => {
+    const hint = 'Codex is not signed in. Sign in with /login codex, or run codex login.';
+    const task = runTask({ id: 'a', order: 1, type: 'ai', assignedRunner: 'codex', status: 'failed', attempted: true });
+    const login = buildGraph([task], {
+      expanded: new Set(), executing: false, handoffPending: false,
+      signInByRunner: { codex: { runner: 'codex', label: 'Codex', hint, action: 'login' } },
+    });
+    if (!login.ok) throw new Error('fixture');
+    expect(nodeCommands(login.nodes[0]!, false)[0]).toEqual({ id: 'login', label: 'Log in' });
+
+    const key = buildGraph([task], {
+      expanded: new Set(), executing: false, handoffPending: false,
+      signInByRunner: { codex: { runner: 'codex', label: 'Codex', hint, action: 'key', provider: 'openrouter' } },
+    });
+    if (!key.ok) throw new Error('fixture');
+    expect(nodeCommands(key.nodes[0]!, false)[0]).toEqual({ id: 'login', label: 'Set API key…' });
+  });
 });

@@ -8,6 +8,7 @@ import type { RunnerCommand, RunnerMcpServer, RunnerModelRef } from '../../model
 import type { PlannerShellSandbox } from '../sandbox/plannerSandbox';
 import type { AttachState } from './ordewellBinding';
 import type { RunnerPlacement } from '../executionLease';
+import type { HeldSecrets } from '../HeldSecrets';
 
 
 /**
@@ -321,9 +322,12 @@ export interface AgentAdapter {
    * adapter that cannot inject the server at all, which cannot run tasks.
    * `false` is the old boolean answer for "not attached"; a real adapter says
    * `pending` while its process is still starting, or `failed` when the
-   * runner reports the server cannot connect.
+   * runner reports the server cannot connect. A runner that uses its token
+   * only once a turn starts it is checked by its first turn, a task's prompt
+   * or a planner's message, sent through `sendFirstTurn` (ADR-0060, R5);
+   * without one it cannot attach.
    */
-  mcpAttached?(): Promise<boolean | AttachState>;
+  mcpAttached?(sendFirstTurn?: () => Promise<unknown>): Promise<boolean | AttachState>;
 
   /**
    * Registers a listener for the process ending, for any reason; a planner
@@ -358,7 +362,7 @@ export interface AgentAdapter {
 
 /** What an adapter adds to run a task rather than a planner (ADR-0018). */
 export interface TaskModeAgentAdapter extends AgentAdapter {
-  mcpAttached(): Promise<boolean | AttachState>;
+  mcpAttached(sendFirstTurn?: () => Promise<unknown>): Promise<boolean | AttachState>;
   /**
    * Ask the running turn to stop, keeping the process and its session. Resolves
    * true once the agent acknowledged it; the turn then ends with
@@ -447,6 +451,12 @@ export interface AgentProcessDeps {
   nativeShellSandbox?: () => PlannerShellSandbox;
   /** Where a lease put this runner, when not on this host (ADR-0059 L5). */
   placement?: RunnerPlacement;
+  /**
+   * The attempt's held secrets, which the process adds its spawn env and
+   * withheld headers to, so the session's sinks hide them too (ADR-0061, H1).
+   * Absent outside an attempt: the process then holds its own.
+   */
+  held?: HeldSecrets;
 }
 
 /** Builds the adapter for one runner id, or null when that runner cannot plan. */

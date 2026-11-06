@@ -1619,7 +1619,8 @@ export class TaskOrchestrator {
         // (ADR-0034). Independent work keeps starting. A loop's check that
         // starts a round instead is no failure yet (ADR-0045 L3).
         this.store.markFailed(task.id);
-        if (!this.startRound(task.id)) this.notifications.error(ended.unresumed ?? failureText(this.store.get(task.id) ?? task, verdict));
+        // A runner that stopped on its login is told as the way back in (ADR-0052).
+        if (!this.startRound(task.id)) this.notifications.error(ended.unresumed ?? withSignInHint(ended.signedOut, failureText(this.store.get(task.id) ?? task, verdict)));
         // A Stop since it was claimed ended its loop with it.
         else if (!this.isScheduling && ended.attempt.admission.current()) this.carriedLoops.add(task.id);
         if (ended.attempt.worktree) await this.leases.letGo(task.id, { keep: true, reason: 'failed' });
@@ -3348,6 +3349,11 @@ const REPEATABLE: ReadonlySet<Task['status']> = new Set<Task['status']>(['pendin
 
 /** A body task a closed loop leaves undone: it has not run, or it did not pass. */
 const LEFT_UNDONE: ReadonlySet<Task['status']> = new Set<Task['status']>(['pending', 'approved', 'failed']);
+
+/** A failure's notice, then the way back into the agent where it stopped on its login. */
+function withSignInHint(hint: string | null, text: string): string {
+  return hint ? `${text} ${hint}` : text;
+}
 
 /** What a failed task's notice says; a loop's check out of rounds says how many it ran. */
 function failureText(task: Readonly<Task>, verdict: Verdict): string {

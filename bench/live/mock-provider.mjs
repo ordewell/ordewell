@@ -260,6 +260,28 @@ const DESKTOP_TOUR_PLAN = {
 };
 
 /**
+ * The tour's third launch, which enables all eight agents: the acceptance
+ * plan's first task, then one task on each of the five newer agents, so the
+ * plan panel and the graph draw every runner's badge. No model is named, since
+ * none of those agents is installed there to list its models.
+ */
+const DESKTOP_TOUR_RUNNERS_PLAN = {
+  tasks: [
+    DESKTOP_E2E_PLAN.tasks[0],
+    ...[
+      ['copilot-cli', 'Review the parser change with Copilot'],
+      ['qwen-code', 'Draft the migration notes with Qwen Code'],
+      ['cline', 'Tidy the fixtures with Cline'],
+      ['gemini-cli', 'Summarise the changelog with Gemini'],
+      ['cursor-agent', 'Rename the helpers with Cursor'],
+    ].map(([runner, title], i) => aiTask({
+      id: `tour-${runner}`, order: 2 + i, title, description: `A task on ${runner}`, dependencies: [DESKTOP_E2E_PLAN.tasks[0].id],
+      assignedRunner: runner, assignedModel: undefined, prompt: `${title}.`,
+    })),
+  ],
+};
+
+/**
  * The plan cards at their widest, for the desktop tour's overflow probe: long
  * titles, a long model with its effort, a loop's check and body, Research,
  * Ops, and a prompt with a path that has nowhere to break. It is never run.
@@ -335,6 +357,11 @@ function scriptTurn(model, messages) {
     // Only the goal gets the plan: a supervisor's wake-up turn refuses plan edits.
     if (messages.some((m) => m.role === 'assistant')) return { content: 'Noted. Nothing to change.' };
     return { reasoning: 'Two small slices. ', content: fence(DESKTOP_E2E_PLAN) };
+  }
+
+  if (persona === 'desktop-tour-runners') {
+    if (messages.some((m) => m.role === 'assistant')) return { content: 'Noted. Nothing to change.' };
+    return { reasoning: 'One task on each newer agent. ', content: fence(DESKTOP_TOUR_RUNNERS_PLAN) };
   }
 
   if (persona === 'desktop-tour') {

@@ -4,7 +4,7 @@ import type { ViewScope } from '../frame/layout';
 
 /**
  * The renderer's client for the daemon's file and repository reads and the one
- * save (ADR-0061, ADR-0062 G10). Every call goes through the preload's
+ * save (ADR-0064, ADR-0062 G10). Every call goes through the preload's
  * fixed-route `daemon.call`; this file only shapes the arguments and checks the
  * answers, since a page trusts nothing it did not parse.
  */
@@ -42,7 +42,7 @@ export interface RepoInfo {
   detached: boolean;
 }
 
-/** The refusals the Explorer words for the user (ADR-0061 R2, R3; ADR-0062 G10). */
+/** The refusals the Explorer words for the user (ADR-0064 R2, R3; ADR-0062 G10). */
 export type FilesErrorCode = 'gone' | 'path_refused' | 'path_not_found' | 'stale' | 'not_checkout' | 'unreadable';
 
 export class FilesError extends Error {

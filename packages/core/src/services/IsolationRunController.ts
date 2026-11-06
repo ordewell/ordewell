@@ -149,10 +149,18 @@ function preservedNotice(kept: PreservedWork[]): string {
     + `\`git log ${first.branch}\` shows it; merge or cherry-pick it to bring it back, and delete the branch once you no longer need it.`;
 }
 
-/** A worktree a removal left alone, and what the user can do with it. */
-function refusedNotice(worktree: string, reason: string, task?: IsolationTaskRef): string {
+/**
+ * A worktree a removal left alone, and what the user can do with it. Not `git
+ * worktree remove` on Windows: Git for Windows walks into the junctions a
+ * worktree holds and empties the folders of the checkout they lead to, where
+ * `rmdir /s` removes a junction itself.
+ */
+export function refusedNotice(worktree: string, reason: string, task?: IsolationTaskRef, platform: NodeJS.Platform = process.platform): string {
+  const remove = platform === 'win32'
+    ? `remove it with \`rmdir /s /q "${worktree}"\` in a Command Prompt, then \`git worktree prune\``
+    : `remove it with \`git worktree remove --force ${worktree}\``;
   return `Left ${task ? `the worktree of task "${task.title}"` : 'a leftover worktree'} in place at ${worktree}: it holds work Ordewell could not keep (${reason}). `
-    + `Save what you need from it, then remove it with \`git worktree remove --force ${worktree}\`.`;
+    + `Save what you need from it, then ${remove}.`;
 }
 
 /** What a new run shares live instead of isolating, as one line; null when it shares nothing. */

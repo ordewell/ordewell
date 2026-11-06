@@ -4,6 +4,7 @@ import type { MessageBlock } from '@ordewell/core';
 import { createApp } from '../app';
 import { initialState, type TuiState, type TaskView } from '../state';
 import type { Action } from '../reducers/shared';
+import { patient } from '@ordewell/core/testing';
 
 const yieldMacrotask = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
@@ -169,5 +170,5 @@ describe('repaint measurement', () => {
     expect(streamedFrames).toBeGreaterThan(0);
     expect(streamedMs).toBeLessThan(15_000);
     expect(streamDelay.max / 1e6).toBeLessThan(1_000);
-  }, 60_000);
+  }, patient(60_000));
 });

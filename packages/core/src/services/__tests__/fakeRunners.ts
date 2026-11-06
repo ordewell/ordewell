@@ -1,6 +1,8 @@
-import { readFileSync } from 'fs';
-import type { AgentProcessDeps, SpawnFn } from '../harness/AgentAdapter';
-import { fakeSpawn, fixture, respondingSpawn, sseResponse, type FakeEventStream, type FakeSpawnResult } from './harnessTestKit';
+import { existsSync, readFileSync } from 'fs';
+import { join } from 'path';
+import type { AgentProcessDeps, AgentStartOptions, SpawnFn } from '../harness/AgentAdapter';
+import { FakeAcpAgent, type FakeAcpStep } from './fakeAcpAgent';
+import { fakeSpawn, fixture, respondingSpawn, sseResponse, type FakeAgentProcess, type FakeEventStream, type FakeSpawnResult } from './harnessTestKit';
 
 /**
  * One fake per built-in runner, each speaking that runner's own protocol, so a
@@ -28,8 +30,12 @@ export interface FakeRunner {
   injectedUrl(n?: number): string | null;
   /** The argv of the latest launch, as one string — which every local user can list, so a token must never be in it (ADR-0022, A5). */
   commandLine(): string;
-  /** Whether the latest launch lets the tool the runner calls `name` run with nobody asked. */
-  preAllows(name: string): boolean;
+  /**
+   * Whether the latest launch lets the tool the runner calls `name` run with
+   * nobody asked: read from what it was launched with, or for a runner that
+   * asks its client about every call (ACP), from how the adapter answers.
+   */
+  preAllows(name: string): boolean | Promise<boolean>;
   /** What the latest launch tells the model about its tools besides the tool list, if anything. */
   instructions(): string;
   /** Resolves once the turn the adapter just sent is open on the runner's side. */
@@ -44,6 +50,12 @@ export interface FakeRunner {
   say(text: string): void;
   /** Whether launch `n` was killed. */
   killed(n: number): boolean;
+  /**
+   * The start options as the server would hand them out. ACP reports no MCP
+   * status, so the attach evidence is the server's own record of the token's
+   * first use (ADR-0022, S2), which a fake of such a runner supplies.
+   */
+  withServer?(start: AgentStartOptions): AgentStartOptions;
 }
 
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -333,9 +345,431 @@ function openCode(script: FakeRunnerScript): FakeRunner {
   };
 }
 
+/** Copilot's own answer to `initialize`, as recorded. */
+const COPILOT_INITIALIZED = (JSON.parse(readFileSync(join(__dirname, 'fixtures/acp/copilot-cli/ordewell-tool.jsonl'), 'utf8').split('\n')[2]) as { line: { result: unknown } }).line.result;
+const COPILOT_SESSION = 'sess-copilot';
+
+/**
+ * Copilot CLI over ACP, in the words its recordings show: a tool call
+ * reported as `ordewell-<tool>`, then a permission request for it under the
+ * bare `<tool>`; with `--allow-all` it asks about nothing.
+ */
+function copilotCli(script: FakeRunnerScript): FakeRunner {
+  const kit = fakeSpawn([]);
+  const agents: FakeAcpAgent[] = [];
+  // Read at spawn: the directory is removed with the process that read it.
+  const instructions: string[] = [];
+  let calls = 0;
+  const steps = (): FakeAcpStep[] => [
+    { expect: 'initialize', reply: COPILOT_INITIALIZED },
+    { expect: 'session/new', reply: { sessionId: COPILOT_SESSION } },
+    // Copilot lists the server's tools once the session has it, and that use
+    // of the token is the only attach evidence ACP leaves (ADR-0060, R5). Not
+    // awaited: a start given a contact record of its own names no live server.
+    ...(script.attach === 'connected' ? [{ run: (agent: FakeAcpAgent) => { void agent.listMcpTools().catch(() => undefined); } }] : []),
+    script.reply === undefined
+      ? { expect: 'session/prompt' }
+      : { expect: 'session/prompt', reply: (_params: unknown, agent: FakeAcpAgent) => { agent.send('session/update', update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: script.reply } })); return { stopReason: 'end_turn' }; } },
+  ];
+  const update = (body: Record<string, unknown>) => ({ sessionId: COPILOT_SESSION, update: body });
+  const spawn: SpawnFn = (cmd, argv, options) => {
+    // A restricted start finds AGENTS.md in the private directory it starts in.
+    const dir = options.env?.COPILOT_CUSTOM_INSTRUCTIONS_DIRS ?? (typeof options.cwd === 'string' ? options.cwd : undefined);
+    instructions.push(dir && existsSync(join(dir, 'AGENTS.md')) ? readFileSync(join(dir, 'AGENTS.md'), 'utf8') : '');
+    const proc = kit.spawn(cmd, argv, options);
+    const agent = new FakeAcpAgent(steps());
+    agent.attach(proc as unknown as FakeAgentProcess);
+    agents.push(agent);
+    return proc;
+  };
+  const agent = () => agents[agents.length - 1];
+  const ask = async (report: Record<string, unknown>, permission: Record<string, unknown>): Promise<RunnerAnswer> => {
+    const toolCallId = `call_${++calls}`;
+    agent().send('session/update', update({ sessionUpdate: 'tool_call', toolCallId, status: 'pending', rawInput: {}, ...report }));
+    let outcome: { outcome?: string; optionId?: string } | undefined;
+    void agent().ask('session/request_permission', {
+      sessionId: COPILOT_SESSION,
+      toolCall: { toolCallId, status: 'pending', rawInput: {}, ...permission },
+      options: [
+        { optionId: 'allow_once', kind: 'allow_once', name: 'Allow once' },
+        { optionId: 'allow_always', kind: 'allow_always', name: 'Always allow' },
+        { optionId: 'reject_once', kind: 'reject_once', name: 'Deny' },
+      ],
+    }).then((answer) => { outcome = (answer.result as { outcome?: { outcome?: string; optionId?: string } } | undefined)?.outcome ?? {}; });
+    const answer = await answered(() => outcome);
+    return answer === undefined ? 'open' : answer.optionId?.startsWith('allow') ? 'allow' : 'deny';
+  };
+  const allowsAll = () => kit.lastArgs().includes('--allow-all');
+  const bare = (name: string) => (name.startsWith('ordewell-') ? name.slice('ordewell-'.length) : name);
+  return {
+    deps: baseDeps(spawn, noHttp),
+    launches: () => agents.length,
+    injectedUrl: (n = agents.length - 1) => agents[n]?.mcpServers.find((server) => server.name === 'ordewell')?.url ?? null,
+    commandLine: () => kit.lastArgs().join(' '),
+    preAllows: async (name) => allowsAll() || (await ask({ title: name, kind: 'other' }, { title: bare(name), kind: 'other' })) === 'allow',
+    instructions: () => instructions[instructions.length - 1] ?? '',
+    turnOpen: async () => { await answered(() => (agent().requests('session/prompt').length > 0 ? true : undefined)); },
+    callOrdewellTool: (tool) => {
+      agent().send('session/update', update({ sessionUpdate: 'tool_call', toolCallId: `call_${tool}`, title: `ordewell-${tool}`, kind: 'other', status: 'pending', rawInput: {} }));
+      // A pending call is not yet running, and is not reported until it is.
+      agent().send('session/update', update({ sessionUpdate: 'tool_call_update', toolCallId: `call_${tool}`, status: 'in_progress' }));
+    },
+    askOrdewellTool: (tool) => ask({ title: `ordewell-${tool}`, kind: 'other' }, { title: tool, kind: 'other' }),
+    askWrite: () => ask({ title: 'Creating /repo/a.txt', kind: 'edit' }, { title: 'Create file', kind: 'edit' }),
+    say: (text) => {
+      agent().send('session/update', update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } }));
+    },
+    killed: (n) => kit.processes[n]?.killed ?? false,
+    withServer: (start) => {
+      if (!start.mcp) return start;
+      const used = script.attach === 'connected';
+      return { ...start, mcp: { ...start.mcp, contact: { contacted: () => used, whenContacted: async () => used } } };
+    },
+  };
+}
+
+/** Qwen Code's own answers to `initialize` and `session/new`, as recorded. */
+const QWEN_RECORDING = readFileSync(join(__dirname, 'fixtures/acp/qwen-code/ordewell-tool.jsonl'), 'utf8').split('\n').filter(Boolean).map((text) => JSON.parse(text) as { dir: string; line?: { id?: number; result?: unknown } });
+const qwenAnswer = (id: number) => QWEN_RECORDING.find((entry) => entry.dir === 'in' && entry.line?.id === id)!.line!.result as { sessionId?: string; configOptions?: Array<{ id: string; currentValue: unknown }> };
+const QWEN_SESSION = qwenAnswer(2).sessionId!;
+
+/**
+ * Qwen Code over ACP, in the words its recordings show: every request names
+ * the tool in `_meta.toolName` (an MCP tool as `mcp__ordewell__<tool>`, a
+ * native one bare) and puts the call's arguments in its title; a call is first
+ * reported under a placeholder title ("ToolCall"). Its mode is a config
+ * option set after `session/new`; in `yolo` it asks about nothing.
+ */
+function qwenCode(script: FakeRunnerScript): FakeRunner {
+  const kit = fakeSpawn([]);
+  const agents: FakeAcpAgent[] = [];
+  let calls = 0;
+  const steps = (): FakeAcpStep[] => [
+    { expect: 'initialize', reply: qwenAnswer(1) },
+    { expect: 'session/new', reply: qwenAnswer(2) },
+    // Qwen contacts the server while the session is made, and that use of the
+    // token is the only attach evidence ACP leaves (ADR-0060, R5).
+    ...(script.attach === 'connected' ? [{ run: (agent: FakeAcpAgent) => { void agent.listMcpTools().catch(() => undefined); } }] : []),
+    // It answers a setting with the whole list, the new value in it. A task
+    // sets its mode; a planner given no model sets nothing.
+    {
+      expect: 'session/set_config_option',
+      optional: true,
+      reply: (params: unknown) => {
+        const { configId, value } = params as { configId: string; value: string };
+        return { configOptions: qwenAnswer(2).configOptions!.map((option) => (option.id === configId ? { ...option, currentValue: value } : option)) };
+      },
+    },
+    script.reply === undefined
+      ? { expect: 'session/prompt' }
+      : { expect: 'session/prompt', reply: (_params: unknown, agent: FakeAcpAgent) => { agent.send('session/update', update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: script.reply } })); return { stopReason: 'end_turn' }; } },
+  ];
+  const update = (body: Record<string, unknown>) => ({ sessionId: QWEN_SESSION, update: body });
+  const spawn: SpawnFn = (cmd, argv, options) => {
+    const proc = kit.spawn(cmd, argv, options);
+    const agent = new FakeAcpAgent(steps());
+    agent.attach(proc as unknown as FakeAgentProcess);
+    agents.push(agent);
+    return proc;
+  };
+  const agent = () => agents[agents.length - 1];
+  const ask = async (tool: string, kind: string, title: string): Promise<RunnerAnswer> => {
+    const toolCallId = `call_${++calls}`;
+    let outcome: { outcome?: string; optionId?: string } | undefined;
+    void agent().ask('session/request_permission', {
+      sessionId: QWEN_SESSION,
+      toolCall: { toolCallId, status: 'pending', title, kind, content: [], locations: [], rawInput: {}, _meta: { toolName: tool } },
+      options: [
+        { optionId: 'proceed_always_project', name: 'Always Allow in project', kind: 'allow_always' },
+        { optionId: 'proceed_once', name: 'Allow', kind: 'allow_once' },
+        { optionId: 'cancel', name: 'Reject', kind: 'reject_once' },
+      ],
+    }).then((answer) => { outcome = (answer.result as { outcome?: { outcome?: string; optionId?: string } } | undefined)?.outcome ?? {}; });
+    const answer = await answered(() => outcome);
+    return answer === undefined ? 'open' : answer.optionId?.startsWith('proceed') ? 'allow' : 'deny';
+  };
+  return {
+    deps: baseDeps(spawn, noHttp),
+    launches: () => agents.length,
+    injectedUrl: (n = agents.length - 1) => agents[n]?.mcpServers.find((server) => server.name === 'ordewell')?.url ?? null,
+    commandLine: () => kit.lastArgs().join(' '),
+    preAllows: async (name) => (await ask(name, 'other', JSON.stringify({ from: 'fake' }))) === 'allow',
+    // The contract rides in the first prompt: Qwen has no channel apart from it.
+    instructions: () => ((agent().requests('session/prompt')[0]?.params as { prompt?: Array<{ text?: string }> } | undefined)?.prompt ?? []).map((part) => part.text ?? '').join('\n'),
+    turnOpen: async () => { await answered(() => (agent().requests('session/prompt').length > 0 ? true : undefined)); },
+    callOrdewellTool: (tool) => {
+      agent().send('session/update', update({ sessionUpdate: 'tool_call', toolCallId: `call_${tool}`, status: 'pending', title: 'ToolCall', kind: 'other', rawInput: {}, _meta: { toolName: 'tool_call', provenance: 'builtin', phase: 'preparing' } }));
+      agent().send('session/update', update({ sessionUpdate: 'tool_call_update', toolCallId: `call_${tool}`, status: 'in_progress', title: `${tool} (ordewell MCP Server): {}`, kind: 'other', _meta: { toolName: `mcp__ordewell__${tool}`, provenance: 'mcp', serverId: 'ordewell' } }));
+    },
+    askOrdewellTool: (tool) => ask(`mcp__ordewell__${tool}`, 'other', JSON.stringify({ from: 'fake' })),
+    askWrite: () => ask('write_file', 'edit', 'Writing to a.txt'),
+    say: (text) => {
+      agent().send('session/update', update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } }));
+    },
+    killed: (n) => kit.processes[n]?.killed ?? false,
+    withServer: (start) => {
+      if (!start.mcp) return start;
+      const used = script.attach === 'connected';
+      return { ...start, mcp: { ...start.mcp, contact: { contacted: () => used, whenContacted: async () => used } } };
+    },
+  };
+}
+
+/** Cline's own answers to `initialize` and `session/new`, as recorded. */
+const CLINE_RECORDING = readFileSync(join(__dirname, 'fixtures/acp/cline/ordewell-tool.jsonl'), 'utf8').split('\n').filter(Boolean).map((text) => JSON.parse(text) as { dir: string; line?: { id?: number; result?: unknown } });
+const clineAnswer = (id: number) => CLINE_RECORDING.find((entry) => entry.dir === 'in' && entry.line?.id === id)!.line!.result as { sessionId?: string };
+const CLINE_SESSION = clineAnswer(2).sessionId!;
+
+/**
+ * Cline over ACP, in the words its recordings show: it reads the Ordewell
+ * server from the settings file `CLINE_MCP_SETTINGS_PATH` names, once, as it
+ * starts; every call's title is `<tool>: <summary>`, an MCP tool named
+ * `<server>__<tool>` and given the kind `other` like a native one; and with
+ * `--auto-approve true` it asks about nothing.
+ */
+function cline(script: FakeRunnerScript): FakeRunner {
+  const kit = fakeSpawn([]);
+  const agents: FakeAcpAgent[] = [];
+  let calls = 0;
+  const steps = (): FakeAcpStep[] => [
+    { expect: 'initialize', reply: clineAnswer(1) },
+    { expect: 'session/new', reply: clineAnswer(2) },
+    script.reply === undefined
+      ? { expect: 'session/prompt' }
+      : { expect: 'session/prompt', reply: (_params: unknown, agent: FakeAcpAgent) => { agent.send('session/update', update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: script.reply } })); return { stopReason: 'end_turn' }; } },
+  ];
+  const update = (body: Record<string, unknown>) => ({ sessionId: CLINE_SESSION, update: body });
+  const settings = { env: 'CLINE_MCP_SETTINGS_PATH', servers: (contents: string) => Object.entries((JSON.parse(contents) as { mcpServers: Record<string, { url: string; headers: Record<string, string> }> }).mcpServers).map(([name, server]) => ({ name, ...server })) };
+  const spawn: SpawnFn = (cmd, argv, options) => {
+    const proc = kit.spawn(cmd, argv, options);
+    const agent = new FakeAcpAgent(steps(), { settings });
+    agent.attach(proc as unknown as FakeAgentProcess, options.env);
+    agents.push(agent);
+    return proc;
+  };
+  const agent = () => agents[agents.length - 1];
+  const ask = async (title: string, kind: string): Promise<RunnerAnswer> => {
+    const toolCallId = `call_${++calls}`;
+    // Cline reports the call before it asks about it, under the same title.
+    agent().send('session/update', update({ sessionUpdate: 'tool_call_update', toolCallId, title, kind, status: 'pending', rawInput: {} }));
+    let outcome: { outcome?: string; optionId?: string } | undefined;
+    void agent().ask('session/request_permission', {
+      sessionId: CLINE_SESSION,
+      toolCall: { toolCallId, title, kind, status: 'pending', rawInput: {} },
+      options: [
+        { optionId: 'allow_once', name: 'Allow once', kind: 'allow_once' },
+        { optionId: 'allow_always', name: 'Allow always', kind: 'allow_always' },
+        { optionId: 'reject_once', name: 'Reject', kind: 'reject_once' },
+      ],
+    }).then((answer) => { outcome = (answer.result as { outcome?: { outcome?: string; optionId?: string } } | undefined)?.outcome ?? {}; });
+    const answer = await answered(() => outcome);
+    return answer === undefined ? 'open' : answer.optionId?.startsWith('allow') ? 'allow' : 'deny';
+  };
+  const allowsAll = () => kit.lastArgs().join(' ').includes('--auto-approve true');
+  const settingsOf = (n: number) => {
+    const contents = agents[n]?.settingsReads[0]?.contents;
+    return contents ? settings.servers(contents) : [];
+  };
+  return {
+    // Cline's key is handed in as Ordewell's environment would hold it, so no fake reads Cline's own store.
+    deps: { ...baseDeps(spawn, noHttp), workspaceEnv: async () => ({ CLINE_API_KEY: 'sk-fake' }) },
+    launches: () => agents.length,
+    injectedUrl: (n = agents.length - 1) => settingsOf(n).find((server) => server.name === 'ordewell')?.url ?? null,
+    commandLine: () => kit.lastArgs().join(' '),
+    preAllows: async (name) => allowsAll() || (await ask(`${name}: {}`, 'other')) === 'allow',
+    // The contract rides in the first prompt: Cline has no channel apart from it.
+    instructions: () => ((agent().requests('session/prompt')[0]?.params as { prompt?: Array<{ text?: string }> } | undefined)?.prompt ?? []).map((part) => part.text ?? '').join('\n'),
+    turnOpen: async () => { await answered(() => (agent().requests('session/prompt').length > 0 ? true : undefined)); },
+    callOrdewellTool: (tool) => {
+      agent().send('session/update', update({ sessionUpdate: 'tool_call', toolCallId: `call_${tool}`, title: `ordewell__${tool}: {}`, kind: 'other', status: 'pending', rawInput: {} }));
+      agent().send('session/update', update({ sessionUpdate: 'tool_call_update', toolCallId: `call_${tool}`, status: 'in_progress' }));
+    },
+    askOrdewellTool: (tool) => ask(`ordewell__${tool}: {}`, 'other'),
+    askWrite: () => ask('apply_patch: {"input":"*** Begin Patch\\n*** Add File: a.txt\\n+x\\n*** End Patch"}', 'other'),
+    say: (text) => {
+      agent().send('session/update', update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } }));
+    },
+    killed: (n) => kit.processes[n]?.killed ?? false,
+    withServer: (start) => {
+      if (!start.mcp) return start;
+      const used = script.attach === 'connected';
+      return { ...start, mcp: { ...start.mcp, contact: { contacted: () => used, whenContacted: async () => used } } };
+    },
+  };
+}
+
+/** Gemini CLI's own answers to `initialize` and `session/new`, as recorded. */
+const GEMINI_RECORDING = readFileSync(join(__dirname, 'fixtures/acp/gemini-cli/ordewell-tool.jsonl'), 'utf8').split('\n').filter(Boolean).map((text) => JSON.parse(text) as { dir: string; line?: { id?: number; result?: unknown } });
+const geminiAnswer = (id: number) => GEMINI_RECORDING.find((entry) => entry.dir === 'in' && entry.line?.id === id)!.line!.result as { sessionId?: string };
+const GEMINI_SESSION = geminiAnswer(2).sessionId!;
+
+/**
+ * Gemini CLI over ACP, in the words its recordings show: a call id is the
+ * tool's name, `__` and a counter, an MCP tool named `mcp_<server>_<tool>`;
+ * a call's title is the call as the model wrote it, and with no arguments
+ * the tool's display name (`formatToolDescription` in Gemini 0.66.0). Its
+ * mode is set with `session/set_mode`; in `yolo` it asks about nothing.
+ */
+function geminiCli(script: FakeRunnerScript): FakeRunner {
+  const kit = fakeSpawn([]);
+  const agents: FakeAcpAgent[] = [];
+  let calls = 0;
+  const steps = (): FakeAcpStep[] => [
+    { expect: 'initialize', reply: geminiAnswer(1) },
+    { expect: 'session/new', reply: geminiAnswer(2) },
+    // In a trusted folder Gemini contacts the server while the session is
+    // made, the only attach evidence ACP leaves (ADR-0060, R5).
+    ...(script.attach === 'connected' ? [{ run: (agent: FakeAcpAgent) => { void agent.listMcpTools().catch(() => undefined); } }] : []),
+    // A task sets its mode; a planner sets none, as the planner recording shows.
+    { expect: 'session/set_mode', optional: true, reply: {} },
+    script.reply === undefined
+      ? { expect: 'session/prompt' }
+      : { expect: 'session/prompt', reply: (_params: unknown, agent: FakeAcpAgent) => { agent.send('session/update', update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: script.reply } })); return { stopReason: 'end_turn' }; } },
+  ];
+  const update = (body: Record<string, unknown>) => ({ sessionId: GEMINI_SESSION, update: body });
+  const spawn: SpawnFn = (cmd, argv, options) => {
+    const proc = kit.spawn(cmd, argv, options);
+    const agent = new FakeAcpAgent(steps());
+    agent.attach(proc as unknown as FakeAgentProcess);
+    agents.push(agent);
+    return proc;
+  };
+  const agent = () => agents[agents.length - 1];
+  const ask = async (tool: string, kind: string, title: string): Promise<RunnerAnswer> => {
+    const toolCallId = `${tool}__call_${++calls}`;
+    let outcome: { outcome?: string; optionId?: string } | undefined;
+    void agent().ask('session/request_permission', {
+      sessionId: GEMINI_SESSION,
+      toolCall: { toolCallId, status: 'pending', title, content: [], locations: [], kind },
+      options: [
+        { optionId: 'proceed_always', name: 'Allow for this session', kind: 'allow_always' },
+        { optionId: 'proceed_once', name: 'Allow', kind: 'allow_once' },
+        { optionId: 'cancel', name: 'Reject', kind: 'reject_once' },
+      ],
+    }).then((answer) => { outcome = (answer.result as { outcome?: { outcome?: string; optionId?: string } } | undefined)?.outcome ?? {}; });
+    const answer = await answered(() => outcome);
+    return answer === undefined ? 'open' : answer.optionId?.startsWith('proceed') ? 'allow' : 'deny';
+  };
+  const allowsAll = () => agent().requests('session/set_mode').some((request) => (request.params as { modeId?: string }).modeId === 'yolo');
+  return {
+    deps: baseDeps(spawn, noHttp),
+    launches: () => agents.length,
+    injectedUrl: (n = agents.length - 1) => agents[n]?.mcpServers.find((server) => server.name === 'ordewell')?.url ?? null,
+    commandLine: () => kit.lastArgs().join(' '),
+    preAllows: async (name) => allowsAll() || (await ask(name, 'other', `${name}(from: fake)`)) === 'allow',
+    // The contract rides in the first prompt: Gemini has no channel apart from it.
+    instructions: () => ((agent().requests('session/prompt')[0]?.params as { prompt?: Array<{ text?: string }> } | undefined)?.prompt ?? []).map((part) => part.text ?? '').join('\n'),
+    turnOpen: async () => { await answered(() => (agent().requests('session/prompt').length > 0 ? true : undefined)); },
+    callOrdewellTool: (tool) => {
+      const toolCallId = `mcp_ordewell_${tool}__call_${++calls}`;
+      agent().send('session/update', update({ sessionUpdate: 'tool_call', toolCallId, status: 'pending', title: `${tool} (ordewell MCP Server)`, content: [], locations: [], kind: 'other' }));
+      agent().send('session/update', update({ sessionUpdate: 'tool_call_update', toolCallId, status: 'in_progress' }));
+    },
+    askOrdewellTool: (tool) => ask(`mcp_ordewell_${tool}`, 'other', `${tool}(from: fake)`),
+    askWrite: () => ask('write_file', 'edit', 'Writing to a.txt'),
+    say: (text) => {
+      agent().send('session/update', update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } }));
+    },
+    killed: (n) => kit.processes[n]?.killed ?? false,
+    withServer: (start) => {
+      if (!start.mcp) return start;
+      const used = script.attach === 'connected';
+      return { ...start, mcp: { ...start.mcp, contact: { contacted: () => used, whenContacted: async () => used } } };
+    },
+  };
+}
+
+/** Cursor's own answers to `initialize` and `session/new`, as recorded. */
+const CURSOR_RECORDING = readFileSync(join(__dirname, 'fixtures/acp/cursor-agent/ordewell-tool.jsonl'), 'utf8').split('\n').filter(Boolean).map((text) => JSON.parse(text) as { dir: string; line?: { id?: number; method?: string; result?: unknown } });
+const cursorAnswer = (id: number) => CURSOR_RECORDING.find((entry) => entry.dir === 'in' && entry.line?.id === id && entry.line.method === undefined)!.line!.result as { sessionId?: string };
+const CURSOR_SESSION = cursorAnswer(2).sessionId!;
+
+/**
+ * Cursor's CLI over ACP, in the words its recordings show: every MCP call is
+ * first reported as "MCP: tool" and asked about as `<server>-<tool>: <tool>`,
+ * a command as itself in backticks. Its mode is a launch flag: under
+ * `--force` it asks about nothing.
+ */
+function cursorAgent(script: FakeRunnerScript): FakeRunner {
+  const kit = fakeSpawn([]);
+  const agents: FakeAcpAgent[] = [];
+  let calls = 0;
+  const steps = (): FakeAcpStep[] => [
+    { expect: 'initialize', reply: cursorAnswer(1) },
+    { expect: 'session/new', reply: cursorAnswer(2) },
+    // Cursor contacts the server while the session is made, the only attach
+    // evidence ACP leaves (ADR-0060, R5).
+    ...(script.attach === 'connected' ? [{ run: (agent: FakeAcpAgent) => { void agent.listMcpTools().catch(() => undefined); } }] : []),
+    script.reply === undefined
+      ? { expect: 'session/prompt' }
+      : { expect: 'session/prompt', reply: (_params: unknown, agent: FakeAcpAgent) => { agent.send('session/update', update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: script.reply } })); return { stopReason: 'end_turn' }; } },
+  ];
+  const update = (body: Record<string, unknown>) => ({ sessionId: CURSOR_SESSION, update: body });
+  const spawn: SpawnFn = (cmd, argv, options) => {
+    const proc = kit.spawn(cmd, argv, options);
+    const agent = new FakeAcpAgent(steps());
+    agent.attach(proc as unknown as FakeAgentProcess);
+    agents.push(agent);
+    return proc;
+  };
+  const agent = () => agents[agents.length - 1];
+  // Cursor reports a call before it asks about it, and the adapter pairs the
+  // request with that report.
+  const ask = async (title: string, kind: string, reportTitle: string): Promise<RunnerAnswer> => {
+    const toolCallId = `call-fake-${++calls}\nfc_fake_0`;
+    agent().send('session/update', update({ sessionUpdate: 'tool_call', toolCallId, title: reportTitle, kind, status: 'pending', rawInput: {} }));
+    let outcome: { outcome?: string; optionId?: string } | undefined;
+    void agent().ask('session/request_permission', {
+      sessionId: CURSOR_SESSION,
+      toolCall: { toolCallId, title, kind, status: 'pending', content: [] },
+      options: [
+        { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
+        { optionId: 'allow-always', name: 'Allow always', kind: 'allow_always' },
+        { optionId: 'reject-once', name: 'Reject', kind: 'reject_once' },
+      ],
+    }).then((answer) => { outcome = (answer.result as { outcome?: { outcome?: string; optionId?: string } } | undefined)?.outcome ?? {}; });
+    const answer = await answered(() => outcome);
+    return answer === undefined ? 'open' : answer.optionId?.startsWith('allow') ? 'allow' : 'deny';
+  };
+  const allowsAll = () => kit.lastArgs().includes('--force');
+  const askTool = (tool: string) => ask(`ordewell-${tool}: ${tool}`, 'other', 'MCP: tool');
+  return {
+    deps: baseDeps(spawn, noHttp),
+    launches: () => agents.length,
+    injectedUrl: (n = agents.length - 1) => agents[n]?.mcpServers.find((server) => server.name === 'ordewell')?.url ?? null,
+    commandLine: () => kit.lastArgs().join(' '),
+    preAllows: async (name) => allowsAll() || (await askTool(name)) === 'allow',
+    // The contract rides in the first prompt: Cursor has no channel apart from it.
+    instructions: () => ((agent().requests('session/prompt')[0]?.params as { prompt?: Array<{ text?: string }> } | undefined)?.prompt ?? []).map((part) => part.text ?? '').join('\n'),
+    turnOpen: async () => { await answered(() => (agent().requests('session/prompt').length > 0 ? true : undefined)); },
+    callOrdewellTool: (tool) => {
+      const toolCallId = `call-fake-${++calls}\nfc_fake_0`;
+      agent().send('session/update', update({ sessionUpdate: 'tool_call', toolCallId, title: 'MCP: tool', kind: 'other', status: 'pending', rawInput: {} }));
+      agent().send('session/update', update({ sessionUpdate: 'tool_call_update', toolCallId, title: `ordewell: ${tool}`, rawInput: { providerIdentifier: 'ordewell', toolName: tool, args: {} } }));
+      agent().send('session/update', update({ sessionUpdate: 'tool_call_update', toolCallId, status: 'in_progress' }));
+    },
+    askOrdewellTool: askTool,
+    askWrite: () => ask('`touch a.txt`', 'execute', '`touch a.txt`'),
+    say: (text) => {
+      agent().send('session/update', update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } }));
+    },
+    killed: (n) => kit.processes[n]?.killed ?? false,
+    withServer: (start) => {
+      if (!start.mcp) return start;
+      const used = script.attach === 'connected';
+      return { ...start, mcp: { ...start.mcp, contact: { contacted: () => used, whenContacted: async () => used } } };
+    },
+  };
+}
+
 /** A fake for every built-in runner, by runner id. */
 export const FAKE_RUNNERS: Record<string, (script: FakeRunnerScript) => FakeRunner> = {
   'claude-code': claudeCode,
   codex,
   opencode: openCode,
+  'copilot-cli': copilotCli,
+  'qwen-code': qwenCode,
+  cline,
+  'gemini-cli': geminiCli,
+  'cursor-agent': cursorAgent,
 };

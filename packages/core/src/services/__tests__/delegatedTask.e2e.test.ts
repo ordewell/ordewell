@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { execFileSync, spawnSync } from 'child_process';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { createWorktreeIsolation } from '../GitWorktreeIsolation';
@@ -17,7 +17,7 @@ import type { IRunner } from '../../interfaces/IRunner';
 import type { IWorktreeIsolation } from '../../interfaces/IWorktreeIsolation';
 import type { PlannerToolHandler } from '../mcp';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
-import { fakeConfig, FakeRunnerSession } from '../../testing';
+import { fakeConfig, FakeRunnerSession, patient, removeDir } from '../../testing';
 import { saveSession } from '../../utils/sessionStore';
 import { openTaskLog } from '../../utils/taskLogStore';
 import { closeSessions, fakeFs, makeSession, scriptedPlanner, type PlannerTurn as Turn } from './sessionTestKit';
@@ -38,7 +38,7 @@ const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd,
 const roots: string[] = [];
 afterEach(async () => {
   await closeSessions();
-  while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  while (roots.length) await removeDir(roots.pop()!);
 });
 
 function repo(): string {
@@ -257,20 +257,22 @@ describe('a delegated task', () => {
 
     await parent.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('in_progress'));
-    await vi.waitFor(() => expect(held.runner.spawned).toContain('s'));
+    // The child's worktrees come first, which real git on a loaded Windows runner takes seconds over.
+    await vi.waitFor(() => expect(held.runner.spawned).toContain('s'), { timeout: 30_000 });
     // A sibling holds the one slot, the delegated task runs beside it and holds none, and its subplanner's turn waits in the queue.
     held.release('s');
     await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
     await vi.waitFor(() => expect(statusOf(parent, 'c')).toBe('completed'), { timeout: 20_000 });
     parent.destroy();
-  });
+  }, patient(90_000));
 
   it('starts while its parent\'s only slot is held by nothing else, its child\'s tasks taking it one at a time', async () => {
     const { parent } = tree([SUBMIT([childTask('a', 1), childTask('b', 2, ['a'])]), DONE], { parallel: 1 });
     await parent.execute({ command: 'run_plan' }, { kind: 'user' });
-    await vi.waitFor(() => expect(statusOf(parent, 'c')).toBe('completed'), { timeout: 20_000 });
+    // Two child tasks and a check, one after another, each on its own real worktree: a loaded Windows runner takes past twenty seconds.
+    await vi.waitFor(() => expect(statusOf(parent, 'c')).toBe('completed'), { timeout: 60_000 });
     parent.destroy();
-  });
+  }, patient(90_000));
 });
 
 describe('the verdict (ADR-0055 D6)', () => {
@@ -671,7 +673,7 @@ describe('two levels down (ADR-0056 M8, ADR-0055 D9, D14)', () => {
     expect(replies[0]).toContain('Not done yet');
     expect(parent.planTasks.find((t) => t.id === 'd')?.verdict?.reported).toBe('blocked');
     parent.destroy();
-  }, 60_000);
+  }, patient(60_000));
 
   it('repairs a child\'s delegated task in the mode its mandate gives, held to what its ancestors protect too', async () => {
     const held = heldTasks({ a: ['x.txt'], s: ['x.txt'] }, ['a', 's']);
@@ -711,7 +713,7 @@ describe('two levels down (ADR-0056 M8, ADR-0055 D9, D14)', () => {
     expect(repairs).toEqual([{ mode: resolveDefaultMode(new RunnerRegistry().get('claude-code')?.manifest.modes, false) }]);
     expect(heard[0]).toContain('conflicts');
     parent.destroy();
-  }, 60_000);
+  }, patient(60_000));
 
   it('wakes the subplanner on a conflict with no repair left: nobody below the root waits on a person', async () => {
     const held = heldTasks({ a: ['x.txt'], s: ['x.txt'] }, ['a', 's']);
@@ -732,7 +734,7 @@ describe('two levels down (ADR-0056 M8, ADR-0055 D9, D14)', () => {
     expect(heard[0]).toContain('conflicts');
     expect(parent.escalations().map((e) => e.kind)).not.toContain('checkpoint');
     parent.destroy();
-  }, 60_000);
+  }, patient(60_000));
 
   it('wakes its parent subplanner, which answers it, and nothing of it reaches the user', async () => {
     let asked: string[] = [];
@@ -757,7 +759,7 @@ describe('two levels down (ADR-0056 M8, ADR-0055 D9, D14)', () => {
     expect(seen.join()).not.toContain('Which file?');
     expect(planners.d.asked.join()).toContain('Which file?');
     parent.destroy();
-  }, 60_000);
+  }, patient(60_000));
 });
 
 describe('the merge hold (ADR-0055 D9)', () => {

@@ -9,6 +9,7 @@ import type { SessionRuntimeSettings } from '../createSession';
 import type { DiscoveredModel } from '../../models/Task';
 import type { SessionMessage } from '../SessionMessage';
 import { fakeConfig, makeSession } from './sessionTestKit';
+import { patient } from '../../testing';
 
 /**
  * The opt-in live check for the OpenCode planner's Ordewell tools (ADR-0022):
@@ -79,5 +80,5 @@ describe.runIf(live)('OpenCode planner tools — live', () => {
     expect(toolCalls).toEqual(expect.arrayContaining([expect.stringContaining('list_runners'), expect.stringContaining('submit_plan')]));
     expect(session.planTasks.map((t) => t.assignedRunner).sort()).toEqual(['claude-code', 'opencode']);
     expect([...(session.planState?.runners ?? [])].sort()).toEqual(['claude-code', 'opencode']);
-  }, 600_000);
+  }, patient(600_000));
 });

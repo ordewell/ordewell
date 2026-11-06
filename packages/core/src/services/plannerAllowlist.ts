@@ -85,6 +85,18 @@ function isScopePattern(entry: string): boolean {
   return /^(\/|~|https?:\/\/|web_search:|mcp__|mcp-server:|[A-Za-z]:[\\/])/.test(entry);
 }
 
+const backslashed = (scope: string): string => scope.replace(/\//g, '\\');
+
+/**
+ * A `!` scope. A Windows path is matched as Windows names a file, in any case
+ * and with either slash, or `!C:/Users/me/.ssh/*` never held against the
+ * `C:\Users\me\.ssh\*` the classifier scopes, and `c:\users\...` got past
+ * `!C:\Users\...`. Over-excluding costs only a prompt.
+ */
+function scopeExclusion(entry: string): RegExp {
+  return /^[A-Za-z]:[\\/]/.test(entry) ? globRegExp(backslashed(entry), 'i') : globRegExp(entry);
+}
+
 export function parseAllowlist(entries: readonly string[]): PlannerAllowlist {
   const list: PlannerAllowlist = { commands: [], commandExclusions: [], tools: [], toolExclusions: [], scopes: [], scopeExclusions: [] };
   for (const raw of entries) {
@@ -94,7 +106,8 @@ export function parseAllowlist(entries: readonly string[]): PlannerAllowlist {
     if (entry.startsWith('mcp:')) {
       (exclude ? list.toolExclusions : list.tools).push(globRegExp(entry.slice(4).trim(), 'i'));
     } else if (isScopePattern(entry)) {
-      (exclude ? list.scopeExclusions : list.scopes).push(globRegExp(entry));
+      if (exclude) list.scopeExclusions.push(scopeExclusion(entry));
+      else list.scopes.push(globRegExp(entry));
     } else {
       const [binary, ...words] = entry.split(/\s+/);
       (exclude ? list.commandExclusions : list.commands).push({ text: raw.trim(), binary, words: words.map(exclude ? exclusionWord : ruleWord) });
@@ -170,7 +183,7 @@ export function toolAllowed(list: PlannerAllowlist, tool: string): boolean {
 /** Whether an `!` entry excludes an approval scope. */
 export function scopeExcluded(list: PlannerAllowlist, scope: string): boolean {
   const origin = /^(?:curl|wget) (https?:\/\/\S+\/\*)$/.exec(scope)?.[1];
-  return list.scopeExclusions.some((re) => re.test(scope) || (origin !== undefined && re.test(origin)));
+  return list.scopeExclusions.some((re) => re.test(scope) || re.test(backslashed(scope)) || (origin !== undefined && re.test(origin)));
 }
 
 /** Whether an approval scope — a directory, an origin, a tool's full name — is pre-approved. */

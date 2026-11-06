@@ -3,7 +3,7 @@ import type { ChildProcess } from 'child_process';
 import type { DockerCall, DockerCli, DockerResult } from '../dockerCli';
 import { parseContainerSettings, type ContainerSettings } from '../containerSettings';
 import { DockerExecutionBackend } from '../dockerLease';
-import { reclaimContainers, reclaimTree, UNPIN_SCRIPT } from '../reclaim';
+import { reclaimContainers, reclaimTree, treePins, UNPIN_SCRIPT } from '../reclaim';
 import { FakeExecutionBackend } from '../../../testing';
 
 const settings = parseContainerSettings({ image: 'ordewell-task', login: { kind: 'own-sign-in' } }) as ContainerSettings;
@@ -22,9 +22,9 @@ class EngineHolding implements DockerCli {
   /** What a helper finds in a volume that holds no repository: one it made itself, by naming it. */
   hollow = false;
   failing: RegExp | null = null;
-  scripts: { args: readonly string[] }[] = [];
+  scripts: { args: readonly string[]; env?: Readonly<Record<string, string>> }[] = [];
 
-  async call(args: readonly string[], _opts?: DockerCall): Promise<DockerResult> {
+  async call(args: readonly string[], opts?: DockerCall): Promise<DockerResult> {
     const line = args.join(' ');
     this.calls.push(line);
     if (this.failing?.test(line)) return { code: 1, stdout: '', stderr: 'no such thing' };
@@ -35,7 +35,7 @@ class EngineHolding implements DockerCli {
     if (line.includes('name=ordewell-mirror-')) return said(this.mirrors);
     if (line.includes('name=ordewell-cache-')) return said(this.caches);
     if (args[0] === 'run') {
-      this.scripts.push({ args });
+      this.scripts.push({ args, env: opts?.env });
       if (this.hollow) return said(['hollow']);
       return said([...(this.held ? ['mine'] : []), ...(this.pinsLeft ? [`left ${this.pinsLeft}`] : [])]);
     }
@@ -98,6 +98,17 @@ describe('what a tree leaves in the engine goes with it (ADR-0059 L6)', () => {
     expect(args.join(' ')).toContain('--pids-limit 8192');
     expect(args).toContain('--init');
     expect(args.join(' ')).toContain('--memory 4g');
+  });
+
+  it('names the tree to the helper on its command line, and gives its value only to the CLI (ADR-0022 A5)', async () => {
+    const engine = new EngineHolding();
+
+    await reclaimTree('session-1', engine, settings, () => undefined);
+
+    const [{ args, env }] = engine.scripts;
+    expect(args[args.indexOf('ORDEWELL_TREE') - 1]).toBe('-e');
+    expect(env).toEqual({ ORDEWELL_TREE: treePins('session-1') });
+    expect(args.join(' ')).not.toContain(treePins('session-1'));
   });
 
   it('leaves a mirror another tree still pins, and the caches beside it: its clones lean on them', async () => {

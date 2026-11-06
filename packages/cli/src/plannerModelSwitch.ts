@@ -1,4 +1,4 @@
-import { CLI_PROVIDERS, getProviderMeta, isVendorModelFor, runnerForProvider } from '@ordewell/core';
+import { CLI_PROVIDERS, getProviderMeta, isPlannerBackend, isVendorModelFor, runnerForProvider } from '@ordewell/core';
 import type { PlannerModelRecall, SettingsUpdateResponse } from '@ordewell/core';
 
 /**
@@ -42,4 +42,31 @@ export function uninstalledPlannerRefusal(provider: string, installed: readonly 
   return agents.length > 0
     ? `${label} is not installed or not on PATH. Installed coding agents: ${agents.join(', ')}. Switch with ${pickPlanner}.`
     : `${label} is not installed or not on PATH, and no other coding agent is. Install one, or plan with an API provider through ${pickPlanner}.`;
+}
+
+/**
+ * Why a runner that can run tasks but cannot plan was not taken as a planner,
+ * or null for any id that is not such a runner. `runners` is the daemon's
+ * runner list: an ACP runner sits there beside the coding agents, so calling
+ * its id an unknown planner contradicts the list the user just read.
+ */
+export function taskOnlyRunnerRefusal(id: string, runners: readonly { id: string; name: string }[], pickPlanner: string): string | null {
+  if (getProviderMeta(id)) return null;
+  const runner = runners.find((r) => r.id === id);
+  if (!runner) return null;
+  return `${runner.name} runs tasks but cannot plan in Ordewell yet. The coding agents that plan are ${CLI_PROVIDERS.join(', ')}: switch with ${pickPlanner}.`;
+}
+
+/**
+ * What a planner switch must say when the shell's AI_PROVIDER names another
+ * planner, or null. The resolver reads AI_PROVIDER before the saved choice
+ * (BaseConfig.detectProvider), and `ordewell plan` forwards the shell's value on
+ * every run, so the planner just saved would not be what plans. `inherited` is
+ * AI_PROVIDER as the shell held it: a value `.env` supplied is the saved choice
+ * the switch has just replaced, and does not outlive it.
+ */
+export function plannerSwitchOverrideNotice(chosen: string, inherited: string | undefined): string | null {
+  if (!inherited || inherited === chosen || !isPlannerBackend(inherited)) return null;
+  const label = getProviderMeta(chosen)?.label ?? chosen;
+  return `Saved ${label} as your planner, but AI_PROVIDER=${inherited} in this environment takes precedence: unset it to plan with ${label}.`;
 }

@@ -136,7 +136,7 @@ describe('desktop-build.yml', () => {
     assert.ok(builds.indexOf('Ensure the Visual Studio Spectre') < builds.indexOf('npm run desktop:package'));
   });
 
-  it('hands the package step each signing secret and variable on its own OS, and only on the release path (ADR-0060 H9)', () => {
+  it('hands the package step each signing secret and variable on its own OS, and only on the release path (ADR-0063 H9)', () => {
     const step = builds.slice(builds.indexOf('- name: Package the desktop app'), builds.indexOf('- name: Verify the installers'));
     const passed = [...step.matchAll(/^ {10}(\w+): \$\{\{ (.+) \}\}$/gm)].map(([, name, expression]) => ({ name, expression }));
     const expected = [
@@ -153,7 +153,7 @@ describe('desktop-build.yml', () => {
     assert.doesNotMatch(build, /secrets: inherit/);
   });
 
-  it('fetches CodeSignTool for the eSigner route only on a Windows release with its secret, at a pinned checksum (ADR-0060 H9)', () => {
+  it('fetches CodeSignTool for the eSigner route only on a Windows release with its secret, at a pinned checksum (ADR-0063 H9)', () => {
     const download = builds.slice(builds.indexOf('- name: Download CodeSignTool'), builds.indexOf('- name: Package the desktop app'));
     assert.ok(download.length > 0 && builds.indexOf('- name: Download CodeSignTool') < builds.indexOf('npm run desktop:package'));
     assert.match(download, /if: inputs\.attach && runner\.os == 'Windows'\n/);
@@ -211,7 +211,7 @@ describe('the desktop job in release.yml', () => {
   });
 });
 
-describe('the package-manager jobs in release.yml (ADR-0060 H11)', () => {
+describe('the package-manager jobs in release.yml (ADR-0063 H11)', () => {
   const homebrew = job(release, 'homebrew');
   const winget = job(release, 'winget');
 

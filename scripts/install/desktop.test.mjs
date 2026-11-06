@@ -1,4 +1,4 @@
-// The one-line desktop installers and the release assets they read (ADR-0060
+// The one-line desktop installers and the release assets they read (ADR-0063
 // H10). desktop.sh runs for real against a fake release directory in a temp
 // HOME. The pieces that need another OS than this one's are stood in for by
 // shims on PATH (`uname`, `dpkg`, `sudo`), so the Linux flow is exercised on a

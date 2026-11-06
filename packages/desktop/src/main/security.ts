@@ -5,7 +5,7 @@ import { isInside } from './paths';
 import { APP_HOST, APP_SCHEME, developmentCsp, isAllowedRendererUrl, productionCsp } from '../shared/csp';
 
 /**
- * Everything ADR-0060 H4 asks of a renderer besides the bridge: one origin it
+ * Everything ADR-0063 H4 asks of a renderer besides the bridge: one origin it
  * loads from, a policy that lets nothing out, no navigation, no new windows,
  * no permissions. Applied to the default session and to every web contents
  * the app ever creates, so a window added later cannot forget it.

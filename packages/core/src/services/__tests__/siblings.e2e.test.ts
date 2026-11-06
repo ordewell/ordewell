@@ -3,7 +3,7 @@ import { mkdirSync, readdirSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import type { IRunner } from '../../interfaces/IRunner';
 import { createTask, type Task } from '../../models/Task';
-import { FakeRunnerSession } from '../../testing';
+import { FakeRunnerSession, patient } from '../../testing';
 import { loadChildSession } from '../../utils/sessionStore';
 import type { PlannerToolHandler } from '../mcp';
 import type { PlannerTurn as Turn } from './sessionTestKit';
@@ -118,6 +118,7 @@ describe('two siblings and a provided interface', () => {
     parent.destroy();
   });
 
+  // Three children on real git, which a Windows runner takes past the default to land.
   it('opens no turn for a line, and tells a sibling that declared nothing it touched nothing', async () => {
     const built = tree([], {
       parallel: 5,
@@ -140,7 +141,7 @@ describe('two siblings and a provided interface', () => {
     expect(lower.p.asked.join('\n')).not.toContain('Nobody hears this');
     expect(lower.o.asked.join('\n')).not.toContain('what you declared moved');
     parent.destroy();
-  });
+  }, patient(90_000));
 });
 
 describe('a contract of a child that failed (ADR-0057 R6)', () => {

@@ -190,14 +190,49 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
   `run_command`. The profile needs no native sandbox probe, so it
   stays available on hosts where Guarded is unavailable. Project config is
   untrusted, as for the planner. No model is replaced.
+- **An ACP runner** may run a read-only task only when its profile claims the
+  read-only role on evidence
+  ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md) R3):
+  the profile's spawn controls take the agent's own write, shell and web tools
+  away, and a recorded live run shows a write and a command refused with
+  nothing left behind. Those controls are arguments and variables for an
+  agent with a deny list. For an agent whose controls are a hook, a settings
+  file or a policy file they are also owner-only files in the process's
+  private directory, outside the worktree and holding no secret, and, where
+  the profile names them, empty config homes there, so the user's global
+  rules, hooks, plugins and skills do not load in the task; all of it goes with the process, and none of it is
+  allowed under a placement. `AcpAdapter` then refuses every edit, delete, move,
+  command and mode switch the agent still asks for, with nobody asked, and
+  fails a session that leaves the mode it settled in. A profile without the
+  role gives its manifest no read-only mode, so ModeResolver never assigns
+  one. GitHub Copilot CLI and Qwen Code claim it (each manifest's `plan`
+  mode, which for Qwen is its `default`, asking before every write and
+  command): each starts in a private directory of its own, so it runs none of
+  the repository's hooks (ADR-0028), and its every read of the worktree is a
+  request this ADR's rules answer. Cline claims it too (its `plan` mode), from
+  a private directory as well. It has no list to take its own tools away, so
+  it is started asking before each use, and its edits and commands are
+  refused. Each of its file reads names its file only in the model's
+  arguments, so it is judged by that one path, and a search of its own,
+  which names none, is refused. Gemini CLI claims it too (its `plan` mode,
+  which runs Gemini's `default` under a policy file Ordewell hands it,
+  denying Gemini's own write, shell and web tools and every MCP server's but
+  Ordewell's), from a private directory its own reads cannot leave, so it
+  reads the worktree through `run_command` alone. Cursor claims it (its
+  manifest's `plan` mode, which is Cursor's `agent` mode restricted, never
+  Cursor's own `plan`), from a private directory with a config home of its
+  own whose settings deny Cursor's reads, writes and shell; Cursor refuses
+  those itself, and it reads through `run_command`.
 - **Native web tools are refused.** A runner's own fetch and search run
   outside Ordewell's pinned transport, and a provider-side search outside its
   secret check and budget too, with nobody there to approve one. Claude's
   `WebFetch` and `WebSearch` are denied at the permission gate, OpenCode's
-  fetch and searches in its policy, and Codex's `web_search` is disabled; the
-  denial names Ordewell's `fetch` and `web_search` instead. A task may still
-  run an allowlisted network command through its task shell under the
-  existing command rules, until its first sealed run.
+  fetch and searches in its policy, Gemini CLI's `web_fetch` and
+  `google_web_search` in the policy file it is handed, and Codex's
+  `web_search` is disabled; the denial names Ordewell's `fetch` and
+  `web_search` instead. A task may still run an allowlisted network command
+  through its task shell under the existing command rules, until its first
+  sealed run.
 
 ### Its web reads
 
@@ -449,3 +484,11 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
 - 2026-10-31 — a task's commands before its first sealed run have a scratch directory apart from its sealed runs' (ADR-0036 S8).
 - 2026-11-01 — a script task and a delegated task may be read-only (ADR-0055 D1, D8).
 - 2026-11-01 — the task tool is `read` ([ADR-0057](../supervision/0057-information-moves-by-reference.md) R11).
+- 2026-11-04 — an ACP runner runs a read-only task only on its profile's evidence; GitHub Copilot CLI runs none (ADR-0060).
+- 2026-11-04 — GitHub Copilot CLI runs read-only tasks, from a private start directory (ADR-0060).
+- 2026-11-04 — Qwen Code runs read-only tasks, from a private start directory (ADR-0060).
+- 2026-11-04 — an ACP runner's restricted start may hand it owner-only files and empty config homes outside the worktree, for an agent with no deny flag (ADR-0060 R3).
+- 2026-11-04 — Cline runs read-only tasks, from a private start directory, asking before each of its own tools (ADR-0060 R3).
+- 2026-11-04 — Gemini CLI runs read-only tasks, from a private start directory, under a policy file that denies its own write, shell and web tools (ADR-0060 R3).
+- 2026-11-04 — Cursor runs read-only tasks, from a private start directory, its own reads, writes and shell denied (ADR-0060 R3).
+- 2026-11-05 — a read-only task's Cline reads by the one path its arguments name (ADR-0060 R3).

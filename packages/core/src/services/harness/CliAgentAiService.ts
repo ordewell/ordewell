@@ -23,18 +23,21 @@ import {
   buildConversationSystemPrompt,
   buildPlanWithResults,
   NATIVE_SHELL_GUIDE,
+  type ConversationVariant,
 } from '../PlanPrompts';
+import { resolveResearchShell } from '../researchShell';
 import { repairLoop, resubmitPlanPrompt } from '../PlanRepair';
 import { PlanChangeCheck, planChangeErrorText, requestScope } from '../PlanChangeCheck';
 import type { SkillLookup } from '../taskSkills';
 import { PLANNER_TURN_ENDED } from '../plannerTools';
 import { settleReply, type ReplyAttempt } from '../settleReply';
 import { ReplySplitter } from '../replyStream';
-import { redactSecrets } from '../../utils/redactSecrets';
+import { redactSourceText } from '../../utils/redactSecrets';
 import { abortScope } from '../../utils/abortScope';
 import { providerForRunner, runnerForProvider } from '../ProviderRegistry';
 import { recordRunnerAuth, signedOutFromFailure } from '../runnerAuth';
 import { describePlannerNotReady, TERMINAL_UI_COMMANDS, type PlannerNotReady } from '../plannerReadiness';
+import { describeSignIn } from '../signInHint';
 import { workspaceEnvOf } from '../workspaceEnv';
 import { augmentedPath, withPath } from '../../utils/shellPath';
 import { BUILTIN_MANIFESTS } from '../../plugins/builtin';
@@ -174,7 +177,10 @@ class PlannerSession {
    * failing a conversation nobody is sat in (ADR-0055 D17).
    */
   takingUp = false;
-  /** Set once the first spawn attached. */
+  /**
+   * Set once the first spawn attached, or, for a runner whose first turn is
+   * its attach check, before that turn spawns it (ADR-0060, R5).
+   */
   start: PlannerSessionStart | null = null;
   /**
    * What the runner's own session-wide search is decided against
@@ -207,6 +213,42 @@ class PlannerSession {
   discard(): void {
     this.discarding.abort();
     this.stop();
+  }
+}
+
+/** The turn a spawn is checked by, for a runner whose first turn is its attach check (ADR-0060, R5). */
+interface FirstTurn {
+  /** Send the turn to `adapter`, settling once it ended, however it ended. */
+  send(adapter: AgentAdapter): Promise<void>;
+  /** The turn's Stop: a check it stops is taken back, not respawned to be sent again. */
+  signal?: AbortSignal;
+}
+
+/**
+ * A planner turn sent as its runner's attach check (ADR-0060, R5). What it
+ * says is kept until the check passed and the turn listens, and never heard
+ * when the check failed: that turn goes with its process.
+ */
+class CheckTurn {
+  private readonly kept: AgentEvent[] = [];
+  private listener: ((event: AgentEvent) => void) | null = null;
+  private readonly sent: Promise<void>;
+  /** The check reads the turn's end, not its outcome, which only a passed check's listener is owed. */
+  readonly ended: Promise<void>;
+
+  constructor(readonly adapter: AgentAdapter, message: string, signal: AbortSignal | undefined, onActivity: () => void) {
+    this.sent = adapter.send(message, (event) => {
+      if (this.listener) this.listener(event);
+      else this.kept.push(event);
+    }, signal, onActivity);
+    this.ended = this.sent.then(() => undefined, () => undefined);
+  }
+
+  /** The turn, heard from its start. */
+  listen(listener: (event: AgentEvent) => void): Promise<void> {
+    this.listener = listener;
+    for (const event of this.kept.splice(0)) listener(event);
+    return this.sent;
   }
 }
 
@@ -267,6 +309,12 @@ export class CliAgentAiService implements IAiService {
   }
 
   hasActiveConversation(): boolean { return this.session?.start != null; }
+
+  /** On Windows, the shell `run_command` runs, which a coding agent there would take for PowerShell (ADR-0010). */
+  private researchShell(): ConversationVariant['researchShell'] {
+    if ((this.processDeps.platform ?? process.platform) !== 'win32') return undefined;
+    return resolveResearchShell().dialect === 'cmd' ? 'cmd' : 'git-bash';
+  }
 
   /**
    * False when the running agent process was spawned under a model/effort the
@@ -333,13 +381,14 @@ export class CliAgentAiService implements IAiService {
     session.notice = req.notice;
 
     const contextStr = await collectResearchContext(req.fs, req.runners);
+    const researchShell = this.researchShell();
     const systemPrompt = buildConversationSystemPrompt(
       req.goal,
       contextStr,
       req.modelsByRunner,
       req.runners,
       req.runnerModes,
-      { harness: true, runner: this.runner, isolatedExecution: req.isolatedExecution, skills: req.skills, execution: req.plannerTools !== undefined, autorun: req.autorun, delegation: req.delegation, subplanner: req.subplanner, ...(req.plannerTools.noSubagents ? { subagents: false } : {}) },
+      { harness: true, runner: this.runner, isolatedExecution: req.isolatedExecution, skills: req.skills, execution: req.plannerTools !== undefined, autorun: req.autorun, delegation: req.delegation, subplanner: req.subplanner, ...(req.plannerTools.noSubagents ? { subagents: false } : {}), ...(researchShell ? { researchShell } : {}) },
     );
 
     const fetcher = req.fetcher;
@@ -361,6 +410,21 @@ export class CliAgentAiService implements IAiService {
     if (req.resume && opensUnder(req.resume.session, this.runner, startOptions)) {
       const turn = await this.takeUp(session, start, req.resume, req);
       if (turn) return turn;
+    }
+    if (this.spawnsOnFirstTurn()) {
+      // Its first turn is the spawn's attach check (ADR-0060, R5), so the
+      // process starts with the opening message, not before it, and a first
+      // turn that throws is a start that failed: no conversation began.
+      session.start = start;
+      try {
+        const turn = await this.runConversation(session, this.openingMessage(req), req.onProgress, req.signal);
+        recordUnusable(session.adapter?.unusableProjectServers?.() ?? [], req.approval);
+        return turn;
+      } catch (err) {
+        if (this.session === session) this.session = null;
+        session.discard();
+        throw err;
+      }
     }
     try {
       const adapter = await this.startAdapter(startOptions, tools, session);
@@ -393,9 +457,11 @@ export class CliAgentAiService implements IAiService {
     session.sessionCost = cost ?? null;
     session.takingUp = true;
     try {
-      const adapter = await this.startAdapter({ ...start.startOptions, resumeSessionId: sessionId, resumeCost: cost }, start.tools, session);
-      recordUnusable(adapter.unusableProjectServers?.() ?? [], req.approval);
-      const named = adapter.nativeSessionId();
+      // A runner whose first turn is its attach check is resumed by that turn,
+      // from `nativeSessionId`, as any respawn is (ADR-0060, R5).
+      const adapter = this.spawnsOnFirstTurn() ? null : await this.startAdapter({ ...start.startOptions, resumeSessionId: sessionId, resumeCost: cost }, start.tools, session);
+      recordUnusable(adapter?.unusableProjectServers?.() ?? [], req.approval);
+      const named = adapter?.nativeSessionId();
       // Codex and OpenCode may answer a missing session with a new one, which heard none of what `since` leaves out.
       if (!named || named === sessionId) {
         const turn = await this.runConversation(session, this.openingMessage({ ...req, priorHistory: resume.since }), req.onProgress, req.signal);
@@ -544,7 +610,27 @@ export class CliAgentAiService implements IAiService {
     onProgress: (progress: ResearchProgress) => void,
     signal?: AbortSignal,
   ): Promise<HarnessTurn> {
-    const adapter = await this.ensureAdapter(session);
+    const checks: CheckTurn[] = [];
+    const firstTurn: FirstTurn | undefined = this.spawnsOnFirstTurn()
+      ? {
+        send: (candidate) => {
+          const check = new CheckTurn(candidate, message, signal, () => onProgress({ type: 'liveness' }));
+          checks.push(check);
+          return check.ended;
+        },
+        signal,
+      }
+      : undefined;
+    let adapter: AgentAdapter;
+    try {
+      adapter = await this.ensureAdapter(session, firstTurn);
+    } catch (err) {
+      // Stopped while its turn was the attach check: nothing of it was heard,
+      // and it ends as any stopped turn does, not as a failed start.
+      if (!firstTurn || !signal?.aborted) throw err;
+      session.stop();
+      return { text: '', runs: [], researchLog: [], aborted: true, backgroundAgents: 0 };
+    }
     // `at` is when the model announced the call, and `slot` is where that call
     // stands in the log: a reloaded transcript places each row where the live
     // view drew it, however the results come back.
@@ -579,7 +665,7 @@ export class CliAgentAiService implements IAiService {
       // provider half of the leak is already outside our reach — but the copy
       // this step persists into the session file is ours, and it must not hold
       // credentials in plaintext.
-      const output = redactSecrets(rawOutput);
+      const output = redactSourceText(rawOutput);
       const call = pendingCalls.get(id);
       pendingCalls.delete(id);
       const subagentId = call?.subagentId ?? reportedBy;
@@ -602,7 +688,7 @@ export class CliAgentAiService implements IAiService {
       onProgress({ type: 'tool_result', toolResult: output, step, toolCallId: id, subagentId });
     };
 
-    const sent = adapter.send(message, (event: AgentEvent) => {
+    const onEvent = (event: AgentEvent) => {
       switch (event.type) {
         case 'assistant_text_delta':
           reply.delta(event.runId, event.text);
@@ -721,7 +807,10 @@ export class CliAgentAiService implements IAiService {
         case 'turn_end':
           return;
       }
-    }, signal, () => onProgress({ type: 'liveness' }));
+    };
+    // A turn that was the attach check is already running: this listens to it from its start.
+    const check = checks.find((candidate) => candidate.adapter === adapter);
+    const sent = check ? check.listen(onEvent) : adapter.send(message, onEvent, signal, () => onProgress({ type: 'liveness' }));
     try {
       await sent;
     } catch (err) {
@@ -759,7 +848,7 @@ export class CliAgentAiService implements IAiService {
   /**
    * A turn that failed because the runner's own account is signed out is
    * recorded for the synchronous planner gate, and the failure opens with the
-   * same two ways back in the gate would give (ADR-0009). Only a phrase the
+   * same ways back in the gate would give (ADR-0009, ADR-0052). Only a phrase the
    * runner's manifest declares; any other failure is returned untouched.
    *
    * Judged with the workspace's own environment, the same merged env the
@@ -786,10 +875,12 @@ export class CliAgentAiService implements IAiService {
       provider: providerForRunner(this.runner) ?? this.config.aiProvider,
       label: manifest.displayName,
       runner: this.runner,
-      loginCommand: auth.loginCommand,
+      signIn: auth.signIn,
     };
     const guidance = describePlannerNotReady(reason, TERMINAL_UI_COMMANDS);
-    return failure.startsWith(guidance) ? failure : `${guidance}\n\n${failure}`;
+    // An ACP agent's refusal is already the hint (AcpAdapter); saying it twice reads as two problems.
+    if (failure.includes(describeSignIn(auth.signIn, TERMINAL_UI_COMMANDS))) return failure;
+    return `${guidance}\n\n${failure}`;
   }
 
   // --- Process lifecycle ---
@@ -801,7 +892,7 @@ export class CliAgentAiService implements IAiService {
    * reach its tools cannot submit a plan, so it is respawned once and never
    * left to plan without them (ADR-0025).
    */
-  private async startAdapter(opts: PlannerStartOptions, tools: PlannerToolsOffer, session: PlannerSession): Promise<AgentAdapter> {
+  private async startAdapter(opts: PlannerStartOptions, tools: PlannerToolsOffer, session: PlannerSession, firstTurn?: FirstTurn): Promise<AgentAdapter> {
     const server = this.mcpServer;
     // Where a task makes its workspace, a planner opens its lease: a process goes no further than that lets it (ADR-0059 L1).
     const opened = await this.openLease?.(session.discarded);
@@ -839,7 +930,8 @@ export class CliAgentAiService implements IAiService {
         });
       },
       startupExit: () => startupExit,
-      cancelled: session.discarded,
+      cancelled: firstTurn?.signal ? AbortSignal.any([session.discarded, firstTurn.signal]) : session.discarded,
+      ...(firstTurn ? { firstTurn: (adapter: AgentAdapter) => firstTurn.send(adapter) } : {}),
       failed: (first, second) => `Could not start the ${this.runner} planner with Ordewell's tools. First spawn: ${first}. Respawn: ${second}.`,
     });
     if (!spawned) throw new Error(`The ${this.runner} planner session ended before its agent started.`);
@@ -852,6 +944,9 @@ export class CliAgentAiService implements IAiService {
     session.nativeShellVersion = spawned.adapter.version?.() ?? session.nativeShellVersion;
     return spawned.adapter;
   }
+
+  /** Whether the runner uses its token only once a prompt runs, so its first turn spawns it as the attach check (ADR-0060, R5). */
+  private spawnsOnFirstTurn(): boolean { return connectorFor(this.runner)?.attachesOnFirstTurn === true; }
 
   private newAdapter(): AgentAdapter {
     const adapter = this.makeAdapter(this.runner, this.processDeps);
@@ -927,7 +1022,7 @@ export class CliAgentAiService implements IAiService {
    * respawned with a fresh token, resuming the conversation, so the turn is
    * never sent to tools that are gone.
    */
-  private async ensureAdapter(session: PlannerSession): Promise<AgentAdapter> {
+  private async ensureAdapter(session: PlannerSession, firstTurn?: FirstTurn): Promise<AgentAdapter> {
     const live = session.adapter;
     if (live && !live.exited && session.nativeSearch === this.nativeSearch(session) && session.nativeShell === this.nativeShellOffered(session)) {
       // A Stop during the check takes the process back; it must not be handed
@@ -939,7 +1034,7 @@ export class CliAgentAiService implements IAiService {
     if (!start) throw new Error('No active planner conversation.');
     const resumeSessionId = session.nativeSessionId ?? undefined;
     try {
-      const adapter = await this.startAdapter({ ...start.startOptions, resumeSessionId, resumeCost: session.sessionCost ?? undefined }, start.tools, session);
+      const adapter = await this.startAdapter({ ...start.startOptions, resumeSessionId, resumeCost: session.sessionCost ?? undefined }, start.tools, session, firstTurn);
       const resumed = adapter.nativeSessionId();
       // Codex and OpenCode may accept a missing resume by starting fresh. That
       // context has no transcript: let the conversation reopen it as after a
@@ -1046,6 +1141,9 @@ export class CliAgentAiService implements IAiService {
     };
     const tools: PlannerToolsOffer = {
       sessionId: uuidv4(),
+      // No session here runs a command, so the planner is not offered one: it
+      // reads with its harness's own tools, and Codex keeps its shell for it.
+      withheld: ['run_command'],
       handler: {
         listRunners: async () => ({ text: JSON.stringify({ runners: catalog.runners.map((id) => ({ id, readOnly: readOnlyMode(catalog.runnerModes?.[id]) !== undefined })) }) }),
         listModels: async ({ runner }) => ({ text: JSON.stringify({ runner, models: catalog.modelsByRunner?.[runner] ?? [] }) }),
@@ -1080,7 +1178,8 @@ export class CliAgentAiService implements IAiService {
     // two sessions that never shared a goal.
     const session = new PlannerSession(this.mcpServer);
     try {
-      await this.startAdapter(startOptions, tools, session);
+      // A runner whose first turn is its attach check is spawned by that turn (ADR-0060, R5).
+      if (!this.spawnsOnFirstTurn()) await this.startAdapter(startOptions, tools, session);
       session.start = { startOptions, tools };
       const splitter = new ReplySplitter();
       const { turn, researchLog } = await this.runTurnAwaitingAgents(

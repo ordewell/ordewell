@@ -25,7 +25,7 @@ function skill(name: string, appliesTo: SkillInfo['appliesTo'] = 'task'): SkillI
 const CATALOG = new Map([['tdd', skill('tdd')], ['grilling', skill('grilling', 'planner')]]);
 
 /** A workspace skill written in the main checkout's `api` repo and never committed: no worktree has it. */
-const UNCOMMITTED: SkillInfo = { ...skill('deploy-checklist'), source: 'workspace', path: '/repo/api/.ordewell/skills/deploy-checklist/SKILL.md' };
+const UNCOMMITTED: SkillInfo = { ...skill('deploy-checklist'), source: 'workspace', path: path.join('/repo', 'api', '.ordewell', 'skills', 'deploy-checklist', 'SKILL.md') };
 
 /**
  * What differs between a change, an ops, a repair and a continued attempt, as
@@ -65,7 +65,7 @@ function setup(opts: { isolation?: FakeWorktreeIsolation; config?: Partial<IConf
     skillsAt: (roots) => {
       skillRoots.push(roots);
       const findSkill = (name: string) => CATALOG.get(name)
-        ?? (name === UNCOMMITTED.name && roots.some((root) => UNCOMMITTED.path === `${root}/.ordewell/skills/${name}/SKILL.md`) ? UNCOMMITTED : undefined);
+        ?? (name === UNCOMMITTED.name && roots.some((root) => UNCOMMITTED.path === path.join(root, '.ordewell', 'skills', name, 'SKILL.md')) ? UNCOMMITTED : undefined);
       return { findSkill, searchedDirs: () => ['/g', ...roots.map((root) => `${root}/.ordewell/skills`)] };
     },
   });
@@ -238,7 +238,7 @@ describe('attempt kinds, as the orchestrator runs them', () => {
       await env.orchestrator.approveReview();
 
       const { cwd } = env.spawned('c1')[0];
-      expect(env.skillRoots).toContainEqual(['/repo', `${cwd}/api`, `${cwd}/web`]);
+      expect(env.skillRoots).toContainEqual(['/repo', path.join(cwd, 'api'), path.join(cwd, 'web')]);
       expect(env.spawned('c1')[0].prompt).toContain('### Skill: tdd');
     });
 
@@ -270,7 +270,8 @@ describe('attempt kinds, as the orchestrator runs them', () => {
 
       await vi.waitFor(() => expect(env.status('c1')).toBe('failed'));
       const reason = env.orchestrator.storeInstance.get('c1')!.outputSummary!.reviewReason;
-      expect(reason).toContain('/repo/.ordewell/skills or /fake-worktrees/run1/1-c1/api/.ordewell/skills or /fake-worktrees/run1/1-c1/web/.ordewell/skills');
+      const repo = (name: string) => `${path.join('/fake-worktrees/run1/1-c1', name)}/.ordewell/skills`;
+      expect(reason).toContain(`/repo/.ordewell/skills or ${repo('api')} or ${repo('web')}`);
       expect(reason).toContain('commit api/.ordewell/skills/deploy-checklist so task worktrees receive it');
     });
 

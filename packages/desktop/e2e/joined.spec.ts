@@ -1,6 +1,6 @@
 /**
  * Joining a session another Ordewell daemon holds, end to end and offline
- * (ADR-0060 H8, design.md W16).
+ * (ADR-0063 H8, design.md W16).
  *
  * A second daemon, started as a TUI starts its private one (`--watch-parent`),
  * plans a goal and so holds the session's lease. The app, on its own daemon,
@@ -108,6 +108,7 @@ test.beforeAll(async () => {
     '--watch-parent', String(process.pid),
   ], { env: appEnv(sandbox, holderPort, started.port), cwd: sandbox.tmp, stdio: 'ignore' });
   if (!await untilListening(holderPort, true)) throw new Error(`the holder never listened on ${holderPort}`);
+  await expect.poll(() => fs.existsSync(path.join(box().home, '.ordewell', `server-${holderPort}.token`))).toBe(true);
   await daemonCall(holderPort, 'POST', `/api/plans/${SESSION}/converse/start?workspace=${encodeURIComponent(sandbox.repo)}`, {
     goal: GOAL,
     workspace: sandbox.repo,

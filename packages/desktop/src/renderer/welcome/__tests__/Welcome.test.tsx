@@ -1,7 +1,9 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DaemonCallResult, DaemonStatus, OrdewellBridge, RecentWorkspace } from '../../../shared/bridge';
+import type { DaemonCallResult, DaemonStatus, OrdewellBridge, RecentWorkspace, TerminalEvent, TerminalOpenResult, TerminalOpenSpec } from '../../../shared/bridge';
 import { Welcome } from '../../Welcome';
+
+vi.mock('../../views/terminal/xterm', async () => (await import('../../test/xtermMock')).fakeXtermModule());
 
 type Route = (params?: Record<string, string>) => Promise<DaemonCallResult>;
 
@@ -23,6 +25,13 @@ interface Bridge {
   app: Record<string, ReturnType<typeof vi.fn>>;
   daemon: Record<string, ReturnType<typeof vi.fn>>;
   shell: Record<string, ReturnType<typeof vi.fn>>;
+  terminal: {
+    open: ReturnType<typeof vi.fn>;
+    write: ReturnType<typeof vi.fn>;
+    resize: ReturnType<typeof vi.fn>;
+    close: ReturnType<typeof vi.fn>;
+    openLink: ReturnType<typeof vi.fn>;
+  };
 }
 
 /**
@@ -35,6 +44,17 @@ function installBridge({ recents = [], routes = {}, platform = 'darwin' }: {
   platform?: string;
 } = {}): Bridge {
   let stored = recents;
+  const terminal: Bridge['terminal'] = {
+    open: vi.fn(async (spec: TerminalOpenSpec, onEvent: (event: TerminalEvent) => void): Promise<TerminalOpenResult> => {
+      void spec;
+      void onEvent;
+      return { ok: true, id: 7, cwd: '/home/me', shell: 'codex' };
+    }),
+    write: vi.fn(async () => undefined),
+    resize: vi.fn(async () => undefined),
+    close: vi.fn(async () => undefined),
+    openLink: vi.fn(async () => ({ ok: true })),
+  };
   const bridge: Bridge = {
     app: {
       info: vi.fn(() => Promise.resolve({ version: '0.4.0', contract: 3, platform, theme: 'dark' })),
@@ -59,6 +79,7 @@ function installBridge({ recents = [], routes = {}, platform = 'darwin' }: {
       start: vi.fn(() => Promise.resolve({ ok: true })),
     },
     shell: { openExternal: vi.fn(() => Promise.resolve()) },
+    terminal,
   };
   Object.defineProperty(window, 'ordewell', { value: bridge as unknown as OrdewellBridge, configurable: true, writable: true });
   return bridge;
@@ -67,7 +88,23 @@ function installBridge({ recents = [], routes = {}, platform = 'darwin' }: {
 const RUNNERS = {
   runners: [
     { id: 'claude-code', enabled: true, version: '1.4.2', auth: { state: 'signed-in' } },
-    { id: 'codex', enabled: true, auth: { state: 'signed-out', loginCommand: ['codex', 'login'] } },
+    {
+      id: 'codex', enabled: true,
+      auth: {
+        state: 'signed-out', loginCommand: ['codex', 'login'],
+        signIn: { runner: 'codex', label: 'Codex', login: ['codex', 'login'] },
+      },
+    },
+  ],
+};
+
+const KEYED_RUNNERS = {
+  runners: [
+    ...RUNNERS.runners,
+    {
+      id: 'gemini-cli', enabled: true,
+      auth: { state: 'signed-out', signIn: { runner: 'gemini-cli', label: 'Gemini CLI', key: { provider: 'google', label: 'Google Gemini' } } },
+    },
   ],
 };
 
@@ -289,6 +326,36 @@ describe('Welcome: runners', () => {
     expect(opencode).toHaveTextContent('Install OpenCode, then Retry.');
   });
 
+  it('words a signed-out agent as core does and offers its own Log in', async () => {
+    installBridge({ routes: { 'runners.list': () => ok(RUNNERS) } });
+    render(<Welcome status={CONNECTED} />);
+    const codex = (await screen.findByText('Signed out')).closest('li') as HTMLElement;
+    expect(codex).toHaveTextContent('Sign in with /login codex, or run codex login.');
+    expect(within(codex).getByRole('button', { name: 'Log in' })).toBeInTheDocument();
+  });
+
+  it('opens the key entry for an agent whose way in is a key', async () => {
+    installBridge({ routes: { 'runners.list': () => ok(KEYED_RUNNERS) } });
+    render(<Welcome status={CONNECTED} />);
+    const gemini = (await screen.findByText('Run /key and choose Google Gemini to hand it a key.')).closest('li') as HTMLElement;
+    expect(gemini).toHaveTextContent('Gemini CLI');
+    fireEvent.click(within(gemini).getByRole('button', { name: 'Set API key…' }));
+    expect(await screen.findByRole('dialog', { name: 'API key for Google Gemini' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('lists every runner core ships when none is installed, each with its install page', async () => {
+    installBridge({ routes: { 'runners.list': () => ok({ runners: [] }) } });
+    render(<Welcome status={CONNECTED} />);
+    const runners = section('Runners');
+    await waitFor(() => expect(runners.querySelectorAll('[data-runner]')).toHaveLength(8));
+    for (const name of ['Claude Code', 'Codex', 'OpenCode', 'GitHub Copilot CLI', 'Qwen Code', 'Cline', 'Gemini CLI', 'Cursor']) {
+      expect(within(runners).getByTitle(name)).toBeInTheDocument();
+    }
+    expect(within(runners).getAllByRole('button', { name: 'Docs' })).toHaveLength(8);
+  });
+
   it('shows skeleton runners until the daemon connects', () => {
     const bridge = installBridge({ routes: { 'runners.list': () => ok(RUNNERS) } });
     render(<Welcome status={{ state: 'connecting', port: 7878 }} />);
@@ -340,4 +407,4 @@ describe('Welcome: runners', () => {
   });
 });
 
-const KNOWN_OFF = ['claude-code', 'codex', 'opencode'].map((id) => ({ id, enabled: false }));
+const KNOWN_OFF = ['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent'].map((id) => ({ id, enabled: false }));

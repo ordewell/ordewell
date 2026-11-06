@@ -1,4 +1,4 @@
-// The cask and winget manifests the release renders (ADR-0060 H11), on fixed
+// The cask and winget manifests the release renders (ADR-0063 H11), on fixed
 // inputs: the templates are the ones the workflow uses, so a placeholder that
 // moved or a URL that stopped matching the release's names fails here.
 import assert from 'node:assert/strict';

@@ -9,7 +9,7 @@ note: "The write half of the desktop app's file and git views (docs/desktop/desi
 ## Problem
 
 The desktop app
-([ADR-0060](../surfaces/0060-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md))
+([ADR-0063](../surfaces/0063-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md))
 lets a person edit files in their checkout and run everyday git on it: stage,
 commit, discard, branch, stash, and fetch, pull and push. They do this while
 Ordewell runs a plan in the same repositories. Until now Ordewell has not
@@ -127,7 +127,7 @@ start stays the existing escalation (G9). Editing is confined to the checkout
   any other escalation and adds no action of its own.
 - **Editing only in the checkout (G10).** A file is saved only in the user's
   checkout, under the read rules of
-  [ADR-0061](../surfaces/0061-a-host-reads-files-and-git-for-the-user-confined-to-the-workspace.md)
+  [ADR-0064](../surfaces/0064-a-host-reads-files-and-git-for-the-user-confined-to-the-workspace.md)
   (R3), and only with the hash of the content it was read at. A file that has
   changed on disk since is refused as `stale`, and the surface offers to compare
   or reload. Worktrees and integration branches are view-only. *Open in editor*
@@ -145,7 +145,7 @@ start stays the existing escalation (G9). Editing is confined to the checkout
 ## The routes
 
 Every route takes `workspace` and `repo`, and answers the repository's new
-state (ADR-0061's `GET /api/git/repos` row for it).
+state (ADR-0064's `GET /api/git/repos` row for it).
 
 | Method and path | Body | Confirm |
 |---|---|---|

@@ -101,7 +101,7 @@ describe('GET /api/sessions/:id', () => {
     expect(pool.plannerCompaction).toHaveBeenCalledWith('s1');
   });
 
-  // A client that joined the session at its holder (ADR-0060 H8) reads it
+  // A client that joined the session at its holder (ADR-0063 H8) reads it
   // here, never by loading it again, which could restart a first turn.
   it('names the planner turn the live session is running', async () => {
     const pool = fakePool({ getPlanState: vi.fn().mockReturnValue(savedPlan), plannerTurnId: vi.fn().mockReturnValue('turn-7') } as Partial<OrchestratorPool>);

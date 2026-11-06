@@ -4,7 +4,7 @@ import { parseSessions } from '../../sessions';
 
 /**
  * Which view scope each repository of the workspace is looking at (design:
- * Scope model, ADR-0061 R2), and what the open session offers to switch to.
+ * Scope model, ADR-0064 R2), and what the open session offers to switch to.
  * The Explorer, its file tabs and the title bar's switcher read this one place,
  * so a switch in the title bar moves them all and a later slice's terminal
  * follows it too.
@@ -170,7 +170,7 @@ export class ScopeStore {
   }
 
   /**
-   * A scope that is gone never silently becomes another one (ADR-0061 R2), so
+   * A scope that is gone never silently becomes another one (ADR-0064 R2), so
    * the repo goes back to the checkout and the reason stays on screen.
    */
   fallBack(repo: string, reason: string): void {

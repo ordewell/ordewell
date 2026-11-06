@@ -121,7 +121,7 @@ export interface OpenTabOptions {
  * views and opens tabs through this alone, so it never edits the frame's files.
  */
 export interface FrameApi {
-  /** The workspace this window shows (ADR-0060 H6). */
+  /** The workspace this window shows (ADR-0063 H6). */
   readonly workspace: string;
   readonly platform: string;
   /** Whether the daemon is away (setReadOnly): no command of a session's can act until it is back (W15). */
@@ -138,6 +138,8 @@ export interface FrameApi {
   showActivity(activity: ActivityId): void;
   /** Dock the plan panel, or open it as a drawer where the window is too narrow to dock it. */
   showPlan(): void;
+  /** Open the terminal panel where it is hidden, so a terminal opened there (a login, one of its own) is seen. */
+  showTerminal(): void;
   /** The session now open: its own task and diff tabs come back, and the last one's are put away until it is open again. */
   showSession(sessionId: string): void;
   runCommand(id: string): void;

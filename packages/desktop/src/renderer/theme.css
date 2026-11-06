@@ -88,6 +88,16 @@
     --ow-runner-codex-tint: #edeff1;
     --ow-runner-opencode: #56670f;
     --ow-runner-opencode-tint: #eef0e7;
+    --ow-runner-copilot-cli: #8f2fa6;
+    --ow-runner-copilot-cli-tint: #f4eaf6;
+    --ow-runner-qwen-code: #096d5d;
+    --ow-runner-qwen-code-tint: #e6f0ef;
+    --ow-runner-cline: #b0276a;
+    --ow-runner-cline-tint: #f7e9f0;
+    --ow-runner-gemini-cli: #0b6a85;
+    --ow-runner-gemini-cli-tint: #e7f0f3;
+    --ow-runner-cursor-agent: #6b5a35;
+    --ow-runner-cursor-agent-tint: #f0efeb;
 
     --ow-diff-inserted: #e6f4ea;
     --ow-diff-removed: #fbe9e8;
@@ -179,6 +189,16 @@
     --ow-runner-codex-tint: #30353b;
     --ow-runner-opencode: #bcd05e;
     --ow-runner-opencode-tint: #32382b;
+    --ow-runner-copilot-cli: #d68be3;
+    --ow-runner-copilot-cli-tint: #362e3e;
+    --ow-runner-qwen-code: #6fd6c4;
+    --ow-runner-qwen-code-tint: #28393a;
+    --ow-runner-cline: #f08ab8;
+    --ow-runner-cline-tint: #3a2e38;
+    --ow-runner-gemini-cli: #6fd0e6;
+    --ow-runner-gemini-cli-tint: #28383e;
+    --ow-runner-cursor-agent: #d4c3a0;
+    --ow-runner-cursor-agent-tint: #363635;
 
     --ow-diff-inserted: #16301f;
     --ow-diff-removed: #3a1b1a;

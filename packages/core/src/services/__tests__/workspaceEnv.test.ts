@@ -1,11 +1,14 @@
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { delimiter, join, resolve } from 'node:path';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { parseEnvFile, resolveWorkspaceEnv, workspaceEnvOf, type WorkspaceEnvDeps } from '../workspaceEnv';
 
-const ROOT = '/work/app';
-const WORKTREE = '/work/app/.ordewell/worktrees/run1/1-task';
+// The product resolves and joins paths natively, so on Windows `/work/app` is
+// on the current drive and every path below it is spelled with backslashes.
+const ROOT = resolve('/work/app');
+const WORKTREE = join(ROOT, '.ordewell', 'worktrees', 'run1', '1-task');
+const ENV_FILE = join(ROOT, '.ordewell', 'env');
 
 function deps(over: {
   direnv?: { code?: number; stdout?: string; stderr?: string } | 'missing';
@@ -19,7 +22,7 @@ function deps(over: {
       if (over.direnv === 'missing') throw new Error('spawn direnv ENOENT');
       return { code: 0, stdout: '', stderr: '', ...over.direnv };
     }
-    const tracked = (over.tracked ?? []).includes(`${opts.cwd}/${args[2]}`);
+    const tracked = (over.tracked ?? []).includes(join(opts.cwd, args[2]));
     return { code: tracked ? 0 : 1, stdout: '', stderr: '' };
   });
   return {
@@ -55,7 +58,7 @@ describe('resolveWorkspaceEnv', () => {
   it("finds the workspace's .ordewell/env from a task worktree below it, over direnv's values", async () => {
     const result = await resolveWorkspaceEnv(WORKTREE, deps({
       direnv: { stdout: JSON.stringify({ CLAUDE_CONFIG_DIR: '/from/direnv', OTHER: 'kept' }) },
-      files: { '/work/app/.ordewell/env': 'export CLAUDE_CONFIG_DIR="$HOME/.claude-work"\n# a comment\nTOKEN=\'lit$eral\'\nNOTE=hi # trailing\n' },
+      files: { [ENV_FILE]: 'export CLAUDE_CONFIG_DIR="$HOME/.claude-work"\n# a comment\nTOKEN=\'lit$eral\'\nNOTE=hi # trailing\n' },
     }));
 
     expect(result.env).toEqual({ CLAUDE_CONFIG_DIR: '/home/me/.claude-work', OTHER: 'kept', TOKEN: 'lit$eral', NOTE: 'hi' });
@@ -64,17 +67,17 @@ describe('resolveWorkspaceEnv', () => {
   it('ignores an .ordewell/env that git tracks: a cloned repository must not choose it', async () => {
     const result = await resolveWorkspaceEnv(ROOT, deps({
       direnv: 'missing',
-      files: { '/work/app/.ordewell/env': 'CLAUDE_CONFIG_DIR=/attacker' },
-      tracked: ['/work/app/.ordewell/env'],
+      files: { [ENV_FILE]: 'CLAUDE_CONFIG_DIR=/attacker' },
+      tracked: [ENV_FILE],
     }));
 
-    expect(result).toMatchObject({ env: {}, trackedEnvFile: '/work/app/.ordewell/env' });
+    expect(result).toMatchObject({ env: {}, trackedEnvFile: ENV_FILE });
   });
 
   it('never passes loader, executable-path or Ordewell-settings variables on', async () => {
     const result = await resolveWorkspaceEnv(ROOT, deps({
       direnv: 'missing',
-      files: { '/work/app/.ordewell/env': 'NODE_OPTIONS=--require /x.js\nLD_PRELOAD=/x.so\nPATH=/evil\nORDEWELL_SETTINGS_PATH=/x\nSAFE=1\n' },
+      files: { [ENV_FILE]: 'NODE_OPTIONS=--require /x.js\nLD_PRELOAD=/x.so\nPATH=/evil\nORDEWELL_SETTINGS_PATH=/x\nSAFE=1\n' },
     }));
 
     expect(result.env).toEqual({ SAFE: '1' });
@@ -84,7 +87,7 @@ describe('resolveWorkspaceEnv', () => {
   it('never takes the effect allowlist from a workspace env file or .envrc: it pre-approves effects, and is the user\'s alone (ADR-0035)', async () => {
     const result = await resolveWorkspaceEnv(ROOT, deps({
       direnv: { stdout: '{"ORDEWELL_EFFECT_ALLOW":"git push *"}' },
-      files: { '/work/app/.ordewell/env': 'ORDEWELL_EFFECT_ALLOW=gh pr merge *\nSAFE=1\n' },
+      files: { [ENV_FILE]: 'ORDEWELL_EFFECT_ALLOW=gh pr merge *\nSAFE=1\n' },
     }));
 
     expect(result.env).toEqual({ SAFE: '1' });
@@ -94,7 +97,7 @@ describe('resolveWorkspaceEnv', () => {
   it('never takes the notify command from a workspace env file or .envrc: a repository would be running a command on the user\'s machine (ADR-0053)', async () => {
     const result = await resolveWorkspaceEnv(ROOT, deps({
       direnv: { stdout: '{"ORDEWELL_NOTIFY_COMMAND":"[\\"curl\\",\\"https://evil.example\\"]"}' },
-      files: { '/work/app/.ordewell/env': 'ORDEWELL_NOTIFY_COMMAND=["sh","-c","evil"]\nSAFE=1\n' },
+      files: { [ENV_FILE]: 'ORDEWELL_NOTIFY_COMMAND=["sh","-c","evil"]\nSAFE=1\n' },
     }));
 
     expect(result.env).toEqual({ SAFE: '1' });
@@ -104,7 +107,7 @@ describe('resolveWorkspaceEnv', () => {
   it('never takes the native-shell opt-in from a workspace env file or .envrc: a repository cannot widen its planner (ADR-0036 N1)', async () => {
     const result = await resolveWorkspaceEnv(ROOT, deps({
       direnv: { stdout: '{"ORDEWELL_PLANNER_NATIVE_SHELL":"1"}' },
-      files: { '/work/app/.ordewell/env': 'ORDEWELL_PLANNER_NATIVE_SHELL=true\nSAFE=1\n' },
+      files: { [ENV_FILE]: 'ORDEWELL_PLANNER_NATIVE_SHELL=true\nSAFE=1\n' },
     }));
 
     expect(result.env).toEqual({ SAFE: '1' });
@@ -123,9 +126,9 @@ describe('resolveWorkspaceEnv', () => {
 it('asks direnv in the matching directory of the checkout, for a task in a multi-repo worktree', async () => {
   const d = deps({ direnv: { stdout: '{}' } });
 
-  await resolveWorkspaceEnv('/work/app/.ordewell/worktrees/run1/2-task/api/src', d);
+  await resolveWorkspaceEnv(join(ROOT, '.ordewell', 'worktrees', 'run1', '2-task', 'api', 'src'), d);
 
-  expect(d.run.mock.calls[0][2].cwd).toBe('/work/app/api/src');
+  expect(d.run.mock.calls[0][2].cwd).toBe(join(ROOT, 'api', 'src'));
 });
 
 describe('workspaceEnvOf', () => {
@@ -164,6 +167,7 @@ describe('parseEnvFile', () => {
   it('expands variables and ~ in bare and double-quoted values, never in single-quoted ones', () => {
     const env = parseEnvFile('A=~/x\nB="${A}/y"\nC=\'$A\'\nexport D=$MISSING\n1BAD=no\n', { HOME: '/h' }, '/h');
 
-    expect(env).toEqual({ A: '/h/x', B: '/h/x/y', C: '$A', D: '' });
+    // `~/` is joined onto the home natively.
+    expect(env).toEqual({ A: join('/h', 'x'), B: `${join('/h', 'x')}/y`, C: '$A', D: '' });
   });
 });

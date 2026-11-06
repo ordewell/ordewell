@@ -1,5 +1,5 @@
 // electron-builder's Windows signing hook for the SSL.com eSigner route
-// (ADR-0060 H9). package.mjs names this file in win.signtoolOptions.sign when
+// (ADR-0063 H9). package.mjs names this file in win.signtoolOptions.sign when
 // the ES_* secrets are set; electron-builder then calls sign() once for each
 // file it would have handed to signtool.
 //

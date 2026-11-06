@@ -2,6 +2,10 @@ import { execFile } from 'child_process';
 import { resolve } from 'path';
 import type { RunnerManifest, RunnerAuthSpec, RunnerAuthStatus } from '../plugins/types';
 import { augmentedPath, withPath } from '../utils/shellPath';
+import { planDirectLaunch, type LaunchDeps } from '../utils/launch';
+import { BUILTIN_MANIFESTS } from '../plugins/builtin';
+import { connectorFor } from './harness/connectors';
+import { describeSignIn, signInOf, type RunnerSignIn, type SignInSyntax } from './signInHint';
 
 /**
  * What a runner's own status command answered (ADR-0009). A surface flags a
@@ -10,8 +14,13 @@ import { augmentedPath, withPath } from '../utils/shellPath';
  */
 export interface RunnerAuth {
   state: 'signed-in' | 'signed-out' | 'unknown';
-  /** The runner command plus its login args, so a surface runs the same login the CLI would. */
+  /**
+   * The runner command plus its login args, so a surface runs the same login
+   * the CLI would. Absent where the agent has no login of its own to run.
+   */
   loginCommand?: string[];
+  /** Every way into the agent, which each surface words with `describeSignIn` (ADR-0052). */
+  signIn?: RunnerSignIn;
   /** A short, credential-free reason — the status command's own wording, never its output. */
   detail?: string;
 }
@@ -26,6 +35,8 @@ export interface RunnerAuthExecResult {
 export interface RunnerAuthExecOptions {
   timeout: number;
   env: NodeJS.ProcessEnv;
+  /** The args are one cmd.exe command line already quoted, as `planDirectLaunch`'s batch route hands back. */
+  verbatim?: boolean;
 }
 
 export type RunnerAuthExec = (
@@ -39,6 +50,8 @@ export interface ReadRunnerAuthOptions {
   /** The workspace's own variables (ADR-0016), merged over the daemon's for the probe. */
   env?: Record<string, string>;
   timeoutMs?: number;
+  /** How the status command is located and started; a test pins the Windows routes from any host. */
+  launch?: LaunchDeps;
 }
 
 const AUTH_TIMEOUT_MS = 8000;
@@ -59,7 +72,7 @@ const defaultExec: RunnerAuthExec = (command, args, options) =>
       clearTimeout(timer);
       resolve(result);
     };
-    const child = execFile(command, args, { timeout: options.timeout, env: options.env, encoding: 'utf8' }, (err, stdout, stderr) => {
+    const child = execFile(command, args, { timeout: options.timeout, env: options.env, encoding: 'utf8', windowsVerbatimArguments: options.verbatim }, (err, stdout, stderr) => {
       const raw = (err as { code?: unknown } | null)?.code;
       // A signal or a spawn failure has no numeric code; either way nothing
       // trustworthy came back, so it is not an exit status to read.
@@ -83,27 +96,41 @@ const defaultExec: RunnerAuthExec = (command, args, options) =>
  * and workspace environment a planner would use, and judges only that answer.
  */
 export async function readRunnerAuth(manifest: RunnerManifest, options: ReadRunnerAuthOptions = {}): Promise<RunnerAuth> {
+  const auth = await probeRunnerAuth(manifest, options);
+  const signIn = runnerSignIn(manifest);
+  return {
+    ...auth,
+    ...(signIn.login ? { loginCommand: [...signIn.login] } : {}),
+    signIn,
+  };
+}
+
+async function probeRunnerAuth(manifest: RunnerManifest, options: ReadRunnerAuthOptions): Promise<RunnerAuth> {
   const spec = manifest.auth;
-  if (!spec) return { state: 'unknown' };
+  if (!spec?.statusArgs) return { state: 'unknown' };
   const command = manifest.runner.command;
-  const loginCommand = [command, ...spec.loginArgs];
 
   let answer: RunnerAuthExecResult;
   let env: NodeJS.ProcessEnv;
   try {
     env = withPath(process.env, await augmentedPath(), options.env ?? {});
-    answer = await (options.exec ?? defaultExec)(command, spec.statusArgs, {
+    // Started the way the planner starts it (ADR-0010): a bare execFile finds
+    // only a native .exe on Windows, so an npm-installed agent's .cmd shim was
+    // ENOENT here and its login always read unknown, never signed out.
+    const launch = await planDirectLaunch(command, spec.statusArgs, options.launch);
+    answer = await (options.exec ?? defaultExec)(launch.file, launch.args, {
       timeout: options.timeoutMs ?? AUTH_TIMEOUT_MS,
       env,
+      ...(launch.verbatim ? { verbatim: true } : {}),
     });
   } catch {
-    return { state: 'unknown', loginCommand };
+    return { state: 'unknown' };
   }
 
   // `defaultExec` answers -1 when the child timed out, was signalled or could
   // not start. That is no exit status, so whatever it printed before dying is
   // not an answer: a slow status command must not be read as signed-out.
-  if (answer.code < 0) return { state: 'unknown', loginCommand };
+  if (answer.code < 0) return { state: 'unknown' };
 
   const output = `${answer.stdout}\n${answer.stderr}`;
   let state: 'signed-in' | 'signed-out' | null;
@@ -111,15 +138,40 @@ export async function readRunnerAuth(manifest: RunnerManifest, options: ReadRunn
     state = verdictOf(spec, { ...answer, output, env, kind: 'status' });
   } catch {
     // A reader that cannot make sense of the output answered nothing.
-    return { state: 'unknown', loginCommand };
+    return { state: 'unknown' };
   }
-  if (state === 'signed-in') return { state, loginCommand };
-  if (state === 'signed-out') return { state, loginCommand, detail: 'not logged in' };
-  return { state: 'unknown', loginCommand };
+  if (state === 'signed-in') return { state };
+  if (state === 'signed-out') return { state, detail: 'not logged in' };
+  return { state: 'unknown' };
 }
 
-/** A signed-out verdict always carries the command that fixes it; a failure fallback leans on that. */
-export type SignedOutAuth = RunnerAuth & { state: 'signed-out'; loginCommand: string[] };
+/**
+ * Every way into a runner: its manifest's login and by-hand route, and the key
+ * its connector reads. A runner may be a plugin's, which has no connector.
+ */
+export function runnerSignIn(runner: RunnerManifest): RunnerSignIn;
+export function runnerSignIn(runner: string): RunnerSignIn | undefined;
+export function runnerSignIn(runner: RunnerManifest | string): RunnerSignIn | undefined {
+  const manifest = typeof runner === 'string' ? BUILTIN_MANIFESTS.find((m) => m.name === runner) : runner;
+  return manifest && signInOf(manifest, connectorFor(manifest.name)?.signInRoute);
+}
+
+/**
+ * A message one surface worded, with each shipped runner's sign-in hint said
+ * in another's syntax. The daemon words for the terminal UI, since it cannot
+ * know who reads; a client without slash commands re-words what reaches it.
+ */
+export function rewordSignIn(message: string, from: SignInSyntax, to: SignInSyntax): string {
+  let said = message;
+  for (const manifest of BUILTIN_MANIFESTS) {
+    const signIn = runnerSignIn(manifest);
+    said = said.replaceAll(describeSignIn(signIn, from), describeSignIn(signIn, to));
+  }
+  return said;
+}
+
+/** A signed-out verdict always carries the ways in, so whatever reports it can name them. */
+export type SignedOutAuth = RunnerAuth & { state: 'signed-out'; signIn: RunnerSignIn };
 
 /**
  * A failed turn's own words as the runner's signed-out verdict. Only a phrase
@@ -143,10 +195,12 @@ export function signedOutFromFailure(manifest: RunnerManifest, message: string, 
     return undefined;
   }
   if (state !== 'signed-out') return undefined;
+  const signIn = runnerSignIn(manifest);
   return {
     state,
-    loginCommand: [manifest.runner.command, ...spec.loginArgs],
+    ...(signIn.login ? { loginCommand: [...signIn.login] } : {}),
     detail: 'not logged in',
+    signIn,
   };
 }
 
@@ -183,6 +237,16 @@ export function recordRunnerAuth(runner: string, auth: RunnerAuth, workspace?: s
 
 export function recordedRunnerAuth(runner: string, workspace?: string): RunnerAuth | undefined {
   return recorded.get(recordKey(runner, workspace));
+}
+
+/**
+ * Forget every signed-out verdict, in every workspace. A provider key saved in
+ * Ordewell can sign an agent in with no login of its own (ADR-0060, R9), so a
+ * refusal recorded before it says nothing about the next start, which records
+ * its own.
+ */
+export function forgetSignedOutRunnerAuth(): void {
+  for (const [key, auth] of recorded) if (auth.state === 'signed-out') recorded.delete(key);
 }
 
 /** For tests: the record is process-wide, so one case's verdict must not decide the next's. */

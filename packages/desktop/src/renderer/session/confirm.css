@@ -2,6 +2,18 @@
 .session-confirm .session-confirm-message { font: var(--ow-type-heading); margin: 0 0 var(--ow-space-2); overflow-wrap: anywhere; }
 .session-confirm .session-confirm-detail { font: var(--ow-type-body); overflow-wrap: anywhere; }
 .session-confirm .session-confirm-actions { flex-wrap: wrap; margin-top: var(--ow-space-3); }
+
+/* The key entry (ADR-0052): one vendor, one secret, in the same modal as the window's questions. */
+.key-entry .key-entry-field { display: flex; flex-direction: column; gap: var(--ow-space-1); margin-top: var(--ow-space-3); font: var(--ow-type-body-strong); }
+.key-entry .key-entry-input {
+  font: var(--ow-type-body);
+  color: var(--ow-fg);
+  background: var(--ow-bg);
+  border: 1px solid var(--ow-border);
+  border-radius: var(--ow-radius-sm, 4px);
+  padding: var(--ow-space-1) var(--ow-space-2);
+}
+.key-entry .key-entry-input:focus-visible { outline: 2px solid var(--ow-focus-ring); outline-offset: 1px; }
 /* A destructive yes is the failure colour, filled: it must not read as the safe default. */
 .session-confirm .session-confirm-destructive { background: var(--ow-status-failed); border-color: var(--ow-status-failed); color: var(--ow-bg); }
 .session-confirm .session-confirm-destructive:hover:not(:disabled) { background: var(--ow-status-failed); filter: brightness(1.08); }

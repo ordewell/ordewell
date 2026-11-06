@@ -6,12 +6,18 @@ import { planDirectLaunch, isExecutableResolved, ExecutableNotFoundError } from 
 import { assertWorkspaceExists } from '../../utils/workspace';
 import { killTree, spawnInOwnGroup } from '../../utils/processTree';
 import { workspaceEnvOf } from '../workspaceEnv';
+import { HeldSecrets } from '../HeldSecrets';
+import { LineTail } from '../../utils/lineTail';
 import { runnerEnv } from './runnerEnv';
 import type { AgentProcessDeps } from './AgentAdapter';
 import type { PlacedLaunch } from '../executionLease';
 
-/** Stderr kept for the failure message; a dying CLI's last words are the only useful diagnostic. */
-const STDERR_TAIL_CHARS = 4000;
+/**
+ * Stderr shown in the failure message; a dying CLI's last words are the only
+ * useful diagnostic. Four times as much raw text is kept, in whole lines, so
+ * that what is shown is cut from text already redacted as a whole.
+ */
+const STDERR_LIMITS = { keepChars: 16_000, showChars: 4000 };
 
 /**
  * How long after 'exit' the pipes get to close before the process is ended
@@ -53,6 +59,12 @@ export interface RunnerCommand {
    * credentials a native-shell planner keeps out of its process (ADR-0036 N2.2).
    */
   envDrop?: (name: string) => boolean;
+  /**
+   * Where the process starts, when not in the workspace it serves, whose
+   * variables it still gets. A placement starts its runner where it puts it,
+   * so a placed launch cannot name one.
+   */
+  cwd?: string;
 }
 
 export interface RunnerExit {
@@ -79,14 +91,17 @@ export class RunnerProcess {
   private exitStatus: RunnerExit | null = null;
   /** The process itself reported its end, before its pipes drained; see {@link hasExited}. */
   private exitReported = false;
-  private stderrTail = '';
+  private readonly stderr = new LineTail(STDERR_LIMITS);
   private spawnEnv: NodeJS.ProcessEnv = {};
+  /** Secrets handed to the process, in its environment or some other way, which no message of its may carry. */
+  private readonly held: HeldSecrets;
   /** What a lease launched in this process's place, where one did (ADR-0059 L5). */
   private placed: PlacedLaunch | null = null;
   /** Stdout readers' end-of-stream flushes, for an end the pipe itself never reports. */
   private readonly stdoutEnds = new Set<() => void>();
 
   constructor(private readonly deps: AgentProcessDeps) {
+    this.held = deps.held ?? new HeldSecrets();
     this.ended = new Promise<void>((resolve) => { this.markEnded = resolve; });
   }
 
@@ -98,9 +113,10 @@ export class RunnerProcess {
    *
    * `command` is asked for only once `cwd` is known to exist, and `handshake`
    * is called in the same tick as the spawn, so a listener it attaches hears
-   * the process's first output.
+   * the process's first output. It may answer later, for a launch that reads
+   * something of the workspace's variables first.
    */
-  async start(cwd: string, command: (workspace: Record<string, string>) => RunnerCommand, handshake: (child: ChildProcess) => Promise<void>): Promise<void> {
+  async start(cwd: string, command: (workspace: Record<string, string>) => RunnerCommand | Promise<RunnerCommand>, handshake: (child: ChildProcess) => Promise<void>): Promise<void> {
     try {
       await this.launch(cwd, command, handshake);
     } catch (err) {
@@ -109,14 +125,15 @@ export class RunnerProcess {
     }
   }
 
-  private async launch(cwd: string, describe: (workspace: Record<string, string>) => RunnerCommand, handshake: (child: ChildProcess) => Promise<void>): Promise<void> {
+  private async launch(cwd: string, describe: (workspace: Record<string, string>) => RunnerCommand | Promise<RunnerCommand>, handshake: (child: ChildProcess) => Promise<void>): Promise<void> {
     // Checked before anything else: a workspace deleted out from under a
     // stale `process.cwd()` otherwise surfaces as `spawn`'s ENOENT, which
     // reads as a missing runner binary rather than a missing directory.
     assertWorkspaceExists(cwd, { isDirectory: this.deps.isDirectory });
     const workspace = await (this.deps.workspaceEnv ?? workspaceEnvOf)(cwd);
-    const asked = describe(workspace);
+    const asked = await describe(workspace);
     const { placement } = this.deps;
+    if (placement && asked.cwd) throw new Error('A placed runner starts where its placement puts it, not in a directory of this host.');
     if (placement) this.placed = await placement.place({ command: asked.command, args: asked.args, env: asked.env?.(workspace) ?? {}, files: asked.files ?? [] });
     const placed = this.placed;
     const command: RunnerCommand = placed ? { command: placed.command, args: placed.args, env: () => placed.env } : asked;
@@ -126,11 +143,13 @@ export class RunnerProcess {
     // minimal PATH a GUI-launched host inherits.
     const PATH = await resolvePath();
     // On POSIX this hands back the command untouched; on Windows it resolves
-    // the real `.exe` (or routes a `.cmd` shim through cmd.exe), because
-    // CreateProcess performs no PATHEXT lookup of its own.
+    // the real `.exe`, the file an npm shim names, or else a shim through its
+    // interpreter, because CreateProcess performs no PATHEXT lookup of its own. `exists` goes to
+    // both: on Windows the lookup here is the only one the check below trusts.
     const launch = await planDirectLaunch(command.command, command.args, {
       platform: this.deps.platform,
       resolvePath,
+      exists: this.deps.exists,
     });
     if (!isExecutableResolved(command.command, launch, PATH, { platform: this.deps.platform, exists: this.deps.exists })) {
       throw new ExecutableNotFoundError(command.command, PATH);
@@ -139,19 +158,20 @@ export class RunnerProcess {
     // while its start runs on, and a dispose finds no child to kill yet.
     if (this.disposed) throw new Error('The runner was stopped before it launched.');
     // Placed, the workspace's variables stay here: they are this host's, and a lease says what crosses (ADR-0059 L5).
-    this.spawnEnv = runnerEnv(PATH, placed ? {} : workspace, command.env?.(workspace), command.envDrop);
+    this.spawnEnv = runnerEnv(PATH, placed ? {} : workspace, command.env?.(workspace), command.envDrop, this.deps.platform);
+    this.held.holdEnv(this.spawnEnv);
 
     const child = spawnInOwnGroup((detached) => this.deps.spawn(launch.file, launch.args, {
       env: this.spawnEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
-      cwd,
+      cwd: asked.cwd ?? cwd,
       windowsVerbatimArguments: launch.verbatim,
       detached,
     }), this.deps.platform);
     this.child = child;
 
     const stderrText = new StringDecoder('utf8');
-    child.stderr?.on('data', (chunk: Buffer) => this.appendStderr(stderrText.write(chunk)));
+    child.stderr?.on('data', (chunk: Buffer) => this.stderr.append(stderrText.write(chunk)));
     // A write racing the process's death (a turn, an interrupt, a permission
     // answer) fails with EPIPE asynchronously; unheard, it crashes the host.
     // The close path already reports the death, with its stderr tail.
@@ -177,7 +197,7 @@ export class RunnerProcess {
       void this.ended.then(() => clearTimeout(grace));
     });
     child.on('error', (err) => {
-      this.appendStderr(`\n${err.message}`);
+      this.stderr.append(`\n${err.message}`);
       this.end({ code: -1, signal: null });
     });
 
@@ -244,14 +264,29 @@ export class RunnerProcess {
 
   /** Fail-safe contract: a dead runner reports its own last words, never an empty bubble. */
   withStderrTail(headline: string): string {
-    const tail = this.stderrTail.trim();
+    const tail = this.stderr.read((text) => this.redact(text));
     return `${headline}${tail ? `\n\n${tail}` : ''}`;
+  }
+
+  /** Keep `values`, secrets the process is handed some other way than its environment, out of its messages too. */
+  withhold(...values: string[]): void {
+    this.held.hold(...values);
+  }
+
+  /**
+   * Text the process wrote, fit for an error: a CLI that prints its settings
+   * or its environment echoes the key it was spawned with, and an error goes
+   * to the task log, the timeline and the planner chat (ADR-0060, R9). Pass it
+   * whole, before any cut: a cut can part a credential's name from its value.
+   */
+  redact(text: string): string {
+    return this.held.redact(text);
   }
 
   /**
    * Tree-wide, because the direct child may be a CLI whose shells, MCP servers
-   * and test runs would outlive it — or, on Windows, the cmd.exe shim rather
-   * than the runner. The forced follow-up is scheduled and unref'd, so a
+   * and test runs would outlive it — or, on Windows, the cmd.exe or PowerShell
+   * that runs a shim rather than the runner. The forced follow-up is scheduled and unref'd, so a
    * disposed runner is never the reason the host refuses to exit.
    */
   dispose(): void {
@@ -272,9 +307,5 @@ export class RunnerProcess {
   private placedEnded(): void {
     this.placed?.ended();
     this.placed = null;
-  }
-
-  private appendStderr(text: string): void {
-    this.stderrTail = (this.stderrTail + text).slice(-STDERR_TAIL_CHARS);
   }
 }

@@ -1,7 +1,8 @@
 import {
-  EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, PROVIDER_PRIORITY, getProviderMeta, isApiProvider, isPlannerBackend, runnerForProvider, type AiProvider,
+  EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, PROVIDER_PRIORITY, TERMINAL_UI_COMMANDS, TERMINAL_UI_SIGN_IN, describeSignInWays, getProviderMeta, isApiProvider, isPlannerBackend, runnerForProvider, type AiProvider,
 } from '@ordewell/core';
 import { handoffCommand } from '../handoff';
+import { plannerSwitchOverrideNotice, taskOnlyRunnerRefusal } from '../../plannerModelSwitch';
 import { canonicalCommandName, findCommand, type ParsedCommand } from '../slash';
 import { findTask, plannerInFlight, type PickerItem, type TuiState } from '../state';
 import { modelsForRunner } from '../taskAssignment';
@@ -243,9 +244,12 @@ function setPlanner(state: TuiState, args: string[]): Step {
   if (args[0]) {
     const id = args[0].toLowerCase();
     if (!isPlannerBackend(id)) {
+      const taskOnly = taskOnlyRunnerRefusal(id, state.runners, TERMINAL_UI_COMMANDS.pickPlanner);
+      if (taskOnly) return fail(state, taskOnly);
       return fail(state, `Unknown planner: ${id}. Run /planner with no arguments to see the list.`);
     }
-    return step(state, [{ type: 'setPlanner', provider: id }]);
+    const overrideNotice = plannerSwitchOverrideNotice(id, state.plannerEnvOverride);
+    return step(state, [{ type: 'setPlanner', provider: id, ...(overrideNotice ? { overrideNotice } : {}) }]);
   }
   const opened = openStepper(state, plannerStepper);
   // The model step lists the chosen backend's catalog, so fetch it fresh; the
@@ -409,9 +413,10 @@ function login(state: TuiState, args: string[]): Step {
     return step(state, [{ type: 'plannerLogin', command, label: row.name }]);
   }
 
-  if (row.id === 'opencode') {
-    return step(say(state, 'system', "OpenCode's login is not managed by Ordewell: sign in with OpenCode itself."));
-  }
+  // The agent's own route, or the key it can be handed: the same ways in the
+  // signed-out hint names (ADR-0052).
+  const ways = row.auth?.signIn ? describeSignInWays(row.auth.signIn, TERMINAL_UI_SIGN_IN) : '';
+  if (ways) return step(say(state, 'system', `${row.name} has no login Ordewell can run. ${ways}`));
   if (!row.auth) {
     return step(say(state, 'system', `Ordewell could not tell whether ${row.name} is signed in. If it needs a login, run its own command.`));
   }

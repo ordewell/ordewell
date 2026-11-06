@@ -238,6 +238,7 @@ function fakeResolver(modelsByRunner: Partial<Record<string, DiscoveredModel[]>>
     refresh: vi.fn(async () => {}),
     invalidate: vi.fn(),
     getDiscoveryErrors: vi.fn(() => ({})),
+    getRunnerDiscoveryErrors: vi.fn(() => ({})),
     getCachedRunnerModels: vi.fn((runner: string) => modelsByRunner[runner] ?? []),
     getCachedPickerOptions: vi.fn(() => []),
     plannerCatalog: vi.fn(async () => []),
@@ -253,6 +254,7 @@ function fakeRunnerInstallation(installed: string[]) {
   return {
     filterInstalled: vi.fn(async (runners: string[]) => runners.filter((r) => installed.includes(r))),
     plannerUsability: vi.fn(async (_runner?: string): Promise<PlannerUsability> => ({ usable: true, reason: undefined })),
+    runnerUsability: vi.fn(async (_runner?: string): Promise<PlannerUsability> => ({ usable: true, reason: undefined })),
     // A discovery refresh asks again; the fake keeps no verdicts, so it is a no-op.
     refresh: vi.fn(),
   };
@@ -577,6 +579,66 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     ));
   });
 
+  it('redraws the planner flags when a task fails, since the failure may be its agent signing out', async () => {
+    await h.host.start();
+    await vi.waitFor(() => expect(h.chat.provider.setPlannerBackends).toHaveBeenCalled());
+    h.chat.provider.setPlannerBackends.mockClear();
+
+    h.sessionDeps.current?.broadcast({ type: 'task_updated', taskId: 't1', changes: { status: 'in_progress' } });
+    h.sessionDeps.current?.broadcast({ type: 'task_updated', taskId: 't1', changes: { status: 'failed' } });
+
+    await vi.waitFor(() => expect(h.chat.provider.setPlannerBackends).toHaveBeenCalledTimes(1));
+  });
+
+  it('says detection is under way, and the planner list that arrives ends it', async () => {
+    const installation = fakeRunnerInstallation(['claude-code']);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    installation.plannerUsability.mockImplementation(async () => {
+      await gate;
+      return { usable: true };
+    });
+    const local = harness({ runnerInstallation: installation });
+    try {
+      const started = local.host.start();
+      await vi.waitFor(() => expect(local.chat.provider.postMessage)
+        .toHaveBeenCalledWith({ type: 'agentDetection', state: 'detecting' }));
+      release();
+      await vi.waitFor(() => expect(local.chat.provider.setPlannerBackends).toHaveBeenCalled());
+      await started;
+    } finally {
+      release();
+      fs.rmSync(local.workspace, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a failed detection with why, and Retry asks the host again', async () => {
+    const installation = fakeRunnerInstallation(['claude-code']);
+    let fail = true;
+    installation.plannerUsability.mockImplementation(async () => {
+      if (fail) throw new Error('the install probe failed');
+      return { usable: true };
+    });
+    const local = harness({ runnerInstallation: installation });
+    try {
+      await local.host.start();
+      await vi.waitFor(() => expect(local.chat.provider.postMessage).toHaveBeenCalledWith({
+        type: 'agentDetection', state: 'failed', error: 'the install probe failed',
+      }));
+
+      fail = false;
+      local.chat.provider.postMessage.mockClear();
+      local.chat.provider.setPlannerBackends.mockClear();
+      local.chat.messages.fire({ type: 'refreshModels' });
+
+      await vi.waitFor(() => expect(local.chat.provider.postMessage)
+        .toHaveBeenCalledWith({ type: 'agentDetection', state: 'detecting' }));
+      await vi.waitFor(() => expect(local.chat.provider.setPlannerBackends).toHaveBeenCalled());
+    } finally {
+      fs.rmSync(local.workspace, { recursive: true, force: true });
+    }
+  });
+
   it('seeds the run view when the webview reconnects, so a task waiting on a runner approval keeps its badge', async () => {
     await h.host.start();
     h.chat.messages.fire({ type: 'sendMessage', text: 'build a parser', typed: true });
@@ -612,7 +674,7 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     expect(h.chat.provider.postMessage).toHaveBeenCalledWith({
       type: 'plannerLoginEnded', runner: 'codex', ok: false, message: 'Ordewell has no login for Codex.',
     });
-    expect(h.installation.plannerUsability).toHaveBeenCalledWith('codex');
+    expect(h.installation.runnerUsability).toHaveBeenCalledWith('codex');
   });
 
   it('remembers the dragged plan dock height for the next webview to open', async () => {

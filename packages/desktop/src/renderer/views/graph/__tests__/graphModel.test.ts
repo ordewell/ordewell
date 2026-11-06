@@ -105,6 +105,21 @@ describe('buildGraph: what a node says', () => {
     expect(model.nodes[1]!.lane).toEqual({ kind: 'ai', runner: 'codex', model: 'default model', effort: null });
   });
 
+  it('flags a card whose runner is signed out, and names the way in', () => {
+    const signIn = {
+      runner: 'codex', label: 'Codex', action: 'login' as const,
+      hint: 'Codex is not signed in. Sign in with /login codex, or run codex login.',
+    };
+    const model = built(buildGraph([
+      runTask({ id: 'a', order: 1, type: 'ai', assignedRunner: 'codex' }),
+      runTask({ id: 'b', order: 2, type: 'ai', assignedRunner: 'claude-code' }),
+    ], { ...CTX, signInByRunner: { codex: signIn } }));
+    expect(model.nodes[0]!.signIn).toEqual(signIn);
+    expect(model.nodes[0]!.lane).toEqual({ kind: 'ai', runner: 'codex', model: 'default model', effort: null, signIn });
+    expect(model.nodes[0]!.description).toContain('signed out');
+    expect(model.nodes[1]!.signIn).toBeUndefined();
+  });
+
   it('says a script\'s first line of command', () => {
     const model = built(buildGraph([runTask({ id: 'a', order: 1, type: 'script', commands: [['npm', 'test'], ['npm', 'run', 'lint']] })], CTX));
     expect(model.nodes[0]!.lane).toEqual({ kind: 'script', command: 'npm test' });

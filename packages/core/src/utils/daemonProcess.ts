@@ -2,7 +2,7 @@
  * How a client finds, probes and stops the local daemon: its port, its PID
  * file, its log, and the `GET /api/server` handshake. The CLI and the desktop
  * app both read these files, and they must read them the same way, or one of
- * them stops a daemon the other cannot see (ADR-0060 H2).
+ * them stops a daemon the other cannot see (ADR-0063 H2).
  *
  * Starting a daemon is not here: the CLI spawns its own Node binary and the
  * desktop app forks a utility process, and neither can do the other's.
@@ -19,7 +19,7 @@ export const DEFAULT_DAEMON_PORT = 3742;
 
 /**
  * The daemon contract's number, answered by `GET /api/server` and compared by
- * a client before it drives a daemon it did not start (ADR-0060 H3). Raise it
+ * a client before it drives a daemon it did not start (ADR-0063 H3). Raise it
  * whenever a body in `daemonContract.ts` or a socket frame changes in a way an
  * older client or daemon would misread; a field only added need not.
  */
@@ -144,7 +144,7 @@ export interface DaemonIdentity {
   pid: number;
   /** The daemon's package version; absent from a daemon older than the field. */
   version?: string;
-  /** The daemon contract it speaks (ADR-0060 H3); absent from a daemon older than the field. */
+  /** The daemon contract it speaks (ADR-0063 H3); absent from a daemon older than the field. */
   contract?: number;
 }
 

@@ -1,6 +1,6 @@
 import type { RouteId, RouteParams } from '../../shared/routes';
 
-/** A run that stopping its daemon would stop, named the way a refusal names it (ADR-0060 H3). */
+/** A run that stopping its daemon would stop, named the way a refusal names it (ADR-0063 H3). */
 export interface LiveRun {
   sessionId: string;
   goal: string;

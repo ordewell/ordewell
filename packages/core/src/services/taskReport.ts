@@ -2,6 +2,7 @@ import type { ScriptResult } from '../models/Execution';
 import type { Task } from '../models/Task';
 import { handoffWakeLines, heldHandoff, heldWords, wordsFrom, type HandoffDigest, type HandoffTaskName } from '../models/Handoff';
 import { fitTail } from './TaskQuery';
+import { redactAgentText } from '../utils/redactSecrets';
 
 /** How much of a task's output a report carries: enough to read what happened by, never the log, which `task_output` pages. */
 export const REPORT_TAIL_LINES = 30;
@@ -97,7 +98,8 @@ export function runUpdateReport(task: Reported & Pick<Task, 'handoff'>, tail: st
 export function taskReport(task: Reported, tail: string | undefined): string {
   const reason = task.verdict?.reason?.trim() ?? '';
   const ended = endedText(task);
-  const output = fitTail((tail ?? '').trim(), REPORT_TAIL_CHARS).text;
+  // Redacted before the cut, which on one long line keeps a value and drops its name.
+  const output = fitTail(redactAgentText((tail ?? '').trim()), REPORT_TAIL_CHARS).text;
   // A failure's reason already ends with its error output; the same lines twice tell the planner nothing more.
   if (task.status === 'failed' && (!output || reason.includes(output))) return ended;
   return output ? `${ended}\n${OUTPUT_END}\n${heldBlock(task, output)}` : `${ended}\nIt printed nothing.`;

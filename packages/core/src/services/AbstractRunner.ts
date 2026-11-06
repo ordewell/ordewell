@@ -3,6 +3,7 @@ import type { IRunner, IRunnerSession, QueuedTaskMessage, ScriptExit, Structured
 import type { ApprovalDecision } from '../interfaces/IApproval';
 import type { RunnerCommand } from '../models/RunnerCommand';
 import type { CheckpointAnswer, TaskCompleteArgs } from './mcp/tools';
+import { HeldSecrets } from './HeldSecrets';
 
 /** One source for the spawn options, so a runner built on this base cannot drift from the interface. */
 export type RunnerSpawnOptions = Parameters<IRunner['spawn']>[0];
@@ -10,6 +11,7 @@ export type RunnerSpawnOptions = Parameters<IRunner['spawn']>[0];
 export abstract class AbstractRunnerSession implements IRunnerSession {
   public id: string;
   public taskId: string;
+  readonly secrets = new HeldSecrets();
   protected exited = false;
   protected outputEmitter = new EventEmitter();
   protected exitEmitter = new EventEmitter();

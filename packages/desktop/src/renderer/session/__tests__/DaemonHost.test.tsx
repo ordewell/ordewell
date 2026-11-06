@@ -1,8 +1,10 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { RUN_SETTINGS_DEFAULTS } from '@ordewell/core';
+import type { HostToWebview } from '@ordewell/ui/protocol';
 import type { ConfirmationRequest } from '@ordewell/ui/host';
 import type { HolderView } from '../../../shared/bridge';
-import { DaemonHost, type Confirm } from '../DaemonHost';
+import { DaemonHost, type Confirm, type DaemonHostOptions } from '../DaemonHost';
 import { ChatSurface } from '../useSession';
 import { fakeDaemon, ok, surfacePlan, surfaceTask } from './fakeDaemon';
 
@@ -29,6 +31,19 @@ async function opened(daemon: ReturnType<typeof fakeDaemon>, host: DaemonHost): 
   await act(async () => {
     daemon.push('s1', { type: 'connected', sessionId: 's1' }, { type: 'run_snapshot', sessionId: 's1', view: { tasks: PLAN.tasks, runMerge: null, handoff: null, mergeResult: null }, stream: 'd1', seq: 0 });
   });
+}
+
+/** Every message a host sends a mounted chat: the place the login and key answers arrive. */
+function watch(host: DaemonHost): HostToWebview[] {
+  const seen: HostToWebview[] = [];
+  host.port('conversation').subscribe((msg) => seen.push(msg));
+  return seen;
+}
+
+function hostWithOptions(options: DaemonHostOptions, answer: Confirm = async () => null): DaemonHost {
+  const host = new DaemonHost(WORKSPACE, answer, options);
+  hosts.push(host);
+  return host;
 }
 
 describe('DaemonHost', () => {
@@ -125,6 +140,26 @@ describe('DaemonHost', () => {
     await waitFor(() => expect(host.getSnapshot().state.plannerKnown).toBe(true));
     expect(host.getSnapshot().state.planner.backends.filter((b) => b.usable).map((b) => b.runner)).toEqual(['claude-code']);
     expect(screen.queryByText('Detecting coding agents…')).toBeNull();
+  });
+
+  it('lists an installed agent the daemon cannot start as unusable, with its reason', async () => {
+    const reason = 'GitHub Copilot CLI is too old for Ordewell: found 1.0.104, needs 1.0.105 or later.';
+    fakeDaemon({
+      'runners.list': ok({
+        runners: [
+          { id: 'claude-code', name: 'Claude Code', enabled: true },
+          { id: 'copilot-cli', name: 'GitHub Copilot CLI', enabled: true, usable: false, reason },
+        ],
+        orchestratorModel: '',
+      }),
+      'models.list': ok({ models: [], modelsByRunner: {}, modesByRunner: {}, orchestratorModel: '', providers: [], orchestratorModels: [], providerErrors: {} }),
+    });
+    const host = hostWith();
+    render(<ChatSurface host={host} layout="conversation" />);
+    await waitFor(() => expect(host.getSnapshot().state.plannerKnown).toBe(true));
+
+    const copilot = host.getSnapshot().state.planner.backends.find((b) => b.runner === 'copilot-cli');
+    expect(copilot).toMatchObject({ kind: 'harness', usable: false, reason });
   });
 
   it('says detection failed, with a Retry that asks again, when the daemon does not list its agents in time', async () => {
@@ -250,8 +285,224 @@ describe('DaemonHost', () => {
   });
 });
 
+// A signed-out agent stays listed and is flagged; its own way in is the chat's
+// to run, and a key is written through the daemon, never kept here (ADR-0052).
+describe('DaemonHost sign-in, keys and planner controls', () => {
+  const MODELS = ok({ models: [], modelsByRunner: {}, modesByRunner: {}, orchestratorModel: '', providers: [], orchestratorModels: [], providerErrors: {} });
+  const SETTINGS = {
+    orchestratorModel: 'gpt-5',
+    aiProvider: 'codex',
+    plannerThinkingEffort: '',
+    autonomousMode: false,
+    maxParallel: 3,
+    modelAllowlist: {},
+    run: { ...RUN_SETTINGS_DEFAULTS },
+  };
+  const codex = (state: 'signed-out' | 'signed-in') => ({
+    id: 'codex', name: 'Codex', enabled: true,
+    auth: { state, loginCommand: ['codex', 'login'], signIn: { runner: 'codex', label: 'Codex', login: ['codex', 'login'] } },
+  });
+
+  it('reads the open session\'s settings, so the Run block shows its values and not the file\'s', async () => {
+    const daemon = fakeDaemon({
+      'runners.list': ok({ runners: [], orchestratorModel: '' }),
+      'models.list': MODELS,
+      'settings.get': ok(SETTINGS),
+    });
+    const host = hostWithOptions({});
+    await act(() => host.handle({ type: 'ready' }));
+
+    expect(daemon.calls('settings.get')[0]?.[0]).toEqual({ workspace: WORKSPACE, sessionId: host.sessionId });
+  });
+
+  it('opens a signed-out agent\'s login terminal, polls its own status, and clears the pending state', async () => {
+    let listed = 0;
+    const daemon = fakeDaemon({
+      'runners.list': () => {
+        listed += 1;
+        return ok({ runners: [codex(listed >= 2 ? 'signed-in' : 'signed-out')], orchestratorModel: '' });
+      },
+      'models.list': MODELS,
+      'settings.get': ok(SETTINGS),
+    });
+    const ended = new Promise<void>(() => undefined);
+    const openLogin = vi.fn(async () => ({ ended }));
+    const host = hostWithOptions({ openLogin, pollMs: 1, sleep: async () => undefined });
+    const seen = watch(host);
+    await act(() => host.handle({ type: 'ready' }));
+
+    await act(() => host.handle({ type: 'loginPlanner', runner: 'codex' }));
+
+    expect(openLogin).toHaveBeenCalledWith('codex', 'Codex');
+    expect(seen).toContainEqual({ type: 'plannerLoginEnded', runner: 'codex', ok: true });
+    // The probe the login changed is re-read before the surface is told.
+    expect(daemon.calls('runners.list').length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('ends a login that times out, saying so', async () => {
+    fakeDaemon({
+      'runners.list': ok({ runners: [codex('signed-out')], orchestratorModel: '' }),
+      'models.list': MODELS,
+      'settings.get': ok(SETTINGS),
+    });
+    const openLogin = vi.fn(async () => ({ ended: new Promise<void>(() => undefined) }));
+    const host = hostWithOptions({ openLogin, loginTimeoutMs: 0 });
+    const seen = watch(host);
+    await act(() => host.handle({ type: 'ready' }));
+
+    await act(() => host.handle({ type: 'loginPlanner', runner: 'codex' }));
+
+    expect(seen).toContainEqual({ type: 'plannerLoginEnded', runner: 'codex', ok: false, message: 'Sign-in did not finish in time.' });
+  });
+
+  it('ends a login when its terminal closes, without asking again', async () => {
+    const daemon = fakeDaemon({
+      'runners.list': ok({ runners: [codex('signed-out')], orchestratorModel: '' }),
+      'models.list': MODELS,
+      'settings.get': ok(SETTINGS),
+    });
+    const openLogin = vi.fn(async () => ({ ended: Promise.resolve() }));
+    const host = hostWithOptions({ openLogin, pollMs: 60_000 });
+    const seen = watch(host);
+    await act(() => host.handle({ type: 'ready' }));
+    const reads = daemon.calls('runners.list').length;
+
+    await act(() => host.handle({ type: 'loginPlanner', runner: 'codex' }));
+
+    expect(seen).toContainEqual({ type: 'plannerLoginEnded', runner: 'codex', ok: false, message: 'The terminal closed before sign-in finished.' });
+    expect(daemon.calls('runners.list')).toHaveLength(reads);
+  });
+
+  it('says when the login terminal cannot be opened, still clearing the pending state', async () => {
+    fakeDaemon({
+      'runners.list': ok({ runners: [codex('signed-out')], orchestratorModel: '' }),
+      'models.list': MODELS,
+      'settings.get': ok(SETTINGS),
+    });
+    const host = hostWithOptions({ openLogin: async () => { throw new Error('no terminal here'); } });
+    const seen = watch(host);
+    await act(() => host.handle({ type: 'ready' }));
+
+    await act(() => host.handle({ type: 'loginPlanner', runner: 'codex' }));
+
+    expect(seen).toContainEqual({ type: 'plannerLoginEnded', runner: 'codex', ok: false, message: 'The login terminal could not be opened. no terminal here' });
+  });
+
+  it('sends a key-based agent\'s Log in to the key entry instead of a terminal', async () => {
+    fakeDaemon({
+      'runners.list': ok({
+        runners: [{ id: 'gemini-cli', name: 'Gemini CLI', enabled: true, auth: { state: 'signed-out', signIn: { runner: 'gemini-cli', label: 'Gemini CLI', key: { provider: 'google', label: 'Google Gemini' } } } }],
+        orchestratorModel: '',
+      }),
+      'models.list': MODELS,
+      'settings.get': ok({ ...SETTINGS, aiProvider: 'gemini-cli' }),
+    });
+    const askForKey = vi.fn(async () => null);
+    const openLogin = vi.fn();
+    const host = hostWithOptions({ askForKey, openLogin });
+    const seen = watch(host);
+    await act(() => host.handle({ type: 'ready' }));
+
+    await act(() => host.handle({ type: 'loginPlanner', runner: 'gemini-cli' }));
+
+    expect(askForKey).toHaveBeenCalledWith({ provider: 'google', runnerLabel: 'Gemini CLI' });
+    expect(openLogin).not.toHaveBeenCalled();
+    expect(seen).toContainEqual({ type: 'plannerLoginEnded', runner: 'gemini-cli', ok: false, message: 'The key was not saved.' });
+  });
+
+  it('writes a key through the daemon\'s settings route and keeps it out of every state and log', async () => {
+    const daemon = fakeDaemon({
+      'runners.list': ok({ runners: [], orchestratorModel: '' }),
+      'models.list': MODELS,
+      'settings.get': ok(SETTINGS),
+      'settings.update': ok({ ...SETTINGS }),
+    });
+    const key = 'sk-live-SECRET-123';
+    const host = hostWithOptions({ askForKey: async () => ({ provider: 'google', key }) });
+    const seen = watch(host);
+    const logged = (['log', 'info', 'warn', 'error', 'debug'] as const).map((level) => vi.spyOn(console, level).mockImplementation(() => undefined));
+    await act(() => host.handle({ type: 'ready' }));
+
+    await act(() => host.handle({ type: 'sendMessage', text: '/key google', typed: false }));
+
+    expect(daemon.calls('settings.update')).toContainEqual([undefined, expect.objectContaining({ env: { GEMINI_API_KEY: key }, workspace: WORKSPACE })]);
+    expect(JSON.stringify(host.getSnapshot())).not.toContain(key);
+    expect(JSON.stringify(seen)).not.toContain(key);
+    expect(logged.every((spy) => spy.mock.calls.every((call) => !call.some((arg) => String(arg).includes(key))))).toBe(true);
+    logged.forEach((spy) => spy.mockRestore());
+  });
+
+  it('never sends a button\'s unknown slash command to the planner as a goal', async () => {
+    const daemon = fakeDaemon();
+    const host = hostWithOptions({});
+    watch(host);
+    await act(() => host.handle({ type: 'ready' }));
+
+    await act(() => host.handle({ type: 'sendMessage', text: '/bogus now', typed: false }));
+    await act(() => host.handle({ type: 'sendMessage', text: '/sessions', typed: false }));
+
+    expect(daemon.calls('plans.converseStart')).toEqual([]);
+    expect(daemon.calls('plans.converseMessage')).toEqual([]);
+  });
+
+  it('saves a planner pick through the shared settings and re-detects', async () => {
+    const daemon = fakeDaemon({
+      'runners.list': ok({ runners: [], orchestratorModel: '' }),
+      'models.list': MODELS,
+      'settings.get': ok(SETTINGS),
+      'settings.update': ok({ ...SETTINGS, aiProvider: 'claude-code' }),
+    });
+    const host = hostWithOptions({});
+    watch(host);
+    await act(() => host.handle({ type: 'ready' }));
+
+    await act(() => host.handle({ type: 'setPlanner', provider: 'claude-code' }));
+
+    expect(daemon.calls('settings.update')).toContainEqual([undefined, expect.objectContaining({ env: { AI_PROVIDER: 'claude-code' }, workspace: WORKSPACE })]);
+    expect(daemon.calls('runners.list').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('saves a runner pill and answers the click with the state the daemon holds', async () => {
+    const daemon = fakeDaemon({
+      'runners.list': ok({ runners: [{ id: 'codex', name: 'Codex', enabled: true }], orchestratorModel: '' }),
+      'models.list': MODELS,
+      'settings.get': ok(SETTINGS),
+    });
+    const host = hostWithOptions({});
+    const seen = watch(host);
+    await act(() => host.handle({ type: 'ready' }));
+
+    await act(() => host.handle({ type: 'setRunnerEnabled', runnerId: 'codex', enabled: true, requestId: 'r1' }));
+
+    expect(daemon.calls('runners.setEnabled')).toEqual([[{ id: 'codex' }, { enabled: true }]]);
+    expect(seen).toContainEqual({ type: 'runnerChoiceSaved', requestId: 'r1', runnerId: 'codex', enabled: true });
+  });
+
+  it('saves a Run setting through the same route and pushes the values back', async () => {
+    let current = { ...SETTINGS };
+    const daemon = fakeDaemon({
+      'runners.list': ok({ runners: [], orchestratorModel: '' }),
+      'models.list': MODELS,
+      'settings.get': () => ok({ ...current }),
+      'settings.update': (_params, body) => {
+        const change = body as { run?: Record<string, unknown> };
+        if (change.run) current = { ...current, run: { ...current.run, ...change.run } as typeof current.run };
+        return ok({ ...current });
+      },
+    });
+    const host = hostWithOptions({});
+    const seen = watch(host);
+    await act(() => host.handle({ type: 'ready' }));
+
+    await act(() => host.handle({ type: 'changeSettings', change: { run: { mergeAtGatesAutomatically: true } } }));
+
+    expect(daemon.calls('settings.update').at(-1)?.[1]).toMatchObject({ run: { mergeAtGatesAutomatically: true }, workspace: WORKSPACE });
+    expect(seen.at(-1)).toMatchObject({ type: 'setRunSettings', run: { mergeAtGatesAutomatically: true } });
+  });
+});
+
 // W16: a session another Ordewell daemon holds is joined, and driven through
-// that daemon alongside its other client (ADR-0060 H8).
+// that daemon alongside its other client (ADR-0063 H8).
 describe('DaemonHost joining a held session', () => {
   const VSCODE_HELD = { holder: { hostId: 'v1', pid: 51234, host: { kind: 'vscode' }, since: '2026-11-04T10:02:00.000Z', heartbeatAt: '2026-11-04T10:02:00.000Z', runnerGroups: [] } };
   const SINCE = '2026-11-04T10:00:00.000Z';

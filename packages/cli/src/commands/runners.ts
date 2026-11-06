@@ -1,4 +1,4 @@
-import { SettingsService, autonomyLevelLabel, codexSandboxNotice, parseAutonomyLevel } from '@ordewell/core';
+import { HEADLESS_CLI_SIGN_IN, SettingsService, autonomyLevelLabel, codexSandboxNotice, describeRunnerSignIn, parseAutonomyLevel } from '@ordewell/core';
 import type { ApiClient } from '../apiClient';
 import { positionals } from '../utils';
 import { connect, fail, fetchCatalog } from './shared';
@@ -14,6 +14,8 @@ export async function handleRunners(subArgs: string[], injectedApi?: ApiClient):
     console.log('\nRunners\n');
     for (const r of state.runners) {
       console.log(`  ${r.enabled ? '✓' : ' '} ${r.id.padEnd(14)} ${r.name}${r.enabled ? '' : '  (disabled)'}`);
+      const way = describeRunnerSignIn(r.auth, HEADLESS_CLI_SIGN_IN);
+      if (way) console.log(`      ${way}`);
     }
     // After the runner list, so the daemon has re-probed the host by now. A
     // catalog that cannot be read leaves the list as it is.

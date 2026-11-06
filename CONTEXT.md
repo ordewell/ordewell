@@ -762,19 +762,23 @@ the directive to attach.
 *Avoid:* "skill message", "skill event".
 
 **Executor / Runner** — an external coding-agent CLI (Claude Code, Codex,
-OpenCode) that runs *one task* in its own session through a structured
-connector. `RunnerRegistry` holds their built-in manifests: identity, command,
-model discovery and mode settings. External plugin manifests are ignored with
-one notice at host startup.
+OpenCode, and GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor over ACP) that runs *one task* in its own
+session through a structured connector. `RunnerRegistry` holds their built-in
+manifests: identity, command, model discovery and mode settings. External
+plugin manifests are ignored with one notice at host startup.
 *Avoid:* "backend", "provider" (provider means the LLM vendor, below).
 
 **Runner connector** (`RunnerConnector`, in the `CONNECTORS` registry) — what
 Ordewell holds for a runner it drives over the runner's own protocol: the
 adapter that serves it as a harness planner (ADR-0009) and as a structured
 task's runner (ADR-0018), its *Ordewell tool binding*, and optionally how it
-words a usage-limit reset. The registry is keyed by runner id; a runner without a connector cannot run. Adding a runner
-to it is the one place a runner's planner, task connector and Ordewell tools are
-declared, so none of the three can drift apart.
+words a usage-limit reset. Its `plans` says whether the runner can also be the
+planner: a runner may be task-only, as an ACP agent whose profile claims no
+planner role is. The registry is
+keyed by runner id; a runner without a connector cannot run, and a runner id
+shares the planner setting's namespace with the API vendors' ids, so it never
+equals one. Adding a runner to it is the one place a runner's planner, task
+connector and Ordewell tools are declared, so none of the three can drift apart.
 *Avoid:* conflating it with `RunnerRegistry`, which holds *manifests* (identity
 and mode/discovery settings for the built-in runners); "adapter table".
 
@@ -804,8 +808,10 @@ requests are for them and so are never refused or left waiting
 another server's name could extend), what the runner's own status word for the server means
 (`attachState`), and the runner-specific injection that writes the server into
 its launch or configuration. Every supported connector has one. Task runners
-and coding-agent planners must connect their tools before receiving a prompt;
-a failed attach is respawned once, then fails (ADR-0025).
+and coding-agent planners must connect their tools before any result of theirs
+is accepted: before receiving a prompt, or, for an ACP runner that connects
+only on its first turn (a task's prompt, a planner's goal or message), before
+that turn ends, which is otherwise discarded unheard (ADR-0060 R5). A failed attach is respawned once, then fails (ADR-0025).
 *Avoid:* "MCP adapter", "tool prefix" (a prefix is how two of the runners happen
 to name a tool, not the concept).
 
@@ -828,6 +834,57 @@ replayed tagged with that subagent) and how a turn is settled are one
 implementation, so a behaviour fixed for one version is fixed for both.
 *Avoid:* "transport" alone for this — **Transport** is the runner session
 contract, and OpenCode's HTTP protocol is one implementation of it.
+
+**ACP runner** — a runner Ordewell drives over the Agent Client Protocol: JSON-RPC
+on the agent's stdio, with Ordewell as the client (ADR-0060). One `AcpAdapter`
+serves every such runner, and only an agent whose own maintainers ship its ACP
+server qualifies. Ordewell offers it no file system or terminal, so it works in
+the worktree with its own tools and reaches Ordewell only through the Ordewell
+MCP server, given over HTTP in `session/new` or in a settings file of the
+agent's own (ADR-0060 R4). It has no mid-turn steer: a
+message waits for the turn's end. Five are admitted so far. GitHub Copilot CLI
+(`copilot-cli`), Qwen Code (`qwen-code`), Cline (`cline`), Gemini CLI
+(`gemini-cli`) and Cursor (`cursor-agent`) run tasks, read-only ones included,
+and plan, and on a planner or read-only start each begins in a private
+directory, never the worktree, so the repository's hooks and config do not run
+(ADR-0060 R3). A restricted Gemini
+CLI runs under a policy file Ordewell hands it, which refuses its own write,
+shell and web tools and every MCP server but Ordewell's (ADR-0060, Gemini CLI).
+Cline takes Ordewell's server from a settings file and attaches on its first
+turn, a planner's goal turn being that check (ADR-0060 R4, R5). With no list to
+take its own tools away, a planner or read-only Cline is started asking about
+each, so its edits and commands are refused, each of its file reads is judged
+by the one path its arguments name, and it searches through Ordewell's
+`run_command` (ADR-0060 R3). A planner or read-only Cursor is also given a
+home of configuration of that start's own, whose settings deny its own reads,
+writes and shell, so it reads through `run_command` (ADR-0060, Cursor). Qwen
+Code and Cline are handed the provider key configured in Ordewell at spawn,
+Cline its own stored key where Ordewell holds none it can use (ADR-0060 R9).
+Gemini CLI is started trusting the task's worktree, since it connects no MCP
+server in a folder it does not trust (ADR-0060, Gemini CLI). A writable Cursor writes a file edit without
+asking in its default mode, and keeps a model the plan sets as the user's own
+default (ADR-0060, Cursor).
+*Avoid:* "ACP shim" or "ACP bridge" for it (a third-party adapter in front of an
+agent does not qualify); "ACP backend", "ACP provider".
+
+**ACP profile** (`AcpProfile`, `harness/acpProfiles.ts`) — everything one ACP
+agent needs beyond the protocol, as data: its manifest, ACP arguments, minimum
+version, how it names Ordewell's tools, how it is given a model, the route its
+instructions take outside the worktree, the route its mode takes, the settings
+file that hands it Ordewell's MCP server when it takes none over HTTP in
+`session/new` (`mcpConfig`, ADR-0060 R4), when it first uses its token
+(`attach`: by the time its session opens, or only on its first turn, a task's
+prompt or a planner's goal, which is then the attach check, ADR-0060 R5), what it loads
+from a repository, the roles it claims, the controls that restrict it, and the
+answers it gives to the agent's own client-bound requests (any other, and any
+in ACP's `session/`, `fs/` or `terminal/` namespaces, is "method not found").
+`acpConnector(profile)` turns it into the runner's connector, so admitting an
+agent means writing a profile and a manifest, not an adapter. A role, planner or
+read-only, is claimed only on evidence; with none claimed the runner gets
+writable tasks only.
+*Avoid:* "ACP config", "agent settings" (a profile is checked-in code reviewed
+against recordings, not a user setting); branching on a runner id inside
+`AcpAdapter` instead of adding a profile field.
 
 **Transport** — how Ordewell drives a task's runner: its programmatic
 protocol, with structured events in and messages out. Every `IRunnerSession`
@@ -2306,7 +2363,8 @@ carried on *the plan* and the session. Every task carries an `assignedRunner`
 drawn from the set (always present, even for single-runner plans), but only an
 AI task has a runner: a script or a manual task keeps a stored default that
 nothing runs on, and every surface reads the runner through `assignedRunnerOf`,
-which is nothing for them. Size is the
+which is nothing for them. That default need not be in the set, so a manual
+task made an AI task admits its runner (`admitRunner`) as a retarget does. Size is the
 semantics, not a sentinel: size 1 means a single-runner plan, size >1 means a
 multi-runner plan. Empty is invalid and rejected before planning.
 
@@ -2862,6 +2920,18 @@ output boundary. Once an attempt ends it keeps the attempt's completion and the
 end of its output. It does not discover transcripts or render a runner's PTY.
 *Avoid:* "the output buffer", "transcript capture" as the owner — a transcript
 is a separate artifact, not completion evidence.
+
+**Held secrets** (`services/HeldSecrets.ts`) — the secrets Ordewell itself
+handed one runner session: the attempt's MCP token, the credentials in its
+spawn env and the headers its process withholds. The session owns one record
+for its whole life (`IRunnerSession.secrets`). It hides what the record holds,
+exactly and in every part of eight characters or more, in everything the
+runner writes before any sink sees it. Every reader of the session's output
+redacts with the same record. A secret Ordewell never held is left to the
+name and shape rules of agent-text redaction, which are defence in depth
+([ADR-0061](docs/adr/platform/0061-held-secrets-are-hidden-exactly-and-agent-text-by-name-in-depth.md)).
+*Avoid:* "known secrets", "the secret list": the record is per session, and
+"held" says that Ordewell handed the value over.
 
 **Check** — one deterministic signal inside a verdict. `task_complete` is the
 required completion check, with `exit_code` as supporting diagnostic evidence.
@@ -3636,7 +3706,7 @@ accepted; each tripped guard posts a supervisor message to the user, once.
 (`packages/web`, HTTP + WebSocket on `127.0.0.1`, with no frontend of its own);
 the VS Code extension runs core's `Session` in-process and never connects to the
 daemon. The desktop app drives the same shared daemon as the CLI
-(ADR-0060). A session planned on one surface opens unchanged on another through the
+(ADR-0063). A session planned on one surface opens unchanged on another through the
 saved-session store in `.ordewell/sessions/`, not through a shared transport
 (ADR-0006).
 *Avoid:* "web UI" — there is none; the web package is the daemon.
@@ -3788,14 +3858,14 @@ is already live is a no-op — the in-memory session wins over the file, because
 *Avoid:* "load" alone for this — the TUI's `/sessions` and `ordewell sessions
 load` both *read* and *adopt*, and the distinction is what the bug was.
 
-**Desktop app** (`packages/desktop`; ADR-0060) — the Electron surface: a client
+**Desktop app** (`packages/desktop`; ADR-0063) — the Electron surface: a client
 of the shared local daemon on port 3742, which it attaches to or starts and
 owns. It is not a host and holds no session lease. One window shows one
 workspace, and its UI is the one in `packages/ui` that the VS Code webview also
 draws. Its design is `docs/desktop/design.md`.
 *Avoid:* "Electron host" (the daemon is the host), "GUI", "web UI".
 
-**Daemon bridge** (`window.ordewell`, the preload; ADR-0060 H4) — the desktop
+**Daemon bridge** (`window.ordewell`, the preload; ADR-0063 H4) — the desktop
 app's one channel from its renderer to anything outside it: a fixed set of named
 calls that its main process checks and turns into daemon requests carrying the
 bearer token, plus frame subscriptions, the terminal, dialogs and the folder
@@ -3803,7 +3873,7 @@ picker. The renderer never holds the token and never names a URL.
 *Avoid:* "IPC" alone (it is one fixed bridge, not a general channel), "API
 client".
 
-**Version handshake** (`GET /api/server`'s `version` and `contract`; ADR-0060
+**Version handshake** (`GET /api/server`'s `version` and `contract`; ADR-0063
 H3) — the check a desktop app makes before driving a daemon: the same `contract`
 number attaches whatever the patch version, and a different one, or none, is
 not driven and offers a restart with the app's own daemon.
@@ -3816,7 +3886,7 @@ one *Escalation*, answered through `answerEscalation` like everywhere else.
 *Avoid:* "notifications", "alerts", "inbox" in the UI's own text (it is the
 word for the list, not the label).
 
-**View scope** (ADR-0061 R2) — which tree a host's file and git reads look at,
+**View scope** (ADR-0064 R2) — which tree a host's file and git reads look at,
 per repository: `checkout` (the *user's checkout* on disk), `integration` (a
 run's integration branch, read from git objects) or `task` (a task's worktree
 while it exists, otherwise its branch). Only the checkout is editable. A scope
@@ -3825,8 +3895,8 @@ title bar picks it.
 *Avoid:* "scope" alone (a *Scope* is a delegated task's declared paths,
 ADR-0057), "context", "view mode".
 
-**User principal** (ADR-0061 R1) — the person at a surface, holding the
-daemon's bearer token, for whom the daemon reads files and git (ADR-0061) and
+**User principal** (ADR-0064 R1) — the person at a surface, holding the
+daemon's bearer token, for whom the daemon reads files and git (ADR-0064) and
 performs *user git actions* (ADR-0062). Their reads are bounded by confinement
 to the workspace, not by the planner envelope, which bounds a model.
 *Avoid:* "the user's planner", "unsandboxed".
@@ -3838,7 +3908,9 @@ CLI on this OS", shared by structured runners, harness planners and model
 discovery. `planDirectLaunch` serves every `spawn` caller and is identity on
 POSIX: execvp already searches PATH. Windows resolves PATH × PATHEXT in order:
 a native executable, a batch shim through `cmd.exe /d /s /c` with verbatim
-arguments, then a PowerShell shim through `powershell.exe -File` (ADR-0010).
+arguments, then a PowerShell shim through `powershell.exe -File` (ADR-0010). A
+batch shim npm wrote is no route of its own: the Node script or program it names
+is started directly, as a native executable is.
 *Avoid:* calling `spawn('claude', …)` directly on Windows; CreateProcess does
 not perform PATHEXT lookup. A batch command line needs the outer quote pair
 that `cmd /s /c` strips. Capacity does not reorder the routes: an overflowing
@@ -3850,10 +3922,14 @@ decides which runners are on this machine before any surface offers one: the
 runner's `<command> --version` over the augmented PATH, a clean exit meaning
 installed and a throw meaning not. The verdict is shallow on purpose — it says
 the binary answers, never that its login works; that is the **Runner auth**
-verdict beside it. An *installed* verdict is kept for the process; a *missing*
-one expires and is forgotten at once by `refresh()`, which a runner-list refresh
-calls, so a CLI installed while the daemon or the extension host runs is offered
-without a restart (ADR-0038).
+verdict beside it. An *installed* verdict is trusted between refreshes; a
+*missing* one also expires on its own, and `refresh()` forgets every verdict, so
+a CLI installed, upgraded or removed while the daemon or the extension host runs
+is offered, or refused, without a restart (ADR-0038). A runner the probe finds
+installed but Ordewell cannot start — a CLI with no directly spawnable file, or
+an ACP agent below its profile's `minVersion` — is unavailable, not missing: it
+stays in the runner list with its reason ("found X, needs Y or later"), and the
+surface shows it disabled (ADR-0009, ADR-0060).
 *Avoid:* "health check" — that is the **Attach state** a runner reports about
 itself, not this probe of ours.
 
@@ -3899,6 +3975,9 @@ POSIX shell Git for Windows ships — so `AUTO_COMMANDS` (`ls`, `cat`, `wc`,
 and falls back to cmd.exe *while saying so*. `C:\Windows\System32\bash.exe` is
 excluded deliberately: that is the WSL launcher, whose `/mnt/c/...` view would
 make every workspace path name a different file than the one confinement checks.
+Git Bash also reads a path its own way, by its mount table (`/c` is `C:\`, `/tmp`
+the temp folder), and the shell's `hostPath` is what path confinement reads a
+command's paths through.
 *Avoid:* treating the shell choice as an adapter detail. `BaseFileSystem` owns it
 because `classifyCommand` has to be told the same answer.
 
@@ -4001,11 +4080,15 @@ empty group's id may have been recycled.
 *Avoid:* `proc.kill('SIGTERM')` at a dispose site — or a bare `proc.kill()`,
 which was the last one left, in `ModelDiscovery`'s Codex app-server probe.
 
-**Platform support** — the VS Code extension and the local daemon run on Linux,
-macOS, and native Windows. The **TUI is not verified on Windows**; WSL remains
-the supported answer for
-that surface. Runner execution needs no tmux or per-task terminal windows
-(ADR-0025). Two things about Windows are explicitly unverified rather than
-claimed — Codex's read-only sandbox enforcement and `%VAR%` expansion on the
-cmd.exe shim route. Argument fidelity on the PowerShell shim route was measured
-on a Windows host. See ADR-0010.
+**Platform support** — the VS Code extension, the TUI and the local daemon run
+on Linux, macOS, and native Windows. Runner execution needs no tmux or per-task terminal windows
+(ADR-0025). Until the user sets up Codex's own Windows sandbox, a Codex change
+task runs read-only by Codex's account and its approved writes run unconfined,
+which the task says. A Codex planner on Windows plans with its own shell off,
+since Codex's sandbox there cannot keep a command off the network. Three things
+about Windows are explicitly unverified rather than claimed — what Codex's
+Administrator sandbox enforces for a change task, and, for a shim npm did not
+write, `%VAR%` expansion on the cmd.exe route and a `"` on the PowerShell one.
+Argument fidelity through an npm shim and on the PowerShell shim route was
+measured on a Windows host. On Windows the TUI's mouse and paste need Node
+22.17 or newer, and it says so on an older one. See ADR-0010.

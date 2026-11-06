@@ -24,7 +24,7 @@ export interface IpcDeps {
   windows: WindowManager;
   daemon: DaemonManager;
   proxy: DaemonProxy;
-  /** The daemons that hold sessions a window joined (ADR-0060 H8). */
+  /** The daemons that hold sessions a window joined (ADR-0063 H8). */
   holders: HolderConnections;
   recents: RecentsStore;
   prefs: PrefsStore;
@@ -66,7 +66,7 @@ export function currentTheme(): AppInfo['theme'] {
 }
 
 /**
- * The main half of `window.ordewell` (ADR-0060 H4). Each handler first checks
+ * The main half of `window.ordewell` (ADR-0063 H4). Each handler first checks
  * that the call came from the top frame of a window this app opened on its
  * own page, then checks every argument again: the preload's types bind a
  * well-behaved page, not a compromised one.
@@ -262,14 +262,14 @@ export function registerIpc(deps: IpcDeps): void {
     },
     () => prefs.get().editorCommand,
   );
-  // The workspace is the window's own, never one the page names (ADR-0060 H6).
+  // The workspace is the window's own, never one the page names (ADR-0063 H6).
   const workspaceOfCaller = (event: IpcMainInvokeEvent): string => {
     const context = windows.contextOf(event.sender);
     if (context?.kind !== 'workspace') throw new Error('Refused: this window has no workspace.');
     return context.path;
   };
   // The page names a session; which daemon holds it, and its token, main reads
-  // itself from the window's own workspace (ADR-0060 H8).
+  // itself from the window's own workspace (ADR-0063 H8).
   handle(CHANNELS.daemonJoin, async (event, sessionId) => {
     const problem = segmentError(sessionId);
     if (problem) throw new Error(`sessionId ${problem}`);
@@ -301,9 +301,12 @@ export function registerIpc(deps: IpcDeps): void {
         if (details.isMainFrame && !details.isSameDocument) deps.terminals.host.closeOwner(id);
       });
     }
+    const context = windows.contextOf(contents);
     return {
       owner: contents.id,
-      workspace: workspaceOfCaller(event),
+      // The launcher has no checkout; a login opens in home there, and every
+      // other terminal is refused by the channel without one.
+      ...(context?.kind === 'workspace' ? { workspace: context.path } : {}),
       send: (terminal, terminalEvent) => {
         if (!contents.isDestroyed()) contents.send(EVENTS.terminal, { id: terminal, event: terminalEvent } satisfies TerminalDelivery);
       },

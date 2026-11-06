@@ -3,7 +3,7 @@ import http from 'http';
 import https from 'https';
 import type { AddressInfo } from 'net';
 import type { SpawnFn } from '@ordewell/core';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, delimiter, join } from 'path';
 
@@ -16,7 +16,7 @@ const boundary = vi.hoisted(() => ({ claude: null as SpawnFn | null }));
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
   const spawn = ((command: string, args: string[], options: Parameters<SpawnFn>[2]) =>
-    boundary.claude && basename(command) === 'claude'
+    boundary.claude && basename(command, '.exe') === 'claude'
       ? boundary.claude(command, args, options)
       : actual.spawn(command, args, options)) as typeof actual.spawn;
   return { ...actual, spawn, default: { ...actual, spawn } };
@@ -35,7 +35,7 @@ import { ApiClient } from '../../apiClient';
 import { handlePlan } from '../plan';
 import { handleCompact } from '../conversation';
 import { plansRoute } from '../../../../web/server/routes/plans';
-import { FakeRunnerSession, flushMicrotasks } from '@ordewell/core/testing';
+import { FakeRunnerSession, flushMicrotasks, homeEnv, setEnv, writeStandIn } from '@ordewell/core/testing';
 import type { WebSocket } from 'ws';
 
 /** Discovery that never spawns a CLI or reaches the network. */
@@ -62,8 +62,9 @@ function answer(proc: FakeAgentProcess, text = 'Which database?'): void {
 // Only the process, model discovery and runner boundaries are replaced: the
 // CLI, HTTP contract, Session, planner transport and Claude adapter all run.
 describe('keyless first-run entry points at the process boundary', () => {
-  const keys = ['HOME', 'PATH', 'ORDEWELL_SETTINGS_PATH', 'AI_PROVIDER', 'ORCHESTRATOR_MODEL', 'ORDEWELL_PLANNER_EFFORT'];
+  const keys = ['PATH', 'ORDEWELL_SETTINGS_PATH', 'AI_PROVIDER', 'ORCHESTRATOR_MODEL', 'ORDEWELL_PLANNER_EFFORT'];
   const saved: Record<string, string | undefined> = {};
+  let restoreHome: () => void;
   let dir: string;
   let workspace: string;
   let pool: OrchestratorPool;
@@ -89,7 +90,7 @@ describe('keyless first-run entry points at the process boundary', () => {
         delete process.env[key];
       }
     }
-    process.env.HOME = dir;
+    restoreHome = setEnv(homeEnv(dir));
     process.env.ORDEWELL_SETTINGS_PATH = join(dir, 'settings.json');
     delete process.env.AI_PROVIDER;
     delete process.env.ORDEWELL_PLANNER_EFFORT;
@@ -98,8 +99,7 @@ describe('keyless first-run entry points at the process boundary', () => {
     // The spawn is faked, but the binary must still resolve on PATH first.
     const bin = join(dir, 'bin');
     mkdirSync(bin);
-    writeFileSync(join(bin, 'claude'), '#!/bin/sh\nexit 1\n');
-    chmodSync(join(bin, 'claude'), 0o755);
+    writeStandIn(bin, 'claude');
     process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ''}`;
     clearAugmentedPathCache();
 
@@ -128,7 +128,7 @@ describe('keyless first-run entry points at the process boundary', () => {
       accountLimitCollectors: () => [],
       modelResolver: inertResolver(),
       runner,
-      runnerInstallation: { plannerUsability: async () => ({ usable: true as const }), filterInstalled: async (ids: string[]) => ids.filter((id) => id === 'claude-code') },
+      runnerInstallation: { plannerUsability: async () => ({ usable: true as const }), runnerUsability: async () => ({ usable: true as const }), filterInstalled: async (ids: string[]) => ids.filter((id) => id === 'claude-code') },
       codexSandbox: { ensure: async () => undefined, refresh: async () => undefined },
     } as unknown as ConstructorParameters<typeof OrchestratorPool>[0]);
     server = http.createServer();
@@ -161,6 +161,7 @@ describe('keyless first-run entry points at the process boundary', () => {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+    restoreHome();
     rmSync(dir, { recursive: true, force: true });
     vi.unstubAllGlobals();
     vi.restoreAllMocks();

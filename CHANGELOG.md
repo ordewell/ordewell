@@ -77,6 +77,215 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   and while it is on offers the tree budget, maximum depth, delegated tasks per
   plan and tasks per child plan, each within core's caps. `ordewell delegation`
   prints the shape read-only.
+- **Sign in, set an API key, and see every runner in the desktop app.** Where
+  an agent is signed out, Welcome, Settings, a failed task and the plan graph
+  say so and offer Log in, which runs the agent's own login command in a
+  terminal in the app and then asks again, and Set API key… for the vendors
+  Ordewell keeps a key for. Settings lists every runner with its sign-in state
+  and a Refresh, and discovery asks each one, so a runner Ordewell knows is
+  listed with an install link even when it is not installed.
+- **An agent too old for Ordewell, or one it cannot start, says so before you
+  pick it.** Discovery compares an ACP agent's version with the one its profile
+  was checked against, and keeps a runner that answers `--version` through a
+  shell but has no file Ordewell can start, so the terminal UI, VS Code and the
+  desktop list it as unavailable with the reason instead of failing on its first
+  task. A refresh asks again, so an agent upgraded or removed meanwhile is
+  offered, or refused, without a restart.
+
+### Fixed
+
+- **VS Code says when it cannot detect the installed agents, and offers
+  Retry.** A failed read behind the planner and model lists no longer leaves the
+  chat on "Detecting coding agents…" with no way forward: it says what failed,
+  Retry asks again, and the error clears when a list arrives.
+
+## [0.12.6] - 2026-11-05
+
+### Added
+
+- **Cursor runs tasks.** A plan can assign a task to `cursor-agent`, which
+  Ordewell drives over the Agent Client Protocol with the Ordewell tools
+  attached and its models discovered. It can also be the planner and run
+  read-only tasks: those start it in a private directory instead of the
+  worktree, so it never loads a repository's `.cursor/` rules, hooks or MCP
+  servers, and with a settings file of that start's own that denies Cursor's
+  file reads, writes and shell, so the user's own Cursor settings do not load
+  either. It reads the workspace through Ordewell's commands, and Ordewell
+  refuses every web fetch or search it asks for in a read-only task. In its
+  default mode a writable task's Cursor asks before a command outside its own
+  allowlist and before each MCP tool call, but writes file edits without
+  asking. A model the plan sets for a writable task becomes Cursor's own
+  default model for later sessions too. Cursor reports no version, so none is
+  checked; it was tested on Cursor CLI 2026.10.22. Signing in is done with
+  `cursor-agent login`; a planner or read-only start keeps that sign-in on
+  macOS, where it was tested.
+
+- **Gemini CLI runs tasks.** A plan can assign a task to `gemini-cli`, which
+  Ordewell drives over the Agent Client Protocol with the Ordewell tools
+  attached and its models discovered. Gemini starts each task trusting the
+  task's worktree for that run only, since an untrusted folder gets no MCP
+  servers; with that trust it also loads the worktree's own `.gemini/`
+  settings. It can also be the planner and run read-only tasks: those start it
+  in a private directory instead of the worktree, so it never runs a
+  repository's `.gemini/settings.json` hooks, and under a policy Ordewell hands
+  it its own write, shell and web tools are refused, as is every other MCP
+  server's. It reaches the workspace only through requests Ordewell answers.
+  Gemini CLI 0.66.0 or newer is required. Sign in by running `gemini`, or
+  save a Google Gemini key with `/key` for Ordewell to hand to Gemini CLI.
+  An explicitly configured Gemini credential route takes precedence.
+
+- **Cline runs tasks.** A plan can assign a task to `cline`, which Ordewell
+  drives over the Agent Client Protocol with its models discovered. The
+  Ordewell tools reach it through a settings file of its own, written for each
+  task outside the worktree and removed after, and the provider key `cline auth`
+  stored is handed to it for that task, or for listing its models, only. It
+  can also be the planner and run read-only tasks: those start it in a
+  private directory instead of the worktree, so it never runs a repository's
+  `.clinerules/hooks/`, and every edit and command of its own is refused. It
+  reads one workspace file at a time, each read decided by the path it names,
+  and searches through Ordewell's commands.
+  Cline 3.0.74 or newer is required.
+
+- **Qwen Code runs tasks.** A plan can assign a task to `qwen-code`, which
+  Ordewell drives over the Agent Client Protocol with the Ordewell tools
+  attached and its models discovered. It can also be the planner and run
+  read-only tasks: those start it in a private directory instead of the
+  worktree, so it never runs a repository's `.qwen/settings.json` hooks, and
+  Ordewell refuses every write, command and mode switch it asks for. It
+  reaches the workspace only through requests Ordewell answers. Qwen Code
+  0.26.6 or newer is required, and signing in is done by running `qwen` itself.
+
+- **GitHub Copilot CLI runs tasks.** A plan can assign a task to `copilot-cli`,
+  which Ordewell drives over the Agent Client Protocol with the Ordewell tools
+  attached, its models discovered and a signed-out Copilot flagged with its
+  `copilot login`. It can also be the planner and run read-only tasks: those
+  start it in a private directory instead of the worktree, so it never runs a
+  repository's `.github/hooks/` shell hooks, its own write and shell tools are
+  off, and it reaches the workspace only through requests Ordewell answers.
+  Copilot CLI 1.0.105 or newer is required.
+
+### Fixed
+
+- **An ACP agent's private directory is removed on Windows.** Windows refuses to
+  remove a folder a running process starts in, so the empty folder an ACP
+  agent's models were read in was left behind, and stopping an agent started in
+  its private directory could fail before the agent was ended. Both are now
+  removed once the agent has let go of them.
+- **The planner sees a repository's instruction files by their own names on
+  Windows**, as `../AGENTS.md` and `.github/instructions/app.instructions.md`
+  rather than with Windows separators.
+
+## [0.12.5] - 2026-11-04
+
+### Changed
+
+- **The terminal UI is supported on native Windows.** It was run there from a
+  goal to a merged plan, with the wheel and bracketed paste, which need Node
+  22.17 or newer there; WSL is no longer needed for it.
+
+### Security
+
+- **A Codex planner on Windows plans with its own shell off.** Codex's sandbox
+  there cannot keep a command off the network, so a Codex planner reads through
+  Ordewell's `run_command`, under the same command rules as every other planner
+  on Windows. Before, only Codex's own checks, and Ordewell refusing what they
+  asked to approve, kept its shell from writing or reaching the network. A
+  one-shot plan (`ordewell plan --no-chat`) runs no command, so there Codex
+  keeps its shell, with those approvals still refused.
+
+### Fixed
+
+- **An agent installed by npm starts whole on Windows.** Ordewell now starts the
+  Node script or program an npm shim names, rather than the shim through cmd.exe
+  or PowerShell. Claude Code installed that way was started through PowerShell,
+  since its system prompt spans lines, and PowerShell dropped every quote on the
+  way: its JSON settings arrived as `{disableAllHooks:true}`, and the quotes in
+  its prompt were gone. A prompt past cmd.exe's 8191 characters, a line break, a
+  `"` and a `%VAR%` now reach any npm-installed agent as written.
+- **The planner's commands are confined to the folders Git Bash reaches.** On
+  Windows a command's paths were judged as if on the current drive, so approving
+  `/etc` or `/tmp` named a different folder than the one the command read, and
+  `/dev/null` asked for approval. They are now read through Git Bash's own mount
+  table, as the shell reads them: `/c/Users` is `C:\Users`, `/tmp` is your temp
+  folder. A path whose folder Git Bash's rules leave uncertain, such as one with
+  a `..` past a mount or one in its own `/proc`, is refused with the reason,
+  rather than asked about under a folder it may not reach.
+- **Search without ripgrep reads a character class as written.** A `]` first in
+  a class, as in `[]\s]`, cut the class off there, and an escaped `^` first, as
+  in `[\^a]`, turned it into its opposite, every character but `a`.
+- **A planner on Windows is told which shell its commands run in.** A coding
+  agent there expects PowerShell, and its `Get-Content` asked for an approval
+  that would have run it in Git Bash, which has no such command. It is told to
+  read with `cat`, `ls` and `grep` (or cmd.exe's own, without Git for Windows).
+- **A one-shot plan no longer offers its planner a `run_command` it cannot
+  run.** `ordewell plan --no-chat` and the plan endpoint answered every call
+  "not available", so a planner lost turns on it before reading with its own
+  tools.
+- **A Codex task on Windows says what Codex grants it.** Until Codex's own
+  Windows sandbox is set up, Codex opens a Guarded task read-only: each edit,
+  and each command it does not judge safe, goes to its reviewer, and what the
+  reviewer approves runs unconfined. A model that read "read-only" could end
+  the task as impossible. It is now told how to write through review, and you
+  are told once, with how to set the sandbox up.
+- **A Codex task on Windows runs npm.** Its shell is PowerShell, whose default
+  execution policy refuses `npm.ps1`, so `npm test` failed before it started,
+  and a model once reported the tests passing anyway. It is now told to call
+  `npm.cmd`.
+- **The terminal UI hands the mouse back when it quits on Windows.** It turned
+  mouse reporting off after leaving raw mode, which Windows' console ignores,
+  so the terminal went on sending mouse reports to the shell. Back from a
+  login, it turned the mouse on before raw mode, and the wheel stopped working.
+  On a Node older than 22.17, which cannot pass the mouse or a paste to it on
+  Windows, it now says so at start: there the wheel does nothing and a line
+  break in a paste sends the line.
+
+## [0.12.4] - 2026-11-04
+
+### Fixed
+
+- **An npm-installed agent's login is read on Windows.** The login check now
+  starts the agent the way the planner does, so a Codex, OpenCode or Claude Code
+  installed as a `.cmd` shim no longer reads as an unknown login: when it is
+  signed out, it is flagged and offered its login.
+- **Logging in from VS Code works on a stock Windows PowerShell.** On Windows the
+  login terminal is cmd.exe, so PowerShell's default Restricted execution policy
+  no longer refuses an npm-installed agent's `.ps1` shim and leaves the sign-in
+  waiting until it times out.
+- **Removing a task's worktree no longer empties your folders on Windows.** Git
+  for Windows removes a junction by walking into it. With the workspace in a
+  folder below its repository's top, the links a worktree makes into your
+  checkout, `.claude` among them, were left in place, and their folders were
+  emptied in your own checkout; so was any folder a task linked to itself. Every
+  link in a worktree is now taken down first. A junction a task left is kept out
+  of its commits too, where git would have copied in the folder it leads to; a
+  symbolic link is still committed as the link it is. A worktree Ordewell leaves
+  in place is now removed, as its notice says, with `rmdir /s`, which leaves a
+  junction's folder alone.
+- **Stop stops a task's runner at once on Windows.** The polite kill Windows
+  offers only asks a window to close, which no console agent has, so a stopped
+  runner went on for five more seconds, writing to its worktree and holding it
+  from a Continue.
+- **A task is held for runner settings as it is on Linux.** On Windows a task was
+  held for your own ignored `.claude/settings.local.json`, which git read through
+  the worktree's link, and was not held for a shared `.mcp.json` an earlier task
+  rewrote.
+- **A task's diff reads on Windows.** git names a worktree in its long form, and
+  Ordewell could hold a short `8.3` name or a lower-case drive letter for the same
+  folder, so the planner's `task_diff` called the worktree "no longer a
+  repository". Untracked files are in the diff too: Git for Windows could not open
+  the empty side it was handed.
+- **A `!` path exclusion holds on Windows in any case and with either slash.** An
+  exclusion such as `!C:/Users/me/.ssh/*` now applies to `C:\Users\me\.ssh\*` and
+  to any casing of it, as Windows itself would read the path.
+- **Search works on Windows and macOS without ripgrep.** The fallback search
+  matched an anchored glob such as `src/*.ts` against backslashed paths and found
+  nothing; `find_symbol` found nothing at all, since neither GNU nor BSD grep reads
+  the non-capturing groups its pattern holds; and on Windows every result came
+  back as an absolute path.
+- **A runner set by its full path is found on Windows.** A command such as
+  `C:\Tools\claude.exe` read as not installed.
+- **The daemon finds your workspaces on Windows.** Its scan read `HOME`, which
+  Windows does not set, and searched no folder of yours.
 
 ## [0.12.3] - 2026-11-03
 
@@ -3955,7 +4164,9 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.12.3...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.12.5...HEAD
+[0.12.5]: https://github.com/ordewell/ordewell/compare/v0.12.4...v0.12.5
+[0.12.4]: https://github.com/ordewell/ordewell/compare/v0.12.3...v0.12.4
 [0.12.3]: https://github.com/ordewell/ordewell/compare/v0.12.2...v0.12.3
 [0.12.2]: https://github.com/ordewell/ordewell/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/ordewell/ordewell/compare/v0.12.0...v0.12.1

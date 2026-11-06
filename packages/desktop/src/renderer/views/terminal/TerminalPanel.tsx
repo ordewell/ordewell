@@ -3,9 +3,11 @@ import { ChevronDown, CircleAlert, Plus, SquareTerminal, X } from 'lucide-react'
 import { EmptyState, IconButton } from '@ordewell/ui/design';
 import type { FrameApi, Unregister } from '../../frame/api';
 import { Popover } from '../../frame/Popover';
+import { setLoginTerminalOpener } from '../../session/loginTerminal';
 import { optionsFor, type ScopeState } from '../scope/scopeStore';
 import { useScope } from '../scope/useScope';
 import { bannerFor, decisionFor, tabTitle, terminalStoreFor, type TerminalStore, type TerminalTab } from './terminalStore';
+import { all } from '../Stub';
 import './terminal.css';
 
 const REFRESH_AFTER_MS = 400;
@@ -226,5 +228,11 @@ function TerminalPanel({ api }: { api: FrameApi }): JSX.Element {
 }
 
 export function register(api: FrameApi): Unregister {
-  return api.registerPanel({ region: 'terminal', id: 'terminal', title: 'Terminal', render: () => <TerminalPanel api={api} /> });
+  const terminals = terminalStoreFor(api);
+  // A login the session host asks for becomes a tab in the panel, whose pty main runs.
+  setLoginTerminalOpener((runner, label) => terminals.openLogin(runner, label));
+  return all(
+    api.registerPanel({ region: 'terminal', id: 'terminal', title: 'Terminal', render: () => <TerminalPanel api={api} /> }),
+    () => setLoginTerminalOpener(undefined),
+  );
 }

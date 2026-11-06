@@ -42,11 +42,19 @@ export type { RefTask } from './services/TaskRefs';
 // The one runner default, shared with the webview so its initial state cannot
 // drift from the plans the host builds.
 export { DEFAULT_RUNNERS, pausedOnLimit } from './models/Task';
+// The runner catalog is pure, so a renderer can list every agent, its name and
+// its install page without the manifests' Node-only readers.
+export { RUNNER_CATALOG, RUNNER_IDS, RUNNER_LABELS, RUNNER_INSTALL_DOCS, type RunnerCatalogEntry } from './services/runnerCatalog';
+export { builtinPlannerBackends, HARNESS_PLANNER_REASON, HARNESS_PLANNER_UNAVAILABLE_REASON, type PlannerBackendEntry, type PlannerUsability } from './services/plannerBackends';
 // The model a task's log last served, for a task log host that runs in a
 // renderer the way TaskLogPanel runs in the extension: its account limits are that model's.
 export { lastServedModel } from './models/TaskLog';
 // A script task's body as its card and the approval card show it (ADR-0035).
 export { scriptTaskText } from './models/ScriptTask';
+// The VS Code webview words a signed-out agent from the verdict it is handed (ADR-0052).
+export { describeRunnerSignIn, describeSignIn, describeSignInWays, signInAction, signInOfVerdict, TERMINAL_UI_SIGN_IN, type RunnerSignIn } from './services/signInHint';
+// The vendors' labels and key variables, pure data a webview may hold: the key entry names the vendor it is for.
+export { VENDORS, PROVIDER_PRIORITY, type ProviderRegistration } from './services/apiProviders';
 // The run view is pure too: a surface seeds its state from the one empty run
 // rather than re-declaring the shape, and a host in a renderer folds it the same way.
 export { EMPTY_RUN, reduceRun } from './services/runView';

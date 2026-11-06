@@ -38,6 +38,13 @@ export const STEPS_BY_CHECK = {
 };
 
 /**
+ * The jobs that run the suites on Windows (ADR-0010). A package change owes
+ * them as it owes build-and-test's package steps, so they are skipped exactly
+ * when those are: on a pull request whose scope reaches no package.
+ */
+export const WINDOWS_JOBS = ['windows', 'windows-harness'];
+
+/**
  * Tests in core that read the whole repository, so what they prove is about
  * every change, docs included, and not about core. They run for every scope.
  */
@@ -93,9 +100,9 @@ export function fullScope(reason, workspaces) {
  *
  * Nothing under scripts/ belongs to a workspace, so the installers
  * (scripts/install/), the release-asset script they read
- * (scripts/desktop-release-assets.mjs, ADR-0060 H10) and the package-manager
+ * (scripts/desktop-release-assets.mjs, ADR-0063 H10) and the package-manager
  * manifests a release renders (packaging/, scripts/render-package-manifests.mjs,
- * ADR-0060 H11) mean the full run: their tests run in the bench step, which a
+ * ADR-0063 H11) mean the full run: their tests run in the bench step, which a
  * narrowed run could skip.
  */
 export function selectScope(paths, workspaces) {
@@ -234,8 +241,12 @@ export function gateFailures(event, needs) {
   if (result('build-and-test') !== 'success') failures.push(`build-and-test: ${result('build-and-test')}`);
   else if (needs['build-and-test'].outputs?.confirmed !== 'true') failures.push('build-and-test: did not confirm its steps');
 
-  const engine = result('real-engine');
-  const mayBeSkipped = event === 'pull_request' && scope?.checks.engine === false;
-  if (engine !== 'success' && !(engine === 'skipped' && mayBeSkipped)) failures.push(`real-engine: ${engine}`);
+  const owed = (job, check) => {
+    const outcome = result(job);
+    const mayBeSkipped = event === 'pull_request' && scope?.checks[check] === false;
+    if (outcome !== 'success' && !(outcome === 'skipped' && mayBeSkipped)) failures.push(`${job}: ${outcome}`);
+  };
+  owed('real-engine', 'engine');
+  for (const job of WINDOWS_JOBS) owed(job, 'packages');
   return failures;
 }

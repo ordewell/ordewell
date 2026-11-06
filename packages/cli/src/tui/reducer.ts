@@ -470,6 +470,7 @@ function reduceAction(state: TuiState, action: Action): Step {
             configuredProviders: action.providers ?? state.configuredProviders,
             providersKnown: state.providersKnown || action.providers !== undefined,
             providerErrors: action.providerErrors ?? state.providerErrors,
+            runnerErrors: action.runnerErrors ?? state.runnerErrors,
             modesByRunner: action.modesByRunner ?? state.modesByRunner,
           },
           ['set-task-model', 'set-task-effort', 'set-task-mode'],

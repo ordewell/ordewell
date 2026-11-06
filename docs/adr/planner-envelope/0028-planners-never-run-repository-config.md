@@ -181,6 +181,99 @@ planner (above and below), and Ordewell reads them itself:
   workspace, as Codex orders them — into the thread's developer
   instructions.
 
+### Copilot CLI planners
+
+- **Started outside the repository.** Under ACP, GitHub Copilot CLI 1.0.105
+  runs the shell hooks in `.github/hooks/` of the directory it starts in,
+  from the first prompt, trusted or not and with `disableAllHooks` set, and no
+  flag turns them off. A planner's Copilot, and a read-only task's, starts in
+  an empty private directory of its own instead, which is also its session's
+  `cwd` and its temp directory, and reaches the worktree only by asking for
+  each path ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)
+  R3). Checked live with a hook planted in the worktree that writes a marker
+  for each event: a writable task's start ran it, and neither restricted
+  start did (`repo-hooks.jsonl`, `planner.jsonl`, `read-only.jsonl`).
+- **Instructions as text.** Started outside the repository, Copilot loads
+  none of its instruction files, so Ordewell reads the ones Copilot would:
+  `.github/copilot-instructions.md`, `AGENTS.md`, `CLAUDE.md`,
+  `.claude/CLAUDE.md` and `GEMINI.md` in each directory from the repository
+  root down to the workspace, with the `@path` imports Copilot expands that
+  stay inside the repository, and `.github/instructions/**/*.instructions.md`
+  at the root and the workspace. They follow Ordewell's own instructions in
+  the private directory's `AGENTS.md`, a read-only task's too. No hook,
+  setting or MCP server file is read, so none of the repository's servers is
+  offered to it.
+
+### Qwen Code planners
+
+- **Started outside the repository.** Under ACP, Qwen Code 0.26.6 started in
+  the worktree runs the hooks in the repository's `.qwen/settings.json`, with
+  nobody asked, and rewrites that file. A planner's Qwen, and a read-only
+  task's, starts in an empty private directory of its own instead, also its
+  temp directory, as Copilot's does
+  ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md) R3).
+  A hook planted in the worktree did not run on the recorded restricted
+  start (`planted-hook.jsonl`).
+- **No instructions as text.** Started there, Qwen loads none of the
+  repository's context files, and the profile has no reader, so a planner's
+  Qwen plans without them. Its user's own `~/.qwen/settings.json` still loads.
+
+### Gemini CLI planners
+
+- **Started outside the repository.** Under ACP, Gemini CLI 0.66.0 trusts the
+  worktree it is started in (`--skip-trust`, which every start passes so that
+  it connects Ordewell's server), so it runs the hooks the repository's
+  `.gemini/settings.json` names and connects its MCP servers. A planner's
+  Gemini, and a read-only task's, starts in an empty private directory of its
+  own instead, also its temp directory, as Qwen's does
+  ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md) R3).
+  Checked live with a hook on every event writing a marker: a writable start
+  in the worktree ran `BeforeAgent` and `BeforeModel` among them, and the
+  restricted start ran none (`planted-hook.jsonl`). Its own reads are held to
+  that directory, so it reaches the worktree only through `run_command`. The
+  policy file it is handed denies every MCP server's tools but Ordewell's, so
+  a server the user's own settings name is refused too.
+- **No instructions as text.** Started there, Gemini loads none of the
+  repository's `GEMINI.md` files, and the profile has no reader, so a
+  planner's Gemini plans without them. Its user's own `~/.gemini/settings.json`
+  still loads.
+
+### Cursor planners
+
+- **Started outside the repository.** Started in a workspace, Cursor CLI
+  2026.10.22 loads its `.cursor/rules/`, runs the hooks in its
+  `.cursor/hooks.json` and reads its `AGENTS.md`, as a run in print mode in a
+  workspace planting all three showed. A planner's Cursor, and a read-only
+  task's, starts in an empty private directory of its own instead, also its
+  temp directory, with `CURSOR_CONFIG_DIR` set to a home of that start's own
+  ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md) R3).
+  On the recorded restricted start in a workspace that also planted a
+  `.cursor/mcp.json` server and a `.cursor/cli.json` allowing every tool, no
+  hook or server ran and no rule or `AGENTS.md` reached the reply
+  (`planted-hook.jsonl`); the restricted write and command, recorded in the
+  same workspace, were refused despite that allow list.
+- **No instructions as text.** The profile has no reader, so a planner's
+  Cursor plans without the repository's rules or `AGENTS.md`. Its user's own
+  `~/.cursor/cli-config.json` does not load either, since the home moved.
+
+### Cline planners and read-only tasks
+
+- **Started outside the repository.** Under ACP, Cline 3.0.74 runs the hooks
+  in `.cline/hooks/` and `.clinerules/hooks/` of the directory it starts in,
+  and pointing `CLINE_DIR` at an empty home does not stop them. A planner's
+  Cline, and a read-only task's, starts in an empty private directory of its
+  own instead, which
+  is also its session's `cwd` and its temp directory
+  ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md) R3).
+  Checked live with hooks planted in both folders that write a marker for
+  each event: a writable task's start ran them all, with `CLINE_DIR` set or
+  not, and the read-only start ran none (`repo-hooks.jsonl`,
+  `repo-hooks-cline-dir.jsonl`, `read-only-hooks.jsonl`). A planner's start,
+  with the same hooks planted, ran none either (`planner.jsonl`).
+- **No instructions from the repository.** Started there, Cline loads none of
+  the repository's `.clinerules/` rules, and Ordewell has no reader for them,
+  so a planner's or a read-only task's Cline has Ordewell's instructions alone.
+
 ### What the repository's config can do, and how the planner launch stops it
 
 | runner | item | can | planner launch |
@@ -204,6 +297,21 @@ planner (above and below), and Ordewell reads them itself:
 | Codex | `model_provider`, `model_providers`, base URLs, `otel` | redirect traffic | untrusted |
 | Codex | `shell_environment_policy`, profiles, exec policies | shape the shell | untrusted; the shell stays sandboxed |
 | Codex | `AGENTS.md` | text | injected by Ordewell |
+| Copilot CLI | `.github/hooks/` | run commands | started in a private directory |
+| Copilot CLI | MCP config | start a command, reach a URL | started in a private directory |
+| Copilot CLI | instruction files, imports | text | started in a private directory; injected by Ordewell |
+| Qwen Code | `.qwen/settings.json` hooks | run commands | started in a private directory |
+| Qwen Code | `.qwen/settings.json` MCP servers | start a command, reach a URL | started in a private directory |
+| Qwen Code | context files (`QWEN.md`) | text | started in a private directory; not read |
+| Gemini CLI | `.gemini/settings.json` hooks | run commands | started in a private directory |
+| Gemini CLI | `.gemini/settings.json` MCP servers | start a command, reach a URL | started in a private directory; every server but Ordewell's denied by policy |
+| Gemini CLI | context files (`GEMINI.md`) | text | started in a private directory; not read |
+| Cursor | `.cursor/hooks.json` | run commands | started in a private directory |
+| Cursor | `.cursor/mcp.json` | start a command, reach a URL | started in a private directory |
+| Cursor | `.cursor/cli.json` permissions | allow its own tools | started in a private directory |
+| Cursor | `.cursor/rules/`, `AGENTS.md` | text | started in a private directory; not read |
+| Cline | `.cline/hooks/`, `.clinerules/hooks/` | run commands | started in a private directory |
+| Cline | `.clinerules/` rules | text | started in a private directory; not read |
 
 The workspace's own environment (ADR-0016) is unchanged: it holds only what
 direnv was allowed to export and an untracked `.ordewell/env`.
@@ -410,3 +518,10 @@ specifies.
   below its repository's top, a group's shared entries, the checkout an ops or
   shared task runs in), covers OpenCode's and Codex's configuration, skips
   read-only tasks, and no longer reads settings files for an `ordewell` server.
+- 2026-11-04 — a Copilot CLI planner or read-only task starts in a private directory, out of reach of the repository's hooks (ADR-0060).
+- 2026-11-04 — a Copilot CLI planner or read-only task is handed the repository's instruction files as text (ADR-0060).
+- 2026-11-04 — a Cline read-only task starts in a private directory, out of reach of the repository's hooks (ADR-0060).
+- 2026-11-04 — a Qwen Code planner or read-only task starts in a private directory, out of reach of the repository's `.qwen/settings.json` (ADR-0060).
+- 2026-11-04 — a Gemini CLI planner or read-only task starts in a private directory, out of reach of the repository's `.gemini/settings.json` (ADR-0060).
+- 2026-11-04 — a Cursor planner or read-only task starts in a private directory with a config home of its own, out of reach of the repository's `.cursor/` (ADR-0060).
+- 2026-11-05 — a Cline planner starts in a private directory too, out of reach of the repository's hooks (ADR-0060).

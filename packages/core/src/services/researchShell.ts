@@ -1,6 +1,8 @@
+import { execFileSync } from 'child_process';
 import * as fsSync from 'fs';
 import * as path from 'path';
 import type { CommandPolicyOptions } from './commandPolicy';
+import { isInertDevice, type HostPath } from './pathScope';
 
 /**
  * Which interpreter runs the planner's `bash` tool, and in which language.
@@ -47,6 +49,13 @@ export interface ResearchShell {
    * `execFile` starts without a shell, so they resolve too.
    */
   utilsDir: string | null;
+  /**
+   * Where a path this shell is handed lands on the host, for a shell that
+   * reads paths its own way; undefined where a path means what the host says.
+   * Path confinement judges the folder the command reaches through it, not the
+   * one the same spelling names on the host's current drive (ADR-0010).
+   */
+  hostPath?: HostPath;
 }
 
 /**
@@ -76,6 +85,149 @@ export interface ResearchShellDeps {
   platform?: NodeJS.Platform;
   exists?: (candidate: string) => boolean;
   env?: NodeJS.ProcessEnv;
+  /** What Git Bash's `mount` prints, then its `mount -p`, for the install at `root`; undefined when it cannot run. */
+  readMounts?: (root: string) => [string, string] | undefined;
+}
+
+/**
+ * A mount table: where each mount point sits on the host, whether Git Bash
+ * matches it in any case (a `posix=0` mount: the drives, `/tmp`) or only as
+ * spelled, and the prefix every drive letter sits under.
+ */
+export interface MountTable {
+  points: Array<{ point: string; host: string; caseless: boolean }>;
+  cygdrive: string;
+}
+
+function defaultReadMounts(root: string): [string, string] | undefined {
+  const mount = path.win32.join(root, 'usr', 'bin', 'mount.exe');
+  try {
+    // Once per process, on the first command that names a POSIX path: about 65ms warm.
+    const read = (args: string[]) => execFileSync(mount, args, { encoding: 'utf8', timeout: 5_000, windowsHide: true });
+    return [read([]), read(['-p'])];
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The table `mount` and `mount -p` print, as `C:/Program Files/Git on / type
+ * ntfs (binary,…)` lines and a `Prefix` heading over the drive prefix.
+ * Undefined when the output holds no root mount, which no working install prints.
+ */
+export function parseMounts(mounts: string, prefix: string): MountTable | undefined {
+  const points: MountTable['points'] = [];
+  for (const line of mounts.split(/\r?\n/)) {
+    const m = /^(.+?) on (\/.*?) type \S+ \(([^)]*)\)/.exec(line);
+    if (!m) continue;
+    const host = m[1].replace(/\//g, '\\');
+    points.push({ point: m[2], host: /^[A-Za-z]:$/.test(host) ? `${host}\\` : host, caseless: m[3].split(',').includes('posix=0') });
+  }
+  if (!points.some((p) => p.point === '/')) return undefined;
+  const cygdrive = /^\s*(\/\S*)\s+\S+\s+\S+/m.exec(prefix.split(/\r?\n/).slice(1).join('\n'))?.[1] ?? '/';
+  return { points, cygdrive };
+}
+
+/** Git for Windows' own table, for when its `mount` cannot be asked. */
+function defaultMounts(root: string, env: NodeJS.ProcessEnv): MountTable {
+  const temp = env.TEMP || env.TMP;
+  return {
+    points: [
+      { point: '/', host: root, caseless: false },
+      { point: '/bin', host: path.win32.join(root, 'usr', 'bin'), caseless: false },
+      ...(temp ? [{ point: '/tmp', host: temp, caseless: true }] : []),
+    ],
+    cygdrive: '/',
+  };
+}
+
+/**
+ * Where Git Bash reads `spelled` to be, run from the host folder `from`, or
+ * undefined where its reading cannot be followed for certain (ADR-0010).
+ *
+ * A POSIX path goes through `table`: its longest mount point, or the drive a
+ * letter under the drive prefix names, with `\` read as Git Bash reads it, a
+ * separator. A device of the shell's own (`/dev/null`) is left as spelled, and
+ * `//server/share` is the network path it names. Git Bash resolves `..` below
+ * some mounts on disk and below others by name, so a POSIX path holding one,
+ * and a relative one that climbs out of its drive, are undefined: so is the
+ * rest of its own `/proc` and `/dev`, which name no folder. A drive, network or
+ * root-relative path and a relative one that stays on its drive are read by
+ * the host as Git Bash reads them, and `~` is the `HOME` Git Bash would use.
+ */
+export function mountedHostPath(table: MountTable, spelled: string, from?: string, home?: string): string | undefined {
+  if (isInertDevice(spelled)) return spelled;
+  if (spelled.startsWith('/')) return mountedAbsolute(table, spelled.replace(/\\/g, '/'));
+  if (home && (spelled === '~' || /^~[\\/]/.test(spelled))) {
+    const base = home.startsWith('/') ? mountedAbsolute(table, home) : home;
+    return base === undefined ? undefined : path.win32.join(base, spelled.slice(1));
+  }
+  if (from === undefined || /^[A-Za-z]:/.test(spelled) || spelled.startsWith('\\') || spelled.startsWith('~')) return spelled;
+  return staysOnDrive(table, spelled.replace(/\\/g, '/'), from) ? spelled : undefined;
+}
+
+function mountedAbsolute(table: MountTable, posix: string): string | undefined {
+  if (/^\/\/[^/]/.test(posix)) return posix.replace(/\//g, '\\');
+  const segments = posix.split('/').filter((s) => s !== '' && s !== '.');
+  if (segments.includes('..')) return undefined;
+  const prefix = table.cygdrive.endsWith('/') ? table.cygdrive : `${table.cygdrive}/`;
+  const top = segments[0]?.toLowerCase();
+  if (top === 'proc' && segments[1]?.toLowerCase() === 'cygdrive') return mountedAbsolute(table, prefix + segments.slice(2).join('/'));
+  if (top === 'proc' || top === 'dev') return undefined;
+
+  const normal = `/${segments.join('/')}`;
+  const under = ({ point, caseless }: MountTable['points'][number]) => {
+    if (point === '/') return true;
+    const [at, here] = caseless ? [point.toLowerCase(), normal.toLowerCase()] : [point, normal];
+    return here === at || here.startsWith(`${at}/`);
+  };
+  let best: { point: string; host: string } | undefined = table.points.filter(under).sort((a, b) => b.point.length - a.point.length)[0];
+  const drive = normal.toLowerCase().startsWith(prefix.toLowerCase()) ? /^([a-z])(?:\/|$)/i.exec(normal.slice(prefix.length)) : null;
+  if (drive && (!best || prefix.length + 1 > best.point.length)) {
+    best = { point: normal.slice(0, prefix.length + 1), host: `${drive[1].toUpperCase()}:\\` };
+  }
+  if (!best) return undefined;
+  const rest = normal.slice(best.point.length).split('/').filter(Boolean);
+  return rest.length ? path.win32.join(best.host, ...rest) : best.host;
+}
+
+/**
+ * Whether a relative path with no `..` past it, or one whose `..` stays on the
+ * drive of `from`, lands where the host would put it. Git Bash climbs from its
+ * own spelling of `from`, `/c/x` for `C:\x`, and from the drive's top on into
+ * its own root: `../../c/Users` from `F:\a` is `C:\Users` to it. Below one of
+ * its other mounts, it climbs in ways no one reading can follow.
+ */
+function staysOnDrive(table: MountTable, relative: string, from: string): boolean {
+  if (!relative.split('/').includes('..')) return true;
+  const drive = /^([A-Za-z]):(?:[\\/]|$)/.exec(from);
+  const underMount = table.points.some((p) => {
+    if (/^[A-Za-z]:\\$/.test(p.host)) return false;
+    const rel = path.win32.relative(p.host, from);
+    return !rel.startsWith('..') && !path.win32.isAbsolute(rel);
+  });
+  if (!drive || underMount) return false;
+  const top = `/${drive[1].toLowerCase()}`;
+  const climbed = path.posix.join(`${top}/${from.slice(drive[0].length).replace(/\\/g, '/')}`, relative);
+  return climbed === top || climbed.startsWith(`${top}/`);
+}
+
+/**
+ * How Git Bash reads a path, read from its own `mount` on the first path that
+ * needs it, since most commands name none; Git for Windows' defaults stand in
+ * when it cannot be asked.
+ */
+function gitBashHostPath(root: string, env: NodeJS.ProcessEnv, readMounts: (root: string) => [string, string] | undefined): HostPath {
+  let table: MountTable | undefined;
+  return (spelled, from) => {
+    // A relative path that climbs nowhere, and a drive or network path, read the same to the host.
+    if (!spelled.startsWith('/') && !spelled.startsWith('~') && !/(^|[\\/])\.\.([\\/]|$)/.test(spelled)) return spelled;
+    if (!table) {
+      const read = readMounts(root);
+      table = (read && parseMounts(...read)) ?? defaultMounts(root, env);
+    }
+    return mountedHostPath(table, spelled, from, env.HOME);
+  };
 }
 
 function defaultExists(candidate: string): boolean {
@@ -116,11 +268,13 @@ let cached: ResearchShell | null = null;
  * handful of `stat` calls.
  */
 export function resolveResearchShell(deps: ResearchShellDeps = {}): ResearchShell {
-  if (cached && !deps.platform && !deps.exists && !deps.env) return cached;
+  // A call with a seam of its own is a probe, and neither reads nor fills the cache.
+  const probe = !!(deps.platform || deps.exists || deps.env || deps.readMounts);
+  if (cached && !probe) return cached;
 
   const platform = deps.platform ?? process.platform;
   if (platform !== 'win32') {
-    if (!deps.platform && !deps.exists && !deps.env) cached = POSIX_SHELL;
+    if (!probe) cached = POSIX_SHELL;
     return POSIX_SHELL;
   }
 
@@ -139,13 +293,14 @@ export function resolveResearchShell(deps: ResearchShellDeps = {}): ResearchShel
         args: ['-c'],
         dialect: 'posix',
         utilsDir: exists(path.win32.join(utilsDir, 'grep.exe')) ? utilsDir : null,
+        hostPath: gitBashHostPath(root, env, deps.readMounts ?? defaultReadMounts),
       };
-      if (!deps.platform && !deps.exists && !deps.env) cached = resolved;
+      if (!probe) cached = resolved;
       return resolved;
     }
   }
 
-  if (!deps.platform && !deps.exists && !deps.env) cached = CMD_SHELL;
+  if (!probe) cached = CMD_SHELL;
   return CMD_SHELL;
 }
 

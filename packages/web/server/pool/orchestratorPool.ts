@@ -64,6 +64,7 @@ import {
   selectPlanner,
   admitSettingsEnv,
   PROVIDER_CREDENTIAL_ENV,
+  forgetSignedOutRunnerAuth,
   type PlannerBackendId,
   type PlannerModelCandidate,
   type PlannerSelectionChange,
@@ -103,7 +104,7 @@ export interface AdoptedFork {
  * test may hand in only the two probes; the real `RunnerInstallation` always
  * has it, and a refresh then re-probes a CLI installed since the last look.
  */
-type RunnerInstall = Pick<RunnerInstallation, 'filterInstalled' | 'plannerUsability'> & Partial<Pick<RunnerInstallation, 'refresh'>>;
+type RunnerInstall = Pick<RunnerInstallation, 'filterInstalled' | 'plannerUsability' | 'runnerUsability'> & Partial<Pick<RunnerInstallation, 'refresh'>>;
 
 export interface OrchestratorPoolDeps {
   /** Inject acquisition boundaries without reading real accounts in host lifecycle tests. */
@@ -737,6 +738,11 @@ export class OrchestratorPool {
       if (touched) {
         this.modelResolver.invalidate();
         this.dropUnkeyedProviderLists();
+        // A saved key can sign an agent in with no login of its own (ADR-0060,
+        // R9): a signed-out verdict taken before it, recorded or cached, is no
+        // longer evidence, and the next start must not be refused on it.
+        forgetSignedOutRunnerAuth();
+        for (const installation of new Set([this.runnerInstallation, ...this.workspaceInstallations.values()])) installation.refresh?.();
       }
     }
 
@@ -820,16 +826,22 @@ export class OrchestratorPool {
     const resolver = this.resolverFor(workspace);
 
     const runnerIds = this.registry.list().map((p) => p.manifest.name);
-    const [runnerModels, providerLists] = await Promise.all([
-      resolver.modelsForRunners(runnerIds),
-      resolver.refresh(),
-      this.codexSandbox.ensure(),
-    ]);
+    const sandbox = this.codexSandbox.ensure();
+    // Awaited below; marked handled now, so a failed catalog load before then
+    // does not leave its rejection unhandled.
+    sandbox.catch(() => {});
+    // The vendor catalogs first: a runner started on a key Ordewell holds can
+    // be handed the model that key's catalog says its account is served
+    // (Qwen's, ADR-0060 R9), and a discovery begun before the catalog is held
+    // would list a model the account may be refused, until the next refresh.
+    const providerLists = await resolver.refresh();
+    const [runnerModels] = await Promise.all([resolver.modelsForRunners(runnerIds), sandbox]);
 
     // `refresh()` populates the picker cache, so this is the same fetch — no
     // second network round-trip. Errors are whatever that fetch recorded.
     const orchestratorModels = await resolver.pickerOptions();
     const providerErrors = resolver.getDiscoveryErrors();
+    const runnerErrors = resolver.getRunnerDiscoveryErrors();
 
     this.cachedProviderLists = providerLists;
 
@@ -857,6 +869,7 @@ export class OrchestratorPool {
       providers,
       orchestratorModels,
       providerErrors,
+      runnerErrors,
     };
   }
 
@@ -922,24 +935,25 @@ export class OrchestratorPool {
     // The auth verdict rides along, never gating the list: a signed-out agent
     // is installed and offered, and a surface flags it. The probe was just
     // asked above and its answer is cached, so this costs no second spawn.
-    // Its `usable` does gate: an installed CLI that cannot be spawned (a
-    // Windows `.cmd` shim) must not be offered (ADR-0009).
-    const rows = await Promise.all(
+    // An installed CLI that cannot be started — a Windows `.cmd` shim, or an
+    // ACP agent below its minimum version — stays in the list as unavailable
+    // with its reason, so a surface can say why instead of hiding it (ADR-0009,
+    // ADR-0060).
+    return Promise.all(
       runners
         .filter((p) => installedIds.has(p.manifest.name))
-        .map(async (p): Promise<RunnersResponse['runners'][number] | null> => {
-          const { usable, auth, version } = await installation.plannerUsability(p.manifest.name);
-          if (!usable) return null;
+        .map(async (p): Promise<RunnersResponse['runners'][number]> => {
+          const { usable, reason, auth, version } = await installation.runnerUsability(p.manifest.name);
           return {
             id: p.manifest.name,
             name: p.manifest.displayName,
             enabled: enabled.has(p.manifest.name),
+            ...(usable ? {} : { usable: false, ...(reason ? { reason } : {}) }),
             ...(auth ? { auth } : {}),
             ...(version ? { version } : {}),
           };
         }),
     );
-    return rows.filter((row): row is RunnersResponse['runners'][number] => row !== null);
   }
 
   async generatePlan(sessionId: string, goal: string, runners: RunnerId[] | undefined, workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Promise<PlanState> {

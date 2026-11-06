@@ -1,14 +1,14 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { execFile, execFileSync } from 'child_process';
 import { promisify } from 'util';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createWorktreeIsolation, type GitExecFn, type WorktreeIsolationDeps } from '../GitWorktreeIsolation';
 import { defaultExecFile, subcommandOf } from '../gitExec';
 import type { IsolationRun, IWorktreeIsolation } from '../../interfaces/IWorktreeIsolation';
 import type { Task } from '../../models/Task';
-import { fakeConfig } from '../../testing';
+import { fakeConfig, removeDir } from '../../testing';
 import { taskIsolationsOf } from '../isolationRecord';
 import { IsolationRunController } from '../IsolationRunController';
 import { revertScope } from '../taskRevert';
@@ -40,13 +40,14 @@ function initRepo(root: string, files: Record<string, string> = { 'README.md': '
 
 const temps: string[] = [];
 function tempDir(): string {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-revert-')));
+  // Native, as git names a path: on Windows the JS realpath keeps the 8.3 short name of the temp folder.
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'ordewell-revert-')));
   temps.push(dir);
   return dir;
 }
 
-afterEach(() => {
-  while (temps.length) rmSync(temps.pop()!, { recursive: true, force: true });
+afterEach(async () => {
+  while (temps.length) await removeDir(temps.pop()!);
 });
 
 function task(order: number, title: string): Task {
@@ -788,7 +789,8 @@ describe('the command for work in the user\'s branch', () => {
     ['a variable', 'we$HOME'],
     ['a command substitution', 'we$(touch pwned)ird'],
     ['a backtick', 'we`touch pwned`ird'],
-    ['a double quote', 'we"ird'],
+    // Windows allows no double quote in a file name.
+    ...(process.platform === 'win32' ? [] : [['a double quote', 'we"ird']]),
     ['a single quote', "it's"],
   ])('runs as printed with %s in the path', async (_what, name) => {
     const root = tempDir();
@@ -877,7 +879,7 @@ describe('what stands in a revert\'s way', () => {
     await iso.handoff(run);
     git(root, 'worktree', 'add', '-q', review, integration);
 
-    expect(await iso.readLanded(run, [t.id])).toMatchObject({ ok: false, reason: 'checked-out', error: expect.stringContaining(`checked out in ${realpathSync(review)}`) });
+    expect(await iso.readLanded(run, [t.id])).toMatchObject({ ok: false, reason: 'checked-out', error: expect.stringContaining(`checked out in ${realpathSync.native(review)}`) });
   });
 
   it('names the repo of a group whose branch is checked out', async () => {

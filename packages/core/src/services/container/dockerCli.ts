@@ -28,7 +28,7 @@ export interface DockerCall {
 export interface DockerCli {
   call(args: readonly string[], opts?: DockerCall): Promise<DockerResult>;
   /** A command that runs for as long as a container does, with its stdio left open. */
-  entry(args: readonly string[]): Promise<ChildProcess>;
+  entry(args: readonly string[], opts?: Pick<DockerCall, 'env'>): Promise<ChildProcess>;
 }
 
 const CALL_TIMEOUT_MS = 120_000;
@@ -38,7 +38,9 @@ export class SpawnedDockerCli implements DockerCli {
   constructor(private readonly resolvePath: () => Promise<string> = augmentedPath) {}
 
   private async environment(env: Readonly<Record<string, string>> = {}): Promise<NodeJS.ProcessEnv> {
-    return { ...withPath(cleanEnv(), await this.resolvePath()), ...env };
+    // Through `withPath`, not a spread over it: on Windows a host variable in
+    // another case would otherwise win over what `-e NAME` hands the CLI.
+    return withPath(cleanEnv(), await this.resolvePath(), env);
   }
 
   async call(args: readonly string[], { input, env, timeoutMs = CALL_TIMEOUT_MS, stdoutTo }: DockerCall = {}): Promise<DockerResult> {
@@ -80,7 +82,7 @@ export class SpawnedDockerCli implements DockerCli {
     });
   }
 
-  async entry(args: readonly string[]): Promise<ChildProcess> {
-    return spawn('docker', [...args], { env: await this.environment(), stdio: ['pipe', 'pipe', 'pipe'] });
+  async entry(args: readonly string[], opts: Pick<DockerCall, 'env'> = {}): Promise<ChildProcess> {
+    return spawn('docker', [...args], { env: await this.environment(opts.env), stdio: ['pipe', 'pipe', 'pipe'] });
   }
 }

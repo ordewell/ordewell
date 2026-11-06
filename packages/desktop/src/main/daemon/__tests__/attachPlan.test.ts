@@ -7,7 +7,7 @@ const daemon = (contract?: number, version = '0.12.3'): DaemonProbe => ({
   identity: { pid: 1, version, ...(contract !== undefined ? { contract } : {}) },
 });
 
-describe('decideAttach (ADR-0060 H2, H3)', () => {
+describe('decideAttach (ADR-0063 H2, H3)', () => {
   it.each<[Holding, string]>([['none', 'own'], ['owned', 'own'], ['attached', 'reconnect']])(
     'a free port while holding %s → %s',
     (holding, action) => {

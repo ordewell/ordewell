@@ -1,5 +1,5 @@
 import { DELEGATION_OFFERED, containersOffered } from '@ordewell/core';
-import { runnerIdList } from './runnerNames';
+import { plannerIdList, runnerIdList } from './runnerNames';
 
 // The `web_search:` provider names further down are search providers, named as
 // an approval names them, not runner ids.
@@ -151,7 +151,7 @@ Environment:
   OPENROUTER_API_KEY         OpenRouter API key
   GEMINI_API_KEY             Google Gemini API key
   AI_PROVIDER                Provider ID (auto-detected from keys); list with "ordewell planner"
-                             ${runnerIdList()}: plan with that CLI,
+                             ${plannerIdList()}: plan with that CLI,
                              no API key (uses its own subscription)
   ORDEWELL_PLANNER_EFFORT    Thinking effort for a coding-agent planner
   ORCHESTRATOR_MODEL         Planner model; no default. Required for an API planner, optional

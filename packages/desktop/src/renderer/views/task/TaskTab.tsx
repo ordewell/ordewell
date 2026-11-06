@@ -9,6 +9,7 @@ import {
 import type { FrameApi, Tab, Unregister } from '../../frame/api';
 import { daemonHost, type DaemonHost } from '../../session/DaemonHost';
 import { useSession } from '../../session/useSession';
+import { signedOutByRunner } from '../../signIn';
 import { all } from '../Stub';
 import { TaskChanges } from '../changes/ChangesSidebar';
 import { NodeMenu, type MenuAnchor } from '../graph/NodeMenu';
@@ -168,7 +169,8 @@ export function TaskTab({ tab, host, api }: { tab: Tab; host: DaemonHost; api: F
   const dependents = [...walkPlan(tasks)].filter((p) => p.task.dependencies.includes(task.id)).map((p) => p.task.id);
   const isolation = live?.isolation;
   const branch = isolation && isolation.state !== 'none' ? isolation.branch : undefined;
-  const actions = taskTabActions({ id: task.id, type: task.type, status: (live ?? task).status }, row, session.state.isExecuting);
+  const signIn = runnerId ? signedOutByRunner(session.state.planner.backends)[runnerId] : undefined;
+  const actions = taskTabActions({ id: task.id, type: task.type, status: (live ?? task).status }, row, session.state.isExecuting, signIn);
   const [first, ...rest] = actions;
   const ref = `#${placed.label} ${task.title}`;
   const act = (action: TaskTabAction): void => { void host.handle(action.message); };
@@ -202,6 +204,9 @@ export function TaskTab({ tab, host, api }: { tab: Tab; host: DaemonHost; api: F
             )}
           </span>
         </div>
+        {signIn && (
+          <p className="session-task-auth" role="status" title={signIn.hint}>{signIn.hint}</p>
+        )}
       </header>
       {menuAt && (
         <NodeMenu commands={rest.map((action, index) => ({ id: String(index), label: action.label }))} at={menuAt} label={`Commands for ${ref}`} anchor={more}
@@ -241,6 +246,7 @@ export function register(api: FrameApi): Unregister {
       api.openTab({ kind: 'file', id: path, title: path.split('/').pop() ?? path, scope: { kind: 'checkout' } }, { preview: true });
     },
     showPlan: () => api.showPlan(),
+    showSessions: () => api.showActivity('sessions'),
   });
   const follow = (): void => api.showSession(host.sessionId);
   follow();

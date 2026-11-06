@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { execFileSync } from 'child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { delimiter, join, resolve } from 'path';
 import { createWorktreeIsolation } from '../GitWorktreeIsolation';
@@ -8,7 +8,7 @@ import { LeaseHost } from '../sessionLease';
 import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import { StructuredRunner } from '../StructuredRunner';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
-import { fakeConfig } from '../../testing';
+import { fakeConfig, patient, removeDir } from '../../testing';
 import { loadChildSession, saveSession } from '../../utils/sessionStore';
 import { openTaskLog } from '../../utils/taskLogStore';
 import { nodeOfTask } from './delegationTestKit';
@@ -38,7 +38,7 @@ afterEach(async () => {
     if (value === undefined) delete process.env[name];
     else process.env[name] = value;
   }
-  while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  while (dirs.length) await removeDir(dirs.pop()!);
 });
 
 function tempDir(): string {
@@ -143,5 +143,5 @@ describe('two sibling delegated tasks on a real harness', () => {
     expect(git(root, 'log', '--format=%s', integration).split('\n')).toEqual(expect.arrayContaining(['Merge: Serve the users API', 'Merge: Call the users API']));
     expect(existsSync(join(root, 'api'))).toBe(false);
     parent.destroy();
-  }, 120_000);
+  }, patient(120_000));
 });

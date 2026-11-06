@@ -7,7 +7,7 @@ and your own repository — files, diffs, git and a terminal.
 It is a **client of the local daemon**, not a host. The daemon
 ([`@ordewell/web`](../web/README.md)) runs the session and holds its lease, so a
 run started here is the one `ordewell status` reports
-([ADR-0060](../../docs/adr/surfaces/0060-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)).
+([ADR-0063](../../docs/adr/surfaces/0063-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)).
 Main attaches to a daemon that is already running or starts and owns the one it
 bundles. The renderer never holds the bearer token: it reaches the daemon only
 through the preload's fixed bridge, and daemon calls name a route id rather than

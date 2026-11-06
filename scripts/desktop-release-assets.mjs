@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The release assets the one-line installers read (ADR-0060 H10): fixed-name
+// The release assets the one-line installers read (ADR-0063 H10): fixed-name
 // copies of the installers, so https://github.com/ordewell/ordewell/releases/
 // latest/download/<name> always resolves, and a SHA256SUMS file over every
 // installer, versioned name and fixed name alike.

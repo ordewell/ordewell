@@ -3,6 +3,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkS
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { linkPath, mirrorDir } from '../worktreeLink';
+import { removeDir } from '../../testing';
 
 const dirs: string[] = [];
 function scratch(): { source: string; file: string; dir: string; out: string } {
@@ -19,7 +20,7 @@ function scratch(): { source: string; file: string; dir: string; out: string } {
 function lexists(p: string): boolean {
   try { lstatSync(p); return true; } catch { return false; }
 }
-afterEach(() => { while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true }); });
+afterEach(async () => { while (dirs.length) await removeDir(dirs.pop()!); });
 
 describe('linkPath', () => {
   it('symlinks files and directories on POSIX', () => {
@@ -80,7 +81,7 @@ describe('mirrorDir', () => {
 
     expect(lstatSync(join(task, 'node_modules')).isSymbolicLink()).toBe(false);
     expect(realpathSync(join(task, 'node_modules', 'left-pad'))).toBe(join(main, 'node_modules', 'left-pad'));
-    expect(readlinkSync(join(task, 'node_modules', 'a'))).toBe('../packages/a');
+    expect(readlinkSync(join(task, 'node_modules', 'a'))).toBe(join('..', 'packages', 'a'));
     expect(realpathSync(join(task, 'node_modules', 'a'))).toBe(join(task, 'packages', 'a'));
   });
 
@@ -110,7 +111,7 @@ describe('mirrorDir', () => {
     expect(lstatSync(join(task, 'node_modules', '@scope', 'real')).isSymbolicLink()).toBe(true);
     expect(realpathSync(join(task, 'node_modules', '@scope', 'real'))).toBe(join(main, 'node_modules', '@scope', 'real'));
     expect(lstatSync(join(task, 'node_modules', '.bin')).isSymbolicLink()).toBe(false);
-    expect(readlinkSync(join(task, 'node_modules', '.bin', 'pad'))).toBe('../left-pad/bin/pad');
+    expect(readlinkSync(join(task, 'node_modules', '.bin', 'pad'))).toBe(join('..', 'left-pad', 'bin', 'pad'));
     expect(readFileSync(join(task, 'node_modules', '.bin', 'pad'), 'utf8')).toBe('#!/bin/sh\n');
   });
 

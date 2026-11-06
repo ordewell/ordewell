@@ -10,7 +10,7 @@ declare const __ORDEWELL_AUTO_UPDATE__: boolean | undefined;
  * signed must not be able to be told to fetch and run another one, so nothing a
  * user or a page can set reaches this. It is true only in a build that is
  * signed, and notarized on macOS, where the platform holds an update to the
- * installed app's signer (ADR-0060 H9). Anything else, including a build that
+ * installed app's signer (ADR-0063 H9). Anything else, including a build that
  * never decided, is false.
  */
 export const AUTO_UPDATE_ENABLED: boolean =

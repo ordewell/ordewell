@@ -335,12 +335,32 @@ describe('PoolFileSystem', () => {
       expect(result.output).toContain('hello.txt');
     });
 
-    it('hands the signal that ended a command to core, which reads the memory limit from it', async () => {
+    // A POSIX signal ending the shell: a Windows process ends with an exit code alone.
+    it.skipIf(process.platform === 'win32')('hands the signal that ended a command to core, which reads the memory limit from it', async () => {
       class Exposed extends PoolFileSystem {
         exec(command: string) { return this.execBashImpl(command, { file: '/bin/sh', args: ['-c'], wallTimeMs: 5_000 }, undefined, tmpDir); }
       }
       expect(await new Exposed(tmpDir).exec('kill -USR2 $$')).toMatchObject({ success: false, signal: 'SIGUSR2' });
       expect(await new Exposed(tmpDir).exec('exit 3')).not.toHaveProperty('signal');
+    });
+
+    it('cuts the output of a failing command between lines, so a credential keeps its name for redaction', async () => {
+      // The shell the bash tool itself resolves: Git Bash on Windows, where a
+      // `/bin/sh` does not start and leaves no output to cut.
+      class Exposed extends PoolFileSystem {
+        exec(command: string) { return this.execBashImpl(command, this.researchShell, undefined, tmpDir); }
+      }
+      const line = 'MISTRAL_API_KEY="aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xYfake"';
+      // The 20,000-char cut falls inside the name, then inside the value.
+      for (const into of [3, 25]) {
+        // 19,900 chars of whole lines, then one more line that ends `into` chars before the cut.
+        const filler = 'q'.repeat(99 - into);
+        fs.writeFileSync(path.join(tmpDir, 'long-stderr.txt'), `${`${'p'.repeat(99)}\n`.repeat(199)}${filler}\n${line}\nafter\n`);
+        const result = await new Exposed(tmpDir).exec('cat long-stderr.txt >&2; exit 1');
+        expect(result.success).toBe(false);
+        expect(result.output, `cut ${into} chars in`).not.toContain(line.slice(into, into + 8));
+        expect(result.output.split('\n').at(-1), `cut ${into} chars in`).toBe(filler);
+      }
     });
 
     it('denies an ask-tier command when no approval channel is wired', async () => {

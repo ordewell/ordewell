@@ -15,7 +15,7 @@ export interface DaemonProxyDeps {
 
 /**
  * The renderer's only way to the daemon, and the only place the token is
- * attached (ADR-0060 H4). It takes a request `buildRequest` already checked
+ * attached (ADR-0063 H4). It takes a request `buildRequest` already checked
  * against the route table and adds what the renderer never holds: the bearer,
  * a loopback `Host` at the daemon's own port, and no `Origin`, since admission
  * refuses any request that carries one.

@@ -203,7 +203,7 @@ describe('daemon admission control', () => {
       ['GET', '/api/commands', undefined],
       ['GET', '/api/workspaces', undefined],
       ['GET', '/api/workspaces/isolation-preview', undefined],
-      // The user's reads of files and git (ADR-0061) sit behind the same admission.
+      // The user's reads of files and git (ADR-0064) sit behind the same admission.
       ['GET', '/api/files/tree?dir=', undefined],
       ['GET', '/api/files/content?path=README.md', undefined],
       ['GET', '/api/files/find?query=a', undefined],

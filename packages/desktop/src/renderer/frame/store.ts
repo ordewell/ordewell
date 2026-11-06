@@ -186,6 +186,9 @@ export class FrameStore {
       showPlan: () => {
         this.dispatch({ type: 'togglePlan', open: true });
       },
+      showTerminal: () => {
+        this.dispatch({ type: 'toggleTerminal', open: true });
+      },
       showSession: (sessionId: string) => {
         this.dispatch({ type: 'session', sessionId });
       },

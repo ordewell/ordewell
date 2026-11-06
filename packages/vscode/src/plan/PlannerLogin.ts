@@ -1,5 +1,5 @@
 import type * as vscode from 'vscode';
-import { augmentedPath, runnerForProvider, withPath, workspaceEnvOf, type INotification, type PlannerBackendId, type RunnerInstallation, type RunnerRegistry } from '@ordewell/core';
+import { augmentedPath, describeSignInWays, runnerForProvider, TERMINAL_UI_SIGN_IN, withPath, workspaceEnvOf, type INotification, type PlannerBackendId, type RunnerInstallation, type RunnerRegistry } from '@ordewell/core';
 import type { HostToWebview } from '@ordewell/ui/protocol';
 
 const POLL_MS = 2_000;
@@ -13,7 +13,7 @@ const TERMINAL_LOST_MESSAGE = 'The login terminal stopped before sign-in finishe
 const PROBE_FAILED_MESSAGE = "The sign-in could not be checked: the agent's status probe failed.";
 
 export interface PlannerLoginDeps {
-  runnerInstallation: Pick<RunnerInstallation, 'plannerUsability' | 'refresh'>;
+  runnerInstallation: Pick<RunnerInstallation, 'runnerUsability' | 'refresh'>;
   /** Only to name the agent and refuse an id the host does not know. */
   runnerRegistry: Pick<RunnerRegistry, 'getManifest'>;
   config: { readonly aiProvider: PlannerBackendId };
@@ -36,26 +36,39 @@ export interface PlannerLoginDeps {
   /** The poll interval and the budget, each overridable by a test. */
   pollMs?: number;
   timeoutMs?: number;
+  /** The host OS, which picks the login terminal's shell; a test pins either from any host. */
+  platform?: NodeJS.Platform;
   log?: (msg: string) => void;
 }
 
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * One argv item as the terminal's own shell reads it. The argv comes from the
+ * One argv item as the login terminal's shell reads it. The argv comes from the
  * runner's manifest, never from the webview, so this is about spaces rather
- * than an injection: PowerShell takes a doubled quote inside single quotes, a
- * POSIX shell a closed-then-escaped one.
+ * than an injection: cmd.exe takes a double-quoted run, a POSIX shell a
+ * closed-then-escaped single quote.
  */
-function shellQuote(arg: string): string {
+function shellQuote(arg: string, platform: NodeJS.Platform): string {
   if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(arg)) return arg;
-  if (process.platform === 'win32') return `'${arg.replace(/'/g, "''")}'`;
+  if (platform === 'win32') return `"${arg.replace(/"/g, '""')}"`;
   return `'${arg.replace(/'/g, `'\\''`)}'`;
 }
 
-/** The manifest's login as one line for the shell. */
-export function commandLine(argv: readonly string[]): string {
-  return argv.map(shellQuote).join(' ');
+/** The manifest's login as one line for the login terminal's shell. */
+export function commandLine(argv: readonly string[], platform: NodeJS.Platform = process.platform): string {
+  return argv.map((arg) => shellQuote(arg, platform)).join(' ');
+}
+
+/**
+ * On Windows the login runs in cmd.exe whatever the user's default terminal
+ * is. Windows PowerShell prefers an npm-installed agent's `.ps1` shim to the
+ * `.cmd` beside it and, under the default Restricted execution policy, refuses
+ * to run it, so the login died before the agent started. cmd.exe reaches the
+ * `.cmd` or a native `.exe` through PATHEXT and has no execution policy.
+ */
+function loginShell(platform: NodeJS.Platform): { shellPath?: string } {
+  return platform === 'win32' ? { shellPath: process.env.ComSpec || 'cmd.exe' } : {};
 }
 
 /**
@@ -88,9 +101,9 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
   }
 
   const label = manifest.displayName;
-  let usability: Awaited<ReturnType<PlannerLoginDeps['runnerInstallation']['plannerUsability']>>;
+  let usability: Awaited<ReturnType<PlannerLoginDeps['runnerInstallation']['runnerUsability']>>;
   try {
-    usability = await deps.runnerInstallation.plannerUsability(runner);
+    usability = await deps.runnerInstallation.runnerUsability(runner);
   } catch (err) {
     // A webview clears its pending button only on `plannerLoginEnded`; a throw
     // here would leave it waiting until a reload.
@@ -102,26 +115,30 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
   if (!usability.usable) {
     // The CLI exists but cannot be spawned (a Windows `.cmd` shim, for one).
     // Saying it has no login would be false: the reason is the real answer.
-    const message = usability.reason ?? `${label} is not usable as a planner.`;
+    const message = usability.reason ?? `${label} is not usable.`;
     deps.post({ type: 'plannerLoginEnded', runner, ok: false, message });
     deps.notifications.info(message);
     return;
   }
   const command = usability.auth?.loginCommand ?? [];
   if (command.length === 0) {
-    // Nothing to run: say so, and still close the surface's pending state.
-    const message = `Ordewell has no login for ${label}.`;
+    // Nothing to run: say so, with the ways in it does have, as the terminal
+    // UI's /login does (ADR-0052), and still close the surface's pending state.
+    const ways = usability.auth?.signIn ? describeSignInWays(usability.auth.signIn, TERMINAL_UI_SIGN_IN) : '';
+    const message = ways ? `${label} has no login Ordewell can run. ${ways}` : `Ordewell has no login for ${label}.`;
     deps.post({ type: 'plannerLoginEnded', runner, ok: false, message });
     deps.notifications.info(message);
     return;
   }
 
   const root = deps.workspaceRoot();
+  const platform = deps.platform ?? process.platform;
   let terminal: vscode.Terminal;
   try {
     terminal = deps.window.createTerminal({
       name: `${label} login`,
       cwd: root,
+      ...loginShell(platform),
       // The agent's own account is chosen by the workspace environment
       // (ADR-0016), so the terminal that logs in must see the same one a spawn
       // would. The PATH is the probe's augmented one too: a GUI-launched host
@@ -168,7 +185,7 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
   let outcome: { ok: boolean; message?: string };
   try {
     terminal.show();
-    terminal.sendText(commandLine(command));
+    terminal.sendText(commandLine(command, platform));
 
     let signedIn = false;
     let probeFailed = false;
@@ -181,7 +198,7 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
       // finished within the last half minute.
       deps.runnerInstallation.refresh();
       try {
-        if ((await deps.runnerInstallation.plannerUsability(runner)).auth?.state === 'signed-in') {
+        if ((await deps.runnerInstallation.runnerUsability(runner)).auth?.state === 'signed-in') {
           signedIn = true;
           break;
         }

@@ -15,7 +15,7 @@ import { cdUnfollowed, classifyCommand, excludedBy, innerCommandScopes, pathRefs
 import { resolveResearchShell, researchShellWarning, researchPolicyOptions, type ResearchShell, type ShellLaunch } from './researchShell';
 import { PlannerShellSandbox, SEALED_FAILURE_NOTE, TASK_SEALED_FAILURE_NOTE, TASK_SEALED_LIMITS, sandboxedFailureNote, sealedMemoryLimitNote, sealedRunHeader, sealedTimeLimitNote, type SealedRunOptions, type SealedRunReason } from './sandbox/plannerSandbox';
 import { parseAllowlist } from './plannerAllowlist';
-import { resolveWithin, resolveRef, grantScopeFor, isInertDevice } from './pathScope';
+import { resolveWithin, resolveRef, grantScopeFor } from './pathScope';
 import { definitionPattern, referencePattern, languageForId, includeGlobFor } from './symbolPatterns';
 import { resolveAll, vetEgress, type ResolveAll } from './egressGuard';
 import { carriesSecret, sensitiveEnvValues } from './outboundSecrets';
@@ -30,6 +30,12 @@ const CD_HINT = ' A "cd" is followed only on a line joined by "&&" alone, so aft
 
 function refusal(output: string): ToolOutcome {
   return { success: false, output, truncated: false };
+}
+
+/** Why a command naming a path the research shell reads by rules confinement cannot follow is refused (ADR-0010). */
+function unfollowableReason(spelled: string): string {
+  return `Git Bash reads "${spelled}" by rules this check cannot follow, so it cannot tell which folder the command would reach: a ".." past one of its mounts, or its own /proc or /dev. `
+    + 'Name the path from its drive (/c/Users/...) or as a Windows path (C:\\Users\\...), with no "..".';
 }
 
 /**
@@ -288,15 +294,16 @@ export abstract class BaseFileSystem implements IFileSystem {
    * closes for `readFile`/`glob`/`grep`. Each escaping path is scoped to its
    * containing directory, one entry per distinct scope.
    */
-  private outsidePaths(command: string, root: string): Array<{ abs: string; scope: string }> {
+  private outsidePaths(command: string, root: string): { outside: Array<{ abs: string; scope: string }>; unfollowable?: string } {
     const found = new Map<string, string>();
     for (const ref of pathRefs(command, this.policyOptions())) {
-      const { abs, inside } = resolveRef(root, ref);
-      if (inside || isInertDevice(abs)) continue;
+      const { abs, inside, device, unfollowable } = resolveRef(root, ref, this.researchShell.hostPath);
+      if (unfollowable) return { outside: [], unfollowable: ref.path };
+      if (inside || device) continue;
       const scope = grantScopeFor(abs, 'file');
       if (!found.has(scope)) found.set(scope, abs);
     }
-    return [...found].map(([scope, abs]) => ({ abs, scope }));
+    return { outside: [...found].map(([scope, abs]) => ({ abs, scope })) };
   }
 
   private policyOptions(): CommandPolicyOptions {
@@ -391,7 +398,7 @@ export abstract class BaseFileSystem implements IFileSystem {
       ...this.policyOptions(), ...approval.commandPolicy?.(), ...(allow ? { allow } : {}),
     });
 
-    const outside = this.outsidePaths(command, root);
+    const { outside, unfollowable } = this.outsidePaths(command, root);
     const asks = tier === 'ask';
     const scopes = [...(asks ? commandScopes ?? [scope] : []), ...outside.map((o) => o.scope)];
     const touched = outside.map((o) => o.abs).join(', ');
@@ -420,6 +427,7 @@ export abstract class BaseFileSystem implements IFileSystem {
     if (site.task?.sealed) return this.runSealed(site, command, request, 'after', signal);
 
     if (tier === 'refuse') return this.sealedInstead(site, command, request, refusal(`Command refused: ${reason}${site.task ? `\n${TASK_UNSEALED} ${TASK_CONTINUE}` : ''}`), signal);
+    if (unfollowable !== undefined) return this.sealedInstead(site, command, request, refusal(`Command refused: ${unfollowableReason(unfollowable)}${site.task ? `\n${TASK_UNSEALED} ${TASK_CONTINUE}` : ''}`), signal);
 
     const outbound = [...(outboundTexts ?? []), ...(webUrls ?? []).map((url) => url.href)];
     if (outbound.length && carriesSecret(outbound, [...this.outboundSecrets(), ...sensitiveEnvValues(process.env)])) {

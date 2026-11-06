@@ -85,7 +85,7 @@ function classify(err: unknown): Classified | undefined {
   if (err instanceof PlannerTurnStoppedError) return { status: 409, code: 'planner_turn_stopped' };
   if (err instanceof PlannerTurnDiscardedError) return { status: 409, code: 'planner_turn_discarded' };
   if (err instanceof ConversationBusyError) return { status: 409, code: 'conversation_busy' };
-  // A user read (ADR-0061): a scope that no longer exists is gone (410), never
+  // A user read (ADR-0064): a scope that no longer exists is gone (410), never
   // answered from another; a path outside the scope is forbidden, not missing.
   if (err instanceof WorkspaceReadError) {
     if (err.code === 'gone') return { status: 410, code: 'gone' };

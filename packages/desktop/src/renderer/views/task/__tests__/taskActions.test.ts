@@ -28,4 +28,18 @@ describe('taskTabActions', () => {
     expect(labels({ ...ai, type: 'user', status: 'failed' }, { actions: ['complete'], revertible: false, status: 'awaiting' }, false))
       .toEqual(['Mark complete', 'Remove…']);
   });
+
+  it('puts a signed-out agent\'s Log in before a same-failure Retry', () => {
+    const signIn = { runner: 'codex', label: 'Codex', hint: 'Codex is not signed in.', action: 'login' as const };
+    const actions = taskTabActions({ ...ai, status: 'failed' }, { actions: ['skip'], revertible: false, status: 'failed' }, false, signIn);
+    expect(actions[0]).toEqual({ label: 'Log in', message: { type: 'loginPlanner', runner: 'codex' } });
+
+    const key = taskTabActions(
+      { ...ai, status: 'failed' },
+      { actions: [], revertible: false, status: 'failed' },
+      false,
+      { runner: 'gemini-cli', label: 'Gemini CLI', hint: 'Run /key.', action: 'key', provider: 'google' },
+    );
+    expect(key[0]).toEqual({ label: 'Set API key…', message: { type: 'sendMessage', text: '/key google' } });
+  });
 });

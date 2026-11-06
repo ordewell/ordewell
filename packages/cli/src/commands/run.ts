@@ -3,7 +3,7 @@ import { iconFor } from '../utils/output';
 import type { ApiClient } from '../apiClient';
 import { handoffBranchName, holdLabel, isRepoGroup, loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, repairWaitLabel, repoResultLines, scriptTaskText, skippedLabel, taskStartedNotice, truncateCheckpointSummary, WAITS_FOR_APPROVAL_LABEL, walkPlan, type SerializedTaskStatus } from '@ordewell/core';
 import { allTasksOf } from '../utils/tasks';
-import { connect } from './shared';
+import { connect, headlessSignedOut } from './shared';
 import { taskHandoffLines } from './taskHandoff';
 
 const inLine = (label: string): string => label.charAt(0).toLowerCase() + label.slice(1);
@@ -142,7 +142,7 @@ export async function followExecution(
     if (event.type === 'execution_stopped') {
       console.log('\nExecution stopped.');
     }
-    if (event.type === 'notice') console.error(`· ${event.message}`);
+    if (event.type === 'notice') console.error(`· ${headlessSignedOut(event.message)}`);
     if (event.type === 'isolation_blocked') {
       blocked = event.message;
       dirtyRepos = event.repos ?? [];

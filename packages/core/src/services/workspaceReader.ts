@@ -22,7 +22,7 @@ import { stateRootOf } from './stateRoot';
 import { allowedPath, readOnlyGitArgs, readSavedPatch, readTaskDiff, type TaskDiffRead, type TaskDiffResult } from './taskDiffRead';
 
 /**
- * The workspace reader (ADR-0061): what a person's own surfaces read of a
+ * The workspace reader (ADR-0064): what a person's own surfaces read of a
  * workspace's files and git, confined to one view scope of one repository.
  * It serves the user principal, so it shares nothing with the planner's
  * envelope (ADR-0008) but `allowedPath`, and it never takes a session's lease.
@@ -41,7 +41,7 @@ export interface WorkspaceReaderDeps {
   config: Pick<IConfig, 'workspaceRepos'>;
   resolvePath?: () => Promise<string>;
   exec?: GitExecFn;
-  /** The largest file `content` answers with its text; a larger one answers `too-large` (ADR-0061 R5). */
+  /** The largest file `content` answers with its text; a larger one answers `too-large` (ADR-0064 R5). */
   maxFileBytes?: number;
 }
 
@@ -85,7 +85,7 @@ const execBuffer = promisify(execFile);
 /**
  * A person may name any workspace path but one that leaves the workspace or
  * reaches git's or Ordewell's internals; `.ordewell/skills/` is committed by
- * design (ADR-0024), so it is the one part of `.ordewell` shown (ADR-0061 R3).
+ * design (ADR-0024), so it is the one part of `.ordewell` shown (ADR-0064 R3).
  */
 export function userPath(file: string): boolean {
   if (allowedPath(file)) return true;
@@ -179,7 +179,7 @@ function refusePath(file: string): never {
 export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
   const maxFileBytes = deps.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
   const baseExec = deps.exec ?? defaultExecFile;
-  // No hook runs, no optional lock is taken, nothing is fetched: a read leaves the repository as it found it (ADR-0061 R6).
+  // No hook runs, no optional lock is taken, nothing is fetched: a read leaves the repository as it found it (ADR-0064 R6).
   const invoker: GitInvoker = {
     resolvePath: deps.resolvePath ?? (() => augmentedPath()),
     exec: (file, args, opts) => baseExec(file, [...NO_HOOKS, ...args], { ...opts, env: { ...opts.env, GIT_OPTIONAL_LOCKS: '0' } }),
@@ -222,7 +222,7 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
     };
   }
 
-  /** A session's saved run, read from its record on disk without adopting the session (ADR-0061 R4). */
+  /** A session's saved run, read from its record on disk without adopting the session (ADR-0064 R4). */
   function savedRun(workspace: string, sessionId: string): { plan: LegacyPlanState; run: IsolationRun | undefined } {
     const loaded = loadSession(sessionId, workspace);
     if (!loaded) gone(`No session "${sessionId}" is saved in this workspace.`);
@@ -261,7 +261,7 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
     };
   }
 
-  /** A task's worktree while it is there, else its branch; once both are gone, `gone` (ADR-0061 R2). */
+  /** A task's worktree while it is there, else its branch; once both are gone, `gone` (ADR-0064 R2). */
   async function taskScope(target: ReadTarget, repo: string): Promise<Scope> {
     if (!target.taskId) throw new WorkspaceReadError('refused', 'Name the task whose scope to read.');
     const { run, repo: runRepo } = runOf(target, repo);
@@ -444,7 +444,7 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
     return Math.max(1, Math.min(MAX_FIND_LIMIT, Math.floor(limit ?? DEFAULT_FIND_LIMIT)));
   }
 
-  /** Quick open matches names; a text search reads what git would, ignored files left out (ADR-0061 R5). */
+  /** Quick open matches names; a text search reads what git would, ignored files left out (ADR-0064 R5). */
   async function find(target: ReadTarget, options: FindOptions): Promise<FileFindResponse> {
     const scope = await scopeOf(target);
     const limit = limitOf(options.limit);
@@ -550,7 +550,7 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
     return { at: scope.at, from, to, files, ...(patch !== undefined ? { patch } : {}) };
   }
 
-  /** A diff's files with their counts, then, when one is named, that file's patch alone (ADR-0061 R5). */
+  /** A diff's files with their counts, then, when one is named, that file's patch alone (ADR-0064 R5). */
   async function diffFiles(scope: Scope, range: string[], file: string | undefined): Promise<{ files: GitDiffFile[]; patch?: string }> {
     const args = ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--relative', ...range];
     const spec = file === undefined ? ['.'] : [`:(literal)${file}`];
@@ -569,7 +569,7 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
   /**
    * One page of a ref's history. The cursor pins the tip the first page read
    * and counts what was shown, so a page follows on from the last even as the
-   * branch moves (ADR-0061 R5).
+   * branch moves (ADR-0064 R5).
    */
   async function log(target: ReadTarget, options: LogOptions): Promise<GitLogResponse> {
     const scope = await scopeOf(target);
@@ -718,7 +718,7 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
     }
     const [blob] = await treeEntries(scope, rel);
     if (!blob || blob.path !== rel) throw new WorkspaceReadError('path_not_found', `No file "${file}" in this scope.`);
-    // A link in a commit has no disk to resolve against, so it is shown as a link and never followed (ADR-0061 R3).
+    // A link in a commit has no disk to resolve against, so it is shown as a link and never followed (ADR-0064 R3).
     if (blob.mode === '120000') refusePath(file);
     if (blob.type !== 'blob') throw new WorkspaceReadError('path_not_found', `"${file}" is not a file.`);
     const size = Number((await gitOut(scope.cwd, ['cat-file', '-s', blob.object])).trim());
@@ -729,7 +729,7 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
   /**
    * A task's diff as the run reads it for a verdict and VS Code, through
    * `readTaskDiff`, or the patch a read-only task saved (ADR-0050). Names are
-   * those a person may be shown (ADR-0061 R3).
+   * those a person may be shown (ADR-0064 R3).
    */
   async function taskDiff(workspace: string, sessionId: string, taskId: string, options: Pick<TaskDiffRead, 'repo' | 'path'> & { names?: boolean }): Promise<TaskDiffResult> {
     if (options.path !== undefined) checked(options.path);

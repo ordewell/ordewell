@@ -17,7 +17,7 @@ import {
 } from '../shared/bridge';
 
 /**
- * `window.ordewell` (ADR-0060 H4). The page gets these functions and nothing
+ * `window.ordewell` (ADR-0063 H4). The page gets these functions and nothing
  * else: no `ipcRenderer`, no channel names, no token. Each call is one invoke
  * whose arguments main checks again; a stream is a number main hands back,
  * whose frames arrive on one event channel and are routed here by that number.

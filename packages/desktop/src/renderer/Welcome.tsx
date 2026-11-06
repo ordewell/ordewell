@@ -54,7 +54,7 @@ function SkeletonCard(): JSX.Element {
  * The welcome window (design W1): the wordmark, Open folder, the recent
  * projects as cards, the runners this machine has, and the daemon in the
  * footer. Everything it learns from the daemon goes through the bridge's
- * named routes; main holds the token (ADR-0060 H4).
+ * named routes; main holds the token (ADR-0063 H4).
  */
 export function Welcome({ status }: { status: DaemonStatus | undefined }): JSX.Element {
   const [info, setInfo] = useState<AppInfo>();
@@ -226,7 +226,7 @@ export function Welcome({ status }: { status: DaemonStatus | undefined }): JSX.E
             )}
           </section>
 
-          <RunnerRow status={status} />
+          <RunnerRow status={status} platform={info?.platform} />
 
           {info && (
             <p className="welcome-hints">

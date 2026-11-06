@@ -7,7 +7,7 @@
 
 <p align="center">
   <strong>Stop juggling agent tabs. Talk to one planner.</strong><br>
-  It runs Claude Code, Codex and OpenCode for you, in plain sight. Review build plans before they run, or turn on autorun.
+  It runs Claude Code, Codex and six more coding agents for you, in plain sight. Review build plans before they run, or turn on autorun.
 </p>
 
 <p align="center">
@@ -33,14 +33,14 @@ tasks in parallel, review the changes, and merge into your branch. Submitted bui
 plans wait for your approval by default; run settings let you automate execution
 and merging.
 
-Claude Code, Codex and OpenCode are supported out of the box, and can be mixed
-freely within one plan. Try it in your project, with nothing to install:
+Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor are supported out of the box,
+and can be mixed freely within one plan. Try it in your project, with nothing to install:
 
 ```bash
 npx ordewell
 ```
 
-This README describes 0.12.3. See the [published releases](https://github.com/ordewell/ordewell/releases)
+This README describes 0.12.6. See the [published releases](https://github.com/ordewell/ordewell/releases)
 for versions available to install and their release notes.
 
 Ordewell is pre-1.0, so minor releases can include breaking changes. Read the
@@ -73,13 +73,24 @@ or run `code --install-extension ordewell.ordewell`. In Cursor, Windsurf or VSCo
 get it from [Open VSX](https://open-vsx.org/extension/ordewell/ordewell). The
 extension bundles its own core and needs nothing from npm.
 
-**Requirements:** Node.js 20.3 or newer, at least one of Claude Code, Codex or
-OpenCode, and git 2.38 or newer for task isolation.
+**Requirements:** Node.js 20.3 or newer, at least one supported coding agent,
+and git 2.38 or newer for task isolation.
+
+The five ACP runners can also plan and run read-only tasks. Install GitHub
+Copilot CLI 1.0.105+, Qwen Code 0.26.6+, Cline 3.0.74+, or Gemini CLI
+0.66.0+ as applicable. Cursor CLI reports no version for Ordewell to check;
+it was tested with 2026.10.22. Sign in through each agent's CLI, or use `/key`
+to save a Google Gemini key for Gemini CLI. Cursor can change its own default
+model when a writable task selects one. See the [0.12.6 changelog](CHANGELOG.md#0126---2026-11-05)
+for runner-specific behavior and read-only restrictions.
 
 ### Windows
 
-The VS Code extension runs natively on Windows. The terminal UI has not been
-verified natively; run it under [WSL](https://learn.microsoft.com/windows/wsl/install).
+The VS Code extension, the full-screen terminal UI and the `ordewell` commands
+(`plan`, `run`, `handoff` and the rest) run natively on Windows. Install Git
+for Windows: the planner's research commands run in its shell. For Codex tasks,
+[set up Codex's own sandbox](docs/troubleshooting.md#codexs-windows-sandbox-is-not-set-up)
+once. The terminal UI's mouse and paste need Node.js 22.17 or newer there.
 See the [platform notes](https://ordewell.ai/docs#platforms) for setup and
 current limitations.
 

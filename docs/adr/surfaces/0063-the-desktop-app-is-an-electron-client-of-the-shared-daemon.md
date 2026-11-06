@@ -3,7 +3,7 @@ status: accepted
 note: "Settles the host half of #129 and #136; the design is docs/desktop/design.md. packages/desktop holds the app: the daemon manager, the token-holding proxy, the hardened windows, the tray and quit rules, and every view the design lists. It is packaged for macOS, Windows and Linux (electron-builder.yml), built in CI and attached to each release, signed and notarized when the release has the credentials, with updates on only for a signed build (H9). Each release also carries fixed-name copies of the installers and a SHA256SUMS, which one-line install scripts read (H10). A Homebrew cask and winget manifests are rendered from that version and SHA256SUMS, and published when their tokens exist (H11)."
 ---
 
-# 0060 — The desktop app is an Electron client of the shared daemon, and its renderer never holds the token
+# 0063 — The desktop app is an Electron client of the shared daemon, and its renderer never holds the token
 
 ## Problem
 
@@ -126,7 +126,7 @@ holds the token.**
     `/ws/session` socket, to the holder. Everything else stays on the app's own
     daemon: adopting a session (`sessions.load`), the session list, settings,
     runners and models, and files and git, since a read needs no lease
-    (ADR-0061 R4). A user git action is confirmed there too. ADR-0062's
+    (ADR-0064 R4). A user git action is confirmed there too. ADR-0062's
     landing interlock still applies, because it reads the holder's `runLive`
     from the lease.
   - **A connection per holder.** A connection to one holder serves every window
@@ -496,3 +496,5 @@ allows script only from the app's own bundle, with no inline script.
 - 2026-11-04 — H9: SSL.com eSigner is a third Windows route, between Azure and the certificate file, for a publisher Azure does not validate; it requires `WIN_PUBLISHER_NAME`.
 - 2026-11-04 — H9: `WIN_PUBLISHER_NAME` may list several publisher names separated by `|`, so a bridge release lets installs move to a new signer.
 - 2026-11-04 — H9: the maintainers' credential setup and the publisher-eligibility reasoning moved out of the public docs; the routes and their gates are unchanged.
+
+- 2026-11-05 — renumbered before publication to avoid a collision with main.

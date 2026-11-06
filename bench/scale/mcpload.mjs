@@ -42,7 +42,7 @@ for (const count of clients) {
   const call = await run('complete');
   const list = await run('list');
   say(`| ${count} | ${Math.round(call.rate)} | ${percentile(load.latencies.complete, 0.5).toFixed(1)} | ${percentile(load.latencies.complete, 0.99).toFixed(1)} | ${call.cpuPerSecond.toFixed(2)} | ${call.cpuPerRequest.toFixed(2)} | ${Math.round(list.rate)} |`);
-  load.stop();
+  await load.stop();
   server.http.closeAllConnections();
 }
 process.exit(0);

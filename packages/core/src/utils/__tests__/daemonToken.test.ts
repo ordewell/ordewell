@@ -35,7 +35,8 @@ describe('the daemon token file', () => {
     expect(daemonTokenPath(3742)).toBe(path.join(home, '.ordewell', 'server-3742.token'));
   });
 
-  it('is readable by its owner and nobody else', () => {
+  // Windows has no POSIX permission bits to assert on (see privateFile.ts).
+  it.skipIf(process.platform === 'win32')('is readable by its owner and nobody else', () => {
     const { file } = mintDaemonToken(3742);
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
   });
@@ -62,8 +63,9 @@ describe('the daemon token file', () => {
   });
 
   // Writing over a file someone else pre-created keeps that file's permissions,
-  // and a pre-planted symlink would redirect the write entirely.
-  it('does not inherit the permissions of a pre-created file', () => {
+  // and a pre-planted symlink would redirect the write entirely. Windows has no
+  // POSIX permission bits to inherit.
+  it.skipIf(process.platform === 'win32')('does not inherit the permissions of a pre-created file', () => {
     const file = daemonTokenPath(3742);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, 'planted', { mode: 0o666 });

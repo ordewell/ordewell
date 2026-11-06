@@ -4,12 +4,12 @@ amends: ["0049"]
 note: "The read half of the desktop app's file and git views (docs/desktop/design.md)."
 ---
 
-# 0061 — A host reads files and git for the user, confined to the workspace and needing no lease
+# 0064 — A host reads files and git for the user, confined to the workspace and needing no lease
 
 ## Problem
 
 The desktop app
-([ADR-0060](0060-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md))
+([ADR-0063](0063-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md))
 shows the user's repository: an Explorer over the files, a viewer and editor, a
 review of each task's diff and of the whole run, the user's own uncommitted
 changes, and a commit graph with its branches. All of it is read through the
@@ -158,3 +158,5 @@ The run's whole diff stays on the existing `GET /api/plans/:sessionId/isolation/
 - 2026-11-03 — accepted.
 - 2026-11-03 — implemented; `find` also searches file contents with `text`, capped like a name search, which the desktop's quick open had left out.
 - 2026-11-03 — the desktop app draws every read here: the Explorer and its Monaco editor, quick open, the task and run diff review, and the commit graph.
+
+- 2026-11-05 — renumbered before publication to avoid a collision with main.

@@ -373,6 +373,106 @@ describe('OrdewellMcpServer', () => {
     expect((await rawRequest(credential, {})).status).toBe(200);
   });
 
+  describe('first contact', () => {
+    const contactOf = (credential: McpCredential) => {
+      if (!credential.contact) throw new Error('credential carries no contact record');
+      return credential.contact;
+    };
+
+    it('records an initialize from a good token, whether the waiter subscribed before or after', async () => {
+      const server = newServer();
+      const early = await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: 1 });
+      const late = await server.issuePlannerToken({ sessionId: 's1' });
+      expect(contactOf(early).contacted()).toBe(false);
+      const waiting = contactOf(early).whenContacted();
+
+      expect((await rawRequest(early, {})).status).toBe(200);
+      expect((await rawRequest(late, {})).status).toBe(200);
+
+      await expect(waiting).resolves.toBe(true);
+      expect(contactOf(early).contacted()).toBe(true);
+      await expect(contactOf(late).whenContacted()).resolves.toBe(true);
+    });
+
+    it('counts any MCP method, not only initialize', async () => {
+      const server = newServer();
+      const credential = await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: 1 });
+      const client = await connect(credential);
+      await client.listTools();
+      await expect(contactOf(credential).whenContacted()).resolves.toBe(true);
+    });
+
+    it('never counts a refused request: bad token, wrong Host, an Origin, a wrong path', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const server = newServer();
+        const credential = await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: 1 });
+        const { port } = new URL(credential.url);
+
+        expect((await rawRequest({ url: credential.url, token: 'not-a-token' }, {})).status).toBe(401);
+        expect((await rawRequest(credential, { host: `localhost:${port}` })).status).toBe(403);
+        expect((await rawRequest(credential, { origin: 'http://evil.example' })).status).toBe(403);
+        expect((await rawRequest({ url: credential.url.replace(/\/mcp$/, '/other'), token: credential.token }, {})).status).toBe(404);
+
+        expect(contactOf(credential).contacted()).toBe(false);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('settles false when the token is revoked without ever being contacted, and ignores a request after that', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const server = newServer();
+        const credential = await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: 1 });
+        const waiting = contactOf(credential).whenContacted();
+
+        server.revoke(credential.token);
+        expect((await rawRequest(credential, {})).status).toBe(401);
+
+        await expect(waiting).resolves.toBe(false);
+        await expect(contactOf(credential).whenContacted()).resolves.toBe(false);
+        expect(contactOf(credential).contacted()).toBe(false);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('keeps the contact it had when the token is revoked later', async () => {
+      const server = newServer();
+      const credential = await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: 1 });
+      await rawRequest(credential, {});
+
+      server.revoke(credential.token);
+
+      await expect(contactOf(credential).whenContacted()).resolves.toBe(true);
+    });
+
+    it('keeps two credentials apart', async () => {
+      const server = newServer();
+      const first = await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: 1 });
+      const second = await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: 2 });
+      const waitingOnSecond = contactOf(second).whenContacted();
+
+      await rawRequest(first, {});
+
+      expect(contactOf(first).contacted()).toBe(true);
+      expect(contactOf(second).contacted()).toBe(false);
+      server.revoke(second.token);
+      await expect(waitingOnSecond).resolves.toBe(false);
+    });
+
+    it('settles every waiter false when the server is disposed', async () => {
+      const server = new OrdewellMcpServer();
+      const credential = await server.issuePlannerToken({ sessionId: 's1' });
+      const waiting = contactOf(credential).whenContacted();
+
+      await server.dispose();
+
+      await expect(waiting).resolves.toBe(false);
+    });
+  });
+
   it('closes the port on dispose', async () => {
     const server = new OrdewellMcpServer();
     const credential = await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: 1 });

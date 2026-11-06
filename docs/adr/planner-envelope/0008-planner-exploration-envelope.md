@@ -400,6 +400,33 @@ tools are withheld, and its server runs under Ordewell's own permission
 policy, which denies every write and shell tool. The plan agent's name and a
 model's refusal to write were never security evidence.
 
+An ACP runner plans only when its profile claims the planner role on the
+evidence [ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)
+R3 asks for: spawn controls that take its own write and shell tools away,
+Ordewell refusing every edit, delete, move, command and mode switch it still
+requests, and a recorded refusal of both. Its other requests reach the
+envelope as the Claude planner's do. GitHub Copilot CLI and Qwen Code plan
+so, each started in a private directory of its own: it asks for each path in
+the worktree, and the envelope decides every one. Gemini CLI plans so too,
+from a private directory its own reads cannot leave, so it reaches the
+worktree only through `run_command`, which the envelope decides. Cursor plans
+from a private directory too, with its own reads denied as well as its writes
+and shell, so it reads the worktree only through `run_command`, which the
+envelope decides. Cline plans from a private directory too, asking before
+each of its own tools: the envelope decides each of its reads by the one
+path its arguments name, and refuses its edits, which name none, and its
+own searches, which name no path either.
+
+An ACP runner's own read or search is a path ask only when it names exactly
+one path. That path is the call's location or, for an agent that names its
+files only in the model's arguments, the one its profile reads from them
+(ADR-0060 R3), resolved against the directory the agent runs in. It meets
+the same containment as any path: inside the workspace it is decided as a
+read, outside it asks or is refused. A call naming several paths is refused,
+never widened to the directory they share, and one naming none is `other`
+and refused. Reading the arguments adds no permission, only an ask the
+envelope can judge.
+
 ## Considered options
 
 - **Native Claude plan mode plus direct write-tool denials.** Rejected: its
@@ -446,3 +473,10 @@ model's refusal to write were never security evidence.
 - 2026-10-29 — git's subcommands are an allowlist with per-subcommand reading forms, and gawk's `SYMTAB` is refused.
 - 2026-10-29 — git is scoped by its operands past leading flags, so `git -C <dir> …` no longer scopes to bare `git`.
 - 2026-10-29 — `chdir` and a re-cased `CD` move the shell: following stops, and the grant is the line.
+- 2026-11-04 — an ACP runner is a harness planner only on its profile's evidence; GitHub Copilot CLI is none (ADR-0060).
+- 2026-11-04 — GitHub Copilot CLI is a harness planner, its every worktree read put to the envelope (ADR-0060).
+- 2026-11-04 — Qwen Code is a harness planner, its every worktree read put to the envelope (ADR-0060).
+- 2026-11-04 — Gemini CLI is a harness planner, reaching the worktree only through `run_command` (ADR-0060).
+- 2026-11-04 — Cursor is a harness planner, reading the worktree only through `run_command` (ADR-0060).
+- 2026-11-04 — an ACP runner's own read or search is judged by the one path its location or, per its profile, its arguments name; several or none are refused (ADR-0060).
+- 2026-11-05 — Cline is a harness planner, its own reads judged by the one path their arguments name (ADR-0060).

@@ -21,9 +21,10 @@ import PendingMessages, { type PendingMessage } from './components/PendingMessag
 import HandoffCard from './components/HandoffCard';
 import CheckpointPanel from './components/CheckpointPanel';
 import RunSettingsBlock from './components/RunSettingsBlock';
+import type { RunnerSignInView } from './components/TaskCard';
 import type { TaskDraft } from './components/NewTaskCard';
 import type { ChildPlanEntry, ChildPlanView, CompactionBlock, GlobalRunSettings, RunSettings, Task, TaskModelAssignment, RunnerId, RunnerAuth, SurfaceTask, DiscoveredModel, AiProvider } from '@ordewell/core';
-import { accountLimitsOf, compactionText, SUPERVISOR_LEVEL_LABEL } from '@ordewell/core/plan-utils';
+import { accountLimitsOf, compactionText, describeRunnerSignIn, signInAction, signInOfVerdict, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_SIGN_IN, type RunnerSignIn } from '@ordewell/core/plan-utils';
 import { DelegationOfferedContext, useDelegationOffered } from './delegationOffered';
 import { planSummaryLabel, nextDock } from './planDock';
 import { OpenPatchContext } from './openPatch';
@@ -135,6 +136,7 @@ export default function App({ layout = 'chat', selection, goal }: {
     conversation, plan, isExecuting, isResearchActive, error, models, modelsByRunner,
     runnerList, enabledRunnerIds, pendingRunners, modelAllowlist, held, unsent, modesByRunner, runnerNotice, modelConfig,
     modelOptions, configuredProviders, planner, plannerKnown, plannerDetecting, runnersKnown, detectionError, isReady, modelDiscoveryErrors,
+    runnerDiscoveryErrors,
     skills, taskSkills, checkpoint, taskOutput, run, activity, starting, dockExpanded, dockHeight, settingsRequest, accountLimits, plannerTurnStartedAt,
   } = host;
   const setPlan = useCallback((v: Updatable<HostState['plan']>) => dispatch({ type: 'patchPlan', plan: v }), []);
@@ -835,6 +837,33 @@ export default function App({ layout = 'chat', selection, goal }: {
   }, []);
 
   /**
+   * What each signed-out agent's surfaces say and what their Log in does, keyed
+   * by runner id. The words are the terminal UI's, since this chat takes the
+   * same `/login <runner>` and `/key` (ADR-0052).
+   */
+  const signInByRunner = useMemo<Record<string, RunnerSignInView>>(() => {
+    const byRunner: Record<string, RunnerSignInView> = {};
+    for (const backend of planner.backends) {
+      const runner = backend.runner ?? backend.id;
+      if (backend.auth?.state !== 'signed-out') continue;
+      const signIn: RunnerSignIn | undefined = signInOfVerdict(runner, backend.label, backend.auth);
+      const hint = describeRunnerSignIn({ state: 'signed-out', ...(signIn ? { signIn } : {}) }, TERMINAL_UI_SIGN_IN)
+        ?? `${backend.label} is not signed in.`;
+      const action = signInAction(signIn);
+      const provider = signIn?.key?.provider;
+      byRunner[runner] = {
+        label: backend.label,
+        hint,
+        ...(action === 'login' ? { logIn: () => handleRunnerLogin(runner) } : {}),
+        // A key needs no runner process, so nothing waits on it: the key entry is the whole action.
+        ...(action === 'key' && provider ? { logIn: () => bridge.post({ type: 'sendMessage', text: `/key ${provider}`, runners }) } : {}),
+      };
+    }
+    return byRunner;
+  }, [planner.backends, handleRunnerLogin, runners]);
+
+
+  /**
    * Every signed-out coding agent, not only the one planning: the login is each
    * one's own fix, and the active planner leads because its refusal is the one
    * about to bite. The rows keep the host's list order after that.
@@ -850,12 +879,13 @@ export default function App({ layout = 'chat', selection, goal }: {
           label: b.label,
           pending: Boolean(pendingLogin[runner]),
           failure: loginFailure[runner],
-          ...(b.auth?.loginCommand?.length ? { onLogIn: () => handleRunnerLogin(runner) } : {}),
+          hint: signInByRunner[runner]?.hint,
+          ...(signInByRunner[runner]?.logIn ? { onLogIn: signInByRunner[runner].logIn } : {}),
         };
       });
     // Stable sort: the active planner first, everything else as the host listed it.
     return rows.sort((a, b) => Number(b.id === activePlanner) - Number(a.id === activePlanner));
-  }, [planner.backends, activePlanner, pendingLogin, loginFailure, handleRunnerLogin]);
+  }, [planner.backends, activePlanner, pendingLogin, loginFailure, signInByRunner]);
 
   const runnerLabelMap = useMemo<Record<string, string>>(() => {
     const m: Record<string, string> = {};
@@ -934,6 +964,7 @@ export default function App({ layout = 'chat', selection, goal }: {
         onRemoveTask={handleRemoveTask}
         onPromptChange={handlePromptChange}
         onRetry={handleRetry}
+        runnerSignIn={signInByRunner}
         onSkip={handleSkip}
         onCancel={handleCancel}
         onCancelResume={handleCancelResume}
@@ -1122,7 +1153,7 @@ export default function App({ layout = 'chat', selection, goal }: {
           onClick={() => { setupChosen.current = true; setSetupCollapsed((v) => !v); }}
           title={
             activeBackend?.auth?.state === 'signed-out'
-              ? `${activeBackend.label} is not logged in — open Settings to sign in`
+              ? signInByRunner[activeBackend.runner ?? activeBackend.id]?.hint
               : setupCollapsed
                 ? 'Expand settings'
                 : 'Collapse settings'
@@ -1160,14 +1191,15 @@ export default function App({ layout = 'chat', selection, goal }: {
                   // The login is this agent's own and never selects the planner
                   // (ADR-0009); it stays offered here even while the empty state
                   // carries the same action, as long as there is a command to run.
-                  const canLogIn = signedOut && (b.auth?.loginCommand?.length ?? 0) > 0;
+                  const way = signedOut ? signInByRunner[runnerId] : undefined;
+                  const canLogIn = way?.logIn !== undefined;
                   return (
                     <span className={`planner-pill-item${canLogIn ? ' has-login' : ''}`} key={b.id} data-runner={runnerId}>
                       <span className={`planner-pill-group${signedOut ? ' signed-out' : ''}${b.id === activePlanner ? ' active' : ''}`}>
                         <button
                           type="button"
                           className={`planner-pill${b.id === activePlanner ? ' active' : ''}${signedOut ? ' signed-out' : ''}${pendingPlanner === b.id ? ' pending' : ''}`}
-                          title={signedOut ? 'Not logged in — sign in from this chat' : b.reason}
+                          title={way ? way.hint : b.reason}
                           onClick={() => handlePlannerChange(b.id)}
                         >
                           {signedOut && <span className="planner-auth-dot" aria-hidden="true" />}
@@ -1176,7 +1208,7 @@ export default function App({ layout = 'chat', selection, goal }: {
                         {canLogIn && (
                           <PlannerLoginAction
                             className="planner-pill-login"
-                            onLogIn={() => handleRunnerLogin(runnerId)}
+                            onLogIn={() => way?.logIn?.()}
                             pending={signingIn}
                             ariaLabel={signingIn ? `Signing in to ${b.label}` : `Log in to ${b.label}`}
                             title={signingIn ? `Signing in to ${b.label}` : `Log in to ${b.label}`}
@@ -1208,7 +1240,7 @@ export default function App({ layout = 'chat', selection, goal }: {
               {orchestratorModels.length === 0 && (
                 <div className="model-discovery-error" role="alert">
                   {planner.runner
-                    ? <>No models discovered for this agent yet: run <code>/refresh</code>.</>
+                    ? (runnerDiscoveryErrors[planner.runner] ?? <>No models discovered for this agent yet: run <code>/refresh</code>.</>)
                     : <>No models available. Add an API key with <code>/key</code>, or pick a coding agent above.</>}
                 </div>
               )}
@@ -1246,9 +1278,10 @@ export default function App({ layout = 'chat', selection, goal }: {
               const signingIn = Boolean(pendingLogin[r.id]);
               // A login never switches the runner on or off: it only signs that
               // agent in, exactly as the planner pill beside it does.
-              const canLogIn = signedOut && (auth?.loginCommand?.length ?? 0) > 0;
-              const title = signedOut
-                ? 'Not logged in'
+              const way = signedOut ? signInByRunner[r.id] : undefined;
+              const canLogIn = way?.logIn !== undefined;
+              const title = way
+                ? way.hint
                 : last
                   ? `${r.displayName} is the only runner on: switch another on first`
                   : on
@@ -1266,7 +1299,7 @@ export default function App({ layout = 'chat', selection, goal }: {
                     {canLogIn && (
                       <PlannerLoginAction
                         className="planner-pill-login runner-pill-login"
-                        onLogIn={() => handleRunnerLogin(r.id)}
+                        onLogIn={() => way?.logIn?.()}
                         pending={signingIn}
                         ariaLabel={signingIn ? `Signing in to ${r.displayName}` : `Log in to ${r.displayName}`}
                         title={signingIn ? `Signing in to ${r.displayName}` : `Log in to ${r.displayName}`}

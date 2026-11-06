@@ -59,6 +59,7 @@ function AiAssignment({ lane }: { lane: AiLane }): JSX.Element {
   return (
     <span ref={line} className="graph-card-lane" data-lane="ai" data-form={level}>
       {lane.runner && <RunnerBadge runner={lane.runner} short={form.shortRunner} className="graph-card-runner" />}
+      {lane.signIn && <Badge tone="attention" className="graph-card-signed-out" title={lane.signIn.hint}>Signed out</Badge>}
       <span className="graph-card-part graph-card-model" title={`Model: ${lane.model}`}>
         <Icon icon={Cpu} size={14} />
         <span ref={model} className="graph-card-part-text">{form.model}</span>

@@ -1,5 +1,5 @@
 /**
- * What a renderer may load (ADR-0060 H4). Pure, so the Vite dev server, main's
+ * What a renderer may load (ADR-0063 H4). Pure, so the Vite dev server, main's
  * protocol handler and the tests read the same policy.
  */
 

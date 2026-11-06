@@ -1,3 +1,7 @@
+import type { AiProvider } from '@ordewell/core';
+import {
+  describeSignInWays, RUNNER_INSTALL_DOCS, signInAction, signInOfVerdict, TERMINAL_UI_SIGN_IN,
+} from '@ordewell/core/plan-utils';
 import type { StatusId } from '@ordewell/ui/design';
 import type { DaemonCallResult, RecentGit } from '../../shared/bridge';
 import type { RunnerLine } from '../runners';
@@ -144,30 +148,45 @@ export interface RunnerCardModel {
   command?: string;
   /** The runner's own install page, for a missing one. */
   docs?: string;
+  /** The button a signed-out agent gets: its login, or the key entry. */
+  action?: 'login' | 'key';
+  /** The vendor a key entry is for. */
+  provider?: AiProvider;
+  /** The agent's name, for the key entry's wording. */
+  runnerLabel?: string;
 }
 
-/** Each runner's own install page, opened through main's https-only `shell.openExternal`. */
-export const INSTALL_DOCS: Readonly<Record<string, string>> = {
-  'claude-code': 'https://docs.claude.com/en/docs/claude-code/setup',
-  codex: 'https://github.com/openai/codex',
-  opencode: 'https://opencode.ai/docs',
-};
+/** Each runner's own install page, from core's manifest, opened through main's https-only `shell.openExternal`. */
+export const INSTALL_DOCS: Readonly<Record<string, string>> = RUNNER_INSTALL_DOCS;
 
 export function runnerCard(line: RunnerLine, name: string): RunnerCardModel {
   const version = line.version ? { version: line.version } : {};
+  // An agent Ordewell cannot start is no better for being signed in, and a login
+  // or key would not help it, so its reason is the whole card.
+  if (line.unavailable && line.state !== 'off' && line.state !== 'missing') {
+    return { id: line.id, tone: 'failed', word: 'Unavailable', ...version, hint: line.unavailable };
+  }
   switch (line.state) {
     case 'signed-in':
       return { id: line.id, tone: 'passed', word: 'Signed in', ...version };
-    case 'signed-out':
-      // The runner's own CLI signs it in, as the chat says (ADR-0052).
+    case 'signed-out': {
+      // The agent's own ways in, worded once by core (ADR-0052): a key-based
+      // agent names the key entry, never a CLI sign-in it does not have.
+      const signIn = line.signIn ?? signInOfVerdict(line.id, name, line.loginCommand ? { loginCommand: line.loginCommand } : undefined);
+      const hint = signIn ? describeSignInWays(signIn, TERMINAL_UI_SIGN_IN) : '';
+      const action = signInAction(signIn);
       return {
         id: line.id,
         tone: 'attention',
         word: 'Signed out',
         ...version,
-        hint: 'Sign in from its CLI, then Retry.',
+        ...(hint ? { hint } : {}),
         ...(line.loginCommand ? { command: line.loginCommand.join(' ') } : {}),
+        ...(action ? { action } : {}),
+        ...(action === 'key' && signIn?.key ? { provider: signIn.key.provider, runnerLabel: name } : {}),
+        ...(action === 'login' ? { runnerLabel: name } : {}),
       };
+    }
     case 'unknown':
       return { id: line.id, tone: 'idle', word: 'Not checked', ...version, ...(line.detail ? { hint: line.detail } : {}) };
     case 'off':

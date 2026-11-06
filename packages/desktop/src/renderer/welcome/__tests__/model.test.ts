@@ -126,10 +126,17 @@ describe('runnerCard', () => {
       .toEqual({ id: 'claude-code', tone: 'passed', word: 'Signed in', version: '1.4.2' });
   });
 
-  it("names a signed-out runner's own CLI sign-in", () => {
-    expect(runnerCard({ id: 'codex', state: 'signed-out', loginCommand: ['codex', 'login'] }, 'Codex')).toMatchObject({
-      tone: 'attention', word: 'Signed out', hint: 'Sign in from its CLI, then Retry.', command: 'codex login',
+  it("names a signed-out runner's own CLI sign-in from core's wording", () => {
+    expect(runnerCard({ id: 'codex', state: 'signed-out', loginCommand: ['codex', 'login'], signIn: { runner: 'codex', label: 'Codex', login: ['codex', 'login'] } }, 'Codex')).toMatchObject({
+      tone: 'attention', word: 'Signed out', hint: 'Sign in with /login codex, or run codex login.', command: 'codex login', action: 'login', runnerLabel: 'Codex',
     });
+  });
+
+  it('names the key entry when the agent has no login Ordewell can run', () => {
+    expect(runnerCard({ id: 'gemini-cli', state: 'signed-out', signIn: { runner: 'gemini-cli', label: 'Gemini CLI', key: { provider: 'google', label: 'Google Gemini' } } }, 'Gemini CLI')).toMatchObject({
+      tone: 'attention', word: 'Signed out', hint: 'Run /key and choose Google Gemini to hand it a key.', action: 'key', provider: 'google',
+    });
+    expect(runnerCard({ id: 'cursor-agent', state: 'signed-out' }, 'Cursor').hint).toBeUndefined();
   });
 
   it('tells how to install a missing runner and links its install page', () => {
@@ -137,6 +144,15 @@ describe('runnerCard', () => {
       tone: 'failed', word: 'Not installed', hint: 'Install OpenCode, then Retry.', docs: 'https://opencode.ai/docs',
     });
     expect(runnerCard({ id: 'aider', state: 'missing' }, 'Aider').docs).toBeUndefined();
+  });
+
+  it('gives a runner Ordewell cannot start its reason alone, however its login stands', () => {
+    const reason = 'Cline 1.0.0 is older than the 1.3.0 Ordewell needs.';
+    const card = runnerCard({ id: 'cline', state: 'signed-out', unavailable: reason, signIn: { runner: 'cline', label: 'Cline', login: ['cline', 'auth'] } }, 'Cline');
+    expect(card).toMatchObject({ tone: 'failed', word: 'Unavailable', hint: reason });
+    expect(card).not.toHaveProperty('action');
+    expect(runnerCard({ id: 'cline', state: 'missing', unavailable: reason }, 'Cline').word).toBe('Not installed');
+    expect(runnerCard({ id: 'cline', state: 'off', unavailable: reason }, 'Cline').word).toBe('Off in Settings');
   });
 
   it('says a runner is off in Settings, or was not checked', () => {

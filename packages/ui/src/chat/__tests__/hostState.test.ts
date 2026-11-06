@@ -408,8 +408,7 @@ describe('conversationEpoch: which conversation the blocks belong to', () => {
   });
 });
 
-describe('the repositories notice', () => {
-  const preview: IsolationPreview = { status: 'ready', shared: [], repos: [{ path: '.', head: { kind: 'branch', branch: 'main', commit: 'a1b2c3d' }, dirty: false }] };
+describe('the repositories notice', () => {  const preview: IsolationPreview = { status: 'ready', shared: [], repos: [{ path: '.', head: { kind: 'branch', branch: 'main', commit: 'a1b2c3d' }, dirty: false }] };
 
   it('is unheard of until the host says, then holds what it last sent, null included', () => {
     expect(INITIAL_HOST_STATE.isolationPreview).toBeUndefined();
@@ -427,5 +426,28 @@ describe('the repositories notice', () => {
     for (const kind of ['empty', 'restore', 'new'] as const) {
       expect(resetSession(shown, kind).isolationPreview).toEqual(preview);
     }
+  });
+});
+
+describe('model discovery errors', () => {
+  it("keeps each runner's own reason beside the providers'", () => {
+    const shown = reduceHost(INITIAL_HOST_STATE, msg({
+      type: 'setModelDiscoveryErrors',
+      errors: { openai: 'bad key' },
+      runnerErrors: { 'qwen-code': 'Qwen Code is not signed in. Run qwen and sign in there.' },
+    }));
+
+    expect(shown.modelDiscoveryErrors).toEqual({ openai: 'bad key' });
+    expect(shown.runnerDiscoveryErrors).toEqual({ 'qwen-code': 'Qwen Code is not signed in. Run qwen and sign in there.' });
+  });
+
+  it('clears both when a later answer has none', () => {
+    const shown = reduceHost(
+      { ...INITIAL_HOST_STATE, modelDiscoveryErrors: { openai: 'bad' }, runnerDiscoveryErrors: { codex: 'signed out' } },
+      msg({ type: 'setModelDiscoveryErrors', errors: {} }),
+    );
+
+    expect(shown.modelDiscoveryErrors).toEqual({});
+    expect(shown.runnerDiscoveryErrors).toEqual({});
   });
 });

@@ -27,13 +27,13 @@ function setup(platform: NodeJS.Platform = 'darwin') {
     host,
     placement: { ...fileSystemPlacement, call },
     platform,
+    home: root,
     env: async () => ({ SHELL: '/bin/zsh', PATH: '/fixed/path:/usr/bin', ELECTRON_RUN_AS_NODE: '1' }),
   });
   const sent: Array<{ id: number; event: TerminalEvent }> = [];
   const caller = (owner = 1): Caller => ({ owner, workspace: root, send: (id, event) => sent.push({ id, event }) });
   return { channel, fake, host, sent, caller };
 }
-
 const spec = (extra: Record<string, unknown> = {}) => ({ id: 1, repo: '.', scope: { kind: 'checkout' }, cols: 90, rows: 30, ...extra });
 
 describe('TerminalChannel (ADR-0062 G11)', () => {
@@ -110,5 +110,38 @@ describe('TerminalChannel (ADR-0062 G11)', () => {
     await channel.open(caller(1), spec({ id: 2 }));
     host.closeOwner(1);
     expect(fake.ptys.every((pty) => pty.kill.mock.calls.length === 1)).toBe(true);
+  });
+
+  it('refuses a launcher\'s shell, and runs only its login there', async () => {
+    const { channel, fake } = setup();
+    const launcher = { owner: 9, send: () => undefined };
+    expect((await channel.open(launcher, spec())).ok).toBe(false);
+    expect(fake.calls).toHaveLength(0);
+    expect((await channel.open(launcher, spec({ login: { runner: 'codex' } }))).ok).toBe(true);
+    expect(fake.calls[0]!.cwd).toBe(root);
+  });
+
+  it('runs an agent\'s login as core\'s argv, never through a shell', async () => {
+    const { channel, fake, caller } = setup();
+    const result = await channel.open(caller(), spec({ login: { runner: 'codex' } }));
+    expect(result).toMatchObject({ ok: true, id: 1, shell: 'codex' });
+    expect(fake.calls[0]!.file).toBe('codex');
+    expect(fake.calls[0]!.args).toEqual(['login']);
+    expect(fake.calls[0]!.cwd.endsWith(root.split('/').pop()!)).toBe(true);
+  });
+
+  it('runs a launcher\'s login in home, with no checkout to open', async () => {
+    const { channel, fake } = setup();
+    const result = await channel.open({ owner: 9, send: () => undefined }, spec({ login: { runner: 'codex' } }));
+    expect(result).toMatchObject({ ok: true });
+    expect(fake.calls[0]!.file).toBe('codex');
+    expect(fake.calls[0]!.cwd).toBe(root);
+  });
+
+  it('refuses a login Ordewell has no argv for, and starts nothing', async () => {
+    const { channel, fake } = setup();
+    const result = await channel.open({ owner: 9, send: () => undefined }, spec({ login: { runner: 'not-a-runner' } }));
+    expect(result.ok).toBe(false);
+    expect(fake.calls).toHaveLength(0);
   });
 });

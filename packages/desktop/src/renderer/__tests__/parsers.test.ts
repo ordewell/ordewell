@@ -3,7 +3,7 @@ import { parseRunners } from '../runners';
 import { parseSessions } from '../sessions';
 
 describe('parseRunners', () => {
-  it('lists the three known runners in order, an absent one as missing', () => {
+  it('lists every runner core ships, in core order, an absent one as missing', () => {
     const data = {
       runners: [
         { id: 'codex', name: 'Codex', enabled: true, auth: { state: 'signed-out', detail: 'run codex login' } },
@@ -13,20 +13,27 @@ describe('parseRunners', () => {
       orchestratorModel: 'x',
     };
     expect(parseRunners(data)).toEqual([
-      { id: 'claude-code', state: 'signed-in' },
-      { id: 'codex', state: 'signed-out', detail: 'run codex login' },
-      { id: 'opencode', state: 'missing' },
+      { id: 'claude-code', name: 'Claude Code', state: 'signed-in' },
+      { id: 'codex', name: 'Codex', state: 'signed-out', detail: 'run codex login' },
+      { id: 'opencode', name: 'OpenCode', state: 'missing' },
+      { id: 'copilot-cli', name: 'GitHub Copilot CLI', state: 'missing' },
+      { id: 'qwen-code', name: 'Qwen Code', state: 'missing' },
+      { id: 'cline', name: 'Cline', state: 'missing' },
+      { id: 'gemini-cli', name: 'Gemini CLI', state: 'missing' },
+      { id: 'cursor-agent', name: 'Cursor', state: 'missing' },
+      { id: 'aider', name: 'Aider', state: 'unknown' },
     ]);
   });
 
   it('reads an unknown or absent login state as unknown', () => {
     const data = { runners: [{ id: 'opencode', auth: { state: 'weird' } }, { id: 'codex' }] };
-    expect(parseRunners(data)?.slice(1)).toEqual([{ id: 'codex', state: 'unknown' }, { id: 'opencode', state: 'unknown' }]);
+    expect(parseRunners(data)?.filter((line) => line.id === 'codex' || line.id === 'opencode'))
+      .toEqual([{ id: 'codex', name: 'Codex', state: 'unknown' }, { id: 'opencode', name: 'OpenCode', state: 'unknown' }]);
   });
 
   it('reads a runner turned off in Settings as off, whatever its login', () => {
     const data = { runners: [{ id: 'codex', enabled: false, auth: { state: 'signed-in' } }] };
-    expect(parseRunners(data)?.[1]).toEqual({ id: 'codex', state: 'off' });
+    expect(parseRunners(data)?.[1]).toEqual({ id: 'codex', name: 'Codex', state: 'off' });
   });
 
   it('keeps the version and the sign-in command when the daemon gives them', () => {
@@ -35,8 +42,20 @@ describe('parseRunners', () => {
       { id: 'opencode', enabled: true, version: '', auth: { state: 'signed-out', loginCommand: ['opencode', 3] } },
     ] };
     const [, codex, opencode] = parseRunners(data) ?? [];
-    expect(codex).toEqual({ id: 'codex', state: 'signed-out', version: '0.9.1', loginCommand: ['codex', 'login'] });
-    expect(opencode).toEqual({ id: 'opencode', state: 'signed-out' });
+    expect(codex).toEqual({ id: 'codex', name: 'Codex', state: 'signed-out', version: '0.9.1', loginCommand: ['codex', 'login'] });
+    expect(opencode).toEqual({ id: 'opencode', name: 'OpenCode', state: 'signed-out' });
+  });
+
+  it('keeps why an installed agent cannot be started, or says so plainly when the daemon gives no reason', () => {
+    const data = { runners: [
+      { id: 'cline', enabled: true, usable: false, reason: 'Cline 1.0.0 is older than the 1.3.0 it needs.', auth: { state: 'unknown' } },
+      { id: 'qwen-code', enabled: true, usable: false, auth: { state: 'signed-in' } },
+      { id: 'cursor-agent', enabled: true, usable: true, auth: { state: 'signed-in' } },
+    ] };
+    const lines = parseRunners(data) ?? [];
+    expect(lines.find((line) => line.id === 'cline')?.unavailable).toBe('Cline 1.0.0 is older than the 1.3.0 it needs.');
+    expect(lines.find((line) => line.id === 'qwen-code')?.unavailable).toBe('Ordewell cannot start it.');
+    expect(lines.find((line) => line.id === 'cursor-agent')?.unavailable).toBeUndefined();
   });
 
   it('answers undefined for anything but the runners response', () => {

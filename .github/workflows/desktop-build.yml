@@ -7,8 +7,8 @@ name: Desktop build
 #   - a pull request to main that touches what can change an installer;
 #   - workflow_dispatch, from the Actions tab once this file is on main;
 #   - release.yml, which calls it with `attach` and the tag to put the
-#     installers on the GitHub Release (ADR-0060).
-# Signing (ADR-0060 H9): only the release path signs. release.yml hands this
+#     installers on the GitHub Release (ADR-0063).
+# Signing (ADR-0063 H9): only the release path signs. release.yml hands this
 # workflow the signing secrets one by one, and the package step passes each to
 # its own OS only when `attach` is set, so a pull request, a manual run and a
 # fork build unsigned (macOS: ad hoc) with updates off, as a release does until
@@ -296,7 +296,7 @@ jobs:
       # and a sums file per runner would leave the installer scripts to join
       # them. SHA256SUMS goes last, so a Release that has one has every
       # installer. latest*.yml and the blockmaps are not touched or listed:
-      # electron-updater reads them by their own names (ADR-0060 H10).
+      # electron-updater reads them by their own names (ADR-0063 H10).
       - name: Attach the fixed-name copies and SHA256SUMS
         shell: bash
         env:

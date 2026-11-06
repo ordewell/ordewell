@@ -20,7 +20,7 @@ function startServer(status: number, body: unknown): Promise<{ port: number; see
   });
 }
 
-/** The user's reads of files and git (ADR-0061): each method's route and query, and a refusal's code. */
+/** The user's reads of files and git (ADR-0064): each method's route and query, and a refusal's code. */
 describe('ApiClient workspace reads', () => {
   const servers: Array<{ close: () => void }> = [];
   afterEach(() => { servers.splice(0).forEach((s) => s.close()); });

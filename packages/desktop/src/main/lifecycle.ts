@@ -15,7 +15,7 @@ export interface QuitPrompt {
 }
 
 /**
- * Whether quitting asks first, and what it says happens (ADR-0060 H5). With
+ * Whether quitting asks first, and what it says happens (ADR-0063 H5). With
  * the daemon this app started, quitting stops it and every run in it. With
  * one it attached to, the runs go on there: nothing is stopped. A terminal
  * running a process is asked about in the same dialog, since quitting ends it

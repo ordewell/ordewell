@@ -4,9 +4,10 @@ import { DEFAULT_MAX_PARALLEL, RUN_SETTINGS_DEFAULTS, type SettingsResponse } fr
 import { registerFrameCommands } from '../../../frame/commands';
 import { Frame } from '../../../frame/Frame';
 import { FrameProvider, FrameStore } from '../../../frame/store';
-import { resetDaemonHosts } from '../../../session/DaemonHost';
+import { daemonHost, resetDaemonHosts } from '../../../session/DaemonHost';
 import { fakeDaemon, ok } from '../../../session/__tests__/fakeDaemon';
 import { register } from '../SettingsTab';
+import { SETTINGS_TIMEOUT_MS } from '../useSettings';
 
 vi.mock('../../../monaco', async () => (await import('../../../test/monacoMock')).fakeMonacoModule());
 
@@ -26,7 +27,17 @@ const SETTINGS: SettingsResponse = {
 const RUNNERS = {
   runners: [
     { id: 'claude-code', name: 'Claude Code', enabled: true, auth: { state: 'signed-in' } },
-    { id: 'codex', name: 'Codex', enabled: false, auth: { state: 'signed-out' } },
+    {
+      id: 'codex', name: 'Codex', enabled: false,
+      auth: {
+        state: 'signed-out', loginCommand: ['codex', 'login'],
+        signIn: { runner: 'codex', label: 'Codex', login: ['codex', 'login'] },
+      },
+    },
+    {
+      id: 'gemini-cli', name: 'Gemini CLI', enabled: true,
+      auth: { state: 'signed-out', signIn: { runner: 'gemini-cli', label: 'Gemini CLI', key: { provider: 'google', label: 'Google Gemini' } } },
+    },
   ],
   orchestratorModel: 'claude-sonnet',
 };
@@ -46,12 +57,15 @@ const MODELS = {
   providers: ['openrouter'],
   orchestratorModels: [{ id: 'openai/gpt-5', label: 'GPT-5', provider: 'openai', apiProvider: 'openai' }],
   providerErrors: {},
+  runnerErrors: {},
 };
 
 let offs: Array<() => void> = [];
 afterEach(() => {
+  vi.useRealTimers();
   for (const off of offs) off();
   offs = [];
+  vi.restoreAllMocks();
   resetDaemonHosts();
 });
 
@@ -67,14 +81,19 @@ interface WorldOptions {
   advancedOpen?: boolean;
   /** Refuse every settings write with this sentence. */
   refuse?: string;
+  models?: Partial<typeof MODELS>;
+  runners?: { runners: Array<Record<string, unknown>>; orchestratorModel?: string };
+  /** A route that never answers, to prove a read is bounded. */
+  hang?: 'settings' | 'runners' | 'models' | 'prefs';
 }
 
 function world(theme: 'system' | 'light' | 'dark' = 'dark', options: WorldOptions = {}): World {
   let settings = { ...SETTINGS, ...options.settings };
+  const never = <T,>(): Promise<T> => new Promise<T>(() => undefined);
   const daemon = fakeDaemon({
-    'settings.get': () => ok({ ...settings }),
-    'runners.list': () => ok(RUNNERS),
-    'models.list': () => ok(MODELS),
+    'settings.get': () => options.hang === 'settings' ? never() : ok({ ...settings }),
+    'runners.list': () => options.hang === 'runners' ? never() : ok(options.runners ?? RUNNERS),
+    'models.list': () => options.hang === 'models' ? never() : ok({ ...MODELS, ...options.models }),
     'settings.update': (_params, body) => {
       if (options.refuse) return { ok: false, status: 400, error: options.refuse, data: { error: options.refuse } };
       const change = body as { autonomousMode?: boolean; orchestratorModel?: string; plannerThinkingEffort?: string; run?: Record<string, unknown>; env?: Record<string, string>; modelAllowlist?: Record<string, string[] | null> };
@@ -89,7 +108,7 @@ function world(theme: 'system' | 'light' | 'dark' = 'dark', options: WorldOption
     'runners.setEnabled': () => ok({ ok: true }),
   });
   let prefs = { theme, layouts: {}, notifications: true, keepRunningInTray: false, settingsAdvancedOpen: options.advancedOpen ?? false, editorCommand: '' };
-  const get = vi.fn(async () => prefs);
+  const get = vi.fn(() => options.hang === 'prefs' ? never() : Promise.resolve(prefs));
   const set = vi.fn(async (key: string, value: unknown) => {
     prefs = { ...prefs, [key]: value };
     return prefs;
@@ -119,8 +138,76 @@ describe('the Settings view', () => {
     expect(screen.getByRole('textbox', { name: /Parallel tasks/ })).toHaveValue('3');
   });
 
-  it('saves autonomy, a run rule, the parallel limit, and a runner through their routes', async () => {
+  it('lists every planner core ships, keeping an unavailable agent with its reason', async () => {
+    await mount();
+    const planner = await screen.findByRole('combobox', { name: 'Planner' });
+    const options = within(planner).getAllByRole('option');
+    expect(options.map((option) => option.getAttribute('value'))).toEqual([
+      'claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent', 'openrouter',
+    ]);
+    const qwen = options.find((option) => option.getAttribute('value') === 'qwen-code') as HTMLOptionElement;
+    expect(qwen).toBeDisabled();
+    expect(qwen).toHaveTextContent('Qwen Code — not available');
+    expect(screen.getByText(/Qwen Code — not available/)).toBeInTheDocument();
+  });
+
+  it('carries each runner\'s login state and why an unavailable one cannot be used', async () => {
+    await mount();
+    await screen.findByRole('heading', { name: 'Runners' });
+    const codex = screen.getByRole('checkbox', { name: /Codex/ }).closest('li') as HTMLElement;
+    expect(codex).toHaveTextContent('Signed out');
+    const qwenCheckbox = screen.getByRole('checkbox', { name: /Qwen Code/ });
+    expect(qwenCheckbox).toBeDisabled();
+    expect(qwenCheckbox.closest('li')).toHaveTextContent('not available');
+    expect(qwenCheckbox.closest('li')).toHaveTextContent('Install Qwen Code, then Refresh.');
+  });
+
+  it('shows a runner\'s own model error in its allowlist, not "lists no models"', async () => {
+    const reason = 'Qwen Code is not signed in. Run qwen and sign in there.';
+    const { w } = await mount('dark', {
+      runners: {
+        runners: [
+          { id: 'claude-code', name: 'Claude Code', enabled: true, auth: { state: 'signed-in' } },
+          { id: 'qwen-code', name: 'Qwen Code', enabled: true, auth: { state: 'signed-out' } },
+        ],
+      },
+      models: { runnerErrors: { 'qwen-code': reason } },
+    });
+    await screen.findByRole('heading', { name: 'Runners' });
+    const row = screen.getByRole('checkbox', { name: /Qwen Code/ }).closest('li') as HTMLElement;
+    fireEvent.click(within(row).getByRole('button', { name: 'Edit Qwen Code models' }));
+    expect(within(row).getByText(reason)).toBeInTheDocument();
+    expect(within(row).queryByText('Qwen Code lists no models.')).toBeNull();
+    expect(w.daemon.calls('models.list')).not.toHaveLength(0);
+  });
+
+  it('re-reads every runner and catalog from the header Refresh, and on window focus, throttled', async () => {
     const { w } = await mount();
+    await screen.findByRole('heading', { name: 'Runners' });
+    const before = w.daemon.calls('runners.list').length;
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(w.daemon.calls('runners.list')).toHaveLength(before + 1));
+    const afterRefresh = w.daemon.calls('runners.list').length;
+
+    act(() => { window.dispatchEvent(new Event('focus')); });
+    await waitFor(() => expect(w.daemon.calls('runners.list')).toHaveLength(afterRefresh + 1));
+
+    act(() => { window.dispatchEvent(new Event('focus')); });
+    expect(w.daemon.calls('runners.list')).toHaveLength(afterRefresh + 1);
+    expect(w.daemon.calls('models.list')).toHaveLength(afterRefresh + 1);
+  });
+
+  it('never stays on "Loading…": a read that does not answer times out into the error and Retry', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    await mount('dark', { hang: 'runners' });
+    await act(async () => { await vi.advanceTimersByTimeAsync(SETTINGS_TIMEOUT_MS + 1_000); });
+    expect(screen.getByText('Settings could not be loaded')).toBeInTheDocument();
+    expect(screen.getByText(`the daemon did not answer with its coding agents within ${SETTINGS_TIMEOUT_MS / 1000} seconds`)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+  });
+
+  it('saves autonomy, a run rule, the parallel limit, and a runner through their routes', async () => {    const { w } = await mount();
     await screen.findByRole('heading', { name: 'Planner' });
 
     fireEvent.click(screen.getByRole('button', { name: 'Full' }));
@@ -139,10 +226,54 @@ describe('the Settings view', () => {
     await waitFor(() => expect(w.daemon.calls('runners.setEnabled')).toContainEqual([{ id: 'codex' }, { enabled: true }]));
   });
 
+  it('words each signed-out runner as core does, and its Log in asks the session host', async () => {
+    await mount();
+    await screen.findByRole('heading', { name: 'Planner' });
+    const row = screen.getByRole('checkbox', { name: /Codex/ }).closest('li') as HTMLElement;
+    expect(row).toHaveTextContent('Sign in with /login codex, or run codex login.');
+
+    const handle = vi.spyOn(daemonHost(WORKSPACE), 'handle');
+    fireEvent.click(within(row).getByRole('button', { name: 'Log in' }));
+    await waitFor(() => expect(handle).toHaveBeenCalledWith({ type: 'loginPlanner', runner: 'codex' }));
+  });
+
+  it('offers Set API key on a key-based runner, through the same host', async () => {
+    await mount();
+    await screen.findByRole('heading', { name: 'Planner' });
+    const row = screen.getByRole('checkbox', { name: /Gemini CLI/ }).closest('li') as HTMLElement;
+    expect(row).toHaveTextContent('Run /key and choose Google Gemini to hand it a key.');
+
+    const key = vi.spyOn(daemonHost(WORKSPACE), 'enterApiKey').mockResolvedValue(false);
+    fireEvent.click(within(row).getByRole('button', { name: 'Set API key…' }));
+    await waitFor(() => expect(key).toHaveBeenCalledWith('google', 'Gemini CLI'));
+  });
+
+  it('re-reads its runners and settings when a sign-in or a planner change says the catalog moved', async () => {
+    const { w } = await mount();
+    await screen.findByRole('heading', { name: 'Planner' });
+    const reads = w.daemon.calls('runners.list').length;
+
+    await act(async () => { await daemonHost(WORKSPACE).handle({ type: 'setPlanner', provider: 'codex' }); });
+
+    await waitFor(() => expect(w.daemon.calls('runners.list').length).toBeGreaterThan(reads));
+    // The row still stands: the refresh is in place, not a blank "Loading settings…".
+    expect(screen.getByRole('heading', { name: 'Planner' })).toBeInTheDocument();
+  });
+
+  it('offers the key entry in the command palette', async () => {
+    const { store } = await mount();
+    await screen.findByRole('heading', { name: 'Planner' });
+    const key = vi.spyOn(daemonHost(WORKSPACE), 'enterApiKey').mockResolvedValue(false);
+    const command = store.enabledCommands().find((candidate) => candidate.id === 'settings.apiKey');
+    expect(command?.title).toBe('Set API key…');
+    await act(async () => { command?.run(); });
+    expect(key).toHaveBeenCalledWith();
+  });
+
   it('summarises each runner\'s allowlist and picks models from the runner\'s full list', async () => {
     const { w } = await mount();
     await screen.findByRole('heading', { name: 'Planner' });
-    expect(screen.getByText('All models')).toBeInTheDocument();
+    expect(screen.getAllByText('All models').length).toBeGreaterThan(0);
     expect(screen.getByText('1 of 2 models: o4-mini')).toBeInTheDocument();
     // Codex is switched off: its picker is there but cannot be opened.
     expect(screen.getByRole('button', { name: 'Edit Codex models' })).toBeDisabled();

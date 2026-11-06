@@ -15,6 +15,7 @@ import type { IRunner, IRunnerSession } from '../../interfaces/IRunner';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
 import { fakeConfig, FakeRunnerSession } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
+import { recordedRunnerAuth, resetRunnerAuth } from '../runnerAuth';
 
 const LIMIT = "You've hit your session limit · resets 8:10pm (UTC)";
 const admitted = { current: () => true };
@@ -26,9 +27,9 @@ type Spawn = (opts: RunnerSpawnOptions) => Promise<IRunnerSession>;
  * hands out {@link FakeRunnerSession}s, and a host that records every ending
  * it is told of instead of scheduling anything.
  */
-function setup(opts: { tasks?: Task[]; spawn?: Spawn; repairs?: string[]; landPassed?: () => Promise<LandingOutcome>; settle?: (ended: AttemptEnded) => Promise<void> } = {}) {
+function setup(opts: { tasks?: Task[]; runners?: string[]; spawn?: Spawn; repairs?: string[]; landPassed?: () => Promise<LandingOutcome>; settle?: (ended: AttemptEnded) => Promise<void> } = {}) {
   const store = new PlanStore();
-  store.load(opts.tasks ?? [createTask({ id: 't1', order: 1, title: 'One', prompt: 'Do it' })], ['claude-code']);
+  store.load(opts.tasks ?? [createTask({ id: 't1', order: 1, title: 'One', prompt: 'Do it' })], opts.runners ?? ['claude-code']);
   const sessions: FakeRunnerSession[] = [];
   const spawn: Spawn = opts.spawn ?? (async (o) => {
     const session = new FakeRunnerSession(`s${sessions.length + 1}`, o.taskId, `native-${o.taskId}`);
@@ -254,6 +255,65 @@ describe('Attempts: a verdict is reported, never applied', () => {
 
     await vi.waitFor(() => expect(env.ended.map((e) => e.kind)).toEqual(['passed', 'unsettled']));
     expect(env.ended[1]).toMatchObject({ attempt: null, reason: 'the tick broke' });
+  });
+});
+
+describe('Attempts: a runner that is not signed in', () => {
+  const CURSOR = 'Cursor is not signed in. Sign in with /login cursor-agent, or run cursor-agent login.';
+  const CLAUDE = 'Claude Code is not signed in. Sign in with /login claude-code, or run claude auth login.';
+  const cursorTask = () => [createTask({ id: 't1', order: 1, title: 'One', prompt: 'Do it', assignedRunner: 'cursor-agent' })];
+
+  it('holds a start the agent refused with the way to sign in, and flags the agent signed out', async () => {
+    resetRunnerAuth();
+    const env = setup({ tasks: cursorTask(), runners: ['cursor-agent'], spawn: async () => { throw new Error(CURSOR); } });
+
+    await env.start();
+
+    expect(env.ended[0]).toMatchObject({
+      kind: 'spawn-failed',
+      failure: { leaves: 'held', hold: `${CURSOR} Then start it again.`, notice: { level: 'error', text: `Failed to start task "One": ${CURSOR}` } },
+    });
+    expect(recordedRunnerAuth('cursor-agent', '/repo')?.state).toBe('signed-out');
+  });
+
+  it('puts the way to sign in before a startup exit that only said "not logged in"', async () => {
+    resetRunnerAuth();
+    const env = setup({ spawn: async () => { throw new RunnerStartupExit('Not logged in · Please run /login'); } });
+
+    await env.start();
+
+    expect(env.ended[0]).toMatchObject({
+      kind: 'spawn-failed',
+      failure: { leaves: 'failed', summary: { reviewReason: `${CLAUDE}\n\nNot logged in · Please run /login` }, notice: { text: `${CLAUDE}\n\nNot logged in · Please run /login` } },
+    });
+    expect(recordedRunnerAuth('claude-code', '/repo')?.state).toBe('signed-out');
+  });
+
+  it('names the way to sign in when the runner exits on its login', async () => {
+    resetRunnerAuth();
+    const env = setup();
+    await env.start();
+
+    env.sessions[0].emitOutput('Not logged in · Please run /login\n');
+    env.sessions[0].emitExit(1);
+
+    await vi.waitFor(() => expect(env.ended).toHaveLength(1));
+    expect(env.ended[0]).toMatchObject({ kind: 'failed', signedOut: CLAUDE });
+    expect(env.task().outputSummary?.reviewReason).toMatch(new RegExp(`^${CLAUDE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    expect(recordedRunnerAuth('claude-code', '/repo')?.state).toBe('signed-out');
+  });
+
+  it('reads no login wall into a task that failed for another reason', async () => {
+    resetRunnerAuth();
+    const env = setup();
+    await env.start();
+
+    env.sessions[0].emitOutput('The tests are red.\n');
+    env.sessions[0].emitExit(1);
+
+    await vi.waitFor(() => expect(env.ended).toHaveLength(1));
+    expect(env.ended[0]).toMatchObject({ kind: 'failed', signedOut: null });
+    expect(recordedRunnerAuth('claude-code', '/repo')).toBeUndefined();
   });
 });
 

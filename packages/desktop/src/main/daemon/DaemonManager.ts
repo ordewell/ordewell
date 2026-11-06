@@ -36,7 +36,7 @@ const defaultTimer = (fn: () => void, ms: number): (() => void) => {
 
 /**
  * Finds the daemon, attaches to it or starts the bundled one, and keeps the
- * windows told which (ADR-0060 H2, H3). The decision itself is
+ * windows told which (ADR-0063 H2, H3). The decision itself is
  * `decideAttach`; this class owns what follows from it: the process it
  * started, the probes while a daemon is away, and the restart a mismatch
  * offers.
@@ -74,7 +74,7 @@ export class DaemonManager {
     return this.status;
   }
 
-  /** Whether quitting this app stops the daemon, and every run in it (ADR-0060 H5). */
+  /** Whether quitting this app stops the daemon, and every run in it (ADR-0063 H5). */
   get owned(): boolean {
     return this.holding === 'owned';
   }

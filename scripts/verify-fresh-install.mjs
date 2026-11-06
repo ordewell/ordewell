@@ -15,6 +15,9 @@ function check(cond, message) {
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-fresh-'));
 process.env.HOME = home;
+// os.homedir() reads USERPROFILE on Windows, so HOME alone left these checks
+// on the real home: failing, and writing into the real ~/.ordewell.
+process.env.USERPROFILE = home;
 
 check(!fs.existsSync(path.join(home, '.ordewell')), '~/.ordewell/ does not exist');
 check(!fs.existsSync(path.join(home, '.config', 'ordewell')), '~/.config/ordewell/ does not exist');

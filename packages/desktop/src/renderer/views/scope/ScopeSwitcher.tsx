@@ -14,7 +14,7 @@ function repoLabel(repo: string): string {
 }
 
 /**
- * The view scope picker in the title bar (W8, ADR-0061 R2). Per repository in a
+ * The view scope picker in the title bar (W8, ADR-0064 R2). Per repository in a
  * multi-repo workspace; the Explorer and the file tabs it opens follow it.
  */
 function ScopeSwitcher({ api }: { api: FrameApi }): JSX.Element {
@@ -97,7 +97,7 @@ function ScopeGroup({ repo, heading, state, current, onChoose }: {
   );
 }
 
-/** `repo › branch` after the workspace: the branch the scope reads (`ReadAt.branch`, ADR-0061 R5). */
+/** `repo › branch` after the workspace: the branch the scope reads (`ReadAt.branch`, ADR-0064 R5). */
 function RepoBranch({ api }: { api: FrameApi }): JSX.Element | null {
   const { store, state } = useScope(api);
   const info = state.repos.find((r) => r.repo === state.repo);

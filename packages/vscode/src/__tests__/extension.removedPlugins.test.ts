@@ -32,7 +32,7 @@ describe('extension startup with removed runner manifests', () => {
     await activate(context);
     const output = vi.mocked(vscode.window.createOutputChannel).mock.results.at(-1)?.value as vscode.OutputChannel;
     expect(vi.mocked(output.appendLine).mock.calls.filter(([line]) => line.includes(notice))).toHaveLength(1);
-    expect(vi.mocked(createExtension).mock.calls[0][0].runnerRegistry.list().map((entry) => entry.manifest.name)).toEqual(['claude-code', 'codex', 'opencode']);
+    expect(vi.mocked(createExtension).mock.calls[0][0].runnerRegistry.list().map((entry) => entry.manifest.name)).toEqual(['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent']);
   });
 
   it('logs no removal notice without leftover manifests', async () => {

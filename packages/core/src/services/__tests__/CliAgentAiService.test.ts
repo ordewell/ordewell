@@ -521,13 +521,22 @@ describe('CliAgentAiService — Claude Code', () => {
   });
 
   it('asks before a read outside the workspace, and not for one inside it', async () => {
-    const outside = approvalSpy(false);
-    const { svc: outsideSvc, spawned: outsideSpawn } = service('claude-code', reachingFor('Read', { file_path: '/etc/hosts' }));
-    await outsideSvc.startConversation(request({ approval: outside }));
-    // Judged where the path points (ADR-0028): on macOS /etc is a symlink to
-    // /private/etc, on Linux it is not, so resolve the expectation the same way.
-    expect(outside.request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', subject: realpathSync.native('/etc/hosts') }));
-    expect(controlAnswer(outsideSpawn.processes[0])).toMatchObject({ behavior: 'deny' });
+    // A real file, so every host has one outside the workspace to point at.
+    const elsewhere = mkdtempSync(join(tmpdir(), 'ordewell-outside-'));
+    const hosts = join(elsewhere, 'hosts');
+    writeFileSync(hosts, '127.0.0.1 localhost\n');
+    try {
+      const outside = approvalSpy(false);
+      const { svc: outsideSvc, spawned: outsideSpawn } = service('claude-code', reachingFor('Read', { file_path: hosts }));
+      await outsideSvc.startConversation(request({ approval: outside }));
+      // Judged where the path points (ADR-0028): macOS's temp directory sits
+      // behind a symlink and Windows' can be a short name, so resolve the
+      // expectation the same way.
+      expect(outside.request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', subject: realpathSync.native(hosts) }));
+      expect(controlAnswer(outsideSpawn.processes[0])).toMatchObject({ behavior: 'deny' });
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
 
     const inside = approvalSpy(false);
     const { svc: insideSvc, spawned: insideSpawn } = service('claude-code', reachingFor('Read', { file_path: '/repo/src/a.ts' }));
@@ -1480,6 +1489,27 @@ describe('CliAgentAiService — Codex', () => {
     expect(planner.developerInstructions).toContain('your own subagents');
   });
 
+  it('tells a planner on Windows which shell run_command runs there, and one elsewhere nothing', async () => {
+    const systemPrompt = async (platform: NodeJS.Platform) => {
+      const spawned = fakeSpawn([...codexHandshake(), fixture('codex', 'tools')]);
+      const svc = new CliAgentAiService(fakeConfig({ aiProvider: 'codex' }), {
+        spawn: spawned.spawn,
+        fetch: (async () => { throw new Error('no HTTP in this test'); }) as unknown as typeof fetch,
+        resolvePath: async () => '/usr/bin',
+        workspaceRoot: () => '/repo',
+        platform,
+        isDirectory: () => true,
+        exists: () => true,
+        mcpServer: fakeMcpServer(),
+      });
+      await svc.startConversation(request({ runners: ['codex'] }));
+      return String(JSON.parse(spawned.processes[0].written[1]).params.developerInstructions);
+    };
+
+    expect(await systemPrompt('win32')).toMatch(/On this Windows machine run_command runs (Git Bash|cmd\.exe)/);
+    expect(await systemPrompt('linux')).not.toContain('On this Windows machine');
+  });
+
   it('plans with Codex\'s own shell off when no sandbox backend works', async () => {
     const { svc, spawned } = service(
       'codex',
@@ -2197,6 +2227,16 @@ describe('CliAgentAiService — one-shot plan generation', () => {
     expect(result.researchLog[0]).toMatchObject({ type: 'user_prompt', content: 'Add the thing' });
     expect(spawned.processes[0].killed).toBe(true);
     expect(svc.hasActiveConversation()).toBe(false);
+  });
+
+  it('offers a one-shot planner no run_command, which nothing here would run', async () => {
+    // The tool answered "not available" to every call, and a Codex planner told
+    // to use it, with its own shell off on Windows, had nothing left to read with.
+    const mcp = fakeMcpServer();
+    const { svc } = service('claude-code', [submitting(mcp, planTasks(), claudeSays('Submitted the plan.'))], {}, {}, mcp);
+    await svc.researchAndPlan('Add the thing', ['claude-code'], { 'claude-code': [] }, fakeFileSystem(), () => {});
+
+    expect(mcp.plannerScopes[0].hidden).toContain('run_command');
   });
 
   // Live, Haiku backgrounded its Explore agents and ended the turn "waiting
@@ -3132,14 +3172,28 @@ describe('CliAgentAiService — a turn that says the agent is signed out', () =>
       kind: 'message',
       failed: true,
       text:
-        'Claude Code not logged in. Sign in with /login, or run claude auth login and try again.\n\n' +
+        'Claude Code is not signed in. Sign in with /login claude-code, or run claude auth login. Then try again.\n\n' +
         'Not logged in · Please run /login',
     });
     expect(recordedRunnerAuth('claude-code', '/repo')).toEqual({
       state: 'signed-out',
       loginCommand: ['claude', 'auth', 'login'],
       detail: 'not logged in',
+      signIn: { runner: 'claude-code', label: 'Claude Code', login: ['claude', 'auth', 'login'] },
     });
+  });
+
+  // An ACP agent's refusal is already worded as the hint (AcpAdapter), so the
+  // planner's turn says it once rather than twice over.
+  it.each([
+    ['cursor-agent', 'Cursor is not signed in. Sign in with /login cursor-agent, or run cursor-agent login.'],
+    ['copilot-cli', 'GitHub Copilot CLI is not signed in. Sign in with /login copilot-cli, or run copilot login.'],
+    ['qwen-code', 'Qwen Code is not signed in. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.'],
+  ])('names the way into a signed-out %s planner once', async (runner, hint) => {
+    const turn = await failing(hint, runner).startConversation(request({ runners: [runner] }));
+
+    expect(turn).toMatchObject({ kind: 'message', failed: true, text: hint });
+    expect(recordedRunnerAuth(runner, '/repo')?.state).toBe('signed-out');
   });
 
   it('leaves an unrelated failure exactly as the runner said it', async () => {
@@ -3193,6 +3247,7 @@ describe('CliAgentAiService — a turn that says the agent is signed out', () =>
         state: 'signed-out',
         loginCommand: ['codex', 'login'],
         detail: 'not logged in',
+        signIn: { runner: 'codex', label: 'Codex', login: ['codex', 'login'] },
       });
     } finally {
       rmSync(home, { recursive: true, force: true });

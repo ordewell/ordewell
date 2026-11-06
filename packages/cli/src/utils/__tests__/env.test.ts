@@ -2,37 +2,35 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { findEnvFile, writeEnvVar, loadEnvFile } from '../env';
+import { homeEnv, setEnv } from '@ordewell/core/testing';
+import { findEnvFile, writeEnvVar, loadEnvFile, shellEnvValue } from '../env';
 
-let origHome: string | undefined;
+let home: string;
+let restoreHome: () => void;
 let origCwd: string;
 
 beforeEach(() => {
-  origHome = process.env.HOME;
   origCwd = process.cwd();
-  process.env.HOME = os.tmpdir();
+  home = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-env-home-'));
+  restoreHome = setEnv(homeEnv(home));
 });
 
 afterEach(() => {
-  process.env.HOME = origHome;
+  restoreHome();
   process.chdir(origCwd);
-  // cleanup
-  try {
-    const file = path.join(os.tmpdir(), '.ordewell', '.env');
-    if (fs.existsSync(file)) fs.unlinkSync(file);
-  } catch { /* empty */ }
+  fs.rmSync(home, { recursive: true, force: true });
 });
 
 describe('findEnvFile', () => {
   it('returns ~/.ordewell/.env', () => {
     const result = findEnvFile();
-    expect(result).toBe(path.join(os.tmpdir(), '.ordewell', '.env'));
+    expect(result).toBe(path.join(home, '.ordewell', '.env'));
   });
 });
 
 describe('writeEnvVar', () => {
   it('creates a new env file with the variable', () => {
-    const file = path.join(os.tmpdir(), '.ordewell', '.env');
+    const file = path.join(home, '.ordewell', '.env');
     writeEnvVar(file, 'TEST_KEY', 'test_value');
     expect(fs.existsSync(file)).toBe(true);
     const content = fs.readFileSync(file, 'utf8');
@@ -40,7 +38,7 @@ describe('writeEnvVar', () => {
   });
 
   it('updates existing env file', () => {
-    const file = path.join(os.tmpdir(), '.ordewell', '.env');
+    const file = path.join(home, '.ordewell', '.env');
     writeEnvVar(file, 'KEY1', 'val1');
     writeEnvVar(file, 'KEY1', 'val2');
     const content = fs.readFileSync(file, 'utf8');
@@ -50,7 +48,7 @@ describe('writeEnvVar', () => {
 
   it('tightens an existing world-readable .env to 0600', () => {
     if (process.platform === 'win32') return;
-    const file = path.join(os.tmpdir(), '.ordewell', '.env');
+    const file = path.join(home, '.ordewell', '.env');
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, 'KEY1=old\n');
     fs.chmodSync(file, 0o644);
@@ -62,12 +60,12 @@ describe('writeEnvVar', () => {
   });
 
   it('rejects a key containing regex metacharacters', () => {
-    const file = path.join(os.tmpdir(), '.ordewell', '.env');
+    const file = path.join(home, '.ordewell', '.env');
     expect(() => writeEnvVar(file, 'KEY.*', 'value')).toThrow(/valid environment variable/);
   });
 
   it('rejects a value containing a newline', () => {
-    const file = path.join(os.tmpdir(), '.ordewell', '.env');
+    const file = path.join(home, '.ordewell', '.env');
     expect(() => writeEnvVar(file, 'KEY', 'one\ntwo')).toThrow(/newline/);
   });
 });
@@ -80,14 +78,14 @@ describe('loadEnvFile', () => {
   });
 
   it('populates process.env from the resolved .env file', () => {
-    const file = path.join(os.tmpdir(), '.ordewell', '.env');
+    const file = path.join(home, '.ordewell', '.env');
     writeEnvVar(file, key, 'from-file');
     loadEnvFile();
     expect(process.env[key]).toBe('from-file');
   });
 
   it('does not override a var already set in the environment', () => {
-    const file = path.join(os.tmpdir(), '.ordewell', '.env');
+    const file = path.join(home, '.ordewell', '.env');
     writeEnvVar(file, key, 'from-file');
     process.env[key] = 'from-shell';
     loadEnvFile();
@@ -100,7 +98,7 @@ describe('loadEnvFile', () => {
     ['an export prefix', `export ${key}=sk-or-v1-abc`],
     ['CRLF line endings', `${key}=sk-or-v1-abc\r`],
   ])('reads the bare value when the line uses %s', (_label, line) => {
-    const file = path.join(os.tmpdir(), '.ordewell', '.env');
+    const file = path.join(home, '.ordewell', '.env');
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, `${line}\n`);
     loadEnvFile();
@@ -111,10 +109,23 @@ describe('loadEnvFile', () => {
     expect(() => loadEnvFile()).not.toThrow();
     expect(process.env[key]).toBeUndefined();
   });
+
+  it('remembers which values the shell supplied before .env filled gaps', () => {
+    const file = findEnvFile();
+    delete process.env[key];
+    writeEnvVar(file, key, 'from-file');
+    loadEnvFile();
+    expect(shellEnvValue(key)).toBeUndefined();
+    expect(process.env[key]).toBe('from-file');
+
+    process.env[key] = 'from-shell';
+    loadEnvFile();
+    expect(shellEnvValue(key)).toBe('from-shell');
+  });
 });
 
 describe('moving the autonomy level out of .env (ADR-0030)', () => {
-  const file = () => path.join(os.tmpdir(), '.ordewell', '.env');
+  const file = () => path.join(home, '.ordewell', '.env');
   const saved = { path: process.env.ORDEWELL_SETTINGS_PATH, mode: process.env.ORDEWELL_AUTONOMOUS_MODE };
   let dir: string;
   beforeEach(() => {

@@ -6,7 +6,7 @@ export type ActivityId = 'sessions' | 'explorer' | 'changes' | 'git';
 export const ACTIVITIES: readonly ActivityId[] = ['sessions', 'explorer', 'changes', 'git'];
 
 /**
- * Which tree a file, diff or terminal view reads (ADR-0061 R2, CONTEXT.md
+ * Which tree a file, diff or terminal view reads (ADR-0064 R2, CONTEXT.md
  * "View scope"). The plan never has one.
  */
 export type ViewScope =

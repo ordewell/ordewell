@@ -4,7 +4,7 @@ import PlanHeader from './PlanHeader';
 import { statusOf } from '../../design/status';
 import NewTaskCard from './NewTaskCard';
 import type { TaskDraft } from './NewTaskCard';
-import type { RunnerMode, RunnerOption } from './TaskCard';
+import type { RunnerMode, RunnerOption, RunnerSignInView } from './TaskCard';
 import type { Task, DiscoveredModel, TaskModelAssignment, RunTask, RunView, AssignmentScope } from '@ordewell/core';
 import { tasksTotalText } from '@ordewell/core/plan-utils';
 
@@ -44,6 +44,8 @@ interface PlanCardGroupProps {
   onRemoveTask?: (taskId: string) => void;
   onPromptChange?: (taskId: string, prompt: string) => void;
   onRetry?: (taskId: string) => void;
+  /** Each signed-out agent's way in, keyed by runner id, for the cards whose task failed on it. */
+  runnerSignIn?: Readonly<Record<string, RunnerSignInView>>;
   onSkip?: (taskId: string) => void;
   onCancel?: (taskId: string) => void;
   onCancelResume?: (taskId: string) => void;
@@ -171,6 +173,7 @@ export default function PlanCardGroup({
   onRemoveTask,
   onPromptChange,
   onRetry,
+  runnerSignIn,
   onSkip,
   onCancel,
   onCancelResume,
@@ -320,6 +323,7 @@ export default function PlanCardGroup({
                 onRemoveTask={onRemoveTask}
                 onPromptChange={onPromptChange}
                 onRetry={onRetry}
+                runnerSignIn={runnerSignIn}
                 onSkip={onSkip}
                 onCancel={onCancel}
                 onCancelResume={onCancelResume}

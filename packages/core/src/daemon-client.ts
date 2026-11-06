@@ -1,6 +1,6 @@
 /**
  * Node entry point for a client of the local daemon that is not itself a
- * host: the desktop app's main process (ADR-0060 H1). It reaches the daemon's
+ * host: the desktop app's main process (ADR-0063 H1). It reaches the daemon's
  * files and handshake without loading the main barrel, which brings the
  * planner, the runners and every AI service with it.
  */

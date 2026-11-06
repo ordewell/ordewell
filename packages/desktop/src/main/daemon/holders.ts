@@ -9,7 +9,7 @@ export interface HolderProxy {
 }
 
 export interface HolderDeps {
-  /** The daemon contract this app speaks (ADR-0060 H3). */
+  /** The daemon contract this app speaks (ADR-0063 H3). */
   contract: number;
   /** The app's own daemon, which never needs joining. */
   ownPort(): number;
@@ -37,7 +37,7 @@ function holderName(record: SessionLeaseRecord, port: number): string {
 
 /**
  * The desktop app's connections to the daemons that hold sessions it shows
- * (ADR-0060 H8). A session another Ordewell daemon holds is joined, not taken:
+ * (ADR-0063 H8). A session another Ordewell daemon holds is joined, not taken:
  * that daemon stays its one live host (ADR-0049) and the app is one more of
  * its clients, as the TUI that started it is.
  *

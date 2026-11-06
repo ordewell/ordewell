@@ -1041,6 +1041,7 @@ body.vscode-high-contrast-light .disclosure:hover {
      that never gives way: squeezed to nothing, the Run settings could not be
      reached to be opened. */
   min-height: 28px;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   /* Only .setup-panel-body scrolls, so the Settings toggle stays reachable. */
@@ -1143,6 +1144,7 @@ body.vscode-high-contrast-light .disclosure:hover {
   min-height: 0;
   max-height: 70vh;
   opacity: 1;
+  overflow-x: hidden;
   overflow-y: auto;
   transition: max-height var(--transition-fast), opacity var(--transition-fast);
 }
@@ -1158,6 +1160,7 @@ body.vscode-high-contrast-light .disclosure:hover {
   flex-direction: column;
   gap: 6px;
   padding: 8px 10px 10px;
+  min-width: 0;
 }
 
 .setup-block + .setup-block {
@@ -1176,6 +1179,8 @@ body.vscode-high-contrast-light .disclosure:hover {
   display: flex;
   align-items: center;
   gap: 6px;
+  /* A control the pointer must hit: the shared 24px minimum target. */
+  min-height: 24px;
   padding: 0;
   border: none;
   background: transparent;
@@ -1227,7 +1232,18 @@ body.vscode-high-contrast-light .disclosure:hover {
 .runner-pills {
   display: flex;
   align-items: flex-start;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  /* One line however many agents are installed: the row scrolls sideways
+     instead. overflow-y is hidden, not left to compute to auto, so a capsule's
+     login-failure line is never given a vertical scroller of its own; the
+     bottom padding keeps the thin scrollbar off the capsules instead of
+     hiding it. */
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  padding-bottom: 6px;
   gap: 6px;
 }
 
@@ -1239,6 +1255,9 @@ body.vscode-high-contrast-light .disclosure:hover {
   align-items: flex-start;
   gap: 3px;
   min-width: 0;
+  /* In a nowrap row a shrinkable capsule would be squeezed instead of the row
+     scrolling. */
+  flex: 0 0 auto;
 }
 
 .runner-pill-group {
@@ -1397,7 +1416,18 @@ body.vscode-high-contrast-light .disclosure:hover {
 .planner-backends {
   display: flex;
   align-items: flex-start;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  /* One line however many agents are installed: the row scrolls sideways
+     instead. overflow-y is hidden, not left to compute to auto, so a capsule's
+     login-failure line is never given a vertical scroller of its own; the
+     bottom padding keeps the thin scrollbar off the capsules instead of
+     hiding it. */
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  padding-bottom: 6px;
   gap: 5px;
 }
 
@@ -1409,6 +1439,7 @@ body.vscode-high-contrast-light .disclosure:hover {
   align-items: flex-start;
   gap: 3px;
   min-width: 0;
+  flex: 0 0 auto;
 }
 
 /* The group owns the one border, tint and radius. Both segments sit inside
@@ -4476,8 +4507,8 @@ body.vscode-high-contrast-light .task-card.expanded {
 /* ---- Remove Task Button ---- */
 .task-remove-btn {
   flex-shrink: 0;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   display: flex;
   align-items: center;
   justify-content: center;

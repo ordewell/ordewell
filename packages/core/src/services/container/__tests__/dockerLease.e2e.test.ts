@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { execFile, execFileSync, spawnSync, type ChildProcess } from 'child_process';
 import { createHash } from 'crypto';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import { createServer as createHttpServer, type IncomingHttpHeaders } from 'http';
@@ -17,7 +17,7 @@ import { DONE, SUBMIT } from '../../__tests__/delegationTestKit';
 import { fakeFs, fakeNotification, makeSession, scriptedPlanner, type PlannerTurn } from '../../__tests__/sessionTestKit';
 import type { IAiService } from '../../AiService';
 import { createTask, type LegacyPlanState, type Task } from '../../../models/Task';
-import { fakeConfig, FakeExecutionBackend } from '../../../testing';
+import { fakeConfig, FakeExecutionBackend, patient, removeDir } from '../../../testing';
 import { saveSession } from '../../../utils/sessionStore';
 import { openTaskLog } from '../../../utils/taskLogStore';
 import { LOGIN_VOLUME } from '../containerPreflight';
@@ -118,7 +118,7 @@ function tempDir(prefix = 'ordewell-container-'): string {
   dirs.push(dir);
   return dir;
 }
-afterEach(() => { while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true }); });
+afterEach(async () => { while (dirs.length) await removeDir(dirs.pop()!); });
 
 function repo(): string {
   const root = tempDir();
@@ -245,7 +245,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     writeFileSync(join(context, 'opencode'), FAKE_OPENCODE_LAUNCHER);
     chmodSync(join(context, 'opencode'), 0o755);
     docker('build', '-q', '-t', IMAGE, context);
-  }, 180_000);
+  }, patient(180_000));
 
   /** The attempts in the engine now, with no sidecar beside them. */
   const attempts = () => ours('container').filter((n) => !before.container.includes(n) && isAttempt(n));
@@ -255,7 +255,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     for (const name of ours('network').filter((n) => !before.network.includes(n))) spawnSync('docker', ['network', 'rm', name]);
     for (const name of ours('volume').filter((n) => !before.volume.includes(n))) spawnSync('docker', ['volume', 'rm', '-f', name]);
     spawnSync('docker', ['image', 'rm', '-f', IMAGE]);
-  }, 60_000);
+  }, patient(60_000));
 
   it('runs in the container, comes back through the gate, and lands on the integration branch', async () => {
     const root = repo();
@@ -279,7 +279,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     expect(await env.parent.execute({ command: 'merge_all' }, { kind: 'user' })).toMatchObject({ ok: true });
     expect(readFileSync(join(root, 'a.txt'), 'utf8')).toBe('written in the container\n');
     env.parent.destroy();
-  }, 120_000);
+  }, patient(120_000));
 
   it('runs an OpenCode change task in the container, and lands its work', async () => {
     const root = repo();
@@ -295,7 +295,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     expect(git(root, 'show', `${integration}:where-i-ran.txt`)).toBe('Linux 1000 /task/home');
     await vi.waitFor(() => expect(ours('container').filter((n) => !before.container.includes(n))).toEqual([]), { timeout: 30_000 });
     env.parent.destroy();
-  }, 120_000);
+  }, patient(120_000));
 
   it.skipIf(!process.env.ORDEWELL_E2E_OPENCODE_IMAGE)('runs a real OpenCode task in a container against a controlled model, through the lease gateway', async () => {
     // Build an image with `npm install -g @opencode/cli` and `git`, as `docker/task.Dockerfile` shows, and name it in ORDEWELL_E2E_OPENCODE_IMAGE.
@@ -325,7 +325,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     } finally {
       model.server.close();
     }
-  }, 180_000);
+  }, patient(180_000));
 
   it('a Continue resumes an OpenCode session in the home its volume kept (ADR-0059 L2)', async () => {
     const root = repo();
@@ -347,7 +347,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     expect(git(root, 'show', `${integration}:partial.txt`)).toBe('half done');
     expect(env.parent.planTasks[0].attemptUsage?.map((usage) => usage.sessionId)).toEqual([resumed, resumed]);
     env.parent.destroy();
-  }, 120_000);
+  }, patient(120_000));
 
   it("gives an OpenCode task its own copy of a person's sign-in, which reaches neither the original nor the next task", async () => {
     const hadLogin = spawnSync('docker', ['volume', 'inspect', 'ordewell-login-opencode']).status === 0;
@@ -368,7 +368,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     } finally {
       if (!hadLogin) docker('volume', 'rm', '-f', 'ordewell-login-opencode');
     }
-  }, 120_000);
+  }, patient(120_000));
 
   it("keeps a failed attempt's work in its worktree, as a local attempt's stays", async () => {
     const root = repo();
@@ -384,7 +384,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     await vi.waitFor(() => expect(existsSync(join(worktree, 'partial.txt'))).toBe(true), { timeout: 30_000 });
     expect(readFileSync(join(worktree, 'partial.txt'), 'utf8')).toBe('half done\n');
     env.parent.destroy();
-  }, 120_000);
+  }, patient(120_000));
 
   it('stops every process of a running attempt, and leaves no container', async () => {
     const root = repo();
@@ -400,7 +400,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     await vi.waitFor(() => expect(ours('container').filter((n) => !before.container.includes(n))).toEqual([]), { timeout: 45_000, interval: 200 });
     expect(env.parent.planTasks[0].status).toBe('pending');
     env.parent.destroy();
-  }, 120_000);
+  }, patient(120_000));
 
   it('a Continue resumes the session in the home its volume kept, on the work it left (ADR-0059 L2)', async () => {
     const root = repo();
@@ -424,7 +424,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     expect(git(root, 'show', `${integration}:runs-of-this-home.txt`)).toBe('2');
     expect(env.parent.planTasks[0].attemptUsage?.map((usage) => usage.sessionId)).toEqual([resumed, resumed]);
     env.parent.destroy();
-  }, 120_000);
+  }, patient(120_000));
 
   it('brings the work back for a Mark complete straight after a Stop: nothing lands an empty worktree', async () => {
     const root = repo();
@@ -442,7 +442,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     await vi.waitFor(() => expect(env.parent.planTasks[0].status).toBe('completed'), { timeout: 60_000, interval: 100 });
     expect(git(root, 'show', `${env.integration()}:vouched.txt`)).toBe('vouched');
     env.parent.destroy();
-  }, 120_000);
+  }, patient(120_000));
 
   it('plants nothing on this host: what a hostile attempt writes under `.git` stays in its volume', async () => {
     const root = repo();
@@ -457,7 +457,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     expect(git(root, 'ls-tree', '-r', '--name-only', env.integration()).split('\n').sort()).toEqual(['README.md', 'b.txt', 'runs-of-this-home.txt', 'where-i-ran.txt']);
     expect(existsSync(join(root, '.git', 'hooks', 'post-merge'))).toBe(false);
     env.parent.destroy();
-  }, 120_000);
+  }, patient(120_000));
 
   describe('a hook written into a folder the repository tracks (ADR-0059 L2, L6)', () => {
     const planted = (root: string, id: string, report: Record<string, unknown>) => {
@@ -486,7 +486,7 @@ describe.skipIf(skip)('a task in a real container', () => {
       expect(existsSync(canary)).toBe(false);
       env.parent.destroy();
       await env.parent.gone;
-    }, 120_000);
+    }, patient(120_000));
 
     it('refuses a Continue rather than seeding over it, until a Retry gives it up', async () => {
       const root = repo();
@@ -511,7 +511,7 @@ describe.skipIf(skip)('a task in a real container', () => {
       expect(existsSync(canary)).toBe(false);
       env.parent.destroy();
       await env.parent.gone;
-    }, 120_000);
+    }, patient(120_000));
   });
 
   it('takes its container, relay and way out with it as a Session closes, and keeps the volume (ADR-0059 L5)', async () => {
@@ -530,7 +530,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     expect(added('container')).toEqual([]);
     expect(added('network')).toEqual([]);
     expect(added('volume').filter((name) => name.startsWith('ordewell-task-'))).toHaveLength(1);
-  }, 120_000);
+  }, patient(120_000));
 
   it('refuses the lease, and starts no runner, on a network the probe finds open', async () => {
     const root = repo();
@@ -544,7 +544,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     expect(env.parent.planTasks[0].verdict).toBeUndefined();
     await vi.waitFor(() => expect(ours('container').filter((n) => !before.container.includes(n))).toEqual([]), { timeout: 30_000 });
     env.parent.destroy();
-  }, 120_000);
+  }, patient(120_000));
 
   it('proves on a real engine what it says it proves, the network with it', async () => {
     const backend = new DockerExecutionBackend(new FakeExecutionBackend(), { settings: settingsOf(), sessionId: () => `probe-${process.pid}`, tell: () => undefined });
@@ -557,7 +557,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     expect(report['cred.unreadable'], 'a probe holds no login').toMatchObject({ proven: false });
     expect(Object.keys(report).sort()).toEqual([...GUARANTEES].sort());
     await vi.waitFor(() => expect(ours('network').filter((n) => !before.network.includes(n))).toEqual([]), { timeout: 30_000 });
-  }, 60_000);
+  }, patient(60_000));
 
   it('reports on a real engine what a check proved apart from what it assumes, and leaves nothing', async () => {
     const status = await containerStatus(settingsOf(), { prove: true, broker: new CredentialBroker({ ANTHROPIC_API_KEY: 'sk-ant-api03-x' }) });
@@ -570,7 +570,7 @@ describe.skipIf(skip)('a task in a real container', () => {
       expect(ours('container').filter((n) => !before.container.includes(n))).toEqual([]);
       expect(ours('network').filter((n) => !before.network.includes(n))).toEqual([]);
     }, { timeout: 30_000 });
-  }, 60_000);
+  }, patient(60_000));
 
   it('names an image that was never built, on a real engine, and starts nothing to find out', async () => {
     const status = await containerStatus(settingsOf({ image: `ordewell-never-built:${process.pid}` }), { prove: true, broker: new CredentialBroker({ ANTHROPIC_API_KEY: 'sk-ant-api03-x' }) });
@@ -578,7 +578,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     expect(status.ready).toBe(false);
     expect(status.problems.map(({ code }) => code)).toEqual(['image-missing']);
     expect(status.guarantees).toBeUndefined();
-  }, 30_000);
+  });
 
   it('hands a task a copy of the sign-in: what it forges stops there, for the original and the next task', async (test) => {
     const hadLogin = spawnSync('docker', ['volume', 'inspect', LOGIN_VOLUME]).status === 0;
@@ -604,7 +604,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     } finally {
       docker('volume', 'rm', '-f', LOGIN_VOLUME);
     }
-  }, 120_000);
+  }, patient(120_000));
 
   it('keeps what one task leaves in its package cache from the next task on the same project', async () => {
     const root = repo();
@@ -621,7 +621,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     reader.lease.release('done');
     await first.backend.letGo('poisoner', { keep: false, reason: 'done' });
     await second.backend.letGo('reader', { keep: false, reason: 'done' });
-  }, 90_000);
+  }, patient(90_000));
 
   it('catches, by that probe, what the default network was measured to let through', async () => {
     const backend = new DockerExecutionBackend(new FakeExecutionBackend(), { settings: settingsOf(), egress: BRIDGE, sessionId: () => `probe-${process.pid}`, tell: () => undefined });
@@ -630,7 +630,7 @@ describe.skipIf(skip)('a task in a real container', () => {
 
     expect(report['net.allowlist'], report['net.allowlist'].by).toMatchObject({ proven: false });
     console.log(`[measure] on the default network: ${report['net.allowlist'].by}`);
-  }, 60_000);
+  }, patient(60_000));
 
   it.each<[string, (entry: ChildProcess) => void]>([
     ['its client is killed', (entry) => entry.kill('SIGKILL')],
@@ -639,13 +639,22 @@ describe.skipIf(skip)('a task in a real container', () => {
   ])('goes with its host: the container ends when %s', async (label, end) => {
     const name = `ordewell-e2e-entry-${process.pid}-${label.length}`;
     const entry = await new SpawnedDockerCli().entry(['run', '-i', '--rm', '--name', name, '--init', '--pids-limit', '8192', '--memory', '256m', '--memory-swap', '256m', IMAGE, 'node', '-e', RELAY_ENTRY]);
-    await new LeaseRelay(entry).ready;
-    expect(docker('ps', '--filter', `name=${name}`, '--format', '{{.Names}}')).toBe(name);
+    try {
+      await new LeaseRelay(entry).ready;
+      // The engine lists a container as running only after its process has
+      // started, so the entry's READY can arrive first.
+      await vi.waitFor(() => expect(docker('ps', '--filter', `name=${name}`, '--format', '{{.Names}}')).toBe(name), { interval: 100 });
 
-    end(entry);
+      end(entry);
 
-    await vi.waitFor(() => expect(docker('ps', '-a', '--filter', `name=${name}`, '--format', '{{.Names}}')).toBe(''), { timeout: 30_000, interval: 200 });
-  }, 60_000);
+      await vi.waitFor(() => expect(docker('ps', '-a', '--filter', `name=${name}`, '--format', '{{.Names}}')).toBe(''), { timeout: 30_000, interval: 200 });
+    } finally {
+      // A failure above leaves the entry holding its container open, and every
+      // later test that counts this suite's containers would count it too.
+      entry.kill('SIGKILL');
+      spawnSync('docker', ['rm', '-f', name]);
+    }
+  }, patient(60_000));
 
   const leaseOver = (taskId: string, repos: LeaseRepo[], memory = '512m') => leaseWith(taskId, repos, settingsOf({ memory }));
   const leaseOverImage = (taskId: string, repos: LeaseRepo[], image: string) => leaseWith(taskId, repos, settingsOf({ image }));
@@ -733,7 +742,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     listener.close();
     reserved.release('done');
     await lease.backend.letGo('walled', { keep: false, reason: 'done' });
-  }, 90_000);
+  }, patient(90_000));
 
   it('opens a listed host through its sidecar, end to end over TLS', async (test) => {
     if (await lookup('registry.npmjs.org').then(() => false, () => true)) return test.skip();
@@ -756,7 +765,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     expect((await node(THROUGH_PROXY('example.com:443'))).stdout.trim()).toMatch(/^HTTP\/1\.1 403 /);
     reserved.release('done');
     await lease.backend.letGo('listed', { keep: false, reason: 'done' });
-  }, 90_000);
+  }, patient(90_000));
 
   it('carries a runner\'s model traffic to the upstream under the key, which it never held', async () => {
     const heard: { url?: string; headers: IncomingHttpHeaders }[] = [];
@@ -785,7 +794,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     upstream.close();
     reserved.release('done');
     await lease.backend.letGo('gated', { keep: false, reason: 'done' });
-  }, 90_000);
+  }, patient(90_000));
 
   /** All a script printed, from its log. */
   const printed = (s: ReturnType<typeof session>['parent'], taskId: string) => s.taskLog(taskId, 1).flatMap((event) => (event.type === 'script_output' ? [event.text] : [])).join('');
@@ -818,7 +827,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     expect(env.told.join()).toContain('committed');
     await nothingLeft();
     env.parent.destroy();
-  }, 120_000);
+  }, patient(120_000));
 
   it('takes the exit status of a script in a container as its evidence', async () => {
     const root = repo();
@@ -832,7 +841,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     expect(printed(env.parent, 'f')).toContain('broke');
     await nothingLeft();
     env.parent.destroy();
-  }, 120_000);
+  }, patient(120_000));
 
   it('ends a script in a container at Stop, and everything it started', async () => {
     const root = repo();
@@ -846,7 +855,7 @@ describe.skipIf(skip)('a task in a real container', () => {
 
     await nothingLeft();
     env.parent.destroy();
-  }, 120_000);
+  }, patient(120_000));
 
   it('holds a read-only script, as a child\'s sealed one is, to no network and no landing', async () => {
     const root = repo();
@@ -864,7 +873,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     await nothingLeft();
     await vi.waitFor(() => expect(ours('volume').filter((n) => n.startsWith('ordewell-task-') && !volumes.includes(n))).toEqual([]), { timeout: 30_000 });
     env.parent.destroy();
-  }, 120_000);
+  }, patient(120_000));
 
   describe('a delegated child plan under containers (ADR-0055)', () => {
     const delegated = (over: Partial<Task> = {}) => createTask({ id: 'd', order: 2, title: 'Delegated subtree', type: 'delegated', goal: 'Write a and b', budget: { tokens: 5_000_000 }, protectedPaths: ['tests/'], assignedRunner: 'claude-code', ...over });
@@ -891,7 +900,7 @@ describe.skipIf(skip)('a task in a real container', () => {
       expect(git(root, 'rev-parse', 'main')).toBe(main);
       await nothingLeft();
       env.parent.destroy();
-    }, 180_000);
+    }, patient(180_000));
 
     it('repairs its conflict in a container: this host has no `claude` for it to run', async () => {
       const root = repo();
@@ -913,7 +922,7 @@ describe.skipIf(skip)('a task in a real container', () => {
       expect(landed(root, env)).toContain('fake-claude-output.txt');
       await nothingLeft();
       env.parent.destroy();
-    }, 180_000);
+    }, patient(180_000));
   });
 
   describe('what a session leaves in the engine (ADR-0059 L6)', () => {
@@ -938,7 +947,7 @@ describe.skipIf(skip)('a task in a real container', () => {
 
       await nothingLeftBy(volumes);
       env.parent.destroy();
-    }, 120_000);
+    }, patient(120_000));
 
     it('goes with a session delete, with no Session to ask, whatever a dead host left', async () => {
       const volumes = ours('volume');
@@ -959,7 +968,7 @@ describe.skipIf(skip)('a task in a real container', () => {
 
       await nothingLeftBy(volumes);
       expect(ours('network')).not.toContain(stranded);
-    }, 120_000);
+    }, patient(120_000));
 
     it('leaves a mirror a session of the same project still pins, and takes it with the last', async () => {
       const volumes = ours('volume');
@@ -984,7 +993,7 @@ describe.skipIf(skip)('a task in a real container', () => {
       await reclaimContainers(`docker-e2e-${process.pid}-p2`, LOGIN);
 
       await nothingLeftBy(volumes);
-    }, 120_000);
+    }, patient(120_000));
 
     it("leaves nothing when another session's clean-up reads the mirror after this one took it: naming a volume makes it again", async () => {
       const volumes = ours('volume');
@@ -1019,7 +1028,7 @@ describe.skipIf(skip)('a task in a real container', () => {
 
       expect(told).toEqual([]);
       await nothingLeftBy(volumes);
-    }, 120_000);
+    }, patient(120_000));
   });
 
   it('reads a board pin\'s file in the container, as git would name it (ADR-0057 R9)', async () => {
@@ -1035,7 +1044,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     expect(await blob('a-folder')).toBeUndefined();
     reserved.release('done');
     await lease.backend.letGo('pinned', { keep: false, reason: 'done' });
-  }, 90_000);
+  }, patient(90_000));
 
   it('reports a process killed at the memory limit as `oom`', async () => {
     const lease = leaseOver('oom', [worktreeOf(repo(), 'ordewell/oom')], '128m');
@@ -1048,7 +1057,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     expect(lease.told.join()).toContain('memory limit');
     reserved.release('oom');
     await lease.backend.letGo('oom', { keep: false, reason: 'done' });
-  }, 90_000);
+  }, patient(90_000));
 
   it('holds a process to the limit it proved: a fork bomb stays in its cgroup', async () => {
     const lease = leaseOver('pids', [worktreeOf(repo(), 'ordewell/pids')]);
@@ -1059,7 +1068,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     expect(counted.stdout.trim().split('\n')).toEqual(['8192', String(512 * 1024 ** 2), '0', '1000']);
     reserved.release('done');
     await lease.backend.letGo('pids', { keep: false, reason: 'done' });
-  }, 60_000);
+  }, patient(60_000));
 
   it('seeds a repair with the integration tip, and brings back the merge it makes (ADR-0015)', async () => {
     const root = repo();
@@ -1086,7 +1095,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     expect(git(repaired.worktree, 'status', '--porcelain')).toBe('');
     reserved.release('verdict');
     await lease.backend.letGo('repair', { keep: false, reason: 'done' });
-  }, 90_000);
+  }, patient(90_000));
 
   it('brings back every repository of a group, or none of them', async () => {
     const roots = [repo(), repo()];
@@ -1101,7 +1110,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     expect(readFileSync(join(repos[1].worktree, 'two.txt'), 'utf8')).toBe('two\n');
     reserved.release('verdict');
     await lease.backend.letGo('group', { keep: false, reason: 'done' });
-  }, 90_000);
+  }, patient(90_000));
 
   /*
    * The real binary, in an image built from docker/task.Dockerfile: set
@@ -1151,7 +1160,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     }
     await lease.backend.letGo('timing', { keep: false, reason: 'done' });
     console.log(`[measure] a lease's whole open, ms: ${[...opens].sort((a, b) => a - b).join(' ')}`);
-  }, 240_000);
+  }, patient(240_000));
 
   /*
    * The real binary through a whole model turn, with nothing faked but the model:
@@ -1227,7 +1236,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     }
     model.server.close();
     env.parent.destroy();
-  }, 240_000);
+  }, patient(240_000));
 
   it('cannot reach the mirror for writing, or the host: the guarantees hold against a real process', async () => {
     const root = repo();
@@ -1240,7 +1249,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     for (const [where, code] of [['mirror', '1'], ['root', '1'], ['host', '2'], ['socket', '2'], ['cache', '0'], ['shared', '2'], ['home', '0']]) expect(lines).toContain(`${where} ${code}`);
     reserved.release('done');
     await lease.backend.letGo('reach', { keep: false, reason: 'done' });
-  }, 60_000);
+  }, patient(60_000));
 });
 
 /*
@@ -1276,14 +1285,14 @@ describe.skipIf(skip || !SIGNED_IN_HARNESS)("a person's own sign-in, on the real
     const parsed = parseContainerSettings({ image: name, memory: '2g', login: { kind: 'own-sign-in' } });
     if ('refused' in parsed) throw new Error(parsed.refused);
     settings = parsed;
-  }, 120_000);
+  }, patient(120_000));
 
   afterAll(() => {
     spawnSync('docker', ['rm', '-f', name]);
     for (const volume of volumes) spawnSync('docker', ['volume', 'rm', '-f', volume]);
     spawnSync('docker', ['network', 'rm', name]);
     spawnSync('docker', ['image', 'rm', '-f', name]);
-  }, 60_000);
+  }, patient(60_000));
 
   const volume = (tag: string) => {
     const made = `${name}-${tag}`;
@@ -1291,12 +1300,15 @@ describe.skipIf(skip || !SIGNED_IN_HARNESS)("a person's own sign-in, on the real
     volumes.push(made);
     return made;
   };
-  const inHelper = (mounts: string[], script: string, input = '') => spawnSync('docker', [...helperArgs(settings, mounts), 'sh', '-c', script], { encoding: 'utf8', input, timeout: 60_000 });
+  const inHelper = (mounts: string[], script: string, input = '') => {
+    const helper = helperArgs(settings, mounts);
+    return spawnSync('docker', [...helper.args, 'sh', '-c', script], { encoding: 'utf8', env: { ...process.env, ...helper.env }, input, timeout: 60_000 });
+  };
   /** As a lease's container runs a runner, on a network that leads to the proxy and nowhere else. */
   const inTask = (task: string, script: string, variables: Record<string, string> = {}) => {
-    const args = helperArgs(settings, [`${task}:/task`], { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', CLAUDE_CONFIG_DIR: SIGN_IN_COPY, ...PROXY_ENV, ...variables });
+    const { args, env } = helperArgs(settings, [`${task}:/task`], { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', CLAUDE_CONFIG_DIR: SIGN_IN_COPY, ...PROXY_ENV, ...variables });
     args[args.indexOf('none')] = name;
-    return spawnSync('docker', [...args, 'sh', '-c', `mkdir -p "$HOME" && cd /tmp && ${script}`], { encoding: 'utf8', input: '', timeout: 90_000 });
+    return spawnSync('docker', [...args, 'sh', '-c', `mkdir -p "$HOME" && cd /tmp && ${script}`], { encoding: 'utf8', env: { ...process.env, ...env }, input: '', timeout: 90_000 });
   };
   const credentials = (refreshToken: string) => JSON.stringify({ claudeAiOauth: { accessToken: 'access-expired', refreshToken, expiresAt: 1000, scopes: ['user:inference', 'user:profile'], subscriptionType: 'pro' } });
   const signIn = (login: string, refreshToken: string) => inHelper([`${login}:/login`], 'mkdir -p /login/claude && cat > /login/claude/.credentials.json', credentials(refreshToken));
@@ -1330,7 +1342,7 @@ describe.skipIf(skip || !SIGNED_IN_HARNESS)("a person's own sign-in, on the real
     expect(copyOf(task)).toMatchObject(refreshed);
     expect(refreshesOf('refresh-kept')).toHaveLength(1);
     expect(refreshesOf(refreshed.refreshToken)).toHaveLength(0);
-  }, 240_000);
+  }, patient(240_000));
 
   it('goes to the provider only through the proxy, to the hosts a sign-in opens', () => {
     const login = volume('routed');
@@ -1345,7 +1357,7 @@ describe.skipIf(skip || !SIGNED_IN_HARNESS)("a person's own sign-in, on the real
     expect(proxied.map(({ host }) => host)).toContain('platform.claude.com');
     expect(proxied.map(({ host }) => host)).toContain('api.anthropic.com');
     expect(proxied.filter(({ opened }) => !opened)).toEqual([]);
-  }, 120_000);
+  }, patient(120_000));
 
   it('fails a task whose refresh token another used, says so, and takes a new sign-in at its next hand-off', () => {
     const login = volume('shared');
@@ -1372,7 +1384,7 @@ describe.skipIf(skip || !SIGNED_IN_HARNESS)("a person's own sign-in, on the real
 
     expect(again.status).toBe(0);
     expect(again.stdout + again.stderr).toContain('answered');
-  }, 240_000);
+  }, patient(240_000));
 
   it('says what a sign-in volume holds in the harness\'s own words, and refuses to hand on what is no login', () => {
     const asked = (login: string) => inHelper([`${login}:/login:ro`], ASK_SIGN_IN).status;
@@ -1388,7 +1400,7 @@ describe.skipIf(skip || !SIGNED_IN_HARNESS)("a person's own sign-in, on the real
     expect([asked(empty), asked(abandoned), asked(held), asked(consoleKey)]).toEqual([1, 1, 0, 0]);
     expect(hand(abandoned, task).status).toBe(3);
     expect(inHelper([`${task}:/task`], 'ls /task/login 2>/dev/null').stdout).toBe('');
-  }, 120_000);
+  }, patient(120_000));
 
   it('sends ANTHROPIC_AUTH_TOKEN as its bearer beside a key, which is why the broker refuses the pair', () => {
     const task = volume('precedence');
@@ -1399,7 +1411,7 @@ describe.skipIf(skip || !SIGNED_IN_HARNESS)("a person's own sign-in, on the real
     const sent = heard().slice(before).filter(({ url }) => url?.startsWith('/v1/messages'));
     expect(sent.length).toBeGreaterThan(0);
     for (const { authorization } of sent) expect(authorization).toBe('Bearer made-up-bearer');
-  }, 120_000);
+  }, patient(120_000));
 
   it('runs a whole task on the sign-in, by the allowed hosts, with the kept volume out of the task', async (test) => {
     if (spawnSync('docker', ['volume', 'inspect', LOGIN_VOLUME]).status === 0) test.skip();
@@ -1436,5 +1448,5 @@ describe.skipIf(skip || !SIGNED_IN_HARNESS)("a person's own sign-in, on the real
     } finally {
       docker('volume', 'rm', '-f', LOGIN_VOLUME);
     }
-  }, 240_000);
+  }, patient(240_000));
 });

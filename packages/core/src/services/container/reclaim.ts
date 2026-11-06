@@ -110,7 +110,8 @@ export async function reclaimTree(tree: string, cli: DockerCli, settings: Contai
 
 async function unpin(tree: string, cli: DockerCli, settings: ContainerSettings, tell: (text: string) => void, list: (args: readonly string[]) => Promise<string[] | null>): Promise<void> {
   for (const mirror of await list(['volume', 'ls', '-q', '--filter', 'name=ordewell-mirror-']) ?? []) {
-    const read = () => cli.call([...helperArgs(settings, [`${mirror}:${MIRROR_ROOT}`], { ORDEWELL_TREE: treePins(tree) }), 'sh', '-c', UNPIN_SCRIPT]);
+    const helper = helperArgs(settings, [`${mirror}:${MIRROR_ROOT}`], { ORDEWELL_TREE: treePins(tree) });
+    const read = () => cli.call([...helper.args, 'sh', '-c', UNPIN_SCRIPT], { env: helper.env });
     const ran = await read();
     if (ran.code !== 0) {
       tell(`Could not take this session's pins out of ${mirror}, so it stays: ${ran.stderr.trim()}`);

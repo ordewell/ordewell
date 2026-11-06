@@ -26,7 +26,7 @@ import { createApp } from '../../app';
 import type { OrchestratorPool } from '../../pool/orchestratorPool';
 
 /**
- * The user's reads of files and git over HTTP (ADR-0061), through the whole
+ * The user's reads of files and git over HTTP (ADR-0064), through the whole
  * app: admission, the routes and the reader against real repositories. The
  * pool answers nothing: a read never asks a session for its lease (R4).
  */
@@ -77,7 +77,7 @@ async function get<T>(url: string, query: Record<string, string | undefined>): P
   return { status: res.status, body: await res.json() as T };
 }
 
-describe.skipIf(!hasGit)('the user\'s file and git reads over HTTP (ADR-0061)', () => {
+describe.skipIf(!hasGit)('the user\'s file and git reads over HTTP (ADR-0064)', () => {
   let tmp: string;
   let group: string;
 
@@ -223,7 +223,7 @@ describe.skipIf(!hasGit)('the user\'s file and git reads over HTTP (ADR-0061)', 
   });
 });
 
-describe.skipIf(!hasGit)('reads of an isolated run over HTTP (ADR-0061 R2)', () => {
+describe.skipIf(!hasGit)('reads of an isolated run over HTTP (ADR-0064 R2)', () => {
   let tmp: string;
   let workspace: string;
   let run: IsolationRun;

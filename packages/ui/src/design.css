@@ -124,6 +124,11 @@
 .ow-runner-claude-code { background: var(--ow-runner-claude-code-tint); color: var(--ow-runner-claude-code); }
 .ow-runner-codex { background: var(--ow-runner-codex-tint); color: var(--ow-runner-codex); }
 .ow-runner-opencode { background: var(--ow-runner-opencode-tint); color: var(--ow-runner-opencode); }
+.ow-runner-copilot-cli { background: var(--ow-runner-copilot-cli-tint); color: var(--ow-runner-copilot-cli); }
+.ow-runner-qwen-code { background: var(--ow-runner-qwen-code-tint); color: var(--ow-runner-qwen-code); }
+.ow-runner-cline { background: var(--ow-runner-cline-tint); color: var(--ow-runner-cline); }
+.ow-runner-gemini-cli { background: var(--ow-runner-gemini-cli-tint); color: var(--ow-runner-gemini-cli); }
+.ow-runner-cursor-agent { background: var(--ow-runner-cursor-agent-tint); color: var(--ow-runner-cursor-agent); }
 
 /* A count sits in a box sized for three digits, so 9 becoming 10 moves nothing (checklist O6). */
 .ow-count {

@@ -255,7 +255,13 @@ describe('the session lease (ADR-0049)', () => {
 
   it('a refused host touches nothing of the holder\'s isolation run', async () => {
     sessionStore.saveSession({ ...savedPlan(), isolation: { run: liveRun(workspace), resolvers: {} } }, GOAL, workspace, SESSION);
-    adopt(sessionOn(host({ id: 'host-a', pid: 37797, alive: () => true })));
+    // The holder's own adoption is not under test. Real git would still be
+    // pruning in the workspace as the test ends, which Windows will not remove
+    // while a process works in it.
+    adopt(makeSession({
+      saveSession: sessionStore.saveSession, leaseHost: host({ id: 'host-a', pid: 37797, alive: () => true }), workspaceRoot: () => workspace,
+      isolation: new FakeWorktreeIsolation(),
+    }));
     const isolation = new FakeWorktreeIsolation();
     const second = makeSession({ saveSession: sessionStore.saveSession, leaseHost: host({ id: 'host-b', alive: () => true }), workspaceRoot: () => workspace, isolation });
 
@@ -344,7 +350,8 @@ describe('the session lease (ADR-0049)', () => {
 
     expect(() => first.destroy()).not.toThrow();
 
-    expect(logged).toHaveBeenCalledWith('[Session] save failed:', expect.objectContaining({ code: 'EISDIR' }));
+    // Windows refuses the rename over a directory as EPERM.
+    expect(logged).toHaveBeenCalledWith('[Session] save failed:', expect.objectContaining({ code: process.platform === 'win32' ? 'EPERM' : 'EISDIR' }));
     logged.mockRestore();
     await vi.waitFor(() => expect(first.activity.running).toBe(false));
     expect(runner.stopAll).toHaveBeenCalled();

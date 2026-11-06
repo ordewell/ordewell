@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
-import { Check, ChevronDown, ChevronRight, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, CircleAlert, X } from 'lucide-react';
 import type { DiscoveredModel } from '@ordewell/core';
 import './allowlist.css';
 
@@ -22,6 +22,20 @@ const matches = (row: Row, query: string): boolean => {
   return !needle || row.label.toLowerCase().includes(needle) || row.id.toLowerCase().includes(needle);
 };
 
+/** A runner that labels a model by its own id prints it once, not twice on one row. */
+const repeatsLabel = (row: Row): boolean => row.id === row.label || row.id.split('/').pop() === row.label;
+
+const distinguishingLength = (id: string, peers: readonly Row[]): number => {
+  let length = id.includes('/') ? id.indexOf('/') + 1 : 1;
+  for (const peer of peers) {
+    if (peer.id === id) continue;
+    let at = 0;
+    while (at < id.length && id[at] === peer.id[at]) at++;
+    length = Math.max(length, Math.min(id.length, at + 1));
+  }
+  return length;
+};
+
 /**
  * A runner's model allowlist (ADR-0003): the runner's full catalog with a
  * checkbox each, committed as one write once the ticking pauses or the picker
@@ -30,12 +44,14 @@ const matches = (row: Row, query: string): boolean => {
  * unfiltered catalog from `/api/models`; the allowlist only narrows what the
  * planner and the task pickers offer.
  */
-export function ModelAllowlist({ runnerName, models, ids, disabled, onCommit }: {
+export function ModelAllowlist({ runnerName, models, ids, disabled, error, onCommit }: {
   runnerName: string;
   models: readonly DiscoveredModel[];
   /** The allowlist the host holds. */
   ids: readonly string[] | undefined;
   disabled: boolean;
+  /** Why the runner listed nothing, as core words it: a signed-out agent says how to sign in, which a refresh cannot fix. */
+  error?: string;
   /** Resolves once the host has answered; a refused write leaves `ids` as it was. */
   onCommit(ids: string[] | null): Promise<void> | void;
 }): JSX.Element {
@@ -66,6 +82,11 @@ export function ModelAllowlist({ runnerName, models, ids, disabled, onCommit }: 
       ...models.map((model): Row => ({ id: model.modelId, label: model.modelLabel || model.modelId, unlisted: false })),
     ];
   }, [models, selected]);
+  const byLabel = useMemo(() => {
+    const groups = new Map<string, Row[]>();
+    for (const row of rows) groups.set(row.label, [...(groups.get(row.label) ?? []), row]);
+    return groups;
+  }, [rows]);
   const visible = useMemo(() => rows.filter((row) => matches(row, query)), [rows, query]);
   const active = visible.find((row) => row.id === activeId) ?? visible[0];
 
@@ -138,7 +159,10 @@ export function ModelAllowlist({ runnerName, models, ids, disabled, onCommit }: 
     close();
   };
 
-  const names = selected.map((id) => rows.find((row) => row.id === id)?.label ?? id);
+  const names = selected.map((id) => {
+    const row = rows.find((candidate) => candidate.id === id);
+    return row && (byLabel.get(row.label)?.length ?? 0) < 2 ? row.label : id;
+  });
   const summary = selected.length === 0
     ? 'All models'
     : `${selected.length} of ${rows.length} models: ${names.slice(0, SUMMARY_NAMES).join(', ')}${names.length > SUMMARY_NAMES ? `, +${names.length - SUMMARY_NAMES}` : ''}`;
@@ -191,8 +215,13 @@ export function ModelAllowlist({ runnerName, models, ids, disabled, onCommit }: 
             <button type="button" className="allowlist-all" disabled={disabled || selected.length === 0} onClick={allowAll}>Allow all models</button>
           </div>
           {visible.length === 0 ? (
-            <p className="settings-hint allowlist-empty">
-              {rows.length === 0 ? `${runnerName} lists no models.` : `No model matches “${query.trim()}”.`}
+            <p className={`settings-hint allowlist-empty${rows.length === 0 && error ? ' allowlist-error' : ''}`}>
+              {rows.length === 0 && error && <CircleAlert size={16} aria-hidden="true" />}
+              <span>
+                {rows.length === 0
+                  ? (error ?? `${runnerName} lists no models.`)
+                  : `No model matches “${query.trim()}”.`}
+              </span>
             </p>
           ) : (
             <div
@@ -209,6 +238,9 @@ export function ModelAllowlist({ runnerName, models, ids, disabled, onCommit }: 
             >
               {visible.map((row) => {
                 const on = selectedSet.has(row.id);
+                const peers = byLabel.get(row.label) ?? [];
+                const ambiguous = peers.length > 1;
+                const prefixLength = ambiguous ? distinguishingLength(row.id, peers) : 0;
                 return (
                   <div
                     key={row.id}
@@ -221,8 +253,8 @@ export function ModelAllowlist({ runnerName, models, ids, disabled, onCommit }: 
                   >
                     <span className={`allowlist-box${on ? ' on' : ''}`} aria-hidden="true">{on && <Check size={12} />}</span>
                     <span className="allowlist-name">
-                      <span className="allowlist-label">{row.label}</span>
-                      <code className="allowlist-id">{row.id}</code>
+                      {!(ambiguous && row.id === row.label) && <span className="allowlist-label">{row.label}</span>}
+                      {(ambiguous || !repeatsLabel(row)) && <code className={`allowlist-id${ambiguous ? ' is-ambiguous' : ''}${ambiguous && row.id === row.label ? ' allowlist-label' : ''}`} title={row.id}><span className="allowlist-id-prefix">{row.id.slice(0, prefixLength)}</span><span className="allowlist-id-rest">{row.id.slice(prefixLength)}</span></code>}
                     </span>
                     {row.unlisted && <span className="allowlist-unlisted">Not listed by this runner</span>}
                   </div>

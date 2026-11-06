@@ -15,6 +15,9 @@ function check(cond, message) {
 
 const globalHome = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-skills-global-'));
 process.env.HOME = globalHome;
+// os.homedir() reads USERPROFILE on Windows, so HOME alone left these checks
+// on the real home: failing, and writing into the real ~/.ordewell.
+process.env.USERPROFILE = globalHome;
 
 const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-skills-project-'));
 

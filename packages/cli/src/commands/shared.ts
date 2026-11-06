@@ -5,7 +5,7 @@ import { normalizeCatalog, type Catalog } from '../catalog';
 import { findEnvFile, writeEnvVar } from '../utils/env';
 import { allTasksOf } from '../utils/tasks';
 import type { TaskView } from '../tui/state';
-import { describePlannerNotReady, HEADLESS_CLI_COMMANDS, type SerializedPlan, type SerializedTask, type SettingsUpdateResponse } from '@ordewell/core';
+import { describePlannerNotReady, HEADLESS_CLI_COMMANDS, rewordSignIn, TERMINAL_UI_COMMANDS, type SerializedPlan, type SerializedTask, type SettingsUpdateResponse } from '@ordewell/core';
 import type { PlanBody } from '../apiClient';
 
 export async function connect(subArgs: string[], injected?: ApiClient): Promise<ApiClient> {
@@ -24,14 +24,12 @@ export function fail(...lines: string[]): never {
 
 /**
  * A failed turn's terminal-UI guidance said in the shell's own commands. The
- * daemon cannot know which surface is asking, so it words a signed-out turn
- * with `/login`; a shell has no such command ([ADR-0052](../../../../docs/adr/routing/0052-a-signed-out-coding-agent-is-flagged-and-signs-in-from-the-chat.md)).
+ * daemon cannot know which surface is asking, so it words a signed-out agent
+ * with `/login` and `/key`; a shell has neither, so the hint is said again
+ * in the shell's own commands (ADR-0052).
  */
 export function headlessSignedOut(message: string): string {
-  return message.replace(
-    /^(.+?) not logged in\. Sign in with \/login, or run (.+?) and try again\.$/m,
-    '$1 not logged in. Run $2 to sign in, then try again.',
-  );
+  return rewordSignIn(message, TERMINAL_UI_COMMANDS, HEADLESS_CLI_COMMANDS);
 }
 
 /**

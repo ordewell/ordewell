@@ -102,17 +102,20 @@ export const CODEX_ORDEWELL: CodexOrdewellBinding = {
    */
   plannerInstructions(nativeSearch, hidden, ownShell = true, extra) {
     const tools = ordewellToolNames('planner', hidden, extra);
+    // A one-shot plan is offered no `run_command`; its shell is Codex's own.
+    const runCommand = !hidden?.includes('run_command');
     return [
       `You have ${countOf(tools)} tools from the \`${ORDEWELL_MCP_SERVER_NAME}\` MCP server: ${quoted(tools)}.`,
       `They are not in your tool list up front. Find them with the tool discovery you have (the \`exec\` tool's \`ALL_TOOLS\` list) and call them by their full names, ${quoted(this.toolNames('planner', hidden, extra))}.`,
-      ownShell
-        ? `Run shell commands with \`${this.toolName('run_command')}\`, not your own shell: yours is sandboxed without network, so git remotes, gh and cloud CLIs fail there.`
-        : `You have no shell of your own on this machine: run every command, reads included, with \`${this.toolName('run_command')}\`.`,
+      !runCommand ? ''
+        : ownShell
+          ? `Run shell commands with \`${this.toolName('run_command')}\`, not your own shell: yours is sandboxed without network, so git remotes, gh and cloud CLIs fail there.`
+          : `You have no shell of your own on this machine: run every command, reads included, with \`${this.toolName('run_command')}\`.`,
       `Fetch web pages with \`${this.toolName('fetch')}\`, not curl or your shell.`,
       nativeSearch
         ? 'Search the web with your built-in web search.'
         : `Your built-in web search is off for this session; search with \`${this.toolName('web_search')}\`.`,
-    ].join(' ');
+    ].filter(Boolean).join(' ');
   },
 
   plannerWebSearch: (nativeSearch) => (nativeSearch ? 'cached' : 'disabled'),

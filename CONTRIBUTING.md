@@ -74,6 +74,13 @@ node bench/live/drive-conversation.mjs
 If you change planner behaviour, run that. It is the fastest way to find out
 that a prompt edit broke plan emission.
 
+CI runs the suites on Linux and again on Windows. `npm run ci` works on either:
+on Windows it skips only the bubblewrap sandbox suite, which is Linux's. Run it
+from Git Bash there, as CI does: some tests run a script through Git's `sh`,
+which a PowerShell or Command Prompt does not put on PATH. If you
+work on Linux or macOS, the Windows jobs on your pull request are where a
+POSIX-only assumption shows up. [AGENTS.md](AGENTS.md) lists the usual ones.
+
 ## Layout
 
 ```
@@ -112,8 +119,8 @@ not an edit to that surface.
    (`services/harness/connectors.ts`): the adapter that drives it over its
    programmatic protocol, how it is handed the Ordewell MCP server (ADR-0022),
    and what it would load from a repository (ADR-0028). Having a connector is
-   what lets a runner run tasks (ADR-0018) and plan (ADR-0009). A usage-limit
-   reader is optional: add `usageLimitReset` only if the runner prints a time.
+   what lets a runner run tasks (ADR-0018), and its `plans` what lets it plan
+   (ADR-0009). A usage-limit reader is optional: add `usageLimitReset` only if the runner prints a time.
 3. **The tests.**
    - Copy `plugins/__tests__/declaringABuiltinRunner.test.ts` to see the
      contract: a fake runner declared at those two places must show up
@@ -158,6 +165,125 @@ catches.
 
 If the agent is closed source or auth-bundled, say so in the issue: the
 planner must fail before the goal is typed when the agent is unusable.
+
+### An ACP runner
+
+An agent that ships its own Agent Client Protocol server needs no adapter:
+`AcpAdapter` drives every ACP runner, and what differs between agents is an
+`AcpProfile` (ADR-0060). Five are admitted: GitHub Copilot CLI
+(`copilot-cli`), Qwen Code (`qwen-code`), Cline (`cline`), Gemini CLI
+(`gemini-cli`) and Cursor (`cursor-agent`). Copilot CLI is the reference: read
+`plugins/builtin/copilot-cli.manifest.ts` and
+`services/harness/copilotProfile.ts` before writing yours. Read
+`services/harness/clineProfile.ts` too if your agent takes MCP servers only
+from a settings file of its own, connects to them only on its first turn,
+ignores over ACP the login its own CLI stored, or has no list that takes its
+own tools away. Read
+`services/harness/geminiProfile.ts` if it names a tool only in its call ids,
+connects MCP servers only in a folder it trusts, or is restricted by a policy
+file of its own. Read
+`services/harness/cursorProfile.ts` if its first report of an MCP call does not
+name the tool, or it reports no version: a profile then sets no `minVersion`,
+since the check refuses an agent that does not say its version. Read it too if
+the only list that takes your agent's own tools away is a settings file in its
+home of configuration.
+
+- **Native servers only.** The agent's own maintainers must ship its ACP
+  server. A third-party shim in front of an agent does not qualify
+  (ADR-0060 R2).
+- **The manifest** is written the same way as any runner's, as in step 1 above.
+  `name` is the runner id, and it shares the planner setting's namespace with
+  the API vendors' ids in `services/apiProviders.ts`, so it must not equal
+  one of them: `kimi-cli`, not `kimi`.
+- **The profile** goes in `services/harness/<id>Profile.ts`, and its connector
+  entry is `CONNECTORS['<id>'] = acpConnector(PROFILE)`. It is data: the ACP
+  arguments, the `minVersion` you checked where the agent reports one, how
+  the agent names Ordewell's tools, how a model reaches it, and the routes its
+  instructions and modes take. A behaviour your agent needs becomes a profile field any agent can
+  use, never a branch on a runner id in the adapter. Instructions go through
+  the agent's own channel outside the worktree, or else as a preamble on the
+  first prompt; never as a file in the worktree. The agent must advertise
+  `mcpCapabilities.http`, or load MCP servers from a settings file of its own
+  that an environment variable can name. Ordewell has no stdio bridge, and an
+  agent with neither is refused. For the second, set `mcpConfig`: the
+  adapter writes the file per process, owner-only, outside the worktree, and
+  removes it with the process. A recording must show the agent connecting from
+  that file, and the attach is still judged by the server, so an agent that
+  ignores the file is refused (ADR-0060 R4). Such a runner cannot run in a
+  container. An agent that connects only once a prompt runs sets
+  `attach: 'firstTurn'` (R5), and its first turn, a task's prompt or a
+  planner's goal, is then the attach check; one that needs its provider key
+  in its environment, or can take the key configured in Ordewell, sets
+  `credentials`, and `signInRoute` where the agent's own refusal should name
+  that route too (R9). Cline's recordings show all three.
+- **Recorded fixtures.** Record every line each side sent in a live run as JSONL
+  under `services/__tests__/fixtures/acp/<id>/`, as `{dir, ms, line}`, with
+  `dir: "note"` lines for the spawn arguments and for what the run left behind.
+  Copilot's recordings show what to cover: discovery, signed out, allow-all,
+  an edit and a command asked for, an Ordewell tool call, a cancel, and each
+  restricted start. Replay
+  them against a live adapter as `copilotCli.test.ts` does. Every claim the
+  profile makes about the agent cites a recording. Add the runner to the fakes
+  in `services/__tests__/fakeRunners.ts` and to the contract tests' tables.
+- **Roles need evidence.** With no `roles`, the runner gets writable tasks
+  only. To claim the planner role or a read-only mode (ADR-0060 R3), you need
+  all three of these:
+  - a `restricted` control that takes the agent's own write and shell tools
+    away, as Cursor's deny list in a settings file of the start's own does,
+    or, where the agent has no list to take them from, makes it ask before
+    every use, as Qwen Code's `--approval-mode default` and Cline's
+    `--auto-approve false` do; either shown to hold under ACP;
+  - Ordewell's refusal of every edit, delete, move and execute request, which
+    the adapter already does;
+  - a recording of a write attempt and a shell attempt refused, with nothing
+    left behind.
+
+  A planner or a read-only task must also run nothing the repository's config
+  names (ADR-0028). An agent that loads hooks or config from the directory it
+  starts in, with no switch to stop it, sets `restricted.privateCwd`, as
+  Copilot does: it then starts in a private directory of its own and asks for
+  every path in the worktree. Record a hook planted in the worktree running on
+  a writable start and not on a restricted one, as Copilot's
+  `repo-hooks.jsonl`, `planner.jsonl` and `read-only.jsonl` do, Qwen Code's,
+  Gemini CLI's and Cursor's `planted-hook.jsonl`, and Cline's
+  `repo-hooks.jsonl`, `read-only-hooks.jsonl` and `planner.jsonl`. A variable
+  that moves the agent's config home is not that switch unless a recording
+  shows it: Cline's `CLINE_DIR` left the worktree's hooks running
+  (`repo-hooks-cline-dir.jsonl`).
+
+  An agent made to ask before every use of its tools leaves the adapter to
+  refuse each by its kind, a request to switch modes included, and the
+  recordings must show it. Never claim a role through the agent's own plan or
+  read-only mode if a request to switch modes leaves it, and record that mode
+  rather than trust its name: Gemini CLI's own plan mode refused Ordewell's
+  tools and let the model write a `.md` file. An agent that defers MCP tools
+  until the model loads them names its loading tool in
+  `restricted.toolSearch`, so a restricted start's prompt says to load each
+  Ordewell tool first.
+
+  An agent with no deny flag, whose controls are a settings file or a hook,
+  is handed them in `restricted.files`: each is written 0600 into that
+  private directory and named to the agent by a variable, a flag, or another
+  of the files. Render each from the directory's path alone, with no key or
+  token in it, and name a script's interpreter in the setting that runs it,
+  since nothing there is executable. List in `restricted.configDirs` the
+  variables that move the agent's config home, so the user's global rules,
+  hooks and skills do not load; a file named `<VARIABLE>/<file>` is written
+  inside that home, as Cursor's `CURSOR_CONFIG_DIR/cli-config.json` is. Both
+  are a layer under Ordewell's refusal by kind, and the role still needs the
+  recording above. An agent that refuses a denied tool without asking, as
+  Cursor does, sends Ordewell no request to refuse, so its recordings must show
+  the refusal in its own words and nothing left behind; deny its reads too if
+  its own reads reach past the directory it starts in.
+
+  An agent whose own policy file can deny its tools, as Gemini CLI's can, is
+  handed that file in `restricted.files` at every tier it reads one from the
+  command line, so a rule the person saved cannot outrank it. The refusal
+  must reach the transcript: a rule that hides a tool from the model leaves
+  no call to record, so Gemini's rules match every call instead
+  (`argsPattern = "."`) and each is refused as a failed tool call. Name
+  Ordewell's tools in full, as the agent names them, where it checks an MCP
+  call under more than one server name.
 
 ## Releasing
 

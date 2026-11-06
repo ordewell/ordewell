@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { execFileSync } from 'child_process';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join, relative } from 'path';
 import { createWorktreeIsolation } from '../GitWorktreeIsolation';
@@ -11,7 +11,7 @@ import type { Session, SessionDeps } from '../createSession';
 import type { IRunner } from '../../interfaces/IRunner';
 import type { IWorktreeIsolation, IsolationRun } from '../../interfaces/IWorktreeIsolation';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
-import { fakeConfig, FakeRunnerSession } from '../../testing';
+import { fakeConfig, FakeRunnerSession, removeDir } from '../../testing';
 import { STATE_DIR_IGNORE } from '../../utils/fsHelpers';
 import { deleteSession, listChildSessions, listSessions, loadChildSession, loadSession, saveChildSession, saveSession } from '../../utils/sessionStore';
 import { openTaskLog } from '../../utils/taskLogStore';
@@ -33,7 +33,10 @@ const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd,
 const roots: string[] = [];
 afterEach(async () => {
   await closeSessions();
-  while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  // Not rmSync: on Windows a stopped runner's tree is ended by taskkill, which
+  // this process has to go on running to see through, and until it has, a
+  // directory the runner works in cannot be removed.
+  while (roots.length) await removeDir(roots.pop()!);
 });
 
 function tempDir(): string {
@@ -129,8 +132,12 @@ describe('a child run rooted in a delegated task\'s worktree', () => {
     writeFileSync(join(root, '.env'), 'A=1\n');
     const { child, childRun } = await nest(root);
     const { cwd } = await child.prepare(task(1, 'leaf work'), childRun);
-    expect(lstatSync(join(cwd, '.env')).isSymbolicLink()).toBe(true);
-    expect(readlinkSync(join(cwd, '.env'))).toBe(join(root, '.env'));
+    // Windows links a file as a hard link (ADR-0010), the root's file itself, which a link in the delegated task's worktree also is.
+    if (process.platform === 'win32') expect(statSync(join(cwd, '.env')).ino).toBe(statSync(join(root, '.env')).ino);
+    else {
+      expect(lstatSync(join(cwd, '.env')).isSymbolicLink()).toBe(true);
+      expect(readlinkSync(join(cwd, '.env'))).toBe(join(root, '.env'));
+    }
   });
 
   it('leaves a live child alone when the parent prunes on reopen, unlanded work and all', async () => {

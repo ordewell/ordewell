@@ -28,6 +28,12 @@ const KITTY_KEYBOARD_OFF = '\x1b[<u';
 // `ORDEWELL_TUI_MOUSE` in the workspace `.env`, so the wheel came back dead in
 // every other project and read as the TUI randomly ignoring the mouse. `/mouse
 // off` is the escape hatch for a session where selecting text matters more.
+//
+// Written only while raw mode is on. Windows' pseudo console passes a change to
+// these modes on to the terminal only while the console reads VT input, which
+// is what raw mode turns on there, and drops it otherwise (measured, ADR-0010):
+// off after raw mode left the terminal reporting the mouse to the shell, and on
+// before it left the wheel dead after a login.
 const MOUSE_TRACKING_ON = '\x1b[?1000h\x1b[?1002h\x1b[?1006h';
 const MOUSE_TRACKING_OFF = '\x1b[?1000l\x1b[?1002l\x1b[?1006l';
 // Alternate scroll (1007) makes the terminal fake arrow keys for the wheel
@@ -53,6 +59,26 @@ const AUTOWRAP_ON = '\x1b[?7h';
 const BACKGROUND_QUERY = '\x1b]11;?\x1b\\';
 // eslint-disable-next-line no-control-regex
 const BACKGROUND_REPLY = /\x1b\]11;rgba?:([0-9a-f]{1,4})\/([0-9a-f]{1,4})\/([0-9a-f]{1,4})(?:\/[0-9a-f]{1,4})?(?:\x07|\x1b\\)/i;
+
+/**
+ * Whether this Node's raw mode has the Windows console read VT input, which is
+ * what carries mouse reports and bracketed-paste markers to the TUI there:
+ * Node 22.17 and 24.2 onward (nodejs/node#58358). Before it, the console drops
+ * the request for mouse reports and strips the paste markers (measured on Node
+ * 20.20.2, ADR-0010). Node 23 never had it.
+ */
+export function rawModeReadsVtOnWindows(version: string): boolean {
+  const [major = 0, minor = 0] = version.replace(/^v/, '').split('.').map(Number);
+  if (major === 22) return minor >= 17;
+  if (major === 24) return minor >= 2;
+  return major >= 25;
+}
+
+/** Said once at start on a Windows Node whose raw mode does not read VT input; null anywhere else. */
+export function windowsInputNotice(platform: NodeJS.Platform = process.platform, version: string = process.version): string | null {
+  if (platform !== 'win32' || rawModeReadsVtOnWindows(version)) return null;
+  return `Node ${version} does not pass the mouse or a bracketed paste to the terminal UI on Windows: the wheel does nothing, and a line break in a paste sends the line. Node 22.17 or newer passes both.`;
+}
 
 /** Each channel of an `rgb:` reply is 1–4 hex digits wide, scaled to its own width. */
 const channel = (hex: string): number => Math.round((parseInt(hex, 16) / (16 ** hex.length - 1)) * 255);
@@ -275,10 +301,11 @@ export function openTerminal(options: TerminalOptions): Terminal {
     resume() {
       if (closed || !suspended) return;
       suspended = false;
-      // Whatever the child painted is now on the screen, so the frame kept for
-      // diffing is worthless: `reestablish` clears and forces a full repaint.
-      reestablish();
+      // Raw mode before the modes, which re-arm the mouse. Whatever the child
+      // painted is now on the screen, so the frame kept for diffing is
+      // worthless: `reestablish` clears and forces a full repaint.
       if (input.isTTY) input.setRawMode(true);
+      reestablish();
       input.resume();
     },
     close() {
@@ -286,14 +313,15 @@ export function openTerminal(options: TerminalOptions): Terminal {
       closed = true;
       input.off('data', onData);
       output.off('resize', onResize);
-      if (input.isTTY) input.setRawMode(false);
-      input.pause();
       // AUTOWRAP_ON here too, not just after each draw: a signal can land
       // between the AUTOWRAP_OFF and AUTOWRAP_ON of an in-flight draw if the
-      // frame is large enough to split across OS writes.
+      // frame is large enough to split across OS writes. Before raw mode goes,
+      // as in `suspend()`, so the mouse is handed back.
       output.write(
         MOUSE_TRACKING_OFF + ALT_SCROLL_RESTORE + KITTY_KEYBOARD_OFF + PASTE_MODE_OFF + AUTOWRAP_ON + SHOW_CURSOR + ALT_SCREEN_OFF,
       );
+      if (input.isTTY) input.setRawMode(false);
+      input.pause();
     },
   };
 }

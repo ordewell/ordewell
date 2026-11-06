@@ -140,7 +140,7 @@ export class TerminalHost {
 
   /**
    * Terminals with something other than their shell in the foreground:
-   * quitting would end that work (ADR-0060 H5), and closing the window that
+   * quitting would end that work (ADR-0063 H5), and closing the window that
    * owns them, when `owner` names it.
    */
   busy(shellNameOf: (file: string) => string, owner?: number): number {

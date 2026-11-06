@@ -105,6 +105,19 @@ describe('the terminal panel', () => {
     expect(w.ptys[0]?.spec).toMatchObject({ repo: '.', scope: { kind: 'checkout' } });
   });
 
+  it('opens the panel for a login and runs it in the checkout, ending when its process does', async () => {
+    const w = world();
+    await mount();
+    const login = await terminalStoreFor(store.api).openLogin('codex', 'Codex');
+
+    expect(await screen.findByRole('region', { name: 'Terminal' })).toBeVisible();
+    expect(w.ptys[0]?.spec).toMatchObject({ repo: '.', scope: { kind: 'checkout' }, login: { runner: 'codex' } });
+    expect(screen.getByRole('tab', { name: /Codex login/ })).toBeInTheDocument();
+
+    act(() => w.ptys[0]?.emit({ kind: 'exit', exitCode: 0 }));
+    await expect(login.ended).resolves.toBeUndefined();
+  });
+
   it('shows the shell\'s output and sends what is typed to that shell', async () => {
     const w = world();
     await openPanel();

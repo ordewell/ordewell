@@ -1,9 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import { execFileSync } from 'child_process';
+import { existsSync } from 'fs';
 import {
   resolveResearchShell,
   clearResearchShellCache,
   researchToolsPath,
   researchShellWarning,
+  parseMounts,
+  mountedHostPath,
 } from '../researchShell';
 
 const GIT_BASH = 'C:\\Program Files\\Git\\bin\\bash.exe';
@@ -82,6 +86,107 @@ describe('resolveResearchShell', () => {
     resolveResearchShell(counting);
     resolveResearchShell(counting);
     expect(probes).toBeGreaterThan(2);
+  });
+});
+
+// What Git Bash's `mount` and `mount -p` print on a Windows host.
+const MOUNT = [
+  'C:/Program Files/Git on / type ntfs (binary,noacl,auto)',
+  'C:/Program Files/Git/usr/bin on /bin type ntfs (binary,noacl,auto)',
+  'C:/Users/me/AppData/Local/Temp on /tmp type ntfs (binary,noacl,posix=0,usertemp)',
+  'C: on /c type ntfs (binary,noacl,posix=0,user,noumount,auto)',
+  'F: on /f type ntfs (binary,noacl,posix=0,user,noumount,auto)',
+].join('\n');
+const PREFIX = 'Prefix              Type         Flags\n/                   user         binmode\n';
+const WORKSPACE = 'F:\\work\\repo';
+
+describe('a path through Git Bash (ADR-0010)', () => {
+  beforeEach(() => clearResearchShellCache());
+  const gitBash = (env: NodeJS.ProcessEnv = {}) => resolveResearchShell({ ...win([GIT_BASH], env), readMounts: () => [MOUNT, PREFIX] }).hostPath!;
+
+  // The classifier judged `/etc/passwd` as `<drive>:\\etc\\passwd` and `/c/x` as
+  // `<drive>:\\c\\x`, so the folder a user approved was not the one the shell
+  // reached, and a workspace at `<drive>:\\c` held paths that were not in it.
+  it('reads a POSIX path where the shell\'s mount table puts it', () => {
+    const read = (spelled: string) => gitBash()(spelled, WORKSPACE);
+    expect(read('/c/Users/me/.ssh/id_rsa')).toBe('C:\\Users\\me\\.ssh\\id_rsa');
+    expect(read('/C/x')).toBe('C:\\x');
+    expect(read('/q/x')).toBe('Q:\\x');
+    expect(read('/etc/passwd')).toBe('C:\\Program Files\\Git\\etc\\passwd');
+    expect(read('/bin/grep')).toBe('C:\\Program Files\\Git\\usr\\bin\\grep');
+    expect(read('/tmpx/a')).toBe('C:\\Program Files\\Git\\tmpx\\a');
+    expect(read('//srv/share/x')).toBe('\\\\srv\\share\\x');
+    // A backslash separates, as Git Bash reads one.
+    expect(read('/c\\Users\\me\\.ssh')).toBe('C:\\Users\\me\\.ssh');
+    // Its /proc/cygdrive is the drive prefix.
+    expect(read('/proc/cygdrive/c/Users/me')).toBe('C:\\Users\\me');
+  });
+
+  // A `posix=0` mount (the drives, `/tmp`) matches in any case; the others only
+  // as spelled, so `/BIN` is a folder of the install, not `/bin`.
+  it('matches a mount point in any case only where Git Bash does', () => {
+    const read = (spelled: string) => gitBash()(spelled, WORKSPACE);
+    expect(read('/TMP/x')).toBe('C:\\Users\\me\\AppData\\Local\\Temp\\x');
+    expect(read('/BIN/x')).toBe('C:\\Program Files\\Git\\BIN\\x');
+  });
+
+  // Git Bash climbs `/tmp/..` on disk and `/bin/..` by name, reads
+  // `../../c/Users` from `F:\\work` as `C:\\Users`, and keeps /proc and /dev of its
+  // own: no folder an approval could name is the one these reach.
+  it('follows nothing it cannot be sure of', () => {
+    const read = (spelled: string, from = WORKSPACE) => gitBash()(spelled, from);
+    for (const spelled of ['/tmp/../x', '/bin/../x', '/c/x/../y', '/proc/registry/HKEY_CURRENT_USER', '/dev/clipboard', '/dev\\null', '../../../c/Users/me']) {
+      expect(read(spelled)).toBeUndefined();
+    }
+    expect(read('../x')).toBe('../x');
+    expect(read('../../x')).toBe('../../x');
+    // Below one of its other mounts, `..` climbs in ways no one reading can follow.
+    expect(read('../x', 'C:\\Program Files\\Git\\usr')).toBeUndefined();
+  });
+
+  it('leaves the shell\'s devices, and every path the host reads as Git Bash does, as spelled', () => {
+    for (const spelled of ['/dev/null', '/dev/stdin', 'src/a.ts', '~/.ssh', 'C:\\x', 'C:/x', '\\Users\\x']) expect(gitBash()(spelled, WORKSPACE)).toBe(spelled);
+  });
+
+  it('reads ~ as the HOME Git Bash would use', () => {
+    expect(gitBash({ HOME: '/c/Users/me' })('~/.ssh/id_rsa', WORKSPACE)).toBe('C:\\Users\\me\\.ssh\\id_rsa');
+    expect(gitBash({ HOME: 'D:\\home' })('~', WORKSPACE)).toBe('D:\\home');
+  });
+
+  it('asks the shell once, on the first path that needs it', () => {
+    let reads = 0;
+    const { hostPath } = resolveResearchShell({ ...win([GIT_BASH]), readMounts: () => { reads++; return [MOUNT, PREFIX]; } });
+    hostPath!('src/a.ts', WORKSPACE);
+    expect(reads).toBe(0);
+    hostPath!('/c/a', WORKSPACE);
+    hostPath!('/etc/b', WORKSPACE);
+    expect(reads).toBe(1);
+  });
+
+  it('stands in Git for Windows\' own table when the shell cannot be asked', () => {
+    const { hostPath } = resolveResearchShell({ ...win([GIT_BASH], { TEMP: 'C:\\Temp' }), readMounts: () => undefined });
+    expect(hostPath!('/etc/x', WORKSPACE)).toBe('C:\\Program Files\\Git\\etc\\x');
+    expect(hostPath!('/tmp/x', WORKSPACE)).toBe('C:\\Temp\\x');
+    expect(hostPath!('/d/x', WORKSPACE)).toBe('D:\\x');
+  });
+
+  it('puts the drives under the prefix the table names', () => {
+    const table = parseMounts('D:/Git on / type ntfs (binary)', 'Prefix Type Flags\n/cygdrive user binmode\n')!;
+    expect(mountedHostPath(table, '/cygdrive/e/x')).toBe('E:\\x');
+    expect(mountedHostPath(table, '/e/x')).toBe('D:\\Git\\e\\x');
+    expect(parseMounts('', PREFIX)).toBeUndefined();
+  });
+});
+
+describe.runIf(process.platform === 'win32' && existsSync('C:\\Program Files\\Git\\usr\\bin\\cygpath.exe'))('a path through a real Git Bash', () => {
+  it('lands where Git\'s own cygpath says it does, or nowhere at all', () => {
+    const { hostPath } = resolveResearchShell({ platform: 'win32', env: process.env });
+    const from = process.cwd();
+    // No program's name: cygpath gives one its `.exe`.
+    const spellings = ['/c/Users/x', '/C/x', '/tmp/a b', '/TMP/x', '/etc/passwd', '/bin/x', '/BIN/x', '/usr/bin/x', '/mingw64/bin', '//srv/share/x', '/c\\Users\\x', '/proc/cygdrive/c/Users/x'];
+    const cygpath = execFileSync('C:\\Program Files\\Git\\usr\\bin\\cygpath.exe', ['-w', ...spellings], { encoding: 'utf8' }).trim().split(/\r?\n/);
+    expect(spellings.map((s) => hostPath!(s, from)?.toLowerCase())).toEqual(cygpath.map((p) => p.toLowerCase()));
+    for (const spelled of ['/tmp/../x', '/proc/registry/HKEY_CURRENT_USER', '/dev/clipboard']) expect(hostPath!(spelled, from)).toBeUndefined();
   });
 });
 

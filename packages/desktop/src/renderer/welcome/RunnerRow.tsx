@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CircleCheck, CircleHelp, CircleSlash, CircleX, ExternalLink, RotateCw, TriangleAlert, type LucideIcon } from 'lucide-react';
+import { CircleCheck, CircleHelp, CircleSlash, CircleX, ExternalLink, LogIn, KeyRound, RotateCw, TriangleAlert, type LucideIcon } from 'lucide-react';
 import { Button, Icon, RunnerBadge, runnerName } from '@ordewell/ui/design';
+import type { AiProvider } from '@ordewell/core';
+import { VENDORS } from '@ordewell/core/plan-utils';
 import type { DaemonStatus } from '../../shared/bridge';
 import { cardFor } from '../DaemonBar';
 import { KNOWN_RUNNERS, parseRunners, type RunnerLine } from '../runners';
+import { askForKey } from '../session/KeyEntryDialog';
 import { DaemonCard, ErrorBanner, Skeleton } from './parts';
+import { LoginDialog } from './LoginDialog';
 import { RUNNERS_TIMEOUT_MS, failureMessage, noRunnerOn, runnerCard, withTimeout, type RunnerTone } from './model';
 
 type RunnersState =
@@ -22,8 +26,14 @@ const TONE_ICON: Record<RunnerTone, LucideIcon> = {
 /** A pending load past this long says what it loads (design, Shared states). */
 const SLOW_MS = 2_000;
 
-function RunnerCardView({ line, busy, onRetry }: { line: RunnerLine; busy: boolean; onRetry(): void }): JSX.Element {
-  const name = runnerName(line.id);
+function RunnerCardView({ line, busy, onRetry, onLogin, onKey }: {
+  line: RunnerLine;
+  busy: boolean;
+  onRetry(): void;
+  onLogin(): void;
+  onKey(provider: AiProvider): void;
+}): JSX.Element {
+  const name = line.name || runnerName(line.id);
   const card = runnerCard(line, name);
   const icon = line.state === 'off' ? CircleSlash : TONE_ICON[card.tone];
   return (
@@ -34,10 +44,16 @@ function RunnerCardView({ line, busy, onRetry }: { line: RunnerLine; busy: boole
         <span>{card.word}</span>
       </span>
       {card.version && <span className="welcome-line welcome-muted" title={`version ${card.version}`}>version {card.version}</span>}
-      {card.hint && <span className="welcome-line welcome-muted" title={card.hint}>{card.hint}</span>}
+      {card.hint && <span className="welcome-line welcome-hint welcome-muted" title={card.hint}>{card.hint}</span>}
       {card.command && <code className="welcome-line welcome-code" title={card.command}>{card.command}</code>}
       {card.tone !== 'passed' && line.state !== 'off' && (
         <span className="welcome-card-actions">
+          {card.action === 'login' && (
+            <Button size="sm" icon={LogIn} disabled={busy} onClick={onLogin}>Log in</Button>
+          )}
+          {card.action === 'key' && card.provider && (
+            <Button size="sm" icon={KeyRound} disabled={busy} onClick={() => { onKey(card.provider as AiProvider); }}>Set API key…</Button>
+          )}
           <Button size="sm" icon={RotateCw} disabled={busy} onClick={onRetry}>Retry</Button>
           {card.docs && (
             <Button
@@ -71,11 +87,13 @@ function SkeletonRunner({ id }: { id: string }): JSX.Element {
  * that never answers ends in the error banner rather than a row that checks
  * for ever.
  */
-export function RunnerRow({ status }: { status: DaemonStatus | undefined }): JSX.Element {
+export function RunnerRow({ status, platform }: { status: DaemonStatus | undefined; platform?: string }): JSX.Element {
   const connected = status?.state === 'connected';
   const [state, setState] = useState<RunnersState>({ kind: 'loading' });
   const [busy, setBusy] = useState(false);
   const [slow, setSlow] = useState(false);
+  const [login, setLogin] = useState<{ runner: string; label: string } | null>(null);
+  const [keyError, setKeyError] = useState<string | undefined>(undefined);
   const generation = useRef(0);
 
   const load = useCallback(async () => {
@@ -91,6 +109,30 @@ export function RunnerRow({ status }: { status: DaemonStatus | undefined }): JSX
     const lines = parseRunners(result.data);
     setState(lines ? { kind: 'ready', lines } : { kind: 'error', message: 'The daemon answered with something that is not a runner list.', status: result.status });
   }, []);
+
+  const setKey = useCallback(async (runner: string, provider: AiProvider): Promise<void> => {
+    const answer = await askForKey({ provider, runnerLabel: runnerName(runner) });
+    if (!answer) return;
+    const meta = VENDORS[answer.provider];
+    try {
+      const saved = await window.ordewell.daemon.call('settings.update', undefined, {
+        env: { [meta.apiKeyEnvVar]: answer.key },
+      });
+      if (!saved.ok) {
+        setKeyError(failureMessage(saved));
+        return;
+      }
+      const rejected = typeof saved.data === 'object' && saved.data !== null ? Reflect.get(saved.data, 'rejectedEnvKeys') : undefined;
+      if (Array.isArray(rejected) && rejected.includes(meta.apiKeyEnvVar)) {
+        setKeyError(`The daemon refused the ${meta.label} key.`);
+        return;
+      }
+      setKeyError(undefined);
+      await load();
+    } catch (error) {
+      setKeyError(error instanceof Error ? error.message : String(error));
+    }
+  }, [load]);
 
   useEffect(() => {
     if (connected) void load();
@@ -122,11 +164,32 @@ export function RunnerRow({ status }: { status: DaemonStatus | undefined }): JSX
       ) : state.kind === 'ready' && noRunnerOn(state.lines) ? (
         <p className="welcome-empty-line">No runners are on. Turn one on in Settings.</p>
       ) : (
-        <ul className="welcome-grid welcome-runners">
-          {state.kind === 'ready'
-            ? state.lines.map((line) => <RunnerCardView key={line.id} line={line} busy={busy} onRetry={retry} />)
-            : KNOWN_RUNNERS.map((id) => <SkeletonRunner key={id} id={id} />)}
-        </ul>
+        <>
+          {keyError && <p className="welcome-banner welcome-banner-error" role="alert">{keyError}</p>}
+          <ul className="welcome-grid welcome-runners">
+            {state.kind === 'ready'
+              ? state.lines.map((line) => (
+                <RunnerCardView
+                  key={line.id}
+                  line={line}
+                  busy={busy}
+                  onRetry={retry}
+                  onLogin={() => setLogin({ runner: line.id, label: line.name || runnerName(line.id) })}
+                  onKey={(provider) => { void setKey(line.id, provider); }}
+                />
+              ))
+              : KNOWN_RUNNERS.map((id) => <SkeletonRunner key={id} id={id} />)}
+          </ul>
+        </>
+      )}
+      {login && (
+        <LoginDialog
+          runner={login.runner}
+          label={login.label}
+          platform={platform}
+          onClose={() => setLogin(null)}
+          onSignedIn={() => { void load(); }}
+        />
       )}
     </section>
   );

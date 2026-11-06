@@ -79,6 +79,8 @@ export interface HostState {
   detectionError: string | null;
   isReady: boolean;
   modelDiscoveryErrors: Record<string, string>;
+  /** Why a runner's catalog lists nothing, keyed by runner id: a signed-out agent names its sign-in, not a refresh. */
+  runnerDiscoveryErrors: Record<string, string>;
   skills: { name: string; description: string; appliesTo?: 'planner' | 'task' }[];
   taskSkills: { name: string; description: string }[];
   checkpoint: OpenCheckpoint | null;
@@ -175,6 +177,7 @@ export const INITIAL_HOST_STATE: HostState = {
   detectionError: null,
   isReady: false,
   modelDiscoveryErrors: {},
+  runnerDiscoveryErrors: {},
   skills: [],
   taskSkills: [],
   checkpoint: null,
@@ -487,7 +490,11 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
       };
 
     case 'setModelDiscoveryErrors':
-      return { ...state, modelDiscoveryErrors: action.errors ?? {} };
+      return {
+        ...state,
+        modelDiscoveryErrors: action.errors ?? {},
+        runnerDiscoveryErrors: action.runnerErrors ?? {},
+      };
 
     case 'setRunners': {
       const list = action.runners ?? [];

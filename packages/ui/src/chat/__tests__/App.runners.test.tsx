@@ -63,7 +63,7 @@ describe('the Runners block', () => {
     const group = codex.closest('.runner-pill-group')!;
     expect(codex.className).toContain('on');
     expect(codex.className).toContain('signed-out');
-    expect(codex.title).toBe('Not logged in');
+    expect(codex.title).toBe('Codex is not signed in. Sign in with /login codex, or run codex login.');
     expect(group.className).toContain('signed-out');
     expect(group.querySelectorAll('button')).toHaveLength(2);
     expect(group.querySelector('.planner-auth-dot')).not.toBeNull();
@@ -122,6 +122,44 @@ describe('the Runners block', () => {
 
     expect(getComputedStyle(document.querySelector('.runner-pills')!).alignItems).toBe('flex-start');
     expect(getComputedStyle(document.querySelector('.planner-backends')!).alignItems).toBe('flex-start');
+  });
+
+  it('keeps both selector bars on one line that scrolls sideways, never wrapping or growing the panel', () => {
+    installedList();
+    post({
+      type: 'setPlannerBackends',
+      backends: [{ id: 'claude-code', label: 'Claude Code', kind: 'harness', runner: 'claude-code', usable: true, auth: { state: 'signed-out', loginCommand: ['claude', 'auth', 'login'] } }],
+      provider: 'claude-code',
+      runner: 'claude-code',
+    });
+    const css = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf8');
+    const style = document.createElement('style');
+    style.textContent = css;
+    document.head.append(style);
+
+    for (const selector of ['.planner-backends', '.runner-pills']) {
+      const bar = getComputedStyle(document.querySelector(selector)!);
+      expect(bar.flexWrap, selector).toBe('nowrap');
+      expect(bar.overflowX, selector).toBe('auto');
+      // Hidden, so a capsule's login-failure line never gets a vertical scroller.
+      expect(bar.overflowY, selector).toBe('hidden');
+      expect(bar.minWidth, selector).toMatch(/^0(px)?$/);
+      expect(bar.alignItems, selector).toBe('flex-start');
+    }
+
+    // A capsule must not be squeezed to fit: the row scrolls instead.
+    for (const selector of ['.planner-pill-item', '.runner-pill-item']) {
+      expect(getComputedStyle(document.querySelector(selector)!).flexShrink, selector).toBe('0');
+    }
+
+    // The scrolling lives in the rows: nothing between a row and the panel body
+    // may widen it, and the body itself never shows a horizontal scrollbar.
+    const body = document.querySelector<HTMLElement>('.setup-panel-body')!;
+    expect(getComputedStyle(body).overflowX).toBe('hidden');
+    for (const selector of ['.setup-panel', '.setup-block']) {
+      expect(getComputedStyle(document.querySelector(selector)!).minWidth, selector).toMatch(/^0(px)?$/);
+    }
+    expect(body.scrollWidth).toBeLessThanOrEqual(body.clientWidth);
   });
 
   it('offers every installed runner when none is enabled, rather than claiming none is installed', () => {

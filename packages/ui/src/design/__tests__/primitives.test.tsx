@@ -1,9 +1,11 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import React, { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { taskRowView } from '@ordewell/core/plan-utils';
 import type { Task } from '@ordewell/core';
-import { RunnerBadge, runnerName } from '../runners';
+import { RUNNER_NAMES, RunnerBadge, runnerName } from '../runners';
 import { Tabs } from '../Tabs';
 import TaskSummary from '../../chat/components/TaskSummary';
 
@@ -17,6 +19,23 @@ describe('the runner badge', () => {
     expect(full.className).toContain('ow-runner-claude-code');
     expect(short.textContent).toBe('Claude');
     expect(short.getAttribute('title')).toBe('Claude Code');
+  });
+
+  it('gives every runner it names a colour of its own, in the token table and the badge rules', () => {
+    const tokens = readFileSync(resolve(__dirname, '../../tokens.css'), 'utf8');
+    const rules = readFileSync(resolve(__dirname, '../../design.css'), 'utf8');
+    const colours = new Set<string>();
+    for (const id of Object.keys(RUNNER_NAMES)) {
+      const { container } = render(<RunnerBadge runner={id} />);
+      const badge = container.querySelector('.ow-runner-badge')!;
+      expect(badge.textContent).toBe(runnerName(id));
+      expect(badge.className).toContain(`ow-runner-${id}`);
+      expect(badge.className).not.toContain('ow-runner-other');
+      expect(tokens).toMatch(new RegExp(`--ow-runner-${id}:\\s*#[0-9a-f]{6};\\s*--ow-runner-${id}-tint:`));
+      expect(rules).toContain(`.ow-runner-${id} {`);
+      colours.add(new RegExp(`--ow-runner-${id}:\\s*(#[0-9a-f]{6})`).exec(tokens)![1]);
+    }
+    expect(colours.size).toBe(Object.keys(RUNNER_NAMES).length);
   });
 
   it('draws a runner it does not know neutral, by its id', () => {

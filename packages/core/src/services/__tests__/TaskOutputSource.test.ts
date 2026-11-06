@@ -119,6 +119,21 @@ describe('BufferedTaskOutputSource', () => {
       expect(source.liveTail('t1', { maxLines: 50, sinceOffset: 19 })?.text).toBe('');
     });
 
+    it('redacts a value whose name came in the chunk a previous read ended at, and shows only the rest of a plain line', () => {
+      const source = new BufferedTaskOutputSource();
+      const session = new FakeRunnerSession('s1', 't1');
+      source.attach('t1', session);
+      session.emitOutput('log: hel');
+      const first = source.liveTail('t1', { maxLines: 50 });
+      session.emitOutput('lo\nMISTRAL_API_KEY=');
+      const second = source.liveTail('t1', { maxLines: 50, sinceOffset: first?.nextOffset });
+      session.emitOutput('qwertyuiopasdfghjklzxcvbnmfake\n');
+      const third = source.liveTail('t1', { maxLines: 50, sinceOffset: second?.nextOffset });
+
+      expect(second?.text).toBe('lo\nMISTRAL_API_KEY=');
+      expect(third?.text).toBe('[REDACTED credential: 30 chars]');
+    });
+
     it('keeps offsets absolute after old output is dropped from the bounded buffer', () => {
       const source = new BufferedTaskOutputSource({ maxBufferChars: 20 });
       const session = new FakeRunnerSession('s1', 't1');
@@ -129,6 +144,21 @@ describe('BufferedTaskOutputSource', () => {
 
       expect(tail?.nextOffset).toBe(70);
       expect(tail?.text).toBe('line-8\nline-9');
+    });
+
+    it('drops a line longer than the buffer whole, and reads on from the line after it', () => {
+      const source = new BufferedTaskOutputSource({ maxBufferChars: 50 });
+      const session = new FakeRunnerSession('s1', 't1');
+      source.attach('t1', session);
+      session.emitOutput('before\n');
+      session.emitOutput('x'.repeat(60));
+      const first = source.liveTail('t1', { maxLines: 50 });
+      session.emitOutput('yyy\nafter\n');
+      const next = source.liveTail('t1', { maxLines: 50, sinceOffset: first?.nextOffset });
+
+      expect(first).toMatchObject({ text: '[a line of 60 chars, too long to keep]', nextOffset: 67 });
+      expect(next).toMatchObject({ text: 'after', nextOffset: 77 });
+      expect(source.liveTail('t1', { maxLines: 50 })?.text).toBe('[a line of 63 chars, too long to keep]\nafter');
     });
 
     it('stops running on exit and ignores output after detach', () => {

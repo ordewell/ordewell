@@ -324,7 +324,7 @@ export type HostToWebview =
    * place of "Detecting coding agents…". A runner or planner list ends it.
    */
   | { type: 'agentDetection'; state: 'detecting' | 'failed'; error?: string }
-  | { type: 'setModelDiscoveryErrors'; errors: Record<string, string> }
+  | { type: 'setModelDiscoveryErrors'; errors: Record<string, string>; runnerErrors?: Record<string, string> }
   /**
    * A session was (re)loaded: the webview drops the previous session's plan,
    * task output, isolation and any stuck busy state. The conversation itself

@@ -7,9 +7,9 @@ same runners and models as the terminal UI and the VS Code extension, because
 it is a client of the same local daemon.
 
 The design is [design.md](design.md). The decisions behind it are
-[ADR-0060](../adr/surfaces/0060-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)
+[ADR-0063](../adr/surfaces/0063-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)
 (the app is an Electron client of the shared daemon),
-[ADR-0061](../adr/surfaces/0061-a-host-reads-files-and-git-for-the-user-confined-to-the-workspace.md)
+[ADR-0064](../adr/surfaces/0064-a-host-reads-files-and-git-for-the-user-confined-to-the-workspace.md)
 (a host reads files and git for you) and
 [ADR-0062](../adr/isolation/0062-user-git-actions-are-confirmed-at-a-host-and-a-live-run-holds-only-its-landing-branch.md)
 (git actions are confirmed at a host). This page is how to install it, what the
@@ -259,7 +259,7 @@ same workflow and attaches the installers to the Release.
 A release signs the installers, and on macOS has Apple notarize them, only when
 the maintainers have configured the signing credentials in the repository.
 Without them it builds unsigned installers, and updates stay off
-([ADR-0060 H9](../adr/surfaces/0060-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)).
+([ADR-0063 H9](../adr/surfaces/0063-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)).
 Linux builds are never signed and never update themselves. The credentials
 reach only a release build: a pull request, a manual run or a fork always
 builds unsigned. Each build writes `release/signing.json`, which says what it
@@ -305,7 +305,7 @@ planner, runner and run settings as every other surface.
 
 The app never runs a `Session` itself. It is a client of the local daemon on
 `127.0.0.1:3742`, so a run started here is the run `ordewell status` reports and
-the CLI can follow ([ADR-0060](../adr/surfaces/0060-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)).
+the CLI can follow ([ADR-0063](../adr/surfaces/0063-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)).
 
 - **Attach or own.** At launch the app asks `GET /api/server` who is there. A
   daemon that answers, with a token file it can read, is attached to. With none

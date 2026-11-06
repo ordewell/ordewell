@@ -4,6 +4,7 @@ import {
   type TaskStatusKind,
 } from '@ordewell/core/plan-utils';
 import { effortLabel, modelLabel, runnerName, statusLineOf, statusOf, type StatusLook } from '@ordewell/ui/design';
+import type { SignInView } from '../../signIn';
 import { stagesOf } from './layout';
 
 /**
@@ -36,7 +37,7 @@ export interface LoopBadgeView {
  * (ids and labels, not one string), so the card can shorten each on its own.
  */
 export type LaneView =
-  | { kind: 'ai'; runner: string | null; model: string; effort: string | null }
+  | { kind: 'ai'; runner: string | null; model: string; effort: string | null; signIn?: SignInView }
   | { kind: 'script'; command: string }
   | { kind: 'user' }
   | { kind: 'delegated'; counts: string | null };
@@ -70,6 +71,8 @@ export interface GraphNode {
   /** "Codex · gpt-5 · medium", for an AI task; null for any other. */
   assignment: string | null;
   lane: LaneView;
+  /** The runner's own sign-in verdict, when it is signed out (ADR-0052). */
+  signIn?: SignInView;
   badges: NodeBadge[];
   flags: NodeFlag[];
   loop: LoopBadgeView | null;
@@ -114,6 +117,8 @@ export interface GraphContext {
   executing: boolean;
   /** Mode lists by runner, for the row view's autonomy reading and a read-only mode's badge. */
   modesByRunner?: Record<string, readonly { id: string; autonomous?: boolean; readOnly?: boolean }[]>;
+  /** Each signed-out agent, by runner id, so its card can name the way in. */
+  signInByRunner?: Readonly<Record<string, SignInView>>;
   /** A handoff waits for Merge all, so a landed task is not yet merged into the user's branch. */
   handoffPending: boolean;
   now?: Date;
@@ -128,11 +133,15 @@ function assignmentOf(task: RunTask): string | null {
   return [runner, modelLabel(task.assignedModel), effort && effortLabel(effort)].filter(Boolean).join(' · ');
 }
 
-function laneOf(task: RunTask, row: TaskRowView): LaneView {
+function laneOf(task: RunTask, row: TaskRowView, signInByRunner: Readonly<Record<string, SignInView>> | undefined): LaneView {
   if (row.kind === 'script') return { kind: 'script', command: scriptTaskText(subjectOf(task)).split('\n')[0] ?? '' };
   if (row.kind === 'delegated') return { kind: 'delegated', counts: row.delegated?.counts ?? null };
   if (task.type !== 'ai') return { kind: 'user' };
-  return { kind: 'ai', runner: task.assignedRunner || null, model: modelLabel(task.assignedModel), effort: task.assignedModel?.thinkingEffort ?? null };
+  const signIn = task.assignedRunner ? signInByRunner?.[task.assignedRunner] : undefined;
+  return {
+    kind: 'ai', runner: task.assignedRunner || null, model: modelLabel(task.assignedModel), effort: task.assignedModel?.thinkingEffort ?? null,
+    ...(signIn ? { signIn } : {}),
+  };
 }
 
 type Modes = readonly { id: string; readOnly?: boolean }[];
@@ -154,7 +163,7 @@ function badgesOf(task: RunTask, row: TaskRowView, modes: Modes): NodeBadge[] {
 
 function laneWords(node: GraphNode): string {
   switch (node.lane.kind) {
-    case 'ai': return node.assignment ?? '';
+    case 'ai': return [node.assignment ?? '', node.lane.signIn ? 'signed out' : ''].filter(Boolean).join(', ');
     case 'script': return node.lane.command ? `script: ${node.lane.command}` : 'script';
     case 'user': return 'you do it';
     case 'delegated': return ['child plan', node.lane.counts].filter(Boolean).join(', ');
@@ -329,7 +338,8 @@ export function buildGraph(tasks: readonly RunTask[], ctx: GraphContext): GraphM
       orderLabel,
       title: task.title,
       assignment: assignmentOf(task),
-      lane: laneOf(task, row),
+      lane: laneOf(task, row, ctx.signInByRunner),
+      ...(task.assignedRunner && ctx.signInByRunner?.[task.assignedRunner] ? { signIn: ctx.signInByRunner[task.assignedRunner] } : {}),
       badges: badgesOf(task, row, runnerModes),
       flags: flagsOf(task, row),
       loop: loopOf(task, row),
@@ -360,7 +370,7 @@ export function buildGraph(tasks: readonly RunTask[], ctx: GraphContext): GraphM
     // The face's name is its first line; who runs it and what kind it is are its second and third, which a Compact card does not draw.
     node.description = [
       `stage ${node.stage}`, describeEdges(node.dependsOn.map(refOf), node.dependents.map(refOf)),
-      laneWords(node), ...node.badges.map((b) => b.label.toLowerCase()), node.loop?.spoken,
+      laneWords(node), node.signIn?.hint, ...node.badges.map((b) => b.label.toLowerCase()), node.loop?.spoken,
     ].filter(Boolean).join('; ');
     node.viewKey = JSON.stringify([
       node.status.id, node.statusLine, node.orderLabel, node.title, node.lane, node.description, node.badges.map((b) => b.label),
@@ -368,8 +378,7 @@ export function buildGraph(tasks: readonly RunTask[], ctx: GraphContext): GraphM
       node.flags.map((f) => [f.label, f.title]), node.loop?.label, node.critical, node.stage, node.expanded,
       node.fold && [node.fold.summary, node.fold.subtasks.map((s) => [s.title, s.status.id]), node.fold.childPlan?.goal],
       node.actions,
-    ]);
-  }
+    ]);  }
 
   const pathEdges = new Set(path.slice(1).map((id, i) => `${path[i]}->${id}`));
   const edges: GraphEdge[] = nodes.flatMap((target) => target.dependsOn.map((source) => {

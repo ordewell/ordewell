@@ -4,7 +4,7 @@ import { diffSides, parsePatch, type DiffSides, type FilePatch } from '../change
 import { parseCheckoutStatus, parseRepoInfo, type CheckoutStatus, type RepoCheckout } from './checkoutModel';
 
 /*
- * The checkout group's reads and actions through the daemon (ADR-0061,
+ * The checkout group's reads and actions through the daemon (ADR-0064,
  * ADR-0062). Every answer is checked here; a refusal keeps its code so the
  * view can word `confirm_stale` and `pushed` as the design says.
  */
@@ -92,7 +92,7 @@ async function workingContent(workspace: string, repo: string, path: string): Pr
 
 /**
  * One checkout file's two sides. Unstaged is the index against the working
- * tree; staged is HEAD against the index (ADR-0061 R5). An untracked file has
+ * tree; staged is HEAD against the index (ADR-0064 R5). An untracked file has
  * no diff to ask for: the whole file is the change.
  */
 export async function readCheckoutDiff(

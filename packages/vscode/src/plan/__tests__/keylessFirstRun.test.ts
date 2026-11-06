@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, vi, it } from 'vitest';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import http from 'http';
 import https from 'https';
@@ -15,7 +15,7 @@ const boundary = vi.hoisted(() => ({ spawn: null as SpawnFn | null }));
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
   const spawn = ((command: string, args: string[], options: Parameters<SpawnFn>[2]) =>
-    boundary.spawn && basename(command) === 'claude'
+    boundary.spawn && basename(command, '.exe') === 'claude'
       ? boundary.spawn(command, args, options)
       : actual.spawn(command, args, options)) as typeof actual.spawn;
   return { ...actual, spawn, default: { ...actual, spawn } };
@@ -26,7 +26,7 @@ import {
   detectInstalledPlanner, getProviderMeta, PROVIDER_DETECT_PRIORITY, recordInstalledPlanner, resetInstalledPlanner,
   RUN_SETTINGS_DEFAULTS, RunnerRegistry, SettingsService, PlannerModelMemory, type LegacyPlanState, type ModelResolver, type PlannerUsability, type IRunner,
 } from '@ordewell/core';
-import { fakeFileSystem, flushMicrotasks } from '@ordewell/core/testing';
+import { fakeFileSystem, flushMicrotasks, homeEnv, setEnv, writeStandIn } from '@ordewell/core/testing';
 import { __resetConfig, __setConfig } from '../../test/vscode.mock';
 import { VsCodeConfig } from '../../adapters/VsCodeConfig';
 import { SecretStore } from '../../adapters/SecretStore';
@@ -48,6 +48,7 @@ function deferred<T>() {
 describe('VS Code keyless first-run process boundary', () => {
   let dir: string;
   let env: NodeJS.ProcessEnv;
+  let restoreHome: () => void;
   let argvs: string[][];
   let prompts: string[];
   let sessions: ReturnType<typeof createSession>[];
@@ -62,9 +63,8 @@ describe('VS Code keyless first-run process boundary', () => {
     dir = mkdtempSync(join(tmpdir(), 'ordewell-vscode-keyless-'));
     mkdirSync(join(dir, '.git'));
     mkdirSync(join(dir, 'bin'));
-    writeFileSync(join(dir, 'bin', 'claude'), '#!/bin/sh\nexit 1\n');
-    chmodSync(join(dir, 'bin', 'claude'), 0o755);
-    process.env.HOME = dir;
+    writeStandIn(join(dir, 'bin'), 'claude');
+    restoreHome = setEnv(homeEnv(dir));
     process.env.PATH = `${join(dir, 'bin')}${delimiter}${process.env.PATH ?? ''}`;
     process.env.ORDEWELL_SETTINGS_PATH = join(dir, 'settings.json');
     delete process.env.AI_PROVIDER;
@@ -124,6 +124,8 @@ describe('VS Code keyless first-run process boundary', () => {
     resetInstalledPlanner();
     clearAugmentedPathCache();
     __resetConfig();
+    // First, on the environment it was set on, which the copy below replaces.
+    restoreHome();
     process.env = env;
     vi.unstubAllGlobals();
     vi.restoreAllMocks();

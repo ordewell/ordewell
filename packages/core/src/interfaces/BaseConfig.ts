@@ -7,6 +7,7 @@ import { BUILTIN_MANIFESTS } from '../plugins/builtin';
 import type { RunnerModelDiscovery } from '../plugins/types';
 import type { PlannerModelChoice } from '../services/PlannerModelMemory';
 import { DEFAULT_MAX_PARALLEL, parseMaxParallel } from '../utils/maxParallel';
+import { vendorApiKeyIn, vendorBaseUrlIn } from '../services/apiProviders';
 import { SettingsService } from '../services/SettingsService';
 import { parseNotifyCommand } from '../services/escalationNotifier';
 import { recordedInstalledPlanner } from '../services/InstalledPlanner';
@@ -175,22 +176,11 @@ export abstract class BaseConfig implements IConfig {
   // --- Registry-driven generic getters ---
 
   getProviderBaseUrl(provider: AiProvider): string {
-    const meta = getProviderMeta(provider);
-    if (!meta) return '';
-    const custom = meta.baseUrlEnvVar ? process.env[meta.baseUrlEnvVar]?.trim() : undefined;
-    return custom || meta.defaultBaseUrl;
+    return vendorBaseUrlIn(process.env, provider);
   }
 
   getProviderApiKey(provider: AiProvider): string {
-    const meta = getProviderMeta(provider);
-    if (!meta) return '';
-    for (const envVar of [meta.apiKeyEnvVar, ...meta.detectEnvVars]) {
-      // A hand-edited .env leaves stray whitespace on a key, and the provider
-      // rejects that as an unknown credential rather than a malformed one.
-      const val = process.env[envVar]?.trim();
-      if (val) return val;
-    }
-    return '';
+    return vendorApiKeyIn(process.env, provider);
   }
 
   get maxParallelSessions(): number { return parseMaxParallel(process.env.ORDEWELL_MAX_PARALLEL) ?? DEFAULT_MAX_PARALLEL; }

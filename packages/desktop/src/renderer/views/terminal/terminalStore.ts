@@ -34,6 +34,11 @@ export interface TerminalState {
   active: string | undefined;
 }
 
+/** What a login terminal tells the host that started it: the process or its tab ended. */
+export interface LoginTerminal {
+  ended: Promise<void>;
+}
+
 export const tabTitle = (tab: TerminalTab): string => tab.name ?? tab.shell ?? 'Terminal';
 
 interface Entry {
@@ -41,6 +46,8 @@ interface Entry {
   ptyId: number | undefined;
   /** Closed before it finished starting: whatever arrives is discarded. */
   closed: boolean;
+  /** A login's waiters: the agent's status command is the verdict, not this exit. */
+  ended(): void;
 }
 
 const DEFAULT_SIZE = { cols: 80, rows: 24 } as const;
@@ -96,19 +103,41 @@ export class TerminalStore {
   }
 
   async open(scope: TerminalScope, repo: string = scopeStoreFor(this.api).getSnapshot().repo): Promise<void> {
+    try {
+      await this.start(scope, repo);
+    } catch {
+      // A refused or failed terminal has already said so in its tab and the announce line.
+    }
+  }
+
+  /**
+   * A coding agent's own login, in a tab of its own (ADR-0052): main runs the
+   * argv core declares, so the tab is a real terminal the person can type an
+   * OAuth code into. The caller gets the end of that terminal to stop waiting.
+   */
+  async openLogin(runner: string, label: string): Promise<LoginTerminal> {
+    // The panel may be hidden: a login's terminal must be seen, or the browser
+    // prompt it waits for is invisible.
+    this.api.showTerminal();
+    return this.start({ kind: 'checkout' }, '.', { login: { runner }, name: `${label} login` });
+  }
+
+  private async start(scope: TerminalScope, repo: string, options: { login?: { runner: string }; name?: string } = {}): Promise<LoginTerminal> {
     const scopes = scopeStoreFor(this.api).getSnapshot();
     const decision = decisionFor(scope, scopes);
     if (!decision.ok) {
       this.api.announce(decision.reason);
-      return;
+      throw new Error(decision.reason);
     }
     const task = scope.kind === 'task' ? scopes.session?.tasks.find((t) => t.id === scope.taskId) : undefined;
     const key = `terminal-${++this.counter}`;
-    const entry: Entry = { term: undefined, ptyId: undefined, closed: false };
+    let ended: () => void = () => undefined;
+    const done = new Promise<void>((resolve) => { ended = resolve; });
+    const entry: Entry = { term: undefined, ptyId: undefined, closed: false, ended };
     this.entries.set(key, entry);
     this.set({
       tabs: [...this.state.tabs, {
-        key, scope, repo, shell: undefined, name: undefined, phase: 'starting', message: undefined,
+        key, scope, repo, shell: undefined, name: options.name, phase: 'starting', message: undefined,
         scopeLabel: terminalLabel(scope, task, repo, scopes.repos.length),
       }],
       active: key,
@@ -120,21 +149,24 @@ export class TerminalStore {
         onLink: (url) => { void window.ordewell.terminal.openLink(url); },
         screenReaderMode: false,
       }, isMac(this.api.platform));
-      if (entry.closed) { term.dispose(); return; }
+      if (entry.closed) { term.dispose(); return { ended: done }; }
       entry.term = term;
-      const result = await window.ordewell.terminal.open({ repo, scope, ...this.size }, (event) => this.onEvent(key, entry, event));
+      const result = await window.ordewell.terminal.open({ repo, scope, ...this.size, ...(options.login ? { login: options.login } : {}) }, (event) => this.onEvent(key, entry, event));
       if (entry.closed) {
         if (result.ok) void window.ordewell.terminal.close(result.id);
-        return;
+        return { ended: done };
       }
+      if (!result.ok) throw new Error(result.message);
       this.started(key, entry, result);
+      return { ended: done };
     } catch (err) {
-      this.fail(key, entry, err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      this.fail(key, entry, message);
+      throw new Error(message);
     }
   }
 
-  private started(key: string, entry: Entry, result: TerminalOpenResult): void {
-    if (!result.ok) { this.fail(key, entry, result.message); return; }
+  private started(key: string, entry: Entry, result: TerminalOpenResult & { ok: true }): void {
     entry.ptyId = result.id;
     this.patchTab(key, { phase: 'running', shell: result.shell });
     this.showActive();
@@ -154,6 +186,7 @@ export class TerminalStore {
     entry.term.write(`\r\n\x1b[2m[${message} Close this tab to dismiss it.]\x1b[0m\r\n`);
     entry.ptyId = undefined;
     this.patchTab(key, { phase: 'exited', message });
+    entry.ended();
   }
 
   close(key: string): void {
@@ -165,6 +198,7 @@ export class TerminalStore {
       entry.closed = true;
       if (entry.ptyId !== undefined) void window.ordewell.terminal.close(entry.ptyId);
       entry.term?.dispose();
+      entry.ended();
     }
     const tabs = this.state.tabs.filter((tab) => tab.key !== key);
     const active = this.state.active === key ? (tabs[at] ?? tabs[at - 1])?.key : this.state.active;

@@ -19,7 +19,7 @@ export type AttachDecision =
   | { action: 'port-taken' };
 
 /**
- * ADR-0060 H2 and H3 as one table: what to do with a probe's answer. Only the
+ * ADR-0063 H2 and H3 as one table: what to do with a probe's answer. Only the
  * contract decides compatibility; the version is for the status bar, so a
  * patch release on either side never refuses the other.
  */

@@ -71,9 +71,9 @@ export type DaemonErrorCode =
   | 'child_task_not_found'
   /** The child plan is open, but its mandate, its grants, the tree's budget or the task's state refuses this now; the message says which. */
   | 'child_refused'
-  /** A user read's view scope no longer exists, or cannot be read: the message says why. It never falls back to another scope (ADR-0061 R2). */
+  /** A user read's view scope no longer exists, or cannot be read: the message says why. It never falls back to another scope (ADR-0064 R2). */
   | 'gone'
-  /** A user read named a path outside its scope: absolute, `..`, `.git`, Ordewell's state, or a link out of the root (ADR-0061 R3). */
+  /** A user read named a path outside its scope: absolute, `..`, `.git`, Ordewell's state, or a link out of the root (ADR-0064 R3). */
   | 'path_refused'
   /** A user read named a path, ref or commit its scope does not hold. */
   | 'path_not_found'
@@ -126,7 +126,7 @@ export interface OkResponse extends Worded {
 /**
  * `GET /api/server`: which process owns the port, so a stop can be verified
  * before it signals one, and which daemon it is, so a client it did not start
- * can tell whether it speaks the same contract (ADR-0060 H3).
+ * can tell whether it speaks the same contract (ADR-0063 H3).
  */
 export interface ServerInfoResponse {
   pid: number;
@@ -201,6 +201,12 @@ export interface ModelsResponse {
   orchestratorModels: OrchestratorOption[];
   /** Per-provider catalog-fetch failures, keyed by provider id. */
   providerErrors: Record<string, string>;
+  /**
+   * Why a runner whose catalog is empty lists nothing, keyed by runner id, as
+   * its resolver words it: a signed-out runner names its sign-in routes, which
+   * a refresh alone cannot take. Absent for a runner that said nothing.
+   */
+  runnerErrors: Record<string, string>;
 }
 
 /** One-shot planning answers in the phase-tagged shape a saved session is read back in. */
@@ -277,6 +283,15 @@ export interface RunnerEntry {
   id: string;
   name: string;
   enabled: boolean;
+  /**
+   * False when the CLI is installed but Ordewell cannot start it — a Windows
+   * `.cmd` shim with no direct-spawnable file, or an ACP agent below its
+   * profile's minimum version — with `reason` saying why. Absent on a row from
+   * a daemon that predates the field, and on every usable one.
+   */
+  usable?: boolean;
+  /** Why `usable` is false, in core's words, for the surface to show beside the row. */
+  reason?: string;
   /** The runner's own login verdict, beside `enabled`: a signed-out agent is still offered, flagged. */
   auth?: RunnerAuth;
   /** What the CLI's `--version` printed, as a number; absent when it printed none. */
@@ -308,7 +323,7 @@ export interface SessionResponse {
   run?: RunView;
   /**
    * The planner turn running now, as {@link AdoptSessionResponse.plannerTurnId}:
-   * how a client that joined the session at its holder (ADR-0060 H8), and so
+   * how a client that joined the session at its holder (ADR-0063 H8), and so
    * never loads it, tells a live turn from one whose end it missed.
    */
   plannerTurnId?: string;
@@ -509,7 +524,7 @@ export interface AccountLimitsFrame extends AccountLimitsMessage {
 }
 
 /**
- * Which tree a user read looks at, per repository (ADR-0061 R2): the user's
+ * Which tree a user read looks at, per repository (ADR-0064 R2): the user's
  * checkout on disk, a run's integration branch from git objects, or a task's
  * worktree on disk while it exists and its branch after.
  */
@@ -529,7 +544,7 @@ export interface ReadTarget {
 }
 
 /**
- * What an answer was read at (ADR-0061 R5), so a later write can say what it
+ * What an answer was read at (ADR-0064 R5), so a later write can say what it
  * saw: the files on disk over `commit` (null for a repository with none yet),
  * or the tree of `commit` alone. `branch` is the scope's branch, for the
  * breadcrumb: the checkout's, the integration branch or the task's.
@@ -553,7 +568,7 @@ export interface FileTreeEntry {
   name: string;
   /** From the repository's scope root, `/`-separated: what every other read takes. */
   path: string;
-  /** A link is listed as one and never followed (ADR-0061 R3); a nested repository is a `repository`. */
+  /** A link is listed as one and never followed (ADR-0064 R3); a nested repository is a `repository`. */
   kind: 'file' | 'directory' | 'symlink' | 'repository';
   ignored: boolean;
   /** A directory's is `M` when anything below it changed, or `?` when all of it is untracked. */
@@ -569,7 +584,7 @@ export interface FileTreeResponse {
   entries: FileTreeEntry[];
 }
 
-/** `GET /api/files/content`: a file's text and the sha256 of its bytes, or why there is none (ADR-0061 R5). */
+/** `GET /api/files/content`: a file's text and the sha256 of its bytes, or why there is none (ADR-0064 R5). */
 export type FileContentResponse =
   | { at: ReadAt; path: string; kind: 'text'; text: string; hash: string; size: number }
   | { at: ReadAt; path: string; kind: 'binary'; size: number }
@@ -635,7 +650,7 @@ export interface GitDiffFile {
 
 /**
  * `GET /api/git/diff`: the changed files first, and with `path` that one file's
- * patch (ADR-0061 R5). `from` and `to` name what was compared, null for the
+ * patch (ADR-0064 R5). `from` and `to` name what was compared, null for the
  * index or the working tree.
  */
 export interface GitDiffResponse {

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Installs the Ordewell desktop app for the current user, on macOS and Linux
-# (ADR-0060 H10):
+# (ADR-0063 H10):
 #
 #   curl -fsSL https://raw.githubusercontent.com/ordewell/ordewell/main/scripts/install/desktop.sh | sh
 #   curl -fsSL .../desktop.sh | sh -s -- --version 0.12.3

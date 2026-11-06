@@ -1,5 +1,6 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { RUN_SETTINGS_DEFAULTS } from '@ordewell/core';
 import type { FrameApi } from '../../../frame/api';
 import { DaemonHost } from '../../../session/DaemonHost';
 import { fakeDaemon, ok, surfacePlan, surfaceTask } from '../../../session/__tests__/fakeDaemon';
@@ -198,5 +199,36 @@ describe('PlanGraph', () => {
     render(<PlanGraph host={host} api={frameApi()} onCannotDraw={onCannotDraw} />);
     expect(await screen.findByRole('alert')).toHaveTextContent(/depend on each other/);
     expect(onCannotDraw).toHaveBeenCalledWith(expect.stringContaining('#1, #2'));
+  });
+
+  it('flags a signed-out agent on its card and offers its Log in in the menu', async () => {
+    const plan = surfacePlan([surfaceTask({ id: 'a', order: 1, title: 'Read the spec', assignedRunner: 'codex' })]);
+    const daemon = fakeDaemon({
+      'sessions.load': ok({ ok: true, plan, goal: 'Ship the parser' }),
+      'runners.list': ok({
+        runners: [{
+          id: 'codex', name: 'Codex', enabled: true,
+          auth: { state: 'signed-out', loginCommand: ['codex', 'login'], signIn: { runner: 'codex', label: 'Codex', login: ['codex', 'login'] } },
+        }],
+        orchestratorModel: '',
+      }),
+      'models.list': ok({ models: [], modelsByRunner: {}, modesByRunner: {}, orchestratorModel: '', providers: [], orchestratorModels: [], providerErrors: {} }),
+      'settings.get': ok({ orchestratorModel: '', aiProvider: 'codex', plannerThinkingEffort: '', autonomousMode: false, maxParallel: 3, modelAllowlist: {}, run: { ...RUN_SETTINGS_DEFAULTS } }),
+    });
+    const host = new DaemonHost('/work/acme');
+    hosts.push(host);
+    await act(() => host.handle({ type: 'ready' }));
+    await act(() => host.open('s1'));
+    render(<PlanGraph host={host} api={frameApi()} onCannotDraw={vi.fn()} />);
+
+    const card = (await screen.findByRole('button', { name: /^#1 Read the spec, / })).closest('.graph-card');
+    expect(card).toHaveTextContent('Signed out');
+    expect(card!.querySelector('.graph-card-signed-out')).toHaveAttribute('title', 'Codex is not signed in. Sign in with /login codex, or run codex login.');
+
+    const handle = vi.spyOn(host, 'handle').mockResolvedValue(undefined);
+    fireEvent.contextMenu(card!, { clientX: 20, clientY: 20 });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Log in' }));
+    await waitFor(() => expect(handle).toHaveBeenCalledWith({ type: 'loginPlanner', runner: 'codex' }));
+    expect(daemon.calls('sessions.load')).toHaveLength(1);
   });
 });

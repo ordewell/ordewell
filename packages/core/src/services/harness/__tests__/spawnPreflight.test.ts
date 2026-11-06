@@ -59,6 +59,8 @@ describe('StdioAgentAdapter (via ClaudeCodeAdapter) — spawn preflight', () => 
       spawn: spawned.spawn,
       fetch: noFetch,
       resolvePath: async () => '/usr/bin',
+      // Pinned: Windows would spawn the `.exe` it resolved, not the bare name.
+      platform: 'linux',
       isDirectory: () => true,
       exists: () => true,
     };

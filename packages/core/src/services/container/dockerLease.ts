@@ -11,7 +11,7 @@ import { CredentialBroker, type IssuedLogin } from './credentialBroker';
 import { describeProblems, inspectReadiness } from './containerPreflight';
 import { CONTAINER_RUNNER_IDS, brokerRefusal, containerRunner, modelHosts, signInRemedy, type ContainerRunner, type ContainerSignIn } from './containerRunners';
 import { networkAsked, probeExpected, probeFindings, proveEngine, withCanaries } from './containerProof';
-import { CACHE_VARIABLES, containerLimits, envArgs, helperArgs, parseContainerSettings, type ContainerSettings } from './containerSettings';
+import { CACHE_VARIABLES, CLI_READS, containerLimits, envArgs, helperArgs, parseContainerSettings, type ContainerSettings } from './containerSettings';
 import { SpawnedDockerCli, type DockerCli } from './dockerCli';
 import { NO_WAY_OUT, SidecarEgress, type EgressPath, type EgressRoute } from './egressSidecar';
 import { judgeProbe, PROBE_SCRIPT, type ProbeAsked } from './guaranteeProbe';
@@ -27,9 +27,6 @@ const ENTRY_START_MS = 60_000;
 const EXPORT_TIMEOUT_MS = 600_000;
 /** Past any repository's worth of one attempt: what comes back is written to this host's disk. */
 const MAX_BUNDLE_BYTES = 8 * 1024 ** 3;
-
-/** A launch variable that names this host's own: the container has its own of each, and the docker CLI reads these. PWD is the container's, which `docker exec -w` sets. */
-const STAYS_HERE = /^(HOME|PATH|PWD|DOCKER_.*)$/;
 
 /** A regular file within the size a board reads: a pipe there would never end the read. By `./`, since a path may start with a dash and `find` has no `--`. */
 const BLOB_SCRIPT = `file="./$0"; [ -n "$(find -P "$file" -maxdepth 0 -type f -size -16385k 2>/dev/null)" ] && exec git hash-object --no-filters -- "$file"`;
@@ -47,6 +44,8 @@ export interface DockerBackendOptions {
   git?: GitInvoker;
   broker?: CredentialBroker;
   egress?: EgressPath;
+  /** The host the engine is judged on. Absent, this one: a test pins it to try the lease where containers run. */
+  platform?: NodeJS.Platform;
 }
 
 /** What a container starts from, once the lease's checks have passed. */
@@ -211,7 +210,7 @@ export class DockerExecutionBackend implements ExecutionBackend {
    */
   private async preflight(runner: ContainerRunner | null, model?: string): Promise<ContainerSettings> {
     const setupCommand = this.options.setupCommand?.();
-    const { problems, settings } = await inspectReadiness(this.options.settings, { cli: this.cli, broker: this.broker, agent: runner !== null, ...(runner ? { runner } : {}), ...(setupCommand ? { setupCommand } : {}) });
+    const { problems, settings } = await inspectReadiness(this.options.settings, { cli: this.cli, broker: this.broker, ...(this.options.platform ? { platform: this.options.platform } : {}), agent: runner !== null, ...(runner ? { runner } : {}), ...(setupCommand ? { setupCommand } : {}) });
     if (!settings) throw new Error(`This session runs tasks in containers, and this task cannot start in one. ${describeProblems(problems)}`);
     // A task's model is the one thing here no surface could have asked about.
     const refusal = runner && settings.login.kind === 'broker' ? brokerRefusal(runner, model) : null;
@@ -283,13 +282,14 @@ export class DockerExecutionBackend implements ExecutionBackend {
     };
     try {
       const startedAt = Date.now();
+      const told = envArgs(this.containerEnv(settings, route, signIn));
       const entry = await this.cli.entry([
         'run', '-i', '--rm', '--name', name, ...labels,
         ...containerLimits(settings), ...route.runArgs,
         '-v', `${volume}:${TASK_ROOT}`, '-v', `${mirror}:${MIRROR_ROOT}:ro`,
-        ...envArgs(this.containerEnv(settings, route, signIn)),
+        ...told.args,
         settings.image, 'node', '-e', RELAY_ENTRY,
-      ]);
+      ], { env: told.env });
       const relay = new LeaseRelay(entry);
       const box: Box & { report: GuaranteeReport } = {
         taskId, settings, name, volume, mirror, pin, ref: exportRef(name), bases: new Map(repos.map((repo) => [repo.path, tips.get(repo.path)!.head])), repos,
@@ -387,7 +387,8 @@ export class DockerExecutionBackend implements ExecutionBackend {
   }
 
   private async handSignIn(settings: ContainerSettings, signIn: ContainerSignIn, volume: string, labels: readonly string[]): Promise<void> {
-    const copied = await this.cli.call([...helperArgs(settings, [`${volume}:${TASK_ROOT}`, `${signIn.volume}:/login:ro`], {}, labels), ...signIn.copy]);
+    const helper = helperArgs(settings, [`${volume}:${TASK_ROOT}`, `${signIn.volume}:/login:ro`], {}, labels);
+    const copied = await this.cli.call([...helper.args, ...signIn.copy], { env: helper.env });
     if (copied.code !== 0) throw new Error(`Your own sign-in could not be handed to this task: ${copied.stderr.trim() || 'it could not be copied'}. ${signInRemedy(signIn)}`);
   }
 
@@ -448,7 +449,8 @@ export class DockerExecutionBackend implements ExecutionBackend {
 
   private async seed(box: Box, repo: LeaseRepo, tip: { name: string; email: string }): Promise<void> {
     const variables = { ORDEWELL_REPO_DIR: repoDir(repo), ORDEWELL_MIRROR: mirrorDir(repo), ORDEWELL_PIN: box.pin, ORDEWELL_BRANCH: repo.branch, ORDEWELL_INTEGRATION: repo.integrationBranch, ORDEWELL_GIT_NAME: tip.name, ORDEWELL_GIT_EMAIL: tip.email };
-    const seeded = await this.cli.call(['exec', ...envArgs(variables), box.name, 'sh', '-c', SEED_SCRIPT]);
+    const told = envArgs(variables);
+    const seeded = await this.cli.call(['exec', ...told.args, box.name, 'sh', '-c', SEED_SCRIPT], { env: told.env });
     if (seeded.code !== 0) throw new Error(`Could not put the task's work in its container: ${seeded.stderr.trim()}`);
   }
 
@@ -459,8 +461,8 @@ export class DockerExecutionBackend implements ExecutionBackend {
       const salt = randomBytes(16).toString('hex');
       const secrets = gated ? { secrets: { salt, digests: [createHash('sha256').update(salt + gated.key).digest('hex')] } } : {};
       const asked: ProbeAsked = { hostPaths: [file, hostCwd], deniedWrites: ['/', '/usr', '/etc', MIRROR_ROOT], workspace: WORK_ROOT, credentials: Object.keys(handed), ...(signIn ? { login: signIn.path } : {}), network, ...secrets };
-      const names = Object.keys(box.credentials).flatMap((variable) => ['-e', variable]);
-      const ran = await this.cli.call(['exec', '-e', `ORDEWELL_PROBE=${JSON.stringify(asked)}`, ...names, box.name, 'node', '-e', PROBE_SCRIPT], { env: box.credentials });
+      const told = envArgs({ ORDEWELL_PROBE: JSON.stringify(asked), ...box.credentials });
+      const ran = await this.cli.call(['exec', ...told.args, box.name, 'node', '-e', PROBE_SCRIPT], { env: told.env });
       return judgeProbe(probeFindings(ran.stdout, ran.stderr), { ...probeExpected(settings, [TASK_ROOT, MIRROR_ROOT, '/tmp']), network, loopbackHits: loopbackHits(), gated: gated !== null }, new Date().toISOString());
     });
   }
@@ -475,16 +477,17 @@ export class DockerExecutionBackend implements ExecutionBackend {
       if (wrote.code !== 0) throw new Error(`Could not hand the runner its configuration: ${wrote.stderr.trim()}`);
       moved.set(file, inside);
     }
-    const env = { ...Object.fromEntries(Object.entries(launch.env).filter(([variable]) => !STAYS_HERE.test(variable))), ...box.credentials };
+    // The container has its own HOME, PATH and PWD, which `-w` sets; the CLI's are this host's.
+    const told = envArgs({ ...Object.fromEntries(Object.entries(launch.env).filter(([variable]) => !CLI_READS.test(variable))), ...box.credentials });
     const pidFile = `/tmp/ordewell/${launchNumber}.pid`;
     box.running += 1;
     return {
       command: 'docker',
       args: [
-        'exec', '-i', '-w', box.cwd, ...Object.keys(env).flatMap((variable) => ['-e', variable]), box.name,
+        'exec', '-i', '-w', box.cwd, ...told.args, box.name,
         'sh', '-c', 'mkdir -p /tmp/ordewell; echo $$ > "$0"; exec "$@"', pidFile, launch.command, ...box.args(launch).map((arg) => moved.get(arg) ?? arg),
       ],
-      env,
+      env: told.env,
       // A killed `docker exec` leaves its process running in the container.
       stop: () => { void this.cli.call(['exec', box.name, 'sh', '-c', 'kill -KILL "$(cat "$0")"', pidFile]); },
       ended: () => {
@@ -608,7 +611,7 @@ export class DockerExecutionBackend implements ExecutionBackend {
     const base = box.bases.get(repo.path)!;
     // The clone leans on the mirror's objects, so it is read through it, as the attempt read it.
     const helper = helperArgs(box.settings, [`${box.volume}:${TASK_ROOT}`, `${box.mirror}:${MIRROR_ROOT}:ro`], { ORDEWELL_REPO_DIR: repoDir(repo), ORDEWELL_REF: box.ref, ORDEWELL_BASE: base }, this.labels(box.taskId));
-    const ran = await this.cli.call([...helper, 'sh', '-c', EXPORT_SCRIPT], { stdoutTo: { file, maxBytes: MAX_BUNDLE_BYTES }, timeoutMs: EXPORT_TIMEOUT_MS });
+    const ran = await this.cli.call([...helper.args, 'sh', '-c', EXPORT_SCRIPT], { env: helper.env, stdoutTo: { file, maxBytes: MAX_BUNDLE_BYTES }, timeoutMs: EXPORT_TIMEOUT_MS });
     if (ran.overflowed) throw new PushRefused('it is larger than any one attempt\'s work should be');
     if (ran.code !== 0) throw new Error(`Could not read the attempt's work out of its volume: ${ran.stderr.trim()}`);
     return takeThroughGate(this.git, repo.root, file, { ref: box.ref, base });

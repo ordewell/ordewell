@@ -12,7 +12,7 @@ import { createWorktreeIsolation } from '../GitWorktreeIsolation';
 import { createWorkspaceReader } from '../workspaceReader';
 
 /**
- * The workspace reader against real repositories (ADR-0061): confinement with
+ * The workspace reader against real repositories (ADR-0064): confinement with
  * no daemon, then each view scope. Expected values are what the files and the
  * git commands written here hold, never the reader's own computation.
  */
@@ -49,7 +49,7 @@ function repo(root: string, files: Record<string, string | Buffer>): void {
 
 const reader = createWorkspaceReader({ config: { workspaceRepos: [] } });
 
-describe.skipIf(!hasGit)('workspace reader confinement (ADR-0061 R3)', () => {
+describe.skipIf(!hasGit)('workspace reader confinement (ADR-0064 R3)', () => {
   let tmp: string;
   let workspace: string;
 
@@ -118,7 +118,7 @@ describe.skipIf(!hasGit)('workspace reader confinement (ADR-0061 R3)', () => {
   });
 });
 
-describe.skipIf(!hasGit)('workspace reader on the checkout (ADR-0061 R5)', () => {
+describe.skipIf(!hasGit)('workspace reader on the checkout (ADR-0064 R5)', () => {
   let tmp: string;
   let workspace: string;
 
@@ -352,7 +352,7 @@ describe.skipIf(!hasGit)('workspace reader history and branches', () => {
   });
 });
 
-describe.skipIf(!hasGit)('workspace reader on a run\'s scopes (ADR-0061 R2)', () => {
+describe.skipIf(!hasGit)('workspace reader on a run\'s scopes (ADR-0064 R2)', () => {
   let tmp: string;
   let workspace: string;
   let run: IsolationRun;

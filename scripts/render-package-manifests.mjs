@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The package-manager manifests for one release (ADR-0060 H11): a Homebrew cask
+// The package-manager manifests for one release (ADR-0063 H11): a Homebrew cask
 // for ordewell/homebrew-tap and the three winget manifests for
 // microsoft/winget-pkgs, rendered from the version and the SHA256SUMS the attach
 // job of desktop-build.yml wrote.

@@ -55,8 +55,8 @@ npmRebuild: true
 # (ad hoc on macOS) and succeeds. scripts/package.mjs reads the signing secrets
 # and adds the identity, notarization or Windows signing route on the command
 # line; it also bakes AUTO_UPDATE_ENABLED (src/main/updater.ts), on only for a
-# build signed here, and notarized on macOS (ADR-0060 H9).
-# ADR-0060 H4: the binary itself refuses the ways a packaged Electron app can
+# build signed here, and notarized on macOS (ADR-0063 H9).
+# ADR-0063 H4: the binary itself refuses the ways a packaged Electron app can
 # be made to run code that is not its own. Applied by electron-builder after it
 # unpacks the Electron distribution, before the app is signed.
 electronFuses:

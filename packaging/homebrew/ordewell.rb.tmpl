@@ -1,6 +1,6 @@
 # The Homebrew cask, rendered by scripts/render-package-manifests.mjs from a
 # release's version and SHA256SUMS and pushed to ordewell/homebrew-tap as
-# Casks/ordewell.rb (ADR-0060 H11). Do not edit the tap's copy by hand: the next
+# Casks/ordewell.rb (ADR-0063 H11). Do not edit the tap's copy by hand: the next
 # release replaces it.
 #
 # Both architectures are named by their versioned installer, so the cask's
@@ -25,7 +25,7 @@ cask "ordewell" do
   end
 
   # Only a notarized release publishes this cask, which is the same build that
-  # has electron-updater on (ADR-0060 H9): the app updates itself, and
+  # has electron-updater on (ADR-0063 H9): the app updates itself, and
   # `brew upgrade` installs a release the same way.
   auto_updates true
   depends_on macos: :ventura

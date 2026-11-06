@@ -1,10 +1,10 @@
 import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { devNull } from 'os';
 import type { IsolationRun } from '../interfaces/IWorktreeIsolation';
 import { git, tryGit, type GitInvoker } from './gitExec';
 import { stateRootOf } from './stateRoot';
+import { realPathOf } from '../utils/realPath';
 import type { HandoffPatch } from '../models/Handoff';
 
 export interface TaskDiffRead {
@@ -202,7 +202,10 @@ export async function readTaskDiff(invoker: GitInvoker, run: IsolationRun, taskI
       if (!inside(workspaceRoot, fs.realpathSync(cwd))) throw new Error('The recorded task repository moved outside the workspace.');
       if (live) {
         const toplevel = (await git(reader, cwd, ['rev-parse', '--show-toplevel'])).trim();
-        if (fs.realpathSync(toplevel) !== fs.realpathSync(entry.worktree)) throw new Error('The recorded task worktree is no longer a repository.');
+        // git names the worktree in long form with forward slashes, and on
+        // Windows the record may hold an 8.3 short name or a lower-case drive
+        // letter: only the file system's own name for both compares them.
+        if (realPathOf(toplevel) !== realPathOf(entry.worktree)) throw new Error('The recorded task worktree is no longer a repository.');
       }
       const prefix = (await git(reader, repo.root, ['rev-parse', '--show-prefix'])).trim();
       const common = await readOnlyGitArgs(reader, cwd);
@@ -237,8 +240,9 @@ export async function readTaskDiff(invoker: GitInvoker, run: IsolationRun, taskI
         for (const file of others.split('\0').filter((f) => f && allowed(f))) {
           const full = path.join(workspace, file);
           if (!inside(fs.realpathSync(workspace), fs.realpathSync(path.dirname(full)))) continue;
+          // Git's own name for the empty side, on every platform: it cannot open Windows' `os.devNull`.
           const untracked = async (numstat: boolean): Promise<string> => {
-            const result = await tryGit(reader, workspace, [...common, 'diff', '--no-index', '--no-renames', '--no-ext-diff', '--no-textconv', ...(numstat ? ['--numstat', '-z'] : []), '--', devNull, file]);
+            const result = await tryGit(reader, workspace, [...common, 'diff', '--no-index', '--no-renames', '--no-ext-diff', '--no-textconv', ...(numstat ? ['--numstat', '-z'] : []), '--', '/dev/null', file]);
             if (!result.ok && result.code !== 1) throw new Error(result.stderr.trim() || 'Could not read an untracked file diff.');
             return result.stdout;
           };

@@ -50,6 +50,35 @@ describe('OrchestratorPool.getProviderModels — configured providers', () => {
 
     expect(providers).not.toContain('openrouter');
   });
+
+  it('tells the surface why a runner lists no models, as its resolver words it', async () => {
+    const reason = 'Qwen Code is not signed in. Run `qwen`, or set the key of an OpenAI-compatible provider, such as OpenRouter, in Ordewell with `/key`.';
+    vi.spyOn(ModelResolver.prototype, 'getRunnerDiscoveryErrors').mockReturnValue({ 'qwen-code': reason });
+
+    const { runnerErrors } = await new OrchestratorPool().getProviderModels();
+
+    expect(runnerErrors).toEqual({ 'qwen-code': reason });
+  });
+
+  // Qwen Code started on a saved OpenRouter key is handed the model that key's
+  // catalog says the account is served (ADR-0060 R9): discovered alongside the
+  // fetch, its first list after `/key` named a model the account is refused.
+  it('loads the vendor catalogs before it discovers the runners, whose start can be chosen from them', async () => {
+    const order: string[] = [];
+    vi.spyOn(ModelResolver.prototype, 'refresh').mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      order.push('vendor catalogs');
+      return {};
+    });
+    vi.spyOn(ModelResolver.prototype, 'modelsForRunners').mockImplementation(async () => {
+      order.push('runner discovery');
+      return {};
+    });
+
+    await new OrchestratorPool().getProviderModels();
+
+    expect(order).toEqual(['vendor catalogs', 'runner discovery']);
+  });
 });
 
 describe('OrchestratorPool.getProviderModels — the model allowlist', () => {

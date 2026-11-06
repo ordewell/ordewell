@@ -1,7 +1,7 @@
 import { callDaemon } from '../../session/daemon';
 
 /*
- * The Git view's reads and actions on the daemon (ADR-0061 R5, ADR-0062).
+ * The Git view's reads and actions on the daemon (ADR-0064 R5, ADR-0062).
  * Every answer is checked here, so the views draw only what parsed; a shape
  * this app cannot read is an error with a sentence, never a half-drawn list.
  */

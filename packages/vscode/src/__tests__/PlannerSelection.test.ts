@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PlannerModelMemory, recordInstalledPlanner, resetInstalledPlanner, runnerForProvider, type PlannerBackendId, type PlannerModelStore, type RunnerAuth } from '@ordewell/core';
+import { PlannerModelMemory, recordInstalledPlanner, resetInstalledPlanner, runnerForProvider, type PlannerBackendId, type PlannerModelStore, type PlannerUsability, type RunnerAuth } from '@ordewell/core';
 import { __resetConfig, __setConfig, configUpdates } from '../test/vscode.mock';
 import { VsCodeConfig } from '../adapters/VsCodeConfig';
 import { PlannerSelection } from '../PlannerSelection';
 
-function setup(runnerModels: Record<string, { modelId: string; variants: { id: string }[] }[]> = {}, auth?: RunnerAuth) {
+function setup(
+  runnerModels: Record<string, { modelId: string; variants: { id: string }[] }[]> = {},
+  auth?: RunnerAuth,
+  usability?: PlannerUsability,
+) {
   const stored: Record<string, { model: string; effort?: string }> = {};
   const store: PlannerModelStore = {
     getPlannerModel: (p) => stored[p],
@@ -17,7 +21,7 @@ function setup(runnerModels: Record<string, { modelId: string; variants: { id: s
     config: new VsCodeConfig(),
     modelResolver: { plannerCatalog: async (provider: PlannerBackendId) => (runnerModels[runnerForProvider(provider) ?? ''] ?? []).map((m) => ({ id: m.modelId, variants: m.variants })) } as never,
     plannerModelMemory: memory,
-    runnerInstallation: { plannerUsability: async () => ({ usable: true, ...(auth ? { auth } : {}) }) } as never,
+    runnerInstallation: { plannerUsability: async () => usability ?? { usable: true, ...(auth ? { auth } : {}) } } as never,
     chatProvider: { setPlannerBackends } as never,
     sendModelConfig,
     log: () => {},
@@ -125,6 +129,16 @@ describe('PlannerSelection.backends', () => {
 
     expect(claude?.auth).toEqual(auth);
     expect(claude?.usable).toBe(true);
+  });
+
+  it('lists an agent the preflight refuses with the reason it cannot start', async () => {
+    const reason = 'GitHub Copilot CLI is too old for Ordewell: found 1.0.104, needs 1.0.105 or later.';
+    const { selection } = setup({}, undefined, { usable: false, reason });
+
+    const backends = await selection.backends();
+    const copilot = backends.find((b) => b.id === 'copilot-cli');
+
+    expect(copilot).toMatchObject({ kind: 'harness', usable: false, reason });
   });
 });
 

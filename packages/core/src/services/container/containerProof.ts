@@ -100,9 +100,10 @@ export async function proveEngine(settings: ContainerSettings, { cli, egress, la
     const box = `${name}-check`;
     try {
       const network = networkAsked(route, port);
-      const flags = [...containerLimits(settings), ...route.runArgs, '--tmpfs', `${TASK_ROOT}:uid=1000,gid=1000`, ...envArgs(route.env)];
       const asked: ProbeAsked = { hostPaths: [file], deniedWrites: ['/', '/usr', '/etc', MIRROR_ROOT], workspace: TASK_ROOT, credentials: [], network };
-      const ran = await cli.call(['run', '--rm', '--name', box, ...labels, ...flags, '-e', `ORDEWELL_PROBE=${JSON.stringify(asked)}`, settings.image, 'node', '-e', PROBE_SCRIPT], { timeoutMs: PROBE_MS });
+      const told = envArgs({ ...route.env, ORDEWELL_PROBE: JSON.stringify(asked) });
+      const flags = [...containerLimits(settings), ...route.runArgs, '--tmpfs', `${TASK_ROOT}:uid=1000,gid=1000`, ...told.args];
+      const ran = await cli.call(['run', '--rm', '--name', box, ...labels, ...flags, settings.image, 'node', '-e', PROBE_SCRIPT], { env: told.env, timeoutMs: PROBE_MS });
       return judgeProbe(probeFindings(ran.stdout, ran.stderr), { ...probeExpected(settings, [TASK_ROOT, '/tmp']), network, loopbackHits: loopbackHits(), loginUntried: true }, new Date().toISOString());
     } finally {
       await cli.call(['rm', '-f', box]);

@@ -9,7 +9,7 @@
 // Order is not optional: @ordewell/core and @ordewell/web must be built first
 // (the root `npm run build` does), because the packaged daemon is web's dist.
 //
-// Signing is decided here from the environment (ADR-0060 H9): with no signing
+// Signing is decided here from the environment (ADR-0063 H9): with no signing
 // secrets the build is the unsigned one, ad hoc on macOS; with a complete set
 // it is signed, notarized on macOS, and the app is built with updates on.
 import { spawnSync } from 'node:child_process';
@@ -30,7 +30,7 @@ export const AZURE_SIGNING = ['AZURE_SIGNING_ENDPOINT', 'AZURE_SIGNING_ACCOUNT',
 export const AZURE_CREDENTIALS = ['AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET'];
 export const WIN_CERTIFICATE = ['WIN_CSC_LINK', 'WIN_CSC_KEY_PASSWORD'];
 // SSL.com eSigner: the cloud-HSM route for a publisher Azure Artifact Signing
-// does not take (ADR-0060 H9).
+// does not take (ADR-0063 H9).
 export const ESIGNER = ['ES_USERNAME', 'ES_PASSWORD', 'ES_CREDENTIAL_ID', 'ES_TOTP_SECRET'];
 // Everything electron-builder (or the Azure credential chain it runs) would
 // pick up on its own. Each is dropped and only the chosen route's put back:
@@ -54,7 +54,7 @@ export const RELEASE_VARIABLES = { Windows: [...AZURE_SIGNING, 'WIN_PUBLISHER_NA
 
 /**
  * WIN_PUBLISHER_NAME holds one publisher name, or several for the release that
- * moves installs from one signer to another (ADR-0060 H9): electron-updater
+ * moves installs from one signer to another (ADR-0063 H9): electron-updater
  * accepts an update signed by any name its install lists. The separator is
  * `|`. A comma or a semicolon would be wrong ("Acme, Inc." is a legal name,
  * and RFC 4514 escapes both in a distinguished name), but `|` is neither
@@ -125,7 +125,7 @@ function windowsPlan(env, problems, notes) {
 }
 
 /**
- * What this build is, from the signing secrets in `env` (ADR-0060 H9). Updates
+ * What this build is, from the signing secrets in `env` (ADR-0063 H9). Updates
  * are on only where the build is signed, and notarized on macOS: a signed
  * install records who signed it and refuses an update signed by anyone else,
  * while an unsigned one has nothing to hold an update to. Linux is never signed.

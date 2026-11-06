@@ -146,7 +146,7 @@ export class ModelDiscovery {
       // Flag any configured provider whose catalog fetch failed — both in the
       // webview (persistent banner) and as a one-shot toast.
       const errors = d.modelResolver.getDiscoveryErrors();
-      d.chatProvider.setModelDiscoveryErrors(errors);
+      d.chatProvider.setModelDiscoveryErrors(errors, d.modelResolver.getRunnerDiscoveryErrors());
       this.warnProviderDiscoveryErrors(errors);
     }).catch((err) => d.log(`Model options discovery error: ${err}`));
   }

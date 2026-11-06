@@ -1,5 +1,5 @@
 /**
- * `window.ordewell`: the one bridge between a renderer and main (ADR-0060 H4).
+ * `window.ordewell`: the one bridge between a renderer and main (ADR-0063 H4).
  * The types are shared so the preload, main's handlers and the renderer cannot
  * drift; every argument is still checked again in main, since a renderer can
  * call `ipcRenderer` channels with anything once it is compromised.
@@ -10,7 +10,7 @@ import type { TerminalScope } from './terminalScope';
 
 export interface AppInfo {
   version: string;
-  /** The daemon contract this app speaks (ADR-0060 H3). */
+  /** The daemon contract this app speaks (ADR-0063 H3). */
   contract: number;
   platform: string;
   theme: 'light' | 'dark';
@@ -64,7 +64,7 @@ export interface DaemonIdentityView {
  */
 export type DaemonStatus =
   | { state: 'connecting'; port: number }
-  /** `owned`: this app started it and stops it on quit (ADR-0060 H2). */
+  /** `owned`: this app started it and stops it on quit (ADR-0063 H2). */
   | { state: 'connected'; port: number; owned: boolean; daemon: DaemonIdentityView }
   /** An attached daemon went away: main probes again. `canStart` once the port is free. */
   | { state: 'reconnecting'; port: number; attempt: number; canStart: boolean }
@@ -75,7 +75,7 @@ export type DaemonStatus =
   | { state: 'port-taken'; port: number }
   | { state: 'failed'; port: number; message: string; logPath: string };
 
-/** The daemon that holds a session this window joined (ADR-0060 H8), for the joined chip and status bar. */
+/** The daemon that holds a session this window joined (ADR-0063 H8), for the joined chip and status bar. */
 export interface HolderView {
   port: number;
   /** The daemon's process. */
@@ -184,7 +184,7 @@ export interface ShellTarget {
 }
 
 export interface UpdateState {
-  /** `disabled` until installers are signed (ADR-0060): the app never fetches an update on its own. */
+  /** `disabled` until installers are signed (ADR-0063): the app never fetches an update on its own. */
   state: 'disabled' | 'checking';
 }
 
@@ -194,6 +194,12 @@ export interface TerminalOpenSpec {
   scope: TerminalScope;
   cols: number;
   rows: number;
+  /**
+   * Start this agent's own login instead of a shell. Only the runner id
+   * crosses: main resolves the argv from core, so a page never names a
+   * program to run (ADR-0052).
+   */
+  login?: { runner: string };
 }
 
 export type TerminalOpenResult =
@@ -246,7 +252,7 @@ export interface OrdewellBridge {
     call(routeId: RouteId, params?: RouteParams, body?: unknown): Promise<DaemonCallResult>;
     subscribe(sessionId: string, cb: (event: StreamEvent) => void): Unsubscribe;
     /**
-     * Join the daemon that holds `sessionId` (ADR-0060 H8): main reads which
+     * Join the daemon that holds `sessionId` (ADR-0063 H8): main reads which
      * one from the lease, so the page names only the session. Until `leave`,
      * this window's calls and socket for that session go to the holder.
      */

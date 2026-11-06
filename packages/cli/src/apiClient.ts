@@ -248,7 +248,7 @@ function daemonError(status: number, data: unknown, fallback: string): DaemonErr
   return new DaemonError(error || fallback, status, code, plannerNotReady, sessionHeld, landingBranchHeld, confirmStale);
 }
 
-/** A read's target (ADR-0061), its workspace the client's own unless named. */
+/** A read's target (ADR-0064), its workspace the client's own unless named. */
 export type ReadQuery = Partial<ReadTarget>;
 
 export class ApiClient {
@@ -578,7 +578,7 @@ export class ApiClient {
     return res.diff;
   }
 
-  /** A directory of one view scope (ADR-0061), `dir` `''` for its root. */
+  /** A directory of one view scope (ADR-0064), `dir` `''` for its root. */
   getFileTree(target: ReadQuery, dir = ''): Promise<FileTreeResponse> {
     return this.read('/api/files/tree', target, { dir }, 'Could not read the folder');
   }

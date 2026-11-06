@@ -29,7 +29,7 @@ export function workspaceKey(path: string): string {
 }
 
 /**
- * The app's windows: one welcome window, and one per workspace (ADR-0060 H6).
+ * The app's windows: one welcome window, and one per workspace (ADR-0063 H6).
  * Main, not the page, knows which window is which, so a renderer can never
  * claim another workspace by naming it.
  */
@@ -119,7 +119,7 @@ export class WindowManager {
       backgroundColor: canvasColour(this.options.dark()),
       webPreferences: {
         preload: this.options.preloadPath,
-        // ADR-0060 H4: the page gets the bridge and nothing of Node or Electron.
+        // ADR-0063 H4: the page gets the bridge and nothing of Node or Electron.
         contextIsolation: true,
         sandbox: true,
         nodeIntegration: false,

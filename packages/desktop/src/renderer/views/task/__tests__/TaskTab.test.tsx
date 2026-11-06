@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { RUN_SETTINGS_DEFAULTS } from '@ordewell/core';
 import type { FrameApi } from '../../../frame/api';
 import type { Tab } from '../../../frame/layout';
 import { DaemonHost } from '../../../session/DaemonHost';
@@ -121,6 +122,34 @@ describe('TaskTab', () => {
     fireEvent.click(within(header).getByRole('button', { name: 'More for #2 Parse the config' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Remove…' }));
     expect(handle).toHaveBeenCalledWith({ type: 'removeTask', taskId: 't1' });
+  });
+
+  it('puts Log in first on a failed task whose agent is signed out, and asks the host', async () => {
+    const failed = surfacePlan([surfaceTask({ id: 't1', order: 2, title: 'Parse the config', assignedRunner: 'codex', status: 'failed' })]);
+    const daemon = fakeDaemon({
+      'sessions.load': ok({ ok: true, plan: failed, goal: 'Ship the parser' }),
+      'runners.list': ok({
+        runners: [{
+          id: 'codex', name: 'Codex', enabled: true,
+          auth: { state: 'signed-out', loginCommand: ['codex', 'login'], signIn: { runner: 'codex', label: 'Codex', login: ['codex', 'login'] } },
+        }],
+        orchestratorModel: '',
+      }),
+      'models.list': ok({ models: [], modelsByRunner: {}, modesByRunner: {}, orchestratorModel: '', providers: [], orchestratorModels: [], providerErrors: {} }),
+      'settings.get': ok({ orchestratorModel: '', aiProvider: 'codex', plannerThinkingEffort: '', autonomousMode: false, maxParallel: 3, modelAllowlist: {}, run: { ...RUN_SETTINGS_DEFAULTS } }),
+    });
+    const host = new DaemonHost('/work/acme');
+    hosts.push(host);
+    await act(() => host.handle({ type: 'ready' }));
+    await act(() => host.open('s1'));
+    const handle = vi.spyOn(host, 'handle').mockResolvedValue(undefined);
+    render(<TaskTab tab={TAB} host={host} api={frameApi()} />);
+
+    const header = (await screen.findByRole('heading', { name: '#2 Parse the config' })).closest('header') as HTMLElement;
+    expect(header).toHaveTextContent('Sign in with /login codex, or run codex login.');
+    fireEvent.click(within(header).getByRole('button', { name: 'Log in' }));
+    expect(handle).toHaveBeenCalledWith({ type: 'loginPlanner', runner: 'codex' });
+    expect(daemon.calls('sessions.load')).toHaveLength(1);
   });
 
   it('closes ⋯ on a second press of it and gives focus back to it after a pick', async () => {

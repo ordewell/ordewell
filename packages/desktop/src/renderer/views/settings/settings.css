@@ -63,6 +63,8 @@
 .settings-runners { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--ow-space-2); }
 .settings-runner { display: flex; flex-direction: column; gap: var(--ow-space-2); min-width: 0; padding: var(--ow-space-2) var(--ow-space-3); border: 1px solid var(--ow-surface-card-border); border-radius: var(--ow-radius-md); background: var(--ow-surface-inset); }
 .settings-runner .settings-field { max-width: none; }
+.settings-runner-actions { display: flex; flex-wrap: wrap; gap: var(--ow-space-2); }
+.settings-runner-actions:empty { display: none; }
 .settings-error { display: flex; align-items: flex-start; gap: var(--ow-space-2); max-width: 780px; margin: 0; padding: var(--ow-space-2) var(--ow-space-3); border: 1px solid var(--ow-status-failed); border-radius: var(--ow-radius-lg); color: var(--ow-fg); background: var(--ow-surface-card); box-shadow: var(--ow-elevation-card); font: var(--ow-type-body); overflow-wrap: anywhere; }
 .settings-error svg { flex: none; margin-top: var(--ow-space-half); color: var(--ow-status-failed); }
 .settings-error span { flex: 1; min-width: 0; }

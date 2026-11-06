@@ -5,7 +5,7 @@ import { isInside } from '../paths';
 
 const run = { sessionId: 's1', goal: 'Ship it', workspace: '/w' };
 
-describe('onLastWindowClosed (ADR-0060 H5)', () => {
+describe('onLastWindowClosed (ADR-0063 H5)', () => {
   it('keeps the app in the tray while a run is live, or when that cannot be told', () => {
     expect(onLastWindowClosed([run], 'linux')).toBe('tray');
     expect(onLastWindowClosed([run], 'darwin')).toBe('tray');
@@ -26,7 +26,7 @@ describe('onLastWindowClosed (ADR-0060 H5)', () => {
   });
 });
 
-describe('quitPrompt (ADR-0060 H5)', () => {
+describe('quitPrompt (ADR-0063 H5)', () => {
   it('does not ask when nothing is live', () => {
     expect(quitPrompt([], true)).toBeUndefined();
     expect(quitPrompt([], false)).toBeUndefined();

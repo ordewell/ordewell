@@ -18,7 +18,10 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { bandDefaults, paneBounds } from '../src/renderer/frame/layout';
-import { appEnv, DESKTOP, freePort, launchApp, makeSandbox, openFolder, removeSandbox, ROOT, startMock, untilListening, type Sandbox } from './fixtures';
+import {
+  appEnv, DESKTOP, DETECTION_FAILED, fakedRunners, fakeDaemon, freePort, launchApp, makeSandbox, MIXED, MIXED_RUNNERS, NONE_INSTALLED, openFolder, removeSandbox, ROOT, startMock, untilListening,
+  type Sandbox,
+} from './fixtures';
 import { CARD_SELECTORS, LIFT_MIN, liftChecks, TEXT_MIN, type LiftResult } from './surfaces';
 
 const OUT = path.join(DESKTOP, 'test-results', 'tour');
@@ -31,14 +34,38 @@ const STRICT = process.env.TOUR_STRICT === '1';
 // the Changes heading over the tasks in that status: neither is a wait that should end.
 const LOADING_WORDS = '\\b(Detecting|Loading|Checking|Waiting for(?! (a )?merge))\\b';
 const LOADING_GRACE_MS = 15_000;
+const ALL_RUNNERS = 'claude-code,codex,opencode,copilot-cli,qwen-code,cline,gemini-cli,cursor-agent';
+const RUNNERS_GOAL = 'Spread the work across every agent';
 const GOAL = 'Add greeting and farewell modules';
 /** The mock planner answers this goal with its widest cards (bench/live/mock-provider.mjs, DESKTOP_FIT_PLAN). */
 const FIT_GOAL = 'Check that the plan cards fit';
 const COMMENT = 'Export it as a named constant, please.';
+/** A catalog long enough to scroll, with provider-qualified ids long enough to truncate, for the allowlist's checks. */
+const ALLOWLIST_MODELS = Array.from({ length: 18 }, (_, at) => ({
+  modelId: `anthropic/claude-sonnet-4-5-20250929-catalog-entry-${at + 1}`,
+  modelLabel: `Sonnet 4.5 catalog entry ${at + 1}`,
+  variants: [],
+}));
+
+/**
+ * What `opencode models` lists: provider-qualified ids, labels that are the id's tail or a vendor's display
+ * name, ids with a second slash and a `:tag`, and one name far wider than any row.
+ */
+const OPENCODE_MODELS = [
+  { modelId: 'opencode-go/deepseek-v4.1-flash', modelLabel: 'deepseek-v4.1-flash', variants: [] },
+  { modelId: 'openrouter/deepseek-v4.1-flash', modelLabel: 'deepseek-v4.1-flash', variants: [] },
+  { modelId: 'openrouter/vendor/flash-one', modelLabel: 'Shared Flash', variants: [] },
+  { modelId: 'openrouter/vendor/flash-two', modelLabel: 'Shared Flash', variants: [] },
+  ...Array.from({ length: 12 }, (_, at) => ({ modelId: `openrouter/anthropic/claude-3.5-sonnet-20241022:beta-${at + 1}`, modelLabel: `claude-3.5-sonnet-20241022:beta-${at + 1}`, variants: [] })),
+  ...Array.from({ length: 10 }, (_, at) => ({ modelId: `github-copilot/gpt-5-mini-${at + 1}`, modelLabel: `gpt-5-mini-${at + 1}`, variants: [] })),
+  ...Array.from({ length: 10 }, (_, at) => ({ modelId: `anthropic/claude-sonnet-4-5-${at + 1}`, modelLabel: `Claude Sonnet 4.5 (${at + 1})`, variants: [] })),
+  { modelId: 'opencode/big-pickle', modelLabel: 'Big Pickle', variants: [] },
+  { modelId: 'openrouter/meta-llama/llama-3.3-70b-instruct-with-an-unusually-long-catalog-name:free', modelLabel: 'Meta Llama 3.3 70B Instruct with an unusually long catalog name for a single row (free)', variants: [] },
+];
 
 type Theme = typeof THEMES[number];
 interface Size { readonly width: number; readonly height: number }
-type CheckId = 'a' | 'b' | 'c' | 'd' | 'e' | 'f' | 'g' | 'h' | 'i';
+type CheckId = 'a' | 'b' | 'c' | 'd' | 'e' | 'f' | 'g' | 'h' | 'i' | 'j';
 
 const CHECK_NAMES: Record<CheckId, string> = {
   a: 'title bar controls visible, in the viewport, unclipped and unobscured',
@@ -50,6 +77,7 @@ const CHECK_NAMES: Record<CheckId, string> = {
   g: 'a chat with messages spans its tab: a long message and the composer fill at least 90% of the chat (1920x1080, plan panel closed)',
   h: 'no element of a graph card overflows the card or overlaps a sibling',
   i: `every card's fill stands off its backdrop by at least ${LIFT_MIN}:1, and its text reads at ${TEXT_MIN}:1 (e2e/surfaces.ts)`,
+  j: 'allowlist rows fit, scroll, title truncated ids and distinguish shared labels with visible providers',
 };
 const CHAT_FILL = 0.9;
 
@@ -130,7 +158,8 @@ function inPageChecks(loadingSource: string): PageChecks {
   // Monaco parks its screen-reader live region off-screen on purpose: it is the editor's, not a layout fault.
   const foreignSelector = '.monaco-editor, .monaco-aria-container, .xterm';
   const foreign = (el: Element): boolean => el.closest(foreignSelector) !== null;
-  const overlay = '[role="dialog"], [role="menu"], [role="listbox"], .frame-popover';
+  // A modal's scrim lies over the whole window by design, so what it covers is not a fault.
+  const overlay = '[role="dialog"], [role="menu"], [role="listbox"], .frame-popover, .frame-scrim';
 
   const titleBar = { present: false, controls: [] as string[], problems: [] as string[] };
   const header = document.querySelector('.frame-title');
@@ -155,6 +184,7 @@ function inPageChecks(loadingSource: string): PageChecks {
         continue;
       }
       const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      if (hit?.closest('.frame-scrim')) continue;
       if (!hit || !(hit === control || control.contains(hit))) titleBar.problems.push(`${name} is covered by ${hit ? describe(hit) : 'nothing'}`);
     }
   }
@@ -357,6 +387,74 @@ async function chatFill(chat: Locator, parts: { body: string; composer: string }
   return { id: 'g', name: CHECK_NAMES.g, pass: problems.length === 0, count: problems.length, details: problems };
 }
 
+/**
+ * The allowlist's rows: each one line inside its own box, apart from its
+ * neighbours, the last reachable by scrolling, and every truncated id titled.
+ */
+async function allowlistLayout(list: Locator): Promise<Check> {
+  const problems = await list.evaluate((root) => {
+    const found: string[] = [];
+    const px = (n: number): number => Math.round(n * 10) / 10;
+    const describe = (el: Element): string => (el.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 48);
+    const options = [...root.querySelectorAll('[role="option"]')];
+    const labels = new Map<string, Element[]>();
+    for (const option of options) {
+      const label = option.querySelector('.allowlist-label')?.textContent;
+      if (label) labels.set(label, [...(labels.get(label) ?? []), option]);
+    }
+    for (const [label, group] of labels) {
+      if (group.length < 2) continue;
+      const distinctions = new Set<string>();
+      for (const option of group) {
+        const id = option.querySelector('.allowlist-id');
+        const prefix = id?.querySelector('.allowlist-id-prefix');
+        const value = prefix?.textContent ?? '';
+        const full = id?.getAttribute('title') ?? '';
+        const provider = full.includes('/') ? full.slice(0, full.indexOf('/') + 1) : '';
+        if (!value || !value.startsWith(provider)) found.push(`${label}: missing distinguishing text or provider`);
+        if (prefix && id && (prefix.getBoundingClientRect().right > id.getBoundingClientRect().right + 1 || prefix.getBoundingClientRect().left < id.getBoundingClientRect().left - 1)) found.push(`${label}: distinguishing text is clipped`);
+        const name = option.querySelector('.allowlist-name');
+        if (prefix && name && prefix.getBoundingClientRect().right > name.getBoundingClientRect().right + 1) found.push(`${label}: distinguishing text runs outside its name`);
+        if (distinctions.has(value)) found.push(`${label}: repeated distinguishing text ${value}`);
+        distinctions.add(value);
+      }
+    }
+    if (options.length === 0) found.push('the picker holds no option');
+    let previous: DOMRect | undefined;
+    options.forEach((option, at) => {
+      const rect = option.getBoundingClientRect();
+      const name = `${describe(option)} (option ${at + 1})`;
+      if (previous && previous.bottom - rect.top > 1) found.push(`${name} overlaps the option above by ${px(previous.bottom - rect.top)}px`);
+      previous = rect;
+      const parts = [...option.querySelectorAll('.allowlist-label, .allowlist-id, .allowlist-unlisted')];
+      for (const part of parts) {
+        const r = part.getBoundingClientRect();
+        if (r.top < rect.top - 1 || r.bottom > rect.bottom + 1 || r.left < rect.left - 1 || r.right > rect.right + 1) {
+          found.push(`${name}: .${part.className.split(' ')[0]} runs ${px(r.top)}–${px(r.bottom)} outside its ${px(rect.top)}–${px(rect.bottom)} box`);
+        }
+      }
+      if (option.scrollHeight > option.clientHeight + 1) found.push(`${name}'s content is ${option.scrollHeight}px in its ${option.clientHeight}px box`);
+    });
+    const tally = root.scrollHeight > root.clientHeight + 1 ? ` (${root.scrollHeight}px of rows in ${root.clientHeight}px)` : '';
+    root.scrollTop = root.scrollHeight;
+    const last = options[options.length - 1];
+    if (last) {
+      const r = last.getBoundingClientRect();
+      const box = root.getBoundingClientRect();
+      if (r.top < box.top - 1 || r.bottom > box.bottom + 1) {
+        found.push(`the last option runs ${px(r.top)}–${px(r.bottom)} outside the list's ${px(box.top)}–${px(box.bottom)} after scrolling to the end${tally}`);
+      }
+    }
+    for (const id of root.querySelectorAll('.allowlist-id')) {
+      const rest = id.querySelector('.allowlist-id-rest');
+      if (rest && rest.scrollWidth > rest.clientWidth + 1 && !id.getAttribute('title')) found.push(`${describe(id)} is truncated with no title`);
+    }
+    root.scrollTop = 0;
+    return found;
+  });
+  return { id: 'j', name: CHECK_NAMES.j, pass: problems.length === 0, count: new Set(problems).size, details: limited(problems) };
+}
+
 /** Polls until no loading text shows, for at most the grace period; the shots then judge what is left. */
 async function waitForLoading(page: Page): Promise<number> {
   const start = Date.now();
@@ -372,7 +470,9 @@ interface CaptureOptions {
   /** Puts back what a resize or a theme change may close, such as a popover. */
   readonly ensure?: () => Promise<void>;
   /** A check of this state's own, judged on the shots it applies to (undefined skips the size). */
-  readonly measure?: (size: Size) => Promise<Check | undefined>;
+  readonly measure?: (size: Size, theme: Theme) => Promise<Check | undefined>;
+  /** Puts back what the state changed outside the page, once the captures are done. */
+  readonly restore?: () => Promise<void>;
 }
 
 async function capture(page: Page, record: StateRecord, started: number, options: CaptureOptions = {}): Promise<void> {
@@ -393,12 +493,13 @@ async function capture(page: Page, record: StateRecord, started: number, options
         const lift = await page.evaluate(liftChecks, { selectors: CARD_SELECTORS, liftMin: LIFT_MIN, textMin: TEXT_MIN });
         const png = pngSize(buffer);
         if (png.width !== size.width || png.height !== size.height) record.notes.push(`${file} came out ${png.width}x${png.height}`);
-        const extra = await options.measure?.(size);
+        const extra = await options.measure?.(size, theme);
         record.shots.push({ file, theme, ...size, png, checks: [...judge(raw, consoleErrors.filter((e) => e.at >= started), lift), ...(extra ? [extra] : [])] });
       }
     }
   } finally {
     await unemulate(page);
+    await options.restore?.();
   }
 }
 
@@ -728,7 +829,7 @@ async function graphProbe(page: Page, graph: Locator): Promise<Record<string, un
 
 function writeReport(): void {
   fs.mkdirSync(OUT, { recursive: true });
-  const failing: Record<CheckId, number> = { a: 0, b: 0, c: 0, d: 0, e: 0, f: 0, g: 0, h: 0, i: 0 };
+  const failing: Record<CheckId, number> = { a: 0, b: 0, c: 0, d: 0, e: 0, f: 0, g: 0, h: 0, i: 0, j: 0 };
   for (const record of states) for (const shot of record.shots) for (const c of shot.checks) if (!c.pass) failing[c.id] += 1;
   const report = {
     generatedAt: new Date().toISOString(),
@@ -1046,10 +1147,16 @@ test('the visual tour', async () => {
 
   await state(win, 'settings-allowlist', 'Settings, a runner\'s model picker open with a search typed and models ticked', async (record) => {
     const page = need(win);
+    // A catalog that scrolls and ids that truncate: the real four models would leave the row and title checks untested.
+    await fakeDaemon(app, { models: { modelsByRunner: { 'claude-code': ALLOWLIST_MODELS } } });
+    const refresh = page.getByRole('button', { name: 'Refresh', exact: true });
+    await refresh.click();
+    await expect(refresh).toBeEnabled({ timeout: 30_000 });
     await page.getByRole('button', { name: 'Edit Claude Code models' }).click();
     const picker = page.getByRole('listbox', { name: 'Claude Code models' });
     await expect(picker).toBeVisible({ timeout: 30_000 });
     const options = picker.getByRole('option');
+    await expect(options).toHaveCount(ALLOWLIST_MODELS.length, { timeout: 30_000 });
     const listed = await options.count();
     record.notes.push(`the runner lists ${listed} models`);
     for (let at = 0; at < Math.min(3, listed); at++) await options.nth(at).click();
@@ -1058,6 +1165,74 @@ test('the visual tour', async () => {
     // The write goes out on its own once the ticking pauses.
     await expect(page.getByRole('status').filter({ hasText: /of \d+ allowed/ })).toBeVisible();
     await settle(page, 1_200);
+  }, {
+    // At each tour size, and again in a 900x600 window, where the list's cap is shortest and a squeezed row would show first.
+    measure: async (size) => {
+      const page = need(win);
+      const list = page.getByRole('listbox', { name: 'Claude Code models' });
+      const here = await allowlistLayout(list);
+      await emulate(page, { width: 900, height: 600 });
+      await settle(page, 300);
+      const small = await allowlistLayout(list);
+      await emulate(page, size);
+      await settle(page, 300);
+      const details = [...here.details, ...small.details.map((line) => `at 900x600: ${line}`)];
+      return { ...here, pass: here.pass && small.pass, count: here.count + small.count, details };
+    },
+    // The fake ids must not stay ticked into the plans after this state: clear the allowlist, then the catalog.
+    restore: async () => {
+      const all = need(win).getByRole('button', { name: 'Allow all models' });
+      if (await all.isEnabled().catch(() => false)) {
+        await all.click();
+        await expect(need(win).getByRole('status').filter({ hasText: /^All \d+ allowed$/ })).toBeVisible({ timeout: 30_000 }).catch(() => undefined);
+      }
+      await fakeDaemon(app, undefined);
+    },
+  });
+
+  await state(win, 'settings-allowlist-opencode', 'Settings, OpenCode\'s model picker open on a catalog of provider-qualified ids', async (record) => {
+    const page = need(win);
+    await fakeDaemon(app, {
+      runners: fakedRunners(MIXED_RUNNERS.map((runner) => (runner.id === 'opencode' ? { ...runner, enabled: true } : runner))),
+      models: { modelsByRunner: { opencode: OPENCODE_MODELS } },
+    });
+    const refresh = page.getByRole('button', { name: 'Refresh', exact: true });
+    await refresh.click();
+    await expect(refresh).toBeEnabled({ timeout: 30_000 });
+    await page.getByRole('button', { name: 'Edit OpenCode models' }).click();
+    const picker = page.getByRole('listbox', { name: 'OpenCode models' });
+    await expect(picker).toBeVisible({ timeout: 30_000 });
+    const options = picker.getByRole('option');
+    await expect(options).toHaveCount(OPENCODE_MODELS.length, { timeout: 30_000 });
+    record.notes.push(`the runner lists ${await options.count()} models`);
+    await options.nth(1).click();
+    await picker.scrollIntoViewIfNeeded();
+    await settle(page, 1_200);
+  }, {
+    measure: async (size, theme) => {
+      const page = need(win);
+      const list = page.getByRole('listbox', { name: 'OpenCode models' });
+      const here = await allowlistLayout(list);
+      await emulate(page, { width: 900, height: 600 });
+      await settle(page, 300);
+      const small = await allowlistLayout(list);
+      if (size.width === 1280) {
+        await list.scrollIntoViewIfNeeded();
+        await settle(page, 200);
+        const { data } = await (await cdpOf(page)).send('Page.captureScreenshot', { format: 'png' });
+        fs.writeFileSync(path.join(OUT, `settings-allowlist-opencode--${theme}--900x600.png`), Buffer.from(data, 'base64'));
+      }
+      await emulate(page, size);
+      await settle(page, 300);
+      const details = [...here.details, ...small.details.map((line) => `at 900x600: ${line}`)];
+      return { ...here, pass: here.pass && small.pass, count: here.count + small.count, details };
+    },
+    restore: async () => {
+      const all = need(win).getByRole('group', { name: 'OpenCode model allowlist' }).getByRole('button', { name: 'Allow all models' });
+      if (await all.isEnabled().catch(() => false)) await all.click();
+      await settle(need(win), 600);
+      await fakeDaemon(app, undefined);
+    },
   });
 
   // Advanced is last in the tab and closed until opened: its heading is scrolled into view so the shot is of it.
@@ -1198,7 +1373,7 @@ test('the visual tour', async () => {
   // ----------------------------------------------------------- second launch
   // The app attaches to an external daemon on its own port, with no planner
   // provider. The session is first held by a VS Code window, which the app
-  // cannot join, and then by a second daemon, which it joins (ADR-0060 H8).
+  // cannot join, and then by a second daemon, which it joins (ADR-0063 H8).
   const appPort = await freePort();
   const holderPort = await freePort();
   const held: Record<string, unknown> = {};
@@ -1353,6 +1528,122 @@ test('the visual tour', async () => {
     attached?.kill('SIGKILL');
     await expect(page.getByRole('heading', { name: 'Reconnecting to the daemon…' })).toBeVisible({ timeout: 60_000 });
   });
+
+  // ------------------------------------------------------------ third launch
+  // The runners the machine does not have. The daemon is the real one, with the
+  // runner list and the model errors answered in main's proxy (fixtures.ts), so
+  // each window draws what a daemon that found these agents would make it draw.
+  await app2?.close().catch(() => undefined);
+  if (app2) apps.splice(apps.indexOf(app2), 1);
+  const thirdPort = await freePort();
+  const app3 = await launchApp(box, appEnv(box, thirdPort, started.port, { persona: 'desktop-tour-runners', runners: ALL_RUNNERS }));
+  apps.push(app3);
+  ports.push(thirdPort);
+  watchConsole(app3, 'launch 3');
+  await stubDialogs(app3).catch(() => undefined);
+  const welcome3 = await app3.firstWindow();
+  await expect(welcome3.locator('.welcome-runner[data-state]').first()).toBeVisible({ timeout: 60_000 }).catch(() => undefined);
+  const answerRunnersWith = async (faked: Parameters<typeof fakeDaemon>[1]): Promise<void> => {
+    await fakeDaemon(app3, faked);
+    await welcome3.reload();
+  };
+
+  await answerRunnersWith(NONE_INSTALLED);
+  await state(welcome3, 'welcome-none-installed', 'Welcome with no agent installed: all eight install cards', async () => {
+    await expect(welcome3.locator('.welcome-runner[data-state="missing"]')).toHaveCount(8, { timeout: 60_000 });
+    await expect(welcome3.getByRole('button', { name: 'Docs' })).toHaveCount(8);
+    await expect(welcome3.locator('.welcome-recent[data-state="loading"]')).toHaveCount(0, { timeout: 30_000 });
+  }, {
+    ensure: async () => { await welcome3.locator('.welcome-runner[data-runner="cursor-agent"]').evaluate((el) => el.scrollIntoView({ block: 'end' })); },
+  });
+
+  await answerRunnersWith(DETECTION_FAILED);
+  await state(welcome3, 'welcome-detect-failed', 'Welcome when the daemon could not detect the runners', async () => {
+    await expect(welcome3.getByText('The daemon did not list its runners')).toBeVisible({ timeout: 60_000 });
+  });
+
+  await answerRunnersWith(MIXED);
+  await state(welcome3, 'welcome-runners-mixed', 'Welcome with signed-in, signed-out (login and key), off and too-old runners', async () => {
+    await expect(welcome3.locator('.welcome-runner[data-state]')).toHaveCount(8, { timeout: 60_000 });
+    await expect(welcome3.locator('.welcome-runner[data-runner="codex"]').getByRole('button', { name: 'Log in' })).toBeVisible();
+    await expect(welcome3.locator('.welcome-runner[data-runner="qwen-code"]').getByRole('button', { name: 'Set API key…' })).toBeVisible();
+    await expect(welcome3.locator('.welcome-runner[data-runner="cline"]')).toContainText('older than');
+    await expect(welcome3.locator('.welcome-recent[data-state="loading"]')).toHaveCount(0, { timeout: 30_000 });
+  }, {
+    // At 1280x800 the last two rows of runner cards are below the fold, and they hold the key and too-old cards.
+    ensure: async () => { await welcome3.locator('.welcome-runner[data-runner="cursor-agent"]').evaluate((el) => el.scrollIntoView({ block: 'end' })); },
+  });
+
+  await state(welcome3, 'key-dialog', 'The key entry open over the welcome window, for Qwen Code', async () => {
+    await welcome3.locator('.welcome-runner[data-runner="qwen-code"]').getByRole('button', { name: 'Set API key…' }).click();
+    const dialog = welcome3.getByRole('dialog', { name: 'API key for OpenRouter' });
+    await expect(dialog).toBeVisible();
+    await dialog.getByLabel('API key').fill('sk-or-v1-0123456789abcdef');
+    await settle(welcome3, 400);
+  });
+  await welcome3.keyboard.press('Escape');
+
+  const win3 = await openFolder(app3, welcome3, box.repo).catch(() => undefined);
+  const settingsOf = (page: Page): Locator => page.getByRole('heading', { name: 'Runners' });
+  // A resize or a theme change resets the tab's scroll, so each shot puts the runner rows back at the top.
+  const runnersToTop = async (page: Page): Promise<void> => {
+    await settingsOf(page).evaluate((el) => el.scrollIntoView({ block: 'start' }));
+  };
+
+  await state(win3, 'planner-signed-out', 'The planner\'s first screen with Codex and Qwen Code signed out', async () => {
+    const page = need(win3);
+    await page.getByRole('button', { name: 'New session' }).click();
+    await expect(page.locator('.planner-auth-row[data-runner="codex"]')).toBeVisible({ timeout: 60_000 });
+    await expect(page.locator('.planner-auth-row[data-runner="qwen-code"]')).toBeVisible();
+  });
+
+  await state(win3, 'settings-runners-mixed', 'Settings, Runners: flags, reasons, Log in and Set API key in each row', async () => {
+    const page = need(win3);
+    await page.getByRole('button', { name: /^Settings/ }).first().click();
+    await expect(settingsOf(page)).toBeVisible({ timeout: 30_000 });
+    await settingsOf(page).scrollIntoViewIfNeeded();
+    await expect(page.locator('.settings-runner')).toHaveCount(8, { timeout: 30_000 });
+    await settle(page, 600);
+  }, { ensure: () => runnersToTop(need(win3)) });
+
+  await state(win3, 'settings-allowlist-error', 'Settings, a signed-out runner\'s model picker open on its error', async () => {
+    const page = need(win3);
+    await page.getByRole('button', { name: 'Edit Codex models' }).click();
+    await expect(page.locator('.settings-runner').filter({ hasText: 'Codex' }).getByText('Codex is not signed in. Sign in with /login codex')).toBeVisible({ timeout: 30_000 });
+    await settle(page, 400);
+  }, { ensure: () => runnersToTop(need(win3)) });
+
+  await state(win3, 'settings-key-dialog', 'Settings: the key entry open over the window, for Gemini CLI', async () => {
+    const page = need(win3);
+    await page.locator('.settings-runner').filter({ hasText: 'Gemini CLI' }).getByRole('button', { name: 'Set API key…' }).click();
+    const dialog = page.getByRole('dialog', { name: 'API key for Google' });
+    await expect(dialog).toBeVisible();
+    await settle(page, 400);
+  });
+  await win3?.keyboard.press('Escape');
+
+  await state(win3, 'graph-signed-out', 'The plan graph with Qwen Code and Gemini CLI signed out, and every new runner\'s badge', async () => {
+    const page = need(win3);
+    const sidebar = page.getByRole('navigation', { name: 'Sessions' });
+    if (!await sidebar.isVisible()) await page.getByRole('navigation', { name: 'Views' }).getByRole('tab', { name: /^Sessions/ }).click();
+    await page.getByRole('button', { name: 'New session' }).click();
+    if (await page.locator('.frame-drawer').isVisible()) await page.keyboard.press('Escape');
+    await page.keyboard.press('ControlOrMeta+L');
+    const message = page.getByRole('textbox', { name: 'Message the planner' });
+    await message.fill(RUNNERS_GOAL);
+    await message.press('Enter');
+    const plan = page.getByRole('complementary', { name: 'Plan', exact: true });
+    await expect(plan.locator('.ow-runner-cursor-agent').first()).toBeVisible({ timeout: 60_000 });
+    await plan.getByRole('button', { name: 'Open the plan graph' }).click({ timeout: 30_000 });
+    const graph = page.getByRole('main', { name: 'Centre' }).getByRole('grid', { name: 'Plan graph' });
+    await expect(graph.locator('.graph-card').first()).toBeVisible({ timeout: 30_000 });
+    for (const runner of ['copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent']) {
+      await expect(graph.locator(`.graph-card .ow-runner-${runner}`).first()).toBeAttached();
+      await expect(plan.locator(`.ow-runner-${runner}`).first()).toBeAttached();
+    }
+    await settle(page, 600);
+  });
+
 
   writeReport();
 

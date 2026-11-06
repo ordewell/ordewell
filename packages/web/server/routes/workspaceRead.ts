@@ -19,7 +19,7 @@ import {
 import { failure } from './errors';
 
 /*
- * The user principal's reads of a workspace's files and git (ADR-0061): every
+ * The user principal's reads of a workspace's files and git (ADR-0064): every
  * route is a GET, takes its workspace per request, and answers from the
  * reader alone. None touches the pool, so none takes or waits on a session's
  * lease (R4), and a session another host holds is read all the same.

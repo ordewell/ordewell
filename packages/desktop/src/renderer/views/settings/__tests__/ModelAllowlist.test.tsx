@@ -10,10 +10,10 @@ const MODELS: DiscoveredModel[] = [
   { modelId: 'anthropic.very-long-model-identifier-that-would-overflow-a-narrow-column-v1:0', modelLabel: 'Bedrock Long', variants: [] },
 ];
 
-function setup(props: { ids?: string[]; models?: DiscoveredModel[]; disabled?: boolean; onCommit?: (ids: string[] | null) => Promise<void> | void } = {}) {
+function setup(props: { ids?: string[]; models?: DiscoveredModel[]; disabled?: boolean; error?: string; onCommit?: (ids: string[] | null) => Promise<void> | void } = {}) {
   const onCommit = props.onCommit ?? vi.fn(async () => undefined);
   const view = (ids: string[] | undefined) => (
-    <ModelAllowlist runnerName="Claude Code" models={props.models ?? MODELS} ids={ids} disabled={props.disabled ?? false} onCommit={onCommit} />
+    <ModelAllowlist runnerName="Claude Code" models={props.models ?? MODELS} ids={ids} disabled={props.disabled ?? false} error={props.error} onCommit={onCommit} />
   );
   const utils = render(view(props.ids));
   return { onCommit: onCommit as ReturnType<typeof vi.fn>, rerender: (ids: string[] | undefined) => utils.rerender(view(ids)) };
@@ -176,6 +176,60 @@ describe('the picker', () => {
     setup({ models: [] });
     openPicker();
     expect(screen.getByText('Claude Code lists no models.')).toBeInTheDocument();
+  });
+
+  it("gives the runner's own reason when it lists nothing, in place of the generic line", () => {
+    setup({ models: [], error: 'Claude Code is not signed in. Run claude auth login.' });
+    openPicker();
+    expect(screen.getByText('Claude Code is not signed in. Run claude auth login.')).toBeInTheDocument();
+    expect(screen.queryByText('Claude Code lists no models.')).toBeNull();
+  });
+});
+
+describe('a model row', () => {
+  it('prints the id once when the runner labels the model by that same id', () => {
+    setup({ models: [{ modelId: 'deepseek-v4.1-flash', modelLabel: 'deepseek-v4.1-flash', variants: [] }] });
+    openPicker();
+    const row = option(/deepseek-v4\.1-flash/);
+    expect(within(row).getAllByText('deepseek-v4.1-flash')).toHaveLength(1);
+    expect(row.querySelector('.allowlist-id')).toBeNull();
+  });
+
+  it('omits an id that repeats the label after its last slash', () => {
+    setup({ models: [{ modelId: 'opencode-go/deepseek-v4.1-flash', modelLabel: 'deepseek-v4.1-flash', variants: [] }] });
+    openPicker();
+    const row = option(/deepseek-v4\.1-flash/);
+    expect(within(row).getAllByText('deepseek-v4.1-flash')).toHaveLength(1);
+    expect(row.querySelector('.allowlist-id')).toBeNull();
+  });
+
+  it('prints a differing id beside the label, with the full id as its title', () => {
+    setup({ models: [{ modelId: 'opencode-go/deepseek-v4.1-flash', modelLabel: 'DeepSeek V4.1 Flash', variants: [] }] });
+    openPicker();
+    const row = option(/DeepSeek V4\.1 Flash/);
+    expect(row.querySelector('.allowlist-label')).toHaveTextContent('DeepSeek V4.1 Flash');
+    const id = row.querySelector('.allowlist-id');
+    expect(id).toHaveTextContent('opencode-go/deepseek-v4.1-flash');
+    expect(id).toHaveAttribute('title', 'opencode-go/deepseek-v4.1-flash');
+  });
+
+  it('distinguishes shared labels in the rows and summary, including retained models', () => {
+    const models = [
+      { modelId: 'opencode-go/flash', modelLabel: 'flash', variants: [] },
+      { modelId: 'openrouter/flash', modelLabel: 'flash', variants: [] },
+      { modelId: 'vendor/old', modelLabel: 'missing/old', variants: [] },
+      { modelId: 'vendor/unique', modelLabel: 'unique', variants: [] },
+    ];
+    setup({ models, ids: ['opencode-go/flash', 'openrouter/flash', 'missing/old'] });
+    expect(screen.getByText('3 of 5 models: opencode-go/flash, openrouter/flash, +1')).toBeInTheDocument();
+    openPicker();
+    const rows = screen.getAllByRole('option');
+    for (const id of ['opencode-go/flash', 'openrouter/flash', 'missing/old', 'vendor/old']) {
+      const row = rows.find((candidate) => candidate.querySelector('.allowlist-id')?.getAttribute('title') === id);
+      expect(row).toBeDefined();
+      expect(row?.textContent?.split(id)).toHaveLength(2);
+    }
+    expect(rows.find((row) => row.querySelector('.allowlist-label')?.textContent === 'unique')?.querySelector('.allowlist-id')).toBeNull();
   });
 });
 

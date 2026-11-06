@@ -3,10 +3,11 @@ import { promisify } from 'util';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import type { RunnerManifest } from '../plugins/types';
 import { augmentedPath, withPath } from '../utils/shellPath';
-import { planDirectLaunch } from '../utils/launch';
+import { isExecutableResolved, planDirectLaunch, type LaunchDeps } from '../utils/launch';
+import { compareVersions } from '../utils/version';
 import type { ExecImpl } from './ModelDiscovery';
 import { connectorFor } from './harness/connectors';
-import { readRunnerAuth, recordRunnerAuth, type RunnerAuth, type RunnerAuthExec } from './runnerAuth';
+import { readRunnerAuth, recordedRunnerAuth, recordRunnerAuth, type RunnerAuth, type RunnerAuthExec } from './runnerAuth';
 
 const execAsync = promisify(exec);
 
@@ -53,6 +54,8 @@ export interface RunnerInstallationOptions {
   workspace?: () => string | undefined;
   /** Injectable status command runner, so tests need no real agent binary. */
   authExec?: RunnerAuthExec;
+  /** How the CLI is located and started, for the spawnability check and the status command alike; a test pins the host's. */
+  launch?: LaunchDeps;
 }
 
 /**
@@ -69,6 +72,8 @@ export interface RunnerInstallationOptions {
 export function parseCliVersion(stdout: string): string | undefined {
   return /\bv?(\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?)/.exec(stdout)?.[1];
 }
+/** Whether an agent can be started, why not, and its login verdict beside it. */
+export interface RunnerUsability { usable: boolean; reason?: string; auth?: RunnerAuth; version?: string }
 
 export class RunnerInstallation {
   private cache: Map<string, { installed: boolean; at: number; version?: string }> = new Map();
@@ -81,6 +86,7 @@ export class RunnerInstallation {
   private env: (workspace?: string) => Promise<Record<string, string>>;
   private workspace: () => string | undefined;
   private authExec: RunnerAuthExec | undefined;
+  private launch: LaunchDeps;
 
   constructor(
     registry: RunnerRegistry,
@@ -94,6 +100,7 @@ export class RunnerInstallation {
     this.env = options.env ?? (async () => ({}));
     this.workspace = options.workspace ?? (() => undefined);
     this.authExec = options.authExec;
+    this.launch = options.launch ?? {};
   }
 
   /** True if the runner's CLI responds to `--version`. Cached per process. */
@@ -129,13 +136,14 @@ export class RunnerInstallation {
   }
 
   /**
-   * Forget cached "not installed" verdicts so the next probe re-runs them. A
-   * runner-list refresh calls this, so a CLI installed while the host runs is
-   * offered without a restart. An installed verdict stays: it cannot have
-   * changed without the binary going away, and re-probing one costs a spawn.
+   * Forget every cached install verdict so the next probe re-runs it. A
+   * runner-list refresh calls this, so a CLI installed, upgraded or removed
+   * while the host runs is offered, or refused, without a restart: the
+   * version decides whether an ACP agent is new enough, so a present binary
+   * can go stale too.
    */
   refresh(): void {
-    for (const [runner, probe] of this.cache) if (!probe.installed) this.cache.delete(runner);
+    this.cache.clear();
     // A login can change in either direction while a host runs, and a refresh
     // is the moment the user expects a fixed one to show.
     this.authCache.clear();
@@ -152,14 +160,41 @@ export class RunnerInstallation {
    * it is installed, and the user may log in from the same picker — so the
    * auth verdict rides beside usability, never inside it.
    */
-  async plannerUsability(runner: string): Promise<{ usable: boolean; reason?: string; auth?: RunnerAuth; version?: string }> {
+  async plannerUsability(runner: string): Promise<RunnerUsability> {
     const manifest = this.registry.getManifest(runner);
     if (!manifest) return { usable: false, reason: `No runner manifest is registered for "${runner}".` };
-    if (!connectorFor(runner)) {
+    const connector = connectorFor(runner);
+    if (!connector) {
       return { usable: false, reason: `${manifest.displayName ?? runner} has no planner transport yet.` };
     }
+    if (!connector.plans) {
+      return { usable: false, reason: `${manifest.displayName ?? runner} can run tasks but cannot plan in Ordewell yet.` };
+    }
+    return this.runnerUsability(runner);
+  }
+
+  /**
+   * {@link plannerUsability} without the question of planning: whether the
+   * agent's CLI is installed and can be started, with its login verdict. The
+   * runner list and the login flows ask this, because a task runner that cannot
+   * plan yet (an ACP agent) is still offered and still needs signing in.
+   */
+  async runnerUsability(runner: string): Promise<RunnerUsability> {
+    const manifest = this.registry.getManifest(runner);
+    if (!manifest) return { usable: false, reason: `No runner manifest is registered for "${runner}".` };
     if (!(await this.isInstalled(runner))) {
       return { usable: false, reason: `${manifest.runner.command} is not installed or is not on PATH.` };
+    }
+    const version = this.cache.get(runner)?.version;
+    // An ACP agent below the version its profile was checked against fails at
+    // initialize, after a planner was picked and a goal typed. Comparing the
+    // CLI's own version here lists it with the reason instead (ADR-0060).
+    const minVersion = connectorFor(runner)?.minVersion;
+    if (minVersion && version && compareVersions(version, minVersion) < 0) {
+      return {
+        usable: false,
+        reason: `${manifest.displayName ?? manifest.name} is too old for Ordewell: found ${version}, needs ${minVersion} or later.`,
+      };
     }
     const spawnable = await this.isSpawnable(manifest.runner.command);
     if (!spawnable) {
@@ -170,7 +205,6 @@ export class RunnerInstallation {
           `Reinstall with the CLI's own installer, or add its install directory to PATH.`,
       };
     }
-    const version = this.cache.get(runner)?.version;
     return { usable: true, auth: await this.authFor(runner, manifest), ...(version ? { version } : {}) };
   }
 
@@ -185,7 +219,13 @@ export class RunnerInstallation {
     const workspace = this.workspace();
     const key = `${workspace ?? ''}\u0000${runner}`;
     const cached = this.authCache.get(key);
-    if (cached && this.now() - cached.at < AUTH_TTL_MS) return cached.auth;
+    if (cached && this.now() - cached.at < AUTH_TTL_MS) {
+      // A record that is not this probe's was left since by a turn the agent
+      // refused, which outranks its status command: the flag and its way in
+      // show at once, not a TTL later (ADR-0052).
+      const since = recordedRunnerAuth(runner, workspace);
+      return since && since !== cached.auth ? since : cached.auth;
+    }
 
     const existing = this.authInflight.get(key);
     if (existing) return existing;
@@ -195,6 +235,7 @@ export class RunnerInstallation {
         return await readRunnerAuth(manifest, {
           ...(this.authExec ? { exec: this.authExec } : {}),
           env: await this.env(workspace),
+          launch: this.launch,
         });
       } catch {
         // A workspace env or status probe that fails is no answer about the
@@ -225,12 +266,12 @@ export class RunnerInstallation {
    * with `isInstalled` there.
    */
   private async isSpawnable(command: string): Promise<boolean> {
-    if (process.platform !== 'win32') return true;
+    if ((this.launch.platform ?? process.platform) !== 'win32') return true;
     try {
-      const plan = await planDirectLaunch(command, []);
-      // An unresolvable command is handed back verbatim; anything else means a
-      // real file was found, directly or behind the interpreter.
-      return plan.file !== command;
+      const plan = await planDirectLaunch(command, [], this.launch);
+      // Asked as the runner's own start asks it (runnerProcess), so the two
+      // cannot disagree. Windows judges by the plan, which searched PATH itself.
+      return isExecutableResolved(command, plan, '', this.launch);
     } catch {
       // A CommandLineTooLongError cannot happen with no arguments; anything
       // else here is a resolution failure, which is the answer.

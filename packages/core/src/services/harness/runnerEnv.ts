@@ -46,13 +46,16 @@ function inherited(source: Record<string, string | undefined>, drop: (key: strin
  * Neither inherited source keeps a parent Ordewell's OpenCode server entry.
  * `drop` removes what a launch must not carry from either inherited source,
  * such as the credentials a native-shell planner must not hold (ADR-0036 N2.2).
+ * `platform` is the one the runner starts on, which decides whether two
+ * spellings of a name are one variable or two.
  */
 export function runnerEnv(
   resolvedPath: string,
   workspace: Record<string, string> = {},
   launch: Record<string, string> = {},
   drop?: (name: string) => boolean,
+  platform: NodeJS.Platform = process.platform,
 ): NodeJS.ProcessEnv {
   const host = inherited(process.env, (key) => isHostOnly(key) || isMcpToken(key) || drop?.(key) === true);
-  return withPath(host, resolvedPath, { ...inherited(workspace, (key) => isMcpToken(key) || drop?.(key) === true), ...launch });
+  return withPath(host, resolvedPath, { ...inherited(workspace, (key) => isMcpToken(key) || drop?.(key) === true), ...launch }, platform);
 }

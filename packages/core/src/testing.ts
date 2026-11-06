@@ -32,6 +32,8 @@ import type { EventStore } from './services/eventStore';
 import { isWithin, type NodePath, type TreeEvent, type TreeFact } from './models/TreeEvent';
 import { handoffOf, integrationBranchFor, noRemoval, SELF_REPO } from './services/isolationRecord';
 
+export { homeEnv, patient, pathWithFake, removeDir, setEnv, writeStandIn } from './testEnv';
+
 /**
  * Let an already-queued promise chain run to its next await before asserting,
  * without a wall-clock sleep. For a chain whose length is not known, drain the

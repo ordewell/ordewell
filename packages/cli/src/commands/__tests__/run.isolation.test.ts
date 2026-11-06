@@ -160,6 +160,18 @@ describe('ordewell run over a repo group', () => {
     expect(stderr).toContain('NOTES.md is shared live with every task, so edits to it are not isolated.');
   });
 
+  it("says a task's signed-out agent in the shell's own command", async () => {
+    const { client } = liveDaemon({ execute: [
+      { type: 'notice', level: 'error', message: 'Failed to start task "One": Cursor is not signed in. Sign in with /login cursor-agent, or run cursor-agent login.' },
+      complete,
+    ] });
+
+    const { stderr } = await capture(() => handleRun(['--session-id', 's1'], client));
+
+    expect(stderr).toContain('· Failed to start task "One": Cursor is not signed in. Run cursor-agent login to sign in.');
+    expect(stderr).not.toContain('/login');
+  });
+
   it('names the dirty repos, and says --stash stashes all of them', async () => {
     const dirty: Event = { type: 'isolation_blocked', reason: 'dirty', repos: ['api', 'web'], message: 'Tracked files have uncommitted changes in api, web' };
     const { client } = liveDaemon({ execute: [dirty] });

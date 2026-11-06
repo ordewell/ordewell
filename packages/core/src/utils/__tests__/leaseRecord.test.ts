@@ -7,7 +7,7 @@ import { readLiveHolder } from '../../daemon-client';
 
 const SESSION = 'session-held';
 
-// What a client that is no host reads of a session's holder (ADR-0060): the
+// What a client that is no host reads of a session's holder (ADR-0063): the
 // desktop app's main process, deciding whether there is a daemon to join.
 describe('readLiveHolder', () => {
   let workspace: string;

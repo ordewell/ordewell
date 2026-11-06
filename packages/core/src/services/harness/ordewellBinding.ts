@@ -120,8 +120,11 @@ interface SpawnedAdapter {
    * Absent: the runner cannot be handed the server at all. `false` is the old
    * boolean answer for a runner that has not attached (a timeout), kept for
    * simple test adapters; the real adapters say `pending` or `failed`.
+   * `sendFirstTurn` is for a runner that uses its token only once a turn
+   * starts it: called, it sends the first turn, a task's prompt or a
+   * planner's message, and settles once that turn ended.
    */
-  mcpAttached?(): Promise<boolean | AttachState>;
+  mcpAttached?(sendFirstTurn?: () => Promise<unknown>): Promise<boolean | AttachState>;
 }
 
 /** A runner spawned with the Ordewell server connected, and the token it was spawned with. */
@@ -152,6 +155,13 @@ export interface SpawnAttachSteps<A extends SpawnedAdapter> {
    * while it runs. Its attach report is not believed, and it is not respawned.
    */
   startupExit?(): string | null;
+  /**
+   * Send `adapter`'s first turn, a task's prompt or a planner's message,
+   * settling once that turn ended, for a runner whose attach only a turn can
+   * show (ADR-0060, R5). Absent where there is no turn to send: such a runner
+   * then cannot attach.
+   */
+  firstTurn?(adapter: A): Promise<unknown>;
   /** Why the first spawn failed, told before the respawn. */
   onRespawn?(failure: string): void;
   /** The {@link McpAttachError}'s or {@link McpAttachTimeout}'s message once the respawn failed too. */
@@ -191,7 +201,10 @@ function unlessCancelled<T>(work: Promise<T>, signal: AbortSignal | undefined): 
 /**
  * One runner with Ordewell's tools attached (ADR-0025): a spawn that does not
  * report the server connected is killed with its token and respawned once on
- * a fresh one. A second wait that ran out throws {@link McpAttachTimeout}, so
+ * a fresh one. A runner that connects only once a prompt starts it is sent its
+ * first turn by {@link SpawnAttachSteps.firstTurn} as the check, and passes
+ * only if it connected before that turn ended (ADR-0060, R5); a failed check's
+ * turn is killed with its process, so a respawn sends that turn again. A second wait that ran out throws {@link McpAttachTimeout}, so
  * the task can be held; a runner that reported the server failed, or could
  * not be checked, throws {@link McpAttachError} instead. One that exited while
  * starting throws {@link RunnerStartupExit}. Null once
@@ -266,7 +279,8 @@ async function spawnOnce<A extends SpawnedAdapter>(steps: SpawnAttachSteps<A>): 
   const failure = `${steps.runner} did not report Ordewell's MCP server connected`;
   let state: AttachState = 'pending';
   try {
-    const report = await unlessCancelled(adapter.mcpAttached(), signal);
+    const firstTurn = steps.firstTurn;
+    const report = await unlessCancelled(adapter.mcpAttached(firstTurn && (() => firstTurn(adapter))), signal);
     if (report === CANCELLED) return null;
     state = attachReport(report);
     const exit = steps.startupExit?.() ?? null;

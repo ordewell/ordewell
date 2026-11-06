@@ -1,13 +1,13 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { execFileSync } from 'child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createWorktreeIsolation } from '../GitWorktreeIsolation';
 import { defaultExecFile, type GitExecFn } from '../gitExec';
 import type { IWorktreeIsolation } from '../../interfaces/IWorktreeIsolation';
 import type { Task } from '../../models/Task';
-import { fakeConfig } from '../../testing';
+import { fakeConfig, removeDir } from '../../testing';
 
 function cleanEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
@@ -34,7 +34,7 @@ function tempDir(): string {
   temps.push(dir);
   return dir;
 }
-afterEach(() => { while (temps.length) rmSync(temps.pop()!, { recursive: true, force: true }); });
+afterEach(async () => { while (temps.length) await removeDir(temps.pop()!); });
 
 const task = (order: number, title: string): Task => ({ id: `task-${order}`, order, title, description: '', type: 'ai', status: 'in_progress', dependencies: [], subtasks: [], assignedRunner: 'claude-code' });
 const nothingInTheWay = { refusal: () => null, persist: () => undefined, settled: () => undefined };

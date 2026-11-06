@@ -11,6 +11,11 @@ export interface RunnerManifest {
   modes?: RunnerMode[];
   /** How to ask whether the user is signed in. Absent when the runner offers no status command. */
   auth?: RunnerAuthSpec;
+  /**
+   * How the agent signs in where Ordewell can run no login for it, as a
+   * clause the signed-out hint ends with ("run qwen and sign in there").
+   */
+  signIn?: string;
 }
 
 /** What a runner's status command answered, with both streams kept apart. */
@@ -39,8 +44,13 @@ export interface RunnerAuthStatus {
  * table to drift.
  */
 export interface RunnerAuthSpec {
-  /** The CLI args that answer whether the user is signed in, e.g. `auth status`. */
-  statusArgs: string[];
+  /**
+   * The CLI args that answer whether the user is signed in, e.g. `auth status`.
+   * Absent when the runner has a login but no status command to ask (Copilot):
+   * nothing is probed, the verdict stays `unknown`, and a failed turn's own
+   * words (`signedOut`) are what learn it.
+   */
+  statusArgs?: string[];
   /** The CLI args that run the login, e.g. `auth login`. */
   loginArgs: string[];
   /**
@@ -85,6 +95,16 @@ export interface DiscoveryCommand {
  */
 export type RunnerEnv = Readonly<Record<string, string | undefined>>;
 
+/**
+ * Reads an agent's provider credential from its own store for one start: the
+ * variables to add to that start's environment, null when the agent needs none
+ * from Ordewell, and a throw, naming the routes that would sign it in, when it
+ * has none (ADR-0060, R9). What it answers holds a secret. `kind` and
+ * `model` are the start's, the model as the plan names it; both are absent
+ * when model discovery asks.
+ */
+export type RunnerCredentials = (context: { env: RunnerEnv; kind?: 'planner' | 'task'; model?: string }) => Promise<Readonly<Record<string, string>> | null>;
+
 export type ApiAuthMethod =
   | { type: 'env'; varName: string; header: string; prefix?: string }
   /** `path` is `~` expanded; a function of the runner's environment when that relocates the file. */
@@ -107,7 +127,12 @@ export interface ApiDiscoveryConfig {
 }
 
 export interface RunnerModelDiscovery {
-  method: 'command' | 'hardcoded';
+  /**
+   * `acp` asks the running agent over the Agent Client Protocol first; the
+   * manifest's `discoveryCommands` and aliases are what it falls back to, so a
+   * runner using it still declares them.
+   */
+  method: 'command' | 'hardcoded' | 'acp';
   command?: string;
   args?: string[];
   parser?: ModelDiscoveryParser;
@@ -120,6 +145,19 @@ export interface RunnerModelDiscovery {
    * the remaining discovery methods.
    */
   appServer?: { command: string; args: string[]; cacheFile?: string | ((env: RunnerEnv) => string) };
+  /**
+   * ACP discovery (`method: 'acp'`): start `runner.command` with `args`, run
+   * `initialize` and `session/new` in a scratch directory with no MCP servers,
+   * and read the models and efforts the new session offers. No prompt is sent,
+   * so nothing is billed. Any failure, signed-out included, falls through to
+   * the remaining methods: discovery never gates a pick (ADR-0040).
+   *
+   * `env` and `credentials` are the ones the runner's ACP profile starts it
+   * with, so an agent that reads its key only from its environment is asked
+   * as it runs (ADR-0060, R9). A hook that refuses is no answer, and nothing
+   * is spawned.
+   */
+  acp?: { args: string[]; env?: Readonly<Record<string, string>>; credentials?: RunnerCredentials };
   /**
    * Optional last-resort list for a CLI that cannot enumerate
    * models. Used only when command discovery fails entirely or the CLI is

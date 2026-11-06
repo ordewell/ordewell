@@ -43,7 +43,7 @@ function WorkspaceWindow({ path, status }: { path: string; status: DaemonStatus 
   );
 }
 
-/** Main decides what this window is; the page only draws it (ADR-0060 H6). */
+/** Main decides what this window is; the page only draws it (ADR-0063 H6). */
 export function App(): JSX.Element | null {
   const [context, setContext] = useState<WindowContext>();
   const status = useDaemonStatus();

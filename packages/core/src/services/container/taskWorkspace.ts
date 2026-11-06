@@ -3,6 +3,7 @@ import { posix } from 'path';
 import { tryGit, type GitInvoker } from '../gitExec';
 import { SELF_REPO } from '../isolationRecord';
 import type { LeaseRepo } from '../executionLease';
+import type { DockerCommand } from './containerSettings';
 
 /*
  * Where a lease's work lives, all of it in the engine's own volumes: on a Mac a
@@ -63,12 +64,14 @@ export const pinRefs = (pin: string, head: string, integration: string): string[
 
 /**
  * Push refs into a repo's mirror, as git negotiates it, so only what the mirror
- * lacks crosses. `helper` is the `docker run` arguments of a throwaway container
+ * lacks crosses. `helper` is the `docker run` of a throwaway container
  * with the mirror writable. A concurrent first push can lose the race on the
  * mirror's config, so it is tried once more.
  */
-export async function pushToMirror(invoker: GitInvoker, repo: LeaseRepo, helper: readonly string[], refspecs: readonly string[]): Promise<void> {
-  const remote = `ext::${['docker', ...helper, 'sh', '-c', receiveScript(mirrorDir(repo))].map(extArgument).join(' ')}`;
+export async function pushToMirror(invoker: GitInvoker, repo: LeaseRepo, helper: DockerCommand, refspecs: readonly string[]): Promise<void> {
+  // Git starts this CLI in git's own environment, where no value of a helper's can be put, and its command line is `ps`'s (ADR-0022 A5).
+  if (Object.keys(helper.env).length > 0) throw new Error(`A mirror's helper takes no variable but HOME: ${Object.keys(helper.env).join(', ')}.`);
+  const remote = `ext::${['docker', ...helper.args, 'sh', '-c', receiveScript(mirrorDir(repo))].map(extArgument).join(' ')}`;
   const push = () => tryGit(invoker, repo.root, ['-c', 'protocol.ext.allow=always', '-c', 'core.hooksPath=/dev/null', 'push', '-q', '--no-verify', remote, ...refspecs]);
   const pushed = await push();
   if (pushed.ok) return;

@@ -44,7 +44,7 @@ async function readLive(path: string): Promise<LiveFacts | undefined> {
  * Each recent workspace's branch, last session and Needs you count, asked of
  * the daemon once it is connected and kept in the app's store through main,
  * so the next welcome window draws them before the daemon answers. The page
- * reaches the daemon only through the bridge's named routes (ADR-0060 H4).
+ * reaches the daemon only through the bridge's named routes (ADR-0063 H4).
  */
 export function useLiveFacts(recents: RecentWorkspace[] | undefined, status: DaemonStatus | undefined): (path: string) => Live {
   const connected = status?.state === 'connected';

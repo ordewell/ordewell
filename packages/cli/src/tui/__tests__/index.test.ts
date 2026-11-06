@@ -44,8 +44,9 @@ vi.mock('../../apiClient', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../apiClient')>();
   return { ...actual, ApiClient: apiClient.ApiClient };
 });
-vi.mock('../../utils/env', () => ({ findEnvFile: vi.fn(() => '/ws/.env'), writeEnvVar: vi.fn() }));
-vi.mock('../terminal', () => ({
+vi.mock('../../utils/env', () => ({ findEnvFile: vi.fn(() => '/ws/.env'), writeEnvVar: vi.fn(), shellEnvValue: vi.fn(() => undefined) }));
+vi.mock('../terminal', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../terminal')>()),
   openTerminal: vi.fn((options: { onKey(key: Key): void; mouse?: boolean }) => {
     fakeTerminal.onKey = options.onKey;
     fakeTerminal.mouse = options.mouse;
@@ -115,7 +116,8 @@ describe('handleTui', () => {
   });
 
   it('refuses to start for a workspace that does not exist, naming the path and both remedies', async () => {
-    const missing = '/definitely/does/not/exist/ordewell-workspace';
+    // Resolved, as the workspace is, so Windows names it on the current drive.
+    const missing = path.resolve('/definitely/does/not/exist/ordewell-workspace');
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     exitSpy.mockImplementation((() => { throw new Error('exit'); }) as never);
 
@@ -431,7 +433,7 @@ describe('handleTui', () => {
       vi.stubEnv('NO_COLOR', '1');
       void handleTui([], { spawn: spawn as unknown as LoginSpawn });
 
-      await vi.waitFor(() => expect(frame()).toContain('Claude Code not logged in'));
+      await vi.waitFor(() => expect(frame()).toContain('Claude Code is not signed in'));
       return { child, spawn };
     }
 
@@ -454,7 +456,7 @@ describe('handleTui', () => {
 
       await vi.waitFor(() => expect(fakeTerminal.resume).toHaveBeenCalled());
       await vi.waitFor(() => expect(frame()).toContain('Claude Code is signed in.'));
-      expect(frame()).not.toContain('Claude Code not logged in');
+      expect(frame()).not.toContain('Claude Code is not signed in');
       vi.unstubAllEnvs();
     });
 
@@ -470,8 +472,10 @@ describe('handleTui', () => {
         await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
 
         const env = vi.mocked(spawn).mock.calls[0][2]?.env as NodeJS.ProcessEnv;
+        // The block is a plain object, and Windows spells the key its own way (`withPath`).
+        const pathKey = process.platform === 'win32' ? 'Path' : 'PATH';
         expect(await augmentedPath()).toContain(path.join(os.homedir(), '.local', 'bin'));
-        expect(env.PATH).toContain(path.join(os.homedir(), '.local', 'bin'));
+        expect(env[pathKey]).toContain(path.join(os.homedir(), '.local', 'bin'));
         child.emit('exit', 1, null);
       } finally {
         process.env.PATH = original;

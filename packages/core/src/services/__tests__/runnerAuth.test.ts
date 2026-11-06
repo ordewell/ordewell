@@ -7,6 +7,8 @@ import { plannerNotReadyFor } from '../plannerReadiness';
 import { CLAUDE_CODE_MANIFEST } from '../../plugins/builtin/claude-code.manifest';
 import { CODEX_MANIFEST } from '../../plugins/builtin/codex.manifest';
 import { OPENCODE_MANIFEST } from '../../plugins/builtin/opencode.manifest';
+import { COPILOT_CLI_MANIFEST } from '../../plugins/builtin/copilot-cli.manifest';
+import type { LaunchDeps } from '../../utils/launch';
 
 type Answer = { code: number; stdout?: string; stderr?: string };
 
@@ -44,13 +46,22 @@ const AZURE_PROVIDER = [
   '',
 ].join('\n');
 
+/** The status command as named, off Windows' PATH lookup: the routes it takes there are pinned under 'on Windows'. */
+const POSIX: LaunchDeps = { platform: 'linux' };
+
+// Every verdict carries the ways in, so a surface can name them whatever it reads (ADR-0052).
+const CLAUDE_SIGN_IN = { runner: 'claude-code', label: 'Claude Code', login: ['claude', 'auth', 'login'] };
+const CODEX_SIGN_IN = { runner: 'codex', label: 'Codex', login: ['codex', 'login'] };
+const COPILOT_SIGN_IN = { runner: 'copilot-cli', label: 'GitHub Copilot CLI', login: ['copilot', 'login'] };
+
 describe('readRunnerAuth', () => {
   it('asks the runner its own status command and reads Claude signed in from a clean exit', async () => {
     const exec = execAnswering({ code: 0, stdout: '{"loggedIn":true,"authMethod":"claude.ai"}' });
 
-    expect(await readRunnerAuth(CLAUDE_CODE_MANIFEST, { exec })).toEqual({
+    expect(await readRunnerAuth(CLAUDE_CODE_MANIFEST, { exec, launch: POSIX })).toEqual({
       state: 'signed-in',
       loginCommand: ['claude', 'auth', 'login'],
+      signIn: CLAUDE_SIGN_IN,
     });
     expect(exec).toHaveBeenCalledWith('claude', ['auth', 'status'], expect.anything());
   });
@@ -65,6 +76,7 @@ describe('readRunnerAuth', () => {
     expect(await readRunnerAuth(CLAUDE_CODE_MANIFEST, { exec })).toEqual({
       state: 'signed-out',
       loginCommand: ['claude', 'auth', 'login'],
+      signIn: CLAUDE_SIGN_IN,
       detail: 'not logged in',
     });
   });
@@ -81,6 +93,7 @@ describe('readRunnerAuth', () => {
     expect(await readRunnerAuth(CLAUDE_CODE_MANIFEST, { exec })).toEqual({
       state: 'signed-out',
       loginCommand: ['claude', 'auth', 'login'],
+      signIn: CLAUDE_SIGN_IN,
       detail: 'not logged in',
     });
   });
@@ -91,6 +104,7 @@ describe('readRunnerAuth', () => {
     expect(await readRunnerAuth(CLAUDE_CODE_MANIFEST, { exec })).toEqual({
       state: 'unknown',
       loginCommand: ['claude', 'auth', 'login'],
+      signIn: CLAUDE_SIGN_IN,
     });
   });
 
@@ -98,9 +112,10 @@ describe('readRunnerAuth', () => {
     // `codex login status` prints this and exits 1 on a signed-out host.
     const exec = execAnswering({ code: 1, stdout: 'Not logged in\n' });
 
-    expect(await readRunnerAuth(CODEX_MANIFEST, { exec })).toEqual({
+    expect(await readRunnerAuth(CODEX_MANIFEST, { exec, launch: POSIX })).toEqual({
       state: 'signed-out',
       loginCommand: ['codex', 'login'],
+      signIn: CODEX_SIGN_IN,
       detail: 'not logged in',
     });
     expect(exec).toHaveBeenCalledWith('codex', ['login', 'status'], expect.anything());
@@ -112,6 +127,7 @@ describe('readRunnerAuth', () => {
     expect(await readRunnerAuth(CODEX_MANIFEST, { exec })).toEqual({
       state: 'signed-in',
       loginCommand: ['codex', 'login'],
+      signIn: CODEX_SIGN_IN,
     });
   });
 
@@ -123,6 +139,7 @@ describe('readRunnerAuth', () => {
     expect(await readRunnerAuth(CLAUDE_CODE_MANIFEST, { exec: missing })).toEqual({
       state: 'unknown',
       loginCommand: ['claude', 'auth', 'login'],
+      signIn: CLAUDE_SIGN_IN,
     });
   });
 
@@ -133,7 +150,8 @@ describe('readRunnerAuth', () => {
 
     const options = vi.mocked(exec).mock.calls[0][2];
     expect(options.env.CLAUDE_CONFIG_DIR).toBe('/home/me/.claude-b');
-    expect(options.env.PATH).toBeTruthy();
+    // Windows spells the one PATH key `Path` (withPath).
+    expect(Object.entries(options.env).find(([name]) => name.toUpperCase() === 'PATH')?.[1]).toBeTruthy();
     expect(options.timeout).toBeGreaterThan(0);
   });
 
@@ -147,13 +165,24 @@ describe('readRunnerAuth', () => {
     expect(await readRunnerAuth(manifest, { exec })).toEqual({
       state: 'unknown',
       loginCommand: ['claude', 'auth', 'login'],
+      signIn: CLAUDE_SIGN_IN,
     });
   });
 
   it('reports a runner with no status command unknown and offers it no login', async () => {
     const exec: RunnerAuthExec = vi.fn(async () => ({ code: 0, stdout: '', stderr: '' }));
 
-    expect(await readRunnerAuth(OPENCODE_MANIFEST, { exec })).toEqual({ state: 'unknown' });
+    expect(await readRunnerAuth(OPENCODE_MANIFEST, { exec })).toEqual({ state: 'unknown', signIn: { runner: 'opencode', label: 'OpenCode', byHand: 'run opencode auth login and choose a provider' } });
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  // Copilot has `copilot login` and no status command, so nothing can be asked:
+  // the verdict stays unknown until a failed turn says otherwise, and the login
+  // command is still offered for the surfaces that run it.
+  it('runs nothing for a runner with a login but no status command, and offers its login', async () => {
+    const exec: RunnerAuthExec = vi.fn(async () => ({ code: 0, stdout: '', stderr: '' }));
+
+    expect(await readRunnerAuth(COPILOT_CLI_MANIFEST, { exec })).toEqual({ state: 'unknown', loginCommand: ['copilot', 'login'], signIn: COPILOT_SIGN_IN });
     expect(exec).not.toHaveBeenCalled();
   });
 
@@ -185,7 +214,7 @@ describe('readRunnerAuth', () => {
         const exec = execAnswering({ code: 1, stdout: 'Not logged in\n' });
         const auth = await readRunnerAuth(CODEX_MANIFEST, { exec, env: { CODEX_HOME: home, AZURE_OPENAI_API_KEY: 'sk-test' } });
 
-        expect(auth).toEqual({ state: 'unknown', loginCommand: ['codex', 'login'] });
+        expect(auth).toEqual({ state: 'unknown', loginCommand: ['codex', 'login'], signIn: CODEX_SIGN_IN });
         recordRunnerAuth('codex', auth);
         expect(gate()).toBeNull();
       } finally {
@@ -217,7 +246,7 @@ describe('readRunnerAuth', () => {
         const exec = execAnswering({ code: 1, stdout: 'Not logged in\n' });
         const auth = await readRunnerAuth(CODEX_MANIFEST, { exec, env: { CODEX_HOME: home, OPENAI_API_KEY: 'sk-test' } });
 
-        expect(auth).toEqual({ state: 'unknown', loginCommand: ['codex', 'login'] });
+        expect(auth).toEqual({ state: 'unknown', loginCommand: ['codex', 'login'], signIn: CODEX_SIGN_IN });
         recordRunnerAuth('codex', auth);
         expect(gate()).toBeNull();
       } finally {
@@ -240,7 +269,7 @@ describe('readRunnerAuth', () => {
         const exec = execAnswering({ code: 1, stdout: 'Not logged in\n' });
         const auth = await readRunnerAuth(CODEX_MANIFEST, { exec, env: { CODEX_HOME: home } });
 
-        expect(auth).toEqual({ state: 'unknown', loginCommand: ['codex', 'login'] });
+        expect(auth).toEqual({ state: 'unknown', loginCommand: ['codex', 'login'], signIn: CODEX_SIGN_IN });
         recordRunnerAuth('codex', auth);
         expect(gate()).toBeNull();
       } finally {
@@ -254,7 +283,7 @@ describe('readRunnerAuth', () => {
         const exec = execAnswering({ code: 1, stdout: 'Not logged in\n' });
         const auth = await readRunnerAuth(CODEX_MANIFEST, { exec, env: { CODEX_HOME: home } });
 
-        expect(auth).toEqual({ state: 'signed-out', loginCommand: ['codex', 'login'], detail: 'not logged in' });
+        expect(auth).toEqual({ state: 'signed-out', loginCommand: ['codex', 'login'], detail: 'not logged in', signIn: CODEX_SIGN_IN });
         recordRunnerAuth('codex', auth);
         expect(gate()).toMatchObject({ code: 'signed_out', runner: 'codex' });
       } finally {
@@ -302,7 +331,7 @@ describe('readRunnerAuth', () => {
           const exec = execAnswering({ code: 1, stdout: 'Not logged in\n' });
           const auth = await readRunnerAuth(CODEX_MANIFEST, { exec, env: { HOME: home, AZURE_OPENAI_API_KEY: 'sk-test' } });
 
-          expect(auth).toEqual({ state: 'unknown', loginCommand: ['codex', 'login'] });
+          expect(auth).toEqual({ state: 'unknown', loginCommand: ['codex', 'login'], signIn: CODEX_SIGN_IN });
         } finally {
           rmSync(home, { recursive: true, force: true });
         }
@@ -333,7 +362,7 @@ describe('readRunnerAuth', () => {
           const exec = execAnswering({ code: 1, stdout: 'Not logged in\n' });
           const auth = await readRunnerAuth(CODEX_MANIFEST, { exec, env: { HOME: home } });
 
-          expect(auth).toEqual({ state: 'signed-out', loginCommand: ['codex', 'login'], detail: 'not logged in' });
+          expect(auth).toEqual({ state: 'signed-out', loginCommand: ['codex', 'login'], detail: 'not logged in', signIn: CODEX_SIGN_IN });
         } finally {
           rmSync(home, { recursive: true, force: true });
         }
@@ -354,6 +383,7 @@ describe('readRunnerAuth', () => {
       expect(await readRunnerAuth(manifest, { timeoutMs: 1000 })).toEqual({
         state: 'unknown',
         loginCommand: [cli, 'login'],
+        signIn: { ...CODEX_SIGN_IN, login: [cli, 'login'] },
       });
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -374,11 +404,72 @@ describe('readRunnerAuth', () => {
       expect(await readRunnerAuth(manifest, { timeoutMs: 500 })).toEqual({
         state: 'unknown',
         loginCommand: [cli, 'login'],
+        signIn: { ...CODEX_SIGN_IN, login: [cli, 'login'] },
       });
       expect(Date.now() - started).toBeLessThan(3000);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  // An npm install on Windows is a `.cmd` shim, which a bare execFile cannot
+  // find or start, so the probe has to be started the way the planner is.
+  describe('on Windows', () => {
+    const NPM = 'C:\\Users\\me\\AppData\\Roaming\\npm';
+    const windows = (files: string[]): LaunchDeps => {
+      const present = new Set(files.map((f) => f.toLowerCase()));
+      return {
+        platform: 'win32',
+        resolvePath: async () => `C:\\tools;${NPM}`,
+        exists: (candidate) => present.has(candidate.toLowerCase()),
+        comSpec: () => 'C:\\Windows\\System32\\cmd.exe',
+        powerShell: () => 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+        pathExt: () => '.COM;.EXE;.BAT;.CMD',
+      };
+    };
+
+    it('asks an npm-installed agent through cmd.exe, with the line passed verbatim', async () => {
+      const exec = execAnswering({ code: 1, stdout: 'Not logged in\n' });
+      const home = codexHome('');
+      try {
+        const auth = await readRunnerAuth(CODEX_MANIFEST, {
+          exec, env: { CODEX_HOME: home }, launch: windows([`${NPM}\\codex.cmd`, `${NPM}\\codex.ps1`]),
+        });
+
+        expect(auth.state).toBe('signed-out');
+        expect(exec).toHaveBeenCalledWith(
+          'C:\\Windows\\System32\\cmd.exe',
+          ['/d', '/s', '/c', `"${NPM}\\codex.cmd login status"`],
+          expect.objectContaining({ verbatim: true }),
+        );
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it('starts a native executable directly', async () => {
+      const exec = execAnswering({ code: 0, stdout: '{"loggedIn":true}' });
+
+      await readRunnerAuth(CLAUDE_CODE_MANIFEST, { exec, launch: windows(['C:\\tools\\claude.exe']) });
+
+      expect(exec).toHaveBeenCalledWith('C:\\tools\\claude.exe', ['auth', 'status'], expect.not.objectContaining({ verbatim: true }));
+    });
+
+    it.runIf(process.platform === 'win32')('reads a real .cmd shim signed out', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'ordewell-auth-shim-'));
+      const home = codexHome('');
+      writeFileSync(join(dir, 'codex.cmd'), '@echo off\r\necho Not logged in\r\nexit /b 1\r\n');
+      try {
+        const auth = await readRunnerAuth(CODEX_MANIFEST, {
+          env: { CODEX_HOME: home }, launch: { resolvePath: async () => dir },
+        });
+
+        expect(auth).toEqual({ state: 'signed-out', loginCommand: ['codex', 'login'], detail: 'not logged in', signIn: CODEX_SIGN_IN });
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
   });
 });
 
@@ -387,6 +478,7 @@ describe('signedOutFromFailure', () => {
     expect(signedOutFromFailure(CLAUDE_CODE_MANIFEST, 'Not logged in · Please run /login')).toEqual({
       state: 'signed-out',
       loginCommand: ['claude', 'auth', 'login'],
+      signIn: CLAUDE_SIGN_IN,
       detail: 'not logged in',
     });
   });
@@ -397,6 +489,7 @@ describe('signedOutFromFailure', () => {
       expect(signedOutFromFailure(CODEX_MANIFEST, 'Not logged in\n', { HOME: home })).toEqual({
         state: 'signed-out',
         loginCommand: ['codex', 'login'],
+      signIn: CODEX_SIGN_IN,
         detail: 'not logged in',
       });
     } finally {
@@ -411,6 +504,22 @@ describe('signedOutFromFailure', () => {
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
+  });
+
+  it("reads the ACP agent's auth-required error as Copilot signed out, with `copilot login`", () => {
+    expect(signedOutFromFailure(COPILOT_CLI_MANIFEST, 'Authentication required')).toEqual({
+      state: 'signed-out',
+      loginCommand: ['copilot', 'login'],
+      signIn: COPILOT_SIGN_IN,
+      detail: 'not logged in',
+    });
+    // The adapter's own words for the same error, which is what a task's failure carries.
+    expect(signedOutFromFailure(COPILOT_CLI_MANIFEST, 'GitHub Copilot CLI is not signed in. Run `copilot login`.')?.state).toBe('signed-out');
+  });
+
+  it('leaves an unrelated Copilot failure unjudged', () => {
+    expect(signedOutFromFailure(COPILOT_CLI_MANIFEST, 'gh: You are not logged in to any GitHub hosts.')).toBeUndefined();
+    expect(signedOutFromFailure(COPILOT_CLI_MANIFEST, 'Model not available')).toBeUndefined();
   });
 
   it('leaves an unrelated failure, and a runner that declares no login, unjudged', () => {

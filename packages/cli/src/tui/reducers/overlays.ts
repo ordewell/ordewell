@@ -251,9 +251,13 @@ function choose(state: TuiState, picker: PickerState, item: PickerItem | undefin
       const items = pickerItemsFor(state, action);
       // An empty catalog is not an empty allowlist. Confirming a picker with no
       // rows would store `[]` — "no restriction" — so refuse to open it rather
-      // than let a cold discovery quietly lift the user's limit.
+      // than let a cold discovery quietly lift the user's limit. A runner that
+      // said why it lists nothing is not helped by a refresh, so it is told why.
       if (items.length === 0) {
-        return step(say(state, 'error', `No models discovered for ${item.label}. Run /refresh, then try again.`));
+        const reason = state.runnerErrors[item.id];
+        return step(say(state, 'error', reason
+          ? `No models discovered for ${item.label}: ${reason}`
+          : `No models discovered for ${item.label}. Run /refresh, then try again.`));
       }
       return step({
         ...state,

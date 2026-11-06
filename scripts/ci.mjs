@@ -12,6 +12,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { npm as runNpm } from './npm.mjs';
 
 const MOCK_PROVIDER_PORT = 3799;
 
@@ -20,7 +21,7 @@ const MOCK_PROVIDER_PORT = 3799;
 process.env.ORDEWELL_NO_VERSION_CHECK = '1';
 
 const sh = (cmd, args, env) => spawnSync(cmd, args, { stdio: 'inherit', env: { ...process.env, ...env } }).status ?? 1;
-const npm = (...args) => sh('npm', args);
+const npm = (...args) => runNpm(args);
 
 function portOpen(port) {
   return new Promise((resolve) => {
@@ -76,7 +77,7 @@ function withDisplay(what, args, env) {
     console.error(`No display and no xvfb-run: install xvfb to run ${what}.`);
     return 1;
   }
-  return headlessLinux ? sh('xvfb-run', ['-a', 'npm', ...args], env) : sh('npm', args, env);
+  return headlessLinux ? sh('xvfb-run', ['-a', 'npm', ...args], env) : runNpm(args, env);
 }
 
 function integrationTest() {
@@ -105,7 +106,7 @@ function installedMatchesLockfile() {
   if (!drifted.length) return true;
   console.error('node_modules does not match package-lock.json, so this run would not test what CI installs:');
   for (const d of drifted) console.error(`  ${d}`);
-  console.error('Reinstall them: `npm ci`, or off Linux, where ci.yml explains why that fails, delete each directory above and run `npm install`.');
+  console.error('Reinstall them: `npm ci`.');
   return false;
 }
 
@@ -152,8 +153,7 @@ const CI_ONLY = {
   'Confirm every step this change owed ran': 'nothing is skipped here for it to confirm',
   'Require every check this change owed': 'a GitHub required status',
   'Use Node.js 22.x': 'the local Node is what you have',
-  // ci.yml explains why the lockfile does not install cleanly off Linux, and
-  // `npm ci` would also wipe the node_modules you are working in.
+  // `npm ci` would wipe the node_modules you are working in.
   'Install dependencies': 'run `npm ci` yourself after a lockfile change',
   'Cache the VS Code download': 'packages/vscode/.vscode-test is already kept between runs',
   'Resolve the VS Code version under test': 'the workflow asks the update service which stable it will download; a local run keeps the .vscode-test it has',
@@ -164,6 +164,14 @@ const CI_ONLY = {
   'Upload coverage reports': 'reports stay in packages/*/coverage/',
   'Upload .vsix': 'the .vsix stays in packages/vscode/',
   'Real engine — every harness in a real container': 'it needs an engine and a large image: run `npm run test:containers`',
+  // The Windows jobs run on this host what the steps above run, so a local run
+  // on Windows has run them already, and one elsewhere cannot.
+  'Build every package': 'the two build steps above build the same packages',
+  'Test on Windows': '`Test with coverage` runs the Windows job’s core, CLI, web and VS Code suites on this host',
+  'Verify scripts on Windows': 'the verify step above runs them on this host',
+  'Bench harness tests on Windows': 'the bench step above runs them on this host',
+  'Planner conversation loop on Windows': 'the planner loop step above runs it on this host',
+  'VS Code integration test on Windows': 'the integration step above runs it on this host',
 };
 
 const workflow = readFileSync('.github/workflows/ci.yml', 'utf8');

@@ -15,7 +15,7 @@ export interface TreeController {
  * The lazily read tree of one repo in one scope: a directory is read the first
  * time it opens, and every open one is read again on `reload` (and when the
  * window regains focus in the checkout, where files change under the user).
- * A `gone` scope is reported, never retried (ADR-0061 R2).
+ * A `gone` scope is reported, never retried (ADR-0064 R2).
  */
 export function useTree(target: ReadTarget, scopeId: string, onGone: (message: string) => void): TreeController {
   const [dirs, setDirs] = useState<ReadonlyMap<string, DirState>>(new Map());
