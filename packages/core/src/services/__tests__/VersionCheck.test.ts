@@ -131,6 +131,16 @@ describe('VersionCheck', () => {
     expect(updates).toEqual(['Ordewell 0.11.0 is out — npm i -g ordewell']);
   });
 
+  it('names the upgrade command the caller gives, for an install npm did not make', async () => {
+    seenNotice();
+    const { check, updates } = start({
+      fetch: fakeFetch(reply(200, '{"latest":"0.11.0"}')).fetch,
+      upgradeCommand: 'brew upgrade ordewell',
+    });
+    await check.settled();
+    expect(updates).toEqual(['Ordewell 0.11.0 is out — brew upgrade ordewell']);
+  });
+
   it.each([
     ['the same version', '0.10.12'],
     ['an older version', '0.10.9'],

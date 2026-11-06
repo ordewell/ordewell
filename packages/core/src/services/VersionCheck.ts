@@ -3,6 +3,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { globalDataDir } from '../utils/globalDataDir';
 import { writePrivateFile } from '../utils/privateFile';
+import { upgradeCommand } from '../utils/seaRuntime';
 
 /**
  * The daily version check (ADR-0048): one ping a day that counts installs
@@ -47,6 +48,11 @@ export interface VersionCheckOptions {
   onNotice(text: string): void;
   /** A newer version is out; `text` is the line to show. */
   onUpdate(text: string, latest: string): void;
+  /**
+   * What the update line tells the user to run; the npm upgrade by default,
+   * so only a caller that knows it was installed another way names one.
+   */
+  upgradeCommand?: string;
   /** False turns the whole check off, as the off-switch variables do. */
   telemetryEnabled?: boolean;
   env?: Record<string, string | undefined>;
@@ -186,7 +192,7 @@ export function startVersionCheck(options: VersionCheckOptions): VersionCheck {
         redirect: 'manual',
       });
       const latest = await newerVersion(response, version);
-      if (latest) options.onUpdate(`Ordewell ${latest} is out — npm i -g ordewell`, latest);
+      if (latest) options.onUpdate(`Ordewell ${latest} is out — ${options.upgradeCommand ?? upgradeCommand('npm')}`, latest);
     } finally {
       clearTimeout(timer);
     }

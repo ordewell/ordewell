@@ -218,6 +218,8 @@ export {
 } from './services/SkillsService';
 export { globalDataDir, migrateOldConfigDir } from './utils/globalDataDir';
 export { writePrivateFile, ensurePrivateDir } from './utils/privateFile';
+export { installMethod, isSea, seaRuntimeDir, seaVersion, upgradeCommand } from './utils/seaRuntime';
+export type { InstallMethod, SeaDeps, SeaModule } from './utils/seaRuntime';
 export type {
   AccountLimitsMessage,
   SessionMessage,

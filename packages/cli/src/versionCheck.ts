@@ -1,4 +1,4 @@
-import { startVersionCheck, type VersionCheck, type VersionCheckOptions } from '@ordewell/core';
+import { installMethod, startVersionCheck, upgradeCommand, type SeaDeps, type VersionCheck, type VersionCheckOptions } from '@ordewell/core';
 import { cliVersion } from './version';
 
 /**
@@ -11,12 +11,21 @@ import { cliVersion } from './version';
  * A headless command shows both the one-time notice and the update line on
  * stderr ({@link toStderr}), so stdout stays the command's own; the TUI draws
  * them in its frame, which a stray write would tear.
+ *
+ * The update line names the upgrade for the way this copy was installed: an
+ * npm upgrade does nothing for the standalone binary.
  */
 export function startCliVersionCheck(
   show: Pick<VersionCheckOptions, 'onNotice' | 'onUpdate'>,
   options: Partial<Omit<VersionCheckOptions, 'onNotice' | 'onUpdate'>> = {},
+  sea: SeaDeps = {},
 ): VersionCheck {
-  return startVersionCheck({ version: cliVersion(), ...options, ...show });
+  return startVersionCheck({
+    version: cliVersion(sea),
+    upgradeCommand: upgradeCommand(installMethod(sea)),
+    ...options,
+    ...show,
+  });
 }
 
 const writeLine = (line: string): void => console.error(line);
