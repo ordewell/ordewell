@@ -9,7 +9,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, join, resolve } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { after, describe, it } from 'node:test';
 
 const SH = resolve('scripts/install/cli.sh');
@@ -498,6 +498,47 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
       const { script, log } = desktopScript();
       assert.equal(install(['--desktop'], { env: { ORDEWELL_DESKTOP_SCRIPT_FROM: script } }).status, 0);
       assert.equal(readFileSync(log, 'utf8'), 'desktop.sh \n');
+    });
+
+    /** A desktop installer that records the ORDEWELL_INSTALL_DIR it was run with. */
+    function desktopEnvScript() {
+      const dir = scratch('desktop');
+      const log = join(dir, 'env.log');
+      const script = join(dir, 'desktop.sh');
+      write(script, `#!/bin/sh\necho "ORDEWELL_INSTALL_DIR=\${ORDEWELL_INSTALL_DIR-<unset>}" >> "${log}"\n`);
+      return { script, log };
+    }
+
+    for (const args of [[], ['--dry-run'], ['--uninstall']]) {
+      it(`does not pass the CLI's ORDEWELL_INSTALL_DIR on to desktop.sh (${args.join(' ') || 'install'})`, () => {
+        const { script, log } = desktopEnvScript();
+        const result = install(['--desktop', ...args], { env: { ORDEWELL_DESKTOP_SCRIPT_FROM: script } });
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(readFileSync(log, 'utf8'), 'ORDEWELL_INSTALL_DIR=<unset>\n');
+      });
+
+      it(`passes ORDEWELL_DESKTOP_INSTALL_DIR on as desktop.sh's ORDEWELL_INSTALL_DIR (${args.join(' ') || 'install'})`, () => {
+        const { script, log } = desktopEnvScript();
+        const where = join(scratch('desktop-prefix'), 'apps');
+        const result = install(['--desktop', ...args], { env: { ORDEWELL_DESKTOP_SCRIPT_FROM: script, ORDEWELL_DESKTOP_INSTALL_DIR: where } });
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(readFileSync(log, 'utf8'), `ORDEWELL_INSTALL_DIR=${where}\n`);
+        if (args.length === 0) assert.ok(existsSync(join(result.target, 'ordewell')));
+      });
+    }
+
+    it('plans the desktop app at desktop.sh\'s default, not in the CLI folder, with the real desktop.sh', () => {
+      const home = scratch('home');
+      const target = join(home, 'cli-only-bin');
+      const result = install(['--desktop', '--dry-run', '--version', VERSION], {
+        home,
+        target,
+        env: { ORDEWELL_DESKTOP_SCRIPT_FROM: join(dirname(SH), 'desktop.sh'), ORDEWELL_DESKTOP_FROM: scratch('desktop-release') },
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, new RegExp(`Install: +${target}/ordewell\n`));
+      assert.match(result.stdout, new RegExp(`Install: +${home}/\\.local/bin/ordewell-desktop\n`));
+      assert.doesNotMatch(result.stdout, /cli-only-bin\/bin\/ordewell-desktop/);
     });
 
     it('is not run without --desktop', () => {

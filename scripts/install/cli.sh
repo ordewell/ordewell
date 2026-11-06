@@ -31,6 +31,12 @@
 #   ORDEWELL_DESKTOP_SCRIPT_FROM
 #                          a file or an https:// URL to take desktop.sh from
 #                          with --desktop, instead of the copy on GitHub
+#   ORDEWELL_DESKTOP_INSTALL_DIR
+#                          with --desktop, handed to desktop.sh as its own
+#                          ORDEWELL_INSTALL_DIR (the folder Ordewell.app goes
+#                          in on macOS, the prefix replacing ~/.local on
+#                          Linux); this script's ORDEWELL_INSTALL_DIR is never
+#                          passed on, since it names the CLI's folder
 
 set -eu
 
@@ -77,6 +83,10 @@ Environment:
   ORDEWELL_DESKTOP_SCRIPT_FROM
                          a file or an https:// URL to take desktop.sh from
                          with --desktop
+  ORDEWELL_DESKTOP_INSTALL_DIR
+                         with --desktop, where the desktop app goes: passed to
+                         desktop.sh as its ORDEWELL_INSTALL_DIR (the CLI's
+                         ORDEWELL_INSTALL_DIR is not passed on)
 
 On Windows, install with: npm install -g ordewell
 EOF
@@ -169,7 +179,17 @@ run_desktop() {
   [ "$dry_run" = 0 ] || set -- "$@" --dry-run
   say ""
   say "Running the desktop app installer"
-  sh "$tmp/desktop.sh" "$@" || die "the desktop app installer failed (the command-line app above is unaffected)"
+  # ORDEWELL_INSTALL_DIR means the CLI's folder here and the app's folder or
+  # prefix in desktop.sh, so the CLI's value is never passed on: the desktop
+  # installer gets ORDEWELL_DESKTOP_INSTALL_DIR, or its own defaults.
+  (
+    unset ORDEWELL_INSTALL_DIR
+    if [ -n "${ORDEWELL_DESKTOP_INSTALL_DIR:-}" ]; then
+      ORDEWELL_INSTALL_DIR=$ORDEWELL_DESKTOP_INSTALL_DIR
+      export ORDEWELL_INSTALL_DIR
+    fi
+    exec sh "$tmp/desktop.sh" "$@"
+  ) || die "the desktop app installer failed (the command-line app above is unaffected)"
 }
 
 # ---- uninstall ----------------------------------------------------------------

@@ -72,8 +72,9 @@ curl -fsSL https://ordewell.ai/install.sh | sh
 It installs to `~/.local/bin/ordewell`; set `ORDEWELL_INSTALL_DIR` to put it
 elsewhere. Pass options after `sh -s --`: `--version X.Y.Z` for a specific
 release, `--dry-run` to see what it would do, `--uninstall` to remove it, and
-`--desktop` to install the [desktop app](#desktop-app) too. Run it again to
-upgrade. With Homebrew:
+`--desktop` to install the [desktop app](#desktop-app) too (its folder is set
+with `ORDEWELL_DESKTOP_INSTALL_DIR`, not `ORDEWELL_INSTALL_DIR`). Run it again
+to upgrade. With Homebrew:
 
 ```bash
 brew install ordewell/tap/ordewell
