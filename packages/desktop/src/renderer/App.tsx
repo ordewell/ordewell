@@ -22,6 +22,13 @@ function WorkspaceWindow({ path, status }: { path: string; status: DaemonStatus 
         layout: prefs.layouts[path],
         // Only this workspace's entry: main merges it into the others'.
         persistLayout: (saved) => { void window.ordewell.prefs.set('layouts', { [path]: saved }); },
+        projects: {
+          recents: () => window.ordewell.app.recentWorkspaces(),
+          onRecentsChange: (cb) => window.ordewell.app.onRecentsChange(cb),
+          // Main answers with a dialog of its own when it cannot; nothing comes back for the page to show.
+          open: (folder, options) => { void window.ordewell.app.openWorkspace(folder, options).catch(() => undefined); },
+          openDropped: (file) => window.ordewell.app.openDroppedFolder(file),
+        },
       }));
     });
     return () => { live = false; };

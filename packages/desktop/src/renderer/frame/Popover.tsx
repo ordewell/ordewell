@@ -1,6 +1,22 @@
-import { useEffect, useRef, type ReactNode, type RefObject } from 'react';
+import { useEffect, useRef, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 
 export const FOCUSABLE = 'button:not([disabled]), [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
+/** A title-bar menu: arrow keys, Home and End move between its items, as a menu's do. */
+export function onMenuKey(event: KeyboardEvent<HTMLElement>): void {
+  const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[role^="menuitem"]'))
+    .filter((item) => item === document.activeElement || (item.checkVisibility?.() ?? true));
+  if (items.length === 0) return;
+  const at = items.indexOf(document.activeElement as HTMLElement);
+  const next = event.key === 'ArrowDown' ? (at + 1) % items.length
+    : event.key === 'ArrowUp' ? (at - 1 + items.length) % items.length
+      : event.key === 'Home' ? 0
+        : event.key === 'End' ? items.length - 1
+          : undefined;
+  if (next === undefined) return;
+  event.preventDefault();
+  items[next]?.focus();
+}
 
 interface PopoverProps {
   label: string;

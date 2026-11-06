@@ -9,6 +9,7 @@ import type { DaemonProxy } from './daemon/proxy';
 import type { AttentionNotifier } from './notifications';
 import { validPref, type PrefsStore } from './prefs';
 import { droppedFolder } from './droppedFolder';
+import type { ProjectOpener } from './projectOpener';
 import type { RecentsStore } from './recents';
 import { Shell } from './shell';
 import { bringForward } from './testWindows';
@@ -28,6 +29,8 @@ export interface IpcDeps {
   /** The daemons that hold sessions a window joined (ADR-0063 H8). */
   holders: HolderConnections;
   recents: RecentsStore;
+  /** Where a chosen folder opens: focus, switch this window, or a new one (projectSwitch.ts). */
+  projects: ProjectOpener;
   prefs: PrefsStore;
   updates: UpdateController;
   notifications: AttentionNotifier;
@@ -139,32 +142,23 @@ export function registerIpc(deps: IpcDeps): void {
   }));
   handle(CHANNELS.appContext, (event) => windows.contextOf(event.sender));
 
-  handle(CHANNELS.appOpenWorkspace, async (event, path) => {
-    let chosen: string | undefined;
-    if (path === undefined) {
-      const parent = BrowserWindow.fromWebContents(event.sender);
-      const options = { title: 'Open a workspace', properties: ['openDirectory' as const, 'createDirectory' as const] };
-      const picked = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options);
-      if (picked.canceled) return undefined;
-      chosen = picked.filePaths[0];
-    } else if (typeof path === 'string') {
-      // A page may reopen what the picker once chose, never name a new folder:
-      // anything new comes through the native dialog the user answered.
-      const recent = recents.list().find((entry) => entry.path === path);
-      if (!recent || recent.missing) return undefined;
-      chosen = recent.path;
-    }
-    if (!chosen) return undefined;
-    const key = windows.openWorkspace(chosen);
-    recents.touch(key);
-    return key;
+  handle(CHANNELS.appOpenWorkspace, async (event, path, options) => {
+    const from = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+    const choice = { newWindow: isRecord(options) && options.newWindow === true };
+    if (path === undefined) return deps.projects.pick(from, choice);
+    // A page may reopen what the picker once chose, never name a new folder:
+    // anything new comes through the native dialog the user answered.
+    const recent = typeof path === 'string' ? recents.list().find((entry) => entry.path === path) : undefined;
+    if (!recent || recent.missing) return undefined;
+    return deps.projects.open(from, recent.path, choice);
   });
-  handle(CHANNELS.appOpenDroppedFolder, (_event, path) => {
+  handle(CHANNELS.appOpenDroppedFolder, async (event, path) => {
     const dropped = droppedFolder(path);
     if (!dropped.ok) return { ok: false, message: dropped.message };
-    recents.touch(windows.openWorkspace(dropped.path));
+    await deps.projects.open(BrowserWindow.fromWebContents(event.sender) ?? undefined, dropped.path);
     return { ok: true };
   });
+  handle(CHANNELS.appReportLiveWork, (event, kinds) => { deps.projects.report(event.sender, kinds); });
   handle(CHANNELS.appRecentWorkspaces, () => recents.list());
   handle(CHANNELS.appForgetWorkspace, (_event, path) => {
     if (typeof path !== 'string') throw new Error('path must be a string');

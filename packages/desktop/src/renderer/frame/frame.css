@@ -18,8 +18,9 @@
 
 /*
  * Title bar (design.md, Title bar priority): one row that no panel's width
- * moves. Needs you, the primary action and ⋯ never shrink; the breadcrumb and
- * then the scope give way as the bar narrows, by the container queries below.
+ * moves. Needs you, the primary action and ⋯ never shrink; the project
+ * switcher drops its name but stays, and the breadcrumb and then the scope give
+ * way as the bar narrows, by the container queries below.
  */
 .frame-title {
   grid-row: 1;
@@ -51,12 +52,42 @@
 .frame-primary { flex: none; max-width: none; }
 .frame-primary .ow-button-label { overflow: visible; }
 
-.frame-breadcrumb { flex: 1 1 auto; min-width: 0; overflow: hidden; }
-.frame-breadcrumb ol { display: flex; align-items: center; gap: var(--ow-space-1); min-width: 0; margin: 0; padding: 0; list-style: none; }
+.frame-breadcrumb { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: var(--ow-space-1); }
+/* The list clips, not the nav: the switcher's menu hangs below the bar. */
+.frame-breadcrumb ol { display: flex; align-items: center; gap: var(--ow-space-1); min-width: 0; margin: 0; padding: 0; list-style: none; overflow: hidden; }
 .frame-breadcrumb li { display: flex; align-items: center; gap: var(--ow-space-1); min-width: 0; color: var(--ow-fg-secondary); white-space: nowrap; }
 .frame-breadcrumb li > .ow-icon { flex: none; }
-.frame-crumb-workspace { flex: 0 1 auto; color: var(--ow-fg); font: var(--ow-type-body-strong); overflow: hidden; text-overflow: ellipsis; display: block !important; }
 .frame-crumb { flex: 0 1 auto; }
+
+/* The project name as a menu button: the chip's shape, the name's weight. */
+.frame-project { flex: 0 1 auto; min-width: 0; }
+.frame-project-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ow-space-1);
+  max-width: 100%;
+  height: var(--ow-hit-icon);
+  padding: 0 var(--ow-space-2);
+  border: 0;
+  border-radius: var(--ow-radius-md);
+  background: transparent;
+  color: var(--ow-fg);
+  font: var(--ow-type-body-strong);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.frame-project-switcher:hover, .frame-project-switcher[aria-expanded='true'] { background: var(--ow-bg-hover); }
+.frame-project-switcher > .ow-icon { flex: none; color: var(--ow-fg-secondary); }
+.frame-project-switcher .frame-project-icon { display: none; }
+.frame-project-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* It opens from the left of the bar, so its menu hangs rightwards, under it. */
+.frame-menu.frame-project-menu { left: 0; right: auto; min-width: 280px; max-width: min(480px, 90vw); }
+.frame-project-menu button { display: flex; align-items: center; gap: var(--ow-space-2); }
+.frame-project-entry { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.frame-menu-hint { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: right; color: var(--ow-fg-secondary); font: var(--ow-type-small); }
+kbd.frame-menu-hint { font-family: inherit; }
+.frame-menu-check { flex: none; display: inline-flex; width: 14px; }
+.frame-menu-empty { padding: var(--ow-space-1) var(--ow-space-3); color: var(--ow-fg-secondary); font: var(--ow-type-small); }
 
 /* Needs you: the attention colour while something waits, the glyph alone in grey when nothing does. */
 .frame-needs-you-button {
@@ -80,11 +111,12 @@
 
 /* The give-way order, widest first. Each step is reachable again from ⋯ › Go to. */
 @container title (max-width: 1000px) {
-  .frame-crumb-workspace { display: none !important; }
-  .frame-crumb-workspace + .frame-crumb > .ow-icon { display: none; }
+  .frame-project-name { display: none; }
+  .frame-project-switcher .frame-project-icon { display: inline-flex; }
 }
 @container title (max-width: 860px) {
-  .frame-breadcrumb { display: none; }
+  .frame-breadcrumb { flex: none; }
+  .frame-breadcrumb ol { display: none; }
 }
 @container title (max-width: 820px) {
   .frame-title .scope-chip-label { display: none; }

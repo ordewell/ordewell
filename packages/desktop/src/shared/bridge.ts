@@ -222,6 +222,20 @@ export type Unsubscribe = () => void;
 /** The frame commands (renderer/frame/commands.ts) the application menu offers; the menu names no other. */
 export type MenuCommand = 'layout.reset';
 
+/**
+ * What a project window has going that switching it to another folder would
+ * leave behind: a run, something in Needs you, an open checkpoint, a planner
+ * turn. The page says which; main words them, so a page cannot write the
+ * question it is asked.
+ */
+export const LIVE_WORK_KINDS = ['run', 'needsYou', 'checkpoint', 'planner'] as const;
+export type LiveWorkKind = (typeof LIVE_WORK_KINDS)[number];
+
+export interface OpenWorkspaceOptions {
+  /** Open it in a window of its own rather than switching this one. */
+  newWindow?: boolean;
+}
+
 export interface OrdewellBridge {
   app: {
     info(): Promise<AppInfo>;
@@ -229,9 +243,18 @@ export interface OrdewellBridge {
     onThemeChange(cb: (theme: AppInfo['theme']) => void): Unsubscribe;
     /** An application-menu item that runs one of the frame's commands in the focused window. */
     onMenuCommand(cb: (command: MenuCommand) => void): Unsubscribe;
-    /** With no path, the native folder picker; with one, a recent entry. Focuses an open window (H6). */
-    openWorkspace(path?: string): Promise<string | undefined>;
+    /**
+     * With no path, the native folder picker; with one, a recent entry.
+     * Focuses an open window (H6); from a project window with nothing live it
+     * switches that window, and with live work it asks to open a new one.
+     * Undefined when nothing was opened.
+     */
+    openWorkspace(path?: string, options?: OpenWorkspaceOptions): Promise<string | undefined>;
     recentWorkspaces(): Promise<RecentWorkspace[]>;
+    /** The recents changed in another window or from the menu, so a list drawn from them is stale. */
+    onRecentsChange(cb: () => void): Unsubscribe;
+    /** What this window has live now; asked about before the window switches folder. */
+    reportLiveWork(kinds: readonly LiveWorkKind[]): Promise<void>;
     forgetWorkspace(path: string): Promise<RecentWorkspace[]>;
     /** Forget's Undo: only an entry this app forgot comes back. */
     unforgetWorkspace(path: string): Promise<RecentWorkspace[]>;
@@ -321,6 +344,7 @@ export const CHANNELS = {
   appUnforgetWorkspace: 'ordewell:app.unforgetWorkspace',
   appRememberRecent: 'ordewell:app.rememberRecent',
   appOpenDroppedFolder: 'ordewell:app.openDroppedFolder',
+  appReportLiveWork: 'ordewell:app.reportLiveWork',
   daemonStatus: 'ordewell:daemon.status',
   daemonRetry: 'ordewell:daemon.retry',
   daemonStart: 'ordewell:daemon.start',
@@ -353,6 +377,7 @@ export const EVENTS = {
   terminal: 'ordewell:event.terminal',
   notifyClick: 'ordewell:event.notifyClick',
   menuCommand: 'ordewell:event.menuCommand',
+  recentsChanged: 'ordewell:event.recentsChanged',
 } as const;
 
 /** What `daemonSubscribe` takes: a session's socket, or one of its child plans'. */

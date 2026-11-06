@@ -12,6 +12,7 @@ import * as needsYou from './needsYou/NeedsYou';
 import * as planSidebar from './plan/PlanSidebar';
 import * as planTab from './plan/PlanTab';
 import * as plannerPanel from './planner/PlannerPanel';
+import * as liveWork from './project/liveWork';
 import * as scopeSwitcher from './scope/ScopeSwitcher';
 import * as settingsTab from './settings/SettingsTab';
 import * as statusSlots from './status/StatusSlots';
@@ -28,7 +29,7 @@ const VIEWS: ReadonlyArray<{ register(api: FrameApi): Unregister }> = [
   explorerSidebar, fileTab, scopeSwitcher,
   changesSidebar, diffTab, checkoutGroup,
   gitSidebar, commitGraphTab, commitDiffTab,
-  terminalPanel,
+  terminalPanel, liveWork,
 ];
 
 export function registerViews(api: FrameApi): Unregister {

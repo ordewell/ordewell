@@ -84,6 +84,13 @@ export class RecentsStore {
   ) {}
 
   private readonly forgotten = new Map<string, { entry: Entry; index: number }>();
+  private readonly listeners = new Set<(list: RecentWorkspace[]) => void>();
+
+  /** Every change, wherever it came from: the menu's Open Recent and each window's list are redrawn from it. */
+  onChange(listener: (list: RecentWorkspace[]) => void): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
 
   list(): RecentWorkspace[] {
     return parseEntries(readJsonFile(this.file)).map((entry) => ({
@@ -129,6 +136,13 @@ export class RecentsStore {
     return this.list();
   }
 
+  /** Clear Recently Opened. Nothing cleared comes back through Undo. */
+  clear(): RecentWorkspace[] {
+    this.forgotten.clear();
+    this.write([]);
+    return this.list();
+  }
+
   /**
    * What the welcome window learned from the daemon about a workspace already
    * in the list. A path that is not in it changes nothing: a page records
@@ -144,11 +158,16 @@ export class RecentsStore {
     if (!git && !lastSession) return false;
     if (git) entry.git = git;
     if (lastSession) entry.lastSession = lastSession;
-    this.write(entries);
+    // The welcome window records these as it draws its list, so telling it
+    // would have it draw again, and record again.
+    this.write(entries, false);
     return true;
   }
 
-  private write(entries: Entry[]): void {
+  private write(entries: Entry[], notify = true): void {
     writeJsonFile(this.file, { version: 1, entries: entries.slice(0, MAX_RECENTS) });
+    if (!notify || this.listeners.size === 0) return;
+    const list = this.list();
+    for (const listener of this.listeners) listener(list);
   }
 }
