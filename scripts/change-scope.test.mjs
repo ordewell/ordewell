@@ -79,19 +79,19 @@ describe('a change inside workspaces', () => {
   it('takes vscode and desktop with ui, and runs the real VS Code and the app for it: both draw from ui\'s dist', () => {
     const scope = selected('packages/ui/src/chat/App.tsx');
     assert.deepEqual(scope.workspaces, [UI, VSCODE, DESKTOP]);
-    assert.deepEqual(offChecks(scope), ['engine', 'planner', 'sandbox']);
+    assert.deepEqual(offChecks(scope), ['binary', 'engine', 'planner', 'sandbox']);
   });
 
   it('runs the real VS Code for a vscode change, and no container or app', () => {
     const scope = selected('packages/vscode/src/extension.ts');
     assert.deepEqual(scope.workspaces, [VSCODE]);
-    assert.deepEqual(offChecks(scope), ['desktop', 'engine', 'planner', 'sandbox']);
+    assert.deepEqual(offChecks(scope), ['binary', 'desktop', 'engine', 'planner', 'sandbox']);
   });
 
   it('keeps a desktop change to desktop and drives the app for it: nothing is built on it, and no container or VS Code proves it', () => {
     const scope = selected('packages/desktop/src/main/daemon/DaemonManager.ts');
     assert.deepEqual(scope.workspaces, [DESKTOP]);
-    assert.deepEqual(offChecks(scope), ['engine', 'integration', 'planner', 'sandbox']);
+    assert.deepEqual(offChecks(scope), ['binary', 'engine', 'integration', 'planner', 'sandbox']);
     assert.equal(scope.checks.desktop, true);
   });
 
@@ -101,6 +101,18 @@ describe('a change inside workspaces', () => {
       assert.equal(scope.mode, 'full', path);
       assert.equal(scope.checks.desktop, true, path);
     }
+  });
+
+  it('builds and drives the standalone binary for whatever reaches the cli: it bundles the cli, web and core', () => {
+    for (const path of ['packages/cli/src/sea.ts', 'packages/web/server/daemon.ts', 'packages/core/src/index.ts']) {
+      const scope = selected(path);
+      assert.equal(scope.mode, 'selected', path);
+      assert.equal(scope.checks.binary, true, path);
+    }
+    for (const path of ['packages/ui/src/chat/App.tsx', 'packages/vscode/src/extension.ts', 'packages/desktop/src/main/index.ts']) {
+      assert.equal(selected(path).checks.binary, false, path);
+    }
+    assert.deepEqual(STEPS_BY_CHECK.binary, ['build-binary', 'drive-binary']);
   });
 
   it('treats a package\'s own build or test config as that package', () => {
@@ -150,6 +162,13 @@ describe('the full fallback', () => {
     ['.github/workflows/release.yml', 'the release'],
     ['.github/workflows/desktop-build.yml', 'the desktop build: ci.yml cannot judge it, so the full run does'],
     ['.github/workflows/verify-release-tag.mjs', 'the release'],
+    ['.github/workflows/cli-build.yml', 'the binary build on every target: ci.yml cannot judge it, so the full run does'],
+    ['scripts/sea/build.mjs', 'builds the standalone binary'],
+    ['scripts/sea/build.test.mjs', 'the binary build\'s tests'],
+    ['packaging/sea/entitlements.plist', 'the entitlements the macOS binary is signed with'],
+    ['bench/live/drive-binary.mjs', 'drives the standalone binary'],
+    ['scripts/install/cli.sh', 'the CLI\'s one-line installer, which fetches the binary'],
+    ['scripts/install/cli.test.mjs', 'the CLI installer\'s tests'],
     ['scripts/change-scope.mjs', 'selection itself'],
     ['scripts/verify-skills.mjs', 'a verify script'],
     ['scripts/install/desktop.sh', 'the one-line installer, tested by the bench step'],
@@ -530,7 +549,7 @@ describe('ci-scope.mjs, as ci.yml runs it', () => {
     const { status, outputs } = run('select', { EVENT: 'push' });
     assert.equal(status, 0);
     assert.equal(outputs.workspace_args, '');
-    for (const check of ['packages', 'sandbox', 'planner', 'integration', 'desktop', 'engine']) assert.equal(outputs[check], 'true', check);
+    for (const check of ['packages', 'sandbox', 'planner', 'integration', 'desktop', 'engine', 'binary']) assert.equal(outputs[check], 'true', check);
     assert.equal(JSON.parse(outputs.scope).mode, 'full');
   });
 

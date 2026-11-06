@@ -32,6 +32,7 @@ jobs:
       integration: ${{ steps.select.outputs.integration }}
       desktop: ${{ steps.select.outputs.desktop }}
       engine: ${{ steps.select.outputs.engine }}
+      binary: ${{ steps.select.outputs.binary }}
       workspace_args: ${{ steps.select.outputs.workspace_args }}
 
     steps:
@@ -126,10 +127,28 @@ jobs:
           done
           node bench/live/drive-conversation.mjs
 
+      # The standalone binary (ADR-0065), linux-x64 only: cli-build.yml builds
+      # every target on its own runner for a pull request that touches it and
+      # for a release. It bundles from the sources and core's dist alone, so
+      # it needs no build but core's. The drive starts its own mock on 3799,
+      # which the planner loop above has let go, and takes Node off PATH.
+      - name: Build the standalone CLI binary
+        id: build-binary
+        if: needs.scope.outputs.binary != 'false'
+        run: node scripts/sea/build.mjs
+
+      - name: CLI binary — offline e2e, no Node on PATH
+        id: drive-binary
+        if: needs.scope.outputs.binary != 'false'
+        run: |
+          dist-sea/linux-x64/ordewell --version
+          node bench/live/drive-binary.mjs --bin dist-sea/linux-x64/ordewell
+
       # node:test suites, not vitest: the runner-detection lab makes the real
       # install probe run against shimmed CLIs in a throwaway HOME, and the
       # pipeline test drives plan -> execute -> verify through the fake claude.
-      # scripts/*.test.mjs run here too, selection's own among them.
+      # scripts/**/*.test.mjs run here too: selection's own, the installer's
+      # (scripts/install/) and the binary build's (scripts/sea/) among them.
       - name: Bench harness tests (offline, against the built core)
         id: bench
         if: needs.scope.outputs.packages != 'false'
