@@ -157,8 +157,9 @@ left, where VS Code users look for it.
   ([The terminal rule](#the-terminal-rule)).
 - **Title bar.** One row, laid out on its own, with nothing that depends on
   the panels' widths.
-  - The breadcrumb names the workspace, the repository and the branch, with the
-    repository and the branch as menus. Then come the scope switcher, the Needs
+  - The breadcrumb names the workspace, the repository and the branch, with
+    each as a menu: the workspace's is the project switcher (the other recent
+    folders, Open Folder… and Open in new window). Then come the scope switcher, the Needs
     you button and the primary action, with the rest in a `⋯` menu.
   - On macOS the traffic lights are inset in the bar. On Windows and Linux the
     bar is a title-bar overlay, with the native window controls on the right.
@@ -270,8 +271,10 @@ first build's bug, where buttons vanished when a panel was resized.
   nothing ever overlaps:
   1. The branch name in the breadcrumb shortens with an ellipsis in the middle,
      down to 12 characters.
-  2. The workspace segment drops, then the repository segment. Each dropped
-     segment is reachable from `⋯ › Go to` and named in the tooltip.
+  2. The project switcher drops its name and keeps its folder icon and
+     chevron, then the repository segment drops. The workspace stays named in
+     the switcher's tooltip and its accessible name, and each dropped segment is
+     reachable from `⋯ › Go to`.
   3. The scope switcher shortens its label (*Checkout*, *Integration*, *#3*),
      then shrinks to its icon, then moves into `⋯`.
   4. Needs you drops its word and keeps its glyph and count (accessible name

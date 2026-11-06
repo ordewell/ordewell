@@ -12,7 +12,7 @@ import {
   stopDaemonAt,
   withPath,
 } from '@ordewell/core/daemon-client';
-import { EVENTS } from '../shared/bridge';
+import { EVENTS, type RecentWorkspace } from '../shared/bridge';
 import { buildRequest, type RouteId, type RouteParams } from '../shared/routes';
 import { DaemonManager } from './daemon/DaemonManager';
 import { forkBundledDaemon } from './daemon/forkDaemon';
@@ -25,7 +25,9 @@ import { fileSystemPlacement } from './terminal/placement';
 import { shellName } from './terminal/shellChoice';
 import { TerminalHost, type PtySpawn } from './terminal/TerminalHost';
 import { closePrompt, onLastWindowClosed, quitPrompt } from './lifecycle';
+import { droppedFolder } from './droppedFolder';
 import { menuTemplate } from './menu';
+import { ProjectOpener } from './projectOpener';
 import { AttentionNotifier } from './notifications';
 import { PrefsStore } from './prefs';
 import { RecentsStore } from './recents';
@@ -62,9 +64,6 @@ async function main(): Promise<void> {
   suppressOsSurfaces();
 
   lockSession(devOrigin);
-  Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate(process.platform, !app.isPackaged, app.getName(), (command) => {
-    BrowserWindow.getFocusedWindow()?.webContents.send(EVENTS.menuCommand, command);
-  })));
   lockWebContents();
   if (!devUrl) serveRenderer(join(__dirname, '..', 'renderer'));
 
@@ -178,6 +177,46 @@ async function main(): Promise<void> {
     },
   });
 
+  const mac = process.platform === 'darwin';
+  const projects = new ProjectOpener({
+    windows: wm,
+    recents,
+    liveRuns: () => liveRuns(),
+    busyTerminals: (contentsId) => terminalHost.busy(shellName, contentsId),
+    // A test run keeps out of the user's own Dock recents, as it keeps out of their screen.
+    ...(mac && osSurfacesAllowed() ? { addRecentDocument: (path: string) => app.addRecentDocument(path) } : {}),
+  });
+  const focused = (): BrowserWindow | undefined => BrowserWindow.getFocusedWindow() ?? undefined;
+  const setMenu = (list: RecentWorkspace[]): void => {
+    Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate({
+      platform: process.platform,
+      dev: !app.isPackaged,
+      appName: app.getName(),
+      recents: list,
+      actions: {
+        command: (command) => { focused()?.webContents.send(EVENTS.menuCommand, command); },
+        openFolder: () => { void projects.pick(focused()); },
+        openRecent: (path) => { void projects.open(focused(), path); },
+        clearRecents: () => {
+          recents.clear();
+          if (mac && osSurfacesAllowed()) app.clearRecentDocuments();
+        },
+        newWindow: () => { wm.openWelcome(); },
+      },
+    })));
+  };
+  setMenu(recents.list());
+  recents.onChange((list) => {
+    setMenu(list);
+    wm.broadcast(EVENTS.recentsChanged, undefined);
+  });
+  // A folder from the Dock's recents, or dropped on its icon: it opens as one chosen in the menu would.
+  app.on('open-file', (event, path) => {
+    event.preventDefault();
+    const dropped = droppedFolder(path);
+    if (dropped.ok) void projects.open(focused(), dropped.path);
+  });
+
   registerIpc({
     appVersion: app.getVersion(),
     contract: DAEMON_CONTRACT,
@@ -187,6 +226,7 @@ async function main(): Promise<void> {
     proxy,
     holders,
     recents,
+    projects,
     prefs,
     updates,
     notifications,

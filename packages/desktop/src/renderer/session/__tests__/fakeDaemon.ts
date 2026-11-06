@@ -1,6 +1,6 @@
 import { vi } from 'vitest';
 import { createTask, type SurfacePlan, type SurfaceTask } from '@ordewell/core';
-import type { DaemonCallResult, DaemonStatus, JoinResult, StreamEvent } from '../../../shared/bridge';
+import type { DaemonCallResult, DaemonStatus, JoinResult, LiveWorkKind, StreamEvent } from '../../../shared/bridge';
 import type { RouteId, RouteParams } from '../../../shared/routes';
 
 const CONNECTED: DaemonStatus = { state: 'connected', port: 3700, owned: true, daemon: { version: '0.12.3', contract: 1 } };
@@ -42,9 +42,11 @@ export function fakeDaemon(answers: Partial<Record<RouteId, Answer>> = {}) {
     sockets.set(sessionId, set);
     return () => { set.delete(cb); };
   });
+  const reportLiveWork = vi.fn(async (_kinds: readonly LiveWorkKind[]): Promise<void> => undefined);
   Object.defineProperty(window, 'ordewell', {
     configurable: true,
     value: {
+      app: { reportLiveWork },
       daemon: {
         status: async () => current,
         onStatus: (cb: (status: DaemonStatus) => void) => { statusListeners.add(cb); return () => { statusListeners.delete(cb); }; },
@@ -60,6 +62,8 @@ export function fakeDaemon(answers: Partial<Record<RouteId, Answer>> = {}) {
   return {
     call,
     subscribe,
+    /** What the window told main it has live, each time that changed. */
+    reportLiveWork,
     join,
     leave,
     answers,

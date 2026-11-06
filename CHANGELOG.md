@@ -17,6 +17,13 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   never be used, or one on a host where containers do not run, now refuses the
   task right away, instead of after the Docker engine answers, which could take
   minutes when Docker was slow or stuck.
+### Added
+
+- **Switch project from any desktop window.** The File menu has Open Folder…,
+  Open Recent and New Window on every platform, and the title bar's project name
+  is a switcher with the recent folders. A window with nothing live switches in
+  place, an open folder is focused, and a window with live work is never
+  switched away: the app offers a new window instead.
 
 ## [0.13.0] - 2026-11-06
 

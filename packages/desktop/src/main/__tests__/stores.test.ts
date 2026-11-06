@@ -107,6 +107,26 @@ describe('RecentsStore', () => {
     expect(store.unforget('/elsewhere').map((r) => r.path)).toEqual(['/a', '/b', '/c']);
   });
 
+  it('clears every entry, and tells its listeners each time the list changes', () => {
+    const store = new RecentsStore(join(dir, 'recents.json'), () => true, at('2026-11-03T00:00:00.000Z'));
+    const seen: string[][] = [];
+    store.onChange((list) => seen.push(list.map((r) => r.path)));
+    store.touch('/a');
+    store.touch('/b');
+    expect(store.clear()).toEqual([]);
+    expect(store.list()).toEqual([]);
+    expect(seen).toEqual([['/a'], ['/b', '/a'], []]);
+  });
+
+  it('does not tell its listeners about a remembered fact, which reorders nothing', () => {
+    const store = new RecentsStore(join(dir, 'recents.json'), () => true, at('2026-11-03T00:00:00.000Z'));
+    store.touch('/a');
+    let calls = 0;
+    store.onChange(() => { calls += 1; });
+    expect(store.remember('/a', { git: { kind: 'branch', name: 'main' } })).toBe(true);
+    expect(calls).toBe(0);
+  });
+
   it('skips malformed entries and starts afresh from a damaged file', () => {
     const file = join(dir, 'recents.json');
     writeFileSync(file, JSON.stringify({ version: 1, entries: [{ path: '/ok', openedAt: 'x' }, { path: 3 }, null, { path: '', openedAt: 'x' }] }));

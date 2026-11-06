@@ -6,7 +6,7 @@ import type { DaemonHost } from '../../session/DaemonHost';
 import { showEscalatedTask } from './escalationView';
 
 /** What a task's run is doing, as the attention monitor reads it: work is at work or on its way. */
-function isLive(state: HostState): boolean {
+export function isLive(state: HostState): boolean {
   const activity = state.run.activity;
   return state.isExecuting
     || state.plan?.status === 'running'

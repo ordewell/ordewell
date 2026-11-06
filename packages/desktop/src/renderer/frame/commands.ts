@@ -63,6 +63,9 @@ export function registerFrameCommands(store: FrameStore): Unregister {
       run: () => store.dispatch({ type: 'activity', activity, toggle: true }),
     })),
     { id: 'settings.open', title: 'Open Settings', keys: 'Mod+,', run: () => api.openTab(SETTINGS_TAB) },
+    // No keys: Mod+O is the File menu's accelerator, which main sees before the page does.
+    { id: 'project.openFolder', title: 'Open Folder…', run: () => store.projects.open(undefined, { newWindow: false }) },
+    { id: 'project.switch', title: 'Switch Project…', run: () => store.setOverlay('project') },
     ...THEME_CHOICES.map(({ value, label }): Command => ({
       id: `theme.${value}`,
       title: `Theme: ${label}`,

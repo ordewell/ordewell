@@ -79,8 +79,10 @@ export function Welcome({ status }: { status: DaemonStatus | undefined }): JSX.E
   useEffect(() => {
     void window.ordewell.app.info().then(setInfo, () => undefined);
     void loadRecents();
+    // A project window that opens or switches to a folder moves it to the top here too.
+    const off = window.ordewell.app.onRecentsChange(() => { void loadRecents(); });
     const timer = setInterval(() => setNow(new Date()), TICK_MS);
-    return () => clearInterval(timer);
+    return () => { off(); clearInterval(timer); };
   }, [loadRecents]);
 
   useEffect(() => {

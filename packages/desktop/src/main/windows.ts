@@ -29,6 +29,10 @@ export function workspaceKey(path: string): string {
   }
 }
 
+function titleOf(key: string): string {
+  return `${basename(key) || key} — Ordewell`;
+}
+
 /**
  * The app's windows: one welcome window, and one per workspace (ADR-0063 H6).
  * Main, not the page, knows which window is which, so a renderer can never
@@ -48,19 +52,57 @@ export class WindowManager {
     return this.welcome;
   }
 
-  /** Focus the workspace's window when it has one, or open it, and close the welcome window it came from. */
-  openWorkspace(path: string): string {
+  /**
+   * Focus the workspace's window when it has one, or open it. The welcome
+   * window it came from closes; asked from a project window, a welcome window
+   * the user opened beside it stays.
+   */
+  openWorkspace(path: string, options: { closeWelcome?: boolean } = {}): string {
     const key = workspaceKey(path);
-    const existing = this.workspaces.get(key);
-    if (existing && !existing.isDestroyed()) {
+    const existing = this.windowOf(key);
+    if (existing) {
       this.focus(existing);
     } else {
       const chrome = workspaceChrome(process.platform, this.options.dark());
-      const win = this.create({ kind: 'workspace', path: key }, `${basename(key)} — Ordewell`, { width: 1280, height: 820, ...chrome });
+      const win = this.create({ kind: 'workspace', path: key }, titleOf(key), { width: 1280, height: 820, ...chrome });
       this.workspaces.set(key, win);
-      win.on('closed', () => { this.workspaces.delete(key); });
+      // Looked up when it closes, not taken now: the window may have switched workspace since.
+      win.on('closed', () => {
+        const now = this.workspaceOf(win);
+        if (now !== undefined) this.workspaces.delete(now);
+      });
     }
-    if (this.welcome && !this.welcome.isDestroyed()) this.welcome.close();
+    if ((options.closeWelcome ?? true) && this.welcome && !this.welcome.isDestroyed()) this.welcome.close();
+    return key;
+  }
+
+  /** The window a workspace is open in, if any. */
+  windowOf(key: string): BrowserWindow | undefined {
+    const win = this.workspaces.get(key);
+    return win && !win.isDestroyed() ? win : undefined;
+  }
+
+  isWelcome(win: BrowserWindow): boolean {
+    return win === this.welcome;
+  }
+
+  /**
+   * Show another workspace in a project window, as an editor does: the page
+   * loads again for it, so its streams, terminals and joined holders close
+   * through the navigation every reload goes through (ADR-0063 H8), and a
+   * joined session goes on with its holder. The caller has checked that
+   * nothing live is left behind, and that no other window has the workspace.
+   */
+  switchWorkspace(win: BrowserWindow, path: string): string {
+    const key = workspaceKey(path);
+    const previous = this.workspaceOf(win);
+    if (previous === undefined || win.isDestroyed()) throw new Error('Only a project window can switch workspace.');
+    if (this.windowOf(key)) throw new Error('That workspace is open in another window.');
+    this.workspaces.delete(previous);
+    this.workspaces.set(key, win);
+    this.contexts.set(win.webContents.id, { kind: 'workspace', path: key });
+    win.setTitle(titleOf(key));
+    void win.loadURL(this.options.pageUrl);
     return key;
   }
 

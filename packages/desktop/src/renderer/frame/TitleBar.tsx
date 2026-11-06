@@ -1,24 +1,10 @@
-import { useRef, type KeyboardEvent } from 'react';
+import { useRef } from 'react';
 import { ChevronRight, Ellipsis } from 'lucide-react';
 import { Button, Icon, IconButton, NeedsYouGlyph } from '@ordewell/ui/design';
 import { formatChord, isMac, parseChord } from './keys';
-import { Popover } from './Popover';
+import { onMenuKey, Popover } from './Popover';
+import { ProjectSwitcher, workspaceName } from './ProjectSwitcher';
 import { slotsFor, useFrameState, useFrameStore } from './store';
-
-function workspaceName(path: string): string {
-  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
-}
-
-/** The ⋯ menu: arrow keys move between its items, as a menu's do. */
-function onMenuKey(event: KeyboardEvent<HTMLDivElement>): void {
-  const step = event.key === 'ArrowDown' ? 1 : event.key === 'ArrowUp' ? -1 : 0;
-  if (!step) return;
-  event.preventDefault();
-  const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]'))
-    .filter((item) => item.offsetParent !== null || item === document.activeElement);
-  const at = items.indexOf(document.activeElement as HTMLElement);
-  items[(at + step + items.length) % items.length]?.focus();
-}
 
 /**
  * The window's top row, drawn under the native controls (chrome.ts), laid out
@@ -50,8 +36,9 @@ export function TitleBar(): JSX.Element {
     <header className={`frame-title ${mac ? 'frame-title-mac' : 'frame-title-overlay'}`} data-region="title">
       <div className="frame-title-row">
         <nav className="frame-breadcrumb" aria-label="Breadcrumb">
+          {/* Outside the list, which clips what overflows it: the switcher's menu hangs below the bar. */}
+          <ProjectSwitcher />
           <ol>
-            <li className="frame-crumb-workspace" title={store.api.workspace}>{name}</li>
             {breadcrumbs.map((view) => (
               <li key={view.id} className="frame-crumb">
                 <Icon icon={ChevronRight} size={12} />
