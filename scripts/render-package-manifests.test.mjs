@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { writeReleaseAssets } from './desktop-release-assets.mjs';
 import { after } from 'node:test';
 import { describe, it } from 'node:test';
 import {
@@ -347,6 +348,26 @@ describe('rendering a release', () => {
     assert.equal(bad.status, 1);
     assert.match(bad.stderr, /unknown target "scoop"/);
     assert.equal(render(dir, '--only').status, 2);
+  });
+
+  it('renders the formula from the SHA256SUMS of a release without the desktop app, and refuses the cask and winget (ADR-0065 C10)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ordewell-cli-only-'));
+    made.push(dir);
+    for (const target of ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64']) writeFileSync(join(dir, `ordewell-${VERSION}-${target}.tar.gz`), `archive ${target}`);
+    writeFileSync(join(dir, 'install.sh'), '#!/bin/sh\n');
+    await writeReleaseAssets(dir, { withoutDesktop: true });
+    const sums = join(dir, 'SHA256SUMS');
+    const command = (only) => spawnSync(process.execPath, ['scripts/render-package-manifests.mjs', '--version', VERSION, '--sums', sums, '--only', only, '--out', join(dir, 'out')], { encoding: 'utf8' });
+    const formula = command('formula');
+    assert.equal(formula.status, 0, formula.stderr);
+    const text = readFileSync(join(dir, 'out', 'homebrew', 'Formula', 'ordewell.rb'), 'utf8');
+    // sha256 of "archive linux-x64", computed with `printf 'archive linux-x64' | shasum -a 256`.
+    assert.ok(text.includes('sha256 "32a68fcd3cf6d571cdbf9dace344673d8bfd25de87c659fd356c7b5e9fe4a0ba"'), text);
+    for (const only of ['cask', 'winget']) {
+      const refused = command(only);
+      assert.equal(refused.status, 1, only);
+      assert.match(refused.stderr, /no Ordewell-0\.0\.0-/, only);
+    }
   });
 
   // The syntax check is the only thing here that needs Ruby, which Windows runners and

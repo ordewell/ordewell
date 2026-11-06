@@ -57,7 +57,7 @@ Ordewell is pre-1.0, so minor releases can include breaking changes. Read the
   <tr><td><b>Run controls</b></td><td>Watch tasks live, review their reports and choose whether to automate execution or merging.</td></tr>
   <tr><td><b>Usage limits</b></td><td>Tasks pause when an agent hits its account limit. Resume later or move unfinished work to another agent.</td></tr>
   <tr><td><b>Planner choices</b></td><td>Plan with a supported coding agent without an extra API key, or use an API provider. The planner reads your repository; changes run through tasks in the plan.</td></tr>
-  <tr><td><b>Interfaces</b></td><td>Use the terminal UI, desktop app, VS Code extension, CLI or local API.</td></tr>
+  <tr><td><b>Interfaces</b></td><td>Use the terminal UI, VS Code extension, CLI or local API. A desktop app is coming.</td></tr>
   <tr><td><b>Skills</b></td><td>Share your team's instructions in repository skills that the planner attaches to tasks across runners.</td></tr>
 </table>
 
@@ -71,10 +71,8 @@ curl -fsSL https://ordewell.ai/install.sh | sh
 
 It installs to `~/.local/bin/ordewell`; set `ORDEWELL_INSTALL_DIR` to put it
 elsewhere. Pass options after `sh -s --`: `--version X.Y.Z` for a specific
-release, `--dry-run` to see what it would do, `--uninstall` to remove it, and
-`--desktop` to install the [desktop app](#desktop-app) too (its folder is set
-with `ORDEWELL_DESKTOP_INSTALL_DIR`, not `ORDEWELL_INSTALL_DIR`). Run it again
-to upgrade. With Homebrew:
+release, `--dry-run` to see what it would do and `--uninstall` to remove it.
+Run it again to upgrade. With Homebrew:
 
 ```bash
 brew install ordewell/tap/ordewell
@@ -133,65 +131,12 @@ Tried it? [Tell us how your first run went](https://github.com/ordewell/ordewell
 
 ## Desktop app
 
-Ordewell also runs as a desktop app for macOS, Windows and Linux: the planner,
-the plan and its tasks, your repository's files, diffs and git, and a terminal,
-in one window. It is a client of the same local daemon, so a run started there
-is the one `ordewell status` reports. Each
-[release](https://github.com/ordewell/ordewell/releases) attaches the
-installers. Until releases are signed, the first launch on macOS or Windows
-asks you to allow the app. The [desktop guide](docs/desktop/README.md) covers
-installing it, running it from source and what the window holds.
-
-### Install the desktop app
-
-One line, for your user, with the download checked against the release's
-checksums first:
-
-```bash
-# macOS and Linux
-curl -fsSL https://raw.githubusercontent.com/ordewell/ordewell/main/scripts/install/desktop.sh | sh
-```
-
-```powershell
-# Windows (PowerShell 5.1 or 7)
-irm https://raw.githubusercontent.com/ordewell/ordewell/main/scripts/install/desktop.ps1 | iex
-```
-
-Run it again to upgrade; `--uninstall` (`-Uninstall` on Windows) removes it.
-The scripts do not remove a macOS quarantine attribute or change any Windows
-SmartScreen setting, and a file `curl` downloads carries no quarantine
-attribute, so macOS treats it differently from a browser download.
-
-A package manager can install the same release once it has published there:
-
-```bash
-# macOS
-brew install --cask ordewell/tap/ordewell-desktop
-```
-
-```powershell
-# Windows
-winget install Ordewell.Ordewell
-```
-
-The cask was named `ordewell` before; it is `ordewell-desktop` now, and
-`brew install ordewell/tap/ordewell` is the CLI. If you installed the cask
-under its old name, Homebrew follows the rename on `brew update`.
-
-Both are set up when the project's package-manager accounts and tokens exist;
-the [desktop guide](docs/desktop/README.md#homebrew-and-winget) says what each
-publishes and how it is set up. Until then, use one of the installers above.
-
-Or download an installer. Each release has copies with a fixed name, so these
-links always get the latest one:
-
-- macOS: [Apple silicon `.dmg`](https://github.com/ordewell/ordewell/releases/latest/download/Ordewell-mac-arm64.dmg) · [Intel `.dmg`](https://github.com/ordewell/ordewell/releases/latest/download/Ordewell-mac-x64.dmg)
-- Windows: [`.exe`](https://github.com/ordewell/ordewell/releases/latest/download/Ordewell-win-x64.exe)
-- Linux: [`.AppImage`](https://github.com/ordewell/ordewell/releases/latest/download/Ordewell-linux-x64.AppImage) · [`.deb`](https://github.com/ordewell/ordewell/releases/latest/download/Ordewell-linux-x64.deb)
-- [`SHA256SUMS`](https://github.com/ordewell/ordewell/releases/latest/download/SHA256SUMS), to check a download by hand: `sha256sum --ignore-missing -c SHA256SUMS` (`shasum -a 256 …` on macOS).
-
-Options, the other install paths and what the checksum does and does not prove
-are in the [desktop guide](docs/desktop/README.md#install).
+A desktop app for macOS, Windows and Linux is coming: the planner, the plan and
+its tasks, your repository's files, diffs and git, and a terminal, in one
+window. It is a client of the same local daemon, so a run started there is the
+one `ordewell status` reports. It is not in a release yet, so there is no
+installer to download. The [desktop guide](docs/desktop/README.md) covers
+running it from source and what the window holds.
 
 ## See it in action
 

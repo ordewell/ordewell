@@ -187,6 +187,64 @@ describe('the release assets script', () => {
     await assert.rejects(writeReleaseAssets(mixed), /disagree on the version/);
   });
 
+  /** A Release with the switch off: the CLI archives and install.sh, and no desktop installer (ADR-0065 C10). */
+  const cliOnly = () => {
+    const dir = scratch('cli-release');
+    writeCli(dir);
+    return dir;
+  };
+  const listed = (dir) => readFileSync(join(dir, 'SHA256SUMS'), 'utf8').trimEnd().split('\n').map((line) => line.replace(/^[0-9a-f]{64} {2}/, ''));
+
+  it('without the desktop app, writes the CLI fixed copies and a SHA256SUMS over exactly the CLI files', async () => {
+    const dir = cliOnly();
+    const written = await writeReleaseAssets(dir, { withoutDesktop: true });
+    assert.deepEqual(written.fixed, [...CLI_FIXED].sort());
+    assert.deepEqual(listed(dir), [...CLI_ARCHIVES, ...CLI_FIXED, 'install.sh'].sort());
+    for (const [i, name] of CLI_FIXED.entries()) {
+      assert.equal(readFileSync(join(dir, name), 'utf8'), readFileSync(join(dir, CLI_ARCHIVES[i]), 'utf8'));
+    }
+    for (const name of FIXED_ASSETS) assert.ok(!existsSync(join(dir, name)), `${name} was written`);
+    if (has('shasum')) {
+      const check = spawnSync('shasum', ['-a', '256', '-c', 'SHA256SUMS'], { cwd: dir, encoding: 'utf8' });
+      assert.equal(check.status, 0, check.stdout + check.stderr);
+    }
+  });
+
+  it('without the desktop app, leaves out a desktop installer the folder happens to hold', async () => {
+    const dir = await release();
+    rmSync(join(dir, 'SHA256SUMS'));
+    for (const name of FIXED_ASSETS) rmSync(join(dir, name));
+    await writeReleaseAssets(dir, { withoutDesktop: true });
+    assert.deepEqual(listed(dir), [...CLI_ARCHIVES, ...CLI_FIXED, 'install.sh'].sort());
+    for (const name of FIXED_ASSETS) assert.ok(!existsSync(join(dir, name)), `${name} was written`);
+  });
+
+  it('without the desktop app, still refuses a missing CLI archive, a missing install.sh or a second version', async () => {
+    const noArchive = cliOnly();
+    rmSync(join(noArchive, `ordewell-${VERSION}-darwin-x64.tar.gz`));
+    await assert.rejects(writeReleaseAssets(noArchive, { withoutDesktop: true }), /the release is missing ordewell-darwin-x64\.tar\.gz$/);
+    const noScript = cliOnly();
+    rmSync(join(noScript, 'install.sh'));
+    await assert.rejects(writeReleaseAssets(noScript, { withoutDesktop: true }), /the release is missing install\.sh$/);
+    const mixed = cliOnly();
+    rmSync(join(mixed, `ordewell-${VERSION}-linux-x64.tar.gz`));
+    write(join(mixed, 'ordewell-1.0.0-linux-x64.tar.gz'), 'older');
+    await assert.rejects(writeReleaseAssets(mixed, { withoutDesktop: true }), /disagree on the version/);
+    await assert.rejects(writeReleaseAssets(scratch('empty'), { withoutDesktop: true }), /no ordewell-<version>-<os>-<arch>\.tar\.gz/);
+  });
+
+  it('is --without-desktop on the command line, and the default still needs the desktop installers', () => {
+    const dir = cliOnly();
+    const refused = spawnSync('node', ['scripts/desktop-release-assets.mjs', dir], { encoding: 'utf8' });
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /missing Ordewell-mac-arm64\.dmg/);
+    const run = spawnSync('node', ['scripts/desktop-release-assets.mjs', dir, '--without-desktop'], { encoding: 'utf8' });
+    assert.equal(run.status, 0, run.stderr);
+    assert.deepEqual(listed(dir), [...CLI_ARCHIVES, ...CLI_FIXED, 'install.sh'].sort());
+    const unknown = spawnSync('node', ['scripts/desktop-release-assets.mjs', dir, '--without-dekstop'], { encoding: 'utf8' });
+    assert.equal(unknown.status, 2);
+  });
+
   it('is the CLI the workflow runs', async () => {
     const dir = await release();
     rmSync(join(dir, 'SHA256SUMS'));

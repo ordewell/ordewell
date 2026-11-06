@@ -15,12 +15,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   a terminal, with one session at a time and one window per workspace. It is a
   client of the local daemon, so a run started there is the one the CLI and
   `ordewell status` see. Closing a window during a run keeps the app in the tray,
-  and quitting asks first, saying whether the run stops with it. A release
-  signs and notarizes its installers once the project's credentials are
-  configured and is unsigned until then, so macOS or Windows may ask you to
-  allow the app on first launch, and the installers are attached to each release
-  (#129, #136). The [desktop guide](docs/desktop/README.md) covers installing
-  it, running it from source, the views and the shortcuts.
+  and quitting asks first, saying whether the run stops with it (#129, #136).
+  It is not in this release: releases leave the desktop app out until it is
+  ready, so there is no installer to download yet. The
+  [desktop guide](docs/desktop/README.md) covers running it from source, the
+  views and the shortcuts.
 - **A chat in the centre and the plan on the right.** The planner conversation
   takes the window's centre, the plan panel sits beside it on the right, and
   your repository is a click away on the left. A narrow window opens the plan
@@ -110,7 +109,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   UI install as one file with no Node.js:
   `curl -fsSL https://ordewell.ai/install.sh | sh` puts it in
   `~/.local/bin` (`ORDEWELL_INSTALL_DIR` changes that; `--version`,
-  `--uninstall`, `--dry-run` and `--desktop` are options), checking the
+  `--uninstall` and `--dry-run` are options), checking the
   download against the release's checksums. `npm install -g ordewell` and
   `npx ordewell` work as before, and remain the way to install on Windows.
   Node.js is no longer a requirement of the binary, and git is optional: without
@@ -120,11 +119,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Changed
 
-- **The desktop app's Homebrew cask is now `ordewell-desktop`.** Install it with
-  `brew install --cask ordewell/tap/ordewell-desktop`. If you installed the cask
-  as `ordewell`, Homebrew renames it on `brew update`; if it does not, run
-  `brew uninstall --cask ordewell` and install the new name. `ordewell` alone is
-  now the CLI formula.
+- **`ordewell` in the Homebrew tap is now the CLI formula.** The desktop app's
+  cask is to be `ordewell-desktop`, and that rename takes effect with the first
+  release that carries the desktop app: until then the tap's cask is left as it
+  is. When it ships, an installed `ordewell` cask is renamed on `brew update`.
 - **The update notice matches how you installed.** A standalone install is
   pointed at re-running the installer or `brew upgrade ordewell`, not at npm.
 
