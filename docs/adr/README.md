@@ -365,8 +365,9 @@ The TUI and the shared conversation view.
 |---|---|---|---|---|
 | [0006](surfaces/0006-tui-pure-core-thin-driver.md) | Terminal UI as a pure core behind a thin driver | accepted | — | — |
 | [0017](surfaces/0017-shared-conversation-view.md) | The shared conversation view, drawn once in core | accepted | — | — |
-| [0063](surfaces/0063-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md) | The desktop app is an Electron client of the shared daemon, and its renderer never holds the token | accepted | — | — |
+| [0063](surfaces/0063-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md) | The desktop app is an Electron client of the shared daemon, and its renderer never holds the token | accepted | — | [0065](surfaces/0065-the-cli-also-ships-as-a-standalone-node-binary.md) |
 | [0064](surfaces/0064-a-host-reads-files-and-git-for-the-user-confined-to-the-workspace.md) | A host reads files and git for the user, confined to the workspace and needing no lease | accepted | [0049](isolation/0049-a-session-has-one-live-host.md) | — |
+| [0065](surfaces/0065-the-cli-also-ships-as-a-standalone-node-binary.md) | The CLI and TUI also ship as a standalone Node binary, installed by one command | accepted | [0048](platform/0048-a-daily-version-check-with-a-notice-first-and-one-install-per-machine.md), [0063](surfaces/0063-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md) | — |
 
 ### platform/
 
@@ -376,7 +377,7 @@ Windows, the per-workspace environment and what Ordewell sends from the machine.
 |---|---|---|---|---|
 | [0010](platform/0010-windows-support.md) | Windows support: one launch seam, one shell seam, one dialect | accepted | — | — |
 | [0016](platform/0016-per-workspace-environment.md) | Per-workspace environment for the planner and agents | accepted | — | — |
-| [0048](platform/0048-a-daily-version-check-with-a-notice-first-and-one-install-per-machine.md) | A daily version check, with a notice first and one install per machine | accepted | — | — |
+| [0048](platform/0048-a-daily-version-check-with-a-notice-first-and-one-install-per-machine.md) | A daily version check, with a notice first and one install per machine | accepted | — | [0065](surfaces/0065-the-cli-also-ships-as-a-standalone-node-binary.md) |
 | [0051](platform/0051-opencode-go-limits-from-the-selected-login-read-in-place.md) | OpenCode Go limits come from the selected login, read in place | accepted | — | — |
 | [0061](platform/0061-held-secrets-are-hidden-exactly-and-agent-text-by-name-in-depth.md) | Held secrets are hidden exactly at every sink; agent text is redacted by name as defence in depth | accepted | — | — |
 

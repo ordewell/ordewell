@@ -1,6 +1,6 @@
 ---
 status: accepted
-note: "Settles the host half of #129 and #136; the design is docs/desktop/design.md. packages/desktop holds the app: the daemon manager, the token-holding proxy, the hardened windows, the tray and quit rules, and every view the design lists. It is packaged for macOS, Windows and Linux (electron-builder.yml), built in CI and attached to each release, signed and notarized when the release has the credentials, with updates on only for a signed build (H9). Each release also carries fixed-name copies of the installers and a SHA256SUMS, which one-line install scripts read (H10). A Homebrew cask and winget manifests are rendered from that version and SHA256SUMS, and published when their tokens exist (H11)."
+note: "Settles the host half of #129 and #136; the design is docs/desktop/design.md. packages/desktop holds the app: the daemon manager, the token-holding proxy, the hardened windows, the tray and quit rules, and every view the design lists. It is packaged for macOS, Windows and Linux (electron-builder.yml), built in CI and attached to each release, signed and notarized when the release has the credentials, with updates on only for a signed build (H9). Each release also carries fixed-name copies of the installers and one SHA256SUMS, shared with the CLI binaries of ADR-0065, which one-line install scripts read (H10). A Homebrew formula and cask (ordewell-desktop) and winget manifests are rendered from that version and SHA256SUMS, and published when their tokens exist (H11)."
 ---
 
 # 0063 — The desktop app is an Electron client of the shared daemon, and its renderer never holds the token
@@ -153,14 +153,16 @@ holds the token.**
 - **A stable download link and a one-line install per OS, both verified
   against one `SHA256SUMS` (H10).** The `attach` job of `desktop-build.yml`
   is the only place that holds all three OSes' installers, so it alone makes
-  the release's two extra kinds of asset, with `scripts/desktop-release-assets.mjs`:
-  copies named without a version (`Ordewell-mac-arm64.dmg`,
+  their fixed-name copies, with `scripts/desktop-release-assets.mjs`: copies
+  named without a version (`Ordewell-mac-arm64.dmg`,
   `Ordewell-mac-x64.dmg`, `Ordewell-win-x64.exe`, `Ordewell-linux-x64.AppImage`,
   `Ordewell-linux-x64.deb`), so `releases/latest/download/<name>` always
-  resolves, and `SHA256SUMS` in `sha256sum -c` format over every installer,
-  versioned name and fixed name. The fixed copies are uploaded first and
-  `SHA256SUMS` last, so a release that has one has all of them. The script
-  refuses a release that lacks a fixed asset or mixes versions. `latest*.yml`
+  resolves. The one `SHA256SUMS`, in `sha256sum -c` format, covers every
+  installer (versioned and fixed name), the CLI archives and `install.sh` of
+  [ADR-0065](0065-the-cli-also-ships-as-a-standalone-node-binary.md) C5. A
+  `release.yml` job writes it after both the desktop and the CLI builds have
+  attached their files and uploads it last, so a release that has it has
+  everything it lists. The script refuses a release that lacks a fixed asset or mixes versions. `latest*.yml`
   and the blockmaps keep their own names and are not listed: electron-updater
   reads them by those names. `scripts/install/desktop.sh` (macOS and Linux) and
   `scripts/install/desktop.ps1` (Windows, PowerShell 5.1 and 7) download by
@@ -179,19 +181,22 @@ holds the token.**
   the release the files do, so it proves the download is intact and complete,
   not who made it: signing (H9) is what proves that.
 
-- **A cask and winget manifests rendered from the release itself (H11).** Two
-  jobs in `release.yml` run after the desktop build has attached the installers
-  and `SHA256SUMS`: `homebrew` and `winget`.
-  `scripts/render-package-manifests.mjs` fills
-  `packaging/homebrew/ordewell.rb.tmpl` and the three `packaging/winget/`
-  templates from the version and that `SHA256SUMS`, refusing a missing
-  installer or a fixed-name copy whose hash disagrees with the versioned file
-  it duplicates, so a package manager installs the release's own bytes and
-  checks them against the release's own hash. The `homebrew` job pushes
-  `Casks/ordewell.rb` to `ordewell/homebrew-tap` only when
-  `HOMEBREW_TAP_TOKEN` exists *and* the macOS build's `signing.json` says it
-  was notarized: Homebrew will not install a cask Gatekeeper stops, so an
-  unnotarized release publishes no cask and says so in a notice. The `winget`
+- **A formula, a cask and winget manifests rendered from the release itself
+  (H11).** Two jobs in `release.yml` run after `SHA256SUMS` is written:
+  `homebrew` and `winget`. `scripts/render-package-manifests.mjs` fills the
+  formula template, the cask template and the three `packaging/winget/`
+  templates from the version and that `SHA256SUMS`, refusing a missing asset or
+  a fixed-name copy whose hash disagrees with the versioned file it duplicates,
+  so a package manager installs the release's own bytes and checks them against
+  the release's own hash. The `homebrew` job pushes two files to
+  `ordewell/homebrew-tap` only when `HOMEBREW_TAP_TOKEN` exists. The formula
+  `ordewell` (`Formula/ordewell.rb`) installs the CLI archive on macOS and Linux
+  and is published whenever the token exists
+  ([ADR-0065](0065-the-cli-also-ships-as-a-standalone-node-binary.md) C8). The
+  cask `ordewell-desktop` (`Casks/ordewell-desktop.rb`, the installer's
+  `BIN_NAME`, so it does not clash with the formula) is published only when the macOS build's `signing.json` says it was notarized: Homebrew
+  will not install a cask Gatekeeper stops, so an unnotarized release publishes
+  no cask and says so in a notice. The `winget`
   job submits the rendered manifests to `microsoft/winget-pkgs` with
   Microsoft's `wingetcreate`, pinned to a version and checked against the
   SHA256 that version publishes, and only when `WINGET_TOKEN` exists. A missing
@@ -424,7 +429,8 @@ allows script only from the app's own bundle, with no inline script.
 - **A SHA256SUMS per OS job, or the scripts joining one per OS.** Rejected: the
   three runners upload on their own, so each sums file would cover a third of
   the release, and a re-run of one runner would race the others over a shared
-  name. One job that sees every installer writes one file.
+  name. One job that sees every asset writes one file; the desktop `attach` job
+  wrote it until the CLI binaries joined the release, which it cannot see.
 - **Fixed-name copies made by each OS's build.** Rejected for the same reason:
   a job can only name the installers it built, and the two macOS builds and the
   Linux pair would need the same upload order the single job gives for free.
@@ -475,8 +481,8 @@ allows script only from the app's own bundle, with no inline script.
   says on, so a build made without `scripts/package.mjs` (`npm run build`,
   electron-builder run by hand) has updates off.
 - A Homebrew install depends on the tap repository and a token that can write
-  to it, and on a notarized macOS build. A release without either publishes no
-  cask, and its users install from the Release as before.
+  to it; the cask also depends on a notarized macOS build. A release without
+  either publishes no cask, and its users install from the Release as before.
 - The first winget submission of the package is reviewed by hand by Microsoft,
   so `winget install Ordewell.Ordewell` works only once that pull request is
   merged; every later version is a pull request like any other.
@@ -498,3 +504,4 @@ allows script only from the app's own bundle, with no inline script.
 - 2026-11-04 — H9: the maintainers' credential setup and the publisher-eligibility reasoning moved out of the public docs; the routes and their gates are unchanged.
 
 - 2026-11-05 — renumbered before publication to avoid a collision with main.
+- 2026-11-06 — H10, H11: ADR-0065 puts the CLI archives and `install.sh` in the release; one `SHA256SUMS` over all of it is written by a `release.yml` job after both builds, and the cask is renamed `ordewell-desktop` beside a new `ordewell` formula.

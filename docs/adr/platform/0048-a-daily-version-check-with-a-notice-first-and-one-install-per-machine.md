@@ -33,7 +33,11 @@ the update line, and decides only where they appear.
   since its age cannot be shown to be short.
 - **The answer.** 204, or 200 with `{"latest":"x.y.z"}`, `latest` optional.
   When `latest` is a newer version by semver precedence, the surface shows one
-  line: `Ordewell <latest> is out — npm i -g ordewell`. Any other answer, a
+  line: `Ordewell <latest> is out — npm i -g ordewell`, where the command names
+  how this copy was installed: `brew upgrade ordewell` for a Homebrew install,
+  running the installer again for another standalone binary
+  ([ADR-0065](../surfaces/0065-the-cli-also-ships-as-a-standalone-node-binary.md)
+  C9), `npm i -g ordewell` otherwise. Any other answer, a
   status that is not 200, a body that is not that JSON, a network failure or no
   answer within three seconds is ignored. The check never throws and never
   holds up a start.
@@ -150,3 +154,4 @@ in the rendered welcome, like the rest of the welcome.
 - 2026-10-23 — accepted.
 - 2026-10-23 — a file without an install ID starts over; a notice that cannot be recorded is not shown.
 - 2026-10-25: the install ID is replaced every 30 days, and the notice names the IP address.
+- 2026-11-06 — the update line names the install method: Homebrew, the installer for another binary install, or npm.
