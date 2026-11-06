@@ -329,9 +329,11 @@ describe.skipIf(!hasGit)('workspace reader history and branches', () => {
     expect(branches.local.find((b) => b.name === 'feature')).toMatchObject({ sha: shas[1], current: false, upstream: null });
     expect(branches.remote.map((b) => b.name)).toContain('origin/main');
     expect(branches.ordewell).toEqual([]);
-    expect(branches.worktrees).toEqual([
-      { path: workspace, branch: 'main', head: git(workspace, 'rev-parse', 'HEAD').trim(), main: true },
-      { path: linked, branch: 'feature', head: shas[1], main: false },
+    // Git lists a worktree by its own name of the folder: on Windows with forward slashes, and long where the temp folder's name is 8.3 short.
+    expect(branches.worktrees.every((w) => path.isAbsolute(w.path))).toBe(true);
+    expect(branches.worktrees.map((w) => ({ ...w, path: fs.realpathSync.native(w.path) }))).toEqual([
+      { path: fs.realpathSync.native(workspace), branch: 'main', head: git(workspace, 'rev-parse', 'HEAD').trim(), main: true },
+      { path: fs.realpathSync.native(linked), branch: 'feature', head: shas[1], main: false },
     ]);
   });
 
@@ -470,9 +472,13 @@ describe.skipIf(!hasGit)('workspace reader on a run\'s scopes (ADR-0064 R2)', ()
   it('confines a task scope to its worktree', async () => {
     const worktree = run.tasks.t2.repos['.'].worktree;
     fs.symlinkSync(path.join(workspace, 'README.md'), path.join(worktree, 'src/escape.md'));
-    await expect(reader.content(at('task', 't2'), 'src/escape.md')).rejects.toMatchObject({ code: 'path_refused' });
-    await expect(reader.content(at('task', 't2'), '../README.md')).rejects.toMatchObject({ code: 'path_refused' });
-    fs.rmSync(path.join(worktree, 'src/escape.md'));
+    try {
+      await expect(reader.content(at('task', 't2'), 'src/escape.md')).rejects.toMatchObject({ code: 'path_refused' });
+      await expect(reader.content(at('task', 't2'), '../README.md')).rejects.toMatchObject({ code: 'path_refused' });
+    } finally {
+      // The worktree is shared with the tests below, whose task diff it would join.
+      fs.rmSync(path.join(worktree, 'src/escape.md'));
+    }
   });
 
   it('links Ordewell branches and worktrees to their run and task', async () => {
@@ -482,8 +488,8 @@ describe.skipIf(!hasGit)('workspace reader on a run\'s scopes (ADR-0064 R2)', ()
     const byName = Object.fromEntries(branches.ordewell.map((b) => [b.name, b.owner]));
     expect(byName[integration]).toEqual({ sessionId: session, runId: run.id });
     expect(byName[run.tasks.t2.branch]).toEqual({ sessionId: session, runId: run.id, taskId: 't2' });
-    const worktree = fs.realpathSync(run.tasks.t2.repos['.'].worktree);
-    expect(branches.worktrees.find((w) => fs.realpathSync(w.path) === worktree)).toMatchObject({ branch: run.tasks.t2.branch, owner: { sessionId: session, runId: run.id, taskId: 't2' } });
+    const worktree = fs.realpathSync.native(run.tasks.t2.repos['.'].worktree);
+    expect(branches.worktrees.find((w) => fs.realpathSync.native(w.path) === worktree)).toMatchObject({ branch: run.tasks.t2.branch, owner: { sessionId: session, runId: run.id, taskId: 't2' } });
   });
 
   it('reads a task\'s diff through the run\'s own task diff, names first', async () => {

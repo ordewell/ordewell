@@ -178,7 +178,10 @@ describe.skipIf(!hasGit)('the user\'s file and git reads over HTTP (ADR-0064)', 
     const { body } = await get<GitBranchesResponse>('/api/git/branches', { workspace: group, repo: 'web' });
     expect(body).toMatchObject({ repo: 'web', current: 'main', detached: false });
     expect(body.local.map((b) => b.name)).toEqual(['main']);
-    expect(body.worktrees).toEqual([expect.objectContaining({ path: path.join(group, 'web'), main: true, branch: 'main' })]);
+    // Git lists the folder by its own name of it: on Windows with forward slashes, and long where the temp folder's name is 8.3 short.
+    expect(body.worktrees.map((w) => ({ ...w, path: fs.realpathSync.native(w.path) }))).toEqual([
+      expect.objectContaining({ path: fs.realpathSync.native(path.join(group, 'web')), main: true, branch: 'main' }),
+    ]);
   });
 
   it.each([

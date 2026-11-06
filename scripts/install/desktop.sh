@@ -156,7 +156,7 @@ uninstall_mac() {
   for dir in "$@"; do
     [ -d "$dir/$APP" ] || continue
     if is_ours "$dir/$APP"; then
-      rm -rf "$dir/$APP" || die "could not remove $dir/$APP (is it owned by another user? try sudo)"
+      rm -rf "${dir:?}/${APP:?}" || die "could not remove $dir/$APP (is it owned by another user? try sudo)"
       say "Removed $dir/$APP"
       found=1
     else
@@ -389,7 +389,13 @@ install_linux_appimage() {
   mkdir "$tmp/extract"
   icon=
   if (cd "$tmp/extract" && "$linux_bin" --appimage-extract 'usr/share/icons/hicolor/*/apps/*.png' >/dev/null 2>&1); then
-    icon=$(ls -S "$tmp"/extract/squashfs-root/usr/share/icons/hicolor/*/apps/*.png 2>/dev/null | head -n 1 || true)
+    # The largest file is the sharpest size; ls -S would misread a name with a line break in it.
+    icon_bytes=0
+    for png in "$tmp"/extract/squashfs-root/usr/share/icons/hicolor/*/apps/*.png; do
+      [ -f "$png" ] || continue
+      bytes=$(wc -c <"$png" | tr -d ' ') || continue
+      if [ "$bytes" -gt "$icon_bytes" ]; then icon=$png; icon_bytes=$bytes; fi
+    done
   fi
   if [ -n "$icon" ]; then
     cp "$icon" "$linux_icon"

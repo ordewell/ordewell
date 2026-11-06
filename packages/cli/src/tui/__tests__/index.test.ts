@@ -635,7 +635,8 @@ describe('handleTui', () => {
 
       type('/update');
 
-      await vi.waitFor(() => expect(frame()).toContain('pull and rebuild'));
+      // The notice names the copy's folder, under this host's temp folder, so where its words wrap varies.
+      await vi.waitFor(() => expect(frame().replace(/\s+/g, ' ')).toContain('pull and rebuild it to update. Nothing was run.'));
       expect(frame()).not.toContain('Update Ordewell?');
       expect(copy.events).toEqual([]);
       expect(exitSpy).not.toHaveBeenCalled();
