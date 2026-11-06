@@ -31,8 +31,32 @@ import { GUARANTEES, refuseUnproven, type ExecutionBackend, type Guarantee, type
 import type { EventStore } from './services/eventStore';
 import { isWithin, type NodePath, type TreeEvent, type TreeFact } from './models/TreeEvent';
 import { handoffOf, integrationBranchFor, noRemoval, SELF_REPO } from './services/isolationRecord';
+import type { SeaModule } from './utils/seaRuntime';
 
 export { homeEnv, patient, pathWithFake, removeDir, setEnv, writeStandIn } from './testEnv';
+
+/**
+ * An in-memory `node:sea` for the standalone binary, holding what its build
+ * embeds: `runtime/manifest.json` naming `version` and every file, and each
+ * file under `runtime/<path>`. Hand it as `{ sea }` to whatever takes `SeaDeps`.
+ */
+export function fakeSea(version: string, files: Record<string, string> = {}): SeaModule {
+  const assets = new Map<string, string>([
+    ['runtime/manifest.json', JSON.stringify({ version, files: Object.keys(files) })],
+    ...Object.entries(files).map(([file, content]): [string, string] => [`runtime/${file}`, content]),
+  ]);
+  function getAsset(key: string): ArrayBuffer;
+  function getAsset(key: string, encoding: string): string;
+  function getAsset(key: string, encoding?: string): ArrayBuffer | string {
+    const content = assets.get(key);
+    // node:sea throws for a key the build did not embed.
+    if (content === undefined) throw new Error(`no asset ${key}`);
+    if (encoding) return content;
+    const bytes = Buffer.from(content, 'utf8');
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  }
+  return { isSea: () => true, getAsset };
+}
 
 /**
  * Let an already-queued promise chain run to its next await before asserting,
