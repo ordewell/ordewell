@@ -16,6 +16,7 @@
     "build": "tsup && vite build && node ../../scripts/generate-third-party-notices.mjs desktop",
     "dev": "node scripts/dev.mjs",
     "package": "node scripts/package.mjs",
+    "postinstall": "node scripts/ensure-spawn-helper.mjs",
     "lint": "eslint src e2e playwright.config.ts --ext .ts,.tsx",
     "test": "vitest run",
     "test:quick": "vitest run",

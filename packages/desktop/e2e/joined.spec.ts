@@ -13,7 +13,7 @@ import { expect, test, type ElectronApplication, type Page } from '@playwright/t
 import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { appEnv, freePort, launchApp, makeSandbox, openFolder, removeSandbox, ROOT, startMock, untilListening, type Sandbox } from './fixtures';
+import { appEnv, closeApp, freePort, launchApp, makeSandbox, openFolder, removeSandbox, ROOT, startMock, untilListening, type Sandbox } from './fixtures';
 
 const GOAL = 'Add greeting and farewell modules';
 const SESSION = 'session-joined-e2e';
@@ -130,12 +130,13 @@ test.afterEach(async ({}, testInfo) => {
 });
 
 test.afterAll(async () => {
-  await app?.close().catch(() => undefined);
+  const closed = await closeApp(app).then(() => undefined, (error: unknown) => ({ error }));
   holder?.kill();
   mock?.kill();
   if (appPort) await untilListening(appPort, false);
   if (holderPort) await untilListening(holderPort, false);
   if (sandbox) removeSandbox(sandbox);
+  if (closed) throw closed.error;
 });
 
 test('the app joins a session a TUI\'s daemon holds, drives it there, and continues it after the TUI exits', async () => {

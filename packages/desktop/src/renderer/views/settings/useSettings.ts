@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
-  GlobalRunSettings, ModelsResponse, RunnersResponse, SettingsResponse, SettingsUpdateResponse,
+  GlobalRunSettings, ModelsResponse, RunnersResponse, SettingsResponse,
 } from '@ordewell/core';
 import { RUNNER_IDS, RUNNER_LABELS } from '@ordewell/core/plan-utils';
 import type { PlannerBackend } from '@ordewell/ui/protocol';
@@ -37,6 +37,13 @@ function within<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
     timer = setTimeout(() => reject(new Error(`the daemon did not answer with ${what} within ${Math.round(ms / 1000)} seconds`)), ms);
   });
   return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+}
+
+/** A write that changes who plans, or with what, so the chat's catalog must be read again. */
+function touchesPlanner(body: Record<string, unknown>): boolean {
+  const env = body.env;
+  if (typeof env === 'object' && env !== null && !Array.isArray(env) && 'AI_PROVIDER' in env) return true;
+  return 'orchestratorModel' in body || 'plannerThinkingEffort' in body || 'modelAllowlist' in body;
 }
 
 /** Every runner with a row: core's eight first, then one a workspace's manifest adds. */
@@ -178,12 +185,19 @@ export function useSettings(host: DaemonHost, sessionId: string): {
   const update = useCallback(async (body: Record<string, unknown>): Promise<void> => {
     setView((current) => ({ ...current, busy: true, error: undefined }));
     try {
-      const next = await callDaemon('settings.update', undefined, { ...body, workspace: host.workspace, ...sessionParam() }) as SettingsUpdateResponse;
+      const next = await host.saveSettings({ ...body, ...sessionParam() });
+      if (next === null) {
+        setView((current) => ({ ...current, busy: false }));
+        return;
+      }
       setView((current) => ({ ...current, busy: false, settings: next }));
+      // Settings is not the chat's own picker: the chat only learns the new
+      // planner, model or allowlist from a detection, as the pills' picks do.
+      if (touchesPlanner(body)) void host.handle({ type: 'refreshModels' });
     } catch (error) {
       setView((current) => ({ ...current, busy: false, error: messageOf(error) }));
     }
-  }, [host.workspace, sessionParam]);
+  }, [host, host.workspace, sessionParam]);
 
   const updateRun = useCallback(async (change: Partial<GlobalRunSettings>): Promise<void> => {
     await update({ run: change });

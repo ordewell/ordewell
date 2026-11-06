@@ -137,14 +137,75 @@ export async function startMock(extraArgs: readonly string[] = []): Promise<{ po
   return { port, process: child };
 }
 
-export function launchApp(sandbox: Sandbox, env: Record<string, string>): Promise<ElectronApplication> {
-  return electron.launch({
+/** The switch main's testWindows.ts reads; main consults only that module. */
+const TEST_WINDOWS_ENV = 'ORDEWELL_DESKTOP_TEST_WINDOWS';
+
+/** Windows the polling loop found shown or focused, by app: the suite fails on any (see {@link closeApp}). */
+const sightings = new WeakMap<ElectronApplication, { found: string[]; timer: NodeJS.Timeout }>();
+
+/** The windows of the app that are visible or focused right now, as text; empty when the run is invisible. */
+async function windowsOnShow(app: ElectronApplication): Promise<string[]> {
+  return app.evaluate(({ BrowserWindow }) => {
+    const slot = globalThis as unknown as { ordewellShown?: string[] };
+    return [
+      ...(slot.ordewellShown ?? []),
+      ...BrowserWindow.getAllWindows()
+        .filter((win) => !win.isDestroyed() && (win.isVisible() || win.isFocused()))
+        .map((win) => `"${win.getTitle()}" is ${win.isVisible() ? 'visible' : 'focused'}`),
+    ];
+  });
+}
+
+/**
+ * Launches the app with its windows hidden (ORDEWELL_DESKTOP_TEST_WINDOWS), so
+ * a run never opens a window on the developer's screen, takes focus or makes
+ * macOS switch Space. The page renders as it would shown, and Playwright's own
+ * input and focus emulation do not need the OS to focus the window.
+ * What the run could not do invisibly would be a regression: a window that is
+ * ever shown or focused fails the suite at {@link closeApp} and {@link openFolder}.
+ */
+export async function launchApp(sandbox: Sandbox, env: Record<string, string>): Promise<ElectronApplication> {
+  const app = await electron.launch({
     // A Linux CI runner has no setuid chrome-sandbox, and its AppArmor forbids
     // the unprivileged user namespaces Chromium's sandbox falls back to.
     args: [DESKTOP, `--user-data-dir=${sandbox.userData}`, ...(process.platform === 'linux' ? ['--no-sandbox'] : [])],
-    env,
+    env: { ...env, [TEST_WINDOWS_ENV]: 'hidden' },
     cwd: sandbox.tmp,
   });
+  // A show or a focus is recorded as it happens, since a window shown and hidden again between two polls leaves no trace in a snapshot.
+  await app.evaluate(({ app: electronApp, BrowserWindow }) => {
+    const slot = globalThis as unknown as { ordewellShown?: string[] };
+    const shown: string[] = [];
+    slot.ordewellShown = shown;
+    const watch = (win: import('electron').BrowserWindow): void => {
+      for (const event of ['show', 'focus', 'restore'] as const) win.on(event as 'show', () => { shown.push(`a window emitted "${event}"`); });
+    };
+    for (const win of BrowserWindow.getAllWindows()) watch(win);
+    electronApp.on('browser-window-created', (_event, win) => { watch(win); });
+  });
+  const entry = { found: [] as string[], timer: setInterval(() => {
+    windowsOnShow(app).then((now) => { if (now.length) entry.found.push(...now); }, () => undefined);
+  }, 250) };
+  entry.timer.unref();
+  sightings.set(app, entry);
+  return app;
+}
+
+/** Fails when a window of the app was ever shown or focused during the run. */
+export async function assertWindowsHidden(app: ElectronApplication): Promise<void> {
+  const found = [...(sightings.get(app)?.found ?? []), ...await windowsOnShow(app)];
+  if (found.length) throw new Error(`a test run must open no visible window and never take focus, but: ${[...new Set(found)].join('; ')}`);
+}
+
+/** Closes the app after checking that the run stayed invisible; a close that fails is no failure of the run. */
+export async function closeApp(app: ElectronApplication | undefined): Promise<void> {
+  if (!app) return;
+  let hidden: Error | undefined;
+  await assertWindowsHidden(app).catch((error: unknown) => { hidden = error instanceof Error && error.message.startsWith('a test run') ? error : undefined; });
+  const entry = sightings.get(app);
+  if (entry) clearInterval(entry.timer);
+  await app.close().catch(() => undefined);
+  if (hidden) throw hidden;
 }
 
 /** Opens `dir` from the welcome window's Open folder…, and returns the workspace window. */
@@ -154,6 +215,7 @@ export async function openFolder(app: ElectronApplication, welcome: Page, dir: s
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] });
   }, dir);
   const [win] = await Promise.all([app.waitForEvent('window'), welcome.getByRole('button', { name: 'Open folder…' }).click()]);
+  await assertWindowsHidden(app);
   return win;
 }
 

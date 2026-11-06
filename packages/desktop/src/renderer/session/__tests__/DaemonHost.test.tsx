@@ -15,7 +15,11 @@ const PLAN = surfacePlan([
 ]);
 
 let hosts: DaemonHost[] = [];
-afterEach(() => { for (const host of hosts) host.dispose(); hosts = []; });
+afterEach(() => {
+  for (const host of hosts) host.dispose();
+  hosts = [];
+  if (typeof window !== 'undefined' && window.navigator?.userAgent.includes('Electron')) window.localStorage.clear();
+});
 
 /** The window's confirm, answered by `answer` with whatever choice it names: a test asks for one it offers. */
 function hostWith(answer: (request: ConfirmationRequest<string>) => Promise<string | null> = async () => null, detectionTimeoutMs?: number, watchMs?: number): DaemonHost {
@@ -283,6 +287,254 @@ describe('DaemonHost', () => {
     await waitFor(() => expect(daemon.calls('plans.converseStart')).toHaveLength(1));
     expect(daemon.calls('plans.converseStart')[0]?.[1]).toMatchObject({ goal: 'Add a parser' });
   });
+
+  it('starts the plan on the runners the chat has switched on', async () => {
+    const daemon = fakeDaemon({
+      'runners.list': ok({ runners: [
+        { id: 'claude-code', name: 'Claude Code', enabled: true },
+        { id: 'codex', name: 'Codex', enabled: true },
+      ], orchestratorModel: '' }),
+      'models.list': ok({ models: [], modelsByRunner: {}, modesByRunner: {}, orchestratorModel: '', providers: [], orchestratorModels: [], providerErrors: {} }),
+      'settings.get': ok({ orchestratorModel: '', aiProvider: '', plannerThinkingEffort: '', autonomousMode: false, maxParallel: 3, modelAllowlist: {}, run: { ...RUN_SETTINGS_DEFAULTS } }),
+      'plans.converseStart': ok({ ok: true, sessionId: 'p1', turnId: 'turn-1' }),
+    });
+    const host = hostWithOptions({});
+    await act(() => host.handle({ type: 'ready' }));
+
+    await act(() => host.handle({ type: 'sendMessage', text: 'Add a parser', runners: ['codex'], typed: true }));
+
+    expect(daemon.calls('plans.converseStart')[0]?.[1]).toMatchObject({ goal: 'Add a parser', runners: ['codex'] });
+  });
+});
+
+describe('DaemonHost held prompts', () => {
+  it('sends a prompt the chat asked to hold once the turn it waited for has already ended', async () => {
+    const daemon = fakeDaemon({ 'plans.converseStart': ok({ ok: true, sessionId: 'p1', turnId: 'turn-1' }) });
+    const host = hostWith();
+    const seen = watch(host);
+
+    await act(() => host.handle({ type: 'holdPrompt', text: 'and add tests' }));
+
+    expect(daemon.calls('plans.converseStart')[0]?.[1]).toMatchObject({ goal: 'and add tests' });
+    expect(seen.filter((m) => m.type === 'heldPrompts').at(-1) ?? { prompts: [] }).toMatchObject({ prompts: [] });
+  });
+
+  it('sends what was typed during a Retry compaction once the compaction is over', async () => {
+    const daemon = fakeDaemon({
+      'sessions.load': ok({ ok: true, sessionId: 's1', goal: 'Ship the parser', plan: PLAN }),
+      'plans.converseMessage': ok({ plan: PLAN }),
+      // The compaction is a planner turn the chat did not send: its frames open and close it while the route runs.
+      'plans.retryCompact': async () => {
+        daemon.push('s1', { type: 'planner_turn_started', turnId: 'c1', sessionId: 's1', stream: 'd1', seq: 1 });
+        await host.handle({ type: 'holdPrompt', text: 'and add tests' });
+        daemon.push('s1', { type: 'planner_turn_ended', turnId: 'c1', outcome: 'message', sessionId: 's1', stream: 'd1', seq: 2 });
+        return ok({ ok: true });
+      },
+    });
+    const host = hostWith();
+    watch(host);
+    await opened(daemon, host);
+
+    await act(() => host.handle({ type: 'sendSystemCommand', command: 'retryPlannerCompaction', taskId: '' }));
+
+    expect(daemon.calls('plans.converseMessage')).toEqual([[{ sessionId: 's1' }, { message: 'and add tests' }]]);
+  });
+
+  it('sends a held prompt once the turn\'s answer is in, though its ended frame has not come yet', async () => {
+    const daemon = fakeDaemon({
+      'sessions.load': ok({ ok: true, sessionId: 's1', goal: 'Ship the parser', plan: PLAN }),
+      // The socket and the call are two channels: the answer can come first.
+      'plans.converseMessage': async (_params, body) => {
+        if ((body as { message: string }).message === 'first') {
+          daemon.push('s1', { type: 'planner_turn_started', turnId: 'p1', sessionId: 's1', stream: 'd1', seq: 1 });
+          await host.handle({ type: 'holdPrompt', text: 'and add tests' });
+        }
+        return ok({ plan: PLAN });
+      },
+    });
+    const host = hostWith();
+    watch(host);
+    await opened(daemon, host);
+
+    await act(() => host.handle({ type: 'sendMessage', text: 'first', typed: true }));
+
+    expect(daemon.calls('plans.converseMessage').map(([, body]) => body)).toEqual([{ message: 'first' }, { message: 'and add tests' }]);
+  });
+
+  it('sends what was typed during a Retry compaction whose ended frame trails the route\'s answer', async () => {
+    const daemon = fakeDaemon({
+      'sessions.load': ok({ ok: true, sessionId: 's1', goal: 'Ship the parser', plan: PLAN }),
+      'plans.converseMessage': ok({ plan: PLAN }),
+      'plans.retryCompact': async () => {
+        daemon.push('s1', { type: 'planner_turn_started', turnId: 'c1', sessionId: 's1', stream: 'd1', seq: 1 });
+        await host.handle({ type: 'holdPrompt', text: 'and add tests' });
+        return ok({ ok: true });
+      },
+    });
+    const host = hostWith();
+    watch(host);
+    await opened(daemon, host);
+
+    await act(() => host.handle({ type: 'sendSystemCommand', command: 'retryPlannerCompaction', taskId: '' }));
+    expect(daemon.calls('plans.converseMessage')).toEqual([]);
+    await act(async () => {
+      daemon.push('s1', { type: 'planner_turn_ended', turnId: 'c1', outcome: 'message', sessionId: 's1', stream: 'd1', seq: 2 });
+    });
+
+    await waitFor(() => expect(daemon.calls('plans.converseMessage')).toEqual([[{ sessionId: 's1' }, { message: 'and add tests' }]]));
+  });
+
+  it('holds what is typed during the next session\'s turn after a switch overtook a turn of the last one', async () => {
+    let finishFirst = (): void => undefined;
+    let finishSecond = (): void => undefined;
+    const daemon = fakeDaemon({
+      'sessions.load': (params) => ok({ ok: true, sessionId: params?.id, goal: 'Ship the parser', plan: PLAN }),
+      'plans.converseMessage': (params) => new Promise((resolve) => {
+        const done = (): void => resolve(ok({ plan: PLAN }));
+        if (params?.sessionId === 's1') finishFirst = done;
+        else finishSecond = done;
+      }),
+    });
+    const host = hostWith();
+    watch(host);
+    await opened(daemon, host);
+
+    let first: Promise<void> = Promise.resolve();
+    await act(async () => { first = host.handle({ type: 'sendMessage', text: 'first', typed: true }); });
+    await act(() => host.open('s2'));
+    await act(async () => { finishFirst(); await first; });
+
+    let second: Promise<void> = Promise.resolve();
+    await act(async () => { second = host.handle({ type: 'sendMessage', text: 'second', typed: true }); });
+    // Not awaited: a prompt sent at once, rather than held, waits on its own turn.
+    await act(async () => { void host.handle({ type: 'sendMessage', text: 'third', typed: true }); });
+    expect(daemon.calls('plans.converseMessage').map(([, body]) => body)).toEqual([{ message: 'first' }, { message: 'second' }]);
+
+    // The turn that ends sends the held prompt, and waits on that one's turn in turn.
+    await act(async () => { finishSecond(); });
+    await waitFor(() => expect(daemon.calls('plans.converseMessage').at(-1)).toEqual([{ sessionId: 's2' }, { message: 'third' }]));
+    await act(async () => { finishSecond(); await second; });
+  });
+});
+
+// A task card's composer offers the commands its runner loaded, and sends a
+// picked one as a command rather than as text (#66).
+describe('DaemonHost task commands', () => {
+  const REVIEW = { name: 'review', description: 'Review the change', kind: 'command' as const };
+  const logged = () => ({
+    'sessions.load': ok({ ok: true, sessionId: 's1', goal: 'Ship the parser', plan: PLAN }),
+    'sessions.taskLog': ok({ attempts: [1, 2] }),
+    'sessions.taskLogAttempt': (params?: Record<string, string>) => ok({
+      attempt: Number(params?.attempt),
+      events: params?.attempt === '2' ? [{ type: 'runner_loaded', commands: [REVIEW], mcpServers: [] }] : [],
+    }),
+  });
+
+  it('answers a card with the commands its runner loaded in the latest attempt', async () => {
+    const daemon = fakeDaemon(logged());
+    const host = hostWith();
+    const seen = watch(host);
+    await opened(daemon, host);
+
+    await act(() => host.handle({ type: 'getTaskCommands', taskId: 't1' }));
+
+    await vi.waitFor(() => expect(seen.filter((m) => m.type === 'taskCommands').at(-1)).toEqual({ type: 'taskCommands', taskId: 't1', commands: [REVIEW] }));
+  });
+
+  it('tells the cards when a runner loads its commands mid-run', async () => {
+    const daemon = fakeDaemon(logged());
+    const host = hostWith();
+    const seen = watch(host);
+    await opened(daemon, host);
+
+    await act(async () => {
+      daemon.push('s1', { type: 'task_log', taskId: 't1', attempt: 2, events: [{ type: 'runner_loaded', commands: [REVIEW], mcpServers: [] }], sessionId: 's1', stream: 'd1', seq: 1 });
+    });
+
+    await vi.waitFor(() => expect(seen.filter((m) => m.type === 'taskCommands').at(-1)).toEqual({ type: 'taskCommands', taskId: 't1', commands: [REVIEW] }));
+  });
+});
+
+// The composer suggests every one of these (packages/ui's SLASH_COMMANDS), so
+// each must do what it does in the extension and the TUI, not be refused.
+describe('DaemonHost slash commands the composer offers', () => {
+  const loads = (params?: Record<string, string>) => ok({ ok: true, sessionId: params?.id ?? 's1', goal: 'Ship the parser', plan: PLAN });
+
+  it('condenses the conversation for a typed /compact', async () => {
+    const daemon = fakeDaemon({ 'sessions.load': loads, 'plans.compact': ok({ plan: PLAN }) });
+    const host = hostWith();
+    watch(host);
+    await opened(daemon, host);
+
+    await act(() => host.handle({ type: 'sendMessage', text: '/compact', typed: true }));
+
+    expect(daemon.calls('plans.compact').map(([params]) => params)).toEqual([{ sessionId: 's1' }]);
+  });
+
+  it('forks the conversation for /fork and follows the fork the daemon adopted', async () => {
+    const daemon = fakeDaemon({ 'sessions.load': loads, 'plans.fork': ok({ sessionId: 'f1', goal: 'Ship the parser', plan: PLAN }) });
+    const host = hostWith();
+    watch(host);
+    await opened(daemon, host);
+
+    await act(() => host.handle({ type: 'sendMessage', text: '/fork', typed: true }));
+
+    expect(daemon.calls('plans.fork').map(([params]) => params)).toEqual([{ sessionId: 's1' }]);
+    expect(host.sessionId).toBe('f1');
+  });
+
+  it('rewinds to the message /rewind names and puts that message back in the composer', async () => {
+    const daemon = fakeDaemon({
+      'sessions.load': loads,
+      'plans.rewind': ok({ sessionId: 'r1', goal: 'Ship the parser', plan: PLAN, rewoundMessage: 'and add tests' }),
+    });
+    const host = hostWith();
+    const seen = watch(host);
+    await opened(daemon, host);
+
+    await act(() => host.handle({ type: 'sendMessage', text: '/rewind 2', typed: true }));
+
+    expect(daemon.calls('plans.rewind')).toEqual([[{ sessionId: 's1' }, { index: 2 }]]);
+    expect(host.sessionId).toBe('r1');
+    expect(seen).toContainEqual(expect.objectContaining({ type: 'promptUnsent', text: 'and add tests' }));
+  });
+
+  it('lists what /rewind alone can go back to', async () => {
+    const target = { index: 2, preview: 'and add tests', content: 'and add tests', timestamp: '2026-11-06T10:00:00.000Z' };
+    const daemon = fakeDaemon({ 'sessions.load': loads, 'plans.rewindTargets': ok({ targets: [target] }) });
+    const host = hostWith();
+    const seen = watch(host);
+    await opened(daemon, host);
+
+    await act(() => host.handle({ type: 'sendMessage', text: '/rewind', typed: true }));
+
+    expect(daemon.calls('plans.rewind')).toEqual([]);
+    await vi.waitFor(() => expect(JSON.stringify(seen)).toContain('/rewind 2  and add tests'));
+  });
+
+  it('sends a skill\'s slash to the planner, as the extension and the TUI do', async () => {
+    const daemon = fakeDaemon({ 'sessions.load': loads, 'plans.converseMessage': ok({ plan: PLAN }) });
+    const host = hostWith();
+    watch(host);
+    await opened(daemon, host);
+
+    await act(() => host.handle({ type: 'sendMessage', text: '/review-pr fix it', typed: true }));
+
+    expect(daemon.calls('plans.converseMessage')).toEqual([[{ sessionId: 's1' }, { message: '/review-pr fix it' }]]);
+  });
+
+  it('opens Settings, where the planner and the allowlist are picked, for /planner and /allowlist', async () => {
+    fakeDaemon({ 'sessions.load': loads });
+    const host = hostWith();
+    watch(host);
+    const navigator = { openTask: vi.fn(), openFile: vi.fn(), showPlan: vi.fn(), showSettings: vi.fn() };
+    host.setNavigator(navigator);
+
+    await act(() => host.handle({ type: 'sendMessage', text: '/planner', typed: true }));
+    await act(() => host.handle({ type: 'sendMessage', text: '/allowlist', typed: true }));
+
+    expect(navigator.showSettings).toHaveBeenCalledTimes(2);
+  });
 });
 
 // A signed-out agent stays listed and is flagged; its own way in is the chat's
@@ -313,6 +565,190 @@ describe('DaemonHost sign-in, keys and planner controls', () => {
     await act(() => host.handle({ type: 'ready' }));
 
     expect(daemon.calls('settings.get')[0]?.[0]).toEqual({ workspace: WORKSPACE, sessionId: host.sessionId });
+  });
+
+  it('names the coding agent behind a harness planner, so the chat lists that agent\'s models', async () => {
+    const model = { modelId: 'sonnet', modelLabel: 'Sonnet', variants: [{ id: 'high', label: 'High' }] };
+    fakeDaemon({
+      'runners.list': ok({ runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }], orchestratorModel: '' }),
+      'models.list': ok({
+        models: [model], modelsByRunner: { 'claude-code': [model] }, modesByRunner: {},
+        orchestratorModel: 'sonnet', providers: [], orchestratorModels: [], providerErrors: {},
+      }),
+      'settings.get': ok({ ...SETTINGS, aiProvider: 'claude-code', orchestratorModel: 'sonnet', plannerThinkingEffort: 'high' }),
+    });
+    const host = hostWithOptions({});
+    const seen = watch(host);
+    await act(() => host.handle({ type: 'ready' }));
+
+    const planner = seen.filter((m) => m.type === 'setPlannerBackends').at(-1);
+    expect(planner).toMatchObject({ provider: 'claude-code', runner: 'claude-code', effort: 'high' });
+    expect(host.getSnapshot().state.modelsByRunner['claude-code']).toEqual([model]);
+  });
+
+  it('sends no runner when a vendor plans, so its vendor catalog is offered', async () => {
+    fakeDaemon({
+      'runners.list': ok({ runners: [], orchestratorModel: '' }),
+      'models.list': MODELS,
+      'settings.get': ok({ ...SETTINGS, aiProvider: 'openrouter' }),
+    });
+    const host = hostWithOptions({});
+    const seen = watch(host);
+    await act(() => host.handle({ type: 'ready' }));
+
+    const planner = seen.filter((m) => m.type === 'setPlannerBackends').at(-1);
+    expect(planner).toMatchObject({ provider: 'openrouter' });
+    expect(planner && 'runner' in planner ? planner.runner : undefined).toBeUndefined();
+  });
+
+  it('follows the chosen agent after its model and effort are picked', async () => {
+    let settings = { ...SETTINGS, aiProvider: 'claude-code', orchestratorModel: 'sonnet', plannerThinkingEffort: '' };
+    fakeDaemon({
+      'runners.list': ok({ runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }], orchestratorModel: '' }),
+      'models.list': () => ok({
+        models: [], modelsByRunner: {}, modesByRunner: {},
+        orchestratorModel: settings.orchestratorModel, providers: [], orchestratorModels: [], providerErrors: {},
+      }),
+      'settings.get': () => ok({ ...settings }),
+      'settings.update': (_params, body) => {
+        const change = body as { orchestratorModel?: string; plannerThinkingEffort?: string };
+        settings = {
+          ...settings,
+          ...(change.orchestratorModel !== undefined ? { orchestratorModel: change.orchestratorModel } : {}),
+          ...(change.plannerThinkingEffort !== undefined ? { plannerThinkingEffort: change.plannerThinkingEffort } : {}),
+        };
+        return ok({ ...settings });
+      },
+    });
+    const host = hostWithOptions({});
+    const seen = watch(host);
+    await act(() => host.handle({ type: 'ready' }));
+
+    await act(() => host.handle({ type: 'setPlannerModel', modelId: 'opus', effort: 'high' }));
+
+    expect(seen.filter((m) => m.type === 'setPlannerBackends').at(-1)).toMatchObject({ runner: 'claude-code', effort: 'high' });
+    expect(seen.filter((m) => m.type === 'setModelConfig').at(-1)).toMatchObject({ modelConfig: { orchestrator: 'opus' } });
+  });
+
+  it('follows the planner the chat switches to, runner and all', async () => {
+    let provider = 'openrouter';
+    fakeDaemon({
+      'runners.list': ok({ runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }], orchestratorModel: '' }),
+      'models.list': MODELS,
+      'settings.get': () => ok({ ...SETTINGS, aiProvider: provider }),
+      'settings.update': (_params, body) => {
+        const env = (body as { env?: Record<string, string> }).env;
+        if (env?.AI_PROVIDER) provider = env.AI_PROVIDER;
+        return ok({ ...SETTINGS, aiProvider: provider });
+      },
+    });
+    const host = hostWithOptions({});
+    const seen = watch(host);
+    await act(() => host.handle({ type: 'ready' }));
+
+    await act(() => host.handle({ type: 'setPlanner', provider: 'claude-code' }));
+    expect(seen.filter((m) => m.type === 'setPlannerBackends').at(-1)).toMatchObject({ provider: 'claude-code', runner: 'claude-code' });
+
+    await act(() => host.handle({ type: 'setPlanner', provider: 'openrouter' }));
+    const vendor = seen.filter((m) => m.type === 'setPlannerBackends').at(-1);
+    expect(vendor).toMatchObject({ provider: 'openrouter' });
+    expect(vendor && 'runner' in vendor ? vendor.runner : undefined).toBeUndefined();
+  });
+
+  it('offers the vendor planner its discovered model options', async () => {
+    fakeDaemon({
+      'runners.list': ok({ runners: [], orchestratorModel: '' }),
+      'models.list': ok({
+        models: [], modelsByRunner: {}, modesByRunner: {},
+        orchestratorModel: 'mock/model', providers: ['openrouter'], providerErrors: {},
+        orchestratorModels: [{ id: 'mock/model', label: 'Mock Model', provider: 'mock', apiProvider: 'openrouter' }],
+      }),
+      'settings.get': ok({ ...SETTINGS, aiProvider: 'openrouter', orchestratorModel: 'mock/model' }),
+    });
+    const host = hostWithOptions({});
+    const seen = watch(host);
+    await act(() => host.handle({ type: 'ready' }));
+
+    expect(seen.filter((m) => m.type === 'setModelOptions').at(-1)).toMatchObject({
+      modelOptions: [{ id: 'mock/model', label: 'Mock Model', apiProvider: 'openrouter' }],
+    });
+  });
+
+  it('sends the per-runner model allowlist the task cards filter by', async () => {
+    fakeDaemon({
+      'runners.list': ok({ runners: [{ id: 'codex', name: 'Codex', enabled: true }], orchestratorModel: '' }),
+      'models.list': MODELS,
+      'settings.get': ok({ ...SETTINGS, modelAllowlist: { codex: ['gpt-5'] } }),
+    });
+    const host = hostWithOptions({});
+    const seen = watch(host);
+    await act(() => host.handle({ type: 'ready' }));
+
+    expect(seen.filter((m) => m.type === 'setModelAllowlist').at(-1)).toEqual({ type: 'setModelAllowlist', allowlist: { codex: ['gpt-5'] } });
+  });
+
+  it('gives a chat that mounts after detection the allowlist, model options and Run settings the first one got', async () => {
+    fakeDaemon({
+      'runners.list': ok({ runners: [{ id: 'codex', name: 'Codex', enabled: true }], orchestratorModel: '' }),
+      'models.list': ok({
+        models: [], modelsByRunner: {}, modesByRunner: {},
+        orchestratorModel: 'mock/model', providers: ['openrouter'], providerErrors: {},
+        orchestratorModels: [{ id: 'mock/model', label: 'Mock Model', provider: 'mock', apiProvider: 'openrouter' }],
+      }),
+      'settings.get': ok({ ...SETTINGS, aiProvider: 'openrouter', orchestratorModel: 'mock/model', autonomousMode: true, modelAllowlist: { codex: ['gpt-5'] } }),
+    });
+    const host = hostWithOptions({});
+    watch(host);
+    await act(() => host.handle({ type: 'ready' }));
+
+    const later: HostToWebview[] = [];
+    const port = host.port('plan');
+    port.subscribe((msg) => later.push(msg));
+    await act(() => port.post({ type: 'ready' }));
+
+    expect(later).toContainEqual({ type: 'setModelAllowlist', allowlist: { codex: ['gpt-5'] } });
+    expect(later.find((m) => m.type === 'setModelOptions')).toMatchObject({ modelOptions: [{ id: 'mock/model', apiProvider: 'openrouter' }] });
+    expect(later.find((m) => m.type === 'setRunSettings')).toMatchObject({ autonomous: true, maxParallel: 3 });
+  });
+
+  it('shows the workspace isolation preview the startup view and approval card draw', async () => {
+    const preview = { status: 'ready' as const, repos: [{ path: '.', top: false }], shared: [] };
+    fakeDaemon({
+      'runners.list': ok({ runners: [], orchestratorModel: '' }),
+      'models.list': MODELS,
+      'settings.get': ok(SETTINGS),
+      'workspaces.isolationPreview': ok({ preview }),
+    });
+    const host = hostWithOptions({});
+    const seen = watch(host);
+    await act(() => host.handle({ type: 'ready' }));
+
+    await waitFor(() => expect(seen).toContainEqual({ type: 'isolationPreview', preview }));
+  });
+
+  it('opens the chat\'s settings panel on /settings', async () => {
+    const daemon = fakeDaemon();
+    const host = hostWithOptions({});
+    const seen = watch(host);
+    await act(() => host.handle({ type: 'sendMessage', text: '/settings', typed: true }));
+
+    expect(seen).toContainEqual({ type: 'openSettings' });
+    expect(daemon.calls('plans.converseStart')).toEqual([]);
+  });
+
+  it('remembers the plan dock height across chat instances', async () => {
+    fakeDaemon({
+      'runners.list': ok({ runners: [], orchestratorModel: '' }),
+      'models.list': MODELS,
+      'settings.get': ok(SETTINGS),
+    });
+    const host = hostWithOptions({});
+    await act(() => host.handle({ type: 'setPlanDockHeight', height: 321 }));
+
+    const seen = watch(host);
+    await act(() => host.handle({ type: 'ready' }));
+
+    await waitFor(() => expect(seen).toContainEqual({ type: 'planDockHeight', height: 321 }));
   });
 
   it('opens a signed-out agent\'s login terminal, polls its own status, and clears the pending state', async () => {
@@ -499,6 +935,33 @@ describe('DaemonHost sign-in, keys and planner controls', () => {
     expect(daemon.calls('settings.update').at(-1)?.[1]).toMatchObject({ run: { mergeAtGatesAutomatically: true }, workspace: WORKSPACE });
     expect(seen.at(-1)).toMatchObject({ type: 'setRunSettings', run: { mergeAtGatesAutomatically: true } });
   });
+
+  it('shows the run settings of the session it switches to, to a mounted chat and to one that mounts after', async () => {
+    // The daemon's run settings are the live session's own: s1 runs autonomously, s2 does not.
+    const daemon = fakeDaemon({
+      'runners.list': ok({ runners: [], orchestratorModel: '' }),
+      'models.list': MODELS,
+      'sessions.load': (params) => ok({ ok: true, sessionId: params?.id, goal: 'Ship the parser', plan: PLAN }),
+      'settings.get': (params) => ok(params?.sessionId === 's1'
+        ? { ...SETTINGS, autonomousMode: true, maxParallel: 5, run: { ...RUN_SETTINGS_DEFAULTS, mergeAtGatesAutomatically: true } }
+        : { ...SETTINGS, autonomousMode: false, maxParallel: 2, run: { ...RUN_SETTINGS_DEFAULTS, mergeAtGatesAutomatically: false } }),
+    });
+    const host = hostWithOptions({});
+    const seen = watch(host);
+    await act(() => host.open('s1'));
+    await act(() => host.handle({ type: 'ready' }));
+    expect(seen.filter((m) => m.type === 'setRunSettings').at(-1)).toMatchObject({ autonomous: true, maxParallel: 5 });
+
+    await act(() => host.open('s2'));
+
+    await waitFor(() => expect(seen.filter((m) => m.type === 'setRunSettings').at(-1)).toMatchObject({ autonomous: false, maxParallel: 2, run: { mergeAtGatesAutomatically: false } }));
+    expect(daemon.calls('settings.get').at(-1)?.[0]).toEqual({ workspace: WORKSPACE, sessionId: 's2' });
+    const later: HostToWebview[] = [];
+    const chat = host.port('conversation');
+    chat.subscribe((msg) => later.push(msg));
+    chat.post({ type: 'ready' });
+    expect(later.find((m) => m.type === 'setRunSettings')).toMatchObject({ autonomous: false, maxParallel: 2 });
+  });
 });
 
 // W16: a session another Ordewell daemon holds is joined, and driven through
@@ -662,6 +1125,25 @@ describe('DaemonHost joining a held session', () => {
     await act(() => host.open('s1'));
 
     expect(host.getSnapshot()).toMatchObject({ sessionId: 's1', readOnly: true, link: { kind: 'refused', reason: 'mismatch', message }, held: TUI_HELD });
+  });
+
+  it('offers Continue here once a refused holder exits, keeping the saved state on screen meanwhile', async () => {
+    let held = true;
+    const daemon = fakeDaemon({
+      'sessions.load': () => (held ? heldBy(TUI_HELD) : ok({ ok: true, plan: PLAN, goal: 'Add SSO login' })),
+      'sessions.get': saved(),
+    });
+    daemon.joinWith(() => (held
+      ? { ok: false, reason: 'mismatch', message: "The TUI's daemon is 0.9.0 (contract 0); this app speaks contract 1, so it can't join." }
+      : { ok: false, reason: 'free', message: 'Nothing holds this session now.' }));
+    const host = hostWith(async () => null, undefined, 10);
+
+    await act(() => host.open('s1'));
+    expect(host.getSnapshot()).toMatchObject({ sessionId: 's1', readOnly: true, link: { kind: 'refused' } });
+
+    held = false;
+    await waitFor(() => expect(host.getSnapshot().link).toMatchObject({ kind: 'gone' }), { timeout: 5_000 });
+    expect(host.getSnapshot()).toMatchObject({ sessionId: 's1', readOnly: true });
   });
 
   it('says the holder still runs, and why, when take over is refused', async () => {

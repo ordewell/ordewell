@@ -94,6 +94,34 @@ describe('HolderConnections.join', () => {
     expect(proxies).toEqual([]);
   });
 
+  it('says a release without desktop join support cannot be joined, and how to go on', async () => {
+    // 0.12.6 from main answers /api/server with only {pid, port}: no contract.
+    const { connections, proxies } = setup({
+      probe: async () => ({ kind: 'daemon', identity: { pid: 48200, version: '0.12.6' } }),
+    });
+
+    const joined = await connections.join(WINDOW_A, WORKSPACE, 's1');
+
+    expect(joined).toEqual({
+      ok: false,
+      reason: 'mismatch',
+      message: "The TUI's daemon is Ordewell 0.12.6, started by a release without desktop join support, so this app can't join it. Quit it and choose Continue here to carry the session on, or update Ordewell.",
+    });
+    expect(proxies).toEqual([]);
+  });
+
+  it('still says how to go on when a daemon without a contract names no version', async () => {
+    const { connections } = setup({
+      probe: async () => ({ kind: 'daemon', identity: { pid: 48200 } }),
+    });
+
+    expect(await connections.join(WINDOW_A, WORKSPACE, 's1')).toMatchObject({
+      ok: false,
+      reason: 'mismatch',
+      message: "The TUI's daemon was started by a release without desktop join support, so this app can't join it. Quit it and choose Continue here to carry the session on, or update Ordewell.",
+    });
+  });
+
   it('refuses when there is no token to present for the holder\'s port', async () => {
     const { connections, tokens } = setup();
     tokens.clear();

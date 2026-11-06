@@ -102,6 +102,7 @@ function world(theme: 'system' | 'light' | 'dark' = 'dark', options: WorldOption
       if (change.plannerThinkingEffort !== undefined) settings = { ...settings, plannerThinkingEffort: change.plannerThinkingEffort };
       if (change.run) settings = { ...settings, run: { ...settings.run, ...change.run } as SettingsResponse['run'] };
       if (change.env?.ORDEWELL_MAX_PARALLEL) settings = { ...settings, maxParallel: Number(change.env.ORDEWELL_MAX_PARALLEL) };
+      if (change.env?.AI_PROVIDER) settings = { ...settings, aiProvider: change.env.AI_PROVIDER as SettingsResponse['aiProvider'] };
       if (change.modelAllowlist) settings = { ...settings, modelAllowlist: { ...settings.modelAllowlist, ...change.modelAllowlist } as SettingsResponse['modelAllowlist'] };
       return ok({ ...settings });
     },
@@ -136,6 +137,17 @@ describe('the Settings view', () => {
     expect(screen.getByRole('checkbox', { name: /Codex/ })).not.toBeChecked();
     expect(screen.getByRole('button', { name: 'Guarded' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('textbox', { name: /Parallel tasks/ })).toHaveValue('3');
+  });
+
+  it('re-detects the catalog after the planner changes, so the chat follows it', async () => {
+    const { w } = await mount();
+    const planner = await screen.findByRole('combobox', { name: 'Planner' });
+    const before = w.daemon.calls('runners.list').length;
+
+    fireEvent.change(planner, { target: { value: 'codex' } });
+
+    await waitFor(() => expect(w.daemon.calls('runners.list').length).toBeGreaterThan(before));
+    await waitFor(() => expect(daemonHost(WORKSPACE).getSnapshot().state.planner.provider).toBe('codex'));
   });
 
   it('lists every planner core ships, keeping an unavailable agent with its reason', async () => {
@@ -224,6 +236,42 @@ describe('the Settings view', () => {
 
     fireEvent.click(screen.getByRole('checkbox', { name: /Codex/ }));
     await waitFor(() => expect(w.daemon.calls('runners.setEnabled')).toContainEqual([{ id: 'codex' }, { enabled: true }]));
+  });
+
+  it('asks before the supervisor may act or autorun turns on, as the chat\'s Run block does, and Cancel saves nothing', async () => {
+    const { w } = await mount();
+    const supervisor = await screen.findByRole('combobox', { name: 'Supervisor' });
+
+    fireEvent.change(supervisor, { target: { value: 'act' } });
+    expect(await screen.findByText('Let the supervisor act?')).toBeInTheDocument();
+    expect(w.daemon.calls('settings.update')).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByText('Let the supervisor act?')).toBeNull());
+    expect(w.daemon.calls('settings.update')).toHaveLength(0);
+    expect(supervisor).toHaveValue(RUN_SETTINGS_DEFAULTS.supervisorLevel);
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /Autorun/ }));
+    expect(await screen.findByText('Start plans without review?')).toBeInTheDocument();
+    expect(w.daemon.calls('settings.update')).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Turn autorun on' }));
+    await waitFor(() => expect(w.daemon.calls('settings.update').at(-1)?.[1]).toMatchObject({ run: { autorun: true }, workspace: WORKSPACE }));
+    await waitFor(() => expect(screen.getByRole('checkbox', { name: /Autorun/ })).toBeChecked());
+  });
+
+  it('tells every chat the run settings it saved, so the Run block and the approval note follow', async () => {
+    await mount();
+    await screen.findByRole('heading', { name: 'Run' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Full' }));
+    await waitFor(() => expect(daemonHost(WORKSPACE).getSnapshot().state.runSettings?.autonomous).toBe(true));
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /Merge at gates automatically/ }));
+    await waitFor(() => expect(daemonHost(WORKSPACE).getSnapshot().state.runSettings?.run.mergeAtGatesAutomatically).toBe(true));
+
+    const parallel = screen.getByRole('textbox', { name: /Parallel tasks/ });
+    fireEvent.change(parallel, { target: { value: '5' } });
+    fireEvent.blur(parallel);
+    await waitFor(() => expect(daemonHost(WORKSPACE).getSnapshot().state.runSettings?.maxParallel).toBe(5));
   });
 
   it('words each signed-out runner as core does, and its Log in asks the session host', async () => {

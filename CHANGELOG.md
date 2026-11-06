@@ -91,6 +91,20 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   desktop list it as unavailable with the reason instead of failing on its first
   task. A refresh asks again, so an agent upgraded or removed meanwhile is
   offered, or refused, without a restart.
+- **The desktop planner lists the chosen agent's models.** When a coding agent
+  is the planner, picking it fills the model dropdown from that agent's own
+  catalog, instead of leaving the list empty or offering another runner's
+  models. Changing who plans, its model or its allowlist in Settings reads the
+  catalog again, so the chat's pickers follow it.
+- **The desktop chat behaves as the VS Code chat does.** It lists every model a
+  vendor planner can use, shows the model allowlist in its own Settings, draws
+  the workspace's isolation preview, restores the plan dock's height, opens
+  Settings from `/settings`, and sends a fresh session's first plan with the
+  runners its pills have on, including one still being saved.
+- **An older Ordewell is explained when the desktop app cannot join it.** A
+  terminal UI from a release without desktop join support says so rather than
+  failing to connect, and its session's saved state stays on screen read-only
+  until that holder exits, when **Continue here** carries the session on.
 
 - **A standalone `ordewell` binary for Linux and macOS.** The CLI and terminal
   UI install as one file with no Node.js:

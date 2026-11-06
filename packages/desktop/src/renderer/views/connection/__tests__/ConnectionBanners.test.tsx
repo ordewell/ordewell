@@ -315,6 +315,32 @@ describe('a session another Ordewell daemon holds (W16)', () => {
     expect(host.getSnapshot().readOnly).toBe(true);
     expect(document.querySelector('.frame-status')).toHaveTextContent('held by TUI (pid 48120) · read-only');
   });
+
+  it('says a release without desktop join support cannot be joined, then offers Continue here once it exits', async () => {
+    let held = true;
+    const message = "The TUI's daemon is Ordewell 0.12.6, started by a release without desktop join support, so this app can't join it. Quit it and choose Continue here to carry the session on, or update Ordewell.";
+    const w = world(CONNECTED, {
+      'sessions.load': () => (held ? heldByTui : ok({ ok: true, plan: PLAN, goal: 'Ship the parser' })),
+      'sessions.get': ok(SAVED),
+    });
+    w.daemon.joinWith(() => (held
+      ? { ok: false, reason: 'mismatch', message }
+      : { ok: false, reason: 'free', message: 'Nothing holds this session now.' }));
+    const { host } = mount(CONNECTED);
+    await act(() => host.open('s1'));
+
+    const refused = await screen.findByRole('region', { name: "Can't join the TUI (pid 48120)" });
+    expect(refused).toHaveTextContent('without desktop join support');
+    expect(refused).toHaveTextContent('update Ordewell');
+    expect(host.getSnapshot().readOnly).toBe(true);
+
+    held = false;
+    const gone = await screen.findByRole('region', { name: 'The TUI that held this session has exited.' }, { timeout: 15_000 });
+    fireEvent.click(within(gone).getByRole('button', { name: 'Continue here' }));
+
+    await waitFor(() => expect(w.daemon.calls('sessions.load')).toHaveLength(2));
+    expect(host.getSnapshot().readOnly).toBe(false);
+  });
 });
 
 describe('the restored-session banner', () => {

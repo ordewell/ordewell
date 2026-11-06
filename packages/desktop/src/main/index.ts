@@ -32,6 +32,7 @@ import { RecentsStore } from './recents';
 import { AUTO_UPDATE_ENABLED, UpdateController, type UpdaterPort } from './updater';
 import { lockSession, lockWebContents, registerAppScheme, serveRenderer } from './security';
 import { WindowManager } from './windows';
+import { osSurfacesAllowed, quietTestApp, suppressOsSurfaces } from './testWindows';
 import { APP_ORIGIN } from '../shared/csp';
 
 // A dev URL is honoured only from a source checkout: a packaged app that read
@@ -39,6 +40,7 @@ import { APP_ORIGIN } from '../shared/csp';
 const devUrl = !app.isPackaged ? process.env.ORDEWELL_DESKTOP_DEV_URL : undefined;
 const devOrigin = devUrl ? new URL(devUrl).origin : undefined;
 
+quietTestApp();
 registerAppScheme();
 
 if (!app.requestSingleInstanceLock()) {
@@ -57,6 +59,7 @@ async function main(): Promise<void> {
   // the runners; the daemon this app forks inherits whatever is set here.
   process.env.PATH = await augmentedPath();
   await app.whenReady();
+  suppressOsSurfaces();
 
   lockSession(devOrigin);
   Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate(process.platform, !app.isPackaged, app.getName(), (command) => {
@@ -159,7 +162,7 @@ async function main(): Promise<void> {
   const notifications = new AttentionNotifier({
     muted: () => !prefs.get().notifications,
     present: (title, body, onClick) => {
-      if (!Notification.isSupported()) return;
+      if (!osSurfacesAllowed() || !Notification.isSupported()) return;
       const item = new Notification({ title, body });
       item.on('click', onClick);
       item.show();
@@ -195,7 +198,7 @@ async function main(): Promise<void> {
 
   let tray: Tray | undefined;
   const showTray = (): void => {
-    if (tray) return;
+    if (tray || !osSurfacesAllowed()) return;
     const icon = nativeImage.createFromPath(join(__dirname, '..', '..', 'resources', 'trayTemplate.png'));
     icon.setTemplateImage(true);
     tray = new Tray(icon);
