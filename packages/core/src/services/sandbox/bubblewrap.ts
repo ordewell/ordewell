@@ -156,12 +156,15 @@ ${BECOME_BUBBLEWRAP}`;
  * cannot be held, so nothing runs.
  * Older kernels count the process limit against all of the user's processes
  * and newer ones against the sandbox's own, so it is set above every process
- * the host runs now: never already spent, and still a bound. Dash names that
+ * the host runs now: never already spent, and still a bound. Linux counts each
+ * thread as a process, so the count is of threads: a host whose processes
+ * hold many would leave the run less than its share, and a test runner's
+ * workers fail to start (EAGAIN) with a core count's worth of them. Dash names that
  * limit `-p` where bash names it `-u`. Only numbers from {@link SandboxLimits}
  * enter the text, and the command reaches it as the last of its arguments.
  */
 function limitsPrelude(limits: SandboxLimits): string {
-  const processes = `$(($(set -- /proc/[0-9]*; echo $#) + ${limits.processes}))`;
+  const processes = `$(($(set -- /proc/[0-9]*/task/[0-9]*; echo $#) + ${limits.processes}))`;
   const refused = `{ echo 'The sealed run could not be held to its limits, so it did not run.' >&2; exit 125; }`;
   return `(PATH=${WATCHER_PATH}; command -v sleep >/dev/null && command -v grep >/dev/null && [ / -ef / ]) 2>/dev/null \\
   || ${refused}

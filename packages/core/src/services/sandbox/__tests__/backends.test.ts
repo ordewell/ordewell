@@ -404,8 +404,8 @@ describe('BubblewrapBackend.wrap', () => {
       const launch = bwrap().wrap(SH, sealed());
       expect(launch.file).toBe('/bin/sh');
       const prelude = launch.args[1];
-      // dash calls the process limit -p, bash -u.
-      const processes = '$(($(set -- /proc/[0-9]*; echo $#) + 64))';
+      // dash calls the process limit -p, bash -u. Linux counts threads against it.
+      const processes = '$(($(set -- /proc/[0-9]*/task/[0-9]*; echo $#) + 64))';
       expect(prelude).toContain(`ulimit -u ${processes} 2>/dev/null || ulimit -p ${processes}`);
       expect(prelude).toContain(`ulimit -v ${64 * 1024 * 1024}`);
       expect(prelude).toMatch(/exec "\$bwrap" --unsetenv \S+ "\$@"$/);

@@ -9,7 +9,7 @@ import { isSea, seaRuntimeDir, type SeaDeps } from '../utils/seaRuntime';
  * `import.meta.url` under ESM — rather than from the current working directory,
  * which is wrong whenever the binary is invoked from somewhere else. The
  * standalone binary has no package beside it, so it answers with the skills
- * it extracted from itself.
+ * it extracted from itself (ADR-0065 C3).
  */
 export function builtinSkillsDir(deps: SeaDeps = {}): string {
   if (isSea(deps)) return path.join(seaRuntimeDir(deps), 'skills');

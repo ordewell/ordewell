@@ -1,6 +1,6 @@
 #!/bin/sh
 # Installs the Ordewell command-line app for the current user, on macOS and
-# Linux. It is one self-contained binary: Node.js is not needed.
+# Linux. It is one self-contained binary: Node.js is not needed (ADR-0065 C7).
 #
 #   curl -fsSL https://ordewell.ai/install.sh | sh
 #   curl -fsSL https://ordewell.ai/install.sh | sh -s -- --version 0.12.3

@@ -13,7 +13,7 @@ import { cliVersion } from './version';
  * them in its frame, which a stray write would tear.
  *
  * The update line names the upgrade for the way this copy was installed: an
- * npm upgrade does nothing for the standalone binary.
+ * npm upgrade does nothing for the standalone binary (ADR-0065 C9).
  */
 export function startCliVersionCheck(
   show: Pick<VersionCheckOptions, 'onNotice' | 'onUpdate'>,

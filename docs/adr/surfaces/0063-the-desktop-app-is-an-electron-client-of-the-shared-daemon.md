@@ -151,18 +151,17 @@ holds the token.**
   manual run or a fork never signs or notarizes.
 
 - **A stable download link and a one-line install per OS, both verified
-  against one `SHA256SUMS` (H10).** The `attach` job of `desktop-build.yml`
-  is the only place that holds all three OSes' installers, so it alone makes
-  their fixed-name copies, with `scripts/desktop-release-assets.mjs`: copies
-  named without a version (`Ordewell-mac-arm64.dmg`,
-  `Ordewell-mac-x64.dmg`, `Ordewell-win-x64.exe`, `Ordewell-linux-x64.AppImage`,
-  `Ordewell-linux-x64.deb`), so `releases/latest/download/<name>` always
-  resolves. The one `SHA256SUMS`, in `sha256sum -c` format, covers every
-  installer (versioned and fixed name), the CLI archives and `install.sh` of
-  [ADR-0065](0065-the-cli-also-ships-as-a-standalone-node-binary.md) C5. A
-  `release.yml` job writes it after both the desktop and the CLI builds have
-  attached their files and uploads it last, so a release that has it has
-  everything it lists. The script refuses a release that lacks a fixed asset or mixes versions. `latest*.yml`
+  against one `SHA256SUMS` (H10).** `release.yml`'s `release-assets` job
+  runs once both the desktop and the CLI builds have attached their files, the
+  only point where one place holds every installer, and with
+  `scripts/desktop-release-assets.mjs` makes the fixed-name copies
+  (`Ordewell-mac-arm64.dmg`, `Ordewell-mac-x64.dmg`, `Ordewell-win-x64.exe`,
+  `Ordewell-linux-x64.AppImage`, `Ordewell-linux-x64.deb`, and the CLI's of
+  [ADR-0065](0065-the-cli-also-ships-as-a-standalone-node-binary.md) C5), so
+  `releases/latest/download/<name>` always resolves. The one `SHA256SUMS`, in
+  `sha256sum -c` format, covers every installer (versioned and fixed name), the
+  CLI archives and `install.sh`; the job uploads it last, so a release that has
+  it has everything it lists. The script refuses a release that lacks a fixed asset or mixes versions. `latest*.yml`
   and the blockmaps keep their own names and are not listed: electron-updater
   reads them by those names. `scripts/install/desktop.sh` (macOS and Linux) and
   `scripts/install/desktop.ps1` (Windows, PowerShell 5.1 and 7) download by
@@ -188,10 +187,11 @@ holds the token.**
   templates from the version and that `SHA256SUMS`, refusing a missing asset or
   a fixed-name copy whose hash disagrees with the versioned file it duplicates,
   so a package manager installs the release's own bytes and checks them against
-  the release's own hash. The `homebrew` job pushes two files to
-  `ordewell/homebrew-tap` only when `HOMEBREW_TAP_TOKEN` exists. The formula
-  `ordewell` (`Formula/ordewell.rb`) installs the CLI archive on macOS and Linux
-  and is published whenever the token exists
+  the release's own hash; each is rendered apart (`--only formula`, `cask`,
+  `winget`). The `homebrew` job writes `ordewell/homebrew-tap` in one commit,
+  only when `HOMEBREW_TAP_TOKEN` exists. The formula `ordewell`
+  (`Formula/ordewell.rb`) installs the CLI archive on macOS and Linux and is
+  published whenever the token exists
   ([ADR-0065](0065-the-cli-also-ships-as-a-standalone-node-binary.md) C8). The
   cask `ordewell-desktop` (`Casks/ordewell-desktop.rb`, the installer's
   `BIN_NAME`, so it does not clash with the formula) is published only when the macOS build's `signing.json` says it was notarized: Homebrew
@@ -504,4 +504,4 @@ allows script only from the app's own bundle, with no inline script.
 - 2026-11-04 — H9: the maintainers' credential setup and the publisher-eligibility reasoning moved out of the public docs; the routes and their gates are unchanged.
 
 - 2026-11-05 — renumbered before publication to avoid a collision with main.
-- 2026-11-06 — H10, H11: ADR-0065 puts the CLI archives and `install.sh` in the release; one `SHA256SUMS` over all of it is written by a `release.yml` job after both builds, and the cask is renamed `ordewell-desktop` beside a new `ordewell` formula.
+- 2026-11-06 — H10, H11: ADR-0065 puts the CLI archives and `install.sh` in the release; one `SHA256SUMS` over all of it and the fixed-name copies are written by `release.yml`'s `release-assets` job after both builds, and the cask is renamed `ordewell-desktop` beside a new `ordewell` formula.

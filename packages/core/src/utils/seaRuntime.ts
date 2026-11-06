@@ -6,7 +6,8 @@
  * Dockerfile) is embedded as a SEA asset under `runtime/`, listed by
  * `runtime/manifest.json` with the version, and extracted to the user's data
  * dir on first use. Nothing here changes the npm install: every answer below
- * is the npm one unless `node:sea` says this process is a binary.
+ * is the npm one unless `node:sea` says this process is a binary
+ * (ADR-0065 C3; the install method and its upgrade, C9).
  */
 
 import { randomBytes } from 'crypto';

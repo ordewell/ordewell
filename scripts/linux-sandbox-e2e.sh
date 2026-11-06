@@ -26,9 +26,12 @@ fi
 
 # The native-shell tests in sealedRuns.e2e.test.ts start the shells a user has,
 # and skip the ones this host lacks. The runner image has no zsh, so install it
-# for them to run; fish stays optional.
+# for them to run; fish stays optional. A local host whose sudo would prompt
+# for a password (CI's does not) leaves them skipped rather than waiting.
 if ! command -v zsh >/dev/null 2>&1; then
-  if command -v apt-get >/dev/null 2>&1; then
+  if ! sudo -n true 2>/dev/null; then
+    echo 'zsh is not installed and sudo would prompt to install it; the native-shell zsh tests skip (unverified here).' >&2
+  elif command -v apt-get >/dev/null 2>&1; then
     sudo apt-get update
     sudo apt-get install -y zsh
   elif command -v dnf >/dev/null 2>&1; then

@@ -136,6 +136,8 @@ describe('checkResources', () => {
   it('names a macOS spawn-helper that lost its executable bit', () => {
     const resources = scratch();
     fill(resources);
+    // fill() lays out this host's entries, and only macOS's include the helper.
+    if (process.platform !== 'darwin') touch(join(resources, 'app.asar.unpacked', ptyEntries('darwin')[1]), header.macho('x64'));
     const failures = checkResources(resources, undefined, 'darwin', () => 0o644);
     assert.match(failures.join('\n'), /spawn-helper is not executable/);
     assert.deepEqual(checkResources(resources, undefined, 'darwin', () => 0o755).filter((f) => f.includes('spawn-helper')), []);
