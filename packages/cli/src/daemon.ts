@@ -13,6 +13,7 @@ import {
   stopDaemonAt,
 } from '@ordewell/core';
 import { flag } from './utils/args';
+import { runningAsSea } from './seaMode';
 
 // The probe, token and PID-file helpers live in core so the desktop app reads
 // the same files the same way (ADR-0063 H2); this module keeps the CLI's
@@ -43,6 +44,20 @@ function getWebServerPath(): string {
   );
 }
 
+/**
+ * The process that runs a daemon with `daemonArgs`. Outside the binary that is
+ * the web package's server file under this Node. The standalone binary has no
+ * server file and no Node beside it: it is its own daemon, entered as
+ * `<binary> __daemon ...` (ADR-0065), so `serverPath` is never consulted there.
+ */
+export function daemonCommand(
+  daemonArgs: string[],
+  serverPath: () => string,
+  sea: boolean = runningAsSea(),
+): { file: string; args: string[] } {
+  return { file: process.execPath, args: sea ? ['__daemon', ...daemonArgs] : [serverPath(), ...daemonArgs] };
+}
+
 export async function startDaemon(
   port: number = DEFAULT_PORT,
   opts?: { detached?: boolean; quiet?: boolean; cwd?: string },
@@ -56,15 +71,7 @@ export async function startDaemon(
     return;
   }
 
-  const serverPath = getWebServerPath();
-
-  const dir = globalDataDir();
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-
   const pidFile = daemonPidFilePath(port);
-  const logFd = openSync(daemonLogPath(), 'a');
   // detached=false puts the daemon in the caller's own process group, so a
   // terminal hangup (closing the tab) reaches it via the same kernel-delivered
   // SIGHUP as the caller — no JS-level signal relay required, and none of the
@@ -78,15 +85,22 @@ export async function startDaemon(
   // or a multiplexer that doesn't relay the signal. `--watch-parent` has the
   // daemon poll for that and self-terminate, so an owned daemon never
   // outlives the CLI that spawned it and orphans don't accumulate.
-  const child = spawn(process.execPath, [
-    serverPath,
+  const command = daemonCommand([
     '--port', String(port),
     // The daemon writes the file itself once it is listening, and removes it
     // on shutdown. A CLI-side write before the bind would leave the loser of a
     // two-CLI race owning the winner's entry, or a dead PID after a crash.
     '--pid-file', pidFile,
     ...(detached ? [] : ['--watch-parent', String(process.pid)]),
-  ], {
+  ], getWebServerPath);
+
+  const dir = globalDataDir();
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+
+  const logFd = openSync(daemonLogPath(), 'a');
+  const child = spawn(command.file, command.args, {
     detached,
     stdio: ['ignore', logFd, logFd],
     env: { ...process.env },
