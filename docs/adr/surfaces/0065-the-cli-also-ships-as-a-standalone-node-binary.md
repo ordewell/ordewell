@@ -103,7 +103,9 @@ is already served by `npm`.
   `scripts/install/cli.sh` downloads the fixed-name archive over https, checks
   it against `SHA256SUMS`, stops on a mismatch before anything is written, and
   installs `~/.local/bin/ordewell` (`ORDEWELL_INSTALL_DIR` moves it), with no
-  sudo. It reports whether `git` is present (recommended, not required) and
+  sudo. With `--desktop` it then runs `desktop.sh` without that variable,
+  which means the app's folder there; `ORDEWELL_DESKTOP_INSTALL_DIR` is passed
+  on as desktop.sh's `ORDEWELL_INSTALL_DIR` instead. It reports whether `git` is present (recommended, not required) and
   which coding agents it finds, and installs neither. It lowers no OS protection, as the
   desktop installers do (ADR-0063 H10).
 
