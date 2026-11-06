@@ -76,8 +76,8 @@ is already served by `npm`.
   notarization when the signing and notarization credentials of
   [ADR-0063 H9](0063-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)
   exist for the release, and ad hoc otherwise. Linux binaries are not signed.
-  The credentials are the desktop app's, read only on the release path, with
-  two narrowings: `CSC_LINK` must be the base64 of the `.p12` (not a path or
+  The credentials are the desktop app's, read only on the release path and in
+  a signing rehearsal, with two narrowings: `CSC_LINK` must be the base64 of the `.p12` (not a path or
   URL), and the App Store Connect API key (`APPLE_API_KEY`, `APPLE_API_KEY_ID`,
   `APPLE_API_ISSUER`) is the one notarization route, so a release that holds
   only the Apple ID route ships a Developer ID-signed binary that is not
@@ -85,6 +85,16 @@ is already served by `npm`.
   the build as `ORDEWELL_SEA_SIGN_IDENTITY`, signs with
   `packaging/sea/entitlements.plist`, and submits the binary with `notarytool`;
   a bare executable cannot be stapled, so Gatekeeper looks the ticket up online.
+  Every Developer ID-signed run prints the binary's signing authority
+  (`codesign -dv`) and fails unless it is a `Developer ID Application`, and
+  passes notarization only as `Accepted`. The credentials are proved before a
+  tag by a signing rehearsal on `main`:
+  `gh workflow run cli-build.yml --ref main -f rehearse_signing=true` runs
+  those same signing and notarization steps on both macOS targets, attaches
+  nothing to any Release, and keeps the signed archives as workflow artifacts
+  for one day. A rehearsal never falls back to ad hoc: a missing secret, named
+  in an `::error::`, or a ref other than `main` fails it. A pull request cannot
+  start one (it has no inputs), and a dispatch needs write access.
 
 - **Assets named for the OS and architecture, all in the one `SHA256SUMS`
   (C5).** The release attaches `ordewell-<version>-<os>-<arch>.tar.gz` and a
@@ -298,3 +308,4 @@ their unit tests run under plain Node.
 - 2026-11-06 — C11: a Release is created without the latest mark and marked latest only once `SHA256SUMS` is attached, and only when it is the highest version; C5 says so.
 - 2026-11-06 — C8: the formula publishes with either tap credential, the token or the `HOMEBREW_TAP_DEPLOY_KEY` deploy key (ADR-0063 H11).
 - 2026-11-06 — C7: the installer refuses musl Linux (Alpine) and points to npm.
+- 2026-11-06 — C4: a signing rehearsal (`rehearse_signing` on `main`) signs and notarizes the macOS binaries without releasing; signed runs check the authority.

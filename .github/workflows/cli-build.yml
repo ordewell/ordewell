@@ -5,16 +5,22 @@ name: CLI build
 # is built where it runs, and each runner drives the binary it just built with
 # no Node on PATH. Proved here, before a release, as desktop-build.yml is:
 #   - a pull request to main that touches what can change the binary;
-#   - workflow_dispatch, from the Actions tab once this file is on main;
+#   - workflow_dispatch, from the Actions tab once this file is on main, and
+#     with `rehearse_signing` as a signing rehearsal (below);
 #   - release.yml, which calls it with `attach` and the tag to put the
 #     versioned archives on the GitHub Release. The fixed-name copies,
 #     install.sh and SHA256SUMS are release.yml's `release-assets` job, which
 #     waits for this and for the desktop build (ADR-0065 C5).
-# Signing (ADR-0065 C4): every macOS binary is re-signed after injection. Only
-# the release path signs with the Developer ID and notarizes, and only when the
-# desktop app's credentials (ADR-0063 H9) exist; a pull request, a manual run, a
-# fork and a release without them sign ad hoc, which scripts/sea/build.mjs does
-# on its own.
+# Signing (ADR-0065 C4): every macOS binary is re-signed after injection. The
+# release path signs with the Developer ID and notarizes when the desktop app's
+# credentials (ADR-0063 H9) exist; a pull request, a plain manual run, a fork
+# and a release without them sign ad hoc, which scripts/sea/build.mjs does on
+# its own. A signing rehearsal (`gh workflow run cli-build.yml --ref main -f
+# rehearse_signing=true`) runs the release's signing and notarization steps on
+# main with nothing attached to any Release, so a bad certificate or API key
+# shows before a tag does; it fails on a missing credential or off main rather
+# than sign ad hoc. Only main's copy can start one: a pull request has no
+# inputs, and a dispatch needs write access.
 on:
   workflow_call:
     inputs:
@@ -40,6 +46,11 @@ on:
       APPLE_API_ISSUER:
         required: false
   workflow_dispatch:
+    inputs:
+      rehearse_signing:
+        description: Sign the macOS binaries with the Developer ID and notarize them as a release does, attaching nothing (main only)
+        type: boolean
+        default: false
   pull_request:
     branches: [ "main" ]
     # What reaches the binary: the three packages it bundles (core's skills/
@@ -100,12 +111,42 @@ jobs:
       # Nothing here may reach ordewell.ai (ADR-0048).
       ORDEWELL_NO_VERSION_CHECK: '1'
       # A secret cannot be read in an `if`, so the tests are variables, and
-      # they are false off the release path and off macOS; the secrets
+      # they are false off macOS and off the two signing routes: the release
+      # path (`attach`) and a rehearsal dispatched on main. The secrets
       # themselves reach only the steps that use them.
-      MAC_SIGNING_SET: ${{ inputs.attach && startsWith(matrix.target, 'darwin-') && secrets.CSC_LINK != '' && secrets.CSC_KEY_PASSWORD != '' }}
-      MAC_NOTARIZE_SET: ${{ inputs.attach && startsWith(matrix.target, 'darwin-') && secrets.APPLE_API_KEY != '' && secrets.APPLE_API_KEY_ID != '' && secrets.APPLE_API_ISSUER != '' }}
+      MAC_REHEARSAL: ${{ github.event_name == 'workflow_dispatch' && inputs.rehearse_signing && startsWith(matrix.target, 'darwin-') }}
+      MAC_SIGNING_SET: ${{ (inputs.attach || (github.event_name == 'workflow_dispatch' && inputs.rehearse_signing && github.ref == 'refs/heads/main')) && startsWith(matrix.target, 'darwin-') && secrets.CSC_LINK != '' && secrets.CSC_KEY_PASSWORD != '' }}
+      MAC_NOTARIZE_SET: ${{ (inputs.attach || (github.event_name == 'workflow_dispatch' && inputs.rehearse_signing && github.ref == 'refs/heads/main')) && startsWith(matrix.target, 'darwin-') && secrets.APPLE_API_KEY != '' && secrets.APPLE_API_KEY_ID != '' && secrets.APPLE_API_ISSUER != '' }}
 
     steps:
+      # A rehearsal exists to prove the credentials, so one that would sign
+      # ad hoc or skip notarization fails here instead, naming what is
+      # missing. Only whether each secret is set reaches this step.
+      - name: Check the signing rehearsal can sign and notarize
+        if: env.MAC_REHEARSAL == 'true'
+        shell: bash
+        env:
+          REF: ${{ github.ref }}
+          HAS_CSC_LINK: ${{ secrets.CSC_LINK != '' }}
+          HAS_CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD != '' }}
+          HAS_APPLE_API_KEY: ${{ secrets.APPLE_API_KEY != '' }}
+          HAS_APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID != '' }}
+          HAS_APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER != '' }}
+        run: |
+          failed=0
+          if [ "$REF" != 'refs/heads/main' ]; then
+            echo "::error::a signing rehearsal runs on main only, not $REF"
+            failed=1
+          fi
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER; do
+            has="HAS_$name"
+            if [ "${!has}" != 'true' ]; then
+              echo "::error::$name is not set, so this signing rehearsal cannot sign with the Developer ID and notarize"
+              failed=1
+            fi
+          done
+          exit "$failed"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
@@ -181,6 +222,27 @@ jobs:
         if: runner.os == 'macOS'
         run: codesign --verify --strict --verbose=2 "dist-sea/${{ matrix.target }}/ordewell"
 
+      # The evidence a signed run leaves in its log: the identity that signed,
+      # read back from the binary. codesign prints the leaf certificate's
+      # authority first.
+      - name: Show the signing authority
+        if: env.MAC_SIGNING_SET == 'true'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          details="$(codesign -dv --verbose=2 "dist-sea/$TARGET/ordewell" 2>&1)"
+          echo "$details"
+          authority="$(printf '%s\n' "$details" | sed -n 's/^Authority=//p' | head -n 1)"
+          case "$authority" in
+            'Developer ID Application: '*) echo "Signing authority: $authority" ;;
+            *)
+              echo "::error::the $TARGET binary is signed by '${authority:-no authority}', not a Developer ID Application identity"
+              exit 1
+              ;;
+          esac
+
       - name: Smoke-test the binary (--version)
         run: '"dist-sea/${{ matrix.target }}/ordewell" --version'
 
@@ -220,6 +282,7 @@ jobs:
             echo "::error::Apple did not accept the $TARGET binary for notarization (status: ${status:-none})"
             exit 1
           fi
+          echo "Notarization status: $status (submission $id)"
 
       - name: Say why the macOS binary was not notarized
         if: runner.os == 'macOS' && !(env.MAC_SIGNING_SET == 'true' && env.MAC_NOTARIZE_SET == 'true')
@@ -242,7 +305,9 @@ jobs:
           name: cli-${{ matrix.target }}
           path: dist-sea/ordewell-*-${{ matrix.target }}.tar.gz
           if-no-files-found: error
-          retention-days: 7
+          # A rehearsal's archives are Developer ID-signed and notarized but
+          # belong to no release: kept a day, for trying Gatekeeper on a Mac.
+          retention-days: ${{ github.event_name == 'workflow_dispatch' && inputs.rehearse_signing && 1 || 7 }}
 
   # Every target built and was driven, so the Release gets all four archives or
   # none. This is the only job that can write.
