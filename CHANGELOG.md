@@ -8,6 +8,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-06
+
 ### Added
 
 - **A desktop app.** An orchestration-first window for macOS, Windows and Linux:
@@ -116,6 +118,13 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   it tasks run in the folder directly, and git 2.38 or newer adds worktrees,
   delegated tasks and Merge all.
 - **A Homebrew formula for the CLI.** `brew install ordewell/tap/ordewell`.
+- **`ordewell update`, and `/update` in the terminal UI.** It updates Ordewell
+  the way it was installed: the installer into the binary's own folder,
+  `brew upgrade ordewell`, or `npm install -g ordewell@latest`. A folder it
+  cannot write to gets the command to run with `sudo` instead, and an `npx` run
+  or a source checkout is told what to do. `--dry-run` prints the command
+  without running it, and it sends nothing to ordewell.ai. `/update` is refused
+  while a run is live.
 
 ### Changed
 
@@ -123,8 +132,29 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   cask is to be `ordewell-desktop`, and that rename takes effect with the first
   release that carries the desktop app: until then the tap's cask is left as it
   is. When it ships, an installed `ordewell` cask is renamed on `brew update`.
-- **The update notice matches how you installed.** A standalone install is
-  pointed at re-running the installer or `brew upgrade ordewell`, not at npm.
+- **The update line names both versions and stays until you update.** It reads
+  "Ordewell X is out (you have Y)" and says how to update for the way you
+  installed: `ordewell update`, `/update` in the terminal UI, the Extensions
+  view in VS Code, `npx ordewell@latest`, or pull and rebuild a source
+  checkout. The terminal UI shows it on every start while a newer release
+  exists; a terminal command prints it once a day on stderr, and VS Code shows
+  it once a day. Turning the version check off still means no file, no request
+  and no line.
+- **A newer CLI replaces an idle server it cannot drive.** After an update, the
+  CLI stops a server left over from the old version when no run is going on it,
+  and starts a new one. A server with a run going is left alone, and the CLI
+  says to `ordewell stop --server` once the run is done. Coming from 0.12.6,
+  whose server cannot say whether a run is going, stop it once with
+  `ordewell stop --server`.
+- **The version check finds the latest complete release by itself.** The
+  version ordewell.ai advertises is now the latest GitHub release that has its
+  checksums attached, discovered automatically and kept when GitHub is
+  unavailable.
+- **A release becomes the latest only once it is complete.** A new GitHub
+  Release is marked latest after its CLI archives, `install.sh` and
+  `SHA256SUMS` are attached, and only when it is the highest version, so
+  `curl -fsSL https://ordewell.ai/install.sh | sh` never lands on a release that
+  is still being built.
 
 ### Fixed
 
@@ -4198,7 +4228,9 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.12.5...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/ordewell/ordewell/compare/v0.12.6...v0.13.0
+[0.12.6]: https://github.com/ordewell/ordewell/compare/v0.12.5...v0.12.6
 [0.12.5]: https://github.com/ordewell/ordewell/compare/v0.12.4...v0.12.5
 [0.12.4]: https://github.com/ordewell/ordewell/compare/v0.12.3...v0.12.4
 [0.12.3]: https://github.com/ordewell/ordewell/compare/v0.12.2...v0.12.3

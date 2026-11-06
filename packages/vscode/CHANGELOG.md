@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-06
+
+### Added
+
+- **The update line names both versions.** When a newer Ordewell is out, a
+  message says "Ordewell X is out (you have Y)" and points at the Extensions
+  view. It shows once a day while the newer version exists. Turning off VS Code
+  telemetry or setting `ORDEWELL_NO_VERSION_CHECK` still means no request and no
+  message.
+- **An agent too old for Ordewell, or one it cannot start, is listed as
+  unavailable with the reason**, instead of failing on its first task. A refresh
+  asks again, so an agent upgraded or removed meanwhile is offered, or refused,
+  without a restart.
+
+### Fixed
+
+- **VS Code says when it cannot detect the installed agents, and offers
+  Retry.** A failed read behind the planner and model lists no longer leaves the
+  chat on "Detecting coding agents…" with no way forward: it says what failed,
+  Retry asks again, and the error clears when a list arrives.
+
+## [0.12.6] - 2026-11-05
+
 ### Added
 
 - **Cursor runs tasks and plans.** Cursor appears among the runners a task
@@ -19,6 +42,7 @@
 - **Qwen Code runs tasks and plans.** Qwen Code 0.26.6 or newer appears among
   the runners a task can be assigned to, with its models, and among the
   planners. It can run read-only tasks too.
+
 ## [0.12.5] - 2026-11-04
 
 ### Security
