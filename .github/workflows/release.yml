@@ -340,6 +340,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    # One writer to the tap at a time, this job's or a manual re-publish's.
+    concurrency:
+      group: homebrew-tap
+      cancel-in-progress: false
+    outputs:
+      # The tap carries this release's formula, so homebrew-verify has
+      # something to install.
+      published: ${{ steps.publish.outputs.published }}
     env:
       # A secret cannot be read in an `if`, so the test is a variable; the
       # credential itself reaches only the step that pushes. Either one
@@ -386,14 +394,12 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: node scripts/render-package-manifests.mjs --version "${TAG#v}" --sums sums/SHA256SUMS --only cask --out rendered
 
-      # One clone, one commit: the formula always, the cask only from a
-      # notarized build of a release that carries the desktop app. The cask was `ordewell` until the formula took the
-      # name (ADR-0065 C8): once `ordewell-desktop` is in the tap the old file
-      # goes, and cask_renames.json, at the tap's root as Homebrew reads it,
-      # moves an installed `ordewell` cask to `ordewell-desktop` on upgrade.
-      # The rename waits for the new cask, since Homebrew needs its target to
-      # exist in the same tap.
+      # The formula always, the cask only from a notarized build of a release
+      # that carries the desktop app. scripts/publish-tap.sh writes the tap, as
+      # the manual re-publish does (homebrew-publish.yml), and hands the
+      # credential to its clone and its push alone.
       - name: Publish to ordewell/homebrew-tap
+        id: publish
         if: env.HOMEBREW_TAP_TOKEN_SET == 'true' || env.HOMEBREW_TAP_DEPLOY_KEY_SET == 'true'
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
@@ -402,70 +408,49 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          version="${TAG#v}"
-          if [ "$HOMEBREW_TAP_TOKEN_SET" = true ]; then
-            # The token is in the clone URL only; the remote is reset before the
-            # commit so it is not left in the checkout's config.
-            git clone --depth 1 "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/ordewell/homebrew-tap.git" tap
-            git -C tap remote set-url origin https://github.com/ordewell/homebrew-tap.git
-          else
-            # The key goes from the environment to a 0600 file through
-            # printf, a builtin, so it is on no command line, and the file
-            # goes on any exit. ssh trusts only the host keys below:
-            # GitHub's published ones, as api.github.com/meta `ssh_keys`
-            # and docs.github.com's "GitHub's SSH key fingerprints" list
-            # them (fetched 2026-11-06; ED25519
-            # SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU). A key
-            # scanned at run time would trust whoever answered.
-            ssh_dir="$RUNNER_TEMP/homebrew-tap-ssh"
-            trap 'rm -rf "$ssh_dir"' EXIT
-            mkdir -m 700 "$ssh_dir"
-            (umask 077 && printf '%s\n' "$HOMEBREW_TAP_DEPLOY_KEY" > "$ssh_dir/key")
-            chmod 600 "$ssh_dir/key"
-            unset HOMEBREW_TAP_DEPLOY_KEY
-            cat > "$ssh_dir/known_hosts" <<'HOSTS'
-          github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
-          github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
-          github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
-          HOSTS
-            export GIT_SSH_COMMAND="ssh -i '$ssh_dir/key' -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='$ssh_dir/known_hosts'"
-            git clone --depth 1 git@github.com:ordewell/homebrew-tap.git tap
-          fi
-          mkdir -p tap/Formula
-          cp rendered/homebrew/Formula/ordewell.rb tap/Formula/ordewell.rb
-          git -C tap add Formula/ordewell.rb
+          cask=()
           if [ "$DESKTOP_RELEASED" != true ]; then
             echo "::notice::ORDEWELL_RELEASE_DESKTOP is not 'true', so this release has no desktop app and no cask was published, only the formula (ADR-0065 C10)."
           elif node -e 'process.exit(JSON.parse(require("fs").readFileSync("signing/signing.json", "utf8")).notarized === true ? 0 : 1)'; then
-            mkdir -p tap/Casks
-            cp rendered/homebrew/Casks/ordewell-desktop.rb tap/Casks/ordewell-desktop.rb
-            git -C tap add Casks/ordewell-desktop.rb
+            cask=(--cask)
           else
             echo "::notice::the macOS build was not notarized, so no cask was published, only the formula: Homebrew requires an app Gatekeeper accepts."
           fi
-          if [ -f tap/Casks/ordewell-desktop.rb ]; then
-            git -C tap rm --quiet --ignore-unmatch Casks/ordewell.rb
-            node -e '
-              const fs = require("fs");
-              const file = "tap/cask_renames.json";
-              const renames = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
-              renames.ordewell = "ordewell-desktop";
-              fs.writeFileSync(file, JSON.stringify(renames, null, 2) + "\n");
-            '
-            git -C tap add cask_renames.json
-          fi
-          git -C tap config user.name 'github-actions[bot]'
-          git -C tap config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          if git -C tap diff --cached --quiet; then
-            echo "the tap already carries Ordewell ${version}"
-            exit 0
-          fi
-          git -C tap commit -m "Ordewell ${version}"
-          git -C tap push origin HEAD
+          scripts/publish-tap.sh rendered "${TAG#v}" "${cask[@]}"
+          echo "published=true" >> "$GITHUB_OUTPUT"
 
       - name: Say why nothing was published to the tap
         if: env.HOMEBREW_TAP_TOKEN_SET != 'true' && env.HOMEBREW_TAP_DEPLOY_KEY_SET != 'true'
         run: echo "::notice::neither HOMEBREW_TAP_TOKEN nor HOMEBREW_TAP_DEPLOY_KEY is set, so neither the formula nor the cask was published (ADR-0063 H11, ADR-0065 C8)."
+
+  # Installs what the tap now carries, as a user would, on a runner of each
+  # platform the formula has an archive for (ADR-0063 H11): a publish that
+  # pushes a formula brew cannot install fails here, not in a user's terminal.
+  # Its steps are homebrew-publish.yml's verify job's, and like it this job
+  # reads the tap as anyone can, with no credential of the tap's.
+  homebrew-verify:
+    needs: homebrew
+    if: ${{ !cancelled() && needs.homebrew.result == 'success' && needs.homebrew.outputs.published == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-latest is arm64, macos-15-intel x64, ubuntu-latest x64 and
+        # ubuntu-24.04-arm arm64: one per archive the formula names.
+        runner: [macos-latest, macos-15-intel, ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ github.ref_name }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install ordewell with brew and test it
+        run: scripts/verify-brew-install.sh "${TAG#v}"
 
   winget:
     needs: release-assets

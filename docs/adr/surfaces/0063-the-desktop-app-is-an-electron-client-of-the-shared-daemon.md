@@ -199,8 +199,9 @@ holds the token.**
   a fixed-name copy whose hash disagrees with the versioned file it duplicates,
   so a package manager installs the release's own bytes and checks them against
   the release's own hash; each is rendered apart (`--only formula`, `cask`,
-  `winget`). The `homebrew` job writes `ordewell/homebrew-tap` in one commit,
-  only when it holds a credential for the tap, and either one serves: the
+  `winget`). The `homebrew` job writes `ordewell/homebrew-tap` in one commit
+  with `scripts/publish-tap.sh`, only when it holds a credential for the tap,
+  and either one serves: the
   secret `HOMEBREW_TAP_TOKEN`, a token cloned and pushed over HTTPS, or else
   the secret `HOMEBREW_TAP_DEPLOY_KEY`, the private half of a write deploy key
   on the tap, pushed over SSH. The token wins when both are set, and the
@@ -210,7 +211,13 @@ holds the token.**
   where a fine-grained token cannot. Its private key is written to a 0600 file
   under `$RUNNER_TEMP`, never echoed or put on a command line, and deleted when
   the step exits, failed or not; ssh trusts only GitHub's published host keys,
-  pinned in the workflow, and never a key scanned at run time. To rotate it,
+  pinned in the script, and never a key scanned at run time. The token reaches
+  git as an `http.<tap URL>.extraheader` in the environment of the clone and
+  of the push alone, so it is on no command line and the clone's
+  `.git/config` never holds it; a token in the clone URL, which v0.13.0's
+  release run then reset out of the config, left that run's push with no
+  credential. The script commits as `github-actions[bot]` and, for a version
+  the tap already carries, commits and pushes nothing. To rotate the key,
   generate a new ed25519 pair, add the public half to the tap as a deploy key
   with write access, replace the secret with the private half, and delete the
   old deploy key from the tap. The formula `ordewell`
@@ -225,7 +232,21 @@ holds the token.**
   Microsoft's `wingetcreate`, pinned to a version and checked against the
   SHA256 that version publishes, and only when `WINGET_TOKEN` exists. A missing
   credential is a notice, not a failure: a release is complete without either
-  package manager. Both
+  package manager. Once the formula is in the tap, `homebrew-verify` installs
+  it as a user does, on one runner per archive it names (`macos-latest`,
+  `macos-15-intel`, `ubuntu-latest`, `ubuntu-24.04-arm`), with
+  `scripts/verify-brew-install.sh`: `brew install ordewell/tap/ordewell`, then
+  `ordewell --version` must print the release's version and `brew test
+  ordewell` must pass. It also runs `brew audit --formula` and prints what that
+  reports as a warning, which fails nothing, since the audit judges how the
+  formula is written and not what a user installs. It holds no credential. A
+  release whose formula did not reach the tap is published again by hand with
+  `homebrew-publish.yml` (`gh workflow run homebrew-publish.yml --ref main -f
+  tag=vX.Y.Z`): it renders the formula alone from that Release's
+  `SHA256SUMS`, writes it with the same script and secrets, one writer to the
+  tap at a time with `homebrew`, and runs the same brew install. A cask needs
+  the release run's notarized build, so that re-publish leaves the tap's cask
+  as it is. Both
   jobs are read-only on this repository and pin every action they use to a
   commit SHA, because they hold the only tokens that reach outside it. The
   first submission of a package to winget-pkgs is reviewed by hand.
@@ -533,3 +554,4 @@ allows script only from the app's own bundle, with no inline script.
 - 2026-11-06 — H10, H11: a release carries the app only when `ORDEWELL_RELEASE_DESKTOP` is `true` (ADR-0065 C10); without it there are no installers, no cask and no winget submission.
 - 2026-11-06 — H10: the Release becomes latest only once `SHA256SUMS` is attached (ADR-0065 C11), so the updater and the fixed-name links never see an incomplete release.
 - 2026-11-06 — H11: the `homebrew` job publishes with the `HOMEBREW_TAP_DEPLOY_KEY` deploy key over SSH when `HOMEBREW_TAP_TOKEN` is not set.
+- 2026-11-06 — H11: `scripts/publish-tap.sh` writes the tap for `homebrew` and the manual re-publish `homebrew-publish.yml`, the token by an extraheader, and `homebrew-verify` installs the formula with brew on four runners.

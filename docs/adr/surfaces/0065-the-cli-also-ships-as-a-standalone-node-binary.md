@@ -160,6 +160,11 @@ is already served by `npm`.
   `ordewell-desktop` in the tap's `cask_renames.json`, so an installed cask
   moves to the new name on upgrade. That happens with the first release that
   carries the desktop app (C10); until then the tap's cask is left as it is.
+  `scripts/publish-tap.sh` writes the tap, the rename included, for the
+  `homebrew` job and for `homebrew-publish.yml`, which publishes a release's
+  formula again by hand and never a cask. After either, the formula is proved
+  by `brew install ordewell/tap/ordewell` on a macOS and a Linux runner of each
+  architecture, as ADR-0063 H11 says.
 
 - **The update notice names how this copy was installed (C9).** The line
   [ADR-0048](../platform/0048-a-daily-version-check-with-a-notice-first-and-one-install-per-machine.md)
@@ -309,3 +314,4 @@ their unit tests run under plain Node.
 - 2026-11-06 — C8: the formula publishes with either tap credential, the token or the `HOMEBREW_TAP_DEPLOY_KEY` deploy key (ADR-0063 H11).
 - 2026-11-06 — C7: the installer refuses musl Linux (Alpine) and points to npm.
 - 2026-11-06 — C4: a signing rehearsal (`rehearse_signing` on `main`) signs and notarizes the macOS binaries without releasing; signed runs check the authority.
+- 2026-11-06 — C8: one script publishes the tap from the release and from the manual re-publish `homebrew-publish.yml`, and brew installs the formula on macOS and Linux after each (ADR-0063 H11).
