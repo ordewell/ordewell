@@ -950,6 +950,19 @@ test('the visual tour', async () => {
   };
   const need = <T>(value: T | undefined): T => { if (value === undefined) throw new Error('the workspace window did not open'); return value; };
 
+  // The welcome's other recents are the switcher's: the missing one is left out, as is this window's own.
+  const switchMenu = () => need(win).getByRole('menu', { name: 'Switch project' });
+  const openSwitcher = async (): Promise<void> => {
+    if (await switchMenu().isVisible()) return;
+    await need(win).locator('header.frame-title').getByRole('button', { name: /, Switch project$/ }).click();
+    await expect(switchMenu().getByRole('menuitem', { name: 'Open Folder…' })).toBeVisible();
+  };
+  await state(win, 'project-switcher', 'The title bar\'s project switcher open: recent folders, Open Folder… and Open in new window', async () => {
+    await expect(need(win).getByRole('contentinfo')).toContainText('Claude Code', { timeout: 60_000 });
+    await openSwitcher();
+  }, { ensure: openSwitcher });
+  if (win && await switchMenu().isVisible()) await win.keyboard.press('Escape');
+
   await state(win, 'planning', 'Session while planning', async (record) => {
     const page = need(win);
     await expect(page.getByRole('contentinfo')).toContainText('Claude Code', { timeout: 60_000 });

@@ -42,8 +42,9 @@ function installBridge({ recents = [], routes = {}, platform = 'darwin' }: {
   recents?: RecentWorkspace[] | Promise<RecentWorkspace[]>;
   routes?: Record<string, Route>;
   platform?: string;
-} = {}): Bridge {
+} = {}): Bridge & { changeRecents(next: RecentWorkspace[]): void } {
   let stored = recents;
+  const recentsListeners = new Set<() => void>();
   const terminal: Bridge['terminal'] = {
     open: vi.fn(async (spec: TerminalOpenSpec, onEvent: (event: TerminalEvent) => void): Promise<TerminalOpenResult> => {
       void spec;
@@ -68,6 +69,7 @@ function installBridge({ recents = [], routes = {}, platform = 'darwin' }: {
       unforgetWorkspace: vi.fn(() => Promise.resolve(recents)),
       rememberRecent: vi.fn(() => Promise.resolve()),
       openDroppedFolder: vi.fn(() => Promise.resolve({ ok: true })),
+      onRecentsChange: vi.fn((cb: () => void) => { recentsListeners.add(cb); return () => { recentsListeners.delete(cb); }; }),
     },
     daemon: {
       call: vi.fn((route: string, params?: Record<string, string>) => {
@@ -82,7 +84,13 @@ function installBridge({ recents = [], routes = {}, platform = 'darwin' }: {
     terminal,
   };
   Object.defineProperty(window, 'ordewell', { value: bridge as unknown as OrdewellBridge, configurable: true, writable: true });
-  return bridge;
+  return {
+    ...bridge,
+    changeRecents(next) {
+      stored = next;
+      for (const cb of [...recentsListeners]) cb();
+    },
+  };
 }
 
 const RUNNERS = {
@@ -190,6 +198,14 @@ describe('Welcome: recent projects', () => {
     render(<Welcome status={CONNECTED} />);
     expect(await screen.findByText(/Open a folder to start/)).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: /Open folder…/ })).toHaveLength(1);
+  });
+
+  it('redraws when a project window opens or switches to a folder', async () => {
+    const bridge = installBridge({ recents: [recent()] });
+    render(<Welcome status={CONNECTED} />);
+    expect(await within(section('Recent projects')).findByText('acme')).toBeInTheDocument();
+    act(() => bridge.changeRecents([recent({ path: '/Users/me/code/billing', name: 'billing', displayPath: '~/code/billing' }), recent()]));
+    expect(await within(section('Recent projects')).findByText('billing')).toBeInTheDocument();
   });
 
   it('shows an error banner with Retry when the store cannot be read', async () => {

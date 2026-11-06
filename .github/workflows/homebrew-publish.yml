@@ -1,0 +1,111 @@
+name: Homebrew publish
+
+# Publishes a release's formula to ordewell/homebrew-tap again and proves brew
+# installs it (ADR-0063 H11, ADR-0065 C8), for a release whose homebrew job did
+# not get the formula into the tap:
+#
+#   gh workflow run homebrew-publish.yml --ref main -f tag=v0.13.0
+#
+# It renders the formula from that Release's own SHA256SUMS with this ref's
+# scripts, so a fix to the publish reaches a release tagged before it, and
+# writes the tap with scripts/publish-tap.sh, as release.yml does. Only the
+# formula: a cask needs the release run's notarized build, so the cask in the
+# tap stays as it is. A tag the tap already carries is pushed nothing and still
+# verified. A dispatch needs write access to this repository.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release to publish, as vX.Y.Z
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # One writer to the tap at a time, this job's or a release's.
+    concurrency:
+      group: homebrew-tap
+      cancel-in-progress: false
+    env:
+      # A secret cannot be read in an `if`, so the test is a variable, as in
+      # release.yml's homebrew job; the credential reaches only the publish.
+      HOMEBREW_TAP_TOKEN_SET: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
+      HOMEBREW_TAP_DEPLOY_KEY_SET: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY != '' }}
+
+    steps:
+      # The input is read only from the environment, never spliced into a
+      # script, and it must be a release tag before anything uses it.
+      - name: Check the tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::\"$TAG\" is not a release tag of the form vX.Y.Z"
+            exit 1
+          fi
+
+      # Asked for by hand, so a missing credential is an error, not the notice a
+      # release without one gets.
+      - name: Check for a credential
+        if: env.HOMEBREW_TAP_TOKEN_SET != 'true' && env.HOMEBREW_TAP_DEPLOY_KEY_SET != 'true'
+        run: |
+          echo "::error::neither HOMEBREW_TAP_TOKEN nor HOMEBREW_TAP_DEPLOY_KEY is set, so nothing can be published to the tap (ADR-0063 H11, ADR-0065 C8)."
+          exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22.x
+
+      - name: Download SHA256SUMS from the Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          REPO: ${{ github.repository }}
+        run: gh release download "$TAG" --pattern SHA256SUMS --dir sums --repo "$REPO"
+
+      - name: Render the formula
+        env:
+          TAG: ${{ inputs.tag }}
+        run: node scripts/render-package-manifests.mjs --version "${TAG#v}" --sums sums/SHA256SUMS --only formula --out rendered
+
+      - name: Publish to ordewell/homebrew-tap
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          # Only when it is the credential this run uses.
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ env.HOMEBREW_TAP_TOKEN_SET != 'true' && secrets.HOMEBREW_TAP_DEPLOY_KEY || '' }}
+          TAG: ${{ inputs.tag }}
+        run: scripts/publish-tap.sh rendered "${TAG#v}"
+
+  # release.yml's homebrew-verify, step for step.
+  verify:
+    needs: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-latest is arm64, macos-15-intel x64, ubuntu-latest x64 and
+        # ubuntu-24.04-arm arm64: one per archive the formula names.
+        runner: [macos-latest, macos-15-intel, ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ inputs.tag }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install ordewell with brew and test it
+        run: scripts/verify-brew-install.sh "${TAG#v}"

@@ -1,3 +1,22 @@
+# The proof a commit can merge or ship. `scope` decides what this event owes;
+# then, side by side, each needing only `scope`:
+#
+#   build-and-test   what needs proving once on Linux: sandbox, verify scripts,
+#                    guards, planner loop, binary, bench, VS Code integration,
+#                    the desktop app's e2e
+#   desktop-tour     the desktop app's visual tour, the longest single job
+#   coverage (...)   the suites with coverage, one leg per workspace
+#   typecheck, lint, package
+#   real-engine      the container suites on a real engine
+#   windows (n/6), windows-harness
+#
+# and `Required checks` last, the one status a branch rule requires. A pull
+# request runs what its change can reach: a changed workspace's full suite, its
+# dependents' quick ones (full when core's exports change), and for a path
+# outside the workspaces only the jobs that read it. A push to main, a release
+# (through workflow_call), the nightly schedule and a manual run run everything.
+# CONTRIBUTING.md's "The checks" describes it for contributors, and
+# `npm run ci` runs the same steps locally, in this file's order.
 name: CI
 
 on:
@@ -5,35 +24,49 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  # A full run of main every night, at an hour the runners are quiet, and one on
+  # demand from the Actions tab. Neither is a pull request, so neither narrows.
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
   # release.yml waits for a full run of this workflow before it publishes. A
   # called workflow sees the caller's event, a push, which never narrows.
   workflow_call:
 
-# A new push to a PR makes the in-flight run obsolete; don't pay for it.
+# A new push to a pull request makes its in-flight run obsolete; don't pay for
+# it. Every other run is the proof of a commit on main or a tag, so it has a
+# group of its own: a shared one would cancel the run that was waiting in it.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # What this event has to prove (scripts/change-scope.mjs). Only a pull request
   # is narrowed, and every path it cannot judge means the full run.
   #
-  # Each step below it runs unless its check is exactly 'false', so a scope job
-  # that fails or loses an output leaves everything running. `required-checks`
+  # Each job and step below it runs unless its check is exactly 'false', so a
+  # scope job that fails or loses an output leaves everything running. `required-checks`
   # is what branch protection must require: a skipped job reads as a pass to
   # GitHub, so that job judges the others by what the change owed them.
   scope:
     runs-on: ubuntu-latest
     outputs:
       scope: ${{ steps.select.outputs.scope }}
-      packages: ${{ steps.select.outputs.packages }}
+      suites: ${{ steps.select.outputs.suites }}
+      typecheck: ${{ steps.select.outputs.typecheck }}
+      lint: ${{ steps.select.outputs.lint }}
+      package: ${{ steps.select.outputs.package }}
+      bench: ${{ steps.select.outputs.bench }}
+      windows: ${{ steps.select.outputs.windows }}
+      harness: ${{ steps.select.outputs.harness }}
       sandbox: ${{ steps.select.outputs.sandbox }}
       planner: ${{ steps.select.outputs.planner }}
       integration: ${{ steps.select.outputs.integration }}
       desktop: ${{ steps.select.outputs.desktop }}
+      tour: ${{ steps.select.outputs.tour }}
       engine: ${{ steps.select.outputs.engine }}
       binary: ${{ steps.select.outputs.binary }}
-      workspace_args: ${{ steps.select.outputs.workspace_args }}
+      coverage: ${{ steps.select.outputs.coverage }}
 
     steps:
       # Two commits: a pull_request run checks out a merge, and its first
@@ -48,9 +81,10 @@ jobs:
           EVENT: ${{ github.event_name }}
         run: node scripts/ci-scope.mjs select
 
-  # The suites on Linux, and what only needs proving once: the bubblewrap
-  # sandbox, the coverage floors, typecheck, lint and packaging. The windows
-  # jobs below run the suites again on Windows.
+  # What only needs proving once, on Linux: the bubblewrap sandbox, the verify
+  # scripts and guards, the planner loop, the standalone binary, the bench
+  # harnesses, the VS Code integration test and the desktop app's e2e. The
+  # suites themselves run in `coverage`, and again on Windows below.
   #
   # The lockfile records the rollup and esbuild binaries of every platform npm
   # publishes (npm ci demands them all, not only the ones it installs), so
@@ -151,13 +185,14 @@ jobs:
       # (scripts/install/) and the binary build's (scripts/sea/) among them.
       - name: Bench harness tests (offline, against the built core)
         id: bench
-        if: needs.scope.outputs.packages != 'false'
+        if: needs.scope.outputs.bench != 'false'
         run: npm run test:bench
 
       # Desktop last: its renderer is built from ui's dist, and the app forks web's.
+      # Only the integration test and the desktop e2e below read these builds.
       - name: Build (ui, vscode, cli, web & desktop)
         id: build-rest
-        if: needs.scope.outputs.packages != 'false'
+        if: needs.scope.outputs.integration != 'false' || needs.scope.outputs.desktop != 'false'
         run: npm run build -w packages/ui -w packages/vscode -w packages/cli -w packages/web -w packages/desktop --if-present
 
       # The extension integration test drives a real VS Code instance. Cache the
@@ -224,28 +259,162 @@ jobs:
             packages/desktop/playwright-report
           if-no-files-found: ignore
 
-      # The same offline run, walked for screenshots and layout checks in both
-      # themes at three sizes. TOUR_STRICT makes a failing layout check fail the
-      # step, as it does for a local `TOUR_STRICT=1 npm run desktop:tour`.
+      - name: Confirm every step this change owed ran
+        id: confirm
+        env:
+          JOB: ${{ github.job }}
+          SCOPE: ${{ needs.scope.outputs.scope }}
+          STEPS: ${{ toJSON(steps) }}
+        run: node scripts/ci-scope.mjs confirm
+
+  # The offline run of the desktop e2e, walked for screenshots and layout
+  # checks in both themes at three sizes. One walk of twenty-odd minutes, so it
+  # runs beside the other jobs rather than before them.
+  desktop-tour:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.tour != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      confirmed: ${{ steps.confirm.outputs.confirmed }}
+
+    env:
+      ORDEWELL_NO_VERSION_CHECK: '1'
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (core first — cli, web and vscode compile against its dist/)
+        id: build-core
+        run: npm run build:core
+
+      - name: Build (ui, vscode, cli, web & desktop)
+        id: build-rest
+        run: npm run build -w packages/ui -w packages/vscode -w packages/cli -w packages/web -w packages/desktop --if-present
+
+      - name: Install xvfb if the image lacks it
+        run: |
+          if ! command -v xvfb-run >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y xvfb
+          fi
+
+      # TOUR_STRICT makes a failing layout check fail the step, as it does for
+      # a local `TOUR_STRICT=1 npm run desktop:tour`.
       - name: Desktop app — visual tour and layout checks
         id: desktop-tour
-        if: needs.scope.outputs.desktop != 'false'
         env:
           TOUR_STRICT: '1'
         run: xvfb-run -a npm run desktop:tour
 
       - name: Upload the desktop tour report
-        if: ${{ failure() && needs.scope.outputs.desktop != 'false' }}
+        if: ${{ failure() }}
         uses: actions/upload-artifact@v4
         with:
           name: desktop-tour-report
           path: packages/desktop/test-results/tour
           if-no-files-found: ignore
 
+      - name: Confirm every step this change owed ran
+        id: confirm
+        env:
+          JOB: ${{ github.job }}
+          SCOPE: ${{ needs.scope.outputs.scope }}
+          STEPS: ${{ toJSON(steps) }}
+        run: node scripts/ci-scope.mjs confirm
+
+  # The packages compile against core's and ui's dist/, so it builds them first.
+  typecheck:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.typecheck != 'false' }}
+    runs-on: ubuntu-latest
+    outputs:
+      confirmed: ${{ steps.confirm.outputs.confirmed }}
+
+    env:
+      ORDEWELL_NO_VERSION_CHECK: '1'
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (core first — cli, web and vscode compile against its dist/)
+        id: build-core
+        run: npm run build:core
+
+      - name: Build (ui, vscode, cli, web & desktop)
+        id: build-rest
+        run: npm run build -w packages/ui -w packages/vscode -w packages/cli -w packages/web -w packages/desktop --if-present
+
       - name: Typecheck
         id: typecheck
-        if: needs.scope.outputs.packages != 'false'
         run: npm run typecheck
+
+      - name: Confirm every step this change owed ran
+        id: confirm
+        env:
+          JOB: ${{ github.job }}
+          SCOPE: ${{ needs.scope.outputs.scope }}
+          STEPS: ${{ toJSON(steps) }}
+        run: node scripts/ci-scope.mjs confirm
+
+  # The suites on Linux with coverage, one leg per workspace the change reaches,
+  # so core's long suite sets the pace instead of the sum of all six. A leg the
+  # scope owes in full runs its workspace's own `test:coverage`, under that
+  # workspace's own vitest.config.ts: the per-file floors are where they always
+  # were. A leg owed only because a dependency changed runs `test:quick`, and
+  # judges no floor: a floor read off part of a suite would be a false one.
+  coverage:
+    name: coverage (${{ matrix.name }})
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.suites != 'false' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.scope.outputs.coverage || '[{"workspace":"","name":"every workspace"}]') }}
+    outputs:
+      confirmed: ${{ steps.confirm.outputs.confirmed }}
+
+    env:
+      ORDEWELL_NO_VERSION_CHECK: '1'
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (core first — cli, web and vscode compile against its dist/)
+        id: build-core
+        run: npm run build:core
+
+      - name: Build (ui, vscode, cli, web & desktop)
+        id: build-rest
+        run: npm run build -w packages/ui -w packages/vscode -w packages/cli -w packages/web -w packages/desktop --if-present
 
       # Coverage is report-only for the codebase as a whole: no overall
       # threshold, so a percentage never fails the build. The one exception is
@@ -253,20 +422,20 @@ jobs:
       # `thresholds` in packages/core/vitest.config.ts), set at each file's
       # measured value so those seams cannot quietly lose their tests.
       #
-      # A selected run names its workspaces; with none named this is the root
-      # script, every workspace. WORKSPACE_ARGS is left unquoted to split them.
+      # A leg with no workspace, the matrix's fallback when the scope job gave
+      # none, runs the root script: every workspace, one after another.
       - name: Test with coverage
         id: coverage
-        if: needs.scope.outputs.packages != 'false'
         shell: bash
         env:
-          WORKSPACE_ARGS: ${{ needs.scope.outputs.workspace_args }}
+          WORKSPACE: ${{ matrix.workspace }}
+          SCRIPT: ${{ matrix.script }}
         run: |
           set -o pipefail
-          npm run test:coverage $WORKSPACE_ARGS --if-present 2>&1 | tee coverage.log
+          npm run "${SCRIPT:-test:coverage}" ${WORKSPACE:+-w "$WORKSPACE"} --if-present 2>&1 | tee coverage.log
 
       - name: Append coverage summaries to the job summary
-        if: ${{ always() && needs.scope.outputs.packages != 'false' }}
+        if: ${{ always() }}
         shell: bash
         run: |
           node --input-type=module - <<'NODE' >> "$GITHUB_STEP_SUMMARY"
@@ -289,21 +458,90 @@ jobs:
           NODE
 
       - name: Upload coverage reports
-        if: ${{ always() && needs.scope.outputs.packages != 'false' }}
+        if: ${{ always() && matrix.script != 'test:quick' }}
         uses: actions/upload-artifact@v7
         with:
-          name: coverage-reports
+          name: coverage-reports-${{ matrix.name }}
           path: packages/*/coverage/
           if-no-files-found: warn
 
+      - name: Confirm every step this change owed ran
+        id: confirm
+        env:
+          JOB: ${{ github.job }}
+          SCOPE: ${{ needs.scope.outputs.scope }}
+          STEPS: ${{ toJSON(steps) }}
+        run: node scripts/ci-scope.mjs confirm
+
+  # Lint reads the sources alone: no rule needs types, so nothing is built.
+  lint:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.lint != 'false' }}
+    runs-on: ubuntu-latest
+    outputs:
+      confirmed: ${{ steps.confirm.outputs.confirmed }}
+
+    env:
+      ORDEWELL_NO_VERSION_CHECK: '1'
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
       - name: Lint
         id: lint
-        if: needs.scope.outputs.packages != 'false'
         run: npm run lint
+
+      - name: Confirm every step this change owed ran
+        id: confirm
+        env:
+          JOB: ${{ github.job }}
+          SCOPE: ${{ needs.scope.outputs.scope }}
+          STEPS: ${{ toJSON(steps) }}
+        run: node scripts/ci-scope.mjs confirm
+
+  # What a user installs, built from this commit: the npm tarballs, the VSIX and
+  # the desktop app's Linux installers, each checked as it would ship.
+  package:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.package != 'false' }}
+    runs-on: ubuntu-latest
+    outputs:
+      confirmed: ${{ steps.confirm.outputs.confirmed }}
+
+    env:
+      ORDEWELL_NO_VERSION_CHECK: '1'
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (core first — cli, web and vscode compile against its dist/)
+        id: build-core
+        run: npm run build:core
+
+      - name: Build (ui, vscode, cli, web & desktop)
+        id: build-rest
+        run: npm run build -w packages/ui -w packages/vscode -w packages/cli -w packages/web -w packages/desktop --if-present
 
       - name: Package VS Code Extension
         id: package-vscode
-        if: needs.scope.outputs.packages != 'false'
         run: npm run package -w packages/vscode
 
       # The desktop app's Linux installers (AppImage and deb) and its unpacked
@@ -311,7 +549,6 @@ jobs:
       # other two platforms are built by release.yml's desktop job, on a tag.
       - name: Package the desktop app
         id: package-desktop
-        if: needs.scope.outputs.packages != 'false'
         run: npm run desktop:package
 
       # What a user installs: the four npm tarballs, this VSIX and the desktop
@@ -320,12 +557,10 @@ jobs:
       # VSIX dropped, and a desktop daemon closure left inside app.asar.
       - name: Verify packaged npm and VS Code artifacts
         id: verify-artifacts
-        if: needs.scope.outputs.packages != 'false'
         run: node scripts/package-check.mjs
 
       - name: Upload .vsix
         id: upload-vsix
-        if: needs.scope.outputs.packages != 'false'
         uses: actions/upload-artifact@v7
         with:
           name: ordewell-vsix
@@ -335,14 +570,14 @@ jobs:
       - name: Confirm every step this change owed ran
         id: confirm
         env:
+          JOB: ${{ github.job }}
           SCOPE: ${{ needs.scope.outputs.scope }}
           STEPS: ${{ toJSON(steps) }}
         run: node scripts/ci-scope.mjs confirm
 
   # The container suites on a real Linux engine, with real Claude Code, Codex and
   # OpenCode in the image and a controlled model behind each: no key, no account.
-  # `build-and-test` skips them, as its `CI` says to, so this job is what runs
-  # them. A test that skips here fails the job (bench/containers/verdict.mjs).
+  # `coverage` skips them, as its `CI` says to, so this job is what runs them. A test that skips here fails the job (bench/containers/verdict.mjs).
   real-engine:
     needs: scope
     if: ${{ !cancelled() && needs.scope.outputs.engine != 'false' }}
@@ -367,20 +602,22 @@ jobs:
       - name: Real engine — every harness in a real container
         run: npm run test:containers
 
-  # The suites on Windows, which ADR-0010 supports, split four ways: a Windows
+  # The suites on Windows, which ADR-0010 supports, split six ways: a Windows
   # runner starts processes and runs git several times slower than a Linux one,
-  # and the e2e suites do little else. Nothing here is checked that only needs
-  # proving once, which build-and-test does.
+  # and the e2e suites do little else. vitest shards by file, so the slowest
+  # file sets a shard's floor; six keeps the longest shard near core's coverage
+  # leg once no file runs for more than a few minutes. Nothing here is checked
+  # that only needs proving once, which build-and-test does.
   windows:
-    name: windows (${{ matrix.shard }}/4)
+    name: windows (${{ matrix.shard }}/${{ strategy.job-total }})
     needs: scope
-    if: ${{ !cancelled() && needs.scope.outputs.packages != 'false' }}
+    if: ${{ !cancelled() && needs.scope.outputs.windows != 'false' }}
     runs-on: windows-latest
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6]
 
     env:
       ORDEWELL_NO_VERSION_CHECK: '1'
@@ -407,16 +644,21 @@ jobs:
         run: npm run build
 
       # The daemon, CLI, core and extension exercise Windows support here.
-      # The shared UI and desktop suites run on Linux in build-and-test.
+      # The shared UI and desktop suites run on Linux, in coverage. Each of
+      # the four runs in full (`test`) or quick (`test:quick`) as the scope
+      # owes it, and a lost scope runs all four in full.
       - name: Test on Windows
-        run: npm run test --workspace packages/core --workspace packages/cli --workspace packages/web --workspace packages/vscode --if-present -- --shard=${{ matrix.shard }}/4
+        env:
+          SCOPE: ${{ needs.scope.outputs.scope }}
+          SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
+        run: node scripts/ci-scope.mjs windows-tests
 
   # What runs on Windows beside the suites: the verify scripts, the bench
   # harnesses, the offline planner loop and the VS Code integration test, each
   # as build-and-test runs it on Linux.
   windows-harness:
     needs: scope
-    if: ${{ !cancelled() && needs.scope.outputs.packages != 'false' }}
+    if: ${{ !cancelled() && needs.scope.outputs.harness != 'false' }}
     runs-on: windows-latest
     timeout-minutes: 45
 
@@ -498,7 +740,7 @@ jobs:
   required-checks:
     name: Required checks
     if: always()
-    needs: [scope, build-and-test, real-engine, windows, windows-harness]
+    needs: [scope, build-and-test, desktop-tour, typecheck, coverage, lint, package, real-engine, windows, windows-harness]
     runs-on: ubuntu-latest
 
     steps:

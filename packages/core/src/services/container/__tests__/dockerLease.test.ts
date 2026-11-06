@@ -132,13 +132,13 @@ const takingGit = (cli: RecordingCli): GitInvoker => ({
 /** The lease is tried where containers run: on Windows the engine check refuses it before any of what is tested here (containerPreflight). */
 const WHERE_CONTAINERS_RUN = { platform: 'linux' } as const;
 
-function backendWith(over: { settings?: unknown; cli?: RecordingCli; env?: Record<string, string>; hooks?: string; setupCommand?: string; git?: GitInvoker } = {}) {
+function backendWith(over: { settings?: unknown; cli?: RecordingCli; env?: Record<string, string>; hooks?: string; setupCommand?: string; git?: GitInvoker; platform?: NodeJS.Platform } = {}) {
   const local = new FakeExecutionBackend();
   local.repos = [repo];
   const cli = over.cli ?? new RecordingCli();
   const told: { level: string; text: string }[] = [];
   const backend = new DockerExecutionBackend(local, {
-    ...WHERE_CONTAINERS_RUN,
+    platform: over.platform ?? WHERE_CONTAINERS_RUN.platform,
     settings: over.settings ?? { image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] } },
     cli,
     git: over.git ?? git(over.hooks),
@@ -358,6 +358,42 @@ describe('a lease that cannot be what was asked refuses, and runs nothing weaker
 
     await expect(opened(backend)).rejects.toThrow(/image/);
     expect(local.opened).toEqual([]);
+  });
+
+  it('refuses a setting that could never be used without asking the engine anything, and leaves nothing in it to clean up', async () => {
+    const { backend, local, cli } = backendWith({ settings: 'docker' });
+
+    await expect(opened(backend)).rejects.toThrow('This session runs tasks in containers, and this task cannot start in one. The containers setting cannot be used: the containers setting must be an object.');
+    await backend.letGo('a', { keep: false, reason: 'failed' });
+
+    expect(cli.calls).toEqual([]);
+    expect(local.opened).toEqual([]);
+    expect(local.letGoCalls).toEqual([{ taskId: 'a', keep: false, reason: 'failed' }]);
+  });
+
+  it('refuses on a host containers have not been proven on without asking the engine anything, a usable setting or not', async () => {
+    const { backend, local, cli } = backendWith({ platform: 'win32' });
+
+    await expect(opened(backend)).rejects.toThrow('This session runs tasks in containers, and this task cannot start in one. Containers have only been proven on Linux and macOS, and this host is win32.');
+    await backend.letGo('a', { keep: false, reason: 'failed' });
+
+    expect(cli.calls).toEqual([]);
+    expect(local.opened).toEqual([]);
+  });
+
+  it('still asks the engine of a usable setting, and gives up what a start it refused left there', async () => {
+    const cli = new RecordingCli();
+    cli.answers.push({ match: /^version/, result: { code: 1, stderr: 'Cannot connect to the Docker daemon' } });
+    const { backend } = backendWith({ cli });
+
+    await expect(opened(backend)).rejects.toThrow(/Docker engine does not answer/);
+    await backend.letGo('a', { keep: false, reason: 'failed' });
+
+    expect(cli.lines().filter((line) => line.startsWith('volume'))).toEqual([
+      expect.stringMatching(/^volume ls -q --filter name=ordewell-held-/),
+      expect.stringMatching(/^volume rm -f ordewell-task-/),
+      expect.stringMatching(/^volume rm -f ordewell-held-/),
+    ]);
   });
 
   it('refuses when no login was chosen: a person chooses it', async () => {

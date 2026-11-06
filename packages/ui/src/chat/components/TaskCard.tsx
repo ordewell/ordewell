@@ -912,7 +912,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
             removal with a real modal: a `confirm()` here would never fire — VS
             Code sandboxes the webview without `allow-modals`. */}
         {!isExecuting && onRemoveTask && (
-          <button className="task-remove-btn" onClick={(e) => { e.stopPropagation(); onRemoveTask(task.id); }} title="Remove task" aria-label={asRow ? 'Remove task' : undefined}>{asRow ? 'Remove' : <>&#10005;</>}</button>
+          <button className="task-remove-btn" onClick={(e) => { e.stopPropagation(); onRemoveTask(task.id); }} title="Remove task" aria-label={`Remove task ${task.title}`}>{asRow ? 'Remove' : <span aria-hidden="true">&#10005;</span>}</button>
         )}
       </div>}
     </div>

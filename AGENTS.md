@@ -41,8 +41,12 @@ full suite before pushing.
 
 `scripts/change-scope.mjs` holds what a change has to prove, for `test:changed`
 and for CI alike. Only a pull request is narrowed: a push to main and a release
-tag always run everything, and a path outside `docs/`, the root docs and the four
-workspaces' files means the full run. A new root config, a new package or a test
+tag always run everything. A changed workspace owes its full suite and its
+dependents their quick ones, unless the change is to core's exported surface,
+which runs the dependents in full. A path outside the workspaces owes what reads
+it, as `ROOT_OWNERS` lists (`.eslintrc.js` lint, `vitest.setup.ts` the suites, a
+`bench/` fake the suites that start it), and one that list does not name means
+the full run. A new root config, a new `bench/` harness, a new package or a test
 that reads past its own package belongs in that file's decisions and its tests.
 `Required checks` is the status to require on main: a skipped job reads as a pass
 to GitHub, so that job judges the others by what the change owed them.
@@ -52,8 +56,9 @@ runs: beyond lint, typecheck and `test:coverage` (whose per-file floors in
 `packages/core/vitest.config.ts` plain `npm test` never checks), the verify
 scripts, the offline planner e2e, the VS Code integration test and packaging.
 It refuses to start when ci.yml has a step it does not know, so add any new
-step to `scripts/ci.mjs` too, and give a step a verdict rests on an `id` in
-`scripts/change-scope.mjs`. The integration test downloads VS Code into
+step to `scripts/ci.mjs` too, and give a step a verdict rests on an `id`,
+listed under its job in `STEPS_BY_JOB` (`scripts/change-scope.mjs`); a new job
+goes there too, and in `Required checks`' needs. The integration test downloads VS Code into
 `packages/vscode/.vscode-test` on its first run.
 
 A test that depends on the time of day (a usage-limit "resets 8:10pm") fails

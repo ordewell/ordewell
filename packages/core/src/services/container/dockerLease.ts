@@ -8,7 +8,7 @@ import { defaultExecFile, git, tryGit, type GitInvoker } from '../gitExec';
 import { SELF_REPO } from '../isolationRecord';
 import { settleWithin } from '../harness/settleWithin';
 import { CredentialBroker, type IssuedLogin } from './credentialBroker';
-import { describeProblems, inspectReadiness } from './containerPreflight';
+import { describeProblems, inspectReadiness, standingProblems, type ContainerProblem } from './containerPreflight';
 import { CONTAINER_RUNNER_IDS, brokerRefusal, containerRunner, modelHosts, signInRemedy, type ContainerRunner, type ContainerSignIn } from './containerRunners';
 import { networkAsked, probeExpected, probeFindings, proveEngine, withCanaries } from './containerProof';
 import { CACHE_VARIABLES, CLI_READS, containerLimits, envArgs, helperArgs, parseContainerSettings, type ContainerSettings } from './containerSettings';
@@ -175,6 +175,10 @@ export class DockerExecutionBackend implements ExecutionBackend {
     const agent = request.role === 'task';
     const runner = (agent && containerRunner(request.runner)) || null;
     if (agent && !runner) throw new Error(`This session runs tasks in containers, and ${request.runner ?? 'this runner'} has not been proven in one: assign the task to ${CONTAINER_RUNNER_IDS.join(', ')}.`);
+    // No engine could take it, so none is asked: one that hangs would hold the refusal for minutes. Nothing of the engine's is let go
+    // for it either (releaseTask), so held-back work outlives it untouched.
+    const standing = this.standing();
+    if (standing.length > 0) throw new Error(cannotStart(describeProblems(standing)));
     // A Continue restores what the worktree holds, so one started at once must not get there first. Before all else: a start that fails
     // below gives its workspace up, which held-back work must outlive.
     if (spec.task) await this.collect(spec.task.id).catch((err: unknown) => { if (err instanceof KeptWorkError) throw err; });
@@ -211,11 +215,15 @@ export class DockerExecutionBackend implements ExecutionBackend {
   private async preflight(runner: ContainerRunner | null, model?: string): Promise<ContainerSettings> {
     const setupCommand = this.options.setupCommand?.();
     const { problems, settings } = await inspectReadiness(this.options.settings, { cli: this.cli, broker: this.broker, ...(this.options.platform ? { platform: this.options.platform } : {}), agent: runner !== null, ...(runner ? { runner } : {}), ...(setupCommand ? { setupCommand } : {}) });
-    if (!settings) throw new Error(`This session runs tasks in containers, and this task cannot start in one. ${describeProblems(problems)}`);
+    if (!settings) throw new Error(cannotStart(describeProblems(problems)));
     // A task's model is the one thing here no surface could have asked about.
     const refusal = runner && settings.login.kind === 'broker' ? brokerRefusal(runner, model) : null;
-    if (refusal) throw new Error(`This session runs tasks in containers, and this task cannot start in one. ${refusal}`);
+    if (refusal) throw new Error(cannotStart(refusal));
     return settings;
+  }
+
+  private standing(): ContainerProblem[] {
+    return standingProblems(this.options.settings, this.options.platform);
   }
 
   /**
@@ -636,7 +644,8 @@ export class DockerExecutionBackend implements ExecutionBackend {
       if (how.keep && !box.landsNothing) await this.bringBack(box).catch((err: unknown) => this.options.tell('warn', errorText(err)));
       if (this.boxes.get(taskId) === box) this.boxes.delete(taskId);
     }
-    if (!how.keep) {
+    // Under a setting no start could use, nothing of this Session's is in the engine, and what an earlier one held is not ours to give up.
+    if (!how.keep && this.standing().length === 0) {
       await this.dropVolume(`ordewell-task-${this.taskKey(taskId)}`);
       await this.dropVolume(this.heldVolume(taskId));
     }
@@ -668,6 +677,8 @@ export class DockerExecutionBackend implements ExecutionBackend {
     await reclaimTree(this.tree(), this.cli, 'refused' in settings ? null : settings, (text) => this.options.tell('warn', text));
   }
 }
+
+const cannotStart = (why: string): string => `This session runs tasks in containers, and this task cannot start in one. ${why}`;
 
 /** What a user finds on a task whose work did not come back: where it is, and the one act that gives it up. */
 function heldBack(taskId: string, why: string): string {

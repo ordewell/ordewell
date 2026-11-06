@@ -1,4 +1,4 @@
-import { useEffect, useRef, type RefObject } from 'react';
+import { useEffect, useRef, type DragEvent, type RefObject } from 'react';
 import { X } from 'lucide-react';
 import { IconButton } from '@ordewell/ui/design';
 import type { DaemonStatus } from '../../shared/bridge';
@@ -66,6 +66,41 @@ function useViewport(store: FrameStore): void {
   }, [store]);
 }
 
+/** Said for a drop of several files, as Welcome says it. */
+const DROP_ONE = 'Drop one folder.';
+
+/**
+ * A folder dropped anywhere on the window goes to main, which opens it as the
+ * File menu would: focus its window, switch this one, or ask first when work
+ * is live here (ADR-0063 H6). A drop a tab or a view already took is theirs.
+ */
+function useFolderDrop(store: FrameStore): { onDragOver(event: DragEvent): void; onDrop(event: DragEvent): void } {
+  const refuse = (message: string): void => {
+    const title = 'Could not open the folder';
+    const dismiss = store.api.showBanner({ id: 'folder-drop', tone: 'warning', title, body: message, actions: [{ label: 'Dismiss', run: () => dismiss() }] });
+    store.api.announce(`${title}: ${message}`);
+  };
+  const files = (event: DragEvent): boolean => !event.defaultPrevented && Array.from(event.dataTransfer.types).includes('Files');
+  return {
+    onDragOver(event) {
+      if (!files(event)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'copy';
+    },
+    onDrop(event) {
+      if (!files(event)) return;
+      event.preventDefault();
+      const dropped = event.dataTransfer.files;
+      const file = dropped.length === 1 ? dropped.item(0) : null;
+      if (!file) { refuse(DROP_ONE); return; }
+      void store.projects.openDropped(file).then(
+        (result) => { if (!result.ok) refuse(result.message ?? 'Only a folder can be opened.'); },
+        (err: unknown) => refuse(err instanceof Error ? err.message : String(err)),
+      );
+    },
+  };
+}
+
 function Terminal(): JSX.Element {
   const store = useFrameStore();
   const { panels, layout } = useFrameState();
@@ -97,11 +132,12 @@ export function Frame({ daemon }: { daemon: DaemonStatus | undefined }): JSX.Ele
   useViewport(store);
   const center = useRef<HTMLDivElement>(null);
   useDrawerFocus(layout.drawer, center);
+  const drop = useFolderDrop(store);
   const docked = shown(layout);
   const closeDrawer = (): void => store.dispatch({ type: 'closeDrawer' });
 
   return (
-    <div className="frame">
+    <div className="frame" onDragOver={drop.onDragOver} onDrop={drop.onDrop}>
       <TitleBar />
       <Banners />
       <div className="frame-body" {...(readOnly ? { inert: '' } : {})}>

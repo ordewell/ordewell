@@ -282,9 +282,10 @@ build, because Homebrew will not install an app Gatekeeper stops.
 
 The welcome window offers **Open folder…** (`⌘O`/`Ctrl+O`), or you can drop a
 folder on the window. A workspace is a folder, usually a git repository or a
-folder of them. The projects you opened before are cards with their branch,
-their last session's goal and status, and what needs you there; one whose
-folder has gone missing says so, and **Forget** takes it off the list. A card
+folder of them. Under **Recent projects**, the ones you opened before are
+cards with their branch, their last session's goal and status, and what needs
+you there; one whose folder has gone missing says so, and **Forget** takes it
+off the list. A card
 per runner says whether it is installed and signed in. If one is signed out,
 sign in from its own CLI first, or in Settings; if one is missing, install it
 and press **Retry**.
@@ -305,6 +306,14 @@ With a workspace open:
 
 Autorun and automatic merging are off by default; Settings has the same
 planner, runner and run settings as every other surface.
+
+Another workspace opens from any window, not only the welcome one: the
+**File** menu has **Open Folder…** (`⌘O`/`Ctrl+O`), **Open Recent**, newest
+first, with **Clear Recently Opened** at its foot, and **New Window**
+(`⌘⇧N`/`Ctrl+Shift+N`), which brings up the welcome window beside the ones
+open. The project name at the head of the title bar does the same: see
+[Title bar](#title-bar). Dropping a folder on a workspace's window opens it too.
+On macOS the folders also go to the Dock's recents.
 
 ## The daemon
 
@@ -330,7 +339,12 @@ the CLI can follow ([ADR-0063](../adr/surfaces/0063-the-desktop-app-is-an-electr
   state and a bar counts the attempts. Coming back redraws from a fresh
   snapshot; nothing is inferred from the time apart.
 - **One window per workspace.** Opening a folder that is already open focuses
-  its window.
+  its window, whichever window it was chosen in. Otherwise a workspace's window
+  with nothing live switches to the folder in place. One with a live run, a
+  question waiting in Needs you or a checkpoint, a planner turn under way or a
+  terminal running a process is never switched away: the app asks whether to
+  open the folder in a new window, and **Cancel** leaves everything as it was.
+  The folder goes to the top of the recents either way it opens.
 - **A session another host holds.** A session the terminal UI or another
   Ordewell daemon holds is *joined*: you drive it live from the app while the
   other client shows the same session, and the session header and status bar
@@ -343,7 +357,7 @@ the CLI can follow ([ADR-0063](../adr/surfaces/0063-the-desktop-app-is-an-electr
 ## A tour of the window
 
 ```
-┌ title bar: workspace › repo › branch · scope · Needs you · primary action · ⋯ ┐
+┌ title bar: project ▾ › repo › branch · scope · Needs you · primary action · ⋯ ┐
 ├────┬───────────┬──────────────────────────────────────────┬─────────────────┤
 │ ☰  │ sidebar   │ Planner │ #3 Add login │ auth.ts │ Graph  │ Plan            │
 │ ⎘  │ (Sessions,│                                          │ the task list,  │
@@ -358,14 +372,20 @@ the CLI can follow ([ADR-0063](../adr/surfaces/0063-the-desktop-app-is-an-electr
 
 ### Title bar
 
-The breadcrumb names the workspace, the repository and the branch, and the
-**scope switcher** beside it chooses which tree the Explorer, Changes and the
+The breadcrumb starts with the workspace's name as a **project switcher**: its
+tooltip is the folder's full path, and it opens a menu of the other recent
+folders, **Open Folder…**, and **Open in new window**, which, while ticked,
+gives what you choose a window of its own instead of switching this one. The
+arrow keys open and move through the menu, and `Esc` closes it; **Switch
+Project…** in the command palette opens it too. Then come the repository and
+the branch, and the **scope switcher** beside it chooses which tree the Explorer, Changes and the
 terminal look at: *Your checkout*, the run's *Integration branch*, or a task's
 *worktree*. The **Needs you** button counts what waits on you. One primary
 action sits at the right — *Approve plan*, *Run*, *Stop* or *Review & Merge
 all*, whichever the session is at — and everything else is in the `⋯` menu.
-As the window narrows the breadcrumb shortens first; Needs you and the primary
-action always stay in view.
+As the window narrows the breadcrumb shortens first, and the project switcher
+keeps its folder icon and chevron after its name drops; Needs you and the
+primary action always stay in view.
 
 ### Planner
 
@@ -484,6 +504,7 @@ the daemon has read.
 | `⌘K` / `Ctrl+K` | Command palette |
 | `⌘P` / `Ctrl+P` | Quick open a file in the current scope |
 | `⌘O` / `Ctrl+O` | Open a folder |
+| `⌘⇧N` / `Ctrl+Shift+N` | New window, from the File menu: the welcome window |
 | `⌘1`–`⌘4` / `Ctrl+1`–`Ctrl+4` | Sessions, Explorer, Changes, Git |
 | `⌘,` / `Ctrl+,` | Settings |
 | `⌘B` / `Ctrl+B` | Show or hide the sidebar |

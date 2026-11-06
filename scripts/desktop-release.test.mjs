@@ -29,18 +29,20 @@ const job = (workflow, name) => {
 };
 
 describe('the desktop build check in ci.yml', () => {
-  it('is a packages step, so a change to any workspace owes it and a docs change does not', () => {
-    assert.ok(STEPS_BY_CHECK.packages.includes('package-desktop'));
+  it('is a package step, so a change to any workspace owes it and a docs change does not', () => {
+    assert.ok(STEPS_BY_CHECK.package.includes('package-desktop'));
     const desktopOnly = selectScope(['packages/desktop/electron-builder.yml'], workspaces);
-    const owed = (scope) => missedSteps(scope, {});
+    const owed = (scope) => missedSteps(scope, {}, 'package');
     assert.ok(owed(desktopOnly).some((line) => line.startsWith('package-desktop:')));
     assert.ok(!owed(selectScope(['docs/desktop/design.md'], workspaces)).some((line) => line.startsWith('package-desktop:')));
   });
 
-  it('packages before the artifact check reads the installers', () => {
-    assert.ok(ci.indexOf('id: package-desktop') > 0);
-    assert.ok(ci.indexOf('id: package-desktop') < ci.indexOf('id: verify-artifacts'));
-    assert.match(ci, /name: Package the desktop app\n\s+id: package-desktop\n\s+if: needs\.scope\.outputs\.packages != 'false'\n\s+run: npm run desktop:package\n/);
+  it('packages, in the package job, before the artifact check reads the installers', () => {
+    const packaging = job(ci, 'package');
+    assert.match(packaging, /needs: scope\n\s+if: \$\{\{ !cancelled\(\) && needs\.scope\.outputs\.package != 'false' \}\}/);
+    assert.ok(packaging.indexOf('id: package-desktop') > 0);
+    assert.ok(packaging.indexOf('id: package-desktop') < packaging.indexOf('id: verify-artifacts'));
+    assert.match(packaging, /name: Package the desktop app\n\s+id: package-desktop\n\s+run: npm run desktop:package\n/);
   });
 
   it('is run by scripts/ci.mjs as the same root script', () => {
@@ -235,9 +237,10 @@ describe('the package-manager jobs in release.yml (ADR-0063 H11)', () => {
   it('pin every action to a commit SHA, unlike the tag pins the other jobs use', () => {
     const expected = {
       homebrew: ['actions/checkout', 'actions/setup-node', 'actions/download-artifact'],
+      'homebrew-verify': ['actions/checkout'],
       winget: ['actions/checkout', 'actions/setup-node'],
     };
-    for (const [name, text] of [['homebrew', homebrew], ['winget', winget]]) {
+    for (const [name, text] of [['homebrew', homebrew], ['homebrew-verify', job(release, 'homebrew-verify')], ['winget', winget]]) {
       const uses = [...text.matchAll(/^ {6,8}(?:- )?uses: (\S+)(?: # (\S+))?$/gm)].map(([, ref, version]) => ({ ref, version }));
       assert.deepEqual(uses.map(({ ref }) => ref.split('@')[0]), expected[name], name);
       for (const { ref, version } of uses) {
@@ -253,7 +256,7 @@ describe('the package-manager jobs in release.yml (ADR-0063 H11)', () => {
       assert.match(homebrew, new RegExp(`node scripts/render-package-manifests\\.mjs --version "\\$\\{TAG#v\\}" --sums sums/SHA256SUMS --only ${only} --out rendered`), only);
     }
     assert.match(winget, /node scripts\/render-package-manifests\.mjs --version \$tag\.TrimStart\('v'\) --sums sums\/SHA256SUMS --only winget --out rendered/);
-    assert.ok(homebrew.indexOf('render-package-manifests.mjs') < homebrew.indexOf('homebrew-tap'));
+    assert.ok(homebrew.indexOf('render-package-manifests.mjs') < homebrew.indexOf('scripts/publish-tap.sh'));
     assert.ok(winget.indexOf('render-package-manifests.mjs') < winget.indexOf('wingetcreate.exe submit'));
   });
 
@@ -262,28 +265,32 @@ describe('the package-manager jobs in release.yml (ADR-0063 H11)', () => {
     assert.match(homebrew, /HOMEBREW_TAP_DEPLOY_KEY_SET: \$\{\{ secrets\.HOMEBREW_TAP_DEPLOY_KEY != '' \}\}/);
     const publish = homebrew.slice(homebrew.indexOf('- name: Publish to ordewell/homebrew-tap'), homebrew.indexOf('- name: Say why nothing was published to the tap'));
     assert.ok(publish.length > 0);
-    const formula = publish.indexOf('cp rendered/homebrew/Formula/ordewell.rb tap/Formula/ordewell.rb');
-    const notarized = publish.indexOf('notarized === true');
-    const cask = publish.indexOf('cp rendered/homebrew/Casks/ordewell-desktop.rb');
-    const otherwise = publish.indexOf('else\n', notarized);
-    assert.ok(formula >= 0 && formula < notarized, 'the formula is copied before, and apart from, the notarization test');
-    assert.ok(notarized < cask && cask < otherwise, 'the cask is copied only on the notarized branch');
     assert.match(publish, /if: env\.HOMEBREW_TAP_TOKEN_SET == 'true' \|\| env\.HOMEBREW_TAP_DEPLOY_KEY_SET == 'true'\n/);
+    // The step decides whether the cask goes; scripts/publish-tap.sh writes
+    // the tap, as homebrew-publish.yml's does (publish-tap.test.mjs).
+    const notarized = publish.indexOf('notarized === true');
+    const cask = publish.indexOf('cask=(--cask)');
+    const otherwise = publish.indexOf('else\n', notarized);
+    const call = publish.indexOf('scripts/publish-tap.sh rendered "${TAG#v}" "${cask[@]}"');
+    assert.ok(publish.indexOf('cask=()') < notarized, 'the cask is left out unless the notarized branch adds it');
+    assert.ok(notarized < cask && cask < otherwise && otherwise < call, 'the cask is passed only on the notarized branch');
     assert.match(publish, /signing\/signing\.json/);
-    assert.match(publish, /notarized === true/);
     assert.match(publish, /::notice::the macOS build was not notarized/);
-    assert.match(publish, /git clone --depth 1 "https:\/\/x-access-token:\$\{HOMEBREW_TAP_TOKEN\}@github\.com\/ordewell\/homebrew-tap\.git"/);
-    assert.match(publish, /cp rendered\/homebrew\/Casks\/ordewell-desktop\.rb tap\/Casks\/ordewell-desktop\.rb/);
-    assert.match(publish, /git -C tap remote set-url origin https:\/\/github\.com\/ordewell\/homebrew-tap\.git/);
-    assert.match(publish, /git -C tap push origin HEAD/);
-    assert.ok(publish.indexOf('remote set-url') < publish.indexOf('git -C tap commit'), 'the token is out of the remote before the commit');
-    // The cask was `ordewell` before the formula took the name (ADR-0065 C8).
-    const renamed = publish.slice(publish.indexOf('if [ -f tap/Casks/ordewell-desktop.rb ]'));
-    assert.match(renamed, /git -C tap rm --quiet --ignore-unmatch Casks\/ordewell\.rb/);
-    assert.match(renamed, /tap\/cask_renames\.json/);
-    assert.match(renamed, /renames\.ordewell = "ordewell-desktop"/);
-    assert.ok(renamed.indexOf('git -C tap add cask_renames.json') < renamed.indexOf('git -C tap commit'));
+    assert.ok(call < publish.indexOf('echo "published=true" >> "$GITHUB_OUTPUT"'), 'the job says it published only after the script did');
+    assert.match(homebrew, /^ {4}outputs:\n(?: {6}#.*\n)* {6}published: \$\{\{ steps\.publish\.outputs\.published \}\}$/m);
+    assert.match(publish, /^ {8}id: publish$/m);
     assert.match(homebrew, /::notice::neither HOMEBREW_TAP_TOKEN nor HOMEBREW_TAP_DEPLOY_KEY is set/);
+  });
+
+  it('clone and push the tap only through scripts/publish-tap.sh, which never takes the credential out from under the push', () => {
+    const publish = homebrew.slice(homebrew.indexOf('- name: Publish to ordewell/homebrew-tap'), homebrew.indexOf('- name: Say why nothing was published to the tap'));
+    // Release run 42286454425 cloned with the token in the URL, reset the
+    // remote to drop it, then pushed with nothing to send.
+    for (const text of [release, readFileSync('.github/workflows/homebrew-publish.yml', 'utf8'), readFileSync('scripts/publish-tap.sh', 'utf8')]) {
+      assert.doesNotMatch(text, /remote set-url/);
+      assert.doesNotMatch(text, /x-access-token:\$\{?HOMEBREW_TAP_TOKEN/);
+    }
+    assert.doesNotMatch(publish, /\bgit (?:-C \S+ )?(?:clone|push|commit|config)\b/);
   });
 
   it('push with the deploy key only without the token, over ssh that trusts GitHub\'s pinned host keys alone (ADR-0063 H11)', () => {
@@ -291,27 +298,27 @@ describe('the package-manager jobs in release.yml (ADR-0063 H11)', () => {
     // The key reaches the step only when the token does not take precedence.
     assert.match(publish, /HOMEBREW_TAP_DEPLOY_KEY: \$\{\{ env\.HOMEBREW_TAP_TOKEN_SET != 'true' && secrets\.HOMEBREW_TAP_DEPLOY_KEY \|\| '' \}\}/);
     assert.equal((release.match(/secrets\.HOMEBREW_TAP_DEPLOY_KEY\b(?! != '')/g) ?? []).length, 1, 'the deploy key reaches more than the publish step');
-    const token = publish.indexOf('if [ "$HOMEBREW_TAP_TOKEN_SET" = true ]; then');
-    const key = publish.indexOf('else\n', token);
-    const shared = publish.indexOf('mkdir -p tap/Formula');
-    assert.ok(token >= 0 && token < publish.indexOf('x-access-token') && publish.indexOf('x-access-token') < key, 'the token path is the first branch');
-    const ssh = publish.slice(key, shared);
-    assert.ok(ssh.length > 0 && shared > key, 'the deploy-key path ends before the shared clone-to-push');
-    assert.match(ssh, /ssh_dir="\$RUNNER_TEMP\/homebrew-tap-ssh"/);
-    assert.match(ssh, /trap 'rm -rf "\$ssh_dir"' EXIT/);
-    assert.ok(ssh.indexOf('trap ') < ssh.indexOf('printf '), 'the cleanup is set before the key is written');
+    assert.doesNotMatch(publish, /\$\{?HOMEBREW_TAP_(?:DEPLOY_KEY|TOKEN)\b/, 'the step reads a credential the script should');
+    const script = readFileSync('scripts/publish-tap.sh', 'utf8');
+    const token = script.indexOf('if [ -n "${HOMEBREW_TAP_TOKEN:-}" ]; then');
+    const key = script.indexOf('elif [ -n "${HOMEBREW_TAP_DEPLOY_KEY:-}" ]; then');
+    const shared = script.indexOf('remote clone');
+    assert.ok(token >= 0 && token < key && key < shared, 'the token path is the first branch, and both end before the shared clone-to-push');
+    const ssh = script.slice(key, shared);
+    assert.ok(script.indexOf("trap 'rm -rf \"$work\"' EXIT") < script.indexOf('printf \'%s\\n\' "$HOMEBREW_TAP_DEPLOY_KEY"'), 'the cleanup is set before the key is written');
+    assert.match(ssh, /ssh_dir="\$work\/ssh"/);
     assert.match(ssh, /\(umask 077 && printf '%s\\n' "\$HOMEBREW_TAP_DEPLOY_KEY" > "\$ssh_dir\/key"\)/);
     assert.match(ssh, /chmod 600 "\$ssh_dir\/key"/);
     assert.match(ssh, /unset HOMEBREW_TAP_DEPLOY_KEY/);
     assert.match(ssh, /-o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='\$ssh_dir\/known_hosts'/);
-    assert.match(ssh, /git clone --depth 1 git@github\.com:ordewell\/homebrew-tap\.git tap/);
-    assert.doesNotMatch(publish, /ssh-keyscan/);
+    assert.match(ssh, /url=\$\{ORDEWELL_TAP_TEST_URL:-git@github\.com:ordewell\/homebrew-tap\.git\}/);
+    assert.doesNotMatch(script, /ssh-keyscan/);
     // The key is read from the environment by builtins only: no echo, and no
     // command whose arguments would carry it.
-    const uses = [...publish.matchAll(/^.*\$\{?HOMEBREW_TAP_DEPLOY_KEY\b.*$/gm)].map(([line]) => line.trim());
-    assert.deepEqual(uses, ['(umask 077 && printf \'%s\\n\' "$HOMEBREW_TAP_DEPLOY_KEY" > "$ssh_dir/key")']);
+    const uses = [...script.matchAll(/^.*\$\{?HOMEBREW_TAP_DEPLOY_KEY\b.*$/gm)].map(([line]) => line.trim());
+    assert.deepEqual(uses, ['elif [ -n "${HOMEBREW_TAP_DEPLOY_KEY:-}" ]; then', '(umask 077 && printf \'%s\\n\' "$HOMEBREW_TAP_DEPLOY_KEY" > "$ssh_dir/key")']);
     // GitHub's published host keys (api.github.com/meta `ssh_keys`), the ed25519 one at least.
-    assert.match(ssh, /^ *github\.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl$/m);
+    assert.match(ssh, /^github\.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl$/m);
     assert.match(ssh, /api\.github\.com\/meta/);
   });
 
@@ -396,8 +403,8 @@ const parseSteps = (text) => {
 /**
  * One GitHub Actions expression, in the forms release.yml uses: `!`, `&&`,
  * `||`, parentheses, `==`/`!=` (which GitHub compares ignoring case), string
- * literals, status functions and the needs, vars, env, secrets and github
- * contexts. A bare condition with no status function is `success() && (...)`.
+ * literals, status functions and the needs (a job's result or one of its
+ * outputs), vars, env, secrets and github contexts. A bare condition with no status function is `success() && (...)`.
  */
 const evaluate = (expression, context, { condition = false } = {}) => {
   let source = expression.trim().replace(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/, '$1');
@@ -406,6 +413,7 @@ const evaluate = (expression, context, { condition = false } = {}) => {
   assert.equal(tokens.join(''), source.replace(/\s+/g, ''), `release.yml uses an expression this test cannot read: ${source}`);
   const lookup = (path) => {
     const [scope, ...rest] = path.split('.');
+    if (scope === 'needs' && rest[1] === 'outputs') return context.outputs?.[rest[0]]?.[rest[2]] ?? '';
     if (scope === 'needs') return context.needs[rest[0]];
     return context[scope]?.[rest.join('.')] ?? '';
   };
@@ -421,18 +429,24 @@ const evaluate = (expression, context, { condition = false } = {}) => {
   return new Function(`return (${js});`)();
 };
 
-/** Each release job's result, given the switch's value and how each job that ran came out. */
-const simulate = ({ vars = {}, outcome = {} }) => {
+/**
+ * Each release job's result, given the switch's value, how each job that ran
+ * came out, and whether a homebrew job that succeeded wrote the tap (it does
+ * not without a credential).
+ */
+const simulate = ({ vars = {}, outcome = {}, published = true }) => {
   const needs = {};
   const results = { ci: 'success', 'npm-publish': 'success', 'vscode-publish': 'success', 'github-release': 'success' };
-  for (const name of ['desktop', 'cli', 'release-assets', 'homebrew', 'winget']) {
+  const outputs = {};
+  for (const name of ['desktop', 'cli', 'release-assets', 'homebrew', 'homebrew-verify', 'winget']) {
     const text = job(release, name);
     needs[name] = (jobField(text, 'needs') ?? '').replace(/[[\]]/g, '').split(',').map((n) => n.trim()).filter(Boolean);
     // A skipped or failed job anywhere upstream fails the implied success().
     const upstream = (n) => (needs[n] ?? []).flatMap((m) => [m, ...upstream(m)]);
     const success = upstream(name).every((n) => results[n] === 'success');
-    const runs = evaluate(jobField(text, 'if') ?? 'success()', { needs: results, vars, success }, { condition: true });
+    const runs = evaluate(jobField(text, 'if') ?? 'success()', { needs: results, outputs, vars, success }, { condition: true });
     results[name] = runs ? outcome[name] ?? 'success' : 'skipped';
+    if (name === 'homebrew') outputs.homebrew = { published: results.homebrew === 'success' && published ? 'true' : '' };
   }
   return results;
 };
@@ -463,6 +477,19 @@ describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', ()
     }
   });
 
+  it('installs the formula with brew only after the homebrew job put it in the tap (ADR-0063 H11)', () => {
+    const verify = (options) => simulate(options)['homebrew-verify'];
+    for (const vars of [{}, { ORDEWELL_RELEASE_DESKTOP: 'true' }]) {
+      assert.equal(verify({ vars }), 'success');
+      // No credential: the job succeeds having published nothing to install.
+      assert.equal(verify({ vars, published: false }), 'skipped');
+      assert.equal(verify({ vars, outcome: { homebrew: 'failure' } }), 'skipped');
+      assert.equal(verify({ vars, outcome: { cli: 'failure' } }), 'skipped');
+    }
+    // A brew that fails to install the formula holds up no other publish.
+    assert.equal(simulate({ vars: { ORDEWELL_RELEASE_DESKTOP: 'true' }, outcome: { 'homebrew-verify': 'failure' } }).winget, 'success');
+  });
+
   const posixOnly = process.platform === 'win32' ? 'runs the bash of jobs that run only on ubuntu-latest' : false;
   const VERSION = '9.8.7';
   const CLI_ARCHIVES = ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64'].map((target) => `ordewell-${VERSION}-${target}.tar.gz`);
@@ -490,6 +517,8 @@ describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', ()
     }
     const log = join(root, 'log');
     const sshLog = join(root, 'ssh-log');
+    const configLog = join(root, 'config-log');
+    const pushed = join(root, 'pushed');
     writeFileSync(join(bin, 'fake.mjs'), `
       import { appendFileSync, copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
       import { basename, join } from 'node:path';
@@ -512,6 +541,13 @@ describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', ()
           hosts: hosts && existsSync(hosts) ? readFileSync(hosts, 'utf8') : null,
           inherited: 'HOMEBREW_TAP_DEPLOY_KEY' in process.env,
         }) + '\\n');
+      }
+      // The config git reads from its environment, and the clone's own config
+      // file, as each git command saw them.
+      if (tool === 'git') {
+        const count = Number(process.env.GIT_CONFIG_COUNT ?? 0);
+        const config = Array.from({ length: count }, (_, at) => [process.env['GIT_CONFIG_KEY_' + at], process.env['GIT_CONFIG_VALUE_' + at]]);
+        appendFileSync(${JSON.stringify(configLog)}, JSON.stringify({ args, config, inherited: 'HOMEBREW_TAP_TOKEN' in process.env }) + '\\n');
       }
       const after = (flag) => args.flatMap((arg, at) => (arg === flag ? [args[at + 1]] : []));
       if (tool === 'gh' && args[0] === 'release' && args[1] === 'download') {
@@ -544,6 +580,10 @@ describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', ()
       } else if (tool === 'git' && args[2] === 'push' && ${JSON.stringify(pushFails)}) {
         console.error('remote: Permission to ordewell/homebrew-tap.git denied');
         process.exit(128);
+      } else if (tool === 'git' && args[2] === 'push') {
+        // What the tap holds after the push, kept past the clone's deletion.
+        rmSync(${JSON.stringify(pushed)}, { recursive: true, force: true });
+        cpSync(args[1], ${JSON.stringify(pushed)}, { recursive: true });
       } else if (tool !== 'git') {
         process.exit(3);
       }
@@ -559,6 +599,8 @@ describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', ()
       const resolved = (values, scope = context) => Object.fromEntries(Object.entries(values).map(([key, value]) => [key, String(value.includes('${{') ? evaluate(value, scope) : value)]));
       const env = resolved(jobEnv(text));
       const printed = [];
+      const output = join(root, `output-${name}`);
+      writeFileSync(output, '');
       for (const step of parseSteps(text)) {
         if (step.if && !evaluate(step.if, { ...context, env }, { condition: true })) continue;
         if (step.uses) {
@@ -575,7 +617,7 @@ describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', ()
         const out = spawnSync('bash', ['--noprofile', '--norc', '-eo', 'pipefail', '-c', step.run], {
           cwd: work,
           encoding: 'utf8',
-          env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}`, RUNNER_TEMP: runnerTemp, ...env, ...resolved(step.env, { ...context, env }) },
+          env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}`, RUNNER_TEMP: runnerTemp, GITHUB_OUTPUT: output, ...env, ...resolved(step.env, { ...context, env }) },
         });
         printed.push({ step: step.name, stdout: out.stdout, stderr: out.stderr });
         assert.equal(out.status, 0, `${name}: ${step.name} failed:\n${out.stdout}${out.stderr}`);
@@ -584,8 +626,11 @@ describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', ()
     };
     const calls = () => readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
     const ssh = () => (existsSync(sshLog) ? readFileSync(sshLog, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : []);
+    const config = () => (existsSync(configLog) ? readFileSync(configLog, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : []);
+    /** A job's outputs, as its steps wrote them to GITHUB_OUTPUT. */
+    const outputs = (name) => Object.fromEntries(readFileSync(join(root, `output-${name}`), 'utf8').split('\n').filter(Boolean).map((line) => line.split(/=(.*)/s).slice(0, 2)));
     const listed = () => readFileSync(join(assets, 'SHA256SUMS'), 'utf8').trim().split('\n').map((line) => line.split(/\s+\*?/)[1]).sort();
-    return { root, work, assets, runnerTemp, run, calls, ssh, listed, done: () => rmSync(root, { recursive: true, force: true }) };
+    return { root, work, assets, runnerTemp, pushed, run, calls, ssh, config, outputs, listed, done: () => rmSync(root, { recursive: true, force: true }) };
   };
 
   const notices = (printed) => printed.flatMap(({ stdout }) => stdout.split('\n').filter((line) => line.startsWith('::notice::')));
@@ -633,7 +678,7 @@ describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', ()
       const results = simulate({});
       space.run('release-assets', { results });
       const printed = space.run('homebrew', { results, secrets: { HOMEBREW_TAP_TOKEN: 'token' } });
-      const tap = join(space.work, 'tap');
+      const tap = space.pushed;
       assert.ok(existsSync(join(tap, 'Formula', 'ordewell.rb')));
       assert.match(readFileSync(join(tap, 'Formula', 'ordewell.rb'), 'utf8'), new RegExp(`version "${VERSION.replace(/\./g, '\\.')}"`));
       assert.ok(!existsSync(join(tap, 'Casks', 'ordewell-desktop.rb')), 'a cask was published for a release without the desktop app');
@@ -641,6 +686,7 @@ describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', ()
       assert.ok(!existsSync(join(tap, 'cask_renames.json')));
       assert.ok(!existsSync(join(space.work, 'rendered', 'homebrew', 'Casks')), 'the cask was rendered');
       assert.ok(space.calls().some(([tool, , , verb]) => tool === 'git' && verb === 'push'));
+      assert.deepEqual(space.outputs('homebrew'), { published: 'true' });
       assert.deepEqual(notices(printed), ["::notice::ORDEWELL_RELEASE_DESKTOP is not 'true', so this release has no desktop app and no cask was published, only the formula (ADR-0065 C10)."]);
     } finally {
       space.done();
@@ -655,6 +701,7 @@ describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', ()
       const printed = space.run('homebrew', { results });
       assert.deepEqual(notices(printed), ['::notice::neither HOMEBREW_TAP_TOKEN nor HOMEBREW_TAP_DEPLOY_KEY is set, so neither the formula nor the cask was published (ADR-0063 H11, ADR-0065 C8).']);
       assert.ok(!space.calls().some(([tool]) => tool === 'git'));
+      assert.deepEqual(space.outputs('homebrew'), {}, 'the job says it published with nothing published');
     } finally {
       space.done();
     }
@@ -663,8 +710,15 @@ describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', ()
   describe('the tap credential (ADR-0063 H11)', () => {
     // Lower case, as the expression reader folds every value it reads.
     const KEY = '-----begin openssh private key-----\nfake deploy key\n-----end openssh private key-----';
-    const sshDir = (space) => join(space.runnerTemp, 'homebrew-tap-ssh');
     const clones = (space) => space.calls().filter(([tool, verb]) => tool === 'git' && verb === 'clone');
+    /** The clone's arguments, its throwaway folder under RUNNER_TEMP written as <work>. */
+    const cloned = (space) => clones(space).map((call) => {
+      const at = call.at(-1);
+      assert.match(at, new RegExp(`^${space.runnerTemp.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')}/homebrew-tap\\.\\w{6}/tap$`));
+      return [...call.slice(0, -1), '<work>/tap'];
+    });
+    const sshDir = (space) => dirname(space.ssh()[0].key);
+    const HEADER = `AUTHORIZATION: basic ${Buffer.from('x-access-token:token').toString('base64')}`;
     const pushes = (space) => space.calls().filter(([tool, , , verb]) => tool === 'git' && verb === 'push');
 
     it('clones and pushes over https with the token, and never writes a key', { skip: posixOnly }, () => {
@@ -672,9 +726,16 @@ describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', ()
       try {
         const results = simulate({});
         space.run('release-assets', { results });
-        space.run('homebrew', { results, secrets: { HOMEBREW_TAP_TOKEN: 'token' } });
-        assert.deepEqual(clones(space), [['git', 'clone', '--depth', '1', 'https://x-access-token:token@github.com/ordewell/homebrew-tap.git', 'tap']]);
+        const printed = space.run('homebrew', { results, secrets: { HOMEBREW_TAP_TOKEN: 'token' } });
+        assert.deepEqual(cloned(space), [['git', 'clone', '--quiet', '--depth', '1', 'https://github.com/ordewell/homebrew-tap.git', '<work>/tap']]);
         assert.equal(pushes(space).length, 1);
+        // The header goes to the clone and the push, and to no other git.
+        const seen = space.config();
+        const carries = ({ config }) => config.some(([key, value]) => key === 'http.https://github.com/ordewell/homebrew-tap.git.extraheader' && value === HEADER);
+        assert.deepEqual(seen.filter(carries).map(({ args }) => (args[0] === 'clone' ? 'clone' : args[2])), ['clone', 'push']);
+        assert.ok(seen.every(({ inherited }) => !inherited), 'git inherits the token in its environment');
+        assert.ok(!space.calls().flat().some((arg) => arg.includes('token@') || arg.includes(HEADER)), 'the token was on a command line');
+        assert.ok(!printed.some(({ stdout, stderr }) => /x-access-token|AUTHORIZATION/i.test(`${stdout}${stderr}`)), 'the credential was printed');
         assert.deepEqual(space.ssh(), [], 'git ran with an ssh command');
         assert.deepEqual(readdirSync(space.runnerTemp), []);
       } finally {
@@ -688,7 +749,8 @@ describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', ()
         const results = simulate({});
         space.run('release-assets', { results });
         const printed = space.run('homebrew', { results, secrets: { HOMEBREW_TAP_TOKEN: 'token', HOMEBREW_TAP_DEPLOY_KEY: KEY } });
-        assert.match(clones(space)[0][4], /^https:\/\/x-access-token:token@/);
+        assert.equal(clones(space)[0][5], 'https://github.com/ordewell/homebrew-tap.git');
+        assert.ok(space.config().find(({ args }) => args[2] === 'push').config.some(([, value]) => value === HEADER));
         assert.deepEqual(space.ssh(), []);
         assert.deepEqual(readdirSync(space.runnerTemp), []);
         assert.ok(!space.calls().flat().some((arg) => arg.includes('fake deploy key')));
@@ -704,8 +766,9 @@ describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', ()
         const results = simulate({ vars: { ORDEWELL_RELEASE_DESKTOP: 'true' } });
         space.run('release-assets', { results });
         const printed = space.run('homebrew', { results, secrets: { HOMEBREW_TAP_DEPLOY_KEY: KEY }, artifacts: { 'signing-macOS': { notarized: true } } });
-        assert.deepEqual(clones(space), [['git', 'clone', '--depth', '1', 'git@github.com:ordewell/homebrew-tap.git', 'tap']]);
+        assert.deepEqual(cloned(space), [['git', 'clone', '--quiet', '--depth', '1', 'git@github.com:ordewell/homebrew-tap.git', '<work>/tap']]);
         assert.ok(!space.calls().some(([tool, , , verb]) => tool === 'git' && verb === 'remote'), 'the ssh remote has no secret to strip');
+        assert.equal(dirname(sshDir(space)), dirname(clones(space)[0].at(-1)), 'the key is kept beside the clone, where the cleanup reaches it');
         const key = join(sshDir(space), 'key');
         const seen = space.ssh();
         assert.deepEqual(seen.map(({ verb }) => verb).filter((verb) => ['clone', 'push'].includes(verb)), ['clone', 'push']);
@@ -718,10 +781,12 @@ describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', ()
           assert.deepEqual(call.hosts.trim().split('\n').map((line) => line.split(' ').slice(0, 2).join(' ')), ['github.com ssh-ed25519', 'github.com ecdsa-sha2-nistp256', 'github.com ssh-rsa']);
         }
         assert.ok(!existsSync(sshDir(space)), 'the key outlived the step');
+        assert.deepEqual(readdirSync(space.runnerTemp), []);
+        assert.ok(space.config().every(({ config }) => config.length === 0), 'the ssh path set an http header');
         assert.ok(!space.calls().flat().some((arg) => arg.includes('fake deploy key')), 'the key was on a command line');
         assert.ok(!printed.some(({ stdout, stderr }) => `${stdout}${stderr}`.includes('fake deploy key')), 'the key was printed');
         // The shared rest of the step: the cask and its rename as with the token.
-        const tap = join(space.work, 'tap');
+        const tap = space.pushed;
         assert.ok(existsSync(join(tap, 'Formula', 'ordewell.rb')));
         assert.ok(existsSync(join(tap, 'Casks', 'ordewell-desktop.rb')));
         assert.ok(!existsSync(join(tap, 'Casks', 'ordewell.rb')));
@@ -741,6 +806,9 @@ describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', ()
         assert.throws(() => space.run('homebrew', { results, secrets: { HOMEBREW_TAP_DEPLOY_KEY: KEY } }), /Publish to ordewell\/homebrew-tap failed/);
         assert.equal(space.ssh().find(({ verb }) => verb === 'push')?.mode, '600', 'the push ran without the key');
         assert.ok(!existsSync(sshDir(space)), 'the key outlived a failed push');
+        assert.deepEqual(readdirSync(space.runnerTemp), []);
+        assert.ok(!existsSync(space.pushed));
+        assert.deepEqual(space.outputs('homebrew'), {}, 'the job says it published after a failed push');
       } finally {
         space.done();
       }
@@ -753,7 +821,7 @@ describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', ()
       const results = simulate({ vars: { ORDEWELL_RELEASE_DESKTOP: 'true' } });
       space.run('release-assets', { results });
       const printed = space.run('homebrew', { results, secrets: { HOMEBREW_TAP_TOKEN: 'token' }, artifacts: { 'signing-macOS': { notarized: true } } });
-      const tap = join(space.work, 'tap');
+      const tap = space.pushed;
       assert.ok(existsSync(join(tap, 'Formula', 'ordewell.rb')));
       assert.match(readFileSync(join(tap, 'Casks', 'ordewell-desktop.rb'), 'utf8'), new RegExp(`version "${VERSION.replace(/\./g, '\\.')}"`));
       assert.ok(!existsSync(join(tap, 'Casks', 'ordewell.rb')));

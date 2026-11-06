@@ -1,5 +1,5 @@
 import { createContext, useContext, useSyncExternalStore } from 'react';
-import type { SavedLayout } from '../../shared/bridge';
+import type { ActionResult, RecentWorkspace, SavedLayout } from '../../shared/bridge';
 import type {
   ActivityBadge, ActivityId, Banner, Command, FrameApi, OpenTabOptions, PanelView, PlanProgress, PrimaryAction, SidebarSection,
   SlotId, SlotView, TabKind, TabRef, Unregister,
@@ -9,7 +9,29 @@ import {
 } from './layout';
 
 /** The frame's own overlays: one at a time, so opening one closes another. */
-export type Overlay = 'palette' | 'needsYou' | 'more' | undefined;
+export type Overlay = 'palette' | 'needsYou' | 'more' | 'project' | undefined;
+
+/**
+ * The app's folders, as the title bar's project switcher reaches them. Main
+ * decides what opening one does: focus the window that has it, switch this
+ * one, or ask first when this one has work in progress (ADR-0063 H6).
+ */
+export interface ProjectsPort {
+  /** Newest first, this window's own folder among them. */
+  recents(): Promise<readonly RecentWorkspace[]>;
+  onRecentsChange(cb: () => void): () => void;
+  /** No path shows the folder picker. */
+  open(path: string | undefined, options: { newWindow: boolean }): void;
+  openDropped(file: File): Promise<ActionResult>;
+}
+
+/** A frame with no app behind it, as in a test that is not about folders. */
+const NO_PROJECTS: ProjectsPort = {
+  recents: async () => [],
+  onRecentsChange: () => () => {},
+  open: () => {},
+  openDropped: async () => ({ ok: false }),
+};
 
 export interface FrameState {
   layout: Layout;
@@ -39,6 +61,7 @@ export interface FrameOptions {
   layout?: SavedLayout;
   /** Where the user's layout goes when it changes, once a drag settles; the prefs store in the app. */
   persistLayout?(layout: SavedLayout): void;
+  projects?: ProjectsPort;
 }
 
 const DEFAULT_VIEWPORT: Viewport = { width: 1280, height: 820 };
@@ -88,6 +111,8 @@ export class FrameStore {
   readonly getSnapshot = (): FrameState => this.state;
 
   get platform(): string { return this.options.platform; }
+
+  get projects(): ProjectsPort { return this.options.projects ?? NO_PROJECTS; }
 
   dispatch(action: LayoutAction): void {
     const layout = reduceLayout(this.state.layout, action);
