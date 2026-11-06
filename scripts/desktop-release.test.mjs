@@ -32,15 +32,17 @@ describe('the desktop build check in ci.yml', () => {
   it('is a packages step, so a change to any workspace owes it and a docs change does not', () => {
     assert.ok(STEPS_BY_CHECK.packages.includes('package-desktop'));
     const desktopOnly = selectScope(['packages/desktop/electron-builder.yml'], workspaces);
-    const owed = (scope) => missedSteps(scope, {});
+    const owed = (scope) => missedSteps(scope, {}, 'package');
     assert.ok(owed(desktopOnly).some((line) => line.startsWith('package-desktop:')));
     assert.ok(!owed(selectScope(['docs/desktop/design.md'], workspaces)).some((line) => line.startsWith('package-desktop:')));
   });
 
-  it('packages before the artifact check reads the installers', () => {
-    assert.ok(ci.indexOf('id: package-desktop') > 0);
-    assert.ok(ci.indexOf('id: package-desktop') < ci.indexOf('id: verify-artifacts'));
-    assert.match(ci, /name: Package the desktop app\n\s+id: package-desktop\n\s+if: needs\.scope\.outputs\.packages != 'false'\n\s+run: npm run desktop:package\n/);
+  it('packages, in the package job, before the artifact check reads the installers', () => {
+    const packaging = job(ci, 'package');
+    assert.match(packaging, /needs: scope\n\s+if: \$\{\{ !cancelled\(\) && needs\.scope\.outputs\.packages != 'false' \}\}/);
+    assert.ok(packaging.indexOf('id: package-desktop') > 0);
+    assert.ok(packaging.indexOf('id: package-desktop') < packaging.indexOf('id: verify-artifacts'));
+    assert.match(packaging, /name: Package the desktop app\n\s+id: package-desktop\n\s+run: npm run desktop:package\n/);
   });
 
   it('is run by scripts/ci.mjs as the same root script', () => {

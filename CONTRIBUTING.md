@@ -74,6 +74,31 @@ node bench/live/drive-conversation.mjs
 If you change planner behaviour, run that. It is the fastest way to find out
 that a prompt edit broke plan emission.
 
+### How CI is laid out
+
+`.github/workflows/ci.yml` starts with `scope`, which works out what the event
+has to prove (`scripts/change-scope.mjs`). Every other job needs only that one
+and runs beside the rest, each installing and building what it uses:
+
+| Job | What it proves |
+| --- | --- |
+| `build-and-test` | What needs proving once, on Linux: the bubblewrap sandbox, the verify scripts and repository-wide guards, the offline planner loop, the standalone binary, the bench harnesses, the VS Code integration test and the desktop app's e2e |
+| `desktop-tour` | The desktop app's visual tour and layout checks, the longest job by far |
+| `coverage (<workspace>)` | Each workspace's suite with coverage, one leg per workspace, under that workspace's own floors |
+| `typecheck`, `lint`, `package` | The type check, lint (it builds nothing), and the npm tarballs, VSIX and Linux installers, each checked as it ships |
+| `real-engine` | The container suites against a real engine |
+| `windows (n/6)`, `windows-harness` | The core, CLI, web and VS Code suites on Windows in six shards, and the harnesses beside them |
+| `Required checks` | The one status a branch rule requires: it fails if a job failed, or skipped what the change owed it |
+
+A pull request runs what its change can reach, and a new push to it cancels the
+run in progress. A push to `main`, a release, the nightly run (03:17 UTC) and a
+run started by hand from the Actions tab always run everything, and none of
+them is cancelled by a later one.
+
+`npm run ci` runs the same steps, once each, in the workflow's order; a build
+several jobs share runs once. `node scripts/ci.mjs --list` prints them without
+running any.
+
 CI runs the suites on Linux and again on Windows. `npm run ci` works on either:
 on Windows it skips only the bubblewrap sandbox suite, which is Linux's. Run it
 from Git Bash there, as CI does: some tests run a script through Git's `sh`,
@@ -344,10 +369,12 @@ carefully, and keep all versions in lockstep.
   `npm run ci` passes before pushing. It runs every step of CI's workflow
   locally, the full suite with its per-file coverage floors included.
 - CI on a pull request runs what the change can reach (`scripts/change-scope.mjs`):
-  a package and those built on it, and everything for a path it cannot judge. A
-  docs-only change runs the verify scripts and repository-wide guards. A push to
-  `main` and a release tag always run everything. `Required checks` is the one status
-  to look at: it fails if a job skipped anything the change owed.
+  a package and those built on it, with a coverage leg for each, and everything
+  for a path it cannot judge. A docs-only change runs the verify scripts and
+  repository-wide guards. A push to `main`, a release tag, the nightly run and a
+  manual run always run everything ([how CI is laid out](#how-ci-is-laid-out)).
+  `Required checks` is the one status to look at: it fails if a job skipped
+  anything the change owed.
 - If you changed anything a container runs, `npm run test:containers` runs the real
   harnesses in a real engine. It needs Docker and builds a large image, so `npm run ci`
   leaves it out and CI's `real-engine` job runs it, on a pull request whenever core

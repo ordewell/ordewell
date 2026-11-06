@@ -52,8 +52,9 @@ runs: beyond lint, typecheck and `test:coverage` (whose per-file floors in
 `packages/core/vitest.config.ts` plain `npm test` never checks), the verify
 scripts, the offline planner e2e, the VS Code integration test and packaging.
 It refuses to start when ci.yml has a step it does not know, so add any new
-step to `scripts/ci.mjs` too, and give a step a verdict rests on an `id` in
-`scripts/change-scope.mjs`. The integration test downloads VS Code into
+step to `scripts/ci.mjs` too, and give a step a verdict rests on an `id`,
+listed under its job in `STEPS_BY_JOB` (`scripts/change-scope.mjs`); a new job
+goes there too, and in `Required checks`' needs. The integration test downloads VS Code into
 `packages/vscode/.vscode-test` on its first run.
 
 A test that depends on the time of day (a usage-limit "resets 8:10pm") fails

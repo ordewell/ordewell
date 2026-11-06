@@ -7,6 +7,10 @@
 // Every named step of ci.yml must appear below, either run here or listed as
 // CI-only with the reason: a step added to the workflow and not here fails
 // this script before anything runs, so the two cannot drift apart unnoticed.
+// ci.yml's jobs run side by side and each builds what it needs, so a step
+// several jobs share (the two builds) runs here once, where it first appears.
+//
+// `--list` prints the steps a run would take, in order, and runs none.
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { connect } from 'node:net';
@@ -200,9 +204,14 @@ if (unknown.length || stale.length) {
   for (const n of stale) console.error(`scripts/ci.mjs names a step ci.yml no longer has: "${n}"`);
   process.exit(1);
 }
+const local = [...new Set(named.filter((n) => n in STEPS))];
+if (process.argv.includes('--list')) {
+  for (const name of local) console.log(name);
+  process.exit(0);
+}
 if (!installedMatchesLockfile()) process.exit(1);
 
-for (const name of named.filter((n) => n in STEPS)) {
+for (const name of local) {
   console.log(`\n=== ${name}`);
   if ((await STEPS[name]()) !== 0) {
     console.error(`\n✗ ${name} failed, as it would in CI.`);

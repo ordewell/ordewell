@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // ci.yml's hands on scripts/change-scope.mjs, which holds the decisions.
 //   select   what this event needs, as job outputs
-//   confirm  build-and-test ran what it owed
+//   confirm  the job it runs in (JOB) ran what it owed
 //   gate     the required status: every job did what the change owed it
 import { appendFileSync } from 'node:fs';
-import { CHECKS, gateFailures, missedSteps, parseScope, readWorkspaces, scopeForEvent } from './change-scope.mjs';
+import { CHECKS, coverageLegs, gateFailures, missedSteps, parseScope, readWorkspaces, scopeForEvent } from './change-scope.mjs';
 
-const { EVENT, GITHUB_OUTPUT, GITHUB_STEP_SUMMARY, NEEDS, SCOPE, STEPS } = process.env;
+const { EVENT, GITHUB_OUTPUT, GITHUB_STEP_SUMMARY, JOB, NEEDS, SCOPE, STEPS } = process.env;
 
 function report(problems, passed) {
   for (const problem of problems) console.error(`::error::${problem}`);
@@ -23,8 +23,8 @@ const commands = {
     output([
       `scope=${JSON.stringify(scope)}`,
       ...CHECKS.map((check) => `${check}=${scope.checks[check]}`),
-      // Empty means every workspace: the root script, or `-ws`.
-      `workspace_args=${scope.mode === 'full' ? '' : scope.workspaces.map((dir) => `-w ${dir}`).join(' ')}`,
+      // The coverage job's matrix: one leg per workspace the scope reaches.
+      `coverage=${JSON.stringify(coverageLegs(scope))}`,
     ]);
     const off = CHECKS.filter((check) => !scope.checks[check]);
     if (GITHUB_STEP_SUMMARY) {
@@ -32,7 +32,8 @@ const commands = {
     }
   },
   confirm() {
-    report(missedSteps(parseScope(SCOPE), JSON.parse(STEPS)), 'Every step this change owed ran and passed.');
+    // No default job: a confirm step that names none would prove build-and-test's steps in another job.
+    report(missedSteps(parseScope(SCOPE), JSON.parse(STEPS), JOB ?? ''), `Every step this change owed ${JOB} ran and passed.`);
     output(['confirmed=true']);
   },
   gate() {
