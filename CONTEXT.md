@@ -1735,7 +1735,9 @@ rounds over, and the guards count no round; "iteration".
 AI task reporting through `task_complete`, or a script task, whose verdict
 decides whether the loop goes on. A round starts only on `failed` evidence
 (`Verdict.reported`): a `blocked` report, an exit without one or a script that
-could not start starts none, and the check fails as any task does.
+could not start starts none, and the check fails as any task does. An AI
+check is told so by Ordewell on every round: `failed` when it confirms a
+problem, `done` only when it confirms none.
 *Avoid:* a bare "check" where a verdict's *Check* could be meant — this one is
 a task; "test" or "review" for the role — those are what a loop check may do;
 "declared check" or "acceptance check" — a check is a task in the plan, not a

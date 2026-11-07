@@ -41,7 +41,7 @@ line, with no Node.js needed:
 curl -fsSL https://ordewell.ai/install.sh | sh
 ```
 
-This README describes 0.13.0. See the [published releases](https://github.com/ordewell/ordewell/releases)
+This README describes 0.13.1. See the [published releases](https://github.com/ordewell/ordewell/releases)
 for versions available to install and their release notes.
 
 Ordewell is pre-1.0, so minor releases can include breaking changes. Read the

@@ -122,6 +122,23 @@ describe('a loop: a check that repeats with its fix until it passes (ADR-0045)',
     await h.pass('ship');
   });
 
+  it('tells the check on every round that its status is the verdict, and its fix not', async () => {
+    const h = setup(reviewed());
+    await h.orchestrator.approveReview();
+    await h.pass('build');
+    await vi.waitFor(() => expect(h.spawns('review')).toHaveLength(1));
+    await h.fail('review');
+    await h.report('fix', 1, { status: 'done', summary: 'Fixed.' }, 'completed');
+    await vi.waitFor(() => expect(h.spawns('review')).toHaveLength(2));
+
+    const [first, second] = h.spawns('review').map((s) => s.prompt!);
+    expect(first).toMatch(/## You are this loop's check\n\nOrdewell reads your `task_complete` status as this check's verdict\.[^]*This is round 1 of 3\.[^]*\n\ndo review$/);
+    expect(second).toMatch(/## You are this loop's check\n\nOrdewell reads your `task_complete` status as this check's verdict\.[^]*This is round 2 of 3\.[^]*\n\ndo review$/);
+    expect(h.spawns('fix')[0].prompt).not.toContain('## You are this loop\'s check');
+    await h.pass('review', 2);
+    await h.pass('ship');
+  });
+
   it('keeps a legacy failed round\'s report for the next check when its log has no handoff', async () => {
     const h = setup(reviewed(3, {
       status: 'failed',

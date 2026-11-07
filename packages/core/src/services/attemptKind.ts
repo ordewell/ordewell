@@ -194,12 +194,15 @@ export function attemptPrompt(kind: AttemptKind, src: AttemptPromptSources): str
   // after betweenRounds held, and cleared the previous verdict and report.
   const between = betweenRounds(task);
   const round = loopRoundOf(task) + (between ? 1 : 0);
-  const loop = task.type === 'ai' && task.loop && round > 1 && takesSkills(kind)
-    ? {
-      round,
-      previousHandoff: src.previousHandoff(task.id),
-      previousReport: between ? task.outputSummary?.report : src.previousRound?.round === round - 1 ? src.previousRound.report : undefined,
-    }
+  // Round 1 is given its number too: the check is told on every round that its status is the verdict (ADR-0045 L2).
+  const loop = task.type === 'ai' && task.loop && takesSkills(kind)
+    ? round > 1
+      ? {
+        round,
+        previousHandoff: src.previousHandoff(task.id),
+        previousReport: between ? task.outputSummary?.report : src.previousRound?.round === round - 1 ? src.previousRound.report : undefined,
+      }
+      : { round }
     : undefined;
   switch (kind.kind) {
     case 'continuation': {
@@ -207,8 +210,9 @@ export function attemptPrompt(kind: AttemptKind, src: AttemptPromptSources): str
       return composeContinuationPrompt(task, `${kind.message}\n\n${where}`, { ops: kind.work === 'ops' });
     }
     case 'repair':
-      // A merge to resolve is not the task's own work, so its skills do not apply.
-      return composeAugmentedPrompt({ ...task, prompt: src.repairPrompt(task) }, plan, { planMapEnabled });
+      // A merge to resolve is not the task's own work, so its skills do not
+      // apply, nor a check's verdict rule: the repair confirms no problem.
+      return composeAugmentedPrompt({ ...task, prompt: src.repairPrompt(task), loop: undefined }, plan, { planMapEnabled });
     case 'ops':
       // Its effects outlive a failed attempt and are never rolled back, so
       // the next one is told what the last one did.

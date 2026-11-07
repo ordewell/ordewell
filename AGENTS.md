@@ -41,7 +41,8 @@ full suite before pushing.
 
 `scripts/change-scope.mjs` holds what a change has to prove, for `test:changed`
 and for CI alike. Only a pull request is narrowed: a push to main and a release
-tag always run everything. A changed workspace owes its full suite and its
+tag always run everything, though a release of a commit main's push run already
+passed reuses that run (`reuse-main-proof`). A changed workspace owes its full suite and its
 dependents their quick ones, unless the change is to core's exported surface,
 which runs the dependents in full. A path outside the workspaces owes what reads
 it, as `ROOT_OWNERS` lists (`.eslintrc.js` lint, `vitest.setup.ts` the suites, a

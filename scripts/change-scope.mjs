@@ -346,11 +346,58 @@ export function uncommittedPaths(root = '.') {
 }
 
 /**
+ * The run of ci.yml that proved `sha` on main, read from what `findMainRuns`
+ * returns: gh's `run list --json` output for successful push runs on main at
+ * that commit. gh's filters are not taken on trust; each field is checked
+ * here, so a run of another commit, branch, event or outcome proves nothing.
+ */
+function mainProof(sha, findMainRuns) {
+  if (typeof sha !== 'string' || !/^[0-9a-f]{40}$/.test(sha)) return { why: `no full commit SHA to look up (${sha || 'none'})` };
+  let runs;
+  try {
+    runs = JSON.parse(findMainRuns(sha));
+  } catch (error) {
+    return { why: `could not look up main's runs: ${String(error?.message ?? error).split('\n')[0]}` };
+  }
+  if (!Array.isArray(runs)) return { why: 'the lookup of main\'s runs gave no list' };
+  const proof = runs.find((run) => run?.headSha === sha && run.headBranch === 'main' && run.event === 'push'
+    && run.conclusion === 'success' && Number.isSafeInteger(run.databaseId)
+    && typeof run.url === 'string' && run.url.startsWith('https://'));
+  return proof ? { url: proof.url } : { why: `no successful push run of ci.yml on main is at ${sha}` };
+}
+
+/**
+ * A release whose commit main's own push run already proved in full: nothing
+ * left to prove, so every check is off, and `proof` names that run.
+ */
+function reusedScope(sha, url) {
+  return {
+    mode: 'reused',
+    reason: `main's push run ${url} already proved ${sha}`,
+    workspaces: [],
+    suites: {},
+    windowsSuites: {},
+    checks: checksFor(() => false),
+    proof: { url, sha },
+  };
+}
+
+/**
  * Only a pull request may narrow. A push to main, a release and whatever event
  * comes next run everything: they are the last chance to catch what a stale
  * pull request's selection could not see.
+ *
+ * The one exception is a release (`reuseMainProof`, ci.yml's workflow_call
+ * input) of a commit main's push run proved: that run was the full run, of
+ * this commit and this ci.yml. Anything short of finding it, the lookup's own
+ * failure included, falls through to the full run.
  */
-export function scopeForEvent(event, root, workspaces) {
+export function scopeForEvent(event, root, workspaces, { reuseMainProof = false, sha, findMainRuns } = {}) {
+  if (reuseMainProof === true) {
+    const proof = mainProof(sha, findMainRuns);
+    if (proof.url) return reusedScope(sha, proof.url);
+    if (event !== 'pull_request') return fullScope(`${event || 'an unnamed event'} runs everything: ${proof.why}`, workspaces);
+  }
   if (event !== 'pull_request') return fullScope(`${event || 'an unnamed event'} runs everything`, workspaces);
   try {
     return selectScope(changedInPullRequest(root), workspaces);
@@ -443,13 +490,27 @@ export function parseScope(text) {
  * than excuses: a scope job that failed leaves the rest running everything, and
  * still fails here, because whatever broke it is itself unproven.
  */
-export function gateFailures(event, needs) {
+export function gateFailures(event, needs, { reuseMainProof = false } = {}) {
   const failures = [];
   const result = (job) => needs[job]?.result ?? 'missing';
   const scope = parseScope(needs.scope?.outputs?.scope);
 
   if (result('scope') !== 'success') failures.push(`scope: ${result('scope')}`);
   if (!scope) failures.push('scope: gave no readable scope');
+
+  // A release of a commit main's push run proved owes nothing more, but only
+  // a caller that asked to reuse that proof may be given a scope that says so.
+  if (scope?.mode === 'reused') {
+    if (reuseMainProof !== true) failures.push(`${event} reused a proof it did not ask to reuse`);
+    if (typeof scope.proof?.url !== 'string') failures.push('scope: reused a proof it does not name');
+    if (CHECKS.some((check) => scope.checks[check] !== false)) failures.push('scope: reused a proof yet owes a check');
+    for (const job of [...Object.keys(STEPS_BY_JOB), 'real-engine', ...Object.keys(WINDOWS_JOBS)]) {
+      const outcome = result(job);
+      if (outcome !== 'success' && outcome !== 'skipped') failures.push(`${job}: ${outcome}`);
+    }
+    return failures;
+  }
+
   if (event !== 'pull_request' && scope?.mode !== 'full') failures.push(`${event} ran a narrowed scope`);
 
   // Only a pull request may leave a job out, and only when its scope owes it nothing.

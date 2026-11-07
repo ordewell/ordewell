@@ -4,7 +4,7 @@ import type { PreservedWork, PreviousWork } from '../interfaces/IWorktreeIsolati
 import { SELF_REPO } from './isolationRecord';
 import { renderTaskSkills } from './taskSkills';
 import { assignedRunnerOf } from './AssignmentScope';
-import { betweenRounds, loopRoundOf } from '../models/Loop';
+import { betweenRounds, loopRoundOf, type TaskLoop } from '../models/Loop';
 import { REPORT_MAX_CHARS, artifactLines, boundedHandoffLines, findingLines, namedHandoff, openingLines, wordsFrom, type HandoffDigest, type StoredHandoff } from '../models/Handoff';
 
 const MAX_TAIL_CHARS = 500;
@@ -318,6 +318,32 @@ function renderCarriedOver(from: string, work: PreviousWork | undefined): string
   return ['## Work carried over', '', body].join('\n');
 }
 
+/**
+ * What a loop's AI check is told on every round (ADR-0045 L2): its
+ * `task_complete` status is the verdict, so a review that finds problems and
+ * reports `done` would pass the round and skip the fix. The runner's generic
+ * contract says `done` once the work is complete; this says what complete
+ * means for a check, whatever its own prompt says or leaves out.
+ */
+function renderLoopVerdict(loop: TaskLoop, round: number | undefined): string {
+  const ahead = 'A `failed` round with rounds left runs the fix, then this check again; a `failed` last round ends the loop, and the tasks after it wait for the user.';
+  const rounds = round === undefined
+    ? `It runs at most ${loop.maxRounds} rounds. ${ahead}`
+    : round >= loop.maxRounds
+      ? `This is round ${round} of ${loop.maxRounds}, the last: a \`failed\` now ends the loop, and the tasks after it wait for the user.`
+      : `This is round ${round} of ${loop.maxRounds}. ${ahead}`;
+  return [
+    '## You are this loop\'s check',
+    '',
+    'Ordewell reads your `task_complete` status as this check\'s verdict. If you confirm any problem, call `task_complete` with status `failed` and put each confirmed problem in `findings`: that starts the fix. Call it with status `done` only when you confirm none; finishing the check is not a pass. Use `blocked` only when you could not do the check: it starts no fix.',
+    '',
+    rounds,
+  ].join('\n');
+}
+
+/** A continued check's session holds the block already; a long one may have compacted it away. */
+const LOOP_VERDICT_REMINDER = 'You are this loop\'s check: your `task_complete` status is its verdict, `failed` when you confirm any problem and `done` only when you confirm none.';
+
 const CHECKPOINT_INSTRUCTION = [
   '## Human-in-the-loop checkpoints',
   '',
@@ -336,7 +362,8 @@ function isHitlTask(task: Task): boolean {
 
 /**
  * A task's first message. How it ends — the `task_complete` call and its
- * report — is in the runner's instructions, not here (`TASK_COMPLETION_CONTRACT`).
+ * report — is in the runner's instructions, not here (`TASK_COMPLETION_CONTRACT`),
+ * save what a loop's check's status means, which only a check is told.
  */
 export function composeAugmentedPrompt(task: Task, allTasks: readonly Task[], opts?: ComposeOptions): string {
   const basePrompt = task.prompt ?? '';
@@ -364,6 +391,10 @@ export function composeAugmentedPrompt(task: Task, allTasks: readonly Task[], op
 
   if (isHitlTask(task)) blocks.push(CHECKPOINT_INSTRUCTION);
 
+  // Last, against the check's own words: past a long map and its dependencies'
+  // handoffs, the block a runner reads just before its task is the one it acts on.
+  if (task.type === 'ai' && task.loop) blocks.push(renderLoopVerdict(task.loop, opts?.loop?.round));
+
   if (blocks.length === 0) return basePrompt;
   return `${blocks.join('\n\n')}\n\n${basePrompt}`;
 }
@@ -380,6 +411,9 @@ export function composeContinuationPrompt(task: Task, message: string, opts: { o
       ? '(Ordewell) You are continuing this task in the same session, in the same checkout. What your earlier attempt did outside the repository was not undone: check what already exists before acting again.'
       : '(Ordewell) You are continuing this task in the same session. Check the working tree before relying on the files remembered from your earlier attempt.',
   ];
+  if (task.type === 'ai' && task.loop) {
+    reminder.push(LOOP_VERDICT_REMINDER);
+  }
   if (isHitlTask(task)) {
     reminder.push('If you reach a decision that needs human judgment, call the `checkpoint` tool: its result is `continue` or `rejected: <why>`.');
   }

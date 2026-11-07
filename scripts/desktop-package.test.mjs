@@ -124,9 +124,11 @@ describe('releasePlan on Windows', () => {
   });
 
   it('refuses an Azure route missing a secret or the publisher name, and half a certificate', () => {
-    const { AZURE_CLIENT_SECRET: _secret, ...noSecret } = AZURE;
+    const noSecret = { ...AZURE };
+    delete noSecret.AZURE_CLIENT_SECRET;
     assert.throws(() => releasePlan(noSecret, 'win32'), /AZURE_CLIENT_SECRET/);
-    const { WIN_PUBLISHER_NAME: _name, ...noName } = AZURE;
+    const noName = { ...AZURE };
+    delete noName.WIN_PUBLISHER_NAME;
     assert.throws(() => releasePlan(noName, 'win32'), /WIN_PUBLISHER_NAME/);
     assert.throws(() => releasePlan({ AZURE_SIGNING_ENDPOINT: 'e' }, 'win32'), /AZURE_SIGNING_ACCOUNT/);
     assert.throws(() => releasePlan({ WIN_CSC_LINK: 'x' }, 'win32'), /WIN_CSC_KEY_PASSWORD/);
@@ -142,7 +144,8 @@ describe('releasePlan on Windows', () => {
 
   it('refuses eSigner without the publisher name, since electron-updater would then check no update, and half its secrets', () => {
     assert.throws(() => releasePlan(ESIGNER, 'win32'), /SSL\.com eSigner is missing WIN_PUBLISHER_NAME/);
-    const { ES_TOTP_SECRET: _totp, ...noTotp } = ESIGNER_ROUTE;
+    const noTotp = { ...ESIGNER_ROUTE };
+    delete noTotp.ES_TOTP_SECRET;
     assert.throws(() => releasePlan(noTotp, 'win32'), /ES_TOTP_SECRET is missing/);
     assert.throws(() => releasePlan({ ES_USERNAME: 'u' }, 'win32'), /ES_PASSWORD, ES_CREDENTIAL_ID, ES_TOTP_SECRET are missing/);
   });

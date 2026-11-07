@@ -4,40 +4,46 @@
 # edit the tap's copy by hand: the next release replaces it. The desktop app is
 # the cask, ordewell-desktop.rb.tmpl.
 #
+# There is no `version` line: Homebrew scans the version from the archive URLs
+# (ordewell-<x.y.z>-<os>-<arch>.tar.gz), and brew audit flags an explicit one as
+# redundant. For the same reason the URLs spell the version out instead of
+# interpolating `version`, which a formula without that line does not have yet
+# while its class body is read. `livecheck` comes before the platform blocks,
+# which is the order brew audit asks for.
+#
 # Each platform downloads the release's versioned archive, which holds one
 # executable, `ordewell`: the same file the one-line installer and the
 # Release's fixed-name copy carry.
 class Ordewell < Formula
   desc "Turn one goal into an ordered plan of coding-agent tasks"
   homepage "https://ordewell.ai/"
-  version "{{version}}"
   license "Apache-2.0"
+
+  livecheck do
+    url :stable
+    strategy :github_latest
+  end
 
   on_macos do
     on_arm do
-      url "https://github.com/ordewell/ordewell/releases/download/v#{version}/ordewell-#{version}-darwin-arm64.tar.gz"
+      url "https://github.com/ordewell/ordewell/releases/download/v{{version}}/ordewell-{{version}}-darwin-arm64.tar.gz"
       sha256 "{{sha256_darwin_arm64}}"
     end
     on_intel do
-      url "https://github.com/ordewell/ordewell/releases/download/v#{version}/ordewell-#{version}-darwin-x64.tar.gz"
+      url "https://github.com/ordewell/ordewell/releases/download/v{{version}}/ordewell-{{version}}-darwin-x64.tar.gz"
       sha256 "{{sha256_darwin_x64}}"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/ordewell/ordewell/releases/download/v#{version}/ordewell-#{version}-linux-arm64.tar.gz"
+      url "https://github.com/ordewell/ordewell/releases/download/v{{version}}/ordewell-{{version}}-linux-arm64.tar.gz"
       sha256 "{{sha256_linux_arm64}}"
     end
     on_intel do
-      url "https://github.com/ordewell/ordewell/releases/download/v#{version}/ordewell-#{version}-linux-x64.tar.gz"
+      url "https://github.com/ordewell/ordewell/releases/download/v{{version}}/ordewell-{{version}}-linux-x64.tar.gz"
       sha256 "{{sha256_linux_x64}}"
     end
-  end
-
-  livecheck do
-    url :stable
-    strategy :github_latest
   end
 
   def install

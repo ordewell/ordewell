@@ -8,8 +8,29 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-11-07
+
+### Added
+
+- **Switch project from any desktop window.** The File menu has Open Folder…,
+  Open Recent and New Window on every platform, and the title bar's project name
+  is a switcher with the recent folders. A window with nothing live switches in
+  place, an open folder is focused, and a window with live work is never
+  switched away: the app offers a new window instead.
+
+### Changed
+
+- **The installer's `--help` no longer lists `--desktop` while no desktop app
+  is released.** Using it anyway installs the CLI and says plainly that the
+  desktop app isn't released yet, then exits with an error, instead of leaving
+  you to wonder why nothing more was installed.
+
 ### Fixed
 
+- **A loop's AI check is now told by Ordewell itself that its status is the
+  verdict:** `failed` when it confirms a problem, `done` only when it confirms
+  none. Before, a review that found problems but reported `done` passed the
+  loop and skipped the fix, unless its own prompt said otherwise.
 - **The remove buttons on tasks and subtasks have accessible names.** Both
   now read "Remove task <title>" / "Remove subtask <title>" to a screen
   reader, in the VS Code extension and the desktop app (#130).
@@ -27,13 +48,9 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   and the other top-level options typed with a long dash (some keyboards and
   apps turn `--` into one) now say which option was meant, instead of only
   Unknown command.
-### Added
-
-- **Switch project from any desktop window.** The File menu has Open Folder…,
-  Open Recent and New Window on every platform, and the title bar's project name
-  is a switcher with the recent folders. A window with nothing live switches in
-  place, an open folder is focused, and a window with live work is never
-  switched away: the app offers a new window instead.
+- **The Homebrew formula passes `brew audit` without style warnings.** It no
+  longer repeats the version on a line of its own, since Homebrew reads it from
+  the download URLs, and its `livecheck` comes before the per-platform blocks.
 
 ## [0.13.0] - 2026-11-06
 
@@ -4259,7 +4276,8 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.13.1...HEAD
+[0.13.1]: https://github.com/ordewell/ordewell/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/ordewell/ordewell/compare/v0.12.6...v0.13.0
 [0.12.6]: https://github.com/ordewell/ordewell/compare/v0.12.5...v0.12.6
 [0.12.5]: https://github.com/ordewell/ordewell/compare/v0.12.4...v0.12.5

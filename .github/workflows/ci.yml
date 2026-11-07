@@ -14,7 +14,9 @@
 # request runs what its change can reach: a changed workspace's full suite, its
 # dependents' quick ones (full when core's exports change), and for a path
 # outside the workspaces only the jobs that read it. A push to main, a release
-# (through workflow_call), the nightly schedule and a manual run run everything.
+# (through workflow_call), the nightly schedule and a manual run run everything,
+# save a release of a commit main's own push run already proved: that run is
+# reused, and nothing runs again (`reuse-main-proof` below).
 # CONTRIBUTING.md's "The checks" describes it for contributors, and
 # `npm run ci` runs the same steps locally, in this file's order.
 name: CI
@@ -31,7 +33,17 @@ on:
   workflow_dispatch:
   # release.yml waits for a full run of this workflow before it publishes. A
   # called workflow sees the caller's event, a push, which never narrows.
+  #
+  # With reuse-main-proof, the scope job looks for a successful push run of
+  # this workflow on main at exactly this commit; finding one, it selects
+  # nothing and names that run. Anything else, a failed lookup included, is
+  # the full run.
   workflow_call:
+    inputs:
+      reuse-main-proof:
+        type: boolean
+        required: false
+        default: false
 
 # A new push to a pull request makes its in-flight run obsolete; don't pay for
 # it. Every other run is the proof of a commit on main or a tag, so it has a
@@ -52,6 +64,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       scope: ${{ steps.select.outputs.scope }}
+      proof: ${{ steps.select.outputs.proof }}
       suites: ${{ steps.select.outputs.suites }}
       typecheck: ${{ steps.select.outputs.typecheck }}
       lint: ${{ steps.select.outputs.lint }}
@@ -79,6 +92,10 @@ jobs:
         id: select
         env:
           EVENT: ${{ github.event_name }}
+          # Empty on every event but a release's call. The lookup reads Actions,
+          # which release.yml grants for this call alone.
+          REUSE_MAIN_PROOF: ${{ inputs.reuse-main-proof }}
+          GH_TOKEN: ${{ github.token }}
         run: node scripts/ci-scope.mjs select
 
   # What only needs proving once, on Linux: the bubblewrap sandbox, the verify
@@ -93,9 +110,12 @@ jobs:
   # node_modules has recorded only the host's binaries, so regenerate it with
   # `npm install --package-lock-only` in a copy without node_modules and check
   # that the diff removes nothing.
+  #
+  # It is skipped only when the scope names the run of main that proved this
+  # commit; a lost output is empty, and runs it.
   build-and-test:
     needs: scope
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.scope.outputs.proof == '' }}
     runs-on: ubuntu-latest
     outputs:
       confirmed: ${{ steps.confirm.outputs.confirmed }}
@@ -750,4 +770,6 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           NEEDS: ${{ toJSON(needs) }}
+          # Only a caller that asked may pass on a reused proof.
+          REUSE_MAIN_PROOF: ${{ inputs.reuse-main-proof }}
         run: node scripts/ci-scope.mjs gate

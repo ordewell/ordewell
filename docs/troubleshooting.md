@@ -215,8 +215,9 @@ Another copy of `ordewell` is on your `PATH`, often an earlier `npm install -g
 ordewell`. bash and zsh remember where they found a command the first time it
 ran in a terminal, and keep running that copy until told to look again, even
 when the new one comes first on `PATH`. If the other copy comes first, every
-terminal runs it. The installer names every other `ordewell` it finds on `PATH`
-and how to remove each one.
+terminal runs it, new ones too. The installer ends its output with a notice,
+in red on a terminal, that names every other `ordewell` it finds on `PATH` and
+how to remove each one.
 
 ### Check it
 
@@ -226,13 +227,7 @@ which -a ordewell     # every ordewell on PATH, in the order a new terminal trie
 
 ### Fix
 
-Make the terminal look again, or open a new one:
-
-```bash
-hash -r
-```
-
-Then remove the copy you no longer want:
+Remove the copy you no longer want, so that new terminals stop finding it:
 
 ```bash
 npm uninstall -g ordewell     # a copy under node_modules, or an npm folder
@@ -241,6 +236,14 @@ brew uninstall ordewell       # a copy under Homebrew's Cellar
 
 Delete any other copy `which -a` lists, or put the folder of the one you want
 (`~/.local/bin` for `install.sh`) first on your `PATH`.
+
+Removing it does not fix a terminal that already ran it: that terminal still
+remembers the old path, and fails with "No such file or directory". Make it look
+again, or open a new one:
+
+```bash
+hash -r
+```
 
 ## Merge all refused: not on the base branch
 

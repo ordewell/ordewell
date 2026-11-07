@@ -680,7 +680,7 @@ describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', ()
       const printed = space.run('homebrew', { results, secrets: { HOMEBREW_TAP_TOKEN: 'token' } });
       const tap = space.pushed;
       assert.ok(existsSync(join(tap, 'Formula', 'ordewell.rb')));
-      assert.match(readFileSync(join(tap, 'Formula', 'ordewell.rb'), 'utf8'), new RegExp(`version "${VERSION.replace(/\./g, '\\.')}"`));
+      assert.match(readFileSync(join(tap, 'Formula', 'ordewell.rb'), 'utf8'), new RegExp(`/ordewell-${VERSION.replace(/\./g, '\\.')}-linux-x64\\.tar\\.gz"`));
       assert.ok(!existsSync(join(tap, 'Casks', 'ordewell-desktop.rb')), 'a cask was published for a release without the desktop app');
       assert.ok(existsSync(join(tap, 'Casks', 'ordewell.rb')), 'the old cask went before its successor exists');
       assert.ok(!existsSync(join(tap, 'cask_renames.json')));

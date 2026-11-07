@@ -287,6 +287,62 @@ describe('a check sees what changed since its last round (ADR-0047)', () => {
   });
 });
 
+describe('a loop\'s AI check is told its status is the verdict (ADR-0045 L2)', () => {
+  const VERDICT_RULE = 'Ordewell reads your `task_complete` status as this check\'s verdict. If you confirm any problem, call `task_complete` with status `failed` and put each confirmed problem in `findings`: that starts the fix. Call it with status `done` only when you confirm none; finishing the check is not a pass. Use `blocked` only when you could not do the check: it starts no fix.';
+
+  it('gets the block on round 1, right before its own prompt', () => {
+    const build = createTask({ id: 'build', order: 1, title: 'Build', handoff: { summary: 'Built it.', findings: [], findingCount: 0 } });
+    const check = createTask({ id: 'check', order: 2, title: 'Review', prompt: 'Review the parser.', dependencies: ['build'], loop: { body: ['fix'], maxRounds: 3 } });
+    const fix = createTask({ id: 'fix', order: 3, title: 'Fix', dependencies: ['check'] });
+
+    const out = composeAugmentedPrompt(check, [build, check, fix], { loop: { round: 1 } });
+
+    expect(out.endsWith([
+      '## You are this loop\'s check',
+      '',
+      VERDICT_RULE,
+      '',
+      'This is round 1 of 3. A `failed` round with rounds left runs the fix, then this check again; a `failed` last round ends the loop, and the tasks after it wait for the user.',
+      '',
+      'Review the parser.',
+    ].join('\n'))).toBe(true);
+    expect(out.indexOf('## Prior task outputs')).toBeLessThan(out.indexOf('## You are this loop\'s check'));
+  });
+
+  it('gets it on round 2 too, alongside what changed since its last round', () => {
+    const check = createTask({ id: 'check', order: 1, title: 'Review', prompt: 'Review the parser.', loop: { body: ['fix'], maxRounds: 3 } });
+    const fix = createTask({ id: 'fix', order: 2, title: 'Fix', dependencies: ['check'] });
+
+    const out = composeAugmentedPrompt(check, [check, fix], { planMapEnabled: false, loop: { round: 2 } });
+
+    expect(out).toContain('## Since your last round');
+    expect(out).toContain(`## You are this loop's check\n\n${VERDICT_RULE}\n\nThis is round 2 of 3. A \`failed\` round`);
+    expect(out.indexOf('## Since your last round')).toBeLessThan(out.indexOf('## You are this loop\'s check'));
+  });
+
+  it('says a failed last round ends the loop, and without a known round how many it runs', () => {
+    const check = createTask({ id: 'check', prompt: 'Review.', loop: { body: ['fix'], maxRounds: 2 } });
+
+    expect(composeAugmentedPrompt(check, [check], { loop: { round: 2 } })).toContain(
+      'This is round 2 of 2, the last: a `failed` now ends the loop, and the tasks after it wait for the user.\n\nReview.',
+    );
+    expect(composeAugmentedPrompt(check, [check])).toContain(
+      'It runs at most 2 rounds. A `failed` round with rounds left runs the fix, then this check again; a `failed` last round ends the loop, and the tasks after it wait for the user.\n\nReview.',
+    );
+  });
+
+  it('is not given to the loop\'s body, to an ordinary AI task, or to a script check', () => {
+    const check = createTask({ id: 'check', order: 1, prompt: 'Review.', status: 'failed', loop: { body: ['fix'], maxRounds: 3 } });
+    const fix = createTask({ id: 'fix', order: 2, prompt: 'Fix it.', dependencies: ['check'] });
+    const plain = createTask({ id: 'plain', order: 3, prompt: 'Build it.' });
+    const script = { ...check, type: 'script' as const, prompt: undefined };
+
+    expect(composeAugmentedPrompt(fix, [check, fix, plain])).not.toContain('## You are this loop\'s check');
+    expect(composeAugmentedPrompt(plain, [check, fix, plain])).not.toContain('## You are this loop\'s check');
+    expect(composeAugmentedPrompt(script, [script, fix, plain], { loop: { round: 2 } })).not.toContain('## You are this loop\'s check');
+  });
+});
+
 describe('augmentPromptWithPriorOutputs', () => {
   it('returns the original prompt when the task has no dependencies', () => {
     const t = createTask({ id: 'a', prompt: 'do A', dependencies: [] });

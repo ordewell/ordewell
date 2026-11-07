@@ -11,9 +11,19 @@ on:
 jobs:
   # Coverage floors, the integration test, the artifact checks and the real
   # engine are what main's CI proves, and a tag is not always a commit main
-  # proved. Nothing publishes until the tagged commit has passed all of them.
+  # proved. Nothing publishes until the tagged commit has passed all of them:
+  # here, or, when main's push run already proved this exact commit, there.
+  # ci.yml then skips every job but its scope and `Required checks`, both of
+  # which still pass, so this job's result is still success.
   ci:
     uses: ./.github/workflows/ci.yml
+    # The lookup of main's runs reads Actions; checkout reads contents. A
+    # called workflow's token cannot exceed this grant, and ci.yml writes nothing.
+    permissions:
+      contents: read
+      actions: read
+    with:
+      reuse-main-proof: true
 
   npm-publish:
     needs: ci
@@ -35,11 +45,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build & test
-        run: |
-          npm run build
-          npm run typecheck
-          npm test
+      # No tests here: the ci job of this run proved this commit, by running
+      # them or by finding main's run that did. Only the publish needs dist/.
+      - name: Build
+        run: npm run build
 
       # npm reads the token from .npmrc; setup-node writes it from NODE_AUTH_TOKEN.
       # A package already at this version is skipped, so a release stopped
