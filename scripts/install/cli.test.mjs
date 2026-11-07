@@ -509,6 +509,25 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
         assert.match(result.stdout, new RegExp(`put ${target} before ${npmBin} on your PATH`));
       });
 
+      // What a real user saw: npm's 0.12.6 later on a PATH that lists both folders
+      // twice, and a terminal that had hashed the npm copy kept running it.
+      it(`names an ordewell later on PATH, how to remove it and hash -r, under ${shell}`, (t) => {
+        if (!has(shell)) return t.skip(`${shell} is not installed`);
+        const home = scratch('home');
+        const target = join(home, 'bin');
+        mkdirSync(target, { recursive: true });
+        const npmBin = npmInstall();
+        const PATH = [target, target, linux(), toolbox, npmBin, npmBin].join(delimiter);
+        const result = spawnSync(whichSh(shell), [SH], { env: { PATH, HOME: home, TMPDIR: tmpdir(), ORDEWELL_CLI_FROM: release(), ORDEWELL_INSTALL_DIR: target }, encoding: 'utf8' });
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(spawnSync(whichSh(shell), ['-c', 'ordewell --version'], { env: { PATH }, encoding: 'utf8' }).stdout.trim(), `ordewell ${VERSION}`);
+        assert.equal(result.stdout.split('\n').filter((line) => line.includes(`${npmBin}/ordewell`)).length, 1, result.stdout);
+        assert.match(result.stdout, new RegExp(`Another ordewell is also on your PATH, after this one: ${npmBin}/ordewell\\n`));
+        assert.match(result.stdout, /npm uninstall -g ordewell/);
+        assert.match(result.stdout, /hash -r/);
+        assert.doesNotMatch(result.stdout, /comes first/);
+      });
+
       // `command -v` prints a relative PATH entry's match as `old/ordewell`,
       // and an empty entry's (the current folder) as a bare `ordewell` under dash.
       for (const [label, entry] of [['a relative entry', 'old'], ['an empty entry', ''], ['a dot entry', '.']]) {
@@ -556,6 +575,51 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
         assert.match(result.stdout, new RegExp(`Another ordewell comes first on your PATH: ${bin}/ordewell`));
         assert.match(result.stdout, hint);
       }
+    });
+
+    it('names a Homebrew and any other ordewell later on PATH, each with the way to remove it', () => {
+      const brew = join(scratch('brew'), 'homebrew');
+      write(join(brew, 'Cellar/ordewell/0.12.6/bin/ordewell'), '#!/bin/sh\necho "ordewell 0.12.6"\n', 0o755);
+      mkdirSync(join(brew, 'bin'));
+      symlinkSync('../Cellar/ordewell/0.12.6/bin/ordewell', join(brew, 'bin/ordewell'));
+      const other = commands({ ordewell: 'echo "ordewell 0.11.0"' });
+      const home = scratch('home');
+      const target = join(home, 'bin');
+      mkdirSync(target, { recursive: true });
+      const result = install([], { home, target, env: { PATH: [target, linux(), toolbox, join(brew, 'bin'), other].join(delimiter) } });
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(
+        result.stdout,
+        new RegExp(
+          `Another ordewell is also on your PATH, after this one: ${brew}/bin/ordewell\\n  To remove it: brew uninstall ordewell .*# it was installed with Homebrew\\n`
+            + `Another ordewell is also on your PATH, after this one: ${other}/ordewell\\n  To remove it: delete ${other}/ordewell\\n`,
+        ),
+      );
+      assert.equal(result.stdout.match(/hash -r/g)?.length, 1);
+      assert.doesNotMatch(result.stdout, /comes first/);
+    });
+
+    it('names an ordewell before the install folder and another after it, and says hash -r once', () => {
+      const before = commands({ ordewell: 'echo "ordewell 0.11.0"' });
+      const npmBin = npmInstall();
+      const home = scratch('home');
+      const target = join(home, 'bin');
+      mkdirSync(target, { recursive: true });
+      const result = install([], { home, target, env: { PATH: [before, linux(), toolbox, target, npmBin].join(delimiter) } });
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, new RegExp(`Another ordewell comes first on your PATH: ${before}/ordewell\\n`));
+      assert.match(result.stdout, new RegExp(`Another ordewell is also on your PATH: ${npmBin}/ordewell\\n  To remove it: npm uninstall -g ordewell`));
+      assert.equal(result.stdout.split('\n').filter((line) => line.includes(`${before}/ordewell`)).length, 2, result.stdout);
+      assert.equal(result.stdout.match(/hash -r/g)?.length, 1, result.stdout);
+    });
+
+    it('says nothing about another ordewell, or hash -r, when there is none', () => {
+      const home = scratch('home');
+      const target = join(home, 'bin');
+      mkdirSync(target, { recursive: true });
+      const result = install([], { home, target, env: { PATH: [target, linux(), toolbox, target].join(delimiter) } });
+      assert.equal(result.status, 0, result.stderr);
+      assert.doesNotMatch(result.stdout, /Another ordewell|hash -r|To remove it|New terminals/);
     });
 
     it('names an earlier ordewell beside the PATH hint, when the install folder is not on PATH', () => {
