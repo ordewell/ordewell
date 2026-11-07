@@ -286,6 +286,76 @@ describe('what a pull request owes, diff by diff', () => {
   }
 });
 
+describe('a release that reuses main\'s proof', () => {
+  // What `gh run list --json databaseId,url,headSha,event,headBranch,conclusion` prints.
+  const SHA = '1374ff43a1b2c3d4e5f60718293a4b5c6d7e8f90';
+  const URL = 'https://github.com/ordewell/ordewell/actions/runs/42286454001';
+  const mainRun = { databaseId: 42286454001, url: URL, headSha: SHA, event: 'push', headBranch: 'main', conclusion: 'success' };
+  const lookingUp = (output) => {
+    const asked = [];
+    const findMainRuns = (sha) => {
+      asked.push(sha);
+      if (output instanceof Error) throw output;
+      return output;
+    };
+    return { asked, findMainRuns };
+  };
+  const release = (output, over = {}) => {
+    const lookup = lookingUp(output);
+    return { ...lookup, scope: scopeForEvent('push', '.', workspaces, { reuseMainProof: true, sha: SHA, findMainRuns: lookup.findMainRuns, ...over }) };
+  };
+
+  it('selects nothing when main\'s push run proved this exact commit, and names that run', () => {
+    const { scope, asked } = release(JSON.stringify([mainRun]));
+    assert.deepEqual(asked, [SHA]);
+    assert.equal(scope.mode, 'reused');
+    assert.deepEqual(onChecks(scope), []);
+    assert.deepEqual(scope.workspaces, []);
+    assert.deepEqual(coverageLegs(scope), []);
+    assert.deepEqual(windowsRuns(scope), []);
+    assert.deepEqual(scope.proof, { url: URL, sha: SHA });
+    assert.ok(scope.reason.includes(URL), scope.reason);
+  });
+
+  for (const [title, output] of [
+    ['no run at that commit', '[]'],
+    ['the lookup throwing', new Error('gh: HTTP 403: Resource not accessible by integration')],
+    ['a run for a different SHA', JSON.stringify([{ ...mainRun, headSha: '0'.repeat(40) }])],
+    ['a run on another branch', JSON.stringify([{ ...mainRun, headBranch: 'release-0.13' }])],
+    ['a pull_request run', JSON.stringify([{ ...mainRun, event: 'pull_request' }])],
+    ['a workflow_dispatch run', JSON.stringify([{ ...mainRun, event: 'workflow_dispatch' }])],
+    ['a failed run', JSON.stringify([{ ...mainRun, conclusion: 'failure' }])],
+    ['a cancelled run', JSON.stringify([{ ...mainRun, conclusion: 'cancelled' }])],
+    ['a run with no URL', JSON.stringify([{ ...mainRun, url: undefined }])],
+    ['output that is not JSON', 'gh: To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN environment variable.'],
+    ['JSON that is no list', '{"databaseId":1}'],
+    ['a list of nulls', '[null]'],
+  ]) {
+    it(`runs everything for ${title}`, () => {
+      const { scope } = release(output);
+      assert.equal(scope.mode, 'full');
+      assert.deepEqual(offChecks(scope), []);
+      assert.deepEqual(scope.proof, undefined);
+    });
+  }
+
+  it('runs everything without asking when it has no full SHA to ask about', () => {
+    for (const sha of [undefined, '', 'main', SHA.slice(0, 7)]) {
+      const { scope, asked } = release(JSON.stringify([mainRun]), { sha });
+      assert.equal(scope.mode, 'full', String(sha));
+      assert.deepEqual(asked, []);
+    }
+  });
+
+  it('keeps today\'s scope when the input is off, and never looks a run up', () => {
+    for (const reuseMainProof of [false, undefined, 'true']) {
+      const { scope, asked } = release(JSON.stringify([mainRun]), { reuseMainProof });
+      assert.deepEqual(scope, scopeForEvent('push', '.', workspaces), String(reuseMainProof));
+      assert.deepEqual(asked, []);
+    }
+  });
+});
+
 describe('a change to docs alone', () => {
   it('needs no workspace, and still owes the checks every change owes', () => {
     const scope = selected('docs/adr/README.md', 'docs/desktop/README.md', 'CHANGELOG.md', 'AGENTS.md');
@@ -691,6 +761,37 @@ describe('the required status', () => {
     assert.deepEqual(gateFailures('pull_request', { scope: scoped(scope), ...docsJobs, 'real-engine': skipped, ...onWindows(passed) }), []);
   });
 
+  describe('for a release that reused main\'s proof', () => {
+    const URL = 'https://github.com/ordewell/ordewell/actions/runs/42286454001';
+    const SHA = '1374ff43a1b2c3d4e5f60718293a4b5c6d7e8f90';
+    const reused = scopeForEvent('push', '.', workspaces, {
+      reuseMainProof: true,
+      sha: SHA,
+      findMainRuns: () => JSON.stringify([{ databaseId: 42286454001, url: URL, headSha: SHA, event: 'push', headBranch: 'main', conclusion: 'success' }]),
+    });
+    const allSkipped = { ...Object.fromEntries(Object.keys(STEPS_BY_JOB).map((job) => [job, skipped])), 'real-engine': skipped, ...onWindows(skipped) };
+    const on = { reuseMainProof: true };
+
+    it('passes when every other job was skipped', () => {
+      assert.deepEqual(gateFailures('push', { scope: scoped(reused), ...allSkipped }, on), []);
+    });
+
+    for (const [title, needs, options] of [
+      ['the input was off: a plain push cannot claim a proof', { scope: scoped(reused), ...allSkipped }, {}],
+      ['the scope names no run', { scope: scoped({ ...reused, proof: undefined }), ...allSkipped }, on],
+      ['the scope turned a check on', { scope: scoped({ ...reused, checks: { ...reused.checks, lint: true } }), ...allSkipped }, on],
+      ['the scope job failed', { scope: { ...scoped(reused), result: 'failure' }, ...allSkipped }, on],
+      ['a job that ran anyway failed', { scope: scoped(reused), ...allSkipped, lint: failed }, on],
+      ['a job is missing altogether', without({ scope: scoped(reused), ...allSkipped }, 'windows')],
+    ]) {
+      it(`fails when ${title}`, () => assert.notDeepEqual(gateFailures('push', needs, options ?? on), []));
+    }
+
+    it('still fails a full push that skipped a job when the input is on', () => {
+      assert.notDeepEqual(gateFailures('push', { scope: scoped(full), ...allSkipped }, on), []);
+    });
+  });
+
   for (const [title, event, needs] of [
     ['the scope job failed, though the rest ran', 'pull_request', { scope: { result: 'failure', outputs: {} }, ...linux(), 'real-engine': passed, ...onWindows(passed) }],
     ['the scope job gave nothing to read', 'pull_request', { scope: { result: 'success', outputs: {} }, ...linux(), 'real-engine': passed, ...onWindows(passed) }],
@@ -821,6 +922,33 @@ describe('ci-scope.mjs, as ci.yml runs it', () => {
       for (const check of CHECKS) assert.equal(outputs[check], 'true', `${EVENT} ${check}`);
       assert.equal(JSON.parse(outputs.scope).mode, 'full');
     }
+  });
+
+  it('runs everything for a release whose lookup cannot run, and names no proof', () => {
+    // No gh on PATH: the lookup fails, as it would without a token or a network.
+    const dir = scratch();
+    const GITHUB_OUTPUT = join(dir, 'output');
+    const GITHUB_STEP_SUMMARY = join(dir, 'summary');
+    writeFileSync(GITHUB_OUTPUT, '');
+    const env = { ...process.env, PATH: dir, Path: dir, GITHUB_OUTPUT, GITHUB_STEP_SUMMARY, EVENT: 'push', REUSE_MAIN_PROOF: 'true', GITHUB_SHA: '1374ff43a1b2c3d4e5f60718293a4b5c6d7e8f90', GITHUB_REPOSITORY: 'ordewell/ordewell' };
+    const { status, stdout, stderr } = spawnSync(process.execPath, [cli, 'select'], { encoding: 'utf8', env });
+    assert.equal(status, 0, stderr);
+    const outputs = Object.fromEntries(readFileSync(GITHUB_OUTPUT, 'utf8').split('\n').filter(Boolean).map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
+    assert.equal(JSON.parse(outputs.scope).mode, 'full');
+    for (const check of CHECKS) assert.equal(outputs[check], 'true', check);
+    assert.equal(outputs.proof, '');
+    assert.match(stdout, /could not look up main's runs/);
+  });
+
+  it('gates a reused release by the input the caller gave, which a plain push lacks', () => {
+    const SHA = '1374ff43a1b2c3d4e5f60718293a4b5c6d7e8f90';
+    const URL = 'https://github.com/ordewell/ordewell/actions/runs/42286454001';
+    const reused = scopeForEvent('push', '.', workspaces, { reuseMainProof: true, sha: SHA, findMainRuns: () => JSON.stringify([{ databaseId: 1, url: URL, headSha: SHA, event: 'push', headBranch: 'main', conclusion: 'success' }]) });
+    const skipped = { result: 'skipped', outputs: {} };
+    const needs = JSON.stringify({ scope: { result: 'success', outputs: { scope: JSON.stringify(reused) } }, ...Object.fromEntries([...Object.keys(STEPS_BY_JOB), 'real-engine', ...Object.keys(WINDOWS_JOBS)].map((job) => [job, skipped])) });
+    assert.equal(run('gate', { EVENT: 'push', NEEDS: needs, REUSE_MAIN_PROOF: 'true' }).status, 0);
+    assert.equal(run('gate', { EVENT: 'push', NEEDS: needs, REUSE_MAIN_PROOF: '' }).status, 1);
+    assert.equal(run('gate', { EVENT: 'push', NEEDS: needs, REUSE_MAIN_PROOF: 'false' }).status, 1);
   });
 
   it('names each coverage leg by its directory, which an artifact name can hold', () => {
@@ -1006,8 +1134,9 @@ describe('ci.yml', () => {
     assert.doesNotMatch(workflow, /continue-on-error/);
   });
 
-  it('keeps build-and-test and the engine alive when the scope job fails', () => {
-    assert.match(jobBlock('build-and-test'), /needs: scope\n\s+if: \$\{\{ !cancelled\(\) \}\}/);
+  it('keeps build-and-test and the engine alive when the scope job fails, and skips build-and-test only for a named proof', () => {
+    assert.ok(jobBlock('build-and-test').includes("needs: scope\n    if: ${{ !cancelled() && needs.scope.outputs.proof == '' }}"), 'build-and-test is not a default-run');
+    assert.ok(jobBlock('scope').includes('proof: ${{ steps.select.outputs.proof }}'), 'the scope job does not output proof');
     assert.match(jobBlock('real-engine'), jobGate('engine'));
   });
 
@@ -1132,6 +1261,41 @@ describe('ci.yml', () => {
     for (const job of ['npm-publish', 'vscode-publish']) {
       assert.match(release, new RegExp(`^  ${job}:\\n\\s+needs: ci$`, 'm'), `${job} does not wait for CI`);
     }
+  });
+
+  it('reuses main\'s proof only when its caller asks, as release.yml does', () => {
+    const call = workflow.match(/^ {2}workflow_call:\n((?: {4}.*\n)+)/m);
+    assert.ok(call, 'workflow_call takes no input');
+    assert.match(call[1], /^ {4}inputs:\n {6}reuse-main-proof:\n(?: {8}.*\n)*? {8}type: boolean\n(?: {8}.*\n)*? {8}default: false\n/m);
+    const select = stepIn('scope', 'select');
+    assert.ok(select.includes('REUSE_MAIN_PROOF: ${{ inputs.reuse-main-proof }}'), 'select does not hear the input');
+    assert.ok(select.includes('GH_TOKEN: ${{ github.token }}'), 'the lookup has no token');
+    const gate = stepNamed('required-checks', 'Require every check this change owed');
+    assert.ok(gate.includes('REUSE_MAIN_PROOF: ${{ inputs.reuse-main-proof }}'), 'the gate does not hear the input');
+    // The pull_request, push, schedule and dispatch runs keep the token they had.
+    assert.doesNotMatch(workflow, /^\s*permissions:/m);
+
+    const release = readFileSync('.github/workflows/release.yml', 'utf8');
+    const ci = release.match(/^ {2}ci:\n((?: {4}.*\n|\s*\n)+?)(?=^ {2}[\w-]+:$)/m)[1];
+    assert.match(ci, /^ {4}with:\n {6}reuse-main-proof: true$/m);
+    // The lookup reads Actions; checkout reads contents. Nothing in ci.yml writes.
+    assert.match(ci, /^ {4}permissions:\n {6}contents: read\n {6}actions: read$/m);
+  });
+
+  it('builds in npm-publish but proves nothing again: the ci job of the same run did', () => {
+    const release = readFileSync('.github/workflows/release.yml', 'utf8');
+    const publish = release.match(/^ {2}npm-publish:\n((?: {4}.*\n|\s*\n)+?)(?=^ {2}[\w-]+:$)/m)[1];
+    const names = [...publish.matchAll(/^ {6}- (?:name|uses): (.+)$/gm)].map((m) => m[1]);
+    assert.deepEqual(names, [
+      'actions/checkout@v7',
+      'Use Node.js 22.x',
+      'Verify tag matches package versions',
+      'Install dependencies',
+      'Build',
+      'Publish npm packages (dependency order)',
+    ]);
+    assert.match(publish, /- name: Build\n {8}run: npm run build\n/);
+    assert.doesNotMatch(publish, /npm (run )?(test|typecheck)/);
   });
 
   it('leaves the checkout-only gates off where the gate tests run', () => {

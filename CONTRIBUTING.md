@@ -116,7 +116,10 @@ left out.
 
 A push to `main`, a release, the nightly run (03:17 UTC) and a run started by
 hand from the Actions tab always run everything, and none of them is cancelled
-by a later one.
+by a later one. The one exception is a release of a commit that `main`'s own
+push run of `ci.yml` already passed: `release.yml` passes `reuse-main-proof`,
+the scope job finds that run, selects nothing and names it in its summary, and
+anything short of finding it, a failed lookup included, runs everything.
 
 `npm run ci` runs the same steps, once each, in the workflow's order; a build
 several jobs share runs once. `node scripts/ci.mjs --list` prints them without
@@ -352,8 +355,9 @@ release will, and attaches nothing to any Release (ADR-0065 C4).
 
 The tag triggers `.github/workflows/release.yml`, which first runs the full CI
 workflow — every check, the real engine included — so a tag cannot publish a
-commit that has not passed all of them. The publish jobs then verify the tag
-matches every `package.json`, build and test, then:
+commit that has not passed all of them. A tag on a commit `main`'s push CI
+already passed reuses that run instead of repeating it. The publish jobs then
+verify the tag matches every `package.json` and build, then:
 
 - **npm**: publishes in dependency order — `core`, `web`, `cli`, then
   `cli-alias` (not a workspace — see Layout) — each one's `dependencies` must
