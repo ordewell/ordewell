@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-11-07
+
+### Fixed
+
+- **The remove buttons on tasks and subtasks have accessible names.** Both
+  now read "Remove task <title>" / "Remove subtask <title>" to a screen
+  reader (#130).
+
 ## [0.13.0] - 2026-11-06
 
 ### Added
