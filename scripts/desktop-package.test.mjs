@@ -346,20 +346,15 @@ describe('the eSigner signing hook', () => {
     assert.equal(failed({ status: null, error: new Error('ETIMEDOUT') }), true);
   });
 
-  it('runs CodeSignTool with no shell, prints its output without a credential, and removes its logs', async () => {
+  it('runs CodeSignTool with no shell, prints its output without a credential, and removes its logs', async (t) => {
     const dir = toolDir();
     const calls = [];
     const logged = [];
-    const log = console.log;
-    console.log = (line) => logged.push(line);
-    try {
-      await sign({ path: 'app.exe' }, {
-        env: { ...ESIGNER, CODE_SIGN_TOOL_PATH: dir },
-        run: (file, args, options) => { calls.push({ file, args, options }); return { status: 0, stdout: 'signed for esuser with es-pass', stderr: '' }; },
-      });
-    } finally {
-      console.log = log;
-    }
+    t.mock.method(console, 'log', (line) => logged.push(line));
+    await sign({ path: 'app.exe' }, {
+      env: { ...ESIGNER, CODE_SIGN_TOOL_PATH: dir },
+      run: (file, args, options) => { calls.push({ file, args, options }); return { status: 0, stdout: 'signed for esuser with es-pass', stderr: '' }; },
+    });
     assert.equal(calls.length, 1);
     assert.equal(calls[0].options.cwd, dir);
     assert.equal(calls[0].options.shell, undefined);
@@ -378,18 +373,13 @@ describe('the eSigner signing hook', () => {
     assert.equal(calls.length, 1);
   });
 
-  it('fails the build, naming no credential, when CodeSignTool does', async () => {
+  it('fails the build, naming no credential, when CodeSignTool does', async (t) => {
     const dir = toolDir();
-    const log = console.log;
-    console.log = () => {};
-    try {
-      await assert.rejects(
-        sign({ path: 'app.exe' }, { env: { ...ESIGNER, CODE_SIGN_TOOL_PATH: dir }, run: () => ({ status: 0, stdout: 'Error: es-pass rejected', stderr: '' }) }),
-        (error) => /could not sign app\.exe/.test(error.message) && !error.message.includes('es-pass'),
-      );
-    } finally {
-      console.log = log;
-    }
+    t.mock.method(console, 'log', () => {});
+    await assert.rejects(
+      sign({ path: 'app.exe' }, { env: { ...ESIGNER, CODE_SIGN_TOOL_PATH: dir }, run: () => ({ status: 0, stdout: 'Error: es-pass rejected', stderr: '' }) }),
+      (error) => /could not sign app\.exe/.test(error.message) && !error.message.includes('es-pass'),
+    );
   });
 });
 
@@ -488,7 +478,11 @@ describe('the publisher names electron-builder derives from the flags', () => {
   const desktop = fileURLToPath(new URL('../packages/desktop/', import.meta.url));
   const asList = (value) => (value == null ? null : [value].flat());
 
-  async function derived(env) {
+  // builder-util's log writes to process.stdout, where node:test reads this
+  // file's messages, and a stray line there crashes the run (test-stdout.test.mjs).
+  async function derived(t, env) {
+    const { log } = createRequire(require.resolve('app-builder-lib/package.json'))('builder-util');
+    t.mock.property(log, 'stream', { write: () => true });
     const { configureBuildCommand, createYargs, normalizeOptions } = require('electron-builder/out/builder.js');
     const { getConfig, validateConfiguration } = require('app-builder-lib/out/util/config/config.js');
     const argv = configureBuildCommand(createYargs()).parse(builderArgs(['--win', '--dir'], 'win32', releasePlan(env, 'win32')));
@@ -499,16 +493,16 @@ describe('the publisher names electron-builder derives from the flags', () => {
   }
 
   for (const [route, env] of [['Azure', AZURE], ['eSigner', ESIGNER], ['a certificate file', WIN_CERT]]) {
-    it(`reads one name on ${route} as it always has`, async () => {
-      assert.deepEqual(await derived({ ...env, WIN_PUBLISHER_NAME: 'Ordewell' }), ['Ordewell']);
+    it(`reads one name on ${route} as it always has`, async (t) => {
+      assert.deepEqual(await derived(t, { ...env, WIN_PUBLISHER_NAME: 'Ordewell' }), ['Ordewell']);
     });
 
-    it(`reads a list of names on ${route}`, async () => {
-      assert.deepEqual(await derived({ ...env, WIN_PUBLISHER_NAME: ' Ada Lovelace | Acme, Inc. |' }), ['Ada Lovelace', 'Acme, Inc.']);
+    it(`reads a list of names on ${route}`, async (t) => {
+      assert.deepEqual(await derived(t, { ...env, WIN_PUBLISHER_NAME: ' Ada Lovelace | Acme, Inc. |' }), ['Ada Lovelace', 'Acme, Inc.']);
     });
   }
 
-  it('derives no name from a certificate file without the variable', async () => {
-    assert.equal(await derived(WIN_CERT), null);
+  it('derives no name from a certificate file without the variable', async (t) => {
+    assert.equal(await derived(t, WIN_CERT), null);
   });
 });
