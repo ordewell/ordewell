@@ -101,9 +101,11 @@ the run in progress:
 - A path outside the workspaces owes what reads it: `.eslintrc.js` owes lint,
   `vitest.setup.ts` and `vitest.shared.ts` the suites that load them,
   `.gitattributes` the Windows jobs, a fake under `bench/` the suites and
-  harnesses that start it, and a doc under `bench/` nothing. A path no one has
-  judged, and `package-lock.json`, `ci.yml` or `change-scope.mjs` itself, runs
-  everything.
+  harnesses that start it, a doc under `bench/` nothing, and an installer, a
+  Homebrew or winget template or a release script under `scripts/` or
+  `packaging/` the bench step that tests it. A path no one has judged, and
+  `package-lock.json`, `ci.yml`, `scripts/ci.mjs` or `change-scope.mjs` itself,
+  runs everything.
 - The desktop tour, the longest job, runs only for a change to
   `packages/desktop` or `packages/ui`. The desktop e2e still runs for a change
   to anything it builds on, core included.

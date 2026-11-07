@@ -277,6 +277,16 @@ describe('what a pull request owes, diff by diff', () => {
     }],
     ['a change to core\'s exports: every dependent in full, still no tour', ['packages/core/src/index.ts'], { ...everything('selected'), off: ['tour'] }],
     ['package-lock.json: everything', ['package-lock.json'], everything('full')],
+    ['the CLI installer and its docs: the bench step, here and on Windows, and no suite or tour', [
+      'scripts/install/cli.sh', 'scripts/install/cli.test.mjs', 'docs/troubleshooting.md', 'CHANGELOG.md',
+    ], { mode: 'selected', linux: {}, windows: {}, off: ALL_OFF.filter((c) => !['bench', 'harness'].includes(c)) }],
+    ['the CLI installer with a cli change: cli in full, the binary\'s build and drive, and still no tour', [
+      'scripts/install/cli.sh', 'scripts/install/cli.test.mjs', 'docs/troubleshooting.md', 'CHANGELOG.md',
+      'packages/cli/src/main.ts', 'packages/cli/src/utils/longDash.ts', 'packages/cli/src/utils/__tests__/longDash.test.ts',
+    ], {
+      mode: 'selected', linux: { cli: 'full' }, windows: { cli: 'full' },
+      off: ['desktop', 'engine', 'integration', 'planner', 'sandbox', 'tour'],
+    }],
   ]) {
     it(title, () => assert.deepEqual(owed(selected(...paths)), expected));
   }
@@ -397,6 +407,47 @@ describe('a path outside the workspaces that only some checks read', () => {
     ['bench/containers/verdict.mjs', {}, {}, ['bench', 'engine', 'harness']],
     ['bench/lab/lab.mjs', {}, {}, ['bench', 'harness']],
     ['bench/scale/entry.ts', {}, {}, ['bench', 'harness', 'lint']],
+
+    // scripts/ and packaging/: test:bench runs scripts/**/*.test.mjs, here and
+    // in windows-harness, so whatever only those tests read owes bench alone.
+    ['scripts/install/cli.sh', {}, {}, ['bench', 'harness']],
+    ['scripts/install/cli.test.mjs', {}, {}, ['bench', 'harness']],
+    ['scripts/install/desktop.sh', {}, {}, ['bench', 'harness']],
+    ['scripts/install/desktop.ps1', {}, {}, ['bench', 'harness']],
+    ['scripts/install/desktop.test.mjs', {}, {}, ['bench', 'harness']],
+    ['packaging/homebrew/ordewell.rb.tmpl', {}, {}, ['bench', 'harness']],
+    ['packaging/homebrew/ordewell-desktop.rb.tmpl', {}, {}, ['bench', 'harness']],
+    ['packaging/winget/Ordewell.Ordewell.yaml.tmpl', {}, {}, ['bench', 'harness']],
+    ['packaging/winget/Ordewell.Ordewell.installer.yaml.tmpl', {}, {}, ['bench', 'harness']],
+    ['packaging/winget/Ordewell.Ordewell.locale.en-US.yaml.tmpl', {}, {}, ['bench', 'harness']],
+    ['scripts/render-package-manifests.mjs', {}, {}, ['bench', 'harness']],
+    ['scripts/render-package-manifests.test.mjs', {}, {}, ['bench', 'harness']],
+    ['scripts/publish-tap.sh', {}, {}, ['bench', 'harness']],
+    ['scripts/publish-tap.test.mjs', {}, {}, ['bench', 'harness']],
+    ['scripts/homebrew-publish.test.mjs', {}, {}, ['bench', 'harness']],
+    ['scripts/verify-brew-install.sh', {}, {}, ['bench', 'harness']],
+    ['scripts/desktop-release-assets.mjs', {}, {}, ['bench', 'harness']],
+    ['scripts/release-latest.mjs', {}, {}, ['bench', 'harness']],
+    ['scripts/release-latest.test.mjs', {}, {}, ['bench', 'harness']],
+    ['scripts/cli-release.test.mjs', {}, {}, ['bench', 'harness']],
+    ['scripts/desktop-release.test.mjs', {}, {}, ['bench', 'harness']],
+    ['scripts/sea/build.mjs', {}, {}, ['bench', 'binary', 'harness']],
+    ['scripts/sea/build.test.mjs', {}, {}, ['bench', 'harness']],
+    ['packaging/sea/entitlements.plist', {}, {}, ['bench', 'harness']],
+    ['scripts/package-check.mjs', {}, {}, ['bench', 'harness', 'package']],
+    ['scripts/desktop-package-check.mjs', {}, {}, ['bench', 'harness', 'package']],
+    ['scripts/desktop-package-check.test.mjs', {}, {}, ['bench', 'harness']],
+    ['scripts/desktop-package.test.mjs', {}, {}, ['bench', 'harness']],
+    ['scripts/test-stdout.test.mjs', {}, {}, ['bench', 'harness']],
+    // build-and-test runs every verify script on every change; windows-harness only when owed.
+    ['scripts/verify-adr.mjs', {}, {}, ['harness']],
+    ['scripts/verify-fresh-install.mjs', {}, {}, ['harness']],
+    ['scripts/verify-migration.mjs', {}, {}, ['harness']],
+    ['scripts/verify-notice.mjs', {}, {}, ['harness']],
+    ['scripts/verify-skills.mjs', {}, {}, ['harness']],
+    ['scripts/linux-sandbox-e2e.sh', {}, {}, ['sandbox']],
+    ['scripts/container-e2e.mjs', {}, {}, ['engine']],
+    ['scripts/change-scope.test.mjs', {}, {}, ['bench', 'harness']],
   ]) {
     it(`owes ${on.join(', ') || 'nothing'} for ${path}`, () => {
       const scope = selected(path);
@@ -404,6 +455,17 @@ describe('a path outside the workspaces that only some checks read', () => {
       assert.equal(scope.mode, on.length ? 'selected' : 'docs');
     });
   }
+
+  it('walks no tour for the installer, the Homebrew templates or their renderer: none of them draws a layout', () => {
+    for (const path of ['scripts/install/cli.sh', 'packaging/homebrew/ordewell.rb.tmpl', 'packaging/homebrew/ordewell-desktop.rb.tmpl',
+      'scripts/render-package-manifests.mjs']) {
+      const scope = selected(path);
+      assert.equal(scope.mode, 'selected', path);
+      assert.equal(scope.checks.tour, false, path);
+      assert.equal(scope.checks.desktop, false, path);
+      assert.deepEqual(scope.suites, {}, path);
+    }
+  });
 
   it('names a suite only for a workspace the repository has', () => {
     const scope = selectScope(['.eslintrc.js'], workspaces.filter((w) => w.dir !== UI));
@@ -425,27 +487,17 @@ describe('the full fallback', () => {
     ['.github/workflows/verify-release-tag.mjs', 'the release'],
     ['.github/workflows/cli-build.yml', 'the binary build on every target: ci.yml cannot judge it, so the full run does'],
     ['.github/workflows/homebrew-publish.yml', 'the manual re-publish to the Homebrew tap: ci.yml cannot judge it, so the full run does'],
-    ['scripts/publish-tap.sh', 'writes the Homebrew tap, for the release and the re-publish'],
-    ['scripts/publish-tap.test.mjs', 'the tap publish\'s tests'],
-    ['scripts/homebrew-publish.test.mjs', 'reads both workflows\' Homebrew jobs and runs verify-brew-install.sh'],
-    ['scripts/verify-brew-install.sh', 'installs the formula with brew after a publish'],
-    ['scripts/sea/build.mjs', 'builds the standalone binary'],
-    ['scripts/sea/build.test.mjs', 'the binary build\'s tests'],
-    ['packaging/sea/entitlements.plist', 'the entitlements the macOS binary is signed with'],
-    ['scripts/install/cli.sh', 'the CLI\'s one-line installer, which fetches the binary'],
-    ['scripts/install/cli.test.mjs', 'the CLI installer\'s tests'],
     ['scripts/change-scope.mjs', 'selection itself'],
-    ['scripts/verify-skills.mjs', 'a verify script'],
-    ['scripts/install/desktop.sh', 'the one-line installer, tested by the bench step'],
-    ['scripts/install/desktop.ps1', 'the Windows one-line installer'],
-    ['scripts/install/desktop.test.mjs', 'the installers\' tests'],
-    ['scripts/desktop-release-assets.mjs', 'writes the fixed-name assets and SHA256SUMS the installers read'],
-    ['scripts/release-latest.mjs', 'decides which release release.yml marks latest'],
-    ['scripts/render-package-manifests.mjs', 'renders the Homebrew formula and cask and the winget manifests from a release'],
-    ['scripts/render-package-manifests.test.mjs', 'the package-manager manifests\' tests'],
-    ['packaging/homebrew/ordewell.rb.tmpl', 'the Homebrew formula template'],
-    ['packaging/homebrew/ordewell-desktop.rb.tmpl', 'the Homebrew cask template'],
-    ['packaging/winget/Ordewell.Ordewell.installer.yaml.tmpl', 'the winget manifest templates'],
+    ['scripts/ci-scope.mjs', 'what ci.yml runs selection with'],
+    ['scripts/ci.mjs', 'npm run ci, which mirrors every ci.yml step'],
+    ['scripts/test-changed.mjs', 'the local inner loop'],
+    ['scripts/npm.mjs', 'how every script starts npm'],
+    ['scripts/generate-third-party-notices.mjs', 'every package build runs it, the tour\'s included'],
+    ['scripts/new-tool.mjs', 'a script no owner claims yet'],
+    ['scripts/install/new.sh', 'a new installer, which a release may ship'],
+    ['scripts/sea/sign.mjs', 'a new build step'],
+    ['scripts/verify-new.mjs', 'a new verify script, which may read past what it verifies'],
+    ['packaging/apt/control.tmpl', 'a new package manager'],
     ['assets/logo.png', 'unknown'],
     ['bench/new/harness.mjs', 'a bench path no owner claims yet'],
     ['bench/live/drive-new.mjs', 'a new driver, which something may run'],
@@ -640,10 +692,10 @@ describe('the local inner loop', () => {
   });
 
   it('runs every quick suite on the full fallback, building what is depended on, in order', () => {
-    const plan = runs('scripts/verify-skills.mjs');
+    const plan = runs('scripts/ci.mjs');
     assert.deepEqual(plan.rebuild, [CORE, UI, WEB]);
     for (const dir of [CORE, CLI, UI, VSCODE, WEB, DESKTOP]) assert.equal(script(plan, dir), 'test:quick');
-    assert.match(plan.note, /scripts\/verify-skills\.mjs/);
+    assert.match(plan.note, /scripts\/ci\.mjs/);
   });
 
   it('runs nothing with nothing changed, and nothing for docs', () => {
