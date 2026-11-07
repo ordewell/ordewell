@@ -18,12 +18,13 @@
 #   --uninstall       remove the binary and the runtime files it unpacked into
 #                     ~/.ordewell/runtime; sessions and other data stay
 #   --dry-run         say what would be downloaded and installed, and do nothing
-#   --desktop         also run the desktop app installer (desktop.sh), passing
-#                     --version, --uninstall and --dry-run on; when the
-#                     release's SHA256SUMS lists no desktop installer, the CLI
-#                     is installed, the script says the release has no desktop
-#                     app and exits 1 (ADR-0065 C10)
 #   -h, --help        this text
+#
+# --desktop (left out of --help and of this list until a release carries the
+# desktop app, ADR-0065 C10) also runs the desktop app installer (desktop.sh),
+# passing --version, --uninstall and --dry-run on. When the release's
+# SHA256SUMS lists no desktop installer, the CLI is installed, the script says
+# the desktop app is not released yet and exits 1.
 #
 # Environment:
 #   ORDEWELL_VERSION       the same as --version
@@ -68,14 +69,12 @@ usage() {
 Installs the Ordewell command-line app for the current user (macOS and Linux).
 It is one self-contained binary; Node.js is not needed.
 
-Usage: install.sh [--version X.Y.Z] [--uninstall] [--dry-run] [--desktop]
+Usage: install.sh [--version X.Y.Z] [--uninstall] [--dry-run]
 
   --version X.Y.Z  install that release instead of the latest (or ORDEWELL_VERSION)
   --uninstall      remove the binary and ~/.ordewell/runtime; sessions and other
                    data in ~/.ordewell stay
   --dry-run        say what would be downloaded and installed, and do nothing
-  --desktop        also run the desktop app installer, passing --version,
-                   --uninstall and --dry-run on, when the release carries it
   -h, --help       this text
 
 Environment:
@@ -84,13 +83,6 @@ Environment:
                          ordewell-<os>-<arch>.tar.gz (and the versioned name)
                          and SHA256SUMS, used instead of the GitHub Release
   ORDEWELL_INSTALL_DIR   the folder the binary goes in (default ~/.local/bin)
-  ORDEWELL_DESKTOP_SCRIPT_FROM
-                         a file or an https:// URL to take desktop.sh from
-                         with --desktop
-  ORDEWELL_DESKTOP_INSTALL_DIR
-                         with --desktop, where the desktop app goes: passed to
-                         desktop.sh as its ORDEWELL_INSTALL_DIR (the CLI's
-                         ORDEWELL_INSTALL_DIR is not passed on)
 
 On Windows and on musl Linux (Alpine), install with: npm install -g ordewell
 EOF
@@ -533,7 +525,7 @@ fi
 # CLI stays installed; the exit status tells a calling script the app is not.
 if ! awk '{ name = $2; sub(/^\*/, "", name); if (name ~ /^Ordewell-/) { found = 1; exit } } END { exit !found }' "$tmp/SHA256SUMS"; then
   note ""
-  note "ordewell: this release does not include the desktop app yet, so only the command-line app was installed."
+  note "The Ordewell desktop app isn't released yet, so --desktop installed nothing more. The CLI is installed."
   exit 1
 fi
 run_desktop

@@ -295,7 +295,9 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
     it('prints its help and rejects what it does not know', () => {
       const help = run(['--help']);
       assert.equal(help.status, 0);
-      for (const text of [/--version X\.Y\.Z/, /--uninstall/, /--dry-run/, /--desktop/, /ORDEWELL_CLI_FROM/, /ORDEWELL_INSTALL_DIR/]) assert.match(help.stdout, text);
+      for (const text of [/--version X\.Y\.Z/, /--uninstall/, /--dry-run/, /ORDEWELL_CLI_FROM/, /ORDEWELL_INSTALL_DIR/]) assert.match(help.stdout, text);
+      // Hidden until a release carries the desktop app (ADR-0065 C10); the option itself still works.
+      assert.doesNotMatch(help.stdout, /desktop/i);
       const bad = run(['--frobnicate']);
       assert.notEqual(bad.status, 0);
       assert.match(bad.stderr, /unknown option/);
@@ -784,7 +786,7 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
       assert.equal(result.status, 1, result.stdout + result.stderr);
       assert.ok(existsSync(join(result.target, 'ordewell')), 'the CLI is installed');
       assert.match(result.stdout, /^Installed ordewell /m);
-      assert.match(result.stderr, /this release does not include the desktop app yet/);
+      assert.match(result.stderr, /The Ordewell desktop app isn't released yet, so --desktop installed nothing more\. The CLI is installed\./);
       assert.ok(!existsSync(log), 'desktop.sh was run');
     });
 

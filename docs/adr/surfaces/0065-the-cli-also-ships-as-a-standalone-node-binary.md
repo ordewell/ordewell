@@ -131,8 +131,9 @@ is already served by `npm`.
   `ORDEWELL_INSTALL_DIR`, which means the app's folder there;
   `ORDEWELL_DESKTOP_INSTALL_DIR` is passed on as desktop.sh's
   `ORDEWELL_INSTALL_DIR` instead. On a release without the desktop app (C10),
-  `--desktop` installs the CLI, says the release has no desktop app yet and
-  exits 1. It reports whether `git` is present (recommended, not required) and
+  `--desktop` installs the CLI, says the desktop app is not released yet and
+  exits 1, the status of any failed desktop step; `--help` does not list the
+  option until a release carries the app. It reports whether `git` is present (recommended, not required) and
   which coding agents it finds, and installs neither. The Linux binaries are
   linked against glibc, so on musl Linux (Alpine) it installs nothing, `--dry-run`
   included, and exits 1 pointing to `npm install -g ordewell`; `--uninstall`
@@ -188,7 +189,8 @@ is already served by `npm`.
   build that fails still holds back `SHA256SUMS` and the publishing jobs.
   Turning the app on is setting the variable to `true` and restoring the
   install text the README and `docs/desktop/README.md` hold back while it is
-  off.
+  off, and putting `--desktop` (and `ORDEWELL_DESKTOP_SCRIPT_FROM` and
+  `ORDEWELL_DESKTOP_INSTALL_DIR`) back in `cli.sh --help`.
 
 - **A Release becomes latest only once it is complete (C11).**
   `releases/latest/download/` is what `ordewell.ai/install.sh` (C6) redirects
@@ -315,3 +317,4 @@ their unit tests run under plain Node.
 - 2026-11-06 — C7: the installer refuses musl Linux (Alpine) and points to npm.
 - 2026-11-06 — C4: a signing rehearsal (`rehearse_signing` on `main`) signs and notarizes the macOS binaries without releasing; signed runs check the authority.
 - 2026-11-06 — C8: one script publishes the tap from the release and from the manual re-publish `homebrew-publish.yml`, and brew installs the formula on macOS and Linux after each (ADR-0063 H11).
+- 2026-11-07 — C7, C10: `cli.sh --help` leaves out `--desktop` until a release carries the app, and the message for a release without it is plainer.
