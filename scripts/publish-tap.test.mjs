@@ -22,7 +22,7 @@ const BOT = 'github-actions[bot] <41898282+github-actions[bot]@users.noreply.git
 /** A git with no user, global or system config, and so no credential helper. */
 const isolated = (home) => ({ PATH: process.env.PATH, HOME: home, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', LANG: 'C', LC_ALL: 'C' });
 
-const formula = (version) => `class Ordewell < Formula\n  desc "Ordewell"\n  version "${version}"\nend\n`;
+const formula = (version) => `class Ordewell < Formula\n  desc "Ordewell"\n  url "https://github.com/ordewell/ordewell/releases/download/v${version}/ordewell-${version}-linux-x64.tar.gz"\nend\n`;
 const desktopCask = (version) => `cask "ordewell-desktop" do\n  version "${version}"\nend\n`;
 
 describe('scripts/publish-tap.sh (ADR-0063 H11, ADR-0065 C8)', { skip: posixOnly }, () => {

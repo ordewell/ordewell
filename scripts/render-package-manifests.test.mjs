@@ -158,10 +158,27 @@ describe('the Homebrew formula', () => {
   it('states what the tool is, where it lives and its licence', () => {
     assert.ok(formula.includes('desc "Turn one goal into an ordered plan of coding-agent tasks"'));
     assert.ok(formula.includes('homepage "https://ordewell.ai/"'));
-    assert.match(formula, /^ {2}version "0\.0\.0"$/m);
     const licence = /^\s*(Apache License)/m.exec(readFileSync('LICENSE', 'utf8'));
     assert.ok(licence, 'LICENSE is the Apache licence');
     assert.match(formula, /^ {2}license "Apache-2\.0"$/m);
+  });
+
+  it('leaves the version to Homebrew, which scans it from the archive URLs', () => {
+    // An explicit `version` that the URL already carries is brew audit's "redundant with version scanned from URL".
+    assert.doesNotMatch(formula, /^\s*version\s/m);
+    // So the version is spelled out in every URL, where the scanner finds it as <name>-<x.y.z>-<target>.tar.gz.
+    assert.doesNotMatch(formula, /#\{version\}\/|-#\{version\}-/, 'no URL leans on a version line the formula no longer has');
+    const urls = [...formula.matchAll(/^\s*url "([^"]+)"$/gm)].map((m) => m[1]);
+    assert.equal(urls.length, 4);
+    for (const url of urls) assert.match(url, /\/ordewell-0\.0\.0-(?:darwin|linux)-(?:arm64|x64)\.tar\.gz$/, url);
+  });
+
+  it('puts livecheck before the platform blocks, as brew audit orders a formula', () => {
+    const at = (text) => formula.indexOf(text);
+    assert.ok(at('livecheck do') > 0, 'has a livecheck');
+    assert.ok(at('livecheck do') < at('on_macos do'));
+    assert.ok(at('livecheck do') < at('on_linux do'));
+    assert.ok(at('license "') < at('livecheck do'), 'after the license');
   });
 
   it('downloads the versioned archive of each platform with that archive\'s own checksum', () => {
@@ -176,7 +193,7 @@ describe('the Homebrew formula', () => {
       const section = formula.slice(formula.indexOf(`on_${os} do`));
       const match = block(os, cpu).exec(section);
       assert.ok(match, `${os} ${cpu}`);
-      assert.equal(match[1], `https://github.com/ordewell/ordewell/releases/download/v#{version}/ordewell-#{version}-${target}.tar.gz`);
+      assert.equal(match[1], `https://github.com/ordewell/ordewell/releases/download/v${VERSION}/ordewell-${VERSION}-${target}.tar.gz`);
       assert.equal(match[2], hash);
     }
   });

@@ -37,7 +37,9 @@ if [ "$cask" = true ] && [ ! -f "$desktop_cask" ]; then
   echo "--cask, but no rendered cask at $desktop_cask" >&2
   exit 2
 fi
-grep -q "^  version \"$version\"$" "$formula" || { echo "$formula is not Ordewell $version" >&2; exit 2; }
+# The formula has no version line (Homebrew scans it from the archive URLs), so this release's
+# version is what its archive URLs carry.
+grep -q "^ *url \".*/ordewell-${version//./\\.}-[a-z0-9-]*\.tar\.gz\"$" "$formula" || { echo "$formula is not Ordewell $version" >&2; exit 2; }
 
 # The clone and the key live here and go on any exit, failed or not.
 work=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/homebrew-tap.XXXXXX")
