@@ -27,6 +27,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
+- **A loop's AI check is now told by Ordewell itself that its status is the
+  verdict:** `failed` when it confirms a problem, `done` only when it confirms
+  none. Before, a review that found problems but reported `done` passed the
+  loop and skipped the fix, unless its own prompt said otherwise.
 - **The remove buttons on tasks and subtasks have accessible names.** Both
   now read "Remove task <title>" / "Remove subtask <title>" to a screen
   reader, in the VS Code extension and the desktop app (#130).

@@ -80,7 +80,16 @@ round *r* and round *r* + 1 the body runs once.
   carried; for a script, `failed` on a non-zero exit, a signal or its time
   limit, and `blocked` when a step could not start. A check that reports
   `blocked`, a runner that exits without reporting, and a stopped script found
-  nothing a fix could answer, so none of them starts a round.
+  nothing a fix could answer, so none of them starts a round. Ordewell tells an
+  AI check so itself on every round, round 1 included and whatever the check's
+  prompt says: the last block of its first message, right before its own
+  prompt, says that its status is the verdict, `failed` with each confirmed
+  problem in `findings` when it confirms any, `done` only when it confirms
+  none, `blocked` only when it could not check, and which round of how many it
+  is. A continue of it repeats the rule in one line. The runner's generic
+  contract says `done` once the work is complete, and a review that finds
+  problems and reports `done` passes the round with nothing fixed. A repair of
+  the check's merge is not told: it checks nothing.
 - **Between rounds the check is no failure (L3).** A check that failed with
   rounds left is stored as `failed`, verdict and report included, and its
   being *between rounds* is derived (`betweenRounds`), as a block is: nothing
@@ -243,6 +252,14 @@ as check or body; a user editing a loop's `loop` field by hand from a surface.
   stored `blocked`: it has to be set and cleared on every path that fails,
   retries, edits, removes or reloads a task. Between rounds is read from the
   check's status, verdict and round.
+- **Leaving the verdict rule to the planner's prompt for the check.**
+  Dropped: the planner prompt asks for it, but a planner may leave it out and
+  a user may edit it away, and the check then reads only the generic "call it
+  with `done` once complete". Ordewell states it at runtime instead; the
+  planner prompt still asks for it, and saying it twice is harmless.
+- **Failing a `done` whose report reads like a failure.** Rejected: guessing
+  a verdict from wording makes the model the tie-breaker. The contract is made
+  explicit instead, and the status stays the evidence.
 - **Telling `blocked` from `failed` by the reason text.** Rejected: the text is
   the runner's, and a script has no such word. The verdict keeps the reported
   status as a field.
@@ -312,3 +329,4 @@ as check or body; a user editing a loop's `loop` field by hand from a surface.
 - 2026-11-01 — a script check marked `readOnly` runs in a worktree of its own, so L9 does not hold it at a gate (ADR-0055 D8).
 - 2026-11-01 — a new attempt of a delegated task takes its check back, and its rounds start over (L7; ADR-0055 D8).
 - 2026-11-01 — the task tool is `read` ([ADR-0057](0057-information-moves-by-reference.md) R11).
+- 2026-11-07 — Ordewell tells an AI check on every round that its status is the verdict, not only through the planner's prompt for it (L2).

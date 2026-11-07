@@ -157,6 +157,28 @@ describe('attemptPrompt', () => {
     expect(previousHandoff).toHaveBeenCalledWith('check');
   });
 
+  it('tells an AI check its round and that its status is the verdict from round 1, but not the repair of its merge', () => {
+    const check = createTask({ id: 'check', prompt: 'Review.', loop: { body: ['fix'], maxRounds: 3 } });
+    const src = { ...sources(), task: check, plan: [check] };
+
+    for (const kind of ['read-only', 'change', 'carried-over change'] as const) {
+      const prompt = attemptPrompt(KINDS[kind], src);
+      expect(prompt, kind).toContain('## You are this loop\'s check');
+      expect(prompt, kind).toContain('This is round 1 of 3.');
+      expect(prompt, kind).not.toContain('## Since your last round');
+    }
+    expect(attemptPrompt(KINDS.repair, src)).not.toContain('## You are this loop\'s check');
+  });
+
+  it('reminds a continued AI check that its status is the verdict, and no other continued task', () => {
+    const check = createTask({ id: 'check', prompt: 'Review.', loop: { body: ['fix'], maxRounds: 3 } });
+
+    expect(attemptPrompt(KINDS['continued read-only'], { ...sources(), task: check, plan: [check] })).toContain(
+      'You are this loop\'s check: your `task_complete` status is its verdict, `failed` when you confirm any problem and `done` only when you confirm none.',
+    );
+    expect(attemptPrompt(KINDS['continued read-only'], sources())).not.toContain('loop\'s check');
+  });
+
   it('keeps a legacy check report when resuming between rounds without a handoff', () => {
     const check = createTask({ id: 'check', prompt: 'Review again.', status: 'failed', loop: { body: ['fix'], maxRounds: 3 },
       verdict: { outcome: 'fail', reported: 'failed', reason: 'Holes', checks: [], decidedAt: 'x' },
