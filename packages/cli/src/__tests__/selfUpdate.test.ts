@@ -270,3 +270,17 @@ describe('ordewell update', () => {
     });
   });
 });
+
+describe('runUpdate options', () => {
+  it('refuses an unknown option before planning or running anything', async () => {
+    const m = machine({ sea: binary('/home/me/.local/bin/ordewell') });
+
+    const status = await runUpdate(['--dryrun'], m.deps);
+
+    expect(status).toBe(1);
+    expect(m.stderr).toEqual(['Unknown option: --dryrun', 'Run `ordewell update --help` for usage.']);
+    expect(m.stdout).toEqual([]);
+    expect(m.ran).toEqual([]);
+    expect(m.downloaded).toEqual([]);
+  });
+});

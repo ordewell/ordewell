@@ -202,6 +202,13 @@ function planNodeUpdate(deps: SelfUpdateDeps, sea: SeaDeps): UpdatePlan {
 
 /** `ordewell update [--dry-run]`: resolves with the status to exit with. */
 export async function runUpdate(args: string[], deps: SelfUpdateDeps = {}): Promise<number> {
+  // Before the plan is made: a mistyped option must not start a real update.
+  const bad = args.find((arg) => arg !== '--dry-run');
+  if (bad !== undefined) {
+    (deps.warn ?? console.error)(`${bad.startsWith('-') ? 'Unknown option' : 'Unexpected argument'}: ${bad}`);
+    (deps.warn ?? console.error)('Run `ordewell update --help` for usage.');
+    return 1;
+  }
   const plan = planUpdate(deps);
   if (plan.kind === 'run' && args.includes('--dry-run')) {
     (deps.say ?? console.log)(`Would run: ${plan.shown}`);

@@ -5,7 +5,7 @@
 // systems. Written on the desktop.test.mjs pattern; the release archives are
 // stand-ins (a tar.gz holding a script that prints a version), not a real build.
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -98,10 +98,12 @@ function release({ binary = FAKE_BINARY, omitFromSums = [], desktop = false } = 
   return dir;
 }
 
-function run(args, { env = {}, shims = [] } = {}) {
+function run(args, { env = {}, shims = [], script } = {}) {
   const home = env.HOME ?? scratch('home');
   const path = [...shims, toolbox].join(delimiter);
-  const result = spawnSync(REAL_SH, [SH, ...args], {
+  // `script` plays `curl ... | sh -s -- args`: sh reads the text from its stdin instead of a file.
+  const result = spawnSync(REAL_SH, script === undefined ? [SH, ...args] : ['-s', '--', ...args], {
+    ...(script === undefined ? {} : { input: script }),
     // The libc is glibc unless a test says otherwise (an empty value leaves the real detection on),
     // so a suite run on Alpine itself still tests the glibc install.
     env: { PATH: path, HOME: home, TMPDIR: tmpdir(), ORDEWELL_TEST_LIBC: 'glibc', ...env },
@@ -277,6 +279,66 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
       const result = spawnSync(whichSh('dash'), [SH, '--dry-run'], { env: { PATH: [linux(), commands({ ldd: MUSL_LDD }), toolbox].join(delimiter), HOME: scratch('home') }, encoding: 'utf8' });
       assert.equal(result.status, 1);
       assert.match(result.stderr, /npm install -g ordewell/);
+    });
+  });
+
+  describe('reads the whole script before it runs any of it', () => {
+    const text = readFileSync(SH, 'utf8');
+    // Cut on a line, as a dropped connection that happens to stop there would.
+    const lines = text.split('\n');
+    const cutAtLine = (n) => `${lines.slice(0, n).join('\n')}\n`;
+
+    /** Plays `curl … | sh` for a cut-off script against a fake release; returns the run and what it left behind. */
+    function cutRun(cut) {
+      const home = scratch('home');
+      const target = join(home, 'bin');
+      const result = run([], { script: cut, shims: [linux()], env: { HOME: home, ORDEWELL_CLI_FROM: release(), ORDEWELL_INSTALL_DIR: target } });
+      return { ...result, home, target };
+    }
+
+    for (const fraction of [0.3, 0.6, 0.9]) {
+      it(`a download cut off at ${fraction * 100}% of its bytes fails and installs nothing`, () => {
+        const result = cutRun(text.slice(0, Math.floor(text.length * fraction)));
+        assert.notEqual(result.status, 0, result.stdout);
+        assert.ok(!existsSync(result.target), 'the install folder must not even be created');
+        assert.deepEqual(readdirSync(result.home), []);
+      });
+    }
+
+    it('a script cut off at any line runs none of its steps', () => {
+      // Whatever the cut, the steps are in main(), which the last line calls: a cut inside it is a syntax
+      // error, and one before the call is a script that defines functions and does nothing.
+      for (let n = 1; n < lines.length - 2; n += 7) {
+        const result = cutRun(cutAtLine(n));
+        assert.equal(result.stdout, '', `cut after line ${n}`);
+        assert.ok(!existsSync(result.target), `cut after line ${n}`);
+        assert.deepEqual(readdirSync(result.home), [], `cut after line ${n}`);
+      }
+    });
+
+    it('the whole script, piped in, still installs', () => {
+      const result = cutRun(text);
+      assert.equal(result.status, 0, result.stderr);
+      assert.ok(existsSync(join(result.target, 'ordewell')));
+    });
+
+    it('`… | sh -s -- --help` reads the whole script, so the writer never gets EPIPE (curl error 23)', async () => {
+      const child = spawn(REAL_SH, ['-s', '--', '--help'], { env: { PATH: toolbox, HOME: scratch('home') }, stdio: ['pipe', 'pipe', 'pipe'] });
+      let stdout = '';
+      child.stdout.on('data', (d) => { stdout += d; });
+      const errors = [];
+      child.stdin.on('error', (e) => errors.push(e.code));
+      const closed = new Promise((done) => child.on('close', done));
+      const bytes = Buffer.from(text);
+      for (let at = 0; at < bytes.length; at += 512) {
+        await new Promise((done) => child.stdin.write(bytes.subarray(at, at + 512), (e) => { if (e) errors.push(e.code); done(); }));
+        await new Promise((done) => setTimeout(done, 2));
+      }
+      child.stdin.end();
+      const status = await closed;
+      assert.deepEqual(errors, []);
+      assert.equal(status, 0);
+      assert.match(stdout, /Usage: install\.sh/);
     });
   });
 
@@ -459,6 +521,55 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
     it('needs no network, no release and no supported OS', () => {
       const result = run(['--uninstall'], { shims: [unameShim('FreeBSD', 'x86_64')] });
       assert.equal(result.status, 0, result.stderr);
+    });
+
+    describe('with another ordewell on PATH', () => {
+      /** A home with this installer's copy, the runtime folder the binary unpacks, and an older ordewell elsewhere. */
+      function withOtherCopy() {
+        const home = scratch('home');
+        const first = install([], { home });
+        assert.equal(first.status, 0, first.stderr);
+        write(join(home, '.ordewell/runtime/0.12.3/skills/x.md'), 'x');
+        write(join(home, '.ordewell/sessions/s1.json'), '{}');
+        const other = commands({ ordewell: 'echo ordewell 0.12.3' });
+        return { home, target: first.target, other };
+      }
+
+      it('keeps ~/.ordewell/runtime, which that copy uses, and says why', () => {
+        const { home, target, other } = withOtherCopy();
+        const result = run(['--uninstall'], { shims: [linux(), other], env: { HOME: home, ORDEWELL_INSTALL_DIR: target } });
+        assert.equal(result.status, 0, result.stderr);
+        assert.ok(!existsSync(join(target, 'ordewell')));
+        assert.ok(existsSync(join(home, '.ordewell/runtime/0.12.3/skills/x.md')));
+        assert.ok(existsSync(join(home, '.ordewell/sessions/s1.json')));
+        assert.match(result.stdout, /Removed .*\/bin\/ordewell/);
+        assert.match(result.stdout, new RegExp(`Kept ${escaped(home)}/\\.ordewell/runtime: another ordewell is on your PATH \\(${escaped(other)}/ordewell\\)`));
+        assert.doesNotMatch(result.stdout, /Removed .*runtime/);
+      });
+
+      it('says the same, and removes nothing, with --dry-run', () => {
+        const { home, target, other } = withOtherCopy();
+        const result = run(['--uninstall', '--dry-run'], { shims: [linux(), other], env: { HOME: home, ORDEWELL_INSTALL_DIR: target } });
+        assert.equal(result.status, 0, result.stderr);
+        assert.match(result.stdout, new RegExp(`Would keep ${escaped(home)}/\\.ordewell/runtime: another ordewell is on your PATH`));
+        assert.doesNotMatch(result.stdout, /Would remove .*runtime/);
+        assert.ok(existsSync(join(target, 'ordewell')));
+        assert.ok(existsSync(join(home, '.ordewell/runtime/0.12.3/skills/x.md')));
+      });
+
+      it('does not count the copy being removed, even with its folder on PATH', () => {
+        const home = scratch('home');
+        const first = install([], { home });
+        assert.equal(first.status, 0, first.stderr);
+        write(join(home, '.ordewell/runtime/0.12.3/skills/x.md'), 'x');
+        const env = { HOME: home, ORDEWELL_INSTALL_DIR: first.target };
+        const dry = run(['--uninstall', '--dry-run'], { shims: [linux(), first.target], env });
+        assert.match(dry.stdout, /Would remove .*\.ordewell\/runtime/);
+        const result = run(['--uninstall'], { shims: [linux(), first.target], env });
+        assert.equal(result.status, 0, result.stderr);
+        assert.ok(!existsSync(join(home, '.ordewell/runtime')));
+        assert.match(result.stdout, /Removed .*\.ordewell\/runtime/);
+      });
     });
   });
 

@@ -29,6 +29,11 @@
 
 set -eu
 
+# Until main() runs and takes this trap over, ending means the file stopped short
+# of its last line: a cut-off download that left only whole functions. That must
+# not look like a success that did nothing.
+trap 'printf "ordewell-desktop: this installer ended before its last line (a cut-off download?), so nothing was installed.\n" >&2; exit 1' EXIT
+
 REPO=ordewell/ordewell
 APP=Ordewell.app
 BUNDLE_ID=ai.ordewell.desktop
@@ -59,61 +64,9 @@ Environment:
 EOF
 }
 
-version=${ORDEWELL_VERSION:-}
-want_deb=0
-uninstall=0
-dry_run=0
-while [ $# -gt 0 ]; do
-  case $1 in
-    --version)
-      [ $# -ge 2 ] || die "--version needs a value, for example --version 0.12.3"
-      version=$2
-      shift 2
-      ;;
-    --version=*) version=${1#--version=}; shift ;;
-    --deb) want_deb=1; shift ;;
-    --uninstall) uninstall=1; shift ;;
-    --dry-run) dry_run=1; shift ;;
-    -h|--help) usage; exit 0 ;;
-    *) die "unknown option: $1 (try --help)" ;;
-  esac
-done
-
-# A version names a release tag, so it is checked before it reaches a URL.
-version=${version#v}
-if [ -n "$version" ]; then
-  case $version in
-    *[!0-9A-Za-z.+-]*|.*|-*|+*) die "not a version: $version (expected X.Y.Z)" ;;
-  esac
-  case $version in
-    [0-9]*.[0-9]*.[0-9]*) ;;
-    *) die "not a version: $version (expected X.Y.Z)" ;;
-  esac
-fi
-
-[ -n "${HOME:-}" ] || die "HOME is not set"
-
-case $(uname -s) in
-  Darwin) platform=mac ;;
-  Linux) platform=linux ;;
-  *) die "this script is for macOS and Linux; on Windows use scripts/install/desktop.ps1" ;;
-esac
-case $(uname -m) in
-  arm64|aarch64) arch=arm64 ;;
-  x86_64|amd64) arch=x64 ;;
-  *) die "no Ordewell desktop build for the $(uname -m) architecture" ;;
-esac
-# A shell running under Rosetta reports x86_64 on an Apple-silicon Mac, and
-# the native build is the one to install.
-if [ "$platform" = mac ] && [ "$arch" = x64 ] && [ "$(sysctl -n sysctl.proc_translated 2>/dev/null || true)" = 1 ]; then
-  arch=arm64
-fi
-if [ "$platform" = linux ] && [ "$arch" != x64 ]; then
-  die "the Linux desktop builds are x64 only; this machine is $(uname -m)"
-fi
-if [ "$want_deb" = 1 ] && [ "$platform" != linux ]; then
-  die "--deb is for Linux"
-fi
+mnt=
+staged=
+tmp=
 
 # ---- where things go ---------------------------------------------------------
 
@@ -126,11 +79,6 @@ mac_target_dir() {
     printf '%s\n' "$HOME/Applications"
   fi
 }
-
-linux_prefix=${ORDEWELL_INSTALL_DIR:-$HOME/.local}
-linux_bin=$linux_prefix/bin/$BIN_NAME
-linux_entry=$linux_prefix/share/applications/$BIN_NAME.desktop
-linux_icon=$linux_prefix/share/icons/hicolor/512x512/apps/$BIN_NAME.png
 
 # ---- uninstall ---------------------------------------------------------------
 
@@ -198,65 +146,6 @@ refresh_desktop_database() {
   fi
 }
 
-if [ "$uninstall" = 1 ]; then
-  if [ "$dry_run" = 1 ]; then
-    say "Would remove what desktop.sh installed ($platform)."
-    exit 0
-  fi
-  if [ "$platform" = mac ]; then uninstall_mac; else uninstall_linux; fi
-  exit 0
-fi
-
-# ---- which file, from where --------------------------------------------------
-
-if [ "$platform" = mac ]; then
-  asset=Ordewell-mac-$arch.dmg
-elif [ "$want_deb" = 1 ]; then
-  asset=Ordewell-linux-x64.deb
-else
-  asset=Ordewell-linux-x64.AppImage
-fi
-
-if [ -n "${ORDEWELL_DESKTOP_FROM:-}" ]; then
-  [ -d "$ORDEWELL_DESKTOP_FROM" ] || die "ORDEWELL_DESKTOP_FROM is not a directory: $ORDEWELL_DESKTOP_FROM"
-  source_desc="the directory $ORDEWELL_DESKTOP_FROM"
-  asset_url=
-  sums_url=
-else
-  if [ -n "$version" ]; then
-    base=https://github.com/$REPO/releases/download/v$version
-    source_desc="release v$version"
-  else
-    base=https://github.com/$REPO/releases/latest/download
-    source_desc="the latest release"
-  fi
-  asset_url=$base/$asset
-  sums_url=$base/SHA256SUMS
-fi
-
-if [ "$dry_run" = 1 ]; then
-  say "Platform:  $platform $arch"
-  say "File:      $asset"
-  say "From:      $source_desc"
-  if [ -n "$asset_url" ]; then
-    say "Download:  $asset_url"
-    say "Checksums: $sums_url"
-  fi
-  if [ "$platform" = mac ]; then
-    say "Install:   $(mac_target_dir)/$APP"
-  elif [ "$want_deb" = 1 ]; then
-    say "Install:   the .deb, with apt or dpkg"
-  else
-    say "Install:   $linux_bin"
-  fi
-  exit 0
-fi
-
-# ---- fetch and verify --------------------------------------------------------
-
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/ordewell-desktop.XXXXXX") || die "could not make a temporary directory"
-mnt=
-staged=
 cleanup() {
   status=$?
   if [ -n "$mnt" ] && [ -d "$mnt" ]; then
@@ -266,9 +155,6 @@ cleanup() {
   rm -rf "$tmp"
   exit "$status"
 }
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM HUP
 
 fetch() {
   case $1 in https://*) ;; *) die "refusing to download over anything but https: $1" ;; esac
@@ -296,42 +182,6 @@ sha256_of() {
     die "needs sha256sum, shasum or openssl to check the download, and found none"
   fi
 }
-
-if [ -n "${ORDEWELL_DESKTOP_FROM:-}" ]; then
-  [ -f "$ORDEWELL_DESKTOP_FROM/SHA256SUMS" ] || die "no SHA256SUMS in $ORDEWELL_DESKTOP_FROM (node scripts/desktop-release-assets.mjs <dir> writes it)"
-  [ -f "$ORDEWELL_DESKTOP_FROM/$asset" ] || die "no $asset in $ORDEWELL_DESKTOP_FROM"
-  cp "$ORDEWELL_DESKTOP_FROM/SHA256SUMS" "$tmp/SHA256SUMS"
-  # A copy, so what is checked is what is installed.
-  cp "$ORDEWELL_DESKTOP_FROM/$asset" "$tmp/$asset"
-else
-  say "Downloading $asset from $source_desc"
-  fetch "$sums_url" "$tmp/SHA256SUMS"
-  fetch "$asset_url" "$tmp/$asset"
-fi
-
-expected=$(awk -v name="$asset" '$2 == name || $2 == "*" name { print $1; exit }' "$tmp/SHA256SUMS" | tr 'A-F' 'a-f')
-case $expected in
-  *[!0-9a-f]*|'') die "SHA256SUMS has no checksum for $asset" ;;
-esac
-[ "${#expected}" = 64 ] || die "SHA256SUMS has no checksum for $asset"
-actual=$(sha256_of "$tmp/$asset" | tr 'A-F' 'a-f')
-if [ "$actual" != "$expected" ]; then
-  note "ordewell-desktop: the checksum of $asset does not match SHA256SUMS."
-  note "  expected $expected"
-  note "  got      $actual"
-  note "Nothing was installed. If a release was published while this ran, run it again."
-  exit 1
-fi
-say "Checksum verified (sha256 $actual)"
-
-# The release's version, when SHA256SUMS can say it: the versioned name that
-# has the same hash as the fixed one.
-installed_version=$(awk -v hash="$expected" -v name="$asset" '$1 == hash && $2 != name { print $2 }' "$tmp/SHA256SUMS" \
-  | sed -n "s/^Ordewell-\\(.*\\)-$platform-$arch\\.[A-Za-z]*\$/\\1/p" | head -n 1)
-label=Ordewell
-[ -z "$installed_version" ] || label="Ordewell $installed_version"
-
-# ---- install -----------------------------------------------------------------
 
 install_mac() {
   command -v hdiutil >/dev/null 2>&1 || die "hdiutil not found"
@@ -443,10 +293,184 @@ install_linux_deb() {
   say "Start it from your applications menu, or:  $BIN_NAME"
 }
 
-if [ "$platform" = mac ]; then
-  install_mac
-elif [ "$want_deb" = 1 ]; then
-  install_linux_deb
-else
-  install_linux_appimage
-fi
+# Everything that does anything is in main(), which the last line calls. `curl … |
+# sh` runs each command as it arrives, so a download cut off midway would run
+# whatever came, and a script that exits early (`--help`) leaves sh no longer
+# reading, so curl reports a write error (23). sh runs a function only once it has
+# parsed it to the closing brace, and main is called by the final line, so a
+# cut-off script is a syntax error that runs nothing (or, cut between functions,
+# ends at the trap at the top), and sh has read the whole file before main
+# starts. What is outside main only defines things; the variables the functions
+# read are set by main (functions share one scope).
+main() {
+  trap - EXIT
+  version=${ORDEWELL_VERSION:-}
+  want_deb=0
+  uninstall=0
+  dry_run=0
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --version)
+        [ $# -ge 2 ] || die "--version needs a value, for example --version 0.12.3"
+        version=$2
+        shift 2
+        ;;
+      --version=*) version=${1#--version=}; shift ;;
+      --deb) want_deb=1; shift ;;
+      --uninstall) uninstall=1; shift ;;
+      --dry-run) dry_run=1; shift ;;
+      -h|--help) usage; exit 0 ;;
+      *) die "unknown option: $1 (try --help)" ;;
+    esac
+  done
+
+  # A version names a release tag, so it is checked before it reaches a URL.
+  version=${version#v}
+  if [ -n "$version" ]; then
+    case $version in
+      *[!0-9A-Za-z.+-]*|.*|-*|+*) die "not a version: $version (expected X.Y.Z)" ;;
+    esac
+    case $version in
+      [0-9]*.[0-9]*.[0-9]*) ;;
+      *) die "not a version: $version (expected X.Y.Z)" ;;
+    esac
+  fi
+
+  [ -n "${HOME:-}" ] || die "HOME is not set"
+
+  case $(uname -s) in
+    Darwin) platform=mac ;;
+    Linux) platform=linux ;;
+    *) die "this script is for macOS and Linux; on Windows use scripts/install/desktop.ps1" ;;
+  esac
+  case $(uname -m) in
+    arm64|aarch64) arch=arm64 ;;
+    x86_64|amd64) arch=x64 ;;
+    *) die "no Ordewell desktop build for the $(uname -m) architecture" ;;
+  esac
+  # A shell running under Rosetta reports x86_64 on an Apple-silicon Mac, and
+  # the native build is the one to install.
+  if [ "$platform" = mac ] && [ "$arch" = x64 ] && [ "$(sysctl -n sysctl.proc_translated 2>/dev/null || true)" = 1 ]; then
+    arch=arm64
+  fi
+  if [ "$platform" = linux ] && [ "$arch" != x64 ]; then
+    die "the Linux desktop builds are x64 only; this machine is $(uname -m)"
+  fi
+  if [ "$want_deb" = 1 ] && [ "$platform" != linux ]; then
+    die "--deb is for Linux"
+  fi
+
+  linux_prefix=${ORDEWELL_INSTALL_DIR:-$HOME/.local}
+  linux_bin=$linux_prefix/bin/$BIN_NAME
+  linux_entry=$linux_prefix/share/applications/$BIN_NAME.desktop
+  linux_icon=$linux_prefix/share/icons/hicolor/512x512/apps/$BIN_NAME.png
+
+  # ---- uninstall ---------------------------------------------------------------
+
+  if [ "$uninstall" = 1 ]; then
+    if [ "$dry_run" = 1 ]; then
+      say "Would remove what desktop.sh installed ($platform)."
+      exit 0
+    fi
+    if [ "$platform" = mac ]; then uninstall_mac; else uninstall_linux; fi
+    exit 0
+  fi
+
+  # ---- which file, from where --------------------------------------------------
+
+  if [ "$platform" = mac ]; then
+    asset=Ordewell-mac-$arch.dmg
+  elif [ "$want_deb" = 1 ]; then
+    asset=Ordewell-linux-x64.deb
+  else
+    asset=Ordewell-linux-x64.AppImage
+  fi
+
+  if [ -n "${ORDEWELL_DESKTOP_FROM:-}" ]; then
+    [ -d "$ORDEWELL_DESKTOP_FROM" ] || die "ORDEWELL_DESKTOP_FROM is not a directory: $ORDEWELL_DESKTOP_FROM"
+    source_desc="the directory $ORDEWELL_DESKTOP_FROM"
+    asset_url=
+    sums_url=
+  else
+    if [ -n "$version" ]; then
+      base=https://github.com/$REPO/releases/download/v$version
+      source_desc="release v$version"
+    else
+      base=https://github.com/$REPO/releases/latest/download
+      source_desc="the latest release"
+    fi
+    asset_url=$base/$asset
+    sums_url=$base/SHA256SUMS
+  fi
+
+  if [ "$dry_run" = 1 ]; then
+    say "Platform:  $platform $arch"
+    say "File:      $asset"
+    say "From:      $source_desc"
+    if [ -n "$asset_url" ]; then
+      say "Download:  $asset_url"
+      say "Checksums: $sums_url"
+    fi
+    if [ "$platform" = mac ]; then
+      say "Install:   $(mac_target_dir)/$APP"
+    elif [ "$want_deb" = 1 ]; then
+      say "Install:   the .deb, with apt or dpkg"
+    else
+      say "Install:   $linux_bin"
+    fi
+    exit 0
+  fi
+
+  # ---- fetch and verify --------------------------------------------------------
+
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/ordewell-desktop.XXXXXX") || die "could not make a temporary directory"
+  trap cleanup EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM HUP
+
+  if [ -n "${ORDEWELL_DESKTOP_FROM:-}" ]; then
+    [ -f "$ORDEWELL_DESKTOP_FROM/SHA256SUMS" ] || die "no SHA256SUMS in $ORDEWELL_DESKTOP_FROM (node scripts/desktop-release-assets.mjs <dir> writes it)"
+    [ -f "$ORDEWELL_DESKTOP_FROM/$asset" ] || die "no $asset in $ORDEWELL_DESKTOP_FROM"
+    cp "$ORDEWELL_DESKTOP_FROM/SHA256SUMS" "$tmp/SHA256SUMS"
+    # A copy, so what is checked is what is installed.
+    cp "$ORDEWELL_DESKTOP_FROM/$asset" "$tmp/$asset"
+  else
+    say "Downloading $asset from $source_desc"
+    fetch "$sums_url" "$tmp/SHA256SUMS"
+    fetch "$asset_url" "$tmp/$asset"
+  fi
+
+  expected=$(awk -v name="$asset" '$2 == name || $2 == "*" name { print $1; exit }' "$tmp/SHA256SUMS" | tr 'A-F' 'a-f')
+  case $expected in
+    *[!0-9a-f]*|'') die "SHA256SUMS has no checksum for $asset" ;;
+  esac
+  [ "${#expected}" = 64 ] || die "SHA256SUMS has no checksum for $asset"
+  actual=$(sha256_of "$tmp/$asset" | tr 'A-F' 'a-f')
+  if [ "$actual" != "$expected" ]; then
+    note "ordewell-desktop: the checksum of $asset does not match SHA256SUMS."
+    note "  expected $expected"
+    note "  got      $actual"
+    note "Nothing was installed. If a release was published while this ran, run it again."
+    exit 1
+  fi
+  say "Checksum verified (sha256 $actual)"
+
+  # The release's version, when SHA256SUMS can say it: the versioned name that
+  # has the same hash as the fixed one.
+  installed_version=$(awk -v hash="$expected" -v name="$asset" '$1 == hash && $2 != name { print $2 }' "$tmp/SHA256SUMS" \
+    | sed -n "s/^Ordewell-\\(.*\\)-$platform-$arch\\.[A-Za-z]*\$/\\1/p" | head -n 1)
+  label=Ordewell
+  [ -z "$installed_version" ] || label="Ordewell $installed_version"
+
+  # ---- install -----------------------------------------------------------------
+
+  if [ "$platform" = mac ]; then
+    install_mac
+  elif [ "$want_deb" = 1 ]; then
+    install_linux_deb
+  else
+    install_linux_appimage
+  fi
+}
+
+main "$@"

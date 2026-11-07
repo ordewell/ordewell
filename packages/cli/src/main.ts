@@ -2,13 +2,14 @@
 import { resolve } from 'path';
 import { migrateOldConfigDir } from '@ordewell/core';
 import { loadEnvFile, moveAutonomyToSettings } from './utils/env';
-import { printHelp } from './help';
+import { printCommandHelp, printHelp } from './help';
 import { describeConnectionRefused, isConnectionRefused, resolvePort } from './daemon';
 import { ApiClient } from './apiClient';
 import { COMMANDS } from './commands/registry';
 import { cliVersion } from './version';
 import { startHeadlessVersionCheck } from './versionCheck';
 import { expandSessionId, flag } from './utils';
+import { wantsHelp } from './utils/args';
 import { suggestForLongDash } from './utils/longDash';
 
 const TUI_FLAGS = new Set(['--workspace', '--port']);
@@ -53,6 +54,13 @@ async function main(): Promise<void> {
     }
     console.error('Run `ordewell --help` for usage.');
     process.exit(1);
+    return;
+  }
+  // `--help` among a command's arguments is a request for help, whatever the
+  // command: it never reaches the handler, which would act on it or ignore it.
+  if (wantsHelp(argv.slice(1))) {
+    printCommandHelp(command);
+    return;
   }
   // The TUI starts its own, to draw it in its frame: one check per start either
   // way. `update` asks the tool it runs for the latest, and never pings (ADR-0048).
