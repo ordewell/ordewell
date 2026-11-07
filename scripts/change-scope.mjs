@@ -202,11 +202,14 @@ const owes = (...checks) => () => ({ checks });
 
 /**
  * Paths outside every workspace that only some checks read, each with what it
- * owes. A path matching none of these, everything under scripts/ and packaging/
- * included, means the full run: the installers, the release scripts and the
- * binary's build (scripts/sea/, packaging/sea/) are tested in the bench step
- * and read by more than one job, and the root manifests, the lockfile and the
- * workflows change what every job installs or runs.
+ * owes. Under scripts/ and packaging/ only files named here are judged: an
+ * installer, a manifest template or a release script owes the bench step that
+ * tests it, and none of them reaches the desktop tour. A path matching none of
+ * these means the full run: a new file under scripts/ or packaging/, the
+ * scripts that decide what CI runs (ci.mjs, change-scope.mjs, ci-scope.mjs,
+ * test-changed.mjs, npm.mjs), generate-third-party-notices.mjs, which every
+ * package build runs, and the root manifests, the lockfile and the workflows,
+ * which change what every job installs or runs.
  */
 const ROOT_OWNERS = [
   // Root lint (`eslint . --ext .ts,.tsx`) reads it, and so does ui's
@@ -254,6 +257,42 @@ const ROOT_OWNERS = [
   [/^bench\/lab\//, owes('bench')],
   // Its tests run in bench, and root lint reads its entry.ts.
   [/^bench\/scale\//, owes('bench', 'lint')],
+
+  // scripts/ and packaging/: each named file owes what reads it. test:bench
+  // runs scripts/**/*.test.mjs, so what only those tests read owes bench
+  // (and, through it, windows-harness). release.yml and homebrew-publish.yml
+  // read some of these too, but no pull request runs either.
+  //
+  // The one-line installers: their tests run them against fake releases.
+  [/^scripts\/install\/(cli\.sh|desktop\.sh|desktop\.ps1|cli\.test\.mjs|desktop\.test\.mjs)$/, owes('bench')],
+  // The package-manager manifests and the release's own scripts: the
+  // templates are read by the renderer alone, and every one of these is run or
+  // read by its tests and by no workspace, job step or build.
+  [/^packaging\/homebrew\/[^/]+\.rb\.tmpl$|^packaging\/winget\/[^/]+\.yaml\.tmpl$/, owes('bench')],
+  [/^scripts\/(render-package-manifests(\.test)?\.mjs|publish-tap\.(sh|test\.mjs)|homebrew-publish\.test\.mjs|verify-brew-install\.sh)$/, owes('bench')],
+  [/^scripts\/(desktop-release-assets\.mjs|release-latest(\.test)?\.mjs|(cli|desktop)-release\.test\.mjs)$/, owes('bench')],
+  // The standalone binary's build (ADR-0065): build-and-test builds and drives
+  // it, and its tests read it. Only a macOS signature reads the entitlements,
+  // which cli-build.yml makes; it builds every target on its own for a pull
+  // request that touches scripts/sea/ or packaging/sea/.
+  [/^scripts\/sea\/build\.mjs$/, owes('binary', 'bench')],
+  [/^scripts\/sea\/build\.test\.mjs$|^packaging\/sea\/entitlements\.plist$/, owes('bench')],
+  // What the package job's verify-artifacts step runs (package-check.mjs
+  // imports the desktop check), and tests read. desktop-build.yml runs the
+  // desktop check on its own for a pull request that touches it.
+  [/^scripts\/(desktop-)?package-check\.mjs$/, owes('package', 'bench')],
+  // Tests of desktop's packaging scripts, and the one that keeps their stdout clean.
+  [/^scripts\/(desktop-package-check|desktop-package|test-stdout)\.test\.mjs$/, owes('bench')],
+  // Selection's own tests. Selection itself, ci-scope.mjs and the rest of
+  // what decides what CI runs are not here: they mean the full run.
+  [/^scripts\/change-scope\.test\.mjs$/, owes('bench')],
+  // build-and-test's verify-scripts step runs each on every change, so only
+  // windows-harness, which runs them too, is owed.
+  [/^scripts\/verify-(adr|fresh-install|migration|notice|skills)\.mjs$/, owes('harness')],
+  // The real bubblewrap e2e (the sandbox step) and the container suites
+  // (test:containers, the real engine); nothing else runs either.
+  [/^scripts\/linux-sandbox-e2e\.sh$/, owes('sandbox')],
+  [/^scripts\/container-e2e\.mjs$/, owes('engine')],
 ];
 
 /** What a path owes, or nothing when only the full run can judge it. */
