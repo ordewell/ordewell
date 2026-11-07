@@ -57,70 +57,36 @@ Ordewell is pre-1.0, so minor releases can include breaking changes. Read the
   <tr><td><b>Run controls</b></td><td>Watch tasks live, review their reports and choose whether to automate execution or merging.</td></tr>
   <tr><td><b>Usage limits</b></td><td>Tasks pause when an agent hits its account limit. Resume later or move unfinished work to another agent.</td></tr>
   <tr><td><b>Planner choices</b></td><td>Plan with a supported coding agent without an extra API key, or use an API provider. The planner reads your repository; changes run through tasks in the plan.</td></tr>
-  <tr><td><b>Interfaces</b></td><td>Use the terminal UI, VS Code extension, CLI or local API. A desktop app is coming.</td></tr>
+  <tr><td><b>Interfaces</b></td><td>Use the terminal UI, VS Code extension, CLI or local API.</td></tr>
   <tr><td><b>Skills</b></td><td>Share your team's instructions in repository skills that the planner attaches to tasks across runners.</td></tr>
 </table>
 
 ## Installation
 
-On Linux and macOS the CLI and terminal UI install as one standalone binary:
-
 ```bash
+# macOS and Linux
 curl -fsSL https://ordewell.ai/install.sh | sh
-```
 
-It installs to `~/.local/bin/ordewell`; set `ORDEWELL_INSTALL_DIR` to put it
-elsewhere. Pass options after `sh -s --`: `--version X.Y.Z` for a specific
-release, `--dry-run` to see what it would do and `--uninstall` to remove it.
-The binary is for glibc-based Linux; Alpine and other musl systems install with
-npm (below). With Homebrew:
-
-```bash
+# Homebrew
 brew install ordewell/tap/ordewell
-```
 
-Prefer npm, or on Windows, where the standalone binary is not available yet?
-`npx ordewell` runs it without installing (Node.js 20.3 or newer). To keep it:
-
-```bash
+# npm: Windows, Alpine Linux, or if you prefer it (Node.js 20.3 or newer)
 npm install -g ordewell
 ```
 
-`ordewell update` updates the CLI the way it was installed: it runs the
-installer again into the binary's own folder, `brew upgrade ordewell`, or
-`npm install -g ordewell@latest`, and `ordewell update --dry-run` prints the
-command without running it. In the terminal UI, `/update` does the same.
+`ordewell update` upgrades Ordewell however you installed it. To see the
+installer's options, such as another folder or uninstalling, run
+`curl -fsSL https://ordewell.ai/install.sh | sh -s -- --help`.
 
-For VS Code, install [Ordewell from the Marketplace](https://marketplace.visualstudio.com/items?itemName=ordewell.ordewell)
-or run `code --install-extension ordewell.ordewell`. In Cursor, Windsurf or VSCodium,
-get it from [Open VSX](https://open-vsx.org/extension/ordewell/ordewell). The
-extension bundles its own core and needs nothing from npm.
+For VS Code, install Ordewell from the [Marketplace](https://marketplace.visualstudio.com/items?itemName=ordewell.ordewell).
+In Cursor, Windsurf or VSCodium, get it from [Open VSX](https://open-vsx.org/extension/ordewell/ordewell).
 
-**Requirements:** a supported coding agent, installed and signed in. Node.js is
-not required for the standalone binary; only the npm install needs 20.3 or
-newer. git is optional: without it, or outside a git repository, tasks run
-directly in the folder without worktrees. git 2.38 or newer is recommended, for
-isolated worktrees, delegated tasks (a child plan needs its own worktree) and
-Merge all.
+**Requirements:** a [supported coding agent](https://ordewell.ai/docs#runners),
+installed and signed in. git 2.38 or newer is recommended: tasks then run in
+their own worktrees. Without it, they run directly in your folder.
 
-The five ACP runners can also plan and run read-only tasks. Install GitHub
-Copilot CLI 1.0.105+, Qwen Code 0.26.6+, Cline 3.0.74+, or Gemini CLI
-0.66.0+ as applicable. Cursor CLI reports no version for Ordewell to check;
-it was tested with 2026.10.22. Sign in through each agent's CLI, or use `/key`
-to save a Google Gemini key for Gemini CLI. Cursor can change its own default
-model when a writable task selects one. See the [0.12.6 changelog](CHANGELOG.md#0126---2026-11-05)
-for runner-specific behavior and read-only restrictions.
-
-### Windows
-
-The VS Code extension, the full-screen terminal UI and the `ordewell` commands
-(`plan`, `run`, `handoff` and the rest) run natively on Windows. Install Git
-for Windows: the planner's research commands run in its shell. For Codex tasks,
-[set up Codex's own sandbox](docs/troubleshooting.md#codexs-windows-sandbox-is-not-set-up)
-once. Windows installs with npm for now, and the terminal UI's mouse and paste
-need Node.js 22.17 or newer there.
-See the [platform notes](https://ordewell.ai/docs#platforms) for setup and
-current limitations.
+**On Windows**, install with npm. [Git for Windows](https://gitforwindows.org/)
+is required. See the [platform notes](https://ordewell.ai/docs#platforms).
 
 ## Quick start
 
@@ -134,15 +100,6 @@ Ordewell also supports [command-line workflows](https://ordewell.ai/docs#first-p
 for scripting.
 
 Tried it? [Tell us how your first run went](https://github.com/ordewell/ordewell/discussions/115).
-
-## Desktop app
-
-A desktop app for macOS, Windows and Linux is coming: the planner, the plan and
-its tasks, your repository's files, diffs and git, and a terminal, in one
-window. It is a client of the same local daemon, so a run started there is the
-one `ordewell status` reports. It is not in a release yet, so there is no
-installer to download. The [desktop guide](docs/desktop/README.md) covers
-running it from source and what the window holds.
 
 ## See it in action
 
