@@ -9,6 +9,7 @@ import { COMMANDS } from './commands/registry';
 import { cliVersion } from './version';
 import { startHeadlessVersionCheck } from './versionCheck';
 import { expandSessionId, flag } from './utils';
+import { suggestForLongDash } from './utils/longDash';
 
 const TUI_FLAGS = new Set(['--workspace', '--port']);
 
@@ -44,6 +45,12 @@ async function main(): Promise<void> {
   const handler = COMMANDS[command];
   if (!handler) {
     console.error(`Unknown command: ${command}`);
+    const suggestion = suggestForLongDash(command);
+    if (suggestion) {
+      console.error(
+        `Did you mean ${suggestion}? It starts with a long dash (${command[0]}) where -- was meant; some keyboards and apps make that change.`,
+      );
+    }
     console.error('Run `ordewell --help` for usage.');
     process.exit(1);
   }
