@@ -17,6 +17,16 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   never be used, or one on a host where containers do not run, now refuses the
   task right away, instead of after the Docker engine answers, which could take
   minutes when Docker was slow or stuck.
+- **The installer names every other `ordewell` on your PATH.** It used to warn
+  only about a copy that came before the one it installed. Now it also names a
+  copy later on PATH, such as an earlier `npm install -g ordewell`, with how to
+  remove it, and says that a terminal that already ran `ordewell` may keep
+  running that copy until `hash -r` or a new terminal
+  ([troubleshooting](docs/troubleshooting.md#ordewell---version-still-shows-the-old-version-after-installing)).
+- **A long dash in place of `--` gets a hint.** `ordewell —version`, `—help`
+  and the other top-level options typed with a long dash (some keyboards and
+  apps turn `--` into one) now say which option was meant, instead of only
+  Unknown command.
 ### Added
 
 - **Switch project from any desktop window.** The File menu has Open Folder…,

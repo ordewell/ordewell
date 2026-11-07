@@ -204,6 +204,44 @@ one your shell finds.
 Install a newer git; on Ubuntu, the [git maintainers' PPA](https://launchpad.net/~git-core/+archive/ubuntu/ppa)
 has one. Then restart the Ordewell server, so that it finds the new one.
 
+## `ordewell --version` still shows the old version after installing
+
+You installed a new version, with `install.sh` or Homebrew, and
+`ordewell --version` in the same terminal prints the version you had before.
+
+### Cause
+
+Another copy of `ordewell` is on your `PATH`, often an earlier `npm install -g
+ordewell`. bash and zsh remember where they found a command the first time it
+ran in a terminal, and keep running that copy until told to look again, even
+when the new one comes first on `PATH`. If the other copy comes first, every
+terminal runs it. The installer names every other `ordewell` it finds on `PATH`
+and how to remove each one.
+
+### Check it
+
+```bash
+which -a ordewell     # every ordewell on PATH, in the order a new terminal tries them
+```
+
+### Fix
+
+Make the terminal look again, or open a new one:
+
+```bash
+hash -r
+```
+
+Then remove the copy you no longer want:
+
+```bash
+npm uninstall -g ordewell     # a copy under node_modules, or an npm folder
+brew uninstall ordewell       # a copy under Homebrew's Cellar
+```
+
+Delete any other copy `which -a` lists, or put the folder of the one you want
+(`~/.local/bin` for `install.sh`) first on your `PATH`.
+
 ## Merge all refused: not on the base branch
 
 Ordewell shows **Merged nothing, so every tree is as it was: … is on `<branch>`;

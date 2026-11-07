@@ -391,8 +391,23 @@ case ":${PATH:-}:" in
     ;;
 esac
 
-# An older install (npm's, Homebrew's, another folder's) earlier on PATH would
-# still be the `ordewell` a new shell runs, so say which one and how to switch.
+# An ordewell this installer did not put there, and how to remove it, from its
+# path and, for a symlink, where that points: npm's or Homebrew's command, or
+# nothing when neither installed it.
+removal() {
+  removal_link=$1
+  if command -v readlink >/dev/null 2>&1; then
+    removal_link=$(readlink "$1" 2>/dev/null || printf '%s' "$1")
+  fi
+  case "$1 $removal_link" in
+    *node_modules*|*/npm/*) printf '%s' 'npm uninstall -g ordewell      # it was installed with npm' ;;
+    *Cellar*|*homebrew*|*linuxbrew*) printf '%s' 'brew uninstall ordewell        # it was installed with Homebrew' ;;
+  esac
+}
+
+# The first ordewell on PATH is what a new shell runs; an older install (npm's,
+# Homebrew's, another folder's) earlier than this one would still be it, so say
+# which one and how to switch.
 resolved=$(command -v "$BIN_NAME" 2>/dev/null || true)
 # A relative PATH entry is printed relative to this folder (`old/ordewell`), and
 # dash prints an empty entry's match as the bare name, so make it absolute.
@@ -402,30 +417,79 @@ case $resolved in
   */*) relative=1; resolved=$PWD/${resolved#./} ;;
   *) if [ -f "./$resolved" ]; then relative=1; resolved=$PWD/$resolved; else resolved=; fi ;;
 esac
-case $resolved in
-  /*)
-    # -ef is not in POSIX but every sh this runs under has it; it sees the same
-    # file through a symlinked folder or a doubled slash.
+# -ef is not in POSIX but every sh this runs under has it; it sees the same
+# file through a symlinked folder or a doubled slash.
+# shellcheck disable=SC3013
+if [ -n "$resolved" ] && { [ "$resolved" = "$bin_path" ] || [ "$resolved" -ef "$bin_path" ]; }; then
+  resolved=
+fi
+
+# Every other ordewell anywhere on PATH. A shell that ran one before this install
+# remembers (hashes) its path and keeps running it, so a copy after this one
+# matters too. None is run to ask its version: an old one's startup migrates
+# config files, and sh has no portable timeout.
+others=
+case $- in *f*) had_noglob=1 ;; *) had_noglob= ;; esac
+had_ifs=${IFS+1}
+saved_ifs=${IFS-}
+# Puts back the field splitting and globbing the PATH walk changed.
+restore_split() {
+  if [ -n "$had_ifs" ]; then IFS=$saved_ifs; else unset IFS; fi
+  [ -n "$had_noglob" ] || set +f
+}
+set -f
+IFS=:
+# The ':' appended keeps a trailing empty entry, which field splitting drops.
+for dir in ${PATH:+$PATH:}; do
+  case $dir in
+    ''|.) dir=$PWD ;;
+    ./*) dir=$PWD/${dir#./} ;;
+    /*) ;;
+    *) dir=$PWD/$dir ;;
+  esac
+  file=${dir%/}/$BIN_NAME
+  { [ -f "$file" ] && [ -x "$file" ]; } || continue
+  # shellcheck disable=SC3013
+  if [ "$file" = "$bin_path" ] || [ "$file" -ef "$bin_path" ]; then continue; fi
+  # shellcheck disable=SC3013
+  if [ -n "$resolved" ] && [ "$file" -ef "$resolved" ]; then continue; fi
+  seen=
+  for other in $others; do
     # shellcheck disable=SC3013
-    if [ "$resolved" != "$bin_path" ] && ! [ "$resolved" -ef "$bin_path" ]; then
-      link=$resolved
-      if command -v readlink >/dev/null 2>&1; then
-        link=$(readlink "$resolved" 2>/dev/null || printf '%s' "$resolved")
-      fi
-      say ""
-      say "Another ordewell comes first on your PATH: $resolved"
-      [ -n "$relative" ] && say "(found through a PATH entry relative to the folder you are in, $PWD)"
-      say "Typing ordewell runs that one, not the copy just installed. To use $bin_path:"
-      case "$resolved $link" in
-        *node_modules*|*/npm/*) say "  npm uninstall -g ordewell      # it was installed with npm" ;;
-        *Cellar*|*homebrew*|*linuxbrew*) say "  brew uninstall ordewell        # it was installed with Homebrew" ;;
-        *) say "  remove $resolved" ;;
-      esac
-      say "  or put $install_dir before ${resolved%/*} on your PATH."
-      say "Then run: hash -r    (or open a new terminal)"
-    fi
-    ;;
-esac
+    if [ "$file" -ef "$other" ]; then seen=1; break; fi
+  done
+  [ -n "$seen" ] || others=${others:+$others:}$file
+done
+restore_split
+
+# Says each of $others and how to remove it, in PATH's order.
+say_others() {
+  set -f
+  IFS=:
+  for other in $others; do
+    say "Another ordewell is also on your PATH$1: $other"
+    how=$(removal "$other")
+    say "  To remove it: ${how:-delete $other}"
+  done
+  restore_split
+}
+
+if [ -n "$resolved" ]; then
+  say ""
+  say "Another ordewell comes first on your PATH: $resolved"
+  [ -n "$relative" ] && say "(found through a PATH entry relative to the folder you are in, $PWD)"
+  say "Typing ordewell runs that one, not the copy just installed. To use $bin_path:"
+  how=$(removal "$resolved")
+  say "  ${how:-remove $resolved}"
+  say "  or put $install_dir before ${resolved%/*} on your PATH."
+  say_others ''
+  say "Then run: hash -r    (or open a new terminal)"
+elif [ -n "$others" ]; then
+  say ""
+  say_others ', after this one'
+  say "New terminals run ordewell $installed_version."
+  say "A terminal that already ran ordewell may still run the copy it found then, until you run: hash -r    (or open a new terminal)"
+fi
 
 # ---- what Ordewell works with: reported, never installed -----------------------
 
