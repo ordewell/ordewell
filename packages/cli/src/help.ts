@@ -1,6 +1,30 @@
 import { DELEGATION_OFFERED, containersOffered } from '@ordewell/core';
 import { plannerIdList, runnerIdList } from './runnerNames';
 
+/**
+ * Usage for the commands that have text of their own; every other command's
+ * `--help` prints the global help, which lists it and its options.
+ */
+const COMMAND_HELP: Record<string, string> = {
+  update: `Usage: ordewell update [--dry-run]
+
+Update Ordewell the way it was installed: the installer for a standalone
+binary, \`brew upgrade ordewell\` for Homebrew, \`npm install -g\` for an npm copy.
+A copy no command can update in place (npx, a project's own install, a source
+checkout) is told what would, and nothing runs.
+
+Options:
+  --dry-run   Print the command that would run; run nothing
+  -h, --help  Show this help`,
+};
+
+/** \`ordewell <command> --help\`: that command's usage, or the global help when it has none of its own. */
+export function printCommandHelp(command: string): void {
+  const own = COMMAND_HELP[command];
+  if (own) console.log(own);
+  else printHelp();
+}
+
 // The `web_search:` provider names further down are search providers, named as
 // an approval names them, not runner ids.
 export function printHelp(): void {

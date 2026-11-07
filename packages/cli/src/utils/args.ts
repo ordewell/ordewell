@@ -57,3 +57,19 @@ export function positionals(args: string[]): string[] {
   }
   return out;
 }
+
+/**
+ * Whether a command's arguments ask for its help: a bare `--help` or `-h`.
+ * An argument is only ever the exact token, so a quoted sentence that contains
+ * "--help" is text; the value a flag consumes (`--goal -h`) is text too; and
+ * nothing after a `--` separator is read as an option.
+ */
+export function wantsHelp(args: string[]): boolean {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--') return false;
+    if (arg === '--help' || arg === '-h') return true;
+    if (VALUE_FLAGS.has(arg)) i++;
+  }
+  return false;
+}
