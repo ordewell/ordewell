@@ -64,6 +64,16 @@ say() { printf '%s\n' "$*"; }
 note() { printf '%s\n' "$*" >&2; }
 die() { printf 'ordewell: %s\n' "$*" >&2; exit 1; }
 
+# Colour for what the user must act on, only on a terminal that shows it.
+# Through `curl ... | sh` stdin is the pipe but stdout is still the terminal.
+# NO_COLOR wins; FORCE_COLOR or CLICOLOR_FORCE, other than 0, forces it on.
+red= bold= off=
+forced() { [ -n "$1" ] && [ "$1" != 0 ]; }
+if [ -z "${NO_COLOR:-}" ] && { forced "${FORCE_COLOR:-}" || forced "${CLICOLOR_FORCE:-}" || { [ -t 1 ] && [ "${TERM:-}" != dumb ]; }; }; then
+  esc=$(printf '\033')
+  red="${esc}[1;31m" bold="${esc}[1m" off="${esc}[0m"
+fi
+
 usage() {
   cat <<'EOF'
 Installs the Ordewell command-line app for the current user (macOS and Linux).
@@ -369,20 +379,6 @@ fi
 installed_version=$(printf '%s\n' "$version_out" | head -n 1)
 say "Installed ordewell $installed_version to $bin_path"
 
-case ":${PATH:-}:" in
-  *":$install_dir:"*) ;;
-  *)
-    say ""
-    say "$install_dir is not on your PATH. Add it for your shell, then open a new terminal:"
-    case $(basename "${SHELL:-sh}") in
-      fish) say "  fish_add_path \"$install_dir\"" ;;
-      zsh) say "  echo 'export PATH=\"$install_dir:\$PATH\"' >> ~/.zshrc" ;;
-      bash) say "  echo 'export PATH=\"$install_dir:\$PATH\"' >> ~/.bashrc" ;;
-      *) say "  export PATH=\"$install_dir:\$PATH\"    # add this line to your shell's startup file" ;;
-    esac
-    ;;
-esac
-
 # An ordewell this installer did not put there, and how to remove it, from its
 # path and, for a symlink, where that points: npm's or Homebrew's command, or
 # nothing when neither installed it.
@@ -392,8 +388,8 @@ removal() {
     removal_link=$(readlink "$1" 2>/dev/null || printf '%s' "$1")
   fi
   case "$1 $removal_link" in
-    *node_modules*|*/npm/*) printf '%s' 'npm uninstall -g ordewell      # it was installed with npm' ;;
-    *Cellar*|*homebrew*|*linuxbrew*) printf '%s' 'brew uninstall ordewell        # it was installed with Homebrew' ;;
+    *node_modules*|*/npm/*) printf '%s' "${bold}npm uninstall -g ordewell${off}      # it was installed with npm" ;;
+    *Cellar*|*homebrew*|*linuxbrew*) printf '%s' "${bold}brew uninstall ordewell${off}        # it was installed with Homebrew" ;;
   esac
 }
 
@@ -459,29 +455,53 @@ say_others() {
   set -f
   IFS=:
   for other in $others; do
-    say "Another ordewell is also on your PATH$1: $other"
+    say "Another ordewell is $1on your PATH$2: $other"
     how=$(removal "$other")
     say "  To remove it: ${how:-delete $other}"
   done
   restore_split
 }
 
-if [ -n "$resolved" ]; then
-  say ""
-  say "Another ordewell comes first on your PATH: $resolved"
-  [ -n "$relative" ] && say "(found through a PATH entry relative to the folder you are in, $PWD)"
-  say "Typing ordewell runs that one, not the copy just installed. To use $bin_path:"
-  how=$(removal "$resolved")
-  say "  ${how:-remove $resolved}"
-  say "  or put $install_dir before ${resolved%/*} on your PATH."
-  say_others ''
-  say "Then run: hash -r    (or open a new terminal)"
-elif [ -n "$others" ]; then
-  say ""
-  say_others ', after this one'
-  say "New terminals run ordewell $installed_version."
-  say "A terminal that already ran ordewell may still run the copy it found then, until you run: hash -r    (or open a new terminal)"
-fi
+# What the user must act on, last on screen so it does not scroll past: the
+# PATH line to add, then any other ordewell. A shell that ran an old copy keeps
+# its remembered path, and once that copy is removed fails with "No such file
+# or directory", so hash -r stays the step for this terminal either way.
+closing() {
+  case ":${PATH:-}:" in
+    *":$install_dir:"*) ;;
+    *)
+      say ""
+      say "$install_dir is not on your PATH. Add it for your shell, then open a new terminal:"
+      case $(basename "${SHELL:-sh}") in
+        fish) say "  ${bold}fish_add_path \"$install_dir\"${off}" ;;
+        zsh) say "  ${bold}echo 'export PATH=\"$install_dir:\$PATH\"' >> ~/.zshrc${off}" ;;
+        bash) say "  ${bold}echo 'export PATH=\"$install_dir:\$PATH\"' >> ~/.bashrc${off}" ;;
+        *) say "  ${bold}export PATH=\"$install_dir:\$PATH\"${off}    # add this line to your shell's startup file" ;;
+      esac
+      ;;
+  esac
+  if [ -n "$resolved" ]; then
+    say ""
+    say "${red}Typing ordewell, even in a new terminal, runs another copy, not the one just installed.${off}"
+    say "It comes first on your PATH: $resolved"
+    [ -n "$relative" ] && say "(found through a PATH entry relative to the folder you are in, $PWD)"
+    say "To use $bin_path instead:"
+    how=$(removal "$resolved")
+    say "  ${how:-delete $resolved}"
+    say "  or put $install_dir before ${resolved%/*} on your PATH."
+    say_others 'also ' ''
+    say "Either way, this terminal keeps running the copy it ran before until you run:"
+  elif [ -n "$others" ]; then
+    say ""
+    say "${red}This terminal may still run another ordewell, not the one just installed.${off}"
+    say_others '' ', after this one'
+    say "New terminals run the new one."
+    say "This terminal keeps running the copy it ran before, even once that copy is removed, until you run:"
+  else
+    return 0
+  fi
+  say "  ${bold}hash -r${off}      # or open a new terminal"
+}
 
 # ---- what Ordewell works with: reported, never installed -----------------------
 
@@ -519,13 +539,18 @@ else
   say "No coding agent was found on PATH. Ordewell needs one, installed and signed in: $all_agents."
 fi
 
-[ "$want_desktop" = 1 ] || exit 0
-# A release made with the desktop app left out (release.yml's
-# ORDEWELL_RELEASE_DESKTOP off, ADR-0065 C10) lists only the CLI's files. The
-# CLI stays installed; the exit status tells a calling script the app is not.
-if ! awk '{ name = $2; sub(/^\*/, "", name); if (name ~ /^Ordewell-/) { found = 1; exit } } END { exit !found }' "$tmp/SHA256SUMS"; then
-  note ""
-  note "The Ordewell desktop app isn't released yet, so --desktop installed nothing more. The CLI is installed."
-  exit 1
+exit_status=0
+if [ "$want_desktop" = 1 ]; then
+  # A release made with the desktop app left out (release.yml's
+  # ORDEWELL_RELEASE_DESKTOP off, ADR-0065 C10) lists only the CLI's files. The
+  # CLI stays installed; the exit status tells a calling script the app is not.
+  if awk '{ name = $2; sub(/^\*/, "", name); if (name ~ /^Ordewell-/) { found = 1; exit } } END { exit !found }' "$tmp/SHA256SUMS"; then
+    run_desktop
+  else
+    note ""
+    note "The Ordewell desktop app isn't released yet, so --desktop installed nothing more. The CLI is installed."
+    exit_status=1
+  fi
 fi
-run_desktop
+closing
+exit "$exit_status"

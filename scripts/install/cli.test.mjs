@@ -115,6 +115,18 @@ function install(args = [], { dir = release(), shims = [], env = {}, home = scra
   return { ...run(args, { shims: [linux(), ...shims], env: { HOME: home, ORDEWELL_CLI_FROM: dir, ORDEWELL_INSTALL_DIR: target, ...env } }), target };
 }
 
+/** The heading of the notice about another ordewell, when that copy is what `ordewell` runs. */
+const FIRST_HEADING = 'Typing ordewell, even in a new terminal, runs another copy, not the one just installed.';
+/** Its heading when the other copy only comes later on PATH. */
+const LATER_HEADING = 'This terminal may still run another ordewell, not the one just installed.';
+/** Any line of that notice, for a test that expects none. */
+const NOTICE = /runs another copy|may still run another ordewell|on your PATH(, after this one)?: |hash -r|To remove it|New terminals/;
+const BOLD_RED = '\x1b[1;31m';
+const BOLD = '\x1b[1m';
+const OFF = '\x1b[0m';
+const escaped = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const LATER_HEADING_RE = new RegExp(escaped(LATER_HEADING));
+
 describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer; Windows installs with `npm install -g ordewell`' : false }, () => {
   it('installs the latest release: an executable binary that runs, with no temporary file beside it', () => {
     const { status, stdout, stderr, target } = install();
@@ -477,7 +489,7 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
       for (const first of [target, `${target}/`, alias]) {
         const result = install([], { home, target, env: { PATH: [first, linux(), toolbox, target].join(delimiter) } });
         assert.equal(result.status, 0, result.stderr);
-        assert.doesNotMatch(result.stdout, /Another ordewell/);
+        assert.doesNotMatch(result.stdout, NOTICE);
       }
     });
 
@@ -506,9 +518,15 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
         assert.equal(result.status, 0, result.stderr);
         // The case being reported: what the next `ordewell` runs is the old one.
         assert.equal(spawnSync(whichSh(shell), ['-c', 'ordewell --version'], { env: { PATH }, encoding: 'utf8' }).stdout.trim(), 'ordewell 0.12.6');
-        assert.match(result.stdout, new RegExp(`Another ordewell comes first on your PATH: ${npmBin}/ordewell`));
-        assert.match(result.stdout, /npm uninstall -g ordewell/);
+        assert.match(result.stdout, new RegExp(`${escaped(FIRST_HEADING)}\\nIt comes first on your PATH: ${npmBin}/ordewell\\n`));
+        assert.match(result.stdout, new RegExp(`To use ${target}/ordewell instead:\\n  npm uninstall -g ordewell .*# it was installed with npm\\n`));
         assert.match(result.stdout, new RegExp(`put ${target} before ${npmBin} on your PATH`));
+        assert.equal(result.stdout.split('\n').filter((line) => line.includes(`${npmBin}/ordewell`)).length, 1, result.stdout);
+        assert.equal(result.stdout.match(/npm uninstall -g ordewell/g)?.length, 1, result.stdout);
+        // Removing the copy leaves a terminal that ran it pointing at a missing file, so hash -r is still the step.
+        assert.match(result.stdout, /this terminal keeps running the copy it ran before until you run:\n  hash -r +# or open a new terminal\n/);
+        assert.equal(result.stdout.match(/hash -r/g)?.length, 1, result.stdout);
+        assert.doesNotMatch(result.stdout, LATER_HEADING_RE);
       });
 
       // What a real user saw: npm's 0.12.6 later on a PATH that lists both folders
@@ -524,10 +542,13 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
         assert.equal(result.status, 0, result.stderr);
         assert.equal(spawnSync(whichSh(shell), ['-c', 'ordewell --version'], { env: { PATH }, encoding: 'utf8' }).stdout.trim(), `ordewell ${VERSION}`);
         assert.equal(result.stdout.split('\n').filter((line) => line.includes(`${npmBin}/ordewell`)).length, 1, result.stdout);
-        assert.match(result.stdout, new RegExp(`Another ordewell is also on your PATH, after this one: ${npmBin}/ordewell\\n`));
-        assert.match(result.stdout, /npm uninstall -g ordewell/);
-        assert.match(result.stdout, /hash -r/);
-        assert.doesNotMatch(result.stdout, /comes first/);
+        assert.match(result.stdout, new RegExp(`${escaped(LATER_HEADING)}\\nAnother ordewell is on your PATH, after this one: ${npmBin}/ordewell\\n  To remove it: npm uninstall -g ordewell .*# it was installed with npm\\n`));
+        assert.equal(result.stdout.match(/npm uninstall -g ordewell/g)?.length, 1, result.stdout);
+        // Removal alone is not enough for this terminal: it says hash -r, once, on a line of its own.
+        assert.match(result.stdout, /New terminals run the new one\.\nThis terminal keeps running the copy it ran before, even once that copy is removed, until you run:\n  hash -r +# or open a new terminal\n$/);
+        assert.equal(result.stdout.match(/hash -r/g)?.length, 1, result.stdout);
+        assert.doesNotMatch(result.stdout, /comes first|runs another copy/);
+        assert.doesNotMatch(result.stdout, /\x1b/, 'no colour when stdout is not a terminal');
       });
 
       // `command -v` prints a relative PATH entry's match as `old/ordewell`,
@@ -547,8 +568,8 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
           assert.equal(result.status, 0, result.stderr);
           assert.equal(spawnSync(whichSh(shell), ['-c', 'ordewell --version'], { cwd, env: { PATH }, encoding: 'utf8' }).stdout.trim(), 'ordewell 0.12.6');
           const shown = join(old, 'ordewell');
-          assert.match(result.stdout, new RegExp(`Another ordewell comes first on your PATH: ${shown}\\n`));
-          assert.match(result.stdout, new RegExp(`remove ${shown}\\n`));
+          assert.match(result.stdout, new RegExp(`It comes first on your PATH: ${shown}\\n`));
+          assert.match(result.stdout, new RegExp(`  delete ${shown}\\n`));
           assert.match(result.stdout, new RegExp(`put ${target} before ${old.replace(/\/$/, '')} on your PATH`));
           assert.match(result.stdout, /relative to the folder you are in/);
         });
@@ -560,7 +581,7 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
       mkdirSync(join(home, 'bin'), { recursive: true });
       const result = spawnSync(REAL_SH, [SH], { cwd: home, env: { PATH: ['bin', linux(), toolbox].join(':'), HOME: home, TMPDIR: tmpdir(), ORDEWELL_CLI_FROM: release(), ORDEWELL_INSTALL_DIR: join(home, 'bin') }, encoding: 'utf8' });
       assert.equal(result.status, 0, result.stderr);
-      assert.doesNotMatch(result.stdout, /Another ordewell/);
+      assert.doesNotMatch(result.stdout, NOTICE);
     });
 
     it('names a Homebrew or any other earlier ordewell, with the way to remove it', () => {
@@ -569,12 +590,12 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
       mkdirSync(join(brew, 'bin'));
       symlinkSync('../Cellar/ordewell/0.12.6/bin/ordewell', join(brew, 'bin/ordewell'));
       const other = commands({ ordewell: 'echo "ordewell 0.11.0"' });
-      for (const [bin, hint] of [[join(brew, 'bin'), /brew uninstall ordewell/], [other, new RegExp(`remove ${other}/ordewell`)]]) {
+      for (const [bin, hint] of [[join(brew, 'bin'), /brew uninstall ordewell/], [other, new RegExp(`  delete ${other}/ordewell\\n`)]]) {
         const home = scratch('home');
         const target = join(home, 'bin');
         const result = install([], { home, target, env: { PATH: [bin, linux(), toolbox, target].join(delimiter) } });
         assert.equal(result.status, 0, result.stderr);
-        assert.match(result.stdout, new RegExp(`Another ordewell comes first on your PATH: ${bin}/ordewell`));
+        assert.match(result.stdout, new RegExp(`${escaped(FIRST_HEADING)}\\nIt comes first on your PATH: ${bin}/ordewell\\n`));
         assert.match(result.stdout, hint);
       }
     });
@@ -593,12 +614,13 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
       assert.match(
         result.stdout,
         new RegExp(
-          `Another ordewell is also on your PATH, after this one: ${brew}/bin/ordewell\\n  To remove it: brew uninstall ordewell .*# it was installed with Homebrew\\n`
-            + `Another ordewell is also on your PATH, after this one: ${other}/ordewell\\n  To remove it: delete ${other}/ordewell\\n`,
+          `${escaped(LATER_HEADING)}\\n`
+            + `Another ordewell is on your PATH, after this one: ${brew}/bin/ordewell\\n  To remove it: brew uninstall ordewell .*# it was installed with Homebrew\\n`
+            + `Another ordewell is on your PATH, after this one: ${other}/ordewell\\n  To remove it: delete ${other}/ordewell\\n`,
         ),
       );
       assert.equal(result.stdout.match(/hash -r/g)?.length, 1);
-      assert.doesNotMatch(result.stdout, /comes first/);
+      assert.doesNotMatch(result.stdout, /comes first|runs another copy/);
     });
 
     it('names an ordewell before the install folder and another after it, and says hash -r once', () => {
@@ -609,10 +631,64 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
       mkdirSync(target, { recursive: true });
       const result = install([], { home, target, env: { PATH: [before, linux(), toolbox, target, npmBin].join(delimiter) } });
       assert.equal(result.status, 0, result.stderr);
-      assert.match(result.stdout, new RegExp(`Another ordewell comes first on your PATH: ${before}/ordewell\\n`));
+      assert.match(result.stdout, new RegExp(`${escaped(FIRST_HEADING)}\\nIt comes first on your PATH: ${before}/ordewell\\n`));
       assert.match(result.stdout, new RegExp(`Another ordewell is also on your PATH: ${npmBin}/ordewell\\n  To remove it: npm uninstall -g ordewell`));
+      assert.doesNotMatch(result.stdout, LATER_HEADING_RE);
       assert.equal(result.stdout.split('\n').filter((line) => line.includes(`${before}/ordewell`)).length, 2, result.stdout);
       assert.equal(result.stdout.match(/hash -r/g)?.length, 1, result.stdout);
+    });
+
+    it('closes the output with the notice, after what it found about git and the coding agents', () => {
+      const npmBin = npmInstall();
+      const home = scratch('home');
+      const target = join(home, 'bin');
+      mkdirSync(target, { recursive: true });
+      const result = install([], { home, target, shims: [commands({ git: 'echo "git version 2.43.0"', claude: 'true' })], env: { PATH: [target, linux(), toolbox, npmBin].join(delimiter) } });
+      assert.equal(result.status, 0, result.stderr);
+      const heading = result.stdout.indexOf(LATER_HEADING);
+      assert.ok(heading > result.stdout.indexOf('git: 2.43 found.'), result.stdout);
+      assert.ok(heading > result.stdout.indexOf('Coding agents found: Claude Code (claude).'), result.stdout);
+      assert.ok(result.stdout.indexOf('git: ') > result.stdout.indexOf('Installed ordewell'), result.stdout);
+      assert.match(result.stdout, /hash -r +# or open a new terminal\n$/);
+    });
+
+    describe('in colour', () => {
+      /** An install with npm's copy later on PATH, so the notice prints, under `env`. */
+      const later = (env) => {
+        const npmBin = npmInstall();
+        const home = scratch('home');
+        const target = join(home, 'bin');
+        mkdirSync(target, { recursive: true });
+        return install([], { home, target, env: { PATH: [target, linux(), toolbox, npmBin].join(delimiter), ...env } });
+      };
+
+      it('makes the heading bold red and the commands bold when FORCE_COLOR or CLICOLOR_FORCE asks', () => {
+        for (const env of [{ FORCE_COLOR: '1' }, { CLICOLOR_FORCE: '1' }, { FORCE_COLOR: '1', TERM: 'dumb' }]) {
+          const result = later(env);
+          assert.equal(result.status, 0, result.stderr);
+          assert.ok(result.stdout.includes(`\n${BOLD_RED}${LATER_HEADING}${OFF}\n`), JSON.stringify(result.stdout));
+          assert.ok(result.stdout.includes(`\n  ${BOLD}hash -r${OFF}`), JSON.stringify(result.stdout));
+          assert.ok(result.stdout.includes(`To remove it: ${BOLD}npm uninstall -g ordewell${OFF}`), JSON.stringify(result.stdout));
+        }
+      });
+
+      it('makes the first-on-PATH heading and the PATH line bold too', () => {
+        const npmBin = npmInstall();
+        const result = install([], { env: { PATH: [npmBin, linux(), toolbox].join(delimiter), SHELL: '/bin/zsh', FORCE_COLOR: '1' } });
+        assert.equal(result.status, 0, result.stderr);
+        assert.ok(result.stdout.includes(`\n${BOLD_RED}${FIRST_HEADING}${OFF}\n`), JSON.stringify(result.stdout));
+        assert.ok(result.stdout.includes(`  ${BOLD}echo 'export PATH="${result.target}:$PATH"' >> ~/.zshrc${OFF}\n`), JSON.stringify(result.stdout));
+        assert.ok(result.stdout.includes(`  ${BOLD}npm uninstall -g ordewell${OFF}`), JSON.stringify(result.stdout));
+      });
+
+      it('has no escape codes when NO_COLOR is set, even with FORCE_COLOR, or when FORCE_COLOR is 0', () => {
+        for (const env of [{ FORCE_COLOR: '1', NO_COLOR: '1' }, { CLICOLOR_FORCE: '1', NO_COLOR: '1' }, { FORCE_COLOR: '0' }, { FORCE_COLOR: '' }]) {
+          const result = later(env);
+          assert.equal(result.status, 0, result.stderr);
+          assert.ok(result.stdout.includes(`\n${LATER_HEADING}\n`), result.stdout);
+          assert.doesNotMatch(result.stdout, /\x1b/);
+        }
+      });
     });
 
     it('says nothing about another ordewell, or hash -r, when there is none', () => {
@@ -621,7 +697,7 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
       mkdirSync(target, { recursive: true });
       const result = install([], { home, target, env: { PATH: [target, linux(), toolbox, target].join(delimiter) } });
       assert.equal(result.status, 0, result.stderr);
-      assert.doesNotMatch(result.stdout, /Another ordewell|hash -r|To remove it|New terminals/);
+      assert.doesNotMatch(result.stdout, NOTICE);
     });
 
     it('names an earlier ordewell beside the PATH hint, when the install folder is not on PATH', () => {
@@ -629,7 +705,12 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
       const result = install([], { env: { PATH: [npmBin, linux(), toolbox].join(delimiter), SHELL: '/bin/zsh' } });
       assert.equal(result.status, 0, result.stderr);
       assert.match(result.stdout, /is not on your PATH/);
-      assert.match(result.stdout, /Another ordewell comes first on your PATH/);
+      assert.match(result.stdout, new RegExp(`${escaped(FIRST_HEADING)}\\nIt comes first on your PATH: ${npmBin}/ordewell\\n`));
+      // Both things to act on close the output, after what it found about git and the agents.
+      const agents = result.stdout.indexOf('No coding agent was found');
+      assert.ok(agents > result.stdout.indexOf('git: '), result.stdout);
+      assert.ok(result.stdout.indexOf('is not on your PATH') > agents, result.stdout);
+      assert.ok(result.stdout.indexOf(FIRST_HEADING) > result.stdout.indexOf('is not on your PATH'), result.stdout);
     });
 
     it('leaves every profile alone', () => {
