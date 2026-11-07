@@ -8,6 +8,17 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The installer reads the whole script before running any of it.** A download
+  cut off midway now runs nothing, instead of running whatever arrived, and
+  `curl … | sh -s -- --help` no longer makes curl report a write error (23).
+- **`--uninstall` keeps `~/.ordewell/runtime` while another copy of ordewell is
+  on PATH,** since that copy uses the folder too. It says so, and removes the
+  folder once no other copy is left.
+- **`ordewell <command> --help` now prints that command's help instead of
+  running it, and `ordewell update` refuses options it doesn't know.**
+
 ## [0.13.1] - 2026-11-07
 
 ### Added

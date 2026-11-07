@@ -4,7 +4,7 @@
 // shims on PATH (`uname`, `dpkg`, `sudo`), so the Linux flow is exercised on a
 // Mac; what cannot be exercised here is skipped, and reported as skipped.
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
@@ -267,6 +267,66 @@ describe('desktop.sh', () => {
     if (!has('shellcheck')) return t.skip('shellcheck is not installed');
     const lint = spawnSync('shellcheck', ['--shell=sh', SH], { encoding: 'utf8' });
     assert.equal(lint.status, 0, lint.stdout);
+  });
+
+  describe('reads the whole script before it runs any of it', () => {
+    const text = readFileSync(SH, 'utf8');
+    const lines = text.split('\n');
+
+    /** Plays `curl … | sh` for a cut-off script against a fake release; returns the run and what it left behind. */
+    async function cutRun(cut) {
+      const home = scratch('home');
+      const prefix = join(home, 'prefix');
+      const result = spawnSync('sh', ['-s', '--'], {
+        input: cut,
+        env: { PATH: [unameShim('Linux', 'x86_64'), process.env.PATH].join(delimiter), HOME: home, TMPDIR: tmpdir(), ORDEWELL_DESKTOP_FROM: await release(), ORDEWELL_INSTALL_DIR: prefix },
+        encoding: 'utf8',
+      });
+      return { ...result, home, prefix };
+    }
+
+    for (const fraction of [0.3, 0.6, 0.9]) {
+      it(`a download cut off at ${fraction * 100}% of its bytes fails and installs nothing`, async () => {
+        const result = await cutRun(text.slice(0, Math.floor(text.length * fraction)));
+        assert.notEqual(result.status, 0, result.stdout);
+        assert.ok(!existsSync(result.prefix), 'the install prefix must not even be created');
+        assert.deepEqual(readdirSync(result.home), []);
+      });
+    }
+
+    it('a script cut off at any line runs none of its steps', async () => {
+      for (let n = 1; n < lines.length - 2; n += 9) {
+        const result = await cutRun(`${lines.slice(0, n).join('\n')}\n`);
+        assert.equal(result.stdout, '', `cut after line ${n}`);
+        assert.ok(!existsSync(result.prefix), `cut after line ${n}`);
+        assert.deepEqual(readdirSync(result.home), [], `cut after line ${n}`);
+      }
+    });
+
+    it('the whole script, piped in, still installs', async () => {
+      const result = await cutRun(text);
+      assert.equal(result.status, 0, result.stderr);
+      assert.ok(existsSync(join(result.prefix, 'bin/ordewell-desktop')));
+    });
+
+    it('`… | sh -s -- --help` reads the whole script, so the writer never gets EPIPE (curl error 23)', async () => {
+      const child = spawn('sh', ['-s', '--', '--help'], { env: { PATH: process.env.PATH, HOME: scratch('home') }, stdio: ['pipe', 'pipe', 'pipe'] });
+      let stdout = '';
+      child.stdout.on('data', (d) => { stdout += d; });
+      const errors = [];
+      child.stdin.on('error', (e) => errors.push(e.code));
+      const closed = new Promise((done) => child.on('close', done));
+      const bytes = Buffer.from(text);
+      for (let at = 0; at < bytes.length; at += 512) {
+        await new Promise((done) => child.stdin.write(bytes.subarray(at, at + 512), (e) => { if (e) errors.push(e.code); done(); }));
+        await new Promise((done) => setTimeout(done, 2));
+      }
+      child.stdin.end();
+      const status = await closed;
+      assert.deepEqual(errors, []);
+      assert.equal(status, 0);
+      assert.match(stdout, /Usage: desktop\.sh/);
+    });
   });
 
   it('never touches an OS protection', () => {
