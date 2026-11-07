@@ -67,7 +67,7 @@ die() { printf 'ordewell: %s\n' "$*" >&2; exit 1; }
 # Colour for what the user must act on, only on a terminal that shows it.
 # Through `curl ... | sh` stdin is the pipe but stdout is still the terminal.
 # NO_COLOR wins; FORCE_COLOR or CLICOLOR_FORCE, other than 0, forces it on.
-red= bold= off=
+red='' bold='' off=''
 forced() { [ -n "$1" ] && [ "$1" != 0 ]; }
 if [ -z "${NO_COLOR:-}" ] && { forced "${FORCE_COLOR:-}" || forced "${CLICOLOR_FORCE:-}" || { [ -t 1 ] && [ "${TERM:-}" != dumb ]; }; }; then
   esc=$(printf '\033')
@@ -138,6 +138,9 @@ runtime_dir=$HOME/.ordewell/runtime
 
 tmp=
 staged=
+# Run by the EXIT trap below. shellcheck 0.11 loses sight of that once the script
+# ends in a top-level `exit`, and reports the function as never invoked.
+# shellcheck disable=SC2329
 cleanup() {
   status=$?
   [ -z "$staged" ] || rm -f "$staged"
