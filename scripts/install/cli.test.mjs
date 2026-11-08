@@ -12,12 +12,13 @@ import { tmpdir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { after, describe, it } from 'node:test';
 
+import { hostHas, pinnedShellcheck } from '../host-tools.mjs';
+
 const SH = resolve('scripts/install/cli.sh');
 const VERSION = '9.8.7';
 const FAKE_BINARY = `#!/bin/sh\necho "ordewell ${VERSION}"\n`;
 
 const whichSh = (command) => spawnSync('sh', ['-c', `command -v ${command}`], { encoding: 'utf8' }).stdout.trim();
-const has = (command) => whichSh(command) !== '';
 const sandboxes = [];
 const scratch = (label) => {
   const dir = mkdtempSync(join(tmpdir(), `o65-${label}-`));
@@ -275,7 +276,7 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
     });
 
     it('runs under dash', (t) => {
-      if (!has('dash')) return t.skip('dash is not installed');
+      if (!hostHas('dash')) return t.skip('dash is not installed');
       const result = spawnSync(whichSh('dash'), [SH, '--dry-run'], { env: { PATH: [linux(), commands({ ldd: MUSL_LDD }), toolbox].join(delimiter), HOME: scratch('home') }, encoding: 'utf8' });
       assert.equal(result.status, 1);
       assert.match(result.stderr, /npm install -g ordewell/);
@@ -343,16 +344,17 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
   });
 
   describe('input checks', () => {
-    it('is valid POSIX sh, under dash too, and shellcheck (when installed) has no complaint', (t) => {
+    it('is valid POSIX sh, under dash too, and the pinned shellcheck has no complaint', (t) => {
       assert.equal(spawnSync('sh', ['-n', SH]).status, 0);
-      if (has('dash')) assert.equal(spawnSync('dash', ['-n', SH]).status, 0);
-      if (!has('shellcheck')) return t.skip('shellcheck is not installed');
-      const lint = spawnSync('shellcheck', ['-s', 'sh', SH], { encoding: 'utf8' });
+      if (hostHas('dash')) assert.equal(spawnSync('dash', ['-n', SH]).status, 0);
+      const shellcheck = pinnedShellcheck(t);
+      if (!shellcheck) return;
+      const lint = spawnSync(shellcheck, ['-s', 'sh', SH], { encoding: 'utf8' });
       assert.equal(lint.status, 0, lint.stdout);
     });
 
     it('runs under dash, the sh of Ubuntu', (t) => {
-      if (!has('dash')) return t.skip('dash is not installed');
+      if (!hostHas('dash')) return t.skip('dash is not installed');
       const result = spawnSync(whichSh('dash'), [SH, '--dry-run'], { env: { PATH: [linux(), toolbox].join(delimiter), HOME: scratch('home') }, encoding: 'utf8' });
       assert.equal(result.status, 0, result.stderr);
     });
@@ -619,7 +621,7 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
 
     for (const shell of ['sh', 'dash']) {
       it(`names an older ordewell earlier on PATH and how to use the new one, under ${shell}`, (t) => {
-        if (!has(shell)) return t.skip(`${shell} is not installed`);
+        if (!hostHas(shell)) return t.skip(`${shell} is not installed`);
         const home = scratch('home');
         const target = join(home, 'bin');
         mkdirSync(target, { recursive: true });
@@ -643,7 +645,7 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
       // What a real user saw: npm's 0.12.6 later on a PATH that lists both folders
       // twice, and a terminal that had hashed the npm copy kept running it.
       it(`names an ordewell later on PATH, how to remove it and hash -r, under ${shell}`, (t) => {
-        if (!has(shell)) return t.skip(`${shell} is not installed`);
+        if (!hostHas(shell)) return t.skip(`${shell} is not installed`);
         const home = scratch('home');
         const target = join(home, 'bin');
         mkdirSync(target, { recursive: true });
@@ -666,7 +668,7 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
       // and an empty entry's (the current folder) as a bare `ordewell` under dash.
       for (const [label, entry] of [['a relative entry', 'old'], ['an empty entry', ''], ['a dot entry', '.']]) {
         it(`names an older ordewell found through ${label} on PATH, under ${shell}`, (t) => {
-          if (!has(shell)) return t.skip(`${shell} is not installed`);
+          if (!hostHas(shell)) return t.skip(`${shell} is not installed`);
           const home = scratch('home');
           const target = join(home, 'bin');
           mkdirSync(target, { recursive: true });

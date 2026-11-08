@@ -108,9 +108,10 @@ EOF
 
 tmp=
 staged=
-# Run by the EXIT trap that main sets, which shellcheck 0.11 does not follow into
-# a function, so it reports this one as never invoked.
-# shellcheck disable=SC2329
+# Run only by the EXIT trap that main sets, which shellcheck does not follow:
+# before 0.11 it reports this body unreachable (SC2317), from 0.11 the function
+# never invoked (SC2329). Both stay disabled so every version agrees.
+# shellcheck disable=SC2317,SC2329
 cleanup() {
   status=$?
   [ -z "$staged" ] || rm -f "$staged"

@@ -14,12 +14,6 @@ import path, { join } from 'node:path';
 const DOCS = /^(docs\/.+|(README|CHANGELOG|CONTEXT|CONTRIBUTING|AGENTS|CLAUDE|SECURITY|CODE_OF_CONDUCT)\.md)$/;
 
 /**
- * vitest's `--changed` follows the imports of source files, so anything else
- * in a package (a tsup config, a fixture) leaves the suite to run whole.
- */
-const SOURCE = /^(src|server)\/.+\.tsx?$/;
-
-/**
  * Each is a check a scope turns on or off; ci.yml reads them as job outputs.
  * `suites` is the coverage job and `windows` the Windows suites, both on when
  * their scope names any workspace; `merge` is the coverage-merge job, on when
@@ -281,6 +275,10 @@ const ROOT_OWNERS = [
   //
   // The one-line installers: their tests run them against fake releases.
   [/^scripts\/install\/(cli\.sh|desktop\.sh|desktop\.ps1|cli\.test\.mjs|desktop\.test\.mjs)$/, owes('bench')],
+  // The pinned shellcheck those tests lint with, and the ORDEWELL_REQUIRE_TOOLS
+  // helper that fails them without it: build-and-test fetches it for the bench
+  // step alone, and npm run ci, which reads it too, judges nothing in CI.
+  [/^scripts\/(shellcheck\.(json|mjs|test\.mjs)|host-tools(\.test)?\.mjs)$/, owes('bench')],
   // The package-manager manifests and the release's own scripts: the
   // templates are read by the renderer alone, and every one of these is run or
   // read by its tests and by no workspace, job step or build.
@@ -303,18 +301,28 @@ const ROOT_OWNERS = [
   // Assignment and its measured data owe Windows; their tooling also runs in bench.
   [/^scripts\/windows-(shards|sequencer)\.mjs$|^scripts\/windows-durations\.json$/, () => ({ windows: allFull(WINDOWS_SUITES), checks: ['bench'] })],
   [/^scripts\/(windows-shards\.test|refresh-windows-durations)\.mjs$/, owes('bench')],
-  // Selection's own tests. Selection itself, ci-scope.mjs and the rest of
+  // The local proof's tests and portability guard run in bench. Selection
+  // itself, ci-scope.mjs and the rest of
   // what decides what CI runs are not here: they mean the full run.
-  [/^scripts\/change-scope\.test\.mjs$/, owes('bench')],
+  [/^scripts\/(change-scope|test-changed)\.test\.mjs$|^scripts\/test-path-portability(\.test)?\.mjs$/, owes('bench')],
   // build-and-test's verify-scripts step runs each on every change, so only
   // windows-harness, which runs them too, is owed.
   [/^scripts\/verify-(adr|fresh-install|migration|notice|skills)\.mjs$/, owes('harness')],
   // The real bubblewrap e2e (the sandbox step) and the container suites
   // (test:containers, the real engine); nothing else runs either, though the
-  // bench step tests the container script's pulls.
-  [/^scripts\/linux-sandbox-e2e\.sh$/, owes('sandbox')],
+  // bench step tests the container script's pulls and the sandbox script's
+  // setup-free run.
+  [/^scripts\/linux-sandbox-e2e\.sh$/, owes('sandbox', 'bench')],
+  [/^scripts\/linux-sandbox-e2e\.test\.mjs$/, owes('bench')],
   [/^scripts\/container-e2e\.mjs$/, owes('engine', 'bench')],
   [/^scripts\/container-e2e\.test\.mjs$/, owes('bench')],
+  // The retry for a command's own downloads: desktop's package.mjs runs
+  // electron-builder through it and the container script its docker build;
+  // the bench step runs its test and both callers'.
+  [/^scripts\/network-retry\.mjs$/, owes('package', 'engine', 'bench')],
+  // The bench steps' annotations: only test:bench, through NODE_OPTIONS in
+  // ci.yml, loads the reporter, and its test runs there too.
+  [/^scripts\/(network-retry\.test|node-test-annotations(\.test)?)\.mjs$/, owes('bench')],
 ];
 
 /** What a path owes, or nothing when only the full run can judge it. */
@@ -469,30 +477,27 @@ export function scopeForEvent(event, root, workspaces, { reuseMainProof = false,
 }
 
 /**
- * What `npm run test:changed` runs. Workspaces reach each other through dist,
- * which vitest cannot see through: a changed workspace others depend on is
- * rebuilt, and those others run whole. Web keeps core external (its tsup
- * config), so a core change alone does not need web rebuilt.
+ * Local proof uses CI's tiers, including full suites' coverage floors. CI's
+ * setup builds every workspace before testing, even on a docs-only change;
+ * keeping those builds avoids testing stale dist consumed across workspaces.
  */
-export function localRuns(paths, workspaces, exists = existsSync) {
+export function localRuns(paths, workspaces) {
+  if (paths.length === 0) return { note: 'No uncommitted changes.', paths, runs: [], steps: [] };
   const scope = selectScope(paths, workspaces);
-  if (paths.length === 0 || scope.mode === 'docs') return { note: '', rebuild: [], runs: [] };
-  const full = scope.mode === 'full';
-  const own = new Map(workspaces.map(({ dir }) => [dir, paths.filter((p) => p.startsWith(`${dir}/`))]));
-  const dependedOn = (dir) => workspaces.some((w) => w.deps.includes(dir));
   return {
-    note: full ? `${scope.reason}: running every workspace's quick suite.` : '',
-    rebuild: workspaces.map((w) => w.dir).filter((dir) => dependedOn(dir) && (full || own.get(dir).length > 0)),
-    runs: scope.workspaces.map((dir) => {
-      const mine = own.get(dir);
-      // A deleted source is in nobody's import graph, so `--changed` would
-      // leave out exactly the tests still importing it.
-      const followable = !full && mine.length > 0 && mine.every((p) => {
-        return SOURCE.test(p.slice(dir.length + 1)) && exists(p);
-      });
-      return { dir, script: followable ? 'test:changed' : 'test:quick' };
-    }),
+    scope,
+    paths,
+    note: scope.reason,
+    steps: owedSteps(scope),
+    runs: Object.entries(scope.suites).map(([dir, tier]) => ({ dir, script: tier === 'full' ? 'test:coverage' : 'test:quick' })),
   };
+}
+
+/** The obligations the CI jobs confirm; an unreadable scope owes everything. */
+export function owedSteps(scope) {
+  return Object.entries(STEPS_BY_JOB).flatMap(([job, table]) => Object.entries(table)
+    .filter(([check]) => check === 'always' || !scope || scope.checks[check])
+    .flatMap(([, ids]) => ids.map((id) => ({ job, id }))));
 }
 
 /**
@@ -501,9 +506,8 @@ export function localRuns(paths, workspaces, exists = existsSync) {
  * A scope that cannot be read owes everything, as the steps' own conditions do.
  */
 export function missedSteps(scope, steps, job = 'build-and-test') {
-  const table = STEPS_BY_JOB[job];
-  if (!table) return [`${job || 'an unnamed job'}: not a job ci.yml confirms (STEPS_BY_JOB in scripts/change-scope.mjs)`];
-  const owed = Object.entries(table).filter(([check]) => check === 'always' || !scope || scope.checks[check]).flatMap(([, ids]) => ids);
+  if (!STEPS_BY_JOB[job]) return [`${job || 'an unnamed job'}: not a job ci.yml confirms (STEPS_BY_JOB in scripts/change-scope.mjs)`];
+  const owed = owedSteps(scope).filter((step) => step.job === job).map((step) => step.id);
   return owed.flatMap((id) => {
     const outcome = steps[id]?.outcome;
     if (outcome === 'success') return [];

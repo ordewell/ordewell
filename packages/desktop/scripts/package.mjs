@@ -18,6 +18,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { runRetryingNetwork } from '../../../scripts/network-retry.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const ESIGNER_HOOK = fileURLToPath(new URL('esigner-sign.mjs', import.meta.url));
@@ -243,15 +244,18 @@ export function signingManifest(plan) {
   return { platform: plan.platform, signing: plan.signing, notarized: plan.notarization !== null, autoUpdate: plan.autoUpdate, publisherNames: plan.publisherNames };
 }
 
-function run(file, args, env = withoutSigning(process.env)) {
-  const result = spawnSync(file, args, { cwd: root, stdio: 'inherit', env });
+function exitUnlessPassed(file, args, result) {
   if (result.status !== 0) {
-    console.error(`${[file, ...args].join(' ')} failed${result.status === null ? ` (${result.signal})` : ` with ${result.status}`}.`);
+    console.error(`${[file, ...args].join(' ')} failed${result.status === null ? ` (${result.signal ?? result.error?.message})` : ` with ${result.status}`}.`);
     process.exit(result.status ?? 1);
   }
 }
 
-function main() {
+function run(file, args, env = withoutSigning(process.env)) {
+  exitUnlessPassed(file, args, spawnSync(file, args, { cwd: root, stdio: 'inherit', env }));
+}
+
+async function main() {
   const missing = [
     ['@ordewell/core', join(root, '..', 'core', 'dist', 'index.js')],
     ['@ordewell/web', join(root, '..', 'web', 'dist', 'server', 'main.js')],
@@ -304,11 +308,14 @@ function main() {
   // architecture (npmRebuild in electron-builder.yml): a single rebuild here
   // would be the host's architecture, wrong for a macOS x64 build on arm64.
 
+  // electron-builder downloads as it packages (Electron's zip, the AppImage
+  // and fpm toolsets, node-pty's prebuilt), so a CDN's 504 fails it partway.
   const builderCli = join(dirname(require.resolve('electron-builder/package.json')), 'cli.js');
-  run(process.execPath, [builderCli, ...args], builderEnv(process.env, plan, { apiKeyPath }));
+  const builderRun = [process.execPath, [builderCli, ...args]];
+  exitUnlessPassed(...builderRun, await runRetryingNetwork(...builderRun, { cwd: root, env: builderEnv(process.env, plan, { apiKeyPath }) }));
 
   mkdirSync(dirname(manifest), { recursive: true });
   writeFileSync(manifest, `${JSON.stringify(signingManifest(plan), null, 2)}\n`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();

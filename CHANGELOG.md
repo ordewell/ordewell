@@ -8,6 +8,26 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **Contributors:** the installers are linted with one pinned shellcheck
+  (v0.11.0), fetched by `node scripts/shellcheck.mjs` and checked against the
+  sha256 in `scripts/shellcheck.json`, so CI and a laptop report the same
+  codes. `ORDEWELL_REQUIRE_TOOLS` names the tools a run means to prove with,
+  and a missing one now fails the test that needed it instead of skipping.
+- **Contributors:** a failing bench harness test is written into the CI job
+  summary as an annotation, and `npm run test:bench` now fails an assertion
+  that compares a native path with a POSIX spelling it would differ from on
+  Windows.
+
+### Changed
+
+- **Contributors:** `npm run test:changed` now runs what a pull request owes,
+  at CI's tiers — full suites with their coverage floors, quick suites, and the
+  steps every change owes — and ends by naming each owed check it left to CI,
+  and why. `npm run test:changed -- --list` prints the selection without
+  running it.
+
 ### Fixed
 
 - **The installer reads the whole script before running any of it.** A download

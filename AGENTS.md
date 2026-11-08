@@ -28,16 +28,29 @@ npm run typecheck
 npm test
 npm run test:coverage   # same tests, plus the per-file coverage floors CI enforces; writes coverage/ reports
 npm run ci              # every ci.yml step once, in its order, unsharded: run this before pushing
-npm run test:changed    # while iterating: only tests affected by uncommitted changes
+npm run test:changed    # what a pull request owes, at CI's tiers, minus what this host cannot prove
 npm run test:quick      # every test except the real-git e2e files (*.e2e.test.ts, GitWorktreeIsolation)
 npm run test:containers # every harness's real binary in a real Docker engine; a skip is UNVERIFIED, not a pass
+node scripts/shellcheck.mjs # fetch the pinned shellcheck the installer tests lint with
 ```
 
-`test:changed` is the inner loop. When a package others depend on changed it
-rebuilds that package's `dist/` and runs its dependents' quick suites in full,
-because they consume it through `dist/` and vitest cannot see the dependency. A
-path it cannot judge runs every quick suite. It skips the e2e files, so run the
-full suite before pushing.
+`test:changed` is the inner loop. From your uncommitted changes it selects what
+a pull request owes, at the same tiers, and runs the checks this host can
+prove: a full-tier workspace runs `test:coverage`, its per-file floors
+included, and a quick one `test:quick`, which skips the real-git e2e files.
+Whatever it cannot judge runs every suite.
+It always runs what every change owes — building core, the verify scripts and
+the repository-wide guards — and the remaining build, and a prose-only change
+still builds, since a suite tested against a stale `dist/` proves nothing. It
+ends by naming every owed check it could not run, with the reason (a display,
+Windows, a container engine, a download or an upload), as UNVERIFIED, and an
+earlier failure does not hide that list. `npm run test:changed -- --list`
+prints the selection and runs none of it. It installs no tool and changes no
+user-namespace policy: on Linux it probes bubblewrap and leaves the sandbox out
+with the reason when it cannot start, and otherwise runs CI's
+`scripts/linux-sandbox-e2e.sh` with `ORDEWELL_SANDBOX_SETUP=none`, naming the
+script's own setup UNVERIFIED when that script changed. Run the full suite
+before pushing.
 
 `scripts/change-scope.mjs` holds what a change has to prove, for `test:changed`
 and for CI alike. Only a pull request is narrowed: a push to main and a release
@@ -74,6 +87,26 @@ checks`' needs. Every job but `scope` and `Required checks` sets up through
 caches before installing, building or downloading one, so a new job uses it
 rather than `npm ci`. The integration test downloads VS Code into
 `packages/vscode/.vscode-test` on its first run.
+
+The bench tests lint the installers with the shellcheck that
+`scripts/shellcheck.json` pins: `node scripts/shellcheck.mjs` fetches and
+checksum-verifies it into `.tools/` (gitignored), never the one on `PATH`, and
+`ORDEWELL_SHELLCHECK=<path>` judges with another binary; no Windows build is
+pinned. `ORDEWELL_REQUIRE_TOOLS` lists, space- or comma-separated, the tools a
+run means to prove with: a missing listed tool fails the test that needed it
+instead of skipping, as CI's bench step does with
+`shellcheck dash pwsh shasum ruby tar` and its sandbox step with `rg zsh`.
+`npm run ci` and `test:changed` read those lists from ci.yml, fetch the pin,
+require each listed tool the host has and name the rest UNVERIFIED.
+
+`scripts/test-path-portability.mjs`, which `test:bench` runs, fails an assertion
+that compares a native path with a POSIX spelling it would differ from on
+Windows, allowing an explicit Windows skip and `path.posix`; a path an API
+returns, a signal, a file mode or a dynamically built fixture is still the
+Windows jobs' to prove. A test that spawns `node --test` and parses its output
+must clear `NODE_OPTIONS`, since CI's bench steps load
+`scripts/node-test-annotations.mjs` there, and it writes each failing test into
+the job summary.
 
 A test that depends on the time of day (a usage-limit "resets 8:10pm") fails
 for the hour after that time; derive such a time from the clock, or fake it,

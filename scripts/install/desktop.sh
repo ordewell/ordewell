@@ -146,6 +146,10 @@ refresh_desktop_database() {
   fi
 }
 
+# Run only by the EXIT trap that main sets, which shellcheck does not follow:
+# before 0.11 it can report this body unreachable (SC2317), from 0.11 the
+# function never invoked (SC2329). Both stay disabled so every version agrees.
+# shellcheck disable=SC2317,SC2329
 cleanup() {
   status=$?
   if [ -n "$mnt" ] && [ -d "$mnt" ]; then

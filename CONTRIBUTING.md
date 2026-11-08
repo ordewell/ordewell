@@ -78,6 +78,69 @@ node bench/live/drive-conversation.mjs
 If you change planner behaviour, run that. It is the fastest way to find out
 that a prompt edit broke plan emission.
 
+### While you iterate
+
+From your uncommitted changes, `npm run test:changed` selects what a pull
+request owes, at CI's own tiers, and runs the checks this machine can prove. A
+workspace the change runs in full uses `test:coverage`, so its per-file floors
+are judged too; one it only reaches uses `test:quick`. The steps every change owes run as well (building core, the
+verify scripts and the repository-wide guards), with the remaining build and,
+when the change owes them, lint, typecheck, the bench harnesses, the offline
+planner loop, the standalone binary on Linux or macOS, and the VSIX packaging.
+A prose-only change still builds, because a suite tested against a stale
+`dist/` proves nothing.
+
+`npm run test:changed -- --list` prints the selection without running it. A run
+ends with `Owed CI checks not run here (UNVERIFIED):` and one line per check it
+left to CI, with the reason: a display, Windows, a container engine, a download
+or an artifact upload. A failure earlier in the run does not hide that list; a
+skip is never a pass. The inner loop installs no tool and changes no
+user-namespace policy: on Linux it probes bubblewrap and omits the sandbox with
+the reason when it cannot start, and otherwise runs CI's own
+`scripts/linux-sandbox-e2e.sh` with `ORDEWELL_SANDBOX_SETUP=none`, which skips
+the script's installs and policy fix; a change to that script names them as
+unverified. The bench step fetches the pinned shellcheck first, as CI's does.
+Where CI requires a tool for a step (see below) that this machine lacks, the
+step still runs, requiring the tools it has, and the list names the tests that
+skipped for the rest. Neither this nor `npm run test:quick`, which
+skips the real-git e2e files, replaces `npm run ci`.
+
+### Pinned tools
+
+The one-line installers are linted with one shellcheck, not whichever version
+`PATH` holds: Ubuntu's packaged one lags a release behind and reports codes the
+newer one renamed. `scripts/shellcheck.json` pins v0.11.0 for Linux and macOS
+on x64 and arm64, with the sha256 of each release archive.
+`node scripts/shellcheck.mjs` downloads it, checks it against that sha256, and
+keeps it in `.tools/shellcheck/<version>/<os-arch>/` (gitignored), printing the
+binary's path; the tests never fall back to `PATH`. Set
+`ORDEWELL_SHELLCHECK=<path>` to judge with another binary. No Windows build is
+pinned: the Windows job's shellcheck tests skip, saying so, and
+`build-and-test` lints on Linux.
+
+A test without its tool skips, which is right on a laptop and wrong in CI,
+where a skip reads as a pass. `ORDEWELL_REQUIRE_TOOLS` is a space- or
+comma-separated list of the tools a run means to prove with; a listed tool that
+is missing fails the test that needed it instead of skipping it. CI's bench
+step sets `shellcheck dash pwsh shasum ruby tar`, and its sandbox step, which
+installs ripgrep and zsh, `rg zsh`. `npm run ci` and `npm run test:changed`
+read those lists from ci.yml: they fetch the pin, require each listed tool the
+host has, and name the ones it lacks as unverified rather than letting their
+tests' skips pass. A zsh counts only in `/bin` or `/usr/bin`, where a sealed
+run can start it, not elsewhere on `PATH`.
+
+### The Windows path guard
+
+`npm run test:bench` runs `scripts/test-path-portability.mjs` over every test
+under `packages/`, `scripts/` and `bench/`. It reports an assertion whose two
+sides it can evaluate — a native `path.resolve`/`join` result, or
+`encodeURIComponent` of one, compared with a POSIX literal — when the
+comparison passes with POSIX paths and fails with Windows paths; derive the
+expectation from the resolved path instead. A test explicitly skipped on
+Windows, and one that asks for `path.posix`, are left alone. It is a static
+check: a path an API returns, a signal, a file mode, a scheduling order or a
+dynamically built fixture stays for the Windows jobs to prove.
+
 ### How CI is laid out
 
 `.github/workflows/ci.yml` starts with `scope`, which works out what the event
@@ -100,6 +163,12 @@ behind a cache, with retries.
 | `real-engine` | The container suites against a real engine |
 | `windows (n/12)`, `windows-harness` | The core, CLI, web and VS Code suites on Windows in twelve shards packed by each file's measured duration, and the harnesses beside them |
 | `Required checks` | The one status a branch rule requires: it fails if a job failed, or skipped what the change owed it |
+
+The bench harness tests (`node:test`) run under
+`scripts/node-test-annotations.mjs` in CI, which writes each failing test as a
+GitHub Actions error annotation with its file, line and name, so the failure
+reaches the job summary and not only the log; the spec reporter still writes
+the log.
 
 A pull request owes what its change can reach, and a new push to it cancels
 the run in progress:
@@ -441,9 +510,11 @@ carefully, and keep all versions in lockstep.
 
 - Branch from `main`.
 - Keep the diff to one concern.
-- While iterating, `npm run test:changed` runs only the tests affected by your
-  uncommitted changes (`npm run test:quick` skips the slow real-git e2e files).
-  Neither replaces the full suite: make sure
+- While iterating, `npm run test:changed` runs what a pull request owes that
+  this machine can prove, at CI's tiers: full suites with their coverage
+  floors, quick suites, and the steps every change owes, with the rest named
+  as UNVERIFIED ([while you iterate](#while-you-iterate)). `npm run test:quick`
+  skips the slow real-git e2e files. Neither replaces the full suite: make sure
   `npm run ci` passes before pushing. It runs every step of CI's workflow
   locally, the full suite with its per-file coverage floors included.
 - CI on a pull request runs what the change can reach (`scripts/change-scope.mjs`):

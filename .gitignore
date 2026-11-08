@@ -73,3 +73,6 @@ Thumbs.db
 # Playwright output of the desktop app's offline acceptance test
 packages/desktop/test-results/
 packages/desktop/playwright-report/
+
+# The pinned shellcheck (scripts/shellcheck.mjs) and any other tool fetched for the tests
+.tools

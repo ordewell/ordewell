@@ -429,6 +429,11 @@ describe('a path outside the workspaces that only some checks read', () => {
     ['scripts/install/desktop.sh', {}, {}, ['bench', 'harness']],
     ['scripts/install/desktop.ps1', {}, {}, ['bench', 'harness']],
     ['scripts/install/desktop.test.mjs', {}, {}, ['bench', 'harness']],
+    ['scripts/shellcheck.json', {}, {}, ['bench', 'harness']],
+    ['scripts/shellcheck.mjs', {}, {}, ['bench', 'harness']],
+    ['scripts/shellcheck.test.mjs', {}, {}, ['bench', 'harness']],
+    ['scripts/host-tools.mjs', {}, {}, ['bench', 'harness']],
+    ['scripts/host-tools.test.mjs', {}, {}, ['bench', 'harness']],
     ['packaging/homebrew/ordewell.rb.tmpl', {}, {}, ['bench', 'harness']],
     ['packaging/homebrew/ordewell-desktop.rb.tmpl', {}, {}, ['bench', 'harness']],
     ['packaging/winget/Ordewell.Ordewell.yaml.tmpl', {}, {}, ['bench', 'harness']],
@@ -459,11 +464,16 @@ describe('a path outside the workspaces that only some checks read', () => {
     ['scripts/verify-migration.mjs', {}, {}, ['harness']],
     ['scripts/verify-notice.mjs', {}, {}, ['harness']],
     ['scripts/verify-skills.mjs', {}, {}, ['harness']],
-    ['scripts/linux-sandbox-e2e.sh', {}, {}, ['sandbox']],
+    ['scripts/linux-sandbox-e2e.sh', {}, {}, ['bench', 'harness', 'sandbox']],
+    ['scripts/linux-sandbox-e2e.test.mjs', {}, {}, ['bench', 'harness']],
     // The bench step runs its tests, which import its pull helpers.
     ['scripts/container-e2e.mjs', {}, {}, ['bench', 'engine', 'harness']],
     ['scripts/container-e2e.test.mjs', {}, {}, ['bench', 'harness']],
     ['scripts/change-scope.test.mjs', {}, {}, ['bench', 'harness']],
+    ['scripts/network-retry.mjs', {}, {}, ['bench', 'engine', 'harness', 'package']],
+    ['scripts/network-retry.test.mjs', {}, {}, ['bench', 'harness']],
+    ['scripts/node-test-annotations.mjs', {}, {}, ['bench', 'harness']],
+    ['scripts/node-test-annotations.test.mjs', {}, {}, ['bench', 'harness']],
   ]) {
     it(`owes ${on.join(', ') || 'nothing'} for ${path}`, () => {
       const scope = selected(path);
@@ -667,55 +677,57 @@ describe('the local inner loop', () => {
   const runs = (...paths) => localRuns(paths, workspaces);
   const script = (plan, dir) => plan.runs.find((r) => r.dir === dir)?.script;
 
-  it('rebuilds core and runs its dependents whole for a core change', () => {
-    const plan = runs('packages/core/src/index.ts');
-    assert.deepEqual(plan.rebuild, [CORE]);
-    assert.equal(script(plan, CORE), 'test:changed');
-    for (const dependent of [CLI, DESKTOP, UI, VSCODE, WEB]) assert.equal(script(plan, dependent), 'test:quick');
+  it('owns the local proof tests and path guard through the bench check that runs them', () => {
+    for (const path of ['scripts/test-changed.test.mjs', 'scripts/test-path-portability.mjs', 'scripts/test-path-portability.test.mjs']) {
+      const scope = selected(path);
+      assert.equal(scope.mode, 'selected', path);
+      assert.deepEqual(onChecks(scope), ['bench', 'harness'], path);
+    }
   });
 
-  it('rebuilds web for a web change, and runs the cli and desktop whole', () => {
+  it('owes the bench step for the scale harness refactor that broke session.persist (#66 F3)', () => {
+    const plan = runs('packages/core/src/services/Session.ts');
+    assert.ok(plan.steps.some(({ job, id }) => job === 'build-and-test' && id === 'bench'));
+  });
+
+  it('runs core and its dependents with coverage for an exported core change', () => {
+    const plan = runs('packages/core/src/index.ts');
+    for (const dir of [CORE, CLI, DESKTOP, UI, VSCODE, WEB]) assert.equal(script(plan, dir), 'test:coverage');
+  });
+
+  it('runs web with coverage, and the cli and desktop quick', () => {
     const plan = runs('packages/web/server/main.ts');
-    assert.deepEqual(plan.rebuild, [WEB]);
-    assert.equal(script(plan, WEB), 'test:changed');
+    assert.equal(script(plan, WEB), 'test:coverage');
     assert.equal(script(plan, CLI), 'test:quick');
     assert.equal(script(plan, DESKTOP), 'test:quick');
     assert.equal(script(plan, CORE), undefined);
     assert.equal(script(plan, VSCODE), undefined);
   });
 
-  it('rebuilds ui for a ui change, and runs vscode and desktop whole', () => {
+  it('runs ui with coverage, and vscode and desktop quick', () => {
     const plan = runs('packages/ui/src/chat/hostState.ts');
-    assert.deepEqual(plan.rebuild, [UI]);
-    assert.equal(script(plan, UI), 'test:changed');
+    assert.equal(script(plan, UI), 'test:coverage');
     assert.equal(script(plan, VSCODE), 'test:quick');
     assert.equal(script(plan, DESKTOP), 'test:quick');
     assert.equal(script(plan, CORE), undefined);
   });
 
-  it('rebuilds nothing for a package nothing depends on', () => {
-    assert.deepEqual(runs('packages/vscode/src/extension.ts').rebuild, []);
-    assert.deepEqual(runs('packages/cli/src/main.ts').rebuild, []);
-    assert.deepEqual(runs('packages/desktop/src/main/index.ts').rebuild, []);
-  });
-
   it('runs a package whole when what changed is no source vitest can follow', () => {
-    assert.equal(script(runs('packages/web/tsup.config.ts'), WEB), 'test:quick');
+    assert.equal(script(runs('packages/web/tsup.config.ts'), WEB), 'test:coverage');
   });
 
   it('runs a package whole for a deleted source: nothing imports it for vitest to follow', () => {
-    const plan = localRuns(['packages/web/server/removed.ts'], workspaces, () => false);
-    assert.equal(script(plan, WEB), 'test:quick');
+    const plan = localRuns(['packages/web/server/removed.ts'], workspaces);
+    assert.equal(script(plan, WEB), 'test:coverage');
   });
 
-  it('runs every quick suite on the full fallback, building what is depended on, in order', () => {
+  it('runs every full suite with coverage on the full fallback', () => {
     const plan = runs('scripts/ci.mjs');
-    assert.deepEqual(plan.rebuild, [CORE, UI, WEB]);
-    for (const dir of [CORE, CLI, UI, VSCODE, WEB, DESKTOP]) assert.equal(script(plan, dir), 'test:quick');
+    for (const dir of [CORE, CLI, UI, VSCODE, WEB, DESKTOP]) assert.equal(script(plan, dir), 'test:coverage');
     assert.match(plan.note, /scripts\/ci\.mjs/);
   });
 
-  it('runs nothing with nothing changed, and nothing for docs', () => {
+  it('runs no workspace suite with nothing changed or for docs', () => {
     assert.deepEqual(runs().runs, []);
     assert.deepEqual(runs('docs/a.md').runs, []);
   });

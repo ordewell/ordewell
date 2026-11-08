@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { classifyEngine, describeVerdict, tally, verdict, withOpenCode } from '../bench/containers/verdict.mjs';
+import { runRetryingNetwork } from './network-retry.mjs';
 
 const CHECK_IMAGE = 'ordewell-e2e-harness:check';
 const SUITE_FILES = ['dockerLease', 'codexContainer', 'containersSetting', 'pushGate'].map((suite) => `${suite}.e2e.test.ts`);
@@ -81,8 +82,8 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /**
  * Pulls each image the engine lacks before the build would. A registry that
  * misses a fetch is no verdict on the change, so a pull gets a few tries; the
- * build, whose failure is one, gets a single go. Returns the image that never
- * came, if one did not.
+ * build gets more only when it failed on its own fetches (network-retry.mjs).
+ * Returns the image that never came, if one did not.
  */
 export async function pullMissing(images, { run = docker, sleep = pause, tries = 4, log = console.log } = {}) {
   for (const image of images) {
@@ -102,7 +103,7 @@ async function buildImage() {
   const missing = await pullMissing(baseImages(dockerfile));
   if (missing) return `${missing} could not be pulled, so ${CHECK_IMAGE} did not build and no suite ran`;
   console.log(`Building ${CHECK_IMAGE} from task.Dockerfile, with OpenCode. The first build downloads all three harnesses.`);
-  const built = spawnSync('docker', ['build', '-t', CHECK_IMAGE, '-'], { input: dockerfile, stdio: ['pipe', 'inherit', 'inherit'] });
+  const built = await runRetryingNetwork('docker', ['build', '-t', CHECK_IMAGE, '-'], { input: dockerfile });
   return built.status === 0 ? undefined : `${CHECK_IMAGE} did not build, so no suite ran`;
 }
 
@@ -122,8 +123,11 @@ async function main() {
   const env = { ...process.env, ORDEWELL_REQUIRE_DOCKER: '1', ORDEWELL_E2E_HARNESS_IMAGE: image, ORDEWELL_E2E_CODEX_IMAGE: image, ORDEWELL_E2E_OPENCODE_IMAGE: image };
   for (const name of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'CLAUDE_CODE_AUTO_COMPACT_WINDOW']) delete env[name];
 
+  // Naming a reporter turns off the one vitest adds under Actions by itself,
+  // which puts a failing test's name on the run's summary.
+  const annotations = process.env.GITHUB_ACTIONS ? ['--reporter=github-actions'] : [];
   const suitePaths = SUITE_FILES.map((suite) => `src/services/container/__tests__/${suite}`);
-  const { status: vitestStatus } = spawnSync('npx', ['vitest', 'run', ...suitePaths, '--no-file-parallelism', '--reporter=default', '--reporter=json', `--outputFile.json=${reportFile}`], {
+  const { status: vitestStatus } = spawnSync('npx', ['vitest', 'run', ...suitePaths, '--no-file-parallelism', '--reporter=default', '--reporter=json', `--outputFile.json=${reportFile}`, ...annotations], {
     cwd: 'packages/core', env, stdio: 'inherit',
   });
 

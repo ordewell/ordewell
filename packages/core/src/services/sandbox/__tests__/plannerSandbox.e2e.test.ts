@@ -37,6 +37,13 @@ function run(launch: ShellLaunch, command: string, cwd: string): Promise<{ code:
  */
 const REQUIRE_SANDBOX = process.env.ORDEWELL_REQUIRE_SANDBOX === '1';
 
+/**
+ * The tools CI's sandbox step names in ORDEWELL_REQUIRE_TOOLS: one of them
+ * missing fails its test where a laptop's run would skip it.
+ */
+const REQUIRED_TOOLS = new Set((process.env.ORDEWELL_REQUIRE_TOOLS ?? '').split(/[\s,]+/).filter(Boolean));
+const needs = (tool: string): boolean => installed(tool) || REQUIRED_TOOLS.has(tool);
+
 // The probe is asynchronous and the skip is decided when the suite is collected, so the outer suite awaits it.
 describe("the planner's sandbox", async () => {
   const availability = await resolvePlannerSandbox();
@@ -124,7 +131,8 @@ describe("the planner's sandbox", async () => {
       expect(existsSync(join(workspace, '.git', 'index.lock'))).toBe(false);
     });
 
-    it.skipIf(!installed('rg'))('runs `rg`', async () => {
+    it.skipIf(!needs('rg'))('runs `rg`', async () => {
+      expect(installed('rg'), 'rg is missing, and ORDEWELL_REQUIRE_TOOLS requires it').toBe(true);
       const result = await sh('rg sandbox README.md');
       expect(result).toMatchObject({ code: 0 });
       expect(result.out).toMatch(/hello sandbox/);

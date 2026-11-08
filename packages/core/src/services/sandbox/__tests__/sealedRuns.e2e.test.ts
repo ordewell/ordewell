@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { createServer, type Server } from 'node:net';
 import { createRequire } from 'node:module';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from 'vitest';
 import { PlannerShellSandbox, resolvePlannerSandbox, SEALED_LIMITS, TASK_SEALED_LIMITS, type SealedRunOptions } from '../plannerSandbox';
 import { createNativeShellLauncher } from '../nativeShellLauncher';
@@ -69,6 +69,12 @@ class HostFileSystem extends BaseFileSystem {
  * happened, not that every test skipped again.
  */
 const REQUIRE_SANDBOX = process.env.ORDEWELL_REQUIRE_SANDBOX === '1';
+
+/**
+ * The tools CI's sandbox step names in ORDEWELL_REQUIRE_TOOLS: one of them
+ * missing fails its test where a laptop's run would skip it.
+ */
+const REQUIRED_TOOLS = new Set((process.env.ORDEWELL_REQUIRE_TOOLS ?? '').split(/[\s,]+/).filter(Boolean));
 
 // The probe is asynchronous and the skip is decided when the suite is collected, so the outer suite awaits it.
 describe('sealed runs', async () => {
@@ -245,11 +251,17 @@ describe('sealed runs', async () => {
     // one runs only in CI's sandbox job, where test:sandbox runs a file at a
     // time.
     const bombProcesses = REQUIRE_SANDBOX ? SEALED_LIMITS.processes : 32;
-    const bomb = (name: string) => `${name}() { ${name} | ${name} & }; ${name}`;
+    // Started from a subshell, and with the run's own shell forking nothing
+    // after it: dash forks each side of the pipe itself, and a shell whose fork
+    // fails exits with "Cannot fork". Started from the run's shell, the first
+    // side's forks could fill the limit before the second side's, ending the
+    // run in milliseconds with no signal (CI's "expected undefined to be
+    // 'SIGUSR2'").
+    const bomb = (name: string) => `(${name}() { ${name} | ${name} & }; ${name})`;
 
     it('stops a fork bomb at its process limit, and leaves none of it behind', async () => {
       const launch = await sandbox.launchSealed(POSIX, { workspace, limits: { ...SEALED_LIMITS, processes: bombProcesses } });
-      const result = await run(launch, `echo "group=$$"; ${bomb(`ordewell_bomb_${process.pid}`)}; sleep 2; echo survived`, workspace);
+      const result = await run(launch, `echo "group=$$"; sleep 2 & ${bomb(`ordewell_bomb_${process.pid}`)}; wait; echo survived`, workspace);
       expect(result.out).toMatch(/fork|Resource temporarily unavailable|Cannot fork/i);
       expect(result.out).toContain('survived');
       expect(result.ms).toBeLessThan(30_000);
@@ -714,14 +726,19 @@ describe('sealed runs', async () => {
           execFile(prefix, [command], { cwd, encoding: 'utf8', timeout: 30_000 }, (_err, stdout, stderr) => resolve(`${stdout}${stderr}`));
         });
 
+        // Where a sealed run can start them (it reads /bin and /usr, not PATH); scripts/ci.mjs's hostHasTool looks in the same places.
         const shells: [string, string][] = process.platform === 'darwin'
           ? [['/bin/zsh', '.zshenv']]
           : [['/bin/zsh', '.zshenv'], ['/usr/bin/zsh', '.zshenv'], ['/usr/bin/fish', '.config/fish/config.fish']];
 
         const installed = shells.filter(([shell]) => existsSync(shell));
+        const missing = ['zsh', 'fish'].filter((tool) => REQUIRED_TOOLS.has(tool) && !installed.some(([shell]) => basename(shell) === tool));
+        for (const tool of missing) {
+          it(`starts ${tool}`, () => { throw new Error(`${tool} is missing, and ORDEWELL_REQUIRE_TOOLS requires it`); });
+        }
         // An empty it.each table fails the file ("No test found in suite"), so a host without
         // these shells registers one skipped test instead.
-        if (installed.length === 0) it.skip('starts a native shell (none of these shells is installed here)', () => {});
+        if (installed.length === 0 && missing.length === 0) it.skip('starts a native shell (none of these shells is installed here)', () => {});
 
         it.each(installed)('starts %s without reading %s from where a sealed run wrote', async (shell, startup) => {
           const native = nativeSession();

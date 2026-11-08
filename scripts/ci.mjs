@@ -17,7 +17,11 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { load } from 'js-yaml';
 import { npm as runNpm } from './npm.mjs';
+import { onPath } from './host-tools.mjs';
+import { platformKey, resolveShellcheck } from './shellcheck.mjs';
 
 const MOCK_PROVIDER_PORT = 3799;
 
@@ -25,7 +29,7 @@ const MOCK_PROVIDER_PORT = 3799;
 // inherits this. ci.yml sets it for the job too.
 process.env.ORDEWELL_NO_VERSION_CHECK = '1';
 
-const sh = (cmd, args, env) => spawnSync(cmd, args, { stdio: 'inherit', env: { ...process.env, ...env } }).status ?? 1;
+export const sh = (cmd, args, env) => spawnSync(cmd, args, { stdio: 'inherit', env: { ...process.env, ...env } }).status ?? 1;
 const npm = (...args) => runNpm(args);
 
 function portOpen(port) {
@@ -58,18 +62,23 @@ async function plannerE2e() {
  * green without either. A local Linux box whose sudo would prompt is skipped
  * with that reason rather than left waiting for a password.
  */
-function linuxSandboxE2e() {
+function sandboxReady() {
   if (process.platform !== 'linux') {
     console.log('Skipping the real bubblewrap suite: it runs on Linux, where bubblewrap is the backend (macOS uses Seatbelt).');
-    return 0;
+    return false;
   }
   const installed = sh('sh', ['-c', 'command -v bwrap >/dev/null']) === 0;
   const restricted = spawnSync('sysctl', ['-n', 'kernel.apparmor_restrict_unprivileged_userns'], { encoding: 'utf8' }).stdout?.trim() === '1';
   if ((!installed || restricted) && sh('sudo', ['-n', 'true']) !== 0) {
     console.log('Skipping the real bubblewrap suite: installing bubblewrap or lifting the user-namespace restriction needs sudo, and sudo would prompt for a password here.');
-    return 0;
+    return false;
   }
-  return sh('bash', ['scripts/linux-sandbox-e2e.sh']);
+  return true;
+}
+
+// Judged before the script's setup installs zsh or rg: one it installs then runs unrequired, and main() names any still missing.
+export function sandboxStep(step, { ready = sandboxReady, run = sh, has = hostHasTool } = {}) {
+  return ready() ? run('bash', ['scripts/linux-sandbox-e2e.sh'], toolsEnv(step, has)) : 0;
 }
 
 /**
@@ -120,9 +129,11 @@ function installedMatchesLockfile() {
  * one failed, and the middle of its output is what a saved log loses. So run
  * the workspaces one by one, in the order it would, and name each that fails.
  */
-function testWithCoverage() {
+export function testWithCoverage(runs) {
   const { workspaces } = JSON.parse(readFileSync('package.json', 'utf8'));
-  const failed = workspaces.filter((ws) => npm('run', 'test:coverage', '-w', ws, '--if-present') !== 0);
+  const failed = (runs ?? workspaces.map((dir) => ({ dir, script: 'test:coverage' })))
+    .filter(({ dir, script }) => npm('run', script, '-w', dir, '--', '--maxWorkers=2', '--minWorkers=1') !== 0)
+    .map(({ dir }) => dir);
   if (failed.length) console.error(`\nCoverage run failed in: ${failed.join(', ')}`);
   return failed.length ? 1 : 0;
 }
@@ -142,29 +153,61 @@ function seaStep(run) {
   };
 }
 
-/** Run here, keyed by the step's name in ci.yml. */
-const STEPS = {
+/** The tools a ci.yml step names in ORDEWELL_REQUIRE_TOOLS, failing a test that would skip without one. */
+export const requiredTools = (step) => String(step.env?.ORDEWELL_REQUIRE_TOOLS ?? '').split(/[\s,]+/).filter(Boolean);
+
+// The bench step fetches the pinned shellcheck where one is pinned (none is
+// for Windows), so there it counts as present before the fetch.
+const pinsShellcheck = platformKey() !== undefined;
+// A sealed run reads /bin and /usr, not the user's PATH, so sealedRuns.e2e.test.ts starts a shell only from where it looks.
+const SEALED_SHELLS = { zsh: ['/bin/zsh', '/usr/bin/zsh'], fish: ['/usr/bin/fish'] };
+export const toolOnHost = ({ exists = existsSync, path = onPath } = {}) => (tool) => {
+  if (tool === 'shellcheck') return pinsShellcheck || resolveShellcheck() !== undefined;
+  return tool in SEALED_SHELLS ? SEALED_SHELLS[tool].some(exists) : path(tool);
+};
+export const hostHasTool = toolOnHost();
+
+/**
+ * Of the tools CI requires for a step, those this host lacks. A local run
+ * requires the rest, as CI does, and names these as unverified: the tests that
+ * need them skip here, and a skip is not the pass CI would have to earn.
+ */
+export const missingTools = (step, has = hostHasTool) => requiredTools(step).filter((tool) => !has(tool));
+const toolsEnv = (step, has = hostHasTool) => ({ ORDEWELL_REQUIRE_TOOLS: requiredTools(step).filter(has).join(' ') });
+
+/**
+ * test:bench, after fetching the shellcheck scripts/shellcheck.json pins, as
+ * CI's step before it does: both local entry points run this, and a lint test
+ * without its shellcheck would fail where CI's passes.
+ */
+export function benchStep(step, { fetch = () => sh('node', ['scripts/shellcheck.mjs']), run = runNpm, has = hostHasTool } = {}) {
+  if (pinsShellcheck && fetch() !== 0) return 1;
+  return run(['run', 'test:bench'], toolsEnv(step, has));
+}
+
+/** Run here, keyed by the step's name in ci.yml, and handed that step. */
+export const STEPS = {
   // CI installs exactly the lockfile here; a local run checks what it has against it instead.
   'Install dependencies and build core (cli, web and vscode compile against its dist/)': () => (installedMatchesLockfile() ? npm('run', 'build:core') : 1),
-  'Planner sandbox — real bubblewrap e2e': linuxSandboxE2e,
+  'Planner sandbox — real bubblewrap e2e': sandboxStep,
   'Verify scripts (offline, against the built core)': () => {
     for (const f of readdirSync('scripts').filter((f) => /^verify-.*\.mjs$/.test(f)).sort()) {
       if (sh('node', [join('scripts', f)]) !== 0) return 1;
     }
     return 0;
   },
-  'Repository-wide guards': () => npm('run', 'test:guards'),
+  'Repository-wide guards': () => npm('run', 'test:guards', '--', '--maxWorkers=2', '--minWorkers=1'),
   'Planner conversation loop — offline e2e (mock model, no API key)': plannerE2e,
   'Build the standalone CLI binary': seaStep(() => sh('node', ['scripts/sea/build.mjs'])),
   'CLI binary — offline e2e, no Node on PATH': seaStep(() => sh(SEA_BINARY, ['--version']) || sh('node', ['bench/live/drive-binary.mjs', '--bin', SEA_BINARY])),
-  'Bench harness tests (offline, against the built core)': () => npm('run', 'test:bench'),
+  'Bench harness tests (offline, against the built core)': benchStep,
   'Build (ui, vscode, cli, web & desktop)': () => npm('run', 'build', '-w', 'packages/ui', '-w', 'packages/vscode', '-w', 'packages/cli', '-w', 'packages/web', '-w', 'packages/desktop', '--if-present'),
   'VS Code integration test (synthetic runner — no API key)': integrationTest,
   'Desktop app — offline e2e (mock planner, fake runner)': () => withDisplay('the desktop e2e', ['run', 'test:desktop-e2e']),
   // ci.yml splits the tour into legs by TOUR_LEG; with none set, this one walk shoots every leg's share.
   'Desktop app — visual tour and layout checks': () => withDisplay('the visual tour', ['run', 'desktop:tour'], { TOUR_STRICT: '1' }),
   'Typecheck': () => npm('run', 'typecheck'),
-  'Test with coverage': testWithCoverage,
+  'Test with coverage': () => testWithCoverage(),
   'Lint': () => npm('run', 'lint'),
   'Package VS Code Extension': () => npm('run', 'package', '-w', 'packages/vscode'),
   'Package the desktop app': () => npm('run', 'desktop:package'),
@@ -178,11 +221,14 @@ const CI_ONLY = {
   'Require every check this change owed': 'a GitHub required status',
   // `npm ci` would wipe the node_modules you are working in.
   'Install dependencies': 'the first step checks node_modules against the lockfile: run `npm ci` yourself when it does not match',
-  'Install bubblewrap and zsh if the image lacks them': 'the sandbox step installs them itself where sudo does not prompt',
+  'Install bubblewrap, zsh and ripgrep if the image lacks them': 'the sandbox step installs them itself where sudo does not prompt',
   'Install dependencies and build every package': 'the first job’s two build steps build the same packages',
   'Build the Windows suite dependencies': 'the first job’s builds already supply core, ui, cli and web; Windows tests remain unsharded here',
   'Build the Windows harness dependencies': 'the first job’s builds already supply core, ui and the VS Code extension bundle',
   'Cache the VS Code download': 'packages/vscode/.vscode-test is already kept between runs',
+  'Download the VS Code under test': 'the integration test downloads the VS Code it lacks itself, into the same .vscode-test',
+  'Cache the pinned shellcheck': '.tools/shellcheck is already kept between runs',
+  'Fetch the pinned shellcheck': 'the bench step fetches it itself, unless the cache holds it',
   'Resolve the VS Code version under test': 'the workflow asks the update service which stable it will download; a local run keeps the .vscode-test it has',
   'Install xvfb if the image lacks it': 'the VS Code and desktop steps check for a display themselves',
   'Upload the desktop e2e report': 'a failed run leaves it in packages/desktop/test-results/',
@@ -204,26 +250,43 @@ const CI_ONLY = {
   'VS Code integration test on Windows': 'the integration step above runs it on this host',
 };
 
-const workflow = readFileSync('.github/workflows/ci.yml', 'utf8');
-const named = [...workflow.matchAll(/^\s+- name: (.+?)\s*$/gm)].map((m) => m[1].replace(/^(['"])(.*)\1$/, '$2'));
-const unknown = named.filter((n) => !(n in STEPS) && !(n in CI_ONLY));
-const stale = [...Object.keys(STEPS), ...Object.keys(CI_ONLY)].filter((n) => !named.includes(n));
-if (unknown.length || stale.length) {
-  for (const n of unknown) console.error(`ci.yml step not covered by scripts/ci.mjs: "${n}"`);
-  for (const n of stale) console.error(`scripts/ci.mjs names a step ci.yml no longer has: "${n}"`);
-  process.exit(1);
-}
-const local = [...new Set(named.filter((n) => n in STEPS))];
-if (process.argv.includes('--list')) {
-  for (const name of local) console.log(name);
-  process.exit(0);
+/** Refuse drift before either local entry point starts a check. */
+export function workflowSteps() {
+  const workflow = load(readFileSync('.github/workflows/ci.yml', 'utf8'));
+  const steps = Object.entries(workflow.jobs).flatMap(([job, value]) => value.steps
+    .filter((step) => step.name).map((step) => ({ ...step, job })));
+  const named = steps.map((step) => step.name);
+  const unknown = named.filter((n) => !(n in STEPS) && !(n in CI_ONLY));
+  const stale = [...Object.keys(STEPS), ...Object.keys(CI_ONLY)].filter((n) => !named.includes(n));
+  if (unknown.length || stale.length) throw new Error([
+    ...unknown.map((n) => `ci.yml step not covered by scripts/ci.mjs: "${n}"`),
+    ...stale.map((n) => `scripts/ci.mjs names a step ci.yml no longer has: "${n}"`),
+  ].join('\n'));
+  return steps;
 }
 
-for (const name of local) {
-  console.log(`\n=== ${name}`);
-  if ((await STEPS[name]()) !== 0) {
-    console.error(`\n✗ ${name} failed, as it would in CI.`);
-    process.exit(1);
+async function main() {
+  const local = workflowSteps().filter((step, at, all) => step.name in STEPS && all.findIndex((other) => other.name === step.name) === at);
+  if (process.argv.includes('--list')) {
+    for (const { name } of local) console.log(name);
+    return 0;
   }
+  for (const step of local) {
+    console.log(`\n=== ${step.name}`);
+    if ((await STEPS[step.name](step)) !== 0) {
+      console.error(`\n✗ ${step.name} failed, as it would in CI.`);
+      return 1;
+    }
+  }
+  console.log('\n✓ Every ci.yml step that runs locally passed.');
+  // Asked after the steps ran, since the sandbox step installs what it can.
+  const unproven = local.map((step) => [step, missingTools(step)]).filter(([, tools]) => tools.length);
+  if (unproven.length) console.log('\nWhat CI requires and this host lacks, so its tests skipped here (UNVERIFIED):');
+  for (const [step, tools] of unproven) console.log(`  ${step.id}: ${tools.join(', ')}`);
+  return 0;
 }
-console.log('\n✓ Every ci.yml step that runs locally passed.');
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try { process.exitCode = await main(); }
+  catch (error) { console.error(error.message); process.exitCode = 1; }
+}

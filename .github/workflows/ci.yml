@@ -22,6 +22,14 @@
 # `npm ci`), the workspace builds the job asks for and, where a job needs it,
 # Electron's binary from a cache before it installs, builds or downloads one.
 #
+# build-and-test fetches the shellcheck `scripts/shellcheck.json` pins before
+# its bench step, into the cache `.tools/shellcheck`. That step names in
+# ORDEWELL_REQUIRE_TOOLS the tools it means to prove with, so one missing there
+# fails its test instead of skipping it; its sandbox step, after installing
+# ripgrep and zsh, does the same with `rg zsh`. Both bench steps add the reporter
+# `scripts/node-test-annotations.mjs` through NODE_OPTIONS, so each failing test
+# is written into the job summary.
+#
 # and `Required checks` last, the one status a branch rule requires. A pull
 # request runs what its change can reach: a changed workspace's full suite, its
 # dependents' quick ones (full when core's exports change), and for a path
@@ -159,12 +167,13 @@ jobs:
 
       # The sandbox step installs these itself where they are missing, with no
       # second try; here a mirror's miss costs a retry rather than the job.
-      - name: Install bubblewrap and zsh if the image lacks them
+      - name: Install bubblewrap, zsh and ripgrep if the image lacks them
         if: needs.scope.outputs.sandbox != 'false'
         run: |
           missing=()
           command -v bwrap >/dev/null 2>&1 || missing+=(bubblewrap)
           command -v zsh >/dev/null 2>&1 || missing+=(zsh)
+          command -v rg >/dev/null 2>&1 || missing+=(ripgrep)
           [ ${#missing[@]} = 0 ] && exit 0
           for attempt in 1 2 3 4; do
             if sudo apt-get update && sudo apt-get install -y "${missing[@]}"; then exit 0; fi
@@ -177,10 +186,13 @@ jobs:
       # suites start a real one. Ubuntu 24.04 restricts unprivileged user
       # namespaces, so the step applies the fix docs/troubleshooting.md gives
       # users, then ORDEWELL_REQUIRE_SANDBOX makes a probe that still fails a
-      # test failure rather than a skip.
+      # test failure rather than a skip, and ORDEWELL_REQUIRE_TOOLS does the
+      # same for the `rg` and native-zsh tests, which skip on a host without them.
       - name: Planner sandbox — real bubblewrap e2e
         id: sandbox
         if: needs.scope.outputs.sandbox != 'false'
+        env:
+          ORDEWELL_REQUIRE_TOOLS: rg zsh
         run: bash scripts/linux-sandbox-e2e.sh
 
       # Skills seeding, slash invocation and the settings migration, each run
@@ -235,9 +247,29 @@ jobs:
       # pipeline test drives plan -> execute -> verify through the fake claude.
       # scripts/**/*.test.mjs run here too: selection's own, the installer's
       # (scripts/install/) and the binary build's (scripts/sea/) among them.
+      # The installers are linted by the shellcheck scripts/shellcheck.json
+      # pins, not the image's older one, which reports other codes. Each tool
+      # ORDEWELL_REQUIRE_TOOLS names turns the test that would skip without
+      # it into a failure: a skip here would read as proof.
+      - name: Cache the pinned shellcheck
+        if: needs.scope.outputs.bench != 'false'
+        uses: actions/cache@v6
+        with:
+          path: .tools/shellcheck
+          key: shellcheck-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/shellcheck.json') }}
+
+      - name: Fetch the pinned shellcheck
+        if: needs.scope.outputs.bench != 'false'
+        run: node scripts/shellcheck.mjs
+
+      # NODE_OPTIONS adds the reporter that annotates each failing test, so its
+      # name reaches the run's summary; spec stays the log's.
       - name: Bench harness tests (offline, against the built core)
         id: bench
         if: needs.scope.outputs.bench != 'false'
+        env:
+          NODE_OPTIONS: --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./scripts/node-test-annotations.mjs --test-reporter-destination=stdout
+          ORDEWELL_REQUIRE_TOOLS: shellcheck dash pwsh shasum ruby tar
         run: npm run test:bench
 
       # Desktop last: its renderer is built from ui's dist, and the app forks web's.
@@ -274,11 +306,28 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Cache the VS Code download
+        id: vscode-cache
         if: needs.scope.outputs.integration != 'false'
         uses: actions/cache@v6
         with:
           path: packages/vscode/.vscode-test
           key: vscode-test-${{ runner.os }}-${{ steps.vscode-version.outputs.version }}
+
+      # The integration test downloads VS Code itself, but its three tries come
+      # back to back, inside one CDN outage. Fetched here first, with room
+      # between tries, into the directory the cache keeps and the test reads.
+      - name: Download the VS Code under test
+        if: needs.scope.outputs.integration != 'false' && steps.vscode-cache.outputs.cache-hit != 'true'
+        working-directory: packages/vscode
+        env:
+          VERSION: ${{ steps.vscode-version.outputs.version }}
+        run: |
+          for attempt in 1 2 3 4; do
+            node -e "require('@vscode/test-electron').downloadAndUnzipVSCode({ version: process.env.VERSION }).catch((error) => { console.error(error.message); process.exit(1); })" && exit 0
+            [ "$attempt" = 4 ] && exit 1
+            echo "::warning::The VS Code $VERSION download failed (try $attempt of 4); trying again in $((attempt * 30))s."
+            sleep $((attempt * 30))
+          done
 
       - name: Install xvfb if the image lacks it
         if: needs.scope.outputs.integration != 'false' || needs.scope.outputs.desktop != 'false'
@@ -779,7 +828,11 @@ jobs:
             node "$f" || exit 1
           done
 
+      # No ORDEWELL_REQUIRE_TOOLS: no shellcheck is pinned for Windows, so the
+      # lint tests skip here, saying so; build-and-test runs them on Linux.
       - name: Bench harness tests on Windows
+        env:
+          NODE_OPTIONS: --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./scripts/node-test-annotations.mjs --test-reporter-destination=stdout
         run: npm run test:bench
 
       - name: Planner conversation loop on Windows
@@ -809,11 +862,28 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Cache the VS Code download
+        id: vscode-cache
         if: needs.scope.outputs.integration != 'false'
         uses: actions/cache@v6
         with:
           path: packages/vscode/.vscode-test
           key: vscode-test-${{ runner.os }}-${{ steps.vscode-version.outputs.version }}
+
+      # The integration test downloads VS Code itself, but its three tries come
+      # back to back, inside one CDN outage. Fetched here first, with room
+      # between tries, into the directory the cache keeps and the test reads.
+      - name: Download the VS Code under test
+        if: needs.scope.outputs.integration != 'false' && steps.vscode-cache.outputs.cache-hit != 'true'
+        working-directory: packages/vscode
+        env:
+          VERSION: ${{ steps.vscode-version.outputs.version }}
+        run: |
+          for attempt in 1 2 3 4; do
+            node -e "require('@vscode/test-electron').downloadAndUnzipVSCode({ version: process.env.VERSION }).catch((error) => { console.error(error.message); process.exit(1); })" && exit 0
+            [ "$attempt" = 4 ] && exit 1
+            echo "::warning::The VS Code $VERSION download failed (try $attempt of 4); trying again in $((attempt * 30))s."
+            sleep $((attempt * 30))
+          done
 
       # A Windows runner has a desktop, so VS Code needs no virtual display.
       - name: VS Code integration test on Windows
