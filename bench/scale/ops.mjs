@@ -135,7 +135,7 @@ async function view(i, n) {
   const { orchestrator } = session;
   put('  getMergeGate, every task (ms)', i, (await timed(() => { for (const t of session.store.allTasks) orchestrator.getMergeGate(t.id); }, budget(n))).ms);
   put('  planUsage(snapshot) (ms)', i, (await timed(() => core.planUsage(session.store.snapshot()))).ms);
-  put('session.persist(), real save + lease (ms)', i, (await timed(() => session.persist(), 400, 20)).ms);
+  put('session saves.after(), real save + lease (ms)', i, (await timed(() => session.saves.after(), 400, 20)).ms);
   put('whole plan to a surface, plan_generated (bytes)', i, JSON.stringify(core.serializePlan(plan)).length);
   // What a wake-up turn is handed beside its digest: the whole block on a fresh context, the changes after.
   let view;

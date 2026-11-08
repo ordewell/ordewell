@@ -1,3 +1,4 @@
+import path from 'path';
 import { describe, expect, it, vi } from 'vitest';
 import type { ApiClient } from '../../apiClient';
 import { handleAddTask } from '../add-task';
@@ -32,9 +33,12 @@ describe('add-task --depends-on', () => {
   it('reads the plan from the workspace it was told, not the one the daemon started in', async () => {
     const api = client([{ id: 'task-abc', order: 2, title: 'Two', status: 'pending' }]);
 
-    await handleAddTask(['--title', 'New', '--depends-on', '2', '--session-id', 's1', '--workspace', '/elsewhere'], api);
+    // Absolute as the CLI makes it: a POSIX-looking path is drive-relative on Windows.
+    const elsewhere = path.resolve('/elsewhere');
 
-    expect(api.getSession).toHaveBeenCalledWith('s1', '/elsewhere');
+    await handleAddTask(['--title', 'New', '--depends-on', '2', '--session-id', 's1', '--workspace', elsewhere], api);
+
+    expect(api.getSession).toHaveBeenCalledWith('s1', elsewhere);
   });
 
   it('resolves an order number to the task id before sending it', async () => {

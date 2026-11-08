@@ -64,11 +64,12 @@ const host = hostSession({
 });
 const { session, stats, muted } = host;
 const noView = counterfactual === 'no-view';
-const persist = session.persist.bind(session);
+// The Session's one save seam (SessionSaves); every persist of the Session goes through its `after`.
+const saveAfter = session.saves.after.bind(session.saves);
 const quiet = (on) => {
   muted.status = on;
   muted.saves = on;
-  session.persist = on ? () => {} : persist;
+  session.saves.after = on ? () => {} : saveAfter;
 };
 const fastRamp = flag('fast-ramp');
 if (noView || fastRamp) quiet(true);

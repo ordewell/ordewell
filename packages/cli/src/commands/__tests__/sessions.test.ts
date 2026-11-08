@@ -6,6 +6,8 @@ import path from 'path';
 import { ApiClient } from '../../apiClient';
 
 const saved: unknown[][] = [];
+// Resolved as the CLI resolves --workspace: a POSIX-looking path is drive-relative on Windows.
+const WS = path.resolve('/tmp/ws');
 
 vi.mock('../../utils', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../utils')>()),
@@ -73,7 +75,7 @@ describe('handleSessions', () => {
     });
     const { handleSessions } = await import('../sessions');
     const { stderr, exitCode } = await capture(() =>
-      handleSessions(['delete', 'session-nope', '--workspace', '/tmp/ws'], new ApiClient(srv.port)),
+      handleSessions(['delete', 'session-nope', '--workspace', WS], new ApiClient(srv.port)),
     );
 
     expect(exitCode).toBe(1);
@@ -107,9 +109,9 @@ describe('handleSessions', () => {
     const srv = await sessionsServer(hits);
     const { handleSessions } = await import('../sessions');
     const { stdout } = await capture(() =>
-      handleSessions(['list', '--workspace', '/tmp/ws'], new ApiClient(srv.port)),
+      handleSessions(['list', '--workspace', WS], new ApiClient(srv.port)),
     );
-    expect(hits[0]).toContain('workspace=%2Ftmp%2Fws');
+    expect(hits[0]).toContain('workspace=' + encodeURIComponent(WS));
     expect(stdout).toContain('session-42');
     expect(stdout).toContain('refactor the parser');
     srv.close();
@@ -135,9 +137,9 @@ describe('handleSessions', () => {
     const srv = await sessionsServer([]);
     const { handleSessions } = await import('../sessions');
     const { stdout } = await capture(() =>
-      handleSessions(['load', 'session-42', '--workspace', '/tmp/ws'], new ApiClient(srv.port)),
+      handleSessions(['load', 'session-42', '--workspace', WS], new ApiClient(srv.port)),
     );
-    expect(saved).toEqual([['session-42', 'refactor the parser', ['claude-code'], '/tmp/ws']]);
+    expect(saved).toEqual([['session-42', 'refactor the parser', ['claude-code'], WS]]);
     expect(stdout).toContain('Loaded session session-42');
     srv.close();
   });
@@ -149,7 +151,7 @@ describe('handleSessions', () => {
     const srv = await sessionsServer(hits);
     const { handleSessions } = await import('../sessions');
     await capture(() =>
-      handleSessions(['load', 'session-42', '--workspace', '/tmp/ws'], new ApiClient(srv.port)),
+      handleSessions(['load', 'session-42', '--workspace', WS], new ApiClient(srv.port)),
     );
     expect(hits.some((h) => h.startsWith('POST /api/sessions/session-42/load'))).toBe(true);
     srv.close();
