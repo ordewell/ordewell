@@ -3,7 +3,7 @@ import { replayTaskLog, type TaskLogEvent } from '@ordewell/core';
 import { initialState, reduce, type Action } from '../reducer';
 import { render } from '../render';
 import { chatLayout } from '../layout';
-import { inboundFor } from '../inbound';
+import { createInbound } from '../inbound';
 import { decodeKey } from '../keys';
 import type { TaskLogState, TaskView, TuiState } from '../state';
 import type { WsEvent } from '../../apiClient';
@@ -132,7 +132,7 @@ describe('waiting for approval, from the daemon', () => {
 
   it('is read off the status update and shown on the task\'s row', () => {
     const actions: Action[] = [];
-    const receive = inboundFor({}, (action) => actions.push(action), 's1').execution();
+    const receive = createInbound((action) => actions.push(action), 's1').receive;
     const wire: unknown = { type: 'status_update', tasks: [{ id: 't1', status: 'in_progress', verdict: null, awaitingApproval: 2 }] };
     receive(wire as WsEvent);
     const update = actions.find((a): a is Extract<Action, { type: 'statusUpdate' }> => a.type === 'statusUpdate');

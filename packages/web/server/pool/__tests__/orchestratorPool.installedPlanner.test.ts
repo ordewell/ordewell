@@ -184,12 +184,12 @@ describe('OrchestratorPool default planner', () => {
 
     pool.adoptSavedSession('restored', workspace);
     await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(pool.session('restored').planState!.pendingTurns!.map((t) => t.text)).toEqual(['Postgres']);
+    expect(pool.session('restored', undefined).planState!.pendingTurns!.map((t) => t.text)).toEqual(['Postgres']);
 
     answer();
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(agent).not.toHaveBeenCalled();
-    await pool.continuePlanning('restored', 'go on');
+    await pool.continuePlanning('restored', 'go on', undefined);
     await vi.waitFor(() => expect(agent).toHaveBeenCalledTimes(1));
     expect(vendor).not.toHaveBeenCalled();
     pool.destroyAll();
@@ -207,7 +207,7 @@ describe('OrchestratorPool default planner', () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(vendor).not.toHaveBeenCalled();
-    expect(pool.session('refused').planState!.pendingTurns!.map((t) => t.text)).toEqual(['Postgres']);
+    expect(pool.session('refused', undefined).planState!.pendingTurns!.map((t) => t.text)).toEqual(['Postgres']);
     pool.destroyAll();
   });
 
@@ -219,14 +219,14 @@ describe('OrchestratorPool default planner', () => {
 
     const planning = pool.startPlanning('s1', 'ship it', ['claude-code'], workspace);
     const settled = expect(planning).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
-    expect(pool.cancelPlanning('s1')).toBe(true);
+    expect(pool.cancelPlanning('s1', undefined)).toBe(true);
     answer();
 
     await settled;
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(asked).toEqual([]);
     // Nothing is left to stop, so a second Stop has nothing to report.
-    expect(pool.cancelPlanning('s1')).toBe(false);
+    expect(pool.cancelPlanning('s1', undefined)).toBe(false);
     pool.destroyAll();
   });
 
@@ -238,7 +238,7 @@ describe('OrchestratorPool default planner', () => {
 
     const first = pool.startPlanning('s1', 'ship it', ['claude-code'], workspace);
     const firstSettled = expect(first).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
-    pool.cancelPlanning('s1');
+    pool.cancelPlanning('s1', undefined);
     const second = pool.startPlanning('s1', 'ship it differently', ['claude-code'], workspace);
     answer();
 
@@ -260,13 +260,13 @@ describe('OrchestratorPool default planner', () => {
     pool.adoptSavedSession('stopped', workspace);
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    expect(pool.cancelPlanning('stopped')).toBe(false);
+    expect(pool.cancelPlanning('stopped', undefined)).toBe(false);
     answer();
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(agent).not.toHaveBeenCalled();
     expect(runner.spawn).not.toHaveBeenCalled();
-    expect(pool.cancelPlanning('stopped')).toBe(false);
+    expect(pool.cancelPlanning('stopped', undefined)).toBe(false);
     pool.destroyAll();
   });
 
@@ -278,7 +278,7 @@ describe('OrchestratorPool default planner', () => {
 
     const planning = pool.startPlanning('s1', 'Build an inventory service', ['claude-code'], workspace);
     await new Promise((resolve) => setTimeout(resolve, 10));
-    const reply = pool.continuePlanning('s1', 'Use Postgres');
+    const reply = pool.continuePlanning('s1', 'Use Postgres', undefined);
     answer();
     await planning;
     const plan = await reply;
@@ -287,7 +287,7 @@ describe('OrchestratorPool default planner', () => {
     expect(asked).toHaveLength(2);
     expect(asked[1]).toContain('Use Postgres');
     expect((plan.conversationHistory ?? []).filter((m) => m.role === 'user').map((m) => m.content)).toEqual(['Build an inventory service', 'Use Postgres']);
-    expect(pool.session('s1').currentGoal).toBe('Build an inventory service');
+    expect(pool.session('s1', undefined).currentGoal).toBe('Build an inventory service');
     pool.destroyAll();
   });
 
@@ -300,9 +300,9 @@ describe('OrchestratorPool default planner', () => {
     const planning = pool.startPlanning('s1', 'Build an inventory service', ['claude-code'], workspace);
     const planningSettled = expect(planning).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
     await new Promise((resolve) => setTimeout(resolve, 10));
-    const reply = pool.continuePlanning('s1', 'Use Postgres');
+    const reply = pool.continuePlanning('s1', 'Use Postgres', undefined);
     const replySettled = expect(reply).rejects.toBeInstanceOf(PlannerTurnStoppedError);
-    expect(pool.cancelPlanning('s1')).toBe(true);
+    expect(pool.cancelPlanning('s1', undefined)).toBe(true);
     await planningSettled;
     await replySettled;
     answer();
@@ -593,26 +593,26 @@ describe('OrchestratorPool default planner', () => {
         writeFileSync(`${account}.logged-in`, '');
       };
       signInAgain();
-      await expect(pool.continuePlanning('s1', 'Use Postgres')).resolves.toBeDefined();
+      await expect(pool.continuePlanning('s1', 'Use Postgres', undefined)).resolves.toBeDefined();
 
       signInAgain();
-      await expect(pool.forceSendPrompt('s1', 'Use SQLite instead')).resolves.toBeDefined();
+      await expect(pool.forceSendPrompt('s1', 'Use SQLite instead', undefined)).resolves.toBeDefined();
 
-      await pool.continuePlanning('s1', 'And stream the export');
+      await pool.continuePlanning('s1', 'And stream the export', undefined);
       signInAgain();
-      await expect(pool.compactConversation('s1')).resolves.toMatchObject({
+      await expect(pool.compactConversation('s1', undefined)).resolves.toMatchObject({
         summary: 'The database and its CSV export were decided.',
       });
 
       // A paused compaction's retry is a planner turn too, and reads the same
       // recorded verdict: it must see the login before the session gates it.
-      const session = pool.session('s1');
+      const session = pool.session('s1', undefined);
       const retry = vi.spyOn(session, 'retryPlannerCompaction').mockImplementation(async () => {
         expect(recordedRunnerAuth('claude-code', ws)?.state).toBe('signed-in');
         return session.planState!;
       });
       signInAgain();
-      await pool.retryPlannerCompaction('s1');
+      await pool.retryPlannerCompaction('s1', undefined);
       expect(retry).toHaveBeenCalledTimes(1);
     } finally {
       pool.destroyAll();
@@ -638,9 +638,9 @@ describe('OrchestratorPool default planner', () => {
       rmSync(`${account}.logged-in`, { force: true });
       recordRunnerAuth('claude-code', { state: 'signed-out', loginCommand: ['claude', 'auth', 'login'] }, ws);
 
-      await expect(pool.continuePlanning('s1', 'Use Postgres')).rejects.toBeInstanceOf(PlannerNotReadyError);
-      await expect(pool.forceSendPrompt('s1', 'Use SQLite instead')).rejects.toBeInstanceOf(PlannerNotReadyError);
-      await expect(pool.compactConversation('s1')).rejects.toBeInstanceOf(PlannerNotReadyError);
+      await expect(pool.continuePlanning('s1', 'Use Postgres', undefined)).rejects.toBeInstanceOf(PlannerNotReadyError);
+      await expect(pool.forceSendPrompt('s1', 'Use SQLite instead', undefined)).rejects.toBeInstanceOf(PlannerNotReadyError);
+      await expect(pool.compactConversation('s1', undefined)).rejects.toBeInstanceOf(PlannerNotReadyError);
     } finally {
       pool.destroyAll();
     }

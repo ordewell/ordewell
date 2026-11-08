@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import http from 'http';
 import { ApiClient } from '../../apiClient';
+import { wireRoute } from '../../__tests__/wireRoute';
 
 function startServer(handler: (req: http.IncomingMessage, res: http.ServerResponse) => void): Promise<{ port: number; close: () => void }> {
   return new Promise((resolve) => {
@@ -41,7 +42,7 @@ async function daemon(answer: (command: { command: string }) => { status: number
     req.on('data', (chunk: Buffer) => chunks.push(chunk));
     req.on('end', () => {
       const sent = Buffer.concat(chunks).toString('utf8');
-      hits.push(`${req.method} ${req.url} ${sent}`);
+      hits.push(`${req.method} ${wireRoute(req.url)} ${sent}`);
       const { status, body } = answer(sent ? JSON.parse(sent) : { command: '' });
       res.writeHead(status, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(body));

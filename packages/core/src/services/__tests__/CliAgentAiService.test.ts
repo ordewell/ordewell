@@ -508,7 +508,7 @@ describe('CliAgentAiService — Claude Code', () => {
     const { svc, spawned } = service('claude-code', reachingFor('mcp__claude_ai_Todoist__find-tasks', { filter: 'today' }, 'claude.ai Todoist'));
     await svc.startConversation(request({ approval }));
 
-    expect(approval.request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mcp_tool', scope: 'mcp__claude_ai_Todoist__find-tasks' }));
+    expect(approval.request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mcp_tool', scope: 'mcp__claude_ai_Todoist__find-tasks' }), { signal: expect.any(AbortSignal) });
     expect(approval.request.mock.calls[0][0].subject).toContain('claude.ai Todoist');
     expect(controlAnswer(spawned.processes[0])).toEqual({ behavior: 'allow', updatedInput: { filter: 'today' } });
   });
@@ -532,7 +532,7 @@ describe('CliAgentAiService — Claude Code', () => {
       // Judged where the path points (ADR-0028): macOS's temp directory sits
       // behind a symlink and Windows' can be a short name, so resolve the
       // expectation the same way.
-      expect(outside.request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', subject: realpathSync.native(hosts) }));
+      expect(outside.request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', subject: realpathSync.native(hosts) }), { signal: expect.any(AbortSignal) });
       expect(controlAnswer(outsideSpawn.processes[0])).toMatchObject({ behavior: 'deny' });
     } finally {
       rmSync(elsewhere, { recursive: true, force: true });
@@ -2808,6 +2808,74 @@ describe('CliAgentAiService — resource lifecycle', () => {
     } finally {
       process.off('unhandledRejection', onUnhandled);
     }
+  });
+
+  /** An approval that parks every request until its signal is aborted, as a surface's card does. */
+  function parkingApproval() {
+    const signals: Array<AbortSignal | undefined> = [];
+    const request = vi.fn((_req: ApprovalRequest, opts?: { signal?: AbortSignal }) => new Promise<boolean>((resolve) => {
+      signals.push(opts?.signal);
+      opts?.signal?.addEventListener('abort', () => resolve(false), { once: true });
+    }));
+    return { approval: { request }, signals };
+  }
+  const outsideRead: AgentEvent = { type: 'permission_request', id: 'req-1', name: 'Read', detail: '/etc/hosts', ask: { kind: 'path', path: '/etc/hosts', directory: false } };
+
+  it('withdraws an approval card whose request the runner cancelled', async () => {
+    const { approval, signals } = parkingApproval();
+    const answers: string[] = [];
+    const { svc } = planners(() => ({
+      send: async (_message, onEvent) => {
+        onEvent(outsideRead);
+        await vi.waitFor(() => expect(signals).toHaveLength(1));
+        expect(signals[0]?.aborted).toBe(false);
+        onEvent({ type: 'permission_cancelled', id: 'req-1' });
+        await vi.waitFor(() => expect(signals[0]?.aborted).toBe(true));
+        onEvent({ type: 'assistant_text', runId: 'r1', text: 'ok' });
+        onEvent({ type: 'turn_end' });
+      },
+      answerPermission: (id) => { answers.push(id); return true; },
+    }));
+
+    await svc.startConversation(request({ approval }));
+
+    expect(signals[0]?.aborted).toBe(true);
+    // The runner took the request back, so there is nobody to answer.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(answers).toEqual([]);
+  });
+
+  it('withdraws a still-open approval card when the turn ends without an answer', async () => {
+    const { approval, signals } = parkingApproval();
+    const { svc } = planners(() => ({
+      send: async (_message, onEvent) => {
+        onEvent(outsideRead);
+        await vi.waitFor(() => expect(signals).toHaveLength(1));
+        onEvent({ type: 'assistant_text', runId: 'r1', text: 'ok' });
+        onEvent({ type: 'turn_end' });
+      },
+      answerPermission: () => true,
+    }));
+
+    await svc.startConversation(request({ approval }));
+
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
+  it('withdraws a still-open approval card when the turn fails', async () => {
+    const { approval, signals } = parkingApproval();
+    const { svc } = planners(() => ({
+      send: async (_message, onEvent) => {
+        onEvent(outsideRead);
+        await vi.waitFor(() => expect(signals).toHaveLength(1));
+        throw new Error('EPIPE');
+      },
+      answerPermission: () => true,
+    }));
+
+    await expect(svc.startConversation(request({ approval }))).rejects.toThrow('EPIPE');
+
+    expect(signals[0]?.aborted).toBe(true);
   });
 });
 

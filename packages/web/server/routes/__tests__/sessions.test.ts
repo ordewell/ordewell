@@ -26,6 +26,8 @@ function fakePool(overrides: Partial<OrchestratorPool> = {}): OrchestratorPool {
     plannerCompaction: vi.fn().mockReturnValue(undefined),
     streamPosition: vi.fn().mockReturnValue({ stream: 'daemon', seq: 12 }),
     hasSession: vi.fn().mockReturnValue(false),
+    holds: vi.fn().mockReturnValue(true),
+    heldElsewhere: vi.fn().mockReturnValue(false),
     stopTree: vi.fn(async () => undefined),
     destroy: vi.fn(),
     close: vi.fn(async () => undefined),
@@ -305,7 +307,7 @@ describe('DELETE /api/sessions/:id', () => {
     const res = await app.request(`/api/sessions/${meta.id}?workspace=${encodeURIComponent(ws)}`, { method: 'DELETE' });
 
     expect(await res.json()).toEqual({ ok: true });
-    expect(pool.close).toHaveBeenCalledWith(meta.id);
+    expect(pool.close).toHaveBeenCalledWith(meta.id, ws);
     expect(filesWhenClosed).toEqual([true]);
     expect(listSessions(ws)).toEqual([]);
   });
@@ -328,7 +330,7 @@ describe('DELETE /api/sessions/:id', () => {
     await app.request(`/api/sessions/${meta.id}?workspace=${encodeURIComponent(ws)}`, { method: 'DELETE' });
 
     expect(order).toEqual(['stopped', 'closed', 'cleared']);
-    expect(pool.reclaim).toHaveBeenCalledWith(meta.id);
+    expect(pool.reclaim).toHaveBeenCalledWith(meta.id, ws);
   });
 
   it('discards a child\'s run first, and keeps the session when git could not let it go', async () => {
@@ -350,7 +352,7 @@ describe('DELETE /api/sessions/:id', () => {
   });
 
   it('still reports failure when there was no saved file to remove', async () => {
-    const pool = fakePool();
+    const pool = fakePool({ holds: vi.fn().mockReturnValue(false) });
     const app = new Hono();
     app.route('/api/sessions', sessionsRoute(pool));
 
@@ -372,7 +374,7 @@ describe('POST /api/sessions/:id/close', () => {
 
     expect(res.status).toBe(200);
     expect(((await res.json()) as { ok?: boolean }).ok).toBe(true);
-    expect(pool.close).toHaveBeenCalledWith('s1');
+    expect(pool.close).toHaveBeenCalledWith('s1', process.cwd());
   });
 
   it('answers once what the session started has gone', async () => {

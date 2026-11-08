@@ -15,6 +15,7 @@ import type {
   IsolationRemoval,
   IsolationRevertResult,
   IsolationRun,
+  IsolationTaskRecord,
   IntegrationDisposal,
   LandedWork,
   PreparedTask,
@@ -689,8 +690,10 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
     return { outcome: 'reverted', tasks: landed.tasks };
   }
 
-  async release(run: IsolationRun, taskId: string, opts: { keep: boolean }): Promise<IsolationRemoval> {
+  async release(run: IsolationRun, taskId: string, opts: { keep: boolean; record?: IsolationTaskRecord }): Promise<IsolationRemoval> {
     this.log({ op: 'release', taskId, keep: opts.keep });
+    // Like git: a newer start's record, made while this release waited its turn, is not this one's.
+    if (opts.record && run.tasks[taskId] !== opts.record) return noRemoval();
     const record = run.tasks[taskId];
     // Like git: a read-only task's record goes whole, with nothing kept (ADR-0046).
     if (record?.readOnly) {

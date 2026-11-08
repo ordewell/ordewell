@@ -58,9 +58,9 @@ describe('landing runs from saved sessions (ADR-0062 G7)', () => {
     const isLive = (where: string, sessionId: string) => { judged.push(`${where}:${sessionId}`); return true; };
 
     expect(landingRuns({ workspace: inner, repo: '.', root: inner }, isLive)).toEqual([
-      { workspace: fs.realpathSync(workspace), sessionId: 's1', runId: 'r1', repo: '.', branch: 'main', live: true, unmerged: false },
+      { workspace: fs.realpathSync.native(workspace), sessionId: 's1', runId: 'r1', repo: '.', branch: 'main', live: true, unmerged: false },
     ]);
-    expect(judged).toEqual([`${fs.realpathSync(workspace)}:s1`]);
+    expect(judged).toEqual([`${fs.realpathSync.native(workspace)}:s1`]);
     // web is another checkout: the run holds nothing there.
     const web = path.join(workspace, 'web');
     expect(landingRuns({ workspace: web, repo: '.', root: web }, isLive)).toEqual([]);

@@ -48,17 +48,21 @@ export function settingsRoute(pool: OrchestratorPool) {
   // here the moment it opens, and a /planner switch is judged against the
   // planner in effect, which the probe may be about to change.
   router.get('/', async (c) => {
-    await installedPlannerDetected();
-    // An open session answers with its own run settings; no id or an id it no
-    // longer holds answers with the file's, which a new session starts from
-    // (ADR-0030). The planner's model is judged against the runner catalog of
-    // the session's workspace, else of the one the client is in, waited for
-    // only where it decides that model (ADR-0040).
-    const sessionId = c.req.query('sessionId') || undefined;
-    const workspace = c.req.query('workspace') || undefined;
-    await pool.discoverPlannerCatalogs(sessionId, workspace);
-    const settings: SettingsResponse = pool.getSettings(sessionId, workspace);
-    return c.json(settings);
+    try {
+      await installedPlannerDetected();
+      // An open session answers with its own run settings; no id or an id it no
+      // longer holds answers with the file's, which a new session starts from
+      // (ADR-0030). The planner's model is judged against the runner catalog of
+      // the session's workspace, else of the one the client is in, waited for
+      // only where it decides that model (ADR-0040).
+      const sessionId = c.req.query('sessionId') || undefined;
+      const workspace = c.req.query('workspace') || undefined;
+      await pool.discoverPlannerCatalogs(sessionId, workspace);
+      const settings: SettingsResponse = pool.getSettings(sessionId, workspace);
+      return c.json(settings);
+    } catch (err) {
+      return failure(c, err, 'read settings');
+    }
   });
 
   router.patch('/', async (c) => {

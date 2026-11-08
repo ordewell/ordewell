@@ -509,20 +509,54 @@ export function serializeTask(t: SurfaceTask): SerializedTask {
   };
 }
 
+/**
+ * What a task's own record cannot say: each fact is gathered elsewhere in the
+ * session when a status goes out. Taken as a `Partial`, so a caller that tracks
+ * none of them emits the same status an older surface would.
+ */
+export interface TaskStatusFacts {
+  /** Advisory silence timestamp from VerdictEngine; `null` when it has none. */
+  idleSince: string | null;
+  /** The task's worktree, when the plan isolates; `null` outside an isolation run. */
+  isolation: TaskIsolation | null;
+  /** Messages waiting for the task's turn to end, oldest first. */
+  queued: readonly QueuedTaskMessage[];
+  /** How many of the task's runner requests wait for an answer. */
+  awaitingApproval: number;
+  /** The ancestors whose landed work is not merged into the user's branch. */
+  mergeGate: readonly string[];
+  /** The whole question of the checkpoint the task waits at. */
+  checkpoint: string;
+  /** The task was added and not approved since, so the scheduler leaves it for the user. */
+  waitsForApproval: boolean;
+  /** Why the task is held out of auto-scheduling, in the user's words. */
+  holdReason: string | null;
+  /** The receipt a runner's `task_complete` left while the attempt winds down. */
+  completionReceived: Verdict['reported'] | null;
+  /** Which spawn of a starting runner waits for Ordewell's tools: 1, or 2 after its one respawn. */
+  attaching: 1 | 2 | null;
+  /** A loop's check between rounds that nothing will run. */
+  loopStranded: boolean;
+  /** A delegated task's row: its child's tasks, what is left of its budget, a Stop still winding down. */
+  delegation: DelegatedRow | undefined;
+}
+
 export function serializeTaskStatus(
   t: Task,
-  idleSince: string | null = null,
-  isolation: TaskIsolation | null = null,
-  queued: readonly QueuedTaskMessage[] = [],
-  awaitingApproval = 0,
-  mergeGate: readonly string[] = [],
-  checkpoint = '',
-  waitsForApproval = false,
-  holdReason: string | null = null,
-  completionReceived: Verdict['reported'] | null = null,
-  attaching: 1 | 2 | null = null,
-  loopStranded = false,
-  delegation: DelegatedRow | undefined = undefined,
+  {
+    idleSince = null,
+    isolation = null,
+    queued = [],
+    awaitingApproval = 0,
+    mergeGate = [],
+    checkpoint = '',
+    waitsForApproval = false,
+    holdReason = null,
+    completionReceived = null,
+    attaching = null,
+    loopStranded = false,
+    delegation = undefined,
+  }: Partial<TaskStatusFacts> = {},
 ): SerializedTaskStatus {
   return {
     id: t.id,

@@ -914,10 +914,11 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     });
   }
 
-  release(run: IsolationRun, taskId: string, opts: { keep: boolean }): Promise<IsolationRemoval> {
+  release(run: IsolationRun, taskId: string, opts: { keep: boolean; record?: IsolationTaskRecord }): Promise<IsolationRemoval> {
     return this.admin(stateRootOf(run), async () => {
       const record = run.tasks[taskId];
-      if (!record) return noRemoval();
+      // Read under the lock a newer start's prepare may have held first, so it can be that start's record.
+      if (!record || (opts.record && record !== opts.record)) return noRemoval();
       // A read-only task's worktree is never kept for inspection: nothing in it is work (ADR-0046).
       // A read-only task's worktree goes whatever it holds, unless it is a child's code root, which a Continue reopens (ADR-0055 D17).
       const removal = opts.keep && (!record.readOnly || record.childSession) ? noRemoval() : await this.removeTask(run, record, { dropRecord: true });

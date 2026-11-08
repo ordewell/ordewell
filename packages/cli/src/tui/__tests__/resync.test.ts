@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createTask } from '@ordewell/core';
-import { inboundFor } from '../inbound';
+import { createInbound } from '../inbound';
 import { render } from '../render';
 import { stripAnsi } from '../ansi';
 import type { Action } from '../reducer';
@@ -72,9 +72,9 @@ describe('two sockets on one session during a handover', () => {
 
   it('does not bring back a status the newer socket\'s snapshot already accounts for', () => {
     const actions: Action[] = [];
-    const inbound = inboundFor({}, (action) => actions.push(action), 's1');
-    const old = inbound.execution();
-    const fresh = inbound.execution();
+    // Both sockets feed the session's one inbound stream.
+    const { receive: old } = createInbound((action) => actions.push(action), 's1');
+    const fresh = old;
 
     old(status(4));
     // The new socket greets with the run as of broadcast 6, which already holds 5 and 6.
@@ -88,19 +88,18 @@ describe('two sockets on one session during a handover', () => {
 
   it('passes over a snapshot older than a broadcast another socket already delivered', () => {
     const actions: Action[] = [];
-    const inbound = inboundFor({}, (action) => actions.push(action), 's1');
-    inbound.execution()(status(9));
+    const { receive } = createInbound((action) => actions.push(action), 's1');
+    receive(status(9));
 
-    inbound.planning()({ type: 'run_snapshot', sessionId: 's1', view, stream: 'd1', seq: 8 } as WsEvent);
+    receive({ type: 'run_snapshot', sessionId: 's1', view, stream: 'd1', seq: 8 } as WsEvent);
 
     expect(actions.map((a) => a.type)).toEqual(['statusUpdate']);
   });
 
   it('shows each broadcast once whichever socket delivers it, and two that read the same twice', () => {
     const actions: Action[] = [];
-    const inbound = inboundFor({}, (action) => actions.push(action), 's1');
-    const a = inbound.execution();
-    const b = inbound.execution();
+    const { receive: a } = createInbound((action) => actions.push(action), 's1');
+    const b = a;
 
     a(status(1)); b(status(1)); b(status(2)); a(status(2));
 
@@ -109,12 +108,13 @@ describe('two sockets on one session during a handover', () => {
 
   it('starts counting again for a restarted daemon', () => {
     const actions: Action[] = [];
-    const receive = inboundFor({}, (action) => actions.push(action), 's1').execution();
+    const { receive } = createInbound((action) => actions.push(action), 's1');
 
     receive(status(7));
     receive(status(1, 'd2'));
 
-    expect(actions.map((a) => a.type)).toEqual(['statusUpdate', 'statusUpdate']);
+    // Shown, though numbered below 7, and the conversation read back: a new daemon's numbers say nothing of what this surface missed.
+    expect(actions.map((a) => a.type)).toEqual(['statusUpdate', 'streamGap', 'statusUpdate']);
   });
 });
 
@@ -129,7 +129,7 @@ describe('the planner\'s approval requests on a TUI that was not listening', () 
     const overlay = tui.state().overlay;
     return overlay?.kind === 'approval' ? overlay.request.id : null;
   };
-  const starts = () => (daemon.pool.session('s').planState?.conversationHistory ?? [])
+  const starts = () => (daemon.pool.session('s', undefined).planState?.conversationHistory ?? [])
     .filter((e) => e.kind === 'execution' && e.execution?.command === 'run_task' && e.execution.outcome === 'done');
 
   /** A plan the user executed, and a task added since that they have not approved. */
@@ -148,8 +148,8 @@ describe('the planner\'s approval requests on a TUI that was not listening', () 
     void other.sendConversationMessage('s', 'start the cache task').catch(() => undefined);
     await vi.waitFor(() => expect(daemon.turns).toHaveLength(1));
     const answered = daemon.turns[0].tools.runTask!({ task: 't3' }, toolContext);
-    await vi.waitFor(() => expect(daemon.pool.session('s').outstandingApprovals()).toHaveLength(1));
-    return { id: daemon.pool.session('s').outstandingApprovals()[0].id, answered };
+    await vi.waitFor(() => expect(daemon.pool.session('s', undefined).outstandingApprovals()).toHaveLength(1));
+    return { id: daemon.pool.session('s', undefined).outstandingApprovals()[0].id, answered };
   }
 
   it('shows a request already waiting to a TUI that loads the session, and asks it', async () => {

@@ -20,8 +20,12 @@ export function workspacesRoute(pool: OrchestratorPool) {
   });
 
   router.get('/', (c) => {
-    const workspaces = scanWorkspaces();
-    return c.json({ workspaces } satisfies WorkspacesResponse);
+    try {
+      const workspaces = scanWorkspaces();
+      return c.json({ workspaces } satisfies WorkspacesResponse);
+    } catch (err) {
+      return failure(c, err, 'list workspaces');
+    }
   });
 
   return router;

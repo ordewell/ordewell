@@ -1,0 +1,287 @@
+import { describe, expect, it, vi } from 'vitest';
+import type { ReservedLease } from '../executionLease';
+import { PlannerTurnDiscardedError, PlannerTurnStoppedError } from '../PlannerConversation';
+import { TurnGate, type TurnGateHost } from '../TurnGate';
+
+/** A pool of `slots` planner leases, with the probe and the conversation as the test sets them. */
+function harness({ slots = 1, placed = true, answered = true } = {}) {
+  let free = slots;
+  const released: string[] = [];
+  let probeAnswer: () => void = () => undefined;
+  const state = {
+    answered,
+    ready: null as Error | null,
+    queuedTurnRunning: false,
+    conversationBusy: false,
+  };
+  const reserve = vi.fn((): { lease: ReservedLease } | { refused: string } => {
+    if (free === 0) return { refused: 'the tree is full' };
+    free--;
+    let held = true;
+    const lease: ReservedLease = {
+      id: `lease-${released.length}`,
+      holdsSlot: true,
+      open: vi.fn().mockResolvedValue({}),
+      release: (why) => {
+        if (!held) return;
+        held = false;
+        free++;
+        released.push(why);
+      },
+    };
+    return { lease };
+  });
+  const host = {
+    reserve,
+    placed: () => placed,
+    plannerAnswered: () => state.answered,
+    plannerDetected: vi.fn(() => new Promise<void>((resolve) => {
+      probeAnswer = () => {
+        state.answered = true;
+        resolve();
+      };
+    })),
+    detecting: vi.fn(),
+    assertReady: () => {
+      if (state.ready) throw state.ready;
+    },
+    queuedTurnRunning: () => state.queuedTurnRunning,
+    conversationBusy: () => state.conversationBusy,
+    parked: vi.fn(),
+    pump: vi.fn(),
+  } satisfies TurnGateHost;
+  const gate = new TurnGate(host);
+  /** Another Session gives its slot back, and the pool offers it here. */
+  const freeOne = () => {
+    free++;
+    gate.freed();
+  };
+  return { gate, host, state, released, freeOne, answerProbe: () => probeAnswer(), takeSlot: () => { free--; } };
+}
+
+const outcome = (p: Promise<void>) => p.then(() => 'open' as const, (err: unknown) => err);
+const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+describe('TurnGate: admission', () => {
+  it('lets a turn in at once when the probe has answered and a slot is free, holding the lease', () => {
+    const { gate } = harness();
+    expect(gate.admit()).toBeNull();
+    expect(gate.holding).toBe(true);
+    expect(gate.waiting).toBe(false);
+  });
+
+  it('takes no slot for a turn of a Session outside a tree', () => {
+    const { gate, host } = harness({ placed: false });
+    expect(gate.admit()).toBeNull();
+    expect(host.reserve).not.toHaveBeenCalled();
+    expect(gate.holding).toBe(false);
+  });
+
+  it('refuses at once when the planner cannot plan', () => {
+    const { gate, state } = harness();
+    state.ready = new Error('no planner');
+    expect(() => gate.admit()).toThrow('no planner');
+  });
+
+  it('waits on the probe, telling the surfaces once however many wait, then judges the planner afresh', async () => {
+    const { gate, host, state, answerProbe } = harness({ answered: false });
+    const first = outcome(gate.admit()!);
+    const second = outcome(gate.admit()!);
+    expect(gate.detecting).toBe(true);
+    expect(gate.waiting).toBe(true);
+    expect(host.plannerDetected).toHaveBeenCalledTimes(1);
+    expect(host.detecting).toHaveBeenCalledWith(true);
+
+    state.ready = new Error('found no planner');
+    answerProbe();
+    expect(await first).toEqual(new Error('found no planner'));
+    expect(await second).toEqual(new Error('found no planner'));
+    expect(host.detecting).toHaveBeenLastCalledWith(false);
+    expect(gate.detecting).toBe(false);
+  });
+
+  it('opens a turn the probe let through on a slot it then takes', async () => {
+    const { gate, answerProbe } = harness({ answered: false });
+    const admitted = outcome(gate.admit()!);
+    answerProbe();
+    expect(await admitted).toBe('open');
+    expect(gate.holding).toBe(true);
+  });
+
+  it('a wait ended before the probe answered is not opened by its answer', async () => {
+    const { gate, answerProbe } = harness({ answered: false });
+    const admitted = outcome(gate.admit()!);
+    expect(gate.endAll(() => new PlannerTurnDiscardedError())).toBe(true);
+    answerProbe();
+    expect(await admitted).toBeInstanceOf(PlannerTurnDiscardedError);
+    await flush();
+    expect(gate.holding).toBe(false);
+  });
+
+  it('the queue waits on the probe while it is unanswered, and on nothing once it has', async () => {
+    const { gate, answerProbe } = harness({ answered: false });
+    const probe = gate.probe();
+    expect(probe).not.toBeNull();
+    answerProbe();
+    await probe;
+    expect(gate.probe()).toBeNull();
+  });
+});
+
+describe('TurnGate: a wait for a slot of the tree (ADR-0055 D18)', () => {
+  it('an abort while it waits rejects it as stopped, and the freed slot goes to the queue', async () => {
+    const { gate, host, freeOne, takeSlot } = harness();
+    takeSlot();
+    const stop = new AbortController();
+    const admitted = outcome(gate.admit(stop.signal)!);
+    stop.abort();
+    expect(await admitted).toBeInstanceOf(PlannerTurnStoppedError);
+    expect(gate.waiting).toBe(false);
+
+    freeOne();
+    expect(host.pump).toHaveBeenCalledTimes(1);
+    expect(gate.holding).toBe(false);
+  });
+
+  it('refuses at once a caller that had already aborted', async () => {
+    const { gate, takeSlot } = harness();
+    takeSlot();
+    const stop = new AbortController();
+    stop.abort();
+    expect(await outcome(gate.admit(stop.signal)!)).toBeInstanceOf(PlannerTurnStoppedError);
+    expect(gate.waiting).toBe(false);
+  });
+
+  it('an end while it waits rejects it with why, and nothing is held when the slot frees', async () => {
+    const { gate, host, freeOne, takeSlot } = harness();
+    takeSlot();
+    const stop = new AbortController();
+    const admitted = outcome(gate.admit(stop.signal)!);
+    expect(gate.endAll(() => new PlannerTurnStoppedError())).toBe(true);
+    expect(await admitted).toBeInstanceOf(PlannerTurnStoppedError);
+    expect(gate.endAll(() => new PlannerTurnStoppedError())).toBe(false);
+    // Its abort listener went with it.
+    stop.abort();
+
+    freeOne();
+    expect(gate.holding).toBe(false);
+    expect(host.pump).toHaveBeenCalledTimes(1);
+  });
+
+  it('two turns waiting both pass when the one slot frees, on one lease: neither is lost', async () => {
+    const { gate, host, freeOne, takeSlot } = harness();
+    takeSlot();
+    const first = outcome(gate.admit()!);
+    const second = outcome(gate.admit()!);
+
+    freeOne();
+    expect(await first).toBe('open');
+    expect(await second).toBe('open');
+    expect(host.reserve).toHaveBeenCalledTimes(3);
+    expect(gate.waiting).toBe(false);
+    expect(host.pump).not.toHaveBeenCalled();
+  });
+
+  it('waits on when the pool refuses again what it offered', async () => {
+    const { gate, host, takeSlot } = harness();
+    takeSlot();
+    const admitted = outcome(gate.admit()!);
+    gate.freed();
+    expect(gate.waiting).toBe(true);
+    expect(host.pump).not.toHaveBeenCalled();
+    gate.endAll(() => new PlannerTurnDiscardedError());
+    await admitted;
+  });
+
+  it('waits for the probe first, then for a slot', async () => {
+    const { gate, answerProbe, freeOne, takeSlot } = harness({ answered: false });
+    takeSlot();
+    const admitted = outcome(gate.admit()!);
+    answerProbe();
+    await flush();
+    expect(gate.waiting).toBe(true);
+    freeOne();
+    expect(await admitted).toBe('open');
+  });
+});
+
+describe('TurnGate: the lease (ADR-0059 L1)', () => {
+  it('a claim takes one lease, and asks no more while it is held', () => {
+    const { gate, host } = harness();
+    expect(gate.claim()).toBeNull();
+    expect(gate.claim()).toBeNull();
+    expect(host.reserve).toHaveBeenCalledTimes(1);
+  });
+
+  it('says why the pool refused a claim', () => {
+    const { gate, takeSlot } = harness();
+    takeSlot();
+    expect(gate.claim()).toBe('the tree is full');
+  });
+
+  it('opens the planner process on the lease, and on nothing without one', async () => {
+    const { gate } = harness();
+    const signal = new AbortController().signal;
+    expect(gate.open(signal)).toBeUndefined();
+    gate.claim();
+    await expect(gate.open(signal)).resolves.toEqual({});
+  });
+
+  it('a settled turn parks the Session and gives its slot back, once', () => {
+    const { gate, host, released } = harness();
+    gate.claim();
+    gate.settled();
+    gate.settled();
+    expect(released).toEqual(['turn ended']);
+    expect(host.parked).toHaveBeenCalledTimes(1);
+    expect(gate.holding).toBe(false);
+  });
+
+  it('the conversation letting go keeps the lease of a queued turn still under way', () => {
+    const { gate, state, released } = harness();
+    gate.claim();
+    state.queuedTurnRunning = true;
+    gate.released();
+    expect(released).toEqual([]);
+    state.queuedTurnRunning = false;
+    gate.released();
+    expect(released).toEqual(['turn ended']);
+  });
+
+  it('a refusal after admission gives the slot back, unless a turn holds the conversation', () => {
+    const { gate, state, released } = harness();
+    gate.claim();
+    state.conversationBusy = true;
+    gate.dropped();
+    expect(released).toEqual([]);
+    state.conversationBusy = false;
+    gate.dropped();
+    expect(released).toEqual(['turn ended']);
+  });
+
+  it('a fresh plan keeps the lease its gate took through the old scope\'s end', () => {
+    const { gate, host, released } = harness();
+    expect(gate.admit()).toBeNull();
+    gate.carry(() => {
+      gate.settled();
+      gate.dropped();
+      gate.carry(() => gate.settled());
+      gate.settled();
+    });
+    expect(released).toEqual([]);
+    expect(host.parked).not.toHaveBeenCalled();
+    expect(gate.holding).toBe(true);
+    // Outside the carry, the turn's own end gives it back.
+    gate.settled();
+    expect(released).toEqual(['turn ended']);
+  });
+
+  it('a lease is kept if the old scope\'s end throws, and a later end still frees it', () => {
+    const { gate, released } = harness();
+    gate.claim();
+    expect(() => gate.carry(() => { throw new Error('boom'); })).toThrow('boom');
+    expect(gate.holding).toBe(true);
+    gate.settled();
+    expect(released).toEqual(['turn ended']);
+  });
+});

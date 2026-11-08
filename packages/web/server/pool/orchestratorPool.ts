@@ -90,13 +90,25 @@ import { WebConfig, type PlannerPick } from '../adapters/WebConfig';
 import { scanWorkspaces as scanWorkspacesImpl } from '../utils/workspaceScanner';
 import { PoolFileSystem } from '../adapters/PoolFileSystem';
 import { PoolAwareRunner } from '../adapters/PoolAwareRunner';
-import type { ApprovalAnswer, RunnerRegistry as CoreRunnerRegistry, IRunner } from '@ordewell/core';
+import type { RunnerRegistry as CoreRunnerRegistry, IRunner } from '@ordewell/core';
 
 /** A fork the pool has adopted: addressable at once, its plan read back from the file it was written to. */
 export interface AdoptedFork {
   sessionId: string;
   goal: string;
   plan: LegacyPlanState;
+}
+
+/**
+ * A load for a session id this daemon already holds open for another
+ * workspace. The pool keeps one session per id, so adopting this one would
+ * stop the other's run or planner turn and take its place.
+ */
+export class SessionOpenElsewhereError extends Error {
+  constructor(sessionId: string, workspace: string) {
+    super(`Session "${sessionId}" is open in this daemon for ${workspace}. Close it there before opening this workspace's copy.`);
+    this.name = 'SessionOpenElsewhereError';
+  }
 }
 
 /**
@@ -147,6 +159,8 @@ export class OrchestratorPool {
   private limitsRevision = 0;
   private sessions = new Map<string, Session>();
   private clients = new Map<string, Set<WebSocket>>();
+  /** The workspace each socket named when it subscribed, judged again whenever a session takes its id. */
+  private readonly socketWorkspaces = new WeakMap<WebSocket, string>();
   /**
    * This process's broadcast numbering (see `StreamStamp`), per session id
    * rather than per Session object: a session replaced under the same id
@@ -155,7 +169,7 @@ export class OrchestratorPool {
    */
   private readonly stream = randomUUID();
   private sequence = new Map<string, number>();
-  private readonly childStreams = new ChildStreams(this.stream);
+  private readonly childStreams = new ChildStreams(this.stream, (ws, workspace) => this.hears(ws, workspace));
   private registry: CoreRunnerRegistry = new RunnerRegistry();
   private modelResolver: ModelResolver;
   /** A host that supplied its own resolver answers for every workspace, as a supplied probe does. */
@@ -278,7 +292,9 @@ export class OrchestratorPool {
     }
   }
 
-  subscribe(sessionId: string, ws: WebSocket): void {
+  /** A socket naming a workspace keeps hearing the id only while no other workspace holds it; one naming none hears whoever does. */
+  subscribe(sessionId: string, ws: WebSocket, workspace?: string): void {
+    if (workspace !== undefined) this.socketWorkspaces.set(ws, workspace);
     if (!this.clients.has(sessionId)) this.clients.set(sessionId, new Set());
     this.clients.get(sessionId)!.add(ws);
     this.connectAccountLimits(sessionId, ws);
@@ -305,18 +321,18 @@ export class OrchestratorPool {
       monitor.subscribe((limits) => {
         for (const [id, clients] of this.clients) {
           if (this.sessionWorkspaces.get(id) !== workspace) continue;
-          for (const client of clients) this.sendAccountLimits(id, client, limits);
+          for (const client of clients) this.sendAccountLimits(id, client, limits, workspace);
         }
       });
     }
-    this.sendAccountLimits(sessionId, ws, monitor.snapshots());
+    this.sendAccountLimits(sessionId, ws, monitor.snapshots(), workspace);
     monitor.setForeground(true);
     monitor.surfaceConnected();
   }
 
-  private sendAccountLimits(sessionId: string, ws: WebSocket, limits: AccountLimitsFrame['limits']): void {
-    if (ws.readyState !== ws.OPEN) return;
-    ws.send(JSON.stringify({ type: 'account_limits', sessionId, limits, stream: this.stream, revision: ++this.limitsRevision } satisfies AccountLimitsFrame));
+  /** `workspace` is the account the limits are read from; none for the empty greeting of an id nobody holds. */
+  private sendAccountLimits(sessionId: string, ws: WebSocket, limits: AccountLimitsFrame['limits'], workspace?: string): void {
+    this.send(sessionId, workspace, JSON.stringify({ type: 'account_limits', sessionId, limits, stream: this.stream, revision: ++this.limitsRevision } satisfies AccountLimitsFrame), [ws]);
   }
 
   private releaseUnusedAccountLimits(): void {
@@ -330,6 +346,16 @@ export class OrchestratorPool {
   private registerSession(sessionId: string, workspace: string, session: Session): void {
     this.sessions.set(sessionId, session);
     this.sessionWorkspaces.set(sessionId, workspace);
+    // A socket subscribes to an id, which may be nobody's when it connects (a
+    // surface opens it before adopting): the workspace taking the id now must
+    // not reach a socket another one opened, through its limits or a broadcast.
+    const clients = this.clients.get(sessionId);
+    for (const ws of clients ?? []) {
+      if (this.hears(ws, workspace)) continue;
+      clients?.delete(ws);
+      ws.close(4409, 'Session open for another workspace');
+    }
+    if (clients?.size === 0) this.clients.delete(sessionId);
     for (const ws of this.clients.get(sessionId) ?? []) this.connectAccountLimits(sessionId, ws);
     session.children.onChange(() => void this.tellTree(sessionId, session));
   }
@@ -338,27 +364,49 @@ export class OrchestratorPool {
   private async tellTree(sessionId: string, session: Session, sockets?: WebSocket[]): Promise<void> {
     const children = await session.children.list().catch(() => []);
     if (children.length === 0 || this.sessions.get(sessionId) !== session) return;
-    const payload = JSON.stringify({ type: 'child_tree', sessionId, children } satisfies ChildTreeFrame);
+    this.send(sessionId, this.sessionWorkspaces.get(sessionId), JSON.stringify({ type: 'child_tree', sessionId, children } satisfies ChildTreeFrame), sockets);
+  }
+
+  /**
+   * The one way a frame of a session reaches its sockets: one that named
+   * another workspace than `workspace`, the one the frame speaks for, hears
+   * none of it. Registering a session closes such sockets, but frames are
+   * sent outside that window too: a load announces its usage before the
+   * session takes the id, and a replaced session's work may still be
+   * settling once another workspace's holds it.
+   */
+  private send(sessionId: string, workspace: string | undefined, payload: string, sockets?: Iterable<WebSocket>): void {
     for (const ws of sockets ?? this.clients.get(sessionId) ?? []) {
-      if (ws.readyState === ws.OPEN) ws.send(payload);
+      if (ws.readyState === ws.OPEN && this.hears(ws, workspace)) ws.send(payload);
     }
   }
 
+  /** Whether a socket may hear what `workspace`'s session says: always, unless both name a workspace and they differ. */
+  private hears(ws: WebSocket, workspace: string | undefined): boolean {
+    const named = this.socketWorkspaces.get(ws);
+    return named === undefined || workspace === undefined || sameWorkspace(named, workspace);
+  }
+
   /** False for a child this root does not hold, or a root no longer loaded (ADR-0055 D20). */
-  async watchChild(rootId: string, childId: string, ws: WebSocket): Promise<boolean> {
+  async watchChild(rootId: string, childId: string, ws: WebSocket, workspace?: string): Promise<boolean> {
+    if (workspace !== undefined) this.socketWorkspaces.set(ws, workspace);
     const session = this.sessions.get(rootId);
     const child = await session?.children.find(childId);
-    if (!child || this.sessions.get(rootId) !== session) return false;
-    this.childStreams.join(rootId, childId, child, ws);
+    const held = this.sessionWorkspaces.get(rootId);
+    if (!child || this.sessions.get(rootId) !== session || !this.hears(ws, held)) return false;
+    this.childStreams.join(rootId, childId, child, ws, held);
     return true;
   }
 
   unwatchChild(rootId: string, childId: string, ws: WebSocket): void { this.childStreams.leave(rootId, childId, ws); }
-  /** What a read of the child taken now accounts for on its socket. */
-  childPosition(rootId: string, childId: string): StreamStamp { return this.childStreams.position(rootId, childId); }
+  /** What a read of the child taken now accounts for on its socket; refused, as {@link live} is, once another workspace holds the root. */
+  childPosition(rootId: string, childId: string, workspace: string | undefined): StreamStamp {
+    this.live(rootId, workspace);
+    return this.childStreams.position(rootId, childId);
+  }
 
-  private broadcast(sessionId: string, msg: SessionMessage | SessionNotice): void {
-    const workspace = this.sessionWorkspaces.get(sessionId);
+  /** `workspace` is the one of the Session that speaks, which need not be the one holding the id by the time it does. */
+  private broadcast(sessionId: string, workspace: string | undefined, msg: SessionMessage | SessionNotice): void {
     const monitor = workspace ? this.accountLimits.get(workspace) : undefined;
     if (msg.type === 'planner_usage') monitor?.invalidate();
     else if (msg.type === 'task_log' && msg.events.some((event) => event.type === 'turn_end')) {
@@ -368,18 +416,35 @@ export class OrchestratorPool {
     }
     const seq = (this.sequence.get(sessionId) ?? 0) + 1;
     this.sequence.set(sessionId, seq);
-    const payload = JSON.stringify({ ...msg, stream: this.stream, seq } satisfies SessionFrame);
-    for (const ws of this.clients.get(sessionId) ?? []) {
-      if (ws.readyState === ws.OPEN) ws.send(payload);
-    }
+    this.send(sessionId, workspace, JSON.stringify({ ...msg, stream: this.stream, seq } satisfies SessionFrame));
   }
 
   hasSession(sessionId: string): boolean { return this.sessions.has(sessionId); }
 
+  /** Whether the session open under this id is this workspace's: only then do the id's live accessors speak for it. */
+  holds(sessionId: string, workspace: string): boolean { return this.heldHere(sessionId, workspace) !== undefined; }
+
+  /** Whether the session open under this id is another workspace's: what the id's live accessors say is not this workspace's to read or act on. */
+  heldElsewhere(sessionId: string, workspace: string): boolean { return this.sessions.has(sessionId) && !this.holds(sessionId, workspace); }
+
+  /**
+   * The session open under this id, as a client in `workspace` reaches it: the
+   * one lookup a route goes through to reach a live session by id. The pool
+   * keeps one session per id, so while another workspace holds it the id names
+   * that project's session, not the caller's, and the call is refused rather
+   * than served or acted on there. Undefined when none is open; a caller that
+   * names no workspace reaches it by the id alone.
+   */
+  live(sessionId: string, workspace: string | undefined): Session | undefined {
+    const held = this.sessionWorkspaces.get(sessionId);
+    if (held !== undefined && workspace !== undefined && !this.heldHere(sessionId, workspace)) throw new SessionOpenElsewhereError(sessionId, held);
+    return this.sessions.get(sessionId);
+  }
+
   /** The session open here under this id for this workspace, if any: an id names a session only within its workspace. */
   private heldHere(sessionId: string, workspace: string): Session | undefined {
     const held = this.sessionWorkspaces.get(sessionId);
-    return held !== undefined && resolve(held) === resolve(workspace) ? this.sessions.get(sessionId) : undefined;
+    return held !== undefined && sameWorkspace(held, workspace) ? this.sessions.get(sessionId) : undefined;
   }
 
   /**
@@ -406,18 +471,6 @@ export class OrchestratorPool {
     else appendUserAction(sessionId, workspace, { text, at: new Date().toISOString() });
   }
 
-  /** Answer an approval prompt, the planner's or a task runner's. False means the id was unknown or already settled. */
-  resolveApproval(sessionId: string, approvalId: string, answer: ApprovalAnswer): boolean {
-    return this.sessions.get(sessionId)?.resolveApproval(approvalId, answer) ?? false;
-  }
-
-  outstandingApprovals(sessionId: string) {
-    return this.sessions.get(sessionId)?.outstandingApprovals() ?? [];
-  }
-
-  approvedScopes(sessionId: string): string[] {
-    return this.sessions.get(sessionId)?.approvedScopes() ?? [];
-  }
   isExecuting(sessionId: string): boolean { return this.sessions.get(sessionId)?.isExecuting ?? false; }
   /** Work under way in any session held here, which stopping this daemon would cut off: a run not settled, or a planner turn answering. */
   workLive(): boolean {
@@ -473,7 +526,7 @@ export class OrchestratorPool {
     }
     const config = this.plannerConfig(modelOverride, workspace);
     const fsAdapter = new PoolFileSystem(workspace);
-    const broadcast = (msg: SessionMessage) => this.broadcast(sessionId, msg);
+    const broadcast = (msg: SessionMessage) => this.broadcast(sessionId, workspace, msg);
     const runner = new PoolAwareRunner(sessionId, broadcast, this.runner);
     return createSession({
       config,
@@ -484,7 +537,7 @@ export class OrchestratorPool {
       fsAdapter,
       broadcast,
       // The notification channel above is silent here; this is how a client hears how the run isolates.
-      onNotice: (notice) => this.broadcast(sessionId, notice),
+      onNotice: (notice) => this.broadcast(sessionId, workspace, notice),
       modelResolver: this.resolverFor(workspace),
       settings: () => this.runtimeSettings(),
       sessionId,
@@ -546,7 +599,7 @@ export class OrchestratorPool {
   getSettings(sessionId?: string, workspace?: string): SettingsResponse {
     const config = this.plannerConfig(undefined, this.settingsWorkspace(sessionId, workspace));
     const userSettings = this.settingsService.getAll();
-    const live = sessionId ? this.sessions.get(sessionId) : undefined;
+    const live = sessionId ? this.live(sessionId, workspace) : undefined;
     return {
       orchestratorModel: config.orchestratorModel,
       // Who plans (ADR-0009) — a vendor id, or one of the three harness
@@ -578,8 +631,10 @@ export class OrchestratorPool {
    * for a value out of range.
    */
   updateRunSettings(changes: Partial<GlobalRunSettings>, sessionId?: string, workspace?: string): SettingsResponse {
+    // Looked up first, so a change refused for another workspace's session saves nothing either.
+    const live = sessionId ? this.live(sessionId, workspace) : undefined;
     this.settingsService.updateRunSettings(changes);
-    if (sessionId) this.sessions.get(sessionId)?.applyRunSettings(changes);
+    live?.applyRunSettings(changes);
     return this.getSettings(sessionId, workspace);
   }
 
@@ -601,12 +656,13 @@ export class OrchestratorPool {
 
   /**
    * The workspace whose runner catalog a settings read or write is judged
-   * against: an open session's own, else the one the client says it is in.
-   * Without either the daemon's cwd stands in. One daemon serves several
+   * against: an open session's own, else the one the client says it is in,
+   * refused for a session another workspace holds under the id. Without either
+   * the daemon's cwd stands in. One daemon serves several
    * workspaces, and each may name another Claude account in its environment.
    */
   private settingsWorkspace(sessionId: string | undefined, workspace: string | undefined): string | undefined {
-    return (sessionId ? this.sessions.get(sessionId)?.workspaceRoot : undefined) ?? workspace;
+    return (sessionId ? this.live(sessionId, workspace)?.workspaceRoot : undefined) ?? workspace;
   }
 
   /**
@@ -964,7 +1020,7 @@ export class OrchestratorPool {
   }
 
   async generatePlan(sessionId: string, goal: string, runners: RunnerId[] | undefined, workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Promise<PlanState> {
-    const recheck = this.recheckSignedOutPlanner(workspace, this.plannerConfig(modelOverride).aiProvider);
+    const recheck = this.recheckSignedOutPlanner(workspace, this.plannerConfig(modelOverride, workspace).aiProvider);
     if (recheck) await recheck;
     const session = this.openPlanningSession(sessionId, runners, workspace, modelOverride, options);
     return migratePlanState(await this.firstTurn(sessionId, session, () => session.generatePlan(goal, runners)));
@@ -991,6 +1047,8 @@ export class OrchestratorPool {
    * place of any live one, for {@link firstTurn} to run its first turn on.
    */
   private openPlanningSession(sessionId: string, runners: RunnerId[] | undefined, workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Session {
+    // The one it replaces must be this workspace's: another's is not this conversation to end.
+    this.live(sessionId, workspace);
     const session = this.createSessionFor(sessionId, workspace, modelOverride, options);
     // Judged on the new session's config (which carries the request's model)
     // and before the old session is destroyed, so a refusal leaves it alone.
@@ -1023,7 +1081,7 @@ export class OrchestratorPool {
    * assistant message lives in conversationHistory).
    */
   async startPlanning(sessionId: string, goal: string, runners: RunnerId[] | undefined, workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Promise<LegacyPlanState> {
-    const recheck = this.recheckSignedOutPlanner(workspace, this.plannerConfig(modelOverride).aiProvider);
+    const recheck = this.recheckSignedOutPlanner(workspace, this.plannerConfig(modelOverride, workspace).aiProvider);
     if (recheck) await recheck;
     const session = this.openPlanningSession(sessionId, runners, workspace, modelOverride, options);
     return this.firstTurn(sessionId, session, () => session.startPlanning(goal, runners));
@@ -1036,8 +1094,8 @@ export class OrchestratorPool {
    * session's own planner gate waits for the probe and judges the planner, as
    * it does for every turn.
    */
-  async continuePlanning(sessionId: string, message: string): Promise<LegacyPlanState> {
-    const session = this.session(sessionId);
+  async continuePlanning(sessionId: string, message: string, workspace: string | undefined): Promise<LegacyPlanState> {
+    const session = this.session(sessionId, workspace);
     // A reply is a planner turn like any other: the signed-out refusal offers
     // the runner's own login, which runs outside this process, so ask the
     // workspace's account again before the session's synchronous gate judges.
@@ -1047,8 +1105,8 @@ export class OrchestratorPool {
   }
 
   /** Condense a session's conversation. The summary turn is a planner turn, so `cancelPlanning` stops it. */
-  async compactConversation(sessionId: string): Promise<ConversationCompaction & { plan: LegacyPlanState }> {
-    const session = this.session(sessionId);
+  async compactConversation(sessionId: string, workspace: string | undefined): Promise<ConversationCompaction & { plan: LegacyPlanState }> {
+    const session = this.session(sessionId, workspace);
     const recheck = this.recheckSignedOutPlanner(session.workspaceRoot, session.plannerProvider);
     if (recheck) await recheck;
     const compaction = await session.compactConversation();
@@ -1061,16 +1119,16 @@ export class OrchestratorPool {
    * waiting. The recheck is the one a reply does before the gate: a login done
    * with the runner's own command is seen here too.
    */
-  async forceSendPrompt(sessionId: string, message: string): Promise<LegacyPlanState> {
-    const session = this.session(sessionId);
+  async forceSendPrompt(sessionId: string, message: string, workspace: string | undefined): Promise<LegacyPlanState> {
+    const session = this.session(sessionId, workspace);
     const recheck = this.recheckSignedOutPlanner(session.workspaceRoot, session.plannerProvider);
     if (recheck) await recheck;
     return session.forceSendPrompt(message);
   }
 
   /** Retry a compaction paused on the planner's context: a planner turn, and gated as one. */
-  async retryPlannerCompaction(sessionId: string): Promise<LegacyPlanState> {
-    const session = this.session(sessionId);
+  async retryPlannerCompaction(sessionId: string, workspace: string | undefined): Promise<LegacyPlanState> {
+    const session = this.session(sessionId, workspace);
     const recheck = this.recheckSignedOutPlanner(session.workspaceRoot, session.plannerProvider);
     if (recheck) await recheck;
     return session.retryPlannerCompaction();
@@ -1081,9 +1139,9 @@ export class OrchestratorPool {
    * there was one to cancel — the route reports that rather than 404ing a
    * session that simply is not planning right now.
    */
-  cancelPlanning(sessionId: string): boolean {
+  cancelPlanning(sessionId: string, workspace: string | undefined): boolean {
     // A first turn still waiting for the probe is the session's to stop too.
-    return this.sessions.get(sessionId)?.abortPlannerTurn() ?? false;
+    return this.live(sessionId, workspace)?.abortPlannerTurn() ?? false;
   }
 
   /**
@@ -1097,12 +1155,16 @@ export class OrchestratorPool {
    */
   adoptSavedSession(sessionId: string, workspace: string): LegacyPlanState {
     // Re-adopting would clear the execution log and drop a running plan back to
-    // its saved state, so a live session wins over the file.
-    const live = this.sessions.get(sessionId);
+    // its saved state, so a live session wins over the file. Only one held for
+    // this workspace: an id names a session within its workspace, and another
+    // project's session under the same id is not an answer for this one.
+    const live = this.heldHere(sessionId, workspace);
     if (live?.planState) return live.planState;
 
     const saved = loadSession(sessionId, workspace);
     if (!saved) throw new SessionNotFoundError();
+    const elsewhere = this.sessionWorkspaces.get(sessionId);
+    if (!live && elsewhere !== undefined) throw new SessionOpenElsewhereError(sessionId, elsewhere);
 
     const session = this.createSessionFor(sessionId, workspace);
     // The saved id is adopted too, so later persists rewrite the same file
@@ -1130,13 +1192,13 @@ export class OrchestratorPool {
    * adopted by, reading back the file the fork was written to. The original
    * keeps running, or planning, untouched.
    */
-  forkConversation(sessionId: string): AdoptedFork {
-    return this.adoptFork(this.session(sessionId).forkConversation());
+  forkConversation(sessionId: string, workspace: string | undefined): AdoptedFork {
+    return this.adoptFork(this.session(sessionId, workspace).forkConversation());
   }
 
   /** A rewind is a fork from an earlier point, so it is adopted the same way. */
-  rewindConversation(sessionId: string, index: number): AdoptedFork & { rewoundMessage: string } {
-    const fork = this.session(sessionId).rewindConversation(index);
+  rewindConversation(sessionId: string, index: number, workspace: string | undefined): AdoptedFork & { rewoundMessage: string } {
+    const fork = this.session(sessionId, workspace).rewindConversation(index);
     return { ...this.adoptFork(fork), rewoundMessage: fork.rewoundMessage };
   }
 
@@ -1146,10 +1208,15 @@ export class OrchestratorPool {
 
   /**
    * Direct access to a session's interface — routes call the Session; the
-   * pool only registers sessions and fans broadcasts out to WS clients.
+   * pool only registers sessions and fans broadcasts out to WS clients. A
+   * caller naming a workspace is refused another's, as {@link live} is. The
+   * workspace is required, if only as undefined, so that no caller reaches a
+   * session by its id without saying whose it asks for; and a route calls it
+   * where it acts, after whatever it awaited, since the id may name another
+   * project's session by then.
    */
-  session(sessionId: string): Session {
-    const session = this.sessions.get(sessionId);
+  session(sessionId: string, workspace: string | undefined): Session {
+    const session = this.live(sessionId, workspace);
     if (!session) throw new SessionNotFoundError();
     return session;
   }
@@ -1162,6 +1229,7 @@ export class OrchestratorPool {
    * longer exists — so those pass `notifyClients`.
    */
   destroy(sessionId: string, options?: { notifyClients?: boolean }): void {
+    const workspace = this.sessionWorkspaces.get(sessionId);
     this.sessions.get(sessionId)?.destroy();
     this.sessions.delete(sessionId);
     this.sessionWorkspaces.delete(sessionId);
@@ -1172,27 +1240,39 @@ export class OrchestratorPool {
     if (!options?.notifyClients) return;
     const clients = this.clients.get(sessionId);
     if (!clients) return;
-    this.broadcast(sessionId, { type: 'notice', level: 'info', message: 'Session closed.' });
+    this.broadcast(sessionId, workspace, { type: 'notice', level: 'info', message: 'Session closed.' });
     for (const ws of clients) {
       if (ws.readyState === ws.OPEN) ws.close(1001, 'Session closed');
     }
     this.clients.delete(sessionId);
   }
 
-  /** Close a session for a surface that is done with it: it is dropped now, and this resolves once all it started has gone. */
-  async close(sessionId: string): Promise<void> {
-    const session = this.sessions.get(sessionId);
+  /**
+   * Close `workspace`'s session for a surface that is done with it: it is
+   * dropped now, and this resolves once all it started has gone. Another
+   * workspace's open under the id is left alone. Judged when called, not when
+   * the request began: a delete calls this after its tree stop, by when the
+   * id may name a session another project opened meanwhile.
+   */
+  async close(sessionId: string, workspace: string): Promise<void> {
+    const session = this.heldHere(sessionId, workspace);
+    if (!session) return;
     this.destroy(sessionId, { notifyClients: true });
-    await session?.gone;
+    await session.gone;
   }
 
-  /** Stop a session's whole tree, and wait until it has gone; the session stays open (ADR-0055 D16). */
-  async stopTree(sessionId: string): Promise<void> {
-    await this.sessions.get(sessionId)?.stopSubtree();
+  /** Stop the whole tree of `workspace`'s session, if it holds the id, and wait until it has gone; the session stays open (ADR-0055 D16). */
+  async stopTree(sessionId: string, workspace: string): Promise<void> {
+    await this.heldHere(sessionId, workspace)?.stopSubtree();
   }
 
-  /** What a session's tree left in the engine, which only the `containers` setting says to look for (ADR-0059 L6). */
-  reclaim(sessionId: string): Promise<void> {
+  /**
+   * What `workspace`'s session's tree left in the engine, which only the
+   * `containers` setting says to look for (ADR-0059 L6). Nothing while another
+   * workspace holds the id: its tree runs in containers under the same id.
+   */
+  reclaim(sessionId: string, workspace: string): Promise<void> {
+    if (this.heldElsewhere(sessionId, workspace)) return Promise.resolve();
     return reclaimContainers(sessionId, this.settingsService.getAll().containers);
   }
 
@@ -1255,6 +1335,11 @@ function changesPlanner(change: PlannerSelectionChange): boolean {
 
 function stringField(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
+}
+
+/** Whether two workspaces are one project, as every judgement of whose an id is compares them. */
+function sameWorkspace(a: string, b: string): boolean {
+  return resolve(a) === resolve(b);
 }
 
 /** One spelling per workspace; a request that names none is the daemon's cwd's. */

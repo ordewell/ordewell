@@ -1,7 +1,7 @@
 import type {
-  AdoptSessionResponse, AiProvider, AnswerEscalationRequest, ConversationCompactResponse, ConversationForkResponse, ConversationRewindResponse, ExecutionCommand, GlobalRunSettings, IsolationPreviewResponse, MergeGateResponse, PlanResponse, RunnerId, RunTask,
-  RunnersResponse, SessionHeld, SessionMessage, RewindTargetsResponse, RunnerCommand, SessionResponse, SettingsResponse, SettingsUpdateResponse, StreamStamp, SurfacePlan,
-  SurfacePlanState, Task, TaskLogAttemptsResponse, TaskLogResponse, TaskRevertPreviewResponse,
+  AdoptSessionResponse, AiProvider, AnswerEscalationRequest, ConversationForkResponse, ConversationRewindResponse, ExecutionCommand, GlobalRunSettings, MergeGateResponse, PlanResponse, RunnerId, RunTask,
+  SessionHeld, SessionMessage, RunnerCommand, SessionResponse, SettingsResponse, SettingsUpdateResponse, StreamStamp, SurfacePlan,
+  SurfacePlanState, Task,
 } from '@ordewell/core';
 import {
   checkoutRule, confirmedOverride, DELEGATION_OFFERED, loopRemovalRefusal, manualOverrideStopFirst, mergeTarget, overrideNeedsConfirmation,
@@ -362,7 +362,7 @@ export class DaemonHost {
    */
   private async readIsolationPreview(): Promise<void> {
     try {
-      const answer = await callDaemon('workspaces.isolationPreview', { workspace: this.workspace }) as IsolationPreviewResponse;
+      const answer = await callDaemon('workspaces.isolationPreview', { workspace: this.workspace });
       this.emit({ type: 'isolationPreview', preview: answer.preview });
     } catch (error) {
       this.emit({ type: 'isolationPreview', preview: { status: 'failed', repos: [], shared: [], error: messageOf(error) } });
@@ -406,7 +406,7 @@ export class DaemonHost {
       env: { [meta.apiKeyEnvVar]: answer.key },
       workspace: this.workspace,
       sessionId: this.sessionId,
-    }) as SettingsUpdateResponse;
+    });
     if (saved.rejectedEnvKeys?.includes(meta.apiKeyEnvVar)) {
       throw new Error(`The daemon refused the ${meta.label} key.`);
     }
@@ -509,7 +509,7 @@ export class DaemonHost {
     const wasLive = await this.savedIsLive(sessionId);
     let adopted: AdoptSessionResponse;
     try {
-      adopted = await callDaemon('sessions.load', { id: sessionId, workspace: this.workspace }) as AdoptSessionResponse;
+      adopted = await callDaemon('sessions.load', { id: sessionId, workspace: this.workspace });
     } catch (error) {
       const held = heldOf(error);
       if (held) {
@@ -564,7 +564,7 @@ export class DaemonHost {
   /** The session as its holder serves it now; null before its planner's first turn has written a file. */
   private async readJoined(sessionId: string): Promise<SessionResponse | null> {
     try {
-      return await callDaemon('sessions.get', { id: sessionId, workspace: this.workspace }) as SessionResponse;
+      return await callDaemon('sessions.get', { id: sessionId, workspace: this.workspace });
     } catch (error) {
       if (error instanceof DaemonError && error.code === 'session_not_found') return null;
       throw error;
@@ -580,7 +580,7 @@ export class DaemonHost {
     // Only a session this daemon runs is live by being shown: a held one's was another host's.
     if (sessionId === this.sessionId && !this.fresh && !this.snapshot.held) return true;
     try {
-      const saved = await callDaemon('sessions.get', { id: sessionId, workspace: this.workspace }) as SessionResponse;
+      const saved = await callDaemon('sessions.get', { id: sessionId, workspace: this.workspace });
       return saved.run !== undefined;
     } catch {
       // The load will answer with the refusal that matters.
@@ -595,7 +595,7 @@ export class DaemonHost {
    */
   async viewHeld(sessionId: string): Promise<void> {
     try {
-      const saved = await callDaemon('sessions.get', { id: sessionId, workspace: this.workspace }) as SessionResponse;
+      const saved = await callDaemon('sessions.get', { id: sessionId, workspace: this.workspace });
       this.showReadOnly(sessionId, saved);
       this.watch(sessionId, JSON.stringify(saved));
     } catch (error) {
@@ -611,7 +611,7 @@ export class DaemonHost {
     const next = (): void => { timer = setTimeout(() => { void read(); }, this.watchMs); };
     const read = async (): Promise<void> => {
       try {
-        const saved = await callDaemon('sessions.get', { id: sessionId, workspace: this.workspace }) as SessionResponse;
+        const saved = await callDaemon('sessions.get', { id: sessionId, workspace: this.workspace });
         const now = JSON.stringify(saved);
         if (stopped) return;
         if (now !== last) {
@@ -707,7 +707,7 @@ export class DaemonHost {
     const sessionId = this.sessionId;
     let adopted: AdoptSessionResponse;
     try {
-      adopted = await callDaemon('sessions.load', { id: sessionId, workspace: this.workspace }) as AdoptSessionResponse;
+      adopted = await callDaemon('sessions.load', { id: sessionId, workspace: this.workspace });
     } catch (error) {
       const held = heldOf(error);
       if (!held) return { ok: false, message: messageOf(error) };
@@ -958,12 +958,12 @@ export class DaemonHost {
         // The chat sends the runners its pills have on, including a click still
         // being saved; the daemon's list is only the fallback (as VS Code does).
         const chosen = runners ?? this.snapshot.state.enabledRunnerIds;
-        response = await callDaemon('plans.converseStart', { sessionId, workspace: this.workspace }, { goal: text, ...(chosen.length ? { runners: chosen } : {}) }) as PlanResponse;
+        response = await callDaemon('plans.converseStart', { sessionId, workspace: this.workspace }, { goal: text, ...(chosen.length ? { runners: [...chosen] } : {}) });
         if (sessionId !== this.sessionId) return;
         this.fresh = false;
         this.update({ goal: text });
       } else {
-        response = await callDaemon(now ? 'plans.converseMessageNow' : 'plans.converseMessage', { sessionId }, { message: text }) as PlanResponse;
+        response = await callDaemon(now ? 'plans.converseMessageNow' : 'plans.converseMessage', { sessionId }, { message: text });
         if (sessionId !== this.sessionId) return;
       }
       this.showPlan(response.plan);
@@ -1100,7 +1100,7 @@ export class DaemonHost {
   private async compact(): Promise<void> {
     if (this.plannerIsAnswering()) return;
     await this.plannerTurn(async (sessionId) => {
-      const response = await callDaemon('plans.compact', { sessionId }) as ConversationCompactResponse;
+      const response = await callDaemon('plans.compact', { sessionId });
       if (sessionId === this.sessionId) this.showPlan(response.plan);
     }, (error) => this.showError(new Error(`Could not condense the conversation: ${messageOf(error)}: nothing was changed.`)));
   }
@@ -1115,7 +1115,7 @@ export class DaemonHost {
     const original = this.sessionId;
     let fork: ConversationForkResponse;
     try {
-      fork = await callDaemon('plans.fork', { sessionId: original }) as ConversationForkResponse;
+      fork = await callDaemon('plans.fork', { sessionId: original });
     } catch (error) {
       this.showError(new Error(`Could not fork the conversation: ${messageOf(error)}`));
       return;
@@ -1135,7 +1135,7 @@ export class DaemonHost {
     const original = this.sessionId;
     if (arg === undefined) {
       try {
-        const { targets } = await callDaemon('plans.rewindTargets', { sessionId: original }) as RewindTargetsResponse;
+        const { targets } = await callDaemon('plans.rewindTargets', { sessionId: original });
         this.view.conversation.note('system', targets.length === 0
           ? 'Nothing to rewind to yet: the only message so far is the goal.'
           : ['Send /rewind <message> to fork from just before one of these; the original is kept.', ...[...targets].reverse().map((t) => `/rewind ${t.index}  ${t.preview}`)].join('\n'));
@@ -1150,7 +1150,7 @@ export class DaemonHost {
     }
     let fork: ConversationRewindResponse;
     try {
-      fork = await callDaemon('plans.rewind', { sessionId: original }, { index: Number(arg) }) as ConversationRewindResponse;
+      fork = await callDaemon('plans.rewind', { sessionId: original }, { index: Number(arg) });
     } catch (error) {
       this.showError(new Error(`Could not rewind the conversation: ${messageOf(error)}`));
       return;
@@ -1250,7 +1250,7 @@ export class DaemonHost {
    */
   private async runnerSignedIn(runner: string): Promise<boolean> {
     try {
-      const list = await callDaemon('runners.list', { workspace: this.workspace }) as RunnersResponse;
+      const list = await callDaemon('runners.list', { workspace: this.workspace });
       return list.runners.find((entry) => entry.id === runner)?.auth?.state === 'signed-in';
     } catch {
       return false;
@@ -1284,7 +1284,7 @@ export class DaemonHost {
       // state as the answer, never the state it asked to leave.
       saved = enabled;
       try {
-        const list = await callDaemon('runners.list', { workspace: this.workspace }) as RunnersResponse;
+        const list = await callDaemon('runners.list', { workspace: this.workspace });
         const row = list.runners.find((entry) => entry.id === runnerId);
         if (row) saved = row.enabled !== false;
       } catch {
@@ -1304,7 +1304,7 @@ export class DaemonHost {
    * declined or refused change puts its old value back.
    */
   private async changeSettings(change: SettingsChange): Promise<void> {
-    const current = await callDaemon('settings.get', { workspace: this.workspace, sessionId: this.sessionId }) as SettingsResponse;
+    const current = await callDaemon('settings.get', { workspace: this.workspace, sessionId: this.sessionId });
     const run = change.run && { ...change.run };
     if (run) {
       // The panel shows no delegation row until it is offered (ADR-0055 D21), and never sets the kept budget.
@@ -1321,7 +1321,7 @@ export class DaemonHost {
     if (change.autonomous !== undefined) body.autonomousMode = change.autonomous;
     if (run && Object.keys(run).length > 0) body.run = run;
     if (change.maxParallel !== undefined) body.env = { ORDEWELL_MAX_PARALLEL: String(change.maxParallel) };
-    const next = await callDaemon('settings.update', undefined, body) as SettingsUpdateResponse;
+    const next = await callDaemon('settings.update', undefined, body);
     this.emitRunSettings(next);
   }
 
@@ -1340,7 +1340,7 @@ export class DaemonHost {
         if (await this.ask(request) === null) return null;
       }
     }
-    const next = await callDaemon('settings.update', undefined, { ...body, workspace: this.workspace }) as SettingsUpdateResponse;
+    const next = await callDaemon('settings.update', undefined, { ...body, workspace: this.workspace });
     this.emitRunSettings(next);
     return next;
   }
@@ -1378,7 +1378,7 @@ export class DaemonHost {
           await this.forceStart(taskId);
           break;
         case 'runTask': {
-          const gate = await callDaemon('plans.mergeGate', { sessionId: this.sessionId, taskId }) as MergeGateResponse;
+          const gate = await callDaemon('plans.mergeGate', { sessionId: this.sessionId, taskId });
           // The seam's run_task refuses a gated task: a start past the gate is a force start, confirmed first.
           if (gate.mergeGate.length > 0) await this.forceStart(taskId, gate);
           else await this.start(taskActionCommand('run', taskId));
@@ -1437,14 +1437,14 @@ export class DaemonHost {
 
   /** ADR-0054: the preview names what goes with it, and the yes carries the ids the user was shown. */
   private async revert(taskId: string): Promise<void> {
-    const preview = await callDaemon('plans.revertPreview', { sessionId: this.sessionId, taskId }) as TaskRevertPreviewResponse;
+    const preview = await callDaemon('plans.revertPreview', { sessionId: this.sessionId, taskId });
     if (!preview.revertible) throw new Error(preview.message);
     if (await this.ask(revertConfirmation(preview, taskId)) !== 'revert') return;
     await this.execute({ command: 'revert_task', task: taskId, confirmed: true, seen: preview.tasks.map((t) => t.taskId) });
   }
 
   private async forceStart(taskId: string, known?: MergeGateResponse): Promise<void> {
-    const gate = known ?? await callDaemon('plans.mergeGate', { sessionId: this.sessionId, taskId }) as MergeGateResponse;
+    const gate = known ?? await callDaemon('plans.mergeGate', { sessionId: this.sessionId, taskId });
     if (gate.mergeGate.length > 0) {
       const named = titledRefs(gate.mergeGate.map((t) => t.id), this.view.run.current.tasks);
       if (await this.ask(startPastGateConfirmation(named)) !== 'start') return;
@@ -1523,7 +1523,7 @@ export class DaemonHost {
           break;
         case 'resolveConflict': {
           if (!taskId) return;
-          const resolved = await callDaemon('plans.resolveConflict', { sessionId, taskId }) as { plan: SurfacePlan | null };
+          const resolved = await callDaemon('plans.resolveConflict', { sessionId, taskId });
           if (resolved.plan) this.showPlan(resolved.plan);
           break;
         }
@@ -1590,7 +1590,7 @@ export class DaemonHost {
       // A load at the holder would adopt the session again over its live turn.
       const plan = this.joined
         ? await this.readJoined(sessionId).then((saved) => saved && planOfSaved(saved.plan))
-        : (await callDaemon('sessions.load', { id: sessionId, workspace: this.workspace }) as AdoptSessionResponse).plan;
+        : (await callDaemon('sessions.load', { id: sessionId, workspace: this.workspace })).plan;
       if (plan && sessionId === this.sessionId) this.showPlan(plan);
     } catch (error) {
       if (sessionId === this.sessionId) this.showError(error);
@@ -1645,10 +1645,10 @@ export class DaemonHost {
     const params = { id: sessionId, workspace: this.workspace, taskId };
     let commands: readonly RunnerCommand[] = [];
     try {
-      const { attempts } = await callDaemon('sessions.taskLog', params) as TaskLogAttemptsResponse;
+      const { attempts } = await callDaemon('sessions.taskLog', params);
       const latest = attempts.at(-1);
       if (latest !== undefined) {
-        const { events } = await callDaemon('sessions.taskLogAttempt', { ...params, attempt: String(latest) }) as TaskLogResponse;
+        const { events } = await callDaemon('sessions.taskLogAttempt', { ...params, attempt: String(latest) });
         for (let index = events.length - 1; index >= 0; index -= 1) {
           const event = events[index];
           if (event?.type === 'runner_loaded') { commands = event.commands; break; }
@@ -1696,7 +1696,7 @@ export class DaemonHost {
    */
   private async readRunSettings(sessionId: string): Promise<void> {
     try {
-      const settings = await callDaemon('settings.get', { workspace: this.workspace, sessionId }) as SettingsResponse;
+      const settings = await callDaemon('settings.get', { workspace: this.workspace, sessionId });
       if (sessionId === this.sessionId && typeof settings.run === 'object' && settings.run !== null) this.emitRunSettings(settings);
     } catch (error) {
       if (sessionId === this.sessionId) this.emit({ type: 'showError', error: `Could not read this session's run settings: ${messageOf(error)}` });
@@ -1819,7 +1819,7 @@ export class DaemonHost {
         ...(saved.plannerTurnId ? { plannerTurnId: saved.plannerTurnId } : {}),
       };
     }
-    const adopted = await callDaemon('sessions.load', { id: sessionId, workspace: this.workspace }) as AdoptSessionResponse;
+    const adopted = await callDaemon('sessions.load', { id: sessionId, workspace: this.workspace });
     if (sessionId === this.sessionId) this.showLoaded(adopted);
     return {
       conversation: adopted.plan,

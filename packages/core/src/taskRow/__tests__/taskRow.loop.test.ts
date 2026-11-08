@@ -37,7 +37,7 @@ describe('a loop\'s check between rounds that nothing will run (ADR-0045 L5)', (
   it('is told on the status stream, and only when it is so', () => {
     const task = createTask({ id: 'c', loop: { body: ['f'], maxRounds: 3 } });
     expect(serializeTaskStatus(task).loopStranded).toBeUndefined();
-    expect(serializeTaskStatus(task, null, null, [], 0, [], '', false, null, null, null, true).loopStranded).toBe(true);
+    expect(serializeTaskStatus(task, { loopStranded: true }).loopStranded).toBe(true);
   });
 });
 

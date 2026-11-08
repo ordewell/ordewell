@@ -82,7 +82,7 @@ describe('the daemon keeps the user\'s plan approval across a run\'s end, a stop
     const id = saveSession(draft(), 'Rate limiting', workspace, 'session-approval').id;
     const first = daemon();
     first.pool.adoptSavedSession(id, workspace);
-    const session = first.pool.session(id);
+    const session = first.pool.session(id, undefined);
 
     expect((await first.post(id, 'execute')).status).toBe(200);
     first.latest('t1').reportComplete({ status: 'failed', summary: '', reason: 'broke' });
@@ -101,7 +101,7 @@ describe('the daemon keeps the user\'s plan approval across a run\'s end, a stop
 
     const restarted = daemon();
     restarted.pool.adoptSavedSession(id, workspace);
-    expect(await restarted.pool.session(id).execute({ command: 'run_plan' }, PLANNER)).toMatchObject({ ok: true });
+    expect(await restarted.pool.session(id, undefined).execute({ command: 'run_plan' }, PLANNER)).toMatchObject({ ok: true });
   });
 
   it('still refuses the planner a plan the user never executed', async () => {
@@ -109,7 +109,7 @@ describe('the daemon keeps the user\'s plan approval across a run\'s end, a stop
     const { pool } = daemon();
     pool.adoptSavedSession(id, workspace);
 
-    expect(await pool.session(id).execute({ command: 'run_plan' }, PLANNER))
+    expect(await pool.session(id, undefined).execute({ command: 'run_plan' }, PLANNER))
       .toMatchObject({ ok: false, message: expect.stringMatching(/has not approved this plan/) });
   });
 });

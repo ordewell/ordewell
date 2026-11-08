@@ -1,5 +1,5 @@
 import { resolveUserTaskRef } from '@ordewell/core/plan-utils';
-import { flag, flags, readLastSession } from '../utils';
+import { flag, flags, readLastSession, workspaceOf } from '../utils';
 import { ensureDaemon, resolvePort } from '../daemon';
 import { ApiClient } from '../apiClient';
 import { taskViews } from './shared';
@@ -11,7 +11,7 @@ export async function handleAddTask(subArgs: string[], injectedApi?: ApiClient):
     process.exit(1);
   }
 
-  const workspace = flag(subArgs, '--workspace') || process.cwd();
+  const workspace = workspaceOf(subArgs);
   let sessionId = flag(subArgs, '--session-id');
   if (!sessionId) {
     const last = readLastSession(workspace);
@@ -26,7 +26,7 @@ export async function handleAddTask(subArgs: string[], injectedApi?: ApiClient):
   const description = flag(subArgs, '--description') || title;
   const dependencyRefs = flags(subArgs, '--depends-on').filter(Boolean) as string[];
 
-  const api = injectedApi || new ApiClient(await ensureDaemon(resolvePort(subArgs)));
+  const api = injectedApi || new ApiClient(await ensureDaemon(resolvePort(subArgs)), workspaceOf(subArgs));
 
   // Core silently drops a dependency id it does not know. Resolve order
   // numbers and id prefixes as every other task command does, and refuse what

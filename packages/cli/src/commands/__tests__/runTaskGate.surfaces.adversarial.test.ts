@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import http from 'http';
 import { ApiClient } from '../../apiClient';
+import { wireRoute } from '../../__tests__/wireRoute';
 
 /**
  * Adversarial: a start the user confirmed past a merge gate has to reach the
@@ -47,7 +48,7 @@ async function capture(fn: () => Promise<void>): Promise<{ stdout: string; stder
 function gatedServer(hits: string[]) {
   return startServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    if (req.url?.endsWith('/merge-gate')) {
+    if (wireRoute(req.url).endsWith('/merge-gate')) {
       res.end(JSON.stringify({ mergeGate: [{ id: 'fix-1', order: 1, title: 'Fix' }] }));
       return;
     }

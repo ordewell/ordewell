@@ -36,6 +36,7 @@ import {
 } from '@ordewell/core';
 import { OrchestratorPool } from '../pool/orchestratorPool';
 import { failure, jsonObject, refuse } from './errors';
+import { callerWorkspace, sameWorkspace } from './liveSession';
 
 const NO_CHECKPOINT = 'The task is not waiting at a checkpoint: it was answered already, withdrawn, or has no runner left to hear it.';
 
@@ -53,6 +54,8 @@ async function runUserCommand(session: ReturnType<OrchestratorPool['session']>, 
 
 export function plansRoute(pool: OrchestratorPool) {
   const router = new Hono();
+  router.use('/:sessionId', sameWorkspace(pool, 'sessionId'));
+  router.use('/:sessionId/*', sameWorkspace(pool, 'sessionId'));
 
   router.post('/:sessionId/generate', async (c) => {
     try {
@@ -70,7 +73,7 @@ export function plansRoute(pool: OrchestratorPool) {
       const runnerList: string[] | undefined = Array.isArray(runners) ? runners : (runners ? [runners] : (queryRunners ? queryRunners.split(',').map(s => s.trim()).filter(Boolean) : undefined));
       const plan = await pool.generatePlan(c.req.param('sessionId'), goal, runnerList, ws, model, { allowInit });
       const { models, modelsByRunner } = await pool.getProviderModels(ws);
-      const notes = (pool.session(c.req.param('sessionId')).planState?.conversationHistory ?? [])
+      const notes = (pool.session(c.req.param('sessionId'), ws).planState?.conversationHistory ?? [])
         .filter((e) => e.kind === 'system')
         .map((e) => e.content);
       return c.json({ plan: surfacePlanState(plan), models, modelsByRunner, ...(notes.length > 0 ? { notes } : {}) } satisfies GeneratePlanResponse);
@@ -81,7 +84,7 @@ export function plansRoute(pool: OrchestratorPool) {
 
   router.post('/:sessionId/execute', async (c) => {
     try {
-      const session = pool.session(c.req.param('sessionId'));
+      const session = pool.session(c.req.param('sessionId'), callerWorkspace(c));
       // The daemon contract keeps `no_plan` distinct from a plain refusal; the
       // seam refuses either way, so the code it cannot carry is kept here. A
       // run under way is no refusal: executing then approves what waits (#95).
@@ -95,8 +98,8 @@ export function plansRoute(pool: OrchestratorPool) {
 
   router.post('/:sessionId/stop', async (c) => {
     try {
-      if (pool.hasSession(c.req.param('sessionId'))) {
-        const session = pool.session(c.req.param('sessionId'));
+      const session = pool.live(c.req.param('sessionId'), callerWorkspace(c));
+      if (session) {
         const outcome = await session.execute({ command: 'stop_run' }, { kind: 'user' });
         // A refused stop is no failure while nothing can start: "stopped" is still true (ADR-0029).
         if (!outcome.ok && (session.isExecuting || session.startsPending)) throw new TaskControlError(outcome.message);
@@ -112,8 +115,12 @@ export function plansRoute(pool: OrchestratorPool) {
   // tasks). This aborts a planning turn in flight — a harmless no-op, not a
   // 404, when the session simply isn't planning right now.
   router.post('/:sessionId/planning/stop', (c) => {
-    const cancelled = pool.cancelPlanning(c.req.param('sessionId'));
-    return c.json({ cancelled } satisfies CancelPlanningResponse);
+    try {
+      const cancelled = pool.cancelPlanning(c.req.param('sessionId'), callerWorkspace(c));
+      return c.json({ cancelled } satisfies CancelPlanningResponse);
+    } catch (err) {
+      return failure(c, err, 'stop planning');
+    }
   });
 
   // Every execution button that is no more than "this command, as the user"
@@ -125,7 +132,7 @@ export function plansRoute(pool: OrchestratorPool) {
     try {
       const parsed = parseExecutionCommand(await jsonObject(c));
       if (!parsed.ok) return refuse(c, 400, parsed.message, 'refused');
-      const outcome = await pool.session(c.req.param('sessionId')).execute(parsed.command, { kind: 'user' });
+      const outcome = await pool.session(c.req.param('sessionId'), callerWorkspace(c)).execute(parsed.command, { kind: 'user' });
       if (!outcome.ok) {
         // Not through TaskControlError: a Merge all that git stopped keeps the result it stopped with.
         return c.json({ error: outcome.message, code: 'refused', ...(outcome.payload ? { payload: outcome.payload } : {}) } satisfies ErrorBody, 400);
@@ -138,7 +145,7 @@ export function plansRoute(pool: OrchestratorPool) {
 
   router.get('/:sessionId/escalations', (c) => {
     try {
-      return c.json({ escalations: pool.session(c.req.param('sessionId')).escalations() } satisfies EscalationsResponse);
+      return c.json({ escalations: pool.session(c.req.param('sessionId'), callerWorkspace(c)).escalations() } satisfies EscalationsResponse);
     } catch (err) {
       return failure(c, err, 'escalations');
     }
@@ -149,7 +156,7 @@ export function plansRoute(pool: OrchestratorPool) {
     try {
       const { id, option, note, confirmed } = await jsonObject<Partial<AnswerEscalationRequest>>(c);
       if (typeof id !== 'string' || typeof option !== 'string') return refuse(c, 400, 'id and option are required', 'refused');
-      const outcome = await pool.session(c.req.param('sessionId')).answerEscalation(id, option, typeof note === 'string' ? note : undefined, confirmed === true);
+      const outcome = await pool.session(c.req.param('sessionId'), callerWorkspace(c)).answerEscalation(id, option, typeof note === 'string' ? note : undefined, confirmed === true);
       if (!outcome.ok) return c.json({ error: outcome.message, code: 'refused', ...(outcome.payload ? { payload: outcome.payload } : {}) } satisfies ErrorBody, 400);
       return c.json({ ok: true, message: outcome.message, ...(outcome.payload ? { payload: outcome.payload } : {}) } satisfies ExecuteCommandResponse);
     } catch (err) {
@@ -165,7 +172,7 @@ export function plansRoute(pool: OrchestratorPool) {
       const fields = typeof body === 'object' && body !== null ? body as { name?: unknown; args?: unknown } : {};
       if (typeof fields.name !== 'string' || !fields.name.trim()) return c.json({ error: 'name is required' }, 400);
       const args = typeof fields.args === 'string' ? fields.args : '';
-      const id = pool.session(c.req.param('sessionId')).invokeTaskCommand(c.req.param('taskId'), fields.name.trim(), args);
+      const id = pool.session(c.req.param('sessionId'), callerWorkspace(c)).invokeTaskCommand(c.req.param('taskId'), fields.name.trim(), args);
       return c.json({ id } satisfies TaskMessageResponse);
     } catch (err) {
       return failure(c, err, 'task edit');
@@ -186,7 +193,7 @@ export function plansRoute(pool: OrchestratorPool) {
         const raiseTokens = typeof body === 'object' && body !== null && 'raiseTokens' in body ? body.raiseTokens : undefined;
         const raise = typeof raiseTokens === 'number' && Number.isSafeInteger(raiseTokens) && raiseTokens > 0 ? raiseTokens : undefined;
         if (raiseTokens !== undefined && raise === undefined) return refuse(c, 400, 'A raise is a whole number of tokens, 1 or more.', 'refused');
-        const session = pool.session(c.req.param('sessionId'));
+        const session = pool.session(c.req.param('sessionId'), callerWorkspace(c));
         const taskId = idOfRef(session, c.req.param('taskId'));
         // Resolved once: the pre-check and the seam judge the same task, the
         // user's unique id prefix included (ADR-0029).
@@ -203,7 +210,7 @@ export function plansRoute(pool: OrchestratorPool) {
   // before a force start passes it. Empty when nothing gates the task.
   router.get('/:sessionId/tasks/:taskId/merge-gate', (c) => {
     try {
-      const session = pool.session(c.req.param('sessionId'));
+      const session = pool.session(c.req.param('sessionId'), callerWorkspace(c));
       const tasks = flattenTasks(session.planState?.tasks ?? []);
       // Named as the seam names a task, so a surface asks about the reference the user typed.
       const mergeGate = session.mergeGate(idOfRef(session, c.req.param('taskId'))).map((id) => {
@@ -220,7 +227,7 @@ export function plansRoute(pool: OrchestratorPool) {
   // before it sends `revert_task`. A refusal is the answer here, not an error.
   router.get('/:sessionId/tasks/:taskId/revert-preview', async (c) => {
     try {
-      const session = pool.session(c.req.param('sessionId'));
+      const session = pool.session(c.req.param('sessionId'), callerWorkspace(c));
       return c.json((await session.revertPreview(idOfRef(session, c.req.param('taskId')))) satisfies TaskRevertPreviewResponse);
     } catch (err) {
       return failure(c, err, 'task edit');
@@ -231,7 +238,7 @@ export function plansRoute(pool: OrchestratorPool) {
   // outcome the surface reports, not a malformed request, so it answers 200.
   router.get('/:sessionId/isolation/diff', async (c) => {
     try {
-      return c.json({ diff: await pool.session(c.req.param('sessionId')).reviewRunDiff() } satisfies IsolationDiffResponse);
+      return c.json({ diff: await pool.session(c.req.param('sessionId'), callerWorkspace(c)).reviewRunDiff() } satisfies IsolationDiffResponse);
     } catch (err) {
       return failure(c, err, 'task edit');
     }
@@ -242,7 +249,7 @@ export function plansRoute(pool: OrchestratorPool) {
       // A merge git stopped is still an outcome the Merge all card shows: the seam refuses it, with the result.
       const body: unknown = await c.req.json().catch(() => ({}));
       const pastChecks = typeof body === 'object' && body !== null && 'pastChecks' in body && body.pastChecks === true;
-      const outcome = await pool.session(c.req.param('sessionId')).execute(pastChecks ? { command: 'merge_all', pastChecks: true } : { command: 'merge_all' }, { kind: 'user' });
+      const outcome = await pool.session(c.req.param('sessionId'), callerWorkspace(c)).execute(pastChecks ? { command: 'merge_all', pastChecks: true } : { command: 'merge_all' }, { kind: 'user' });
       if (outcome.payload?.kind === 'merge') return c.json(outcome.payload.result satisfies IsolationMergeResponse);
       // Not a refusal of the request: the user is asked, the checks named, and the yes comes in the body.
       if (outcome.payload?.kind === 'merge_hold') return refuse(c, 409, outcome.message, 'merge_past_check');
@@ -261,7 +268,7 @@ export function plansRoute(pool: OrchestratorPool) {
   ] as const) {
     router.post(`/:sessionId/isolation/${segment}`, async (c) => {
       try {
-        await run(pool.session(c.req.param('sessionId')));
+        await run(pool.session(c.req.param('sessionId'), callerWorkspace(c)));
         return c.json({ ok: true } satisfies OkResponse);
       } catch (err) {
         return failure(c, err, 'task edit');
@@ -271,7 +278,7 @@ export function plansRoute(pool: OrchestratorPool) {
 
   router.post('/:sessionId/tasks/:taskId/resolve-conflict', async (c) => {
     try {
-      const plan = await pool.session(c.req.param('sessionId')).resolveConflictAsTask(c.req.param('taskId'));
+      const plan = await pool.session(c.req.param('sessionId'), callerWorkspace(c)).resolveConflictAsTask(c.req.param('taskId'));
       return c.json({ plan: plan && surfacePlan(plan) } satisfies ResolveConflictResponse);
     } catch (err) {
       return failure(c, err, 'task edit');
@@ -287,7 +294,7 @@ export function plansRoute(pool: OrchestratorPool) {
       // edit may set, moves the runner with what it scopes, checks the
       // dependency list against the whole plan, and lands it as one save. An
       // empty patch still asks whether the task exists at all.
-      const result = await pool.session(c.req.param('sessionId')).updateTask(c.req.param('taskId'), changes);
+      const result = await pool.session(c.req.param('sessionId'), callerWorkspace(c)).updateTask(c.req.param('taskId'), changes);
       if (!result) return refuse(c, 404, 'Task not found', 'task_not_found');
       return c.json({ ok: true } satisfies OkResponse);
     } catch (err) {
@@ -297,7 +304,7 @@ export function plansRoute(pool: OrchestratorPool) {
 
   router.delete('/:sessionId/tasks/:taskId', async (c) => {
     try {
-      const result = await pool.session(c.req.param('sessionId')).removeTask(c.req.param('taskId'));
+      const result = await pool.session(c.req.param('sessionId'), callerWorkspace(c)).removeTask(c.req.param('taskId'));
       if (!result) return refuse(c, 404, 'Task not found', 'task_not_found');
       return c.json({ ok: true } satisfies OkResponse);
     } catch (err) {
@@ -308,7 +315,7 @@ export function plansRoute(pool: OrchestratorPool) {
   router.post('/:sessionId/tasks', async (c) => {
     try {
       const body = await jsonObject<Partial<Task>>(c);
-      const result = await pool.session(c.req.param('sessionId')).addTask(body);
+      const result = await pool.session(c.req.param('sessionId'), callerWorkspace(c)).addTask(body);
       if (!result) return refuse(c, 404, 'Session not found', 'session_not_found');
       return c.json({ ok: true } satisfies OkResponse);
     } catch (err) {
@@ -318,7 +325,7 @@ export function plansRoute(pool: OrchestratorPool) {
 
   router.post('/:sessionId/review/approve', async (c) => {
     try {
-      const session = pool.session(c.req.param('sessionId'));
+      const session = pool.session(c.req.param('sessionId'), callerWorkspace(c));
       const plan = session.planState;
       if (!plan) throw new NoPlanError('review');
       const { message } = await runUserCommand(session, { command: 'approve_review' });
@@ -353,7 +360,7 @@ export function plansRoute(pool: OrchestratorPool) {
     try {
       const { message } = await jsonObject<{ message?: string }>(c);
       if (!message) return c.json({ error: 'message is required' }, 400);
-      const plan = await pool.continuePlanning(c.req.param('sessionId'), message);
+      const plan = await pool.continuePlanning(c.req.param('sessionId'), message, callerWorkspace(c));
       return c.json({ plan: surfacePlan(plan) } satisfies PlanResponse);
     } catch (err) {
       return failure(c, err, 'conversation message');
@@ -367,7 +374,7 @@ export function plansRoute(pool: OrchestratorPool) {
     try {
       const { message } = await jsonObject<{ message?: string }>(c);
       if (!message) return c.json({ error: 'message is required' }, 400);
-      const plan = await pool.forceSendPrompt(c.req.param('sessionId'), message);
+      const plan = await pool.forceSendPrompt(c.req.param('sessionId'), message, callerWorkspace(c));
       return c.json({ plan: surfacePlan(plan) } satisfies PlanResponse);
     } catch (err) {
       return failure(c, err, 'conversation message');
@@ -378,7 +385,7 @@ export function plansRoute(pool: OrchestratorPool) {
   // message instead of at the reset; `cancelled` is false when nothing waited.
   router.post('/:sessionId/converse/resend/cancel', (c) => {
     try {
-      const cancelled = pool.session(c.req.param('sessionId')).cancelPlannerResend();
+      const cancelled = pool.session(c.req.param('sessionId'), callerWorkspace(c)).cancelPlannerResend();
       return c.json({ cancelled } satisfies CancelResumeResponse);
     } catch (err) {
       return failure(c, err, 'cancel resend', { fallback: 404, message: 'Not found' });
@@ -390,7 +397,7 @@ export function plansRoute(pool: OrchestratorPool) {
   // just before a user message; the original session is left as it was.
   router.post('/:sessionId/conversation/fork', (c) => {
     try {
-      const fork = pool.forkConversation(c.req.param('sessionId'));
+      const fork = pool.forkConversation(c.req.param('sessionId'), callerWorkspace(c));
       return c.json({ ...fork, plan: surfacePlan(fork.plan) } satisfies ConversationForkResponse);
     } catch (err) {
       return failure(c, err, 'conversation edit');
@@ -399,7 +406,7 @@ export function plansRoute(pool: OrchestratorPool) {
 
   router.get('/:sessionId/conversation/rewind-targets', (c) => {
     try {
-      return c.json({ targets: pool.session(c.req.param('sessionId')).rewindTargets() } satisfies RewindTargetsResponse);
+      return c.json({ targets: pool.session(c.req.param('sessionId'), callerWorkspace(c)).rewindTargets() } satisfies RewindTargetsResponse);
     } catch (err) {
       return failure(c, err, 'conversation edit');
     }
@@ -409,7 +416,7 @@ export function plansRoute(pool: OrchestratorPool) {
     try {
       const { index } = await jsonObject<{ index?: number }>(c);
       if (typeof index !== 'number' || !Number.isInteger(index) || index < 0) return c.json({ error: 'index must be a non-negative integer' }, 400);
-      const rewound = pool.rewindConversation(c.req.param('sessionId'), index);
+      const rewound = pool.rewindConversation(c.req.param('sessionId'), index, callerWorkspace(c));
       return c.json({ ...rewound, plan: surfacePlan(rewound.plan) } satisfies ConversationRewindResponse);
     } catch (err) {
       return failure(c, err, 'conversation edit');
@@ -420,7 +427,7 @@ export function plansRoute(pool: OrchestratorPool) {
   // fail like one — a failure leaves the conversation exactly as it was.
   router.post('/:sessionId/conversation/compact', async (c) => {
     try {
-      const compacted = await pool.compactConversation(c.req.param('sessionId'));
+      const compacted = await pool.compactConversation(c.req.param('sessionId'), callerWorkspace(c));
       return c.json({ ...compacted, plan: surfacePlan(compacted.plan) } satisfies ConversationCompactResponse);
     } catch (err) {
       return failure(c, err, 'conversation edit');
@@ -433,7 +440,7 @@ export function plansRoute(pool: OrchestratorPool) {
   // planner ends it, as it ends any turn.
   router.post('/:sessionId/conversation/compact/retry', async (c) => {
     try {
-      const plan = await pool.retryPlannerCompaction(c.req.param('sessionId'));
+      const plan = await pool.retryPlannerCompaction(c.req.param('sessionId'), callerWorkspace(c));
       return c.json({ plan: surfacePlan(plan) } satisfies PlanResponse);
     } catch (err) {
       return failure(c, err, 'retry compaction');
@@ -441,9 +448,13 @@ export function plansRoute(pool: OrchestratorPool) {
   });
 
   router.get('/:sessionId/prd', (c) => {
-    const plan = pool.getPlan(c.req.param('sessionId'));
-    if (!plan?.prdMarkdown) return refuse(c, 404, 'No PRD found');
-    return c.json({ prdMarkdown: plan.prdMarkdown } satisfies PrdResponse);
+    try {
+      const plan = pool.live(c.req.param('sessionId'), callerWorkspace(c))?.planState;
+      if (!plan?.prdMarkdown) return refuse(c, 404, 'No PRD found');
+      return c.json({ prdMarkdown: plan.prdMarkdown } satisfies PrdResponse);
+    } catch (err) {
+      return failure(c, err, 'prd');
+    }
   });
 
   return router;

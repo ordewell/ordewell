@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildRequest, childStreamPath, isRouteId, liveSessionOf, ROUTES, segmentError, sessionStreamPath } from '../routes';
+import { buildRequest, childStreamPath, isRouteId, liveSessionOf, namingWorkspace, ROUTES, segmentError, sessionStreamPath } from '../routes';
 
 function refused(result: ReturnType<typeof buildRequest>): string {
   if (result.ok) throw new Error(`expected a refusal, got ${JSON.stringify(result.request)}`);
@@ -93,7 +93,7 @@ describe('buildRequest: the IPC allowlist', () => {
 
   it('refuses a param the route does not read', () => {
     expect(refused(buildRequest('sessions.list', { workspace: '/w', admin: '1' }))).toBe('sessions.list: unknown param admin');
-    expect(refused(buildRequest('plans.stop', { sessionId: 's', workspace: '/w' }))).toBe('plans.stop: unknown param workspace');
+    expect(refused(buildRequest('runners.setEnabled', { id: 'claude-code', workspace: '/w' }))).toBe('runners.setEnabled: unknown param workspace');
   });
 
   it('refuses a param that is not a string', () => {
@@ -116,6 +116,16 @@ describe('buildRequest: the IPC allowlist', () => {
     cyclic.self = cyclic;
     expect(refused(buildRequest('plans.addTask', { sessionId: 's' }, cyclic))).toContain('not JSON');
     expect(refused(buildRequest('plans.addTask', { sessionId: 's' }, 10n))).toContain('not JSON');
+  });
+
+  // The daemon reads a container change's workspace from the body: one sent
+  // in the query was dropped, and the change landed on the daemon's own cwd.
+  it('sends a container change its workspace in the body, where the daemon reads it', () => {
+    expect(refused(buildRequest('settings.updateContainers', { workspace: '/w' }, { on: true }))).toContain('unknown param workspace');
+    expect(buildRequest('settings.updateContainers', {}, { on: true, workspace: '/w' })).toEqual({
+      ok: true,
+      request: { method: 'PATCH', path: '/api/settings/containers', body: '{"on":true,"workspace":"/w"}' },
+    });
   });
 
   it('never lets a param name a header or method', () => {
@@ -150,6 +160,22 @@ describe('liveSessionOf', () => {
   });
 });
 
+describe('namingWorkspace', () => {
+  // The daemon refuses an id another project holds only on a call that says whose it means.
+  it('names the window\'s workspace on a live row that was given none', () => {
+    expect(namingWorkspace('plans.stop', { sessionId: 's' }, '/b')).toEqual({ sessionId: 's', workspace: '/b' });
+    expect(namingWorkspace('children.get', { id: 'root', childId: 'c' }, '/b')).toEqual({ id: 'root', childId: 'c', workspace: '/b' });
+    const built = buildRequest('plans.stop', namingWorkspace('plans.stop', { sessionId: 's' }, '/b'));
+    expect(built).toMatchObject({ ok: true, request: { path: '/api/plans/s/stop?workspace=%2Fb' } });
+  });
+
+  it('keeps the workspace a call names, and leaves a row that reaches no live session as called', () => {
+    expect(namingWorkspace('plans.stop', { sessionId: 's', workspace: '/a' }, '/b')).toEqual({ sessionId: 's', workspace: '/a' });
+    expect(namingWorkspace('runners.setEnabled', { id: 'claude-code' }, '/b')).toEqual({ id: 'claude-code' });
+    expect(namingWorkspace('plans.stop', { sessionId: 's' }, undefined)).toEqual({ sessionId: 's' });
+  });
+});
+
 describe('segmentError', () => {
   it('passes an ordinary id', () => {
     expect(segmentError('2026-11-03_abc')).toBeUndefined();
@@ -167,6 +193,11 @@ describe('stream paths', () => {
     expect(childStreamPath('root', 'child')).toEqual({ ok: true, request: { method: 'GET', path: '/ws/session/root/child/child' } });
     expect(childStreamPath('a/b', 'c')).toEqual({ ok: false, error: 'rootId is not a single path segment' });
     expect(childStreamPath('a', '..')).toEqual({ ok: false, error: 'childId is not a path segment' });
+  });
+
+  it('names the window\'s workspace, so the socket hears only that project\'s session of the id', () => {
+    expect(sessionStreamPath('s#1', '/b')).toEqual({ ok: true, request: { method: 'GET', path: '/ws/session/s%231?workspace=%2Fb' } });
+    expect(childStreamPath('root', 'c', '/b')).toEqual({ ok: true, request: { method: 'GET', path: '/ws/session/root/child/c?workspace=%2Fb' } });
   });
 });
 

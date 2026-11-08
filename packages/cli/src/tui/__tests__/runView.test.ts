@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { inboundFor } from '../inbound';
+import { createInbound } from '../inbound';
 import type { WsEvent } from '../../apiClient';
 import { initialState, reduce, type Action } from '../reducer';
 import { findTask, type TaskView, type TuiState } from '../state';
@@ -131,7 +131,7 @@ describe('the connect snapshot', () => {
   it('reaches the reducer from the socket frame', () => {
     const view = loaded([task({ id: 'x' })]).run;
     const actions: Action[] = [];
-    const receive = inboundFor({}, (action) => actions.push(action), 's1').execution();
+    const receive = createInbound((action) => actions.push(action), 's1').receive;
 
     receive({ type: 'run_snapshot', sessionId: 's1', view } as WsEvent);
 
@@ -141,10 +141,10 @@ describe('the connect snapshot', () => {
   it('is adopted again when a reconnect greets with the same view', () => {
     const view = loaded([task({ id: 'x' })]).run;
     const actions: Action[] = [];
-    const inbound = inboundFor({}, (action) => actions.push(action), 's1');
+    const inbound = createInbound((action) => actions.push(action), 's1');
 
-    inbound.execution()({ type: 'run_snapshot', sessionId: 's1', view } as WsEvent);
-    inbound.execution()({ type: 'run_snapshot', sessionId: 's1', view } as WsEvent);
+    inbound.receive({ type: 'run_snapshot', sessionId: 's1', view } as WsEvent);
+    inbound.receive({ type: 'run_snapshot', sessionId: 's1', view } as WsEvent);
 
     expect(actions.map((a) => a.type)).toEqual(['runSnapshot', 'runSnapshot']);
   });
@@ -162,7 +162,7 @@ describe('a task edited elsewhere', () => {
   it('shows at once when another surface or the supervisor edits it', () => {
     const state = loaded([task(), task({ id: 'b', order: 2, title: 'B' })]);
     const actions: Action[] = [];
-    inboundFor({}, (action) => actions.push(action), 's1').execution()(
+    createInbound((action) => actions.push(action), 's1').receive(
       { type: 'task_updated', taskId: 'b', changes: { title: 'B, renamed', assignedRunner: 'codex' } } as WsEvent,
     );
 

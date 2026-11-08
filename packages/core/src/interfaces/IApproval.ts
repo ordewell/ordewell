@@ -103,7 +103,12 @@ export type StandingDecision =
   | { decision: 'ask'; source: 'no-channel' };
 
 export interface IApproval {
-  request(req: ApprovalRequest): Promise<boolean>;
+  /**
+   * `signal` withdraws the request: whoever asked no longer waits (a runner
+   * cancelled the call, the turn ended), so its card goes from every surface
+   * and the request settles as a denial that is not remembered.
+   */
+  request(req: ApprovalRequest, opts?: { signal?: AbortSignal }): Promise<boolean>;
   /** The standing approvals a command is classified against, when this approval has any (ADR-0026). */
   allowlist?(): PlannerAllowlist;
   commandPolicy?(): Pick<CommandPolicyOptions, 'autonomous' | 'approvalMode'>;

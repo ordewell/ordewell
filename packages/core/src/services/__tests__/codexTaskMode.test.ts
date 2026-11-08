@@ -402,6 +402,38 @@ describe('CodexAdapter task turn end', () => {
     adapter.dispose();
   });
 
+  it.each([
+    ['after the new turn has started', true],
+    ['before the new turn has an id', false],
+  ])('leaves the next turn open when the previous turn\'s failure lands %s', async (_label, started) => {
+    const { adapter, proc } = await startedTask();
+    const first = adapter.send('go', () => {});
+    proc.emitStdout(turnStarted('turn-a') + turnCompleted('turn-a'));
+    await first;
+
+    const events: AgentEvent[] = [];
+    const second = adapter.send('again', (e) => e.type !== 'runner_loaded' && events.push(e));
+    if (started) proc.emitStdout(turnStarted('turn-b'));
+    proc.emitStdout(line({ method: 'error', params: { threadId: 'thr-task-1', turnId: 'turn-a', willRetry: false, error: { message: 'turn-a lost its stream' } } }));
+    await tick();
+    expect(events).toEqual([]);
+
+    proc.emitStdout(turnStarted('turn-b') + turnCompleted('turn-b'));
+    await second;
+    expect(events).toEqual([{ type: 'turn_end' }]);
+    adapter.dispose();
+  });
+
+  it('still fails the turn on its own non-retry error', async () => {
+    const { adapter, proc } = await startedTask();
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('go', (e) => e.type !== 'runner_loaded' && events.push(e));
+    proc.emitStdout(turnStarted('turn-a') + line({ method: 'error', params: { threadId: 'thr-task-1', turnId: 'turn-a', willRetry: false, error: { message: 'context window exhausted' } } }));
+    await turn;
+    expect(events).toEqual([{ type: 'error', message: 'context window exhausted' }]);
+    adapter.dispose();
+  });
+
   it('treats a retrying error as a heartbeat, not the end of the turn', async () => {
     const { adapter, proc } = await startedTask();
     const events: AgentEvent[] = [];

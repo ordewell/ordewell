@@ -642,6 +642,8 @@ export class CliAgentAiService implements IAiService {
     const streamedThinking = new Set<string>();
     // Calls whose permission request the envelope denied: their failed result is a denial, not a failure.
     const deniedCalls = new Set<string>();
+    // A request the planner's runner still waits on, by the id it gave it: aborting one takes its card off every surface.
+    const openAsks = new Map<string, AbortController>();
     const gate: PlannerPermissionGate = {
       workspaceRoot: session.start?.startOptions.cwd ?? this.workspaceRoot(),
       ...session.start?.gate,
@@ -781,9 +783,14 @@ export class CliAgentAiService implements IAiService {
             // planner would (ADR-0026). A call the runner linked settles from
             // its own result; one it did not is shown denied here.
             const { id, toolUseId } = event;
-            void decidePlannerPermission(event.ask, event.input ?? {}, gate)
+            const asked = new AbortController();
+            openAsks.set(id, asked);
+            void decidePlannerPermission(event.ask, event.input ?? {}, gate, asked.signal)
               .catch((): ApprovalDecision => ({ decision: 'deny' }))
               .then((decision) => {
+                // The runner took the request back, or its turn is over: nothing is left to answer.
+                if (asked.signal.aborted) return;
+                if (openAsks.get(id) === asked) openAsks.delete(id);
                 if (decision.decision === 'deny') {
                   if (toolUseId) deniedCalls.add(toolUseId);
                   else announceDenial(`Access denied: "${event.name}" was refused. ${decision.note ?? ''}`.trim());
@@ -798,6 +805,11 @@ export class CliAgentAiService implements IAiService {
           announceDenial(`Access denied: the planner runs read-only, so "${event.name}" was refused. Mutation belongs to the runners that execute the plan.`);
           return;
         }
+
+        case 'permission_cancelled':
+          openAsks.get(event.id)?.abort();
+          openAsks.delete(event.id);
+          return;
 
         case 'error':
           error = event.message;
@@ -818,6 +830,9 @@ export class CliAgentAiService implements IAiService {
       throw err;
     } finally {
       if (adapter.nativeSessionId()) session.takingUp = false;
+      // A runner asks only mid-turn, so what is still open once the turn is over was dropped by whatever ended it.
+      for (const asked of openAsks.values()) asked.abort();
+      openAsks.clear();
     }
     // A failed or stopped turn may have ended before the harness named its
     // version; the next one can still say why the setting is not offered.

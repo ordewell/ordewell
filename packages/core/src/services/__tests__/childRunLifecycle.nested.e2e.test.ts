@@ -185,7 +185,7 @@ describe('a Continue below a Continue (ADR-0055 D15, D17)', () => {
   });
 
   it('rebuilds a subplanner whose harness keeps no session from its transcript, its plan, the board and its references', async () => {
-    const pin = (parent: Session) => parent.postOnBoard({ type: 'pin', title: 'Keep the v1 routes' });
+    const pin = (parent: Session) => parent.reading.post({ type: 'pin', title: 'Keep the v1 routes' });
     const { root, image } = await midGrandchild(0, undefined, { sessionless: true, before: pin });
     const read: string[] = [];
     const READING: Turn = async (tools, text) => {
@@ -210,7 +210,7 @@ describe('a Continue below a Continue (ADR-0055 D15, D17)', () => {
   });
 
   it('tells a grandchild\'s subplanner a pin once, though its message passes through every level', async () => {
-    const { root, image } = await midGrandchild(0, undefined, { before: (parent) => parent.postOnBoard({ type: 'pin', title: 'Keep the v1 routes' }) });
+    const { root, image } = await midGrandchild(0, undefined, { before: (parent) => parent.reading.post({ type: 'pin', title: 'Keep the v1 routes' }) });
     const { parent, planner } = restarted(root, image, reports(8), fakeRunner({ b: ['b.txt'] }));
 
     expect(await goOn(parent)).toMatchObject({ ok: true });

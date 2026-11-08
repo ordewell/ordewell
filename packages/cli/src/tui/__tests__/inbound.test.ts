@@ -2,29 +2,36 @@ import { describe, it, expect } from 'vitest';
 import type { WsEvent } from '../../apiClient';
 import { initialState, reduce, type Action } from '../reducer';
 import { lastMessage } from './chat';
-import { forgetInbound, inboundFor } from '../inbound';
+import { createInbound } from '../inbound';
+import { sessionLink, type LinkDeps } from '../sessionLink';
 
 /**
- * What one session's inbound subscriptions have already delivered is held per
- * client and session; a session the TUI is done with must not stay there for
- * the life of the process.
+ * What one session's inbound stream has already delivered is held per client
+ * and session; a session the TUI is done with must not stay there for the life
+ * of the process.
  */
 describe('forgetting a session\'s inbound state', () => {
   const turn = { type: 'planner_turn_started', turnId: 't1', stream: 's', seq: 1 } as WsEvent;
-  it('lets a forgotten session start clean instead of growing a map entry forever', () => {
-    const api = {};
+  it('lets a forgotten session start clean instead of growing a map entry forever', async () => {
     const actions: Action[] = [];
-    const dispatch = (action: Action): void => { actions.push(action); };
+    const handlers: ((event: WsEvent) => void)[] = [];
+    const api = {
+      followSession: (_id: string, onEvent: (event: WsEvent) => void) => {
+        handlers.push(onEvent);
+        return { ready: Promise.resolve(true), ended: new Promise<null>(() => {}), close: () => {} };
+      },
+    } as unknown as LinkDeps['api'];
+    const deps: LinkDeps = { api, dispatch: (action) => { actions.push(action); } };
 
-    const first = inboundFor(api, dispatch, 's1');
-    first.planning()(turn);
-    // The same broadcast on a second socket is a copy, not a new turn.
-    first.planning()(turn);
+    await sessionLink(deps, 's1').ensure();
+    handlers[0]!(turn);
+    // The same stamped frame again is a copy, not a new turn.
+    handlers[0]!(turn);
     expect(actions).toHaveLength(1);
 
-    forgetInbound(api, 's1');
-    const reopened = inboundFor(api, dispatch, 's1');
-    reopened.planning()(turn);
+    sessionLink(deps, 's1').close();
+    await sessionLink(deps, 's1').ensure();
+    handlers[1]!(turn);
     expect(actions).toHaveLength(2);
   });
 });
@@ -33,9 +40,8 @@ describe('a socket held on a plan', () => {
   const children = [{ sessionId: 'child', node: 'root/1', parent: 's1', title: 'Delegated', depth: 1, state: 'working' }];
 
   function subscribed() {
-    const api = {};
     const actions: Action[] = [];
-    return { actions, onEvent: inboundFor(api, (action) => { actions.push(action); }, 's1').planning() };
+    return { actions, onEvent: createInbound((action) => { actions.push(action); }, 's1').receive };
   }
 
   it('takes the tree of its own plan', () => {

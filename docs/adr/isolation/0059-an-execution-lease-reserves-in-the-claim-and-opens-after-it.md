@@ -86,7 +86,7 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
 
   interface LeaseSpec {
     task?: Task;
-    workspace: { kind: 'checkout' } | { kind: 'worktree'; intent: AttemptIntent };
+    workspace: { kind: 'checkout' } | { kind: 'worktree'; intent: AttemptIntent; decision?: IsolationDecision };
     required: readonly Guarantee[];                        // open fails if one cannot be proven
   }
 
@@ -490,3 +490,4 @@ for model traffic first. The interface is kept free of anything that blocks thes
 - 2026-11-02 — Review fixes: the gateway carries exact routes, batches and stored responses out; a login with a gated key opens a handed key's provider; a check says not ready when a required guarantee no lease could prove; an export stops an attempt's hooks and fsmonitor, a filter still runs; a clean-up takes what a dead host's check left.
 - 2026-11-02 — L7: a broker login refuses an OpenCode task on an `openai/*` model before a worktree is made, where it had started with no way to its model.
 - 2026-11-05 — L5: a container's variables reach docker by name, their values in the CLI's environment, never on its command line.
+- 2026-11-08 — a worktree spec carries the claim's isolation decision, validated before and after the workspace is prepared; an attempt ended while its workspace opens lets go of what its own open made, once, as its end decided, and a later end's decision wins when two land in one spawn.

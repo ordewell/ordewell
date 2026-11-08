@@ -2,7 +2,8 @@ import type {
   AccountLimitsFrame, ChildFrame, ChildPlanEntry, ChildPlanResponse, ChildPlanView, ChildTreeFrame, RunSnapshotFrame,
   RunView, SessionFrame, SessionMessage, SessionNotice, StreamStamp,
 } from '@ordewell/core';
-import { reduceRun } from '@ordewell/core/plan-utils';
+import { reduceRun, StreamOrder, stampOf } from '@ordewell/core/plan-utils';
+import type { Placement } from '@ordewell/core/plan-utils';
 import type { HostToWebview } from '../shared/protocol';
 import { ChildView } from './ChildView';
 import type { SavedConversation } from './ConversationViewHost';
@@ -17,92 +18,22 @@ export interface ConnectedFrame {
 /** Everything a daemon session socket, root or child, may carry. */
 export type DaemonFrame = SessionFrame | RunSnapshotFrame | ChildTreeFrame | AccountLimitsFrame | ConnectedFrame;
 
-/** As the TUI's window: frames of two sockets on one session can interleave, so a frame below the highest may still be new. */
-const WINDOW = 256;
-
-/**
- * What a run snapshot already accounts for. One numbered at or below the
- * snapshot adopted is a copy that lagged behind it on an older socket, and
- * applying it after would bring back what the snapshot says is over.
- */
-const COVERED: ReadonlySet<string> = new Set<SessionFrame['type']>(['status_update', 'task_updated', 'approval_request', 'approval_settled']);
-
 /** A child's socket never carries these (ADR-0056 M8); one that did would answer for the root. */
 const ROOT_ONLY: ReadonlySet<string> = new Set<SessionFrame['type']>(['approval_request', 'approval_settled', 'approval_decided']);
 
-function stampOf(frame: Partial<StreamStamp>): StreamStamp | null {
-  return frame.stream !== undefined && frame.seq !== undefined ? { stream: frame.stream, seq: frame.seq } : null;
+/**
+ * Where a frame stands, as {@link StreamOrder} judges it. A frame a daemon
+ * older than the stamp sends, or one it sends unnumbered (the planner state
+ * after a snapshot), has nothing to order it by.
+ */
+function placeBroadcast(order: StreamOrder, frame: SessionFrame): Placement {
+  const stamp = stampOf(frame);
+  return stamp ? order.first(stamp, frame.type) : { keep: true, jump: false };
 }
 
-/** `jump`: the view cannot account for every broadcast before this one, so what it holds must be read again. */
-type Judgement = { keep: false } | { keep: true; jump: boolean };
-
-/**
- * A session's broadcasts as one socket after another delivered them: which
- * frame is a copy, and where one was missed. Dedupe is the TUI's
- * (`packages/cli/src/tui/inbound.ts`); this adds the gap, since a surface that
- * redraws from frames alone must know when frames alone no longer suffice.
- */
-class FrameOrder {
-  private stream: string | null = null;
-  private highest = 0;
-  private snapshot = 0;
-  /** Everything at or below it is in what a load returned. */
-  private floor = 0;
-  private readonly seen = new Set<number>();
-
-  broadcast(frame: SessionFrame): Judgement {
-    const stamp = stampOf(frame);
-    // A daemon older than the stamp, or a frame it sends unnumbered (the
-    // planner state after a snapshot): nothing to order it by.
-    if (!stamp) return { keep: true, jump: false };
-    const restarted = this.follow(stamp.stream);
-    const { seq } = stamp;
-    if (seq <= this.floor || seq <= this.highest - WINDOW || this.seen.has(seq)) return { keep: false };
-    if (COVERED.has(frame.type) && seq <= this.snapshot) return { keep: false };
-    const jump = restarted || seq > this.highest + 1;
-    this.mark(seq);
-    return { keep: true, jump };
-  }
-
-  /** A snapshot covers the run up to its number, but not the conversation: one past what was delivered left a gap in it. */
-  snapshotOf(frame: RunSnapshotFrame): Judgement {
-    const stamp = stampOf(frame);
-    if (!stamp) return { keep: true, jump: true };
-    const restarted = this.follow(stamp.stream);
-    if (stamp.seq < this.highest || stamp.seq < this.floor) return { keep: false };
-    const jump = restarted || stamp.seq > this.highest;
-    this.snapshot = stamp.seq;
-    this.mark(stamp.seq);
-    return { keep: true, jump };
-  }
-
-  /** What a load said it accounts for. */
-  cover(position: StreamStamp): void {
-    this.follow(position.stream);
-    this.floor = Math.max(this.floor, position.seq);
-    this.snapshot = Math.max(this.snapshot, position.seq);
-    if (position.seq > this.highest) this.mark(position.seq);
-  }
-
-  private mark(seq: number): void {
-    this.seen.add(seq);
-    if (seq <= this.highest) return;
-    this.highest = seq;
-    for (const old of this.seen) if (old <= seq - WINDOW) this.seen.delete(old);
-  }
-
-  /** A new stream is a restarted daemon: its numbers start over and mean nothing against the last one's. */
-  private follow(stream: string): boolean {
-    if (stream === this.stream) return false;
-    const restarted = this.stream !== null;
-    this.stream = stream;
-    this.highest = 0;
-    this.snapshot = 0;
-    this.floor = 0;
-    this.seen.clear();
-    return restarted;
-  }
+function placeSnapshot(order: StreamOrder, frame: RunSnapshotFrame): Placement {
+  const stamp = stampOf(frame);
+  return stamp ? order.adopt(stamp) : { keep: true, jump: true };
 }
 
 function coveredBy(position: StreamStamp | undefined, frame: Partial<StreamStamp>): boolean {
@@ -121,7 +52,7 @@ type Ordered = SessionFrame | RunSnapshotFrame;
  * redrawn would be undone by the redraw.
  */
 abstract class DaemonStream<L> {
-  private readonly order = new FrameOrder();
+  private readonly order = new StreamOrder();
   /** Whether the view accounts for everything up to the last frame delivered. */
   private whole = false;
   private loading = false;
@@ -143,10 +74,10 @@ abstract class DaemonStream<L> {
         this.unordered(frame);
         return;
       case 'run_snapshot':
-        this.ordered(frame, this.order.snapshotOf(frame));
+        this.ordered(frame, placeSnapshot(this.order, frame));
         return;
       default:
-        this.ordered(frame, this.order.broadcast(frame));
+        this.ordered(frame, placeBroadcast(this.order, frame));
     }
   }
 
@@ -162,7 +93,7 @@ abstract class DaemonStream<L> {
   /** Redraw from a load; returns what of the stream the load accounts for, when it says. */
   protected abstract loaded(state: L): StreamStamp | undefined;
 
-  private ordered(frame: Ordered, judgement: Judgement): void {
+  private ordered(frame: Ordered, judgement: Placement): void {
     if (!judgement.keep) return;
     if (this.loading) {
       this.held.push(frame);

@@ -439,15 +439,6 @@ export interface SettingsUpdateResponse extends SettingsResponse {
   rejectedEnvKeys?: string[];
 }
 
-export interface CommandDescriptor {
-  name: string;
-  description: string;
-}
-
-export interface CommandsResponse {
-  commands: CommandDescriptor[];
-}
-
 export interface WorkspacesResponse {
   workspaces: string[];
 }

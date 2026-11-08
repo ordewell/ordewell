@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import http from 'http';
 import { ApiClient } from '../../apiClient';
 import { handleRevert } from '../revert';
+import { wireRoute } from '../../__tests__/wireRoute';
 
 function startServer(handler: (req: http.IncomingMessage, res: http.ServerResponse) => void): Promise<{ port: number; close: () => void }> {
   return new Promise((resolve) => {
@@ -47,7 +48,7 @@ async function daemon(previewBody: unknown, hits: string[]) {
     const chunks: Buffer[] = [];
     req.on('data', (chunk: Buffer) => chunks.push(chunk));
     req.on('end', () => {
-      hits.push(`${req.method} ${req.url} ${Buffer.concat(chunks).toString('utf8')}`.trim());
+      hits.push(`${req.method} ${wireRoute(req.url)} ${Buffer.concat(chunks).toString('utf8')}`.trim());
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(req.method === 'GET' ? previewBody : { ok: true, message: 'Reverted task #1 and #2.' }));
     });

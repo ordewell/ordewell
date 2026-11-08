@@ -1,6 +1,6 @@
 import { assignmentFlagText } from '../tui/blocks';
 import { writeFileSync } from 'fs';
-import { flag, hasFlag, readLastSession } from '../utils';
+import { flag, hasFlag, readLastSession, workspaceOf } from '../utils';
 import { iconFor } from '../utils/output';
 import { blockedByLabel, handoffBaseLine, holdLabel, isolationViewOfPlan, loopRowParts, planBlocks, repairWaitLabel, scriptTaskText, skippedLabel, flattenTasks, taskOrderLabel, taskRowView, tasksTotalText, usageText, waitsForApproval, walkPlan, type ApprovalRecord, type AssignmentScope, type RunView } from '@ordewell/core';
 import { allTasksOf } from '../utils/tasks';
@@ -10,13 +10,13 @@ import { taskHandoffLines } from './taskHandoff';
 
 export async function handleStatus(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
   const sessionId = flag(subArgs, '--session-id');
-  const workspace = flag(subArgs, '--workspace') || process.cwd();
+  const workspace = workspaceOf(subArgs);
   const outputPath = flag(subArgs, '--output');
   // --output implies JSON: writing the human table to a file helps nobody.
   const asJson = hasFlag(subArgs, '--json') || Boolean(outputPath);
 
   const port = injectedApi ? resolvePort(subArgs) : await ensureDaemon(resolvePort(subArgs));
-  const api = injectedApi || new ApiClient(port);
+  const api = injectedApi || new ApiClient(port, workspace);
 
   if (sessionId) {
     const session = await api.getSession(sessionId, workspace);

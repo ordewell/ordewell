@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { createTask, type SessionMessage } from '@ordewell/core';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import { initialState, reduce, type Action, type Effect } from '../reducer';
-import { inboundFor } from '../inbound';
+import { createInbound } from '../inbound';
 import { chatActivity } from '../layout';
 import { plannerInFlight, type TuiState } from '../state';
 
@@ -52,7 +52,7 @@ function fold(state: TuiState, actions: Action[]): { state: TuiState; effects: E
 describe('a turn the daemon holds for agent detection', () => {
   const socket = () => {
     const actions: Action[] = [];
-    const planning = inboundFor({ getTaskLog: vi.fn() } as unknown as Parameters<typeof inboundFor>[0], (action) => actions.push(action), 's1').planning();
+    const planning = createInbound((action) => actions.push(action), 's1').receive;
     return { actions, planning };
   };
 

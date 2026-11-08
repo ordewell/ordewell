@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { GlobalRunSettings, SettingsResponse, SurfacePlan } from '@ordewell/core';
-import { DaemonError, WorkspaceInitNeededError, type SessionFollow } from '../../apiClient';
+import { DaemonError, WorkspaceInitNeededError, type SessionSocket } from '../../apiClient';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import { initialState, reduce, type Action, type Effect } from '../reducer';
 import type { TuiState } from '../state';
@@ -53,8 +53,7 @@ function tui(api: Partial<OrdewellApi>, over: Partial<EffectDeps> = {}, initial:
       getSettings: vi.fn(async () => ({})),
       getRunners: vi.fn(async () => ({ runners: [] })),
       getIsolationPreview: vi.fn(async () => ({ preview: { status: 'none', repos: [], shared: [] } })),
-      streamPlanning: vi.fn(() => ({ ready: Promise.resolve(), close: () => {} })),
-      followSession: vi.fn(() => ({ ready: Promise.resolve(true), ended: new Promise(() => {}), close: () => {} }) as SessionFollow),
+      followSession: vi.fn(() => ({ ready: Promise.resolve(true), ended: new Promise(() => {}), close: () => {} }) as SessionSocket),
       ...api,
     } as unknown as OrdewellApi,
     workspace: '/ws',

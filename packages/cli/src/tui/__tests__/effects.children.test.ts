@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import type { Action } from '../reducer';
-import { DaemonError, type ChildFollow } from '../../apiClient';
+import { DaemonError, type SessionSocket, type SocketEnd } from '../../apiClient';
 
 const ROOT = 'root-session';
 const CHILD = 'child-session';
@@ -9,10 +9,11 @@ const VIEW = { child: { sessionId: CHILD, node: 'root/1', parent: ROOT, taskId: 
 
 /** One socket's life, ended by the test with the close code the daemon would send. */
 function socket(opens = true) {
-  let end: (code: number | null) => void = () => {};
-  const ended = new Promise<number | null>((resolve) => { end = resolve; });
+  let settle: (end: SocketEnd | null) => void = () => {};
+  const ended = new Promise<SocketEnd | null>((resolve) => { settle = resolve; });
+  const end = (code: number | null) => settle(code === null ? null : { code });
   const close = vi.fn(() => end(null));
-  const follow: ChildFollow = { ready: Promise.resolve(opens), ended, close };
+  const follow: SessionSocket = { ready: Promise.resolve(opens), ended, close };
   return { follow, end, close };
 }
 

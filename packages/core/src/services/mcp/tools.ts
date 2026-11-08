@@ -1,3 +1,4 @@
+import { taskKinds } from '../../models/TaskKind';
 import { z } from 'zod/v4';
 import { TASK_QUERY_TASK_FIELDS, OUTPUT_LINES_MAX } from '../TaskQuery';
 import { TASK_LOG_KINDS } from '../taskLogRead';
@@ -175,7 +176,7 @@ const planTask = z.looseObject({
   order: z.number().optional(),
   title: z.string(),
   description: z.string().optional(),
-  type: z.enum(['ai', 'user', 'script']).optional(),
+  type: z.enum(taskKinds(false)).optional(),
   dependencies: z.array(z.string()).optional(),
   prompt: z.string().optional(),
   userSteps: z.array(z.looseObject({ order: z.number().optional(), instruction: z.string() })).optional(),
@@ -782,7 +783,7 @@ export const PLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
 
 /** A task as a planner that may delegate writes it: the same list, and `type` takes one more value (ADR-0055 D1). */
 const delegatingPlanTask = planTask.extend({
-  type: z.enum(['ai', 'user', 'script', 'delegated']).optional(),
+  type: z.enum(taskKinds(true)).optional(),
   goal: z.string().optional().describe('A delegated task\'s goal: what its child plan must achieve, in place of a prompt.'),
   budget: z.looseObject({ tokens: z.number(), wallClockMs: z.number().optional() }).optional()
     .describe('A delegated task\'s budget, required: tokens, and a time limit in milliseconds if it has one. Carved from what this plan has left.'),

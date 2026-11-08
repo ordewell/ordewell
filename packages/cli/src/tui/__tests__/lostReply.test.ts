@@ -31,7 +31,6 @@ function tui(api: Partial<OrdewellApi>, start: Partial<TuiState> = {}) {
       forceSendPlannerMessage: vi.fn().mockResolvedValue({ tasks: [] }),
       compactConversation: vi.fn().mockResolvedValue({ plan: { tasks: [] }, summary: '' }),
       adoptSession: vi.fn().mockResolvedValue({ plan: planWith(), goal: 'g' }),
-      streamPlanning: vi.fn().mockReturnValue({ ready: Promise.resolve(), close: vi.fn() }),
       followSession: vi.fn().mockReturnValue({ ready: Promise.resolve(true), ended: new Promise(() => {}), close: unfollowed }),
       ...api,
     } as unknown as OrdewellApi,

@@ -444,6 +444,16 @@ describe('PlanEditor.addTask', () => {
     expect(store.planTasks.at(-1)!.assignedModel).toBeUndefined();
   });
 
+  // Bug: createTask read the kind table with it and threw a TypeError, answered as a 500.
+  it('refuses a type no kind owns, adding nothing', async () => {
+    const { editor, store } = setup();
+    const before = store.planTasks.length;
+
+    await expect(editor.addTask({ title: 'Docs', type: 'manual' as string as Task['type'] })).rejects.toThrow(PlanEditError);
+    await expect(editor.addTask({ title: 'Docs', type: 'manual' as string as Task['type'] })).rejects.toThrow(/"manual", which is no kind of task/);
+    expect(store.planTasks).toHaveLength(before);
+  });
+
   it('reschedules once the task has landed', async () => {
     const { editor, events } = setup();
 
@@ -623,5 +633,17 @@ describe('PlanEditor.followRunnerModel', () => {
     expect(await editor.followRunnerModel('u1', { model: 'm' }, undefined, live)).toBeNull();
     expect(await editor.followRunnerModel('t1', { model: 'm' }, undefined, () => false)).toBeNull();
     expect(mutate).not.toHaveBeenCalled();
+  });
+});
+
+describe('research task type flips', () => {
+  it.each(['user', 'script'] as const)('clears research when becoming %s directly', async (type) => {
+    const research = createTask({ id: 'r', title: 'Research', type: 'ai', prompt: 'investigate', research: true, taskMode: 'plan' });
+    const { editor, task } = setup({ tasks: [research], catalogs: { 'claude-code': { models: [], modes: [...CATALOGS['claude-code'].modes, { id: 'plan', label: 'Read only', description: '', readOnly: true }] } } });
+    await editor.updateTask('r', type === 'user'
+      ? { type, userSteps: [{ order: 1, instruction: 'check', completed: false }] }
+      : { type, commands: [['git', 'status']] });
+    expect(task('r')?.type).toBe(type);
+    expect(task('r')?.research).toBeFalsy();
   });
 });

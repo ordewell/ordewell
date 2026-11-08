@@ -76,7 +76,7 @@ describe('OrchestratorPool after the transport setting was removed', () => {
     const meta = saveSession(plan, 'Rate limiting', workspace, 'session-pinned-terminal');
     pool.adoptSavedSession(meta.id, workspace);
 
-    await pool.session(meta.id).execute({ command: 'run_task', task: 't1' }, { kind: 'user' });
+    await pool.session(meta.id, undefined).execute({ command: 'run_task', task: 't1' }, { kind: 'user' });
 
     await vi.waitFor(() => expect(structured).toHaveLength(1));
   });

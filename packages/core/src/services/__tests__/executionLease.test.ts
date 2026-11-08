@@ -125,7 +125,7 @@ describe('reserve, then open (ADR-0059 L1)', () => {
     await until(() => env.started().includes('a'));
   });
 
-  it('a Stop between reserve and open starts nothing, gives the slot back, and lets the workspace go', async () => {
+  it('a Stop between reserve and open starts nothing, gives the slot back, and lets the workspace go kept', async () => {
     const env = setup();
     env.orchestrator.loadPlan([task('a')]);
     const open = env.backend.holdOpen();
@@ -139,7 +139,8 @@ describe('reserve, then open (ADR-0059 L1)', () => {
     await flushMicrotasks();
 
     expect(env.started()).toEqual([]);
-    expect(env.backend.letGoCalls).toEqual([{ taskId: 'a', keep: false, reason: 'ended while opening' }]);
+    // A Stop keeps a worktree (ADR-0013), and one its ender could not reach is let go by that decision.
+    expect(env.backend.letGoCalls).toEqual([{ taskId: 'a', keep: true, reason: 'ended while opening' }]);
   });
 
   it('an open that fails leaves the task as a failed spawn does, and gives the slot back', async () => {

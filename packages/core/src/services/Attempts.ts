@@ -13,7 +13,7 @@ import { delegatedWorkNote, summarizeOutput } from './promptAugment';
 import { endedByExit, VerdictEngine } from './VerdictEngine';
 import type { PlanStore } from './PlanStore';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
-import type { IsolationRunController } from './IsolationRunController';
+import type { IsolationDecision, IsolationRunController } from './IsolationRunController';
 import type { Landing, LandingOutcome } from './Landing';
 import { SELF_REPO } from './isolationRecord';
 import { TaskStartConfig } from './taskStartConfig';
@@ -92,6 +92,7 @@ export interface EndedAttempt {
  * nothing can be left behind for one exit path to forget.
  */
 interface TaskAttempt extends EndedAttempt {
+  readonly isolationDecision: IsolationDecision | null;
   /** 1-based count of spawns, continued from the persisted attempt ledgers. */
   readonly attempt: number;
   /**
@@ -168,6 +169,12 @@ interface TaskAttempt extends EndedAttempt {
   readonly hold: BudgetHold | null;
   /** What its lease opened, which the attempt's result is read from (L2); null until then. */
   opened: OpenLease | null;
+  /**
+   * Whether what ended it keeps its worktree (ADR-0013): a cancel or a Stop
+   * does. Its ender could not reach a workspace still being made, so the
+   * attempt lets that one go late by the same decision.
+   */
+  endKeeps: boolean;
 }
 
 const DEFAULT_GIT: GitInvoker = { exec: defaultExecFile, resolvePath: () => augmentedPath() };
@@ -244,6 +251,7 @@ export type AttemptEnded =
 /** The claim a start took, as the scheduler granted it. */
 export interface AttemptClaim {
   admission: Admitted;
+  isolationDecision: IsolationDecision | null;
   /** A continue of the task's saved session (ADR-0018, K1); a fresh session when absent. */
   continuation?: Continuation | null;
   autoResumed?: boolean;
@@ -270,6 +278,13 @@ export interface AttemptsHost {
   unawaited(work: Promise<unknown>, failure: string): void;
 }
 
+/**
+ * Everything an attempt runs on but its host: built once by
+ * {@link TaskOrchestrator.compose}, so a capability only attempts use is
+ * declared here and in the options, not forwarded through the scheduler.
+ */
+export type AttemptEnvironment = Omit<AttemptsDeps, 'host'>;
+
 export interface AttemptsDeps {
   config: Pick<IConfig, 'planMapEnabled'>;
   notifications: INotification;
@@ -281,7 +296,7 @@ export interface AttemptsDeps {
   store: PlanStore;
   output: TaskOutputSource;
   /** The run an attempt works in. */
-  runs: Pick<IsolationRunController, 'snapshotWorkspace' | 'filesChangedSince' | 'openRecord' | 'skillLayout' | 'current' | 'epoch'>;
+  runs: Pick<IsolationRunController, 'snapshotWorkspace' | 'filesChangedSince' | 'openRecord' | 'skillLayout' | 'current' | 'epoch' | 'stillToLetGo'>;
   /** What becomes of a workspace an attempt ended while opening, and how work kept elsewhere comes back to one. */
   leases: Pick<ExecutionBackend, 'letGo' | 'collect'>;
   /** This node's side of the tree's ledger; absent at the root, and on a flat run, which has none (ADR-0056 M5). */
@@ -356,11 +371,24 @@ export interface AttemptsDeps {
  */
 export class Attempts {
   private readonly live = new Map<string, TaskAttempt>();
+  /**
+   * Attempts ended from under their spawn while it was in flight, until it
+   * lets their workspace go: an end that comes later still decides what it
+   * keeps, so a task deleted after a cancel loses the worktree the cancel kept
+   * (ADR-0013).
+   */
+  private readonly unspawned = new Map<string, TaskAttempt>();
   /** Bumped by every plan load: an ended attempt's wind-down belongs to the scope before it. */
   private planScope = 0;
   private readonly startConfig = new TaskStartConfig();
   /** Each task's runners still winding down once stopped: a continue waits for them (ADR-0018, L1). */
   private readonly windDowns = new Map<string, Promise<void>>();
+  /**
+   * Each task's lease still opening, settled either way. Its prepare drops the
+   * last attempt's record before it writes the new one, so a Mark complete
+   * meanwhile would read nothing to land (ADR-0013).
+   */
+  private readonly openings = new Map<string, Promise<void>>();
   /**
    * How often each task has spawned, which numbers its next attempt. It
    * describes the task across attempts, so it lives outside the record:
@@ -496,6 +524,8 @@ export class Attempts {
       worktree: false,
       integration: null,
       kind,
+      // Its own copy, even of a decision another claim was handed: it is what tells its workspace's record from a newer start's.
+      isolationDecision: claim.isolationDecision && { ...claim.isolationDecision },
       snapshot: null,
       startedAt: new Date().toISOString(),
       decided: false,
@@ -520,6 +550,7 @@ export class Attempts {
       // A child plan's sessions hold their own; this one is no session (ADR-0056 M5).
       hold: script || delegated ? null : this.deps.budget?.hold() ?? null,
       opened: null,
+      endKeeps: false,
     };
     this.spawnCounts.set(task.id, attempt.attempt);
     this.live.set(task.id, attempt);
@@ -548,14 +579,26 @@ export class Attempts {
    * generation it delivers a verdict that marks the task 'completed' for one
    * tick — long enough for the scheduler to start a dependent task. Stop and
    * load reset the whole verifier themselves.
+   *
+   * `how.keep` is what the ender does with the worktree, which a workspace
+   * still being made as it ends is let go by too. An end that says so also
+   * reaches an attempt an earlier end left still being made: its say is the
+   * later one. An end that does not say leaves that attempt's as it was.
    */
-  end(taskId: string, reason: AttemptEnd): EndedAttempt | undefined {
+  end(taskId: string, reason: AttemptEnd, how?: { keep: boolean }): EndedAttempt | undefined {
     const { store } = this.deps;
     const attempt = this.live.get(taskId);
     this.live.delete(taskId);
     const session = attempt?.session ?? null;
     const nativeSessionId = session?.nativeSessionId() ?? null;
+    // A spawn that ended its own attempt has left already, so nothing would take it off the list.
+    if (attempt?.phase === 'starting' && reason !== 'spawn-failed') this.unspawned.set(taskId, attempt);
+    else if (!attempt && how) {
+      const unspawned = this.unspawned.get(taskId);
+      if (unspawned) unspawned.endKeeps = how.keep;
+    }
     if (attempt) {
+      attempt.endKeeps = how?.keep ?? false;
       attempt.spawning.abort();
       store.endAttemptUsage(taskId, attempt.attempt, new Date().toISOString(), session?.sessionCost?.() ?? undefined, nativeSessionId ?? undefined);
       this.deps.output.detach(taskId);
@@ -787,7 +830,17 @@ export class Attempts {
         const paths = await this.startConfig.check(runs.current, task.id, { epoch: runs.epoch, root: this.deps.workspaceRoot(), cwd: null, worktree: true });
         if (paths.length) throw new TaskStartConfigError(paths);
       }
-      attempt.opened = await attempt.lease.open({ task, workspace: attemptWorkspace(kind), required: [] }, attempt.spawning.signal);
+      const intent = attemptWorkspace(kind);
+      if (intent.kind === 'worktree' && !attempt.isolationDecision) throw new Error('No isolation decision was taken for this attempt.');
+      const workspace = intent.kind === 'checkout' ? intent : { ...intent, decision: attempt.isolationDecision! };
+      const opening = attempt.lease.open({ task, workspace, required: [] }, attempt.spawning.signal);
+      const settled = opening.then(() => undefined, () => undefined);
+      this.openings.set(task.id, settled);
+      try {
+        attempt.opened = await opening;
+      } finally {
+        if (this.openings.get(task.id) === settled) this.openings.delete(task.id);
+      }
       const { cwd, worktree, previousWork, writable } = attempt.opened.workspace;
       attempt.cwd = cwd;
       attempt.worktree = worktree;
@@ -797,15 +850,7 @@ export class Attempts {
         if (paths.length) throw new TaskStartConfigError(paths);
       }
       if (checksTree(kind)) attempt.snapshot = await runs.snapshotWorkspace();
-      if (this.live.get(task.id) !== attempt) {
-        // Ended while its worktree was being made, so whatever ended it could
-        // not release it. A newer attempt's own prepare replaces it instead,
-        // and a Mark complete lands what is in it. A repair's worktree holds
-        // work that passed, so it is only handed back.
-        if (attempt.worktree && !this.live.has(task.id) && !this.host.completing(task.id)) await this.deps.leases.letGo(task.id, { keep: kind.kind === 'repair', reason: 'ended while opening' });
-        this.abandonSpawn(task, attempt);
-        return false;
-      }
+      if (this.live.get(task.id) !== attempt) return await this.leaveEnded(task, attempt);
       this.verifier.starting(task.id);
       const session = attempt.script
         ? await this.spawnScript(task, attempt, cwd, writable)
@@ -817,10 +862,7 @@ export class Attempts {
       // starting. Do not resurrect that execution after the surface already
       // went idle — and compare identity, not presence, because a newer
       // attempt of the same task may have been claimed in the meantime.
-      if (this.live.get(task.id) !== attempt) {
-        this.abandonSpawn(task, attempt, session);
-        return false;
-      }
+      if (this.live.get(task.id) !== attempt) return await this.leaveEnded(task, attempt, session);
       attempt.phase = 'running';
       attempt.attaching = null;
       attempt.session = session;
@@ -834,10 +876,7 @@ export class Attempts {
       this.watch(task, attempt, session);
       return true;
     } catch (err) {
-      if (this.live.get(task.id) !== attempt) {
-        this.abandonSpawn(task, attempt);
-        return false;
-      }
+      if (this.live.get(task.id) !== attempt) return await this.leaveEnded(task, attempt);
       this.end(task.id, 'spawn-failed');
       await this.host.settle(this.spawnFailed(task, attempt, err));
       return false;
@@ -1256,15 +1295,42 @@ export class Attempts {
   }
 
   /**
-   * A spawn whose attempt ended while it was in flight: kill what it produced
+   * Where a spawn leaves once its attempt was ended from under it, at any
+   * point from its claim to its runner's start. Its ender could not reach a
+   * workspace still being made, so the attempt lets that one go late, by what
+   * the end decided (ADR-0013, ADR-0059 L1): a cancel or a Stop keeps it, a
+   * delete or a plan load removes it, and a repair's, which holds work that
+   * passed, is only handed back. What its open made is the run's to say,
+   * whether or not the open returned it; a backend whose workspace the run did
+   * not make made one once its open returned. A newer attempt's own prepare
+   * replaces it, and a Mark complete lands what is in it. One a start made
+   * since, running, kept or landed, is not this one's either, nor one its
+   * ender's release or a landing reached: that end let it go already. A later
+   * end that decided otherwise, a delete after a cancel, has the last say,
+   * and when its own release failed this is that release's retry. A runner it
+   * started is killed first, so nothing writes to what goes.
+   */
+  private async leaveEnded(task: Task, attempt: TaskAttempt, session?: IRunnerSession): Promise<false> {
+    session?.kill();
+    const keep = () => attempt.kind.kind === 'repair' || attempt.endKeeps;
+    const made = (await this.deps.runs.stillToLetGo(task.id, attempt.isolationDecision, keep)) ?? attempt.worktree;
+    if (made && !this.live.has(task.id) && !this.host.completing(task.id)) {
+      await this.deps.leases.letGo(task.id, { keep: keep(), reason: 'ended while opening' });
+    }
+    this.abandonSpawn(task, attempt);
+    return false;
+  }
+
+  /**
+   * A spawn whose attempt ended while it was in flight: end what it produced
    * and take back the claim it made. Only the claim — whatever ended the
    * attempt may have decided the task since (mark complete, cancel, retry).
    * A task Mark complete is landing stays in progress until that lands:
    * back to not started, the scheduler would start it again under the landing.
    */
-  private abandonSpawn(task: Task, attempt: TaskAttempt, session?: IRunnerSession): void {
+  private abandonSpawn(task: Task, attempt: TaskAttempt): void {
     const { store } = this.deps;
-    session?.kill();
+    if (this.unspawned.get(task.id) === attempt) this.unspawned.delete(task.id);
     attempt.shell?.end();
     attempt.web?.end();
     if (this.live.has(task.id) || this.host.completing(task.id) || store.get(task.id)?.status !== 'in_progress') return;
@@ -1442,9 +1508,16 @@ export class Attempts {
    * task's runner has gone, or Landing would land less than it did (ADR-0059 L2).
    * Work a backend would not bring back lands nothing and waits on the user with
    * the reason, as a merge git refused does. The door for a landing no verdict
-   * started, a Mark complete's, as for one that did.
+   * started, a Mark complete's, as for one that did, so it also waits for a
+   * start ended while its lease was opening: what it lands is in the record that
+   * opening writes.
    */
   afterCollecting(taskId: string, settle: () => Promise<LandingOutcome>): Promise<LandingOutcome> {
+    const opening = this.openings.get(taskId);
+    return opening ? opening.then(() => this.collected(taskId, settle)) : this.collected(taskId, settle);
+  }
+
+  private collected(taskId: string, settle: () => Promise<LandingOutcome>): Promise<LandingOutcome> {
     const { leases } = this.deps;
     if (!leases.collect) return settle();
     return Promise.resolve(this.windDowns.get(taskId)).then(() => leases.collect!(taskId)).then(settle, (err: unknown): LandingOutcome => ({
@@ -1515,7 +1588,8 @@ export class Attempts {
 
   private endAll(reason: 'stop' | 'load'): TaskAttempt[] {
     const ended = [...this.live.values()];
-    for (const { taskId } of ended) this.end(taskId, reason);
+    // A Stop keeps worktrees as a cancel does (ADR-0013); a loaded plan replaced the one that would land them.
+    for (const { taskId } of ended) this.end(taskId, reason, { keep: reason === 'stop' });
     this.verifier.reset();
     if (reason === 'load') this.deps.output.reset();
     return ended;

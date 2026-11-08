@@ -58,9 +58,6 @@ export interface TaskScope {
 /** How long a scope's item is, and how many of each it holds: each can reach a line Ordewell writes (ADR-0057 R6). */
 export const SCOPE_LIMITS = { item: 200, items: 50 } as const;
 
-/** What a delegated task does not have: it holds a goal, not a runner prompt, so it has no mode, skills or steps, and it never runs in the checkout (ADR-0055 D1). */
-export const NOT_A_DELEGATED_TASKS_FIELDS = ['prompt', 'taskMode', 'skills', 'userSteps', 'ops', 'commands', 'script', 'timeoutMs', 'research'] as const satisfies readonly (keyof Task)[];
-
 /** The fields only a delegated task has. */
 export const DELEGATED_FIELDS = ['goal', 'budget', 'grants', 'protectedPaths', 'scope'] as const satisfies readonly (keyof Task)[];
 

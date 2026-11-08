@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import http from 'http';
 import { ApiClient } from '../../apiClient';
+import { wireRoute } from '../../__tests__/wireRoute';
 
 vi.mock('../../utils', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../utils')>()),
@@ -16,7 +17,7 @@ function daemon(respond: (hit: Hit) => { status?: number; body: unknown }): Prom
       const chunks: Buffer[] = [];
       req.on('data', (chunk: Buffer) => chunks.push(chunk));
       req.on('end', () => {
-        const hit = { method: req.method ?? '', url: req.url ?? '', body: Buffer.concat(chunks).toString('utf8') };
+        const hit = { method: req.method ?? '', url: wireRoute(req.url), body: Buffer.concat(chunks).toString('utf8') };
         hits.push(hit);
         const answer = respond(hit);
         res.writeHead(answer.status ?? 200, { 'Content-Type': 'application/json' });

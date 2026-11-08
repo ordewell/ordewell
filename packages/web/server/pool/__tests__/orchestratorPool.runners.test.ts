@@ -85,7 +85,7 @@ describe('OrchestratorPool enabled runners', () => {
 
       pool.setRunnerEnabled('opencode', true);
 
-      expect((await pool.session('s1').liveCatalog()).runners).toEqual(['claude-code', 'opencode']);
+      expect((await pool.session('s1', undefined).liveCatalog()).runners).toEqual(['claude-code', 'opencode']);
     } finally {
       startSpy.mockRestore();
       discoverSpy.mockRestore();

@@ -31,12 +31,12 @@ describe('ApiClient workspace reads', () => {
     return { api: new ApiClient(srv.port, '/ws a'), seen: srv.seen };
   }
 
-  const WS = 'workspace=%2Fws+a';
+  const WS = 'workspace=%2Fws%20a';
 
   it.each<[string, (api: ApiClient) => Promise<unknown>, string]>([
     ['the tree of a directory', (api) => api.getFileTree({ repo: 'api' }, 'src'), `/api/files/tree?${WS}&repo=api&dir=src`],
-    ['the tree of a task scope', (api) => api.getFileTree({ scope: 'task', sessionId: 's1', taskId: 't 1' }), `/api/files/tree?${WS}&scope=task&sessionId=s1&taskId=t+1&dir=`],
-    ['a file', (api) => api.getFileContent({ scope: 'integration', sessionId: 's1' }, 'src/a b.ts'), `/api/files/content?${WS}&scope=integration&sessionId=s1&path=src%2Fa+b.ts`],
+    ['the tree of a task scope', (api) => api.getFileTree({ scope: 'task', sessionId: 's1', taskId: 't 1' }), `/api/files/tree?${WS}&scope=task&sessionId=s1&taskId=t%201&dir=`],
+    ['a file', (api) => api.getFileContent({ scope: 'integration', sessionId: 's1' }, 'src/a b.ts'), `/api/files/content?${WS}&scope=integration&sessionId=s1&path=src%2Fa%20b.ts`],
     ['a name search', (api) => api.findFiles({}, { query: 'a' }), `/api/files/find?${WS}&query=a`],
     ['a text search, capped', (api) => api.findFiles({ workspace: '/other' }, { query: 'x&y', text: true, limit: 5 }), '/api/files/find?workspace=%2Fother&query=x%26y&text=1&limit=5'],
     ['the repositories', (api) => api.getGitRepos(), `/api/git/repos?${WS}`],

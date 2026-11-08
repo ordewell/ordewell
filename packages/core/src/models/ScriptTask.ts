@@ -25,12 +25,6 @@ export type ScriptBody =
 /** The fields that make up a script task's body: what consent is given to. */
 export const SCRIPT_BODY_FIELDS = ['commands', 'script', 'timeoutMs'] as const satisfies readonly (keyof Task)[];
 
-/**
- * What a script task does not have: it runs no model, so it has no runner,
- * model, mode or prompt, no skills or steps, and it is an ops task by nature.
- */
-export const NOT_A_SCRIPTS_FIELDS = ['assignedModel', 'taskMode', 'prompt', 'skills', 'userSteps', 'ops'] as const satisfies readonly (keyof Task)[];
-
 type BodyFields = Pick<Task, 'type' | 'commands' | 'script' | 'timeoutMs'>;
 
 /** The body a script task runs; null for any other task, or one whose body the plan's rules refuse. */
@@ -104,14 +98,6 @@ function commandsErrors(commands: unknown): { field: string; message: string }[]
     if (!argv[0].trim()) return [{ field: 'commands', message: `has command ${n} naming no program: its first word is the program it runs` }];
   }
   return [];
-}
-
-/** The fields a script task has that it must not, by name. */
-export function notAScriptsFields(task: Partial<Record<(typeof NOT_A_SCRIPTS_FIELDS)[number], unknown>>): string[] {
-  return NOT_A_SCRIPTS_FIELDS.filter((f) => {
-    const value = task[f];
-    return value !== undefined && value !== false && !(Array.isArray(value) && value.length === 0);
-  });
 }
 
 /** An edit's body fields, with a `null` the planner's JSON wrote to drop one read as leaving it out. */

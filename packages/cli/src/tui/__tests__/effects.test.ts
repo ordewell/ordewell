@@ -3,13 +3,81 @@ import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import { initialState, reduce, type Action } from '../reducer';
 import type { Effect } from '../reducer';
 import { fromTranscript, RUN_SETTINGS_DEFAULTS, type IsolationPreview, type SessionMessage } from '@ordewell/core';
-import { DaemonError } from '../../apiClient';
+import { DaemonError, type SessionSocket, type SocketEnd } from '../../apiClient';
 import type { TuiState } from '../state';
 import { chatOf, messagesOf } from './chat';
 import { emptyEditor } from '../editor';
 
-function harness(api: Partial<OrdewellApi> = {}, over: Partial<EffectDeps> = {}) {
+/** One session socket the TUI opened, as the daemon holds it. */
+interface FakeSocket {
+  sessionId: string;
+  /** Delivers a frame, if the socket is still open. */
+  emit(event: unknown): void;
+  /** The daemon goes away: the socket ends abnormally. */
+  drop(): void;
+  close: Mock<() => void>;
+  open: boolean;
+  /** Whether a run's end has gone out on it since the harness last asked. */
+  ended: boolean;
+}
+
+const RUN_DONE = { type: 'execution_complete', summary: { total: 0, completed: 0, failed: 0 } };
+
+/**
+ * The daemon's side of the session sockets. A run ends only on a frame, so a
+ * run the harness starts is ended by the daemon once the request is answered,
+ * unless the test ended it already or `settles` is off.
+ */
+function fakeDaemon() {
+  const sockets: FakeSocket[] = [];
+  const follow = vi.fn((sessionId: string, onEvent: (event: unknown) => void, opens: Promise<boolean> = Promise.resolve(true)) => {
+    let settle: (end: SocketEnd | null) => void = () => {};
+    const ended = new Promise<SocketEnd | null>((resolve) => { settle = resolve; });
+    const socket: FakeSocket = {
+      sessionId,
+      open: true,
+      ended: false,
+      emit: (event) => {
+        if (!socket.open) return;
+        const type = (event as { type?: unknown }).type;
+        if (type === 'execution_complete' || type === 'execution_stopped') socket.ended = true;
+        onEvent(event);
+      },
+      drop: () => { socket.open = false; settle({ code: 1006 }); },
+      close: vi.fn(() => { socket.open = false; settle(null); }),
+    };
+    sockets.push(socket);
+    return { ready: opens, ended, close: socket.close } satisfies SessionSocket;
+  });
+  /** The newest socket still open, on `sessionId` if given. */
+  const live = (sessionId?: string): FakeSocket | undefined =>
+    sockets.filter((socket) => socket.open && (sessionId === undefined || socket.sessionId === sessionId)).at(-1);
+  const daemon = {
+    sockets,
+    follow,
+    settles: true,
+    emit: (event: unknown, sessionId?: string) => live(sessionId)?.emit(event),
+    drop: (sessionId?: string) => live(sessionId)?.drop(),
+    /** Wraps a request that starts a run so the daemon ends the run after answering it. */
+    runs: <A extends unknown[], R>(request: (...args: A) => Promise<R>) => async (...args: A): Promise<R> => {
+      const socket = live(args[0] as string);
+      if (socket) socket.ended = false;
+      const answer = await request(...args);
+      if (daemon.settles && socket?.open && !socket.ended) socket.emit(RUN_DONE);
+      return answer;
+    },
+  };
+  return daemon;
+}
+
+type FakeDaemon = ReturnType<typeof fakeDaemon>;
+
+/** Requests that always start a run the TUI waits on. */
+const RUN_REQUESTS = ['executePlan', 'continueWithStash', 'continueWithoutIsolation'] as const;
+
+function harness(api: Partial<OrdewellApi> | ((daemon: FakeDaemon) => Partial<OrdewellApi>) = {}, over: Partial<EffectDeps> = {}) {
   const actions: Action[] = [];
+  const daemon = fakeDaemon();
   const env: Record<string, string> = {};
   const exit = vi.fn();
 
@@ -37,14 +105,8 @@ function harness(api: Partial<OrdewellApi> = {}, over: Partial<EffectDeps> = {})
       setRunnerEnabled: vi.fn().mockResolvedValue({ ok: true }),
       getModels: vi.fn().mockResolvedValue({ models: [], providers: [] }),
       getIsolationPreview: vi.fn().mockResolvedValue({ preview: { status: 'no-repo', repos: [], shared: [] } }),
-      streamPlanning: vi.fn().mockReturnValue({ close: vi.fn() }),
-      streamExecution: vi.fn().mockImplementation((_id: string, _callback: (event: unknown) => void, onReady?: (error?: Error) => void) => {
-        onReady?.();
-        return Promise.resolve();
-      }),
-      closeExecutionStream: vi.fn(),
-      followSession: vi.fn().mockReturnValue({ ready: Promise.resolve(true), ended: new Promise(() => {}), close: vi.fn() }),
-      ...api,
+      followSession: daemon.follow,
+      ...(typeof api === 'function' ? api(daemon) : api),
     } as OrdewellApi,
     workspace: '/ws',
     port: 3742,
@@ -64,7 +126,13 @@ function harness(api: Partial<OrdewellApi> = {}, over: Partial<EffectDeps> = {})
     ...over,
   };
 
-  return { deps, actions, env, exit, api: deps.api as Mocked<OrdewellApi> };
+  const methods = deps.api as unknown as Record<string, unknown>;
+  for (const name of RUN_REQUESTS) {
+    const request = methods[name];
+    if (typeof request === 'function') methods[name] = vi.fn(daemon.runs(request as (...args: unknown[]) => Promise<unknown>));
+  }
+
+  return { deps, actions, env, exit, daemon, api: deps.api as Mocked<OrdewellApi> };
 }
 
 /** The error Node hands back when nothing is listening on the daemon's port. */
@@ -104,33 +172,29 @@ describe('planning', () => {
     expect(h.actions).toContainEqual(expect.objectContaining({ type: 'settingsLoaded', sessionId: 'session-new', settings: { run } }));
   });
 
-  /** A harness whose planning socket the test drives from inside the REST call. */
+  /** A harness whose session socket the test drives from inside the REST call. */
   function streaming(call: (emit: (e: unknown) => void) => Promise<unknown>, method: 'startConversation' | 'sendConversationMessage' | 'forceSendPlannerMessage' = 'startConversation') {
-    let emit: (e: unknown) => void = () => {};
-    return harness({
-      streamPlanning: vi.fn().mockImplementation((_id: string, cb: (e: unknown) => void) => {
-        emit = cb;
-        return { close: vi.fn() };
-      }),
-      [method]: vi.fn().mockImplementation(() => call(emit)),
-    });
+    return harness((daemon) => ({
+      [method]: vi.fn().mockImplementation(() => call((e) => daemon.emit(e))),
+    }));
   }
 
   /** The session messages the stream handed the reducer, in order. */
   const heard = (actions: Action[]): SessionMessage[] =>
     actions.flatMap((a) => (a.type === 'sessionMessage' ? [a.message] : []));
 
-  it('opens the planning socket before sending the turn, so the turn\'s start is not broadcast into nothing', async () => {
-    let open: () => void = () => {};
-    const h = harness({
-      streamPlanning: vi.fn().mockReturnValue({ close: vi.fn(), ready: new Promise<void>((resolve) => { open = resolve; }) }),
-    });
+  it('opens the session socket before sending the turn, so the turn\'s start is not broadcast into nothing', async () => {
+    let open: (opened: boolean) => void = () => {};
+    const opens = new Promise<boolean>((resolve) => { open = resolve; });
+    const h = harness((daemon) => ({
+      followSession: vi.fn((id: string, cb: (e: unknown) => void) => daemon.follow(id, cb, opens)),
+    }));
 
     const sent = runEffect({ type: 'sendMessage', sessionId: 's1', message: 'add streaming' }, h.deps);
     await Promise.resolve();
     expect(h.api.sendConversationMessage).not.toHaveBeenCalled();
 
-    open();
+    open(true);
     await sent;
     expect(h.api.sendConversationMessage).toHaveBeenCalledWith('s1', 'add streaming');
   });
@@ -492,15 +556,13 @@ describe('planning', () => {
     expect(types(h.actions)).toContain('failed');
   });
 
-  it('always closes the research stream, even when planning fails', async () => {
-    const close = vi.fn();
+  it('stops following a session that failed to start, even when planning fails', async () => {
     const h = harness({
-      streamPlanning: vi.fn().mockReturnValue({ close }),
       startConversation: vi.fn().mockRejectedValue(new DaemonError('no key', 400)),
     });
 
     await runEffect({ type: 'startConversation', goal: 'x' }, h.deps);
-    expect(close).toHaveBeenCalled();
+    expect(h.daemon.sockets[0].close).toHaveBeenCalled();
     expect(h.actions).toContainEqual({ type: 'failed', message: 'no key', turn: true, sessionId: 'session-new' });
   });
 
@@ -525,20 +587,14 @@ describe('planning', () => {
 
 describe('execution', () => {
   it('subscribes before execution so immediate task status updates reach the loading indicator', async () => {
-    let onEvent: ((event: unknown) => void) | undefined;
-    const h = harness({
-      streamExecution: vi.fn().mockImplementation((_id: string, callback: (event: unknown) => void, onReady?: (error?: Error) => void) => {
-        onEvent = callback;
-        onReady?.();
-        return Promise.resolve();
-      }),
+    const h = harness((daemon) => ({
       executePlan: vi.fn().mockImplementation(async () => {
         // The orchestrator can start independent tasks before this request
         // resolves. Their first status update must not be lost.
-        onEvent?.({ type: 'status_update', tasks: [{ id: 'a', status: 'in_progress' }] });
+        daemon.emit({ type: 'status_update', tasks: [{ id: 'a', status: 'in_progress' }] });
         return { status: 'started' };
       }),
-    });
+    }));
 
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
@@ -553,18 +609,17 @@ describe('execution', () => {
     const h = harness();
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
     expect(h.api.executePlan).toHaveBeenCalledWith('s1');
-    expect(h.api.streamExecution).toHaveBeenCalled();
+    expect(h.api.followSession).toHaveBeenCalledWith('s1', expect.any(Function));
   });
 
   /** Drive one execution with a scripted list of daemon websocket messages. */
   const withEvents = (...events: unknown[]) =>
-    harness({
-      streamExecution: vi.fn().mockImplementation((_id: string, cb: (e: unknown) => void, onReady?: (error?: Error) => void) => {
-        onReady?.();
-        for (const event of events) cb(event);
-        return Promise.resolve();
+    harness((daemon) => ({
+      executePlan: vi.fn().mockImplementation(async () => {
+        for (const event of events) daemon.emit(event);
+        return { status: 'started' };
       }),
-    });
+    }));
 
   it('applies a status_update, which is what the daemon actually broadcasts', async () => {
     const h = withEvents({
@@ -630,6 +685,7 @@ describe('execution', () => {
     expect(h.actions).toEqual([
       { type: 'sessionMessage', message: event, sessionId: 's1' },
       { type: 'planBroadcast', plan, sessionId: 's1' },
+      { type: 'executionComplete', summary: RUN_DONE.summary, sessionId: 's1' },
     ]);
   });
 
@@ -645,25 +701,25 @@ describe('execution', () => {
   });
 
   it('tells the user when the stream closes before the run reported an end', async () => {
-    const h = harness({
-      streamExecution: vi.fn().mockImplementation((_id: string, _cb: unknown, onReady?: (error?: Error) => void) => {
-        onReady?.();
-        return Promise.resolve('lost');
+    const h = harness((daemon) => ({
+      executePlan: vi.fn().mockImplementation(async () => {
+        daemon.drop();
+        return { status: 'started' };
       }),
-    });
+    }));
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
     expect(h.actions).toContainEqual({ type: 'executionLost', sessionId: 's1' });
   });
 
-  it('closes the already-open stream when the request that follows it fails', async () => {
+  it('waits on no run when the request that follows the socket fails', async () => {
     const h = harness({
       executePlan: vi.fn().mockRejectedValue(new Error('No plan to execute')),
     });
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
-    const opened = vi.mocked(h.api.streamExecution).mock.results[0].value;
-    expect(h.api.closeExecutionStream).toHaveBeenCalledWith(opened);
+    h.daemon.drop();
+    await Promise.resolve();
     expect(types(h.actions)).not.toContain('executionLost');
   });
 
@@ -686,13 +742,20 @@ describe('execution', () => {
     for (const action of h.actions) ({ state } = reduce(state, action));
     expect(state.conversation.blocks).toMatchObject([
       { type: 'approval', kind: 'shell_command', subject: 'npm test', status: 'denied', decidedBy: 'mode' },
+      { type: 'message', role: 'system', text: 'Execution finished: 0/0 tasks complete.' },
     ]);
   });
 
-  it('ignores chatter it has no use for', async () => {
-    const h = withEvents({ type: 'task_output', taskId: 'a', text: 'npm test' }, { type: 'plan_token', token: 'x' });
+  // The session's one socket carries a turn's tokens whoever sent the turn, so
+  // a run's watcher streams them too; a task's raw output is still not its to show.
+  it('streams a planner turn\'s tokens that arrive during a run, and ignores chatter it has no use for', async () => {
+    const token = { type: 'plan_token', token: 'x', stream: 'd1', seq: 1 };
+    const h = withEvents({ type: 'task_output', taskId: 'a', text: 'npm test' }, token);
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
-    expect(types(h.actions)).toEqual([]);
+    expect(h.actions).toEqual([
+      { type: 'sessionMessage', message: token, sessionId: 's1' },
+      { type: 'executionComplete', summary: RUN_DONE.summary, sessionId: 's1' },
+    ]);
   });
 
   // The seam keeps its own line of a Stop in the timeline, and the run's end
@@ -720,54 +783,31 @@ describe('execution', () => {
 });
 
 /**
- * During a run there are two live subscriptions to one session, and the daemon
- * sends every broadcast to both (see `OrchestratorPool.broadcast`). A planner
- * turn taken while the run executes therefore arrives twice, and each copy
- * must not be shown twice — one reply, one approval.
+ * A planner turn taken while a run executes arrives on the session's one
+ * socket, which the run's watch and the turn's send share, so each broadcast
+ * lands once. A copy is a broadcast delivered again — a reconnect's socket
+ * overlapping the one it replaced — and is told apart by its stamp.
  */
-describe('one planner turn on both live streams', () => {
-  interface Streams {
-    /** Deliver on the planning subscription. */
-    planning(event: unknown): void;
-    /** Deliver on the run's subscription. */
-    execution(event: unknown): void;
-    /** The daemon's actual fan-out: the same broadcast on both. */
-    both(event: unknown): void;
-  }
-
-  /** A harness whose run stream stays open while the awaited call replays a turn through `script`. */
-  function twoStreams(script: (streams: Streams) => unknown) {
-    let onPlanning: (event: unknown) => void = () => {};
-    let onExecution: (event: unknown) => void = () => {};
-    let finishExecution: () => void = () => {};
-
-    const h = harness({
-      streamPlanning: vi.fn().mockImplementation((_id: string, cb: (event: unknown) => void) => {
-        onPlanning = cb;
-        return { close: vi.fn() };
-      }),
-      streamExecution: vi.fn().mockImplementation((_id: string, cb: (event: unknown) => void, onReady?: (error?: Error) => void) => {
-        onExecution = cb;
-        onReady?.();
-        return new Promise<void>((resolve) => { finishExecution = resolve; });
-      }),
-      sendConversationMessage: vi.fn().mockImplementation(async () => script({
-        planning: (event) => onPlanning(event),
-        execution: (event) => onExecution(event),
-        both: (event) => { onExecution(event); onPlanning(event); },
-      })),
-    });
+describe('one planner turn during a run', () => {
+  /** A harness whose run stays open while the awaited call replays a turn through `script`. */
+  function duringRun(script: (emit: (event: unknown) => void) => unknown) {
+    const h = harness((daemon) => ({
+      sendConversationMessage: vi.fn().mockImplementation(async () => script((event) => daemon.emit(event))),
+    }));
+    h.daemon.settles = false;
 
     return {
       h,
       run: async (): Promise<void> => {
         const running = runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
         await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'use pg' }, h.deps);
-        finishExecution();
+        h.daemon.emit(RUN_DONE);
         await running;
       },
     };
   }
+
+  const stamped = (seq: number, frame: Record<string, unknown>) => ({ ...frame, stream: 'd1', seq });
 
   const conversationOf = (actions: Action[]): TuiState => {
     let state: TuiState = { ...initialState(), sessionId: 's1' };
@@ -775,14 +815,13 @@ describe('one planner turn on both live streams', () => {
     return state;
   };
 
-  it('shows the reply and the approval once, whichever subscription delivered them', async () => {
-    const reply = { type: 'planner_message', content: 'Which database?', timestamp: '2026-09-27T10:00:00.000Z', turnId: 't1' };
-    const decision = { type: 'approval_decided', kind: 'shell_command', subject: 'npm test', scope: 'npm test', granted: true, source: 'pre-approved' };
+  it('shows the reply and the approval once, the REST answer\'s copy of the reply included', async () => {
+    const reply = stamped(1, { type: 'planner_message', content: 'Which database?', timestamp: '2026-09-27T10:00:00.000Z', turnId: 't1' });
+    const decision = stamped(2, { type: 'approval_decided', kind: 'shell_command', subject: 'npm test', scope: 'npm test', granted: true, source: 'pre-approved' });
 
-    const { h, run } = twoStreams((s) => {
-      // The daemon commits the turn and broadcasts it before answering the
-      // REST call, so both subscriptions standing at that moment carry it.
-      for (const event of [reply, decision]) s.both(event);
+    const { h, run } = duringRun((emit) => {
+      // The daemon commits the turn and broadcasts it before answering the REST call.
+      for (const event of [reply, decision]) emit(event);
       return {
         tasks: [],
         conversationHistory: [{ role: 'assistant', content: 'Which database?', timestamp: '2026-09-27T10:00:00.000Z' }],
@@ -790,22 +829,20 @@ describe('one planner turn on both live streams', () => {
     });
     await run();
 
+    expect(h.api.followSession).toHaveBeenCalledTimes(1);
     expect(conversationOf(h.actions).conversation.blocks).toMatchObject([
       { type: 'message', role: 'planner', text: 'Which database?' },
       { type: 'approval', kind: 'shell_command', subject: 'npm test', status: 'granted', decidedBy: 'pre-approved' },
+      { type: 'message', role: 'system', text: 'Execution finished: 0/0 tasks complete.' },
     ]);
   });
 
-  it('still drops the copy when a research record lands between the two deliveries', async () => {
-    const reply = { type: 'planner_message', content: 'Which database?', timestamp: '10:00:00', turnId: 't1' };
-    const step = { type: 'research_step', tool: 'grep', args: '{"pattern":"db"}', toolCallId: 'c1', turnId: 't1' };
+  it('drops a copy by its stamp, even when a later record landed between the two deliveries', async () => {
+    const reply = stamped(1, { type: 'planner_message', content: 'Which database?', timestamp: '10:00:00', turnId: 't1' });
+    const step = stamped(2, { type: 'research_step', tool: 'grep', args: '{"pattern":"db"}', toolCallId: 'c1', turnId: 't1' });
 
-    const { h, run } = twoStreams((s) => {
-      // The other subscription's copies lag behind a later record.
-      s.execution(reply);
-      s.execution(step);
-      s.planning(reply);
-      s.planning(step);
+    const { h, run } = duringRun((emit) => {
+      for (const event of [reply, step, reply, step]) emit(event);
       return { tasks: [], conversationHistory: [] };
     });
     await run();
@@ -816,9 +853,9 @@ describe('one planner turn on both live streams', () => {
   });
 
   it('shows the same words again when they are a new turn', async () => {
-    const { h, run } = twoStreams((s) => {
-      for (const at of ['10:00:00', '10:00:05']) {
-        s.both({ type: 'planner_message', content: 'Done.', timestamp: at, turnId: `t-${at}` });
+    const { h, run } = duringRun((emit) => {
+      for (const [seq, at] of [[1, '10:00:00'], [2, '10:00:05']] as const) {
+        emit(stamped(seq, { type: 'planner_message', content: 'Done.', timestamp: at, turnId: `t-${at}` }));
       }
       return { tasks: [], conversationHistory: [] };
     });
@@ -829,36 +866,29 @@ describe('one planner turn on both live streams', () => {
 });
 
 /**
- * The same run can be watched by more than one execution subscription — the
- * initial Execute holds its socket open through a review pause, and approving
- * opens another. The daemon fans every broadcast to both, so a task start
- * arrives twice and must still be shown once.
+ * The same run can be asked for twice on one session — the initial Execute
+ * waits through a review pause, and approving asks again. Both share the
+ * session's socket, so a task start arrives once; the later request reports
+ * the run from then on.
  */
-describe('duplicate run subscriptions', () => {
-  it('shows one task-start notice when the same start arrives on two run streams', async () => {
-    const listeners: Array<(event: unknown) => void> = [];
-    const settle: Array<() => void> = [];
-    const h = harness({
-      streamExecution: vi.fn().mockImplementation((_id: string, cb: (event: unknown) => void, onReady?: (error?: Error) => void) => {
-        listeners.push(cb);
-        onReady?.();
-        return new Promise<void>((resolve) => { settle.push(resolve); });
-      }),
-    });
+describe('two runs asked for on one session', () => {
+  it('shows one task-start notice, and both settle on the run\'s one end', async () => {
+    const h = harness();
+    h.daemon.settles = false;
 
     const running = [
       runEffect({ type: 'execute', sessionId: 's1' }, h.deps),
       runEffect({ type: 'execute', sessionId: 's1' }, h.deps),
     ];
-    await vi.waitFor(() => expect(listeners).toHaveLength(2));
+    await vi.waitFor(() => expect(h.api.executePlan).toHaveBeenCalledTimes(2));
 
-    const started = { type: 'task_started', taskId: 't1', order: 1, title: 'Add route', runner: 'opencode' };
-    for (const listener of listeners) listener(started);
-
-    settle.forEach((resolve) => resolve());
+    h.daemon.emit({ type: 'task_started', taskId: 't1', order: 1, title: 'Add route', runner: 'opencode' });
+    h.daemon.emit(RUN_DONE);
     await Promise.all(running);
 
+    expect(h.api.followSession).toHaveBeenCalledTimes(1);
     expect(h.actions.filter((a) => a.type === 'taskStarted')).toHaveLength(1);
+    expect(types(h.actions)).not.toContain('executionLost');
   });
 });
 
@@ -888,22 +918,21 @@ describe('task control', () => {
 
   it('a watched start subscribes before the request, so the task cannot start unobserved', async () => {
     const order: string[] = [];
-    const h = harness({
-      streamExecution: vi.fn().mockImplementation((_id: string, onEvent: (event: unknown) => void, onReady?: () => void) => {
-        order.push('streamExecution');
-        onReady?.();
-        onEvent({ type: 'status_update', tasks: [{ id: 't1', status: 'in_progress' }] });
-        return Promise.resolve();
+    const h = harness((daemon) => ({
+      followSession: vi.fn((id: string, onEvent: (event: unknown) => void) => {
+        order.push('followSession');
+        return daemon.follow(id, onEvent);
       }),
-      execute: vi.fn().mockImplementation(async () => {
+      execute: vi.fn().mockImplementation(daemon.runs(async () => {
         order.push('execute');
+        daemon.emit({ type: 'status_update', tasks: [{ id: 't1', status: 'in_progress' }] });
         return { ok: true, message: 'Done.' };
-      }),
-    });
+      })),
+    }));
 
     await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'force-start', watch: true }, h.deps);
 
-    expect(order).toEqual(['streamExecution', 'execute']);
+    expect(order).toEqual(['followSession', 'execute']);
     expect(h.actions).toContainEqual({
       type: 'statusUpdate',
       tasks: [{ id: 't1', status: 'in_progress' }],
@@ -914,7 +943,7 @@ describe('task control', () => {
   it('leaves the stream alone for an action that spawns nothing', async () => {
     const h = harness();
     await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'cancel' }, h.deps);
-    expect(h.api.streamExecution).not.toHaveBeenCalled();
+    expect(h.api.followSession).not.toHaveBeenCalled();
   });
 
   it('adds and removes tasks', async () => {
@@ -2026,22 +2055,12 @@ describe('conversation compact effect', () => {
     ...over,
   });
 
-  /** A harness whose planning and standing-follow sockets the test drives from inside the REST call. */
-  function sockets(call: (emit: (e: unknown) => void, both: (e: unknown) => void) => Promise<unknown>) {
-    let planning: (e: unknown) => void = () => {};
-    let standing: (e: unknown) => void = () => {};
-    const h = harness({
-      streamPlanning: vi.fn().mockImplementation((_id: string, cb: (e: unknown) => void) => {
-        planning = cb;
-        return { close: vi.fn() };
-      }),
-      followSession: vi.fn().mockImplementation((_id: string, cb: (e: unknown) => void) => {
-        standing = cb;
-        return { ready: Promise.resolve(true), ended: new Promise(() => {}), close: vi.fn() };
-      }),
-      compactConversation: vi.fn().mockImplementation(() => call((e) => planning(e), (e) => { planning(e); standing(e); })),
-    });
-    return { h, planning: (e: unknown) => planning(e), standing: (e: unknown) => standing(e) };
+  /** A harness whose session socket the test drives from inside the REST call; `twice` delivers a frame and its copy. */
+  function sockets(call: (emit: (e: unknown) => void, twice: (e: unknown) => void) => Promise<unknown>) {
+    const h = harness((daemon) => ({
+      compactConversation: vi.fn().mockImplementation(() => call((e) => daemon.emit(e), (e) => { daemon.emit(e); daemon.emit(e); })),
+    }));
+    return { h, standing: (e: unknown) => h.daemon.emit(e) };
   }
 
   const play = (from: TuiState, actions: Action[]): TuiState => actions.reduce((state, action) => reduce(state, action).state, from);
@@ -2098,14 +2117,14 @@ describe('conversation compact effect', () => {
     expect(state.planner).toBe('idle');
   });
 
-  it('draws one block however many subscriptions carry the frames, and ignores a late repeat', async () => {
+  it('draws one block however many times the frames are delivered, and ignores a late repeat', async () => {
     let stamp = 0;
     const stamped = (e: object) => ({ ...e, stream: 'daemon', seq: ++stamp });
     const lateEnd = stamped(ended('condensed'));
-    const { h, standing } = sockets(async (_emit, both) => {
-      both(stamped(started()));
-      both(stamped(generated));
-      both(lateEnd);
+    const { h, standing } = sockets(async (_emit, twice) => {
+      twice(stamped(started()));
+      twice(stamped(generated));
+      twice(lateEnd);
       return { plan, summary: 'the state', keptMessages: 4 };
     });
     const start = session();
@@ -2201,15 +2220,13 @@ describe('conversation compact effect', () => {
 
 describe('worktree isolation', () => {
   /** Drive one run with scripted websocket messages, the way `execute` sees them. */
-  const running = (events: unknown[], api: Partial<OrdewellApi> = {}) =>
-    harness({
-      streamExecution: vi.fn().mockImplementation((_id: string, cb: (e: unknown) => void, onReady?: (error?: Error) => void) => {
-        onReady?.();
-        for (const event of events) cb(event);
-        return Promise.resolve();
+  const running = (events: unknown[]) =>
+    harness((daemon) => ({
+      executePlan: vi.fn().mockImplementation(async () => {
+        for (const event of events) daemon.emit(event);
+        return { status: 'started' };
       }),
-      ...api,
-    });
+    }));
 
   it('carries each task\'s isolation from a status_update into the reducer', async () => {
     const isolation = { state: 'conflict', branch: 'ordewell/r1/2-b', worktree: '/w/2-b' };
@@ -2245,23 +2262,16 @@ describe('worktree isolation', () => {
   });
 
   it('keeps showing what still runs while the stash question is open', async () => {
-    let emit: (event: unknown) => void = () => {};
-    let end: () => void = () => {};
-    const h = harness({
-      streamExecution: vi.fn().mockImplementation((_id: string, cb: (e: unknown) => void, onReady?: (error?: Error) => void) => {
-        emit = cb;
-        onReady?.();
-        return new Promise<void>((resolve) => { end = resolve; });
-      }),
-    } as Partial<OrdewellApi>);
+    const h = harness();
+    h.daemon.settles = false;
 
     const run = runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
     await vi.waitFor(() => expect(h.api.executePlan).toHaveBeenCalled());
-    emit({ type: 'isolation_blocked', reason: 'dirty', message: 'Tracked files have uncommitted changes' });
-    emit({ type: 'status_update', tasks: [{ id: 'ops1', status: 'in_progress', verdict: null }] });
+    h.daemon.emit({ type: 'isolation_blocked', reason: 'dirty', message: 'Tracked files have uncommitted changes' });
+    h.daemon.emit({ type: 'status_update', tasks: [{ id: 'ops1', status: 'in_progress', verdict: null }] });
 
     expect(types(h.actions)).toEqual(expect.arrayContaining(['isolationBlocked', 'statusUpdate']));
-    end();
+    h.daemon.emit(RUN_DONE);
     await run;
   });
 
@@ -2478,18 +2488,17 @@ describe('worktree isolation', () => {
     ['shared', 'continueWithoutIsolation'],
   ] as const)('%s: opens a stream of its own, then continues, then follows the run', async (mode, method) => {
     const order: string[] = [];
-    const h = harness({
-      streamExecution: vi.fn().mockImplementation((_id: string, _cb: unknown, onReady?: () => void) => {
-        order.push('stream');
-        onReady?.();
-        return Promise.resolve();
+    const h = harness((daemon) => ({
+      followSession: vi.fn((id: string, onEvent: (event: unknown) => void) => {
+        order.push('followSession');
+        return daemon.follow(id, onEvent);
       }),
       [method]: vi.fn().mockImplementation(async () => { order.push(method); }),
-    } as Partial<OrdewellApi>);
+    }));
 
     await runEffect({ type: 'isolationContinue', sessionId: 's1', mode }, h.deps);
 
-    expect(order).toEqual(['stream', method]);
+    expect(order).toEqual(['followSession', method]);
   });
 
   it('resolve-as-a-task adds the task, refreshes the plan and says what to do next', async () => {
@@ -2576,18 +2585,18 @@ describe('a structured task\'s log, messages and interrupt', () => {
 
   it('continues a finished task, holding the execution stream open when asked to watch (ADR-0018, K1)', async () => {
     const order: string[] = [];
-    const execute = vi.fn().mockImplementation(async () => { order.push('execute'); return { ok: true, message: 'Done.' }; });
-    const streamExecution = vi.fn().mockImplementation((_id: string, _cb: (e: unknown) => void, onReady?: (error?: Error) => void) => {
-      order.push('streamExecution');
-      onReady?.();
-      return Promise.resolve();
-    });
-    const h = harness({ execute, streamExecution } as Partial<OrdewellApi>);
+    const h = harness((daemon) => ({
+      followSession: vi.fn((id: string, onEvent: (event: unknown) => void) => {
+        order.push('followSession');
+        return daemon.follow(id, onEvent);
+      }),
+      execute: vi.fn().mockImplementation(daemon.runs(async () => { order.push('execute'); return { ok: true, message: 'Done.' }; })),
+    }));
 
     await runEffect({ type: 'continueTask', sessionId: 's1', taskId: 't1', text: 'also handle arrays', watch: true }, h.deps);
 
-    expect(execute).toHaveBeenCalledWith('s1', { command: 'retry_task', task: 't1', from: 'session', message: 'also handle arrays' });
-    expect(order).toEqual(['streamExecution', 'execute']);
+    expect(h.api.execute).toHaveBeenCalledWith('s1', { command: 'retry_task', task: 't1', from: 'session', message: 'also handle arrays' });
+    expect(order).toEqual(['followSession', 'execute']);
   });
 
   it('continues without a second stream while a run is already watched', async () => {
@@ -2596,7 +2605,7 @@ describe('a structured task\'s log, messages and interrupt', () => {
     await runEffect({ type: 'continueTask', sessionId: 's1', taskId: 't1', text: 'go on' }, h.deps);
 
     expect(h.deps.api.execute).toHaveBeenCalledWith('s1', { command: 'retry_task', task: 't1', from: 'session', message: 'go on' });
-    expect(h.deps.api.streamExecution).not.toHaveBeenCalled();
+    expect(h.deps.api.followSession).not.toHaveBeenCalled();
   });
 
   it('interrupts the task, leaving what it says to the timeline', async () => {
@@ -2642,20 +2651,10 @@ describe('a structured task\'s log, messages and interrupt', () => {
 
 
 describe('following the session', () => {
-  /** A harness whose follow socket the test drives, and can end. */
+  /** A harness whose follow sockets the test drives, and can drop. */
   function following(api: Partial<OrdewellApi> = {}) {
-    const follows: Array<{ sessionId: string; emit: (e: unknown) => void; close: Mock; end: (outcome?: 'lost') => void }> = [];
-    const h = harness({
-      followSession: vi.fn().mockImplementation((sessionId: string, cb: (e: unknown) => void) => {
-        let end: (outcome?: 'lost') => void = () => {};
-        const ended = new Promise<'lost' | void>((resolve) => { end = resolve; });
-        const close = vi.fn(() => end());
-        follows.push({ sessionId, emit: cb, close, end });
-        return { ready: Promise.resolve(true), ended, close };
-      }),
-      ...api,
-    });
-    return { ...h, follows };
+    const h = harness(api);
+    return { ...h, follows: h.daemon.sockets };
   }
 
   it('is open before the first turn is sent, so a run the turn\'s plan starts on its own is drawn', async () => {
@@ -2682,21 +2681,20 @@ describe('following the session', () => {
     expect(h.api.followSession).toHaveBeenCalledTimes(1);
   });
 
-  it('shows a broadcast once when the follow and the run\'s own stream both carry it', async () => {
-    let run: (e: unknown) => void = () => {};
-    const h = following({
-      streamExecution: vi.fn().mockImplementation((_id: string, cb: (e: unknown) => void, onReady?: (error?: Error) => void) => {
-        run = cb;
-        onReady?.();
-        return Promise.resolve();
-      }),
-    });
+  it('shows a broadcast once, the session and its run sharing one socket', async () => {
+    const h = following();
     await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'one' }, h.deps);
-    await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
-    const start = { type: 'task_started', taskId: 'a', order: 1, title: 'A', runner: 'claude-code' };
+    h.daemon.settles = false;
+    const running = runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
+    await vi.waitFor(() => expect(h.api.executePlan).toHaveBeenCalled());
+    // A reconnect's replay delivers the same stamped frame again.
+    const start = { type: 'task_started', taskId: 'a', order: 1, title: 'A', runner: 'claude-code', stream: 'd1', seq: 4 };
     h.follows[0].emit(start);
-    run(start);
+    h.follows[0].emit(start);
+    h.follows[0].emit({ ...RUN_DONE, stream: 'd1', seq: 5 });
+    await running;
 
+    expect(h.api.followSession).toHaveBeenCalledTimes(1);
     expect(h.actions.filter((a) => a.type === 'taskStarted')).toHaveLength(1);
   });
 
@@ -2796,7 +2794,7 @@ describe('following the session', () => {
   it('opens a new follow after the last one was lost', async () => {
     const h = following();
     await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'one' }, h.deps);
-    h.follows[0].end('lost');
+    h.follows[0].drop();
     await Promise.resolve();
     await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'two' }, h.deps);
 
@@ -2806,7 +2804,7 @@ describe('following the session', () => {
   it('reports a lost follow, which the reducer speaks only while a run is shown', async () => {
     const h = following();
     await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'one' }, h.deps);
-    h.follows[0].end('lost');
+    h.follows[0].drop();
     await vi.waitFor(() => expect(h.actions).toContainEqual({ type: 'followLost', sessionId: 's1' }));
   });
 
@@ -2815,7 +2813,7 @@ describe('following the session', () => {
     try {
       const h = following();
       await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'one' }, h.deps);
-      h.follows[0].end('lost');
+      h.follows[0].drop();
       await Promise.resolve();
       await Promise.resolve();
       expect(h.api.followSession).toHaveBeenCalledTimes(1);
@@ -2837,7 +2835,7 @@ describe('following the session', () => {
     try {
       const h = following();
       await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'one' }, h.deps);
-      h.follows[0].end('lost');
+      h.follows[0].drop();
       await Promise.resolve();
       await Promise.resolve();
       await runEffect({ type: 'closeSession', sessionId: 's1' }, h.deps);
@@ -2855,7 +2853,7 @@ describe('following the session', () => {
     try {
       const h = following();
       await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'one' }, h.deps);
-      h.follows[0].end('lost');
+      h.follows[0].drop();
       await Promise.resolve();
       await Promise.resolve();
       await runEffect({ type: 'deleteSession', sessionId: 's1' }, h.deps);
@@ -2868,18 +2866,12 @@ describe('following the session', () => {
     }
   });
 
-  it('leaves a loss to the run\'s own stream while one is open, so it is reported once', async () => {
-    let lose: () => void = () => {};
-    const h = following({
-      streamExecution: vi.fn().mockImplementation((_id: string, _cb: unknown, onReady?: (error?: Error) => void) => {
-        onReady?.();
-        return new Promise<'lost'>((resolve) => { lose = () => resolve('lost'); });
-      }),
-    });
+  it('reports a loss during a run once, as the run\'s', async () => {
+    const h = following();
+    h.daemon.settles = false;
     const running = runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
-    await vi.waitFor(() => expect(h.api.streamExecution).toHaveBeenCalled());
-    h.follows[0].end('lost');
-    lose();
+    await vi.waitFor(() => expect(h.api.executePlan).toHaveBeenCalled());
+    h.follows[0].drop();
     await running;
     await Promise.resolve();
 
@@ -2891,7 +2883,7 @@ describe('following the session', () => {
     const h = following();
     await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'one' }, h.deps);
     await runEffect({ type: 'loadSession', sessionId: 's9' }, h.deps);
-    h.follows[0].end('lost');
+    h.follows[0].drop();
     await Promise.resolve();
     await Promise.resolve();
 

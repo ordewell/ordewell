@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { Hono } from 'hono';
 import { ModelResolver, SettingsService, saveSession, type LegacyPlanState, type SettingsResponse, type SettingsUpdateResponse } from '@ordewell/core';
-import { OrchestratorPool } from '../orchestratorPool';
+import { OrchestratorPool, SessionOpenElsewhereError } from '../orchestratorPool';
 import { settingsRoute } from '../../routes/settings';
 
 // One daemon serves workspaces A (its cwd) and B, whose `.ordewell/env` name
@@ -188,14 +188,17 @@ describe.skipIf(MANAGED_SETTINGS.some((dir) => fs.existsSync(dir)))('Orchestrato
     });
   });
 
-  it('answers for an open session\'s own workspace over the one a request names', () => {
+  it('answers for an open session\'s own workspace, and refuses another workspace naming its id', () => {
     process.env.AI_PROVIDER = 'claude-code';
     process.env.ORCHESTRATOR_MODEL = 'gproxy/b-only';
     const meta = saveSession(savedPlan(), 'session-b', workspaceB, 'session-b');
     pool.adoptSavedSession(meta.id, workspaceB);
 
     expect(pool.getSettings('session-b').orchestratorModel).toBe('gproxy/b-only');
-    expect(pool.getSettings('session-b', workspaceA).orchestratorModel).toBe('gproxy/b-only');
+    expect(pool.getSettings('session-b', workspaceB).orchestratorModel).toBe('gproxy/b-only');
     expect(pool.updateRunSettings({ autorun: true }, 'session-b').orchestratorModel).toBe('gproxy/b-only');
+    // The id names B's session only for B: A's copy of it is not this one.
+    expect(() => pool.getSettings('session-b', workspaceA)).toThrow(SessionOpenElsewhereError);
+    expect(() => pool.updateRunSettings({ autorun: false }, 'session-b', workspaceA)).toThrow(SessionOpenElsewhereError);
   });
 });

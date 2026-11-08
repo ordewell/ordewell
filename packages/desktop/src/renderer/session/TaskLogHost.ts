@@ -1,6 +1,5 @@
 import type {
-  AccountLimitSnapshot, DisplayBlock, ExecutionCommand, RunTask, SessionMessage, StreamStamp, TaskLogAttemptsResponse,
-  TaskLogEvent, TaskLogResponse,
+  AccountLimitSnapshot, DisplayBlock, ExecutionCommand, RunTask, SessionMessage, StreamStamp, TaskLogEvent,
 } from '@ordewell/core';
 import {
   accountLimitsOf, assignedRunnerOf, EMPTY_TASK_LOG_FOLLOW, followTaskLog, lastServedModel, taskActionCommand,
@@ -183,7 +182,7 @@ export class TaskLogHost implements TaskLogBridge {
 
   private async loadLatest(): Promise<void> {
     try {
-      const listing = await callDaemon('sessions.taskLog', this.params()) as TaskLogAttemptsResponse;
+      const listing = await callDaemon('sessions.taskLog', this.params());
       this.follow = { ...this.follow, attempts: listing.attempts };
       const latest = listing.attempts.at(-1) ?? 0;
       if (latest === 0) this.settle(0, [], listing.position);
@@ -196,7 +195,7 @@ export class TaskLogHost implements TaskLogBridge {
   private async load(attempt: number): Promise<void> {
     this.follow = followTaskLog(this.follow, { type: 'picked', attempt });
     try {
-      const read = await callDaemon('sessions.taskLogAttempt', this.params(attempt)) as TaskLogResponse;
+      const read = await callDaemon('sessions.taskLogAttempt', this.params(attempt));
       this.observeServed(attempt, read.events);
       this.settle(attempt, read.events, read.position);
     } catch (error) {

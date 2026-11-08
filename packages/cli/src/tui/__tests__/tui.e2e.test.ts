@@ -54,13 +54,9 @@ function planPayload(tasks = PLAN_TASKS, question = 'Plan drafted — anything t
 /** An in-memory daemon honouring the call protocol the real one has. */
 function fakeDaemon() {
   const log: string[] = [];
-  let planningListener: ((event: unknown) => void) | null = null;
-  let executionListener: ((event: unknown) => void) | null = null;
   let followListener: ((event: unknown) => void) | null = null;
-  // Like `OrchestratorPool.broadcast`: every socket open on the session gets every event.
-  const broadcast = (event: unknown) => {
-    for (const listener of [planningListener, executionListener, followListener]) listener?.(event);
-  };
+  // Like `OrchestratorPool.broadcast`: the session's socket gets every event.
+  const broadcast = (event: unknown) => followListener?.(event);
 
   const api = {
     startConversation: vi.fn(async (_id: string, _goal: string) => {
@@ -78,7 +74,6 @@ function fakeDaemon() {
       broadcast({ type: 'status_update', tasks: [{ id: 't1', status: 'in_progress' }] });
       broadcast({ type: 'status_update', tasks: [{ id: 't1', status: 'completed' }, { id: 't2', status: 'completed' }] });
       broadcast({ type: 'execution_complete', summary: { total: 2, completed: 2, failed: 0 } });
-      settleExecution();
       return { status: 'started' };
     }),
     stopExecution: vi.fn(async () => ({ status: 'stopped' })),
@@ -125,34 +120,18 @@ function fakeDaemon() {
         shared: [],
       },
     })),
-    streamPlanning: vi.fn((_id: string, onEvent: (event: unknown) => void) => {
-      log.push('streamPlanning');
-      planningListener = onEvent;
-      return { close: () => { planningListener = null; } };
-    }),
-    streamExecution: vi.fn((_id: string, onEvent: (event: unknown) => void, onReady?: (error?: Error) => void) => {
-      log.push('streamExecution');
-      executionListener = onEvent;
-      queueMicrotask(() => onReady?.());
-      return new Promise<void>((resolve) => { settleExecution = resolve; });
-    }),
     followSession: vi.fn((_id: string, onEvent: (event: unknown) => void) => {
       log.push('followSession');
       followListener = onEvent;
-      return { ready: Promise.resolve(true), ended: new Promise<void>(() => {}), close: () => { if (followListener === onEvent) followListener = null; } };
+      return { ready: Promise.resolve(true), ended: new Promise<null>(() => {}), close: () => { if (followListener === onEvent) followListener = null; } };
     }),
   };
-  let settleExecution: () => void = () => {};
 
   return {
     api: api as unknown as OrdewellApi,
     mocks: api,
     log,
-    emitPlanning: broadcast,
-    emitExecution: broadcast,
-    /** An event only the follow hears: nothing this surface asked for is in flight. */
-    emitFollow: (event: unknown) => followListener?.(event),
-    endExecution: () => settleExecution(),
+    emit: broadcast,
   };
 }
 
@@ -280,15 +259,15 @@ describe('TUI end to end', () => {
     );
     // The research step painted while the REST call was in flight.
     expect(h.frames().some((f) => f.includes('LoginRoute.ts'))).toBe(true);
-    // The planning stream was subscribed before the turn and closed after it.
-    expect(h.daemon.log.indexOf('streamPlanning')).toBeLessThan(h.daemon.log.indexOf('startConversation'));
+    // The session's socket was open before the turn was sent.
+    expect(h.daemon.log.indexOf('followSession')).toBeLessThan(h.daemon.log.indexOf('startConversation'));
     expect(h.app.getState().sessionId).toBe('session-1');
   });
 
   it('draws the turn as the shared view: a command row with its preview, the streamed reply, and the token line', async () => {
     const h = harness();
     h.daemon.mocks.startConversation.mockImplementationOnce(async () => {
-      const emit = h.daemon.emitPlanning;
+      const emit = h.daemon.emit;
       emit({ type: 'planner_turn_started', turnId: 't1', prompt: 'Build the login flow' });
       emit({ type: 'research_step', tool: 'bash', args: '{"command":"ls src"}', toolCallId: 'c1', turnId: 't1' });
       emit({
@@ -329,7 +308,7 @@ describe('TUI end to end', () => {
   it('ctrl+o raw bytes toggle full detail on the command rows, with the footer hint following', async () => {
     const h = harness();
     h.daemon.mocks.startConversation.mockImplementationOnce(async () => {
-      const emit = h.daemon.emitPlanning;
+      const emit = h.daemon.emit;
       emit({ type: 'planner_turn_started', turnId: 't1', prompt: 'Build the login flow' });
       emit({ type: 'research_step', tool: 'bash', args: '{"command":"ls src"}', toolCallId: 'c1', turnId: 't1' });
       emit({
@@ -493,7 +472,7 @@ describe('TUI end to end', () => {
     await vi.waitFor(() => {
       expect(h.screen()).toContain('Execution finished: 2/2 tasks complete.');
     });
-    expect(h.daemon.log.indexOf('streamExecution')).toBeLessThan(h.daemon.log.indexOf('executePlan'));
+    expect(h.daemon.log.indexOf('followSession')).toBeLessThan(h.daemon.log.indexOf('executePlan'));
     expect(h.app.getState().tasks.map((t) => t.status)).toEqual(['completed', 'completed']);
   });
 
@@ -510,13 +489,13 @@ describe('TUI end to end', () => {
     h.type('\r');
     await vi.waitFor(() => expect(h.app.getState().sessionId).toBe('session-1'));
 
-    h.daemon.emitPlanning({ type: 'plan_generated', plan: { tasks: PLAN_TASKS }, goal: 'Build the login flow', runners: ['claude-code'] });
-    h.daemon.emitPlanning({
+    h.daemon.emit({ type: 'plan_generated', plan: { tasks: PLAN_TASKS }, goal: 'Build the login flow', runners: ['claude-code'] });
+    h.daemon.emit({
       type: 'execution_action',
       record: { command: 'run_plan', actor: 'autorun', outcome: 'done', at: '2026-10-14T10:00:00.000Z' },
       text: 'Started the plan: by autorun.',
     });
-    h.daemon.emitPlanning({ type: 'task_started', taskId: 't1', order: 1, title: 'Add the login route', runner: 'claude-code' });
+    h.daemon.emit({ type: 'task_started', taskId: 't1', order: 1, title: 'Add the login route', runner: 'claude-code' });
 
     await vi.waitFor(() => expect(h.screen()).toContain('Write the tests'));
     expect(h.app.getState().tasks.map((t) => t.status)).toEqual(['in_progress', 'pending']);
@@ -528,8 +507,7 @@ describe('TUI end to end', () => {
     expect(h.app.getState().status).toBe('executing');
   });
 
-  // The supervisor speaks after the run's end closed the run's own socket, so
-  // only the follow is open for it.
+  // The supervisor speaks after the run ended, on the socket the session kept.
   it('draws a run nobody on this surface started, and the supervisor\'s note after it ends', async () => {
     const h = harness();
     h.type('Build the login flow');
@@ -537,18 +515,18 @@ describe('TUI end to end', () => {
     await vi.waitFor(() => expect(h.screen()).toContain('Add the login route'));
     expect(h.daemon.log.indexOf('followSession')).toBeLessThan(h.daemon.log.indexOf('startConversation'));
 
-    h.daemon.emitFollow({
+    h.daemon.emit({
       type: 'execution_action',
       record: { command: 'run_plan', actor: 'autorun', outcome: 'done', at: '2026-10-12T10:00:00.000Z' },
       text: 'Started the plan: by autorun.',
     });
-    h.daemon.emitFollow({ type: 'task_started', taskId: 't1', order: 1, title: 'Add the login route', runner: 'opencode' });
+    h.daemon.emit({ type: 'task_started', taskId: 't1', order: 1, title: 'Add the login route', runner: 'opencode' });
     await vi.waitFor(() => expect(h.app.getState().status).toBe('executing'));
-    h.daemon.emitFollow({ type: 'status_update', tasks: [{ id: 't1', status: 'failed' }, { id: 't2', status: 'pending' }] });
-    h.daemon.emitFollow({ type: 'execution_complete', summary: { total: 2, completed: 0, failed: 1 } });
-    h.daemon.emitFollow({ type: 'planner_turn_started', turnId: 'w1', supervisor: true });
-    h.daemon.emitFollow({ type: 'planner_message', content: 'Task 1 failed on a missing env var.', timestamp: '2026-10-12T10:01:00.000Z', turnId: 'w1', supervisor: true });
-    h.daemon.emitFollow({ type: 'planner_turn_ended', turnId: 'w1', outcome: 'message' });
+    h.daemon.emit({ type: 'status_update', tasks: [{ id: 't1', status: 'failed' }, { id: 't2', status: 'pending' }] });
+    h.daemon.emit({ type: 'execution_complete', summary: { total: 2, completed: 0, failed: 1 } });
+    h.daemon.emit({ type: 'planner_turn_started', turnId: 'w1', supervisor: true });
+    h.daemon.emit({ type: 'planner_message', content: 'Task 1 failed on a missing env var.', timestamp: '2026-10-12T10:01:00.000Z', turnId: 'w1', supervisor: true });
+    h.daemon.emit({ type: 'planner_turn_ended', turnId: 'w1', outcome: 'message' });
 
     await vi.waitFor(() => {
       expect(h.screen()).toContain('Started the plan: by autorun.');
@@ -596,7 +574,7 @@ describe('TUI end to end', () => {
 
     h.daemon.mocks.execute.mockImplementationOnce(async () => {
       h.daemon.log.push('execute');
-      h.daemon.emitExecution({ type: 'status_update', tasks: [{ id: 't1', status: 'in_progress' }] });
+      h.daemon.emit({ type: 'status_update', tasks: [{ id: 't1', status: 'in_progress' }] });
       return { ok: true as const, message: 'Started.' };
     });
 
@@ -609,16 +587,15 @@ describe('TUI end to end', () => {
       expect(h.screen()).toContain('RUN');
     });
     expect(h.daemon.mocks.execute).toHaveBeenCalledWith('session-1', { command: 'force_start', task: 't1' });
-    // The stream was subscribed before the request, so the first update landed.
-    expect(h.daemon.log.indexOf('streamExecution')).toBeLessThan(h.daemon.log.indexOf('execute'));
+    // The socket was open before the request, so the first update landed.
+    expect(h.daemon.log.indexOf('followSession')).toBeLessThan(h.daemon.log.indexOf('execute'));
 
     const frame = h.app.getState().spinnerFrame;
     h.app.dispatch({ type: 'spinnerTick' });
     expect(h.app.getState().spinnerFrame).not.toBe(frame);
 
-    h.daemon.emitExecution({ type: 'status_update', tasks: [{ id: 't1', status: 'completed' }] });
-    h.daemon.emitExecution({ type: 'execution_complete', summary: { total: 2, completed: 1, failed: 0 } });
-    h.daemon.endExecution();
+    h.daemon.emit({ type: 'status_update', tasks: [{ id: 't1', status: 'completed' }] });
+    h.daemon.emit({ type: 'execution_complete', summary: { total: 2, completed: 1, failed: 0 } });
 
     await vi.waitFor(() => expect(h.app.getState().status).toBe('idle'));
   });
@@ -631,18 +608,17 @@ describe('TUI end to end', () => {
 
     h.daemon.mocks.executePlan.mockImplementationOnce(async () => {
       h.daemon.log.push('executePlan');
-      h.daemon.emitExecution({ type: 'task_started', taskId: 't1', title: 'Add the login route', runner: 'opencode' });
-      h.daemon.emitExecution({ type: 'checkpoint', taskTitle: 'Add the login route', summary: 'Route added' });
-      h.daemon.emitExecution({ type: 'review_needed' });
+      h.daemon.emit({ type: 'task_started', taskId: 't1', title: 'Add the login route', runner: 'opencode' });
+      h.daemon.emit({ type: 'checkpoint', taskTitle: 'Add the login route', summary: 'Route added' });
+      h.daemon.emit({ type: 'review_needed' });
       // The daemon can rewrite the plan mid-run (queued task ops) and speak.
-      h.daemon.emitExecution({
+      h.daemon.emit({
         type: 'plan_generated',
         plan: planPayload([...PLAN_TASKS, { id: 't3', order: 3, title: 'Harden the session check', type: 'ai', status: 'pending', dependencies: [] }]),
       });
-      h.daemon.emitExecution({ type: 'planner_message', content: 'Added a hardening task.' });
-      h.daemon.emitExecution({ type: 'review_approved' });
-      h.daemon.emitExecution({ type: 'execution_stopped', summary: { total: 2, completed: 1, failed: 0 } });
-      h.daemon.endExecution();
+      h.daemon.emit({ type: 'planner_message', content: 'Added a hardening task.' });
+      h.daemon.emit({ type: 'review_approved' });
+      h.daemon.emit({ type: 'execution_stopped', summary: { total: 2, completed: 1, failed: 0 } });
       return { status: 'started' };
     });
 
@@ -1093,7 +1069,7 @@ describe('TUI end to end', () => {
     h.output.columns = 140;
     h.output.emit('resize');
     h.daemon.mocks.startConversation.mockImplementationOnce(async () => {
-      const emit = h.daemon.emitPlanning;
+      const emit = h.daemon.emit;
       emit({ type: 'planner_turn_started', turnId: 'p1', prompt: 'Build the login flow' });
       emit({ type: 'planner_message', content: 'Plan drafted.', timestamp: '', turnId: 'p1' });
       emit({ type: 'planner_usage', turnId: 'p1', ...plannerUsage, contextFill: { usedTokens: 61_143, windowTokens: 1_000_000 } });
@@ -1106,7 +1082,7 @@ describe('TUI end to end', () => {
     await vi.waitFor(() => expect(h.screen()).toContain('Add the login route'));
 
     expect(h.transcript()).toContain('Planner ctx 61k (6%) · ≈$7.89 API-equivalent');
-    h.daemon.emitExecution({ type: 'status_update', tasks: [
+    h.daemon.emit({ type: 'status_update', tasks: [
       { id: 't1', status: 'completed', attemptUsage: attempts.t1 },
       { id: 't2', status: 'completed', attemptUsage: attempts.t2 },
       { id: 't3', status: 'completed', attemptUsage: attempts.t3 },
@@ -1126,14 +1102,14 @@ describe('TUI end to end', () => {
     const retry = [attempts.t1[0], attempt(2, 'opencode', {
       totals: { reportedCost: { USD: 0.25 } }, lastPromptTokens: 100_000, contextWindow: 200_000,
     })];
-    h.daemon.emitExecution({ type: 'status_update', tasks: [{ id: 't1', status: 'completed', attemptUsage: retry }] });
+    h.daemon.emit({ type: 'status_update', tasks: [{ id: 't1', status: 'completed', attemptUsage: retry }] });
     await vi.waitFor(() => expect(chatLine('ctx 100k (50%) · ≈$1.75')).toBe(true));
 
     const continued = [...retry, attempt(3, 'claude-code', {
       totals: { reportedCost: { USD: 0.5 }, costProvenance: { USD: { kind: 'estimate', billing: 'subscription' } } },
       lastPromptTokens: 120_000, contextWindow: 1_000_000,
     })];
-    h.daemon.emitExecution({ type: 'status_update', tasks: [{ id: 't1', status: 'completed', attemptUsage: continued }] });
+    h.daemon.emit({ type: 'status_update', tasks: [{ id: 't1', status: 'completed', attemptUsage: continued }] });
     await vi.waitFor(() => expect(chatLine('ctx 120k (12%) · ≈$2.25')).toBe(true));
     expect(h.screen()).toContain('Tasks total: ≈$2.35 · codex reports no cost');
 

@@ -96,6 +96,21 @@ describe('adversarial: a queued force start re-reads the task as it opens its ru
     expect(env.status('c')).toBe('pending');
   });
 
+  it('a Stop while one queued start opens its run withdraws the queued starts after it too', async () => {
+    const env = setup();
+    env.orchestrator.loadPlan([change('a', 1), change('b', 2, { dependencies: ['a'] }), change('c', 3, { dependencies: ['a'] })]);
+    await env.orchestrator.forceStartTask('b');
+    await env.orchestrator.forceStartTask('c');
+    editWhileOpening(env, () => env.orchestrator.stop());
+
+    await env.orchestrator.markTaskComplete('a');
+    await flushMicrotasks();
+
+    expect(env.spawned('b')).toHaveLength(0);
+    expect(env.spawned('c')).toHaveLength(0);
+    expect(env.orchestrator.startQueuedFor('c')).toBe(false);
+  });
+
   it('starts when the dependency it was queued behind finishes, with nothing else holding it back', async () => {
     const env = setup();
     env.orchestrator.loadPlan([change('a', 1), change('c', 2, { dependencies: ['a'] })]);

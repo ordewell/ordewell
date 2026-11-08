@@ -130,6 +130,35 @@ describe('adversarial: what was open on the session left behind stays with it', 
   });
 });
 
+describe('adversarial: an abandoned opening reports onto no other welcome', () => {
+  /** An opening turn on screen, as `startConversation` leaves it once it dispatched `sessionStarted`. */
+  const opening = (): TuiState =>
+    reduce(initialState({ planner: 'planning' }), { type: 'sessionStarted', sessionId: 'a', goal: 'Plan A' }).state;
+  const discarded = { type: 'failed', turn: true, sessionId: 'a', message: 'The planner turn was discarded' } as const satisfies Action;
+  const errorsOf = (state: TuiState): string => JSON.stringify(state.conversation);
+
+  it('/new while the opening runs keeps the discarded turn\'s error off the fresh welcome', () => {
+    const confirm = reduce(withDraft(opening(), '/new'), enter).state;
+    const fresh = confirm.overlay?.kind === 'confirm' ? reduce(confirm, enter).state : confirm;
+    expect(fresh.sessionId).toBeNull();
+    const after = reduce(fresh, discarded).state;
+    expect(errorsOf(after)).not.toContain('discarded');
+    expect(after.planner).toBe('idle');
+  });
+
+  it('a clear still reports the refusal onto the welcome it left', () => {
+    const cleared = reduce(opening(), { type: 'sessionCleared', sessionId: 'a' }).state;
+    expect(errorsOf(reduce(cleared, discarded).state)).toContain('discarded');
+  });
+
+  it('a stop armed against the abandoned session does not outlive /new or a clear', () => {
+    const stopping = { ...opening(), stopRequested: true };
+    const fresh = reduce(stopping, { type: 'sessionDeleted', sessionId: 'a' }).state;
+    expect(fresh.stopRequested).toBe(false);
+    expect(reduce(stopping, { type: 'sessionCleared', sessionId: 'a' }).state.stopRequested).toBe(false);
+  });
+});
+
 describe('adversarial: the run closed is the Session\'s to say (ADR-0013, ADR-0020)', () => {
   /** A run whose one task carries a conflict mark and whose handoff card is up. */
   const runWithCards = (): TuiState => {

@@ -136,9 +136,9 @@ export function useSettings(host: DaemonHost, sessionId: string): {
     if (mode === 'refresh') setView((current) => ({ ...current, busy: true, error: undefined }));
     try {
       const [settings, runners, models, prefs] = await Promise.all([
-        within(callDaemon('settings.get', { workspace: host.workspace, ...sessionParam() }) as Promise<SettingsResponse>, SETTINGS_TIMEOUT_MS, 'its settings'),
-        within(callDaemon('runners.list', { workspace: host.workspace }) as Promise<RunnersResponse>, SETTINGS_TIMEOUT_MS, 'its coding agents'),
-        within(callDaemon('models.list', { workspace: host.workspace }) as Promise<ModelsResponse>, SETTINGS_TIMEOUT_MS, 'its models'),
+        within(callDaemon('settings.get', { workspace: host.workspace, ...sessionParam() }), SETTINGS_TIMEOUT_MS, 'its settings'),
+        within(callDaemon('runners.list', { workspace: host.workspace }), SETTINGS_TIMEOUT_MS, 'its coding agents'),
+        within(callDaemon('models.list', { workspace: host.workspace }), SETTINGS_TIMEOUT_MS, 'its models'),
         within(window.ordewell.prefs?.get() ?? Promise.resolve(EMPTY_PREFS), SETTINGS_TIMEOUT_MS, 'its preferences'),
       ]);
       const list = runners.runners ?? [];
@@ -207,7 +207,7 @@ export function useSettings(host: DaemonHost, sessionId: string): {
     setView((current) => ({ ...current, busy: true, error: undefined }));
     try {
       await callDaemon('runners.setEnabled', { id }, { enabled });
-      const runners = await within(callDaemon('runners.list', { workspace: host.workspace }) as Promise<RunnersResponse>, SETTINGS_TIMEOUT_MS, 'its coding agents');
+      const runners = await within(callDaemon('runners.list', { workspace: host.workspace }), SETTINGS_TIMEOUT_MS, 'its coding agents');
       setView((current) => {
         const list = runners.runners ?? [];
         const backends = plannerBackendsFor(list, current.models?.providers ?? []);

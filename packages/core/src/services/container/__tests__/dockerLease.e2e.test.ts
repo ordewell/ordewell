@@ -671,7 +671,7 @@ describe.skipIf(skip)('a task in a real container', () => {
       open: async (intent: 'fresh' | 'repair' = 'fresh') => {
         const reserved = backend.reserve({ node: { sessionId: taskId, taskId }, role: 'task', runner: 'claude-code' });
         if ('refused' in reserved) throw new Error(reserved.refused);
-        const opened = await reserved.lease.open({ task: createTask({ id: taskId, order: 1, title: taskId, prompt: 'x' }), workspace: { kind: 'worktree', intent }, required: [] }, new AbortController().signal);
+        const opened = await reserved.lease.open({ task: createTask({ id: taskId, order: 1, title: taskId, prompt: 'x' }), workspace: { kind: 'worktree', intent, decision: { epoch: 1, mode: 'isolated' } }, required: [] }, new AbortController().signal);
         const placedRun = async (command: string, args: string[]) => {
           const placed = await opened.placement!.place({ command, args, env: {}, files: [] });
           const ran = await new Promise<{ status: number | null; stdout: string; stderr: string }>((done) => {

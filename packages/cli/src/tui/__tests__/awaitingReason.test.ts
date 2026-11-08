@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { initialState, reduce } from '../reducer';
 import { render } from '../render';
-import { inboundFor } from '../inbound';
+import { createInbound } from '../inbound';
 import type { TaskView, TuiState } from '../state';
 import type { Action } from '../reducer';
 import type { WsEvent } from '../../apiClient';
@@ -42,7 +42,7 @@ describe('the reason, from the daemon', () => {
 
   it('is read off the status_update message, and an unknown one is ignored', () => {
     const actions: Action[] = [];
-    const receive = inboundFor({}, (action) => actions.push(action), 's1').execution();
+    const receive = createInbound((action) => actions.push(action), 's1').receive;
     // As it comes off the wire, where nothing has checked the reason yet.
     const wire: unknown = {
       type: 'status_update',

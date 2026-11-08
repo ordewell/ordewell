@@ -740,9 +740,11 @@ export interface IWorktreeIsolation {
    * the task `conflict`, as it was before the repair. A read-only task's
    * record goes whole either way, with nothing kept (ADR-0046). Takes the run
    * rather than a bare task id: ids are only unique within one plan, and one
-   * daemon serves many (ADR-0025 D2).
+   * daemon serves many (ADR-0025 D2). `record`, when given, is the one the
+   * release was decided for: a record a newer start made in its place while
+   * the release waited its turn is that start's, and is left as it is.
    */
-  release(run: IsolationRun, taskId: string, opts: { keep: boolean }): Promise<IsolationRemoval>;
+  release(run: IsolationRun, taskId: string, opts: { keep: boolean; record?: IsolationTaskRecord }): Promise<IsolationRemoval>;
 
   /** End of run: park the integration branch for review and report what landed. */
   handoff(run: IsolationRun): Promise<IsolationHandoff>;

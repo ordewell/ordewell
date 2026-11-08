@@ -19,6 +19,7 @@ import {
   type DaemonErrorCode,
   type ErrorBody,
 } from '@ordewell/core';
+import { SessionOpenElsewhereError } from '../pool/orchestratorPool';
 
 interface Classified {
   status: ContentfulStatusCode;
@@ -74,6 +75,8 @@ function classify(err: unknown): Classified | undefined {
   if (err instanceof ChildNotFoundError) return { status: 404, code: 'child_not_found' };
   // 409: the session exists; another host has it open right now (ADR-0049).
   if (err instanceof SessionHeldError) return { status: 409, code: 'session_held' };
+  // 409: this workspace's session exists; the id is taken here by another workspace's, open now.
+  if (err instanceof SessionOpenElsewhereError) return { status: 409, code: 'refused' };
   if (err instanceof NoPlanError) return { status: 400, code: 'no_plan' };
   if (err instanceof AlreadyExecutingError) return { status: 409, code: 'already_executing' };
   if (err instanceof WorkspaceNotAProjectError) return { status: 400, code: 'workspace_not_a_project' };

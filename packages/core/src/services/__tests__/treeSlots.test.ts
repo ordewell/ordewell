@@ -261,6 +261,28 @@ describe('a subplanner\'s turn (ADR-0055 D18)', () => {
     await opening;
   });
 
+  it('two turns waiting for one slot both hear when it frees: a compaction behind an opening does not strand it', async () => {
+    const { child } = await tree(1);
+    const a = child('a', [task('a1', 1)]);
+    const b = child('b', [task('b1', 1)]);
+    await run(a);
+    await until(() => started(a).includes('a1'));
+
+    const opening = b.session.startPlanning('Plan a subtree').catch((err: unknown) => err);
+    const compaction = b.session.compactConversation().catch((err: unknown) => err);
+    await settled();
+    expect(b.planner.calls).toHaveLength(0);
+
+    await pass(a, 'a1');
+
+    // The opening takes the conversation; the compaction admitted beside it meets the conversation's refusal.
+    expect(await compaction).toBeInstanceOf(Error);
+    await until(() => b.planner.calls.length === 1);
+    b.planner.calls[0].finish(prose('A plan.'));
+    expect(await opening).not.toBeInstanceOf(Error);
+    await until(() => !b.session.isPlannerBusy);
+  });
+
   it('an opening stopped while it waits never opens, and leaves no slot taken', async () => {
     const { child } = await tree(1);
     const a = child('a', [task('a1', 1)]);
@@ -388,11 +410,13 @@ describe('what waits for a slot another Session holds is a wait, not a failure (
     const sibling: PoolNode = { tick: async () => undefined, openTurn: () => undefined, waitsOnPlanner: () => false, limitFound: () => undefined };
     pool.join(sibling);
     const run = recordingRunner();
+    const childPlans = recordingRunner();
     const notifications = fakeNotification();
     const orchestrator = TaskOrchestrator.compose({
       config: fakeConfig({ maxParallelSessions: 8, conflictRepairAttempts: 1 }),
       notifications,
       runner: run.runner,
+      childPlanRunner: childPlans.runner,
       output: new BufferedTaskOutputSource(),
       registry: new RunnerRegistry(),
       isolation,
@@ -405,7 +429,7 @@ describe('what waits for a slot another Session holds is a wait, not a failure (
       if ('refused' in slot) throw new Error(slot.refused);
       return slot;
     };
-    return { pool, orchestrator, run, notifications, held, isolation };
+    return { pool, orchestrator, run, childPlans, notifications, held, isolation };
   }
 
   it('a queued start holds its run open: nothing here will tick for it, and what frees the slot does', async () => {
@@ -429,6 +453,37 @@ describe('what waits for a slot another Session holds is a wait, not a failure (
     limit.value = 2;
     slot.free();
     await until(() => env.run.spawnedIds().includes('b'));
+  });
+
+  it('a queued start a sibling\'s slot holds reads as live work, so its parent does not end the Session for nothing running', async () => {
+    const limit = { value: 2 };
+    const env = shared(limit);
+    env.held();
+    env.orchestrator.loadPlan([task('a', 1), task('b', 2)]);
+    await env.orchestrator.forceStartTask('a');
+    env.orchestrator.startWhenAllowed('b');
+    limit.value = 1;
+
+    env.run.of('a').reportComplete({ status: 'done', summary: '' });
+    await settled();
+
+    expect(env.orchestrator.activeTaskIds).toEqual([]);
+    expect(env.orchestrator.movesUnasked).toBe(true);
+  });
+
+  it('a queued delegated start waits for no slot: it takes none', async () => {
+    const limit = { value: 2 };
+    const env = shared(limit);
+    env.held();
+    env.orchestrator.loadPlan([task('a', 1), task('d', 2, { type: 'delegated', goal: 'do d', dependencies: ['a'] })]);
+    await env.orchestrator.forceStartTask('a');
+    env.orchestrator.startWhenAllowed('d');
+    limit.value = 1;
+
+    env.run.of('a').reportComplete({ status: 'done', summary: '' });
+    await settled();
+
+    expect(env.childPlans.spawnedIds()).toEqual(['d']);
   });
 
   it('a repair owed stays owed, and starts when the sibling\'s slot frees', async () => {

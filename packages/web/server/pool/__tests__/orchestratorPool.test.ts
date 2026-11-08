@@ -50,7 +50,7 @@ describe('OrchestratorPool.adoptSavedSession', () => {
     pool.adoptSavedSession(meta.id, workspace);
 
     expect(pool.hasSession(meta.id)).toBe(true);
-    expect(() => pool.session(meta.id)).not.toThrow();
+    expect(() => pool.session(meta.id, undefined)).not.toThrow();
   });
 
   it('restores the saved plan, not an empty one', () => {
@@ -72,14 +72,14 @@ describe('OrchestratorPool.adoptSavedSession', () => {
     const meta = saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');
     pool.adoptSavedSession(meta.id, workspace);
 
-    expect(pool.session(meta.id).sessionId).toBe('session-saved');
+    expect(pool.session(meta.id, undefined).sessionId).toBe('session-saved');
   });
 
   it('lets task control reach a task from the restored plan', async () => {
     const meta = saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');
     pool.adoptSavedSession(meta.id, workspace);
 
-    await expect(pool.session(meta.id).execute({ command: 'mark_complete', task: 't2', confirmed: true }, { kind: 'user' })).resolves.toMatchObject({ ok: true });
+    await expect(pool.session(meta.id, undefined).execute({ command: 'mark_complete', task: 't2', confirmed: true }, { kind: 'user' })).resolves.toMatchObject({ ok: true });
   });
 
   // persist() derives the filename from goal + createdAt + id, so adopting a
@@ -112,11 +112,11 @@ describe('OrchestratorPool.adoptSavedSession', () => {
   it('leaves an already-live session alone instead of resetting it', () => {
     const meta = saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');
     pool.adoptSavedSession(meta.id, workspace);
-    const live = pool.session(meta.id);
+    const live = pool.session(meta.id, undefined);
 
     pool.adoptSavedSession(meta.id, workspace);
 
-    expect(pool.session(meta.id)).toBe(live);
+    expect(pool.session(meta.id, undefined)).toBe(live);
   });
 });
 
@@ -145,21 +145,21 @@ describe('OrchestratorPool.forkConversation', () => {
     const meta = saveSession(savedPlan(conversation), 'Rate limiting', workspace, 'session-saved');
     pool.adoptSavedSession(meta.id, workspace);
 
-    const fork = pool.forkConversation(meta.id);
+    const fork = pool.forkConversation(meta.id, undefined);
 
     expect(fork.sessionId).not.toBe('session-saved');
     expect(pool.hasSession(fork.sessionId)).toBe(true);
-    expect(pool.session(fork.sessionId).sessionId).toBe(fork.sessionId);
+    expect(pool.session(fork.sessionId, undefined).sessionId).toBe(fork.sessionId);
     expect(fork.goal).toBe('Rate limiting');
     expect(pool.getGoal(fork.sessionId)).toBe('Rate limiting');
     expect(fork.plan.tasks.map((t) => t.id)).toEqual(['t1', 't2']);
     expect(fork.plan.conversationHistory).toHaveLength(2);
-    expect(pool.session('session-saved').sessionId).toBe('session-saved');
+    expect(pool.session('session-saved', undefined).sessionId).toBe('session-saved');
     expect(listSessions(workspace).map((m) => m.id).sort()).toEqual([fork.sessionId, 'session-saved'].sort());
   });
 
   it('refuses a session the pool never adopted', () => {
-    expect(() => pool.forkConversation('session-nope')).toThrow('Session not found');
+    expect(() => pool.forkConversation('session-nope', undefined)).toThrow('Session not found');
   });
 });
 
@@ -190,21 +190,21 @@ describe('OrchestratorPool.rewindConversation', () => {
     const meta = saveSession(savedPlan(conversation), 'Rate limiting', workspace, 'session-saved');
     pool.adoptSavedSession(meta.id, workspace);
 
-    const fork = pool.rewindConversation(meta.id, 2);
+    const fork = pool.rewindConversation(meta.id, 2, undefined);
 
     expect(fork.sessionId).not.toBe('session-saved');
     expect(pool.hasSession(fork.sessionId)).toBe(true);
-    expect(pool.session(fork.sessionId).sessionId).toBe(fork.sessionId);
+    expect(pool.session(fork.sessionId, undefined).sessionId).toBe(fork.sessionId);
     expect(fork.goal).toBe('Rate limiting');
     expect(fork.rewoundMessage).toBe('Per user, not per IP\nand burst to 20');
     expect(fork.plan.conversationHistory).toEqual(conversation.conversationHistory.slice(0, 2));
     expect(fork.plan.tasks.map((t) => t.id)).toEqual(['t1', 't2']);
-    expect(pool.session('session-saved').planState!.conversationHistory).toHaveLength(4);
+    expect(pool.session('session-saved', undefined).planState!.conversationHistory).toHaveLength(4);
     expect(listSessions(workspace).map((m) => m.id).sort()).toEqual([fork.sessionId, 'session-saved'].sort());
   });
 
   it('refuses a session the pool never adopted', () => {
-    expect(() => pool.rewindConversation('session-nope', 2)).toThrow('Session not found');
+    expect(() => pool.rewindConversation('session-nope', 2, undefined)).toThrow('Session not found');
   });
 });
 
@@ -229,7 +229,7 @@ describe('OrchestratorPool.compactConversation', () => {
   it('answers the condensed plan with the summary', async () => {
     vi.spyOn(Session.prototype, 'compactConversation').mockResolvedValue({ summary: 'the state', keptMessages: 4 });
 
-    const result = await pool.compactConversation('session-saved');
+    const result = await pool.compactConversation('session-saved', undefined);
 
     expect(result.summary).toBe('the state');
     expect(result.keptMessages).toBe(4);
@@ -237,7 +237,7 @@ describe('OrchestratorPool.compactConversation', () => {
   });
 
   it('refuses a session the pool never adopted', async () => {
-    await expect(pool.compactConversation('session-nope')).rejects.toThrow('Session not found');
+    await expect(pool.compactConversation('session-nope', undefined)).rejects.toThrow('Session not found');
   });
 });
 
@@ -401,12 +401,12 @@ describe('OrchestratorPool.cancelPlanning', () => {
     // A Stop before the turn begins cancels the start instead (see the installed-planner tests).
     await vi.waitFor(() => expect(start).toHaveBeenCalled());
 
-    expect(pool.cancelPlanning('session-abort')).toBe(true);
-    expect(abort.mock.contexts).toEqual([pool.session('session-abort')]);
+    expect(pool.cancelPlanning('session-abort', undefined)).toBe(true);
+    expect(abort.mock.contexts).toEqual([pool.session('session-abort', undefined)]);
   });
 
   it('is a no-op when nothing is planning for that session', () => {
-    expect(pool.cancelPlanning('nobody-home')).toBe(false);
+    expect(pool.cancelPlanning('nobody-home', undefined)).toBe(false);
   });
 
   it('finds nothing to abort once the turn settles', async () => {
@@ -414,7 +414,7 @@ describe('OrchestratorPool.cancelPlanning', () => {
 
     await pool.startPlanning('session-settled', 'Add a widget', ['claude-code'], workspace);
 
-    expect(pool.cancelPlanning('session-settled')).toBe(false);
+    expect(pool.cancelPlanning('session-settled', undefined)).toBe(false);
   });
 });
 
@@ -424,12 +424,12 @@ describe('OrchestratorPool isolation messages', () => {
     const sent: string[] = [];
     const ws = { OPEN: 1, readyState: 1, send: (data: string) => sent.push(data) };
     pool.subscribe('s1', ws as never);
-    const broadcast = (pool as unknown as { broadcast(id: string, msg: unknown): void }).broadcast.bind(pool);
+    const broadcast = (pool as unknown as { broadcast(id: string, workspace: string | undefined, msg: unknown): void }).broadcast.bind(pool);
     const blocked = { type: 'isolation_blocked', reason: 'dirty', message: 'Tracked files have uncommitted changes' };
     const handoff = { type: 'isolation_handoff', branch: 'ordewell/r1/integration', baseRef: 'abc123', landed: [{ taskId: 't1', order: 1, title: 'One' }] };
 
-    broadcast('s1', blocked);
-    broadcast('s1', handoff);
+    broadcast('s1', undefined, blocked);
+    broadcast('s1', undefined, handoff);
 
     const frames = sent.map((s) => JSON.parse(s) as { type: string; stream: string; seq: number }).filter((frame) => frame.type !== 'account_limits');
     expect(frames).toEqual([{ ...blocked, stream: expect.any(String), seq: 1 }, { ...handoff, stream: frames[0].stream, seq: 2 }]);
@@ -454,7 +454,7 @@ describe('OrchestratorPool run notices', () => {
     const sent: string[] = [];
     pool.subscribe(meta.id, { OPEN: 1, readyState: 1, send: (data: string) => sent.push(data) } as never);
 
-    await pool.session(meta.id).execute({ command: 'run_task', task: 't2' }, { kind: 'user' }).catch(() => undefined);
+    await pool.session(meta.id, undefined).execute({ command: 'run_task', task: 't2' }, { kind: 'user' }).catch(() => undefined);
 
     const frames = sent.map((s) => JSON.parse(s) as { type: string; level?: string; message?: string });
     expect(frames).toContainEqual(expect.objectContaining({ type: 'notice', level: 'info', message: expect.stringMatching(/workspace root|isolation/i) }));
@@ -470,11 +470,11 @@ describe('OrchestratorPool planning with no enabled runner', () => {
     vi.spyOn(Session.prototype, 'startPlanning').mockResolvedValue({} as LegacyPlanState);
     try {
       await pool.startPlanning('s1', 'first', undefined, workspace);
-      const live = pool.session('s1');
+      const live = pool.session('s1', undefined);
 
       await expect(pool.startPlanning('s1', 'second', ['no-such-runner'], workspace)).rejects.toThrow('None of the requested runners are enabled');
 
-      expect(pool.session('s1')).toBe(live);
+      expect(pool.session('s1', undefined)).toBe(live);
     } finally {
       pool.destroyAll();
       vi.restoreAllMocks();

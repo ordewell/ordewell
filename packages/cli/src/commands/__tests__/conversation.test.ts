@@ -1,13 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import http from 'http';
+import { resolve as resolvePath } from 'path';
 import { ApiClient } from '../../apiClient';
 
 const saved: unknown[][] = [];
+// Resolved as the CLI resolves --workspace: a POSIX-looking path is drive-relative on Windows.
+const WS = resolvePath('/tmp/ws');
+const WS_QUERY = encodeURIComponent(WS);
 
 vi.mock('../../utils', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../utils')>()),
   saveLastSession: (...args: unknown[]) => { saved.push(args); },
-  readLastSession: () => ({ sessionId: 'session-1', goal: 'build me a parser', runners: ['claude-code'], workspace: '/tmp/ws' }),
+  readLastSession: () => ({ sessionId: 'session-1', goal: 'build me a parser', runners: ['claude-code'], workspace: WS }),
 }));
 
 interface Hit { method: string; url: string; body: string }
@@ -65,15 +69,15 @@ describe('ordewell fork', () => {
       : { body: { sessionId: 'session-fork', goal: 'build me a parser', plan: { tasks: [], runners: ['claude-code'] } } });
     const { handleFork } = await import('../conversation');
 
-    const { stdout, exitCode } = await capture(() => handleFork(['--workspace', '/tmp/ws'], new ApiClient(srv.port)));
+    const { stdout, exitCode } = await capture(() => handleFork(['--workspace', WS], new ApiClient(srv.port, WS)));
     srv.close();
 
     expect(exitCode).toBeNull();
     expect(srv.hits.map((h) => `${h.method} ${h.url}`)).toEqual([
-      'POST /api/sessions/session-1/load?workspace=%2Ftmp%2Fws',
-      'POST /api/plans/session-1/conversation/fork',
+      `POST /api/sessions/session-1/load?workspace=${WS_QUERY}`,
+      `POST /api/plans/session-1/conversation/fork?workspace=${WS_QUERY}`,
     ]);
-    expect(saved).toEqual([['session-fork', 'build me a parser', ['claude-code'], '/tmp/ws']]);
+    expect(saved).toEqual([['session-fork', 'build me a parser', ['claude-code'], WS]]);
     expect(stdout).toMatch(/Forked session-1 into session-fork/);
   });
 
@@ -83,7 +87,7 @@ describe('ordewell fork', () => {
       : { status: 409, body: { error: 'Cannot fork the conversation while the planner is answering' } });
     const { handleFork } = await import('../conversation');
 
-    const { stderr, exitCode } = await capture(() => handleFork(['--workspace', '/tmp/ws'], new ApiClient(srv.port)));
+    const { stderr, exitCode } = await capture(() => handleFork(['--workspace', WS], new ApiClient(srv.port, WS)));
     srv.close();
 
     expect(exitCode).toBe(1);
@@ -102,7 +106,7 @@ describe('ordewell rewind', () => {
     const srv = await daemon(({ url }) => url.includes('/load') ? { body: adopted } : { body: { targets } });
     const { handleRewind } = await import('../conversation');
 
-    const { stdout, exitCode } = await capture(() => handleRewind(['--workspace', '/tmp/ws'], new ApiClient(srv.port)));
+    const { stdout, exitCode } = await capture(() => handleRewind(['--workspace', WS], new ApiClient(srv.port, WS)));
     srv.close();
 
     expect(exitCode).toBeNull();
@@ -118,7 +122,7 @@ describe('ordewell rewind', () => {
     const srv = await daemon(({ url }) => url.includes('/load') ? { body: adopted } : { body: { targets: [] } });
     const { handleRewind } = await import('../conversation');
 
-    const { stdout } = await capture(() => handleRewind(['--workspace', '/tmp/ws'], new ApiClient(srv.port)));
+    const { stdout } = await capture(() => handleRewind(['--workspace', WS], new ApiClient(srv.port, WS)));
     srv.close();
 
     expect(stdout).toMatch(/Nothing to rewind to/);
@@ -133,14 +137,14 @@ describe('ordewell rewind', () => {
     const srv = await daemon(({ url }) => url.includes('/load') ? { body: adopted } : { body: rewound });
     const { handleRewind } = await import('../conversation');
 
-    const { stdout, exitCode } = await capture(() => handleRewind(['4', '--workspace', '/tmp/ws'], new ApiClient(srv.port)));
+    const { stdout, exitCode } = await capture(() => handleRewind(['4', '--workspace', WS], new ApiClient(srv.port, WS)));
     srv.close();
 
     expect(exitCode).toBeNull();
-    const rewind = srv.hits.find((h) => h.url.endsWith('/conversation/rewind'))!;
-    expect(rewind.url).toBe('/api/plans/session-1/conversation/rewind');
+    const rewind = srv.hits.find((h) => h.url.includes('/conversation/rewind'))!;
+    expect(rewind.url).toBe(`/api/plans/session-1/conversation/rewind?workspace=${WS_QUERY}`);
     expect(JSON.parse(rewind.body)).toEqual({ index: 4 });
-    expect(saved).toEqual([['session-fork', 'build me a parser', ['claude-code'], '/tmp/ws']]);
+    expect(saved).toEqual([['session-fork', 'build me a parser', ['claude-code'], WS]]);
     expect(stdout).toMatch(/Forked session-1 into session-fork from just before message 4/);
     expect(stdout).toContain('ordewell sessions load session-1');
     expect(stdout).toContain('Streaming\nand resumable after a crash');
@@ -150,7 +154,7 @@ describe('ordewell rewind', () => {
     const srv = await daemon(() => ({ body: {} }));
     const { handleRewind } = await import('../conversation');
 
-    const { stderr, exitCode } = await capture(() => handleRewind([arg, '--workspace', '/tmp/ws'], new ApiClient(srv.port)));
+    const { stderr, exitCode } = await capture(() => handleRewind([arg, '--workspace', WS], new ApiClient(srv.port, WS)));
     srv.close();
 
     expect(exitCode).toBe(1);
@@ -164,7 +168,7 @@ describe('ordewell rewind', () => {
       : { status: 400, body: { error: 'No user message at position 3 to rewind to.' } });
     const { handleRewind } = await import('../conversation');
 
-    const { stderr, exitCode } = await capture(() => handleRewind(['3', '--workspace', '/tmp/ws'], new ApiClient(srv.port)));
+    const { stderr, exitCode } = await capture(() => handleRewind(['3', '--workspace', WS], new ApiClient(srv.port, WS)));
     srv.close();
 
     expect(exitCode).toBe(1);
@@ -178,7 +182,7 @@ describe('ordewell rewind', () => {
       : { status: 409, body: { error: 'Cannot rewind the conversation while the planner is answering' } });
     const { handleRewind } = await import('../conversation');
 
-    const { stderr, exitCode } = await capture(() => handleRewind(['2', '--workspace', '/tmp/ws'], new ApiClient(srv.port)));
+    const { stderr, exitCode } = await capture(() => handleRewind(['2', '--workspace', WS], new ApiClient(srv.port, WS)));
     srv.close();
 
     expect(exitCode).toBe(1);
@@ -194,13 +198,13 @@ describe('ordewell compact retry', () => {
     const srv = await daemon(({ url }) => url.includes('/load') ? { body: { ...adopted, plan: { tasks: [], plannerContextPause: pause } } } : { body: { plan: { tasks: [] } } });
     const { handleCompact } = await import('../conversation');
 
-    const { stdout, exitCode } = await capture(() => handleCompact(['retry', '--workspace', '/tmp/ws'], new ApiClient(srv.port)));
+    const { stdout, exitCode } = await capture(() => handleCompact(['retry', '--workspace', WS], new ApiClient(srv.port, WS)));
     srv.close();
 
     expect(exitCode).toBeNull();
     expect(srv.hits.map((h) => `${h.method} ${h.url}`)).toEqual([
-      'POST /api/sessions/session-1/load?workspace=%2Ftmp%2Fws',
-      'POST /api/plans/session-1/conversation/compact/retry',
+      `POST /api/sessions/session-1/load?workspace=${WS_QUERY}`,
+      `POST /api/plans/session-1/conversation/compact/retry?workspace=${WS_QUERY}`,
     ]);
     expect(stdout).toMatch(/carried the paused turn on/);
   });
@@ -209,7 +213,7 @@ describe('ordewell compact retry', () => {
     const srv = await daemon(({ url }) => url.includes('/load') ? { body: adopted } : { body: { plan: { tasks: [], plannerContextPause: pause } } });
     const { handleCompact } = await import('../conversation');
 
-    const { stderr, exitCode } = await capture(() => handleCompact(['retry', '--workspace', '/tmp/ws'], new ApiClient(srv.port)));
+    const { stderr, exitCode } = await capture(() => handleCompact(['retry', '--workspace', WS], new ApiClient(srv.port, WS)));
     srv.close();
 
     expect(exitCode).toBe(1);
@@ -221,7 +225,7 @@ describe('ordewell compact retry', () => {
     const srv = await daemon(({ url }) => url.includes('/load') ? { body: adopted } : { status: 400, body: { error, code: 'refused' } });
     const { handleCompact } = await import('../conversation');
 
-    const { stderr, exitCode } = await capture(() => handleCompact(['retry', '--workspace', '/tmp/ws'], new ApiClient(srv.port)));
+    const { stderr, exitCode } = await capture(() => handleCompact(['retry', '--workspace', WS], new ApiClient(srv.port, WS)));
     srv.close();
 
     expect(exitCode).toBe(1);
@@ -243,13 +247,13 @@ describe('ordewell compact', () => {
     const srv = await daemon(({ url }) => url.includes('/load') ? { body: adopted } : { body: compacted });
     const { handleCompact } = await import('../conversation');
 
-    const { stdout, exitCode } = await capture(() => handleCompact(['--workspace', '/tmp/ws'], new ApiClient(srv.port)));
+    const { stdout, exitCode } = await capture(() => handleCompact(['--workspace', WS], new ApiClient(srv.port, WS)));
     srv.close();
 
     expect(exitCode).toBeNull();
     expect(srv.hits.map((h) => `${h.method} ${h.url}`)).toEqual([
-      'POST /api/sessions/session-1/load?workspace=%2Ftmp%2Fws',
-      'POST /api/plans/session-1/conversation/compact',
+      `POST /api/sessions/session-1/load?workspace=${WS_QUERY}`,
+      `POST /api/plans/session-1/conversation/compact?workspace=${WS_QUERY}`,
     ]);
     expect(stdout).toMatch(/Condensed session-1/);
     expect(stdout).toContain('Goal: a JSON parser. Streaming chosen.');
@@ -265,7 +269,7 @@ describe('ordewell compact', () => {
     const srv = await daemon(({ url }) => url.includes('/load') ? { body: adopted } : { status, body: { error } });
     const { handleCompact } = await import('../conversation');
 
-    const { stderr, exitCode } = await capture(() => handleCompact(['--workspace', '/tmp/ws'], new ApiClient(srv.port)));
+    const { stderr, exitCode } = await capture(() => handleCompact(['--workspace', WS], new ApiClient(srv.port, WS)));
     srv.close();
 
     expect(exitCode).toBe(1);
@@ -286,7 +290,7 @@ describe('ordewell compact', () => {
     });
     const { handleCompact } = await import('../conversation');
 
-    const { stderr, exitCode } = await capture(() => handleCompact(['--workspace', '/tmp/ws'], new ApiClient(srv.port)));
+    const { stderr, exitCode } = await capture(() => handleCompact(['--workspace', WS], new ApiClient(srv.port, WS)));
     srv.close();
 
     expect(exitCode).toBe(1);
@@ -300,7 +304,7 @@ describe('ordewell compact', () => {
       : { status: 409, body: { error: 'No planner is ready. Pick one with /planner', code: 'planner_not_ready', plannerNotReady } });
     const { handleCompact } = await import('../conversation');
 
-    const { stderr, exitCode } = await capture(() => handleCompact(['--workspace', '/tmp/ws'], new ApiClient(srv.port)));
+    const { stderr, exitCode } = await capture(() => handleCompact(['--workspace', WS], new ApiClient(srv.port, WS)));
     srv.close();
 
     expect(exitCode).toBe(1);
@@ -320,13 +324,13 @@ describe('ordewell resend', () => {
     const srv = await daemon(({ url }) => url.includes('/load') ? { body: adopted } : { body: { cancelled } });
     const { handleResend } = await import('../conversation');
 
-    const { stdout, exitCode } = await capture(() => handleResend(['cancel', '--workspace', '/tmp/ws'], new ApiClient(srv.port)));
+    const { stdout, exitCode } = await capture(() => handleResend(['cancel', '--workspace', WS], new ApiClient(srv.port, WS)));
     srv.close();
 
     expect(exitCode).toBeNull();
     expect(srv.hits.map((h) => `${h.method} ${h.url}`)).toEqual([
-      'POST /api/sessions/session-1/load?workspace=%2Ftmp%2Fws',
-      'POST /api/plans/session-1/converse/resend/cancel',
+      `POST /api/sessions/session-1/load?workspace=${WS_QUERY}`,
+      `POST /api/plans/session-1/converse/resend/cancel?workspace=${WS_QUERY}`,
     ]);
     expect(stdout).toMatch(said);
   });

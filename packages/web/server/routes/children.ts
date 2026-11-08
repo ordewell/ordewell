@@ -16,6 +16,7 @@ import {
 } from '@ordewell/core';
 import type { OrchestratorPool } from '../pool/orchestratorPool';
 import { ChildNotFoundError, failure, jsonObject, refuse } from './errors';
+import { callerWorkspace, sameWorkspace } from './liveSession';
 
 const ABOVE_THIS_PLAN = 'A raise or a force is the plan above this one to give: this request sets neither.';
 
@@ -38,13 +39,17 @@ const CONTROL_REFUSALS: Record<Extract<ChildControlOutcome, { ok: false }>['code
  */
 export function childrenRoute(pool: OrchestratorPool) {
   const router = new Hono();
+  router.use('/:id/children', sameWorkspace(pool, 'id'));
+  router.use('/:id/children/*', sameWorkspace(pool, 'id'));
 
+  // A handler that reads a body finds the child after it: while the body
+  // arrived, the root's id may have come to name another workspace's session.
   const childOf = async (c: Context): Promise<ChildPlanHandle> => {
-    const child = await pool.session(c.req.param('id')!).children.find(c.req.param('childId')!);
+    const child = await pool.session(c.req.param('id')!, callerWorkspace(c)).children.find(c.req.param('childId')!);
     if (!child) throw new ChildNotFoundError();
     return child;
   };
-  const position = (c: Context) => pool.childPosition(c.req.param('id')!, c.req.param('childId')!);
+  const position = (c: Context) => pool.childPosition(c.req.param('id')!, c.req.param('childId')!, callerWorkspace(c));
   const controlled = (c: Context, outcome: ChildControlOutcome) => {
     if (!outcome.ok) return refuse(c, CONTROL_REFUSALS[outcome.code].status, outcome.message, CONTROL_REFUSALS[outcome.code].code);
     return c.json({ message: outcome.message, ...(outcome.id ? { id: outcome.id } : {}) } satisfies ChildTaskControlResponse);
@@ -55,7 +60,7 @@ export function childrenRoute(pool: OrchestratorPool) {
 
   router.get('/:id/children', async (c) => {
     try {
-      return c.json({ children: await pool.session(c.req.param('id')).children.list() } satisfies ChildListResponse);
+      return c.json({ children: await pool.session(c.req.param('id'), callerWorkspace(c)).children.list() } satisfies ChildListResponse);
     } catch (err) {
       return failure(c, err, 'list child plans');
     }
@@ -92,8 +97,8 @@ export function childrenRoute(pool: OrchestratorPool) {
 
   router.post('/:id/children/:childId/message', async (c) => {
     try {
-      const child = await childOf(c);
       const body = await jsonObject<{ message?: unknown }>(c);
+      const child = await childOf(c);
       if (asksAboveItsPlan(body)) return refuse(c, 400, ABOVE_THIS_PLAN, 'refused');
       const { message } = body;
       if (typeof message !== 'string' || !message.trim()) return refuse(c, 400, 'message must be a non-empty string');
@@ -107,8 +112,8 @@ export function childrenRoute(pool: OrchestratorPool) {
 
   router.post('/:id/children/:childId/tasks/:taskId/message', async (c) => {
     try {
-      const child = await childOf(c);
       const body = await jsonObject<{ message?: unknown }>(c);
+      const child = await childOf(c);
       if (asksAboveItsPlan(body)) return refuse(c, 400, ABOVE_THIS_PLAN, 'refused');
       if (typeof body.message !== 'string' || !body.message.trim()) return refuse(c, 400, 'message must be a non-empty string', 'refused');
       return controlled(c, await child.control(c.req.param('taskId'), { kind: 'message', text: body.message }));
@@ -120,8 +125,8 @@ export function childrenRoute(pool: OrchestratorPool) {
   for (const answer of ['approve', 'reject'] as const) {
     router.post(`/:id/children/:childId/tasks/:taskId/checkpoint/${answer}`, async (c) => {
       try {
-        const child = await childOf(c);
         const body = await jsonObject<{ question?: unknown; reason?: unknown }>(c);
+        const child = await childOf(c);
         if (asksAboveItsPlan(body)) return refuse(c, 400, ABOVE_THIS_PLAN, 'refused');
         const { question } = body;
         if (typeof question !== 'string' || !question.trim()) return refuse(c, 400, 'question must be the words the task is waiting on', 'refused');

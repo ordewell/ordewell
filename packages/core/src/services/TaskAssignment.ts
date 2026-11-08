@@ -1,4 +1,3 @@
-import type { IntakeCatalog } from './PlannedTask';
 import type { DiscoveredModel, RunnerId, Task, TaskModelAssignment } from '../models/Task';
 import { clampThinkingEffort, effectiveAllowlist } from './ModelAllowlistResolver';
 import { plannedMode, readOnlyMode, readOnlyRunners, taggedReadOnlyMode, unavailableModeReason, type RunnerModeInfo } from './ModeResolver';
@@ -35,10 +34,6 @@ export interface AssignmentCatalog {
   runnerModes?: Partial<Record<RunnerId, readonly RunnerModeInfo[]>>;
   /** Raw (unfiltered) allowlist, keyed by runner; read through {@link effectiveAllowlist}. */
   perRunnerAllowlist?: Partial<Record<RunnerId, string[]>>;
-  /** Why an edit may not write a delegated task, or null when it may; absent, no node is behind it (`IntakeCatalog`). */
-  delegationRefusal?: string | null;
-  /** Which script tasks an edit adds land sealed (`IntakeCatalog`). */
-  sealsScripts?: IntakeCatalog['sealsScripts'];
   /** Full (true) or Guarded: the mode a derived task lands on unless it is read-only (ADR-0001). Full when absent. */
   autonomousDefault?: boolean;
   /**

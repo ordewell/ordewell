@@ -202,10 +202,10 @@ describe('the question a checkpoint asks', () => {
     const call = ask(question);
     await vi.waitFor(() => expect(get().awaitingReason).toBe('checkpoint'));
 
-    expect(serializeTaskStatus(get(), null, null, [], 0, [], orchestrator.getCheckpointQuestion('t1')).checkpoint).toBe(question);
+    expect(serializeTaskStatus(get(), { checkpoint: orchestrator.getCheckpointQuestion('t1') }).checkpoint).toBe(question);
     orchestrator.rejectCheckpoint('t1', 'no');
     await call;
-    expect(serializeTaskStatus(get(), null, null, [], 0, [], question)).not.toHaveProperty('checkpoint');
+    expect(serializeTaskStatus(get(), { checkpoint: question })).not.toHaveProperty('checkpoint');
   });
 
   it('is refused cleanly when the task is not at a checkpoint', async () => {

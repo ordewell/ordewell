@@ -2,7 +2,7 @@ import { flattenTasks, flattenTasksWithParents, type Task } from '../models/Task
 import { DEFAULT_SCRIPT_TIMEOUT_MS } from '../models/ScriptTask';
 import { betweenRounds, loopRoundOf } from '../models/Loop';
 import { actorAuthority, type ExecutionCommandName, type ExecutionRecord } from '../models/Execution';
-import { UPDATABLE_FIELDS } from './TaskOps';
+import { UPDATABLE_FIELDS } from './TaskEdit';
 import type { ExecutionCommand } from './ExecutionCommands';
 
 /**

@@ -5,13 +5,13 @@ import {
   type RunnersResponse,
 } from '@ordewell/core';
 import { describeConnectionRefused, isConnectionRefused } from '../daemon';
-import { DaemonError, RequestTimeoutError, UnreadableResponseError, WorkspaceInitNeededError, deliveryOf, type ApiClient, type ChildFollow, type SessionFollow } from '../apiClient';
+import { DaemonError, RequestTimeoutError, UnreadableResponseError, WorkspaceInitNeededError, deliveryOf, type ApiClient } from '../apiClient';
 import { normalizeCatalog } from '../catalog';
 import { plannerSwitchRecall, uninstalledPlannerRefusal } from '../plannerModelSwitch';
 import type { Action, Effect } from './reducer';
 import { answerWords, type ChatRestored } from './reducers/shared';
 import type { SessionView } from './state';
-import { inboundFor, forgetInbound } from './inbound';
+import { closeChildLink, openChildLink, sessionLink, shownSession } from './sessionLink';
 
 /**
  * The slice of the daemon client the TUI needs. Derived from `ApiClient` rather
@@ -30,7 +30,7 @@ export type OrdewellApi = Pick<ApiClient,
   | 'reviewRunDiff' | 'mergeRun' | 'discardRun' | 'cleanupRun' | 'continueWithStash' | 'continueWithoutIsolation' | 'resolveConflictAsTask'
   | 'getSettings' | 'updateSettings' | 'updateRunSettings'
   | 'getRunners' | 'setRunnerEnabled' | 'getModels'
-  | 'streamPlanning' | 'respondToApproval' | 'streamExecution' | 'closeExecutionStream' | 'followSession'
+  | 'respondToApproval' | 'followSession'
   | 'listChildren' | 'getChild' | 'getChildTaskLogAttempts' | 'getChildTaskLog' | 'messageChild' | 'messageChildTask' | 'answerChildCheckpoint' | 'followChild'
 >;
 
@@ -243,7 +243,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
         // and the retry can tell (`openingRevived`). `runEffect` lets it go
         // when no retry comes.
         if (isConnectionRefused(err)) {
-          unfollow(deps, sessionId);
+          sessionLink(deps, sessionId).close();
           throw err;
         }
         // What reaches here is a refusal the daemon answered, or a request that
@@ -251,7 +251,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
         // `converse`, the session kept). Neither leaves a conversation a reply
         // could continue, so the id is let go: keeping it would 404 every
         // following message.
-        unfollow(deps, sessionId);
+        sessionLink(deps, sessionId).close();
         dispatch({ type: 'sessionCleared', sessionId });
         // The welcome is not any session: its run settings are the file's again (ADR-0030).
         await reloadSettings(deps);
@@ -277,6 +277,10 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       await readBackSession(deps, effect.sessionId, { opening: false, turnEnded: true });
       return;
 
+    case 'resyncConversation':
+      await resyncConversation(deps, effect.sessionId);
+      return;
+
     case 'sendMessage':
       await converse(deps, effect.sessionId, () => api.sendConversationMessage(effect.sessionId, effect.message));
       return;
@@ -289,7 +293,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       return;
 
     case 'execute':
-      await withExecutionStream(deps, effect.sessionId, () => api.executePlan(effect.sessionId));
+      await withRun(deps, effect.sessionId, () => api.executePlan(effect.sessionId));
       return;
 
     // The seam keeps its own line of a Stop in the timeline and the stream
@@ -323,7 +327,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       const request = () => api.execute(sessionId, effect.confirmed ? confirmedOverride(command, effect.confirmed.seen) : command);
       // A spawning action (see `taskActionEffect`) reports its progress the same
       // way a whole run does, so it needs the same stream open around it.
-      await (effect.watch ? withExecutionStream(deps, sessionId, request) : request());
+      await (effect.watch ? withRun(deps, sessionId, request) : request());
       await refreshPlan(deps, sessionId);
       return;
     }
@@ -347,7 +351,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       const request = async (): Promise<void> => {
         said = (await api.answerEscalation(sessionId, { id, option, ...(note ? { note } : {}), ...(confirmed ? { confirmed } : {}) })).message;
       };
-      await (effect.watch ? withExecutionStream(deps, sessionId, request) : request());
+      await (effect.watch ? withRun(deps, sessionId, request) : request());
       await refreshPlan(deps, sessionId);
       if (said) dispatch({ type: 'notice', message: said });
       return;
@@ -375,10 +379,11 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
     case 'respondApproval': {
       try {
         await api.respondToApproval(effect.sessionId, effect.approvalId, effect.granted);
-      } catch {
+      } catch (err) {
         // The planner's own timeout denies an unanswered request, so a lost
-        // answer degrades to a denial rather than a stuck session.
-        dispatch({ type: 'failed', message: 'Could not deliver the approval answer: the planner will treat it as denied.', sessionId: effect.sessionId });
+        // answer degrades to a denial rather than a stuck session. A refusal
+        // is the daemon's word (answered elsewhere, timed out), not a lost answer.
+        dispatch({ type: 'failed', message: deliveryOf(err) === 'answered' ? (err as Error).message : 'Could not deliver the approval answer: the planner will treat it as denied.', sessionId: effect.sessionId });
       }
       return;
     }
@@ -387,10 +392,11 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
     case 'answerTaskApproval': {
       try {
         await api.respondToApproval(effect.sessionId, effect.approvalId, effect.answer);
-      } catch {
+      } catch (err) {
         // A runner's request never times out, so a lost answer leaves it
-        // waiting rather than denied.
-        dispatch({ type: 'failed', message: 'Could not deliver the answer: the task is still waiting for approval.', sessionId: effect.sessionId });
+        // waiting rather than denied. A refusal says the opposite: the request
+        // is settled, and the daemon says how.
+        dispatch({ type: 'failed', message: deliveryOf(err) === 'answered' ? (err as Error).message : 'Could not deliver the answer: the task is still waiting for approval.', sessionId: effect.sessionId });
       }
       return;
     }
@@ -439,7 +445,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       await openChildLink(deps, effect.rootId, effect.childId);
       return;
     case 'closeChild':
-      closeChildLink(deps, effect.childId);
+      closeChildLink(deps.api, effect.childId);
       return;
     case 'readChild':
       await readChild(deps, effect.rootId, effect.childId);
@@ -480,7 +486,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
     case 'continueTask': {
       const { sessionId, taskId, text } = effect;
       const request = () => api.execute(sessionId, { command: 'retry_task', task: taskId, from: 'session', message: text });
-      await (effect.watch ? withExecutionStream(deps, sessionId, request) : request());
+      await (effect.watch ? withRun(deps, sessionId, request) : request());
       await refreshPlan(deps, sessionId);
       return;
     }
@@ -667,20 +673,16 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
 
     case 'loadSession': {
       // Followed first: a session still running goes on reporting while it loads.
-      const shown = follows.get(deps.api)?.sessionId;
+      const shown = shownSession(deps.api);
       // The daemon greets a live session's socket with its run before this
       // session is the one on screen, where the reducer would drop it as stale;
       // it is held, with every broadcast after it, until the session is on
       // screen and drawn from its transcript — which holds no approval card,
       // so the requests the snapshot says are waiting go on after it.
-      const inbound = inboundFor(deps.api, deps.dispatch, effect.sessionId);
+      const link = sessionLink(deps, effect.sessionId);
+      const { inbound } = link;
       inbound.holdSnapshot();
-      try {
-        await follow(deps, effect.sessionId);
-      } catch (err) {
-        inbound.releaseSnapshot(false);
-        throw err;
-      }
+      await link.ensure();
       // Adopting registers the session with the daemon, which is what makes the
       // restored plan executable — `getSession` alone only reads the file.
       let adopted: Awaited<ReturnType<OrdewellApi['adoptSession']>>;
@@ -689,8 +691,8 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       } catch (err) {
         inbound.releaseSnapshot(false);
         // The TUI stays on the session it showed, so it goes on following that one.
-        if (shown) await follow(deps, shown);
-        else unfollow(deps, effect.sessionId);
+        if (shown) await sessionLink(deps, shown).ensure();
+        else link.close();
         throw err;
       }
       const { plan, goal, run } = adopted;
@@ -718,7 +720,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
     // catching up — the original session is not closed: it may be running.
     case 'forkConversation': {
       const fork = await api.forkConversation(effect.sessionId);
-      await follow(deps, fork.sessionId);
+      await sessionLink(deps, fork.sessionId).ensure();
       dispatch({ type: 'sessionForked', sessionId: fork.sessionId, goal: fork.goal });
       dispatch(restoredChat(fork.plan, fork.sessionId));
       dispatch({ type: 'planUpdated', plan: fork.plan, sessionId: fork.sessionId });
@@ -741,7 +743,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
     // rewound message comes back into the input, to edit and send again.
     case 'rewindConversation': {
       const fork = await api.rewindConversation(effect.sessionId, effect.index);
-      await follow(deps, fork.sessionId);
+      await sessionLink(deps, fork.sessionId).ensure();
       dispatch({ type: 'sessionForked', sessionId: fork.sessionId, goal: fork.goal });
       dispatch(restoredChat(fork.plan, fork.sessionId));
       dispatch({ type: 'planUpdated', plan: fork.plan, sessionId: fork.sessionId });
@@ -768,12 +770,11 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
     // would have: the plan, whose transcript holds the summary. Nothing is
     // redrawn, which would drop the reader's place.
     case 'compactConversation': {
-      const inbound = inboundFor(deps.api, deps.dispatch, effect.sessionId);
-      const stream = api.streamPlanning(effect.sessionId, inbound.planning());
+      const link = sessionLink(deps, effect.sessionId);
       let plan: unknown;
       let lost: string | null = null;
       try {
-        await Promise.all([stream.ready, follow(deps, effect.sessionId)]);
+        await link.ensure();
         const sentAt = Date.now();
         try {
           ({ plan } = await api.compactConversation(effect.sessionId));
@@ -782,8 +783,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
           lost = describeLoss(err, Date.now() - sentAt);
         }
       } finally {
-        inbound.flush();
-        stream.close();
+        link.inbound.flush();
       }
       if (lost !== null) {
         await settleLostReply(deps, effect.sessionId, { opening: false, reason: lost });
@@ -834,7 +834,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
     // the blocked run's, which stayed open to show the ops tasks still running.
     case 'isolationContinue': {
       const { sessionId } = effect;
-      await withExecutionStream(deps, sessionId, () => effect.mode === 'stash' ? api.continueWithStash(sessionId) : api.continueWithoutIsolation(sessionId));
+      await withRun(deps, sessionId, () => effect.mode === 'stash' ? api.continueWithStash(sessionId) : api.continueWithoutIsolation(sessionId));
       await refreshPlan(deps, sessionId);
       return;
     }
@@ -843,7 +843,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
     case 'resolveConflict': {
       const { sessionId, taskId } = effect;
       const request = () => api.resolveConflictAsTask(sessionId, taskId);
-      await (effect.watch ? withExecutionStream(deps, sessionId, request) : request());
+      await (effect.watch ? withRun(deps, sessionId, request) : request());
       await refreshPlan(deps, sessionId);
       dispatch({ type: 'notice', message: 'Added a task that merges the conflicted branch by hand. It starts once a slot is free; when it lands, the conflicted task lands through it.' });
       return;
@@ -853,8 +853,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       const { ok } = await api.deleteSession(effect.sessionId, workspace);
       await loadSessions(deps);
       // The session is gone: a reconnect would open a socket on nothing.
-      if (ok) unfollow(deps, effect.sessionId);
-      forgetInbound(deps.api, effect.sessionId);
+      if (ok) sessionLink(deps, effect.sessionId).close();
       if (ok) dispatch({ type: 'sessionDeleted', sessionId: effect.sessionId });
       dispatch(ok
         ? { type: 'notice', message: `Deleted ${effect.sessionId}.` }
@@ -868,8 +867,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       return;
 
     case 'closeSession':
-      unfollow(deps, effect.sessionId);
-      forgetInbound(deps.api, effect.sessionId);
+      sessionLink(deps, effect.sessionId).close();
       // Local state already moved on; a failure here must not surface as an
       // error in the new session's transcript.
       try {
@@ -966,62 +964,6 @@ function copySelection(deps: EffectDeps, text: string): void {
 
 // ── Shared steps ─────────────────────────────────────────────────────────────
 
-/**
- * Runs a request that spawns runner work with the session's execution stream
- * live around it, and stays until the run settles. The stream is subscribed
- * *before* the request because the orchestrator may launch immediately: a
- * status_update emitted before the socket is listening is simply lost, which is
- * how a started task ended up with no running icon.
- */
-async function withExecutionStream(
-  deps: EffectDeps,
-  sessionId: string,
-  request: () => Promise<unknown>,
-): Promise<void> {
-  await follow(deps, sessionId);
-  const open = runStreamsOf(deps.api);
-  open.set(sessionId, (open.get(sessionId) ?? 0) + 1);
-  try {
-    await streamRun(deps, sessionId, request);
-  } finally {
-    const left = (open.get(sessionId) ?? 1) - 1;
-    if (left > 0) open.set(sessionId, left);
-    else open.delete(sessionId);
-  }
-}
-
-async function streamRun(
-  deps: EffectDeps,
-  sessionId: string,
-  request: () => Promise<unknown>,
-): Promise<void> {
-  let settleReady: (error?: Error) => void = () => {};
-  const streamReady = new Promise<void>((resolve, reject) => {
-    settleReady = (error) => error ? reject(error) : resolve();
-  });
-  const inbound = inboundFor(deps.api, deps.dispatch, sessionId);
-  const stream = deps.api.streamExecution(sessionId, inbound.execution(), settleReady);
-  // Surface a failed connection while it is still being established.
-  void stream.catch(settleReady);
-  try {
-    await streamReady;
-    await request();
-  } catch (err) {
-    // Nothing else holds this socket; left open it outlives the failed run.
-    // Closed by handle: a newer stream on this session is not ours to end.
-    deps.api.closeExecutionStream(stream);
-    throw err;
-  }
-  if (await stream === 'lost') deps.dispatch({ type: 'executionLost', sessionId });
-}
-
-// ── Following the session ────────────────────────────────────────────────────
-
-const follows = new WeakMap<object, { sessionId: string; follow: SessionFollow; opened: boolean }>();
-const runStreams = new WeakMap<object, Map<string, number>>();
-/** Consecutive reconnects that failed before opening, for the backoff. */
-const followFailures = new WeakMap<object, number>();
-const followRetryTimers = new WeakMap<object, { sessionId: string; timer: ReturnType<typeof setTimeout> }>();
 /** Per client, the newest preview read it started; answers carry the number they answer. */
 const previewReads = new WeakMap<object, number>();
 /** Per client, the newest settings read it started; an older answer must not paint over a newer one (ADR-0030). */
@@ -1038,130 +980,6 @@ function nextSettingsRead(api: object): number {
 /** One settings answer, numbered so an older read cannot replace a newer one. */
 function dispatchSettings(deps: EffectDeps, settings: Partial<SettingsAnswer>, sessionId?: string, read = nextSettingsRead(deps.api)): void {
   deps.dispatch({ type: 'settingsLoaded', settings, read, ...(sessionId ? { sessionId } : {}) });
-}
-const FOLLOW_RETRY_MS = 500;
-const FOLLOW_RETRY_MAX_MS = 8_000;
-
-function runStreamsOf(api: object): Map<string, number> {
-  let open = runStreams.get(api);
-  if (!open) {
-    open = new Map();
-    runStreams.set(api, open);
-  }
-  return open;
-}
-
-/** Drop a pending reconnect — the api's own, or only the one for `sessionId`. Says whether one went. */
-function cancelFollowRetry(api: object, sessionId?: string): boolean {
-  const pending = followRetryTimers.get(api);
-  if (pending === undefined || (sessionId !== undefined && pending.sessionId !== sessionId)) return false;
-  clearTimeout(pending.timer);
-  followRetryTimers.delete(api);
-  return true;
-}
-
-/**
- * Reopen a follow the daemon dropped, backing off while it stays down. The
- * session the TUI shows must keep following it: a run started by the daemon's
- * own timer or by another client broadcasts to sockets only, so an idle TUI
- * that gave up would never see it. Timers are unref'd, so a pending reconnect
- * does not hold the process open.
- */
-function scheduleFollowRetry(deps: EffectDeps, sessionId: string, failures: number): void {
-  cancelFollowRetry(deps.api);
-  const delay = Math.min(FOLLOW_RETRY_MS * 2 ** Math.min(failures, 4), FOLLOW_RETRY_MAX_MS);
-  const timer = setTimeout(() => {
-    followRetryTimers.delete(deps.api);
-    // A send, a load or a new session reopened it meanwhile: that follow owns the session now.
-    if (follows.get(deps.api) !== undefined) return;
-    void follow(deps, sessionId, true).catch(() => {});
-  }, delay);
-  timer.unref?.();
-  followRetryTimers.set(deps.api, { sessionId, timer });
-}
-
-/**
- * Holds the TUI's one standing subscription, to the session it shows. A run's
- * own stream exists only around a request this surface made, and the planning
- * one only around a turn; a run started by anyone else — autorun as the turn
- * ends, the planner's `run_plan`, the supervisor after the last task settled —
- * was broadcast into nothing. Ensured before each request, for the reason
- * `withExecutionStream` subscribes first; anchored to the client, like
- * `inboundFor`, so a new daemon connection starts clean.
- */
-async function follow(deps: EffectDeps, sessionId: string, restored = false): Promise<void> {
-  const current = follows.get(deps.api);
-  if (current?.sessionId === sessionId) {
-    await current.follow.ready;
-    return;
-  }
-  current?.follow.close();
-  cancelFollowRetry(deps.api);
-  const inbound = inboundFor(deps.api, deps.dispatch, sessionId);
-  const entry = { sessionId, follow: deps.api.followSession(sessionId, inbound.execution()), opened: false };
-  follows.set(deps.api, entry);
-  void entry.follow.ended.then((outcome) => {
-    if (follows.get(deps.api) !== entry) return;
-    follows.delete(deps.api);
-    if (outcome !== 'lost') return;
-    const failures = followFailures.get(deps.api) ?? 0;
-    // One notice per outage: a daemon that stays down would otherwise add a
-    // line every backoff interval. A run's own stream says so itself when it
-    // goes with the daemon; two notices for one loss is noise.
-    if (failures === 0 && !runStreamsOf(deps.api).has(sessionId)) deps.dispatch({ type: 'followLost', sessionId });
-    followFailures.set(deps.api, failures + 1);
-    scheduleFollowRetry(deps, sessionId, failures);
-  });
-  entry.opened = await entry.follow.ready;
-  if (!entry.opened) return;
-  followFailures.delete(deps.api);
-  // A turn whose reply was lost has no `planner_turn_ended` to settle it; a
-  // reconnect is the moment the session can be read back for its end.
-  if (restored) deps.dispatch({ type: 'followRestored', sessionId });
-}
-
-function unfollow(deps: EffectDeps, sessionId: string): void {
-  // A follow that was already lost leaves no entry behind, only its retry. That
-  // timer must not reopen a session the user is closing, so it is cancelled
-  // whether or not there is still a socket to close.
-  const retried = cancelFollowRetry(deps.api, sessionId);
-  const current = follows.get(deps.api);
-  if (current?.sessionId !== sessionId) {
-    if (retried) followFailures.delete(deps.api);
-    return;
-  }
-  follows.delete(deps.api);
-  followFailures.delete(deps.api);
-  current.follow.close();
-}
-
-const WENT_WITH_ITS_ROOT = 'The session above this plan closed, so this plan closed with it.';
-const NO_LONGER_LISTED = 'That plan is no longer in this session.';
-
-/** The socket of one child plan on screen. */
-interface ChildLink {
-  rootId: string;
-  childId: string;
-  follow: ChildFollow | null;
-  timer: ReturnType<typeof setTimeout> | null;
-  closed: boolean;
-  failures: number;
-}
-
-/**
- * The plans on screen follow one socket each, not one standing `follow`: a plan
- * a person went down from keeps its socket, so Esc lands on one that kept up.
- * Anchored to the client, like `inboundFor`, so a new daemon connection starts clean.
- */
-const childLinks = new WeakMap<object, Map<string, ChildLink>>();
-
-function childLinksOf(api: object): Map<string, ChildLink> {
-  let links = childLinks.get(api);
-  if (!links) {
-    links = new Map();
-    childLinks.set(api, links);
-  }
-  return links;
 }
 
 async function refusable(deps: EffectDeps, childId: string, call: () => Promise<unknown>, text?: string): Promise<void> {
@@ -1181,102 +999,14 @@ async function readChild(deps: EffectDeps, rootId: string, childId: string): Pro
   });
 }
 
-function retryChildLink(deps: EffectDeps, link: ChildLink): void {
-  // A failed read and its socket's close can both ask, and one link holds one socket.
-  if (link.timer) return;
-  const delay = Math.min(FOLLOW_RETRY_MS * 2 ** Math.min(link.failures, 4), FOLLOW_RETRY_MAX_MS);
-  link.failures += 1;
-  link.timer = setTimeout(() => {
-    link.timer = null;
-    if (!link.closed) void connectChildLink(deps, link).catch(() => {});
-  }, delay);
-  link.timer.unref?.();
-}
-
 /**
- * What each close asks for. 4404 is an unknown child or a root the daemon has
- * not loaded, which only a read tells apart: the client's read loads the root.
+ * A request that spawns runner work, with the session's socket listening
+ * before it goes out — the orchestrator may launch at once, and a
+ * status_update emitted before the socket listened is lost, which is how a
+ * started task ended up with no running icon — and waited on until the run settles.
  */
-async function childLinkEnded(deps: EffectDeps, link: ChildLink, code: number | null): Promise<void> {
-  if (link.closed || code === null) return;
-  const { dispatch } = deps;
-  const { rootId, childId } = link;
-  const gone = (message: string) => { closeChildLink(deps, childId); dispatch({ type: 'childGone', sessionId: childId, message }); };
-  if (code === 1001) {
-    gone(WENT_WITH_ITS_ROOT);
-    return;
-  }
-  if (code === 4404) {
-    const read = await deps.api.getChild(rootId, childId).then(() => 'there' as const, (err: unknown) => err);
-    if (read instanceof DaemonError && read.code === 'child_not_found') {
-      gone(NO_LONGER_LISTED);
-      return;
-    }
-  } else if (code !== 1012 && link.failures === 0) {
-    // One notice per outage, as `follow` does. A replaced root is back at once.
-    dispatch({ type: 'followLost', sessionId: childId });
-  }
-  if (!link.closed) retryChildLink(deps, link);
-}
-
-/**
- * Socket first, then the read, as `loadSession` orders them: nothing the plan
- * does between the two is missed, and the read lands before any frame after it.
- */
-async function connectChildLink(deps: EffectDeps, link: ChildLink): Promise<void> {
-  const { rootId, childId } = link;
-  const inbound = inboundFor(deps.api, deps.dispatch, childId);
-  inbound.holdSnapshot();
-  const follow = deps.api.followChild(rootId, childId, inbound.planning());
-  link.follow = follow;
-  void follow.ended.then((code) => childLinkEnded(deps, link, code)).catch(() => {});
-  if (!(await follow.ready)) {
-    inbound.releaseSnapshot(false);
-    return;
-  }
-  let read = false;
-  try {
-    const view = await deps.api.getChild(rootId, childId);
-    if (link.closed) return;
-    deps.dispatch({ type: 'childOpened', sessionId: childId, view });
-    read = true;
-    link.failures = 0;
-  } catch (err) {
-    if (link.closed || link.follow !== follow) return;
-    if (err instanceof DaemonError && err.code === 'child_not_found') {
-      closeChildLink(deps, childId);
-      deps.dispatch({ type: 'childGone', sessionId: childId, message: NO_LONGER_LISTED });
-      return;
-    }
-    // An open socket never asks again, and its frames would land on a plan
-    // missing what this read held. `followLost` is said once by the reducer,
-    // and the close that led here may not have said it at all.
-    follow.close();
-    deps.dispatch({ type: 'followLost', sessionId: childId });
-    retryChildLink(deps, link);
-    throw err;
-  } finally {
-    inbound.releaseSnapshot(read);
-  }
-}
-
-async function openChildLink(deps: EffectDeps, rootId: string, childId: string): Promise<void> {
-  const links = childLinksOf(deps.api);
-  if (links.has(childId)) return;
-  const link: ChildLink = { rootId, childId, follow: null, timer: null, closed: false, failures: 0 };
-  links.set(childId, link);
-  await connectChildLink(deps, link);
-}
-
-function closeChildLink(deps: EffectDeps, childId: string): void {
-  const links = childLinksOf(deps.api);
-  const link = links.get(childId);
-  if (!link) return;
-  link.closed = true;
-  if (link.timer) clearTimeout(link.timer);
-  link.follow?.close();
-  links.delete(childId);
-  forgetInbound(deps.api, childId);
+function withRun(deps: EffectDeps, sessionId: string, request: () => Promise<unknown>): Promise<void> {
+  return sessionLink(deps, sessionId).withRun(request);
 }
 
 /**
@@ -1284,15 +1014,18 @@ function closeChildLink(deps: EffectDeps, childId: string): void {
  * is in flight, and the reply is either a question or a plan.
  */
 async function converse(deps: EffectDeps, sessionId: string, call: () => Promise<unknown>, opening = false): Promise<void> {
-  const inbound = inboundFor(deps.api, deps.dispatch, sessionId);
-  const stream = deps.api.streamPlanning(sessionId, inbound.planning());
+  const link = sessionLink(deps, sessionId);
+  const { inbound } = link;
   let lost: string | null = null;
   // A reply that arrived but could not be used or shown. The daemon took the
   // turn and answered it, so it is its own error, not a loss: the session stays.
   let unusable: { err: unknown; shown: boolean } | null = null;
 
   try {
-    await Promise.all([stream.ready, follow(deps, sessionId)]);
+    // Listening before the call: the daemon broadcasts the turn's start the
+    // moment the call reaches it. A socket that cannot open costs the progress
+    // display, not the turn.
+    await link.ensure();
     const sentAt = Date.now();
     let plan: unknown;
     try {
@@ -1319,7 +1052,6 @@ async function converse(deps: EffectDeps, sessionId: string, call: () => Promise
     }
   } finally {
     inbound.flush();
-    stream.close();
   }
   if (unusable) {
     const { err, shown } = unusable;
@@ -1388,7 +1120,7 @@ async function readBackSession(deps: EffectDeps, sessionId: string, how: { openi
     await reloadSettings(deps, sessionId);
   } catch (err) {
     if (err instanceof DaemonError && err.code === 'session_not_found' && how.opening) {
-      unfollow(deps, sessionId);
+      sessionLink(deps, sessionId).close();
       deps.dispatch({ type: 'sessionCleared', sessionId });
       deps.dispatch({ type: 'failed', message: 'The reply was lost and the server holds no session for it. Send your goal again to start over.', code: err.code, turn: true, sessionId });
       return;
@@ -1398,6 +1130,18 @@ async function readBackSession(deps: EffectDeps, sessionId: string, how: { openi
       return;
     }
     deps.dispatch({ type: 'notice', level: 'error', message: `Could not read the session back from the server: ${explain(err)}`, sessionId });
+  }
+}
+
+/** The stream skipped a broadcast: the conversation, plan and run are read again from the daemon, without disturbing anything it runs. */
+async function resyncConversation(deps: EffectDeps, sessionId: string): Promise<void> {
+  try {
+    const { plan, run } = await deps.api.getSession(sessionId, deps.workspace);
+    deps.dispatch({ type: 'conversationResynced', chat: restoredChat(plan, sessionId), sessionId });
+    deps.dispatch({ type: 'planRefreshed', plan, sessionId });
+    if (run) deps.dispatch({ type: 'runSnapshot', view: run, sessionId });
+  } catch (err) {
+    deps.dispatch({ type: 'notice', level: 'error', message: `Missed part of this session and could not read it back from the server: ${explain(err)}`, sessionId });
   }
 }
 

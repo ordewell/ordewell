@@ -9,7 +9,6 @@ import { modelsRoute } from './routes/models';
 import { workspacesRoute } from './routes/workspaces';
 import { approvalsRoute } from './routes/approvals';
 import { settingsRoute } from './routes/settings';
-import { commandsRoute } from './routes/commands';
 import { filesRoute, gitRoute, taskDiffRoute } from './routes/workspaceRead';
 import { fileWriteRoute, gitWriteRoute, mergePreflightRoute } from './routes/workspaceWrite';
 import { WebConfig } from './adapters/WebConfig';
@@ -83,13 +82,15 @@ export function createApp(
 
   app.route('/api/sessions', sessionsRoute(pool));
   app.route('/api/sessions', childrenRoute(pool));
-  app.route('/api/plans', plansRoute(pool));
+  // A run's reads come first: they read the named workspace's saved run, never
+  // the pool (ADR-0064 R2), and Hono runs handlers in the order they were
+  // mounted, so the plans router's live-session guard never reaches them.
   app.route('/api/plans', taskDiffRoute(reader));
   app.route('/api/plans', mergePreflightRoute(reader));
+  app.route('/api/plans', plansRoute(pool));
   app.route('/api/runners', runnersRoute(pool));
   app.route('/api/models', modelsRoute(pool));
   app.route('/api/settings', settingsRoute(pool));
-  app.route('/api/commands', commandsRoute());
   app.route('/api/workspaces', workspacesRoute(pool));
   app.route('/api/approvals', approvalsRoute(pool));
   // The user's reads of files and git (ADR-0064): the reader, never the pool.

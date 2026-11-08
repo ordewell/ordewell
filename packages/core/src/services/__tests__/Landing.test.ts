@@ -25,7 +25,7 @@ async function setup(opts: { isolation?: FakeWorktreeIsolation; conflictRepairAt
   store.load(opts.tasks ?? [], ['claude-code']);
   await runs.decide(async () => undefined);
   const landing = new Landing({ runs, config, tasks: store, ...(opts.plannedWith ? { plannedWith: opts.plannedWith } : {}) });
-  const prepare = (t: Task) => runs.attemptCwd(t, 'fresh');
+  const prepare = (t: Task) => runs.attemptCwd(t, 'fresh', runs.decision);
   const record = (taskId: string) => runs.current?.tasks[taskId];
   return { landing, runs, isolation, listener, store, prepare, record };
 }
@@ -71,7 +71,7 @@ describe('Landing', () => {
     it('lands nothing from a read-only attempt: its worktree goes, whatever it changed (ADR-0046)', async () => {
       const { landing, isolation, runs, record } = await setup();
       const t1 = task('t1', 1);
-      await runs.attemptCwd(t1, 'readOnly');
+      await runs.attemptCwd(t1, 'readOnly', runs.decision);
       expect(record('t1')?.readOnly).toBe(true);
 
       const outcome = await landing.landPassed(t1, { worktree: true, kind: READ_ONLY });
@@ -86,7 +86,7 @@ describe('Landing', () => {
     it('lands nothing from a read-only task the user marks complete, and lets its worktree go', async () => {
       const { landing, isolation, runs, record } = await setup();
       const t1 = task('t1', 1);
-      await runs.attemptCwd(t1, 'readOnly');
+      await runs.attemptCwd(t1, 'readOnly', runs.decision);
 
       expect(await landing.landVouched(t1)).toEqual({ kind: 'nothing-to-land', messages: [] });
       expect(isolation.taskIdsFor('integrate')).toEqual([]);
@@ -186,7 +186,7 @@ describe('Landing', () => {
   describe('a conflict repair', () => {
     async function repairing(opts: { conflictRepairAttempts?: number; commit?: HandoffCommit; plannedWith?: () => boolean } = {}) {
       const env = await conflicted(opts);
-      await env.runs.attemptCwd(env.t1, 'repair');
+      await env.runs.attemptCwd(env.t1, 'repair', env.runs.decision);
       return env;
     }
 
@@ -263,7 +263,7 @@ describe('Landing', () => {
 
       expect(await landing.settleRepair(t1, passed, current)).toMatchObject({ kind: 'repair-needed', repair: { n: 2, limit: 2 } });
 
-      await runs.attemptCwd(t1, 'repair');
+      await runs.attemptCwd(t1, 'repair', runs.decision);
       const outcome = await landing.settleRepair(t1, passed, current);
       expect(outcome).toMatchObject({ kind: 'awaiting_user', reason: 'conflict' });
       expect(outcome.messages.at(-1)).toEqual({ level: 'info', text: 'Task "Task t1" has had 2 of its 2 conflict repairs, so its conflict waits for you.', repairLog: true });

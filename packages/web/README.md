@@ -21,7 +21,7 @@ ordewell web --daemon   # background; logs to ~/.ordewell/server.log
 ## Routes
 
 `/api/sessions`, `/api/plans`, `/api/runners`, `/api/models`, `/api/settings`,
-`/api/commands`, `/api/workspaces`, `/api/approvals`, plus a WebSocket stream
+`/api/workspaces`, `/api/approvals`, plus a WebSocket stream
 for live planner and execution events. Execution controls (run, stop or retry a
 task, skip, mark complete, message) are one `POST /api/plans/:id/execute-command`
 whose body is core's `ExecutionCommand`. Mark complete and Mark not done on an

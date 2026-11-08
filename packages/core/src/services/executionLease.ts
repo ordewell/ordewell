@@ -1,6 +1,6 @@
 import type { PreviousWork } from '../interfaces/IWorktreeIsolation';
 import type { RunnerId, Task } from '../models/Task';
-import type { AttemptIntent } from './IsolationRunController';
+import type { AttemptIntent, IsolationDecision } from './IsolationRunController';
 
 /*
  * The execution lease (ADR-0059): where a session runs, behind one seam, as
@@ -60,7 +60,21 @@ export interface LeaseRequest {
 }
 
 /** Where a lease puts its session. */
-export type LeaseWorkspace = { kind: 'checkout' } | { kind: 'worktree'; intent: AttemptIntent };
+export type LeaseWorkspaceIntent = { kind: 'checkout' } | { kind: 'worktree'; intent: AttemptIntent };
+
+export type LeaseWorkspace = { kind: 'checkout' } | { kind: 'worktree'; intent: AttemptIntent; decision: IsolationDecision };
+
+/**
+ * The run's isolation decision closed or changed while its workspace was being
+ * prepared, so this lease will not open it. The caller lets that workspace go:
+ * a worktree it never received is otherwise left active in the run.
+ */
+export class LeaseWorkspacePreparedError extends Error {
+  constructor(message: string, readonly keep: boolean) {
+    super(message);
+    this.name = 'LeaseWorkspacePreparedError';
+  }
+}
 
 export interface LeaseSpec {
   /** The attempt's task, as the claim read it; a planner's lease has none. */

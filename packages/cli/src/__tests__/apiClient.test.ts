@@ -58,9 +58,30 @@ describe('ApiClient', () => {
     await new ApiClient(srv.port, '/work/app').execute('session-1', { command: 'retry_task', task: 't1', from: 'fresh' });
 
     expect(hits).toEqual([
-      'POST /api/plans/session-1/execute-command',
+      'POST /api/plans/session-1/execute-command?workspace=%2Fwork%2Fapp',
       'POST /api/sessions/session-1/load?workspace=%2Fwork%2Fapp',
-      'POST /api/plans/session-1/execute-command',
+      'POST /api/plans/session-1/execute-command?workspace=%2Fwork%2Fapp',
+    ]);
+  });
+
+  it('names its workspace on a run, a stop and a close, so the daemon acts on no other project\'s session of the id', async () => {
+    const hits: string[] = [];
+    const srv = await startCustomServer((req, res) => {
+      hits.push(`${req.method} ${req.url}`);
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ ok: true, status: 'running' }));
+    });
+    servers.push(srv);
+    const client = new ApiClient(srv.port, '/work/b');
+
+    await client.executePlan('s1');
+    await client.stopExecution('s1');
+    await client.closeSession('s1');
+
+    expect(hits).toEqual([
+      'POST /api/plans/s1/execute?workspace=%2Fwork%2Fb',
+      'POST /api/plans/s1/stop?workspace=%2Fwork%2Fb',
+      'POST /api/sessions/s1/close?workspace=%2Fwork%2Fb',
     ]);
   });
 
@@ -82,8 +103,8 @@ describe('ApiClient', () => {
     expect(await client.answerEscalation('session-1', { id: 'failed:t1:1', option: 'retry' })).toEqual({ ok: true, message: 'Retrying.' });
 
     expect(hits).toEqual([
-      'GET /api/plans/session-1/escalations ',
-      'POST /api/plans/session-1/escalations/answer {"id":"failed:t1:1","option":"retry"}',
+      'GET /api/plans/session-1/escalations?workspace=%2Fwork%2Fapp ',
+      'POST /api/plans/session-1/escalations/answer?workspace=%2Fwork%2Fapp {"id":"failed:t1:1","option":"retry"}',
     ]);
   });
 
@@ -199,9 +220,9 @@ describe('ApiClient', () => {
       res.end(JSON.stringify({ plan: { tasks: [] } }));
     });
     servers.push(srv);
-    const client = new ApiClient(srv.port);
+    const client = new ApiClient(srv.port, '/w');
     const result = await client.generatePlan('goal', undefined, undefined, 'session-fixed-id');
-    expect(requestedUrl).toBe('/api/plans/session-fixed-id/generate');
+    expect(requestedUrl).toBe('/api/plans/session-fixed-id/generate?workspace=%2Fw');
     expect(result.sessionId).toBe('session-fixed-id');
   });
 
@@ -386,11 +407,11 @@ describe('ApiClient — endpoints the TUI drives', () => {
     });
     servers.push(server);
 
-    await new ApiClient(server.port).updateTask('s1', 't1', { thinkingEffort: 'high' });
+    await new ApiClient(server.port, '/w').updateTask('s1', 't1', { title: 'Renamed' });
     expect(seen).toEqual({
       method: 'PUT',
-      url: '/api/plans/s1/tasks/t1',
-      body: { thinkingEffort: 'high' },
+      url: '/api/plans/s1/tasks/t1?workspace=%2Fw',
+      body: { title: 'Renamed' },
     });
   });
 
@@ -588,14 +609,14 @@ describe('ApiClient — adopting a saved session', () => {
       });
     });
     servers.push(srv);
-    const client = new ApiClient(srv.port);
+    const client = new ApiClient(srv.port, '/w');
 
     expect(await client.execute('s1', { command: 'message_task', task: 't1', text: 'use Postgres' })).toEqual({ ok: true, message: 'Sent.', payload: { kind: 'message', id: 'msg-1' } });
     await expect(client.execute('s1', { command: 'interrupt_task', task: 't1' })).rejects.toThrow('is not running');
 
     expect(hits).toEqual([
-      'POST /api/plans/s1/execute-command {"command":"message_task","task":"t1","text":"use Postgres"}',
-      'POST /api/plans/s1/execute-command {"command":"interrupt_task","task":"t1"}',
+      'POST /api/plans/s1/execute-command?workspace=%2Fw {"command":"message_task","task":"t1","text":"use Postgres"}',
+      'POST /api/plans/s1/execute-command?workspace=%2Fw {"command":"interrupt_task","task":"t1"}',
     ]);
   });
 
@@ -611,10 +632,10 @@ describe('ApiClient — adopting a saved session', () => {
       });
     });
     servers.push(srv);
-    const client = new ApiClient(srv.port);
+    const client = new ApiClient(srv.port, '/w');
 
     expect(await client.invokeTaskCommand('s1', 't1', 'compact', 'keep the API notes')).toEqual({ id: 'msg-4' });
-    expect(hits).toEqual(['POST /api/plans/s1/tasks/t1/commands {"name":"compact","args":"keep the API notes"}']);
+    expect(hits).toEqual(['POST /api/plans/s1/tasks/t1/commands?workspace=%2Fw {"name":"compact","args":"keep the API notes"}']);
   });
 
   it('send now in the planner chat posts to the converse/now route (ADR-0023, F5)', async () => {
@@ -629,11 +650,11 @@ describe('ApiClient — adopting a saved session', () => {
       });
     });
     servers.push(srv);
-    const client = new ApiClient(srv.port);
+    const client = new ApiClient(srv.port, '/w');
 
     expect(await client.forceSendPlannerMessage('s1', 'use Postgres instead')).toEqual({ tasks: [] });
 
-    expect(hits).toEqual(['POST /api/plans/s1/converse/message/now {"message":"use Postgres instead"}']);
+    expect(hits).toEqual(['POST /api/plans/s1/converse/message/now?workspace=%2Fw {"message":"use Postgres instead"}']);
   });
 
   it('answers a planner prompt with a yes/no and a runner\'s request with its whole decision', async () => {
@@ -648,13 +669,13 @@ describe('ApiClient — adopting a saved session', () => {
       });
     });
     servers.push(srv);
-    const client = new ApiClient(srv.port);
+    const client = new ApiClient(srv.port, '/w');
 
     await client.respondToApproval('s1', 'ap-1', true);
     await client.respondToApproval('s1', 'ap-2', { decision: 'deny', note: 'not there' });
     expect(hits).toEqual([
-      'POST /api/approvals/s1/ap-1 {"granted":true}',
-      'POST /api/approvals/s1/ap-2 {"decision":"deny","note":"not there"}',
+      'POST /api/approvals/s1/ap-1?workspace=%2Fw {"granted":true}',
+      'POST /api/approvals/s1/ap-2?workspace=%2Fw {"decision":"deny","note":"not there"}',
     ]);
   });
 });

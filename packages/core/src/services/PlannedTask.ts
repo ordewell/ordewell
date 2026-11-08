@@ -1,11 +1,12 @@
+import { presentForbiddenFields, TASK_KINDS, writtenForbiddenFields } from '../models/TaskKind';
 import { dependencyTargetErrors, findDependencyCycle } from './PlanTree';
 import { v4 as uuidv4 } from 'uuid';
 import { Task, RunnerId, TaskModelAssignment, DEFAULT_RUNNERS, createTask, flattenTasksWithParents, inheritedSkills, skillNames } from '../models/Task';
 import { taggedReadOnlyMode, type RunnerModeInfo } from './ModeResolver';
 import { resolveAssignment, type AssignmentAdjustment, type AssignmentCatalog } from './TaskAssignment';
-import { notAScriptsFields, scriptBodyErrors } from '../models/ScriptTask';
+import { scriptBodyErrors } from '../models/ScriptTask';
 import { loopErrors, loopSpec } from '../models/Loop';
-import { DELEGATION_UNAVAILABLE, NOT_A_DELEGATED_TASKS_FIELDS, delegationErrors, notOnADelegatedMessage, type DelegatedBudget, type DelegationRules, type TaskScope } from '../models/Delegation';
+import { DELEGATION_UNAVAILABLE, delegationErrors, notOnADelegatedMessage, type DelegatedBudget, type DelegationRules, type TaskScope } from '../models/Delegation';
 
 /** One reason a planned task was refused, pinned to the task and field it is about. */
 export interface PlanTaskError {
@@ -89,29 +90,6 @@ function text(value: unknown): string | undefined {
   return typeof value === 'string' || typeof value === 'number' ? String(value) : undefined;
 }
 
-/**
- * What a script task's planner may not write on it (ADR-0035): it runs its
- * body with no model, so nothing about a runner, a model, a mode or a prompt
- * applies, and it has no subtasks.
- */
-const NOT_ON_A_SCRIPT = ['assignedRunner', 'assignedModel', 'thinkingEffort', 'taskMode', 'readOnly', 'prompt', 'skills', 'userSteps', 'ops', 'subtasks'] as const;
-
-/** The fields a planner wrote on a script task that it may not have, by name; none when it wrote none. */
-export function notOnAScript(raw: Record<string, unknown>): string[] {
-  return NOT_ON_A_SCRIPT.filter((f) => {
-    const value = raw[f];
-    return value !== undefined && value !== null && value !== false && !(Array.isArray(value) && value.length === 0);
-  });
-}
-
-/** What a planner wrote on a delegated task that belongs to some other kind of task. */
-function notOnADelegated(raw: Record<string, unknown>): string[] {
-  return NOT_A_DELEGATED_TASKS_FIELDS.filter((f) => {
-    const value = raw[f];
-    return value !== undefined && value !== null && value !== false && !(Array.isArray(value) && value.length === 0);
-  });
-}
-
 /** A planner's fields, as untyped as the rest of its JSON; a rule refuses what is wrong with a value that reached the task. */
 function delegatedFields(raw: Record<string, unknown>, base: Partial<Task>): Pick<Task, 'goal' | 'budget' | 'grants' | 'protectedPaths' | 'scope'> & { readOnly?: true } {
   const list = (value: unknown): string[] | undefined => (Array.isArray(value) ? value.map(String) : undefined);
@@ -142,7 +120,7 @@ export function notOnAScriptMessage(fields: readonly string[]): string {
  */
 export function opsPlacementRefusal(type: Task['type'], isSubtask: boolean): string | null {
   if (type === 'script') return 'is a script task, which is an ops task by nature: leave "ops" out';
-  if (type !== 'ai') return 'is a manual task: only an AI task can be an ops task';
+  if (!TASK_KINDS[type].mayBeOps) return 'is a manual task: only an AI task can be an ops task';
   if (isSubtask) return 'is a subtask, which runs with its parent: only a top-level task can be an ops task';
   return null;
 }
@@ -256,11 +234,11 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
 
   // What it may not have is refused rather than dropped: a prompt left on a
   // script, or a runner named for it, says the planner meant something else.
-  const notScripts = script ? notOnAScript(raw).filter((f) => !(sealedScript && f === 'readOnly')) : [];
+  const notScripts = script ? writtenForbiddenFields('script', raw).filter((f) => !(sealedScript && f === 'readOnly')) : [];
   if (notScripts.length > 0) errors.push({ taskId: id, field: notScripts[0], message: `${where} ${notOnAScriptMessage(notScripts)}` });
   if (delegated) {
     if (!delegating) errors.push({ taskId: id, field: 'type', message: catalog.delegationRefusal ?? `${where} is a delegated task, and ${DELEGATION_UNAVAILABLE}.` });
-    const extra = notOnADelegated(raw);
+    const extra = writtenForbiddenFields('delegated', raw);
     if (extra.length > 0) errors.push({ taskId: id, field: extra[0], message: `${where} ${notOnADelegatedMessage(extra)}` });
   }
   // A body's shape is judged here, where it is still what the planner wrote: a Task holds only a well-formed one.
@@ -326,7 +304,7 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
     ...(delegated ? delegatedFields(raw, base) : {}),
     ...(sealedScript ? { readOnly: true as const } : {}),
   };
-  let taskMode = script || delegated ? undefined : base.taskMode;
+  let taskMode = (TASK_KINDS[type].runsInMode || type === 'user') ? base.taskMode : undefined;
   let landedModel = assignedModel;
   if ((ai || delegated) && catalog.runners.includes(assignedRunner)) {
     const resolved = resolveAssignment({
@@ -358,7 +336,7 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
 export function checkPlanRunners(tasks: readonly Task[], runners: readonly RunnerId[] | undefined): PlanTaskError[] {
   if (!runners) return [];
   return flattenTasksWithParents(tasks)
-    .filter(({ task: t }) => (t.type === 'ai' || t.type === 'delegated') && !runners.includes(t.assignedRunner))
+    .filter(({ task: t }) => TASK_KINDS[t.type].hasRunner && !runners.includes(t.assignedRunner))
     .map(({ task: t, parent }) => ({
       taskId: t.id,
       field: 'assignedRunner',
@@ -393,7 +371,7 @@ export function checkPlanInvariants(
     if (t.research !== undefined && typeof t.research !== 'boolean') fail('research', `${where}: "research" must be a boolean`);
     // Research's approval exception is safe only under the shared read-only profile (ADR-0037 R1, R4).
     const readOnly = runnerModes ? taggedReadOnlyMode(runnerModes[t.assignedRunner]) : 'plan';
-    if (t.research && (t.type !== 'ai' || parent !== null || t.ops || body.has(t.id)
+    if (t.research && (!TASK_KINDS[t.type].mayBeResearch || parent !== null || t.ops || body.has(t.id)
       || readOnly === undefined || t.taskMode !== readOnly)) {
       fail('research', `${where}: research is only for top-level read-only AI tasks, never a loop's body`);
     }
@@ -407,15 +385,15 @@ export function checkPlanInvariants(
     if (opsRefused) fail('ops', `${where} ${opsRefused}`);
     if (t.type === 'script') {
       // It runs at the workspace root on its own (ADR-0035): nothing hangs under it, and it hangs under nothing.
-      if (parent !== null) fail('type', `${where} is a script task: only a top-level task can be one, as only a top-level task can be an ops task`);
-      if (t.subtasks?.length) fail('subtasks', `${where} is a script task, which has no subtasks: make each step a command of its own, or a task of its own`);
-      const extra = notAScriptsFields(t);
+      if (TASK_KINDS[t.type].topLevelOnly && parent !== null) fail('type', `${where} is a script task: only a top-level task can be one, as only a top-level task can be an ops task`);
+      if (!TASK_KINDS[t.type].mayHaveSubtasks && t.subtasks?.length) fail('subtasks', `${where} is a script task, which has no subtasks: make each step a command of its own, or a task of its own`);
+      const extra = presentForbiddenFields('script', t, ['assignedRunner', 'readOnly', 'subtasks']);
       if (extra.length > 0) fail(extra[0], `${where} ${notOnAScriptMessage(extra)}`);
     }
     if (t.type === 'delegated') {
       // Top-level like a script task, and its child plan's tasks are the child's own (ADR-0055 D1).
-      if (parent !== null) fail('type', `${where} is a delegated task: only a top-level task can be delegated`);
-      if (t.subtasks?.length) fail('subtasks', `${where} is a delegated task, which has no subtasks: its child plan's tasks are its child's own`);
+      if (TASK_KINDS[t.type].topLevelOnly && parent !== null) fail('type', `${where} is a delegated task: only a top-level task can be delegated`);
+      if (!TASK_KINDS[t.type].mayHaveSubtasks && t.subtasks?.length) fail('subtasks', `${where} is a delegated task, which has no subtasks: its child plan's tasks are its child's own`);
     }
     for (const e of scriptBodyErrors(t)) fail(e.field, `${where} ${e.message}`);
     if (t.ops && t.taskMode !== undefined && t.taskMode === taggedReadOnlyMode(runnerModes?.[t.assignedRunner])) {
@@ -431,19 +409,40 @@ export function checkPlanInvariants(
       errors.push({ taskId: t.id, field: 'dependencies', message: `${taskWhere(t.title, parent?.title)}: ${error}` });
     }
   }
-  const cycle = findCycle(rows.map((r) => r.task));
+  const cycle = findDependencyCycle(rows.map((r) => r.task));
   // Pinned to a task on the cycle: a plan whose only fault is a rule a task
   // breaks is worth naming back to the planner, not re-asking for as JSON.
   if (cycle) errors.push({ taskId: cycle[0].id, field: 'dependencies', message: `Dependency cycle detected: ${[...cycle, cycle[0]].map((t) => `"${t.title}"`).join(' → ')}` });
   return errors;
 }
 
-/** The tasks on one dependency cycle, in dependency order, or null when there is none. A self-dependency is a cycle of one. */
-export function findCycle(tasks: readonly Task[]): Task[] | null {
-  return findDependencyCycle(tasks);
+/** A rule `after` breaks, with what tells it apart from another breach. */
+export interface PlanBreach {
+  error: PlanTaskError;
+  key: string;
 }
 
-/** The title of a task on a dependency cycle, or null when there is none. */
-export function detectCycle(tasks: readonly Task[]): string | null {
-  return findCycle(tasks)?.[0].title ?? null;
+/**
+ * The rules `after` breaks that `before` did not, for either route of an edit:
+ * what the plan already broke, a task on a runner switched off since, say,
+ * never blocks an unrelated edit. A breach is told by its task and rule, not
+ * its wording, which carries the title an edit may change; a runner's breach
+ * by the runner too, as moving a task from one runner switched off to another
+ * is the edit's own.
+ */
+export function newBreaches(
+  before: readonly Task[],
+  after: readonly Task[],
+  runners: readonly RunnerId[] | undefined,
+  runnerModes?: Partial<Record<RunnerId, readonly RunnerModeInfo[]>>,
+): PlanBreach[] {
+  const breaches = (tasks: readonly Task[]): PlanBreach[] => {
+    const runnerOf = new Map(flattenTasksWithParents(tasks).map(({ task }) => [task.id, task.assignedRunner]));
+    return checkPlanInvariants(tasks, runners, runnerModes).map((error) => {
+      const runner = error.field === 'assignedRunner' ? `\u0000${runnerOf.get(error.taskId ?? '') ?? ''}` : '';
+      return { error, key: `${error.taskId ?? ''}\u0000${error.field}${runner}` };
+    });
+  };
+  const standing = new Set(breaches(before).map((b) => b.key));
+  return breaches(after).filter((b) => !standing.has(b.key));
 }

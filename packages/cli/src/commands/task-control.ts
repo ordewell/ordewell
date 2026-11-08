@@ -1,4 +1,4 @@
-import { flag, hasFlag, positionals, readLastSession, resolveTaskId } from '../utils';
+import { flag, hasFlag, positionals, readLastSession, resolveTaskId, workspaceOf } from '../utils';
 import { askYesNo, fail } from './shared';
 import { ensureDaemon, resolvePort } from '../daemon';
 import { ApiClient, type PlanBody } from '../apiClient';
@@ -16,7 +16,7 @@ async function sessionAndRef(
   usage: string,
   injectedApi: ApiClient | undefined,
 ): Promise<{ api: ApiClient; sessionId: string; ref: string; workspace: string }> {
-  const workspace = flag(subArgs, '--workspace') || process.cwd();
+  const workspace = workspaceOf(subArgs);
   let sessionId = flag(subArgs, '--session-id');
   if (!sessionId) {
     const last = readLastSession(workspace);
@@ -33,7 +33,7 @@ async function sessionAndRef(
     process.exit(1);
   }
 
-  const api = injectedApi || new ApiClient(await ensureDaemon(resolvePort(subArgs)));
+  const api = injectedApi || new ApiClient(await ensureDaemon(resolvePort(subArgs)), workspaceOf(subArgs));
   return { api, sessionId, ref, workspace };
 }
 

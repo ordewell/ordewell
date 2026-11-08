@@ -351,6 +351,14 @@ describe('keepExecutionState', () => {
     expect(result[0].subtasks[0]).toMatchObject({ status: 'skipped', skipReason: 'The test host is unavailable' });
   });
 
+  it('takes no execution state from the rewrite: what the planner wrote of a wait or an attempt is dropped', () => {
+    const rewrite = [{ ...todo('a', 1), awaitingReason: 'input' as const, parkedQuestion: 'invented', resumeAt: 'soon', addedBy: 'supervisor' as const }];
+
+    const [kept] = keepExecutionState([todo('a', 1)], rewrite);
+
+    expect(kept).toMatchObject({ status: 'pending', awaitingReason: undefined, parkedQuestion: undefined, resumeAt: undefined, addedBy: undefined });
+  });
+
   it('keeps the attempted mark of a task a planner restates, so its chat does not vanish', () => {
     const current = [{ ...todo('a', 1), attempted: true as const }];
     const rewrite = [todo('a', 1)];

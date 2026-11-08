@@ -472,6 +472,43 @@ describe('saving', () => {
       expect(errors(env)).toEqual([expect.stringContaining('disk full')]);
     });
 
+    it('still says the run ended, and once that it could not be saved', async () => {
+      const { env, logged } = await refused();
+
+      env.run.of('t1').reportComplete({ status: 'done', summary: 'ok' });
+      env.run.of('t2').reportComplete({ status: 'done', summary: 'ok' });
+      await settled();
+      logged.mockRestore();
+
+      expect(env.messages.map((m) => m.type)).toContain('execution_complete');
+      expect(env.session.activity.running).toBe(false);
+      expect(errors(env)).toEqual([expect.stringContaining('disk full')]);
+    });
+
+    it('still hands the supervisor the run\'s end', async () => {
+      const { env, logged } = await refused();
+
+      env.run.of('t1').reportComplete({ status: 'done', summary: 'ok' });
+      env.run.of('t2').reportComplete({ status: 'done', summary: 'ok' });
+      await settled();
+      await vi.advanceTimersByTimeAsync(10_000);
+      logged.mockRestore();
+
+      expect(env.planner.calls.map((c) => c.message)).toContainEqual(expect.stringContaining('- the run finished: 2 of 2 tasks completed'));
+    });
+
+    it('still sends a status that moved a second after the last save', async () => {
+      const { env, logged } = await refused();
+      await vi.advanceTimersByTimeAsync(2000);
+      env.messages.length = 0;
+
+      env.run.of('t2').waitForInput();
+      await settled();
+      logged.mockRestore();
+
+      expect(statuses(env.messages).at(-1)?.tasks.find((t) => t.id === 't2')?.status).toBe('awaiting_user');
+    });
+
     it('answers a Stop through the seam as done', async () => {
       const { env, logged } = await refused();
 

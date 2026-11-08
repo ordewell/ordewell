@@ -1,11 +1,11 @@
-import { UPDATABLE_FIELDS } from './TaskOps';
+import { prepareTaskEdit, UPDATABLE_FIELDS } from './TaskEdit';
 import { subtreeIds } from './PlanTree';
-import { startedEditRefusal, validateTaskEdit } from './TaskEditValidator';
+import { startedEditRefusal } from './TaskEditValidator';
 import { NOT_STARTED } from '../taskRow/status';
 import { liveRunnerRefusal, resolveAssignment, type AssignmentAdjustment, type AssignmentCatalog, type RunnerCatalog } from './TaskAssignment';
 import { clampThinkingEffort } from './ModelAllowlistResolver';
 import { conflictResolverTask } from './Landing';
-import { checkPlanInvariants, type PlanTaskError } from './PlannedTask';
+import { newBreaches, type PlanTaskError } from './PlannedTask';
 import { PlanEditError } from './PlanEditError';
 import type { SessionCatalog } from './SessionCatalog';
 import type { PlanStore } from './PlanStore';
@@ -17,10 +17,8 @@ import { createTask, opsFlag, skillNames, updateTaskInPlan, type DiscoveredModel
 import type { RunnerModelRef } from '../models/RunnerCommand';
 import { clearedBodyFields } from '../models/ScriptTask';
 import { loopRemovalRefusal, loopSpec } from '../models/Loop';
-import { resolveDefaultMode, taggedReadOnlyMode } from './ModeResolver';
-
-/** The fields that decide what a task runs on: an edit that touches none of them leaves the assignment as it stands. */
-const ASSIGNMENT_FIELDS = ['assignedRunner', 'assignedModel', 'taskMode', 'type'] as const satisfies readonly (keyof Task)[];
+import { isTaskType, unknownTypeRefusal } from '../models/TaskKind';
+import { resolveDefaultMode } from './ModeResolver';
 
 /** The catalogs an edit reads, as the session holds them at the moment of the edit. */
 export type PlanEditCatalog = Pick<SessionCatalog, 'edit' | 'runner' | 'admit'>;
@@ -63,7 +61,7 @@ export interface PlanEditorDeps {
 /**
  * The user's own edits to the plan: the direct side of a direct edit vs a
  * planner edit. Each one is checked by the same rules the planner's task ops
- * meet ({@link validateTaskEdit} and TaskOps' own refusals), derives whatever a
+ * meet ({@link prepareTaskEdit}, as the `direct` actor), derives whatever a
  * runner change or an added task leaves unset from that runner's catalog, and
  * lands through the session's mutation seam followed by the reschedule a direct
  * edit owes an armed scheduler. A merge or split is the planner's to carry out
@@ -103,10 +101,10 @@ export class PlanEditor {
    * planner may change are taken ({@link directChanges}); a task's status,
    * verdict or subtasks are execution's and the plan tree's, never a patch's.
    * The edit meets the rules the planner's task ops meet — who may make it and
-   * whether the task stays well-formed ({@link validateTaskEdit}, as the
-   * 'direct' actor, which skips the lock rule), what its runner, model, effort
-   * and mode end up as ({@link resolveAssignment}, as the user's), and the
-   * rules the plan's tasks are held to together (`checkPlanInvariants`) — and
+   * whether the task stays well-formed, and what its runner, model, effort
+   * and mode end up as ({@link prepareTaskEdit}, as the 'direct' actor, which
+   * skips the lock rule and resolves as the user), and the rules the plan's
+   * tasks are held to together (`newBreaches`) — and
    * throws, so the surface can say why. Attached skills meet the rule a
    * planner's do: a planner skill is refused, a name not found yet only warns.
    *
@@ -220,23 +218,11 @@ export class PlanEditor {
     // Re-read after every wait: the scheduler may have claimed the task while
     // its runner's catalog or its skills were being checked.
     this.refuseStartedCardEdit(before, options);
-    const check = validateTaskEdit('direct', this.store.planTasks, taskId, changes);
-    if (!check.ok) throw new PlanEditError(check.error ?? 'Those changes are not valid');
-    const edit: Partial<Task> = { ...changes, ...Object.fromEntries((check.clear ?? []).map((f) => [f, undefined])), ...check.set };
-    const catalog = this.assignmentCatalog(edit.assignedRunner ?? before.assignedRunner, discovered);
-    let adjustments: AssignmentAdjustment[] = [];
-    if (ASSIGNMENT_FIELDS.some((f) => f in edit)) {
-      const written = { ...before, ...edit };
-      const outcome = resolveAssignment({ writer: 'user', task: written, before, catalog });
-      if (!outcome.ok) throw new PlanEditError(outcome.error);
-      if (outcome.task.assignedModel !== written.assignedModel) edit.assignedModel = outcome.task.assignedModel;
-      if (outcome.task.taskMode !== written.taskMode) edit.taskMode = outcome.task.taskMode;
-      adjustments = outcome.adjustments;
-    }
-    if (before.research && changes.research !== true && edit.taskMode !== undefined
-      && edit.taskMode !== taggedReadOnlyMode(catalog.runnerModes?.[edit.assignedRunner ?? before.assignedRunner])) edit.research = false;
-    this.refuseBreach(taskId, edit, catalog);
-    return { edit, adjustments };
+    const catalog = this.assignmentCatalog(changes.assignedRunner ?? before.assignedRunner, discovered);
+    const prep = prepareTaskEdit('direct', this.store.planTasks, taskId, changes, catalog);
+    if (!prep.ok) throw new PlanEditError(prep.error);
+    this.refuseBreach(taskId, prep.changes, catalog);
+    return { edit: prep.changes, adjustments: prep.adjustments };
   }
 
   /**
@@ -262,9 +248,7 @@ export class PlanEditor {
 
   /** The first rule `tasks` breaks that the plan does not already break, or none. */
   private firstBreach(tasks: readonly Task[], catalog: AssignmentCatalog): PlanTaskError | undefined {
-    const key = (e: PlanTaskError) => `${e.taskId ?? ''}\u0000${e.field}`;
-    const standing = new Set(checkPlanInvariants(this.store.planTasks, undefined, catalog.runnerModes).map(key));
-    return checkPlanInvariants(tasks, undefined, catalog.runnerModes).find((e) => !standing.has(key(e)));
+    return newBreaches(this.store.planTasks, tasks, undefined, catalog.runnerModes)[0]?.error;
   }
 
   private commitTaskUpdate(taskId: string, changes: Partial<Task>): Promise<LegacyPlanState | null> {
@@ -318,6 +302,8 @@ export class PlanEditor {
     const plan = this.plan();
     if (!plan) return null;
     const draft = editableFields(given);
+    // Left out, or null, it is an AI task, as createTask makes it.
+    if (draft.type !== undefined && draft.type !== null && !isTaskType(draft.type)) throw new PlanEditError(`This task ${unknownTypeRefusal(draft.type)}`);
     const runner = draft.assignedRunner ?? plan.runners[0];
     const dependencies = (draft.dependencies ?? []).filter((id) => this.store.get(id));
     const discovered = (draft.type ?? 'ai') !== 'ai' ? undefined : await this.discover(runner);

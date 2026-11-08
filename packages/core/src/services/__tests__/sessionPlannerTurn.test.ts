@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { LegacyPlanState } from '../../models/Task';
 import type { ConversationTurn } from '../AiService';
-import { PlannerTurnDiscardedError } from '../PlannerConversation';
+import { PlannerTurnDiscardedError, PlannerTurnStoppedError } from '../PlannerConversation';
 import { makeSession, saves, testWorkspace } from './sessionTestKit';
 
 function dialogue(goal: string): LegacyPlanState {
@@ -66,6 +66,50 @@ describe('Session planner turn', () => {
     calls[0].finish({ kind: 'message', text: 'Stopped.', researchLog: [], aborted: true });
     await turn;
     expect(session.abortPlannerTurn()).toBe(false);
+  });
+
+  it('stops the turn in flight and the message queued behind it on a disk that refuses the save', async () => {
+    const { aiService, calls } = heldPlanner();
+    const session = makeSession({ aiService });
+    session.loadPlan(dialogue('parser'), 'parser', testWorkspace, { persist: false });
+
+    const turn = session.continueConversation('JSON');
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const queued = session.continueConversation('and YAML');
+    const refusedQueued = expect(queued).rejects.toThrow(PlannerTurnStoppedError);
+    saves(session).mockImplementation(() => { throw new Error('disk full'); });
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    expect(session.abortPlannerTurn()).toBe(true);
+    expect(calls[0].signal?.aborted).toBe(true);
+    await refusedQueued;
+
+    calls[0].finish({ kind: 'message', text: 'Stopped.', researchLog: [], aborted: true });
+    // What the stopped turn said was not saved, so it lands as nothing but its stop.
+    await expect(turn).rejects.toThrow(PlannerTurnStoppedError);
+    logged.mockRestore();
+    expect(aiService.continueConversation).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops the whole subtree on a disk that refuses the save', async () => {
+    const { aiService, calls } = heldPlanner();
+    const session = makeSession({ aiService });
+    session.loadPlan(dialogue('parser'), 'parser', testWorkspace, { persist: false });
+
+    const turn = session.continueConversation('JSON');
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const queued = session.continueConversation('and YAML');
+    const refusedQueued = expect(queued).rejects.toThrow(PlannerTurnStoppedError);
+    saves(session).mockImplementation(() => { throw new Error('disk full'); });
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const stopped = session.stopSubtree();
+    expect(calls[0].signal?.aborted).toBe(true);
+    calls[0].finish({ kind: 'message', text: 'Stopped.', researchLog: [], aborted: true });
+    await expect(turn).rejects.toThrow(PlannerTurnStoppedError);
+    await expect(stopped).resolves.toBeUndefined();
+    await refusedQueued;
+    logged.mockRestore();
   });
 
   it('writes nothing of a turn into the session adopted while it was in flight', async () => {

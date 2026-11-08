@@ -2,7 +2,7 @@ import type { PreviousWork } from '../interfaces/IWorktreeIsolation';
 import type { RunnerId, Task, TaskSkillSnapshot } from '../models/Task';
 import type { StoredHandoff } from '../models/Handoff';
 import { betweenRounds, loopRoundOf } from '../models/Loop';
-import type { LeaseWorkspace } from './executionLease';
+import type { LeaseWorkspaceIntent } from './executionLease';
 import type { RepairAttempt } from './Landing';
 import { composeAugmentedPrompt, composeContinuationPrompt, continuedWorkNote, READ_ONLY_CONTINUED_NOTE } from './promptAugment';
 
@@ -154,7 +154,7 @@ export function checksTree(kind: AttemptKind): boolean {
  * attempt's work for a continue and a carry-over. What a lease opens
  * (ADR-0059): the kind is resolved here, before a backend sees it.
  */
-export function attemptWorkspace(kind: AttemptKind): LeaseWorkspace {
+export function attemptWorkspace(kind: AttemptKind): LeaseWorkspaceIntent {
   if (inCheckout(kind)) return { kind: 'checkout' };
   if (kind.kind === 'repair') return { kind: 'worktree', intent: 'repair' };
   // A child's code root, which a Continue reopens whether or not it lands (ADR-0055 D17).

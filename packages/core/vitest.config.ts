@@ -23,6 +23,7 @@ export default defineConfig({
       exclude: ['**/*.test.ts', '**/__tests__/**', '**/fixtures/**', '**/*.d.ts', 'dist/**'],
       thresholds: {
         'src/conversation/labels.ts': floor(100, 100, 100),
+        'src/daemonRoutes.ts': floor(100, 100, 100),
         'src/plugins/builtin/cline.manifest.ts': floor(100, 100, 100),
         'src/plugins/builtin/copilot-cli.manifest.ts': floor(100, 100, 100),
         'src/plugins/builtin/copilotModels.ts': floor(100, 100, 100),
@@ -31,7 +32,9 @@ export default defineConfig({
         'src/plugins/builtin/qwen.manifest.ts': floor(100, 100, 100),
         'src/services/PlanEditError.ts': floor(100, 100, 100),
         'src/services/PlanEditor.ts': floor(100, 92, 100),
+        'src/services/StartLedger.ts': floor(100, 100, 100),
         'src/services/TaskAssignment.ts': floor(100, 97, 100),
+        'src/services/TurnGate.ts': floor(100, 98, 100),
         'src/services/attemptKind.ts': floor(100, 100, 100),
         'src/services/harness/AcpAdapter.ts': floor(100, 87, 100),
         'src/services/harness/acpModels.ts': floor(96, 82, 100),

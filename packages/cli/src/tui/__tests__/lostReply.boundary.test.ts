@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import http from 'http';
 import { EventEmitter } from 'events';
 import type { SurfacePlan } from '@ordewell/core';
-import { ApiClient, type SessionFollow } from '../../apiClient';
+import { ApiClient, type SessionSocket } from '../../apiClient';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import { initialState, reduce, type Action, type Effect } from '../reducer';
 import type { TuiState } from '../state';
@@ -89,8 +89,7 @@ function tui(api: Partial<OrdewellApi>, start: Partial<TuiState> = {}) {
       compactConversation: vi.fn(async () => ({ plan: { tasks: [] }, summary: '' })),
       adoptSession: vi.fn(async () => ({ plan: PLAN, goal: 'g' })),
       getSettings: vi.fn(async () => ({})),
-      streamPlanning: vi.fn(() => ({ ready: Promise.resolve(), close: () => {} })),
-      followSession: vi.fn(() => ({ ready: Promise.resolve(true), ended: new Promise(() => {}), close: () => {} }) as SessionFollow),
+      followSession: vi.fn(() => ({ ready: Promise.resolve(true), ended: new Promise(() => {}), close: () => {} }) as SessionSocket),
       ...api,
     } as unknown as OrdewellApi,
     workspace: '/ws',
@@ -190,7 +189,7 @@ describe('a response that arrived is not a lost reply', () => {
     expect(t.state.planner).toBe('idle');
     expect(counts.adopt).toBe(0);
     expect(counts.start).toBe(1);
-    expect(wire.calls).toEqual(['POST /api/plans/session-new/converse/start']);
+    expect(wire.calls).toEqual(['POST /api/plans/session-new/converse/start?workspace=%2Fws']);
   });
 
   it('shows a first-turn plan it cannot fold as its own error, keeping the session', async () => {
@@ -228,7 +227,7 @@ describe('a response that arrived is not a lost reply', () => {
     expect(counts.send).toBe(1);
     expect(counts.adopt).toBe(0);
     expect(t.effects.filter((e) => e.type === 'sendMessage')).toEqual([]);
-    expect(wire.calls).toEqual(['POST /api/plans/s1/converse/message']);
+    expect(wire.calls).toEqual(['POST /api/plans/s1/converse/message?workspace=%2Fws']);
   });
 
   it('shows a later plan it cannot fold as its own error, keeping the session and not resending', async () => {

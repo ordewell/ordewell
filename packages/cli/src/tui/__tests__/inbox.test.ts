@@ -5,7 +5,7 @@ import { render } from '../render';
 import { width } from '../ansi';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import { DaemonError, type WsEvent } from '../../apiClient';
-import { inboundFor } from '../inbound';
+import { createInbound } from '../inbound';
 import type { TaskView, TuiState } from '../state';
 import { lastMessage } from './chat';
 
@@ -223,7 +223,7 @@ describe('/inbox: the list follows core', () => {
 
   it('follows a status update off the stream, as the daemon sends it', () => {
     const actions: Action[] = [];
-    const receive = inboundFor({}, (action) => actions.push(action), 's1').execution();
+    const receive = createInbound((action) => actions.push(action), 's1').receive;
     const wire: unknown = { type: 'status_update', tasks: [], escalations: [failed, approval] };
     receive(wire as WsEvent);
 

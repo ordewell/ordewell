@@ -49,6 +49,22 @@ export type IsolationNoticeLevel = 'info' | 'warn' | 'error';
  */
 export type AttemptIntent = 'fresh' | 'repair' | 'readOnly' | PrepareIntent;
 
+/** The run whose isolation choice an attempt was claimed under (ADR-0059 L1). */
+export interface IsolationDecision {
+  readonly epoch: number;
+  readonly mode: 'isolated' | 'shared';
+}
+
+/**
+ * How a start's activation ended. `closed` is the run it would have opened
+ * settling and closing first, where `interrupted` is a stop or a plan load:
+ * what closed the run (a revert, a skip) may have changed the task, so its
+ * start says how rather than only that it stopped.
+ */
+export type IsolationStart = IsolationDecision | 'blocked' | 'interrupted' | 'closed';
+
+const DECISION_CLOSED = 'The isolation decision changed or closed before this attempt could start.';
+
 /**
  * What adopting a persisted run found: nothing to change, landed work git
  * shows the user has merged since, or a settled run that had nothing left to
@@ -220,16 +236,29 @@ export class IsolationRunController {
   private mode: 'undecided' | 'isolated' | 'shared' | null = null;
   /** Resolver task id → the conflicted task it resolves; see {@link linkResolver}. */
   private resolvers: Record<string, string> = {};
-  private opening: Promise<boolean> | null = null;
+  private opening: Promise<IsolationStart> | null = null;
   private opened = 0;
   /** Bumped by an interrupt, so an activation in flight across it does not open the run it ended. */
   private activations = 0;
+  /** The activation {@link close} last ended. */
+  private closedActivation = -1;
   /** The start a dirty tree turned away, handed back once the user chooses how to go on. */
   private blockedStart: (() => Promise<void>) | null = null;
   /** How many starts it has turned away; a replay can be turned away again in the same run. */
   private turnedAway = 0;
   /** The dirty repos behind {@link blockedStart}, for the stash notice. */
   private blockedRepos: string[] = [];
+  /** The record each attempt's open made, null for none, by the decision it was claimed under, which is that attempt's own; see {@link stillToLetGo}. */
+  private readonly made = new WeakMap<IsolationDecision, { run: IsolationRun; record: IsolationTaskRecord } | null>();
+  /**
+   * What last reached each record: the `keep` of a {@link release} that went
+   * through, or a landing, which no later release overrides. An attempt ended
+   * while opening does not let go again what its end did, but does what a
+   * later end decided otherwise; see {@link stillToLetGo}.
+   */
+  private readonly reached = new WeakMap<IsolationTaskRecord, boolean | 'landed'>();
+  /** The releases in flight on each record, which a spawn ended meanwhile waits out before it asks. */
+  private readonly reaching = new WeakMap<IsolationTaskRecord, Promise<unknown>>();
 
   constructor(deps: IsolationRunControllerDeps) {
     this.isolation = deps.isolation;
@@ -264,6 +293,12 @@ export class IsolationRunController {
 
   /** The open run has decided whether it isolates. */
   get decided(): boolean { return this.mode === 'isolated' || this.mode === 'shared'; }
+
+  /** Read in the synchronous claim, before its lease opens or any observer hears it. */
+  get decision(): IsolationDecision {
+    if (this.mode !== 'isolated' && this.mode !== 'shared') throw new Error(DECISION_CLOSED);
+    return { epoch: this.epoch, mode: this.mode };
+  }
 
   /** The open run executes in worktrees. */
   get isolating(): boolean { return this.mode === 'isolated' && this.run !== null; }
@@ -407,19 +442,19 @@ export class IsolationRunController {
    * Decide once per run, as its first change task starts, whether it executes
    * in worktrees (ADR-0020): an ops task needs none, so a run of only ops
    * tasks never asks. `resume` is what a dirty tree parks until the user
-   * chooses how to go on. Resolves false while the run waits on that choice.
+   * chooses how to go on. An interrupted activation is refused separately
+   * from one parked on a dirty tree, so an explicit start never disappears.
    */
-  decide(resume: () => Promise<void>): Promise<boolean> {
+  decide(resume: () => Promise<void>): Promise<IsolationStart> {
     this.open();
-    if (this.decided) return Promise.resolve(true);
-    if (this.blockedStart) return Promise.resolve(false);
-    if (!this.opening) {
-      const opening = this.activate(resume, this.activations).finally(() => {
-        if (this.opening === opening) this.opening = null;
-      });
-      this.opening = opening;
-    }
-    return this.opening;
+    if (this.opening) return this.opening;
+    if (this.decided) return Promise.resolve(this.decision);
+    if (this.blockedStart) return Promise.resolve('blocked');
+    const opening = this.activate(resume, this.activations).finally(() => {
+      if (this.opening === opening) this.opening = null;
+    });
+    this.opening = opening;
+    return opening;
   }
 
   /**
@@ -486,15 +521,66 @@ export class IsolationRunController {
    * The working directory of an attempt that may run in a worktree — which
    * attempts do is the attempt kind's to say (see `attemptKind.attemptWorkspace`):
    * the worktree prepared for it in an isolated run, the kept one for a
-   * conflict repair, else the workspace root. `worktree` says which. Does not
+   * conflict repair, or the workspace root under a shared decision. A stale
+   * or closed decision is refused. `worktree` says which. Does not
    * itself report a worktree it creates as a change — the caller does once
    * the attempt is committed as running, so a spawn abandoned or failed after
    * this settles is not misreported as a change that stuck.
    */
-  attemptCwd(task: Task, intent: AttemptIntent): Promise<AttemptWorkspace> {
-    if (intent === 'repair' && this.run) return this.reopenCwd(task, this.run);
-    if (!this.isolating || !this.run) return this.workspaceCwd(task);
-    return this.prepareCwd(task, this.run, intent === 'restore' ? intent : 'fresh', intent === 'readOnly');
+  attemptCwd(task: Task, intent: AttemptIntent, decision: IsolationDecision): Promise<AttemptWorkspace> {
+    this.assertDecision(decision);
+    if (intent === 'repair' && this.run) return this.reopenCwd(task, this.run, decision);
+    if (decision.mode === 'shared') return this.sharedCwd(task, decision);
+    return this.prepareCwd(task, this.run!, intent === 'restore' ? intent : 'fresh', intent === 'readOnly', decision);
+  }
+
+  /** A lease rechecks after git has prepared its workspace: the run can close during that await. */
+  assertDecision(decision: IsolationDecision): void {
+    if (!decision || decision.epoch !== this.epoch || decision.mode !== this.mode || (decision.mode === 'isolated' && !this.run)) throw new Error(DECISION_CLOSED);
+  }
+
+  /**
+   * Whether the workspace the open claimed under `decision` made is still its
+   * attempt's to let go, by `keep`, once that attempt ended while opening: the
+   * record that open made is the task's yet, in the run it opened in, and
+   * nothing has reached it since with that decision — no release that went
+   * through with the same `keep`, no landing. An end can come after another
+   * whose release went through and decide otherwise, and its own release can
+   * fail: the attempt's let-go is then that release's retry. A start since
+   * has made the workspace its own, or an end removed it, or the open made
+   * none, and then nothing is left. The open made one whether or not it then
+   * returned it: a backend can make it and fail after. Undefined for an open
+   * no workspace here was made by, which is its backend's to answer for.
+   * Every release in flight on the record settles first, one begun while
+   * this waits included, and `keep` is read once they have: an end that came
+   * meanwhile may have changed it. One that failed reached nothing.
+   */
+  async stillToLetGo(taskId: string, decision: IsolationDecision | null, keep: () => boolean): Promise<boolean | undefined> {
+    const made = decision ? this.made.get(decision) : undefined;
+    if (!made) return made === null ? false : undefined;
+    let inFlight = this.reaching.get(made.record);
+    while (inFlight) {
+      await inFlight;
+      const next = this.reaching.get(made.record);
+      inFlight = next === inFlight ? undefined : next;
+    }
+    const reached = this.reached.get(made.record);
+    return made.run === this.run && made.run.tasks[taskId] === made.record && reached !== 'landed' && reached !== keep();
+  }
+
+  private madeUnder(decision: IsolationDecision, run: IsolationRun, taskId: string): IsolationTaskRecord | undefined {
+    const record = run.tasks[taskId];
+    this.made.set(decision, record ? { run, record } : null);
+    // A repair reopens the record a release kept, and its own end decides afresh what becomes of it.
+    if (record) this.reached.delete(record);
+    return record;
+  }
+
+  private async sharedCwd(task: Task, decision: IsolationDecision): Promise<AttemptWorkspace> {
+    const workspace = await this.workspaceCwd(task);
+    // Outside any worktree: a record left now is an earlier attempt's, whose release failed.
+    this.made.set(decision, null);
+    return workspace;
   }
 
   /** The workspace root, for an attempt that runs outside any worktree. */
@@ -505,12 +591,13 @@ export class IsolationRunController {
     return { cwd: this.workspaceRoot(), worktree: false };
   }
 
-  private async reopenCwd(task: Task, run: IsolationRun): Promise<{ cwd: string; worktree: boolean }> {
+  private async reopenCwd(task: Task, run: IsolationRun, decision: IsolationDecision): Promise<{ cwd: string; worktree: boolean }> {
     const { cwd } = await this.isolation.reopen(task, run);
+    this.madeUnder(decision, run, task.id);
     return { cwd, worktree: true };
   }
 
-  private async prepareCwd(task: Task, run: IsolationRun, intent: PrepareIntent, readOnly: boolean): Promise<AttemptWorkspace> {
+  private async prepareCwd(task: Task, run: IsolationRun, intent: PrepareIntent, readOnly: boolean, decision: IsolationDecision): Promise<AttemptWorkspace> {
     // As it is cut, not as it lands: a plan edit from here on drops the link, and the worktree still stands on the work (ADR-0054).
     this.keepLandedOn(run, task.id);
     let result: PreparedTask;
@@ -525,7 +612,7 @@ export class IsolationRunController {
     this.reportCopies(copied);
     this.reportSetupFailures(setupFailed ?? []);
     if (preserved) this.report({ preserved, refused: [] });
-    const workspace = run.tasks[task.id]?.workspace;
+    const workspace = this.madeUnder(decision, run, task.id)?.workspace;
     const prepared = { cwd, worktree: true, ...(workspace ? { workspace } : {}) };
     if (!restoration) return prepared;
     const previousWork: PreviousWork = restoration === 'fallback' ? { outcome: 'fallback', preserved: preserved ?? [] } : { outcome: 'restored' };
@@ -541,6 +628,9 @@ export class IsolationRunController {
   async integrate(task: Task, commit?: HandoffCommit): Promise<IsolationOutcome> {
     const run = this.run;
     if (!run) return 'failed';
+    // A landing decides the record, whatever it comes to: what a Mark complete lands is not the ended spawn's to let go.
+    const record = run.tasks[task.id];
+    if (record) this.reached.set(record, 'landed');
     const outcome = await this.isolation.integrate(task, run, () => this.listener.changed(), commit).catch((): IsolationOutcome => 'failed');
     if (outcome === 'merged') this.keepLandedOn(run, task.id);
     this.listener.changed();
@@ -568,15 +658,29 @@ export class IsolationRunController {
    * Let go of a task's worktree. `keep` leaves it and its branch for
    * inspection; otherwise both go. A landing still in flight settles first, so
    * the worktree is never torn down underneath its merge. Bound to the run
-   * the call was made in: a plan loaded meanwhile adopts its own run, whose
-   * records share these task ids and are not this release's to touch.
+   * the call was made in, and to the record it found: a plan loaded meanwhile
+   * adopts its own run, and a start since makes its own record, which share
+   * this task id and are not this release's to touch, even one made while
+   * the release waits its turn behind that start's prepare. What it finds is
+   * marked in flight as the call is made, before anything awaits, so a spawn
+   * that resumes meanwhile waits for its end's decision to be carried out;
+   * the record counts as reached only once the release goes through.
    */
-  async release(taskId: string, opts: { keep: boolean }, landing?: Promise<unknown> | null): Promise<void> {
+  release(taskId: string, opts: { keep: boolean }, landing?: Promise<unknown> | null): Promise<void> {
     const run = this.run;
+    const found = run?.tasks[taskId];
+    const releasing = this.releaseFound(run, taskId, found, opts, landing);
+    if (found) this.reaching.set(found, Promise.allSettled([this.reaching.get(found), releasing]));
+    return releasing;
+  }
+
+  private async releaseFound(run: IsolationRun | null, taskId: string, found: IsolationTaskRecord | undefined, opts: { keep: boolean }, landing?: Promise<unknown> | null): Promise<void> {
     await landing;
-    if (!run?.tasks[taskId]) return;
+    const record = run?.tasks[taskId];
+    if (!run || !record || (found && record !== found)) return;
     try {
-      this.report(await this.isolation.release(run, taskId, opts));
+      this.report(await this.isolation.release(run, taskId, { ...opts, record }));
+      if (this.reached.get(record) !== 'landed') this.reached.set(record, opts.keep);
     } catch (err) {
       this.notifications.warn(`Could not clean up the worktree of task ${taskId}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -591,7 +695,11 @@ export class IsolationRunController {
    */
   async close(): Promise<void> {
     const mode = this.mode;
-    this.mode = null;
+    // An activation in flight does not open the run this ends, but a start a
+    // dirty tree parked is still the user's to replay: only a stop or a plan
+    // load drops it ({@link interrupt}).
+    this.closedActivation = this.activations;
+    this.endActivation();
     const run = this.run;
     if (mode !== 'isolated' || !run) return;
     await this.refreshInHead();
@@ -675,12 +783,14 @@ export class IsolationRunController {
    * start is dropped. `keepOpen` spares a run the scheduler is still driving.
    */
   interrupt(opts: { keepOpen?: boolean } = {}): void {
-    if (!opts.keepOpen) {
-      this.mode = null;
-      this.activations++;
-      this.opening = null;
-    }
+    if (!opts.keepOpen) this.endActivation();
     this.blockedStart = null;
+  }
+
+  private endActivation(): void {
+    this.mode = null;
+    this.activations++;
+    this.opening = null;
   }
 
   /**
@@ -905,41 +1015,45 @@ export class IsolationRunController {
     return { mode: 'shared', reason: availability.reason, repos: availability.repos ?? [] };
   }
 
-  private async activate(resume: () => Promise<void>, activation: number): Promise<boolean> {
+  private async activate(resume: () => Promise<void>, activation: number): Promise<IsolationStart> {
     const root = this.workspaceRoot();
     const decision = await this.assess(root);
     const interrupted = () => activation !== this.activations;
-    if (interrupted()) return false;
+    // Only a close with nothing after it: a stop or a plan load since has the last word.
+    const ended = (): 'interrupted' | 'closed' => activation === this.closedActivation && this.activations === activation + 1 ? 'closed' : 'interrupted';
+    if (interrupted()) return ended();
     if (decision.mode === 'blocked') {
       this.blockedStart = resume;
       this.turnedAway += 1;
       this.blockedRepos = decision.repos;
       this.listener.blocked(decision.repos);
-      return false;
+      return 'blocked';
     }
     if (decision.mode === 'shared') {
       this.tell('info', sharedRootNotice(decision.reason, decision.repos));
       this.begin('shared');
-      return true;
+      return this.decision;
     }
     if (!decision.continuing) {
       try {
-        if (!(await this.mint(root, interrupted))) return false;
+        if (!(await this.mint(root, interrupted)) || interrupted()) return ended();
       } catch (err) {
-        if (interrupted()) return false;
+        if (interrupted()) return ended();
         // Not git's refusal: another host holds this session, or a child's root (ADR-0049, ADR-0055 D13), and a run without worktrees would change what it holds.
         if (err instanceof SessionHeldError) throw err;
         // Git can still refuse every repo of the group once a run is minted — the one check `isActive` cannot make.
         this.tell('info', `${err instanceof Error ? err.message : String(err)}: ${SHARED_ROOT_TAIL}`);
         this.listener.changed();
         this.begin('shared');
-        return true;
+        return this.decision;
       }
     }
     this.begin('isolated');
     await this.sweep();
+    if (interrupted()) return ended();
     await this.sayGitShortfall();
-    return true;
+    if (interrupted()) return ended();
+    return this.decision;
   }
 
   private begin(mode: 'isolated' | 'shared'): void {

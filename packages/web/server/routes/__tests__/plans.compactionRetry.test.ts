@@ -25,7 +25,7 @@ describe('POST /conversation/compact/retry', () => {
 
     expect(res.status).toBe(200);
     expect((await res.json() as { plan: { plannerContextPause?: unknown } }).plan.plannerContextPause).toEqual(pause);
-    expect(retryPlannerCompaction).toHaveBeenCalledWith('s1');
+    expect(retryPlannerCompaction).toHaveBeenCalledWith('s1', undefined);
   });
 
   it.each([

@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { BrowserWindow, dialog, ipcMain, nativeTheme, shell, type IpcMainInvokeEvent, type WebContents } from 'electron';
 import { CHANNELS, EVENTS, type AppInfo, type ConfirmSpec, type NotificationClick, type NotificationRequest, type StreamDelivery, type StreamEvent, type TerminalDelivery } from '../shared/bridge';
 import { isAppPage } from '../shared/csp';
-import { buildRequest, childStreamPath, liveSessionOf, segmentError, sessionStreamPath, type BuildResult } from '../shared/routes';
+import { buildRequest, childStreamPath, liveSessionOf, namingWorkspace, segmentError, sessionStreamPath, type BuildResult } from '../shared/routes';
 import type { DaemonManager } from './daemon/DaemonManager';
 import type { HolderConnections, HolderProxy } from './daemon/holders';
 import type { DaemonProxy } from './daemon/proxy';
@@ -174,15 +174,22 @@ export function registerIpc(deps: IpcDeps): void {
   handle(CHANNELS.daemonRetry, () => daemon.retry());
   handle(CHANNELS.daemonStart, () => daemon.start());
   handle(CHANNELS.daemonRestart, () => daemon.restart());
+  // A window's calls on a session say whose session they mean: the daemon
+  // refuses an id another project holds rather than serve that one.
+  const windowWorkspace = (event: IpcMainInvokeEvent): string | undefined => {
+    const context = windows.contextOf(event.sender);
+    return context?.kind === 'workspace' ? context.path : undefined;
+  };
   handle(CHANNELS.daemonCall, async (event, routeId, params, body) => {
-    const built = buildRequest(routeId, params, body);
+    const built = buildRequest(routeId, namingWorkspace(routeId, params, windowWorkspace(event)), body);
     if (!built.ok) return { ok: false, error: built.error };
     return targetOf(event, liveSessionOf(routeId, params)).call(built.request);
   });
   handle(CHANNELS.daemonSubscribe, (event, target) => {
     if (!isRecord(target)) throw new Error('subscribe takes a target');
-    if ('sessionId' in target) return openStream(event, sessionStreamPath(target.sessionId), target.sessionId);
-    return openStream(event, childStreamPath(target.rootId, target.childId), target.rootId);
+    const workspace = windowWorkspace(event);
+    if ('sessionId' in target) return openStream(event, sessionStreamPath(target.sessionId, workspace), target.sessionId);
+    return openStream(event, childStreamPath(target.rootId, target.childId, workspace), target.rootId);
   });
   handle(CHANNELS.daemonUnsubscribe, (event, subscription) => {
     if (typeof subscription !== 'number') return;

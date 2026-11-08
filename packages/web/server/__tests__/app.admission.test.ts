@@ -13,12 +13,19 @@ const TOKEN = 'the-daemons-token';
 const TOKEN_FILE = '/home/dev/.config/ordewell/server.token';
 const AUTH = { authorization: bearerHeaderValue(TOKEN) };
 
+/** The session each fake pool holds as `s1`, which answers its approvals. */
+const heldSessions = new WeakMap<OrchestratorPool, { resolveApproval: ReturnType<typeof vi.fn> }>();
+const heldSession = (pool: OrchestratorPool) => heldSessions.get(pool)!;
+
 function fakePool(overrides: Partial<OrchestratorPool> = {}): OrchestratorPool {
-  return {
-    hasSession: vi.fn().mockReturnValue(true),
+  const session = {
     resolveApproval: vi.fn().mockReturnValue(true),
     outstandingApprovals: vi.fn().mockReturnValue([]),
     approvedScopes: vi.fn().mockReturnValue([]),
+  };
+  const pool = {
+    hasSession: vi.fn().mockReturnValue(true),
+    session: vi.fn().mockReturnValue(session),
     getSettings: vi.fn().mockReturnValue({}),
     discoverPlannerCatalogs: vi.fn(async () => undefined),
     getRunnerState: vi.fn().mockReturnValue({ runners: [], headless: false, orchestratorModel: 'm' }),
@@ -31,6 +38,8 @@ function fakePool(overrides: Partial<OrchestratorPool> = {}): OrchestratorPool {
     workLive: vi.fn().mockReturnValue(false),
     ...overrides,
   } as unknown as OrchestratorPool;
+  heldSessions.set(pool, session);
+  return pool;
 }
 
 /**
@@ -149,7 +158,7 @@ describe('daemon admission control', () => {
         body: JSON.stringify({ granted: true }),
       });
       expect(res.status).toBe(200);
-      expect(pool.resolveApproval).toHaveBeenCalledWith('s1', 'ap-1', true);
+      expect(heldSession(pool).resolveApproval).toHaveBeenCalledWith('ap-1', true);
     });
 
     it('opens the session stream, carrying the token as a subprotocol', async () => {
@@ -211,7 +220,6 @@ describe('daemon admission control', () => {
       ['GET', '/api/settings', undefined],
       ['GET', '/api/sessions', undefined],
       ['GET', '/api/models', undefined],
-      ['GET', '/api/commands', undefined],
       ['GET', '/api/workspaces', undefined],
       ['GET', '/api/workspaces/isolation-preview', undefined],
       // The user's reads of files and git (ADR-0064) sit behind the same admission.
@@ -245,7 +253,7 @@ describe('daemon admission control', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ granted: true }),
       });
-      expect(pool.resolveApproval).not.toHaveBeenCalled();
+      expect(heldSession(pool).resolveApproval).not.toHaveBeenCalled();
     });
 
     it('is refused with a guessed token', async () => {
@@ -324,7 +332,7 @@ describe('daemon admission control', () => {
         body: JSON.stringify({ granted: true }),
       });
       expect(res.status).toBe(403);
-      expect(pool.resolveApproval).not.toHaveBeenCalled();
+      expect(heldSession(pool).resolveApproval).not.toHaveBeenCalled();
     });
 
     it('is refused even when the origin is a former allowlist entry', async () => {
@@ -355,7 +363,7 @@ describe('daemon admission control', () => {
         body: JSON.stringify({ granted: true }),
       });
       expect(res.status).toBe(403);
-      expect(pool.resolveApproval).not.toHaveBeenCalled();
+      expect(heldSession(pool).resolveApproval).not.toHaveBeenCalled();
     });
 
     it('is refused on the upgrade, before any subscription', async () => {

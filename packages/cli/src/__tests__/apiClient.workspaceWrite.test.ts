@@ -63,7 +63,7 @@ describe('ApiClient user git actions', () => {
   it('reads the Merge all preflight of a session', async () => {
     const { api, seen } = await client(200, { runId: 'r1', repos: [], stashMessage: 'm' });
     expect(await api.mergePreflight('s1')).toEqual({ runId: 'r1', repos: [], stashMessage: 'm' });
-    expect([seen.method, seen.url]).toEqual(['GET', '/api/plans/s1/isolation/merge-preflight?workspace=%2Fws+a']);
+    expect([seen.method, seen.url]).toEqual(['GET', '/api/plans/s1/isolation/merge-preflight?workspace=%2Fws%20a']);
   });
 
   it('carries the run that holds the branch, so a surface can name it', async () => {

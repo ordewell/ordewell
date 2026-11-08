@@ -3,8 +3,7 @@ import { canSetDependencies, dependencyCandidates, noExecutorRefusal, resolveTas
 import { assignedModelFor, effortsForTask, modelsForTask, modesForTask, runnerAccepts } from '../tui/taskAssignment';
 import { findTask, type TaskView } from '../tui/state';
 import type { ApiClient } from '../apiClient';
-import { positionals } from '../utils';
-import { flag } from '../utils/args';
+import { positionals, workspaceOf } from '../utils';
 import { fail, fetchCatalog, taskViews } from './shared';
 import { withResolvedTask } from './task-control';
 
@@ -237,7 +236,7 @@ export async function handleTaskSkills(subArgs: string[], injectedApi?: ApiClien
   await withTask(subArgs, SKILLS_USAGE, injectedApi, async (api, sessionId, task, tasks, value) => {
     if (task.type !== 'ai') fail('Manual tasks do not run an executor, so they take no skills.');
     // User-only skills are included: attaching by hand is a user invocation.
-    const catalog = createSkillsService(flag(subArgs, '--workspace') || process.cwd(), new EnvConfig().workspaceRepos)
+    const catalog = createSkillsService(workspaceOf(subArgs), new EnvConfig().workspaceRepos)
       .listSkills()
       .filter((s) => s.appliesTo === 'task');
 

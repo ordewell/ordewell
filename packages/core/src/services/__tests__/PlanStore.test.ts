@@ -182,6 +182,32 @@ describe('PlanStore.resetForRun', () => {
     expect(store.get('a')!.status).toBe('pending');
     expect(store.get('b')!.status).toBe('approved');
   });
+
+  // Bug: Execute cleared a hand-picked few of the attempt's fields, so a task it readied kept the verdict, the force start and the question of the attempt before.
+  it.each<[string, (s: PlanStore) => void]>([
+    ['resetForRun', (s) => s.resetForRun()],
+    ['readyFailed', (s) => s.readyFailed(() => false)],
+  ])('%s readies a task from nothing its last attempt earned, but the hold and carry-over it is still owed', (_name, ready) => {
+    store.load([{
+      ...createTask({ id: 't', title: 'T', assignedRunner: 'claude-code' }),
+      status: 'failed',
+      verdict: { outcome: 'fail', reason: 'no', checks: [], decidedAt: 'now' },
+      handoff: { summary: 'Half.', findings: [], findingCount: 0 },
+      outputSummary: { reviewReason: 'half', logTail: '', capturedAt: 'now' },
+      forcedPastGate: ['Earlier work'],
+      parkedQuestion: 'Which one?',
+      carriedFrom: 'codex',
+      reverted: true,
+      runnerSessionId: 'session-1',
+      attempted: true,
+    }], ['claude-code', 'codex']);
+
+    ready(store);
+
+    const task = store.get('t')!;
+    expect(task).toMatchObject({ status: 'approved', carriedFrom: 'codex', reverted: true, runnerSessionId: 'session-1', attempted: true });
+    for (const field of ['verdict', 'handoff', 'outputSummary', 'forcedPastGate', 'parkedQuestion'] as const) expect(task, field).not.toHaveProperty(field);
+  });
 });
 
 describe('PlanStore completion and failure have one source', () => {
@@ -405,6 +431,37 @@ describe('PlanStore counts the waits a task has ended (ADR-0053)', () => {
     store.markAttemptStarted('t');
     expect(store.get('t')).toMatchObject({ status: 'in_progress' });
     expect(store.get('t')?.waitsEnded).toBeUndefined();
+  });
+});
+
+describe('PlanStore.retry', () => {
+  it('starts a fresh attempt from nothing it earned, its record of having run kept', () => {
+    const store = new PlanStore();
+    store.load([{
+      ...createTask({ id: 't', title: 'T', assignedRunner: 'claude-code' }),
+      status: 'completed',
+      verdict: { outcome: 'pass', reason: 'ok', checks: [], decidedAt: 'now' },
+      handoff: { summary: 'Done.', findings: [], findingCount: 0 },
+      forcedPastGate: ['Earlier work'],
+      carriedFrom: 'codex',
+      loopRound: 2,
+      runnerSessionId: 'session-1',
+      attempted: true,
+    }], ['claude-code', 'codex']);
+
+    store.retry('t');
+
+    const task = store.get('t')!;
+    expect(task).toMatchObject({ status: 'pending', runnerSessionId: 'session-1', attempted: true });
+    for (const field of ['verdict', 'handoff', 'forcedPastGate', 'carriedFrom', 'loopRound'] as const) expect(task[field], field).toBeUndefined();
+  });
+
+  it('keeps a loop\'s round on a resume after a usage limit (ADR-0045 L7)', () => {
+    const store = new PlanStore();
+    store.load([{ ...createTask({ id: 't', title: 'T', assignedRunner: 'claude-code' }), status: 'awaiting_user', awaitingReason: 'usage-limit', loopRound: 2 }], ['claude-code']);
+    store.retry('t', { sameRound: true });
+    expect(store.get('t')).toMatchObject({ status: 'pending', loopRound: 2 });
+    expect(store.get('t')).not.toHaveProperty('awaitingReason');
   });
 });
 

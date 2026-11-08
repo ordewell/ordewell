@@ -1,9 +1,9 @@
 import {
-  isAwaitingReason, isSupervisorLevel, reduceRun,
+  EMPTY_RUN, isAwaitingReason, isSupervisorLevel, reduceRun,
   type PlanSnapshot, type RunInput, type RunTask, type RunView, type SessionMessage, type SettingsResponse, type SurfacePlan, type SurfacePlanState,
 } from '@ordewell/core';
 import { sanitize } from '../ansi';
-import type { TaskView, TuiState } from '../state';
+import { SESSION_KEYS, initialState, type SessionKey, type TaskView, type TuiState } from '../state';
 import { hear } from '../transcript';
 import { dropApproval, enqueueApproval } from './approvals';
 import { refillInbox } from './inbox';
@@ -153,6 +153,27 @@ export function withRun(state: TuiState, run: RunView): TuiState {
     runAutoMerge: run.runSettings?.mergeAtGatesAutomatically ?? null,
     ...supervisorOfRun(run.runSettings),
   });
+}
+
+const FRESH = initialState();
+
+/**
+ * The state with its session left (ADR-0006 R1): every field `STATE_SCOPE`
+ * calls session-scoped goes back to a fresh start's value, so a field added
+ * later is reset by every way out of a session without a list to edit. `keep`
+ * names what the leaving step is deliberately carrying over; the run view
+ * never survives. An approval prompt on screen was the session's, and goes.
+ */
+export function leaveSession(state: TuiState, keep: readonly SessionKey[] = []): TuiState {
+  const fresh: Record<string, unknown> = {};
+  for (const key of SESSION_KEYS) {
+    if (!keep.includes(key)) fresh[key] = FRESH[key];
+  }
+  return withRun({
+    ...state,
+    ...(fresh as Partial<TuiState>),
+    overlay: state.overlay?.kind === 'approval' ? null : state.overlay,
+  }, EMPTY_RUN);
 }
 
 /** One run input into the surface's view; a fold that changes nothing returns the state unchanged. */

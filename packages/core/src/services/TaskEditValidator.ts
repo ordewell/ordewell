@@ -1,8 +1,9 @@
+import { flipClears, isTaskType, presentForbiddenFields, unknownTypeRefusal } from '../models/TaskKind';
 import { Task, flattenTasksWithParents, waitsMidAttempt } from '../models/Task';
 import { canSetDependencies } from './PlanTree';
 import { NOT_STARTED } from '../taskRow/status';
 import { notOnAScriptMessage, opsPlacementRefusal } from './PlannedTask';
-import { notAScriptsFields, SCRIPT_BODY_FIELDS } from '../models/ScriptTask';
+import { SCRIPT_BODY_FIELDS } from '../models/ScriptTask';
 
 /**
  * Who is making the edit. The planner (`applyTaskOps`) and the direct-edit
@@ -65,11 +66,6 @@ export function startedEditRefusal(task: Pick<Task, 'title'>): string {
   return `"${task.title}" started before this change was saved, so it was not changed: only a task that has not started can be edited while the plan runs`;
 }
 
-const AI_ONLY_FIELDS = ['assignedModel', 'taskMode', 'autonomy', 'ops'] as const satisfies readonly (keyof Task)[];
-
-/** What a task loses on becoming a script task (ADR-0035): everything a runner would read. */
-const NOT_KEPT_BY_A_SCRIPT = [...AI_ONLY_FIELDS, 'prompt', 'skills', 'userSteps'] as const satisfies readonly (keyof Task)[];
-
 /**
  * Coherence between `type` and the fields that only make sense for one side
  * of it. Deriving user steps from an AI prompt (or vice versa) would fabricate
@@ -80,7 +76,9 @@ const NOT_KEPT_BY_A_SCRIPT = [...AI_ONLY_FIELDS, 'prompt', 'skills', 'userSteps'
  * clears the fields that stopped meaning anything, named for the caller.
  */
 function typeCoherenceCheck(target: Task, changes: Partial<Task>): TaskEditCheck | null {
-  if (!changes.type || changes.type === target.type) return null;
+  if (changes.type === undefined || changes.type === target.type) return null;
+  // A type cannot be cleared, and one no kind owns has no rules to hold the task to.
+  if (!isTaskType(changes.type)) return { ok: false, error: `"${target.title}" ${unknownTypeRefusal(changes.type)}` };
   // A goal and a prompt are not the same work, and its child would answer for another (ADR-0055 D1): a new task says so.
   if (changes.type === 'delegated' || target.type === 'delegated') return { ok: false, error: `"${target.title}" cannot change between a delegated task and any other: add a new task instead` };
   // What runs, and where, is fixed once it has run (ADR-0020): a script's
@@ -89,7 +87,8 @@ function typeCoherenceCheck(target: Task, changes: Partial<Task>): TaskEditCheck
   if ((changes.type === 'script' || target.type === 'script') && !NOT_STARTED.has(target.status)) {
     return { ok: false, error: `"${target.title}" has started, so whether it is a script task is fixed: add a new task instead` };
   }
-  const body = target.type === 'script' ? SCRIPT_BODY_FIELDS.filter((f) => target[f] !== undefined) : [];
+  const clear = flipClears(target.type, changes.type).filter((f) => target[f] !== undefined
+    && !(f === 'userSteps' && target.userSteps?.length === 0));
 
   if (changes.type === 'user') {
     if (!Array.isArray(changes.userSteps) || changes.userSteps.length === 0) {
@@ -97,7 +96,7 @@ function typeCoherenceCheck(target: Task, changes: Partial<Task>): TaskEditCheck
     }
     return {
       ok: true,
-      clear: [...AI_ONLY_FIELDS.filter((f) => target[f] !== undefined), ...body],
+      clear,
       // User tasks are held to HITL, so a flip that kept the AI task's slice would be refused by the plan's own rules.
       ...(target.sliceType !== 'HITL' ? { set: { sliceType: 'HITL' as const } } : {}),
     };
@@ -107,14 +106,14 @@ function typeCoherenceCheck(target: Task, changes: Partial<Task>): TaskEditCheck
     if (changes.commands === undefined && changes.script === undefined) {
       return { ok: false, error: `"${target.title}" cannot become a script task without a body: include "commands" or "script" in this edit` };
     }
-    return { ok: true, clear: NOT_KEPT_BY_A_SCRIPT.filter((f) => target[f] !== undefined) };
+    return { ok: true, clear };
   }
 
   // changes.type === 'ai'
   if (!changes.prompt || !changes.prompt.trim()) {
     return { ok: false, error: `"${target.title}" cannot become an AI task without a prompt: include "prompt" in this edit` };
   }
-  return { ok: true, clear: [...(target.userSteps && target.userSteps.length > 0 ? ['userSteps' as const] : []), ...body] };
+  return { ok: true, clear };
 }
 
 /**
@@ -129,7 +128,7 @@ function scriptCheck(target: Task, changes: Partial<Task>): TaskEditCheck | null
     if (body.length === 0) return null;
     return { ok: false, error: `"${target.title}" is not a script task, so it has no ${body.map((f) => `"${f}"`).join(', ')}: set "type": "script" with it, or leave it out` };
   }
-  const extra = [...('assignedRunner' in changes && changes.assignedRunner !== undefined ? ['assignedRunner'] : []), ...notAScriptsFields(changes)];
+  const extra = presentForbiddenFields('script', changes, ['readOnly', 'subtasks']);
   if (extra.length > 0) return { ok: false, error: `"${target.title}" ${notOnAScriptMessage(extra)}` };
   const replaced = [
     ...(changes.commands !== undefined && !('script' in changes) && target.script !== undefined ? ['script' as const] : []),

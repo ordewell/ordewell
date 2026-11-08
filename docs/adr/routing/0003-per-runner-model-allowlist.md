@@ -69,7 +69,7 @@ We decided to add a per-**RunnerId** model-id allowlist (stored on `UserSettings
 - `Planner` / `AiService` / `Session` threads the resolver through `PlanRequest` and `IAiService.startConversation`'s `modelsByRunner`. `loadPlan` and `TaskOrchestrator.startTask` are unchanged.
 - VS Code has an `ordewell.conﬁgureModelAllowlist` command (QuickPick runner → `withProgress` discover → `showQuickPick({ canPickMany: true })` over that runner's discovered models, pre-checked with the current allowlist; empty discovery aborts with a message). The per-task dropdown in `PlanCardGroup.tsx` is unchanged.
 - The CLI has `ordewell allowlist` (`set <runner> <id1,id2,…>` / `clear <runner>` / `show`), calling the existing `PATCH /settings` route. No new TTY picker dependency.
-- The daemon's `PATCH /settings` route is the single persistence channel both surfaces call — no new `/api/commands` entry, since the allowlist is a setting, not a toggle action.
+- The daemon's `PATCH /settings` route is the single persistence channel both surfaces call — no new entry in the daemon route table (`DAEMON_ROUTES`), since the allowlist is a setting, not a toggle action.
 - A future reader sees `ModelAllowlistResolver` separate from `ModelResolver`, `UserSettings.modelAllowlist` keyed by `RunnerId` not by `runnerProvider`, `loadPlan` untouched, and the orchestrator unaware — this ADR is the "why."
 
 ## History
@@ -84,3 +84,4 @@ We decided to add a per-**RunnerId** model-id allowlist (stored on `UserSettings
 - 2026-10-17 — a `/model` the user sends in a task's chat is written to the plan even off the allowlist, and tasks outside a changed scope are flagged, not moved ([ADR-0041](0041-a-tasks-model-follows-the-runners-own-switch.md), [ADR-0043](0043-a-change-of-scope-reaches-the-planner-and-flags-tasks.md)).
 - 2026-10-18 — one assignment resolver decides every writer's outcome (P1): a user's model edit off the allowlist stays refused, a task the user adds has it replaced and is told so; a replacement prefers an allowlisted model the runner lists (B1); its effort is carried to the nearest level, not wiped (T2); a model only another runner lists is refilled from the task's runner (V1); L3 splits the reading from the resolving.
 - 2026-10-26 — V1: a planner edit may put new work only on the runners enabled now, no longer the plan's own as well; a task an edit leaves on a runner switched off stands, and split parts and merged tasks are new.
+- 2026-11-08 — the settings route is named against the daemon's route table, not a command list.

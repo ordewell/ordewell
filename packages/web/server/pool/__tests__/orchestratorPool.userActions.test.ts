@@ -75,7 +75,7 @@ describe('a user git action against the pool', () => {
     expect(other.userRunIsLive(SESSION, workspace, { ...savedPlan(), tasks: [] })).toBe(false);
     expect(other.hasSession(SESSION)).toBe(false);
 
-    await holder.close(SESSION);
+    await holder.close(SESSION, workspace);
     expect(other.userRunIsLive(SESSION, workspace, savedPlan())).toBe(false);
   });
 

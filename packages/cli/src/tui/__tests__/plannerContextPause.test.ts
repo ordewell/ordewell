@@ -78,7 +78,6 @@ describe('/compact retry', () => {
     const deps: EffectDeps = {
       api: {
         retryPlannerCompaction,
-        streamPlanning: vi.fn().mockReturnValue({ close: vi.fn() }),
         followSession: vi.fn().mockReturnValue({ ready: Promise.resolve(true), ended: new Promise(() => {}), close: vi.fn() }),
       } as unknown as OrdewellApi,
       workspace: '/ws', port: 3742, dispatch, newSessionId: () => 's2', setEnvVar: () => {}, saveAutonomy: () => ({ overridden: false }), hasBin: () => true,

@@ -1,5 +1,5 @@
 import { createInterface } from 'readline';
-import { allTasksOf, flag, flags, hasFlag, saveLastSession } from '../utils';
+import { allTasksOf, flag, flags, hasFlag, saveLastSession, workspaceOf } from '../utils';
 import { ensureDaemon, resolvePort } from '../daemon';
 import { ApiClient } from '../apiClient';
 import { createApprovalHandler } from '../approvals';
@@ -207,16 +207,16 @@ export async function handlePlan(
   }
 
   const runnerFlags = flags(subArgs, '--runner').filter(Boolean) as string[];
-  const workspace = flag(subArgs, '--workspace') || process.cwd();
+  const workspace = workspaceOf(subArgs);
   const oneShot = hasFlag(subArgs, '--no-chat');
   const autoApprove = hasFlag(subArgs, '--yes');
   const verbose = hasFlag(subArgs, '--verbose');
 
   const port = injectedApi ? resolvePort(subArgs) : await ensureDaemon(resolvePort(subArgs));
-  const api = injectedApi || new ApiClient(port);
+  const api = injectedApi || new ApiClient(port, workspace);
   await forwardPlannerEnv(api);
 
-  const state = await api.getRunners();
+  const state = await api.getRunners(workspace);
   const enabledIds = state.runners.filter(r => r.enabled).map(r => r.id);
 
   // The list is every installed runner, enabled or not. One that is installed

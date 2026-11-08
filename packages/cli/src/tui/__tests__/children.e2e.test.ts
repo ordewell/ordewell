@@ -133,7 +133,7 @@ async function tree(turns: Record<string, Turn[]>, held: string[] = ['a']) {
   const planners = Object.fromEntries(Object.entries(turns).map(([id, script]) => [id, planner(script)]));
   const runners = heldTasks(held);
   const internals = daemon.pool as unknown as {
-    broadcast(id: string, message: unknown): void;
+    broadcast(id: string, workspace: string, message: unknown): void;
     registerSession(id: string, workspace: string, session: Session): void;
   };
   const config = fakeConfig({ maxParallelSessions: 3, autonomousMode: true });
@@ -143,8 +143,8 @@ async function tree(turns: Record<string, Turn[]>, held: string[] = ['a']) {
     notifications: { info() {}, warn() {}, error() {}, async confirm() { return undefined; } },
     workspaceRoot: () => workspace,
     fsAdapter: fakeFileSystem(),
-    broadcast: (message) => internals.broadcast(ROOT, message),
-    onNotice: (notice) => internals.broadcast(ROOT, notice),
+    broadcast: (message) => internals.broadcast(ROOT, workspace, message),
+    onNotice: (notice) => internals.broadcast(ROOT, workspace, notice),
     modelResolver: new ModelResolver(registry, config, { execImpl: async () => ({ stdout: '' }) }),
     settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', delegationTokens: 5_000_000, mergeAtGatesAutomatically: false } }),
     sessionId: ROOT,

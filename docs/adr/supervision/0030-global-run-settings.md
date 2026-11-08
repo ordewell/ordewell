@@ -509,3 +509,4 @@ the daemon reads it from there at generation.
 - 2026-10-31 — Parallel counts a whole tree (ADR-0055 D18).
 - 2026-11-02 — Subplanners is a compact on/off control: the tree budget shows only while on, is entered by the user the first time, and is kept while off and across restarts.
 - 2026-11-05 — a tree's shape limits (ADR-0055 D19) join the run settings, set in the desktop's Settings and printed by `ordewell delegation`.
+- 2026-11-08 — a start the run owes (a hold, queued start, repair, kept resume) is recorded in one ledger, and a user Stop withdraws queued starts, reopens and kept children; a restart does not.

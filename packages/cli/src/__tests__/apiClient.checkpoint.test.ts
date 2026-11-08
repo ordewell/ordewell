@@ -19,13 +19,13 @@ describe('ApiClient checkpoint answers', () => {
     });
     servers.push(server);
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-    return { api: new ApiClient((server.address() as { port: number }).port), hits };
+    return { api: new ApiClient((server.address() as { port: number }).port, '/w'), hits };
   }
 
   it('approves on its own route', async () => {
     const { api, hits } = await client(200, { ok: true });
     expect(await api.approveTaskCheckpoint('s1', 't1')).toEqual({ ok: true });
-    expect(hits).toEqual(['POST /api/plans/s1/tasks/t1/checkpoint/approve']);
+    expect(hits).toEqual(['POST /api/plans/s1/tasks/t1/checkpoint/approve?workspace=%2Fw']);
   });
 
   it('rejects with the reason, or with an empty body when there is none', async () => {
@@ -33,8 +33,8 @@ describe('ApiClient checkpoint answers', () => {
     await api.rejectTaskCheckpoint('s1', 't1', 'keep the table');
     await api.rejectTaskCheckpoint('s1', 't1');
     expect(hits).toEqual([
-      'POST /api/plans/s1/tasks/t1/checkpoint/reject {"reason":"keep the table"}',
-      'POST /api/plans/s1/tasks/t1/checkpoint/reject {}',
+      'POST /api/plans/s1/tasks/t1/checkpoint/reject?workspace=%2Fw {"reason":"keep the table"}',
+      'POST /api/plans/s1/tasks/t1/checkpoint/reject?workspace=%2Fw {}',
     ]);
   });
 

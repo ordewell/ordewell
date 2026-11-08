@@ -45,6 +45,8 @@ export interface AskOptions {
    * stopped) must deliver the answer before it goes.
    */
   onDecision?: (decision: ApprovalDecision) => void;
+  /** Aborting it withdraws the request: it settles as a denial, which takes its card off every surface. */
+  signal?: AbortSignal;
 }
 
 const DEFAULT_TIMEOUT_MS = 5 * 60_000;
@@ -75,7 +77,7 @@ export class PendingApprovals {
   /** Park a request whose answer is more than yes or no. */
   decide(request: ApprovalRequest, options: AskOptions = {}): Promise<ApprovalDecision> {
     const id = options.id ?? `ap-${Date.now()}-${counter++}`;
-    if (this.entries.has(id)) {
+    if (this.entries.has(id) || options.signal?.aborted) {
       const refused: ApprovalDecision = { decision: 'deny' };
       options.onDecision?.(refused);
       return Promise.resolve(refused);
@@ -101,6 +103,7 @@ export class PendingApprovals {
       }
 
       this.entries.set(id, { pending, settle, timer });
+      options.signal?.addEventListener('abort', () => settle({ decision: 'deny' }), { once: true });
       this.opts.onRequest?.(pending);
       for (const listener of this.listeners) listener(pending);
     });

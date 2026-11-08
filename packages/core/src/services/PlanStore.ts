@@ -7,6 +7,22 @@ import { startAttemptUsage, addAttemptUsage, endAttemptUsage, type RunnerSession
 import { sessionOwner } from './continuation';
 import { betweenRounds, loopRoundOf } from '../models/Loop';
 import { handoffDigest, type StoredHandoff } from '../models/Handoff';
+import { ATTEMPT_FIELDS, freshAttempt, type AttemptField } from '../models/TaskExecution';
+
+/** See {@link PlanStore.ready}. */
+const READY_KEEPS: readonly AttemptField[] = ['loopRound', 'reverted', 'carriedFrom'];
+
+/**
+ * Changes laid on a task the store owns. A field cleared stays as an
+ * `undefined` key where the task held it, as a cleared field always has, and is
+ * not added where it held none.
+ */
+function writeInto(task: Task, changes: Partial<Task>): void {
+  const fields = task as unknown as Record<string, unknown>;
+  for (const [field, value] of Object.entries(changes)) {
+    if (value !== undefined || field in fields) fields[field] = value;
+  }
+}
 
 /**
  * Deep copy of a task tree, down to the arrays the store rewrites. A task's
@@ -240,14 +256,19 @@ export class PlanStore {
     releaseMadeManual(this._planTasks, live);
   }
 
+  /**
+   * Execute's fresh chance: a fresh attempt, approved rather than pending, and
+   * not yet started. So it keeps what that attempt is still owed: the round,
+   * which its caller decides (ADR-0045 L5, L7), a revert's hold, which is the
+   * user's to release by a retry or a force start and which the load after a
+   * reset holds again (ADR-0054), and a carry-over, which the attempt it
+   * readies is (ADR-0018 U1).
+   */
   private ready(t: Task): void {
     this._revision++;
-    delete t.handoff;
-    delete t.outputSummary;
+    const fields = t as unknown as Record<string, unknown>;
+    for (const field of ATTEMPT_FIELDS) if (!READY_KEEPS.includes(field)) delete fields[field];
     t.status = 'approved';
-    delete t.awaitingReason;
-    delete t.resumeAt;
-    delete t.skipReason;
   }
 
   /** A delegated task's checks; its scheduler, which knows what makes a task read-only, says which those are. */
@@ -320,18 +341,10 @@ export class PlanStore {
    */
   retry(id: string, opts: { sameRound?: boolean } = {}): void {
     const task = this.edit(id);
-    if (task) {
-      this.setStatus(id, 'pending');
-      task.verdict = undefined;
-      task.outputSummary = undefined;
-      delete task.handoff;
-      delete task.forcedPastGate;
-      delete task.carriedFrom;
-      if (!opts.sameRound) {
-        delete task.loopRound;
-        this.takeBackChecks(id);
-      }
-    }
+    if (!task) return;
+    this.setStatus(id, 'pending');
+    writeInto(task, freshAttempt({ sameRound: opts.sameRound }));
+    if (!opts.sameRound) this.takeBackChecks(id);
   }
 
   /**

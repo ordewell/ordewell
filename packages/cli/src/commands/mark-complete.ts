@@ -1,6 +1,6 @@
 import { confirmedOverride, manualOverrideConfirmation, manualOverrideStopFirst, overrideNeedsConfirmation, resolveUserTaskRef, taskActionCommand, titledTaskRefOf, type ExecutionCommand, type OverrideDirection } from '@ordewell/core';
 import { ApiClient } from '../apiClient';
-import { flag, hasFlag } from '../utils';
+import { flag, hasFlag, workspaceOf } from '../utils';
 import { allTasksOf } from '../utils/tasks';
 import { askYesNo, fail } from './shared';
 import { withTaskRef } from './task-control';
@@ -25,7 +25,7 @@ async function overrideCommand(
 ): Promise<ExecutionCommand> {
   const command = taskActionCommand(direction, ref);
   if (hasFlag(subArgs, '--yes')) return confirmedOverride(command);
-  const live = await api.getSession(sessionId, flag(subArgs, '--workspace') || process.cwd()).catch(() => null);
+  const live = await api.getSession(sessionId, workspaceOf(subArgs)).catch(() => null);
   const tasks = live ? allTasksOf(live.plan as unknown as Record<string, unknown>) : [];
   const task = resolveUserTaskRef(tasks, ref);
   if (!task || !overrideNeedsConfirmation(task)) return command;

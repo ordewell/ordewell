@@ -13,6 +13,7 @@ import type { IsolationMergeResult } from '../../interfaces/IWorktreeIsolation';
 import type { ConversationTurn, IAiService } from '../AiService';
 import type { Session } from '../createSession';
 import { PlanEditError } from '../PlanEditError';
+import { STOPPED_BEFORE_START } from '../TaskOrchestrator';
 
 function runner() {
   const sessions: FakeRunnerSession[] = [];
@@ -47,6 +48,23 @@ const saved = (session: Session) => saves(session).mock.calls.at(-1)?.[0];
 beforeEach(() => { vi.restoreAllMocks(); });
 
 describe('Session with worktree isolation', () => {
+  it('returns an interrupted force start as a refusal at the command seam', async () => {
+    const { session, isolation, spawn, messages } = setup();
+    session.loadPlan(plan([task('t1', 1)]), 'goal', '/repo');
+    let assessed!: () => void;
+    const gate = new Promise<void>((resolve) => { assessed = resolve; });
+    const assess = vi.spyOn(isolation, 'isActive').mockImplementation(async () => { await gate; return { active: true }; });
+
+    const starting = session.execute({ command: 'force_start', task: 't1' }, { kind: 'user' });
+    await vi.waitFor(() => expect(assess).toHaveBeenCalledOnce());
+    session.loadPlan(plan([task('t1', 1)]), 'edited goal', '/repo');
+    assessed();
+
+    expect(await starting).toMatchObject({ ok: false, outcome: 'refused', message: STOPPED_BEFORE_START });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(messages).toContainEqual(expect.objectContaining({ type: 'execution_action', record: expect.objectContaining({ command: 'force_start', outcome: 'refused' }) }));
+  });
+
   it('offers landed work without a gate, drops it after merging, and offers later landings', async () => {
     const { session, lastStatus, pass, spawn, isolation, messages } = setup();
     const t1 = task('t1', 1);

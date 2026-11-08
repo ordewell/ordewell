@@ -56,7 +56,7 @@ describe('DELETE /api/sessions/:id when a child cannot be let go', () => {
         // What is still at work has gone before anything of its run is touched.
         expect(existsSync(join(worktree, 'a.txt'))).toBe(true);
       });
-      const pool = { hasSession: vi.fn().mockReturnValue(true), close, stopTree } as unknown as OrchestratorPool;
+      const pool = { hasSession: vi.fn().mockReturnValue(true), holds: vi.fn().mockReturnValue(true), heldElsewhere: vi.fn().mockReturnValue(false), close, stopTree } as unknown as OrchestratorPool;
       const app = new Hono();
       app.route('/api/sessions', sessionsRoute(pool));
 
@@ -64,7 +64,7 @@ describe('DELETE /api/sessions/:id when a child cannot be let go', () => {
       const body = (await res.json()) as { ok: boolean; message?: string };
 
       expect(body.ok).toBe(false);
-      expect(stopTree).toHaveBeenCalledWith('root');
+      expect(stopTree).toHaveBeenCalledWith('root', ws);
       expect(close).not.toHaveBeenCalled();
       expect(loadSession('root', ws)).not.toBeNull();
       expect(existsSync(join(worktree, 'a.txt'))).toBe(true);

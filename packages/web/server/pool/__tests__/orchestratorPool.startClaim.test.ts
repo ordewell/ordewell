@@ -93,7 +93,7 @@ describe('task starts and Stop sent to the daemon at once', () => {
     const id = saveSession(approvedPlan(), 'Rate limiting', workspace, name).id;
     const d = daemon();
     d.pool.adoptSavedSession(id, workspace);
-    return { ...d, id, session: d.pool.session(id) };
+    return { ...d, id, session: d.pool.session(id, undefined) };
   }
 
   it('answers a Run sent beside Stop as not started, Stop as stopped, and leaves the task not started', async () => {
