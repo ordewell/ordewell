@@ -5,8 +5,10 @@
 // git failure and every event but a pull request all mean the full run. So a
 // new root config or a new package costs time, never a missed check.
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { existsSync, lstatSync, readFileSync, readlinkSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import path, { join } from 'node:path';
 
 /** Prose nothing executes. AUTHORS.md and NOTICE ship in every package, so they are not here. */
 const DOCS = /^(docs\/.+|(README|CHANGELOG|CONTEXT|CONTRIBUTING|AGENTS|CLAUDE|SECURITY|CODE_OF_CONDUCT)\.md)$/;
@@ -20,10 +22,12 @@ const SOURCE = /^(src|server)\/.+\.tsx?$/;
 /**
  * Each is a check a scope turns on or off; ci.yml reads them as job outputs.
  * `suites` is the coverage job and `windows` the Windows suites, both on when
- * their scope names any workspace; `harness` is the windows-harness job.
+ * their scope names any workspace; `merge` is the coverage-merge job, on when
+ * a suite it owes in full runs as shards (COVERAGE_SHARDS); `harness` is the
+ * windows-harness job.
  */
 export const CHECKS = [
-  'suites', 'typecheck', 'lint', 'package', 'bench', 'windows', 'harness',
+  'suites', 'merge', 'typecheck', 'lint', 'package', 'bench', 'windows', 'harness',
   'sandbox', 'planner', 'integration', 'desktop', 'tour', 'engine', 'binary',
 ];
 
@@ -48,11 +52,14 @@ export const STEPS_BY_JOB = {
     desktop: ['desktop-e2e'],
     binary: ['build-binary', 'drive-binary'],
   },
-  // The visual tour is one long walk (21.9 min in CI), so it has a job of its own.
+  // The visual tour is one long walk, so it has a job of its own, a matrix of
+  // legs that each walk every state and shoot a share of it; each leg confirms this.
   'desktop-tour': { tour: ['desktop-tour'] },
   typecheck: { typecheck: ['typecheck'] },
   // One leg per workspace the scope names, at the tier it names.
   coverage: { suites: ['coverage'] },
+  // A sharded suite's coverage, merged and judged against its floors.
+  'coverage-merge': { merge: ['merge-coverage'] },
   lint: { lint: ['lint'] },
   package: { package: ['package-vscode', 'package-desktop', 'verify-artifacts', 'upload-vsix'] },
 };
@@ -131,6 +138,15 @@ const TIER = { quick: 1, full: 2 };
 
 const allFull = (dirs) => Object.fromEntries(dirs.map((dir) => [dir, 'full']));
 
+/**
+ * The workspaces whose full coverage leg runs as shards, each with how many.
+ * Core's suite is the one leg that set the coverage job's pace, so it is split
+ * until a shard runs about as long as the other long jobs. A shard judges no
+ * floor, since it runs only part of the suite; coverage-merge merges every
+ * shard's coverage and judges the workspace's own floors over the whole.
+ */
+export const COVERAGE_SHARDS = { 'packages/core': 3 };
+
 const onWindows = (suites) => Object.fromEntries(Object.entries(suites).filter(([dir]) => WINDOWS_SUITES.includes(dir)));
 
 /**
@@ -146,7 +162,7 @@ export function fullScope(reason, workspaces) {
     workspaces: dirs,
     suites: allFull(dirs),
     windowsSuites: allFull(WINDOWS_SUITES.filter((dir) => dirs.includes(dir))),
-    checks: checksFor(() => true),
+    checks: checksFor((check) => check !== 'merge' || dirs.some((dir) => COVERAGE_SHARDS[dir])),
   };
 }
 
@@ -208,8 +224,8 @@ const owes = (...checks) => () => ({ checks });
  * these means the full run: a new file under scripts/ or packaging/, the
  * scripts that decide what CI runs (ci.mjs, change-scope.mjs, ci-scope.mjs,
  * test-changed.mjs, npm.mjs), generate-third-party-notices.mjs, which every
- * package build runs, and the root manifests, the lockfile and the workflows,
- * which change what every job installs or runs.
+ * package build runs, and the root manifests, the lockfile, the workflows and
+ * the setup action, which change what every job installs or runs.
  */
 const ROOT_OWNERS = [
   // Root lint (`eslint . --ext .ts,.tsx`) reads it, and so does ui's
@@ -283,6 +299,10 @@ const ROOT_OWNERS = [
   [/^scripts\/(desktop-)?package-check\.mjs$/, owes('package', 'bench')],
   // Tests of desktop's packaging scripts, and the one that keeps their stdout clean.
   [/^scripts\/(desktop-package-check|desktop-package|test-stdout)\.test\.mjs$/, owes('bench')],
+  // The Windows partition proof reads the real suite configs and manifests.
+  // Assignment and its measured data owe Windows; their tooling also runs in bench.
+  [/^scripts\/windows-(shards|sequencer)\.mjs$|^scripts\/windows-durations\.json$/, () => ({ windows: allFull(WINDOWS_SUITES), checks: ['bench'] })],
+  [/^scripts\/(windows-shards\.test|refresh-windows-durations)\.mjs$/, owes('bench')],
   // Selection's own tests. Selection itself, ci-scope.mjs and the rest of
   // what decides what CI runs are not here: they mean the full run.
   [/^scripts\/change-scope\.test\.mjs$/, owes('bench')],
@@ -290,9 +310,11 @@ const ROOT_OWNERS = [
   // windows-harness, which runs them too, is owed.
   [/^scripts\/verify-(adr|fresh-install|migration|notice|skills)\.mjs$/, owes('harness')],
   // The real bubblewrap e2e (the sandbox step) and the container suites
-  // (test:containers, the real engine); nothing else runs either.
+  // (test:containers, the real engine); nothing else runs either, though the
+  // bench step tests the container script's pulls.
   [/^scripts\/linux-sandbox-e2e\.sh$/, owes('sandbox')],
-  [/^scripts\/container-e2e\.mjs$/, owes('engine')],
+  [/^scripts\/container-e2e\.mjs$/, owes('engine', 'bench')],
+  [/^scripts\/container-e2e\.test\.mjs$/, owes('bench')],
 ];
 
 /** What a path owes, or nothing when only the full run can judge it. */
@@ -317,7 +339,7 @@ function summarise(suites, checks) {
   const parts = [];
   if (at('full').length) parts.push(`full suites for ${at('full').join(', ')}`);
   if (at('quick').length) parts.push(`quick suites for ${at('quick').join(', ')}`);
-  const also = CHECKS.filter((check) => checks[check] && !['suites', 'windows'].includes(check));
+  const also = CHECKS.filter((check) => checks[check] && !['suites', 'merge', 'windows'].includes(check));
   if (also.length) parts.push(`owes ${also.join(', ')}`);
   return parts.join('; ');
 }
@@ -345,6 +367,7 @@ export function selectScope(paths, workspaces) {
   const on = {
     ...Object.fromEntries([...owed].map((check) => [check, true])),
     suites: Object.keys(linux).length > 0,
+    merge: Object.entries(linux).some(([dir, tier]) => tier === 'full' && COVERAGE_SHARDS[dir]),
     windows: Object.keys(windowsSuites).length > 0,
     // windows-harness runs the bench step, the planner loop and the VS Code
     // integration test on Windows, so it is owed when any of them is.
@@ -490,17 +513,63 @@ export function missedSteps(scope, steps, job = 'build-and-test') {
 
 /**
  * The coverage matrix for a scope: a leg per workspace it names. A full leg
- * runs `test:coverage`, under that workspace's floors; a quick one runs
- * `test:quick`, which judges no floor, since a floor is only meaningful over
- * the whole suite.
+ * runs `test:coverage`, under that workspace's floors, or, for a workspace in
+ * COVERAGE_SHARDS, one `test:coverage:shard` leg per shard, whose floors
+ * coverage-merge judges. A quick leg runs `test:quick`, which judges no floor,
+ * since a floor is only meaningful over the whole suite.
  */
 export function coverageLegs(scope) {
-  return scope.workspaces.map((dir) => {
+  return scope.workspaces.flatMap((dir) => {
     const name = dir.split('/').at(-1);
-    return scope.suites[dir] === 'full'
-      ? { workspace: dir, name, script: 'test:coverage' }
-      : { workspace: dir, name: `${name}-quick`, script: 'test:quick' };
+    if (scope.suites[dir] !== 'full') return [{ workspace: dir, name: `${name}-quick`, script: 'test:quick' }];
+    const shards = COVERAGE_SHARDS[dir];
+    if (!shards) return [{ workspace: dir, name, script: 'test:coverage' }];
+    return Array.from({ length: shards }, (_, i) => ({
+      workspace: dir, name: `${name}-${i + 1}-of-${shards}`, script: 'test:coverage:shard', shard: `${i + 1}/${shards}`,
+    }));
   });
+}
+
+/** The coverage-merge matrix: one leg per workspace whose shards coverageLegs gave. */
+export function coverageMerges(scope) {
+  return scope.workspaces
+    .filter((dir) => scope.suites[dir] === 'full' && COVERAGE_SHARDS[dir])
+    .map((dir) => ({ workspace: dir, name: dir.split('/').at(-1), shards: COVERAGE_SHARDS[dir] }));
+}
+
+/**
+ * Why a merge of these blob files would not stand for the whole suite. vitest
+ * merges whatever blobs it finds, so a shard that left none would drop its
+ * tests and its coverage without a word; and a blob of another count would
+ * count files twice.
+ */
+export function blobProblems(files, shards) {
+  if (!Number.isInteger(shards) || shards < 1) return [`${shards} is not a count of shards`];
+  const expected = Array.from({ length: shards }, (_, i) => `blob-${i + 1}-${shards}.json`);
+  return [
+    ...expected.filter((file) => !files.includes(file)).map((file) => `${file}: missing, so shard ${file.split('-')[1]}/${shards} left no tests or coverage to merge`),
+    ...files.filter((file) => !expected.includes(file)).map((file) => `${file}: not one of this run's ${shards} shards`),
+  ];
+}
+
+/**
+ * The coverage summary of each workspace in a coverage log, as markdown for a
+ * job summary. npm heads each run with `> name@version script`; a shard's run
+ * is left out, its coverage being part of a suite.
+ */
+export function coverageSummaries(log) {
+  const chunks = log.split(/^> (\S+)@\S+ test:coverage(?::merge)?\s*$/m);
+  const out = [];
+  for (let i = 1; i < chunks.length; i += 2) {
+    const body = chunks[i + 1] ?? '';
+    const marker = body.indexOf('Coverage summary');
+    if (marker < 0) continue;
+    const rest = body.slice(body.lastIndexOf('\n', marker) + 1);
+    const end = rest.search(/\n={20,}/);
+    const summary = (end < 0 ? rest : rest.slice(0, end)).trimEnd();
+    out.push(`### Coverage — \`${chunks[i]}\``, '', '```', summary, '```', '');
+  }
+  return out.join('\n');
 }
 
 /**
@@ -571,4 +640,229 @@ export function gateFailures(event, needs, { reuseMainProof = false } = {}) {
   owed('real-engine', 'engine');
   for (const [job, check] of Object.entries(WINDOWS_JOBS)) owed(job, check);
   return failures;
+}
+
+// The setup action (.github/actions/setup/action.yml): what a job installs and
+// builds, and the cache keys that let it skip either. A key hashes everything
+// the work reads, so a hit is what the work would have produced. Where in
+// doubt a key takes more in: that costs a rebuild, never a stale build.
+
+/**
+ * What each workspace's build writes that a later step reads. A hit restores
+ * these and nothing else, so an output a build gains and this leaves out goes
+ * missing after one. Every path is gitignored, which keeps it out of the key.
+ */
+export const BUILD_OUTPUTS = {
+  'packages/core': ['dist'],
+  'packages/ui': ['dist', 'THIRD-PARTY-NOTICES.md'],
+  // copy-skills.mjs fills skills/ from core's.
+  'packages/vscode': ['dist', 'skills', 'THIRD-PARTY-NOTICES.md'],
+  'packages/cli': ['dist', 'THIRD-PARTY-NOTICES.md'],
+  'packages/web': ['dist'],
+  'packages/desktop': ['dist', 'THIRD-PARTY-NOTICES.md'],
+};
+
+/**
+ * Files outside the workspaces that a build reads or that decide how it runs:
+ * the manifests and lockfile node_modules comes from, the shared tsconfig, the
+ * notices generator, and what runs the build. A missing one hashes as missing.
+ */
+const BUILD_ROOT_FILES = [
+  'package.json', 'package-lock.json', 'tsconfig.json', '.nvmrc', '.npmrc',
+  'scripts/generate-third-party-notices.mjs', 'scripts/ci-scope.mjs', 'scripts/npm.mjs',
+  '.github/actions/setup/action.yml',
+];
+
+/** The environment a build reads: desktop's tsup bakes ORDEWELL_DESKTOP_AUTO_UPDATE in. */
+const BUILD_ENV = ['NODE_ENV', 'ORDEWELL_DESKTOP_AUTO_UPDATE'];
+
+/** Raised by hand to drop every cached build, should a key ever prove to have missed an input. */
+const BUILD_CACHE_EPOCH = 1;
+
+/** npm runs these on `npm ci`, so the files they name shape node_modules too. */
+const INSTALL_SCRIPTS = ['preinstall', 'install', 'postinstall', 'prepare'];
+
+const shortName = (dir) => dir.split('/').at(-1);
+
+/**
+ * The workspaces `asked` names (short names, or `all`), each with every
+ * workspace it depends on, ordered so a dependency builds before what depends
+ * on it, and in root package.json order otherwise.
+ */
+export function buildOrder(asked, workspaces) {
+  const words = asked.split(/\s+/).filter(Boolean);
+  const byName = new Map(workspaces.map((ws) => [shortName(ws.dir), ws]));
+  const byDir = new Map(workspaces.map((ws) => [ws.dir, ws]));
+  const unknown = words.filter((word) => word !== 'all' && !byName.has(word));
+  if (unknown.length) throw new Error(`setup: no workspace is named ${unknown.join(', ')}; ask for ${[...byName.keys()].join(', ')} or all`);
+  const wanted = new Set();
+  const want = (ws) => {
+    if (wanted.has(ws.dir)) return;
+    wanted.add(ws.dir);
+    for (const dep of ws.deps) want(byDir.get(dep));
+  };
+  for (const ws of words.includes('all') ? workspaces : words.map((word) => byName.get(word))) want(ws);
+  const order = [];
+  const placed = new Set();
+  while (order.length < wanted.size) {
+    const next = workspaces.find((ws) => wanted.has(ws.dir) && !placed.has(ws.dir) && ws.deps.every((dep) => placed.has(dep)));
+    if (!next) throw new Error('setup: the workspaces depend on each other in a cycle');
+    order.push(next);
+    placed.add(next.dir);
+  }
+  return order;
+}
+
+/** Every file git would commit under `dirs`: the tracked ones, and new ones .gitignore lets in. */
+function filesUnder(root, dirs) {
+  const listed = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...dirs], {
+    cwd: root, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024,
+  });
+  return listed.split('\0').filter(Boolean);
+}
+
+/**
+ * `files` (repo-relative, `/`-separated) hashed by name and content, in sorted
+ * order. A link hashes as its target, and a file listed but gone as missing,
+ * so a deletion changes the hash too.
+ */
+function hashFiles(hash, root, files) {
+  for (const file of [...new Set(files)].sort()) {
+    const full = join(root, file);
+    let body;
+    try {
+      const stat = lstatSync(full);
+      body = stat.isSymbolicLink() ? Buffer.from(`link:${readlinkSync(full)}`) : stat.isFile() ? readFileSync(full) : Buffer.from('not a file');
+    } catch {
+      body = Buffer.from('missing');
+    }
+    hash.update(`${file}\0${body.length}\0`);
+    hash.update(body);
+  }
+}
+
+/**
+ * Each workspace's build cache key: its own files, the keys of the workspaces
+ * it depends on (which stand for their builds), the root files, the outputs it
+ * caches, the environment its build reads, and the Node it runs on.
+ */
+export function buildKeys(order, { root = '.', workspaces, platform, arch, nodeVersion, env }) {
+  const byDir = new Map(workspaces.map((ws) => [ws.dir, ws]));
+  const keys = new Map();
+  const keyOf = (ws) => {
+    if (keys.has(ws.dir)) return keys.get(ws.dir);
+    const outputs = BUILD_OUTPUTS[ws.dir];
+    if (!outputs) throw new Error(`setup: ${ws.dir} has no BUILD_OUTPUTS entry in scripts/change-scope.mjs, so its build cannot be cached`);
+    const hash = createHash('sha256');
+    hash.update(JSON.stringify({
+      epoch: BUILD_CACHE_EPOCH,
+      nodeVersion,
+      dir: ws.dir,
+      outputs,
+      env: BUILD_ENV.map((name) => [name, env[name] ?? null]),
+      deps: ws.deps.map((dep) => keyOf(byDir.get(dep))),
+    }));
+    hashFiles(hash, root, [...filesUnder(root, [ws.dir]), ...BUILD_ROOT_FILES]);
+    const key = `build-${platform}-${arch}-${shortName(ws.dir)}-${hash.digest('hex')}`;
+    keys.set(ws.dir, key);
+    return key;
+  };
+  for (const ws of order) keyOf(ws);
+  return keys;
+}
+
+/**
+ * The node_modules cache key: everything `npm ci` installs from (the lockfile
+ * and the manifests it checks the lockfile against) and the files the install
+ * scripts it runs name, on this Node and npm.
+ */
+export function modulesKey({ root = '.', workspaces, platform, arch, nodeVersion }) {
+  const manifests = ['.', ...workspaces.map((ws) => ws.dir)];
+  const scripts = manifests.flatMap((dir) => {
+    const { scripts: run = {} } = JSON.parse(readFileSync(join(root, dir, 'package.json'), 'utf8'));
+    return INSTALL_SCRIPTS.flatMap((name) => [...(run[name] ?? '').matchAll(/[\w./-]+\.(?:[cm]?js|sh)\b/g)])
+      .map(([file]) => path.posix.join(dir, file));
+  });
+  const hash = createHash('sha256');
+  hash.update(`${nodeVersion}\0`);
+  hashFiles(hash, root, ['package-lock.json', '.npmrc', ...manifests.map((dir) => path.posix.join(dir, 'package.json')), ...scripts]);
+  return `node-modules-${platform}-${arch}-${nodeVersion}-${hash.digest('hex')}`;
+}
+
+const pathsFor = (platform) => (platform === 'win32' ? path.win32 : path.posix);
+
+/**
+ * Where electron's install.js has @electron/get keep its downloads, which is
+ * also where electron-builder looks for the same zip and seeded checksums
+ * (app-builder-lib's defaultElectronGetCacheRoot).
+ */
+export function electronCacheDir({ platform, env, home }) {
+  const p = pathsFor(platform);
+  if (env.electron_config_cache) return env.electron_config_cache;
+  if (platform === 'darwin') return p.join(home, 'Library', 'Caches', 'electron');
+  if (platform === 'win32') return p.join(env.LOCALAPPDATA || p.join(home, 'AppData', 'Local'), 'electron', 'Cache');
+  return p.join(env.XDG_CACHE_HOME || p.join(home, '.cache'), 'electron');
+}
+
+/** electron-builder's own cache, its toolsets (AppImage, fpm) among them, as app-builder-lib's getCacheDirectory finds it. */
+export function electronBuilderCacheDir({ platform, env, home, tmp }) {
+  const p = pathsFor(platform);
+  const override = env.ELECTRON_BUILDER_CACHE?.trim();
+  if (override && p.parse(override).root) return override;
+  if (platform === 'darwin') return p.join(home, 'Library', 'Caches', 'electron-builder');
+  if (platform === 'win32') {
+    const local = env.LOCALAPPDATA?.trim();
+    const system = local?.toLowerCase().includes('\\windows\\system32\\') || env.USERNAME?.trim().toLowerCase() === 'system';
+    return !local || system ? p.join(tmp, 'electron-builder-cache') : p.join(local, 'electron-builder', 'Cache');
+  }
+  const xdg = env.XDG_CACHE_HOME;
+  return xdg && p.parse(xdg).root ? p.join(xdg, 'electron-builder') : p.join(home, '.cache', 'electron-builder');
+}
+
+/** Where @electron/rebuild keeps the Electron headers a native module compiles against. */
+export const electronGypDir = ({ platform, home }) => pathsFor(platform).join(home, '.electron-gyp');
+
+/** The version package-lock.json installs `name` at, or null. */
+export const lockedVersion = (lock, name) => lock.packages?.[`node_modules/${name}`]?.version ?? null;
+
+/**
+ * electron's checksums.json written as a SHASUMS256.txt, `<sha256> *<file>` a
+ * line. Seeded beside the zip, it lets electron-builder verify that zip offline
+ * rather than download the sums again (app-builder-lib's resolveSeededChecksums).
+ */
+export function shasumsText(checksums) {
+  return Object.keys(checksums).sort().map((file) => `${checksums[file]} *${file}\n`).join('');
+}
+
+/**
+ * What one call of the setup action does: install unless this job already
+ * did, build each workspace asked for that this job has not, and the caches
+ * each of those reads, keyed. `built` is the short names already built here.
+ */
+export function setupPlan(request, host = {}) {
+  const { build = '', installed = false, built = [], electron = false, electronBuilder = false } = request;
+  const { root = '.', platform = process.platform, arch = process.arch, nodeVersion = process.version, env = process.env, home = homedir(), tmp = tmpdir() } = host;
+  const workspaces = host.workspaces ?? readWorkspaces(root);
+  const order = buildOrder(build, workspaces).filter((ws) => !built.includes(shortName(ws.dir)));
+  const keys = buildKeys(order, { root, workspaces, platform, arch, nodeVersion, env });
+  const lock = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8'));
+  const electronAt = `electron@${lockedVersion(lock, 'electron')}`;
+  const builderAt = `electron-builder@${lockedVersion(lock, 'electron-builder')}`;
+  const where = { platform, env, home, tmp };
+  return {
+    install: !installed,
+    // node_modules is some 40k files on Windows, which unpack there slower than
+    // `npm ci` fills them from the npm cache setup-node restores.
+    modulesKey: !installed && platform !== 'win32' ? modulesKey({ root, workspaces, platform, arch, nodeVersion }) : '',
+    builds: order.map((ws) => ({
+      name: shortName(ws.dir),
+      dir: ws.dir,
+      key: keys.get(ws.dir),
+      paths: BUILD_OUTPUTS[ws.dir].map((output) => `${ws.dir}/${output}`),
+    })),
+    electron: electron ? { key: `electron-${platform}-${arch}-${electronAt}`, path: electronCacheDir(where) } : null,
+    electronBuilder: electronBuilder
+      ? { key: `electron-builder-${platform}-${arch}-${electronAt}-${builderAt}`, paths: [electronBuilderCacheDir(where), electronGypDir(where)] }
+      : null,
+  };
 }

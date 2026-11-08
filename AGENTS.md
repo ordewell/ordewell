@@ -27,7 +27,7 @@ npm run lint
 npm run typecheck
 npm test
 npm run test:coverage   # same tests, plus the per-file coverage floors CI enforces; writes coverage/ reports
-npm run ci              # every ci.yml step, in its order: run this before pushing
+npm run ci              # every ci.yml step once, in its order, unsharded: run this before pushing
 npm run test:changed    # while iterating: only tests affected by uncommitted changes
 npm run test:quick      # every test except the real-git e2e files (*.e2e.test.ts, GitWorktreeIsolation)
 npm run test:containers # every harness's real binary in a real Docker engine; a skip is UNVERIFIED, not a pass
@@ -49,17 +49,30 @@ it, as `ROOT_OWNERS` lists (`.eslintrc.js` lint, `vitest.setup.ts` the suites, a
 `bench/` fake the suites that start it), and one that list does not name means
 the full run. A new root config, a new `bench/` harness, a new package or a test
 that reads past its own package belongs in that file's decisions and its tests.
-`Required checks` is the status to require on main: a skipped job reads as a pass
-to GitHub, so that job judges the others by what the change owed them.
+`COVERAGE_SHARDS` there names each workspace whose full suite CI runs as several
+legs whose blobs `coverage merge` judges over the whole (core today); the
+Windows shards are packed from `scripts/windows-durations.json`, which
+`node scripts/refresh-windows-durations.mjs <run-id> [...]` refreshes.
+`Required checks` is the status to require on main, and it waits on every job
+that confirms steps, `desktop-tour` and `coverage-merge` included: a skipped job
+reads as a pass to GitHub, so that job judges the others by what the change owed
+them.
 
 Before pushing, run `npm run ci`. It runs what `.github/workflows/ci.yml`
 runs: beyond lint, typecheck and `test:coverage` (whose per-file floors in
 `packages/core/vitest.config.ts` plain `npm test` never checks), the verify
 scripts, the offline planner e2e, the VS Code integration test and packaging.
-It refuses to start when ci.yml has a step it does not know, so add any new
-step to `scripts/ci.mjs` too, and give a step a verdict rests on an `id`,
-listed under its job in `STEPS_BY_JOB` (`scripts/change-scope.mjs`); a new job
-goes there too, and in `Required checks`' needs. The integration test downloads VS Code into
+It runs each step once, unsharded: CI's Windows shards, and core's coverage
+shards with the merge leg that judges their floors, are there to finish sooner,
+not to check anything extra. It refuses to start when ci.yml has a step it does
+not know, so add any new step to `scripts/ci.mjs` too, and give a step a verdict
+rests on an `id`, listed under its job in `STEPS_BY_JOB`
+(`scripts/change-scope.mjs`); a new job goes there too, and in `Required
+checks`' needs. Every job but `scope` and `Required checks` sets up through
+`.github/actions/setup`, which restores `node_modules` (on Linux; Windows runs
+`npm ci`), the workspace builds the job asks for and Electron's binary from
+caches before installing, building or downloading one, so a new job uses it
+rather than `npm ci`. The integration test downloads VS Code into
 `packages/vscode/.vscode-test` on its first run.
 
 A test that depends on the time of day (a usage-limit "resets 8:10pm") fails

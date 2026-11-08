@@ -1,25 +1,39 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { after, describe, it } from 'node:test';
 import {
   ALWAYS_STEPS,
+  BUILD_OUTPUTS,
   CHECKS,
+  COVERAGE_SHARDS,
   GUARD_TESTS,
   STEPS_BY_CHECK,
   STEPS_BY_JOB,
   WINDOWS_JOBS,
+  buildKeys,
+  buildOrder,
+  blobProblems,
   changedInPullRequest,
   coverageLegs,
+  coverageMerges,
+  coverageSummaries,
+  electronBuilderCacheDir,
+  electronCacheDir,
+  electronGypDir,
   fullScope,
   gateFailures,
   localRuns,
+  lockedVersion,
   missedSteps,
+  modulesKey,
   readWorkspaces,
   scopeForEvent,
   selectScope,
+  setupPlan,
+  shasumsText,
   uncommittedPaths,
   windowsRuns,
 } from './change-scope.mjs';
@@ -72,31 +86,31 @@ describe('a change inside workspaces', () => {
   it('takes the cli and desktop with web, drives the app on the daemon, and leaves core, vscode and what only they prove', () => {
     const scope = selected('packages/web/server/routes/settings.ts');
     assert.deepEqual([...scope.workspaces].sort(), [CLI, DESKTOP, WEB]);
-    assert.deepEqual(offChecks(scope), ['engine', 'integration', 'planner', 'sandbox', 'tour']);
+    assert.deepEqual(offChecks(scope), ['engine', 'integration', 'merge', 'planner', 'sandbox', 'tour']);
   });
 
   it('keeps a cli change to the cli', () => {
     const scope = selected('packages/cli/src/tui/view.ts');
     assert.deepEqual(scope.workspaces, [CLI]);
-    assert.deepEqual(offChecks(scope), ['desktop', 'engine', 'integration', 'planner', 'sandbox', 'tour']);
+    assert.deepEqual(offChecks(scope), ['desktop', 'engine', 'integration', 'merge', 'planner', 'sandbox', 'tour']);
   });
 
   it('takes vscode and desktop with ui, and runs the real VS Code and the app for it: both draw from ui\'s dist', () => {
     const scope = selected('packages/ui/src/chat/App.tsx');
     assert.deepEqual(scope.workspaces, [UI, VSCODE, DESKTOP]);
-    assert.deepEqual(offChecks(scope), ['binary', 'engine', 'planner', 'sandbox']);
+    assert.deepEqual(offChecks(scope), ['binary', 'engine', 'merge', 'planner', 'sandbox']);
   });
 
   it('runs the real VS Code for a vscode change, and no container or app', () => {
     const scope = selected('packages/vscode/src/extension.ts');
     assert.deepEqual(scope.workspaces, [VSCODE]);
-    assert.deepEqual(offChecks(scope), ['binary', 'desktop', 'engine', 'planner', 'sandbox', 'tour']);
+    assert.deepEqual(offChecks(scope), ['binary', 'desktop', 'engine', 'merge', 'planner', 'sandbox', 'tour']);
   });
 
   it('keeps a desktop change to desktop and drives the app for it: nothing is built on it, and no container or VS Code proves it', () => {
     const scope = selected('packages/desktop/src/main/daemon/DaemonManager.ts');
     assert.deepEqual(scope.workspaces, [DESKTOP]);
-    assert.deepEqual(offChecks(scope), ['binary', 'engine', 'integration', 'planner', 'sandbox', 'windows']);
+    assert.deepEqual(offChecks(scope), ['binary', 'engine', 'integration', 'merge', 'planner', 'sandbox', 'windows']);
     assert.equal(scope.checks.desktop, true);
     assert.equal(scope.checks.tour, true);
   });
@@ -218,7 +232,7 @@ describe('what a pull request owes, diff by diff', () => {
     const tiers = (suites) => Object.fromEntries(Object.entries(suites).map(([dir, tier]) => [dir.split('/').at(-1), tier]));
     return { mode: scope.mode, linux: tiers(scope.suites), windows: tiers(scope.windowsSuites), off: offChecks(scope) };
   };
-  const ALL_OFF = ['bench', 'binary', 'desktop', 'engine', 'harness', 'integration', 'lint', 'package', 'planner', 'sandbox', 'suites', 'tour', 'typecheck', 'windows'];
+  const ALL_OFF = ['bench', 'binary', 'desktop', 'engine', 'harness', 'integration', 'lint', 'merge', 'package', 'planner', 'sandbox', 'suites', 'tour', 'typecheck', 'windows'];
   const nothing = { mode: 'docs', linux: {}, windows: {}, off: ALL_OFF };
   const everything = (mode) => ({
     mode,
@@ -259,15 +273,15 @@ describe('what a pull request owes, diff by diff', () => {
       off: ALL_OFF.filter((c) => !['windows', 'harness'].includes(c)),
     }],
     ['a desktop change: desktop in full, its drive and tour, no Windows suite', ['packages/desktop/src/main/index.ts'], {
-      mode: 'selected', linux: { desktop: 'full' }, windows: {}, off: ['binary', 'engine', 'integration', 'planner', 'sandbox', 'windows'],
+      mode: 'selected', linux: { desktop: 'full' }, windows: {}, off: ['binary', 'engine', 'integration', 'merge', 'planner', 'sandbox', 'windows'],
     }],
     ['a ui change: ui in full, vscode and desktop quick, the tour', ['packages/ui/src/chat/App.tsx'], {
       mode: 'selected', linux: { ui: 'full', vscode: 'quick', desktop: 'quick' }, windows: { vscode: 'quick' },
-      off: ['binary', 'engine', 'planner', 'sandbox'],
+      off: ['binary', 'engine', 'merge', 'planner', 'sandbox'],
     }],
     ['a web change: web in full, cli and desktop quick, no tour', ['packages/web/server/routes/settings.ts'], {
       mode: 'selected', linux: { cli: 'quick', web: 'full', desktop: 'quick' }, windows: { cli: 'quick', web: 'full' },
-      off: ['engine', 'integration', 'planner', 'sandbox', 'tour'],
+      off: ['engine', 'integration', 'merge', 'planner', 'sandbox', 'tour'],
     }],
     ['a core-internal change: core in full, its dependents quick, the app\'s drive but no tour', ['packages/core/src/services/PlanPrompts.ts'], {
       mode: 'selected',
@@ -285,7 +299,7 @@ describe('what a pull request owes, diff by diff', () => {
       'packages/cli/src/main.ts', 'packages/cli/src/utils/longDash.ts', 'packages/cli/src/utils/__tests__/longDash.test.ts',
     ], {
       mode: 'selected', linux: { cli: 'full' }, windows: { cli: 'full' },
-      off: ['desktop', 'engine', 'integration', 'planner', 'sandbox', 'tour'],
+      off: ['desktop', 'engine', 'integration', 'merge', 'planner', 'sandbox', 'tour'],
     }],
   ]) {
     it(title, () => assert.deepEqual(owed(selected(...paths)), expected));
@@ -383,17 +397,17 @@ describe('a path outside the workspaces that only some checks read', () => {
   const WINDOWS_ALL = { [CORE]: 'full', [VSCODE]: 'full', [CLI]: 'full', [WEB]: 'full' };
   for (const [path, suites, windowsSuites, on] of [
     ['.eslintrc.js', { [UI]: 'quick' }, {}, ['lint', 'suites']],
-    ['vitest.shared.ts', ALL, WINDOWS_ALL, ['engine', 'lint', 'sandbox', 'suites', 'windows']],
-    ['vitest.setup.ts', ALL, WINDOWS_ALL, ['engine', 'lint', 'sandbox', 'suites', 'windows']],
+    ['vitest.shared.ts', ALL, WINDOWS_ALL, ['engine', 'lint', 'merge', 'sandbox', 'suites', 'windows']],
+    ['vitest.setup.ts', ALL, WINDOWS_ALL, ['engine', 'lint', 'merge', 'sandbox', 'suites', 'windows']],
     ['.gitattributes', {}, WINDOWS_ALL, ['harness', 'windows']],
     ['bench/README.md', {}, {}, []],
     ['bench/scale/README.md', {}, {}, []],
     ['bench/live/.gitignore', {}, {}, []],
     ['bench/pipeline/fake-claude/fake-claude.mjs', { [CORE]: 'full', [CLI]: 'full' }, { [CORE]: 'full', [CLI]: 'full' },
-      ['bench', 'desktop', 'engine', 'harness', 'integration', 'suites', 'tour', 'windows']],
+      ['bench', 'desktop', 'engine', 'harness', 'integration', 'merge', 'suites', 'tour', 'windows']],
     ['bench/pipeline/fake-claude/claude.cmd', { [CORE]: 'full', [CLI]: 'full' }, { [CORE]: 'full', [CLI]: 'full' },
-      ['bench', 'desktop', 'engine', 'harness', 'integration', 'suites', 'tour', 'windows']],
-    ['bench/pipeline/fake-acp/fake-acp.mjs', { [CORE]: 'full' }, { [CORE]: 'full' }, ['bench', 'harness', 'suites', 'windows']],
+      ['bench', 'desktop', 'engine', 'harness', 'integration', 'merge', 'suites', 'tour', 'windows']],
+    ['bench/pipeline/fake-acp/fake-acp.mjs', { [CORE]: 'full' }, { [CORE]: 'full' }, ['bench', 'harness', 'merge', 'suites', 'windows']],
     ['bench/pipeline/fake-opencode/fake-opencode.mjs', {}, {}, ['engine']],
     ['bench/pipeline/fake-provider/fake-provider.mjs', {}, {}, ['engine']],
     ['bench/pipeline/drive-pipeline.mjs', {}, {}, ['bench', 'harness']],
@@ -446,7 +460,9 @@ describe('a path outside the workspaces that only some checks read', () => {
     ['scripts/verify-notice.mjs', {}, {}, ['harness']],
     ['scripts/verify-skills.mjs', {}, {}, ['harness']],
     ['scripts/linux-sandbox-e2e.sh', {}, {}, ['sandbox']],
-    ['scripts/container-e2e.mjs', {}, {}, ['engine']],
+    // The bench step runs its tests, which import its pull helpers.
+    ['scripts/container-e2e.mjs', {}, {}, ['bench', 'engine', 'harness']],
+    ['scripts/container-e2e.test.mjs', {}, {}, ['bench', 'harness']],
     ['scripts/change-scope.test.mjs', {}, {}, ['bench', 'harness']],
   ]) {
     it(`owes ${on.join(', ') || 'nothing'} for ${path}`, () => {
@@ -487,6 +503,7 @@ describe('the full fallback', () => {
     ['.github/workflows/verify-release-tag.mjs', 'the release'],
     ['.github/workflows/cli-build.yml', 'the binary build on every target: ci.yml cannot judge it, so the full run does'],
     ['.github/workflows/homebrew-publish.yml', 'the manual re-publish to the Homebrew tap: ci.yml cannot judge it, so the full run does'],
+    ['.github/actions/setup/action.yml', 'how every job installs and builds'],
     ['scripts/change-scope.mjs', 'selection itself'],
     ['scripts/ci-scope.mjs', 'what ci.yml runs selection with'],
     ['scripts/ci.mjs', 'npm run ci, which mirrors every ci.yml step'],
@@ -784,7 +801,7 @@ describe('the required status', () => {
   const onWindows = (result) => Object.fromEntries(Object.keys(WINDOWS_JOBS).map((job) => [job, result]));
   // Every job that confirms its steps, each confirmed; `over` replaces some.
   const linux = (over = {}) => ({ ...Object.fromEntries(Object.keys(STEPS_BY_JOB).map((job) => [job, confirmed])), ...over });
-  const docsJobs = linux({ 'desktop-tour': skipped, typecheck: skipped, coverage: skipped, lint: skipped, package: skipped });
+  const docsJobs = linux({ 'desktop-tour': skipped, typecheck: skipped, coverage: skipped, 'coverage-merge': skipped, lint: skipped, package: skipped });
   const without = (needs, job) => Object.fromEntries(Object.entries(needs).filter(([name]) => name !== job));
 
   it('passes a push whose every job ran', () => {
@@ -801,6 +818,10 @@ describe('the required status', () => {
 
   it('passes a pull request of docs alone, which owes Windows nothing', () => {
     assert.deepEqual(gateFailures('pull_request', { scope: scoped(docsOnly), ...docsJobs, 'real-engine': skipped, ...onWindows(skipped) }), []);
+  });
+
+  it('passes a change that owes core no full suite without a coverage merge', () => {
+    assert.deepEqual(gateFailures('pull_request', { scope: scoped(webOnly), ...linux({ 'coverage-merge': skipped }), 'real-engine': skipped, ...onWindows(passed) }), []);
   });
 
   it('passes a desktop change without the Windows suites, none of which it reaches', () => {
@@ -863,6 +884,10 @@ describe('the required status', () => {
     ['the tour never confirmed its steps', 'push', { scope: scoped(full), ...linux({ 'desktop-tour': passed }), 'real-engine': passed, ...onWindows(passed) }],
     ['a coverage leg failed', 'pull_request', { scope: scoped(webOnly), ...linux({ coverage: failed }), 'real-engine': skipped, ...onWindows(passed) }],
     ['coverage was skipped for a package change', 'pull_request', { scope: scoped(webOnly), ...linux({ coverage: skipped }), 'real-engine': skipped, ...onWindows(passed) }],
+    ['the coverage merge was skipped for a core change', 'pull_request', { scope: scoped(coreChange), ...linux({ 'coverage-merge': skipped }), 'real-engine': passed, ...onWindows(passed) }],
+    ['the coverage merge was skipped on a push', 'push', { scope: scoped(full), ...linux({ 'coverage-merge': skipped }), 'real-engine': passed, ...onWindows(passed) }],
+    ['the coverage merge failed: a shard\'s test, a floor or a blob', 'push', { scope: scoped(full), ...linux({ 'coverage-merge': failed }), 'real-engine': passed, ...onWindows(passed) }],
+    ['the coverage merge never confirmed its step', 'pull_request', { scope: scoped(coreChange), ...linux({ 'coverage-merge': passed }), 'real-engine': passed, ...onWindows(passed) }],
     ['typecheck failed', 'push', { scope: scoped(full), ...linux({ typecheck: failed }), 'real-engine': passed, ...onWindows(passed) }],
     ['lint was skipped on a push', 'push', { scope: scoped(full), ...linux({ lint: skipped }), 'real-engine': passed, ...onWindows(passed) }],
     ['packaging never confirmed its steps', 'push', { scope: scoped(full), ...linux({ package: passed }), 'real-engine': passed, ...onWindows(passed) }],
@@ -970,7 +995,13 @@ describe('ci-scope.mjs, as ci.yml runs it', () => {
     for (const EVENT of ['push', 'schedule', 'workflow_dispatch']) {
       const { status, outputs } = run('select', { EVENT });
       assert.equal(status, 0);
-      assert.deepEqual(JSON.parse(outputs.coverage), workspaces.map((w) => ({ workspace: w.dir, name: w.dir.split('/').at(-1), script: 'test:coverage' })), EVENT);
+      assert.deepEqual(JSON.parse(outputs.coverage), workspaces.flatMap((w) => {
+        const name = w.dir.split('/').at(-1);
+        const shards = COVERAGE_SHARDS[w.dir];
+        if (!shards) return [{ workspace: w.dir, name, script: 'test:coverage' }];
+        return Array.from({ length: shards }, (_, i) => ({ workspace: w.dir, name: `${name}-${i + 1}-of-${shards}`, script: 'test:coverage:shard', shard: `${i + 1}/${shards}` }));
+      }), EVENT);
+      assert.deepEqual(JSON.parse(outputs.merges), [{ workspace: CORE, name: 'core', shards: COVERAGE_SHARDS[CORE] }], EVENT);
       for (const check of CHECKS) assert.equal(outputs[check], 'true', `${EVENT} ${check}`);
       assert.equal(JSON.parse(outputs.scope).mode, 'full');
     }
@@ -1016,6 +1047,53 @@ describe('ci-scope.mjs, as ci.yml runs it', () => {
     ]);
   });
 
+  it('splits a suite owed in full into the shards COVERAGE_SHARDS gives it, which one merge leg joins', () => {
+    const scope = selected('packages/core/src/index.ts');
+    const shards = COVERAGE_SHARDS[CORE];
+    assert.ok(Number.isInteger(shards) && shards > 1, 'core is not sharded');
+    const legs = coverageLegs(scope).filter((leg) => leg.workspace === CORE);
+    assert.deepEqual(legs, Array.from({ length: shards }, (_, i) => ({ workspace: CORE, name: `core-${i + 1}-of-${shards}`, script: 'test:coverage:shard', shard: `${i + 1}/${shards}` })));
+    assert.deepEqual(coverageMerges(scope), [{ workspace: CORE, name: 'core', shards }]);
+    assert.equal(scope.checks.merge, true);
+    // Only core is sharded: every other suite owed in full keeps its one leg, floors and all.
+    for (const leg of coverageLegs(scope).filter((leg) => leg.workspace !== CORE)) assert.ok(!leg.shard, leg.name);
+  });
+
+  it('runs core whole and quick, with nothing to merge, when the change owes it only quick', () => {
+    const scope = { ...selected('packages/core/src/index.ts'), workspaces: [CORE], suites: { [CORE]: 'quick' } };
+    assert.deepEqual(coverageLegs(scope), [{ workspace: CORE, name: 'core-quick', script: 'test:quick' }]);
+    assert.deepEqual(coverageMerges(scope), []);
+    const web = selected('packages/web/server/main.ts');
+    assert.equal(web.checks.merge, false);
+    assert.deepEqual(coverageMerges(web), []);
+  });
+
+  it('refuses to merge unless every shard of this count left its blob, and nothing else lies beside them', () => {
+    assert.deepEqual(blobProblems(['blob-1-3.json', 'blob-2-3.json', 'blob-3-3.json'], 3), []);
+    assert.deepEqual(blobProblems(['blob-1-3.json', 'blob-3-3.json'], 3), ['blob-2-3.json: missing, so shard 2/3 left no tests or coverage to merge']);
+    assert.deepEqual(blobProblems(['blob-1-2.json', 'blob-2-2.json', 'blob-1-3.json'], 2), ['blob-1-3.json: not one of this run\'s 2 shards']);
+    assert.equal(blobProblems([], 2).length, 2);
+    for (const count of [Number.NaN, 0, 1.5]) assert.deepEqual(blobProblems([], count), [`${count} is not a count of shards`]);
+  });
+
+  it('summarises a whole suite\'s coverage and a merged one\'s, never a shard\'s', () => {
+    const table = (pct) => `% Coverage report from v8\n=============================== Coverage summary ===============================\nStatements   : ${pct}% ( 1/1 )\n================================================================================\nmore`;
+    const log = [
+      '> @ordewell/web@1.0.0 test:coverage', table(90),
+      '> @ordewell/core@1.0.0 test:coverage:shard', table(40),
+      '> @ordewell/core@1.0.0 test:coverage:merge', table(95),
+      '> @ordewell/cli@1.0.0 test:quick', 'no coverage',
+    ].join('\n');
+    const summary = coverageSummaries(log);
+    assert.ok(summary.includes('### Coverage — `@ordewell/web`'), summary);
+    assert.ok(summary.includes('### Coverage — `@ordewell/core`'), summary);
+    assert.ok(summary.includes('Statements   : 95%'), summary);
+    assert.ok(summary.includes('Statements   : 90%'), summary);
+    assert.ok(!summary.includes('40%'), 'a shard\'s partial coverage reached the summary');
+    assert.ok(!summary.includes('more'), 'the summary ran past its table');
+    assert.equal(coverageSummaries('no runs here'), '');
+  });
+
   it('runs on Windows what the scope owes Windows, and every suite in full when the scope is lost', () => {
     const all = [CORE, CLI, WEB, VSCODE].map((dir) => ({ dir, script: 'test' }));
     assert.deepEqual([...windowsRuns(null)].sort((a, b) => a.dir.localeCompare(b.dir)), [...all].sort((a, b) => a.dir.localeCompare(b.dir)));
@@ -1024,23 +1102,6 @@ describe('ci-scope.mjs, as ci.yml runs it', () => {
     const web = windowsRuns(selected('packages/web/server/index.ts'));
     assert.deepEqual([...web].sort((a, b) => a.dir.localeCompare(b.dir)), [{ dir: CLI, script: 'test:quick' }, { dir: WEB, script: 'test' }]);
     assert.deepEqual(windowsRuns(selected('packages/desktop/src/main/index.ts')), []);
-  });
-
-  it('runs each Windows suite on its shard, every one even after a failure, and fails if any did', () => {
-    const root = scratch();
-    const log = join(root, 'ran.log');
-    const write = (path, text) => {
-      mkdirSync(dirname(join(root, path)), { recursive: true });
-      writeFileSync(join(root, path), text);
-    };
-    const record = (code) => `node -e "require('fs').appendFileSync(process.argv[1], process.argv.slice(2).join(' ') + '\\n'); process.exit(${code})"`;
-    write('package.json', JSON.stringify({ private: true, workspaces: [CORE, WEB] }));
-    write(`${CORE}/package.json`, JSON.stringify({ name: 'c', scripts: { test: `${record(1)} ${JSON.stringify(log)} core-test`, 'test:quick': `${record(0)} ${JSON.stringify(log)} core-quick` } }));
-    write(`${WEB}/package.json`, JSON.stringify({ name: 'w', scripts: { test: `${record(0)} ${JSON.stringify(log)} web-test`, 'test:quick': `${record(0)} ${JSON.stringify(log)} web-quick` } }));
-    const scope = JSON.stringify({ mode: 'selected', checks: {}, windowsSuites: { [CORE]: 'full', [WEB]: 'quick' } });
-    const { status, stderr } = run('windows-tests', { SCOPE: scope, SHARD: '2/6' }, root);
-    assert.equal(status, 1, stderr);
-    assert.deepEqual(readFileSync(log, 'utf8').trim().split('\n'), ['core-test --shard=2/6', 'web-quick --shard=2/6']);
   });
 
   it('names the workspaces of a narrowed pull request, in outputs ci.yml can compare', () => {
@@ -1135,6 +1196,37 @@ describe('ci-scope.mjs, as ci.yml runs it', () => {
     assert.match(refused.stderr, /real-engine: skipped/);
   });
 
+  it('merges nothing on the leg a lost scope gives, whose suites the coverage job judged whole', () => {
+    const { status } = run('coverage-merge', { WORKSPACE: '', SHARDS: '' });
+    assert.equal(status, 0);
+  });
+
+  it('fails a merge that a shard left no blob for, before vitest would merge the rest without it', () => {
+    const dir = scratch();
+    const reports = join(dir, 'packages', 'core', '.vitest-reports');
+    mkdirSync(reports, { recursive: true });
+    writeFileSync(join(reports, 'blob-1-3.json'), '[]');
+    writeFileSync(join(reports, 'blob-3-3.json'), '[]');
+    const { status, stderr } = run('coverage-merge', { WORKSPACE: 'packages/core', SHARDS: '3' }, dir);
+    assert.equal(status, 1);
+    assert.match(stderr, /blob-2-3\.json: missing/);
+    // No blobs at all, as when the download found no artifact.
+    const empty = run('coverage-merge', { WORKSPACE: 'packages/web', SHARDS: '2' }, dir);
+    assert.equal(empty.status, 1);
+    assert.match(empty.stderr, /blob-1-2\.json: missing/);
+  });
+
+  it('writes the coverage log\'s summaries to the job summary, and nothing without a log', () => {
+    const dir = scratch();
+    const GITHUB_STEP_SUMMARY = join(dir, 'summary');
+    writeFileSync(GITHUB_STEP_SUMMARY, '');
+    assert.equal(run('coverage-summary', { GITHUB_STEP_SUMMARY }, dir).status, 0);
+    assert.equal(readFileSync(GITHUB_STEP_SUMMARY, 'utf8'), '');
+    writeFileSync(join(dir, 'coverage.log'), '> @ordewell/core@1.0.0 test:coverage:merge\n=============================== Coverage summary ===============================\nLines        : 97.92% ( 1/1 )\n====================\n');
+    assert.equal(run('coverage-summary', { GITHUB_STEP_SUMMARY }, dir).status, 0);
+    assert.match(readFileSync(GITHUB_STEP_SUMMARY, 'utf8'), /### Coverage — `@ordewell\/core`[\s\S]*Lines {8}: 97\.92%/);
+  });
+
   it('refuses a command it does not know', () => {
     assert.equal(run('nonsense', {}).status, 2);
   });
@@ -1152,7 +1244,7 @@ describe('ci.yml', () => {
   const steps = (job) => jobBlock(job).split(/^ {6}- /m).slice(1);
   const stepIn = (job, id) => steps(job).find((s) => new RegExp(`^\\s*id: ${id}$`, 'm').test(s));
   const stepNamed = (job, name) => steps(job).find((s) => s.startsWith(`name: ${name}\n`));
-  const jobGate = (check) => new RegExp(`needs: scope\\n\\s+if: \\$\\{\\{ !cancelled\\(\\) && needs\\.scope\\.outputs\\.${check} != 'false' \\}\\}`);
+  const jobGate = (check, needs = 'scope') => new RegExp(`needs: ${needs.replace(/[[\]]/g, '\\$&')}\\n\\s+if: \\$\\{\\{ !cancelled\\(\\) && needs\\.scope\\.outputs\\.${check} != 'false' \\}\\}`);
   const owedSteps = Object.entries(STEPS_BY_JOB).flatMap(([job, table]) => Object.entries(table).flatMap(([check, ids]) => ids.map((id) => ({ job, check, id }))));
 
   it('has every step the tables name, in the job that owes it', () => {
@@ -1170,14 +1262,16 @@ describe('ci.yml', () => {
       } else {
         // A job of one check is gated as a whole, so its steps need no gate.
         assert.deepEqual(Object.keys(STEPS_BY_JOB[job]), [check], job);
-        assert.match(jobBlock(job), jobGate(check), `job ${job} is not gated on ${check} as a default-run`);
+        // coverage-merge reads what the coverage job's shards left.
+        const needs = job === 'coverage-merge' ? '[scope, coverage]' : 'scope';
+        assert.match(jobBlock(job), jobGate(check, needs), `job ${job} is not gated on ${check} as a default-run`);
         assert.doesNotMatch(stepIn(job, id), /^\s*if:/m, `${job} ${id}`);
       }
     }
   });
 
   it('hands every check on from the scope job: a missing output reads as empty, and the step would run on every change', () => {
-    for (const check of [...CHECKS, 'coverage']) {
+    for (const check of [...CHECKS, 'coverage', 'merges']) {
       assert.ok(jobBlock('scope').includes(`${check}: \${{ steps.select.outputs.${check} }}`), `the scope job does not output ${check}`);
     }
   });
@@ -1195,7 +1289,7 @@ describe('ci.yml', () => {
   it('runs each Windows job on its own check, and keeps it alive when the scope job fails', () => {
     for (const [job, check] of Object.entries(WINDOWS_JOBS)) {
       assert.match(jobBlock(job), jobGate(check), job);
-      assert.match(jobBlock(job), /runs-on: windows-latest/, job);
+      assert.match(jobBlock(job), /runs-on: windows-2025-vs2026/, job);
     }
   });
 
@@ -1203,7 +1297,7 @@ describe('ci.yml', () => {
     const windows = jobBlock('windows');
     const shards = JSON.parse(windows.match(/^\s+shard: (\[[\d, ]+\])$/m)[1]);
     assert.deepEqual(shards, shards.map((_, i) => i + 1));
-    assert.equal(shards.length, 6);
+    assert.equal(shards.length, 12);
     assert.ok(windows.includes('name: windows (${{ matrix.shard }}/${{ strategy.job-total }})'));
     const test = stepNamed('windows', 'Test on Windows');
     assert.ok(test.includes('SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}'), 'a shard does not know which it is');
@@ -1252,10 +1346,7 @@ describe('ci.yml', () => {
     const names = steps('desktop-tour').map((s) => s.match(/^(?:name|uses): (.+)$/m)[1]);
     assert.deepEqual(names, [
       'actions/checkout@v7',
-      'Use Node.js 22.x',
-      'Install dependencies',
-      'Build (core first — cli, web and vscode compile against its dist/)',
-      'Build (ui, vscode, cli, web & desktop)',
+      'Install dependencies and build every package',
       'Install xvfb if the image lacks it',
       'Desktop app — visual tour and layout checks',
       'Upload the desktop tour report',
@@ -1264,6 +1355,18 @@ describe('ci.yml', () => {
     const report = stepNamed('desktop-tour', 'Upload the desktop tour report');
     assert.match(report, /failure\(\)/);
     assert.match(report, /path: packages\/desktop\/test-results\/tour/);
+  });
+
+  it('walks the tour in legs numbered from one, each knowing its share, every leg to the end, each report apart', () => {
+    const tour = jobBlock('desktop-tour');
+    const legs = JSON.parse(tour.match(/^\s+leg: (\[[\d, ]+\])$/m)[1]);
+    assert.deepEqual(legs, legs.map((_, i) => i + 1));
+    // The tour shoots two themes at three sizes (packages/desktop/e2e/tour.spec.ts), and refuses a leg with none of them.
+    assert.ok(legs.length >= 1 && legs.length <= 6, `${legs.length} legs`);
+    assert.ok(tour.includes('name: desktop-tour (${{ matrix.leg }}/${{ strategy.job-total }})'));
+    assert.match(tour, /fail-fast: false/);
+    assert.ok(stepIn('desktop-tour', 'desktop-tour').includes('TOUR_LEG: ${{ matrix.leg }}/${{ strategy.job-total }}'), 'a leg does not know which it is');
+    assert.ok(stepNamed('desktop-tour', 'Upload the desktop tour report').includes('name: desktop-tour-report-${{ matrix.leg }}-of-${{ strategy.job-total }}'), 'legs would upload over one another');
   });
 
   it('runs coverage one leg per workspace, every leg to the end, and the root script when the scope gave none', () => {
@@ -1277,21 +1380,85 @@ describe('ci.yml', () => {
     assert.ok(step.includes('WORKSPACE: ${{ matrix.workspace }}'));
     assert.ok(step.includes('SCRIPT: ${{ matrix.script }}'));
     // The fallback leg names no script, so it runs coverage, floors and all.
-    assert.ok(step.includes('npm run "${SCRIPT:-test:coverage}" ${WORKSPACE:+-w "$WORKSPACE"} --if-present'), 'a leg does not run its own workspace\'s script');
+    assert.ok(step.includes('SHARD: ${{ matrix.shard }}'));
+    assert.ok(step.includes('npm run "${SCRIPT:-test:coverage}" ${WORKSPACE:+-w "$WORKSPACE"} --if-present ${SHARD:+-- "--shard=$SHARD"}'), 'a leg does not run its own workspace\'s script, or its own shard of it');
     assert.match(step, /set -o pipefail/);
     const upload = stepNamed('coverage', 'Upload coverage reports');
     assert.ok(upload.includes('name: coverage-reports-${{ matrix.name }}'), 'legs would upload over one another');
-    assert.ok(upload.includes("if: ${{ always() && matrix.script != 'test:quick' }}"), 'a quick leg, which writes no report, would upload one');
+    // A shard's coverage is part of the suite's: coverage-merge uploads the whole.
+    assert.ok(upload.includes("if: ${{ always() && matrix.script != 'test:quick' && !matrix.shard }}"), 'a quick leg, which writes no report, or a shard would upload one');
+    const blob = stepNamed('coverage', "Upload the shard's coverage blob");
+    assert.ok(blob, 'a shard does not hand its blob on');
+    // A shard whose tests failed still leaves its blob, and the merge fails on them.
+    assert.ok(blob.includes('if: ${{ always() && matrix.shard }}'));
+    assert.ok(blob.includes('name: coverage-blob-${{ matrix.name }}'));
+    assert.ok(blob.includes('path: ${{ matrix.workspace }}/.vitest-reports/'));
+    // upload-artifact leaves a hidden directory out unless told.
+    assert.ok(blob.includes('include-hidden-files: true'));
+    assert.ok(blob.includes('if-no-files-found: error'));
   });
 
-  it('lints without building, and builds before typecheck and packaging', () => {
+  it('merges each sharded suite\'s blobs in a job of its own, and judges its floors on the whole', () => {
+    const merge = jobBlock('coverage-merge');
+    assert.match(merge, /fail-fast: false/);
+    assert.ok(merge.includes('name: coverage merge (${{ matrix.name }})'));
+    const fallback = merge.match(/include: \$\{\{ fromJSON\(needs\.scope\.outputs\.merges \|\| '(.+)'\) \}\}/);
+    assert.ok(fallback, 'the matrix does not fall back when the scope output is lost');
+    // The coverage job's fallback runs every suite whole, so this one names no workspace.
+    assert.deepEqual(JSON.parse(fallback[1]), [{ workspace: '', name: 'every workspace' }]);
+    // The merge reads only the blobs and the config, never a dist/.
+    const install = stepNamed('coverage-merge', 'Install dependencies');
+    assert.match(install, /uses: \.\/\.github\/actions\/setup\n/);
+    assert.doesNotMatch(install, /build:/);
+    const download = stepNamed('coverage-merge', "Download the shards' coverage blobs");
+    // The pattern finds a blob by its leg's name, so each merge must find its own shards' legs and no other.
+    const full = fullScope('a push', workspaces);
+    for (const { workspace, name } of coverageMerges(full)) {
+      const found = coverageLegs(full).filter((leg) => leg.name.startsWith(`${name}-`));
+      assert.deepEqual(found.map((leg) => leg.workspace), found.map(() => workspace), name);
+      assert.ok(found.length > 1 && found.every((leg) => leg.shard), name);
+    }
+    assert.ok(download.includes('pattern: coverage-blob-${{ matrix.name }}-*'));
+    assert.ok(download.includes('path: ${{ matrix.workspace }}/.vitest-reports'));
+    assert.ok(download.includes('merge-multiple: true'));
+    const step = stepIn('coverage-merge', 'merge-coverage');
+    assert.ok(step.includes('WORKSPACE: ${{ matrix.workspace }}'));
+    assert.ok(step.includes('SHARDS: ${{ matrix.shards }}'));
+    assert.ok(step.includes('node scripts/ci-scope.mjs coverage-merge'));
+    assert.match(step, /set -o pipefail/);
+    const upload = stepNamed('coverage-merge', 'Upload coverage reports');
+    assert.ok(upload.includes('name: coverage-reports-${{ matrix.name }}'));
+    assert.ok(upload.includes('path: ${{ matrix.workspace }}/coverage/'));
+    assert.ok(stepNamed('coverage-merge', 'Append coverage summaries to the job summary').includes('node scripts/ci-scope.mjs coverage-summary'));
+    assert.ok(jobBlock('required-checks').includes('coverage, coverage-merge,'), 'the gate does not read the merge');
+  });
+
+  it('lints without building, and builds every package before typecheck, coverage, packaging and the tour', () => {
+    const install = stepNamed('lint', 'Install dependencies');
+    assert.match(install, /uses: \.\/\.github\/actions\/setup\n/);
+    assert.doesNotMatch(install, /build:/);
     assert.doesNotMatch(jobBlock('lint'), /id: build-/);
     for (const job of ['typecheck', 'package', 'coverage', 'desktop-tour']) {
       const block = jobBlock(job);
       const owed = Object.values(STEPS_BY_JOB[job]).flat()[0];
-      assert.ok(block.indexOf('id: build-core') < block.indexOf('id: build-rest'), job);
-      assert.ok(block.indexOf('id: build-rest') < block.indexOf(`id: ${owed}`), job);
+      assert.match(stepIn(job, 'setup'), /uses: \.\/\.github\/actions\/setup\n\s+with:\n\s+build: all\n/, job);
+      assert.ok(block.indexOf('id: setup') < block.indexOf(`id: ${owed}`), job);
     }
+  });
+
+  it('builds core before build-and-test\'s first check, and the rest where only their readers run', () => {
+    const block = jobBlock('build-and-test');
+    assert.match(stepIn('build-and-test', 'build-core'), /uses: \.\/\.github\/actions\/setup\n\s+with:\n\s+build: core\n/);
+    const rest = stepIn('build-and-test', 'build-rest');
+    assert.match(rest, /uses: \.\/\.github\/actions\/setup\n/);
+    assert.match(rest, /build: ui vscode cli web desktop\n/);
+    // Only the desktop e2e launches Electron, so only it fetches the binary.
+    assert.ok(rest.includes("electron: ${{ needs.scope.outputs.desktop != 'false' }}"));
+    assert.ok(block.indexOf('id: build-core') < block.indexOf('id: build-rest'));
+    for (const id of Object.values(STEPS_BY_JOB['build-and-test']).flat().filter((id) => !id.startsWith('build-'))) {
+      assert.ok(block.indexOf('id: build-core') < block.indexOf(`id: ${id}`), id);
+    }
+    for (const id of ['vscode-integration', 'desktop-e2e']) assert.ok(block.indexOf('id: build-rest') < block.indexOf(`id: ${id}`), id);
   });
 
   it('runs in full every night and on demand, and cancels only a pull request\'s superseded run', () => {
@@ -1355,5 +1522,439 @@ describe('ci.yml', () => {
     // would prove delegation and containers on for the wrong reason.
     assert.doesNotMatch(workflow, /ORDEWELL_(DELEGATION|CONTAINERS)/);
     assert.doesNotMatch(readFileSync('.github/workflows/release.yml', 'utf8'), /ORDEWELL_(DELEGATION|CONTAINERS)/);
+  });
+});
+
+describe('the order the setup action builds in', () => {
+  const dirs = (asked) => buildOrder(asked, workspaces).map((ws) => ws.dir);
+
+  it('brings what a workspace depends on, before it', () => {
+    assert.deepEqual(dirs('core'), [CORE]);
+    assert.deepEqual(dirs('cli'), [CORE, WEB, CLI]);
+    assert.deepEqual(dirs('desktop'), [CORE, UI, WEB, DESKTOP]);
+    assert.deepEqual(dirs('ui ui core'), [CORE, UI]);
+    assert.deepEqual(dirs(''), []);
+  });
+
+  it('builds every workspace for all, each after everything it depends on', () => {
+    const order = dirs('all');
+    assert.deepEqual([...order].sort(), workspaces.map((ws) => ws.dir).sort());
+    for (const ws of workspaces) for (const dep of ws.deps) assert.ok(order.indexOf(dep) < order.indexOf(ws.dir), `${dep} after ${ws.dir}`);
+  });
+
+  it('refuses a name no workspace has, and a cycle, rather than build part of it', () => {
+    assert.throws(() => dirs('core nonsense'), /no workspace is named nonsense/);
+    const cycle = [{ dir: 'packages/a', deps: ['packages/b'] }, { dir: 'packages/b', deps: ['packages/a'] }];
+    assert.throws(() => buildOrder('a', cycle), /cycle/);
+  });
+});
+
+describe('the setup action\'s caches', () => {
+  const made = [];
+  after(() => { for (const dir of made) rmSync(dir, { recursive: true, force: true }); });
+  const host = { platform: 'linux', arch: 'x64', nodeVersion: 'v22.0.0', env: {}, home: '/home/u', tmp: '/tmp' };
+  const buildScript = (code = 0) => `node -e "require('fs').mkdirSync('dist',{recursive:true});require('fs').writeFileSync('dist/built','');process.exit(${code})"`;
+
+  /** A repository of core, and ui and web on it, as git lists it, whose builds write dist/built. */
+  const fixture = () => {
+    const root = mkdtempSync(join(tmpdir(), 'ordewell-setup-'));
+    made.push(root);
+    const write = (file, text) => {
+      mkdirSync(dirname(join(root, file)), { recursive: true });
+      writeFileSync(join(root, file), text);
+    };
+    write('.gitignore', 'dist/\nnode_modules/\n');
+    write('package.json', JSON.stringify({ private: true, workspaces: [CORE, UI, WEB], scripts: { postinstall: 'node scripts/postinstall.mjs' } }));
+    write('package-lock.json', JSON.stringify({ lockfileVersion: 3, packages: { '': {}, 'node_modules/electron': { version: '45.2.1' }, 'node_modules/electron-builder': { version: '26.18.0' } } }));
+    write('tsconfig.json', '{}');
+    write('scripts/postinstall.mjs', '');
+    write(`${CORE}/package.json`, JSON.stringify({ name: '@f/core', scripts: { build: buildScript() } }));
+    write(`${UI}/package.json`, JSON.stringify({ name: '@f/ui', dependencies: { '@f/core': '*' }, scripts: { build: buildScript() } }));
+    write(`${WEB}/package.json`, JSON.stringify({ name: '@f/web', dependencies: { '@f/core': '*' }, scripts: { build: buildScript() } }));
+    for (const dir of [CORE, UI, WEB]) write(`${dir}/src/index.ts`, `export const name = '${dir}';\n`);
+    execFileSync('git', ['init', '-q'], { cwd: root });
+    execFileSync('git', ['add', '-A'], { cwd: root });
+    return { root, write, workspaces: readWorkspaces(root) };
+  };
+  const keysOf = ({ root, workspaces: ws }, over = {}) => Object.fromEntries(buildKeys(buildOrder('all', ws), { ...host, ...over, root, workspaces: ws }));
+
+  it('keys a build by the workspace, the host and a hash', () => {
+    const keys = keysOf(fixture());
+    assert.deepEqual(Object.keys(keys), [CORE, UI, WEB]);
+    assert.match(keys[CORE], /^build-linux-x64-core-[0-9a-f]{64}$/);
+    assert.notEqual(keys[UI], keysOf(fixture(), { arch: 'arm64' })[UI]);
+  });
+
+  it('builds again what a change reaches, through what depends on it, and nothing else', () => {
+    const repo = fixture();
+    const before = keysOf(repo);
+    repo.write(`${WEB}/src/index.ts`, 'export const name = 2;\n');
+    const web = keysOf(repo);
+    assert.deepEqual([CORE, UI, WEB].filter((dir) => web[dir] !== before[dir]), [WEB]);
+    repo.write(`${CORE}/src/index.ts`, 'export const name = 2;\n');
+    const core = keysOf(repo);
+    assert.deepEqual([CORE, UI, WEB].filter((dir) => core[dir] !== web[dir]), [CORE, UI, WEB]);
+  });
+
+  it('reads a new file, a deleted one and a root file every build reads, but not its own gitignored output', () => {
+    const repo = fixture();
+    const before = keysOf(repo);
+    repo.write(`${CORE}/dist/index.js`, 'built');
+    assert.deepEqual(keysOf(repo), before);
+    repo.write(`${UI}/src/new.ts`, '');
+    const added = keysOf(repo);
+    assert.notEqual(added[UI], before[UI]);
+    unlinkSync(join(repo.root, UI, 'src', 'index.ts'));
+    assert.notEqual(keysOf(repo)[UI], added[UI]);
+    const kept = keysOf(repo);
+    repo.write('tsconfig.json', '{"compilerOptions":{}}');
+    const after = keysOf(repo);
+    for (const dir of [CORE, UI, WEB]) assert.notEqual(after[dir], kept[dir], dir);
+  });
+
+  it('builds again on another Node, or with an environment the build bakes in', () => {
+    const repo = fixture();
+    const before = keysOf(repo);
+    for (const over of [{ nodeVersion: 'v22.1.0' }, { env: { NODE_ENV: 'production' } }, { env: { ORDEWELL_DESKTOP_AUTO_UPDATE: '0' } }]) {
+      const after = keysOf(repo, over);
+      for (const dir of [CORE, UI, WEB]) assert.notEqual(after[dir], before[dir], `${JSON.stringify(over)} ${dir}`);
+    }
+    assert.deepEqual(keysOf(repo, { env: { UNRELATED: '1' } }), before);
+  });
+
+  it('refuses to key a workspace whose outputs it does not know', () => {
+    const ws = [{ dir: 'packages/new', deps: [] }];
+    assert.throws(() => buildKeys(ws, { ...host, root: fixture().root, workspaces: ws }), /packages\/new has no BUILD_OUTPUTS entry/);
+  });
+
+  it('keys node_modules by what npm ci installs from and runs, not by the source', () => {
+    const repo = fixture();
+    const key = () => modulesKey({ ...host, root: repo.root, workspaces: repo.workspaces });
+    const before = key();
+    assert.match(before, /^node-modules-linux-x64-v22\.0\.0-[0-9a-f]{64}$/);
+    repo.write(`${CORE}/src/index.ts`, 'changed');
+    assert.equal(key(), before);
+    const changes = [
+      ['package-lock.json', JSON.stringify({ lockfileVersion: 3, packages: { '': {} } })],
+      [`${UI}/package.json`, JSON.stringify({ name: '@f/ui', dependencies: { '@f/core': '*', left: '1' } })],
+      ['scripts/postinstall.mjs', 'console.log(1);'],
+      ['.npmrc', 'fund=false'],
+    ];
+    let last = before;
+    for (const [file, text] of changes) {
+      repo.write(file, text);
+      assert.notEqual(key(), last, file);
+      last = key();
+    }
+    assert.notEqual(modulesKey({ ...host, nodeVersion: 'v22.1.0', root: repo.root, workspaces: repo.workspaces }), last);
+  });
+
+  it('plans the install, each build with the paths it caches, and nothing for Electron unless asked', () => {
+    const repo = fixture();
+    const plan = setupPlan({ build: 'ui' }, { ...host, root: repo.root });
+    assert.equal(plan.install, true);
+    assert.equal(plan.modulesKey, modulesKey({ ...host, root: repo.root, workspaces: repo.workspaces }));
+    assert.deepEqual(plan.builds.map(({ name, dir, paths }) => ({ name, dir, paths })), [
+      { name: 'core', dir: CORE, paths: [`${CORE}/dist`] },
+      { name: 'ui', dir: UI, paths: [`${UI}/dist`, `${UI}/THIRD-PARTY-NOTICES.md`] },
+    ]);
+    assert.equal(plan.builds[1].key, keysOf(repo)[UI]);
+    assert.equal(plan.electron, null);
+    assert.equal(plan.electronBuilder, null);
+  });
+
+  it('installs nothing again on a second call in the job, and builds only what the first did not', () => {
+    const repo = fixture();
+    const plan = setupPlan({ build: 'all', installed: true, built: ['core', 'ui'] }, { ...host, root: repo.root });
+    assert.equal(plan.install, false);
+    assert.equal(plan.modulesKey, '');
+    assert.deepEqual(plan.builds.map(({ name, key }) => [name, key]), [['web', keysOf(repo)[WEB]]]);
+  });
+
+  it('caches no node_modules on Windows, where npm ci fills it faster than a restore unpacks it', () => {
+    assert.equal(setupPlan({ build: 'core' }, { ...host, platform: 'win32', root: fixture().root }).modulesKey, '');
+  });
+
+  it('keys the Electron downloads by the versions the lockfile installs', () => {
+    const repo = fixture();
+    const plan = setupPlan({ electron: true, electronBuilder: true }, { ...host, root: repo.root });
+    assert.deepEqual(plan.builds, []);
+    assert.deepEqual(plan.electron, { key: 'electron-linux-x64-electron@45.2.1', path: '/home/u/.cache/electron' });
+    assert.deepEqual(plan.electronBuilder, {
+      key: 'electron-builder-linux-x64-electron@45.2.1-electron-builder@26.18.0',
+      paths: ['/home/u/.cache/electron-builder', '/home/u/.electron-gyp'],
+    });
+    const windows = setupPlan({ electron: true }, { ...host, platform: 'win32', home: 'C:\\Users\\u', env: { LOCALAPPDATA: 'C:\\Users\\u\\AppData\\Local' }, root: repo.root });
+    assert.equal(windows.electron.path, 'C:\\Users\\u\\AppData\\Local\\electron\\Cache');
+  });
+
+  it('finds the Electron caches where electron, electron-builder and @electron/rebuild look', () => {
+    const linux = { platform: 'linux', home: '/home/u', tmp: '/tmp' };
+    assert.equal(electronCacheDir({ ...linux, env: {} }), '/home/u/.cache/electron');
+    assert.equal(electronCacheDir({ ...linux, env: { XDG_CACHE_HOME: '/xdg' } }), '/xdg/electron');
+    assert.equal(electronCacheDir({ ...linux, env: { XDG_CACHE_HOME: '/xdg', electron_config_cache: '/mine' } }), '/mine');
+    assert.equal(electronCacheDir({ platform: 'darwin', home: '/Users/u', env: {} }), '/Users/u/Library/Caches/electron');
+    assert.equal(electronCacheDir({ platform: 'win32', home: 'C:\\Users\\u', env: {} }), 'C:\\Users\\u\\AppData\\Local\\electron\\Cache');
+    assert.equal(electronCacheDir({ platform: 'win32', home: 'C:\\Users\\u', env: { LOCALAPPDATA: 'D:\\local' } }), 'D:\\local\\electron\\Cache');
+
+    assert.equal(electronBuilderCacheDir({ ...linux, env: {} }), '/home/u/.cache/electron-builder');
+    assert.equal(electronBuilderCacheDir({ ...linux, env: { XDG_CACHE_HOME: '/xdg' } }), '/xdg/electron-builder');
+    assert.equal(electronBuilderCacheDir({ ...linux, env: { XDG_CACHE_HOME: 'relative' } }), '/home/u/.cache/electron-builder');
+    assert.equal(electronBuilderCacheDir({ ...linux, env: { ELECTRON_BUILDER_CACHE: '/mine' } }), '/mine');
+    assert.equal(electronBuilderCacheDir({ ...linux, env: { ELECTRON_BUILDER_CACHE: 'relative' } }), '/home/u/.cache/electron-builder');
+    assert.equal(electronBuilderCacheDir({ platform: 'darwin', home: '/Users/u', env: {} }), '/Users/u/Library/Caches/electron-builder');
+    const windows = { platform: 'win32', home: 'C:\\Users\\u', tmp: 'C:\\Temp' };
+    assert.equal(electronBuilderCacheDir({ ...windows, env: { LOCALAPPDATA: 'C:\\Users\\u\\AppData\\Local' } }), 'C:\\Users\\u\\AppData\\Local\\electron-builder\\Cache');
+    assert.equal(electronBuilderCacheDir({ ...windows, env: {} }), 'C:\\Temp\\electron-builder-cache');
+    assert.equal(electronBuilderCacheDir({ ...windows, env: { LOCALAPPDATA: 'C:\\Users\\u\\AppData\\Local', USERNAME: 'SYSTEM' } }), 'C:\\Temp\\electron-builder-cache');
+    assert.equal(electronBuilderCacheDir({ ...windows, env: { LOCALAPPDATA: 'C:\\Windows\\System32\\config\\systemprofile\\AppData\\Local' } }), 'C:\\Temp\\electron-builder-cache');
+
+    assert.equal(electronGypDir(linux), '/home/u/.electron-gyp');
+    assert.equal(electronGypDir(windows), 'C:\\Users\\u\\.electron-gyp');
+  });
+
+  it('writes electron\'s checksums as the SHASUMS256.txt electron-builder reads, and finds the locked versions', () => {
+    assert.equal(shasumsText({ 'b.zip': '22', 'a.zip': '11' }), '11 *a.zip\n22 *b.zip\n');
+    const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'));
+    for (const name of ['electron', 'electron-builder']) assert.match(lockedVersion(lock, name), /^\d+\.\d+\.\d+/, name);
+    assert.equal(lockedVersion(lock, 'no-such-package-here'), null);
+  });
+
+  it('caches only gitignored outputs, so a build\'s own output never moves its key', () => {
+    assert.deepEqual(Object.keys(BUILD_OUTPUTS).sort(), workspaces.map((ws) => ws.dir).sort());
+    const ignored = (file) => spawnSync('git', ['check-ignore', '-q', file]).status === 0;
+    for (const [dir, outputs] of Object.entries(BUILD_OUTPUTS)) {
+      for (const output of outputs) {
+        const file = `${dir}/${output}`;
+        assert.ok(ignored(file) || ignored(`${file}/x`), `${file} is not gitignored`);
+        assert.equal(execFileSync('git', ['ls-files', '--', file], { encoding: 'utf8' }), '', `${file} is tracked`);
+      }
+    }
+  });
+});
+
+describe('ci-scope.mjs, as the setup action runs it', () => {
+  const made = [];
+  after(() => { for (const dir of made) rmSync(dir, { recursive: true, force: true }); });
+  const cli = resolve('scripts/ci-scope.mjs');
+  const scratch = () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ordewell-setup-run-'));
+    made.push(dir);
+    return dir;
+  };
+  /** GITHUB_OUTPUT as the runner reads it, `name<<END` values over several lines among them. */
+  const parseOutputs = (text) => {
+    const outputs = {};
+    const lines = text.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const heredoc = /^([\w-]+)<<(.+)$/.exec(lines[i]);
+      if (heredoc) {
+        const end = lines.indexOf(heredoc[2], i + 1);
+        assert.ok(end > i, `${heredoc[1]} is never closed`);
+        outputs[heredoc[1]] = lines.slice(i + 1, end).join('\n');
+        i = end;
+      } else if (lines[i]) {
+        const at = lines[i].indexOf('=');
+        outputs[lines[i].slice(0, at)] = lines[i].slice(at + 1);
+      }
+    }
+    return outputs;
+  };
+  // In CI this runs after the action has written its own markers into the job's
+  // environment, so each run sets every variable it reads.
+  const run = (command, env, cwd) => {
+    const dir = scratch();
+    const files = { GITHUB_OUTPUT: join(dir, 'output'), GITHUB_ENV: join(dir, 'env'), GITHUB_STEP_SUMMARY: join(dir, 'summary') };
+    for (const file of Object.values(files)) writeFileSync(file, '');
+    const clean = { BUILD: '', ELECTRON: '', ELECTRON_BUILDER: '', STEPS: '{}', ORDEWELL_SETUP_INSTALLED: '', ORDEWELL_SETUP_BUILT: '', electron_config_cache: join(dir, 'electron') };
+    const { status, stdout, stderr } = spawnSync(process.execPath, [cli, command], { cwd, encoding: 'utf8', env: { ...process.env, ...files, ...clean, ...env } });
+    return { status, stdout, stderr, cache: clean.electron_config_cache, outputs: parseOutputs(readFileSync(files.GITHUB_OUTPUT, 'utf8')), jobEnv: readFileSync(files.GITHUB_ENV, 'utf8') };
+  };
+  /** core, and ui and web on it; a web build that exits `webStatus`. */
+  const fixture = (webStatus = 0) => {
+    const root = scratch();
+    const write = (file, text) => {
+      mkdirSync(dirname(join(root, file)), { recursive: true });
+      writeFileSync(join(root, file), text);
+    };
+    const build = (code) => `node -e "require('fs').mkdirSync('dist',{recursive:true});require('fs').writeFileSync('dist/built','');process.exit(${code})"`;
+    write('.gitignore', 'dist/\n');
+    write('package.json', JSON.stringify({ private: true, workspaces: [CORE, UI, WEB] }));
+    write('package-lock.json', JSON.stringify({ lockfileVersion: 3, packages: { '': {}, 'node_modules/electron': { version: '45.2.1' }, 'node_modules/electron-builder': { version: '26.18.0' } } }));
+    write(`${CORE}/package.json`, JSON.stringify({ name: '@f/core', scripts: { build: build(0) } }));
+    write(`${UI}/package.json`, JSON.stringify({ name: '@f/ui', dependencies: { '@f/core': '*' }, scripts: { build: build(0) } }));
+    write(`${WEB}/package.json`, JSON.stringify({ name: '@f/web', dependencies: { '@f/core': '*' }, scripts: { build: build(webStatus) } }));
+    write('node_modules/electron/package.json', JSON.stringify({ name: 'electron', version: '45.2.1' }));
+    write('node_modules/electron/checksums.json', JSON.stringify({ 'electron-v45.2.1-linux-x64.zip': 'ab', 'SHASUMS256.txt': 'cd' }));
+    execFileSync('git', ['init', '-q'], { cwd: root });
+    return root;
+  };
+  const built = (root, dir) => existsSync(join(root, dir, 'dist', 'built'));
+
+  it('plans each build with its key and paths, and gives every workspace both outputs, empty when unasked', () => {
+    const { status, stderr, outputs } = run('setup-plan', { BUILD: 'ui' }, fixture());
+    assert.equal(status, 0, stderr);
+    assert.equal(outputs.install, 'true');
+    if (process.platform === 'win32') assert.equal(outputs['modules-key'], '');
+    else assert.match(outputs['modules-key'], new RegExp(`^node-modules-${process.platform}-${process.arch}-`));
+    assert.equal(outputs.build, 'core ui');
+    assert.match(outputs['core-key'], new RegExp(`^build-${process.platform}-${process.arch}-core-`));
+    assert.equal(outputs['ui-paths'], `${UI}/dist\n${UI}/THIRD-PARTY-NOTICES.md`);
+    assert.equal(outputs['web-key'], '');
+    assert.equal(outputs['web-paths'], '');
+    for (const name of ['electron-key', 'electron-path', 'builder-key', 'builder-paths']) assert.equal(outputs[name], '', name);
+  });
+
+  it('plans from what an earlier call in the job left in its environment', () => {
+    const { status, outputs } = run('setup-plan', { BUILD: 'all', ORDEWELL_SETUP_INSTALLED: 'true', ORDEWELL_SETUP_BUILT: 'core' }, fixture());
+    assert.equal(status, 0);
+    assert.equal(outputs.install, 'false');
+    assert.equal(outputs['modules-key'], '');
+    assert.equal(outputs.build, 'ui web');
+    assert.equal(outputs['core-key'], '');
+  });
+
+  it('plans the Electron caches where this host keeps them, and refuses a workspace it does not know', () => {
+    const { status, outputs, cache } = run('setup-plan', { ELECTRON: 'true', ELECTRON_BUILDER: 'true' }, fixture());
+    assert.equal(status, 0);
+    assert.equal(outputs['electron-key'], `electron-${process.platform}-${process.arch}-electron@45.2.1`);
+    assert.equal(outputs['electron-path'], cache);
+    assert.equal(outputs['builder-key'], `electron-builder-${process.platform}-${process.arch}-electron@45.2.1-electron-builder@26.18.0`);
+    assert.equal(outputs['builder-paths'].split('\n').length, 2);
+    const refused = run('setup-plan', { BUILD: 'nonsense' }, fixture());
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, /no workspace is named nonsense/);
+  });
+
+  it('builds what no cache restored, in order, and tells a later call in the job', () => {
+    const root = fixture();
+    const STEPS = JSON.stringify({ 'restore-core': { outputs: { 'cache-hit': 'true' } }, 'restore-ui': { outputs: { 'cache-hit': '' } } });
+    const first = run('setup-build', { BUILD: 'core ui', STEPS }, root);
+    assert.equal(first.status, 0, first.stderr);
+    assert.equal(built(root, CORE), false);
+    assert.equal(built(root, UI), true);
+    assert.deepEqual([first.outputs.restored, first.outputs.built], ['core', 'ui']);
+    assert.equal(first.jobEnv, 'ORDEWELL_SETUP_INSTALLED=true\nORDEWELL_SETUP_BUILT=core ui\n');
+    const second = run('setup-build', { BUILD: 'web', ORDEWELL_SETUP_BUILT: 'core ui' }, root);
+    assert.equal(second.status, 0, second.stderr);
+    assert.deepEqual([second.outputs.restored, second.outputs.built], ['', 'web']);
+    assert.equal(second.jobEnv, 'ORDEWELL_SETUP_INSTALLED=true\nORDEWELL_SETUP_BUILT=core ui web\n');
+  });
+
+  it('fails on a build that fails, names it, and tells no later call it was built', () => {
+    const root = fixture(3);
+    const { status, stderr, outputs, jobEnv } = run('setup-build', { BUILD: 'core web' }, root);
+    assert.equal(status, 1);
+    assert.match(stderr, /::error::the web build failed/);
+    assert.equal(built(root, CORE), true);
+    assert.deepEqual(outputs, {});
+    assert.equal(jobEnv, '');
+  });
+
+  it('seeds electron\'s checksums beside the zip, where electron-builder looks', () => {
+    const { status, stderr, cache } = run('electron-checksums', {}, fixture());
+    assert.equal(status, 0, stderr);
+    assert.equal(readFileSync(join(cache, 'SHASUMS256.txt-45.2.1'), 'utf8'), 'cd *SHASUMS256.txt\nab *electron-v45.2.1-linux-x64.zip\n');
+  });
+});
+
+describe('the setup action', () => {
+  const action = readFileSync('.github/actions/setup/action.yml', 'utf8');
+  const steps = action.slice(action.indexOf('\n  steps:\n')).split(/^ {4}- /m).slice(1);
+  const named = (name) => steps.find((s) => s.startsWith(`name: ${name}\n`));
+  const at = (name) => steps.indexOf(named(name));
+  const field = (step, name) => step.match(new RegExp(`^\\s+${name}: (.+)$`, 'm'))?.[1];
+  const names = readWorkspaces().map((ws) => ws.dir.split('/').at(-1));
+
+  it('restores and saves each workspace\'s build under its own key and paths, around the one step that builds', () => {
+    const build = steps.findIndex((s) => /^\s+id: build$/m.test(s));
+    assert.match(steps[build], /STEPS: \$\{\{ toJSON\(steps\) \}\}/);
+    assert.match(steps[build], /node scripts\/ci-scope\.mjs setup-build/);
+    for (const name of names) {
+      const restore = named(`Restore ${name}'s build`);
+      const save = named(`Save ${name}'s build`);
+      assert.ok(restore && save, name);
+      assert.equal(field(restore, 'id'), `restore-${name}`);
+      assert.equal(field(restore, 'uses'), 'actions/cache/restore@v6');
+      assert.equal(field(save, 'uses'), 'actions/cache/save@v6');
+      assert.equal(field(restore, 'if'), `steps.plan.outputs.${name}-key != ''`);
+      assert.equal(field(save, 'if'), `steps.plan.outputs.${name}-key != '' && steps.restore-${name}.outputs.cache-hit != 'true'`);
+      for (const step of [restore, save]) {
+        assert.equal(field(step, 'path'), `\${{ steps.plan.outputs.${name}-paths }}`, name);
+        assert.equal(field(step, 'key'), `\${{ steps.plan.outputs.${name}-key }}`, name);
+      }
+      assert.ok(at(`Restore ${name}'s build`) < build && build < at(`Save ${name}'s build`), name);
+    }
+  });
+
+  it('saves node_modules under the paths it restored, once npm ci has filled it and before anything builds', () => {
+    const paths = (step) => step.slice(step.indexOf('path: |'), step.indexOf('key:'));
+    assert.equal(paths(named('Restore node_modules')), paths(named('Save node_modules')));
+    assert.match(paths(named('Restore node_modules')), /node_modules\n\s+packages\/\*\/node_modules\n/);
+    assert.ok(at('Restore node_modules') < at('Install dependencies'));
+    assert.ok(at('Install dependencies') < at('Save node_modules'));
+    assert.ok(at('Save node_modules') < at('Build what no cache restored'));
+    assert.equal(field(named('Install dependencies'), 'if'), "steps.plan.outputs.install == 'true' && steps.modules.outputs.cache-hit != 'true'");
+  });
+
+  it('retries the Electron download, and nothing whose failure is a verdict', () => {
+    const install = named('Install Electron\'s binary');
+    assert.match(install, /for attempt in 1 2 3 4 5; do\n\s+node node_modules\/electron\/install\.js && break/);
+    assert.match(install, /sleep \$\(\(attempt \* 15\)\)/);
+    for (const step of steps.filter((s) => s !== install)) assert.doesNotMatch(step, /for attempt|sleep /);
+  });
+
+  it('runs each script step in bash, which a composite step must name', () => {
+    for (const step of steps.filter((s) => /^\s+run: /m.test(s))) assert.equal(field(step, 'shell'), 'bash', step.split('\n')[0]);
+  });
+
+  it('reads only outputs the plan writes, so no cache is keyed by an empty string by mistake', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ordewell-setup-outputs-'));
+    try {
+      const GITHUB_OUTPUT = join(dir, 'output');
+      writeFileSync(GITHUB_OUTPUT, '');
+      const env = { ...process.env, GITHUB_OUTPUT, BUILD: 'all', ELECTRON: 'true', ELECTRON_BUILDER: 'true', ORDEWELL_SETUP_INSTALLED: '', ORDEWELL_SETUP_BUILT: '' };
+      const { status, stderr } = spawnSync(process.execPath, ['scripts/ci-scope.mjs', 'setup-plan'], { encoding: 'utf8', env });
+      assert.equal(status, 0, stderr);
+      const written = new Set([...readFileSync(GITHUB_OUTPUT, 'utf8').matchAll(/^([\w-]+)(?:=|<<)/gm)].map((m) => m[1]));
+      const read = new Set([...action.matchAll(/steps\.plan\.outputs\.([\w-]+)/g)].map((m) => m[1]));
+      assert.deepEqual([...read].filter((name) => !written.has(name)), []);
+      for (const name of names) assert.ok(written.has(`${name}-key`) && written.has(`${name}-paths`), name);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('every CI job', () => {
+  const workflow = readFileSync('.github/workflows/ci.yml', 'utf8');
+  const jobs = workflow.slice(workflow.indexOf('\njobs:\n')).split(/^ {2}(?=[\w-]+:$)/m).slice(1);
+  const nodeJobs = [...Object.keys(STEPS_BY_JOB), 'real-engine', ...Object.keys(WINDOWS_JOBS)];
+
+  it('has a timeout, so a hang ends in minutes rather than at GitHub\'s six hours', () => {
+    assert.ok(jobs.length > nodeJobs.length);
+    for (const job of jobs) assert.match(job, /^ {4}timeout-minutes: \d+$/m, job.split('\n')[0]);
+  });
+
+  it('names its image, so a move of a -latest label is a change here, in ci.yml and in the release', () => {
+    const images = [...workflow.matchAll(/^\s+runs-on: (.+)$/gm)].map((m) => m[1]);
+    assert.equal(images.length, jobs.length);
+    for (const image of images) assert.match(image, /^(ubuntu-\d+\.\d+|windows-\d{4}(-vs\d{4})?)$/);
+    // homebrew-verify's matrix tries the installer on the -latest labels on purpose.
+    const release = readFileSync('.github/workflows/release.yml', 'utf8');
+    for (const [, image] of release.matchAll(/^\s+runs-on: (.+)$/gm)) {
+      if (image !== '${{ matrix.runner }}') assert.doesNotMatch(image, /latest/, image);
+    }
+  });
+
+  it('sets Node up through the setup action, straight after checkout', () => {
+    assert.doesNotMatch(workflow, /actions\/setup-node|run: npm ci/);
+    for (const job of nodeJobs) {
+      const block = jobs.find((j) => j.startsWith(`${job}:\n`));
+      assert.ok(block, job);
+      const jobSteps = block.split(/^ {6}- /m).slice(1);
+      assert.match(jobSteps[0], /^uses: actions\/checkout@/, job);
+      assert.match(jobSteps[1], /^\s+uses: \.\/\.github\/actions\/setup$/m, job);
+    }
   });
 });

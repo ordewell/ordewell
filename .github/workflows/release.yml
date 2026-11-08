@@ -8,6 +8,7 @@ on:
 # A release tag moves the version on every package from local to the registry —
 # no cancel-in-progress here: a second push is a different release.
 
+# Each job names its image, as ci.yml's do, so a move of the -latest labels is a change here.
 jobs:
   # Coverage floors, the integration test, the artifact checks and the real
   # engine are what main's CI proves, and a tag is not always a commit main
@@ -27,7 +28,7 @@ jobs:
 
   npm-publish:
     needs: ci
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v7
@@ -76,7 +77,7 @@ jobs:
 
   vscode-publish:
     needs: ci
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v7
@@ -118,7 +119,7 @@ jobs:
           npx --yes ovsx@1.1.1 publish --packagePath packages/vscode/*.vsix --skip-duplicate
 
   github-release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [npm-publish, vscode-publish]
     permissions:
       contents: write
@@ -225,7 +226,7 @@ jobs:
   release-assets:
     needs: [desktop, cli]
     if: ${{ !cancelled() && needs.cli.result == 'success' && (needs.desktop.result == 'success' || (needs.desktop.result == 'skipped' && vars.ORDEWELL_RELEASE_DESKTOP != 'true')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     env:
@@ -346,7 +347,7 @@ jobs:
   homebrew:
     needs: [desktop, release-assets]
     if: ${{ !cancelled() && needs.release-assets.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     # One writer to the tap at a time, this job's or a manual re-publish's.
@@ -464,7 +465,7 @@ jobs:
   winget:
     needs: release-assets
     if: vars.ORDEWELL_RELEASE_DESKTOP == 'true'
-    runs-on: windows-latest
+    runs-on: windows-2025-vs2026
     permissions:
       contents: read
     env:

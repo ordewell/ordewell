@@ -55,6 +55,10 @@ Everything CI runs, you can run in one go, in CI's order:
 npm run ci
 ```
 
+It runs each step once, whole. CI splits some of them to finish sooner: core's
+covered suite runs as shards that a merge leg judges, and the Windows suites
+are packed into twelve.
+
 Or one check at a time:
 
 ```bash
@@ -77,17 +81,24 @@ that a prompt edit broke plan emission.
 ### How CI is laid out
 
 `.github/workflows/ci.yml` starts with `scope`, which works out what the event
-has to prove (`scripts/change-scope.mjs`). Every other job needs only that one
-and runs beside the rest, each installing and building what it uses:
+has to prove (`scripts/change-scope.mjs`). Every other job needs only that one —
+except `coverage merge`, which also needs the coverage legs it merges — and runs
+beside the rest. Every job but `scope` and `Required checks` sets up through
+`.github/actions/setup`, which installs `node_modules` (from a cache on Linux;
+on Windows `npm ci` fills it from npm's cache, quicker there than unpacking it),
+restores the workspace builds the job asks for from a cache, builds only what
+the cache missed, and, for a job that needs it, installs Electron's binary once
+behind a cache, with retries.
 
 | Job | What it proves |
 | --- | --- |
 | `build-and-test` | What needs proving once, on Linux: the bubblewrap sandbox, the verify scripts and repository-wide guards, the offline planner loop, the standalone binary, the bench harnesses, the VS Code integration test and the desktop app's e2e |
-| `desktop-tour` | The desktop app's visual tour and layout checks, the longest job by far |
-| `coverage (<workspace>)` | Each workspace's suite with coverage, one leg per workspace, under that workspace's own floors; a `<workspace>-quick` leg runs `test:quick` and judges no floor |
+| `desktop-tour (n/2)` | The desktop app's visual tour and layout checks, in two legs: each walks every state and shoots and judges its share of the (theme, size) pairs, and together they are one walk |
+| `coverage (<workspace>)` | Each workspace's suite with coverage, one leg per workspace, under that workspace's own floors; a `<workspace>-quick` leg runs `test:quick` and judges no floor. Core's full suite is split into three shard legs, each judging no floor |
+| `coverage merge (<workspace>)` | After the coverage legs: each sharded workspace's blobs merged with `vitest --merge-reports`, which fails on a shard's failed test and judges the workspace's per-file floors over the whole |
 | `typecheck`, `lint`, `package` | The type check, lint (it builds nothing), and the npm tarballs, VSIX and Linux installers, each checked as it ships |
 | `real-engine` | The container suites against a real engine |
-| `windows (n/6)`, `windows-harness` | The core, CLI, web and VS Code suites on Windows in six shards, and the harnesses beside them |
+| `windows (n/12)`, `windows-harness` | The core, CLI, web and VS Code suites on Windows in twelve shards packed by each file's measured duration, and the harnesses beside them |
 | `Required checks` | The one status a branch rule requires: it fails if a job failed, or skipped what the change owed it |
 
 A pull request owes what its change can reach, and a new push to it cancels
@@ -106,15 +117,20 @@ the run in progress:
   `packaging/` the bench step that tests it. A path no one has judged, and
   `package-lock.json`, `ci.yml`, `scripts/ci.mjs` or `change-scope.mjs` itself,
   runs everything.
-- The desktop tour, the longest job, runs only for a change to
-  `packages/desktop` or `packages/ui`. The desktop e2e still runs for a change
-  to anything it builds on, core included.
+- The desktop tour runs only for a change to `packages/desktop` or
+  `packages/ui`, or to a harness it drives: the fake Claude Code under
+  `bench/pipeline/fake-claude/` and the mock planner's
+  `bench/live/mock-provider.mjs` and `scenarios.mjs`. Its two legs run side by
+  side. The desktop e2e still runs for
+  a change to anything it builds on, core included.
 
-So a change to core's internals runs core in full and the other five quick,
-with no tour; one to `packages/ui` runs ui in full, VS Code and the desktop
-app quick, and the tour; one to `README.md` or `bench/README.md` runs nothing
-but `scope` and `Required checks`. The scope job's summary names what it
-left out.
+So a change to core's internals runs core in full, three shards and their
+merge, and the other five quick, with no tour; one to `packages/ui` runs ui in
+full, VS Code and the desktop app quick, and the tour; one to `README.md` or
+`bench/README.md` runs no suite and no other job: only `scope`, `Required
+checks` and the steps of `build-and-test` every change owes (building core,
+the verify scripts and the repository-wide guards). The scope
+job's summary names what it left out.
 
 A push to `main`, a release, the nightly run (03:17 UTC) and a run started by
 hand from the Actions tab always run everything, and none of them is cancelled
@@ -126,6 +142,39 @@ anything short of finding it, a failed lookup included, runs everything.
 `npm run ci` runs the same steps, once each, in the workflow's order; a build
 several jobs share runs once. `node scripts/ci.mjs --list` prints them without
 running any.
+
+### Walking one desktop-tour leg
+
+The tour launches the desktop app from its build, so build first
+(`npm run build`) and run it where there is a display. To walk one CI leg's
+share instead of the whole tour, set `TOUR_LEG=k/n`, with `1 ≤ k ≤ n`:
+
+```bash
+TOUR_STRICT=1 TOUR_LEG=1/2 npm run desktop:tour
+```
+
+Each leg still walks every state, because a state is reached from the ones
+before it, and shoots and judges only its share of the (theme, size)
+combinations; the plan-card fit check, which every leg walks, every leg
+judges. With no `TOUR_LEG`, one run walks all of them. `TOUR_STRICT=1`
+makes a failing layout check fail the run, as it does in CI; without it the
+checks only report. On a headless Linux machine, wrap the command in
+`xvfb-run -a`, as CI does.
+
+### Refreshing the Windows shard durations
+
+The twelve Windows shards are packed by each test file's measured duration,
+recorded in `scripts/windows-durations.json`. After a Windows suite has grown,
+refresh it from one or more completed CI runs whose Windows matrix passed (the
+`gh` CLI does the reading):
+
+```bash
+node scripts/refresh-windows-durations.mjs <run-id> [<run-id> ...]
+```
+
+It keeps each file's maximum observed time across those runs. A file the record
+does not name is estimated at 1000 ms, and ties break on path and then shard
+index, so the packing is the same on every OS.
 
 CI runs the suites on Linux and again on Windows. `npm run ci` works on either:
 on Windows it skips only the bubblewrap sandbox suite, which is Linux's. Run it

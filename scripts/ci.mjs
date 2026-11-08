@@ -7,8 +7,9 @@
 // Every named step of ci.yml must appear below, either run here or listed as
 // CI-only with the reason: a step added to the workflow and not here fails
 // this script before anything runs, so the two cannot drift apart unnoticed.
-// ci.yml's jobs run side by side and each builds what it needs, so a step
-// several jobs share (the two builds) runs here once, where it first appears.
+// ci.yml's jobs run side by side and each sets up and builds what it needs, so
+// what several jobs share runs here once: the first job's two builds, which
+// build every package the later jobs' setup builds again.
 //
 // `--list` prints the steps a run would take, in order, and runs none.
 import { spawn, spawnSync } from 'node:child_process';
@@ -143,7 +144,8 @@ function seaStep(run) {
 
 /** Run here, keyed by the step's name in ci.yml. */
 const STEPS = {
-  'Build (core first — cli, web and vscode compile against its dist/)': () => npm('run', 'build:core'),
+  // CI installs exactly the lockfile here; a local run checks what it has against it instead.
+  'Install dependencies and build core (cli, web and vscode compile against its dist/)': () => (installedMatchesLockfile() ? npm('run', 'build:core') : 1),
   'Planner sandbox — real bubblewrap e2e': linuxSandboxE2e,
   'Verify scripts (offline, against the built core)': () => {
     for (const f of readdirSync('scripts').filter((f) => /^verify-.*\.mjs$/.test(f)).sort()) {
@@ -159,6 +161,7 @@ const STEPS = {
   'Build (ui, vscode, cli, web & desktop)': () => npm('run', 'build', '-w', 'packages/ui', '-w', 'packages/vscode', '-w', 'packages/cli', '-w', 'packages/web', '-w', 'packages/desktop', '--if-present'),
   'VS Code integration test (synthetic runner — no API key)': integrationTest,
   'Desktop app — offline e2e (mock planner, fake runner)': () => withDisplay('the desktop e2e', ['run', 'test:desktop-e2e']),
+  // ci.yml splits the tour into legs by TOUR_LEG; with none set, this one walk shoots every leg's share.
   'Desktop app — visual tour and layout checks': () => withDisplay('the visual tour', ['run', 'desktop:tour'], { TOUR_STRICT: '1' }),
   'Typecheck': () => npm('run', 'typecheck'),
   'Test with coverage': testWithCoverage,
@@ -173,9 +176,12 @@ const CI_ONLY = {
   'Work out what this change needs': 'a local run does not select: it runs every step here',
   'Confirm every step this change owed ran': 'nothing is skipped here for it to confirm',
   'Require every check this change owed': 'a GitHub required status',
-  'Use Node.js 22.x': 'the local Node is what you have',
   // `npm ci` would wipe the node_modules you are working in.
-  'Install dependencies': 'run `npm ci` yourself after a lockfile change',
+  'Install dependencies': 'the first step checks node_modules against the lockfile: run `npm ci` yourself when it does not match',
+  'Install bubblewrap and zsh if the image lacks them': 'the sandbox step installs them itself where sudo does not prompt',
+  'Install dependencies and build every package': 'the first job’s two build steps build the same packages',
+  'Build the Windows suite dependencies': 'the first job’s builds already supply core, ui, cli and web; Windows tests remain unsharded here',
+  'Build the Windows harness dependencies': 'the first job’s builds already supply core, ui and the VS Code extension bundle',
   'Cache the VS Code download': 'packages/vscode/.vscode-test is already kept between runs',
   'Resolve the VS Code version under test': 'the workflow asks the update service which stable it will download; a local run keeps the .vscode-test it has',
   'Install xvfb if the image lacks it': 'the VS Code and desktop steps check for a display themselves',
@@ -183,11 +189,14 @@ const CI_ONLY = {
   'Upload the desktop tour report': 'a failed run leaves it in packages/desktop/test-results/tour/',
   'Append coverage summaries to the job summary': 'a GitHub job summary',
   'Upload coverage reports': 'reports stay in packages/*/coverage/',
+  // CI splits core's suite into shards only to finish sooner; here it runs whole.
+  'Upload the shard\'s coverage blob': '`Test with coverage` runs each suite whole, so there are no shards',
+  'Download the shards\' coverage blobs': '`Test with coverage` runs each suite whole, so there are no shards',
+  'Merge the shards\' coverage and judge its floors': '`Test with coverage` judges the same floors over each whole suite',
   'Upload .vsix': 'the .vsix stays in packages/vscode/',
   'Real engine — every harness in a real container': 'it needs an engine and a large image: run `npm run test:containers`',
   // The Windows jobs run on this host what the steps above run, so a local run
   // on Windows has run them already, and one elsewhere cannot.
-  'Build every package': 'the two build steps above build the same packages',
   'Test on Windows': '`Test with coverage` runs the Windows job’s core, CLI, web and VS Code suites on this host',
   'Verify scripts on Windows': 'the verify step above runs them on this host',
   'Bench harness tests on Windows': 'the bench step above runs them on this host',
@@ -209,7 +218,6 @@ if (process.argv.includes('--list')) {
   for (const name of local) console.log(name);
   process.exit(0);
 }
-if (!installedMatchesLockfile()) process.exit(1);
 
 for (const name of local) {
   console.log(`\n=== ${name}`);
