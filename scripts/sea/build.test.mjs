@@ -8,6 +8,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { after, describe, it } from 'node:test';
+
+import { hostHas } from '../host-tools.mjs';
 import {
   SENTINEL_FUSE,
   archiveName,
@@ -199,7 +201,8 @@ describe('the archive', () => {
   });
 
   const tar = spawnSync('tar', ['--version'], { encoding: 'utf8' });
-  it('extracts with the system tar', { skip: tar.status !== 0 && 'no tar on PATH' }, () => {
+  it('extracts with the system tar', (t) => {
+    if (!hostHas('tar', { present: tar.status === 0 })) return t.skip('no tar on PATH');
     const dir = join(scratch, 'extract');
     mkdirSync(dir);
     writeFileSync(join(scratch, 'a.tar.gz'), archive);

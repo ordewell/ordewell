@@ -7,6 +7,10 @@
  *
  * Output, all under test-results/tour (gitignored): `<state>--<theme>--<w>x<h>.png`,
  * report.json with every check and probe, and index.html, a contact sheet.
+ * TOUR_LEG=k/n walks every state but shoots and judges only the k-th share of
+ * the (theme, size) combinations (e2e/legs.ts), so n legs side by side make
+ * one walk's captures and checks between them; the plan-card fit probe, which
+ * every leg walks, every leg judges.
  * A state the tour cannot reach fails the test; a failing layout check fails it
  * only with TOUR_STRICT=1, since the checks describe the app as it is today.
  *
@@ -22,6 +26,7 @@ import {
   appEnv, closeApp, DESKTOP, DETECTION_FAILED, fakedRunners, fakeDaemon, freePort, launchApp, makeSandbox, MIXED, MIXED_RUNNERS, NONE_INSTALLED, openFolder, removeSandbox, ROOT, startMock, untilListening,
   type Sandbox,
 } from './fixtures';
+import { assertPartition, combinations, legName, owns, parseLeg } from './legs';
 import { CARD_SELECTORS, LIFT_MIN, liftChecks, TEXT_MIN, type LiftResult } from './surfaces';
 
 const OUT = path.join(DESKTOP, 'test-results', 'tour');
@@ -30,10 +35,23 @@ const SIZES = [{ width: 1280, height: 800 }, { width: 1512, height: 982 }, { wid
 const NARROW = { width: 900, height: 800 } as const;
 const THEMES = ['dark', 'light'] as const;
 const STRICT = process.env.TOUR_STRICT === '1';
+const COMBINATIONS = combinations(THEMES, SIZES);
+/** Which share of COMBINATIONS this run shoots (e2e/legs.ts); a bad TOUR_LEG fails before anything launches. */
+const LEG = parseLeg(process.env.TOUR_LEG);
 // "Waiting for merge" is a task's status (docs/desktop/design.md, status table), and "Waiting for a merge"
 // the Changes heading over the tasks in that status: neither is a wait that should end.
 const LOADING_WORDS = '\\b(Detecting|Loading|Checking|Waiting for(?! (a )?merge))\\b';
 const LOADING_GRACE_MS = 15_000;
+/** How long a page must stay unchanged to count as settled, and the most a settle waits for that. */
+const QUIET_MS = 150;
+const SETTLE_MS = 400;
+/**
+ * A hidden test window, never throttled, still draws one frame a second until
+ * a screenshot wakes it, and a theme or size change puts it back to sleep, so
+ * every settle and every shot waited out whole seconds. Unlimited, it draws as
+ * a shown window does.
+ */
+const SWITCHES = ['--disable-frame-rate-limit'];
 const ALL_RUNNERS = 'claude-code,codex,opencode,copilot-cli,qwen-code,cline,gemini-cli,cursor-agent';
 const RUNNERS_GOAL = 'Spread the work across every agent';
 const GOAL = 'Add greeting and farewell modules';
@@ -82,7 +100,9 @@ const CHECK_NAMES: Record<CheckId, string> = {
 const CHAT_FILL = 0.9;
 
 interface Check { readonly id: CheckId; readonly name: string; readonly pass: boolean; readonly count: number; readonly details: string[] }
-interface Shot { readonly file: string; readonly theme: Theme; readonly width: number; readonly height: number; readonly png: Size; readonly checks: Check[] }
+/** Where a shot's time went, in ms: resizing and settling (with `ensure`), the screenshot, and the checks. */
+interface ShotTiming { readonly settle: number; readonly shoot: number; readonly judge: number }
+interface Shot { readonly file: string; readonly theme: Theme; readonly width: number; readonly height: number; readonly png: Size; readonly checks: Check[]; readonly ms: ShotTiming }
 interface StateRecord {
   readonly id: string;
   readonly title: string;
@@ -91,6 +111,9 @@ interface StateRecord {
   readonly notes: string[];
   readonly shots: Shot[];
   loadingSettledMs?: number;
+  /** How long driving the app into this state took, and capturing it, in ms. */
+  reachMs?: number;
+  captureMs?: number;
 }
 
 /** What the page reports about itself; computed in the renderer, so it uses nothing from this module. */
@@ -333,7 +356,44 @@ async function setTheme(page: Page, theme: Theme): Promise<void> {
   await page.waitForFunction((t) => window.matchMedia('(prefers-color-scheme: light)').matches === (t === 'light'), theme, { timeout: 5_000 });
 }
 
-async function settle(page: Page, ms = 400): Promise<void> {
+/**
+ * Waits until the page stops changing after a resize or a theme: its fonts
+ * loaded, then no node, attribute or text changed, nothing scrolled and no
+ * finite animation ran for QUIET_MS of frames. SETTLE_MS, the fixed wait this
+ * replaced, stays its limit, so a page that never goes quiet is judged as late
+ * as it always was. A spinner runs for ever and is not waited for; a canvas
+ * that resizes changes its attributes, so it is.
+ */
+async function settle(page: Page): Promise<void> {
+  await page.evaluate(async ({ limit, quiet }) => {
+    const deadline = performance.now() + limit;
+    const frame = (): Promise<number> => new Promise((resolve) => requestAnimationFrame(resolve));
+    await Promise.race([document.fonts.ready, new Promise((resolve) => setTimeout(resolve, limit))]);
+    let changed = performance.now();
+    const mark = (): void => { changed = performance.now(); };
+    const observer = new MutationObserver(mark);
+    observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+    document.addEventListener('scroll', mark, true);
+    try {
+      await frame();
+      await frame();
+      while (performance.now() < deadline) {
+        if (document.getAnimations().some((a) => a.playState === 'running' && Number.isFinite(Number(a.effect?.getComputedTiming().endTime)))) mark();
+        if (performance.now() - changed >= quiet) return;
+        await frame();
+      }
+    } finally {
+      observer.disconnect();
+      document.removeEventListener('scroll', mark, true);
+    }
+  }, { limit: SETTLE_MS, quiet: QUIET_MS });
+}
+
+/**
+ * A fixed wait, after a step that starts a debounce, a hover's delay or a
+ * daemon read: the page can sit quiet before those land, so no quiet stands in.
+ */
+async function pause(page: Page, ms: number): Promise<void> {
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
   await page.waitForTimeout(ms);
 }
@@ -479,23 +539,30 @@ async function capture(page: Page, record: StateRecord, started: number, options
   fs.mkdirSync(OUT, { recursive: true });
   record.loadingSettledMs = await waitForLoading(page);
   try {
-    for (const theme of THEMES) {
-      await setTheme(page, theme);
-      for (const size of SIZES) {
-        await emulate(page, size);
-        await settle(page);
-        if (options.ensure) { await options.ensure(); await settle(page, 200); }
-        const { data } = await (await cdpOf(page)).send('Page.captureScreenshot', { format: 'png' });
-        const buffer = Buffer.from(data, 'base64');
-        const file = `${record.id}--${theme}--${size.width}x${size.height}.png`;
-        fs.writeFileSync(path.join(OUT, file), buffer);
-        const raw = await page.evaluate(inPageChecks, LOADING_WORDS);
-        const lift = await page.evaluate(liftChecks, { selectors: CARD_SELECTORS, liftMin: LIFT_MIN, textMin: TEXT_MIN });
-        const png = pngSize(buffer);
-        if (png.width !== size.width || png.height !== size.height) record.notes.push(`${file} came out ${png.width}x${png.height}`);
-        const extra = await options.measure?.(size, theme);
-        record.shots.push({ file, theme, ...size, png, checks: [...judge(raw, consoleErrors.filter((e) => e.at >= started), lift), ...(extra ? [extra] : [])] });
-      }
+    let theme: Theme | undefined;
+    for (const [at, combination] of COMBINATIONS.entries()) {
+      // Every leg drives the app through every combination, in one walk's order, so the
+      // ones it shoots meet the app as one walk would; it only leaves the others unshot.
+      if (combination.theme !== theme) { theme = combination.theme; await setTheme(page, theme); }
+      const { size } = combination;
+      const t0 = Date.now();
+      await emulate(page, size);
+      await settle(page);
+      if (options.ensure) { await options.ensure(); await settle(page); }
+      if (!owns(LEG, at)) continue;
+      const t1 = Date.now();
+      const { data } = await (await cdpOf(page)).send('Page.captureScreenshot', { format: 'png' });
+      const buffer = Buffer.from(data, 'base64');
+      const file = `${record.id}--${theme}--${size.width}x${size.height}.png`;
+      fs.writeFileSync(path.join(OUT, file), buffer);
+      const t2 = Date.now();
+      const raw = await page.evaluate(inPageChecks, LOADING_WORDS);
+      const lift = await page.evaluate(liftChecks, { selectors: CARD_SELECTORS, liftMin: LIFT_MIN, textMin: TEXT_MIN });
+      const png = pngSize(buffer);
+      if (png.width !== size.width || png.height !== size.height) record.notes.push(`${file} came out ${png.width}x${png.height}`);
+      const extra = await options.measure?.(size, theme);
+      const ms = { settle: t1 - t0, shoot: t2 - t1, judge: Date.now() - t2 };
+      record.shots.push({ file, theme, ...size, png, checks: [...judge(raw, consoleErrors.filter((e) => e.at >= started), lift), ...(extra ? [extra] : [])], ms });
     }
   } finally {
     await unemulate(page);
@@ -516,7 +583,9 @@ async function state(page: Page | undefined, id: string, title: string, reach: (
     if (!page) throw new Error('no window to draw this state in');
     await reach(record);
     record.reached = true;
+    record.reachMs = Date.now() - started;
     await capture(page, record, started, options);
+    record.captureMs = Date.now() - started - record.reachMs;
   } catch (error) {
     record.error = error instanceof Error ? error.message.split('\n').slice(0, 6).join('\n') : String(error);
     if (page) {
@@ -702,9 +771,11 @@ async function setPane(page: Page, label: string, size: number): Promise<string 
 async function planCardFit(page: Page, where: string): Promise<Record<string, string[]>> {
   const result: Record<string, string[]> = {};
   const measure = async (key: string, preset: (string | undefined)[]): Promise<void> => {
-    await settle(page, 200);
+    await pause(page, 200);
     const found = [...preset.filter((p): p is string => p !== undefined), ...await page.evaluate(cardOverflow)];
     result[key] = found;
+    // Every leg walks this probe, since it sets the panes later states start from, so every leg judges it:
+    // one leg run alone then fails on an overflow as the whole tour would.
     fitFailures.push(...found.map((f) => `${where} ${key}: ${f}`));
   };
   for (const size of SIZES) {
@@ -794,30 +865,30 @@ async function graphProbe(page: Page, graph: Locator): Promise<Record<string, un
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     const start = await scroll();
     await page.mouse.wheel(0, 240);
-    await settle(page, 300);
+    await pause(page, 300);
     result.wheel = { before: start, after: await scroll() };
     await page.keyboard.down('Shift');
     await page.mouse.wheel(0, 240);
     await page.keyboard.up('Shift');
-    await settle(page, 600);
+    await pause(page, 600);
     result.shiftWheel = await scroll();
     await page.mouse.move(box.x + 20, box.y + box.height - 20);
     await page.mouse.down();
     await page.mouse.move(box.x + 140, box.y + box.height - 60, { steps: 8 });
     await page.mouse.up();
-    await settle(page, 300);
+    await pause(page, 300);
     result.drag = await scroll();
   }
   const previous = page.getByRole('button', { name: 'Previous stage' });
   if (await previous.isEnabled()) await previous.click();
-  await settle(page, 600);
+  await pause(page, 600);
   result.previousStage = await scroll();
   const first = graph.locator('.graph-card-face[tabindex="0"]');
   await first.focus().catch(() => undefined);
   const keys: { key: string; focused: string }[] = [];
   for (const key of ['ArrowRight', 'Escape', 'ArrowDown', 'End', 'Home']) {
     await page.keyboard.press(key);
-    await settle(page, 100);
+    await pause(page, 100);
     keys.push({ key, focused: await page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.tagName ?? '') });
   }
   result.keyboard = keys;
@@ -834,8 +905,10 @@ function writeReport(): void {
   const report = {
     generatedAt: new Date().toISOString(),
     strict: STRICT,
+    leg: legName(LEG),
     sizes: SIZES,
     themes: THEMES,
+    shot: COMBINATIONS.filter((_, at) => owns(LEG, at)).map(({ theme, size }) => `${theme} ${size.width}x${size.height}`),
     checks: CHECK_NAMES,
     summary: {
       states: states.length,
@@ -875,7 +948,7 @@ img{width:100%;display:block;border-radius:3px}
 figcaption ul{margin:4px 0 0;padding-left:16px;color:#b91c1c}
 figure.dark figcaption ul{color:#fca5a5}
 .error{color:#b91c1c}
-</style></head><body><h1>Ordewell desktop tour</h1><p>${new Date().toISOString()} · ${STRICT ? 'strict' : 'report only'} · checks: ${Object.entries(CHECK_NAMES).map(([id, name]) => `<b>${id}</b> ${escape(name)}`).join('; ')}</p><nav>${nav}</nav>\n${sections}</body></html>\n`);
+</style></head><body><h1>Ordewell desktop tour</h1><p>${new Date().toISOString()} · ${STRICT ? 'strict' : 'report only'} · leg ${legName(LEG)} · checks: ${Object.entries(CHECK_NAMES).map(([id, name]) => `<b>${id}</b> ${escape(name)}`).join('; ')}</p><nav>${nav}</nav>\n${sections}</body></html>\n`);
 }
 
 // ----------------------------------------------------------------------- tour
@@ -895,6 +968,13 @@ test.afterAll(async () => {
   for (const port of ports) await untilListening(port, false);
   if (sandbox) removeSandbox(sandbox);
   if (visible.length) throw visible[0];
+});
+
+// What lets CI split the walk: whatever n it runs, legs 1..n shoot every combination once between them.
+test('the legs partition the combinations', () => {
+  for (let count = 1; count <= COMBINATIONS.length; count++) assertPartition(COMBINATIONS.length, count);
+  expect(() => assertPartition(COMBINATIONS.length, COMBINATIONS.length + 1)).toThrow(/shoot nothing/);
+  assertPartition(COMBINATIONS.length, LEG.count);
 });
 
 test('the visual tour', async () => {
@@ -921,7 +1001,7 @@ test('the visual tour', async () => {
   // ------------------------------------------------------------ first launch
   const ownedPort = await freePort();
   // The tour's plan adds cards with long model names behind the e2e plan's two, for the graph's captures.
-  const app = await launchApp(box, appEnv(box, ownedPort, started.port, { persona: 'desktop-tour' }));
+  const app = await launchApp(box, appEnv(box, ownedPort, started.port, { persona: 'desktop-tour' }), SWITCHES);
   apps.push(app);
   ports.push(ownedPort);
   watchConsole(app, 'launch 1');
@@ -971,8 +1051,8 @@ test('the visual tour', async () => {
     const box2 = page.getByRole('textbox', { name: 'Message the planner' });
     await box2.fill(GOAL);
     await box2.press('Enter');
-    // The mock has streamed its reasoning and holds the answer while the file exists.
-    await page.waitForTimeout(2_500);
+    // The mock streams its reasoning, then holds the answer while the file exists.
+    await expect(page.locator('.activity-group-summary', { hasText: 'Thinking…' })).toBeVisible({ timeout: 30_000 });
     record.notes.push('the planner turn is held open by the mock provider\'s --hold-file until the captures are done');
   });
   fs.rmSync(holdFile, { force: true });
@@ -985,14 +1065,14 @@ test('the visual tour', async () => {
     const page = need(win);
     await need(approve).click();
     await expect(need(planPanel).getByRole('button', { name: 'Add a greeting module' })).toBeVisible({ timeout: 60_000 });
-    await settle(page, 1_000);
+    await pause(page, 1_000);
   });
 
   await state(win, 'run-graph', 'The same run, in the plan graph tab', async () => {
     const page = need(win);
     const graph = await graphTab();
     await expect(graph.getByRole('button', { name: /^#1 Add a greeting module, running/ })).toBeVisible({ timeout: 60_000 });
-    await settle(page, 600);
+    await pause(page, 600);
     probes.graphNavigation = await graphProbe(page, graph);
     // The probe scrolled the view: bring the first stage back, as a fresh open shows it.
     await graph.evaluate((el) => el.scrollTo({ left: 0, top: 0 }));
@@ -1018,7 +1098,7 @@ test('the visual tour', async () => {
 
   await state(win, 'task-chat', 'Task Chat', async () => {
     await need(editor).getByRole('tablist', { name: 'Task view' }).getByRole('tab', { name: 'Chat' }).click();
-    await need(win).waitForTimeout(1_000);
+    await expect(need(editor).locator('.task-log-container .chat-msg-content').first()).toBeVisible({ timeout: 30_000 });
   });
 
   // The chats with the plan panel closed, so the tab is all the room the chat has (checklist L7).
@@ -1061,7 +1141,7 @@ test('the visual tour', async () => {
     await expect(file).toBeVisible({ timeout: 30_000 });
     await file.dblclick();
     await expect(need(editor).locator('.monaco-editor').first()).toBeVisible({ timeout: 30_000 });
-    await settle(page, 800);
+    await pause(page, 800);
   });
 
   await state(win, 'changes-comment', 'Changes: a task diff with a line comment', async () => {
@@ -1110,14 +1190,14 @@ test('the visual tour', async () => {
     const graph = await graphTab();
     await density('Comfortable').click();
     await expect(graph.getByRole('button', { name: /^#3 Port the tokenizer/ })).toBeVisible({ timeout: 30_000 });
-    await settle(page, 600);
+    await pause(page, 600);
   });
 
   await state(win, 'graph-cards-compact', 'The plan graph with every kind of card, Compact', async () => {
     const page = need(win);
     await graphTab();
     await density('Compact').click();
-    await settle(page, 600);
+    await pause(page, 600);
   });
   await density('Comfortable').click().catch(() => undefined);
 
@@ -1149,7 +1229,7 @@ test('the visual tour', async () => {
     await expect(page.locator('.xterm').first()).toBeVisible({ timeout: 30_000 });
     await page.locator('.xterm').first().click();
     await page.keyboard.type('git log --oneline -3\n');
-    await settle(page, 1_000);
+    await pause(page, 1_000);
   });
 
   await state(win, 'settings', 'Settings, grouped in sections with Theme first', async () => {
@@ -1179,7 +1259,7 @@ test('the visual tour', async () => {
     await page.getByRole('heading', { name: 'Runners' }).scrollIntoViewIfNeeded();
     // The write goes out on its own once the ticking pauses.
     await expect(page.getByRole('status').filter({ hasText: /of \d+ allowed/ })).toBeVisible();
-    await settle(page, 1_200);
+    await pause(page, 1_200);
   }, {
     // At each tour size, and again in a 900x600 window, where the list's cap is shortest and a squeezed row would show first.
     measure: async (size) => {
@@ -1187,10 +1267,10 @@ test('the visual tour', async () => {
       const list = page.getByRole('listbox', { name: 'Claude Code models' });
       const here = await allowlistLayout(list);
       await emulate(page, { width: 900, height: 600 });
-      await settle(page, 300);
+      await pause(page, 300);
       const small = await allowlistLayout(list);
       await emulate(page, size);
-      await settle(page, 300);
+      await pause(page, 300);
       const details = [...here.details, ...small.details.map((line) => `at 900x600: ${line}`)];
       return { ...here, pass: here.pass && small.pass, count: here.count + small.count, details };
     },
@@ -1222,30 +1302,30 @@ test('the visual tour', async () => {
     record.notes.push(`the runner lists ${await options.count()} models`);
     await options.nth(1).click();
     await picker.scrollIntoViewIfNeeded();
-    await settle(page, 1_200);
+    await pause(page, 1_200);
   }, {
     measure: async (size, theme) => {
       const page = need(win);
       const list = page.getByRole('listbox', { name: 'OpenCode models' });
       const here = await allowlistLayout(list);
       await emulate(page, { width: 900, height: 600 });
-      await settle(page, 300);
+      await pause(page, 300);
       const small = await allowlistLayout(list);
       if (size.width === 1280) {
         await list.scrollIntoViewIfNeeded();
-        await settle(page, 200);
+        await pause(page, 200);
         const { data } = await (await cdpOf(page)).send('Page.captureScreenshot', { format: 'png' });
         fs.writeFileSync(path.join(OUT, `settings-allowlist-opencode--${theme}--900x600.png`), Buffer.from(data, 'base64'));
       }
       await emulate(page, size);
-      await settle(page, 300);
+      await pause(page, 300);
       const details = [...here.details, ...small.details.map((line) => `at 900x600: ${line}`)];
       return { ...here, pass: here.pass && small.pass, count: here.count + small.count, details };
     },
     restore: async () => {
       const all = need(win).getByRole('group', { name: 'OpenCode model allowlist' }).getByRole('button', { name: 'Allow all models' });
       if (await all.isEnabled().catch(() => false)) await all.click();
-      await settle(need(win), 600);
+      await pause(need(win), 600);
       await fakeDaemon(app, undefined);
     },
   });
@@ -1331,7 +1411,8 @@ test('the visual tour', async () => {
     // A `has` locator is resolved inside each card, so it is rooted at the page, not at the panel.
     const done = panel.locator('.task-card').filter({ has: page.getByRole('button', { name: /^#2 Add a farewell module, / }) });
     for (const fold of ['Prompt', 'Handoff']) await done.getByRole('button', { name: new RegExp(`^${fold}`) }).click();
-    probes.planCardFitRun = await planCardFit(page, 'the run\'s #2');
+    const run = await planCardFit(page, 'the run\'s #2');
+    probes.planCardFitRun = run;
 
     // A draft at its widest: long titles, a long model and its effort, every badge, the edit controls.
     // The window is narrow enough here that the sidebar is a drawer, over the editor, and the planner a tab behind others.
@@ -1346,12 +1427,14 @@ test('the visual tour', async () => {
     await expect(widest).toBeVisible({ timeout: 60_000 });
     await widest.click();
     await panel.locator('.task-card').filter({ has: page.getByRole('button', { name: /^#2 Find why the session lease heartbeat/ }) }).getByRole('button', { name: /^Prompt/ }).click();
-    probes.planCardFitDraft = await planCardFit(page, 'the draft\'s #2');
+    const draft = await planCardFit(page, 'the draft\'s #2');
+    probes.planCardFitDraft = draft;
     // The capture is the narrowest docked panel, where a card has the least room.
     await emulate(page, SIZES[0]);
     await setPane(page, 'Resize plan panel', paneBounds('plan', SIZES[0]).min);
     await unemulate(page);
-    record.notes.push(`plan cards measured at the panel's minimum and default widths at every size, and in the ${NARROW.width}px drawer: ${fitFailures.length} problems`);
+    const found = [run, draft].flatMap((result) => Object.values(result)).flat().length;
+    record.notes.push(`plan cards measured at the panel's minimum and default widths at every size, and in the ${NARROW.width}px drawer: ${found} problems`);
   });
 
   probes.activityBar = win ? await win.evaluate(() => [...document.querySelectorAll('nav[aria-label="Views"] button')].map((b) => {
@@ -1412,7 +1495,7 @@ test('the visual tour', async () => {
     held.holderPid = holder.pid;
     held.attachedPid = attached.pid;
 
-    app2 = await launchApp(box, appEnv(box, appPort, started.port, { noProvider: true }));
+    app2 = await launchApp(box, appEnv(box, appPort, started.port, { noProvider: true }), SWITCHES);
     apps.push(app2);
     watchConsole(app2, 'launch 2');
     await stubDialogs(app2);
@@ -1551,7 +1634,7 @@ test('the visual tour', async () => {
   await closeApp(app2);
   if (app2) apps.splice(apps.indexOf(app2), 1);
   const thirdPort = await freePort();
-  const app3 = await launchApp(box, appEnv(box, thirdPort, started.port, { persona: 'desktop-tour-runners', runners: ALL_RUNNERS }));
+  const app3 = await launchApp(box, appEnv(box, thirdPort, started.port, { persona: 'desktop-tour-runners', runners: ALL_RUNNERS }), SWITCHES);
   apps.push(app3);
   ports.push(thirdPort);
   watchConsole(app3, 'launch 3');
@@ -1594,7 +1677,7 @@ test('the visual tour', async () => {
     const dialog = welcome3.getByRole('dialog', { name: 'API key for OpenRouter' });
     await expect(dialog).toBeVisible();
     await dialog.getByLabel('API key').fill('sk-or-v1-0123456789abcdef');
-    await settle(welcome3, 400);
+    await pause(welcome3, 400);
   });
   await welcome3.keyboard.press('Escape');
 
@@ -1618,14 +1701,14 @@ test('the visual tour', async () => {
     await expect(settingsOf(page)).toBeVisible({ timeout: 30_000 });
     await settingsOf(page).scrollIntoViewIfNeeded();
     await expect(page.locator('.settings-runner')).toHaveCount(8, { timeout: 30_000 });
-    await settle(page, 600);
+    await pause(page, 600);
   }, { ensure: () => runnersToTop(need(win3)) });
 
   await state(win3, 'settings-allowlist-error', 'Settings, a signed-out runner\'s model picker open on its error', async () => {
     const page = need(win3);
     await page.getByRole('button', { name: 'Edit Codex models' }).click();
     await expect(page.locator('.settings-runner').filter({ hasText: 'Codex' }).getByText('Codex is not signed in. Sign in with /login codex')).toBeVisible({ timeout: 30_000 });
-    await settle(page, 400);
+    await pause(page, 400);
   }, { ensure: () => runnersToTop(need(win3)) });
 
   await state(win3, 'settings-key-dialog', 'Settings: the key entry open over the window, for Gemini CLI', async () => {
@@ -1633,7 +1716,7 @@ test('the visual tour', async () => {
     await page.locator('.settings-runner').filter({ hasText: 'Gemini CLI' }).getByRole('button', { name: 'Set API key…' }).click();
     const dialog = page.getByRole('dialog', { name: 'API key for Google' });
     await expect(dialog).toBeVisible();
-    await settle(page, 400);
+    await pause(page, 400);
   });
   await win3?.keyboard.press('Escape');
 
@@ -1656,7 +1739,7 @@ test('the visual tour', async () => {
       await expect(graph.locator(`.graph-card .ow-runner-${runner}`).first()).toBeAttached();
       await expect(plan.locator(`.ow-runner-${runner}`).first()).toBeAttached();
     }
-    await settle(page, 600);
+    await pause(page, 600);
   });
 
 
@@ -1676,7 +1759,7 @@ test('the visual tour', async () => {
     record.notes.push(`Claude Code as the planner offers ${await models.count()} models`);
     await models.filter({ hasText: 'Sonnet' }).first().click();
     await page.locator('.setup-panel .variant-select').selectOption('high');
-    await settle(page, 800);
+    await pause(page, 800);
   });
 
   await state(win3, 'planner-model-reopened', 'The picked model and effort after reopening the window', async (record) => {

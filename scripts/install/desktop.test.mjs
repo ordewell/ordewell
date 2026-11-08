@@ -9,13 +9,13 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import { after, describe, it } from 'node:test';
+import { hostHas, onPath, pinnedShellcheck } from '../host-tools.mjs';
 import { CLI_FIXED_ASSETS, FIXED_ASSETS, INSTALL_SCRIPT, readInstallers, writeReleaseAssets } from '../desktop-release-assets.mjs';
 
 const SH = resolve('scripts/install/desktop.sh');
 const PS1 = resolve('scripts/install/desktop.ps1');
 const VERSION = '9.8.7';
 
-const has = (command) => spawnSync('sh', ['-c', `command -v ${command}`], { stdio: 'ignore' }).status === 0;
 const sandboxes = [];
 const scratch = (label) => {
   const dir = mkdtempSync(join(tmpdir(), `o48-${label}-`));
@@ -115,7 +115,7 @@ describe('the release assets script', () => {
     const hash = (name) => sums.find((line) => line.endsWith(`  ${name}`)).slice(0, 64);
     assert.equal(hash('Ordewell-win-x64.exe'), hash(`Ordewell-${VERSION}-win-x64.exe`));
     assert.notEqual(hash('Ordewell-win-x64.exe'), hash('Ordewell-mac-arm64.dmg'));
-    if (has('shasum')) {
+    if (hostHas('shasum')) {
       const check = spawnSync('shasum', ['-a', '256', '-c', 'SHA256SUMS'], { cwd: dir, encoding: 'utf8' });
       assert.equal(check.status, 0, check.stdout + check.stderr);
     }
@@ -209,7 +209,7 @@ describe('the release assets script', () => {
       assert.equal(readFileSync(join(dir, name), 'utf8'), readFileSync(join(dir, CLI_ARCHIVES[i]), 'utf8'));
     }
     for (const name of FIXED_ASSETS) assert.ok(!existsSync(join(dir, name)), `${name} was written`);
-    if (has('shasum')) {
+    if (hostHas('shasum')) {
       const check = spawnSync('shasum', ['-a', '256', '-c', 'SHA256SUMS'], { cwd: dir, encoding: 'utf8' });
       assert.equal(check.status, 0, check.stdout + check.stderr);
     }
@@ -261,11 +261,12 @@ describe('the release assets script', () => {
 });
 
 describe('desktop.sh', () => {
-  it('is valid POSIX sh, and shellcheck (when installed) has no complaint', (t) => {
+  it('is valid POSIX sh, under dash too, and the pinned shellcheck has no complaint', (t) => {
     assert.equal(spawnSync('sh', ['-n', SH]).status, 0);
-    if (has('dash')) assert.equal(spawnSync('dash', ['-n', SH]).status, 0);
-    if (!has('shellcheck')) return t.skip('shellcheck is not installed');
-    const lint = spawnSync('shellcheck', ['--shell=sh', SH], { encoding: 'utf8' });
+    if (hostHas('dash')) assert.equal(spawnSync('dash', ['-n', SH]).status, 0);
+    const shellcheck = pinnedShellcheck(t);
+    if (!shellcheck) return;
+    const lint = spawnSync(shellcheck, ['--shell=sh', SH], { encoding: 'utf8' });
     assert.equal(lint.status, 0, lint.stdout);
   });
 
@@ -538,7 +539,7 @@ describe('desktop.sh', () => {
   });
 
   describe('on macOS (a real dmg, mounted with hdiutil)', () => {
-    const onMac = process.platform === 'darwin' && has('hdiutil');
+    const onMac = process.platform === 'darwin' && onPath('hdiutil');
 
     /** A dmg holding a minimal Ordewell.app, shaped like the packaged one where it counts: the bundle id. */
     function dmgWith(marker) {
@@ -612,8 +613,13 @@ describe('desktop.sh', () => {
 });
 
 describe('desktop.ps1', () => {
-  const hasPwsh = has('pwsh');
+  const hasPwsh = onPath('pwsh');
   const skip = hasPwsh ? false : 'pwsh is not installed';
+  // The tests below skip without pwsh; this one fails instead when the run
+  // requires it (ORDEWELL_REQUIRE_TOOLS), so their skips cannot pass for proof.
+  it('has pwsh, or is not required to', () => {
+    hostHas('pwsh', { present: hasPwsh });
+  });
   const pwsh = (args, env = {}) => spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-File', PS1, ...args], { env: { ...process.env, ...env }, encoding: 'utf8' });
 
   it('parses without errors', { skip }, () => {

@@ -11,7 +11,9 @@ import { spawnSync } from 'node:child_process';
 import { appendFileSync, copyFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { classifyEngine, describeVerdict, tally, verdict, withOpenCode } from '../bench/containers/verdict.mjs';
+import { runRetryingNetwork } from './network-retry.mjs';
 
 const CHECK_IMAGE = 'ordewell-e2e-harness:check';
 const SUITE_FILES = ['dockerLease', 'codexContainer', 'containersSetting', 'pushGate'].map((suite) => `${suite}.e2e.test.ts`);
@@ -61,42 +63,86 @@ function askEngine() {
   };
 }
 
-function buildImage() {
+/** The images a Dockerfile builds on: every FROM's, less `scratch` and the stages it names itself. */
+export function baseImages(dockerfile) {
+  const stages = new Set();
+  const images = [];
+  for (const [, from] of dockerfile.matchAll(/^[ \t]*FROM[ \t]+(.+?)[ \t]*$/gim)) {
+    const [image, as, stage] = from.split(/\s+/).filter((word) => !word.startsWith('--'));
+    // An image an ARG names is the build's to resolve, so it pulls that one itself.
+    if (image !== 'scratch' && !image.includes('$') && !stages.has(image.toLowerCase()) && !images.includes(image)) images.push(image);
+    if (as?.toLowerCase() === 'as' && stage) stages.add(stage.toLowerCase());
+  }
+  return images;
+}
+
+const docker = (args) => spawnSync('docker', args, { stdio: ['ignore', 'inherit', 'inherit'], timeout: 300_000 }).status ?? 1;
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Pulls each image the engine lacks before the build would. A registry that
+ * misses a fetch is no verdict on the change, so a pull gets a few tries; the
+ * build gets more only when it failed on its own fetches (network-retry.mjs).
+ * Returns the image that never came, if one did not.
+ */
+export async function pullMissing(images, { run = docker, sleep = pause, tries = 4, log = console.log } = {}) {
+  for (const image of images) {
+    if (run(['image', 'inspect', '--format', '{{.Id}}', image]) === 0) continue;
+    for (let attempt = 1; run(['pull', image]) !== 0; attempt++) {
+      if (attempt === tries) return image;
+      log(`${process.env.GITHUB_ACTIONS ? '::warning::' : ''}docker pull ${image} failed (try ${attempt} of ${tries}); trying again in ${attempt * 15}s.`);
+      await sleep(attempt * 15_000);
+    }
+  }
+  return undefined;
+}
+
+/** Why the image could not be had, or nothing when it built. */
+async function buildImage() {
   const dockerfile = withOpenCode(readFileSync('packages/core/docker/task.Dockerfile', 'utf8'));
+  const missing = await pullMissing(baseImages(dockerfile));
+  if (missing) return `${missing} could not be pulled, so ${CHECK_IMAGE} did not build and no suite ran`;
   console.log(`Building ${CHECK_IMAGE} from task.Dockerfile, with OpenCode. The first build downloads all three harnesses.`);
-  const built = spawnSync('docker', ['build', '-t', CHECK_IMAGE, '-'], { input: dockerfile, stdio: ['pipe', 'inherit', 'inherit'] });
-  return built.status === 0;
+  const built = await runRetryingNetwork('docker', ['build', '-t', CHECK_IMAGE, '-'], { input: dockerfile });
+  return built.status === 0 ? undefined : `${CHECK_IMAGE} did not build, so no suite ran`;
 }
 
-const { engine, reason } = askEngine();
-if (!engine) finish({ engine: null, counts: null, reason });
+async function main() {
+  const { engine, reason } = askEngine();
+  if (!engine) finish({ engine: null, counts: null, reason });
 
-const image = option('--image') ?? CHECK_IMAGE;
-if (!option('--image') && !buildImage()) {
-  finish({ engine, counts: null, reason: `${CHECK_IMAGE} did not build, so no suite ran` });
+  const image = option('--image') ?? CHECK_IMAGE;
+  const unbuilt = option('--image') ? undefined : await buildImage();
+  if (unbuilt) finish({ engine, counts: null, reason: unbuilt });
+
+  const scratch = mkdtempSync(join(tmpdir(), 'ordewell-container-e2e-'));
+  const reportFile = join(scratch, 'report.json');
+
+  // A key or window from this shell would change what the suites prove: the model
+  // they talk to is the controlled one, and only by the settings they give it.
+  const env = { ...process.env, ORDEWELL_REQUIRE_DOCKER: '1', ORDEWELL_E2E_HARNESS_IMAGE: image, ORDEWELL_E2E_CODEX_IMAGE: image, ORDEWELL_E2E_OPENCODE_IMAGE: image };
+  for (const name of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'CLAUDE_CODE_AUTO_COMPACT_WINDOW']) delete env[name];
+
+  // Naming a reporter turns off the one vitest adds under Actions by itself,
+  // which puts a failing test's name on the run's summary.
+  const annotations = process.env.GITHUB_ACTIONS ? ['--reporter=github-actions'] : [];
+  const suitePaths = SUITE_FILES.map((suite) => `src/services/container/__tests__/${suite}`);
+  const { status: vitestStatus } = spawnSync('npx', ['vitest', 'run', ...suitePaths, '--no-file-parallelism', '--reporter=default', '--reporter=json', `--outputFile.json=${reportFile}`, ...annotations], {
+    cwd: 'packages/core', env, stdio: 'inherit',
+  });
+
+  let report;
+  try {
+    report = JSON.parse(readFileSync(reportFile, 'utf8'));
+  } catch (error) {
+    finish({ engine, counts: null, reason: `the suites left no report, and vitest ended with status ${vitestStatus}: ${error.message}` });
+  }
+  const out = option('--out');
+  if (out) copyFileSync(reportFile, out);
+  rmSync(scratch, { recursive: true, force: true });
+
+  finish({ engine, counts: tally(report), vitestStatus });
 }
 
-const scratch = mkdtempSync(join(tmpdir(), 'ordewell-container-e2e-'));
-const reportFile = join(scratch, 'report.json');
-
-// A key or window from this shell would change what the suites prove: the model
-// they talk to is the controlled one, and only by the settings they give it.
-const env = { ...process.env, ORDEWELL_REQUIRE_DOCKER: '1', ORDEWELL_E2E_HARNESS_IMAGE: image, ORDEWELL_E2E_CODEX_IMAGE: image, ORDEWELL_E2E_OPENCODE_IMAGE: image };
-for (const name of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'CLAUDE_CODE_AUTO_COMPACT_WINDOW']) delete env[name];
-
-const suitePaths = SUITE_FILES.map((suite) => `src/services/container/__tests__/${suite}`);
-const { status: vitestStatus } = spawnSync('npx', ['vitest', 'run', ...suitePaths, '--no-file-parallelism', '--reporter=default', '--reporter=json', `--outputFile.json=${reportFile}`], {
-  cwd: 'packages/core', env, stdio: 'inherit',
-});
-
-let report;
-try {
-  report = JSON.parse(readFileSync(reportFile, 'utf8'));
-} catch (error) {
-  finish({ engine, counts: null, reason: `the suites left no report, and vitest ended with status ${vitestStatus}: ${error.message}` });
-}
-const out = option('--out');
-if (out) copyFileSync(reportFile, out);
-rmSync(scratch, { recursive: true, force: true });
-
-finish({ engine, counts: tally(report), vitestStatus });
+// Its tests import the helpers above without starting a run.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();

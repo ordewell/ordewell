@@ -1,0 +1,220 @@
+# The setup every CI job repeats: Node 22 with the npm cache, node_modules, and
+# the workspace builds the job asks for, each restored from a cache when nothing
+# it reads has changed, save node_modules on Windows, which `npm ci` installs
+# every time (setupPlan says why). A key hashes all of that, so a hit is what
+# the work would have produced (setupPlan in scripts/change-scope.mjs holds the keys and
+# scripts/ci-scope.mjs runs the steps that decide). A second call in one job
+# installs nothing again and builds only what the first did not.
+#
+# A restore that fails reads as a miss, and a save that loses a race to another
+# job only logs it, so neither can fail a job: only `npm ci`, a build or the
+# Electron download can.
+name: Set up Ordewell
+description: Node 22, node_modules and the workspace builds a job asks for, each from a cache when it can be.
+inputs:
+  build:
+    description: The workspaces to build, by short name (core ui vscode cli web desktop) or `all`; each brings the workspaces it depends on.
+    required: false
+    default: ''
+  electron:
+    description: Install Electron's binary, from a cache or with retries, for a step that launches it.
+    required: false
+    default: 'false'
+  electron-builder:
+    description: Restore electron-builder's toolsets and Electron headers, and save them when the job passes, for packaging.
+    required: false
+    default: 'false'
+outputs:
+  restored:
+    description: The workspaces this call restored from the build cache.
+    value: ${{ steps.build.outputs.restored }}
+  built:
+    description: The workspaces this call built.
+    value: ${{ steps.build.outputs.built }}
+runs:
+  using: composite
+  steps:
+    - name: Use Node.js 22.x
+      if: env.ORDEWELL_SETUP_INSTALLED != 'true'
+      uses: actions/setup-node@v7
+      with:
+        node-version: 22.x
+        cache: npm
+
+    - name: Plan the install, the builds and their caches
+      id: plan
+      shell: bash
+      env:
+        BUILD: ${{ inputs.build }}
+        ELECTRON: ${{ inputs.electron }}
+        ELECTRON_BUILDER: ${{ inputs.electron-builder }}
+      run: node scripts/ci-scope.mjs setup-plan
+
+    # The restore and the save name the same paths: they are part of the cache's version.
+    - name: Restore node_modules
+      id: modules
+      if: steps.plan.outputs.modules-key != ''
+      uses: actions/cache/restore@v6
+      with:
+        path: |
+          node_modules
+          packages/*/node_modules
+        key: ${{ steps.plan.outputs.modules-key }}
+
+    - name: Install dependencies
+      if: steps.plan.outputs.install == 'true' && steps.modules.outputs.cache-hit != 'true'
+      shell: bash
+      # Five tries a package, backing off up to two minutes, where npm's own are two and one.
+      env:
+        npm_config_fetch_retries: '5'
+        npm_config_fetch_retry_mintimeout: '20000'
+        npm_config_fetch_retry_maxtimeout: '120000'
+      run: npm ci
+
+    # Saved now, before any build or Electron writes into node_modules.
+    - name: Save node_modules
+      if: steps.plan.outputs.modules-key != '' && steps.modules.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: |
+          node_modules
+          packages/*/node_modules
+        key: ${{ steps.plan.outputs.modules-key }}
+
+    - name: Restore core's build
+      id: restore-core
+      if: steps.plan.outputs.core-key != ''
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ steps.plan.outputs.core-paths }}
+        key: ${{ steps.plan.outputs.core-key }}
+
+    - name: Restore ui's build
+      id: restore-ui
+      if: steps.plan.outputs.ui-key != ''
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ steps.plan.outputs.ui-paths }}
+        key: ${{ steps.plan.outputs.ui-key }}
+
+    - name: Restore vscode's build
+      id: restore-vscode
+      if: steps.plan.outputs.vscode-key != ''
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ steps.plan.outputs.vscode-paths }}
+        key: ${{ steps.plan.outputs.vscode-key }}
+
+    - name: Restore cli's build
+      id: restore-cli
+      if: steps.plan.outputs.cli-key != ''
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ steps.plan.outputs.cli-paths }}
+        key: ${{ steps.plan.outputs.cli-key }}
+
+    - name: Restore web's build
+      id: restore-web
+      if: steps.plan.outputs.web-key != ''
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ steps.plan.outputs.web-paths }}
+        key: ${{ steps.plan.outputs.web-key }}
+
+    - name: Restore desktop's build
+      id: restore-desktop
+      if: steps.plan.outputs.desktop-key != ''
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ steps.plan.outputs.desktop-paths }}
+        key: ${{ steps.plan.outputs.desktop-key }}
+
+    - name: Build what no cache restored
+      id: build
+      shell: bash
+      env:
+        BUILD: ${{ steps.plan.outputs.build }}
+        STEPS: ${{ toJSON(steps) }}
+      run: node scripts/ci-scope.mjs setup-build
+
+    # Saved straight after the build, so a test that fails later still leaves it for the next run.
+    - name: Save core's build
+      if: steps.plan.outputs.core-key != '' && steps.restore-core.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ steps.plan.outputs.core-paths }}
+        key: ${{ steps.plan.outputs.core-key }}
+
+    - name: Save ui's build
+      if: steps.plan.outputs.ui-key != '' && steps.restore-ui.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ steps.plan.outputs.ui-paths }}
+        key: ${{ steps.plan.outputs.ui-key }}
+
+    - name: Save vscode's build
+      if: steps.plan.outputs.vscode-key != '' && steps.restore-vscode.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ steps.plan.outputs.vscode-paths }}
+        key: ${{ steps.plan.outputs.vscode-key }}
+
+    - name: Save cli's build
+      if: steps.plan.outputs.cli-key != '' && steps.restore-cli.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ steps.plan.outputs.cli-paths }}
+        key: ${{ steps.plan.outputs.cli-key }}
+
+    - name: Save web's build
+      if: steps.plan.outputs.web-key != '' && steps.restore-web.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ steps.plan.outputs.web-paths }}
+        key: ${{ steps.plan.outputs.web-key }}
+
+    - name: Save desktop's build
+      if: steps.plan.outputs.desktop-key != '' && steps.restore-desktop.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ steps.plan.outputs.desktop-paths }}
+        key: ${{ steps.plan.outputs.desktop-key }}
+
+    - name: Restore the Electron download
+      id: electron
+      if: steps.plan.outputs.electron-key != ''
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ steps.plan.outputs.electron-path }}
+        key: ${{ steps.plan.outputs.electron-key }}
+
+    # electron fetches its binary on first use, from GitHub's release CDN, and
+    # one 504 there failed whole jobs: here it costs a retry. install.js does
+    # nothing when the binary is in place, and reuses the zip a restore brought.
+    - name: Install Electron's binary
+      if: steps.plan.outputs.electron-key != ''
+      shell: bash
+      run: |
+        for attempt in 1 2 3 4 5; do
+          node node_modules/electron/install.js && break
+          if [ "$attempt" = 5 ]; then exit 1; fi
+          echo "::warning::Electron's download failed (try $attempt of 5); trying again in $((attempt * 15))s."
+          sleep $((attempt * 15))
+        done
+        node scripts/ci-scope.mjs electron-checksums
+
+    - name: Save the Electron download
+      if: steps.plan.outputs.electron-key != '' && steps.electron.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ steps.plan.outputs.electron-path }}
+        key: ${{ steps.plan.outputs.electron-key }}
+
+    # What packaging downloads (AppImage and fpm toolsets, Electron headers for
+    # the native rebuild) is only known once it has run, so this saves when the job ends.
+    - name: Cache electron-builder's downloads
+      if: steps.plan.outputs.builder-key != ''
+      uses: actions/cache@v6
+      with:
+        path: ${{ steps.plan.outputs.builder-paths }}
+        key: ${{ steps.plan.outputs.builder-key }}

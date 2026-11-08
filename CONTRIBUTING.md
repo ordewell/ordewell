@@ -55,6 +55,10 @@ Everything CI runs, you can run in one go, in CI's order:
 npm run ci
 ```
 
+It runs each step once, whole. CI splits some of them to finish sooner: core's
+covered suite runs as shards that a merge leg judges, and the Windows suites
+are packed into twelve.
+
 Or one check at a time:
 
 ```bash
@@ -74,21 +78,97 @@ node bench/live/drive-conversation.mjs
 If you change planner behaviour, run that. It is the fastest way to find out
 that a prompt edit broke plan emission.
 
+### While you iterate
+
+From your uncommitted changes, `npm run test:changed` selects what a pull
+request owes, at CI's own tiers, and runs the checks this machine can prove. A
+workspace the change runs in full uses `test:coverage`, so its per-file floors
+are judged too; one it only reaches uses `test:quick`. The steps every change owes run as well (building core, the
+verify scripts and the repository-wide guards), with the remaining build and,
+when the change owes them, lint, typecheck, the bench harnesses, the offline
+planner loop, the standalone binary on Linux or macOS, and the VSIX packaging.
+A prose-only change still builds, because a suite tested against a stale
+`dist/` proves nothing.
+
+`npm run test:changed -- --list` prints the selection without running it. A run
+ends with `Owed CI checks not run here (UNVERIFIED):` and one line per check it
+left to CI, with the reason: a display, Windows, a container engine, a download
+or an artifact upload. A failure earlier in the run does not hide that list; a
+skip is never a pass. The inner loop installs no tool and changes no
+user-namespace policy: on Linux it probes bubblewrap and omits the sandbox with
+the reason when it cannot start, and otherwise runs CI's own
+`scripts/linux-sandbox-e2e.sh` with `ORDEWELL_SANDBOX_SETUP=none`, which skips
+the script's installs and policy fix; a change to that script names them as
+unverified. The bench step fetches the pinned shellcheck first, as CI's does.
+Where CI requires a tool for a step (see below) that this machine lacks, the
+step still runs, requiring the tools it has, and the list names the tests that
+skipped for the rest. Neither this nor `npm run test:quick`, which
+skips the real-git e2e files, replaces `npm run ci`.
+
+### Pinned tools
+
+The one-line installers are linted with one shellcheck, not whichever version
+`PATH` holds: Ubuntu's packaged one lags a release behind and reports codes the
+newer one renamed. `scripts/shellcheck.json` pins v0.11.0 for Linux and macOS
+on x64 and arm64, with the sha256 of each release archive.
+`node scripts/shellcheck.mjs` downloads it, checks it against that sha256, and
+keeps it in `.tools/shellcheck/<version>/<os-arch>/` (gitignored), printing the
+binary's path; the tests never fall back to `PATH`. Set
+`ORDEWELL_SHELLCHECK=<path>` to judge with another binary. No Windows build is
+pinned: the Windows job's shellcheck tests skip, saying so, and
+`build-and-test` lints on Linux.
+
+A test without its tool skips, which is right on a laptop and wrong in CI,
+where a skip reads as a pass. `ORDEWELL_REQUIRE_TOOLS` is a space- or
+comma-separated list of the tools a run means to prove with; a listed tool that
+is missing fails the test that needed it instead of skipping it. CI's bench
+step sets `shellcheck dash pwsh shasum ruby tar`, and its sandbox step, which
+installs ripgrep and zsh, `rg zsh`. `npm run ci` and `npm run test:changed`
+read those lists from ci.yml: they fetch the pin, require each listed tool the
+host has, and name the ones it lacks as unverified rather than letting their
+tests' skips pass. A zsh counts only in `/bin` or `/usr/bin`, where a sealed
+run can start it, not elsewhere on `PATH`.
+
+### The Windows path guard
+
+`npm run test:bench` runs `scripts/test-path-portability.mjs` over every test
+under `packages/`, `scripts/` and `bench/`. It reports an assertion whose two
+sides it can evaluate — a native `path.resolve`/`join` result, or
+`encodeURIComponent` of one, compared with a POSIX literal — when the
+comparison passes with POSIX paths and fails with Windows paths; derive the
+expectation from the resolved path instead. A test explicitly skipped on
+Windows, and one that asks for `path.posix`, are left alone. It is a static
+check: a path an API returns, a signal, a file mode, a scheduling order or a
+dynamically built fixture stays for the Windows jobs to prove.
+
 ### How CI is laid out
 
 `.github/workflows/ci.yml` starts with `scope`, which works out what the event
-has to prove (`scripts/change-scope.mjs`). Every other job needs only that one
-and runs beside the rest, each installing and building what it uses:
+has to prove (`scripts/change-scope.mjs`). Every other job needs only that one —
+except `coverage merge`, which also needs the coverage legs it merges — and runs
+beside the rest. Every job but `scope` and `Required checks` sets up through
+`.github/actions/setup`, which installs `node_modules` (from a cache on Linux;
+on Windows `npm ci` fills it from npm's cache, quicker there than unpacking it),
+restores the workspace builds the job asks for from a cache, builds only what
+the cache missed, and, for a job that needs it, installs Electron's binary once
+behind a cache, with retries.
 
 | Job | What it proves |
 | --- | --- |
 | `build-and-test` | What needs proving once, on Linux: the bubblewrap sandbox, the verify scripts and repository-wide guards, the offline planner loop, the standalone binary, the bench harnesses, the VS Code integration test and the desktop app's e2e |
-| `desktop-tour` | The desktop app's visual tour and layout checks, the longest job by far |
-| `coverage (<workspace>)` | Each workspace's suite with coverage, one leg per workspace, under that workspace's own floors; a `<workspace>-quick` leg runs `test:quick` and judges no floor |
+| `desktop-tour (n/2)` | The desktop app's visual tour and layout checks, in two legs: each walks every state and shoots and judges its share of the (theme, size) pairs, and together they are one walk |
+| `coverage (<workspace>)` | Each workspace's suite with coverage, one leg per workspace, under that workspace's own floors; a `<workspace>-quick` leg runs `test:quick` and judges no floor. Core's full suite is split into three shard legs, each judging no floor |
+| `coverage merge (<workspace>)` | After the coverage legs: each sharded workspace's blobs merged with `vitest --merge-reports`, which fails on a shard's failed test and judges the workspace's per-file floors over the whole |
 | `typecheck`, `lint`, `package` | The type check, lint (it builds nothing), and the npm tarballs, VSIX and Linux installers, each checked as it ships |
 | `real-engine` | The container suites against a real engine |
-| `windows (n/6)`, `windows-harness` | The core, CLI, web and VS Code suites on Windows in six shards, and the harnesses beside them |
+| `windows (n/12)`, `windows-harness` | The core, CLI, web and VS Code suites on Windows in twelve shards packed by each file's measured duration, and the harnesses beside them |
 | `Required checks` | The one status a branch rule requires: it fails if a job failed, or skipped what the change owed it |
+
+The bench harness tests (`node:test`) run under
+`scripts/node-test-annotations.mjs` in CI, which writes each failing test as a
+GitHub Actions error annotation with its file, line and name, so the failure
+reaches the job summary and not only the log; the spec reporter still writes
+the log.
 
 A pull request owes what its change can reach, and a new push to it cancels
 the run in progress:
@@ -106,15 +186,20 @@ the run in progress:
   `packaging/` the bench step that tests it. A path no one has judged, and
   `package-lock.json`, `ci.yml`, `scripts/ci.mjs` or `change-scope.mjs` itself,
   runs everything.
-- The desktop tour, the longest job, runs only for a change to
-  `packages/desktop` or `packages/ui`. The desktop e2e still runs for a change
-  to anything it builds on, core included.
+- The desktop tour runs only for a change to `packages/desktop` or
+  `packages/ui`, or to a harness it drives: the fake Claude Code under
+  `bench/pipeline/fake-claude/` and the mock planner's
+  `bench/live/mock-provider.mjs` and `scenarios.mjs`. Its two legs run side by
+  side. The desktop e2e still runs for
+  a change to anything it builds on, core included.
 
-So a change to core's internals runs core in full and the other five quick,
-with no tour; one to `packages/ui` runs ui in full, VS Code and the desktop
-app quick, and the tour; one to `README.md` or `bench/README.md` runs nothing
-but `scope` and `Required checks`. The scope job's summary names what it
-left out.
+So a change to core's internals runs core in full, three shards and their
+merge, and the other five quick, with no tour; one to `packages/ui` runs ui in
+full, VS Code and the desktop app quick, and the tour; one to `README.md` or
+`bench/README.md` runs no suite and no other job: only `scope`, `Required
+checks` and the steps of `build-and-test` every change owes (building core,
+the verify scripts and the repository-wide guards). The scope
+job's summary names what it left out.
 
 A push to `main`, a release, the nightly run (03:17 UTC) and a run started by
 hand from the Actions tab always run everything, and none of them is cancelled
@@ -126,6 +211,39 @@ anything short of finding it, a failed lookup included, runs everything.
 `npm run ci` runs the same steps, once each, in the workflow's order; a build
 several jobs share runs once. `node scripts/ci.mjs --list` prints them without
 running any.
+
+### Walking one desktop-tour leg
+
+The tour launches the desktop app from its build, so build first
+(`npm run build`) and run it where there is a display. To walk one CI leg's
+share instead of the whole tour, set `TOUR_LEG=k/n`, with `1 ≤ k ≤ n`:
+
+```bash
+TOUR_STRICT=1 TOUR_LEG=1/2 npm run desktop:tour
+```
+
+Each leg still walks every state, because a state is reached from the ones
+before it, and shoots and judges only its share of the (theme, size)
+combinations; the plan-card fit check, which every leg walks, every leg
+judges. With no `TOUR_LEG`, one run walks all of them. `TOUR_STRICT=1`
+makes a failing layout check fail the run, as it does in CI; without it the
+checks only report. On a headless Linux machine, wrap the command in
+`xvfb-run -a`, as CI does.
+
+### Refreshing the Windows shard durations
+
+The twelve Windows shards are packed by each test file's measured duration,
+recorded in `scripts/windows-durations.json`. After a Windows suite has grown,
+refresh it from one or more completed CI runs whose Windows matrix passed (the
+`gh` CLI does the reading):
+
+```bash
+node scripts/refresh-windows-durations.mjs <run-id> [<run-id> ...]
+```
+
+It keeps each file's maximum observed time across those runs. A file the record
+does not name is estimated at 1000 ms, and ties break on path and then shard
+index, so the packing is the same on every OS.
 
 CI runs the suites on Linux and again on Windows. `npm run ci` works on either:
 on Windows it skips only the bubblewrap sandbox suite, which is Linux's. Run it
@@ -392,9 +510,11 @@ carefully, and keep all versions in lockstep.
 
 - Branch from `main`.
 - Keep the diff to one concern.
-- While iterating, `npm run test:changed` runs only the tests affected by your
-  uncommitted changes (`npm run test:quick` skips the slow real-git e2e files).
-  Neither replaces the full suite: make sure
+- While iterating, `npm run test:changed` runs what a pull request owes that
+  this machine can prove, at CI's tiers: full suites with their coverage
+  floors, quick suites, and the steps every change owes, with the rest named
+  as UNVERIFIED ([while you iterate](#while-you-iterate)). `npm run test:quick`
+  skips the slow real-git e2e files. Neither replaces the full suite: make sure
   `npm run ci` passes before pushing. It runs every step of CI's workflow
   locally, the full suite with its per-file coverage floors included.
 - CI on a pull request runs what the change can reach (`scripts/change-scope.mjs`):

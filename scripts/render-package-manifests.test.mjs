@@ -7,6 +7,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeReleaseAssets } from './desktop-release-assets.mjs';
+import { hostHas } from './host-tools.mjs';
 import { after } from 'node:test';
 import { describe, it } from 'node:test';
 import {
@@ -391,7 +392,8 @@ describe('rendering a release', () => {
   // most dev machines lack; it is skipped, not faked, when `ruby` is not on PATH.
   const ruby = spawnSync('ruby', ['-v'], { encoding: 'utf8' });
   const hasRuby = ruby.status === 0;
-  it('renders Ruby that `ruby -c` accepts', { skip: hasRuby ? false : 'ruby is not on PATH' }, () => {
+  it('renders Ruby that `ruby -c` accepts', (t) => {
+    if (!hostHas('ruby', { present: hasRuby })) return t.skip('ruby is not on PATH');
     const dir = mkdtempSync(join(tmpdir(), 'ordewell-ruby-'));
     made.push(dir);
     for (const { path, text } of renderManifests(VERSION, sumsText(), { only: ['formula', 'cask'] })) {

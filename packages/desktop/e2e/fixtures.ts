@@ -163,12 +163,13 @@ async function windowsOnShow(app: ElectronApplication): Promise<string[]> {
  * input and focus emulation do not need the OS to focus the window.
  * What the run could not do invisibly would be a regression: a window that is
  * ever shown or focused fails the suite at {@link closeApp} and {@link openFolder}.
+ * `switches` are Chromium command-line switches a suite needs beyond these.
  */
-export async function launchApp(sandbox: Sandbox, env: Record<string, string>): Promise<ElectronApplication> {
+export async function launchApp(sandbox: Sandbox, env: Record<string, string>, switches: readonly string[] = []): Promise<ElectronApplication> {
   const app = await electron.launch({
     // A Linux CI runner has no setuid chrome-sandbox, and its AppArmor forbids
     // the unprivileged user namespaces Chromium's sandbox falls back to.
-    args: [DESKTOP, `--user-data-dir=${sandbox.userData}`, ...(process.platform === 'linux' ? ['--no-sandbox'] : [])],
+    args: [DESKTOP, `--user-data-dir=${sandbox.userData}`, ...(process.platform === 'linux' ? ['--no-sandbox'] : []), ...switches],
     env: { ...env, [TEST_WINDOWS_ENV]: 'hidden' },
     cwd: sandbox.tmp,
   });

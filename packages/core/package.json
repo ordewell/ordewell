@@ -92,6 +92,8 @@
     "test:changed": "vitest run --changed --passWithNoTests --exclude '**/*.e2e.test.ts' --exclude '**/GitWorktreeIsolation.test.ts' --exclude '**/node_modules/**'",
     "test:sandbox": "vitest run --no-file-parallelism src/services/sandbox/__tests__/plannerSandbox.e2e.test.ts src/services/sandbox/__tests__/sealedRuns.e2e.test.ts src/services/__tests__/PatchCapture.e2e.test.ts",
     "test:coverage": "vitest run --coverage",
+    "test:coverage:shard": "vitest run --coverage --reporter=default --reporter=blob",
+    "test:coverage:merge": "vitest run --merge-reports --coverage",
     "lint": "eslint src --ext .ts",
     "typecheck": "tsc --noEmit"
   },

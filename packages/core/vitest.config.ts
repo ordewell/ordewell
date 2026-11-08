@@ -11,6 +11,11 @@ const floor = (lines: number, branches: number, functions: number, statements = 
   perFile: true,
 });
 
+// A shard runs part of the suite, so a floor read off its coverage would be a
+// false one. Its blob carries its coverage to `test:coverage:merge`, which
+// judges these floors over every shard's at once (ci.yml's coverage-merge).
+const shard = process.argv.some((arg) => arg === '--shard' || arg.startsWith('--shard='));
+
 export default defineConfig({
   test: {
     ...sharedTest,
@@ -21,7 +26,7 @@ export default defineConfig({
       reportsDirectory: 'coverage',
       include: ['src/**/*.ts'],
       exclude: ['**/*.test.ts', '**/__tests__/**', '**/fixtures/**', '**/*.d.ts', 'dist/**'],
-      thresholds: {
+      thresholds: shard ? undefined : {
         'src/conversation/labels.ts': floor(100, 100, 100),
         'src/daemonRoutes.ts': floor(100, 100, 100),
         'src/plugins/builtin/cline.manifest.ts': floor(100, 100, 100),
