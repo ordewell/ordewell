@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import http from 'http';
 import { ApiClient } from '../../apiClient';
+import { wireRoute } from '../../__tests__/wireRoute';
 
 function startServer(handler: (req: http.IncomingMessage, res: http.ServerResponse) => void): Promise<{ port: number; close: () => void }> {
   return new Promise((resolve) => {
@@ -40,7 +41,7 @@ const PLAN = {
 
 /** What a request asked, as one line: a control is its command and task, anything else its method and path. */
 function asked(req: http.IncomingMessage, body: string): string {
-  if (!req.url?.endsWith('/execute-command')) return `${req.method} ${req.url}`;
+  if (!wireRoute(req.url).endsWith('/execute-command')) return `${req.method} ${wireRoute(req.url)}`;
   const sent = JSON.parse(body) as { command: string; task: string; from?: string; message?: string };
   return [sent.command, sent.task, sent.from, sent.message].filter(Boolean).join(' ');
 }
@@ -48,12 +49,12 @@ function asked(req: http.IncomingMessage, body: string): string {
 /** A daemon that keeps what it was asked and answers a control in a line of its own. */
 async function serverRecordingHits(hits: string[]) {
   return startServer((req, res) => {
-    if (req.url?.includes('/sessions/')) {
+    if (wireRoute(req.url).includes('/sessions/')) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(PLAN));
       return;
     }
-    if (req.url?.endsWith('/merge-gate')) {
+    if (wireRoute(req.url).endsWith('/merge-gate')) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ mergeGate: [] }));
       return;
@@ -91,8 +92,8 @@ describe('task control commands', () => {
     const queued = 'Task "Third" is approved and starts once task "Second" finishes.';
     const srv = await startServer((req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      if (req.url?.includes('/sessions/')) res.end(JSON.stringify(PLAN));
-      else if (req.url?.endsWith('/merge-gate')) res.end(JSON.stringify({ mergeGate: [] }));
+      if (wireRoute(req.url).includes('/sessions/')) res.end(JSON.stringify(PLAN));
+      else if (wireRoute(req.url).endsWith('/merge-gate')) res.end(JSON.stringify({ mergeGate: [] }));
       else res.end(JSON.stringify({ ok: true, message: queued, payload: { kind: 'queued', line: queued } }));
     });
     const { handleForceStart } = await import('../task-control');
@@ -108,7 +109,7 @@ describe('task control commands', () => {
     const srv = await startServer((req, res) => {
       req.resume();
       req.on('end', () => {
-        hits.push(`${req.method} ${req.url}`);
+        hits.push(`${req.method} ${wireRoute(req.url)}`);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true, message: 'Retrying task #3 "Third".' }));
       });
@@ -144,8 +145,8 @@ describe('task control commands', () => {
       req.on('data', (c) => { body += c.toString(); });
       req.on('end', () => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        if (req.url?.includes('/sessions/')) return res.end(JSON.stringify(PLAN));
-        hits.push(`${req.method} ${req.url}`);
+        if (wireRoute(req.url).includes('/sessions/')) return res.end(JSON.stringify(PLAN));
+        hits.push(`${req.method} ${wireRoute(req.url)}`);
         res.end(JSON.stringify({ ok: true, message: 'Continuing task #3 "Third" in its saved session with your message.' }));
       });
     });
@@ -171,7 +172,7 @@ describe('task control commands', () => {
       req.resume();
       req.on('end', () => {
         res.setHeader('Content-Type', 'application/json');
-        if (req.url?.includes('/sessions/')) return res.end(JSON.stringify(PLAN));
+        if (wireRoute(req.url).includes('/sessions/')) return res.end(JSON.stringify(PLAN));
         res.statusCode = 400;
         res.end(JSON.stringify({ error: 'Task "Third" cannot be continued: its runner left no saved session to resume. Use Retry instead.' }));
       });
@@ -276,9 +277,9 @@ describe('starting a task past its merge gate (ADR-0020)', () => {
 
   async function gatedServer(hits: string[], gate: unknown = { mergeGate: [{ id: 'fix-1', order: 1, title: 'Fix' }] }, gateStatus = 200) {
     return startServer((req, res) => {
-      res.writeHead(req.url?.endsWith('/merge-gate') ? gateStatus : 200, { 'Content-Type': 'application/json' });
-      if (req.url?.includes('/sessions/')) return res.end(JSON.stringify(GATE_PLAN));
-      if (req.url?.endsWith('/merge-gate')) return res.end(JSON.stringify(gate));
+      res.writeHead(wireRoute(req.url).endsWith('/merge-gate') ? gateStatus : 200, { 'Content-Type': 'application/json' });
+      if (wireRoute(req.url).includes('/sessions/')) return res.end(JSON.stringify(GATE_PLAN));
+      if (wireRoute(req.url).endsWith('/merge-gate')) return res.end(JSON.stringify(gate));
       const chunks: Buffer[] = [];
       req.on('data', (chunk: Buffer) => chunks.push(chunk));
       req.on('end', () => {

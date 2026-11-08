@@ -199,7 +199,7 @@ export class PlanChangeCheck {
     }
 
     if (skillErrors.length > 0) return this.refused(change, skillErrors);
-    const applied = applyTaskOps(before, change.ops, runners, { ...catalog, ...this.delegation() }, this.scope.handles?.());
+    const applied = applyTaskOps(before, change.ops, runners, catalog, this.scope.handles?.(), this.delegation());
     if (!applied.ok) return this.refused(change, applied.refusals);
     const ungranted = [...this.ungranted(before, applied.tasks), ...this.pastMandate(before, applied.tasks)];
     if (ungranted.length > 0) return this.refused(change, ungranted);

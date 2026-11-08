@@ -174,10 +174,22 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
       await expect(client.execute('session-saved', { command: 'skip_task', task: 't1', reason: 'the limiter is not needed' })).resolves.toMatchObject({ ok: true, message: expect.stringContaining('Skipped task #1') });
       const err = await refusal(client.execute('session-saved', { command: 'skip_task', task: 't2' }));
 
-      const skipped = pool.session('session-saved').planState!.tasks.find((t) => t.id === 't1')!;
+      const skipped = pool.session('session-saved', undefined).planState!.tasks.find((t) => t.id === 't1')!;
       expect(skipped).toMatchObject({ status: 'skipped', skipReason: 'the limiter is not needed' });
       expect(err.status).toBe(400);
       expect(err.message).toMatch(/has completed: its work landed/);
+    });
+
+    // A session id is stored whatever it holds (idSegment escapes it), so the
+    // client encodes it into the path: a raw `#` would end the URL's path and
+    // drop its query with it, naming another session in another workspace.
+    it('reads a session whose id needs encoding', async () => {
+      saveSession(savedPlan(), 'Rate limiting', workspace, 'session-a');
+      saveSession(savedPlan(), 'Caching', workspace, 'session-a#b');
+
+      const one = await client.getSession('session-a#b', workspace);
+
+      expect(one.meta.goal).toBe('Caching');
     });
 
     it('says session_not_found for one that exists nowhere', async () => {
@@ -243,7 +255,7 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
       const first = client.sendConversationMessage('session-plan', 'First');
       await vi.waitFor(() => expect(OpenAiService.prototype.startConversation).toHaveBeenCalledTimes(2));
       const second = client.sendConversationMessage('session-plan', 'Second');
-      await vi.waitFor(() => expect(pool.session('session-plan').planState?.pendingTurns?.map((t) => t.text)).toEqual(['First', 'Second']));
+      await vi.waitFor(() => expect(pool.session('session-plan', undefined).planState?.pendingTurns?.map((t) => t.text)).toEqual(['First', 'Second']));
       release(TEXT);
       await first;
       const plan = await second;
@@ -308,12 +320,12 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
       await client.adoptSession('session-saved', workspace);
 
       await expect(client.executePlan('session-saved')).resolves.toMatchObject({ status: 'running' });
-      await vi.waitFor(() => expect(pool.session('session-saved').isExecuting).toBe(true));
-      const live = pool.session('session-saved').runSnapshot().tasks.filter((t) => t.status === 'in_progress').map((t) => t.id);
+      await vi.waitFor(() => expect(pool.session('session-saved', undefined).isExecuting).toBe(true));
+      const live = pool.session('session-saved', undefined).runSnapshot().tasks.filter((t) => t.status === 'in_progress').map((t) => t.id);
 
       await expect(client.executePlan('session-saved')).resolves.toMatchObject({ status: 'running' });
 
-      expect(pool.session('session-saved').runSnapshot().tasks.filter((t) => t.status === 'in_progress').map((t) => t.id)).toEqual(live);
+      expect(pool.session('session-saved', undefined).runSnapshot().tasks.filter((t) => t.status === 'in_progress').map((t) => t.id)).toEqual(live);
     });
 
     it('refuses a message to a task that is not running, as refused', async () => {
@@ -344,7 +356,7 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
     };
 
     /** What the session's timeline holds of the user's controls, as the transcript every surface reads keeps it. */
-    const timeline = (sessionId: string) => (pool.session(sessionId).planState?.conversationHistory ?? [])
+    const timeline = (sessionId: string) => (pool.session(sessionId, undefined).planState?.conversationHistory ?? [])
       .filter((entry) => entry.kind === 'execution')
       .map((entry) => entry.content);
 
@@ -394,7 +406,7 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
         before: async (id) => {
           await running(id);
           void spawned[0].callCheckpoint('Drop the table?');
-          await vi.waitFor(() => expect(pool.session(id).awaitsCheckpoint('t1')).toBe(true));
+          await vi.waitFor(() => expect(pool.session(id, undefined).awaitsCheckpoint('t1')).toBe(true));
         },
         cli: (id) => handleCheckpoint(['--session-id', id, '1', 'approve'], client),
         effect: (id) => ({ type: 'answerTaskCheckpoint', sessionId: id, taskId: 't1', answer: 'approve' }),

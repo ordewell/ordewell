@@ -289,6 +289,26 @@ describe('a task paused on a usage limit', () => {
     expect(spawn.mock.calls.slice(2).map(([o]) => [o.taskId, o.resumeSessionId])).toEqual([['t1', 'native-1'], ['t2', 'native-2']]);
   });
 
+  it('starts at the reset a start the user asked for under the rule, which the limit held back', async () => {
+    const { orchestrator, sessions, spawn, notifications, task } = setup();
+    orchestrator.loadPlan([
+      createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first' }),
+      createTask({ id: 't2', order: 2, title: 'Second', prompt: 'do second' }),
+    ]);
+    await orchestrator.forceStartTask('t1');
+    hitLimitInTurn(sessions[0]);
+    await until(() => task('t1').resumeAt === RESUME_AT);
+
+    orchestrator.startWhenAllowed('t2');
+    await orchestrator.tick();
+    expect(vi.mocked(notifications.info).mock.calls.flat()).toContain('Task "Second" has not started: its runner is on a usage limit, so it starts after the reset.');
+    expect(spawn).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(Date.parse(RESUME_AT) - Date.now());
+    await until(() => spawn.mock.calls.some(([o]) => o.taskId === 't2'));
+    expect(orchestrator.startQueuedFor('t2')).toBe(false);
+  });
+
   it('a stop cancels the resume: the task waits for the user', async () => {
     const { orchestrator, sessions, spawn, task } = setup();
     orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
@@ -345,6 +365,36 @@ describe('a task paused on a usage limit', () => {
     } finally {
       process.off('unhandledRejection', onUnhandled);
     }
+  });
+
+  it('does not resume an ops task into a Merge all under way at its reset, and leaves it to the user (ADR-0020)', async () => {
+    const isolation = new FakeWorktreeIsolation();
+    const { orchestrator, sessions, spawn, notifications, task } = setup({ isolation });
+    orchestrator.loadPlan([
+      createTask({ id: 't1', order: 1, title: 'Change', prompt: 'do change' }),
+      createTask({ id: 'o2', order: 2, title: 'Deploy', prompt: 'deploy', ops: true }),
+    ]);
+    await orchestrator.approveReview();
+    await until(() => spawn.mock.calls.length === 2);
+    const opsSession = sessions.find((s) => s.taskId === 'o2')!;
+    hitLimitInTurn(opsSession);
+    await until(() => task('o2').status === 'awaiting_user');
+    sessions.find((s) => s.taskId === 't1')!.reportComplete({ status: 'done', summary: '' });
+    await until(() => task('t1').status === 'completed');
+    let spawnedDuringMerge = -1;
+    isolation.mergeIntoCheckedOut = async () => {
+      await vi.advanceTimersByTimeAsync(Date.parse(RESUME_AT) - Date.now());
+      await flushMicrotasks(20);
+      spawnedDuringMerge = spawn.mock.calls.length;
+      return { outcome: 'merged' };
+    };
+
+    await orchestrator.mergeRun();
+
+    expect(spawnedDuringMerge).toBe(2);
+    expect(task('o2')).toMatchObject({ status: 'awaiting_user', awaitingReason: 'usage-limit' });
+    expect(task('o2').resumeAt).toBeUndefined();
+    expect(notifications.warn).toHaveBeenCalledWith('Task "Deploy" did not resume at its usage limit\'s reset: A Merge all is under way: ops task "Deploy" can start once it has finished. Resume it once it can start.');
   });
 });
 

@@ -1,5 +1,6 @@
 import { ensureDaemon, resolvePort } from '../daemon';
 import { ApiClient } from '../apiClient';
+import { workspaceOf } from '../utils';
 
 const USAGE = `Usage:
   ordewell allowlist set <runner> <id1,id2,…>    Set allowlist for a runner
@@ -8,7 +9,7 @@ const USAGE = `Usage:
   ordewell allowlist                             Same as "show"`;
 
 export async function handleAllowlist(subArgs: string[], _api?: ApiClient): Promise<void> {
-  const api = _api ?? new ApiClient(await ensureDaemon(resolvePort(subArgs)));
+  const api = _api ?? new ApiClient(await ensureDaemon(resolvePort(subArgs)), workspaceOf(subArgs));
   const sub = subArgs[0];
 
   if (!sub || sub === 'show') {

@@ -1,5 +1,5 @@
 import {
-  EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, PROVIDER_PRIORITY, TERMINAL_UI_COMMANDS, TERMINAL_UI_SIGN_IN, describeSignInWays, getProviderMeta, isApiProvider, isPlannerBackend, runnerForProvider, type AiProvider,
+  PROVIDER_PRIORITY, TERMINAL_UI_COMMANDS, TERMINAL_UI_SIGN_IN, describeSignInWays, getProviderMeta, isApiProvider, isPlannerBackend, runnerForProvider, type AiProvider,
 } from '@ordewell/core';
 import { handoffCommand } from '../handoff';
 import { plannerSwitchOverrideNotice, taskOnlyRunnerRefusal } from '../../plannerModelSwitch';
@@ -17,7 +17,7 @@ import {
   addTask, confirmForceStartPastGate, openTaskDepsPicker, taskCommand, taskOpsCommand, taskEffortCommand, taskModeCommand, taskModelCommand, taskRunnerCommand, taskSkillsCommand,
 } from './taskEdits';
 import { stopPlanning } from './turnQueue';
-import { withRun } from './incoming';
+import { leaveSession } from './incoming';
 import { openSettings } from './settings';
 import { fail, step, withSession, type Action, type Effect, type Step, type TaskAction } from './shared';
 
@@ -246,33 +246,9 @@ export function newSession(state: TuiState): Step {
   // Without this, the outgoing session's execution stream stays open and its
   // task updates keep landing on whatever id matches in the fresh state below.
   const closeEffects: Effect[] = state.sessionId ? [{ type: 'closeSession', sessionId: state.sessionId }] : [];
-  return step(withRun({
-    ...state,
-    sessionId: null,
-    accountLimits: [],
-    servedModels: {},
-    goal: '',
-    taskView: null,
-    planApproved: false,
-    conversation: EMPTY_CONVERSATION,
-    turnGate: NO_TURN,
-    selectedTask: 0,
-    expandedTaskId: null,
-    taskEditor: null,
-    scroll: 0,
-    planScroll: null,
-    status: 'idle',
-    planner: 'idle',
-    plannerPause: null,
-    plannerResend: null,
-    // Prompts belong to the session that raised them; the old planner is gone
-    // and its pending requests deny on their own timeout.
-    pendingApprovals: [],
-    queuedPrompts: EMPTY_HOLD,
-    stopArmed: false,
-    forceSendPending: null,
-    overlay: state.overlay?.kind === 'approval' ? null : state.overlay,
-  }, EMPTY_RUN), closeEffects);
+  // Prompts belong to the session that raised them; the old planner is gone
+  // and its pending requests deny on their own timeout.
+  return step(leaveSession(state), closeEffects);
 }
 
 function setPlanner(state: TuiState, args: string[]): Step {

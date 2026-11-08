@@ -7,7 +7,7 @@ import { tmpdir } from 'os';
 import { join, sep } from 'path';
 import { type GitExecFn, type WorktreeIsolationDeps } from '../GitWorktreeIsolation';
 import type { IsolationRun } from '../../interfaces/IWorktreeIsolation';
-import { fakeConfig, removeDir } from '../../testing';
+import { fakeConfig, flushMicrotasks, removeDir } from '../../testing';
 import { realpath, hasGit, create, git, initRepo, task, worktreePaths, replaceGitFile, lexists, branches, execFileAsync, refuseWorktreesIn, roots, repo } from './gitWorktreeIsolationKit';
 
 afterEach(async () => {
@@ -708,6 +708,26 @@ describe.skipIf(!hasGit)('WorktreeIsolation.release', () => {
     const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const run = await iso.startRun(root);
     await expect(iso.release(run, 'nope', { keep: false })).resolves.toEqual({ preserved: [], refused: [] });
+  });
+
+  it('leaves the record a newer start made while a release decided for the earlier one waited its turn', async () => {
+    const root = repo();
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(root);
+    const t = task(1, 'Cancelled, then started again');
+    await iso.prepare(t, run);
+    const ended = run.tasks['task-1'];
+    const restarting = iso.prepare(t, run);
+    // The newer prepare takes the admin lock once its turn comes, so the release queues behind it.
+    await flushMicrotasks(5);
+    const releasing = iso.release(run, 'task-1', { keep: false, record: ended });
+    const { cwd, branch } = await restarting;
+
+    await expect(releasing).resolves.toEqual({ preserved: [], refused: [] });
+    expect(run.tasks['task-1']).not.toBe(ended);
+    expect(run.tasks['task-1'].status).toBe('active');
+    expect(worktreePaths(root)).toContain(cwd);
+    expect(branches(root)).toContain(branch);
   });
 
   it('a retry starts fresh from the current integration tip', async () => {

@@ -1,7 +1,8 @@
 import { Hono } from 'hono';
 import { isGranted, toApprovalDecision, type ApprovalAnswer, type ApprovalAnswerResponse, type ApprovalsResponse } from '@ordewell/core';
 import type { OrchestratorPool } from '../pool/orchestratorPool';
-import { refuse } from './errors';
+import { failure, refuse } from './errors';
+import { callerWorkspace, sameWorkspace } from './liveSession';
 
 /**
  * A body's answer. `{ decision, note? }` carries a runner request's whole
@@ -30,15 +31,17 @@ function answerOf(body: unknown): ApprovalAnswer {
  */
 export function approvalsRoute(pool: OrchestratorPool) {
   const router = new Hono();
+  router.use('/:sessionId', sameWorkspace(pool, 'sessionId'));
+  router.use('/:sessionId/*', sameWorkspace(pool, 'sessionId'));
 
   router.get('/:sessionId', (c) => {
     const sessionId = c.req.param('sessionId');
-    if (!pool.hasSession(sessionId)) return refuse(c, 404, `Unknown session: ${sessionId}`, 'session_not_found');
-
-    return c.json({
-      pending: pool.outstandingApprovals(sessionId),
-      approvedScopes: pool.approvedScopes(sessionId),
-    } satisfies ApprovalsResponse);
+    try {
+      const session = pool.session(sessionId, callerWorkspace(c));
+      return c.json({ pending: session.outstandingApprovals(), approvedScopes: session.approvedScopes() } satisfies ApprovalsResponse);
+    } catch (err) {
+      return failure(c, err, 'read approvals');
+    }
   });
 
   router.post('/:sessionId/:approvalId', async (c) => {
@@ -48,18 +51,25 @@ export function approvalsRoute(pool: OrchestratorPool) {
 
     const answer = answerOf(await c.req.json().catch(() => null));
     const decided = toApprovalDecision(answer);
-    // A runner request goes through the command seam as the user's answer, so
-    // their action is kept in the timeline (ADR-0029). The planner's own
-    // prompt is no execution action and is answered directly.
-    const request = pool.outstandingApprovals(sessionId).find((pending) => pending.id === approvalId)?.request;
-    if (request?.taskId) {
-      const outcome = await pool.session(sessionId).execute(
-        { command: 'answer_approval', task: request.taskId, approval: approvalId, answer: decided.decision, ...(decided.decision === 'deny' && decided.note ? { note: decided.note } : {}) },
-        { kind: 'user' },
-      );
-      if (!outcome.ok) return refuse(c, 400, outcome.message, 'refused');
-    } else if (!pool.resolveApproval(sessionId, approvalId, answer)) {
-      return refuse(c, 409, 'Approval is no longer outstanding: it timed out or was already answered.', 'approval_not_outstanding');
+    try {
+      // Found after the body: while it arrived, the id may have come to name
+      // another workspace's session, whose prompt this caller never saw.
+      const session = pool.session(sessionId, callerWorkspace(c));
+      // A runner request goes through the command seam as the user's answer, so
+      // their action is kept in the timeline (ADR-0029). The planner's own
+      // prompt is no execution action and is answered directly.
+      const request = session.outstandingApprovals().find((pending) => pending.id === approvalId)?.request;
+      if (request?.taskId) {
+        const outcome = await session.execute(
+          { command: 'answer_approval', task: request.taskId, approval: approvalId, answer: decided.decision, ...(decided.decision === 'deny' && decided.note ? { note: decided.note } : {}) },
+          { kind: 'user' },
+        );
+        if (!outcome.ok) return refuse(c, 400, outcome.message, 'refused');
+      } else if (!session.resolveApproval(approvalId, answer)) {
+        return refuse(c, 409, 'Approval is no longer outstanding: it timed out or was already answered.', 'approval_not_outstanding');
+      }
+    } catch (err) {
+      return failure(c, err, 'answer approval');
     }
     return c.json({ ok: true, granted: isGranted(decided), decision: decided.decision } satisfies ApprovalAnswerResponse);
   });

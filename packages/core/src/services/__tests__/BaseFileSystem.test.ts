@@ -973,7 +973,7 @@ describe('web commands in the planner shell', () => {
     fs.setApproval(new ApprovalPolicy({ ask }));
     expect((await fs.bash('curl.exe https://93.184.216.34/posix-exe')).success).toBe(true);
     expect(fs.bashCalls).toEqual(["curl.exe -q --noproxy '*' https://93.184.216.34/posix-exe"]);
-    expect(ask).toHaveBeenCalledWith(expect.objectContaining({ scope: 'curl https://93.184.216.34/*' }));
+    expect(ask).toHaveBeenCalledWith(expect.objectContaining({ scope: 'curl https://93.184.216.34/*' }), expect.any(AbortSignal));
   });
 
   it('refuses path-invoked clients despite remembered origin and broad filesystem grants', async () => {
@@ -1173,7 +1173,7 @@ describe('web commands in the planner shell', () => {
     fs.setApproval(new ApprovalPolicy({ ask }));
     await fs.bash('timeout 5 curl -s https://93.184.216.34/a | head -1');
     expect(fs.bashCalls).toEqual(["timeout 5 curl -q --noproxy '*' -s https://93.184.216.34/a | head -1"]);
-    expect(ask).toHaveBeenCalledWith(expect.objectContaining({ subject: "timeout 5 curl -q --noproxy '*' -s https://93.184.216.34/a | head -1" }));
+    expect(ask).toHaveBeenCalledWith(expect.objectContaining({ subject: "timeout 5 curl -q --noproxy '*' -s https://93.184.216.34/a | head -1" }), expect.any(AbortSignal));
   });
 
   it('vets every DNS answer for every origin before asking, including allowlisted hosts', async () => {
@@ -1195,7 +1195,7 @@ describe('web commands in the planner shell', () => {
     const ask = vi.fn().mockResolvedValue(true);
     fs.setApproval(new ApprovalPolicy({ ask }));
     await fs.bash('curl https://93.184.216.34/a https://8.8.8.8/b');
-    expect(ask).toHaveBeenCalledWith(expect.objectContaining({ scopes: ['curl https://8.8.8.8/*', 'curl https://93.184.216.34/*'] }));
+    expect(ask).toHaveBeenCalledWith(expect.objectContaining({ scopes: ['curl https://8.8.8.8/*', 'curl https://93.184.216.34/*'] }), expect.any(AbortSignal));
     await fs.bash('curl https://8.8.8.8/next');
     expect(ask).toHaveBeenCalledTimes(1);
     await fs.bash('curl https://1.1.1.1/other');

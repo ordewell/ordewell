@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { applyTaskOps, parseTaskOpsJson, textHasTaskOps, canMergeTasks, canSplitTask, type TaskOp } from '../TaskOps';
+import { applyTaskOps, parseTaskOpsJson, textHasTaskOps, type TaskOp } from '../TaskOps';
 import { resolveAssignment } from '../TaskAssignment';
 import { blockingFailures } from '../blocking';
 import { validatePlanTasks } from '../PlanValidator';
 import { PlanParseError } from '../JsonExtractor';
+import { PlanStore } from '../PlanStore';
 import { createTask, type Task } from '../../models/Task';
 
 function samplePlan(): Task[] {
@@ -432,6 +433,35 @@ describe('applyTaskOps — rearm', () => {
     expect(res.tasks).toBe(plan);
   });
 
+  // A rearm used to clear less than a retry: a task force-started past its merge gate still read "forced past gate" on its next run.
+  it('clears what a retry clears, keeping only the revert mark a retry would release', () => {
+    const plan = samplePlan();
+    Object.assign(plan[0], {
+      status: 'completed',
+      verdict: { outcome: 'pass', reason: 'ok', checks: [], decidedAt: 'now' },
+      handoff: { summary: 'Done.', findings: [], findingCount: 0 },
+      forcedPastGate: ['Earlier work'],
+      carriedFrom: 'codex',
+      parkedQuestion: 'Which database?',
+      reverted: true,
+      loopRound: 2,
+    } satisfies Partial<Task>);
+    const store = new PlanStore();
+    store.load(plan, ['claude-code', 'codex']);
+    store.retry('a');
+    const retried = store.get('a')!;
+
+    const rearmed = applyTaskOps(plan, [{ op: 'rearm', taskId: 'a' }], ['claude-code']).tasks[0];
+
+    for (const field of ['status', 'verdict', 'handoff', 'forcedPastGate', 'carriedFrom', 'parkedQuestion', 'loopRound'] as const) {
+      expect(rearmed[field], field).toEqual(retried[field]);
+    }
+    expect(rearmed).toMatchObject({ status: 'pending', forcedPastGate: undefined, carriedFrom: undefined, parkedQuestion: undefined, loopRound: undefined });
+    // A revert's hold is the user's to release (ADR-0054): the planner's edit keeps the mark that holds it past a restart.
+    expect(retried.reverted).toBeUndefined();
+    expect(rearmed.reverted).toBe(true);
+  });
+
   it('does not expose status as a field the changes payload can set directly', () => {
     const plan = samplePlan();
     plan[0].status = 'failed';
@@ -788,6 +818,51 @@ describe('applyTaskOps — split', () => {
   });
 });
 
+describe('applyTaskOps — a busy subtree locks merge and split (ADR-0029)', () => {
+  const withSub = (status: Task['status'], awaitingReason?: Task['awaitingReason']): Task[] => {
+    const plan = samplePlan();
+    plan[1] = { ...plan[1], subtasks: [{ ...createTask({ id: 'b1', order: 1, title: 'Sub', prompt: 'sub', status }), awaitingReason }] };
+    return plan;
+  };
+  const merge: TaskOp = { op: 'merge', taskIds: ['a', 'b'], merged: { title: 'AB' } };
+  const split: TaskOp = { op: 'split', taskId: 'b', parts: [{ title: 'x' }, { title: 'y' }] };
+
+  it.each([['completed', /"Sub" is completed and cannot be (merged|split)/], ['in_progress', /"Sub" is running and cannot be (merged|split)/]] as const)(
+    'refuses a merge and a split over a %s subtask, naming it',
+    (status, pattern) => {
+      for (const op of [merge, split]) {
+        const res = applyTaskOps(withSub(status), [op], ['claude-code']);
+        expect(res.ok, op.op).toBe(false);
+        expect(res.errors[0], op.op).toMatch(pattern);
+      }
+    },
+  );
+
+  it('refuses over a subtask waiting at a checkpoint, and over a deeper one', () => {
+    for (const op of [merge, split]) {
+      expect(applyTaskOps(withSub('awaiting_user', 'checkpoint'), [op], ['claude-code']).ok, op.op).toBe(false);
+      const deep = withSub('pending');
+      deep[1].subtasks[0] = { ...deep[1].subtasks[0], subtasks: [createTask({ id: 'b11', order: 1, title: 'Deep', prompt: 'deep', status: 'completed' })] };
+      const res = applyTaskOps(deep, [op], ['claude-code']);
+      expect(res.ok, op.op).toBe(false);
+      expect(res.errors[0], op.op).toContain('"Deep" is completed');
+    }
+  });
+
+  it('names the pending subtasks a merge or a split drops, so the planner can add them back', () => {
+    for (const op of [merge, split]) {
+      const res = applyTaskOps(withSub('pending'), [op], ['claude-code']);
+      expect(res.ok, op.op).toBe(true);
+      expect(res.summary.join('\n'), op.op).toContain('dropped subtask "Sub"');
+    }
+  });
+
+  it('says nothing about subtasks when there were none', () => {
+    const res = applyTaskOps(samplePlan(), [merge], ['claude-code']);
+    expect(res.summary.join('\n')).not.toContain('subtask');
+  });
+});
+
 describe('a planner edit keeps its structural merge and split ops', () => {
   // Removing the dedicated Merge and Split controls leaves the planner's
   // natural-language edit path as the way to reshape a plan.
@@ -905,69 +980,6 @@ describe('applyTaskOps — order repair', () => {
     expect(res.ok).toBe(false);
     expect(res.errors[0]).toBe('"A" would have to run after "C", which is running and cannot be moved');
     expect(res.tasks).toBe(plan);
-  });
-});
-
-describe('canMergeTasks', () => {
-  it('approves a simple consecutive chain merge', () => {
-    expect(canMergeTasks(samplePlan(), ['a', 'b']).ok).toBe(true);
-  });
-
-  // The pre-flight and the applier must agree: order alone is no longer a
-  // reason to refuse, since the applier repairs it.
-  it('approves a merge that only needs a display-order repair', () => {
-    // A(1) and B(2) are independent; C(3) depends on B. Merging A + C gives a
-    // survivor at slot 1 that depends on B at slot 2 — no cycle, just a shuffle.
-    const plan = [
-      createTask({ id: 'a', order: 1, title: 'A', prompt: 'p', assignedRunner: 'claude-code' }),
-      createTask({ id: 'b', order: 2, title: 'B', prompt: 'p', assignedRunner: 'claude-code' }),
-      createTask({ id: 'c', order: 3, title: 'C', prompt: 'p', dependencies: ['b'], assignedRunner: 'claude-code' }),
-    ];
-    expect(canMergeTasks(plan, ['a', 'c']).ok).toBe(true);
-
-    const res = applyTaskOps(plan, [{ op: 'merge', taskIds: ['a', 'c'], merged: { title: 'A + C' } }], ['claude-code']);
-    expect(res.ok).toBe(true);
-    expect(res.tasks.map((t) => t.title)).toEqual(['B', 'A + C']);
-  });
-
-  it('rejects fewer than two ids', () => {
-    expect(canMergeTasks(samplePlan(), ['a']).ok).toBe(false);
-  });
-
-  it('rejects a merge that would pull in a later dependency (ordering break)', () => {
-    // a(1), b(2) depends on a, c(3) depends on a, d(4) depends on b.
-    // Merging a + d: survivor (order 1) would depend on b (order 2) -> order violation.
-    const plan = [
-      createTask({ id: 'a', order: 1, title: 'A', prompt: 'p', assignedRunner: 'claude-code' }),
-      createTask({ id: 'b', order: 2, title: 'B', prompt: 'p', dependencies: ['a'], assignedRunner: 'claude-code' }),
-      createTask({ id: 'c', order: 3, title: 'C', prompt: 'p', dependencies: ['a'], assignedRunner: 'claude-code' }),
-      createTask({ id: 'd', order: 4, title: 'D', prompt: 'p', dependencies: ['b'], assignedRunner: 'claude-code' }),
-    ];
-    const res = canMergeTasks(plan, ['a', 'd']);
-    expect(res.ok).toBe(false);
-    expect(res.error).toMatch(/ordering|cycle/i);
-  });
-
-  it('rejects merging a running task', () => {
-    const plan = samplePlan();
-    plan[0].status = 'in_progress';
-    expect(canMergeTasks(plan, ['a', 'b']).ok).toBe(false);
-  });
-});
-
-describe('canSplitTask', () => {
-  it('approves a pending task', () => {
-    expect(canSplitTask(samplePlan(), 'b').ok).toBe(true);
-  });
-
-  it('rejects a completed task', () => {
-    const plan = samplePlan();
-    plan[1].status = 'completed';
-    expect(canSplitTask(plan, 'b').ok).toBe(false);
-  });
-
-  it('rejects an unknown task', () => {
-    expect(canSplitTask(samplePlan(), 'nope').ok).toBe(false);
   });
 });
 
@@ -1187,5 +1199,18 @@ describe('applyTaskOps — the mode a planner edit lands a task on (ADR-0031)', 
     const before = samplePlan()[0];
     const outcome = resolveAssignment({ writer: 'user', task: { ...before, taskMode: 'bypassPermissions' }, before, catalog: catalog(false) });
     expect(outcome).toMatchObject({ ok: true, task: { taskMode: 'bypassPermissions' } });
+  });
+});
+
+describe('research task type flips', () => {
+  it.each(['user', 'script'] as const)('clears research when becoming %s through the planner', (type) => {
+    const research = createTask({ id: 'r', title: 'Research', type: 'ai', prompt: 'investigate', research: true, taskMode: 'plan' });
+    const result = applyTaskOps([research], [{ op: 'update', taskId: 'r', changes: type === 'user'
+      ? { type, userSteps: [{ order: 1, instruction: 'check', completed: false }] }
+      : { type, commands: [['git', 'status']] } }], ['claude-code']);
+    expect(result.errors).toEqual([]);
+    expect(result.ok).toBe(true);
+    expect(result.tasks[0].type).toBe(type);
+    expect(result.tasks[0].research).toBeFalsy();
   });
 });

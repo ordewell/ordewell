@@ -17,10 +17,13 @@ export class ChildStreams {
   private readonly watched = new Map<string, Watched>();
   private readonly sequence = new Map<string, number>();
 
-  constructor(private readonly stream: string) {}
+  constructor(private readonly stream: string, private readonly hears: (ws: WebSocket, workspace: string | undefined) => boolean) {}
 
-  /** Snapshot and watching in one turn, as a root's socket has them: no frame can fall between. */
-  join(rootId: string, childId: string, child: ChildPlanHandle, ws: WebSocket): void {
+  /**
+   * Snapshot and watching in one turn, as a root's socket has them: no frame can
+   * fall between. `workspace` is the root's: its later frames reach only sockets allowed to hear it.
+   */
+  join(rootId: string, childId: string, child: ChildPlanHandle, ws: WebSocket, workspace: string | undefined): void {
     if (ws.readyState !== ws.OPEN) return;
     const key = keyOf(rootId, childId);
     const view = child.view();
@@ -35,7 +38,7 @@ export class ChildStreams {
       return;
     }
     const sockets = new Set([ws]);
-    this.watched.set(key, { sockets, stop: child.watch((frame) => this.send(key, sockets, frame)) });
+    this.watched.set(key, { sockets, stop: child.watch((frame) => this.send(key, sockets, workspace, frame)) });
   }
 
   leave(rootId: string, childId: string, ws: WebSocket): void {
@@ -60,12 +63,12 @@ export class ChildStreams {
     }
   }
 
-  private send(key: string, sockets: Set<WebSocket>, frame: ChildFrame): void {
+  private send(key: string, sockets: Set<WebSocket>, workspace: string | undefined, frame: ChildFrame): void {
     const seq = (this.sequence.get(key) ?? 0) + 1;
     this.sequence.set(key, seq);
     const payload = JSON.stringify({ ...frame, stream: this.stream, seq } satisfies SessionFrame);
     for (const ws of sockets) {
-      if (ws.readyState === ws.OPEN) ws.send(payload);
+      if (ws.readyState === ws.OPEN && this.hears(ws, workspace)) ws.send(payload);
     }
   }
 

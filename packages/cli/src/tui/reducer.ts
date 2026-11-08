@@ -1,4 +1,4 @@
-import { blockingFailures, DEFAULT_RUNNERS, EMPTY_HOLD, EMPTY_RUN, NO_TURN, closeTurn, fromTranscript, holdPrompt, taskLogCommands, taskStartedNotice, type ChildPlanView, type RunnerId, type SerializedPlan } from '@ordewell/core';
+import { blockingFailures, DEFAULT_RUNNERS, NO_TURN, closeTurn, fromTranscript, holdPrompt, taskLogCommands, taskStartedNotice, type ChildPlanView, type RunnerId, type SerializedPlan } from '@ordewell/core';
 import { bodyMode, chatEditorRoomFor } from './geometry';
 import { SPINNER_CYCLE, chatScrollMax } from './layout';
 import { activeToken, composerCompletions, findCommand, parseRunnerCommand, parseSlash, runnerCommandFor, type ParsedCommand } from './slash';
@@ -15,13 +15,13 @@ import { newSession, pickRewindTarget, runCommand, updatePlanned } from './reduc
 import { revertPreviewed } from './reducers/revert';
 import { adoptCompaction, followCompaction } from './reducers/compaction';
 import { disarmStop, drainQueue, forceSendPlanner, plannerEscape, queueToEditor, restoreForced } from './reducers/turnQueue';
-import { applySettings, foldRun, followSession, planSnapshot, withRun } from './reducers/incoming';
+import { applySettings, foldRun, followSession, leaveSession, planSnapshot, withRun } from './reducers/incoming';
 import { refillPicker, reseedRunnerChoice } from './reducers/pickers';
 import { refreshStepper } from './reducers/stepper';
 import {
   handleMouseSelect, isMouseSelect, isScrollKey, isWheel, scrollChat, scrollDelta, scrollPointed, settlePanes, settlePlan, toggleDetail,
 } from './reducers/pointer';
-import { clamp, clampSelection, clearNotice, reportError, stale, step, type Action, type Effect, type Step } from './reducers/shared';
+import { clamp, clampSelection, clearNotice, reportError, stale, staleFailure, step, type Action, type Effect, type Step } from './reducers/shared';
 import { belongsAbove, childFailed, childGone, childKey, childLost, childMessaged, childTreeArrived, childrenListed, commandInChild, leaveChild, onParent, readLanded, routeChild, speakToChild } from './reducers/children';
 
 export { initialState } from './state';
@@ -96,37 +96,23 @@ function reduceAction(state: TuiState, action: Action): Step {
     // (`task-1`), so nothing of the last one's — a merge gate, a checkpoint, its
     // tasks — may carry over into this.
     case 'sessionStarted':
-      return step(withRun({ ...state, sessionId: action.sessionId, goal: action.goal, accountLimits: [], servedModels: {}, taskView: null, status: 'idle' }, EMPTY_RUN));
+      // Entered from the welcome, as its own turn begins (`startConversation`
+      // dispatches it): the turn's conversation, gate and stop are the ones
+      // `submit` just set, and the run settings read at launch still stand.
+      return step({
+        ...leaveSession(state, ['conversation', 'scroll', 'planner', 'turnGate', 'queuedPrompts', 'stopArmed', 'stopRequested', 'forceSendPending', 'runSettingsKnown']),
+        sessionId: action.sessionId,
+        openingSessionId: action.sessionId,
+        goal: action.goal,
+      });
 
     // A loaded session is a different one: the turn the old one had out, the
     // prompts held behind it and a stop armed against it are not this one's.
     // Nor is an open prompt editor: task ids repeat across plans, so the
     // loaded plan's `task-1` would keep it, and Enter save the old draft there.
-    // (`sessionStarted` cannot reset them: `startConversation` dispatches it
-    // as its own turn begins.)
+    // Its transcript arrives next (`chatRestored`).
     case 'sessionLoaded':
-      return step(withRun({
-        ...state,
-        accountLimits: [],
-        servedModels: {},
-        sessionId: action.sessionId,
-        goal: action.goal,
-        taskView: null,
-        expandedTaskId: null,
-        taskEditor: null,
-        status: 'idle',
-        planner: 'idle',
-        plannerPause: null,
-        plannerResend: null,
-        turnGate: NO_TURN,
-        pendingApprovals: [],
-        queuedPrompts: EMPTY_HOLD,
-        stopArmed: false,
-        stopRequested: false,
-        forceSendPending: null,
-        overlay: state.overlay?.kind === 'approval' ? null : state.overlay,
-        runSettingsKnown: false,
-      }, EMPTY_RUN));
+      return step({ ...leaveSession(state), sessionId: action.sessionId, goal: action.goal });
 
     // The daemon registers a session before its opening turn runs, and drops it
     // itself when it refuses the turn or the goal is discarded; any other
@@ -138,26 +124,13 @@ function reduceAction(state: TuiState, action: Action): Step {
       // Approvals belong to the session that raised them; the old planner is
       // gone, and the turn gate it held with it. The prompts typed behind its
       // turn were never sent and are not echoed until they are, so they go back
-      // to the editor rather than vanishing with the session.
-      return step(withRun({
-        ...queueToEditor(state),
-        accountLimits: [],
-        servedModels: {},
+      // to the editor rather than vanishing with the session. What the user
+      // typed stays on screen with the failure that follows it, which ends the
+      // turn (`planner`) and is reported against the opening kept for it.
+      return step({
+        ...leaveSession(queueToEditor(state), ['conversation', 'scroll', 'planner', 'openingSessionId', ...(action.unreached ? ['runSettingsKnown' as const] : [])]),
         sessionId: null,
-        goal: '',
-        taskView: null,
-        expandedTaskId: null,
-        taskEditor: null,
-        status: 'idle',
-        plannerPause: null,
-        plannerResend: null,
-        turnGate: NO_TURN,
-        pendingApprovals: [],
-        stopArmed: false,
-        forceSendPending: null,
-        overlay: state.overlay?.kind === 'approval' ? null : state.overlay,
-        runSettingsKnown: action.unreached ? state.runSettingsKnown : false,
-      }, EMPTY_RUN));
+      });
 
     // Deleting the session on screen stops it in the daemon; a view left on it
     // would answer every next message with a session-not-found.
@@ -426,6 +399,20 @@ function reduceAction(state: TuiState, action: Action): Step {
       if (stale(state, action.sessionId) || (state.planner !== 'awaiting' && state.planner !== 'compacting' && state.planner !== 'joined')) return step(state);
       return step(state, [{ type: 'reconcileTurn', sessionId: action.sessionId }]);
 
+    // Frames are not enough once one is missed. With a turn of this surface's
+    // out, its own reply and `followRestored` settle what the gap hid; a child
+    // on screen is read through its own route, not the root's stream.
+    case 'streamGap':
+      if (stale(state, action.sessionId) || state.child || plannerInFlight(state)) return step(state);
+      return step(state, [{ type: 'resyncConversation', sessionId: action.sessionId }]);
+
+    // The read may have come back after a turn began: its text is then the turn's to draw.
+    case 'conversationResynced': {
+      if (stale(state, action.sessionId) || state.child || plannerInFlight(state)) return step(state);
+      const { history, researchLog, plannerUsage, pendingTurns } = action.chat;
+      return step({ ...state, conversation: fromTranscript(history, researchLog, plannerUsage, pendingTurns) });
+    }
+
     case 'executionLost': {
       if (stale(state, action.sessionId)) return step(state);
       // Statuses stay as last reported: the daemon still serves the live store
@@ -494,25 +481,7 @@ function reduceAction(state: TuiState, action: Action): Step {
     // prompt editor: the fork copies the task ids, so Enter would save the
     // original's draft into the fork.
     case 'sessionForked':
-      return step(withRun({
-        ...state,
-        sessionId: action.sessionId,
-        goal: action.goal,
-        taskView: null,
-        expandedTaskId: null,
-        taskEditor: null,
-        status: 'idle',
-        planner: 'idle',
-        turnGate: NO_TURN,
-        planApproved: false,
-        pendingApprovals: [],
-        queuedPrompts: EMPTY_HOLD,
-        stopArmed: false,
-        stopRequested: false,
-        forceSendPending: null,
-        overlay: state.overlay?.kind === 'approval' ? null : state.overlay,
-        runSettingsKnown: false,
-      }, EMPTY_RUN));
+      return step({ ...leaveSession(state), sessionId: action.sessionId, goal: action.goal });
 
     // The rewound message comes back as a draft to edit and resend, so it lands
     // as if just typed: history is not being browsed, and nothing is parked.
@@ -566,9 +535,9 @@ function reduceAction(state: TuiState, action: Action): Step {
       return step(state, [{ type: 'loadIsolationPreview' }]);
 
     case 'failed': {
-      // Dropped only once another session is on screen: a session that let
-      // itself go (`sessionCleared`) reports why onto the welcome it left.
-      if (state.sessionId !== null && stale(state, action.sessionId)) return step(state);
+      // A session that let itself go (`sessionCleared`) reports why onto the
+      // welcome it left; any other session's failure is not this screen's.
+      if (staleFailure(state, action.sessionId)) return step(state);
       // A failed call may have been the task view's log read; the view falls
       // back to whatever the live stream sent rather than waiting forever.
       if (!action.turn) {
@@ -605,7 +574,7 @@ function reduceAction(state: TuiState, action: Action): Step {
     // As `failed`: an opening that let itself go asks on the welcome it left,
     // never over a session loaded meanwhile.
     case 'workspaceNeedsInit':
-      if (state.sessionId !== null && stale(state, action.sessionId)) return step(state);
+      if (staleFailure(state, action.sessionId)) return step(state);
       return step({
         ...state,
         planner: 'idle',
@@ -631,7 +600,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       // settings of its own that the welcome's would have to be read back over.
       if (!plannerInFlight(state) || state.stopRequested) {
         const cleared = reduceAction(state, { type: 'sessionCleared', sessionId: action.sessionId, unreached: true }).state;
-        return step(say({ ...cleared, planner: 'idle', stopRequested: false }, 'system', `${restarted}. The goal was not sent again, as planning was stopped.`));
+        return step(say({ ...cleared, planner: 'idle' }, 'system', `${restarted}. The goal was not sent again, as planning was stopped.`));
       }
       const retry: Effect = { type: 'startConversation', goal: action.goal, sessionId: action.sessionId, ...(action.allowInit ? { allowInit: true } : {}) };
       return step(say(state, 'system', `${restarted} and retried.`), [retry]);

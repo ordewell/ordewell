@@ -137,6 +137,31 @@ describe('Session.compactConversation', () => {
     session.destroy();
   });
 
+  it('answers a compaction that landed as done when only the meter\'s save is refused, and still sends the meter', async () => {
+    const { planner, state } = apiStylePlanner();
+    const broadcast = vi.fn<(msg: SessionMessage) => void>();
+    const plan = plannedDialogue();
+    plan.plannerUsage = { totals: { inputTokens: 61_000, outputTokens: 1_000 }, source: 'claude-code', model: 'claude-opus-5-5', lastPromptTokens: 61_000, contextWindow: 1_000_000 };
+    const onNotice = vi.fn<(notice: { level: string; message: string }) => void>();
+    const session = makeSession({ aiService: planner, broadcast, onNotice });
+    session.loadPlan(plan, GOAL, testWorkspace, { persist: false });
+    state.context = ['live'];
+    // The checkpoint's save lands; the disk fills before the one that clears the meter.
+    saves(session).mockImplementation((saved) => {
+      if (saved.plannerUsage?.lastPromptTokens === undefined) throw new Error('disk full');
+    });
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    broadcast.mockClear();
+
+    await expect(session.compactConversation()).resolves.toMatchObject({ summary: SUMMARY_TEXT });
+
+    logged.mockRestore();
+    const sent = broadcast.mock.calls.map(([m]) => m);
+    expect(sent.filter((m) => m.type === 'planner_usage').at(-1)?.contextFill).toBeUndefined();
+    expect(onNotice.mock.calls.map(([n]) => n)).toEqual([{ type: 'notice', level: 'error', message: expect.stringContaining('disk full') }]);
+    session.destroy();
+  });
+
   it('counts what the summary turn spent, condensed or not, without moving the meter on its calls', async () => {
     const plan = (): LegacyPlanState => ({
       ...plannedDialogue(),

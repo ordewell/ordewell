@@ -1,6 +1,5 @@
 import { abbreviateHome, createSkillsService, EnvConfig, type SkillInfo } from '@ordewell/core';
-import { resolve } from 'path';
-import { flag, hasFlag, positionals } from '../utils';
+import { hasFlag, positionals, workspaceOf } from '../utils';
 import { fail } from './shared';
 
 function invocation(skill: SkillInfo): string {
@@ -14,7 +13,7 @@ export function handleSkills(subArgs: string[]): void {
   if (positionals(subArgs).length > 0) {
     fail('Usage: ordewell skills [--workspace /path] [--json]');
   }
-  const workspace = resolve(flag(subArgs, '--workspace') || process.cwd());
+  const workspace = workspaceOf(subArgs);
   const catalog = createSkillsService(workspace, new EnvConfig().workspaceRepos).readCatalog();
   const skills = catalog.skills.map((skill) => ({
     name: skill.name,

@@ -1,3 +1,5 @@
+import { resolve } from 'path';
+
 /** The value of `--name=value`, or undefined when `arg` is a different token. */
 function inlineValue(arg: string, name: string): string | undefined {
   return arg.startsWith(`${name}=`) ? arg.slice(name.length + 1) : undefined;
@@ -11,6 +13,15 @@ export function flag(args: string[], name: string): string | undefined {
     if (inline !== undefined) return inline;
   }
   return undefined;
+}
+
+/**
+ * The directory `--workspace` names, absolute. The daemon keeps the cwd of the
+ * command that first started it, so a relative path sent as typed would be
+ * resolved there instead of where the user is.
+ */
+export function workspaceOf(args: string[]): string {
+  return resolve(flag(args, '--workspace') || process.cwd());
 }
 
 export function flags(args: string[], name: string): (string | undefined)[] {

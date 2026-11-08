@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
 import { EMPTY_TASK_LOG_FOLLOW, type AccountLimitSnapshot } from '@ordewell/core';
 import type { WsEvent } from '../../apiClient';
-import { inboundFor } from '../inbound';
+import { createInbound } from '../inbound';
 import { reduce } from '../reducer';
 import { initialState, type TuiState } from '../state';
 import { chatLayout } from '../layout';
@@ -25,7 +25,7 @@ it('carries a live quota frame into one planner footer without touching chat or 
     contextFill: { usedTokens: 61000, windowTokens: 1000000 },
   } }).state;
   const before = state;
-  const receive = inboundFor({}, (action) => { state = reduce(state, action).state; }, 's').execution();
+  const receive = createInbound((action) => { state = reduce(state, action).state; }, 's').receive;
   receive({ type: 'account_limits', sessionId: 's', stream: 'daemon', revision: 1, limits: [codex] } as unknown as WsEvent);
   expect(footer(state)).toEqual(['Planner ctx 61k (6%) · Codex 5h 24% used · $0.42']);
   expect(state.conversation).toBe(before.conversation);
@@ -78,8 +78,8 @@ it('keeps context first and exact frame geometry with wide labels and narrow dim
 
 it('adopts quota greetings independently of run stamps, including held empty reconnect snapshots', () => {
   let state = initialState({ sessionId: 's', plannerProvider: 'codex' });
-  const inbound = inboundFor({}, (action) => { state = reduce(state, action).state; }, 's');
-  const receive = inbound.execution();
+  const inbound = createInbound((action) => { state = reduce(state, action).state; }, 's');
+  const receive = inbound.receive;
   receive({ type: 'run_snapshot', sessionId: 's', stream: 'daemon', seq: 100, view: state.run });
   receive({ type: 'account_limits', sessionId: 's', stream: 'daemon', revision: 1, limits: [codex] });
   expect(footer(state)).toEqual(['Codex 5h 24% used']);

@@ -65,7 +65,7 @@ describe('OrchestratorPool mid-session planner switch', () => {
 
     pool.updateSettings({ env: { AI_PROVIDER: 'google', ORCHESTRATOR_MODEL: 'gemini-2.5-pro' } });
 
-    await pool.continuePlanning('session-switch', 'Use a token bucket');
+    await pool.continuePlanning('session-switch', 'Use a token bucket', undefined);
 
     // Pre-fix, the stale WebConfig.aiProvider kept the OpenAiService for google
     // too; the switch would never have reached the Gemini transport.
@@ -101,7 +101,7 @@ describe('OrchestratorPool mid-session planner switch', () => {
 
     pool.updateSettings({ env: { AI_PROVIDER: 'google', ORCHESTRATOR_MODEL: 'gemini-2.5-pro' } });
 
-    await pool.continuePlanning('session-with-plan', 'Use a token bucket');
+    await pool.continuePlanning('session-with-plan', 'Use a token bucket', undefined);
 
     expect(GeminiService.prototype.startConversation).toHaveBeenCalledTimes(1);
     expect(OpenAiService.prototype.startConversation).toHaveBeenCalledTimes(1);

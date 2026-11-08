@@ -958,8 +958,10 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
         // A subagent's failure is reported by its own lifecycle, not by ending
         // the planner's turn: the planner is still working and may recover.
         if (this.subagentOf(msg.params?.threadId)) return;
-        const failure = msg.params as { error?: CodexTurnError; willRetry?: boolean } | undefined;
+        const failure = msg.params as { error?: CodexTurnError; willRetry?: boolean; turnId?: unknown } | undefined;
         if (failure?.willRetry) return;
+        // Like a late `turn/completed`: the previous turn's failure, landing after the next turn was written, is not this one's.
+        if (typeof failure?.turnId === 'string' && (failure.turnId === this.endedTurnId || (this.turn?.id && failure.turnId !== this.turn.id))) return;
         this.closeTurn(emit);
         emit(this.turnFailed(failure?.error));
         return;

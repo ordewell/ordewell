@@ -188,7 +188,7 @@ describe('Claude Code planner reads (ADR-0028)', () => {
     await svc.startConversation(request({ approval }));
 
     expect(controlAnswer(spawned.processes[0])).toBe('deny');
-    expect(approval.request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', subject: resolved(join(outside, 'secret.txt')) }));
+    expect(approval.request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', subject: resolved(join(outside, 'secret.txt')) }), { signal: expect.any(AbortSignal) });
   });
 });
 
@@ -988,7 +988,7 @@ describe('runner state outside the workspace (ADR-0032)', () => {
     await svc.startConversation(request({ approval }));
 
     expect(controlAnswer(spawned.processes[0])).toBe('deny');
-    expect(approval.request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path' }));
+    expect(approval.request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path' }), { signal: expect.any(AbortSignal) });
   });
 
   it('asks about a link planted in the saved-output folder, judged where it points', async () => {
@@ -1001,7 +1001,7 @@ describe('runner state outside the workspace (ADR-0032)', () => {
     await svc.startConversation(request({ approval }));
 
     expect(controlAnswer(spawned.processes[0])).toBe('deny');
-    expect(approval.request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', subject: resolved(join(outside, 'secret.txt')) }));
+    expect(approval.request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', subject: resolved(join(outside, 'secret.txt')) }), { signal: expect.any(AbortSignal) });
   });
 
   it('reads the workspace and its saved output with nobody to ask, and refuses the rest', async () => {

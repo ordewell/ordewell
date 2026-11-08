@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import http from 'http';
 import { ApiClient } from '../../apiClient';
+import { wireRoute } from '../../__tests__/wireRoute';
 
 function startServer(handler: (req: http.IncomingMessage, res: http.ServerResponse) => void): Promise<{ port: number; close: () => void }> {
   return new Promise((resolve) => {
@@ -45,8 +46,8 @@ async function daemon(status = 200, body: unknown = { ok: true }) {
     req.on('data', (chunk) => { sent += String(chunk); });
     req.on('end', () => {
       res.setHeader('Content-Type', 'application/json');
-      if (req.url?.includes('/sessions/')) return res.end(JSON.stringify(PLAN));
-      hits.push(`${req.method} ${req.url} ${sent}`.trim());
+      if (wireRoute(req.url).includes('/sessions/')) return res.end(JSON.stringify(PLAN));
+      hits.push(`${req.method} ${wireRoute(req.url)} ${sent}`.trim());
       res.statusCode = status;
       res.end(JSON.stringify(body));
     });

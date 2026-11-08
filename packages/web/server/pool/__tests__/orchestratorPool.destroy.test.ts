@@ -36,14 +36,14 @@ describe('closing a session', () => {
 
     try {
       const turn = pool.startPlanning('s1', 'ship it', ['claude-code'], workspace);
-      const session = pool.session('s1');
+      const session = pool.session('s1', undefined);
       expect(session.isPlannerBusy).toBe(true);
 
       pool.destroy('s1');
 
       expect(destroySpy.mock.contexts).toContain(session);
       expect(pool.hasSession('s1')).toBe(false);
-      expect(pool.cancelPlanning('s1')).toBe(false);
+      expect(pool.cancelPlanning('s1', undefined)).toBe(false);
       await expect(turn).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
     } finally {
       pool.destroyAll();
@@ -62,12 +62,12 @@ describe('a session a surface closes', () => {
 
     try {
       const turn = pool.startPlanning('s1', 'ship it', ['claude-code'], workspace);
-      const session = pool.session('s1');
+      const session = pool.session('s1', undefined);
       let done!: () => void;
       vi.spyOn(session, 'gone', 'get').mockReturnValue(new Promise<void>((resolve) => { done = resolve; }));
 
       let closed = false;
-      const closing = pool.close('s1').then(() => { closed = true; });
+      const closing = pool.close('s1', workspace).then(() => { closed = true; });
 
       expect(pool.hasSession('s1')).toBe(false);
       await expect(turn).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
@@ -84,7 +84,7 @@ describe('a session a surface closes', () => {
   it('is a no-op for one that is not there', async () => {
     const pool = new OrchestratorPool({ accountLimitCollectors: () => [] });
 
-    await expect(pool.close('nobody')).resolves.toBeUndefined();
+    await expect(pool.close('nobody', tmpdir())).resolves.toBeUndefined();
   });
 });
 
@@ -100,17 +100,17 @@ describe('re-planning under a live session id', () => {
 
     try {
       const firstTurn = pool.startPlanning('s1', 'first', ['claude-code'], workspace);
-      const first = pool.session('s1');
+      const first = pool.session('s1', undefined);
 
       const secondTurn = pool.startPlanning('s1', 'second', ['claude-code'], workspace);
       const secondDiscarded = expect(secondTurn).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
 
       expect(destroySpy.mock.contexts).toContain(first);
-      expect(pool.session('s1')).not.toBe(first);
+      expect(pool.session('s1', undefined)).not.toBe(first);
       // The first session's turn is abandoned with it, not left running unheard.
       await expect(firstTurn).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
       expect(first.isPlannerBusy).toBe(false);
-      expect(pool.session('s1').isPlannerBusy).toBe(true);
+      expect(pool.session('s1', undefined).isPlannerBusy).toBe(true);
 
       pool.destroyAll();
       await secondDiscarded;

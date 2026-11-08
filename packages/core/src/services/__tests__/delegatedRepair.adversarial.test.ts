@@ -72,6 +72,7 @@ function setup() {
     unawaited: (work) => { void work.catch(() => undefined); },
   };
   const runs = {
+    assertDecision: () => undefined,
     attemptCwd: async () => ({ cwd: '/repo/.ordewell/worktrees/d', worktree: true }),
     workspaceCwd: async () => ({ cwd: '/repo', worktree: false }),
     snapshotWorkspace: async () => null,
@@ -80,6 +81,7 @@ function setup() {
     skillLayout: () => ({ repos: [], worktrees: false }),
     current: null,
     epoch: 1,
+    stillToLetGo: async () => undefined,
   } as unknown as AttemptsDeps['runs'];
   const landing: AttemptsDeps['landing'] = {
     nextRepair: () => ({ n: 1, limit: 2 }),
@@ -122,7 +124,8 @@ function setup() {
   } as unknown as AttemptsDeps);
   /** Start the conflict repair ADR-0055 D14 gives the delegated task. */
   const repair = async () => {
-    await attempts.start(store.get('d')!, { admission: admitted, lease: leaseOf() } as never);
+    // A repair works in a worktree, so its claim carries the run's isolation decision (ADR-0059 L1).
+    await attempts.start(store.get('d')!, { admission: admitted, lease: leaseOf(), isolationDecision: { epoch: 1, mode: 'isolated' } });
     await new Promise((resolve) => setTimeout(resolve, 60));
   };
   return { store, spent, sessions, ended, repair };

@@ -441,6 +441,13 @@ export interface TuiState {
   status: RunStatus;
   planner: PlannerStatus;
   sessionId: string | null;
+  /**
+   * The session whose opening turn is on screen, kept past a `sessionCleared`
+   * (which lets `sessionId` go) so the refusal that follows lands on the welcome
+   * it left. A failure naming any other session is an abandoned turn's, and
+   * lands nowhere.
+   */
+  openingSessionId: string | null;
   goal: string;
   /**
    * The run as core folds it (ADR-0017): every `SessionMessage` that changes a
@@ -777,6 +784,104 @@ function asRunTasks(tasks: TaskView[]): RunTask[] {
 }
 
 /**
+ * Who a `TuiState` field belongs to, which decides what leaving a session
+ * resets (ADR-0006 E1, R1): a `session` field is reset by `leaveSession`, a
+ * `workspace` one outlives every session, and a `screen` one is the terminal's
+ * own. A new field fails to compile until it is classified here.
+ */
+export type Scope = 'session' | 'workspace' | 'screen';
+
+export const STATE_SCOPE = {
+  editor: 'screen',
+  // The frame and tree are navigation: the reducer runs a session switch on
+  // the root beneath a child (`belongsAbove`), and `forgetTree` drops the tree.
+  child: 'screen',
+  childTree: 'screen',
+  composerTipSeq: 'screen',
+  conversation: 'session',
+  accountLimits: 'session',
+  servedModels: 'session',
+  taskView: 'session',
+  turnGate: 'session',
+  detailAll: 'screen',
+  status: 'session',
+  planner: 'session',
+  sessionId: 'session',
+  openingSessionId: 'session',
+  goal: 'session',
+  // The run and everything `withRun` derives from it.
+  run: 'session',
+  tasks: 'session',
+  planApproved: 'session',
+  focus: 'screen',
+  selectedTask: 'session',
+  expandedTaskId: 'session',
+  taskEditor: 'session',
+  scroll: 'session',
+  planScroll: 'session',
+  runners: 'workspace',
+  sessions: 'workspace',
+  rewindTargets: 'session',
+  models: 'workspace',
+  modesByRunner: 'workspace',
+  taskSkills: 'workspace',
+  orchestratorModels: 'workspace',
+  providerErrors: 'workspace',
+  runnerErrors: 'workspace',
+  orchestratorModel: 'workspace',
+  plannerProvider: 'workspace',
+  plannerEnvOverride: 'workspace',
+  plannerEffort: 'workspace',
+  plannerModels: 'workspace',
+  maxParallel: 'workspace',
+  configuredProviders: 'workspace',
+  allowlist: 'workspace',
+  autonomous: 'workspace',
+  // The values are the file's until a session's own are read; what a session
+  // knows of them is `runSettingsKnown`. Both counters only rise: a reset
+  // would let an older answer in.
+  runSettings: 'workspace',
+  runSettingsKnown: 'session',
+  settingsRead: 'workspace',
+  runSettingsRead: 'workspace',
+  plannerKnown: 'workspace',
+  runnersKnown: 'workspace',
+  plannerDetecting: 'workspace',
+  providersKnown: 'workspace',
+  isolationPreview: 'workspace',
+  isolationPreviewRead: 'workspace',
+  versionCheckNotice: 'screen',
+  runAutoMerge: 'session',
+  runSupervisor: 'session',
+  mouseCapture: 'screen',
+  selection: 'screen',
+  workspace: 'workspace',
+  handoff: 'session',
+  runMerge: 'session',
+  plannerResend: 'session',
+  plannerPause: 'session',
+  // An approval prompt is the session's, and `leaveSession` drops it; any other
+  // overlay is the person's and stays.
+  overlay: 'screen',
+  pendingApprovals: 'session',
+  queuedPrompts: 'session',
+  stopArmed: 'session',
+  stopArmToken: 'screen',
+  stopRequested: 'session',
+  forceSendPending: 'session',
+  toast: 'screen',
+  rows: 'screen',
+  cols: 'screen',
+  exiting: 'screen',
+  spinnerFrame: 'screen',
+  now: 'screen',
+} satisfies Record<keyof TuiState, Scope>;
+
+export type SessionKey = { [K in keyof typeof STATE_SCOPE]: (typeof STATE_SCOPE)[K] extends 'session' ? K : never }[keyof typeof STATE_SCOPE];
+
+export const SESSION_KEYS = (Object.keys(STATE_SCOPE) as (keyof TuiState)[]).filter((key): key is SessionKey => STATE_SCOPE[key] === 'session');
+
+/**
  * The run view a caller seeds the pane with: its own when it hands one, else
  * one built from the run-shaped fields it did hand (`tasks`, `handoff`,
  * `runMerge`). Keeping the two in step is what lets a caller that seeds tasks
@@ -809,6 +914,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     status: 'idle',
     planner: 'idle',
     sessionId: null,
+    openingSessionId: null,
     goal: '',
     tasks: [],
     planApproved: false,

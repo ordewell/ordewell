@@ -17,6 +17,8 @@ export type Effect =
   | { type: 'sendMessage'; sessionId: string; message: string }
   /** Read the session back from the daemon after a planner turn's reply was lost, and settle the turn if the daemon is done with it. */
   | { type: 'reconcileTurn'; sessionId: string }
+  /** The stream skipped a broadcast and no turn of this surface's is out: read the conversation back (ADR-0017). */
+  | { type: 'resyncConversation'; sessionId: string }
   /** Send now in the planner chat (ADR-0023, F5): stop the turn in flight and answer `message` next. */
   | { type: 'forceSendPlannerMessage'; sessionId: string; message: string }
   | { type: 'setPlanner'; provider: string; /** The shell's AI_PROVIDER overrides this choice; said once the daemon accepts it. */ overrideNotice?: string }
@@ -208,6 +210,10 @@ export type Action =
   | { type: 'followLost'; sessionId: string }
   /** A standing subscription opened; on a reconnect this is what reads a lost turn's end back. */
   | { type: 'followRestored'; sessionId: string }
+  /** The session's stream numbered a broadcast past the next one, or a daemon restarted: this surface missed some. */
+  | { type: 'streamGap'; sessionId: string }
+  /** The conversation as the daemon holds it, read after a {@link streamGap}. */
+  | { type: 'conversationResynced'; chat: ChatRestored; sessionId: string }
   /** `read` and `sessionId` say which read this answers, so a late one cannot paint another session's values (ADR-0030). */
   | { type: 'settingsLoaded'; settings: Partial<SettingsResponse>; read?: number; sessionId?: string }
   | { type: 'modelsLoaded'; models: ModelView[]; orchestratorModels?: ModelView[]; providers?: AiProvider[]; providerErrors?: Record<string, string>; runnerErrors?: Record<string, string>; modesByRunner?: Record<string, ModeView[]> }
@@ -301,6 +307,15 @@ export function clearNotice(state: TuiState): TuiState {
  */
 export const stale = (state: TuiState, sessionId: string | undefined): boolean =>
   sessionId !== undefined && sessionId !== state.sessionId;
+
+/**
+ * A turn's failure is reported on the screen its session left behind only when
+ * it is the opening a clear let go (`openingSessionId`): any other session's —
+ * one `/new` or a load has replaced, whose abandoned turn the daemon fails when
+ * it closes the session — lands on nothing, welcome included.
+ */
+export const staleFailure = (state: TuiState, sessionId: string | undefined): boolean =>
+  stale(state, sessionId) && sessionId !== state.openingSessionId;
 
 /** What a person typed for an answer, which is theirs again if it is refused: a raise is typed as its number. */
 export const answerWords = ({ reason, raiseTokens }: { reason?: string; raiseTokens?: number }): string | undefined =>

@@ -1,3 +1,4 @@
+import { isTaskType, TASK_KINDS } from './TaskKind';
 import { v4 as uuidv4 } from 'uuid';
 import type { PlanIsolation } from '../interfaces/IWorktreeIsolation';
 import type { AttemptUsage, PlannerUsage, ReportedWindow, RunnerSessionCost, UsageRecord, UsageTotals } from './Usage';
@@ -8,6 +9,7 @@ import type { SupervisorSnapshot } from '../services/Supervisor';
 import type { TaskLoop } from './Loop';
 import type { HandoffDigest } from './Handoff';
 import type { DelegatedBudget, TaskScope } from './Delegation';
+import { executionStateOf } from './TaskExecution';
 import type { Grant } from '../services/Mandate';
 import { SKILL_NAME_PATTERN } from '../conversation/skillTokens';
 import { subtreeIds, walkPlan } from '../services/PlanTree';
@@ -241,6 +243,12 @@ export function migrateLoadedPlan(plan: LegacyPlanState, { adopting = true }: { 
   // its removal is read once and written back without its keys.
   dropRetiredPlanFields(plan);
   carryOverQueuedEdits(plan);
+  // An older direct edit could store a type no kind owns, or clear it, and
+  // the kind table has no rules to read for one: it becomes "ai", as a type
+  // the planner writes that no kind owns does.
+  for (const task of flattenTasks(plan.tasks)) {
+    if (!isTaskType(task.type)) task.type = 'ai';
+  }
 }
 
 /**
@@ -318,7 +326,7 @@ export interface Task {
   /**
    * The runner a task paused on its usage limit was moved off (ADR-0018, U1):
    * its next attempt is a carry-over, a fresh session that starts from that
-   * attempt's files. Cleared once that attempt runs, and by a retry.
+   * attempt's files. Cleared once that attempt runs, and by a retry or a rearm.
    */
   carriedFrom?: RunnerId;
   /** Why the task was skipped, as whoever skipped it put it; set only while `status` is `skipped`, and not always then. */
@@ -344,7 +352,7 @@ export interface Task {
   /**
    * The dependencies, by title, whose work was not merged into the user's
    * branch when the user force-started this task past its merge gate
-   * (ADR-0020). Cleared when the task is retried.
+   * (ADR-0020). Cleared when the task is retried or re-armed.
    */
   forcedPastGate?: string[];
   /**
@@ -1071,8 +1079,8 @@ export function createTask(overrides: Partial<Task> = {}): Task {
     ...(overrides.attemptUsage ? { attemptUsage: structuredClone(overrides.attemptUsage) } : {}),
     assignedModel: overrides.assignedModel,
     assignedRunner: overrides.assignedRunner ?? DEFAULT_RUNNERS[0],
-    // A script task runs in no mode (ADR-0035): one given it would read as a mode it runs in.
-    taskMode: overrides.taskMode ?? (type === 'script' || type === 'delegated' ? undefined : 'build'),
+    // Keep the legacy manual-task default in saved rows, though a manual task runs in no mode.
+    taskMode: overrides.taskMode ?? (TASK_KINDS[type].runsInMode || type === 'user' ? 'build' : undefined),
     autonomy: overrides.autonomy,
     sliceType: overrides.sliceType,
     userStoriesCovered: overrides.userStoriesCovered,
@@ -1362,25 +1370,10 @@ export function keepExecutionState(current: readonly Task[], rewrite: Task[]): T
       if (prior?.status === 'failed' && (prior.type === 'script') !== (t.type === 'script')) return { ...prior };
       return {
         ...t,
+        ...executionStateOf(prior),
         status: prior?.status ?? 'pending',
-        skipReason: prior?.skipReason,
-        reverted: prior?.reverted,
-        verdict: prior?.verdict,
-        outputSummary: prior?.outputSummary,
-        handoff: prior?.handoff,
-        runnerSessionId: prior?.runnerSessionId,
-        runnerSessionOwner: prior?.runnerSessionOwner,
-        carriedFrom: prior?.carriedFrom,
-        attemptSkills: prior?.attemptSkills,
-        attempted: prior?.attempted,
-        attemptUsage: prior?.attemptUsage,
-        loopRound: prior?.loopRound,
-        waitsEnded: prior?.waitsEnded,
         // Where a task that has run ran is fixed, like its runner session (ADR-0020).
         ...(prior?.status === 'failed' ? { ops: prior.ops } : {}),
-        forcedPastGate: prior?.forcedPastGate,
-        reportTo: prior?.reportTo,
-        researchOrigin: prior?.researchOrigin,
         subtasks: overlay(t.subtasks ?? [], prior?.subtasks ?? []),
       };
     });

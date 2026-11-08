@@ -54,7 +54,8 @@ function setup(opts: { tasks?: Task[]; runners?: string[]; spawn?: Spawn; repair
     unawaited: (work) => { void work.catch(() => undefined); },
   };
   const repairs = new Set(opts.repairs ?? []);
-  const runs: AttemptsDeps['runs'] & Pick<IsolationRunController, 'attemptCwd' | 'workspaceCwd' | 'release'> = {
+  const runs: AttemptsDeps['runs'] & Pick<IsolationRunController, 'attemptCwd' | 'assertDecision' | 'workspaceCwd' | 'release'> = {
+    assertDecision: () => undefined,
     attemptCwd: async () => ({ cwd: '/repo/.ordewell/worktrees/t1', worktree: true }),
     workspaceCwd: async () => ({ cwd: '/repo', worktree: false }),
     snapshotWorkspace: async () => null,
@@ -64,6 +65,7 @@ function setup(opts: { tasks?: Task[]; runners?: string[]; spawn?: Spawn; repair
     skillLayout: () => ({ repos: [], worktrees: false }),
     current: null,
     epoch: 1,
+    stillToLetGo: async () => undefined,
   };
   const landing: AttemptsDeps['landing'] = {
     nextRepair: (taskId) => (repairs.has(taskId) ? { n: 1, limit: 2 } : null),
@@ -101,7 +103,7 @@ function setup(opts: { tasks?: Task[]; runners?: string[]; spawn?: Spawn; repair
     taskLog: { attempts: () => [], events: () => [] },
     host,
   });
-  const start = (taskId = 't1', claim: Partial<Parameters<Attempts['start']>[1]> = {}) => attempts.start(store.get(taskId)!, { admission: admitted, lease: leaseOf(), ...claim });
+  const start = (taskId = 't1', claim: Partial<Parameters<Attempts['start']>[1]> = {}) => attempts.start(store.get(taskId)!, { admission: admitted, lease: leaseOf(), isolationDecision: { epoch: 1, mode: 'isolated' }, ...claim });
   return { attempts, store, runner, runs, landing, sessions, ended, events, told, notifications, start, task: (id = 't1') => store.get(id)! };
 }
 

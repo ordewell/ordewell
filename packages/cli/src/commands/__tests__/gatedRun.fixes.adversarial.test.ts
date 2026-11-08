@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import http from 'http';
 import { ApiClient } from '../../apiClient';
+import { wireRoute } from '../../__tests__/wireRoute';
 
 /**
  * Adversarial, round two: the merge gate is confirmed before a start that
@@ -48,8 +49,8 @@ const PLAN = {
 async function gatedServer(hits: string[]) {
   return startServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    if (req.url?.includes('/sessions/')) return res.end(JSON.stringify(PLAN));
-    if (req.url?.endsWith('/merge-gate')) return res.end(JSON.stringify({ mergeGate: [{ id: 'fix-1', order: 1, title: 'Fix' }] }));
+    if (wireRoute(req.url).includes('/sessions/')) return res.end(JSON.stringify(PLAN));
+    if (wireRoute(req.url).endsWith('/merge-gate')) return res.end(JSON.stringify({ mergeGate: [{ id: 'fix-1', order: 1, title: 'Fix' }] }));
     const chunks: Buffer[] = [];
     req.on('data', (chunk: Buffer) => chunks.push(chunk));
     req.on('end', () => {

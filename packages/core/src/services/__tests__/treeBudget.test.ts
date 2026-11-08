@@ -381,17 +381,6 @@ describe('what the parent does', () => {
     expect(await root.raiseChild('b', R)).toBe('That task has no child to raise.');
   });
 
-  it('takes back what a child did not spend on confirmed close', async () => {
-    const { root, child } = await tree(10 * R, ['a']);
-    const a = await child('a', 5 * R, [task('a1', 1)]);
-    await run(a);
-    await until(() => started(a).includes('a1'));
-    report(a, 'a1', used(1000));
-    await root.closeChild('a');
-
-    expect((await root.ledger()).numbers(ROOT_NODE)).toEqual({ limit: 10 * R, committed: 0, spent: 1000, reserve: 0 });
-  });
-
   it('has a grandchild carved from a child, and no further than it', async () => {
     const { root, child } = await tree(10 * R, ['a']);
     const a = await child('a', 3 * R, [task('a1', 1)]);

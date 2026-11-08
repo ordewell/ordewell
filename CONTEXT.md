@@ -106,6 +106,12 @@ itself holds only what earns its keep — the session registry
 operations; routes reach a session's interface via `pool.session(id)` instead
 of per-verb forwarders, and the pool never caches plan state (the Session is
 the plan's owner).
+Every save goes through one save seam, `SessionSaves`: a save an act depends on
+refuses the act when the disk refuses it, while a save made after the act has
+happened never throws and the user is told once per failing stretch that the
+disk is behind. Each save is made before the announcement it is owed for.
+A Session is one *tree node* (see there): its funds, its reading of the plans
+around it and its seat under a parent are chosen once, at construction.
 Session boundaries are hard: every way a plan stops being the Session's ends
 its **plan scope** in one place (see there). `loadPlan` of a *different* plan
 then adopts the new one (the first user send reseeds from the adopted plan's
@@ -116,6 +122,52 @@ long-lived Session (VS Code hosts exactly one) otherwise presents the previous
 session's tasks to the planner as the current plan.
 *Avoid:* "the pool" (that's the web transport host), "the session manager" —
 Session is the lifecycle owner, not a registry.
+
+**Task execution state** (`models/TaskExecution.ts`) — which of a `Task`'s fields
+are the plan's, which are execution's and which belong to one attempt. Every key
+of `Task` has exactly one kind (a new field without one fails to compile). A
+planner's rewrite is laid over the execution fields of the task it replaces. A
+fresh attempt (`freshAttempt`) is the one reset a retry and a rearm share; a rearm
+alone keeps the revert mark, since that hold is the user's.
+
+**Task-kind policy** (`TaskType`, `models/TaskKind.ts`) — the shared rules for
+ai, user, script and delegated tasks: the fields forbidden at intake and at the
+planner-edit boundary, the fields cleared on a type flip, where a task may sit
+under another, and which runner and mode capabilities it has.
+
+**Start ledger** (`StartLedger`) — the orchestrator's one record of what is owed
+a start: holds (`chosen` or `failed-start`), queued starts, owed repairs, kept
+resumes, owed reopens, kept children and carried loops and checks. A path reports
+what happened (retried, forced, completed, skipped, left, a Stop, a plan load) and
+the ledger decides what that event ends; nothing edits an entry by hand. One
+drain (`offer`) offers every owed start to the orchestrator, which answers that it
+waits, is full, ends, or starts. A user Stop withdraws queued starts, reopens and
+kept children; a restart does not.
+
+**Tree node** — the one kind of node a Session is at every depth. Its side of the
+budget ledger is `NodeFunding` (a root opens the tree's log and is charged
+nothing; a child holds what its parent carved), what it reads of its own plan,
+the plans below it and its board is `NodeReading` (each read made afresh), and
+where it sits under its parent is `NodeSeat`. Each has a root and a child variant
+chosen at construction, so the Session never asks its depth.
+
+**StreamOrder** (`utils/streamOrder.ts`) — the pure, per-session record of which
+stamped broadcasts a client has delivered (a 256-number window), which run frames
+a snapshot covers, and where a gap or daemon restart means the client must read
+the session again. The TUI and the desktop share it; the TUI reads the session
+back on a gap while no turn of its own is out.
+
+**Session link** (`tui/sessionLink.ts`) — the TUI's one socket per (client,
+session): it owns the follow socket, its reconnect with backoff, the run's end and
+a lost run. A planner turn the TUI did not send (a wake-up, a resend, another
+window) therefore streams too, and copies are told apart by seq.
+
+**Session scope** (`STATE_SCOPE`, `leaveSession`) — the classification of every
+field of the TUI's state as session, workspace or screen. Leaving a session
+(`/new`, load, fork, clear, close) resets the session fields in one place. The
+*opening session* is the one whose opening turn is on screen; it survives a clear
+so its refusal lands on the welcome it left, but a `/new` drops an abandoned
+opening's failure.
 
 **Plan scope** (`Session.dropPlanScope`) — everything a Session holds that
 belongs to the plan it holds, and goes with it: the run (stopped, with its
@@ -166,6 +218,12 @@ reaches what the user reaches. `release` gives back what was reserved as the
 attempt ends; `letGo` decides its worktree, which can outlive the lease. A result
 is the task's branches and the runner's session, which a Continue resumes; a
 backend that keeps the work elsewhere brings it to the worktree with `collect`.
+The claim fixes the *isolation decision* in the workspace spec, and opening
+validates it before and after the workspace is prepared, so a stale or closed
+decision is refused before a workspace can open. An attempt ended while its
+workspace opens lets go of what its own open made, once, as its end decided
+(a cancel or a Stop keeps the worktree; a removal does not), and a later end's
+decision wins when two land in one spawn.
 *Avoid:* "lease" alone where the *session lease* could be meant: that one says
 which host holds a session, and this one where a session runs.
 
@@ -428,7 +486,8 @@ Watch and Act, with the authority of the turn that started it. Nothing lands
 (ADR-0046). How many a message starts is the planner's judgement, and the run's
 Parallel limit bounds what runs at once: research tasks and every other task
 share the same slots. Removing research or lifting read-only withdraws the
-approval granted as research landed. Surfaces mark its row as research and draw
+approval granted as research landed; changing the task to a manual or script
+task clears research by itself. Surfaces mark its row as research and draw
 its report in the run update that delivered it, folded when long.
 The planner starts one for evidence it must decide something on. Evidence is
 a finding a later task acts on, which would otherwise be re-typed into its
@@ -1073,7 +1132,10 @@ adapter's permission requests go through (ADR-0026): an Ordewell tool, named
 exactly, is allowed at once; a task's request under an auto-approving mode is
 answered at once; both are logged as decided. Anything else is held open — a
 task's with the runner's own grants, a planner's with what it is for — until
-it is answered, withdrawn by the runner, or cancelled because its turn ended.
+it is answered, withdrawn by the runner, or cancelled because its turn ended; a
+harness planner's card is removed at once when the runner cancels it or the turn
+ends (the approval seam's `request` takes an abort signal). A web fetch or search
+ask is not withdrawn that way and waits for the turn's clear.
 An HTTP answer settles only when its reply succeeds; a failed reply is logged
 and leaves the request open for another answer, including an automatic one.
 An adapter supplies only how to read its runner's request and how to reply,
@@ -2217,7 +2279,8 @@ controller*.
 **Isolation run controller** (`IsolationRunController`) — the module between
 TaskOrchestrator and `WorktreeIsolation` that owns an *isolation run*'s
 lifecycle: deciding at a run's start whether it isolates, shares the workspace
-root or is a *blocked run*; continuing a plan's run or minting a new one; the
+root or is a *blocked run* (the answer is an *isolation decision*, a parked
+dirty-tree start, or an interrupted activation); continuing a plan's run or minting a new one; the
 working directory of each attempt that is not already in the checkout (the
 *attempt kind* decides which); a task's integration and a repair's evidence
 check, with the record reported changed before the first merge; releasing a
@@ -2235,6 +2298,13 @@ the orchestrator — and its `requireRun` is the one guard for "no isolated run
 to act on", throwing `PlanEditError`. Git stays in `WorktreeIsolation`.
 *Avoid:* "isolation run" for the controller — that is the record it holds;
 "WorktreeIsolation" for it — that is the git layer beneath it.
+
+**Isolation decision** (`IsolationDecision`) — the open run's epoch and its
+isolated-or-shared choice, which an attempt's claim retains and its execution
+lease carries into the workspace spec. A decision that has gone stale or whose
+run closed is refused before a workspace can open, so a planner edit between the
+claim and the open cannot make an admitted start fall back to the checkout.
+Checkout-only attempts carry none.
 
 **Isolation handoff** — the end of an isolated run: for each repo, its integration
 branch and base ref, and the tasks that landed, broadcast as `isolation_handoff`. What
@@ -2506,6 +2576,15 @@ completed set, which is safe because `removeTaskFromPlan` detaches the
 dependents in the same op. A direct edit sets only the fields the planner may
 change (`UPDATABLE_FIELDS`): a task's status, verdict and subtasks are
 execution's and the plan tree's, never a patch's.
+Both routes prepare an edit through one `prepareTaskEdit`, whose only differing
+input is the actor. The planner's vocabulary (no `taskMode`, `readOnly`,
+`thinkingEffort`, delegated fields), the lock (lifted by a rearm), the
+enabled-runner limit and dependency refs checked on the batch's final graph are
+the planner's; skills, discovery and the card's not-started precondition are the
+direct route's. Both refuse only a plan-rule breach the edit itself introduces.
+A rearm is refused for a task whose runner is running or waits at a checkpoint or
+for input, as a merge, split or removal is refused for a subtree holding live or
+completed work.
 The asymmetry itself is expressed as one `actor` parameter (`'planner' |
 'direct'`) on **TaskEditValidator**'s single `validateTaskEdit`, not as two
 separate rule implementations — see below.
@@ -3070,7 +3149,18 @@ usage, approvals and transcript markers are facts and still land. Both
 surfaces fold session messages through `followTurn`, so a stopped reply looks
 the same in the TUI and VS Code.
 *Avoid:* keeping a stopped turn's late deltas "until the daemon answers" —
-that was one surface's rule and the two drifted.
+that was one surface's rule and the two drifted. *Avoid:* confusing it with
+*Turn admission* (`services/TurnGate.ts`), which is the core's side.
+
+**Turn admission** (`TurnGate` in `services/TurnGate.ts`) — a planner turn's
+admission, from its gate to its lease's end. A turn waits on the installed-planner
+probe; a subplanner's turn then also waits for a slot of the tree. It holds one
+turn lease from admission to the turn's end, however many times it takes the
+conversation. Every turn admitted beside it passes on that lease and meets the
+conversation's own refusal, so no waiter is stranded when a slot frees. A Stop, a
+newer goal, the plan scope ending or the caller's abort ends a wait at once.
+*Avoid:* "slot waiter", "room waiter"; "turn gate" for it — that is the
+surfaces' stop rule above.
 
 **Detail view (detail-all)** — the TUI's single expand-all toggle: ctrl+o
 flips one `detailAll` flag that decides whether tool blocks show their
@@ -3820,6 +3910,15 @@ is the session's own plan state, not the `SerializedPlan` a socket carries.
 landed on and why — only when the write changed the planner.
 `daemonContract.test.ts` drives `ApiClient` against the real `createApp` and
 `OrchestratorPool`.
+One row per route lives beside it in `DAEMON_ROUTES` (`daemonRoutes.ts`): method,
+path, query keys, whether it is a planner turn, and the request and response
+types. `ApiClient` builds every HTTP call from a row, encoding each path
+parameter once, so an id holding `#`, `/` or `?` reads its own session; the
+desktop's `callDaemon` is typed by the same row, and its allowlist
+(`RENDERER_ROUTES`) picks rows from the table rather than widening with it. A web
+test holds the daemon to the table. A session id names a session only within the
+workspace that holds it: a route, a socket and a load from another workspace is
+refused or closed, and a socket hears only the workspace it named.
 *Avoid:* branching on a daemon error's message text — the message is for display,
 the `code` is the contract. *Avoid:* a hand-written response type in a client or
 route; add it to the contract.

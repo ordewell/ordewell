@@ -98,7 +98,7 @@ export class AgentDetection {
         this.emit({ type: 'setRunners', runners: runnerMeta(data) });
         publish();
       });
-    const catalog = within(callDaemon('models.list', workspace) as Promise<ModelsResponse>, this.timeoutMs, 'its models')
+    const catalog = within(callDaemon('models.list', workspace), this.timeoutMs, 'its models')
       .then((models) => {
         if (!current()) return;
         providers = models.providers;
@@ -114,7 +114,7 @@ export class AgentDetection {
         });
       })
       .finally(() => { catalogSettled = true; publish(); });
-    const chosen = within(callDaemon('settings.get', settingsQuery) as Promise<SettingsResponse>, this.timeoutMs, 'its settings')
+    const chosen = within(callDaemon('settings.get', settingsQuery), this.timeoutMs, 'its settings')
       .then((data) => {
         if (!current()) return;
         settings = data;

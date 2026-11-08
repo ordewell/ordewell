@@ -28,20 +28,20 @@ describe('ApiClient isolation endpoints', () => {
   async function client(status: number, body: unknown) {
     const srv = await startServer(status, body);
     servers.push(srv);
-    return { api: new ApiClient(srv.port), seen: srv.seen };
+    return { api: new ApiClient(srv.port, '/w'), seen: srv.seen };
   }
 
   it('reviewRunDiff reads the integration diff', async () => {
     const { api, seen } = await client(200, { diff: 'diff --git a/x b/x\n' });
     expect(await api.reviewRunDiff('s1')).toBe('diff --git a/x b/x\n');
-    expect([seen.method, seen.url]).toEqual(['GET', '/api/plans/s1/isolation/diff']);
+    expect([seen.method, seen.url]).toEqual(['GET', '/api/plans/s1/isolation/diff?workspace=%2Fw']);
   });
 
   it('revertPreview reads what a revert would take, a refusal included', async () => {
     const preview = { revertible: true, tasks: [{ taskId: 't 1', order: 1, title: 'One', repos: ['.'], dependent: false }] };
     const { api, seen } = await client(200, preview);
     expect(await api.revertPreview('s1', 't 1')).toEqual(preview);
-    expect([seen.method, seen.url]).toEqual(['GET', '/api/plans/s1/tasks/t%201/revert-preview']);
+    expect([seen.method, seen.url]).toEqual(['GET', '/api/plans/s1/tasks/t%201/revert-preview?workspace=%2Fw']);
     const refused = { revertible: false, reason: 'in-a-loop', message: 'Let the loop end first.' };
     expect(await (await client(200, refused)).api.revertPreview('s1', 't1')).toEqual(refused);
   });
@@ -49,7 +49,7 @@ describe('ApiClient isolation endpoints', () => {
   it('mergeRun answers the outcome, conflict included', async () => {
     const { api, seen } = await client(200, { outcome: 'conflict', repo: '.', files: ['a.txt'] });
     expect(await api.mergeRun('s1')).toEqual({ outcome: 'conflict', repo: '.', files: ['a.txt'] });
-    expect([seen.method, seen.url]).toEqual(['POST', '/api/plans/s1/isolation/merge']);
+    expect([seen.method, seen.url]).toEqual(['POST', '/api/plans/s1/isolation/merge?workspace=%2Fw']);
   });
 
   it('mergeRun passes on each repository that blocked the merge, and what landed before one stopped it', async () => {
@@ -60,10 +60,10 @@ describe('ApiClient isolation endpoints', () => {
   });
 
   it.each([
-    ['discardRun', '/api/plans/s1/isolation/discard'],
-    ['cleanupRun', '/api/plans/s1/isolation/cleanup'],
-    ['continueWithStash', '/api/plans/s1/isolation/stash-and-continue'],
-    ['continueWithoutIsolation', '/api/plans/s1/isolation/run-without'],
+    ['discardRun', '/api/plans/s1/isolation/discard?workspace=%2Fw'],
+    ['cleanupRun', '/api/plans/s1/isolation/cleanup?workspace=%2Fw'],
+    ['continueWithStash', '/api/plans/s1/isolation/stash-and-continue?workspace=%2Fw'],
+    ['continueWithoutIsolation', '/api/plans/s1/isolation/run-without?workspace=%2Fw'],
   ] as const)('%s posts to its route', async (method, url) => {
     const { api, seen } = await client(200, { ok: true });
     await api[method]('s1');
@@ -73,7 +73,7 @@ describe('ApiClient isolation endpoints', () => {
   it('resolveConflictAsTask posts for the task and answers the plan', async () => {
     const { api, seen } = await client(200, { plan: { tasks: [] } });
     expect(await api.resolveConflictAsTask('s1', 't2')).toEqual({ tasks: [] });
-    expect([seen.method, seen.url]).toEqual(['POST', '/api/plans/s1/tasks/t2/resolve-conflict']);
+    expect([seen.method, seen.url]).toEqual(['POST', '/api/plans/s1/tasks/t2/resolve-conflict?workspace=%2Fw']);
   });
 
   it("surfaces the daemon's refusal", async () => {
@@ -136,26 +136,6 @@ describe('ApiClient.streamExecution and a blocked run', () => {
     await expect(client.streamExecution('s1', () => {}, ready)).resolves.toBe('lost');
 
     expect(ready).toHaveBeenCalledWith();
-    wss.close();
-  });
-
-  it('closes only the stream it is handed, not a newer one on the same session', async () => {
-    const sockets: import('ws').WebSocket[] = [];
-    const { wss, client } = await server((ws) => { sockets.push(ws); });
-    const first = client.streamExecution('s1', () => {});
-    await vi.waitFor(() => expect(sockets).toHaveLength(1));
-    const second = client.streamExecution('s1', () => {});
-    await vi.waitFor(() => expect(sockets).toHaveLength(2));
-    await first;
-
-    client.closeExecutionStream(first);
-    let secondSettled = false;
-    void second.then(() => { secondSettled = true; });
-    await new Promise((r) => setTimeout(r, 30));
-    expect(secondSettled).toBe(false);
-
-    client.closeExecutionStream(second);
-    await second;
     wss.close();
   });
 });

@@ -228,7 +228,7 @@ describe('the execute-command route', () => {
 describe('run controls reach the command seam as the user', () => {
   async function appFor(session: Record<string, unknown>): Promise<Hono> {
     const planSession = { planState: { tasks: [{}] }, planTasks: [{}], isExecuting: false, ...session };
-    const pool = fakePool({ hasSession: vi.fn().mockReturnValue(true), session: vi.fn().mockReturnValue(planSession) } as never);
+    const pool = fakePool({ live: vi.fn().mockReturnValue(planSession), session: vi.fn().mockReturnValue(planSession) } as never);
     const { plansRoute } = await import('../../routes/plans');
     const app = new Hono();
     app.route('/api/plans', plansRoute(pool));

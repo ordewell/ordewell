@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { planLayout, revealOffset } from '../layout';
 import { initialState, type TaskView } from '../state';
 import { reduce, type Action } from '../reducer';
-import { inboundFor } from '../inbound';
+import { createInbound } from '../inbound';
 import type { WsEvent } from '../../apiClient';
 import { stripAnsi } from '../ansi';
 import type { AttemptUsage } from '@ordewell/core';
@@ -37,7 +37,7 @@ describe('task row accounting', () => {
 
   it('carries live usage from the daemon into the row even when status stays the same', () => {
     const actions: Action[] = [];
-    const receive = inboundFor({}, (action) => actions.push(action), 's1').execution();
+    const receive = createInbound((action) => actions.push(action), 's1').receive;
     const wire: unknown = { type: 'status_update', tasks: [{ id: 't', status: 'completed', verdict: null, attemptUsage: [usage] }] };
     receive(wire as WsEvent);
     const update = actions.find((a): a is Extract<Action, { type: 'statusUpdate' }> => a.type === 'statusUpdate');
@@ -56,7 +56,7 @@ describe('task row accounting', () => {
 
   it('keeps usage and unmerged landings from the same status update visible', () => {
     const actions: Action[] = [];
-    const receive = inboundFor({}, (action) => actions.push(action), 's1').execution();
+    const receive = createInbound((action) => actions.push(action), 's1').receive;
     receive({
       type: 'status_update',
       tasks: [{ id: 't', status: 'completed', verdict: null, attemptUsage: [usage] }],

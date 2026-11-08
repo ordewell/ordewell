@@ -16,6 +16,7 @@ import { planUsage, type UsageRecord } from '../models/Usage';
 import type { LegacyPlanState, ResearchProgress } from '../models/Task';
 import type { Escalation } from './escalations';
 import type { DelegatedRow } from '../models/Delegation';
+import type { SessionSaves } from './SessionSaves';
 
 type PlannerCompactionMessage = Extract<SessionMessage, { type: 'planner_compaction' }>;
 
@@ -72,10 +73,10 @@ export type RelayObserver = Required<Omit<OrchestratorObserver, 'onTaskSettled' 
 /**
  * Turns orchestrator and planner events into {@link SessionMessage}
  * broadcasts — the one place a surface's view of a Session is produced. It
- * never persists, and holds nothing of a planner turn: a turn keeps what it
- * writes until it lands (`PlannerConversation`). Where an event also owes a
- * save, the Session does that before handing the event on, so no surface sees
- * state the disk lacks.
+ * writes nothing itself, and holds nothing of a planner turn: a turn keeps
+ * what it writes until it lands (`PlannerConversation`). Where an event also
+ * owes a save, its observer asks the Session's saves for it before announcing,
+ * so no surface sees state the disk lacks.
  */
 export class SessionEventRelay {
   private readonly broadcast: SessionBroadcaster;
@@ -131,10 +132,13 @@ export class SessionEventRelay {
   }
 
   /** `plan` is read per event: a Session with no plan (or mid-reset) announces nothing about tasks. */
-  observer(plan: () => LegacyPlanState | null): RelayObserver {
+  observer(plan: () => LegacyPlanState | null, saves?: Pick<SessionSaves, 'owed' | 'after'>): RelayObserver {
     this.livePlan = plan;
     return {
-      onTaskChanged: () => this.statusChanged(plan()),
+      onTaskChanged: () => {
+        saves?.owed('status');
+        this.statusChanged(plan());
+      },
       onReviewNeeded: () => {
         this.flushStatus(plan());
         this.broadcast({ type: 'review_needed', tasks: this.store.allTasks.map(serializeTask) });
@@ -145,9 +149,20 @@ export class SessionEventRelay {
         if (!this.waitsSent) this.flushStatus(plan());
         this.broadcast({ type: 'checkpoint', taskId: data.taskId, taskTitle: data.taskTitle, summary: data.summary });
       },
-      onTick: () => this.statusChanged(plan()),
-      onUsageChanged: () => this.statusCanWait(plan()),
-      onIsolationChanged: () => this.isolationChanged(plan()),
+      onTick: () => {
+        saves?.owed('status');
+        this.statusChanged(plan());
+      },
+      onUsageChanged: () => {
+        saves?.owed('usage');
+        this.statusCanWait(plan());
+      },
+      onIsolationChanged: () => {
+        // The run record names branches and worktrees on disk, so it is saved
+        // as it changes rather than at the end: a crash must still find them.
+        saves?.after();
+        this.isolationChanged(plan());
+      },
       onIsolationBlocked: ({ reason, repos }) => {
         this.flushStatus(plan());
         const where = repos.length > 0 ? ` in ${repos.join(', ')}` : '';
@@ -161,7 +176,10 @@ export class SessionEventRelay {
       onIsolationNotice: ({ level, message }) => {
         this.onNotice?.({ type: 'notice', level, message });
       },
-      onExecutionComplete: () => this.executionComplete(plan()),
+      onExecutionComplete: () => {
+        saves?.after();
+        this.executionComplete(plan());
+      },
     };
   }
 
@@ -295,21 +313,20 @@ export class SessionEventRelay {
     return {
       type: 'status_update',
       usage: planUsage(this.store.planTasks),
-      tasks: this.store.allTasks.map((t) => serializeTaskStatus(
-        t,
-        this.orchestrator.getIdleSince(t.id),
-        this.orchestrator.taskIsolation(t.id),
-        this.orchestrator.getQueuedTaskMessages(t.id),
-        this.awaitingApproval(t.id),
-        this.orchestrator.getMergeGate(t.id),
-        this.checkpointQuestion(t.id),
-        this.waitsForApproval(t.id),
-        this.orchestrator.holdReason(t.id),
-        this.orchestrator.getCompletionReceipt(t.id),
-        this.orchestrator.getToolsAttaching(t.id),
-        this.orchestrator.loopStranded(t.id),
-        t.type === 'delegated' ? this.delegation(t.id) : undefined,
-      )),
+      tasks: this.store.allTasks.map((t) => serializeTaskStatus(t, {
+        idleSince: this.orchestrator.getIdleSince(t.id),
+        isolation: this.orchestrator.taskIsolation(t.id),
+        queued: this.orchestrator.getQueuedTaskMessages(t.id),
+        awaitingApproval: this.awaitingApproval(t.id),
+        mergeGate: this.orchestrator.getMergeGate(t.id),
+        checkpoint: this.checkpointQuestion(t.id),
+        waitsForApproval: this.waitsForApproval(t.id),
+        holdReason: this.orchestrator.holdReason(t.id),
+        completionReceived: this.orchestrator.getCompletionReceipt(t.id),
+        attaching: this.orchestrator.getToolsAttaching(t.id),
+        loopStranded: this.orchestrator.loopStranded(t.id),
+        delegation: t.type === 'delegated' ? this.delegation(t.id) : undefined,
+      })),
       ...(runMerge ? { runMerge } : {}),
       activity: this.orchestrator.activity,
       escalations: this.escalations(),

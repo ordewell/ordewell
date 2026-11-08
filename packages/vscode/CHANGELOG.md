@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Stopping a run no longer leaves a half-opened workspace behind.** A task
+  stopped or cancelled while its workspace was still opening lets go of what
+  that open made, once.
+- **A planner edit that changes a task's type no longer leaves fields the new
+  type cannot hold,** and a plan saved with an unknown task type now loads.
+- **A tool permission a coding-agent planner withdraws, or whose turn ends, now
+  leaves the screen at once.**
+- **A disk that refuses a save is now told once** while it keeps refusing.
+
 ## [0.13.1] - 2026-11-07
 
 ### Fixed

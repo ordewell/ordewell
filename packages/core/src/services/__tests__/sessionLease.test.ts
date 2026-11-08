@@ -382,6 +382,27 @@ describe('the session lease (ADR-0049)', () => {
     first.destroy();
   });
 
+  it('refuses a load before its claim when a stored type no kind owns migrates onto a runner outside the set', () => {
+    const OTHER = 'session-other000';
+    const leaseOf = (id: string) => path.join(sessionStore.sessionDataDir(id, workspace), 'lease.json');
+    const first = sessionOn(host({ id: 'host-a', alive: () => true }));
+    adopt(first);
+    // An older direct edit stored "manual" on a task whose runner the plan later stopped listing.
+    const onDisk = savedPlan();
+    onDisk.tasks = [Object.assign(createTask({ id: 't2', order: 1, title: 'Lex', prompt: 'do it', assignedRunner: 'gemini' }), { type: 'manual' })];
+    const meta = sessionStore.saveSession(onDisk, 'another goal', workspace, OTHER);
+    const loaded = sessionStore.loadSession(meta.id, workspace)!;
+
+    expect(() => first.loadPlan(loaded.plan, loaded.meta.goal, workspace, { sessionId: OTHER })).toThrow(/runner set/);
+
+    expect(first.sessionId).toBe(SESSION);
+    expect(first.planState?.tasks.map((t) => t.id)).toEqual(['t1']);
+    expect(first.planTasks.map((t) => t.id)).toEqual(['t1']);
+    expect(fs.existsSync(leaseOf(SESSION))).toBe(true);
+    expect(fs.existsSync(leaseOf(OTHER))).toBe(false);
+    first.destroy();
+  });
+
   it('holds the picked session while the plan it leaves saves its last', async () => {
     const OTHER = 'session-other000';
     const leaseOf = (id: string) => path.join(sessionStore.sessionDataDir(id, workspace), 'lease.json');
@@ -463,6 +484,8 @@ describe('leasedIsolation (ADR-0049)', () => {
     await expect(isolation.pruneOrphans(run)).rejects.toBeInstanceOf(SessionHeldError);
     await expect(isolation.release(run, 't1', { keep: false })).rejects.toBeInstanceOf(SessionHeldError);
     await expect(isolation.startRun('/repo')).rejects.toBeInstanceOf(SessionHeldError);
+    // It commits what the repair left in the task's worktree before it judges it.
+    await expect(isolation.verifyRepair(t1, run)).rejects.toBeInstanceOf(SessionHeldError);
     await isolation.isActive('/repo');
     await isolation.reviewDiff(run);
     expect(git.calls.map((c) => c.op)).toEqual(['isActive', 'reviewDiff']);
@@ -507,6 +530,7 @@ describe('leasedIsolation (ADR-0049)', () => {
       await isolation.closeChanges();
 
       await expect(isolation.release(run, 't1', { keep: true })).rejects.toThrow('has closed');
+      await expect(isolation.verifyRepair(createTask({ id: 't1', order: 1, title: 'Parse', prompt: 'do it' }), run)).rejects.toThrow('has closed');
       expect(git.calls).toEqual([]);
     });
 

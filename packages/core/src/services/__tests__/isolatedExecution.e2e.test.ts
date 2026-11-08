@@ -450,7 +450,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     const runs = controllerOver(root);
     const t1 = createTask({ id: 't1', order: 1, title: 'Add landed', prompt: 'write landed.txt' });
     await runs.decide(async () => undefined);
-    const { cwd } = await runs.attemptCwd(t1, 'fresh');
+    const { cwd } = await runs.attemptCwd(t1, 'fresh', runs.decision);
     writeFileSync(join(cwd, 'landed.txt'), 'landed\n');
     expect(await runs.integrate(t1)).toBe('merged');
     const integration = runs.current!.repos[0].integrationBranch;
@@ -469,7 +469,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     const root = repo();
     const runs = controllerOver(root);
     await runs.decide(async () => undefined);
-    await runs.attemptCwd(createTask({ id: 't1', order: 1, title: 'Idle', prompt: 'do nothing' }), 'fresh');
+    await runs.attemptCwd(createTask({ id: 't1', order: 1, title: 'Idle', prompt: 'do nothing' }), 'fresh', runs.decision);
     const first = runs.current!.repos[0].integrationBranch;
     await runs.release('t1', { keep: false });
     await runs.close();

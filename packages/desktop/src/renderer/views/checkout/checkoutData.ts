@@ -1,3 +1,4 @@
+import type { UserGitTarget } from '@ordewell/core';
 import { filesApi } from '../../files/api';
 import { callDaemon, DaemonError, messageOf } from '../../session/daemon';
 import { diffSides, parsePatch, type DiffSides, type FilePatch } from '../changes/changesModel';
@@ -38,16 +39,16 @@ export async function readStatus(workspace: string, repo: string): Promise<Check
   return status;
 }
 
-function body(workspace: string, repo: string): Record<string, unknown> {
+function body(workspace: string, repo: string): UserGitTarget {
   return { workspace, repo };
 }
 
 export async function stagePaths(workspace: string, repo: string, paths: readonly string[]): Promise<void> {
-  await callDaemon('git.stage', {}, { ...body(workspace, repo), paths });
+  await callDaemon('git.stage', {}, { ...body(workspace, repo), paths: [...paths] });
 }
 
 export async function unstagePaths(workspace: string, repo: string, paths: readonly string[]): Promise<void> {
-  await callDaemon('git.unstage', {}, { ...body(workspace, repo), paths });
+  await callDaemon('git.unstage', {}, { ...body(workspace, repo), paths: [...paths] });
 }
 
 export async function stageHunks(workspace: string, repo: string, hunks: string): Promise<void> {
@@ -69,7 +70,7 @@ export async function commitCheckout(workspace: string, repo: string, message: s
 
 /** Discard the named files; the route checks the echo against what is still changed (G3). */
 export async function discardPaths(workspace: string, repo: string, paths: readonly string[]): Promise<void> {
-  await callDaemon('git.discard', {}, { ...body(workspace, repo), paths, confirm: { files: [...paths] } });
+  await callDaemon('git.discard', {}, { ...body(workspace, repo), paths: [...paths], confirm: { files: [...paths] } });
 }
 
 function lineCount(text: string): number[] {

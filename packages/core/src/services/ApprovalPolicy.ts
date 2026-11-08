@@ -62,7 +62,7 @@ export interface ApprovalPolicyOptions {
   /** Allowlist entries granted up front from config (ADR-0026). */
   preApproved?: readonly string[] | (() => readonly string[]);
   /** The human channel. Absent means there is nobody to ask. */
-  ask?: (req: ApprovalRequest) => Promise<boolean>;
+  ask?: (req: ApprovalRequest, signal?: AbortSignal) => Promise<boolean>;
   /** Called whenever a decision is reached, for surfacing in a UI or a log. */
   onDecision?: (req: ApprovalRequest, granted: boolean, source: ApprovalSource) => void;
 }
@@ -84,13 +84,16 @@ export class ApprovalPolicy implements IApproval {
   private readonly autonomousOf: () => boolean;
   private readonly entriesOf: () => readonly string[];
   private parsed: { key: string; list: PlannerAllowlist } | null = null;
-  private readonly asker?: (req: ApprovalRequest) => Promise<boolean>;
+  private readonly asker?: (req: ApprovalRequest, signal?: AbortSignal) => Promise<boolean>;
   private readonly onDecision?: ApprovalPolicyOptions['onDecision'];
 
   private readonly granted = new Set<string>();
   private readonly refused = new Set<string>();
-  /** One in-flight ask per scope: a parallel tool round must not prompt twice for the same thing. */
-  private readonly inFlight = new Map<string, Promise<boolean>>();
+  /**
+   * One in-flight ask per scope: a parallel tool round must not prompt twice for the same thing.
+   * It is withdrawn only once every caller waiting on it has withdrawn.
+   */
+  private readonly inFlight = new Map<string, { answer: Promise<boolean>; waiting: number; withdraw: AbortController }>();
   // Bumped on reset so an in-flight ask whose promise settles AFTER reset
   // cannot re-populate granted/refused — the continuation checks the
   // generation it was started under and bails if reset has intervened.
@@ -105,7 +108,7 @@ export class ApprovalPolicy implements IApproval {
     this.onDecision = opts.onDecision;
   }
 
-  async request(req: ApprovalRequest): Promise<boolean> {
+  async request(req: ApprovalRequest, opts: { signal?: AbortSignal } = {}): Promise<boolean> {
     const decide = (granted: boolean, source: ApprovalSource) => {
       this.onDecision?.(req, granted, source);
       return granted;
@@ -117,7 +120,7 @@ export class ApprovalPolicy implements IApproval {
     if (req.perInvocation) {
       if (this.modeOf(req.kind) === 'deny' || this.autonomousOf()) return decide(false, 'mode');
       if (!this.asker) return decide(false, 'no-channel');
-      return decide(await this.asker(req).catch(() => false), 'asked');
+      return decide(await this.asker(req, opts.signal).catch(() => false), 'asked');
     }
     const { scopes, key, open } = this.standing(req);
     if (open.length === 0) {
@@ -134,20 +137,30 @@ export class ApprovalPolicy implements IApproval {
     if (!this.asker) return decide(false, 'no-channel');
 
     const openKey = open.join('\n');
-    const existing = this.inFlight.get(openKey);
-    if (existing) return decide(await existing, 'asked');
-
     const gen = this.generation;
-    const asked: ApprovalRequest = { ...req, scope: open[0], scopes: open.length > 1 ? open : undefined };
-    const pending = this.asker(asked)
-      .catch(() => false)
-      .finally(() => { if (this.generation === gen) this.inFlight.delete(openKey); });
-    this.inFlight.set(openKey, pending);
+    let flight = this.inFlight.get(openKey);
+    if (!flight) {
+      const withdraw = new AbortController();
+      const asked: ApprovalRequest = { ...req, scope: open[0], scopes: open.length > 1 ? open : undefined };
+      const answer = this.asker(asked, withdraw.signal)
+        .catch(() => false)
+        .finally(() => { if (this.generation === gen) this.inFlight.delete(openKey); });
+      flight = { answer, waiting: 0, withdraw };
+      this.inFlight.set(openKey, flight);
+    }
+    const shared = flight;
+    shared.waiting++;
+    const leave = () => { if (--shared.waiting === 0) shared.withdraw.abort(); };
+    // Every waiter leaves once, and the ask goes with the last one.
+    if (opts.signal?.aborted) leave();
+    else opts.signal?.addEventListener('abort', leave, { once: true });
+    const answer = await shared.answer;
+    opts.signal?.removeEventListener('abort', leave);
 
-    const answer = await pending;
     // A denial is remembered too, so a model that retries the same blocked
     // lookup burns one tool round instead of re-prompting the user each time.
-    if (this.generation === gen) {
+    // A withdrawn ask was never answered, so it is not.
+    if (this.generation === gen && !shared.withdraw.signal.aborted) {
       if (answer) open.forEach((s) => this.granted.add(s));
       else this.refused.add(key);
     }

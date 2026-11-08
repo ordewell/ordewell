@@ -123,7 +123,7 @@ describe('the session socket', () => {
   it('numbers every broadcast of a session, and greets with the number the snapshot accounts for', async () => {
     const meta = saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');
     pool.adoptSavedSession(meta.id, workspace);
-    await pool.session(meta.id).execute({ command: 'mark_complete', task: 't2' }, { kind: 'user' });
+    await pool.session(meta.id, undefined).execute({ command: 'mark_complete', task: 't2' }, { kind: 'user' });
 
     const [, snapshot] = await firstFrames(port, meta.id, 2) as [unknown, RunSnapshotFrame];
     const later = joinSocket(port, meta.id);
@@ -131,7 +131,7 @@ describe('the session socket', () => {
     // no broadcast of the command below can fall between the two.
     await later.until(3);
     const broadcast = later.until(4);
-    await pool.session(meta.id).execute({ command: 'mark_not_done', task: 't2' }, { kind: 'user' });
+    await pool.session(meta.id, undefined).execute({ command: 'mark_not_done', task: 't2' }, { kind: 'user' });
     const [, again, , next] = await broadcast as [unknown, RunSnapshotFrame, unknown, SessionFrame];
     later.close();
 
@@ -149,7 +149,7 @@ describe('the session socket', () => {
     const joined = joinSocket(port, meta.id);
     await Promise.all([holder.until(3), joined.until(3)]);
     const seen = Promise.all([holder.until(4), joined.until(4)]);
-    await pool.session(meta.id).execute({ command: 'mark_complete', task: 't2' }, { kind: 'user' });
+    await pool.session(meta.id, undefined).execute({ command: 'mark_complete', task: 't2' }, { kind: 'user' });
     const [byHolder, byJoined] = await seen;
     holder.close();
     joined.close();
@@ -195,14 +195,50 @@ describe('the session socket', () => {
     const socket = joinSocket(port, meta.id);
     await socket.until(3);
     const frames = socket.until(5);
-    const broadcast = (pool as unknown as { broadcast(id: string, m: unknown): void }).broadcast.bind(pool);
-    broadcast(meta.id, { type: 'planner_compaction', compaction: { phase: 'started', id: 'c1', origin: 'ordewell', trigger: 'auto', at: '2026-10-25T10:00:00.000Z' } });
-    broadcast(meta.id, { type: 'planner_compaction', compaction: { phase: 'ended', id: 'c1', origin: 'ordewell', trigger: 'auto', outcome: 'condensed', at: '2026-10-25T10:00:05.000Z' } });
+    const broadcast = (pool as unknown as { broadcast(id: string, workspace: string, m: unknown): void }).broadcast.bind(pool);
+    broadcast(meta.id, workspace, { type: 'planner_compaction', compaction: { phase: 'started', id: 'c1', origin: 'ordewell', trigger: 'auto', at: '2026-10-25T10:00:00.000Z' } });
+    broadcast(meta.id, workspace, { type: 'planner_compaction', compaction: { phase: 'ended', id: 'c1', origin: 'ordewell', trigger: 'auto', outcome: 'condensed', at: '2026-10-25T10:00:05.000Z' } });
     const [, , , first, second] = await frames as [unknown, unknown, unknown, SessionFrame, SessionFrame];
     socket.close();
 
     expect([first, second].map((f) => f.type === 'planner_compaction' && [f.compaction.phase, f.compaction.id])).toEqual([['started', 'c1'], ['ended', 'c1']]);
     expect(second.seq).toBe(first.seq! + 1);
+  });
+
+  /** The first frame, or the close code, of a socket opened on `path` as sent. */
+  function openRaw(path: string): Promise<{ frame?: unknown; code?: number }> {
+    const socket = new WebSocket(`ws://127.0.0.1:${port}${path}`, [DAEMON_SUBPROTOCOL]);
+    return new Promise((resolve, reject) => {
+      socket.once('message', (data) => { resolve({ frame: JSON.parse(data.toString()) }); socket.close(); });
+      socket.once('close', (code) => resolve({ code }));
+      socket.once('error', reject);
+    });
+  }
+
+  // `/`, `?` and `#` cannot travel raw, so a client encodes the id; the daemon must hear the id, not its escape.
+  it('subscribes under the decoded id of an encoded session path', async () => {
+    expect(await openRaw(`/ws/session/${encodeURIComponent('a#b/c?d')}`)).toEqual({ frame: { type: 'connected', sessionId: 'a#b/c?d' } });
+  });
+
+  it('closes 4400 on a socket path whose id is a malformed escape', async () => {
+    expect(await openRaw('/ws/session/a%E0%A4%A')).toEqual({ code: 4400 });
+    expect(await openRaw('/ws/session/root/child/c%ZZ')).toEqual({ code: 4400 });
+  });
+
+  // The pool keeps one session per id: another project's copy of it must not hear this one's run.
+  it('closes 4409 on a socket naming another workspace than the one holding the id, and greets its own', async () => {
+    const meta = saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');
+    pool.adoptSavedSession(meta.id, workspace);
+    const other = mkdtempSync(join(tmpdir(), 'ordewell-stream-other-'));
+    try {
+      const named = (where: string, path = '') => `/ws/session/${meta.id}${path}?workspace=${encodeURIComponent(where)}`;
+
+      expect(await openRaw(named(other))).toEqual({ code: 4409 });
+      expect(await openRaw(named(other, '/child/c1'))).toEqual({ code: 4409 });
+      expect(await openRaw(named(workspace))).toEqual({ frame: { type: 'connected', sessionId: meta.id } });
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
   });
 
   it('sends no compaction or detection frame when neither is under way', async () => {

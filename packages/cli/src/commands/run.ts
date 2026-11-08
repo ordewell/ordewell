@@ -1,4 +1,4 @@
-import { flag, hasFlag, readLastSession } from '../utils';
+import { flag, hasFlag, readLastSession, workspaceOf } from '../utils';
 import { iconFor } from '../utils/output';
 import type { ApiClient } from '../apiClient';
 import { handoffBranchName, holdLabel, isRepoGroup, loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, repairWaitLabel, repoResultLines, scriptTaskText, skippedLabel, taskStartedNotice, truncateCheckpointSummary, WAITS_FOR_APPROVAL_LABEL, walkPlan, type SerializedTaskStatus } from '@ordewell/core';
@@ -40,7 +40,7 @@ export function resolveSessionId(subArgs: string[]): string {
   const explicit = flag(subArgs, '--session-id');
   if (explicit) return explicit;
 
-  const workspace = flag(subArgs, '--workspace') || process.cwd();
+  const workspace = workspaceOf(subArgs);
   const last = readLastSession(workspace);
   if (!last) {
     console.error(`No session specified. Use --session-id <id> or run \`ordewell plan\` in ${workspace} first.`);
@@ -205,7 +205,7 @@ function printScriptBodies(plan: Record<string, unknown>): void {
 
 export async function handleRun(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
   const sessionId = resolveSessionId(subArgs);
-  const workspace = flag(subArgs, '--workspace') || process.cwd();
+  const workspace = workspaceOf(subArgs);
   const api = await connect(subArgs, injectedApi);
 
   let plan: Record<string, unknown>;

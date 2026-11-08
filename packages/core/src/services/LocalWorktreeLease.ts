@@ -1,12 +1,12 @@
 import type { IsolationRunController } from './IsolationRunController';
-import { CHECKOUT_BRANCH, GUARANTEES, refuseUnproven, type ExecutionBackend, type GuaranteeReport, type LeaseRecord, type LeaseRepo, type LeaseRequest, type LeaseResult, type LeaseSessionState, type LeaseSpec, type OpenLease, type ReservedLease } from './executionLease';
+import { CHECKOUT_BRANCH, GUARANTEES, LeaseWorkspacePreparedError, refuseUnproven, type ExecutionBackend, type GuaranteeReport, type LeaseRecord, type LeaseRepo, type LeaseRequest, type LeaseResult, type LeaseSessionState, type LeaseSpec, type OpenLease, type ReservedLease } from './executionLease';
 import type { PoolNode, SlotPool } from './SlotPool';
 
 export interface LocalWorktreeLeaseDeps {
   pool: SlotPool;
   /** This Session, as its pool hears it. */
   node: PoolNode;
-  runs: Pick<IsolationRunController, 'attemptCwd' | 'workspaceCwd' | 'release' | 'current'>;
+  runs: Pick<IsolationRunController, 'attemptCwd' | 'assertDecision' | 'workspaceCwd' | 'release' | 'current'>;
   workspaceRoot: () => string;
 }
 
@@ -57,6 +57,14 @@ export class LocalWorktreeLease implements ExecutionBackend {
     // Ended since its claim, by a Stop or a cancel: there is no workspace to make, so none is left to undo.
     if (signal.aborted) throw new Error('The lease was given up before it opened.');
     const { cwd, worktree, workspace, previousWork } = await this.workspace(spec);
+    if (spec.workspace.kind === 'worktree') {
+      try {
+        this.deps.runs.assertDecision(spec.workspace.decision);
+      } catch (err) {
+        if (spec.task) throw new LeaseWorkspacePreparedError(err instanceof Error ? err.message : String(err), spec.workspace.intent === 'repair');
+        throw err;
+      }
+    }
     const repos = worktree ? this.repos(spec) : [];
     return {
       workspace: { cwd, worktree, ...(workspace ? { writable: workspace } : {}), ...(previousWork ? { previousWork } : {}), ...(repos.length ? { repos } : {}) },
@@ -66,8 +74,12 @@ export class LocalWorktreeLease implements ExecutionBackend {
   }
 
   private workspace({ task, workspace }: LeaseSpec): ReturnType<IsolationRunController['attemptCwd']> {
+    if (workspace.kind === 'worktree') {
+      if (!task) return Promise.reject(new Error('A worktree lease needs a task.'));
+      return this.deps.runs.attemptCwd(task, workspace.intent, workspace.decision);
+    }
     if (!task) return Promise.resolve({ cwd: this.deps.workspaceRoot(), worktree: false });
-    return workspace.kind === 'worktree' ? this.deps.runs.attemptCwd(task, workspace.intent) : this.deps.runs.workspaceCwd(task);
+    return this.deps.runs.workspaceCwd(task);
   }
 
   private repos({ task }: LeaseSpec): LeaseRepo[] {

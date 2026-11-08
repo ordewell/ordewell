@@ -170,6 +170,36 @@ describe('Mark complete while the task\'s spawn is under way', () => {
     expect(env.status('t1')).toBe('completed');
     expect(env.spawn).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ['a Continue', (env: ReturnType<typeof setup>) => env.orchestrator.continueTask('t1', 'and the docs')],
+    ['a force start', (env: ReturnType<typeof setup>) => env.orchestrator.forceStartTask('t1')],
+  ])('lands the worktree %s of a failed task was making, though its prepare had dropped the last record', async (_, start) => {
+    const env = setup();
+    env.orchestrator.loadPlan([change('t1', 1), change('t2', 2, { dependencies: ['t1'] })]);
+    await env.orchestrator.forceStartTask('t1');
+    env.latest('t1').reportComplete({ status: 'failed', summary: '', reason: 'broke' });
+    await vi.waitFor(() => expect(env.status('t1')).toBe('failed'));
+    await flushMicrotasks();
+    // As git's does: the last attempt's record goes as its worktree is taken down, and the new one is only written once the new worktree is made.
+    let made!: () => void;
+    const prepare = env.isolation.prepare.bind(env.isolation);
+    env.isolation.prepare = async (task, run, ...rest) => {
+      delete run.tasks[task.id];
+      await new Promise<void>((resolve) => { made = resolve; });
+      return prepare(task, run, ...rest);
+    };
+    void start(env);
+    await vi.waitFor(() => expect(made).toBeDefined());
+
+    const marked = env.orchestrator.markTaskComplete('t1');
+    await flushMicrotasks();
+    made();
+    await marked;
+
+    expect(env.isolation.taskIdsFor('integrate')).toEqual(['t1']);
+    expect(env.status('t1')).toBe('completed');
+  });
 });
 
 describe('merge at gates automatically', () => {

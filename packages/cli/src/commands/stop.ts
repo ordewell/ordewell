@@ -1,4 +1,4 @@
-import { flag, readLastSession } from '../utils';
+import { flag, readLastSession, workspaceOf } from '../utils';
 import { stopDaemon, resolvePort } from '../daemon';
 import type { ApiClient } from '../apiClient';
 import { connect } from './shared';
@@ -12,7 +12,7 @@ export async function handleStop(subArgs: string[], injectedApi?: ApiClient): Pr
 
   let sessionId = flag(subArgs, '--session-id');
   if (!sessionId) {
-    const workspace = flag(subArgs, '--workspace') || process.cwd();
+    const workspace = workspaceOf(subArgs);
     const last = readLastSession(workspace);
     if (!last) {
       console.error('No session specified. Use --session-id <id> or --server to stop the server.');

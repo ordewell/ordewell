@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { initialState, reduce, type Action } from '../reducer';
-import { inboundFor } from '../inbound';
+import { createInbound } from '../inbound';
 import { chatActivity } from '../layout';
 import { findTask, type TuiState } from '../state';
 import type { WsEvent } from '../../apiClient';
@@ -87,7 +87,7 @@ describe('the run and the turn end on their own', () => {
 
 // Autorun starts the run inside the turn that landed the plan: the plan, the
 // starts and the status updates all arrive while `converse` still awaits the
-// turn's answer, on its planning socket and the session's follow alike.
+// turn's answer, on the session's socket.
 describe('a run autorun starts inside the turn that landed its plan', () => {
   const planned = { tasks: [task(), task({ id: 'b', order: 2, title: 'B' })] };
   const wire = (event: Record<string, unknown>): WsEvent => event as unknown as WsEvent;
@@ -96,18 +96,15 @@ describe('a run autorun starts inside the turn that landed its plan', () => {
     let state = reduce(typed(initialState({ sessionId: 's1', rows: 30, cols: 100 }), 'build it'), { type: 'key', key: { name: 'enter' } }).state;
     state = reduce(typed(state, 'and a README'), { type: 'key', key: { name: 'enter' } }).state;
     const effects: unknown[] = [];
-    const inbound = inboundFor({}, (action) => {
+    const { receive } = createInbound((action) => {
       const next = reduce(state, action);
       state = next.state;
       effects.push(...next.effects);
     }, 's1');
-    const planning = inbound.planning();
-    const follow = inbound.execution();
-    const both = (event: WsEvent): void => { planning(event); follow(event); };
 
-    both(wire({ type: 'plan_generated', plan: planned, goal: 'build it', runners: ['claude-code'] }));
-    both(wire({ type: 'task_started', taskId: 'a', order: 1, title: 'A', runner: 'claude-code' }));
-    both(wire({ type: 'status_update', tasks: [{ id: 'a', status: 'in_progress', verdict: null, idleSince: '2026-10-14T09:00:00.000Z' }] }));
+    receive(wire({ type: 'plan_generated', plan: planned, goal: 'build it', runners: ['claude-code'] }));
+    receive(wire({ type: 'task_started', taskId: 'a', order: 1, title: 'A', runner: 'claude-code' }));
+    receive(wire({ type: 'status_update', tasks: [{ id: 'a', status: 'in_progress', verdict: null, idleSince: '2026-10-14T09:00:00.000Z' }] }));
     return { state, effects };
   };
 

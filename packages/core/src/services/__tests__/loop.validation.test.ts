@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { validatePlanTasks } from '../PlanValidator';
-import { applyTaskOps, canMergeTasks, canSplitTask, type TaskOp } from '../TaskOps';
+import { applyTaskOps, type TaskOp } from '../TaskOps';
 import { PLANNER_TOOLS, type PlannerToolHandler } from '../mcp/tools';
 import { PlanStore } from '../PlanStore';
 import { createTask, keepExecutionState, removeTaskFromPlan, type Task, type Verdict } from '../../models/Task';
@@ -177,8 +177,15 @@ describe('a loop through edit_plan', () => {
     expect(merged.errors[0]).toContain('"Task fix" is in a loop\'s body and cannot be merged');
     const split = apply([{ op: 'split', taskId: 'review', parts: [{ title: 'A', description: 'a' }, { title: 'B', description: 'b' }] }]);
     expect(split.errors[0]).toContain('"Task review" is a loop\'s check and cannot be split');
-    expect(canMergeTasks(plan(), ['fix', 'retest'])).toMatchObject({ ok: false });
-    expect(canSplitTask(plan(), 'review')).toMatchObject({ ok: false });
+  });
+
+  it('refuses to rearm a check whose runner waits at a checkpoint or for input, as one running', () => {
+    for (const awaitingReason of ['checkpoint', 'input'] as const) {
+      const tasks = plan().map((t) => (t.id === 'review' ? { ...t, status: 'awaiting_user' as const, awaitingReason, loopRound: 2 } : t));
+      const result = apply([{ op: 'rearm', taskId: 'review' }], tasks);
+      expect(result.ok, awaitingReason).toBe(false);
+      expect(result.errors[0], awaitingReason).toContain('"Task review" is running and cannot be re-armed now');
+    }
   });
 
   it('starts a re-armed check\'s rounds over', () => {

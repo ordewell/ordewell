@@ -25,7 +25,6 @@ const refusesTurn = (): Promise<never> => Promise.reject(new DaemonError('planne
 const refused = (): Promise<never> => Promise.reject(Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:3742'), { code: 'ECONNREFUSED' }));
 /** The sockets a turn opens around its call, open at once and never dropping. */
 const turnSockets: Partial<OrdewellApi> = {
-  streamPlanning: () => ({ close: () => {}, ready: Promise.resolve() }),
   followSession: () => ({ ready: Promise.resolve(true), ended: new Promise(() => {}), close: () => {} }),
 };
 

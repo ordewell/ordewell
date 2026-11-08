@@ -1,4 +1,4 @@
-import { flag, positionals, saveLastSession } from '../utils';
+import { positionals, saveLastSession, workspaceOf } from '../utils';
 import type { ApiClient } from '../apiClient';
 import { connect, fail, headlessPlannerRefusal, lostReplyHint } from './shared';
 import { resolveSessionId } from './run';
@@ -12,7 +12,7 @@ const REWIND_USAGE = 'Usage: ordewell rewind [<n>] [--session-id <id>] [--worksp
  * answers a phase-shaped view without it.
  */
 export async function adopted(subArgs: string[], injectedApi?: ApiClient): Promise<{ api: ApiClient; sessionId: string; workspace: string; plan: unknown }> {
-  const workspace = flag(subArgs, '--workspace') || process.cwd();
+  const workspace = workspaceOf(subArgs);
   const sessionId = resolveSessionId(subArgs);
   const api = await connect(subArgs, injectedApi);
   let plan: unknown;

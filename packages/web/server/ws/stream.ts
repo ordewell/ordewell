@@ -6,13 +6,22 @@ import { OrchestratorPool } from '../pool/orchestratorPool';
 
 const CHILD_PATH = /^\/ws\/session\/([^/]+)\/child\/([^/]+)$/;
 
+/** One id from the path, as a client encodes it (`/`, `?` and `#` cannot travel raw); undefined for a malformed escape. */
+function idOf(segment: string): string | undefined {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Nothing is sent before the tree has named the child, so a stray id learns only that it was refused. */
-function joinChild(pool: OrchestratorPool, ws: WebSocket, rootId: string, childId: string): void {
+function joinChild(pool: OrchestratorPool, ws: WebSocket, rootId: string, childId: string, workspace: string | undefined): void {
   const leave = () => pool.unwatchChild(rootId, childId, ws);
   ws.on('close', leave);
   ws.on('error', leave);
   const refuse = () => ws.close(4404, 'No such child plan in this tree');
-  void pool.watchChild(rootId, childId, ws).then((watching) => { if (!watching) refuse(); }, refuse);
+  void pool.watchChild(rootId, childId, ws, workspace).then((watching) => { if (!watching) refuse(); }, refuse);
 }
 
 export function createWsHandler(pool: OrchestratorPool) {
@@ -26,12 +35,34 @@ export function createWsHandler(pool: OrchestratorPool) {
 
   wss.on('connection', (ws: WebSocket, request: IncomingMessage) => {
     const url = new URL(request.url ?? '', `http://${request.headers.host}`);
+    const malformed = () => ws.close(4400, 'Malformed id in the socket path');
+    // A socket naming its workspace hears only that workspace's session: the
+    // pool keeps one per id, so another project's copy of the id would hear
+    // this one's run. Refused here while another holds the id, and by the pool
+    // when another takes it later.
+    const workspace = url.searchParams.get('workspace') || undefined;
+    const elsewhere = (id: string) => {
+      if (workspace === undefined) return false;
+      try {
+        pool.live(id, workspace);
+        return false;
+      } catch {
+        ws.close(4409, 'Session open for another workspace');
+        return true;
+      }
+    };
     const child = CHILD_PATH.exec(url.pathname);
     if (child) {
-      joinChild(pool, ws, child[1], child[2]);
+      const rootId = idOf(child[1]);
+      const childId = idOf(child[2]);
+      if (rootId === undefined || childId === undefined) return malformed();
+      if (elsewhere(rootId)) return;
+      joinChild(pool, ws, rootId, childId, workspace);
       return;
     }
-    const sessionId = url.pathname.split('/').pop() || '';
+    const sessionId = idOf(url.pathname.split('/').pop() || '');
+    if (sessionId === undefined) return malformed();
+    if (elsewhere(sessionId)) return;
 
     ws.on('close', () => {
       pool.unsubscribe(sessionId, ws);
@@ -61,7 +92,7 @@ export function createWsHandler(pool: OrchestratorPool) {
     if (detection?.waiting) ws.send(JSON.stringify(detection satisfies SessionFrame));
     // Subscribing also greets with host-owned account limits, independently
     // of the run snapshot above, even when the host knows none yet.
-    pool.subscribe(sessionId, ws);
+    pool.subscribe(sessionId, ws, workspace);
   });
 
   return (request: IncomingMessage, socket: Duplex, head: Buffer) => {

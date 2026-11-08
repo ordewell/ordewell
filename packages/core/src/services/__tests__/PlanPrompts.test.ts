@@ -1,3 +1,4 @@
+import { forbiddenFields } from '../../models/TaskKind';
 import { describe, it, expect } from 'vitest';
 import { buildConflictRepairPrompt, buildConflictResolutionPrompt, buildConversationSystemPrompt, buildPlanWithResults, buildResearchPrompt, buildResearchToolsPrompt, buildSubagentSystemPrompt, inTurnAgents, NATIVE_SHELL_GUIDE, whoExploresSection } from '../PlanPrompts';
 import type { RepoGroupLayout } from '../../interfaces/IWorktreeIsolation';
@@ -76,6 +77,13 @@ describe('the one-shot prompts, per transport', () => {
   const prompts = (tools: boolean) => [
     buildPlanWithResults('goal', '', '', {}, ['claude-code'], undefined, DEFAULT_PLANNER_MODES, tools),
   ];
+
+  it.each([false, true])('includes research and skills in the shared plan example (tools: %s)', (tools) => {
+    for (const prompt of prompts(tools)) {
+      expect(prompt).toContain('"research": false');
+      expect(prompt).toContain('"skills": ["task-skill-name"]');
+    }
+  });
 
   it('ask a coding agent for submit_plan and never for JSON in its reply', () => {
     for (const prompt of prompts(true)) {
@@ -330,7 +338,8 @@ describe('research tasks (ADR-0037)', () => {
   });
 
   it('is in the conversation prompt only, not the one-shot planner\'s', () => {
-    expect(oneShot(LONE_REPO)).not.toMatch(/"research"|research task/);
+    expect(oneShot(LONE_REPO)).not.toMatch(/research task/);
+    expect(oneShot(LONE_REPO)).toContain('"research": false');
   });
 });
 
@@ -763,7 +772,7 @@ describe('script tasks in the conversation prompt (ADR-0035)', () => {
     expect(p).toMatch(/"commands" is a list of argument vectors, run in order with no shell, stopping at the first that fails/);
     expect(p).toMatch(/give "script" instead.*Give exactly one of the two/);
     expect(p).toMatch(/"timeoutMs" is its time limit in milliseconds; ten minutes when left out/);
-    expect(p).toMatch(/Only a top-level task can be one\. Leave out "prompt", "assignedRunner", "assignedModel", "readOnly", "ops", "skills", "userSteps" and "subtasks"/);
+    expect(p).toContain('Only a top-level task can be one. Leave out ' + forbiddenFields('script').map((f) => `"${f}"`).join(', ') + '.');
   });
 
   it('shows an example the plan\'s own rules accept', () => {

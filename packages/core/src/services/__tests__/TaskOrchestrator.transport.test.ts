@@ -396,7 +396,7 @@ describe('a task whose MCP tools cannot attach', () => {
     ]);
     expect(env.orchestrator.storeInstance.get('t1')?.status).toBe('pending');
     expect(env.orchestrator.holdReason('t1')).toBe('could not connect to Ordewell\'s tools; start it again');
-    expect(serializeTaskStatus(env.orchestrator.storeInstance.get('t1')!, null, null, [], 0, [], '', false, env.orchestrator.holdReason('t1')))
+    expect(serializeTaskStatus(env.orchestrator.storeInstance.get('t1')!, { holdReason: env.orchestrator.holdReason('t1') }))
       .toMatchObject({ holdReason: 'could not connect to Ordewell\'s tools; start it again' });
     expect(env.orchestrator.startWaits(env.orchestrator.storeInstance.get('t1')!).find((wait) => wait.kind === 'on-hold'))
       .toEqual({ kind: 'on-hold', reason: 'could not connect to Ordewell\'s tools; start it again' });

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { EMPTY_RUN, replayTaskLog, type AttemptUsage, type RunnerCommand, type TaskLogEvent } from '@ordewell/core';
 import { stripAnsi, width } from '../ansi';
 import { chatPaneWidth } from '../geometry';
-import { inboundFor } from '../inbound';
+import { createInbound } from '../inbound';
 import { bodyRows, chatLayout } from '../layout';
 import { initialState, reduce } from '../reducer';
 import { render } from '../render';
@@ -244,7 +244,7 @@ describe('loading the log', () => {
   it('keeps approval and turn end batches broadcast after the saved read while opening', () => {
     const loading = opened({ taskView: notLoaded() });
     let buffered = loading;
-    const receive = inboundFor({}, (action) => { buffered = reduce(buffered, action).state; }, 's1').execution();
+    const receive = createInbound((action) => { buffered = reduce(buffered, action).state; }, 's1').receive;
     receive({
       type: 'task_log', taskId: 't1', attempt: 1, stream: 'daemon', seq: 12,
       events: [

@@ -18,6 +18,19 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   folder once no other copy is left.
 - **`ordewell <command> --help` now prints that command's help instead of
   running it, and `ordewell update` refuses options it doesn't know.**
+- **A session id holding `#`, `/` or `?` now opens its own session,** and a
+  session from another workspace is no longer read, adopted or heard by this
+  one.
+- **Stopping a run no longer leaves a half-opened workspace behind.** A task
+  stopped or cancelled while its workspace was still opening lets go of what
+  that open made, once, and a Stop still keeps the worktree of finished work.
+- **A planner edit that changes a task's type no longer leaves fields the new
+  type cannot hold,** and a plan saved with an unknown task type or with empty
+  fields a type forbids now loads instead of failing.
+- **A tool permission a coding-agent planner withdraws, or whose turn ends, now
+  leaves the screen at once** instead of waiting to be answered.
+- **A disk that refuses a save is now told once** while it keeps refusing,
+  instead of the plan stopping on an error or failing silently.
 
 ## [0.13.1] - 2026-11-07
 

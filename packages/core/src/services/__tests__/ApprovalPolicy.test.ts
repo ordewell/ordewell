@@ -32,6 +32,60 @@ describe('ApprovalPolicy', () => {
     }
   });
 
+  describe('a withdrawn request', () => {
+    function viaPending() {
+      const settled: Array<[string, boolean]> = [];
+      const pending = new PendingApprovals({ onSettled: (id, granted) => settled.push([id, granted]) });
+      const policy = new ApprovalPolicy({ ask: (r, signal) => pending.ask(r, { signal }) });
+      return { pending, policy, settled };
+    }
+
+    it('takes its card off the pending list and remembers no refusal', async () => {
+      const { pending, policy, settled } = viaPending();
+      const withdraw = new AbortController();
+      const answered = policy.request(req(), { signal: withdraw.signal });
+      expect(pending.outstanding()).toHaveLength(1);
+
+      withdraw.abort();
+
+      expect(await answered).toBe(false);
+      expect(pending.outstanding()).toEqual([]);
+      expect(settled).toHaveLength(1);
+      // Asked again, it prompts again: nobody said no.
+      void policy.request(req());
+      expect(pending.outstanding()).toHaveLength(1);
+    });
+
+    it('keeps a shared ask open until every request waiting on it is withdrawn', async () => {
+      const { pending, policy } = viaPending();
+      const first = new AbortController();
+      const second = new AbortController();
+      const one = policy.request(req(), { signal: first.signal });
+      const two = policy.request(req(), { signal: second.signal });
+      expect(pending.outstanding()).toHaveLength(1);
+
+      first.abort();
+      expect(pending.outstanding()).toHaveLength(1);
+      second.abort();
+
+      expect(await Promise.all([one, two])).toEqual([false, false]);
+      expect(pending.outstanding()).toEqual([]);
+    });
+
+    it('is not withdrawn by a waiter that never asked to leave', async () => {
+      const { pending, policy } = viaPending();
+      const leaving = new AbortController();
+      const one = policy.request(req(), { signal: leaving.signal });
+      const two = policy.request(req());
+
+      leaving.abort();
+      expect(pending.outstanding()).toHaveLength(1);
+      pending.resolve(pending.outstanding()[0].id, true);
+
+      expect(await Promise.all([one, two])).toEqual([true, true]);
+    });
+  });
+
   it('denies when no human channel is wired — the safe default for headless and web', async () => {
     const policy = new ApprovalPolicy();
     expect(await policy.request(req())).toBe(false);
@@ -221,7 +275,7 @@ describe('ApprovalPolicy — one request covering several scopes', () => {
     const policy = new ApprovalPolicy({ ask, preApproved: ['/opt/*'] });
 
     expect(await policy.request(both())).toBe(true);
-    expect(ask).toHaveBeenCalledWith(expect.objectContaining({ scope: 'npm' }));
+    expect(ask).toHaveBeenCalledWith(expect.objectContaining({ scope: 'npm' }), expect.any(AbortSignal));
     expect(ask.mock.calls[0][0].scopes).toBeUndefined();
   });
 

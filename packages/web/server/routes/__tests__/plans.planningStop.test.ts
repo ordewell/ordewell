@@ -30,7 +30,7 @@ describe('POST /:sessionId/planning/stop', () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ cancelled: true });
-    expect(cancelPlanning).toHaveBeenCalledWith('s1');
+    expect(cancelPlanning).toHaveBeenCalledWith('s1', undefined);
   });
 
   it('is a harmless no-op when no planning turn is in flight', async () => {
@@ -79,7 +79,7 @@ describe('POST /:sessionId/converse/start then /planning/stop — real daemon wi
 
       expect(stopRes.status).toBe(200);
       expect(await stopRes.json()).toEqual({ cancelled: true });
-      expect(abort.mock.contexts).toEqual([pool.session('s-real')]);
+      expect(abort.mock.contexts).toEqual([pool.session('s-real', undefined)]);
 
       resolvePlan({
         tasks: [], runners: ['claude-code'], generatedAt: new Date().toISOString(),

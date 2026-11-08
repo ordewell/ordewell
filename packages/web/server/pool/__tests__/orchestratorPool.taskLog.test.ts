@@ -56,7 +56,7 @@ describe('OrchestratorPool task logs', () => {
     const sent: string[] = [];
     pool.subscribe(meta.id, { OPEN: 1, readyState: 1, send: (data: string) => sent.push(data) } as never);
 
-    await pool.session(meta.id).execute({ command: 'run_task', task: 't1' }, { kind: 'user' });
+    await pool.session(meta.id, undefined).execute({ command: 'run_task', task: 't1' }, { kind: 'user' });
     await vi.waitFor(() => expect(sessions).toHaveLength(1));
     sessions[0].emitEvent({ type: 'turn_start', text: 'do it' });
     sessions[0].emitEvent({ type: 'assistant_text', runId: 'r1', text: 'Working on it.' });

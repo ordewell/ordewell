@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import http from 'http';
 import { ApiClient } from '../../apiClient';
 import { handleForceStart } from '../task-control';
+import { wireRoute } from '../../__tests__/wireRoute';
 
 const PLAN = {
   meta: { id: 'session-1', goal: 'test', runners: ['claude-code'], taskCount: 2, status: 'running', createdAt: '', updatedAt: '' },
@@ -13,7 +14,7 @@ describe('the question before a start past the merge gate, pinned before its tex
   it('names every unmerged dependency by order and title', async () => {
     const server = http.createServer((req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(req.url?.endsWith('/merge-gate') ? GATE : req.url?.includes('/sessions/') ? PLAN : { ok: true }));
+      res.end(JSON.stringify(wireRoute(req.url).endsWith('/merge-gate') ? GATE : wireRoute(req.url).includes('/sessions/') ? PLAN : { ok: true }));
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const addr = server.address();

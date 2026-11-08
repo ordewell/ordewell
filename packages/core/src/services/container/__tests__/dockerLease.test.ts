@@ -151,8 +151,8 @@ function backendWith(over: { settings?: unknown; cli?: RecordingCli; env?: Recor
 }
 
 const taskRequest: LeaseRequest = { node: { sessionId: 'session-1', taskId: 'a' }, role: 'task', runner: 'claude-code' };
-const changeSpec: LeaseSpec = { task: createTask({ id: 'a', order: 1, title: 'A', prompt: 'do a' }), workspace: { kind: 'worktree', intent: 'fresh' }, required: [] };
-const readOnlySpec: LeaseSpec = { ...changeSpec, workspace: { kind: 'worktree', intent: 'readOnly' } };
+const changeSpec: LeaseSpec = { task: createTask({ id: 'a', order: 1, title: 'A', prompt: 'do a' }), workspace: { kind: 'worktree', intent: 'fresh', decision: { epoch: 1, mode: 'isolated' } }, required: [] };
+const readOnlySpec: LeaseSpec = { ...changeSpec, workspace: { kind: 'worktree', intent: 'readOnly', decision: { epoch: 1, mode: 'isolated' } } };
 const checkoutSpec: LeaseSpec = { ...changeSpec, workspace: { kind: 'checkout' } };
 const scriptRequest: LeaseRequest = { ...taskRequest, role: 'script' };
 
@@ -1134,7 +1134,7 @@ describe('the next attempt of a task', () => {
     let preparedBeforeExport: number | null = null;
     cli.heard = (line) => { if (line.includes('ORDEWELL_REF=')) preparedBeforeExport ??= local.opened.length; };
 
-    await opened(backend, taskRequest, { ...changeSpec, workspace: { kind: 'worktree', intent: 'restore' } });
+    await opened(backend, taskRequest, { ...changeSpec, workspace: { kind: 'worktree', intent: 'restore', decision: { epoch: 1, mode: 'isolated' } } });
 
     expect(preparedBeforeExport).toBe(1);
     expect(local.opened).toHaveLength(2);
@@ -1315,7 +1315,7 @@ describe('work that did not come back (L2)', () => {
   it('holds for a Continue as for any start, and before anything that would give its workspace up', async () => {
     const { backend } = await refused();
 
-    await expect(opened(backend, taskRequest, { ...changeSpec, workspace: { kind: 'worktree', intent: 'restore' } })).rejects.toBeInstanceOf(KeptWorkError);
+    await expect(opened(backend, taskRequest, { ...changeSpec, workspace: { kind: 'worktree', intent: 'restore', decision: { epoch: 1, mode: 'isolated' } } })).rejects.toBeInstanceOf(KeptWorkError);
     const missing = backendWith({ cli: new EngineCli(), setupCommand: 'npm ci' });
     await expect(opened(missing.backend)).rejects.toThrow(/setup command/);
   });

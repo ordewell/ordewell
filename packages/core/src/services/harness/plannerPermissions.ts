@@ -72,9 +72,10 @@ export async function decidePlannerPermission(
   ask: PlannerAsk | undefined,
   input: Record<string, unknown>,
   gate: PlannerPermissionGate,
+  signal?: AbortSignal,
 ): Promise<ApprovalDecision> {
   if (!ask || ask.kind === 'other') return deny(ask?.note ?? UNKNOWN_TOOL_DENIAL);
-  if (ask.kind === 'path') return decideRead(ask, gate);
+  if (ask.kind === 'path') return decideRead(ask, gate, signal);
   // The opt-in is the consent (ADR-0036 N1): the command runs under Ordewell's
   // sealed profile, with the network its harness gives it (N2, N3), and every
   // call is on the timeline already. Asking per command would be a second
@@ -93,7 +94,7 @@ export async function decidePlannerPermission(
         scope: ask.scope,
         tool: ask.tool,
         detail: `The planner wants to use "${ask.tool}"${ask.server ? ` from ${ask.server}` : ''}. It may change things outside the repository.`,
-      });
+      }, { signal });
       return granted ? ALLOW : deny(`Not approved: ${ask.scope}. ${NOT_APPROVED_HINT}`);
     }
     case 'fetch': {
@@ -116,7 +117,7 @@ export async function decidePlannerPermission(
   }
 }
 
-async function decideRead(ask: Extract<PlannerAsk, { kind: 'path' }>, gate: PlannerPermissionGate): Promise<ApprovalDecision> {
+async function decideRead(ask: Extract<PlannerAsk, { kind: 'path' }>, gate: PlannerPermissionGate, signal?: AbortSignal): Promise<ApprovalDecision> {
   const { abs, inside } = readTarget(gate.workspaceRoot, ask.path);
   if (inside || gate.savedOutput?.(abs)) return ALLOW;
   if (!gate.approval) return deny(NOBODY_TO_ASK);
@@ -125,6 +126,6 @@ async function decideRead(ask: Extract<PlannerAsk, { kind: 'path' }>, gate: Plan
     subject: abs,
     scope: grantScopeFor(abs, ask.directory ? 'directory' : 'file'),
     detail: `Planner research wants to read ${abs}, outside the workspace (${gate.workspaceRoot}).`,
-  });
+  }, { signal });
   return granted ? ALLOW : deny(`Access denied: "${abs}" is outside the workspace and was not approved.`);
 }

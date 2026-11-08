@@ -155,7 +155,7 @@ async function daemon(turns: Record<string, Turn[]>, { held = ['a'], parallel = 
   const { runner, spawned, sessions, release } = heldTasks(held);
   const pool = new OrchestratorPool({ accountLimitCollectors: () => [] });
   const internals = pool as unknown as {
-    broadcast(id: string, message: unknown): void;
+    broadcast(id: string, workspace: string, message: unknown): void;
     registerSession(id: string, workspace: string, session: Session): void;
   };
   const config = fakeConfig({ maxParallelSessions: parallel, autonomousMode: true });
@@ -165,8 +165,8 @@ async function daemon(turns: Record<string, Turn[]>, { held = ['a'], parallel = 
     notifications: { info() {}, warn() {}, error() {}, async confirm() { return undefined; } },
     workspaceRoot: () => workspace,
     fsAdapter: fakeFileSystem(),
-    broadcast: (message) => internals.broadcast(ROOT, message),
-    onNotice: (notice) => internals.broadcast(ROOT, notice),
+    broadcast: (message) => internals.broadcast(ROOT, workspace, message),
+    onNotice: (notice) => internals.broadcast(ROOT, workspace, notice),
     modelResolver: new ModelResolver(registry, config, { execImpl: async () => ({ stdout: '' }) }),
     settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', delegationTokens: 5_000_000, mergeAtGatesAutomatically: false } }),
     sessionId: ROOT,
@@ -195,7 +195,7 @@ async function daemon(turns: Record<string, Turn[]>, { held = ['a'], parallel = 
   };
   cleanups.push(async () => {
     for (const socket of sockets) socket.close();
-    const live = pool.hasSession(ROOT) ? pool.session(ROOT) : session;
+    const live = pool.hasSession(ROOT) ? pool.session(ROOT, undefined) : session;
     pool.destroyAll();
     await live.gone;
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -355,14 +355,14 @@ describe('a child\'s socket', () => {
   });
 
   it('closes for good when its root is closed', async () => {
-    const { pool, session, spawned, connect, running } = await daemon({ d: [SUBMIT([aiTask('a', 1)]), DONE] });
+    const { pool, session, spawned, connect, running, workspace } = await daemon({ d: [SUBMIT([aiTask('a', 1)]), DONE] });
     await session.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(spawned).toContain('a'), WAIT);
     const [child] = await running(1);
     const socket = connect(`/ws/session/${ROOT}/child/${child.sessionId}`);
     await socket.saw('run_snapshot');
 
-    await pool.close(ROOT);
+    await pool.close(ROOT, workspace);
 
     expect(await socket.closed).toBe(1001);
   });

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { TaskOrchestrator } from '../TaskOrchestrator';
+import { STOPPED_BEFORE_START, TaskOrchestrator } from '../TaskOrchestrator';
 import { createTask, type Task } from '../../models/Task';
 import type { IRunner } from '../../interfaces/IRunner';
 import type { IConfig } from '../../interfaces/IConfig';
@@ -45,6 +45,97 @@ const task = (id: string, order: number, over: Partial<Task> = {}) =>
   createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, ...over });
 
 describe('TaskOrchestrator with worktree isolation', () => {
+  it('keeps an admitted Continue isolated through a planner edit during sweep', async () => {
+    const { orchestrator, isolation, spawn } = setup();
+    const t1: Task = { ...task('t1', 1), status: 'completed', runnerSessionId: 'native-t1' };
+    orchestrator.loadPlan([t1]);
+    let swept!: () => void;
+    const gate = new Promise<void>((resolve) => { swept = resolve; });
+    const sweep = vi.spyOn(isolation, 'sweep').mockImplementation(async () => { await gate; });
+
+    const starting = orchestrator.continueTask('t1', 'handle arrays too');
+    await vi.waitFor(() => expect(sweep).toHaveBeenCalledOnce());
+    orchestrator.adoptEdit([t1, task('t2', 2)], ['claude-code']);
+    swept();
+    await starting;
+
+    expect(spawn.mock.calls[0][0]).toMatchObject({ cwd: '/fake-worktrees/run1/1-t1', resumeSessionId: 'native-t1' });
+  });
+
+  it('reports a Continue interrupted by a plan load during isolation assessment', async () => {
+    const { orchestrator, isolation, spawn } = setup();
+    orchestrator.loadPlan([{ ...task('t1', 1), status: 'completed', runnerSessionId: 'native-t1' }]);
+    let assessed!: () => void;
+    const gate = new Promise<void>((resolve) => { assessed = resolve; });
+    const assess = vi.spyOn(isolation, 'isActive').mockImplementation(async () => { await gate; return { active: true }; });
+
+    const starting = orchestrator.continueTask('t1', 'handle arrays too');
+    const result = expect(starting).rejects.toThrow(STOPPED_BEFORE_START);
+    await vi.waitFor(() => expect(assess).toHaveBeenCalledOnce());
+    orchestrator.loadPlan([{ ...task('t1', 1), status: 'completed', runnerSessionId: 'native-t1' }]);
+    assessed();
+
+    await result;
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('reports a force start interrupted by a plan load during sweep without reaching the checkout', async () => {
+    const { orchestrator, isolation, spawn } = setup();
+    orchestrator.loadPlan([task('t1', 1)]);
+    let swept!: () => void;
+    const gate = new Promise<void>((resolve) => { swept = resolve; });
+    const sweep = vi.spyOn(isolation, 'sweep').mockImplementation(async () => { await gate; });
+
+    const starting = orchestrator.forceStartTask('t1');
+    const result = expect(starting).rejects.toThrow(STOPPED_BEFORE_START);
+    await vi.waitFor(() => expect(sweep).toHaveBeenCalledOnce());
+    orchestrator.loadPlan([task('t1', 1)]);
+    swept();
+
+    await result;
+    expect(spawn).not.toHaveBeenCalled();
+    expect(isolation.taskIdsFor('prepare')).toEqual([]);
+  });
+
+  it('reports a force start interrupted by a plan load during isolation assessment', async () => {
+    const { orchestrator, isolation, spawn } = setup();
+    orchestrator.loadPlan([task('t1', 1)]);
+    let assessed!: () => void;
+    const gate = new Promise<void>((resolve) => { assessed = resolve; });
+    const assess = vi.spyOn(isolation, 'isActive').mockImplementation(async () => {
+      await gate;
+      return { active: true };
+    });
+
+    const starting = orchestrator.forceStartTask('t1');
+    const result = expect(starting).rejects.toThrow(STOPPED_BEFORE_START);
+    await vi.waitFor(() => expect(assess).toHaveBeenCalledOnce());
+    orchestrator.loadPlan([task('t2', 1)]);
+    assessed();
+
+    await result;
+    expect(spawn).not.toHaveBeenCalled();
+    expect(orchestrator.runs.blocked).toBe(false);
+  });
+
+  it('keeps an admitted force start isolated when a planner edit lands during sweep', async () => {
+    const { orchestrator, isolation, spawnedCwd } = setup();
+    const t1 = task('t1', 1);
+    orchestrator.loadPlan([t1]);
+    let swept!: () => void;
+    const gate = new Promise<void>((resolve) => { swept = resolve; });
+    const sweep = vi.spyOn(isolation, 'sweep').mockImplementation(async () => { await gate; });
+
+    const starting = orchestrator.forceStartTask('t1');
+    await vi.waitFor(() => expect(sweep).toHaveBeenCalledOnce());
+    orchestrator.adoptEdit([t1, task('t2', 2)], ['claude-code']);
+    swept();
+    await starting;
+
+    expect(spawnedCwd('t1')).toBe('/fake-worktrees/run1/1-t1');
+    expect(orchestrator.storeInstance.get('t2')).toBeDefined();
+  });
+
   it('spawns each task in the worktree prepared for it', async () => {
     const { orchestrator, spawnedCwd } = setup();
     orchestrator.loadPlan([task('t1', 1)]);
@@ -262,7 +353,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
     expect(orchestrator.storeInstance.get('t1')!.status).toBe('pending');
   });
 
-  it('removes a worktree whose attempt was cancelled while it was still being made', async () => {
+  it('keeps a worktree whose attempt was cancelled while it was still being made', async () => {
     const isolation = new FakeWorktreeIsolation();
     let finishPrepare!: () => void;
     const prepare = isolation.prepare.bind(isolation);
@@ -279,9 +370,10 @@ describe('TaskOrchestrator with worktree isolation', () => {
     finishPrepare();
     await started;
 
+    // A cancel keeps the worktree (ADR-0013), the one its attempt made after it too.
     expect(spawn).not.toHaveBeenCalled();
-    expect(isolation.calls).toContainEqual({ op: 'release', taskId: 't1', keep: false });
-    expect(orchestrator.runs.taskIsolation('t1')).toEqual({ state: 'none' });
+    expect(isolation.calls.filter((c) => c.op === 'release')).toEqual([{ op: 'release', taskId: 't1', keep: true }]);
+    expect(orchestrator.runs.current?.tasks.t1?.status).toBe('kept');
   });
 
   it('keeps an interrupted task\'s worktree when the run is stopped', async () => {

@@ -150,7 +150,7 @@ describe('an edit', () => {
     return result.tasks;
   })();
 
-  const apply = (ops: unknown[]) => applyTaskOps(plan, ops as TaskOp[], runners, { modelsByRunner: {}, runnerModes: modes, delegationRefusal: null });
+  const apply = (ops: unknown[]) => applyTaskOps(plan, ops as TaskOp[], runners, { modelsByRunner: {}, runnerModes: modes }, undefined, { delegationRefusal: null });
 
   it('adds a delegated task as a plan does, held to the same rules', () => {
     const added = apply([{ op: 'add', task: delegated('e', { order: undefined }), handle: 'e' }]);

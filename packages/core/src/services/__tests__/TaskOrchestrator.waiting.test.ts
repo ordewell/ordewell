@@ -317,11 +317,11 @@ describe('sending a structured task a message', () => {
 
     expect(structured.delivered).toEqual([]);
     expect(orchestrator.getQueuedTaskMessages('t1')).toEqual([{ id, text: 'use the existing helper' }]);
-    expect(serializeTaskStatus(task(orchestrator), null, null, orchestrator.getQueuedTaskMessages('t1')).queued).toEqual([{ id, text: 'use the existing helper' }]);
+    expect(serializeTaskStatus(task(orchestrator), { queued: orchestrator.getQueuedTaskMessages('t1') }).queued).toEqual([{ id, text: 'use the existing helper' }]);
 
     expect(orchestrator.removeQueuedTaskMessage('t1', id)).toBe(true);
     expect(orchestrator.removeQueuedTaskMessage('t1', id)).toBe(false);
-    expect(serializeTaskStatus(task(orchestrator), null, null, orchestrator.getQueuedTaskMessages('t1'))).not.toHaveProperty('queued');
+    expect(serializeTaskStatus(task(orchestrator), { queued: orchestrator.getQueuedTaskMessages('t1') })).not.toHaveProperty('queued');
   });
 
   it('delivers it at once to a task waiting for input, which is back in progress', async () => {

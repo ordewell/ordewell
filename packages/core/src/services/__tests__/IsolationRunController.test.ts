@@ -30,11 +30,65 @@ const ops = (isolation: FakeWorktreeIsolation) => isolation.calls.map((c) => c.o
 
 describe('IsolationRunController', () => {
   describe('open', () => {
+    it('refuses an activation interrupted during the last git shortfall check', async () => {
+      const { runs, isolation } = setup();
+      let checked!: () => void;
+      const gate = new Promise<void>((resolve) => { checked = resolve; });
+      const shortfall = vi.spyOn(isolation, 'gitShortfall').mockImplementation(async () => { await gate; return null; });
+
+      const deciding = runs.decide(async () => undefined);
+      await vi.waitFor(() => expect(shortfall).toHaveBeenCalledOnce());
+      runs.interrupt();
+      checked();
+
+      expect(await deciding).toBe('interrupted');
+      expect(runs.isOpen).toBe(false);
+    });
+
+    it('does not reopen an activation interrupted as its newly minted record is reported', async () => {
+      const { runs, isolation, listener } = setup();
+      vi.mocked(listener.changed).mockImplementationOnce(() => runs.interrupt());
+
+      expect(await runs.decide(async () => undefined)).toBe('interrupted');
+      expect(runs.isOpen).toBe(false);
+      expect(ops(isolation)).not.toContain('sweep');
+    });
+
+    it('does not reopen a run closed while its isolation assessment was in flight', async () => {
+      const { runs, isolation } = setup();
+      let assessed!: () => void;
+      const gate = new Promise<void>((resolve) => { assessed = resolve; });
+      vi.spyOn(isolation, 'isActive').mockImplementation(async () => { await gate; return { active: true }; });
+
+      const deciding = runs.decide(async () => undefined);
+      await runs.close();
+      assessed();
+
+      expect(await deciding).toBe('closed');
+      expect(runs.isOpen).toBe(false);
+      expect(ops(isolation)).not.toContain('startRun');
+    });
+
+    it('reports a stop after that close as the interruption it is', async () => {
+      const { runs, isolation } = setup();
+      let assessed!: () => void;
+      const gate = new Promise<void>((resolve) => { assessed = resolve; });
+      vi.spyOn(isolation, 'isActive').mockImplementation(async () => { await gate; return { active: true }; });
+
+      const deciding = runs.decide(async () => undefined);
+      await runs.close();
+      runs.interrupt();
+      assessed();
+
+      expect(await deciding).toBe('interrupted');
+      expect(ops(isolation)).not.toContain('startRun');
+    });
+
     it('mints an isolated run once and reports it as a change', async () => {
       const { runs, isolation, listener } = setup();
 
-      expect(await runs.decide(async () => undefined)).toBe(true);
-      expect(await runs.decide(async () => undefined)).toBe(true);
+      expect(await runs.decide(async () => undefined)).toEqual({ epoch: 1, mode: 'isolated' });
+      expect(await runs.decide(async () => undefined)).toEqual({ epoch: 1, mode: 'isolated' });
 
       expect(runs.isOpen).toBe(true);
       expect(runs.isolating).toBe(true);
@@ -69,7 +123,7 @@ describe('IsolationRunController', () => {
       isolation.availability = { active: false, reason: 'not-git' };
       const { runs, listener, notifications } = setup(isolation);
 
-      expect(await runs.decide(async () => undefined)).toBe(true);
+      expect(await runs.decide(async () => undefined)).toEqual({ epoch: 1, mode: 'shared' });
 
       expect(runs.isOpen).toBe(true);
       expect(runs.isolating).toBe(false);
@@ -81,7 +135,7 @@ describe('IsolationRunController', () => {
     it('continues an adopted run that holds work instead of minting a new one', async () => {
       const { runs: first } = setup();
       await first.decide(async () => undefined);
-      await first.attemptCwd(task('t1', 1), 'fresh');
+      await first.attemptCwd(task('t1', 1), 'fresh', first.decision);
       await first.release('t1', { keep: true });
       const saved = first.planIsolation;
 
@@ -96,11 +150,24 @@ describe('IsolationRunController', () => {
   });
 
   describe('attemptCwd', () => {
+    it('keeps a repair in its existing worktree when a resumed run shares the checkout', async () => {
+      const { runs, isolation } = setup();
+      const t1 = task('t1', 1);
+      await runs.decide(async () => undefined);
+      await runs.attemptCwd(t1, 'fresh', runs.decision);
+      runs.current!.tasks.t1.status = 'conflict';
+      runs.interrupt();
+      isolation.availability = { active: false, reason: 'disabled' };
+      await runs.decide(async () => undefined);
+
+      expect(await runs.attemptCwd(t1, 'repair', runs.decision)).toEqual({ cwd: '/fake-worktrees/run1/1-t1', worktree: true });
+    });
+
     it('gives an attempt in an isolated run the worktree prepared for it', async () => {
       const { runs } = setup();
       await runs.decide(async () => undefined);
 
-      expect(await runs.attemptCwd(task('t1', 1), 'fresh')).toEqual({ cwd: '/fake-worktrees/run1/1-t1', worktree: true, workspace: '/fake-worktrees/run1/1-t1' });
+      expect(await runs.attemptCwd(task('t1', 1), 'fresh', runs.decision)).toEqual({ cwd: '/fake-worktrees/run1/1-t1', worktree: true, workspace: '/fake-worktrees/run1/1-t1' });
       expect(runs.taskIsolation('t1')).toMatchObject({ state: 'active' });
     });
 
@@ -108,9 +175,9 @@ describe('IsolationRunController', () => {
       const { runs } = setup();
       await runs.decide(async () => undefined);
 
-      expect(await runs.attemptCwd(task('t1', 1), 'readOnly')).toMatchObject({ cwd: '/fake-worktrees/run1/1-t1', worktree: true });
+      expect(await runs.attemptCwd(task('t1', 1), 'readOnly', runs.decision)).toMatchObject({ cwd: '/fake-worktrees/run1/1-t1', worktree: true });
       expect(runs.current!.tasks.t1.readOnly).toBe(true);
-      await runs.attemptCwd(task('t2', 2), 'fresh');
+      await runs.attemptCwd(task('t2', 2), 'fresh', runs.decision);
       expect(runs.current!.tasks.t2.readOnly).toBeUndefined();
     });
 
@@ -120,7 +187,7 @@ describe('IsolationRunController', () => {
       const kept = { repo: '.', branch: 'ordewell-preserved/run1/1-t1', commit: 'abcdef0123456789', task: { taskId: 't1', order: 1, title: 'Task t1' } };
       vi.spyOn(isolation, 'prepare').mockRejectedValueOnce(new PrepareFailedError(new Error('git worktree failed: x'), [kept]));
 
-      await expect(runs.attemptCwd(task('t1', 1), 'fresh')).rejects.toThrow('git worktree failed: x');
+      await expect(runs.attemptCwd(task('t1', 1), 'fresh', runs.decision)).rejects.toThrow('git worktree failed: x');
 
       expect(notifications.warn).toHaveBeenCalledWith(expect.stringContaining('ordewell-preserved/run1/1-t1'));
     });
@@ -131,7 +198,7 @@ describe('IsolationRunController', () => {
       const { runs } = setup(isolation);
       await runs.decide(async () => undefined);
 
-      expect(await runs.attemptCwd(task('t1', 1), 'fresh')).toEqual({ cwd: '/repo', worktree: false });
+      expect(await runs.attemptCwd(task('t1', 1), 'fresh', runs.decision)).toEqual({ cwd: '/repo', worktree: false });
       expect(isolation.taskIdsFor('prepare')).toEqual([]);
     });
 
@@ -139,10 +206,10 @@ describe('IsolationRunController', () => {
       const { runs, isolation } = setup();
       await runs.decide(async () => undefined);
       const t1 = task('t1', 1);
-      await runs.attemptCwd(t1, 'fresh');
+      await runs.attemptCwd(t1, 'fresh', runs.decision);
       runs.current!.tasks.t1.status = 'conflict';
 
-      expect(await runs.attemptCwd(t1, 'repair')).toEqual({ cwd: '/fake-worktrees/run1/1-t1', worktree: true });
+      expect(await runs.attemptCwd(t1, 'repair', runs.decision)).toEqual({ cwd: '/fake-worktrees/run1/1-t1', worktree: true });
       expect(isolation.taskIdsFor('reopen')).toEqual(['t1']);
     });
 
@@ -152,8 +219,8 @@ describe('IsolationRunController', () => {
       const { runs, listener } = setup(isolation);
       await runs.decide(async () => undefined);
 
-      await runs.attemptCwd(task('t1', 1), 'fresh');
-      await runs.attemptCwd(task('t2', 2), 'fresh');
+      await runs.attemptCwd(task('t1', 1), 'fresh', runs.decision);
+      await runs.attemptCwd(task('t2', 2), 'fresh', runs.decision);
 
       expect(vi.mocked(listener.notice).mock.calls.filter(([, m]) => m.includes('.env'))).toHaveLength(1);
     });
@@ -164,8 +231,8 @@ describe('IsolationRunController', () => {
       const { runs, listener } = setup(isolation);
       await runs.decide(async () => undefined);
 
-      await runs.attemptCwd(task('t1', 1), 'fresh');
-      await runs.attemptCwd(task('t2', 2), 'fresh');
+      await runs.attemptCwd(task('t1', 1), 'fresh', runs.decision);
+      await runs.attemptCwd(task('t2', 2), 'fresh', runs.decision);
 
       const warnings = vi.mocked(listener.notice).mock.calls.filter(([, m]) => m.includes('setup command'));
       expect(warnings).toHaveLength(1);
@@ -181,7 +248,7 @@ describe('IsolationRunController', () => {
       const { runs, listener } = setup(isolation);
       const resume = vi.fn(async () => undefined);
 
-      expect(await runs.decide(resume)).toBe(false);
+      expect(await runs.decide(resume)).toBe('blocked');
       expect(runs.blocked).toBe(true);
       expect(runs.decided).toBe(false);
       expect(listener.blocked).toHaveBeenCalledWith(['api']);
@@ -192,7 +259,7 @@ describe('IsolationRunController', () => {
       expect(listener.notice).toHaveBeenCalledWith('info', expect.stringContaining('Stashed your uncommitted changes in api'));
       expect(resume).not.toHaveBeenCalled();
 
-      expect(await runs.decide(resume)).toBe(true);
+      expect(await runs.decide(resume)).toEqual({ epoch: 1, mode: 'isolated' });
       expect(runs.isolating).toBe(true);
     });
 
@@ -264,7 +331,7 @@ describe('IsolationRunController', () => {
       const { runs, listener } = setup();
       await runs.decide(async () => undefined);
       const t1 = task('t1', 1);
-      await runs.attemptCwd(t1, 'fresh');
+      await runs.attemptCwd(t1, 'fresh', runs.decision);
       runs.current!.tasks.t1.status = 'merged';
 
       await runs.close();
@@ -309,7 +376,7 @@ describe('IsolationRunController', () => {
       runs.interrupt();
       assessed();
 
-      expect(await deciding).toBe(false);
+      expect(await deciding).toBe('interrupted');
       expect(runs.isOpen).toBe(false);
       expect(runs.decided).toBe(false);
     });
@@ -327,8 +394,8 @@ describe('IsolationRunController', () => {
       const next = runs.decide(async () => undefined);
       assessed();
 
-      expect(await stale).toBe(false);
-      expect(await next).toBe(true);
+      expect(await stale).toBe('interrupted');
+      expect(await next).toEqual({ epoch: 2, mode: 'isolated' });
       expect(runs.isolating).toBe(true);
     });
 
@@ -351,11 +418,11 @@ describe('IsolationRunController', () => {
       const stale = runs.decide(async () => undefined);
       await vi.waitFor(() => expect(mints).toBe(1));
       runs.interrupt();
-      expect(await runs.decide(async () => undefined)).toBe(true);
+      expect(await runs.decide(async () => undefined)).toEqual({ epoch: 2, mode: 'isolated' });
       expect(runs.current?.id).toBe('run2');
       minted();
 
-      expect(await stale).toBe(false);
+      expect(await stale).toBe('interrupted');
       expect(runs.current?.id).toBe('run2');
       expect(runs.isolating).toBe(true);
       expect(discarded).toEqual(['run1']);
@@ -364,7 +431,7 @@ describe('IsolationRunController', () => {
     it('forgets a settled run once everything merged into the checked-out branch', async () => {
       const { runs, listener } = setup();
       await runs.decide(async () => undefined);
-      await runs.attemptCwd(task('t1', 1), 'fresh');
+      await runs.attemptCwd(task('t1', 1), 'fresh', runs.decision);
       await runs.integrate(task('t1', 1));
       await runs.close();
       expect(listener.closed).not.toHaveBeenCalled();
@@ -383,9 +450,9 @@ describe('IsolationRunController', () => {
     async function closedRun(t2: 'kept' | 'active') {
       const env = setup();
       await env.runs.decide(async () => undefined);
-      await env.runs.attemptCwd(task('t1', 1), 'fresh');
+      await env.runs.attemptCwd(task('t1', 1), 'fresh', env.runs.decision);
       await env.runs.integrate(task('t1', 1));
-      await env.runs.attemptCwd(task('t2', 2), 'fresh');
+      await env.runs.attemptCwd(task('t2', 2), 'fresh', env.runs.decision);
       if (t2 === 'kept') await env.runs.release('t2', { keep: true });
       env.runs.interrupt();
       return env;
@@ -461,7 +528,7 @@ describe('IsolationRunController', () => {
       async function savedRun() {
         const { runs } = setup();
         await runs.decide(async () => undefined);
-        await runs.attemptCwd(task('t1', 1), 'fresh');
+        await runs.attemptCwd(task('t1', 1), 'fresh', runs.decision);
         await runs.integrate(task('t1', 1));
         runs.interrupt();
         return structuredClone(runs.planIsolation);
@@ -490,7 +557,7 @@ describe('IsolationRunController', () => {
     it('mints fresh for a run that starts while the load-time clear deletes the old one', async () => {
       const { runs: first } = setup();
       await first.decide(async () => undefined);
-      await first.attemptCwd(task('t1', 1), 'fresh');
+      await first.attemptCwd(task('t1', 1), 'fresh', first.decision);
       await first.integrate(task('t1', 1));
       first.interrupt();
       const saved = structuredClone(first.planIsolation)!;
@@ -522,7 +589,7 @@ describe('IsolationRunController', () => {
     it('leaves the last run\'s worktrees in place when a new run is minted while a task is live in it', async () => {
       const { runs, isolation, live, notifications } = setup();
       await runs.decide(async () => undefined);
-      await runs.attemptCwd(task('t1', 1), 'fresh');
+      await runs.attemptCwd(task('t1', 1), 'fresh', runs.decision);
       live.add('t1');
       runs.interrupt();
 
@@ -539,7 +606,7 @@ describe('IsolationRunController', () => {
       const { runs, isolation, listener } = setup();
       await runs.decide(async () => undefined);
       const t1 = task('t1', 1);
-      await runs.attemptCwd(t1, 'fresh');
+      await runs.attemptCwd(t1, 'fresh', runs.decision);
       const release = isolation.holdIntegration('t1');
       vi.mocked(listener.changed).mockClear();
 
@@ -558,7 +625,7 @@ describe('IsolationRunController', () => {
       expect(await runs.integrate(t1)).toBe('failed');
 
       await runs.decide(async () => undefined);
-      await runs.attemptCwd(t1, 'fresh');
+      await runs.attemptCwd(t1, 'fresh', runs.decision);
       vi.spyOn(isolation, 'integrate').mockRejectedValueOnce(new Error('hook failed'));
       expect(await runs.integrate(t1)).toBe('failed');
     });
@@ -567,7 +634,7 @@ describe('IsolationRunController', () => {
       const { runs, isolation } = setup();
       await runs.decide(async () => undefined);
       const t1 = task('t1', 1);
-      await runs.attemptCwd(t1, 'fresh');
+      await runs.attemptCwd(t1, 'fresh', runs.decision);
       runs.current!.tasks.t1.conflictRepo = 'api';
       vi.spyOn(isolation, 'verifyRepair').mockRejectedValueOnce(new Error('git died'));
 
@@ -579,7 +646,7 @@ describe('IsolationRunController', () => {
     it('removes a worktree the task no longer needs', async () => {
       const { runs, isolation, listener } = setup();
       await runs.decide(async () => undefined);
-      await runs.attemptCwd(task('t1', 1), 'fresh');
+      await runs.attemptCwd(task('t1', 1), 'fresh', runs.decision);
 
       await runs.release('t1', { keep: false });
 
@@ -591,7 +658,7 @@ describe('IsolationRunController', () => {
     it('keeps a worktree for inspection', async () => {
       const { runs } = setup();
       await runs.decide(async () => undefined);
-      await runs.attemptCwd(task('t1', 1), 'fresh');
+      await runs.attemptCwd(task('t1', 1), 'fresh', runs.decision);
 
       await runs.release('t1', { keep: true });
 
@@ -601,7 +668,7 @@ describe('IsolationRunController', () => {
     it('waits for a merge in flight before touching the worktree', async () => {
       const { runs, isolation } = setup();
       await runs.decide(async () => undefined);
-      await runs.attemptCwd(task('t1', 1), 'fresh');
+      await runs.attemptCwd(task('t1', 1), 'fresh', runs.decision);
       let settle!: (outcome: IsolationOutcome) => void;
       const integration = new Promise<IsolationOutcome>((resolve) => { settle = resolve; });
 

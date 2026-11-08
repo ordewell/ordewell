@@ -3,13 +3,14 @@ import { ensureDaemon, resolvePort } from '../daemon';
 import { ApiClient, DaemonError, deliveryOf } from '../apiClient';
 import { normalizeCatalog, type Catalog } from '../catalog';
 import { findEnvFile, writeEnvVar } from '../utils/env';
+import { workspaceOf } from '../utils';
 import { allTasksOf } from '../utils/tasks';
 import type { TaskView } from '../tui/state';
 import { describePlannerNotReady, HEADLESS_CLI_COMMANDS, rewordSignIn, TERMINAL_UI_COMMANDS, type SerializedPlan, type SerializedTask, type SettingsUpdateResponse } from '@ordewell/core';
 import type { PlanBody } from '../apiClient';
 
 export async function connect(subArgs: string[], injected?: ApiClient): Promise<ApiClient> {
-  return injected ?? new ApiClient(await ensureDaemon(resolvePort(subArgs)));
+  return injected ?? new ApiClient(await ensureDaemon(resolvePort(subArgs)), workspaceOf(subArgs));
 }
 
 export async function fetchCatalog(api: ApiClient): Promise<Catalog> {

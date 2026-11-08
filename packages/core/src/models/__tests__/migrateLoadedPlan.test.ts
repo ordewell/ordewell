@@ -1,6 +1,9 @@
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
-import { createEmptyPlan, createTask, migrateLoadedPlan, type LegacyPlanState, type PendingPlanTurn } from '../Task';
+import { createEmptyPlan, createTask, migrateLoadedPlan, type LegacyPlanState, type PendingPlanTurn, type Task } from '../Task';
+import { EXECUTION_FIELDS } from '../TaskExecution';
+import { checkPlanInvariants } from '../../services/PlannedTask';
+import { prepareTaskEdit } from '../../services/TaskEdit';
 
 function plan(overrides: Partial<LegacyPlanState> = {}): LegacyPlanState {
   return { ...createEmptyPlan(), ...overrides };
@@ -143,6 +146,29 @@ describe('migrateLoadedPlan', () => {
     ]);
   });
 
+  it('keeps the execution state a later retry or rearm is decided from, but for a pause’s reset time', () => {
+    const ran: Task = {
+      ...createTask({ id: 't1', title: 'Build', status: 'awaiting_user', awaitingReason: 'usage-limit', assignedRunner: 'claude-code' }),
+      verdict: { outcome: 'fail', reason: 'broke', checks: [], decidedAt: '2026-10-01T00:00:00Z' },
+      handoff: { summary: 'It broke.', findings: [], findingCount: 0 },
+      runnerSessionId: 'session-1',
+      runnerSessionOwner: 'claude-code',
+      parkedQuestion: 'Which database?',
+      waitsEnded: 2,
+      resumeAt: '2026-10-11T20:11:00.000Z',
+      carriedFrom: 'codex',
+      reverted: true,
+      forcedPastGate: ['Earlier work'],
+      attempted: true,
+      loopRound: 2,
+    };
+    const loaded = plan({ tasks: [structuredClone(ran)] });
+
+    migrateLoadedPlan(loaded);
+
+    for (const field of EXECUTION_FIELDS) expect(loaded.tasks[0][field], field).toEqual(field === 'resumeAt' ? undefined : ran[field]);
+  });
+
   it('changes nothing on a plan already in today’s shape', () => {
     const loaded = plan({ status: 'approved', tasks: [createTask({ id: 't1', title: 'Build' })] });
     migrateLoadedPlan(loaded);
@@ -152,4 +178,22 @@ describe('migrateLoadedPlan', () => {
 
     expect(loaded).toEqual(once);
   });
+
+  // Bug: an older direct edit stored "manual" or null as a task's type, and the next plan check or edit threw a TypeError reading the kind table.
+  it.each<[string, unknown]>([['a type no kind owns', 'manual'], ['a cleared type', null], ['no type', undefined]])(
+    'reads %s as an AI task, so the plan checks and edits it',
+    (_name, type) => {
+      const stored = createTask({ id: 't', title: 'T', prompt: 'Do it.', assignedRunner: 'claude-code', subtasks: [createTask({ id: 't.1', title: 'Sub' })] });
+      Object.assign(stored, { type });
+      Object.assign(stored.subtasks[0], { type });
+      const loaded = plan({ tasks: [stored] });
+
+      migrateLoadedPlan(loaded);
+
+      expect(loaded.tasks[0].type).toBe('ai');
+      expect(loaded.tasks[0].subtasks[0].type).toBe('ai');
+      expect(checkPlanInvariants(loaded.tasks, ['claude-code'])).toEqual([]);
+      expect(prepareTaskEdit('planner', loaded.tasks, 't', { title: 'T2' }, { modelsByRunner: {} })).toMatchObject({ ok: true });
+    },
+  );
 });

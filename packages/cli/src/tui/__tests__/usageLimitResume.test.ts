@@ -4,7 +4,7 @@ import { initialState, reduce, type Step } from '../reducer';
 import { chatLayout, footerHints, planLayout } from '../layout';
 import { chatPromptLabel } from '../geometry';
 import { style } from '../ansi';
-import { inboundFor } from '../inbound';
+import { createInbound } from '../inbound';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import type { TaskLogState, TaskView, TuiState } from '../state';
 import type { WsEvent } from '../../apiClient';
@@ -104,7 +104,7 @@ describe('a task paused on a usage limit in the TUI', () => {
       tasks: [{ id: 't1', status: 'awaiting_user', verdict: null, awaitingReason: 'usage-limit', ...(resumeAt ? { resumeAt } : {}) }],
     }) as WsEvent;
     let current = state([task({ resumeAt: undefined })]);
-    const receive = inboundFor({}, (action) => { current = reduce(current, action).state; }, 's1').execution();
+    const receive = createInbound((action) => { current = reduce(current, action).state; }, 's1').receive;
 
     receive(event(RESUME_AT));
     expect(current.tasks[0].resumeAt).toBe(RESUME_AT);

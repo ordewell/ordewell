@@ -173,8 +173,8 @@ export { nativeShellOffer } from './services/harness/nativeShell';
 export type { NativeShellOffer } from './services/harness/nativeShell';
 export { mapAgentTool, normalizeAgentArgs } from './services/harness/agentTools';
 export type { MappedTool } from './services/harness/agentTools';
-export { applyTaskOps, opRefusalText, parseTaskOpsJson, textHasTaskOps, canMergeTasks, canSplitTask, canSetDependencies, dependencyCandidates, dependentsOf } from './services/TaskOps';
-export type { TaskOp, ApplyTaskOpsResult, OpRef, OpRefusal, TaskRef } from './services/TaskOps';
+export { applyTaskOps, opRefusalText, parseTaskOpsJson, textHasTaskOps, canSetDependencies, dependencyCandidates, dependentsOf } from './services/TaskOps';
+export type { TaskOp, ApplyTaskOpsResult, OpRef, OpRefusal } from './services/TaskOps';
 export {
   parseTaskQueryJson, textHasTaskQuery, taskQuerySignature, renderTaskQueryAnswer,
   TASK_QUERY_FIELDS, TASK_QUERY_PROTOCOL, TASK_QUERY_REMINDER, TASK_QUERY_ANSWER_OR_OPS,
@@ -189,6 +189,8 @@ export type { DockerCli } from './services/container/dockerCli';
 export { abbreviateHome, resolveSkillInvocation, plannerMessage, plannerTranscript, type SkillInvocation } from './services/skillInvocation';
 export { PlanEditError } from './services/PlanEditError';
 export type * from './daemonContract';
+export { DAEMON_ROUTES, type DaemonRoute, type DaemonRouteId, type HttpMethod, type RouteBody, type RouteResponse, type RouteSpec } from './daemonRoutes';
+export { StreamOrder, stampOf, type Placement } from './utils/streamOrder';
 export { SessionNotFoundError, NoPlanError, AlreadyExecutingError } from './services/SessionErrors';
 export { LeaseHost, processLeaseHost, SessionHeldError, describeHeld, describeHolder, LEASE_HEARTBEAT_MS, LEASE_STALE_MS, type LeaseHostKind, type LeaseHostOptions, type SessionHeld, type SessionLease, type SessionLeaseRecord } from './services/sessionLease';
 export { describeRunnerSignIn, describeSignIn, describeSignInWays, signInAction, signInOf, signInOfVerdict, TERMINAL_UI_SIGN_IN, HEADLESS_CLI_SIGN_IN, type KeySignInRoute, type RunnerSignIn, type SignInSyntax } from './services/signInHint';
@@ -227,6 +229,7 @@ export type {
   SessionNotice,
   SerializedTask,
   SerializedTaskStatus,
+  TaskStatusFacts,
   RunMergeView,
   SerializedPlan,
   SerializedConversationMessage,

@@ -4,8 +4,7 @@
  * import runtime values from here instead of the main barrel, which bundles the
  * Gemini/OpenAI services and their `fs`/`child_process` imports.
  */
-export { canMergeTasks, canSplitTask, canSetDependencies, dependencyCandidates, dependentsOf } from './services/TaskOps';
-export type { TaskRef } from './services/TaskOps';
+export { canSetDependencies, dependencyCandidates, dependentsOf } from './services/PlanTree';
 export { summarizeToolCall } from './services/researchStepSummary';
 // Which agent tools write a file, so a surface's summary of a run of calls
 // counts an edit the way a row's diff is decided.
@@ -70,3 +69,7 @@ export { rejoinPlanTree } from './models/Task';
 // The one rule for the effort a model change keeps, so a surface's model
 // picker lands where core's resolver would.
 export { clampThinkingEffort } from './services/ModelAllowlistResolver';
+// The order a session's stamped broadcasts arrive in (ADR-0017), read the same by the TUI and the desktop.
+export { StreamOrder, stampOf, type Placement } from './utils/streamOrder';
+// The daemon's routes, from which the desktop derives the allowlist its renderer calls through (ADR-0063 H4).
+export { DAEMON_ROUTES, type DaemonRoute, type DaemonRouteId, type HttpMethod, type RouteBody, type RouteResponse, type RouteSpec } from './daemonRoutes';

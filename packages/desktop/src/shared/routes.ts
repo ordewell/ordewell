@@ -8,140 +8,117 @@
  * Pure: no Electron, no Node. The renderer imports the ids for its types.
  */
 
-export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+import { DAEMON_ROUTES, type DaemonRouteId, type HttpMethod, type RouteSpec } from '@ordewell/core/plan-utils';
 
-interface RouteSpec {
-  method: HttpMethod;
-  /** `:name` marks a path parameter, filled from the same-named param as one segment. */
-  path: string;
-  /** Query parameters the route reads; any other param is refused. */
-  query?: readonly string[];
-  /**
-   * A planner turn: the daemon answers when the turn ends, which can be long
-   * after the socket last carried a byte, so main sets it no idle bound. The
-   * turn's progress reaches the view over the session socket meanwhile.
-   */
-  turn?: true;
-  /**
-   * The path param naming a session whose live host answers this route. For
-   * a session the window joined, main sends it to the holder's daemon
-   * (ADR-0063 H8); anything else, and every route without it, stays on the
-   * app's own daemon: files, git, the catalog, and opening, closing or
-   * deleting a session here.
-   */
-  live?: 'id' | 'sessionId';
-}
+export type { HttpMethod };
 
-const WS = ['workspace'] as const;
-/** What the file read routes take to pick the tree (ADR-0064 R2): the repo and the view scope. */
-const AT = ['workspace', 'repo', 'scope', 'sessionId', 'taskId'] as const;
+// Picked by id rather than taken whole: a route the daemon adds stays out of
+// the renderer's reach until a view needs it and it is named here.
+const RENDERER_ROUTES = [
+  'server.info',
 
-// Rows follow the daemon's routers in packages/web/server/routes, named
-// `area.verb` as the design's Daemon routes table does.
-export const ROUTES = {
-  'server.info': { method: 'GET', path: '/api/server' },
+  'workspaces.list',
+  'workspaces.isolationPreview',
 
-  'workspaces.list': { method: 'GET', path: '/api/workspaces' },
-  'workspaces.isolationPreview': { method: 'GET', path: '/api/workspaces/isolation-preview', query: WS },
+  'sessions.list',
+  'sessions.get',
+  'sessions.load',
+  'sessions.close',
+  'sessions.delete',
+  'sessions.taskLog',
+  'sessions.taskLogAttempt',
 
-  'sessions.list': { method: 'GET', path: '/api/sessions', query: WS },
-  'sessions.get': { method: 'GET', path: '/api/sessions/:id', query: WS, live: 'id' },
-  'sessions.load': { method: 'POST', path: '/api/sessions/:id/load', query: WS },
-  'sessions.close': { method: 'POST', path: '/api/sessions/:id/close', query: WS },
-  'sessions.delete': { method: 'DELETE', path: '/api/sessions/:id', query: WS },
-  'sessions.taskLog': { method: 'GET', path: '/api/sessions/:id/tasks/:taskId/log', query: WS, live: 'id' },
-  'sessions.taskLogAttempt': { method: 'GET', path: '/api/sessions/:id/tasks/:taskId/log/:attempt', query: WS, live: 'id' },
+  'children.list',
+  'children.get',
+  'children.taskLog',
+  'children.taskLogAttempt',
+  'children.message',
+  'children.taskMessage',
 
-  'children.list': { method: 'GET', path: '/api/sessions/:id/children', live: 'id' },
-  'children.get': { method: 'GET', path: '/api/sessions/:id/children/:childId', live: 'id' },
-  'children.taskLog': { method: 'GET', path: '/api/sessions/:id/children/:childId/tasks/:taskId/log', live: 'id' },
-  'children.taskLogAttempt': { method: 'GET', path: '/api/sessions/:id/children/:childId/tasks/:taskId/log/:attempt', live: 'id' },
-  'children.message': { method: 'POST', path: '/api/sessions/:id/children/:childId/message', live: 'id' },
-  'children.taskMessage': { method: 'POST', path: '/api/sessions/:id/children/:childId/tasks/:taskId/message', live: 'id' },
+  'plans.generate',
+  'plans.execute',
+  'plans.stop',
+  'plans.stopPlanning',
+  'plans.executeCommand',
+  'plans.escalations',
+  'plans.answerEscalation',
+  'plans.taskCommands',
+  'plans.mergeGate',
+  'plans.revertPreview',
+  'plans.isolationDiff',
+  'plans.taskDiff',
+  'plans.mergePreflight',
+  'plans.isolationMerge',
+  'plans.isolationDiscard',
+  'plans.isolationCleanup',
+  'plans.isolationStash',
+  'plans.isolationRunWithout',
+  'plans.checkpointApprove',
+  'plans.checkpointReject',
+  'plans.resolveConflict',
+  'plans.addTask',
+  'plans.updateTask',
+  'plans.deleteTask',
+  'plans.approveReview',
+  'plans.converseStart',
+  'plans.converseMessage',
+  'plans.converseMessageNow',
+  'plans.cancelResend',
+  'plans.fork',
+  'plans.rewindTargets',
+  'plans.rewind',
+  'plans.compact',
+  'plans.retryCompact',
+  'plans.prd',
 
-  'plans.generate': { method: 'POST', path: '/api/plans/:sessionId/generate', query: ['workspace', 'runners'], turn: true, live: 'sessionId' },
-  'plans.execute': { method: 'POST', path: '/api/plans/:sessionId/execute', live: 'sessionId' },
-  'plans.stop': { method: 'POST', path: '/api/plans/:sessionId/stop', live: 'sessionId' },
-  'plans.stopPlanning': { method: 'POST', path: '/api/plans/:sessionId/planning/stop', live: 'sessionId' },
-  'plans.executeCommand': { method: 'POST', path: '/api/plans/:sessionId/execute-command', live: 'sessionId' },
-  'plans.escalations': { method: 'GET', path: '/api/plans/:sessionId/escalations', live: 'sessionId' },
-  'plans.answerEscalation': { method: 'POST', path: '/api/plans/:sessionId/escalations/answer', live: 'sessionId' },
-  'plans.taskCommands': { method: 'POST', path: '/api/plans/:sessionId/tasks/:taskId/commands', live: 'sessionId' },
-  'plans.mergeGate': { method: 'GET', path: '/api/plans/:sessionId/tasks/:taskId/merge-gate', live: 'sessionId' },
-  'plans.revertPreview': { method: 'GET', path: '/api/plans/:sessionId/tasks/:taskId/revert-preview', live: 'sessionId' },
-  'plans.isolationDiff': { method: 'GET', path: '/api/plans/:sessionId/isolation/diff', live: 'sessionId' },
-  // Reads of the saved run (ADR-0064, ADR-0062 G8): neither needs the session open here.
-  'plans.taskDiff': { method: 'GET', path: '/api/plans/:sessionId/tasks/:taskId/diff', query: ['workspace', 'repo', 'path', 'names'], live: 'sessionId' },
-  'plans.mergePreflight': { method: 'GET', path: '/api/plans/:sessionId/isolation/merge-preflight', query: WS, live: 'sessionId' },
-  'plans.isolationMerge': { method: 'POST', path: '/api/plans/:sessionId/isolation/merge', live: 'sessionId' },
-  'plans.isolationDiscard': { method: 'POST', path: '/api/plans/:sessionId/isolation/discard', live: 'sessionId' },
-  'plans.isolationCleanup': { method: 'POST', path: '/api/plans/:sessionId/isolation/cleanup', live: 'sessionId' },
-  'plans.isolationStash': { method: 'POST', path: '/api/plans/:sessionId/isolation/stash-and-continue', live: 'sessionId' },
-  'plans.isolationRunWithout': { method: 'POST', path: '/api/plans/:sessionId/isolation/run-without', live: 'sessionId' },
-  'plans.checkpointApprove': { method: 'POST', path: '/api/plans/:sessionId/tasks/:taskId/checkpoint/approve', live: 'sessionId' },
-  'plans.checkpointReject': { method: 'POST', path: '/api/plans/:sessionId/tasks/:taskId/checkpoint/reject', live: 'sessionId' },
-  'plans.resolveConflict': { method: 'POST', path: '/api/plans/:sessionId/tasks/:taskId/resolve-conflict', live: 'sessionId' },
-  'plans.addTask': { method: 'POST', path: '/api/plans/:sessionId/tasks', live: 'sessionId' },
-  'plans.updateTask': { method: 'PUT', path: '/api/plans/:sessionId/tasks/:taskId', live: 'sessionId' },
-  'plans.deleteTask': { method: 'DELETE', path: '/api/plans/:sessionId/tasks/:taskId', live: 'sessionId' },
-  'plans.approveReview': { method: 'POST', path: '/api/plans/:sessionId/review/approve', live: 'sessionId' },
-  'plans.converseStart': { method: 'POST', path: '/api/plans/:sessionId/converse/start', query: WS, turn: true, live: 'sessionId' },
-  'plans.converseMessage': { method: 'POST', path: '/api/plans/:sessionId/converse/message', turn: true, live: 'sessionId' },
-  'plans.converseMessageNow': { method: 'POST', path: '/api/plans/:sessionId/converse/message/now', turn: true, live: 'sessionId' },
-  'plans.cancelResend': { method: 'POST', path: '/api/plans/:sessionId/converse/resend/cancel', live: 'sessionId' },
-  'plans.fork': { method: 'POST', path: '/api/plans/:sessionId/conversation/fork', live: 'sessionId' },
-  'plans.rewindTargets': { method: 'GET', path: '/api/plans/:sessionId/conversation/rewind-targets', live: 'sessionId' },
-  'plans.rewind': { method: 'POST', path: '/api/plans/:sessionId/conversation/rewind', live: 'sessionId' },
-  'plans.compact': { method: 'POST', path: '/api/plans/:sessionId/conversation/compact', turn: true, live: 'sessionId' },
-  'plans.retryCompact': { method: 'POST', path: '/api/plans/:sessionId/conversation/compact/retry', turn: true, live: 'sessionId' },
-  'plans.prd': { method: 'GET', path: '/api/plans/:sessionId/prd', live: 'sessionId' },
+  'approvals.list',
+  'approvals.decide',
 
-  'approvals.list': { method: 'GET', path: '/api/approvals/:sessionId', live: 'sessionId' },
-  'approvals.decide': { method: 'POST', path: '/api/approvals/:sessionId/:approvalId', live: 'sessionId' },
+  'models.list',
 
-  'commands.list': { method: 'GET', path: '/api/commands' },
-  'commands.run': { method: 'POST', path: '/api/commands/:name' },
+  'runners.list',
+  'runners.setEnabled',
 
-  'models.list': { method: 'GET', path: '/api/models', query: WS },
+  'files.tree',
+  'files.content',
+  'files.find',
+  'files.save',
 
-  'runners.list': { method: 'GET', path: '/api/runners', query: WS },
-  'runners.setEnabled': { method: 'PUT', path: '/api/runners/:id' },
-
-  'files.tree': { method: 'GET', path: '/api/files/tree', query: [...AT, 'dir'] },
-  'files.content': { method: 'GET', path: '/api/files/content', query: [...AT, 'path'] },
-  'files.find': { method: 'GET', path: '/api/files/find', query: [...AT, 'query', 'text', 'limit'] },
-  'files.save': { method: 'PUT', path: '/api/files/content' },
-
-  'git.repos': { method: 'GET', path: '/api/git/repos', query: WS },
-  'git.status': { method: 'GET', path: '/api/git/status', query: [...WS, 'repo', 'scope'] },
+  'git.repos',
+  'git.status',
   // Read by main, to find the worktree a task's terminal opens in.
-  'git.branches': { method: 'GET', path: '/api/git/branches', query: AT },
-  'git.diff': { method: 'GET', path: '/api/git/diff', query: [...AT, 'kind', 'from', 'to', 'path'] },
+  'git.branches',
+  'git.diff',
   // Merge all's preflight sets the user's overlapping files aside and offers them back (ADR-0062 G8).
-  'git.stash': { method: 'POST', path: '/api/git/stash' },
-  'git.stashPop': { method: 'POST', path: '/api/git/stash-pop' },
+  'git.stash',
+  'git.stashPop',
   // The Git view (ADR-0062): history to draw, and the actions on the user's checkout of one repository.
-  'git.log': { method: 'GET', path: '/api/git/log', query: [...AT, 'ref', 'cursor', 'limit'] },
-  // `git.show` reads a commit, leaving `git.commit` free for the POST that makes one.
-  'git.show': { method: 'GET', path: '/api/git/commit', query: [...AT, 'sha', 'path'] },
-  'git.branch': { method: 'POST', path: '/api/git/branch' },
-  'git.switch': { method: 'POST', path: '/api/git/switch' },
-  'git.branchDelete': { method: 'POST', path: '/api/git/branch-delete' },
-  'git.stashDrop': { method: 'POST', path: '/api/git/stash-drop' },
-  'git.fetch': { method: 'POST', path: '/api/git/fetch' },
-  'git.pull': { method: 'POST', path: '/api/git/pull' },
-  'git.push': { method: 'POST', path: '/api/git/push' },
+  'git.log',
+  'git.show',
+  'git.branch',
+  'git.switch',
+  'git.branchDelete',
+  'git.stashDrop',
+  'git.fetch',
+  'git.pull',
+  'git.push',
   // The user's own actions on their checkout (ADR-0062 G1-G5): the Changes activity's checkout group.
-  'git.stage': { method: 'POST', path: '/api/git/stage' },
-  'git.unstage': { method: 'POST', path: '/api/git/unstage' },
-  'git.commit': { method: 'POST', path: '/api/git/commit' },
-  'git.discard': { method: 'POST', path: '/api/git/discard' },
+  'git.stage',
+  'git.unstage',
+  'git.commit',
+  'git.discard',
 
-  'settings.get': { method: 'GET', path: '/api/settings', query: ['workspace', 'sessionId'] },
-  'settings.update': { method: 'PATCH', path: '/api/settings' },
-  'settings.containers': { method: 'GET', path: '/api/settings/containers', query: ['workspace', 'prove'] },
-  'settings.updateContainers': { method: 'PATCH', path: '/api/settings/containers', query: WS },
-} as const satisfies Record<string, RouteSpec>;
+  'settings.get',
+  'settings.update',
+  'settings.containers',
+  'settings.updateContainers',
+] as const satisfies readonly DaemonRouteId[];
+
+// Each row is core's own (`DAEMON_ROUTES`), which the daemon's routers are
+// checked against, so the path, query and flags here cannot drift from theirs.
+export const ROUTES = Object.fromEntries(RENDERER_ROUTES.map((id) => [id, DAEMON_ROUTES[id]])) as {
+  readonly [Id in (typeof RENDERER_ROUTES)[number]]: (typeof DAEMON_ROUTES)[Id];
+};
 
 export type RouteId = keyof typeof ROUTES;
 
@@ -240,14 +217,29 @@ export function liveSessionOf(routeId: unknown, params: unknown): string | undef
   return typeof value === 'string' ? value : undefined;
 }
 
-/** The session socket's path, its id checked as one segment like any route's. */
-export function sessionStreamPath(sessionId: unknown): BuildResult {
-  const problem = segmentError(sessionId);
-  if (problem) return { ok: false, error: `sessionId ${problem}` };
-  return { ok: true, request: { method: 'GET', path: `/ws/session/${encodeURIComponent(sessionId as string)}` } };
+/**
+ * `params` naming the window's workspace on a live row that lists one and was
+ * given none. The daemon keeps one session per id and refuses one another
+ * project holds, which it can only tell from a call that says whose it means.
+ */
+export function namingWorkspace(routeId: unknown, params: unknown, workspace: string | undefined): unknown {
+  if (workspace === undefined || liveSessionOf(routeId, params) === undefined) return params;
+  const spec: RouteSpec = ROUTES[routeId as RouteId];
+  if (!spec.query?.includes('workspace') || Reflect.get(params as object, 'workspace') !== undefined) return params;
+  return { ...(params as object), workspace };
 }
 
-export function childStreamPath(rootId: unknown, childId: unknown): BuildResult {
+/** A socket's query: named with its workspace, it hears only that project's session of the id. */
+const streamQuery = (workspace: string | undefined): string => (workspace === undefined ? '' : `?workspace=${encodeURIComponent(workspace)}`);
+
+/** The session socket's path, its id checked as one segment like any route's. */
+export function sessionStreamPath(sessionId: unknown, workspace?: string): BuildResult {
+  const problem = segmentError(sessionId);
+  if (problem) return { ok: false, error: `sessionId ${problem}` };
+  return { ok: true, request: { method: 'GET', path: `/ws/session/${encodeURIComponent(sessionId as string)}${streamQuery(workspace)}` } };
+}
+
+export function childStreamPath(rootId: unknown, childId: unknown, workspace?: string): BuildResult {
   const rootProblem = segmentError(rootId);
   if (rootProblem) return { ok: false, error: `rootId ${rootProblem}` };
   const childProblem = segmentError(childId);
@@ -256,7 +248,7 @@ export function childStreamPath(rootId: unknown, childId: unknown): BuildResult 
     ok: true,
     request: {
       method: 'GET',
-      path: `/ws/session/${encodeURIComponent(rootId as string)}/child/${encodeURIComponent(childId as string)}`,
+      path: `/ws/session/${encodeURIComponent(rootId as string)}/child/${encodeURIComponent(childId as string)}${streamQuery(workspace)}`,
     },
   };
 }

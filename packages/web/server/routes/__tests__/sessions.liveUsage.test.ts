@@ -66,7 +66,7 @@ describe('GET /api/sessions/:id while a failed task is retried', () => {
     };
 
     try {
-      const live = pool.session(meta.id);
+      const live = pool.session(meta.id, undefined);
       await live.execute({ command: 'run_plan' }, { kind: 'user' });
       await vi.waitFor(() => expect(sessions).toHaveLength(1));
       sessions[0].emitEvent({ type: 'usage', record: { source: 'claude-code', model: 'claude-opus-5-5', inputTokens: 100, contextTokens: 61_000, contextWindow: 1_000_000, reportedCost: { amount: 1, currency: 'USD' } } });

@@ -123,12 +123,12 @@ describe('a report by reference (ADR-0057 R1, R2)', () => {
     const { parent } = tree([SUBMIT([childTask('a', 1)]), REPORT()], { runner: runner() });
     await endsDone(parent);
 
-    const read = await parent.readBelow({ task: '1:#1@1/F1' });
+    const read = await parent.reading.read({ task: '1:#1@1/F1' });
     expect(read.text).toContain('A race in the writer');
-    const delegatedRead = await parent.readBelow({ task: '#1' });
+    const delegatedRead = await parent.reading.read({ task: '#1' });
     expect(delegatedRead.text).toContain('Promoted (each in its author\'s words):');
     expect(delegatedRead.text).toContain('- 1:#1@1/F2 [minor] A stale comment');
-    expect(await parent.readBelow({ task: '9:#1/F1' })).toMatchObject({ isError: true });
+    expect(await parent.reading.read({ task: '9:#1/F1' })).toMatchObject({ isError: true });
     parent.destroy();
   });
 
@@ -192,7 +192,7 @@ describe('a report by reference (ADR-0057 R1, R2)', () => {
     const report = taskOf(parent, 'd')?.handoff?.subtree;
     expect(report?.promoted[0]).toMatchObject({ ref: { node: 'root/1/1', task: 'a', attempt: 1, finding: 'F1', label: '#1' }, finding: { title: 'A race in the writer' } });
     expect(handoffReferenceText(report!.promoted[0].ref!)).toBe('1/1:#1@1/F1');
-    expect((await parent.readBelow({ task: '1/1:#1@1/F1' })).text).toContain('A race in the writer');
+    expect((await parent.reading.read({ task: '1/1:#1@1/F1' })).text).toContain('A race in the writer');
     // A path from the subplanner's own plan, the task's words, and its log.
     expect(read.handoff).toContain('A race in the writer');
     expect(read.output).toContain('"node":"root/1/1"');

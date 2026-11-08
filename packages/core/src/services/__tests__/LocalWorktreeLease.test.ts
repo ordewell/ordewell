@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { LocalWorktreeLease } from '../LocalWorktreeLease';
 import { SlotPool, type PoolNode } from '../SlotPool';
 import { IsolationRunController } from '../IsolationRunController';
-import { GUARANTEES, LeaseGuaranteeError, type LeaseRequest, type LeaseSpec, type OpenLease, type ReservedLease } from '../executionLease';
+import { GUARANTEES, LeaseGuaranteeError, type LeaseRequest, type LeaseSpec, type LeaseWorkspaceIntent, type OpenLease, type ReservedLease } from '../executionLease';
 import { createTask } from '../../models/Task';
 import { fakeConfig, FakeWorktreeIsolation } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
@@ -28,9 +28,10 @@ function setup(limit = 3, isolated = true) {
   const pool = new SlotPool(() => limit);
   pool.join(node);
   const backend = new LocalWorktreeLease({ pool, node, runs, workspaceRoot: () => '/repo' });
-  const open = async (spec: Omit<LeaseSpec, 'required'> & { required?: LeaseSpec['required'] }, signal = new AbortController().signal) => {
+  const open = async (spec: Omit<LeaseSpec, 'required' | 'workspace'> & { workspace: LeaseWorkspaceIntent; required?: LeaseSpec['required'] }, signal = new AbortController().signal) => {
     if (isolated && !runs.decided) await runs.decide(async () => undefined);
-    return reserved(backend.reserve(attemptOf())).open({ required: [], ...spec }, signal);
+    const workspace = spec.workspace.kind === 'checkout' ? spec.workspace : { ...spec.workspace, decision: runs.decision };
+    return reserved(backend.reserve(attemptOf())).open({ required: [], ...spec, workspace }, signal);
   };
   return { isolation, runs, pool, backend, open };
 }
@@ -41,6 +42,76 @@ function reserved(result: ReturnType<LocalWorktreeLease['reserve']>): ReservedLe
 }
 
 describe('LocalWorktreeLease (ADR-0059 L4)', () => {
+  it.each(['close', 'isolated', 'shared'] as const)('refuses a shared decision after %s without touching the checkout', async (next) => {
+    const { backend, runs, isolation } = setup();
+    isolation.availability = { active: false, reason: 'disabled' };
+    const decision = await runs.decide(async () => undefined);
+    if (typeof decision === 'string') throw new Error(decision);
+    const lease = reserved(backend.reserve(attemptOf()));
+    await runs.close();
+    if (next !== 'close') {
+      isolation.availability = next === 'isolated' ? { active: true } : { active: false, reason: 'disabled' };
+      await runs.decide(async () => undefined);
+    }
+
+    await expect(lease.open({ task: t1, workspace: { kind: 'worktree', intent: 'fresh', decision }, required: [] }, new AbortController().signal))
+      .rejects.toThrow('isolation decision changed or closed');
+    expect(isolation.taskIdsFor('prepare')).toEqual([]);
+    expect(isolation.taskIdsFor('release')).toEqual([]);
+  });
+
+  it('refuses a decision closed while git prepares the attempt workspace', async () => {
+    const { backend, runs, isolation } = setup();
+    await runs.decide(async () => undefined);
+    const decision = runs.decision;
+    let prepared!: () => void;
+    const gate = new Promise<void>((resolve) => { prepared = resolve; });
+    const prepare = isolation.prepare.bind(isolation);
+    const preparing = vi.spyOn(isolation, 'prepare').mockImplementation(async (...args) => { await gate; return prepare(...args); });
+
+    const opening = reserved(backend.reserve(attemptOf())).open({ task: t1, workspace: { kind: 'worktree', intent: 'fresh', decision }, required: [] }, new AbortController().signal);
+    const result = expect(opening).rejects.toThrow('isolation decision changed or closed');
+    await vi.waitFor(() => expect(preparing).toHaveBeenCalledOnce());
+    runs.interrupt();
+    prepared();
+
+    await result;
+    expect(isolation.taskIdsFor('release')).toEqual([]);
+  });
+
+  it('opens the checkout only under a current shared decision', async () => {
+    const { backend, runs, isolation } = setup();
+    isolation.availability = { active: false, reason: 'disabled' };
+    const decision = await runs.decide(async () => undefined);
+    expect(decision).toEqual({ epoch: 1, mode: 'shared' });
+    if (typeof decision === 'string') throw new Error(decision);
+
+    const opened = await reserved(backend.reserve(attemptOf())).open({ task: t1, workspace: { kind: 'worktree', intent: 'fresh', decision }, required: [] }, new AbortController().signal);
+
+    expect(opened.workspace).toEqual({ cwd: '/repo', worktree: false });
+  });
+
+  it('refuses a worktree spec without a task instead of returning the checkout', async () => {
+    const { open } = setup();
+
+    await expect(open({ workspace: { kind: 'worktree', intent: 'fresh' } })).rejects.toThrow('A worktree lease needs a task.');
+  });
+
+  it('refuses the claim\'s isolation decision after its run is replaced by a shared run', async () => {
+    const { backend, runs, isolation } = setup();
+    const decision = await runs.decide(async () => undefined);
+    if (typeof decision === 'string') throw new Error(decision);
+    const lease = reserved(backend.reserve(attemptOf()));
+    runs.interrupt();
+    isolation.availability = { active: false, reason: 'disabled' };
+    await runs.decide(async () => undefined);
+
+    await expect(lease.open({ task: t1, workspace: { kind: 'worktree', intent: 'fresh', decision }, required: [] }, new AbortController().signal))
+      .rejects.toThrow('isolation decision changed or closed');
+    expect(isolation.taskIdsFor('prepare')).toEqual([]);
+    expect(isolation.taskIdsFor('release')).toEqual([]);
+  });
+
   it('reserve is the Parallel limit', () => {
     const { backend } = setup(1);
     const lease = reserved(backend.reserve(attemptOf('a')));

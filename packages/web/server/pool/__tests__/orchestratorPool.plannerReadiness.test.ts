@@ -71,8 +71,8 @@ describe('OrchestratorPool planner readiness', () => {
     await pool.startPlanning('s3', 'Add a limiter', ['claude-code'], workspace);
     delete process.env.OPENROUTER_API_KEY;
 
-    await expect(pool.continuePlanning('s3', 'go on')).rejects.toBeInstanceOf(PlannerNotReadyError);
-    expect(pool.session('s3')).toBeDefined();
+    await expect(pool.continuePlanning('s3', 'go on', undefined)).rejects.toBeInstanceOf(PlannerNotReadyError);
+    expect(pool.session('s3', undefined)).toBeDefined();
   });
 
   it('refuses what reaches the session past the pool once the key is gone: a force send, a merge, a compaction', async () => {
@@ -82,9 +82,9 @@ describe('OrchestratorPool planner readiness', () => {
     transport.mockClear();
     delete process.env.OPENROUTER_API_KEY;
 
-    await expect(pool.session('s5').forceSendPrompt('go on')).rejects.toBeInstanceOf(PlannerNotReadyError);
-    await expect(pool.session('s5').continueConversation('merge #1 and #2')).rejects.toBeInstanceOf(PlannerNotReadyError);
-    await expect(pool.compactConversation('s5')).rejects.toBeInstanceOf(PlannerNotReadyError);
+    await expect(pool.session('s5', undefined).forceSendPrompt('go on')).rejects.toBeInstanceOf(PlannerNotReadyError);
+    await expect(pool.session('s5', undefined).continueConversation('merge #1 and #2')).rejects.toBeInstanceOf(PlannerNotReadyError);
+    await expect(pool.compactConversation('s5', undefined)).rejects.toBeInstanceOf(PlannerNotReadyError);
     expect(transport).not.toHaveBeenCalled();
     expect(continued).not.toHaveBeenCalled();
   });
@@ -92,10 +92,10 @@ describe('OrchestratorPool planner readiness', () => {
   it('keeps the live session when a restart is refused', async () => {
     process.env.OPENROUTER_API_KEY = 'sk-or-test';
     await pool.startPlanning('s4', 'Add a limiter', ['claude-code'], workspace);
-    const live = pool.session('s4');
+    const live = pool.session('s4', undefined);
     delete process.env.OPENROUTER_API_KEY;
 
     await expect(pool.startPlanning('s4', 'Another goal', ['claude-code'], workspace)).rejects.toBeInstanceOf(PlannerNotReadyError);
-    expect(pool.session('s4')).toBe(live);
+    expect(pool.session('s4', undefined)).toBe(live);
   });
 });

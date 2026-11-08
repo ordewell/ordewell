@@ -1,5 +1,4 @@
 import { AlertTriangle, Check, GitMerge } from 'lucide-react';
-import type { GitActionResponse } from '@ordewell/core';
 import { Badge, Icon } from '@ordewell/ui/design';
 import type { ConfirmationRequest } from '@ordewell/ui/host';
 import type { FrameApi } from '../../frame/api';
@@ -47,7 +46,7 @@ async function restore(api: FrameApi, stashes: Array<{ repo: string; sha: string
   const said: string[] = [];
   for (const { repo, sha } of stashes) {
     try {
-      const answer = await callDaemon('git.stashPop', {}, { workspace: api.workspace, repo, stash: sha }) as GitActionResponse;
+      const answer = await callDaemon('git.stashPop', {}, { workspace: api.workspace, repo, stash: sha });
       if (answer.warning) said.push(answer.warning);
     } catch (error) {
       said.push(`${repoName(repo)}: ${messageOf(error)} Your changes are kept in stash ${sha.slice(0, 12)}.`);
@@ -130,7 +129,7 @@ export async function mergeAll(api: FrameApi, host: DaemonHost, ask: Ask = confi
       const stashes: Array<{ repo: string; sha: string }> = [];
       try {
         for (const { repo, paths } of plan) {
-          const answer = await callDaemon('git.stash', {}, { workspace: api.workspace, repo, paths, message: stashMessage }) as GitActionResponse;
+          const answer = await callDaemon('git.stash', {}, { workspace: api.workspace, repo, paths, message: stashMessage });
           if (answer.stash) stashes.push({ repo, sha: answer.stash.sha });
         }
       } catch (error) {

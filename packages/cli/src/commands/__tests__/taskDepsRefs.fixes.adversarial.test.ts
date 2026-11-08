@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import http from 'http';
 import { ApiClient } from '../../apiClient';
+import { wireRoute } from '../../__tests__/wireRoute';
 
 /**
  * Adversarial, round two, on `ordewell task-deps`: the first round added the
@@ -32,9 +33,9 @@ async function fakeDaemon(plan: unknown = PLAN): Promise<{ port: number; close: 
     req.on('data', (c) => { raw += c; });
     req.on('end', () => {
       const body = raw ? JSON.parse(raw) : undefined;
-      if (req.method !== 'GET') sent.push({ method: req.method!, url: req.url!, body });
+      if (req.method !== 'GET') sent.push({ method: req.method!, url: wireRoute(req.url), body });
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      if (req.url?.includes('/api/sessions/')) return res.end(JSON.stringify({ meta: { id: 'session-1', goal: 'g' }, plan }));
+      if (wireRoute(req.url).includes('/api/sessions/')) return res.end(JSON.stringify({ meta: { id: 'session-1', goal: 'g' }, plan }));
       res.end(JSON.stringify({ ok: true }));
     });
   });

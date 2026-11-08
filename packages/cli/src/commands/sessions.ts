@@ -1,4 +1,4 @@
-import { expandSessionId, flag, hasFlag, positionals, saveLastSession, readLastSession } from '../utils';
+import { expandSessionId, hasFlag, positionals, saveLastSession, readLastSession, workspaceOf } from '../utils';
 import { ensureDaemon, resolvePort } from '../daemon';
 import { ApiClient } from '../apiClient';
 
@@ -11,12 +11,12 @@ const USAGE = 'Usage: ordewell sessions list|load <id>|delete <id> [--workspace 
  */
 export async function handleSessions(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
   const [action, identifier] = positionals(subArgs);
-  const workspace = flag(subArgs, '--workspace') || process.cwd();
+  const workspace = workspaceOf(subArgs);
   // `status` prints the tail of an id; load/delete must accept what it printed.
   const target = identifier ? expandSessionId(identifier, workspace) : undefined;
   const asJson = hasFlag(subArgs, '--json');
 
-  const api = injectedApi || new ApiClient(await ensureDaemon(resolvePort(subArgs)));
+  const api = injectedApi || new ApiClient(await ensureDaemon(resolvePort(subArgs)), workspaceOf(subArgs));
 
   if (!action || action === 'list') {
     const sessions = await api.getSessions(workspace);

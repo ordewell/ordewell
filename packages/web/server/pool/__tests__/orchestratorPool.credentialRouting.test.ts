@@ -114,7 +114,7 @@ describe('OrchestratorPool routing after a credential change', () => {
     await p.startPlanning('s1', 'ship it', ['claude-code'], workspace);
 
     const settings = p.updateSettings({ env: { OPENROUTER_API_KEY: '' } });
-    await p.continuePlanning('s1', 'go on');
+    await p.continuePlanning('s1', 'go on', undefined);
 
     expect(settings.aiProvider).toBe('google');
     expect(reached).toEqual(['openrouter', settings.aiProvider]);

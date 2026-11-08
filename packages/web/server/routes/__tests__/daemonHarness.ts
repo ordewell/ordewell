@@ -45,9 +45,8 @@ export function daemonHarness() {
   });
   const pool = {
     session: () => session,
+    live: () => session,
     hasSession: () => true,
-    outstandingApprovals: () => session.outstandingApprovals(),
-    resolveApproval: (_id: string, approvalId: string, answer: Parameters<Session['resolveApproval']>[1]) => session.resolveApproval(approvalId, answer),
   } as unknown as OrchestratorPool;
   const app = new Hono()
     .route('/api/plans', plansRoute(pool))

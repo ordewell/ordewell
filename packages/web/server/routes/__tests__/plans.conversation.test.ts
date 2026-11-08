@@ -40,7 +40,7 @@ describe('POST /:sessionId/conversation/fork', () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ sessionId: 'session-fork', plan: { tasks: [] } });
-    expect(forkConversation).toHaveBeenCalledWith('s1');
+    expect(forkConversation).toHaveBeenCalledWith('s1', undefined);
   });
 
   it('is a conflict while the planner is answering', async () => {
@@ -89,7 +89,7 @@ describe('POST /:sessionId/conversation/rewind', () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual(fork);
-    expect(rewindConversation).toHaveBeenCalledWith('s1', 2);
+    expect(rewindConversation).toHaveBeenCalledWith('s1', 2, undefined);
   });
 
   it.each([[{}], [{ index: '2' }], [{ index: 1.5 }], [{ index: -1 }]])('refuses %j without touching the session', async (body) => {
@@ -133,7 +133,7 @@ describe('POST /:sessionId/conversation/compact', () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ plan: { tasks: [] }, summary: 'the state', keptMessages: 4 });
-    expect(compactConversation).toHaveBeenCalledWith('s1');
+    expect(compactConversation).toHaveBeenCalledWith('s1', undefined);
   });
 
   it('is a conflict while the planner is answering', async () => {
@@ -193,7 +193,7 @@ describe('POST /:sessionId/converse/message/now', () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ plan: { tasks: [] } });
-    expect(forceSendPrompt).toHaveBeenCalledWith('s1', 'use Postgres instead');
+    expect(forceSendPrompt).toHaveBeenCalledWith('s1', 'use Postgres instead', undefined);
   });
 
   it('needs a message', async () => {
@@ -260,7 +260,7 @@ describe('conversation routes — real daemon wiring', () => {
       expect(pool.hasSession(rewound.sessionId)).toBe(true);
       expect(listSessions(workspace).map((m) => m.id).sort()).toEqual([rewound.sessionId, 's1'].sort());
       expect(readFileSync(join(sessionsDir, originalFile)).equals(originalBytes)).toBe(true);
-      expect(pool.session('s1').planState!.conversationHistory).toHaveLength(4);
+      expect(pool.session('s1', undefined).planState!.conversationHistory).toHaveLength(4);
 
       const fork = (await (await app.request(`/api/plans/${rewound.sessionId}/conversation/fork`, { method: 'POST' })).json()) as { sessionId: string };
       expect(pool.hasSession(fork.sessionId)).toBe(true);

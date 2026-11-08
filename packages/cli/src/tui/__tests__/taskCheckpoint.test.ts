@@ -3,7 +3,7 @@ import { replayTaskLog, type TaskLogEvent } from '@ordewell/core';
 import { initialState, reduce, type Action } from '../reducer';
 import { render } from '../render';
 import { chatLayout, footerHints, helpLayout } from '../layout';
-import { inboundFor } from '../inbound';
+import { createInbound } from '../inbound';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import { lastMessage } from './chat';
 import type { TaskLogState, TaskView, TuiState } from '../state';
@@ -228,7 +228,7 @@ describe('answering from the task view', () => {
 describe('the question, from the daemon', () => {
   it('is read off the status update, and gone with the next one that does not carry it', () => {
     const actions: Action[] = [];
-    const receive = inboundFor({}, (action) => actions.push(action), 's1').execution();
+    const receive = createInbound((action) => actions.push(action), 's1').receive;
     const wire: unknown = { type: 'status_update', tasks: [{ id: 't1', status: 'awaiting_user', verdict: null, awaitingReason: 'checkpoint', checkpoint: `Drop it?\x1b[2J\n${'x'.repeat(10)}` }] };
     receive(wire as WsEvent);
     const update = actions.find((a): a is Extract<Action, { type: 'statusUpdate' }> => a.type === 'statusUpdate');
@@ -268,7 +268,7 @@ describe('the notice in the chat pane', () => {
 
   it('arrives from the daemon\'s checkpoint message', () => {
     const actions: Action[] = [];
-    const receive = inboundFor({}, (action) => actions.push(action), 's1').execution();
+    const receive = createInbound((action) => actions.push(action), 's1').receive;
     const wire: unknown = { type: 'checkpoint', taskId: 't1', taskTitle: 'Migrate the schema', summary: QUESTION };
     receive(wire as WsEvent);
     expect(actions).toEqual([{ type: 'taskCheckpoint', taskId: 't1', title: 'Migrate the schema', summary: QUESTION, sessionId: 's1' }]);

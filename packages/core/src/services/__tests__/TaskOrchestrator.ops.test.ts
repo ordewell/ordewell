@@ -305,6 +305,57 @@ describe('TaskOrchestrator: ops tasks and merge gates (ADR-0020)', () => {
       expect(refused).toBeInstanceOf(TaskControlError);
     });
 
+    /** t1's change landed and ops task o2 has ended, holding a saved session: a Merge all may run, and o2 could be started again in it. */
+    async function endedBesideMerge(end: (env: ReturnType<typeof setup>) => void, settled: (task: Task) => boolean) {
+      const env = setup();
+      const t1 = change('t1', 1);
+      env.orchestrator.loadPlan([t1, ops('o2', 2)]);
+      await env.orchestrator.approveReview();
+      await vi.waitFor(() => expect(env.spawned('o2')).toHaveLength(1));
+      end(env);
+      await vi.waitFor(() => expect(settled(env.orchestrator.storeInstance.get('o2')!)).toBe(true));
+      env.pass(t1);
+      await vi.waitFor(() => expect(env.status('t1')).toBe('completed'));
+      return env;
+    }
+
+    it.each([
+      ['continued', (env: ReturnType<typeof setup>) => env.orchestrator.continueTask('o2', 'one more thing')],
+      ['force-started', (env: ReturnType<typeof setup>) => env.orchestrator.forceStartTask('o2')],
+    ])('refuses an ops task %s while a merge is under way', async (_how, start) => {
+      const env = await endedBesideMerge((e) => e.latest('o2').emitExit(1), (t) => t.status === 'failed');
+      let refused: unknown = null;
+      env.isolation.mergeIntoCheckedOut = async () => {
+        refused = await start(env).then(() => null, (err: unknown) => err);
+        return { outcome: 'merged' };
+      };
+
+      await env.orchestrator.mergeRun();
+
+      expect(refused).toBeInstanceOf(TaskControlError);
+      expect((refused as Error).message).toBe('A Merge all is under way: ops task "Task o2" can start once it has finished.');
+      expect(env.spawned('o2')).toHaveLength(1);
+    });
+
+    it('refuses to resume an ops task paused on a usage limit while a merge is under way', async () => {
+      const env = await endedBesideMerge((e) => {
+        e.latest('o2').emitEvent({ type: 'error', message: "You've hit your session limit." });
+        e.latest('o2').emitOutput("You've hit your session limit.\n");
+        e.latest('o2').emitTurnEnd('failed');
+      }, (t) => t.awaitingReason === 'usage-limit');
+      let refused: unknown = null;
+      env.isolation.mergeIntoCheckedOut = async () => {
+        refused = await env.orchestrator.resumeNow('o2').then(() => null, (err: unknown) => err);
+        return { outcome: 'merged' };
+      };
+
+      await env.orchestrator.mergeRun();
+
+      expect((refused as Error | null)?.message).toBe('A Merge all is under way: ops task "Task o2" can start once it has finished.');
+      expect(env.spawned('o2')).toHaveLength(1);
+      expect(env.orchestrator.storeInstance.get('o2')!.awaitingReason).toBe('usage-limit');
+    });
+
     it('starts no ops task while a merge is under way', async () => {
       const env = setup();
       const t1 = change('t1', 1);

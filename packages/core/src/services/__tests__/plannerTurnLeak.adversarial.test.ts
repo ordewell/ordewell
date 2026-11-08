@@ -5,6 +5,7 @@ import { join } from 'path';
 import type { LegacyPlanState, RunnerId, Task } from '../../models/Task';
 import type { Session, ChildPlacement } from '../createSession';
 import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
+import type { TurnGate } from '../TurnGate';
 import { FakeWorktreeIsolation } from '../../testing';
 import { LEASE_STALE_MS, LeaseHost } from '../sessionLease';
 import { openTaskLog } from '../../utils/taskLogStore';
@@ -63,7 +64,7 @@ describe('a planner goal refused after its turn took a slot', () => {
       const refused = await refusedGoal(a.session).catch((err: unknown) => err);
       expect((refused as Error).message).toBe('None of the requested runners are enabled');
       // No turn opened, so nothing ever released what the opening reserved.
-      expect((a.session as unknown as { turnLease: unknown }).turnLease).toBeNull();
+      expect((a.session as unknown as { gate: TurnGate }).gate.holding).toBe(false);
 
       await b.session.execute({ command: 'run_plan' }, { kind: 'user' });
       await until(() => b.runner.spawnedIds().includes('b1'));
@@ -80,7 +81,7 @@ describe('a planner goal refused after its turn took a slot', () => {
     const a = childOf('a', [task('a1', 1)]);
     try {
       await expect(a.session.compactConversation()).rejects.toThrow('too short to condense');
-      expect((a.session as unknown as { turnLease: unknown }).turnLease).toBeNull();
+      expect((a.session as unknown as { gate: TurnGate }).gate.holding).toBe(false);
     } finally {
       a.session.destroy();
       root.destroy();
@@ -97,7 +98,7 @@ describe('a planner goal refused after its turn took a slot', () => {
       expect(a.session.isPlannerBusy).toBe(true);
 
       await expect(a.session.startPlanning('a new goal', ['opencode'])).rejects.toThrow('None of the requested runners are enabled');
-      expect((a.session as unknown as { turnLease: unknown }).turnLease).not.toBeNull();
+      expect((a.session as unknown as { gate: TurnGate }).gate.holding).toBe(true);
 
       await b.session.execute({ command: 'run_plan' }, { kind: 'user' });
       await settled();
@@ -144,7 +145,7 @@ describe('a planner goal refused after its turn took a slot', () => {
 
       const refused = await a.startPlanning('a new goal', ['claude-code']).catch((err: unknown) => err);
       expect((refused as Error).message).toContain('another Ordewell host');
-      expect((a as unknown as { turnLease: unknown }).turnLease).toBeNull();
+      expect((a as unknown as { gate: TurnGate }).gate.holding).toBe(false);
     } finally {
       a?.destroy();
       taker.releaseAll();

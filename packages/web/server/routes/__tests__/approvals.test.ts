@@ -1,24 +1,42 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Hono } from 'hono';
 import { approvalsRoute } from '../approvals';
+import { SessionNotFoundError } from '@ordewell/core';
 import type { OrchestratorPool } from '../../pool/orchestratorPool';
 
-function fakePool(overrides: Partial<OrchestratorPool> = {}): OrchestratorPool {
-  return {
-    hasSession: vi.fn().mockReturnValue(true),
+interface FakeSession {
+  resolveApproval: ReturnType<typeof vi.fn>;
+  outstandingApprovals: ReturnType<typeof vi.fn>;
+  approvedScopes: ReturnType<typeof vi.fn>;
+  execute: ReturnType<typeof vi.fn>;
+}
+
+/** A pool holding one session, `s1`, the route reaches through `pool.session`; `held: false` holds none. */
+function fakePool(overrides: Partial<FakeSession> = {}, { held = true } = {}): { pool: OrchestratorPool; session: FakeSession } {
+  const session: FakeSession = {
     resolveApproval: vi.fn().mockReturnValue(true),
     outstandingApprovals: vi.fn().mockReturnValue([]),
     approvedScopes: vi.fn().mockReturnValue([]),
+    execute: vi.fn(),
     ...overrides,
+  };
+  const pool = {
+    hasSession: vi.fn().mockReturnValue(held),
+    session: vi.fn(() => {
+      if (!held) throw new SessionNotFoundError();
+      return session;
+    }),
   } as unknown as OrchestratorPool;
+  return { pool, session };
 }
 
 describe('POST /api/approvals/:sessionId/:approvalId', () => {
   let app: Hono;
   let pool: OrchestratorPool;
+  let session: FakeSession;
 
   beforeEach(() => {
-    pool = fakePool();
+    ({ pool, session } = fakePool());
     app = new Hono();
     app.route('/api/approvals', approvalsRoute(pool));
   });
@@ -31,7 +49,7 @@ describe('POST /api/approvals/:sessionId/:approvalId', () => {
     });
 
     expect(res.status).toBe(200);
-    expect(pool.resolveApproval).toHaveBeenCalledWith('s1', 'ap-1', true);
+    expect(session.resolveApproval).toHaveBeenCalledWith('ap-1', true);
   });
 
   it('denies when the body says so', async () => {
@@ -41,14 +59,14 @@ describe('POST /api/approvals/:sessionId/:approvalId', () => {
       body: JSON.stringify({ granted: false }),
     });
 
-    expect(pool.resolveApproval).toHaveBeenCalledWith('s1', 'ap-1', false);
+    expect(session.resolveApproval).toHaveBeenCalledWith('ap-1', false);
   });
 
   // A missing or malformed body must not read as consent.
   it('treats an absent granted flag as a denial', async () => {
     await app.request('/api/approvals/s1/ap-1', { method: 'POST' });
 
-    expect(pool.resolveApproval).toHaveBeenCalledWith('s1', 'ap-1', false);
+    expect(session.resolveApproval).toHaveBeenCalledWith('ap-1', false);
   });
 
   // T5: absent is denial everywhere. A wrong type, a truthy non-boolean, a
@@ -67,7 +85,7 @@ describe('POST /api/approvals/:sessionId/:approvalId', () => {
       body,
     });
 
-    expect(pool.resolveApproval).toHaveBeenCalledWith('s1', 'ap-1', false);
+    expect(session.resolveApproval).toHaveBeenCalledWith('ap-1', false);
   });
 
   it.each([
@@ -81,7 +99,7 @@ describe('POST /api/approvals/:sessionId/:approvalId', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
-    expect(pool.resolveApproval).toHaveBeenCalledWith('s1', 'ap-1', expected);
+    expect(session.resolveApproval).toHaveBeenCalledWith('ap-1', expected);
     expect(await res.json()).toEqual({ ok: true, granted: expected.decision !== 'deny', decision: expected.decision });
   });
 
@@ -94,17 +112,17 @@ describe('POST /api/approvals/:sessionId/:approvalId', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
-    expect(pool.resolveApproval).toHaveBeenCalledWith('s1', 'ap-1', { decision: 'deny' });
+    expect(session.resolveApproval).toHaveBeenCalledWith('ap-1', { decision: 'deny' });
   });
 
   it('routes a runner request the user denies through the command seam, keeping it in the timeline', async () => {
     const execute = vi.fn().mockResolvedValue({ ok: true, message: 'Denied task #1 "Build"\'s request.' });
-    pool = fakePool({
+    ({ pool, session } = fakePool({
       outstandingApprovals: vi.fn().mockReturnValue([
         { id: 'ap-1', createdAt: '2026-10-11T18:00:00Z', request: { kind: 'runner_tool', subject: 'Bash(npm test)', scope: 'Bash(npm test)', taskId: 't1' } },
       ]),
-      session: vi.fn().mockReturnValue({ execute }),
-    });
+      execute,
+    }));
     app = new Hono();
     app.route('/api/approvals', approvalsRoute(pool));
 
@@ -116,7 +134,7 @@ describe('POST /api/approvals/:sessionId/:approvalId', () => {
 
     expect(res.status).toBe(200);
     expect(execute).toHaveBeenCalledWith({ command: 'answer_approval', task: 't1', approval: 'ap-1', answer: 'deny', note: 'not now' }, { kind: 'user' });
-    expect(pool.resolveApproval).not.toHaveBeenCalled();
+    expect(session.resolveApproval).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -124,12 +142,12 @@ describe('POST /api/approvals/:sessionId/:approvalId', () => {
     [{ decision: 'allowForTask' }, { command: 'answer_approval', task: 't1', approval: 'ap-1', answer: 'allowForTask' }],
   ])('routes the user\'s allow of a runner request %o through the command seam too', async (body, command) => {
     const execute = vi.fn().mockResolvedValue({ ok: true, message: 'Allowed.' });
-    pool = fakePool({
+    ({ pool, session } = fakePool({
       outstandingApprovals: vi.fn().mockReturnValue([
         { id: 'ap-1', createdAt: '2026-10-11T18:00:00Z', request: { kind: 'runner_tool', subject: 'Bash(npm test)', scope: 'Bash(npm test)', taskId: 't1' } },
       ]),
-      session: vi.fn().mockReturnValue({ execute }),
-    });
+      execute,
+    }));
     app = new Hono();
     app.route('/api/approvals', approvalsRoute(pool));
 
@@ -142,17 +160,17 @@ describe('POST /api/approvals/:sessionId/:approvalId', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, granted: true, decision: body.decision });
     expect(execute).toHaveBeenCalledWith(command, { kind: 'user' });
-    expect(pool.resolveApproval).not.toHaveBeenCalled();
+    expect(session.resolveApproval).not.toHaveBeenCalled();
   });
 
   it('answers 400 with the seam\'s reason when it refuses the answer', async () => {
     const execute = vi.fn().mockResolvedValue({ ok: false, outcome: 'refused', message: 'The request ap-1 was answered meanwhile.' });
-    pool = fakePool({
+    ({ pool, session } = fakePool({
       outstandingApprovals: vi.fn().mockReturnValue([
         { id: 'ap-1', createdAt: '2026-10-11T18:00:00Z', request: { kind: 'runner_tool', subject: 'Bash(npm test)', scope: 'Bash(npm test)', taskId: 't1' } },
       ]),
-      session: vi.fn().mockReturnValue({ execute }),
-    });
+      execute,
+    }));
     app = new Hono();
     app.route('/api/approvals', approvalsRoute(pool));
 
@@ -163,19 +181,19 @@ describe('POST /api/approvals/:sessionId/:approvalId', () => {
   });
 
   it('404s for an unknown session', async () => {
-    pool = fakePool({ hasSession: vi.fn().mockReturnValue(false) });
+    ({ pool, session } = fakePool({}, { held: false }));
     app = new Hono();
     app.route('/api/approvals', approvalsRoute(pool));
 
     const res = await app.request('/api/approvals/nope/ap-1', { method: 'POST' });
 
     expect(res.status).toBe(404);
-    expect(pool.resolveApproval).not.toHaveBeenCalled();
+    expect(session.resolveApproval).not.toHaveBeenCalled();
   });
 
   // The prompt may have timed out or been answered from another surface.
   it('409s when the approval is no longer outstanding', async () => {
-    pool = fakePool({ resolveApproval: vi.fn().mockReturnValue(false) });
+    ({ pool, session } = fakePool({ resolveApproval: vi.fn().mockReturnValue(false) }));
     app = new Hono();
     app.route('/api/approvals', approvalsRoute(pool));
 
@@ -191,7 +209,7 @@ describe('POST /api/approvals/:sessionId/:approvalId', () => {
 
 describe('GET /api/approvals/:sessionId', () => {
   it('lists what is still pending, so a client that connects mid-prompt can render it', async () => {
-    const pool = fakePool({
+    const { pool } = fakePool({
       outstandingApprovals: vi.fn().mockReturnValue([
         { id: 'ap-1', createdAt: '2026-07-25T00:00:00Z', request: { kind: 'shell_command', subject: 'npm test', scope: 'npm test' } },
       ]),
@@ -209,7 +227,7 @@ describe('GET /api/approvals/:sessionId', () => {
   });
 
   it('404s for an unknown session', async () => {
-    const pool = fakePool({ hasSession: vi.fn().mockReturnValue(false) });
+    const { pool } = fakePool({}, { held: false });
     const app = new Hono();
     app.route('/api/approvals', approvalsRoute(pool));
 

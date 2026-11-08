@@ -90,10 +90,15 @@ export function landingRuns(
   }
 }
 
-/** A path with its links resolved as far as it exists, so a missing folder still compares with its parent's real path. */
+/**
+ * A path with its links resolved as far as it exists, so a missing folder
+ * still compares with its parent's real path. Native, as git's paths are: the
+ * JS realpath keeps a Windows 8.3 short name, and a record git named long
+ * would not match the checkout it lands in.
+ */
 function realPath(file: string): string {
   try {
-    return fs.realpathSync(file);
+    return fs.realpathSync.native(file);
   } catch {
     const resolved = path.resolve(file);
     const parent = path.dirname(resolved);
