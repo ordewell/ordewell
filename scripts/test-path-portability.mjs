@@ -4,11 +4,14 @@ import path from 'node:path';
 import ts from 'typescript';
 
 export function pathAssumptions(text, filename = 'test.ts') {
-  const compilerFile = ts.sys.resolvePath(filename);
+  // A virtual POSIX-form root: TypeScript normalizes every name it hands the
+  // host to forward slashes, so a host path (`D:\a\x.test.ts`) never equals
+  // the name it asks for. Only the extension matters, as it picks TS, TSX or JS.
+  const compilerFile = `/__path_guard__/file${path.extname(filename.replaceAll('\\', '/'))}`;
   const source = ts.createSourceFile(compilerFile, text, ts.ScriptTarget.Latest, true);
   const program = ts.createProgram([compilerFile], { noLib: true, noResolve: true, allowJs: true }, {
     ...ts.createCompilerHost({}),
-    getSourceFile: (name) => name === compilerFile ? source : undefined,
+    getSourceFile: (name) => ts.normalizePath(name) === ts.normalizePath(compilerFile) ? source : undefined,
   });
   const checker = program.getTypeChecker();
   const symbol = (node) => checker.getSymbolAtLocation(node);

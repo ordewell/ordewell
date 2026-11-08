@@ -21,7 +21,10 @@ describe('host path comparisons in tests', () => {
       "import * as p from 'node:path'; const ws = p.resolve('/tmp/ws'); expect(encodeURIComponent(ws)).toBe('%2Ftmp%2Fws');",
       "import { resolve } from 'path'; expect('/elsewhere').toStrictEqual(resolve('/elsewhere'));",
     ]) {
-      for (const filename of ['fixture.test.ts', 'fixture.test.tsx', join('fixtures', 'fixture.test.mjs')]) {
+      for (const filename of [
+        'fixture.test.ts', 'fixture.test.tsx', join('fixtures', 'fixture.test.mjs'),
+        'D:\\a\\ordewell\\fixture.test.ts', 'D:\\a\\ordewell\\fixture.test.tsx', 'fixtures\\fixture.test.mjs',
+      ]) {
         assert.equal(pathAssumptions(source, filename).length, 1, filename);
       }
     }
@@ -37,14 +40,23 @@ describe('host path comparisons in tests', () => {
     ]) assert.deepEqual(pathAssumptions(source), [], source);
   });
 
+  it('reports a finding under the caller\'s Windows-form filename (#74)', () => {
+    const filename = 'D:\\a\\ordewell\\fixture.test.ts';
+    const [problem] = pathAssumptions("import path from 'node:path'; expect(path.resolve('/tmp/ws')).toBe('/tmp/ws');", filename);
+    assert.ok(problem.startsWith(`${filename}:1:`), problem);
+  });
+
   it('has no host path comparison assumptions in the repository tests', () => {
     const walk = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
       if (['node_modules', 'dist', 'dist-test', 'coverage', 'out', '.vscode-test', 'test-results'].includes(entry.name)) return [];
       const file = join(dir, entry.name);
       return entry.isDirectory() ? walk(file) : /\.test\.(ts|tsx|mjs)$/.test(file) ? [file] : [];
     });
-    const problems = ['packages', 'scripts', 'bench'].flatMap(walk)
-      .flatMap((file) => pathAssumptions(readFileSync(file, 'utf8'), file));
-    assert.deepEqual(problems, []);
+    const files = ['packages', 'scripts', 'bench'].flatMap(walk);
+    // Windows hands the guard backslash names; the host's own form must not matter.
+    for (const form of [(file) => file, (file) => file.replaceAll('/', '\\')]) {
+      const problems = files.flatMap((file) => pathAssumptions(readFileSync(file, 'utf8'), form(file)));
+      assert.deepEqual(problems, []);
+    }
   });
 });
