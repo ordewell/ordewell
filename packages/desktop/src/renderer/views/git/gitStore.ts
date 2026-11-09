@@ -79,6 +79,8 @@ export class GitStore {
   /** The one history read in flight per repository; a newer one replaces it, and the older one's answer is dropped. */
   private readonly historyReads = new Map<string, { token: number; tips: string; more: boolean }>();
   private historyTokens = 0;
+  /** Bumped by a Refresh the person asked for, so the history is read again though no tip moved: a tag alone moves none. */
+  private readonly historyRereads = new Map<string, number>();
 
   constructor(private readonly workspace: string) {}
 
@@ -116,9 +118,11 @@ export class GitStore {
   /**
    * Reads the repositories and the branches of `repo`. A read that a later one
    * overtook is dropped, so a quick change of repository never shows the
-   * earlier one's branches under the later one's name.
+   * earlier one's branches under the later one's name. With `history`, a
+   * history already read is read again too, as a Refresh the person pressed
+   * means it.
    */
-  async refresh(repo: string): Promise<void> {
+  async refresh(repo: string, { history = false }: { history?: boolean } = {}): Promise<void> {
     const mine = ++this.reads;
     this.set({ loading: true });
     try {
@@ -126,6 +130,7 @@ export class GitStore {
       if (mine !== this.reads) return;
       const runs = await this.runsFor(ownersOf(branches));
       if (mine !== this.reads) return;
+      if (history) this.historyRereads.set(repo, (this.historyRereads.get(repo) ?? 0) + 1);
       this.set({ repos, repo, branches, runs, error: undefined, loading: false, round: this.state.round + 1 });
     } catch (error) {
       if (mine !== this.reads) return;
@@ -143,12 +148,15 @@ export class GitStore {
    * read again over the same tips (the sidebar shown again, a fetch that
    * brought nothing) costs no log read. A detached checkout moves no tip when
    * it commits, and a failed branch read says nothing, so those count each read.
+   * A fetch that brought only tags moves no tip either: an explicit Refresh
+   * reads them in.
    */
   historyTips(repo: string): string | undefined {
     const { repo: read, branches, round } = this.state;
     if (read !== repo) return undefined;
     if (!branches || branches.detached) return `round ${round}`;
-    return JSON.stringify([branches.current, ...[...branches.local, ...branches.ordewell, ...branches.remote].map((b) => [b.name, b.sha])]);
+    const reread = this.historyRereads.get(repo) ?? 0;
+    return JSON.stringify([reread, branches.current, ...[...branches.local, ...branches.ordewell, ...branches.remote].map((b) => [b.name, b.sha])]);
   }
 
   /**

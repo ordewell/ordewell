@@ -320,6 +320,51 @@ describe('the Branches and History views', () => {
     await waitFor(() => expect(daemon.calls('git.branches').length).toBeGreaterThan(before));
     expect(daemon.calls('git.log')).toHaveLength(1);
   });
+
+  it('reads a tag that moved no branch in on an explicit Refresh, keeping the rows on screen meanwhile', async () => {
+    const later = deferred();
+    let reads = 0;
+    const daemon = await mount({
+      'git.log': () => (++reads === 1 ? ok({ repo: '.', ref: 'HEAD', commits: LOG, cursor: null }) : later.promise),
+    });
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    const row = await screen.findByRole('button', { name: 'Commit aaaaaaa: Merge: Wire SSO' });
+    expect(within(row).queryByText('v2.0')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh the branches and history' }));
+    await waitFor(() => expect(daemon.calls('git.log')).toHaveLength(2));
+    expect(screen.getByRole('button', { name: 'Commit aaaaaaa: Merge: Wire SSO' })).toBeInTheDocument();
+    await act(async () => { later.settle(ok({ repo: '.', ref: 'HEAD', commits: [{ ...LOG[0]!, refs: [...LOG[0]!.refs, 'v2.0'] }, LOG[1]!], cursor: null })); });
+    expect(within(screen.getByRole('button', { name: 'Commit aaaaaaa: Merge: Wire SSO' })).getByText('v2.0')).toBeInTheDocument();
+  });
+
+  it('keeps each repository’s history and pick its own, and drops a late answer for the one no longer shown', async () => {
+    const lib = deferred();
+    const libBranches = { ...BRANCHES, repo: 'libs/ui', local: [branch('main', { current: true, sha: sha('9') })], ordewell: [], remote: [], stashes: [], worktrees: [] };
+    const daemon = await mount({
+      'git.repos': ok({ repos: [REPO_STATE, { ...REPO_STATE, repo: 'libs/ui', head: sha('9') }] }),
+      'git.branches': (params) => ok(params?.repo === 'libs/ui' ? libBranches : BRANCHES),
+      'git.log': (params) => (params?.repo === 'libs/ui' ? lib.promise : ok({ repo: '.', ref: 'HEAD', commits: LOG, cursor: null })),
+    });
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Commit fffffff: Add the login button' }));
+    expect(screen.getByRole('button', { name: 'Commit fffffff: Add the login button' })).toHaveAttribute('aria-current', 'true');
+
+    const picker = await screen.findByRole('combobox', { name: 'Repository' });
+    fireEvent.change(picker, { target: { value: 'libs/ui' } });
+    await waitFor(() => expect(daemon.calls('git.log').some(([p]) => p?.repo === 'libs/ui')).toBe(true));
+    expect(await screen.findByText('Loading the history…')).toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: 'History' })).not.toBeInTheDocument();
+
+    fireEvent.change(picker, { target: { value: '.' } });
+    expect(await screen.findByRole('button', { name: 'Commit fffffff: Add the login button' })).toHaveAttribute('aria-current', 'true');
+    await act(async () => { lib.settle(ok({ repo: 'libs/ui', ref: 'HEAD', commits: [commit('9', [], 'Start the UI kit', ['HEAD', 'main'])], cursor: null })); });
+    expect(screen.queryByRole('button', { name: /Start the UI kit/ })).not.toBeInTheDocument();
+    expect(daemon.calls('git.log').filter(([p]) => p?.repo === '.')).toHaveLength(1);
+
+    fireEvent.change(picker, { target: { value: 'libs/ui' } });
+    expect(await screen.findByRole('button', { name: 'Commit 9999999: Start the UI kit' })).toBeInTheDocument();
+    expect(daemon.calls('git.log').filter(([p]) => p?.repo === 'libs/ui')).toHaveLength(1);
+  });
 });
 
 describe('branch folders', () => {
