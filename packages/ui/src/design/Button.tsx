@@ -15,6 +15,12 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   size?: ButtonSize;
   /** Leads the label, 16px, 8px from it. */
   icon?: IconComponent;
+  /**
+   * An operation this button started is pending: the icon turns, `aria-busy`
+   * says so, and the button refuses a second press. It stays at full strength,
+   * unlike a disabled one, so it reads as working and not as unavailable.
+   */
+  busy?: boolean;
   children: ReactNode;
 }
 
@@ -24,13 +30,13 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
  * run under the icon (design.md, Layout rules that prevent overlap).
  */
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
-  { variant = 'secondary', size = 'md', icon, children, className, type = 'button', ...rest },
+  { variant = 'secondary', size = 'md', icon, busy, children, className, type = 'button', disabled, ...rest },
   ref,
 ) {
   const classes = ['ow-button', `ow-button-${variant}`, `ow-button-${size}`, className].filter(Boolean).join(' ');
   return (
-    <button ref={ref} type={type} className={classes} {...rest}>
-      {icon && <Icon icon={icon} size={16} />}
+    <button ref={ref} type={type} className={classes} disabled={disabled || busy} aria-busy={busy || undefined} {...rest}>
+      {icon && <Icon icon={icon} size={16} className={busy ? 'ow-spin' : undefined} />}
       <span className="ow-button-label">{children}</span>
     </button>
   );

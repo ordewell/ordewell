@@ -6,6 +6,7 @@ import { FrameStore } from '../../../frame/store';
 import { daemonHost, resetDaemonHosts } from '../../../session/DaemonHost';
 import { fakeDaemon, ok, surfacePlan } from '../../../session/__tests__/fakeDaemon';
 import { HANDOFF, runView } from '../../changes/__tests__/fixtures';
+import { gitStoreFor } from '../../git/gitStore';
 import { CheckoutChanges, register } from '../CheckoutGroup';
 
 const WORKSPACE = '/work/acme';
@@ -21,7 +22,8 @@ function repo(over: Record<string, unknown> = {}) {
   return { repo: '.', branch: 'main', detached: false, head: 'abc123', upstream: 'origin/main', ahead: 0, behind: 0, ...over };
 }
 
-type Answers = Partial<Record<RouteId, DaemonCallResult | ((params: RouteParams | undefined, body: unknown) => DaemonCallResult)>>;
+type Result = DaemonCallResult | Promise<DaemonCallResult>;
+type Answers = Partial<Record<RouteId, Result | ((params: RouteParams | undefined, body: unknown) => Result)>>;
 
 async function mounted(answers: Answers = {}) {
   const daemon = fakeDaemon({
@@ -185,5 +187,47 @@ describe('the checkout group', () => {
     expect(screen.getByText(/↓ 3 ↑ 1/)).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Commit message for Your checkout' })).toBeInTheDocument();
     off();
+  });
+
+  describe('the sync line while git works', () => {
+    const sha = 'a'.repeat(40);
+    const BRANCHES = {
+      repo: '.', current: 'main', detached: false,
+      local: [{ name: 'main', sha, upstream: 'origin/main', ahead: 0, behind: 2, current: true }],
+      ordewell: [], remote: [{ name: 'origin/main', sha, upstream: null, ahead: 0, behind: 0, current: false }], stashes: [], worktrees: [],
+    };
+    const button = (name: RegExp) => within(screen.getByRole('group', { name: /^Sync/ })).getByRole('button', { name });
+
+    async function mountedWithRemote(answers: Answers) {
+      const result = await mounted({ 'git.repos': ok({ repos: [repo({ behind: 2 })] }), 'git.branches': ok(BRANCHES), ...answers });
+      await waitFor(() => expect(button(/^Fetch/)).toBeEnabled());
+      return result;
+    }
+
+    it('turns the Fetch icon from the first click to the answer, and restores every button', async () => {
+      let settle!: (r: DaemonCallResult) => void;
+      await mountedWithRemote({ 'git.fetch': new Promise<DaemonCallResult>((resolve) => { settle = resolve; }) });
+      fireEvent.click(button(/^Fetch/));
+      await waitFor(() => expect(button(/^Fetch/)).toHaveAttribute('aria-busy', 'true'));
+      expect(button(/^Fetch/).querySelector('svg')).toHaveClass('ow-spin');
+      expect(button(/^Pull/)).toBeDisabled();
+      expect(button(/^Pull/).querySelector('svg')).not.toHaveClass('ow-spin');
+      await act(async () => { settle(ok({ repo: repo() })); });
+      await waitFor(() => expect(button(/^Fetch/)).not.toHaveAttribute('aria-busy'));
+      expect(button(/^Fetch/)).toBeEnabled();
+      expect(button(/^Pull/)).toBeEnabled();
+    });
+
+    it('shows a sync another surface started, and is restored when it is refused', async () => {
+      const { store } = await mountedWithRemote({});
+      let fail!: () => void;
+      const started = gitStoreFor(store.api).sync('.', 'fetch', () => new Promise<void>((_, reject) => { fail = () => reject(new Error('no route to host')); }));
+      await waitFor(() => expect(button(/^Fetch/)).toHaveAttribute('aria-busy', 'true'));
+      expect(button(/^Push/)).toBeDisabled();
+      fail();
+      await expect(started).rejects.toThrow('no route to host');
+      await waitFor(() => expect(button(/^Fetch/)).not.toHaveAttribute('aria-busy'));
+      expect(button(/^Fetch/)).toBeEnabled();
+    });
   });
 });
