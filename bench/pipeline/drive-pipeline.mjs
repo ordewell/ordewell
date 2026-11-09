@@ -109,7 +109,6 @@ function makeConfig(runnerId) {
     sttModel: '',
     orchestratorModel: '',
     geminiModel: '',
-    planMapEnabled: true,
     openrouterKey: process.env.OPENROUTER_API_KEY || '',
     geminiKey: '',
     autonomousMode: true,

@@ -87,7 +87,6 @@ export function fakeConfig(overrides: Partial<IConfig> = {}): IConfig {
     orchestratorModel: '',
     researchSubagentModel: '',
     geminiModel: '',
-    planMapEnabled: true,
     autonomousMode: true,
     // Off so an orchestrator built without an injected isolation never runs
     // real git against whatever repository the tests happen to run in.

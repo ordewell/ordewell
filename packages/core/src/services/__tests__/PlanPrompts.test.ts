@@ -500,6 +500,13 @@ describe('the coordinator role and its defaults (#5)', () => {
     }
   });
 
+  // A runner is shown no plan map, so the brief is the only place its boundary can be written.
+  it.each(backends)('has each brief state its boundary and name a shared decision with its owner (harness: $harness, $runner)', ({ harness, runner }) => {
+    const p = buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness, runner });
+    expect(p).toMatch(/Each brief states its boundary: what is out of scope, and which tasks running in parallel own the neighbouring files or areas, named by what they own\./);
+    expect(p).toMatch(/A decision several tasks share \(an interface, a name, a limit such as a size ceiling a test pins\) is named in each brief that touches it, with the task that owns it\./);
+  });
+
   // Every line of the system prompt is paid for on each turn; the rewrite had to fit in what was there.
   it('keeps the harness prompt within its word budget', () => {
     const p = buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, {

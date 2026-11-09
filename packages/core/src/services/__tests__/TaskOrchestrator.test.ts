@@ -399,11 +399,9 @@ describe('TaskOrchestrator', () => {
 
       expect(spawn).toHaveBeenCalledTimes(1);
       const arg = spawn.mock.calls[0][0];
-      const expected = composeAugmentedPrompt(tasks[1], tasks, { planMapEnabled: true });
+      const expected = composeAugmentedPrompt(tasks[1], tasks);
       expect(arg.prompt).toBe(expected);
-      // Regression: must carry plan-map context, not the bare prompt/title.
-      expect(arg.prompt).not.toBe('do second');
-      expect(arg.prompt).toContain('Plan map');
+      expect(arg.prompt).toContain('do second');
       expect(orchestrator.storeInstance.get('t2')!.status).toBe('in_progress');
     });
 

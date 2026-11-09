@@ -47,7 +47,6 @@ export interface IConfig {
    */
   plannerThinkingEffort?: string;
 
-  planMapEnabled: boolean;
   autonomousMode: boolean;
 
   /**

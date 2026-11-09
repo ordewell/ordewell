@@ -2,7 +2,6 @@ import * as path from 'path';
 import { resolveDefaultMode, taggedReadOnlyMode, unavailableTaskModeMessage } from './ModeResolver';
 import { McpAttachError, McpAttachTimeout, RunnerStartupExit } from './harness/ordewellBinding';
 import type { RunnerId, Task, TaskOutputSummary, TaskSkillSnapshot, Verdict } from '../models/Task';
-import type { IConfig } from '../interfaces/IConfig';
 import type { INotification } from '../interfaces/INotification';
 import type { IRunner, IRunnerSession, QueuedTaskMessage, StructuredTurnEnd } from '../interfaces/IRunner';
 import type { TaskShell, TaskShellSite } from '../interfaces/IFileSystem';
@@ -286,7 +285,6 @@ export interface AttemptsHost {
 export type AttemptEnvironment = Omit<AttemptsDeps, 'host'>;
 
 export interface AttemptsDeps {
-  config: Pick<IConfig, 'planMapEnabled'>;
   notifications: INotification;
   runner: IRunner;
   /** Runs script tasks' bodies (ADR-0035), in place of a registered runner. */
@@ -1024,7 +1022,6 @@ export class Attempts {
     const prompt = attemptPrompt(kind, {
       task,
       plan: store.planTasks,
-      planMapEnabled: this.deps.config.planMapEnabled,
       previousWork,
       skills: attempt.skills,
       repairPrompt: (t) => this.deps.landing.repairPrompt(t),

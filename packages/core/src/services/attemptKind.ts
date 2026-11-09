@@ -167,7 +167,6 @@ export function attemptWorkspace(kind: AttemptKind): LeaseWorkspaceIntent {
 export interface AttemptPromptSources {
   task: Task;
   plan: readonly Task[];
-  planMapEnabled?: boolean;
   /** What became of the previous attempt's work where this one runs; absent in the checkout. */
   previousWork?: PreviousWork;
   /** The task's skills, resolved where the attempt runs; a repair and a continue are given none. */
@@ -189,7 +188,7 @@ export interface AttemptPromptSources {
  * verdict is watched for unchanged.
  */
 export function attemptPrompt(kind: AttemptKind, src: AttemptPromptSources): string {
-  const { task, plan, planMapEnabled } = src;
+  const { task, plan } = src;
   // At spawn the check is already in progress: repeat counted the round on
   // after betweenRounds held, and cleared the previous verdict and report.
   const between = betweenRounds(task);
@@ -212,17 +211,17 @@ export function attemptPrompt(kind: AttemptKind, src: AttemptPromptSources): str
     case 'repair':
       // A merge to resolve is not the task's own work, so its skills do not
       // apply, nor a check's verdict rule: the repair confirms no problem.
-      return composeAugmentedPrompt({ ...task, prompt: src.repairPrompt(task), loop: undefined }, plan, { planMapEnabled });
+      return composeAugmentedPrompt({ ...task, prompt: src.repairPrompt(task), loop: undefined }, plan);
     case 'ops':
       // Its effects outlive a failed attempt and are never rolled back, so
       // the next one is told what the last one did.
-      return composeAugmentedPrompt(task, plan, { planMapEnabled, skills: src.skills, previousAttempt: src.previousAttempt(task.id), loop });
+      return composeAugmentedPrompt(task, plan, { skills: src.skills, previousAttempt: src.previousAttempt(task.id), loop });
     case 'change':
-      return composeAugmentedPrompt(task, plan, { planMapEnabled, skills: src.skills, loop });
+      return composeAugmentedPrompt(task, plan, { skills: src.skills, loop });
     case 'readOnly':
-      return composeAugmentedPrompt(task, plan, { planMapEnabled, skills: src.skills, loop, readOnly: true });
+      return composeAugmentedPrompt(task, plan, { skills: src.skills, loop, readOnly: true });
     case 'carryOver':
-      return composeAugmentedPrompt(task, plan, { planMapEnabled, skills: src.skills, carriedOver: { from: kind.from, work: src.previousWork }, loop });
+      return composeAugmentedPrompt(task, plan, { skills: src.skills, carriedOver: { from: kind.from, work: src.previousWork }, loop });
     case 'delegated':
       // A subplanner reads its goal, not a runner's brief.
       return task.goal ?? '';

@@ -3,15 +3,12 @@ import { flattenTasksWithParents } from '../models/Task';
 import type { PreservedWork, PreviousWork } from '../interfaces/IWorktreeIsolation';
 import { SELF_REPO } from './isolationRecord';
 import { renderTaskSkills } from './taskSkills';
-import { assignedRunnerOf } from './AssignmentScope';
 import { betweenRounds, loopRoundOf, type TaskLoop } from '../models/Loop';
 import { REPORT_MAX_CHARS, artifactLines, boundedHandoffLines, findingLines, namedHandoff, openingLines, wordsFrom, type HandoffDigest, type StoredHandoff } from '../models/Handoff';
 
 const MAX_TAIL_CHARS = 500;
 /** Each dependency's share of a dependent's prompt, which carries every direct dependency's handoff (ADR-0047). */
 const MAX_HANDOFF_CHARS = 4_000;
-const DEFAULT_PLAN_MAP_MAX_ENTRIES = 30;
-const PLAN_MAP_MIN_TASKS = 3;
 
 export interface PriorOutput {
   /** The dependency's path label, dotted for a subtask (`1.1`). */
@@ -140,79 +137,6 @@ export function augmentPromptWithPriorOutputs(task: Task, allTasks: readonly Tas
   return `${renderPriorOutputs(outputs)}\n\n${basePrompt}`;
 }
 
-function planMapStatus(task: Task, isCurrent: boolean): string {
-  if (isCurrent) return 'NOW';
-  if (task.status === 'completed') return 'done';
-  if (task.status === 'failed') return 'failed';
-  if (task.status === 'skipped') return 'skipped';
-  if (task.status === 'in_progress') return 'running';
-  if (task.type === 'user') return 'user';
-  return 'next';
-}
-
-interface PlanMapRow {
-  task: Task;
-  parent: Task | null;
-  label: string;
-}
-
-function pickWindow(sorted: PlanMapRow[], currentIdx: number, max: number): { window: PlanMapRow[]; omitted: number } {
-  if (sorted.length <= max) return { window: sorted, omitted: 0 };
-  if (currentIdx < 0) return { window: sorted.slice(0, max), omitted: sorted.length - max };
-  const lookBack = Math.min(currentIdx, Math.floor(max / 3));
-  let start = currentIdx - lookBack;
-  if (start + max > sorted.length) start = sorted.length - max;
-  if (start < 0) start = 0;
-  const window = sorted.slice(start, start + max);
-  return { window, omitted: sorted.length - window.length };
-}
-
-/**
- * Numbered task list for the model's context. `planTasks` is the nested task
- * tree; subtasks render indented under their parent with the same dotted
- * path label the other surfaces use, so an `N.M` the model echoes back
- * matches what `resolveTaskId` accepts.
- */
-export function renderPlanMap(planTasks: readonly Task[], currentTaskId: string, opts?: { maxEntries?: number }): string {
-  const rows = flattenTasksWithParents(planTasks);
-  if (rows.length < PLAN_MAP_MIN_TASKS) return '';
-
-  // Top-level tasks first in order, then each parent's subtasks under it.
-  const sorted = [...rows].sort((a, b) => {
-    const parentDiff = (a.parent?.order ?? -1) - (b.parent?.order ?? -1);
-    if (parentDiff !== 0) return parentDiff;
-    return a.task.order - b.task.order;
-  });
-  const max = opts?.maxEntries ?? DEFAULT_PLAN_MAP_MAX_ENTRIES;
-  const currentIdx = sorted.findIndex((r) => r.task.id === currentTaskId);
-  const { window, omitted } = pickWindow(sorted, currentIdx, max);
-
-  const currentTask = sorted.find((r) => r.task.id === currentTaskId)?.task;
-
-  const lines = window.map((row) => {
-    const isCurrent = row.task.id === currentTaskId;
-    const tag = planMapStatus(row.task, isCurrent);
-    const order = row.parent ? row.label : row.label.padStart(2, ' ');
-    const arrow = isCurrent ? '   ← you are here' : '';
-    // A script task runs on no runner (ADR-0035): what it is says more than the runner it was never given.
-    const assigned = assignedRunnerOf(row.task);
-    const runner = row.task.type === 'script' ? ' (script)' : assigned ? ` (${assigned})` : '';
-    return `${order}. [${tag.padEnd(7, ' ')}] ${row.task.title}${runner}${arrow}`;
-  });
-
-  const footer = omitted > 0 ? `\n(${omitted} task${omitted === 1 ? '' : 's'} omitted from this view)` : '';
-  const currentRunner = currentTask && assignedRunnerOf(currentTask);
-  const runnerNote = currentRunner ? `\nYou are running as: ${currentRunner}` : '';
-
-  return [
-    '## Plan map',
-    '',
-    'This is for context only — do ONLY the task marked `← you are here`. Future tasks will handle their own scope; do not preempt them.',
-    '',
-    lines.join('\n') + footer + runnerNote,
-  ].join('\n');
-}
-
 /** What a read-only task is told it may do beyond reading (ADR-0050): the tool that keeps its prototype past its worktree. */
 export const READ_ONLY_PATCH_NOTE = 'This task is read-only and its worktree is thrown away when it ends. If you build a prototype there, keep it with the `save_patch` tool before you finish: a later task can then apply it.';
 
@@ -221,8 +145,6 @@ export const READ_ONLY_WEB_NOTE = 'Read the web with the `fetch` and `web_search
 export interface ComposeOptions {
   /** A read-only task: told of `save_patch` (ADR-0050) and of its web reads (ADR-0046). */
   readOnly?: boolean;
-  planMapEnabled?: boolean;
-  planMapMaxEntries?: number;
   /** The task's skills as resolved where this attempt runs. */
   skills?: readonly TaskSkillSnapshot[];
   /** An ops task's last attempt, as its output ended (ADR-0020); absent on a first attempt. */
@@ -373,11 +295,6 @@ export function composeAugmentedPrompt(task: Task, allTasks: readonly Task[], op
     blocks.push(renderSinceLastRound(task, allTasks, opts.loop));
   }
 
-  if (opts?.planMapEnabled !== false) {
-    const map = renderPlanMap(allTasks, task.id, { maxEntries: opts?.planMapMaxEntries });
-    if (map) blocks.push(map);
-  }
-
   const outputs = collectDirectDependencyOutputs(task, allTasks);
   if (outputs.length > 0) blocks.push(renderPriorOutputs(outputs));
 
@@ -391,8 +308,7 @@ export function composeAugmentedPrompt(task: Task, allTasks: readonly Task[], op
 
   if (isHitlTask(task)) blocks.push(CHECKPOINT_INSTRUCTION);
 
-  // Last, against the check's own words: past a long map and its dependencies'
-  // handoffs, the block a runner reads just before its task is the one it acts on.
+  // Last, against the check's own words: past its dependencies' handoffs, the block a runner reads just before its task is the one it acts on.
   if (task.type === 'ai' && task.loop) blocks.push(renderLoopVerdict(task.loop, opts?.loop?.round));
 
   if (blocks.length === 0) return basePrompt;

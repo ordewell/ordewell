@@ -204,7 +204,7 @@ async function prompts(i, n) {
   const tasks = makeTasks(n, { shape, done: Math.floor(n / 2) });
   const task = tasks[Math.floor(n / 2)];
   let prompt = '';
-  put('composeAugmentedPrompt (ms)', i, (await timed(() => { prompt = core.composeAugmentedPrompt(task, tasks, { planMapEnabled: true }); })).ms);
+  put('composeAugmentedPrompt (ms)', i, (await timed(() => { prompt = core.composeAugmentedPrompt(task, tasks); })).ms);
   put('prompt a runner is sent (bytes)', i, prompt.length);
 }
 
