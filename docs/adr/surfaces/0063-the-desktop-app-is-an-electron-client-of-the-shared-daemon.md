@@ -95,7 +95,12 @@ holds the token.**
   that workspace is active keeps the app running in the menu bar or tray, with
   the run's state and its *inbox* count in the tray menu. Quitting while a run is
   active asks first and says what happens to the run: with an owned daemon the
-  run stops with it, and with an attached one it goes on in that daemon.
+  runs it holds stop with it, and with an attached one they go on in that daemon.
+  A run is live by the session list's run activity, not its saved plan status,
+  which reads approved for as long as a run lasts. A run another host holds
+  (H8) goes on either way, and the confirm lists it as going on; when it is the
+  only kind, the confirm asks *Quit Ordewell?* with *Quit*, never *Stop and
+  quit*. The stop names each run's workspace.
 - **One window per workspace (H6).** Opening a workspace that is already open
   focuses its window. A window shows one session at a time, chosen from that
   workspace's sessions.
@@ -310,7 +315,7 @@ requires `WIN_PUBLISHER_NAME`: without it `app-update.yml` would carry no
 |---|---|---|
 | No answer (connection refused) | — | Starts the bundled daemon with `utilityProcess.fork` and owns it. |
 | Answers, token file readable | Same | Attaches. |
-| Answers, token file readable | Different, or none | Shows the mismatch. If the app owns that daemon it restarts it. If it does not, it offers *Restart daemon*: refused while any session in it has a live run, which it names, and otherwise stopping it as `ordewell stop --server` does and starting the bundled one, which the app then owns. |
+| Answers, token file readable | Different, or none | Shows the mismatch. If the app owns that daemon it restarts it. If it does not, it offers *Restart daemon*: refused while it holds a live run, which it names, or while `GET /api/server` reports `live` work (a run or a planner turn) that its list may not show, and otherwise stopping it as `ordewell stop --server` does and starting the bundled one, which the app then owns. |
 | Answers, token file unreadable | — | Shows that a daemon on that port belongs to another user or install and does not attach. |
 | Something else on the port | — | Shows that the port is taken and how to pick another (`ORDEWELL_PORT`). |
 
@@ -508,9 +513,10 @@ allows script only from the app's own bundle, with no inline script.
   frames must remember to raise.
 - The probe, token and PID helpers move out of the CLI into a module both can
   import; the CLI's behaviour is unchanged.
-- Quitting the app stops runs only in a daemon the app owns. A CLI command
-  attached to that daemon loses it when the app quits. The quit confirm names
-  the runs that would stop, and the CLI's own daemon revive starts a fresh one.
+- Quitting the app stops runs only in a daemon the app owns, and only the runs
+  that daemon holds. A CLI command attached to that daemon loses it when the
+  app quits. The quit confirm names the runs that would stop, and those another
+  host holds as going on, and the CLI's own daemon revive starts a fresh one.
 - `packages/ui` becomes a dependency of both the VS Code extension and the
   desktop app, so a UI change is checked in both. The extension's build order
   gains a step.
@@ -555,3 +561,4 @@ allows script only from the app's own bundle, with no inline script.
 - 2026-11-06 — H10: the Release becomes latest only once `SHA256SUMS` is attached (ADR-0065 C11), so the updater and the fixed-name links never see an incomplete release.
 - 2026-11-06 — H11: the `homebrew` job publishes with the `HOMEBREW_TAP_DEPLOY_KEY` deploy key over SSH when `HOMEBREW_TAP_TOKEN` is not set.
 - 2026-11-06 — H11: `scripts/publish-tap.sh` writes the tap for `homebrew` and the manual re-publish `homebrew-publish.yml`, the token by an extraheader, and `homebrew-verify` installs the formula with brew on four runners.
+- 2026-11-09 — H3, H5: a live run is read from the session list's run activity; restart is refused for runs this daemon holds or `live` work, and an owned quit stops only the runs it holds, naming another host's as going on.

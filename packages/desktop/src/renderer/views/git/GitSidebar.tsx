@@ -264,7 +264,7 @@ function Sidebar({ api }: { api: FrameApi }): JSX.Element {
     <div className="git-side">
       <div className="git-side-head">
         <span className="git-side-name"><MiddleText text={name} tail={8} /></span>
-        <IconButton icon={RefreshCw} label="Refresh the branches" onClick={() => void git.refresh(repo)} />
+        <IconButton icon={RefreshCw} label={history ? 'Refresh the branches and history' : 'Refresh the branches'} onClick={() => void git.refresh(repo, { history: true })} />
       </div>
       {multi && (
         <select className="ow-select frame-input git-repo" aria-label="Repository" value={repo} onChange={(event) => setRepo(event.target.value)}>
@@ -343,7 +343,7 @@ export function register(api: FrameApi): Unregister {
   return all(
     api.registerSidebar({ activity: 'git', id: 'branches', title: 'Branches', render: () => <Sidebar api={api} /> }),
     api.registerCommand({ id: 'git.fetch', title: 'Git: Fetch', enabled: () => !api.readOnly && context() !== undefined && !syncing(), run: () => { const ctx = context(); if (ctx) void fetchRepo(ctx); } }),
-    api.registerCommand({ id: 'git.refresh', title: 'Git: Refresh branches', enabled: () => !api.readOnly, run: () => { const { repo } = store.getSnapshot(); if (repo !== undefined) void store.refresh(repo); } }),
+    api.registerCommand({ id: 'git.refresh', title: 'Git: Refresh branches', enabled: () => !api.readOnly, run: () => { const { repo } = store.getSnapshot(); if (repo !== undefined) void store.refresh(repo, { history: true }); } }),
     api.registerCommand({ id: 'git.showGraph', title: 'Git: Show commit graph', enabled: () => store.getSnapshot().repo !== undefined, run: () => { const { repo } = store.getSnapshot(); if (repo !== undefined) showGraph(api, repo, undefined, false); } }),
   );
 }
