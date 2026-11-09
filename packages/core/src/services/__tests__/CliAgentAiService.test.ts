@@ -669,7 +669,7 @@ describe('CliAgentAiService — Claude Code', () => {
     const sent = writes(spawned.processes[0]);
     expect(sent[0]).toContain('Add a cache layer\\n\\nCONTEXT AND BUDGETS (this turn):\\n- Task reads left for this message: 3.');
     expect(sent[1]).toContain('Redis, please.\\n\\nCONTEXT AND BUDGETS (this turn):\\n- Task reads left for this message: 2.');
-    expect(spawned.lastArgs().join(' ')).not.toContain('CONTEXT AND BUDGETS');
+    expect(spawned.lastArgs().join(' ')).not.toContain('CONTEXT AND BUDGETS (this turn):');
   });
 
   it('replays a persisted transcript instead of re-running research', async () => {

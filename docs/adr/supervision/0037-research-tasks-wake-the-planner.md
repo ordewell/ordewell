@@ -34,8 +34,9 @@ addressed to the planner.
 read-only task in the plan whose report is addressed to the planner. When it
 ends, the planner wakes with the report, at every supervisor level. Evidence
 only a later task acts on is a plain read-only task that task depends on.
-Orientation stays in the turn, with the planner's own reads and its own agents,
-awaited before the turn ends.**
+Orientation stays in the turn: the planner reads the project's guides and makes
+targeted lookups itself, and sends wider questions to its own agents, awaited
+before the turn ends.**
 
 - **What it is (R1).** A read-only AI task (ADR-0031) marked `research: true`,
   with a self-contained brief: what to find out, where to start, and what the
@@ -79,18 +80,28 @@ awaited before the turn ends.**
 - **Who explores is decided by what the result is (R5).** A planner cannot
   know how long a lookup takes before it starts, so the line is drawn by what
   the result is, never by its duration. The test it applies on the spot: if
-  the finding a later task acts on would end up in its brief, it is evidence;
-  if it only decides what the planner says or asks the user, it is
-  orientation.
-  - *Orientation* is what the planner needs this turn to answer, ask or
-    outline, when only the conclusion matters and no later task acts on it. It
-    stays in the turn: the planner's own reads, or its own agents awaited
-    before the turn ends ([ADR-0005](../planner/0005-parallel-research-subagents.md)'s
-    `spawn_research_agent` for an API planner whose service can run
-    subagents, the harness's own subagents for a harness planner as ADR-0009
-    T8 says, none for an OpenCode or a Gemini planner), each briefed to
-    return a digest of the conclusion and file:line references.
-  - *Evidence* is a task of its own: when finding out needs a worktree (a
+  the finding a later task acts on would end up in its brief, a task finds it;
+  if it only decides what the planner says or asks the user, it stays in the
+  turn. The planner is the run's coordinator, and its context holds the whole
+  picture and the integration, so finding out goes to one of three tiers:
+  - *The planner's own reads*: the project's guides (README, AGENTS.md or
+    CLAUDE.md, its glossary, its ADR index), a map of its directories, and
+    targeted lookups (a known file, a symbol, one grep) whose detail decides
+    its next step or question. It stops when it can decide the next step, not
+    when it understands the whole architecture.
+  - *An in-turn agent, awaited* before the turn ends, for mapping a subsystem,
+    a question that means reading across several files, or a comparison:
+    [ADR-0005](../planner/0005-parallel-research-subagents.md)'s
+    `spawn_research_agent` for an API planner whose service can run subagents,
+    the harness's own subagents for a harness planner as ADR-0009 T8 says.
+    One agent per independent question, run in parallel; a question whose
+    parts depend on each other stays with one. Effort scales with the
+    question: one agent for a fact, two to four for a comparison, more only for
+    broad research. Each returns a digest of about 1-2k tokens: conclusion
+    first, file:line references, decisions found, what is uncertain, no pasted
+    file bodies. An OpenCode or a Gemini planner has no agents of its own, so
+    this tier is its own reads too, keeping only the conclusion.
+  - *A task* is the evidence tier: when finding out needs a worktree (a
     failing test, a build, a reproduction), another runner or model should
     judge it, the user should see it and be able to stop it, or a later task
     will act on its findings. In the last case the later task depends on it,
@@ -99,9 +110,9 @@ awaited before the turn ends.**
     task only when the planner must decide something on its report; one whose
     report only later tasks read is a plain read-only task they depend on,
     since waking the planner for a report it will not act on spends its
-    context for nothing. The planner takes a research task's summary, and
-    pulls the full report with `task_output` only where the plan rests on the
-    detail.
+    context for nothing. A loop's fix may depend on one only when the loop's
+    check does. The planner takes a research task's summary, and pulls the
+    full report with `task_output` only where the plan rests on the detail.
   - *A first plan may be research tasks alone*, when the plan cannot be
     outlined without their evidence: its outline says in a line what each
     asks, they start as R4 says, and the planner plans the rest when their
@@ -121,10 +132,17 @@ awaited before the turn ends.**
     depends on the chosen explorer and applies its patch with `apply_patch`,
     resolving the conflicts the tool reports.
 
+  The same rule keeps the planner's session fresh: when it replans it says
+  what the new plan replaces, before a major decision it restates the goal,
+  the decisions agreed with the user and the plan, and when its turn's
+  context-and-budgets block shows the context past 40% of its window it
+  suggests compacting at a quiet moment, through the surface's own control.
+
   #24 draws a line at the task boundary: inside a task the harness decides,
   and across tasks Ordewell does. This keeps it: what another task acts on, or
   the user should see and stop, is Ordewell's. The planner prompt states the
-  rule once, in `whoExploresSection`, and every other section refers to it.
+  rule once, in `whoExploresSection`, which names no other prompt section, and
+  every other section refers to it.
 - **On the surfaces (R6)**, a research task is a row in the plan, marked as
   research, with its log, usage, stop and retry like any task. It waits for a
   free slot like any other task. Its handoff is drawn in the conversation as the
@@ -191,3 +209,4 @@ awaited before the turn ends.**
 - 2026-10-24 — the explore skill's choice between approaches: explorers save their prototypes as patches, a check fixed beforehand decides eligibility, a judge only when several pass, and the build task applies the chosen patch (R5).
 - 2026-10-24 — the judge only recommends and is always a research task: the planner adds the build task on the recommended patch, and approving that task is the pick, as [ADR-0050](../planner-envelope/0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md) says (R5).
 - 2026-10-25 — a long report in a run update opens on its own in VS Code, which has no detail switch any more (R6; ADR-0017 X1).
+- 2026-11-09 — who explores is three tiers: the planner reads the project's guides, a map and targeted lookups itself, sends wider questions to in-turn agents returning digests, and gives tasks what needs a worktree, another model, the user's sight or a later task's action; the context rule and session freshness join it (R5).
