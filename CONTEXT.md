@@ -2332,8 +2332,9 @@ review diff with one section per repo that has changes, each headed by the repo'
 path and with its paths rooted at the workspace (a repo that is the workspace
 reads as before). A resolver task merges the conflicted branch in every repo
 the task changed, since the conflict in one rolled back all of them.
-In the terminal the same four steps are the handoff overlay (`/handoff`, opened
-by `isolation_handoff` on a screen with nothing else open) and
+In the terminal the same four steps are the handoff overlay (`/merge`, which
+opens it on Merge, and which `isolation_handoff` opens on a screen with nothing
+else open) and
 `ordewell handoff [review|merge|discard|cleanup]`. Merge and discard are asked
 about first, in both — the CLI takes `--yes` as having asked. A surface that was
 not listening — a reloaded session, a reconnected webview or socket — is re-told

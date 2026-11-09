@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { initialState, reduce, type Action, type Step } from '../reducer';
 import type { HandoffView, TaskView, TuiState } from '../state';
-import { lastMessage } from './chat';
+import { lastMessage, messagesOf } from './chat';
 
 const key = (name: string, char?: string) => ({ type: 'key' as const, key: { name, char } });
 const press = (state: TuiState, name: string, char?: string): Step => reduce(state, key(name, char));
@@ -43,7 +43,7 @@ describe('isolation_handoff', () => {
 
     expect(state.overlay).toEqual({ kind: 'help' });
     expect(state.handoff).toEqual(handoff);
-    expect(lastMessage(state)?.text).toMatch(/\/handoff/);
+    expect(lastMessage(state)?.text).toMatch(/\/merge/);
   });
 
   it('stores a handoff deferred to the supervisor and says so, without opening the overlay', () => {
@@ -54,15 +54,15 @@ describe('isolation_handoff', () => {
     expect(state.handoff).toEqual(deferred);
     expect(state.overlay).toBeNull();
     expect(lastMessage(state)?.text).toBe(
-      'Run finished on ordewell/r1/integration: 2 tasks landed. The supervisor may merge it; /handoff to review it yourself.',
+      'Run finished on ordewell/r1/integration: 2 tasks landed. The supervisor may merge it; /merge to review it yourself.',
     );
   });
 
-  it('keeps /handoff working while the handoff is deferred', () => {
+  it('keeps /merge working while the handoff is deferred', () => {
     const deferred = withHandoff({ handoff: { ...handoff, deferredTo: 'supervisor' } });
 
-    expect(typed(deferred, '/handoff').state.overlay).toEqual({ kind: 'handoff', index: 0, diff: null });
-    expect(typed(deferred, '/handoff merge').state.overlay).toMatchObject({ kind: 'confirm', action: { kind: 'merge-run' } });
+    expect(typed(deferred, '/merge').state.overlay).toEqual({ kind: 'handoff', index: 1, diff: null });
+    expect(typed(deferred, '/merge discard').state.overlay).toMatchObject({ kind: 'confirm', action: { kind: 'discard-run' } });
   });
 
   it('opens the overlay when the unmarked handoff for the same run follows, and says the supervisor left it', () => {
@@ -73,7 +73,7 @@ describe('isolation_handoff', () => {
     expect(state.handoff).toEqual(handoff);
     expect(state.overlay).toEqual({ kind: 'handoff', index: 0, diff: null });
     expect(lastMessage(state)?.text).toBe(
-      'The supervisor left ordewell/r1/integration to you: 2 tasks landed. /handoff to review and land it.',
+      'The supervisor left ordewell/r1/integration to you: 2 tasks landed. /merge to review and land it.',
     );
   });
 
@@ -105,13 +105,22 @@ describe('isolation_handoff', () => {
   });
 });
 
-describe('/handoff', () => {
-  it('opens the overlay', () => {
-    expect(typed(withHandoff(), '/handoff').state.overlay).toEqual({ kind: 'handoff', index: 0, diff: null });
+describe('/merge', () => {
+  it('opens the overlay with Merge selected, so Enter asks the merge confirmation', () => {
+    const { state, effects } = typed(withHandoff(), '/merge');
+
+    expect(effects).toEqual([]);
+    expect(state.overlay).toEqual({ kind: 'handoff', index: 1, diff: null });
+    const asked = press(state, 'enter');
+    expect(asked.effects).toEqual([]);
+    expect(asked.state.overlay).toMatchObject({ kind: 'confirm', title: 'Merge into your branch?', action: { kind: 'merge-run' } });
+    expect(press(asked.state, 'enter').effects).toEqual([
+      { type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration' },
+    ]);
   });
 
   it('says there is nothing to hand off when no run isolated', () => {
-    const { state, effects } = typed(session(), '/handoff');
+    const { state, effects } = typed(session(), '/merge');
 
     expect(effects).toEqual([]);
     expect(state.overlay).toBeNull();
@@ -119,12 +128,12 @@ describe('/handoff', () => {
   });
 
   it('review asks for the diff', () => {
-    expect(typed(withHandoff(), '/handoff review').effects).toEqual([{ type: 'isolationReviewDiff', sessionId: 's1' }]);
+    expect(typed(withHandoff(), '/merge review').effects).toEqual([{ type: 'isolationReviewDiff', sessionId: 's1' }]);
   });
 
   it('merge and discard confirm first instead of acting', () => {
     for (const [arg, kind] of [['merge', 'merge-run'], ['discard', 'discard-run']] as const) {
-      const { state, effects } = typed(withHandoff(), `/handoff ${arg}`);
+      const { state, effects } = typed(withHandoff(), `/merge ${arg}`);
 
       expect(effects).toEqual([]);
       expect(state.overlay).toMatchObject({ kind: 'confirm', action: { kind } });
@@ -132,16 +141,50 @@ describe('/handoff', () => {
   });
 
   it('cleanup acts without a confirmation', () => {
-    expect(typed(withHandoff(), '/handoff cleanup').effects).toEqual([
+    expect(typed(withHandoff(), '/merge cleanup').effects).toEqual([
       { type: 'isolationCleanup', sessionId: 's1', branch: 'ordewell/r1/integration' },
     ]);
   });
 
   it('rejects an action it does not know', () => {
-    const { effects, state } = typed(withHandoff(), '/handoff deploy');
+    const { effects, state } = typed(withHandoff(), '/merge deploy');
 
     expect(effects).toEqual([]);
-    expect(lastMessage(state)?.text).toMatch(/Usage: \/handoff/);
+    expect(lastMessage(state)?.text).toMatch(/Usage: \/merge/);
+  });
+});
+
+describe('/handoff, the old name of /merge', () => {
+  it('still takes merge as an action', () => {
+    expect(typed(withHandoff(), '/merge merge').state.overlay).toMatchObject({ kind: 'confirm', action: { kind: 'merge-run' } });
+  });
+
+  const noticeCount = (state: TuiState): number => messagesOf(state).filter((m) => m.text === 'renamed: use /merge').length;
+
+  it('does what /merge does and says it was renamed', () => {
+    const old = typed(withHandoff(), '/handoff');
+    const current = typed(withHandoff(), '/merge');
+
+    expect(old.state.overlay).toEqual(current.state.overlay);
+    expect(old.effects).toEqual(current.effects);
+    expect(lastMessage(old.state)).toMatchObject({ role: 'system', text: 'renamed: use /merge' });
+    expect(noticeCount(current.state)).toBe(0);
+  });
+
+  it('keeps every action working, merge included', () => {
+    expect(typed(withHandoff(), '/handoff merge').state.overlay).toMatchObject({ kind: 'confirm', action: { kind: 'merge-run' } });
+    expect(typed(withHandoff(), '/handoff discard').state.overlay).toMatchObject({ kind: 'confirm', action: { kind: 'discard-run' } });
+    expect(typed(withHandoff(), '/handoff review').effects).toEqual([{ type: 'isolationReviewDiff', sessionId: 's1' }]);
+    expect(typed(withHandoff(), '/handoff cleanup').effects).toEqual([
+      { type: 'isolationCleanup', sessionId: 's1', branch: 'ordewell/r1/integration' },
+    ]);
+  });
+
+  it('says it was renamed when it fails too, once', () => {
+    const { state } = typed(session(), '/handoff');
+
+    expect(messagesOf(state).some((m) => m.role === 'error' && /No isolated run/.test(m.text))).toBe(true);
+    expect(noticeCount(state)).toBe(1);
   });
 });
 
@@ -267,7 +310,7 @@ describe('the diff view', () => {
     expect((state.overlay as { diff: { lines: string[] } }).diff.lines).toHaveLength(60);
   });
 
-  it('opens the overlay itself when the request came from /handoff review', () => {
+  it('opens the overlay itself when the request came from /merge review', () => {
     const { state } = apply(session({ handoff }), { type: 'handoffDiff', diff, sessionId: 's1' });
 
     expect(state.overlay).toMatchObject({ kind: 'handoff', diff: { scroll: 0 } });
@@ -537,11 +580,12 @@ describe('a run over a repo group', () => {
   it('says which repos the run finished in when it arrives', () => {
     const { state } = apply(session(), { type: 'isolationHandoff', handoff: group, sessionId: 's1' });
 
-    expect(lastMessage(state)?.text).toBe(`Run finished on ${branch} in api, web, infra: 2 tasks landed. /handoff to review and land it.`);
+    expect(lastMessage(state)?.text).toBe(`Run finished on ${branch} in api, web, infra: 2 tasks landed. /merge to review and land it.`);
   });
 
   it('asks before Merge all, naming the repos it will merge and that it merges none unless all can', () => {
-    const { state, effects } = typed(inGroup(), '/handoff merge');
+    const opened = typed(inGroup(), '/merge');
+    const { state, effects } = press(opened.state, 'enter');
 
     expect(effects).toEqual([]);
     const overlay = state.overlay as { title: string; message: string; action: { kind: string } };
@@ -555,19 +599,19 @@ describe('a run over a repo group', () => {
   });
 
   it('sends the merge with the group marked, so its answer is worded for a group', () => {
-    const asked = typed(inGroup(), '/handoff merge');
+    const asked = press(typed(inGroup(), '/merge').state, 'enter');
 
     expect(press(asked.state, 'enter').effects).toEqual([{ type: 'isolationMerge', sessionId: 's1', branch, group: true }]);
   });
 
   it('asks before discarding, naming every repo', () => {
-    const { state } = typed(inGroup(), '/handoff discard');
+    const { state } = typed(inGroup(), '/merge discard');
 
     expect((state.overlay as { message: string }).message).toContain('in api, web, infra');
   });
 
   it('cleans up with the branch, as for one repo', () => {
-    expect(typed(inGroup(), '/handoff cleanup').effects).toEqual([{ type: 'isolationCleanup', sessionId: 's1', branch }]);
+    expect(typed(inGroup(), '/merge cleanup').effects).toEqual([{ type: 'isolationCleanup', sessionId: 's1', branch }]);
   });
 
   it('names the dirty repos in the stash choice, which stashes all of them', () => {

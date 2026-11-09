@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { COMMANDS } from '../registry';
-import { SLASH_COMMANDS } from '../../tui/slash';
+import { COMMAND_ALIASES, SLASH_COMMANDS } from '../../tui/slash';
 
 /**
  * The two command surfaces are one product. This test is the contract: a slash
@@ -11,6 +11,7 @@ import { SLASH_COMMANDS } from '../../tui/slash';
  * deliberate act with a reason attached.
  */
 const TUI_ONLY: Record<string, string> = {
+  merge: '`ordewell handoff`, which keeps its name until the headless command is renamed too',
   help: '`ordewell --help`, which is not a subcommand',
   quit: 'nothing to exit — a CLI command has already returned',
   new: 'every `ordewell plan` already starts a fresh session',
@@ -57,7 +58,8 @@ describe('CLI ↔ TUI command parity', () => {
   });
 
   it('has no subcommand missing from the TUI beyond the listed CLI-only ones', () => {
-    const slash = new Set(SLASH_COMMANDS.map((c) => c.name));
+    // A deprecated alias is still a slash command, so the CLI command of the same old name has its counterpart.
+    const slash = new Set([...SLASH_COMMANDS.map((c) => c.name), ...COMMAND_ALIASES.map((a) => a.name)]);
     const unexplained = Object.keys(COMMANDS).filter((name) => !slash.has(name) && !CLI_ONLY.includes(name));
     expect(unexplained).toEqual([]);
   });

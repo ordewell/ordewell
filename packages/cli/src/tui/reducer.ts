@@ -325,7 +325,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       // the same run words the follow-up as the supervisor leaving it — then
       // fold the fresh handoff into the run view. A child's branch is not the
       // person's to land: it comes in through its task in the plan above, and
-      // `/handoff` here would act on the root.
+      // `/merge` here would act on the root.
       const announced = state.child ? state : handoffArrived(state, action.handoff);
       return step(foldRun(announced, { type: 'isolation_handoff', ...action.handoff }));
     }

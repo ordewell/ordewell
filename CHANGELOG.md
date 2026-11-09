@@ -22,6 +22,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Changed
 
+- **Terminal:** `/handoff` is now `/merge`, the word the other surfaces use for
+  Merge all. `/merge` opens the review overlay on Merge; `/merge review`,
+  `discard` and `cleanup` take those steps directly. `/handoff` still works for
+  a release or two and says it was renamed.
 - **Contributors:** `npm run test:changed` now runs what a pull request owes,
   at CI's tiers — full suites with their coverage floors, quick suites, and the
   steps every change owes — and ends by naming each owed check it left to CI,

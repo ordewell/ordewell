@@ -46,7 +46,7 @@ describe('ops tasks and merge gates in the TUI (ADR-0020)', () => {
     expect(next.runMerge).toEqual(runMerge);
     expect(next.tasks[1].mergeGate).toEqual(['t1']);
     expect(next.status).toBe('executing');
-    expect(runHint(next)).toBe('paused for Merge all: /handoff merge');
+    expect(runHint(next)).toBe('paused for Merge all: /merge');
 
     const cleared = apply(next, { type: 'statusUpdate', sessionId: 's1', tasks: [{ id: 'o2', status: 'in_progress', verdict: null, idleSince: null }] }).state;
     expect(cleared.runMerge).toBeNull();
@@ -82,18 +82,18 @@ describe('ops tasks and merge gates in the TUI (ADR-0020)', () => {
   it('offers Merge all mid-run from the gate, and keeps the run when it merges', () => {
     const state = plan([change(), deploy({ mergeGate: ['t1'] })], { status: 'executing', runMerge, focus: 'chat' });
 
-    const typed = reduce({ ...state, editor: { ...state.editor, text: '/handoff merge', cursor: 14 } }, key('enter'));
+    const typed = reduce({ ...state, editor: { ...state.editor, text: '/merge', cursor: 6 } }, key('enter'));
 
     expect(typed.state.overlay).toMatchObject({ kind: 'confirm', title: 'Merge what has landed into your branch?' });
     expect(typed.state.overlay?.kind === 'confirm' && typed.state.overlay.message).toContain('The run goes on');
     expect(press(typed.state, 'enter').effects).toEqual([{ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration' }]);
   });
 
-  it('offers /handoff merge during a run without a gate, using the same confirmation', () => {
+  it('offers /merge during a run without a gate, using the same confirmation', () => {
     const state = plan([change(), change({ id: 't2', order: 2, status: 'in_progress' })], {
       status: 'executing', runMerge: { ...runMerge, waitingAtGate: false, paused: false }, focus: 'chat',
     });
-    const command = (s: TuiState) => reduce({ ...s, editor: { ...s.editor, text: '/handoff merge', cursor: 14 } }, key('enter'));
+    const command = (s: TuiState) => reduce({ ...s, editor: { ...s.editor, text: '/merge', cursor: 6 } }, key('enter'));
 
     const asked = command(state);
     const gated = command({ ...state, runMerge });
@@ -118,11 +118,11 @@ describe('ops tasks and merge gates in the TUI (ADR-0020)', () => {
 
   it('does not offer a cached handoff mid-run after all landed work was merged', () => {
     const state = plan([change({ status: 'in_progress' })], { status: 'executing', handoff, focus: 'chat' });
-    const asked = reduce({ ...state, editor: { ...state.editor, text: '/handoff merge', cursor: 14 } }, key('enter'));
+    const asked = reduce({ ...state, editor: { ...state.editor, text: '/merge', cursor: 6 } }, key('enter'));
 
     expect(asked.state.overlay).toBeNull();
     expect(asked.effects).toEqual([]);
-    expect(frame(asked.state)).toContain('No isolated run to hand off');
+    expect(frame(asked.state)).toContain('No isolated run to merge');
   });
 });
 
