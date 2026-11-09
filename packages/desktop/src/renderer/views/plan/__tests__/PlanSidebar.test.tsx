@@ -1,10 +1,18 @@
-import { act, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
-import { DaemonHost } from '../../../session/DaemonHost';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { registerFrameCommands } from '../../../frame/commands';
+import { Frame } from '../../../frame/Frame';
+import { FrameProvider } from '../../../frame/store';
+import { DaemonHost, daemonHost, resetDaemonHosts } from '../../../session/DaemonHost';
+import { registerViews } from '../../index';
+import { resetTaskViews } from '../../task/taskView';
 import { fakeDaemon, ok, surfacePlan, surfaceTask } from '../../../session/__tests__/fakeDaemon';
 import { runTask } from '../../changes/__tests__/fixtures';
 import { FrameStore } from '../../../frame/store';
 import { register, relativeTime, Sessions, sessionStatus } from '../PlanSidebar';
+
+// Monaco needs a browser; these views never open a file.
+vi.mock('../../../monaco', async () => (await import('../../../test/monacoMock')).fakeMonacoModule());
 
 let hosts: DaemonHost[] = [];
 afterEach(() => { for (const host of hosts) host.dispose(); hosts = []; });
@@ -74,6 +82,57 @@ describe('Sessions', () => {
     act(() => daemon.setStatus({ state: 'reconnecting', port: 3700, attempt: 1, canStart: false }));
     expect(screen.getByRole('button', { name: /Ship the parser/ })).toBeDisabled();
     expect(screen.queryByText(/Waiting|Loading/)).not.toBeInTheDocument();
+  });
+});
+
+describe('the Sessions sidebar in the frame', () => {
+  let offs: Array<() => void> = [];
+  afterEach(() => { for (const off of offs) off(); offs = []; resetDaemonHosts(); resetTaskViews(); });
+
+  it('folds Sessions by its header while Needs you stays open and New session stays offered, and keeps the choice across an activity switch', async () => {
+    const daemon = fakeDaemon({
+      'sessions.load': ok({ ok: true, plan: surfacePlan(TASKS, 'running'), goal: 'Ship the parser' }),
+      'sessions.list': () => ok([{ id: 's1', goal: 'Ship the parser', status: 'running', taskCount: 1 }]),
+    });
+    const store = new FrameStore({ workspace: '/work/acme', platform: 'linux' });
+    offs.push(registerFrameCommands(store), registerViews(store.api));
+    const host = daemonHost('/work/acme');
+    render(<FrameProvider value={store}><Frame daemon={{ state: 'connected', port: 3700, owned: true, daemon: { version: '0.12.3', contract: 1 } }} /></FrameProvider>);
+    await act(() => host.open('s1'));
+    await act(async () => {
+      daemon.push('s1', { type: 'connected', sessionId: 's1' }, {
+        type: 'run_snapshot', sessionId: 's1', stream: 'd1', seq: 0,
+        view: {
+          tasks: [runTask({ id: 't1', order: 1, title: 'Parse the config', status: 'in_progress' })], runMerge: null, handoff: null, mergeResult: null,
+          escalations: [{ id: 'failed:t1:1', kind: 'failed', task: { id: 't1', ref: '#1', title: 'Parse the config' }, attempt: 1, reason: 'Tests failed (exit 1).', options: [{ id: 'retry', label: 'Retry' }] }],
+        },
+      });
+    });
+    const sidebar = (): ReturnType<typeof within> => within(screen.getByRole('navigation', { name: 'Sessions' }));
+    const sessions = (): HTMLElement => sidebar().getByRole('button', { name: 'Sessions' });
+    const needsYou = (): HTMLElement => sidebar().getByRole('button', { name: /^Needs you/ });
+    expect(await sidebar().findByRole('button', { name: /Ship the parser/ })).toBeInTheDocument();
+    expect(sessions()).toHaveAttribute('aria-expanded', 'true');
+    expect(needsYou()).toHaveAttribute('aria-expanded', 'true');
+
+    fireEvent.click(sessions());
+    expect(sessions()).toHaveAttribute('aria-expanded', 'false');
+    expect(sidebar().queryByRole('button', { name: /Ship the parser/ })).not.toBeInTheDocument();
+    expect(needsYou()).toHaveAttribute('aria-expanded', 'true');
+    expect(sidebar().getByText('Tests failed (exit 1).')).toBeInTheDocument();
+    const newSession = vi.spyOn(host, 'newSession').mockImplementation(() => {});
+    fireEvent.click(sidebar().getByRole('button', { name: 'New session' }));
+    expect(newSession).toHaveBeenCalledOnce();
+
+    const views = within(screen.getByRole('tablist', { name: 'Views' }));
+    fireEvent.click(views.getByRole('tab', { name: 'Explorer' }));
+    expect(screen.queryByRole('navigation', { name: 'Sessions' })).not.toBeInTheDocument();
+    fireEvent.click(views.getByRole('tab', { name: /^Sessions/ }));
+    expect(sessions()).toHaveAttribute('aria-expanded', 'false');
+    expect(needsYou()).toHaveAttribute('aria-expanded', 'true');
+
+    fireEvent.click(sessions());
+    expect(await sidebar().findByRole('button', { name: /Ship the parser/ })).toBeInTheDocument();
   });
 });
 
