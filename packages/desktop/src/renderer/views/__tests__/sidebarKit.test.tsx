@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { MiddleText, SidebarGroup } from '../sidebarKit';
+import { MiddleText, SidebarGroup, pathTail } from '../sidebarKit';
 import { SyncBar, pullBlocked, pushBlocked, type SyncState } from '../git/SyncBar';
 
 const TRACKING: SyncState = { upstream: 'origin/main', ahead: 2, behind: 1, hasRemote: true, branchless: false };
@@ -36,6 +36,15 @@ describe('MiddleText', () => {
     const { container } = render(<MiddleText text="main" />);
     expect(container.querySelector('.mid-tail')).toBeNull();
     expect(screen.getByText('main')).toBeInTheDocument();
+  });
+});
+
+describe('pathTail', () => {
+  it('keeps the last segment of a path whole, within bounds', () => {
+    expect(pathTail('a/b')).toBe(12);
+    expect(pathTail('src/components/TheVeryLongPrimaryNavigationControllerWithAnExtraordinaryName.tsx')).toBe(40);
+    const path = 'packages/desktop/src/renderer/views/git/GitSidebar.tsx';
+    expect(pathTail(path)).toBe('/GitSidebar.tsx'.length);
   });
 });
 

@@ -212,7 +212,15 @@ describe('the Branches and History views', () => {
     expect(row).toHaveAttribute('aria-current', 'true');
     const detail = within(await screen.findByRole('complementary', { name: 'Commit' }));
     expect(await detail.findByText('Why it changed.')).toBeInTheDocument();
-    fireEvent.click(detail.getByRole('button', { name: /src\/sso\.ts/ }));
+    // The subject leads; the sha, author and a readable date are its own supporting line, and a file names itself before its folder.
+    expect(detail.getByRole('heading', { name: 'Merge: Wire SSO' })).toBeInTheDocument();
+    expect(detail.getByText('aaaaaaa')).toBeInTheDocument();
+    expect(detail.getByText('Ada')).toBeInTheDocument();
+    const file = detail.getByRole('button', { name: /sso\.ts/ });
+    expect(file).toHaveAttribute('title', 'src/sso.ts');
+    expect(within(file).getByText('sso.ts')).toBeInTheDocument();
+    expect(within(file).getByText('src')).toBeInTheDocument();
+    fireEvent.click(file);
     expect(await screen.findByRole('tab', { name: /sso\.ts @ aaaaaaa/ })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /Commit aaaaaaa/ })).toBeInTheDocument();
   });

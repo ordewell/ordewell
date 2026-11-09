@@ -18,7 +18,10 @@
 .terminal-tab:hover { background: var(--ow-bg-hover); }
 .terminal-tab-active { background: var(--ow-bg); color: var(--ow-fg); box-shadow: inset 0 -2px 0 var(--ow-accent); }
 .terminal-tab:focus-visible { outline: 1px solid var(--ow-focus-ring); outline-offset: -1px; }
-.terminal-tab-ended .terminal-tab-name { text-decoration: line-through; }
+/* A struck-through name is hard to read and says nothing of why; the word does, and the name only dims. */
+.terminal-tab-ended .terminal-tab-name { color: var(--ow-fg-secondary); }
+.terminal-tab-state { flex: none; color: var(--ow-fg-secondary); font: var(--ow-type-caption); }
+.terminal-tab-state-failed { color: var(--ow-status-failed); }
 /* The name keeps its start and the scope its own room: a long label gives up its ellipsis, never the close button. */
 .terminal-tab-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .terminal-tab-scope { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--ow-fg-secondary); font: var(--ow-type-caption); }

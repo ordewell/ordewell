@@ -81,7 +81,7 @@ function ScopeGroup({ repo, heading, state, current, onChoose }: {
             <li key={option.label + (option.detail ?? '')}>
               <button type="button" role="menuitemradio" aria-checked={checked} onClick={() => onChoose(option.scope)}>
                 <span className="scope-mark" aria-hidden="true">{checked && <Icon icon={Check} size={16} />}</span>
-                <span className="scope-label">{option.label}</span>
+                <span className="scope-label" title={option.label}>{option.label}</span>
                 {option.detail && <span className="scope-detail" title={option.detail}>{option.detail}</span>}
                 {option.mark && STATE_MARKS[option.mark] && (
                   <span className={`scope-state scope-state-${STATE_MARKS[option.mark]!.tone}`} role="img" aria-label={STATE_MARKS[option.mark]!.word}>

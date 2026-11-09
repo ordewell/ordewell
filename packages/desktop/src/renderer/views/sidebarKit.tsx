@@ -28,6 +28,14 @@ export function MiddleText({ text, tail = 12, className }: { text: string; tail?
 }
 
 /**
+ * The tail to keep of a path or a rename's "from …" line: its last segment and the slash before it, so the name that tells two paths apart is never what the ellipsis takes.
+ * Bounded below by MiddleText's own default and above so a long name still leaves the head a few characters.
+ */
+export function pathTail(path: string): number {
+  return Math.min(40, Math.max(12, path.length - path.lastIndexOf('/')));
+}
+
+/**
  * A sidebar section that folds: its header is one button, so a second press
  * folds it again. Whether it starts open is decided when it first draws; what
  * the person does after that is theirs.
