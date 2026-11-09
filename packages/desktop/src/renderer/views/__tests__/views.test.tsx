@@ -60,7 +60,7 @@ describe('the view stubs', () => {
     expect(state.sidebars.map((s) => `${s.activity}/${s.id}`).sort()).toEqual([
       'changes/checkout', 'changes/review', 'explorer/files', 'git/branches', 'sessions/needs-you', 'sessions/sessions',
     ]);
-    expect(Object.keys(state.tabKinds).sort()).toEqual(['commit-diff', 'commits', 'diff', 'file', 'plan-graph', 'planner', 'settings', 'task']);
+    expect(Object.keys(state.tabKinds).sort()).toEqual(['commit', 'commit-diff', 'commits', 'diff', 'file', 'plan-graph', 'planner', 'settings', 'task']);
     expect(state.panels.map((p) => `${p.region}/${p.id}`).sort()).toEqual(['plan/plan', 'terminal/terminal']);
     expect(state.slots.map((s) => s.slot).sort()).toEqual([
       'popover.needsYou', 'status.daemon', 'status.lease', 'status.runners', 'status.usage', 'title.breadcrumb', 'title.scope',

@@ -7,9 +7,10 @@ import { all } from '../Stub';
 import { MiddleText, Notice } from '../sidebarKit';
 import { openRun } from './gitActions';
 import { readBranches, readCommit, readLog, type Branches, type CommitDetail, type CommitSummary } from './gitData';
-import { ago, commitDiffTabId, landedTaskOf, parseCommitsTabId, refChips, shortSha, type LandedTask, type RefChip } from './gitModel';
+import { ago, commitDiffTabId, commitTabId, landedTaskOf, parseCommitTabId, parseCommitsTabId, refChips, shortSha, type LandedTask } from './gitModel';
 import { gitStoreFor, ownersOf, type RunInfo } from './gitStore';
-import { assignLanes, type GraphRow } from './lanes';
+import { Chip, Lanes } from './GraphParts';
+import { assignLanes } from './lanes';
 import './git.css';
 
 /*
@@ -19,37 +20,9 @@ import './git.css';
  * run's own branch and its landed tasks say so.
  */
 
-const ROW = 28;
-const LANE = 14;
 const PAGE = 100;
 /** Integration branches whose log is read to link landed commits; a repository with more is linked for the newest runs only. */
 const MAX_LINKED_BRANCHES = 5;
-
-const x = (lane: number): number => lane * LANE + LANE / 2;
-
-function Lanes({ row, width }: { row: GraphRow; width: number }): JSX.Element {
-  const mid = ROW / 2;
-  return (
-    <svg className="git-lanes" width={Math.max(width, 1) * LANE + 2} height={ROW} aria-hidden="true">
-      {row.segments.map((s, i) => {
-        const d = s.kind === 'pass' ? `M${x(s.from)},0 V${ROW}`
-          : s.kind === 'in' ? `M${x(s.from)},0 L${x(s.to)},${mid}`
-            : `M${x(s.from)},${mid} L${x(s.to)},${ROW}`;
-        return <path key={i} d={d} className={`git-lane-${s.color}`} />;
-      })}
-      {row.continues && <path d={`M${x(row.lane)},${mid} V${ROW}`} className={`git-lane-${row.color}`} strokeDasharray="2 3" />}
-      <circle cx={x(row.lane)} cy={mid} r={4} className={`git-lane-${row.color}${row.merge ? ' git-merge' : ''}`} />
-    </svg>
-  );
-}
-
-function Chip({ chip }: { chip: RefChip }): JSX.Element {
-  const classes = ['git-chip', `git-chip-${chip.kind}`, chip.current ? 'git-chip-current' : ''].filter(Boolean).join(' ');
-  const title = chip.kind === 'ordewell'
-    ? `Ordewell’s ${chip.owner?.taskId ? 'task' : 'integration'} branch${chip.owner ? ` for run ${chip.owner.runId}` : ''}`
-    : undefined;
-  return <span className={classes} title={title}>{chip.kind === 'ordewell' ? `Ordewell · ${chip.text}` : chip.text}</span>;
-}
 
 interface Linked {
   shas: ReadonlySet<string>;
@@ -77,7 +50,11 @@ function landedFor(commit: CommitSummary, links: readonly Linked[]): { task: Lan
   return undefined;
 }
 
-function Detail({ api, repo, sha, summary, linked, close }: { api: FrameApi; repo: string; sha: string; summary: CommitSummary; linked: { task: LandedTask; sessionId: string } | undefined; close(): void }): JSX.Element {
+/**
+ * A commit's message and files: beside the graph's rows, or as a tab of its own
+ * when the sidebar's history opens it. Each file opens in a diff tab.
+ */
+function Detail({ api, repo, sha, summary, linked, close }: { api: FrameApi; repo: string; sha: string; summary?: CommitSummary; linked?: { task: LandedTask; sessionId: string }; close?(): void }): JSX.Element {
   const [detail, setDetail] = useState<CommitDetail>();
   const [error, setError] = useState<string>();
   useEffect(() => {
@@ -87,18 +64,21 @@ function Detail({ api, repo, sha, summary, linked, close }: { api: FrameApi; rep
     readCommit(api.workspace, repo, sha).then((read) => { if (live) setDetail(read); }, (e: unknown) => { if (live) setError(messageOf(e)); });
     return () => { live = false; };
   }, [api, repo, sha]);
+  const shown = summary ?? detail?.commit;
 
   const open = (path: string, preview: boolean): void => {
+    // Its own tab is kept first: a preview diff would otherwise take the preview commit's place.
+    if (!close) openCommit(api, repo, sha, false);
     api.openTab({ kind: 'commit-diff', id: commitDiffTabId(repo, sha, path), title: `${path.slice(path.lastIndexOf('/') + 1)} @ ${shortSha(sha)}` }, { preview });
   };
 
   return (
-    <aside className="git-detail" aria-label="Commit">
+    <aside className={close ? 'git-detail' : 'git-detail git-detail-tab'} aria-label="Commit">
       <div className="git-detail-head">
-        <h3>{summary.subject}</h3>
-        <IconButton icon={X} label="Close the commit" onClick={close} />
+        <h3>{shown?.subject ?? shortSha(sha)}</h3>
+        {close && <IconButton icon={X} label="Close the commit" onClick={close} />}
       </div>
-      <p className="git-detail-meta">{shortSha(sha)} · {summary.author} · {summary.date}</p>
+      <p className="git-detail-meta">{shortSha(sha)}{shown && ` · ${shown.author} · ${shown.date}`}</p>
       {linked && (
         <p className="git-detail-landed">
           <span>Landed from</span>
@@ -131,6 +111,11 @@ function Detail({ api, repo, sha, summary, linked, close }: { api: FrameApi; rep
       )}
     </aside>
   );
+}
+
+/** A commit as a tab of its own, a preview unless kept, so stepping through the sidebar's history leaves one tab behind. */
+export function openCommit(api: FrameApi, repo: string, sha: string, preview: boolean): void {
+  api.openTab({ kind: 'commit', id: commitTabId(repo, sha), title: `Commit ${shortSha(sha)}` }, { preview });
 }
 
 function Graph({ api, tab }: { api: FrameApi; tab: Tab }): JSX.Element {
@@ -229,5 +214,8 @@ function Graph({ api, tab }: { api: FrameApi; tab: Tab }): JSX.Element {
 }
 
 export function register(api: FrameApi): Unregister {
-  return all(api.registerTabKind({ kind: 'commits', icon: GitCommitHorizontal, render: (tab) => <Graph key={tab.key} api={api} tab={tab} /> }));
+  return all(
+    api.registerTabKind({ kind: 'commits', icon: GitCommitHorizontal, render: (tab) => <Graph key={tab.key} api={api} tab={tab} /> }),
+    api.registerTabKind({ kind: 'commit', icon: GitCommitHorizontal, render: (tab) => { const { repo, sha } = parseCommitTabId(tab.id); return <Detail key={tab.key} api={api} repo={repo} sha={sha} />; } }),
+  );
 }
