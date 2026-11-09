@@ -633,7 +633,7 @@ describe('composeAugmentedPrompt', () => {
     expect(change).toMatch(/`commit`.*at most 100 characters and best 72 or fewer.*imperative mood/);
     expect(change).toMatch(/tells a human reviewer what changed and why/);
     expect(change).toMatch(/summary no longer repeats that/);
-    expect(change).toMatch(/paths, symbols, decisions.*`artifacts`.*what is left and what to watch/);
+    expect(change).toMatch(/paths, symbols, decisions.*`artifacts`.*what is left or open/);
     expect(change).toMatch(/summary may be empty/);
   });
 

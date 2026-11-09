@@ -66,7 +66,7 @@ const taskCompleteInput = z.object({
   status: z.enum(['done', 'blocked', 'failed'])
     .describe("'done' only when the task is fully complete. 'blocked' or 'failed' end the attempt without passing."),
   summary: z.string().max(HANDOFF_LIMITS.summary, 'Put the long form in report.')
-    .describe(`The handoff the next task reads first, written for that reader: what changed, what is left, what to watch. At most ${HANDOFF_LIMITS.summary} characters; the long form goes in report.`),
+    .describe(`The handoff the next task reads first, written for that reader: what changed and why, the interfaces and paths a dependent relies on, the assumptions you acted on, what is left. At most ${HANDOFF_LIMITS.summary} characters; the long form goes in report.`),
   reason: z.string().optional().describe("Why the task is blocked or failed. Expected for anything but 'done'."),
   commit: handoffCommit.optional()
     .describe(`A change task's commit message, for a human reviewer: what changed and why. Only kept with status 'done'. The subject is one line of at most ${HANDOFF_LIMITS.commitSubject} characters, best 72 or fewer, the body at most ${HANDOFF_LIMITS.commitBody}.`),
@@ -621,12 +621,13 @@ export const TASK_COMPLETE_TOOL = 'task_complete';
  */
 export const TASK_COMPLETION_CONTRACT = [
   `When you have fully completed this task, call the \`${TASK_COMPLETE_TOOL}\` tool with status \`done\` and your handoff. If you cannot complete it, call \`${TASK_COMPLETE_TOOL}\` with status \`blocked\` or \`failed\` and the reason instead. Call it once, as your last action.`,
-  `Its \`summary\` is this task's handoff to the next task: the planner and the tasks that depend on this one read it first, and nothing else you write reaches them unless they ask. Write it for that reader, not as a log: what changed, what is left, what to watch. It is at most ${HANDOFF_LIMITS.summary} characters, and a call over a limit is refused: the long form goes in \`report\`.`,
+  `Its \`summary\` is this task's handoff to the next task: the planner and the tasks that depend on this one read it first, and nothing else you write reaches them unless they ask. Write it for that reader, not as a log: what changed and the decisions behind it; the interfaces and paths a dependent relies on; the assumptions you acted on; what is left or open. It is at most ${HANDOFF_LIMITS.summary} characters, and a call over a limit is refused: the long form goes in \`report\`.`,
   `Put anything the next reader must act on in \`findings\`, one item each, most important first, each with a severity, a one-line title, its detail and evidence to check it by: a file (and line), a commit, a task (and one of its findings, as "F3") or a URL. Ordewell numbers them F1, F2, … so a later task can cite one. List what you produced in \`artifacts\`.`,
+  `Work from your brief and the prior task outputs you were given; pull more with \`read\` only when you need it, and read the code your task touches, not the whole repository.`,
   `The long story, if there is one, goes in \`report\`: it is kept with this attempt and read only on demand. A review or other read-only task especially: its findings are its result, so state each one, and do not write the report to a file.`,
 ].join('\n\n');
 
-const COMMIT_CONTRACT = `This task's work lands as a commit, so with status \`done\` also give \`commit\`: a \`subject\` of one line, at most ${HANDOFF_LIMITS.commitSubject} characters and best 72 or fewer, in the imperative mood ("Add a daily version check behind ORDEWELL_NO_VERSION_CHECK"), and a \`body\` of one to three lines on why, with no trailers. The commit tells a human reviewer what changed and why, so the summary no longer repeats that: it holds the exact specifics the next agent needs (paths, symbols, decisions) alongside \`artifacts\`, plus what is left and what to watch, and the summary may be empty when there is nothing to add.`;
+const COMMIT_CONTRACT = `This task's work lands as a commit, so with status \`done\` also give \`commit\`: a \`subject\` of one line, at most ${HANDOFF_LIMITS.commitSubject} characters and best 72 or fewer, in the imperative mood ("Add a daily version check behind ORDEWELL_NO_VERSION_CHECK"), and a \`body\` of one to three lines on why, with no trailers. The commit tells a human reviewer what changed and why, so the summary no longer repeats that: it holds the exact specifics the next agent needs (paths, symbols, decisions, interfaces, assumptions) alongside \`artifacts\`, plus what is left or open, and the summary may be empty when there is nothing to add.`;
 
 /** The completion contract for one attempt: only one whose work lands as a commit is asked for its message (ADR-0047). */
 export function taskCompletionContract(opts: { commits?: true }): string {
