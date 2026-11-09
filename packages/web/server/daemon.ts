@@ -4,7 +4,23 @@ import { OrchestratorPool } from './pool/orchestratorPool';
 import { createServer } from 'http';
 import { mkdirSync, unlinkSync, writeFileSync } from 'fs';
 import { dirname } from 'path';
-import { clearDaemonToken, mintDaemonToken, processLeaseHost, StructuredRunner } from '@ordewell/core';
+import { clearDaemonToken, mintDaemonToken, processLeaseHost, StructuredRunner, type LeaseHostKind } from '@ordewell/core';
+
+/**
+ * What another host's refusal names this one as, and the surface its planner
+ * is told its user has (ADR-0049). Only a TUI starts a daemon it watches, as
+ * its private one; the desktop app marks the one it forks.
+ */
+export function daemonHostKind(args: readonly string[], port: number): LeaseHostKind {
+  const watchParentIdx = args.indexOf('--watch-parent');
+  const ownerPid = watchParentIdx !== -1 ? parseInt(args[watchParentIdx + 1], 10) : undefined;
+  return {
+    kind: 'daemon',
+    port,
+    ...(ownerPid ? { ownerPid } : {}),
+    ...(args.includes('--desktop-app') ? { app: 'desktop' as const } : {}),
+  };
+}
 
 /**
  * The daemon: the API server the CLI, the TUI and the desktop app drive over
@@ -36,9 +52,7 @@ export function runDaemon(args: string[]): void {
   const pidFile = pidFileIdx !== -1 ? args[pidFileIdx + 1] : undefined;
   let ownsPidFile = false;
 
-  // What another host's refusal names this one as (ADR-0049). Only a TUI starts
-  // a daemon it watches, as its private one.
-  processLeaseHost().describe({ kind: 'daemon', port, ...(watchParentPid ? { ownerPid: watchParentPid } : {}) });
+  processLeaseHost().describe(daemonHostKind(args, port));
 
   // Tasks run on the structured transport (ADR-0018) as plain child processes,
   // so one runner serves every plan whatever the host has.

@@ -34,6 +34,8 @@ describe('a delegated task', () => {
     // The subplanner got the goal, on its token's tools.
     expect(planner.requests[0].plannerTools).toMatchObject({ subplanner: true });
     expect(planner.asked[0]).toContain('Write a and b');
+    // Its asker is a planner, which presses no control (ADR-0030).
+    expect(planner.asked[0]).not.toContain('SURFACE AND SETTINGS:');
     const integration = parent.planState?.isolation?.run.repos[0].integrationBranch ?? '';
     expect(git(root, 'ls-tree', '-r', '--name-only', integration).split('\n')).toEqual(['README.md', 'a.txt', 'b.txt', 'tests/guard.txt']);
     expect(git(root, 'log', '-1', '--format=%s', integration)).toBe('Merge: Write a and b');

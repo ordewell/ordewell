@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { taskOf } from './sessionTestKit';
 import { ctx, NOW, prose, settled, supervised, task, until, type Env, type Options } from './supervisorTestKit';
+import { SURFACE_CONTROLS } from '../surfaceControls';
 
 /**
  * Guarded means "ask the user first": in the user's own turn, a planner start
@@ -182,7 +183,7 @@ describe('a planner start of a plan the user never executed', () => {
     const start = await env.planner.tools().runPlan!({}, ctx);
 
     expect(start.isError).toBe(true);
-    expect(answer(start).reason).toBe('The user has not approved this plan yet: they approve it by executing it themselves (Execute plan). Ask them to.');
+    expect(answer(start).reason).toBe(`The user has not approved this plan yet: they approve it themselves (${SURFACE_CONTROLS.unknown.approvePlan}). Ask them to.`);
     env.planner.calls[0].finish(prose('Added it.'));
     await settled();
     expect(cards(env)).toEqual([]);

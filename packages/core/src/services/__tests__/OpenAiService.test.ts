@@ -486,7 +486,7 @@ describe('OpenAiService execution tools (ADR-0029)', () => {
 
     expect(toolNames(0)).toEqual(expect.arrayContaining(['run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'message_task', 'answer_approval', 'answer_checkpoint']));
     expect(systemPrompt()).toContain('RUNNING THE PLAN:');
-    expect(systemPrompt()).toMatch(/- answer_checkpoint .*Only the supervisor at Act may, in a wake-up turn; in the user's own turn they answer it from the task's checkpoint card/);
+    expect(systemPrompt()).toMatch(/- answer_checkpoint .*Only the supervisor at Act may, in a wake-up turn; in the user's own turn they answer it themselves/);
     expect(stopTask).toHaveBeenCalledWith({ task: '2' }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
     const fedBack = (createSpy.mock.calls[1][0] as { messages: Array<{ role: string; content: string }> }).messages.find((m) => m.role === 'tool');
     expect(fedBack?.content).toBe('{"ok":true,"result":"Stopped task #2."}');

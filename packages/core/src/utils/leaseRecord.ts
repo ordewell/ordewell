@@ -17,9 +17,13 @@ import { getSessionsDir, idSegment } from './sessionDir';
  */
 export const LEASE_STALE_MS = 60_000;
 
-/** What kind of process a host is, for the words a refusal names it in. `ownerPid` is the TUI a private daemon serves. */
+/**
+ * What kind of process a host is, for the words a refusal names it in and the
+ * surface the planner is told its user has. `ownerPid` is the TUI a private
+ * daemon serves; `app` marks the daemon the desktop app forked.
+ */
 export type LeaseHostKind =
-  | { kind: 'daemon'; port: number; ownerPid?: number }
+  | { kind: 'daemon'; port: number; ownerPid?: number; app?: 'desktop' }
   | { kind: 'vscode' };
 
 /** A session's lease as its file records it. */

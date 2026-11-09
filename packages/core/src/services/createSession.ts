@@ -24,6 +24,7 @@ import { ChildDirectory } from './ChildDirectory';
 import { ChildPlanRunner, ownedRunner, type ChildHost, type ChildNode, type SubplannerLink } from './ChildPlanRunner';
 import { ScopeLines } from './ScopeLines';
 import { DELEGATION_OFFERED, rememberDelegationBudget } from './runSettingsText';
+import { SURFACE_CONTROLS, surfaceOf, surfaceSettingsBlock, type SurfaceSettings } from './surfaceControls';
 import { checksDelegatedTask, type DelegatedRow } from '../models/Delegation';
 import type { SlotPool } from './SlotPool';
 import type { OpenLease } from './executionLease';
@@ -1007,6 +1008,10 @@ export class Session {
       subplanner: () => this.subplanner !== undefined,
       assignmentScope: () => this.catalog.scope(),
       autorun: () => this.userRunSettings().autorun,
+      surfaceFacts: () => {
+        const facts = this.surfaceSettings();
+        return facts ? surfaceSettingsBlock(facts) : null;
+      },
       tasks: () => this.store.planTasks,
       // Before plan approval, only research has start rules to explain (ADR-0037 R4).
       startWaits: (task) => (this.record.planApproved || task.research ? this.orchestrator.startWaits(task) : []),
@@ -1303,6 +1308,8 @@ export class Session {
       approve: (taskIds) => this.record.approve(taskIds),
       approvePlan: () => this.record.approvePlan(),
       autonomous: () => this.autonomous(),
+      userControls: () => SURFACE_CONTROLS[surfaceOf(this.lease.host?.())],
+      mergesByThemselves: () => this.automaticMerging() === 'on',
       autorun: () => this.userRunSettings().autorun,
       scheduling: () => this.orchestrator.isScheduling,
       startsHeld: () => this.orchestrator.startsHeld,
@@ -1534,6 +1541,31 @@ export class Session {
   runSettings(): GlobalRunSettings {
     // The Planned-with line keeps no copy: every landing reads the user's saved setting (ADR-0030).
     return { ...this.runSettingsValue, plannedWithTrailer: this.plannedWithTrailer() };
+  }
+
+  /**
+   * Where this session's user is and how its run is set, for the planner and
+   * the refusals that tell it what the user does (ADR-0030). The surface is
+   * the live host's (ADR-0049). None for a subplanner: its asker is a planner,
+   * which presses no control.
+   */
+  private surfaceSettings(): SurfaceSettings | null {
+    if (this.subplanner !== undefined) return null;
+    return {
+      surface: surfaceOf(this.lease.host?.()),
+      automaticMerging: this.automaticMerging(),
+      autorun: this.userRunSettings().autorun,
+      supervisorLevel: this.supervision.standing().level,
+      parallelLimit: this.config.maxParallelSessions,
+    };
+  }
+
+  /** The run's automatic merging as it stands: the run's own setting while one runs, the user's otherwise (ADR-0030). */
+  private automaticMerging(): SurfaceSettings['automaticMerging'] {
+    const standing = this.supervision.standing();
+    if (!standing.mergeAtGatesAutomatically) return 'off';
+    // On, yet not merging now (a landing override, a delegated task's check): the user's merge is what lands the work.
+    return standing.running && !this.orchestrator.mergesAtGates ? 'held' : 'on';
   }
 
   /** The user's run settings as they stand for this session (ADR-0030). */

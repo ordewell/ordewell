@@ -96,6 +96,11 @@ export interface SessionLease {
    * starts or merges says so before it moves, not at the next heartbeat.
    */
   publish(): void;
+  /**
+   * What kind of host serves this Session, as a refusal would name it: the
+   * planner is told its user's surface from it. None where no host does.
+   */
+  host?(): LeaseHostKind | undefined;
 }
 
 /** For a Session whose saves go nowhere on disk (a test's): there is no shared state to own. */
@@ -186,6 +191,11 @@ export class LeaseHost {
   /** Say what kind of host this is, for the refusals another host words. */
   describe(kind: LeaseHostKind): void {
     this.kindOf = () => kind;
+  }
+
+  /** What this host was last described as. */
+  kind(): LeaseHostKind | undefined {
+    return this.kindOf();
   }
 
   /**
@@ -388,37 +398,41 @@ class HostedLease implements SessionLease {
   private lostLease: { file: string; held: SessionHeld } | null = null;
 
   constructor(
-    private readonly host: LeaseHost,
+    private readonly owner: LeaseHost,
     private readonly onLost: (held: SessionHeld) => void,
     /** @internal */ readonly runLive: () => boolean,
   ) {}
 
+  host(): LeaseHostKind | undefined {
+    return this.owner.kind();
+  }
+
   claim(sessionId: string, workspace: string, commit?: () => void): void {
     const file = leaseFile(sessionId, workspace);
     if (this.file === file) {
-      const held = this.host.check(file, this);
+      const held = this.owner.check(file, this);
       if (held) throw new SessionHeldError(held);
       commit?.();
       return;
     }
-    this.host.acquire(file, workspace, this);
+    this.owner.acquire(file, workspace, this);
     try {
       commit?.();
     } catch (err) {
-      this.host.release(file, this);
+      this.owner.release(file, this);
       throw err;
     }
     const previous = this.file;
     this.file = file;
     this.workspace = workspace;
     this.lostLease = null;
-    if (previous) this.host.release(previous, this);
+    if (previous) this.owner.release(previous, this);
   }
 
   hold(sessionId: string, workspace: string): SessionHeld | null {
     const file = leaseFile(sessionId, workspace);
     if (this.lostLease?.file === file) return this.lostLease.held;
-    if (this.file === file) return this.host.check(file, this);
+    if (this.file === file) return this.owner.check(file, this);
     try {
       this.claim(sessionId, workspace);
       return null;
@@ -429,13 +443,13 @@ class HostedLease implements SessionLease {
   }
 
   release(): void {
-    if (this.file) this.host.release(this.file, this);
+    if (this.file) this.owner.release(this.file, this);
     this.file = null;
     this.lostLease = null;
   }
 
   publish(): void {
-    if (this.file) this.host.publish(this.file);
+    if (this.file) this.owner.publish(this.file);
   }
 
   /** @internal Another host took `file`'s lease from this one. */

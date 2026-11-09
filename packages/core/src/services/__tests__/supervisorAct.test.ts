@@ -518,7 +518,7 @@ describe('merge_all as a planner tool', () => {
     expect(env.session.mergeGate('o2')).toEqual([]);
   });
 
-  it('is refused in the user\'s own turn: they press Merge all themselves', async () => {
+  it('is refused in the user\'s own turn: they merge it themselves', async () => {
     const env = await gated();
     env.planner.calls[0].finish(prose('Task 3 waits for input.'));
     await settled();
@@ -528,7 +528,7 @@ describe('merge_all as a planner tool', () => {
     const merge = await env.planner.tools().mergeAll!({}, ctx);
 
     expect(merge.isError).toBe(true);
-    expect(JSON.parse(merge.text).reason).toMatch(/^Merge all is the user's/);
+    expect(JSON.parse(merge.text).reason).toMatch(/^Merging the run's landed work is the user's/);
     expect(env.merges()).toBe(0);
   });
 });
@@ -700,7 +700,7 @@ describe('answer_checkpoint at Act', () => {
     const approved = await env.planner.tools().answerCheckpoint!({ task: '1', answer: 'approve' }, ctx);
 
     expect(approved.isError).toBe(true);
-    expect(JSON.parse(approved.text).reason).toMatch(/^You are the supervisor at Watch: you read and suggest, and cannot answer a checkpoint\. The user answers it from the task's checkpoint card/);
+    expect(JSON.parse(approved.text).reason).toMatch(/^You are the supervisor at Watch: you read and suggest, and cannot answer a checkpoint\. The user answers it themselves/);
     expect(env.session.awaitsCheckpoint('t1')).toBe(true);
   });
 });
