@@ -32,6 +32,14 @@
 /* The task's chat, like the planner's, uses its tab's full width; the activity line and composer share the body's gutter so they sit under what they answer. */
 .session-task-chat :is(.task-log-body, .task-log-activity, .task-log-composer) { padding-inline: var(--ow-space-3); }
 
+/* A task's kind is a label, not a state: the shared sheet tints it cyan, orange or purple, which on Desktop would read as runner, Needs you and area colours. The VS Code webview keeps its tints. */
+.task-type-badge, .task-type-badge:is(.ai, .user, .ops, .research, .delegated, .script) { background: var(--ow-bg-selected); color: var(--ow-fg-secondary); }
+
+/* The supervisor and a run update speak for Ordewell, not for a wait on the user: amber is kept for Needs you, so their marks go neutral here. */
+.chat-msg-label { color: var(--ow-fg-secondary); }
+.chat-msg-supervisor .chat-msg-bubble, .chat-msg-wake-up { border-left-color: var(--ow-fg-muted); }
+.chat-msg-wake-up { background: var(--ow-bg-selected); }
+
 .sessions { margin: 0; padding: 0 0 var(--ow-space-1); list-style: none; }
 .sessions li:has(> .session-row) { display: block; padding: 0; }
 /* Two lines: the goal, then the status as a shape and a word and when it last moved. */

@@ -39,8 +39,8 @@ ul { list-style: none; margin: 0; padding: 0; }
 
 .frame-sidebar .sessions { padding: 0 var(--ow-space-3); }
 .sessions li { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 8px 0; border-bottom: 1px solid var(--ow-border); }
-.session-goal { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.session-status { font-size: 12px; color: var(--ow-fg-secondary); }
+.session-goal { font: var(--ow-type-body-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-status { font: var(--ow-type-small); color: var(--ow-fg-secondary); }
 
 /* A count is typed, never nudged: no number field in the app draws spin buttons (the planner chat's own run settings block still has some). */
 input[type='number']::-webkit-inner-spin-button,
