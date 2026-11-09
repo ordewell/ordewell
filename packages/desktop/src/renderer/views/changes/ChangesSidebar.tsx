@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { AlertTriangle, ChevronDown, ChevronRight, GitMerge, GitPullRequestArrow, RefreshCw } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronRight, GitMerge, GitPullRequestArrow, Info, RefreshCw } from 'lucide-react';
 import { taskRowView, titledRefs, walkPlan } from '@ordewell/core/plan-utils';
 import type { RunTask, RunView, Task, TaskType } from '@ordewell/core';
 import { TaskSummary } from '@ordewell/ui';
@@ -10,7 +10,7 @@ import { useSession } from '../../session/useSession';
 import { all } from '../Stub';
 import { fileTabId } from '../explorer/fileTabs';
 import { readRunFiles, readTaskFiles, type FileList, type ReviewScope } from './changesData';
-import { conflictRows, matchesFilter, reviewableTasks, type ChangedFile, type ConflictRow } from './changesModel';
+import { conflictRows, matchesFilter, reviewableTasks, taskDiffNote, type ChangedFile, type ConflictRow, type TaskDiffNote } from './changesModel';
 import { mergeAll } from './mergeAll';
 import '../explorer/explorer.css';
 import './changes.css';
@@ -32,17 +32,73 @@ function opener(api: FrameApi): Opener {
   };
 }
 
-/** One read of a file list, again whenever `key` changes: a task that moved on has other files. */
-function useFiles(read: () => Promise<FileList>, key: string): FileList | undefined {
-  const [list, setList] = useState<FileList>();
+/**
+ * One read of a file list, again whenever `key` changes: a task that moved on
+ * has other files. While the same `scope` is read again its last list stays
+ * drawn rather than flashing to a skeleton; a list from another scope is never
+ * drawn, nor an answer that arrives after its read was superseded.
+ */
+function useFiles(read: () => Promise<FileList>, scope: string, key: string): { list: FileList | undefined; current: boolean } {
+  const [held, setHeld] = useState<{ scope: string; key: string; list: FileList }>();
   useEffect(() => {
     let live = true;
-    setList(undefined);
-    void read().then((next) => { if (live) setList(next); });
+    void read().then((list) => { if (live) setHeld({ scope, key, list }); });
     return () => { live = false; };
-    // `read` is rebuilt each render; `key` names everything it reads.
-  }, [key]);
-  return list;
+    // `read` is rebuilt each render; `scope` and `key` name everything it reads.
+  }, [scope, key]);
+  if (held?.scope !== scope) return { list: undefined, current: false };
+  return { list: held.list, current: held.key === key };
+}
+
+/** How long each read after a quiet answer waits; past the last, Refresh reads again. A run saves a task's record within seconds of reporting it. */
+const RETRY_MS = [1000, 2000, 4000, 8000, 16000];
+
+/** Call `go` once the window is shown and the daemon connected: a read before then would only be retried again. */
+function whenReachable(go: () => void): () => void {
+  let done = false;
+  const check = (): void => {
+    if (done || document.hidden) return;
+    void window.ordewell.daemon.status().then((status) => {
+      if (done || document.hidden || status.state !== 'connected') return;
+      stop();
+      go();
+    }, () => undefined); // An unreadable status waits for the next status event.
+  };
+  const offStatus = window.ordewell.daemon.onStatus((status) => { if (status.state === 'connected') check(); });
+  document.addEventListener('visibilitychange', check);
+  function stop(): void {
+    done = true;
+    offStatus();
+    document.removeEventListener('visibilitychange', check);
+  }
+  check();
+  return stop;
+}
+
+/**
+ * A task's files, and what to say when it has none to show. The saved run the
+ * daemon reads trails what the run broadcasts, so a task whose record has not
+ * been saved yet is read again a few times, though nothing on its row changes;
+ * a task that has settled is never polled.
+ */
+function useTaskFiles(host: DaemonHost, task: RunTask, refresh: number): { list: FileList | undefined; note: TaskDiffNote | undefined } {
+  const sessionId = host.sessionId;
+  // A new attempt is another scope: the last attempt's files are not this one's.
+  const scope = [sessionId, task.id, task.attemptUsage?.length ?? 0].join('\0');
+  const asked = [scope, task.status, task.isolation?.state, refresh].join('\0');
+  const [retry, setRetry] = useState({ asked, tries: 0 });
+  const tries = retry.asked === asked ? retry.tries : 0;
+  const { list, current } = useFiles(() => readTaskFiles(host.workspace, sessionId, task.id), scope, `${asked}\0${tries}`);
+  const note = list && !list.ok && list.unavailable ? taskDiffNote(list.unavailable, task) : undefined;
+  // Only an answer to the latest read schedules the next, so a slow read is never overtaken by another.
+  const again = current && note?.retry === true && tries < RETRY_MS.length;
+  useEffect(() => {
+    if (!again) return;
+    let reachable: (() => void) | undefined;
+    const timer = setTimeout(() => { reachable = whenReachable(() => setRetry({ asked, tries: tries + 1 })); }, RETRY_MS[tries]);
+    return () => { clearTimeout(timer); reachable?.(); };
+  }, [again, asked, tries]);
+  return { list, note };
 }
 
 function Counts({ file }: { file: ChangedFile }): JSX.Element {
@@ -67,8 +123,10 @@ function FilesSkeleton(): JSX.Element {
   );
 }
 
-function Files({ list, scope, tag, filter, open, empty }: {
+function Files({ list, note, scope, tag, filter, open, empty }: {
   list: FileList | undefined;
+  /** What a task with no diff to show says instead of its read's failure. */
+  note?: TaskDiffNote;
   scope: ReviewScope;
   tag: string;
   filter: string;
@@ -76,7 +134,9 @@ function Files({ list, scope, tag, filter, open, empty }: {
   empty: string;
 }): JSX.Element | null {
   if (!list) return <FilesSkeleton />;
-  if (!list.ok) return <p className="changes-note error" role="alert"><Icon icon={AlertTriangle} size={16} />{list.error}</p>;
+  if (note?.tone === 'quiet') return <p className="changes-note">{note.text}</p>;
+  if (note?.tone === 'unavailable') return <p className="changes-note unavailable"><Icon icon={Info} size={16} />{note.text}</p>;
+  if (!list.ok) return <p className="changes-note error" role="alert"><Icon icon={AlertTriangle} size={16} />{note?.text ?? list.error}</p>;
   const files = list.files.filter((file) => matchesFilter(filter, `${file.repo}/${file.path}`));
   if (list.files.length === 0) return <p className="changes-note">{empty}</p>;
   if (files.length === 0) return null;
@@ -116,13 +176,9 @@ function Files({ list, scope, tag, filter, open, empty }: {
 function Revert({ host, task, row }: { host: DaemonHost; task: RunTask; row?: boolean }): JSX.Element | null {
   if (task.isolation?.revertible !== true) return null;
   const revert = (): void => { void host.handle({ type: 'sendSystemCommand', command: 'revertTask', taskId: task.id }); };
-  // On a task's header the action sits with the status it follows; in the task tab it has the list to itself.
+  // On a task's header the action sits with the status it follows; in the task tab it heads the list's actions.
   if (row) return <button type="button" className="task-row-action" onClick={revert}>Revert…</button>;
-  return (
-    <div className="changes-task-actions">
-      <Button size="sm" variant="secondary" onClick={revert}>Revert…</Button>
-    </div>
-  );
+  return <Button size="sm" variant="secondary" onClick={revert}>Revert…</Button>;
 }
 
 /** Tasks held at a merge gate (ADR-0042): Merge all lets them go on, or one is started past its gate, asked first. */
@@ -187,10 +243,7 @@ function TaskGroup({ host, task, tasks, label, filter, round, open }: {
   open: Opener;
 }): JSX.Element | null {
   const sessionId = host.sessionId;
-  const list = useFiles(
-    () => readTaskFiles(host.workspace, sessionId, task.id),
-    [sessionId, task.id, task.status, task.isolation?.state, round].join('\0'),
-  );
+  const { list, note } = useTaskFiles(host, task, round);
   const [expanded, toggle] = useGroupOpen(list, filter !== '');
   const scope: ReviewScope = { kind: 'task', sessionId, taskId: task.id };
   // A filter that names the task shows all its files; one that matches none of them hides the task.
@@ -212,6 +265,7 @@ function TaskGroup({ host, task, tasks, label, filter, round, open }: {
       {expanded && (
         <Files
           list={list}
+          note={note}
           scope={scope}
           tag={`Task #${label}`}
           filter={named ? '' : filter}
@@ -230,14 +284,15 @@ function TaskGroup({ host, task, tasks, label, filter, round, open }: {
  */
 export function TaskChanges({ api, host, task, label }: { api: FrameApi; host: DaemonHost; task: RunTask; label: string }): JSX.Element {
   const sessionId = host.sessionId;
-  const list = useFiles(
-    () => readTaskFiles(host.workspace, sessionId, task.id),
-    [sessionId, task.id, task.status, task.isolation?.state].join('\0'),
-  );
+  const [round, setRound] = useState(0);
+  const { list, note } = useTaskFiles(host, task, round);
   return (
     <section className="changes-group" aria-label="Changed files">
-      <Revert host={host} task={task} />
-      <Files list={list} scope={{ kind: 'task', sessionId, taskId: task.id }} tag={`Task #${label}`} filter="" open={opener(api)} empty="No changes in this task." />
+      <div className="changes-task-actions">
+        <Revert host={host} task={task} />
+        <IconButton icon={RefreshCw} label="Refresh changes" onClick={() => setRound((r) => r + 1)} />
+      </div>
+      <Files list={list} note={note} scope={{ kind: 'task', sessionId, taskId: task.id }} tag={`Task #${label}`} filter="" open={opener(api)} empty="No changes in this task." />
     </section>
   );
 }
@@ -246,7 +301,7 @@ function RunGroup({ host, repos, filter, round, open }: { host: DaemonHost; repo
   const sessionId = host.sessionId;
   const { state } = useSession(host);
   const landed = (state.run.handoff ?? state.run.runMerge)?.landed.length ?? 0;
-  const list = useFiles(() => readRunFiles(host.workspace, sessionId, repos), [sessionId, repos.join('\0'), landed, round].join('\0'));
+  const { list } = useFiles(() => readRunFiles(host.workspace, sessionId, repos), [sessionId, repos.join('\0')].join('\0'), [landed, round].join('\0'));
   const [expanded, toggle] = useGroupOpen(list, filter !== '');
   return (
     <section className="changes-group" aria-label="Whole run vs base">

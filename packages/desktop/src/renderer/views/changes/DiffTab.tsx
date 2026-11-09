@@ -268,6 +268,9 @@ function ReviewDiff({ api, tab, scope, repo, path }: { api: FrameApi; tab: Tab; 
             <EmptyState icon={FileWarning} title="The diff could not be read" body={<span role="alert">{diff.message}</span>} action={<Button size="sm" icon={RefreshCw} onClick={reload}>Try again</Button>} />
           </div>
         );
+      case 'unavailable':
+        // A task with no diff of its own to show (ops, read-only, not recorded yet) is no failure: no alert, but a way to read again once it is.
+        return <div className="fv-state"><EmptyState icon={FileDiffIcon} title="No diff to show" body={diff.message} action={<Button size="sm" icon={RefreshCw} onClick={reload}>Try again</Button>} /></div>;
       case 'binary':
         return <div className="fv-state"><EmptyState icon={FileQuestion} title="This is a binary file" body="This is a binary file, so its change is not shown." /></div>;
       case 'unchanged':

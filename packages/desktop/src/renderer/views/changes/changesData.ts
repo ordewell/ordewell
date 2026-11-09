@@ -1,9 +1,10 @@
 import { filesApi } from '../../files/api';
 import type { ViewScope } from '../../frame/api';
 import { callDaemon, messageOf } from '../../session/daemon';
+import type { TaskDiffCause } from '@ordewell/core';
 import {
   changeLetter, diffSides, parsePatch, parseTaskDiffList, taskFilePatch,
-  type ChangedFile, type DiffSides, type FilePatch,
+  type ChangedFile, type DiffSides, type FilePatch, type TaskDiffUnavailable,
 } from './changesModel';
 
 /*
@@ -17,7 +18,7 @@ export type ReviewScope = Exclude<ViewScope, { kind: 'checkout' }>;
 
 export type FileList =
   | { ok: true; files: ChangedFile[]; note?: string }
-  | { ok: false; error: string };
+  | { ok: false; error: string; unavailable?: TaskDiffUnavailable };
 
 interface DiffFiles {
   files: ChangedFile[];
@@ -57,13 +58,17 @@ async function gitDiff(workspace: string, repo: string, scope: ReviewScope, path
   return parsed;
 }
 
-type TaskDiffText = { available: true; text: string } | { available: false; reason: string };
+type TaskDiffText = { available: true; text: string } | ({ available: false } & TaskDiffUnavailable);
+
+const CAUSES: ReadonlySet<unknown> = new Set<TaskDiffCause>(['no-record', 'no-run', 'not-attributable', 'read-only', 'error']);
+const isCause = (value: unknown): value is TaskDiffCause => CAUSES.has(value);
 
 function parseTaskDiff(data: unknown): TaskDiffText | undefined {
   if (!isRecord(data)) return undefined;
   if (data.available === true && typeof data.text === 'string') return { available: true, text: data.text };
-  if (data.available === false && typeof data.reason === 'string') return { available: false, reason: data.reason };
-  return undefined;
+  if (data.available !== false || typeof data.reason !== 'string') return undefined;
+  // A daemon from before the cause, or one naming a cause this app does not know, is heard as a failure: only a cause it names excuses a missing diff.
+  return { available: false, cause: isCause(data.cause) ? data.cause : 'error', reason: data.reason };
 }
 
 async function taskDiff(workspace: string, sessionId: string, taskId: string, file?: { repo: string; path: string }): Promise<TaskDiffText> {
@@ -82,7 +87,7 @@ async function taskDiff(workspace: string, sessionId: string, taskId: string, fi
 export async function readTaskFiles(workspace: string, sessionId: string, taskId: string): Promise<FileList> {
   try {
     const answer = await taskDiff(workspace, sessionId, taskId);
-    if (!answer.available) return { ok: false, error: answer.reason };
+    if (!answer.available) return { ok: false, error: answer.reason, ...(answer.cause === 'error' ? {} : { unavailable: { cause: answer.cause, reason: answer.reason } }) };
     const list = parseTaskDiffList(answer.text);
     if (list.savedPatch) return { ok: true, files: list.files, note: list.savedPatch };
     const letters = new Map<string, ChangedFile['status']>();
@@ -122,6 +127,8 @@ export type FileDiff =
   | { kind: 'text'; sides: DiffSides; patch: FilePatch }
   | { kind: 'binary' }
   | { kind: 'unchanged' }
+  /** The task has no diff of its own to read, for a reason the daemon named: nothing failed. */
+  | { kind: 'unavailable'; message: string }
   | { kind: 'error'; message: string };
 
 /**
@@ -135,7 +142,7 @@ export async function readFileDiff(workspace: string, scope: ReviewScope, repo: 
     let text: string;
     if (scope.kind === 'task') {
       const answer = await taskDiff(workspace, scope.sessionId, scope.taskId, { repo, path });
-      if (!answer.available) return { kind: 'error', message: answer.reason };
+      if (!answer.available) return { kind: answer.cause === 'error' ? 'error' : 'unavailable', message: answer.reason };
       text = taskFilePatch(answer.text);
     } else {
       text = (await gitDiff(workspace, repo, scope, path)).patch ?? '';

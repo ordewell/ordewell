@@ -1,4 +1,4 @@
-import { TASK_DIFF_UNAVAILABLE, type TaskDiffRead, type TaskDiffResult } from './taskDiffRead';
+import { TASK_DIFF_NO_RECORD, TASK_DIFF_NO_RUN, TASK_DIFF_SHARED, taskDiffUnavailable, type TaskDiffRead, type TaskDiffResult } from './taskDiffRead';
 import type { Task } from '../models/Task';
 import type { HandoffCommit } from '../models/Handoff';
 import type { IConfig } from '../interfaces/IConfig';
@@ -838,9 +838,11 @@ export class IsolationRunController {
   }
 
   async taskDiff(taskId: string, options: TaskDiffRead): Promise<TaskDiffResult> {
-    if (!this.run || !this.run.tasks[taskId] || !this.isolation.taskDiff) {
-      return { available: false, reason: TASK_DIFF_UNAVAILABLE };
-    }
+    // Only a run decided shared is said to be one: a task still preparing its worktree has no record yet either.
+    if (this.mode === 'shared') return taskDiffUnavailable('not-attributable', TASK_DIFF_SHARED);
+    if (!this.run) return taskDiffUnavailable('no-run', TASK_DIFF_NO_RUN);
+    if (!this.run.tasks[taskId]) return taskDiffUnavailable('no-record', TASK_DIFF_NO_RECORD);
+    if (!this.isolation.taskDiff) return taskDiffUnavailable('error', 'Task diff is not available: this run\'s isolation cannot read one.');
     return this.isolation.taskDiff(this.run, taskId, options);
   }
 
