@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button } from '@ordewell/ui/design';
+import { CircleX } from 'lucide-react';
+import { Button, Icon } from '@ordewell/ui/design';
 import type { TerminalEvent } from '../../shared/bridge';
 import { isMac } from '../frame/keys';
 import { SIGN_IN_CLOSED, SIGN_IN_TIMEOUT, waitForSignIn } from '../session/signInWait';
@@ -144,11 +145,17 @@ export function LoginDialog({ runner, label, platform, onClose, onSignedIn, poll
       >
         <p id="welcome-login-title" className="welcome-login-title">Sign in to {label}</p>
         <div ref={screen} className="welcome-login-terminal" aria-label={`${label} login terminal`} />
-        <p className="welcome-login-status" role="status">
+        {/* A failure is announced as an alert and led by what happened; the agent's own words follow it. */}
+        <p className={`welcome-login-status${failed ? ' welcome-login-failed' : ''}`} role={failed ? 'alert' : 'status'}>
+          {failed && <Icon icon={CircleX} size={16} />}
           {phase.kind === 'starting' ? 'Starting the login terminal…' : null}
           {phase.kind === 'running' ? 'Waiting for the sign-in to finish…' : null}
           {phase.kind === 'done' ? phase.message : null}
-          {failed ? `Sign-in did not finish. ${phase.message}` : null}
+          {failed ? (
+            <span>
+              <strong>Sign-in did not finish.</strong>{' '}{phase.message}
+            </span>
+          ) : null}
         </p>
         {failed && (phase.message === SIGN_IN_CLOSED || phase.message === SIGN_IN_TIMEOUT) && (
           <p className="welcome-login-hint">The agent's own command is in the terminal above. Close this, then choose Log in to run it again.</p>
