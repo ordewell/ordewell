@@ -45,7 +45,7 @@ import { collectResearchContext } from '../ContextCollector';
 import { sensitiveEnvValues } from '../outboundSecrets';
 import type { AgentAdapter, AgentEvent, AgentProcessDeps, PlannerStartOptions, UsageLimitSignal } from './AgentAdapter';
 import { connectorFor, createPlannerAdapter } from './connectors';
-import { mapAgentTool, normalizeAgentArgs } from './agentTools';
+import { isWorkspaceRead, mapAgentTool, normalizeAgentArgs } from './agentTools';
 import { decidePlannerPermission, type PlannerPermissionGate } from './plannerPermissions';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from '../plannerModes';
 import { mcpClientConfig, sharedMcpServer, type OrdewellMcpServer } from '../mcp';
@@ -513,6 +513,17 @@ export class CliAgentAiService implements IAiService {
   }
 
   /**
+   * Whether this runner's own workspace reads reach Ordewell as read calls
+   * (the own-reads meter, an experiment). Claude Code and OpenCode have
+   * read, search and list tools. Codex reads through a shell, and an ACP
+   * agent names its tools its own way: a read is not told from any other
+   * command there, so those add no line rather than a wrong one.
+   */
+  private reportsOwnReads(): boolean {
+    return this.runner === 'claude-code' || this.runner === 'opencode';
+  }
+
+  /**
    * Drive one user message to a settled planner turn through
    * {@link settleReply}, the loop the API backend settles through too. The
    * tool rounds belong to the agent now, so one call is one agent turn —
@@ -560,7 +571,7 @@ export class CliAgentAiService implements IAiService {
       // or edit lands only from a tool call the conversation committed.
       const turn = await settleReply({
         // The turn's own input carries the budgets, not the system prompt, which stays cacheable.
-        message: withTurnBudgets(this.turnBudgets, message),
+        message: withTurnBudgets(this.turnBudgets, message, this.reportsOwnReads()),
         send,
         onProgress,
         signal: combined,
@@ -634,7 +645,7 @@ export class CliAgentAiService implements IAiService {
     // `at` is when the model announced the call, and `slot` is where that call
     // stands in the log: a reloaded transcript places each row where the live
     // view drew it, however the results come back.
-    const pendingCalls = new Map<string, { tool: ResearchStep['tool']; toolLabel?: string; args: string; subagentId?: string; at: string; slot: number }>();
+    const pendingCalls = new Map<string, { tool: ResearchStep['tool']; toolLabel?: string; args: string; subagentId?: string; at: string; slot: number; ownRead?: boolean }>();
     const logSlots: (ResearchStep | null)[] = [];
     const reply = new TurnReply(onProgress);
     // Who streamed thinking deltas (the planner as '', or a subagent) since
@@ -670,6 +681,7 @@ export class CliAgentAiService implements IAiService {
       const output = redactSourceText(rawOutput);
       const call = pendingCalls.get(id);
       pendingCalls.delete(id);
+      if (call?.ownRead && success) this.turnBudgets?.noteOwnRead(rawOutput.length);
       const subagentId = call?.subagentId ?? reportedBy;
       const step: ResearchStep = {
         id: `rs-${Date.now()}-${stepIndex++}`,
@@ -714,7 +726,10 @@ export class CliAgentAiService implements IAiService {
           const mapped = mapAgentTool(event.name);
           const args = JSON.stringify(normalizeAgentArgs(mapped.tool, event.args));
           const subagentId = event.subagentId;
-          pendingCalls.set(event.id, { tool: mapped.tool, toolLabel: mapped.toolLabel, args, subagentId, at: new Date().toISOString(), slot: logSlots.push(null) - 1 });
+          pendingCalls.set(event.id, {
+            tool: mapped.tool, toolLabel: mapped.toolLabel, args, subagentId, at: new Date().toISOString(), slot: logSlots.push(null) - 1,
+            ownRead: !subagentId && isWorkspaceRead(event.name),
+          });
           onProgress({ type: 'tool_call', tool: mapped.tool, toolLabel: mapped.toolLabel, toolArgs: args, toolCallId: event.id, subagentId });
           return;
         }

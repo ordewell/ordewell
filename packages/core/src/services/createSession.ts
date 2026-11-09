@@ -441,6 +441,8 @@ export function createSession(deps: SessionDeps): Session {
     () => taskReadsLine(conversation?.readsLeft),
     () => webReadsLine(webReads.remaining()),
   ]);
+  // An experiment, off unless ORDEWELL_PLANNER_READ_METER is exactly `1`.
+  turnBudgets.measureOwnReads();
   // An API planner reads these before each call: its model's limits from the
   // catalogs already held (a fetch is started, never awaited, for a model they
   // lack), and the config file's switch, so a change applies from the next call.
