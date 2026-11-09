@@ -24,7 +24,7 @@ import { TerminalChannel } from './terminal/TerminalChannel';
 import { fileSystemPlacement } from './terminal/placement';
 import { shellName } from './terminal/shellChoice';
 import { TerminalHost, type PtySpawn } from './terminal/TerminalHost';
-import { closePrompt, onLastWindowClosed, quitPrompt } from './lifecycle';
+import { closePrompt, onLastWindowClosed, quitPrompt, runsQuitStops } from './lifecycle';
 import { droppedFolder } from './droppedFolder';
 import { menuTemplate } from './menu';
 import { ProjectOpener } from './projectOpener';
@@ -286,14 +286,10 @@ async function main(): Promise<void> {
         if (answer.response !== 0) return;
       }
       quitting = true;
-      // An owned daemon's runs are stopped through the daemon before it goes,
-      // so each records a stop rather than a crash; an attached daemon's runs
-      // go on (H5).
-      if (daemon.owned && live) {
-        for (const run of live) {
-          const built = buildRequest('plans.stop', { sessionId: run.sessionId });
-          if (built.ok) await proxy.call(built.request);
-        }
+      // Named with its workspace: an id names a session only within one.
+      for (const run of runsQuitStops(live, daemon.owned)) {
+        const built = buildRequest('plans.stop', { sessionId: run.sessionId, workspace: run.workspace });
+        if (built.ok) await proxy.call(built.request);
       }
       hideTray();
       terminalHost.killAll();

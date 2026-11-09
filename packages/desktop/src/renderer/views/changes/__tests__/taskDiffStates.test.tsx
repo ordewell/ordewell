@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { RouteParams } from '../../../../shared/routes';
 import type { DaemonCallResult } from '../../../../shared/bridge';
 import { startAttemptUsage, type RunTask } from '@ordewell/core';
-import { FrameStore } from '../../../frame/store';
+import { FrameProvider, FrameStore } from '../../../frame/store';
 import { DaemonHost } from '../../../session/DaemonHost';
 import { fakeDaemon, ok, surfacePlan, surfaceTask } from '../../../session/__tests__/fakeDaemon';
 import { ChangesList, TaskChanges } from '../ChangesSidebar';
@@ -40,7 +40,8 @@ async function hostWith(task: RunTask, taskDiff: Answer) {
     });
   };
   await show(task);
-  return { daemon, host, show, api: new FrameStore({ workspace: WORKSPACE, platform: 'linux' }).api };
+  const store = new FrameStore({ workspace: WORKSPACE, platform: 'linux' });
+  return { daemon, host, show, store, api: store.api };
 }
 
 /** Let the retry's wait pass, and the read it starts settle. */
@@ -77,8 +78,8 @@ describe('a task diff the saved run has not caught up with', () => {
   it('reads quietly as no changes yet, and shows the files once the record is saved, though the row never changed', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     let saved = false;
-    const { daemon, host, api } = await hostWith(running, () => ok(saved ? { available: true, text: SSO } : NO_RECORD));
-    render(<ChangesList api={api} host={host} />);
+    const { daemon, host, store, api } = await hostWith(running, () => ok(saved ? { available: true, text: SSO } : NO_RECORD));
+    render(<FrameProvider value={store}><ChangesList api={api} host={host} /></FrameProvider>);
 
     const group = within(await screen.findByRole('region', { name: 'Task #3: Wire SSO' }));
     expect(await group.findByText('No changes yet.')).toBeInTheDocument();
@@ -200,9 +201,11 @@ describe('waiting for a running task\'s record', () => {
 
     fireEvent.click(region.getByRole('button', { name: 'Refresh changes' }));
     await waitFor(() => expect(daemon.calls('plans.taskDiff')).toHaveLength(7));
-    // A refresh is a fresh start: its own quiet answer is read again too.
+    // A refresh is a fresh start: its own quiet answer is read again too. Its
+    // retry is scheduled only once that answer lands, which on a loaded machine
+    // can trail the read being counted, so the next read is waited for.
     await elapse(1000);
-    expect(daemon.calls('plans.taskDiff')).toHaveLength(8);
+    await waitFor(() => expect(daemon.calls('plans.taskDiff')).toHaveLength(8));
   });
 
   it('waits while the daemon is away or the window hidden, and reads nothing once closed', async () => {

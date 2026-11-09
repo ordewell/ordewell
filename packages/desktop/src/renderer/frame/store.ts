@@ -50,6 +50,13 @@ export interface FrameState {
   /** `serial` changes with each message, so the same words said twice are said twice. */
   announcement: { text: string; serial: number };
   overlay: Overlay;
+  /**
+   * The open or closed choices the user made on the sidebars' disclosures, by
+   * key, for as long as the window lives: a sidebar is drawn again after an
+   * activity switch, and its folds stand. A disclosure with no entry keeps its
+   * own default.
+   */
+  disclosures: Readonly<Record<string, boolean>>;
 }
 
 export interface FrameOptions {
@@ -98,6 +105,7 @@ export class FrameStore {
       banners: [],
       announcement: { text: '', serial: 0 },
       overlay: undefined,
+      disclosures: {},
     };
     this.persisted = JSON.stringify(savedLayout(this.state.layout));
     this.api = this.makeApi();
@@ -124,6 +132,11 @@ export class FrameStore {
 
   setOverlay(overlay: Overlay): void {
     if (overlay !== this.state.overlay) this.set({ overlay });
+  }
+
+  /** Keeps a disclosure's open or closed choice; see FrameState.disclosures. */
+  setDisclosure(key: string, open: boolean): void {
+    if (this.state.disclosures[key] !== open) this.set({ disclosures: { ...this.state.disclosures, [key]: open } });
   }
 
   /** Keeps the user's layout for this workspace's next window, if it changed since it was last kept. */
@@ -279,4 +292,16 @@ export function useFrameStore(): FrameStore {
 export function useFrameState(): FrameState {
   const store = useFrameStore();
   return useSyncExternalStore(store.subscribe, store.getSnapshot);
+}
+
+/**
+ * A sidebar disclosure's choice, kept by the frame under `key` so it outlives
+ * the component drawing it: undefined until the user opens or closes it. A key
+ * names everything the choice belongs to, a session's task among them, so one
+ * session's folds never land on another's.
+ */
+export function useDisclosure(key: string): [boolean | undefined, (open: boolean) => void] {
+  const store = useFrameStore();
+  const chosen = useSyncExternalStore(store.subscribe, () => store.getSnapshot().disclosures[key]);
+  return [chosen, (open) => store.setDisclosure(key, open)];
 }

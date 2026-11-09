@@ -79,6 +79,28 @@ describe('parseSessions', () => {
     ]);
   });
 
+  it("keeps the daemon's word that a run is live, its counts only when both are whole numbers", () => {
+    const at = { status: 'approved', taskCount: 2, updatedAt: '2026-11-03T00:00:00Z' };
+    const rows = parseSessions([
+      { id: 'held', ...at, run: { live: true, done: 1, total: 2 } },
+      { id: 'leased', ...at, run: { live: true } },
+      { id: 'odd-counts', ...at, run: { live: true, done: 1, total: '2' } },
+      { id: 'negative', ...at, run: { live: true, done: -1, total: 2 } },
+      { id: 'not-live', ...at, run: { live: false, done: 1, total: 2 } },
+      { id: 'old-daemon', ...at },
+    ]);
+    expect(Object.fromEntries((rows ?? []).map((row) => [row.id, row.run]))).toEqual({
+      held: { live: true, done: 1, total: 2 },
+      leased: { live: true },
+      'odd-counts': { live: true },
+      negative: { live: true },
+      'not-live': undefined,
+      'old-daemon': undefined,
+    });
+    // An Approved row with no run is not taken to be running.
+    expect(rows?.find((row) => row.id === 'old-daemon')).not.toHaveProperty('run');
+  });
+
   it('answers undefined for anything but a session list', () => {
     expect(parseSessions({ sessions: [] })).toBeUndefined();
     expect(parseSessions([{ goal: 'no id' }])).toBeUndefined();

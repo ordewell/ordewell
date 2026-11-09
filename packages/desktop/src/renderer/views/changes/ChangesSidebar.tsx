@@ -1,10 +1,12 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { AlertTriangle, ChevronDown, ChevronRight, GitMerge, GitPullRequestArrow, Info, RefreshCw } from 'lucide-react';
 import { taskRowView, titledRefs, walkPlan } from '@ordewell/core/plan-utils';
 import type { RunTask, RunView, Task, TaskType } from '@ordewell/core';
 import { TaskSummary } from '@ordewell/ui';
 import { Badge, Button, EmptyState, Icon, IconButton, SectionHeader, statusOf } from '@ordewell/ui/design';
 import type { FrameApi, Unregister } from '../../frame/api';
+import { SectionHead } from '../../frame/Sidebar';
+import { useDisclosure } from '../../frame/store';
 import { daemonHost, type DaemonHost } from '../../session/DaemonHost';
 import { useSession } from '../../session/useSession';
 import { all } from '../Stub';
@@ -209,18 +211,44 @@ function Gates({ host, gated, tasks }: { host: DaemonHost; gated: Array<{ task: 
 /** A group with this many files or fewer starts open; a longer one starts closed, and the user's own choice stands from then on. */
 const OPEN_UP_TO = 8;
 
-/** A group's open state: the user's choice once made, otherwise open while it is short or being searched. */
-function useGroupOpen(list: FileList | undefined, filtering: boolean): [boolean, () => void] {
-  const [chosen, setChosen] = useState<boolean>();
-  const short = !list?.ok || list.files.length <= OPEN_UP_TO;
-  const open = filtering || (chosen ?? short);
+/**
+ * A group's open state: the user's choice once made, which a filter does not
+ * override, otherwise open while it is short or being searched. `key` names
+ * the session as well as the group, so a choice outlives the sidebar being
+ * drawn again and never lands on another session's group of the same name.
+ */
+function useGroupOpen(key: string, list: FileList | undefined, filtering: boolean): [boolean, () => void] {
+  const [chosen, setChosen] = useDisclosure(key);
+  // Read again on a refresh, a long group stays as long as it was: it does not open while its files are away.
+  const known = useRef<boolean>();
+  if (list) known.current = !list.ok || list.files.length <= OPEN_UP_TO;
+  const open = chosen ?? (filtering || (known.current ?? true));
   return [open, () => setChosen(!open)];
 }
 
-/** The chevron is decoration: the header's title button carries the disclosure state. */
-function GroupHead({ open, children }: { open: boolean; children: ReactNode }): JSX.Element {
+/** A group's file count; folded under a filter it says how many of them match, so a match is seen without opening it. */
+function FileCount({ list, filter }: { list: FileList | undefined; filter: string }): JSX.Element | null {
+  if (!list?.ok) return null;
+  const total = list.files.length;
+  if (filter === '') return <span className="changes-file-count" aria-label={`${total} ${total === 1 ? 'file' : 'files'}`}>{total}</span>;
+  const matching = list.files.filter((file) => matchesFilter(filter, `${file.repo}/${file.path}`)).length;
+  return <span className="changes-file-count" aria-label={`${matching} of ${total} ${total === 1 ? 'file matches' : 'files match'}`}>{matching}/{total}</span>;
+}
+
+/**
+ * The whole header turns the group over, chevron included, so a click lands on
+ * the same state wherever it falls. TaskSummary handles a click inside itself,
+ * its title button toggling and its actions doing their own work; the chevron
+ * stays decoration, as the title button is the one control a keyboard or a
+ * screen reader meets.
+ */
+function GroupHead({ open, onToggle, children }: { open: boolean; onToggle: () => void; children: ReactNode }): JSX.Element {
+  const click = (event: MouseEvent<HTMLDivElement>): void => {
+    if (event.target instanceof Element && event.target.closest('.task-summary')) return;
+    onToggle();
+  };
   return (
-    <div className="changes-group-head">
+    <div className="changes-group-head" onClick={click}>
       <Icon icon={open ? ChevronDown : ChevronRight} size={16} className="changes-chevron" />
       {children}
     </div>
@@ -244,18 +272,17 @@ function TaskGroup({ host, task, tasks, label, filter, round, open }: {
 }): JSX.Element | null {
   const sessionId = host.sessionId;
   const { list, note } = useTaskFiles(host, task, round);
-  const [expanded, toggle] = useGroupOpen(list, filter !== '');
+  const [expanded, toggle] = useGroupOpen(`changes:${sessionId}:task:${task.id}`, list, filter !== '');
   const scope: ReviewScope = { kind: 'task', sessionId, taskId: task.id };
   // A filter that names the task shows all its files; one that matches none of them hides the task.
   const named = matchesFilter(filter, task.title, `#${label}`);
   if (!named && list?.ok && !list.files.some((f) => matchesFilter(filter, `${f.repo}/${f.path}`))) return null;
   const { subject, row } = summaryOf(task, tasks);
-  const count = list?.ok ? list.files.length : undefined;
   return (
     <section className="changes-group" aria-label={`Task #${label}: ${task.title}`}>
-      <GroupHead open={expanded}>
+      <GroupHead open={expanded} onToggle={toggle}>
         <TaskSummary task={subject} row={row} density="row" expanded={expanded} onToggle={toggle} idleSince={task.idleSince} status={statusOf(row.status)} badges={false}>
-          {count !== undefined && <span className="changes-file-count" aria-label={`${count} ${count === 1 ? 'file' : 'files'}`}>{count}</span>}
+          <FileCount list={list} filter={expanded || named ? '' : filter} />
           <Revert host={host} task={task} row />
           <button type="button" className="task-row-action" title="Show the task in the plan" onClick={(event) => { event.stopPropagation(); host.revealTask(task.id); }}>
             Show in plan
@@ -302,13 +329,13 @@ function RunGroup({ host, repos, filter, round, open }: { host: DaemonHost; repo
   const { state } = useSession(host);
   const landed = (state.run.handoff ?? state.run.runMerge)?.landed.length ?? 0;
   const { list } = useFiles(() => readRunFiles(host.workspace, sessionId, repos), [sessionId, repos.join('\0')].join('\0'), [landed, round].join('\0'));
-  const [expanded, toggle] = useGroupOpen(list, filter !== '');
+  const [expanded, toggle] = useGroupOpen(`changes:${sessionId}:run`, list, filter !== '');
   return (
     <section className="changes-group" aria-label="Whole run vs base">
       <button type="button" className="changes-run-head" aria-expanded={expanded} onClick={toggle}>
         <Icon icon={expanded ? ChevronDown : ChevronRight} size={16} className="changes-chevron" />
         <span className="changes-run-title">Whole run vs base</span>
-        {list?.ok && <span className="changes-file-count" aria-label={`${list.files.length} ${list.files.length === 1 ? 'file' : 'files'}`}>{list.files.length}</span>}
+        <FileCount list={list} filter={expanded ? '' : filter} />
       </button>
       {expanded && <Files list={list} scope={{ kind: 'integration', sessionId }} tag="Integration" filter={filter} open={open} empty="Nothing has landed on the integration branch yet." />}
     </section>
@@ -363,14 +390,27 @@ export function ChangesList({ api, host }: { api: FrameApi; host: DaemonHost }):
   const repos = handoff ? handoff.repos.map((r) => r.path) : [];
   const mergeable = hasLanded(run);
 
+  const heading = useId();
+  const list = useId();
+  const [chosen, setReviewing] = useDisclosure('changes:review');
+  // Like the frame's own foldable sections: folded while it has no task to show, until the user says otherwise.
+  const reviewing = chosen ?? tasks.length > 0;
+
   const open = opener(api);
 
   if (tasks.length === 0 && conflicts.length === 0 && gated.length === 0 && !handoff) {
-    return <EmptyState icon={GitMerge} title="No changes to review yet" body="An isolated run’s tasks list their changes here." />;
+    return (
+      <>
+        <SectionHead id={heading} title="Review" />
+        <EmptyState icon={GitMerge} title="No changes to review yet" body="An isolated run’s tasks list their changes here." />
+      </>
+    );
   }
 
   return (
     <div className="changes" key={sessionId}>
+      {/* Review folds the task list alone: the whole run, the waits and Merge all are this sidebar's actions, never folded away. */}
+      <SectionHead id={heading} title="Review" count={tasks.length} showZero={!reviewing} open={reviewing} onToggle={setReviewing} controls={list} />
       <div className="changes-search">
         <input
           className="frame-input"
@@ -384,9 +424,15 @@ export function ChangesList({ api, host }: { api: FrameApi; host: DaemonHost }):
       </div>
       {conflicts.length > 0 && <Conflicts host={host} rows={conflicts} />}
       {gated.length > 0 && <Gates host={host} gated={gated} tasks={run.tasks} />}
-      {tasks.map(({ task, label }) => (
-        <TaskGroup key={task.id} host={host} task={task} tasks={run.tasks} label={label} filter={filter} round={round} open={open} />
-      ))}
+      {!reviewing && filter !== '' && tasks.length > 0 && <p className="changes-note">Review is folded: open it to see the tasks that match.</p>}
+      {reviewing && (
+        <div id={list} className="changes-review" role="group" aria-labelledby={heading}>
+          {tasks.length === 0 && <p className="changes-note">No task has changes to review yet.</p>}
+          {tasks.map(({ task, label }) => (
+            <TaskGroup key={task.id} host={host} task={task} tasks={run.tasks} label={label} filter={filter} round={round} open={open} />
+          ))}
+        </div>
+      )}
       {handoff && repos.length > 0 && <RunGroup host={host} repos={repos} filter={filter} round={round} open={open} />}
       {mergeable && (
         <div className="changes-merge">
@@ -402,7 +448,7 @@ export function register(api: FrameApi): Unregister {
   // Review & Merge all's review step, and every Merge all behind the preflight (ADR-0062 G8).
   host.setReviewer({ open: () => api.showActivity('changes'), mergeAll: () => mergeAll(api, host) });
   return all(
-    api.registerSidebar({ activity: 'changes', id: 'review', title: 'Review', order: 10, render: () => <ChangesList api={api} host={host} /> }),
+    api.registerSidebar({ activity: 'changes', id: 'review', title: 'Review', order: 10, ownsHeading: true, render: () => <ChangesList api={api} host={host} /> }),
     // A palette entry only: the ⋯ menu's Merge all is the plan's, which follows the run's actions.
     api.registerCommand({
       id: 'changes.mergeAll',
