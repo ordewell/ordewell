@@ -162,6 +162,13 @@ export function ago(iso: string, now: number = Date.now()): string {
   return `${Math.floor(days / 30)}mo`;
 }
 
+/** A commit's date for its own tab, where there is room for it: `Jan 5, 2025, 12:00 PM`, or the text as given when it is not a date. */
+export function commitWhen(iso: string): string {
+  const at = Date.parse(iso);
+  if (Number.isNaN(at)) return iso;
+  return new Date(at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+}
+
 /** The run a branch belongs to or lands for, named as the sidebar's lock does: `run r7`. */
 export function runMark(branch: BranchInfo): string | undefined {
   const run = branch.landingFor?.[0] ?? branch.owner;

@@ -149,3 +149,132 @@ export function liftChecks(input: { selectors: readonly string[]; liftMin: numbe
   for (const value of unparsed) problems.push(`could not read the colour ${value}`);
   return { problems, measured: [...measured] };
 }
+
+/** How much of an important label's text must show, in px: about ten characters, enough to tell one row from the next. */
+export const SHOWN_MIN = 64;
+
+/**
+ * Runs in the renderer, as `locator.evaluateAll`'s function: `labels` are the
+ * state's important names and titles (design.md, Layout rule 3). Each must show
+ * at least `shownMin` px of its text, or all of it when shorter, and each of
+ * its parts (a name, its path) at least half that; a text cut by
+ * an ellipsis, a clamp or a clipping ancestor must carry a tooltip; and each
+ * text must read at `textMin`:1 on what is painted under it. It repeats
+ * liftChecks' colour arithmetic, since a function sent to the page takes
+ * nothing from this module. A label scrolled away is scrolled to and back,
+ * with any scroll snapping held off meanwhile.
+ */
+export function labelChecks(labels: Element[], input: { textMin: number; shownMin: number }): string[] {
+  type Rgba = [number, number, number, number];
+  const parse = (value: string): Rgba | undefined => {
+    const rgb = /^rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?\)$/.exec(value);
+    if (rgb) return [Number(rgb[1]), Number(rgb[2]), Number(rgb[3]), rgb[4] === undefined ? 1 : Number(rgb[4])];
+    const srgb = /^color\(srgb ([\d.e-]+) ([\d.e-]+) ([\d.e-]+)(?: \/ ([\d.e-]+))?\)$/.exec(value);
+    if (srgb) return [Number(srgb[1]) * 255, Number(srgb[2]) * 255, Number(srgb[3]) * 255, srgb[4] === undefined ? 1 : Number(srgb[4])];
+    return undefined;
+  };
+  const over = (top: Rgba, under: Rgba): Rgba => {
+    const a = top[3];
+    return [top[0] * a + under[0] * (1 - a), top[1] * a + under[1] * (1 - a), top[2] * a + under[2] * (1 - a), 1];
+  };
+  const luminance = ([r, g, b]: Rgba): number => {
+    const lin = (c: number) => { const s = c / 255; return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; };
+    return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+  };
+  const ratio = (a: Rgba, b: Rgba): number => {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+  const hex = (c: Rgba): string => `#${c.slice(0, 3).map((n) => Math.round(n).toString(16).padStart(2, '0')).join('')}`;
+  const backdrop = (el: Element): Rgba => {
+    const layers: Rgba[] = [];
+    for (let at: Element | null = el; at; at = at.parentElement) {
+      const fill = parse(getComputedStyle(at).backgroundColor) ?? [0, 0, 0, 0];
+      if (fill[3] > 0) layers.push(fill);
+      if (fill[3] >= 1) break;
+    }
+    return layers.reverse().reduce<Rgba>((under, top) => over(top, under), [255, 255, 255, 1]);
+  };
+  const shown = (el: Element): boolean => el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+  /** `rect` cut by `from` and every ancestor that clips, and by the viewport. */
+  const clip = (rect: DOMRect, from: Element): { width: number; height: number } => {
+    let { left, top, right, bottom } = rect;
+    for (let at: Element | null = from; at; at = at.parentElement) {
+      const s = getComputedStyle(at);
+      const r = at.getBoundingClientRect();
+      if (s.overflowX !== 'visible') { left = Math.max(left, r.left); right = Math.min(right, r.right); }
+      if (s.overflowY !== 'visible') { top = Math.max(top, r.top); bottom = Math.min(bottom, r.bottom); }
+      if (s.position === 'fixed') break;
+    }
+    left = Math.max(left, 0);
+    top = Math.max(top, 0);
+    right = Math.min(right, window.innerWidth);
+    bottom = Math.min(bottom, window.innerHeight);
+    return { width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
+  };
+  const scrolled: [Element, number, number][] = [];
+  // A mandatory snap pulls scrollIntoView back to the nearest snap point, which can leave
+  // the label still cut at the scroller's edge (the plan graph snaps to stage starts).
+  // Snapping is suspended while the labels are brought to view, so each is measured as
+  // presented in full; what clips it itself, or an ancestor that cannot scroll, still counts.
+  const snaps = new Map<HTMLElement, string>();
+  for (const label of labels) {
+    for (let at = label.parentElement; at; at = at.parentElement) {
+      if (at.scrollHeight <= at.clientHeight && at.scrollWidth <= at.clientWidth) continue;
+      scrolled.push([at, at.scrollTop, at.scrollLeft]);
+      if (at instanceof HTMLElement && !snaps.has(at) && getComputedStyle(at).scrollSnapType !== 'none') snaps.set(at, at.style.scrollSnapType);
+    }
+  }
+  for (const el of snaps.keys()) el.style.scrollSnapType = 'none';
+
+  const problems: string[] = [];
+  for (const label of labels) {
+    const name = (label.getAttribute('aria-label') ?? label.textContent ?? '').trim().replace(/\s+/g, ' ').slice(0, 60);
+    if (!shown(label)) { problems.push(`"${name}" is not shown`); continue; }
+    label.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    const leaves = [label, ...label.querySelectorAll('*')].filter((el) => [...el.childNodes].some((n) => n.nodeType === Node.TEXT_NODE && (n.textContent ?? '').trim() !== '')
+      && shown(el) && el.closest('svg, .sr-only') === null);
+    if (leaves.length === 0) { problems.push(`"${name}" shows no text`); continue; }
+    let natural = 0;
+    let visible = 0;
+    for (const leaf of leaves) {
+      const text = (leaf.textContent ?? '').trim().replace(/\s+/g, ' ').slice(0, 40);
+      // Its own text's extent, laid out in full: an ellipsis or a clamp only stops it being painted.
+      let whole: DOMRect | undefined;
+      for (const node of leaf.childNodes) {
+        if (node.nodeType !== Node.TEXT_NODE || (node.textContent ?? '').trim() === '') continue;
+        const range = document.createRange();
+        range.selectNode(node);
+        const r = range.getBoundingClientRect();
+        whole = whole ? new DOMRect(Math.min(whole.left, r.left), Math.min(whole.top, r.top), Math.max(whole.right, r.right) - Math.min(whole.left, r.left), Math.max(whole.bottom, r.bottom) - Math.min(whole.top, r.top)) : r;
+      }
+      if (!whole) continue;
+      const seen = clip(whole, leaf);
+      natural += whole.width;
+      visible += seen.width;
+      const block = getComputedStyle(leaf).display !== 'inline';
+      const cut = seen.width < whole.width - 1 || seen.height < whole.height - 1
+        || (block && (leaf.scrollWidth > leaf.clientWidth + 1 || leaf.scrollHeight > leaf.clientHeight + 1));
+      // Each part keeps a few characters: a path squeezed to nothing beside its name no longer tells two folders apart.
+      if (seen.width < Math.min(whole.width, input.shownMin / 2) - 1) problems.push(`"${name}": "${text}" is squeezed to ${Math.round(seen.width)}px`);
+      const titled = leaf.closest('[title]');
+      if (cut && !(titled && (titled === label || label.contains(titled)) && titled.getAttribute('title')?.trim())) {
+        problems.push(`"${name}": "${text}" is cut short with no tooltip`);
+      }
+      if (leaf.closest('[disabled], [aria-disabled="true"]')) continue;
+      const style = getComputedStyle(leaf);
+      const color = parse(style.color);
+      if (!color) { problems.push(`"${name}": could not read the colour ${style.color}`); continue; }
+      const under = backdrop(leaf);
+      const read = ratio(over(color, under), under);
+      const size = parseFloat(style.fontSize);
+      const min = size >= 24 || (size >= 18.66 && Number(style.fontWeight) >= 700) ? 3 : input.textMin;
+      if (read < min) problems.push(`"${name}": "${text}" is ${hex(over(color, under))} on ${hex(under)}: ${read.toFixed(2)} < ${min}`);
+    }
+    if (visible < Math.min(natural, input.shownMin) - 1) problems.push(`"${name}" shows ${Math.round(visible)}px of its ${Math.round(natural)}px of text`);
+  }
+  for (const [el, top, left] of scrolled.reverse()) { el.scrollTop = top; el.scrollLeft = left; }
+  // Back on the position it was snapped to, the scroller snaps again as it did.
+  for (const [el, inline] of snaps) el.style.scrollSnapType = inline;
+  return problems;
+}

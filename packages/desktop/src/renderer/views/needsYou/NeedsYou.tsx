@@ -35,6 +35,29 @@ const KIND_WORDS: Readonly<Record<Escalation['kind'], string>> = {
   'blocked-run': 'dirty checkout',
 };
 
+export type KindTone = 'attention' | 'failed' | 'blocked' | 'merge';
+
+/**
+ * The status colour a kind's word is drawn in. Every item here is a wait on
+ * the user, but a failure or a merge is a different wait from an approval, and
+ * the word says it only once the colour agrees with the rest of the app.
+ */
+export function kindTone(kind: Escalation['kind']): KindTone {
+  switch (kind) {
+    case 'failed':
+    case 'out-of-rounds':
+    case 'conflict':
+      return 'failed';
+    case 'blocked-run':
+      return 'blocked';
+    case 'merge-gate':
+    case 'merge-all':
+      return 'merge';
+    default:
+      return 'attention';
+  }
+}
+
 function itemTitle(escalation: Escalation): string {
   if (escalation.task) return `${escalation.task.ref} ${escalation.task.title}`;
   return RUN_TITLES[escalation.kind] ?? 'This run';
@@ -149,11 +172,13 @@ function NeedsYouList({ api, host }: { api: FrameApi; host: DaemonHost }): JSX.E
           return (
             <li key={escalation.id} className="needs-item" aria-busy={busy !== undefined}>
               <div className="needs-item-head">
-                <span className="needs-item-title">{itemTitle(escalation)}</span>
-                <span className="needs-kind">{KIND_WORDS[escalation.kind]}</span>
+                <span className="needs-item-title" title={itemTitle(escalation)}>{itemTitle(escalation)}</span>
                 <button type="button" className="needs-open" aria-label={`Open ${itemTitle(escalation)}`} onClick={() => open(escalation)}>Open</button>
               </div>
-              <p className="needs-reason">{escalation.reason}</p>
+              <p className="needs-reason">
+                <span className="needs-kind" data-tone={kindTone(escalation.kind)}>{KIND_WORDS[escalation.kind]}</span>
+                {escalation.reason}
+              </p>
               {busy !== undefined ? (
                 <p className="needs-sending" role="status">Sending: {busy}…</p>
               ) : writing ? (

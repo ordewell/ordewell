@@ -16,6 +16,6 @@
 .scope-state-running { color: var(--ow-status-running); }
 /* A long branch keeps its tail and loses its middle, down to 12 characters (design.md, Title bar priority). */
 .scope-branch { display: inline-flex; min-width: 0; max-width: 100%; font: var(--ow-type-code); white-space: nowrap; }
-.scope-repo-name { flex: none; }
+.scope-repo-name { flex: 0 1 auto; max-width: 40%; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .scope-branch-head { flex: 0 1 auto; min-width: 6ch; overflow: hidden; text-overflow: ellipsis; }
 .scope-branch-tail { flex: none; }

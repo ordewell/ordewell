@@ -1,18 +1,19 @@
 import { Fragment, useEffect, useId, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
-import { ArrowDownToLine, Check, ChevronDown, ChevronRight, GitBranch, GitBranchPlus, GitGraph, History, Lock, RefreshCw, Trash2 } from 'lucide-react';
+import { ArrowDownToLine, Check, ChevronDown, ChevronRight, GitBranch, GitBranchPlus, History, Lock, RefreshCw, Trash2, Undo2 } from 'lucide-react';
 import { Button, EmptyState, Icon, IconButton } from '@ordewell/ui/design';
 import type { FrameApi, Unregister } from '../../frame/api';
 import { useDisclosure } from '../../frame/store';
 import { all } from '../Stub';
 import { onCheckoutChange } from '../checkout/checkoutEvents';
-import { LONG_LIST, MiddleText, Notice, SidebarGroup } from '../sidebarKit';
+import { scopeStoreFor } from '../scope/scopeStore';
+import { LONG_LIST, MiddleText, Notice, SidebarGroup, pathTail } from '../sidebarKit';
 import {
   createBranch, deleteBranch, dropStash, fetchRepo, openRun, popStash, pullBranch, pushBranch, stashChanges, switchBranch, syncTarget,
   type GitContext,
 } from './gitActions';
-import type { BranchInfo, Owner, WorktreeInfo } from './gitData';
-import { branchTree, commitsTabId, plural, repoDisplay, runMark, trackMark, type BranchNode } from './gitModel';
-import { gitStoreFor, useGit, type RunInfo } from './gitStore';
+import type { BranchInfo, Branches, Owner, WorktreeInfo } from './gitData';
+import { branchTree, plural, repoDisplay, runMark, trackMark, type BranchNode } from './gitModel';
+import { gitStoreFor, useGit, type GitStore, type RunInfo } from './gitStore';
 import { HistoryList } from './HistoryList';
 import { SyncBar, type SyncState } from './SyncBar';
 import './git.css';
@@ -22,12 +23,24 @@ import './git.css';
  * the person's own checkout (design W11, ADR-0062). Ordewell's branches are
  * listed to look at, never to switch to or delete: a run owns them. Branches
  * and History are two views of the same repository under the same branch and
- * sync controls; slash-delimited names fold into folders.
+ * sync controls; slash-delimited names fold into folders. Pressing a branch
+ * browses its history here in the sidebar: it opens no tab and switches
+ * nothing, so the main area keeps what the person had open.
  */
 
-/** A branch row only reveals its history: a preview tab, replaced by the next one, so looking never piles tabs up. */
-function showGraph(api: FrameApi, repo: string, ref?: string, preview = true): void {
-  api.openTab({ kind: 'commits', id: commitsTabId(repo, ref), title: ref ? `Commits: ${ref}` : 'Commits' }, { preview });
+/** Which group a branch is listed in, and so what may be done to it here. */
+type BranchKind = 'local' | 'ordewell' | 'remote';
+
+function kindOf(branches: Branches, name: string): BranchKind | undefined {
+  if (branches.local.some((b) => b.name === name)) return 'local';
+  if (branches.ordewell.some((b) => b.name === name)) return 'ordewell';
+  if (branches.remote.some((b) => b.name === name)) return 'remote';
+  return undefined;
+}
+
+/** The marks a branch row carries while its history is the one the sidebar shows. */
+function viewingProps(viewing: boolean): { 'aria-description'?: string } {
+  return viewing ? { 'aria-description': 'Shown in History' } : {};
 }
 
 /** What a branch or worktree belongs to, as the sidebar words it: `run r7`, and the task when it is one's. */
@@ -49,13 +62,13 @@ function OwnerLink({ api, runs, owner }: { api: FrameApi; runs: Readonly<Record<
 /** How deep a row sits in its folders, for its indent. */
 const indent = (depth: number): CSSProperties => ({ '--git-depth': depth } as CSSProperties);
 
-function LocalRow({ ctx, branch, label = branch.name, depth = 0 }: { ctx: GitContext; branch: BranchInfo; label?: string; depth?: number }): JSX.Element {
+function LocalRow({ ctx, branch, viewing, label = branch.name, depth = 0 }: { ctx: GitContext; branch: BranchInfo; viewing: boolean; label?: string; depth?: number }): JSX.Element {
   const mark = trackMark(branch);
   const held = runMark(branch);
   const hold = branch.landingFor && held ? `A live run lands on ${branch.name}` : undefined;
   return (
-    <li className="srow git-branch" style={indent(depth)} aria-current={branch.current ? 'true' : undefined}>
-      <button type="button" className="srow-main" aria-label={branch.name} title={branch.upstream ? `${branch.name} tracks ${branch.upstream}` : branch.name} onClick={() => showGraph(ctx.api, ctx.repo, branch.name)}>
+    <li className={`srow git-branch${viewing ? ' git-viewing' : ''}`} style={indent(depth)} aria-current={branch.current ? 'true' : undefined}>
+      <button type="button" className="srow-main" aria-label={branch.name} {...viewingProps(viewing)} title={branch.upstream ? `${branch.name} tracks ${branch.upstream}` : branch.name} onClick={() => gitStoreFor(ctx.api).browse(ctx.repo, branch.name)}>
         <span className="git-lead">{branch.current ? <Icon icon={Check} size={14} /> : <Icon icon={GitBranch} size={14} />}</span>
         <MiddleText className="srow-label" text={label} />
       </button>
@@ -137,7 +150,7 @@ function WorktreeRow({ api, tree, runs }: { api: FrameApi; tree: WorktreeInfo; r
     <li className="srow git-worktree">
       <span className="srow-main srow-plain git-worktree-main" title={tree.path}>
         <span className="git-worktree-name">{tree.main ? 'Your checkout' : tree.branch ?? 'detached'}</span>
-        <MiddleText className="git-worktree-path" text={tree.path} tail={20} />
+        <MiddleText className="git-worktree-path" text={tree.path} tail={pathTail(tree.path)} />
       </span>
       {tree.owner && <OwnerLink api={api} runs={runs} owner={tree.owner} />}
     </li>
@@ -145,11 +158,11 @@ function WorktreeRow({ api, tree, runs }: { api: FrameApi; tree: WorktreeInfo; r
 }
 
 /** A branch Ordewell owns: shown and diffed, with no switch or delete to press. */
-function OrdewellRow({ api, repo, branch, runs, integration, label = branch.name, depth = 0 }: { api: FrameApi; repo: string; branch: BranchInfo; runs: Readonly<Record<string, RunInfo>>; integration?: boolean; label?: string; depth?: number }): JSX.Element {
+function OrdewellRow({ api, repo, branch, runs, viewing, integration, label = branch.name, depth = 0 }: { api: FrameApi; repo: string; branch: BranchInfo; runs: Readonly<Record<string, RunInfo>>; viewing: boolean; integration?: boolean; label?: string; depth?: number }): JSX.Element {
   const note = integration ? 'integration' : 'read-only';
   return (
-    <li className="srow" style={indent(depth)}>
-      <button type="button" className="srow-main git-ordewell-main" aria-label={`${branch.name}, ${note}`} title={`${branch.name}: Ordewell’s, read-only here`} onClick={() => showGraph(api, repo, branch.name)}>
+    <li className={`srow${viewing ? ' git-viewing' : ''}`} style={indent(depth)}>
+      <button type="button" className="srow-main git-ordewell-main" aria-label={`${branch.name}, ${note}`} {...viewingProps(viewing)} title={`${branch.name}: Ordewell’s, read-only here`} onClick={() => gitStoreFor(api).browse(repo, branch.name)}>
         <span className="git-lead"><Icon icon={Lock} size={14} /></span>
         <span className="git-ordewell-text">
           <MiddleText text={label} />
@@ -161,10 +174,10 @@ function OrdewellRow({ api, repo, branch, runs, integration, label = branch.name
   );
 }
 
-function RemoteRow({ api, repo, branch, label = branch.name, depth = 0 }: { api: FrameApi; repo: string; branch: BranchInfo; label?: string; depth?: number }): JSX.Element {
+function RemoteRow({ api, repo, branch, viewing, label = branch.name, depth = 0 }: { api: FrameApi; repo: string; branch: BranchInfo; viewing: boolean; label?: string; depth?: number }): JSX.Element {
   return (
-    <li className="srow" style={indent(depth)}>
-      <button type="button" className="srow-main" aria-label={branch.name} title={branch.name} onClick={() => showGraph(api, repo, branch.name)}>
+    <li className={`srow${viewing ? ' git-viewing' : ''}`} style={indent(depth)}>
+      <button type="button" className="srow-main" aria-label={branch.name} {...viewingProps(viewing)} title={branch.name} onClick={() => gitStoreFor(api).browse(repo, branch.name)}>
         <span className="git-lead"><Icon icon={GitBranch} size={14} /></span>
         <MiddleText className="srow-label" text={label} />
       </button>
@@ -218,17 +231,50 @@ function BranchFolders({ branches, scope, leaf }: { branches: readonly BranchInf
   return <ul className="git-list"><Nodes nodes={branchTree(branches)} depth={0} scope={scope} short={branches.length <= LONG_LIST} leaf={leaf} /></ul>;
 }
 
-/** Branches or History: two views of the one repository, the person's pick kept for the window like a sidebar's folds. */
-function useHistoryView(): [boolean, (history: boolean) => void] {
-  const [chosen, choose] = useDisclosure('git:history');
-  return [chosen ?? false, choose];
-}
-
-function ViewSwitch({ history, choose }: { history: boolean; choose(history: boolean): void }): JSX.Element {
+/** Branches or History: two views of the one repository, the person's pick kept by the store for the window. */
+function ViewSwitch({ git, history }: { git: GitStore; history: boolean }): JSX.Element {
   return (
     <div className="git-mode" role="group" aria-label="Git sidebar view">
-      <button type="button" aria-pressed={!history} onClick={() => choose(false)}><Icon icon={GitBranch} size={14} />Branches</button>
-      <button type="button" aria-pressed={history} onClick={() => choose(true)}><Icon icon={History} size={14} />History</button>
+      <button type="button" aria-pressed={!history} onClick={() => git.setView('branches')}><Icon icon={GitBranch} size={14} />Branches</button>
+      <button type="button" aria-pressed={history} onClick={() => git.setView('history')}><Icon icon={History} size={14} />History</button>
+    </div>
+  );
+}
+
+/**
+ * Whose history the History view shows: the checkout's, or a branch browsed
+ * from the list. It names the checkout apart from the branch looked at, since
+ * Fetch, Pull and Push act on the checkout whatever is browsed.
+ */
+function HistoryScope({ git, ctx, viewed }: { git: GitStore; ctx: GitContext; viewed: string | undefined }): JSX.Element {
+  const { branches, repo } = ctx;
+  const checkout = branches.detached ? 'detached HEAD' : branches.current ?? 'no branch yet';
+  const kind = viewed === undefined ? undefined : kindOf(branches, viewed);
+  const hint = kind === 'ordewell' ? 'Ordewell’s branch, read-only here.'
+    : kind === 'remote' ? 'A remote branch, read-only here.'
+    : kind === 'local' ? `Browsing only: your checkout stays on ${checkout}.`
+    : undefined;
+  const group = (label: string, list: readonly BranchInfo[]): ReactNode => list.length > 0 && (
+    <optgroup label={label}>{list.map((b) => <option key={b.name} value={b.name}>{b.name}</option>)}</optgroup>
+  );
+  return (
+    <div className="git-scope">
+      <div className="git-scope-row">
+        <select
+          className="ow-select frame-input git-scope-select"
+          aria-label="History of"
+          title={viewed ?? `Your checkout (${checkout})`}
+          value={viewed ?? ''}
+          onChange={(event) => git.browse(repo, event.target.value || undefined)}
+        >
+          <option value="">Your checkout ({checkout})</option>
+          {group('Local', branches.local.filter((b) => !b.current))}
+          {group('Ordewell', branches.ordewell)}
+          {group('Remote', branches.remote)}
+        </select>
+        {viewed !== undefined && <IconButton icon={Undo2} label="Show your checkout’s history" onClick={() => git.browse(repo, undefined)} />}
+      </div>
+      {hint && <p className="git-hint git-scope-hint">{hint}</p>}
     </div>
   );
 }
@@ -248,10 +294,15 @@ function syncStateOf(ctx: GitContext): SyncState {
 function Sidebar({ api }: { api: FrameApi }): JSX.Element {
   const { git, state, repo, setRepo } = useGit(api);
   const [creating, setCreating] = useState(false);
-  const [history, chooseView] = useHistoryView();
   const { branches } = state;
+  const history = state.view === 'history';
   const multi = state.repos.length > 1;
   const ctx: GitContext | undefined = branches && state.repo === repo ? { api, repo, branches } : undefined;
+  // A browsed branch the last read no longer lists is gone: the checkout's history stands in for it.
+  const browsed = state.browsing[repo];
+  const viewed = ctx && browsed !== undefined && kindOf(ctx.branches, browsed) ? browsed : undefined;
+  // On Branches, the row History would show stands out, apart from the checked-out one.
+  const isViewed = (name: string): boolean => name === viewed;
 
   // The checkout commits, stages and syncs too: its actions move the same branches, so this list reads again.
   useEffect(() => onCheckoutChange(() => { void git.refresh(repo); }), [git, repo]);
@@ -275,11 +326,10 @@ function Sidebar({ api }: { api: FrameApi }): JSX.Element {
       {!ctx && !state.error && <EmptyState className="git-state" icon={GitBranch} title="Loading the branches…" />}
       {ctx && (
         <>
-          <div className="git-current">
-            <div className="git-current-name">
+          <div className="git-current" role="group" aria-label="Your checkout">
+            <div className="git-current-name" title="Your checkout: Fetch, Pull and Push act on it">
               <Icon icon={GitBranch} size={14} />
               <MiddleText className="git-current-label" text={ctx.branches.detached ? 'Detached HEAD' : ctx.branches.current ?? 'No branch yet'} />
-              <IconButton icon={GitGraph} label="Show the commit graph" onClick={() => showGraph(api, repo, undefined, false)} />
             </div>
             <SyncBar
               label={name}
@@ -288,9 +338,14 @@ function Sidebar({ api }: { api: FrameApi }): JSX.Element {
               actions={{ fetch: () => fetchRepo(ctx), pull: () => pullBranch(ctx), push: () => pushBranch(ctx) }}
             />
           </div>
-          <ViewSwitch history={history} choose={chooseView} />
+          <ViewSwitch git={git} history={history} />
 
-          {history ? <HistoryList api={api} repo={repo} branches={ctx.branches} /> : (
+          {history ? (
+            <>
+              <HistoryScope git={git} ctx={ctx} viewed={viewed} />
+              <HistoryList key={viewed ?? ''} api={api} repo={repo} at={viewed} branches={ctx.branches} />
+            </>
+          ) : (
             <>
               {/* Outside the group: a folded Local must still show the form its + opened. */}
               {creating && <NewBranch ctx={ctx} close={() => setCreating(false)} />}
@@ -301,26 +356,26 @@ function Sidebar({ api }: { api: FrameApi }): JSX.Element {
                 actions={<IconButton icon={GitBranchPlus} label="New branch" onClick={() => setCreating(true)} />}
               >
                 {ctx.branches.local.length === 0 ? <p className="git-hint">This repository has no branches yet.</p> : (
-                  <BranchFolders branches={ctx.branches.local} scope={`${repo}:local`} leaf={(b, label, depth) => <LocalRow key={b.name} ctx={ctx} branch={b} label={label} depth={depth} />} />
+                  <BranchFolders branches={ctx.branches.local} scope={`${repo}:local`} leaf={(b, label, depth) => <LocalRow key={b.name} ctx={ctx} branch={b} viewing={isViewed(b.name)} label={label} depth={depth} />} />
                 )}
               </SidebarGroup>
 
               {others.length > 0 && (
                 <SidebarGroup title="Ordewell" count={others.length} startOpen={others.length <= LONG_LIST}>
-                  <BranchFolders branches={others} scope={`${repo}:ordewell`} leaf={(b, label, depth) => <OrdewellRow key={b.name} api={api} repo={repo} branch={b} runs={state.runs} label={label} depth={depth} />} />
+                  <BranchFolders branches={others} scope={`${repo}:ordewell`} leaf={(b, label, depth) => <OrdewellRow key={b.name} api={api} repo={repo} branch={b} runs={state.runs} viewing={isViewed(b.name)} label={label} depth={depth} />} />
                 </SidebarGroup>
               )}
 
               <SidebarGroup title="Worktrees" count={ctx.branches.worktrees.length + integration.length} startOpen={ctx.branches.worktrees.length + integration.length <= LONG_LIST}>
                 <ul className="git-list">
                   {ctx.branches.worktrees.map((tree) => <WorktreeRow key={tree.path} api={api} tree={tree} runs={state.runs} />)}
-                  {integration.map((b) => <OrdewellRow key={b.name} api={api} repo={repo} branch={b} runs={state.runs} integration />)}
+                  {integration.map((b) => <OrdewellRow key={b.name} api={api} repo={repo} branch={b} runs={state.runs} viewing={isViewed(b.name)} integration />)}
                 </ul>
               </SidebarGroup>
 
               {ctx.branches.remote.length > 0 && (
                 <SidebarGroup title="Remote" count={ctx.branches.remote.length} startOpen={ctx.branches.remote.length <= LONG_LIST}>
-                  <BranchFolders branches={ctx.branches.remote} scope={`${repo}:remote`} leaf={(b, label, depth) => <RemoteRow key={b.name} api={api} repo={repo} branch={b} label={label} depth={depth} />} />
+                  <BranchFolders branches={ctx.branches.remote} scope={`${repo}:remote`} leaf={(b, label, depth) => <RemoteRow key={b.name} api={api} repo={repo} branch={b} viewing={isViewed(b.name)} label={label} depth={depth} />} />
                 </SidebarGroup>
               )}
 
@@ -344,6 +399,10 @@ export function register(api: FrameApi): Unregister {
     api.registerSidebar({ activity: 'git', id: 'branches', title: 'Branches', render: () => <Sidebar api={api} /> }),
     api.registerCommand({ id: 'git.fetch', title: 'Git: Fetch', enabled: () => !api.readOnly && context() !== undefined && !syncing(), run: () => { const ctx = context(); if (ctx) void fetchRepo(ctx); } }),
     api.registerCommand({ id: 'git.refresh', title: 'Git: Refresh branches', enabled: () => !api.readOnly, run: () => { const { repo } = store.getSnapshot(); if (repo !== undefined) void store.refresh(repo, { history: true }); } }),
-    api.registerCommand({ id: 'git.showGraph', title: 'Git: Show commit graph', enabled: () => store.getSnapshot().repo !== undefined, run: () => { const { repo } = store.getSnapshot(); if (repo !== undefined) showGraph(api, repo, undefined, false); } }),
+    // Kept under its old id so a binding to it still works: the history it shows is the checkout's, in the sidebar, whatever was open there.
+    api.registerCommand({ id: 'git.showGraph', title: 'Git: Show history', run: () => {
+      store.browse(store.getSnapshot().repo ?? scopeStoreFor(api).getSnapshot().repo, undefined);
+      api.showActivity('git');
+    } }),
   );
 }

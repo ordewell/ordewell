@@ -145,7 +145,7 @@ describe('searching', () => {
     const { harness } = workspace();
     await mount();
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search file names' }), { target: { value: 'a.ts' } });
-    const result = await screen.findByRole('button', { name: /src\/a\.ts/ });
+    const result = await screen.findByRole('button', { name: /a\.ts/ });
     expect(harness.callsTo('files.find')[0]?.params).toMatchObject({ query: 'a.ts', scope: 'checkout' });
     expect(harness.callsTo('files.find')[0]?.params.text).toBeUndefined();
     fireEvent.click(result);
@@ -157,7 +157,11 @@ describe('searching', () => {
     await mount();
     fireEvent.click(screen.getByRole('button', { name: 'Search the text of files' }));
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search text in files' }), { target: { value: 'const' } });
-    const result = await screen.findByRole('button', { name: /src\/a\.ts\s*:7/ });
+    const result = await screen.findByRole('button', { name: /a\.ts\s*:7/ });
+    // The file's name is its own element, the folder the muted context after it, and the tooltip has both whole.
+    expect(within(result).getByText('a.ts')).toBeInTheDocument();
+    expect(within(result).getByText('src')).toBeInTheDocument();
+    expect(result.querySelector('[title="src/a.ts:7"]')).not.toBeNull();
     expect(harness.callsTo('files.find')[0]?.params.text).toBe('1');
     fireEvent.click(result);
     await waitFor(() => expect(editors).toHaveLength(1));

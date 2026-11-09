@@ -8,6 +8,7 @@ import { daemonHost, resetDaemonHosts } from '../../../session/DaemonHost';
 import { selectedTask } from '../../../session/selection';
 import { registerViews } from '../../index';
 import { resetTaskViews } from '../../task/taskView';
+import { kindTone } from '../NeedsYou';
 import { fakeDaemon, ok, surfacePlan, surfaceTask } from '../../../session/__tests__/fakeDaemon';
 
 // Monaco needs a browser; these views never open a file.
@@ -104,6 +105,22 @@ describe('the Needs you list', () => {
     expect(within(popover).getByText('#2 Add SAML callback route')).toBeInTheDocument();
 
     expect(daemon.calls('plans.answerEscalation')).toEqual([]);
+  });
+
+  it('leads each item with its task title and gives the kind a status word in the colour of its status', async () => {
+    await mount();
+    const sidebar = screen.getByRole('navigation', { name: 'Sessions' });
+
+    const title = within(sidebar).getByText('#2 Add SAML callback route');
+    expect(title).toHaveAttribute('title', '#2 Add SAML callback route');
+    expect(within(title.closest('li') as HTMLElement).getByText('approval')).toHaveAttribute('data-tone', 'attention');
+    expect(within(within(sidebar).getByText('#1 Read the auth module').closest('li') as HTMLElement).getByText('failed')).toHaveAttribute('data-tone', 'failed');
+  });
+
+  it('maps every kind to a tone, so a failure never borrows the amber that means a question', () => {
+    const kinds: Array<Escalation['kind']> = ['approval', 'checkpoint', 'input', 'conflict', 'files-changed', 'usage-limit', 'failed', 'out-of-rounds', 'merge-gate', 'unapproved', 'on-hold', 'no-prompt', 'by-hand', 'merge-all', 'blocked-run'];
+    const tones = Object.fromEntries(kinds.map((kind) => [kind, kindTone(kind)]));
+    expect(tones).toMatchObject({ failed: 'failed', 'out-of-rounds': 'failed', conflict: 'failed', 'blocked-run': 'blocked', 'merge-gate': 'merge', 'merge-all': 'merge', approval: 'attention', input: 'attention' });
   });
 
   it('answers inline, asking first for an option that carries a note', async () => {

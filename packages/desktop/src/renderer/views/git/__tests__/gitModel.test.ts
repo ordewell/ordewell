@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Branches, BranchInfo } from '../gitData';
 import {
-  ago, branchTree, commitDiffTabId, commitsTabId, isOrdewellRef, landedTaskOf, landingSubject, parseCommitDiffTabId, parseCommitsTabId, plural, refChips, repoDisplay,
+  ago, branchTree, commitDiffTabId, commitWhen, commitsTabId, isOrdewellRef, landedTaskOf, landingSubject, parseCommitDiffTabId, parseCommitsTabId, plural, refChips, repoDisplay,
   runMark, splitUpstream, trackMark,
 } from '../gitModel';
 
@@ -57,6 +57,11 @@ describe('naming', () => {
     expect(ago('2025-01-05T12:00:00Z', now)).toBe('5d');
     expect(ago('2024-09-10T12:00:00Z', now)).toBe('4mo');
     expect(ago('not a date', now)).toBe('');
+  });
+
+  it('dates a commit for its own tab, and leaves what is no date as it was', () => {
+    expect(commitWhen('2025-01-05T12:00:00Z')).toMatch(/2025/);
+    expect(commitWhen('not a date')).toBe('not a date');
   });
 });
 

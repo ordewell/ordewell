@@ -28,7 +28,19 @@ export const HISTORY_PAGE = 50;
 /** The daemon's ceiling on one log read: a read again keeps the person's place up to here, and no further. */
 const HISTORY_MAX = 500;
 
-/** The sidebar's history of one repository, kept by the store so a switch of view or of repository loses neither the commits nor the pick. */
+/** The Git sidebar's two views of a repository: its branch tree, or its history as lanes. */
+export type GitSidebarView = 'branches' | 'history';
+
+/**
+ * Where one history is kept: a repository and the ref it is read from, the
+ * checkout's own when `ref` is undefined. A ref never holds a NUL, so the two
+ * cannot run into each other.
+ */
+export function historyKey(repo: string, ref?: string): string {
+  return ref === undefined ? repo : `${repo}\0${ref}`;
+}
+
+/** The sidebar's history of one repository at one ref, kept by the store so a switch of view, ref or repository loses neither the commits nor the pick. */
 export interface History {
   commits: CommitSummary[];
   /** Where the next page starts; null at the root. */
@@ -58,8 +70,16 @@ export interface GitState {
   round: number;
   /** The fetch, pull or push running on each repository now, from any surface that started it. */
   syncing: Readonly<Record<string, SyncKind>>;
-  /** Each repository's sidebar history, read only once the History view asks for it. */
+  /** Each repository's sidebar history at each ref browsed, by historyKey, read only once the History view asks for it. */
   history: Readonly<Record<string, History>>;
+  /** The sidebar's view: the window's, so it outlives an activity switch and a change of repository. */
+  view: GitSidebarView;
+  /**
+   * The branch each repository's History is browsing, when it is not the
+   * checkout's own. Browsing only reads: the checkout, which Fetch, Pull and
+   * Push act on, stays where it is.
+   */
+  browsing: Readonly<Record<string, string>>;
 }
 
 export function ownersOf(branches: Branches | undefined): Owner[] {
@@ -74,11 +94,11 @@ export function ownersOf(branches: Branches | undefined): Owner[] {
 }
 
 export class GitStore {
-  private state: GitState = { repos: [], repo: undefined, branches: undefined, error: undefined, loading: false, runs: {}, round: 0, syncing: {}, history: {} };
+  private state: GitState = { repos: [], repo: undefined, branches: undefined, error: undefined, loading: false, runs: {}, round: 0, syncing: {}, history: {}, view: 'branches', browsing: {} };
   private readonly listeners = new Set<() => void>();
   private reads = 0;
   private goals: Map<string, string> | undefined;
-  /** The one history read in flight per repository; a newer one replaces it, and the older one's answer is dropped. */
+  /** The one history read in flight per historyKey; a newer one replaces it, and the older one's answer is dropped. */
   private readonly historyReads = new Map<string, { token: number; tips: string; more: boolean }>();
   private historyTokens = 0;
   /** Bumped by a Refresh the person asked for, so the history is read again though no tip moved: a tag alone moves none. */
@@ -133,16 +153,51 @@ export class GitStore {
       const runs = await this.runsFor(ownersOf(branches));
       if (mine !== this.reads) return;
       if (history) this.historyRereads.set(repo, (this.historyRereads.get(repo) ?? 0) + 1);
-      this.set({ repos, repo, branches, runs, error: undefined, loading: false, round: this.state.round + 1 });
+      this.set({ repos, repo, branches, runs, error: undefined, loading: false, round: this.state.round + 1, ...this.forgetGone(repo, branches) });
     } catch (error) {
       if (mine !== this.reads) return;
       this.set({ repo, branches: undefined, error: messageOf(error), loading: false, round: this.state.round + 1 });
     }
   }
 
-  private patchHistory(repo: string, patch: Partial<History>): void {
-    const was = this.state.history[repo] ?? { commits: [], cursor: null, tips: '', status: 'loading', more: false };
-    this.set({ history: { ...this.state.history, [repo]: { ...was, ...patch } } });
+  /**
+   * A browsed branch the read no longer lists was deleted: History goes back to
+   * the checkout's, and what was read of it, or is still being read, goes too,
+   * so a branch made again under the name is never shown the old one's commits.
+   */
+  private forgetGone(repo: string, branches: Branches): Partial<GitState> {
+    const ref = this.state.browsing[repo];
+    if (ref === undefined || [...branches.local, ...branches.ordewell, ...branches.remote].some((b) => b.name === ref)) return {};
+    const key = historyKey(repo, ref);
+    this.historyReads.delete(key);
+    const browsing = { ...this.state.browsing };
+    delete browsing[repo];
+    const history = { ...this.state.history };
+    delete history[key];
+    return { browsing, history };
+  }
+
+  private patchHistory(key: string, patch: Partial<History>): void {
+    const was = this.state.history[key] ?? { commits: [], cursor: null, tips: '', status: 'loading', more: false };
+    this.set({ history: { ...this.state.history, [key]: { ...was, ...patch } } });
+  }
+
+  /** Shows the sidebar's branch tree or its history; the window keeps the choice. */
+  setView(view: GitSidebarView): void {
+    if (this.state.view !== view) this.set({ view });
+  }
+
+  /**
+   * Shows the history of `ref` in `repo`'s sidebar, the checkout's own when
+   * `ref` is undefined. It only reads: nothing is switched, and no tab opens.
+   */
+  browse(repo: string, ref: string | undefined): void {
+    const browsing = { ...this.state.browsing };
+    // The checked-out branch is the checkout's own history, read and kept once.
+    const checkedOut = this.state.repo === repo && !this.state.branches?.detached ? this.state.branches?.current : undefined;
+    if (ref === undefined || ref === checkedOut) delete browsing[repo];
+    else browsing[repo] = ref;
+    this.set({ view: 'history', browsing });
   }
 
   /**
@@ -164,58 +219,62 @@ export class GitStore {
   }
 
   /**
-   * Reads the history of `repo` when it has none at the branch tips now known,
-   * or when the last read failed; asked again while that read is in flight, it
-   * sends nothing. A read again keeps the commits on screen and as many of them
-   * as were shown, within the daemon's ceiling, so the person's place stands.
+   * Reads the history of `repo` at `ref` (the checkout's when undefined) when
+   * it has none at the branch tips now known, or when the last read failed;
+   * asked again while that read is in flight, it sends nothing. A read again
+   * keeps the commits on screen and as many of them as were shown, within the
+   * daemon's ceiling, so the person's place stands.
    */
-  async loadHistory(repo: string): Promise<void> {
+  async loadHistory(repo: string, ref?: string): Promise<void> {
     const tips = this.historyTips(repo);
     if (tips === undefined) return;
-    const have = this.state.history[repo];
-    const inFlight = this.historyReads.get(repo);
+    const key = historyKey(repo, ref);
+    const have = this.state.history[key];
+    const inFlight = this.historyReads.get(key);
     // A page in flight at these tips is still good; only moved tips overtake it.
     if (inFlight && inFlight.tips === tips) return;
     if (!inFlight && have && have.tips === tips && have.status === 'ready') return;
     const token = ++this.historyTokens;
-    this.historyReads.set(repo, { token, tips, more: false });
+    this.historyReads.set(key, { token, tips, more: false });
     const limit = Math.min(HISTORY_MAX, Math.max(HISTORY_PAGE, have?.commits.length ?? 0));
-    this.patchHistory(repo, { status: have?.status === 'ready' ? 'ready' : 'loading', error: undefined, rereading: true, more: false, moreError: undefined });
+    this.patchHistory(key, { status: have?.status === 'ready' ? 'ready' : 'loading', error: undefined, rereading: true, more: false, moreError: undefined });
     try {
-      const page = await readLog(this.workspace, repo, { limit });
-      if (this.historyReads.get(repo)?.token !== token) return;
-      this.historyReads.delete(repo);
-      this.patchHistory(repo, { commits: page.commits, cursor: page.cursor, tips, status: 'ready', rereading: false });
+      const page = await readLog(this.workspace, repo, { ...(ref !== undefined ? { ref } : {}), limit });
+      if (this.historyReads.get(key)?.token !== token) return;
+      this.historyReads.delete(key);
+      this.patchHistory(key, { commits: page.commits, cursor: page.cursor, tips, status: 'ready', rereading: false });
     } catch (error) {
-      if (this.historyReads.get(repo)?.token !== token) return;
-      this.historyReads.delete(repo);
-      this.patchHistory(repo, { tips, status: 'error', error: messageOf(error), rereading: false });
+      if (this.historyReads.get(key)?.token !== token) return;
+      this.historyReads.delete(key);
+      this.patchHistory(key, { tips, status: 'error', error: messageOf(error), rereading: false });
     }
   }
 
-  /** The next page of `repo`'s history, once: never beside another read of it, and dropped if a read again overtook it. */
-  async loadMoreHistory(repo: string): Promise<void> {
-    const have = this.state.history[repo];
-    if (!have || have.status !== 'ready' || !have.cursor || this.historyReads.has(repo)) return;
+  /** The next page of `repo`'s history at `ref`, once: never beside another read of it, and dropped if a read again overtook it. */
+  async loadMoreHistory(repo: string, ref?: string): Promise<void> {
+    const key = historyKey(repo, ref);
+    const have = this.state.history[key];
+    if (!have || have.status !== 'ready' || !have.cursor || this.historyReads.has(key)) return;
     const token = ++this.historyTokens;
-    this.historyReads.set(repo, { token, tips: have.tips, more: true });
-    this.patchHistory(repo, { more: true, moreError: undefined });
+    this.historyReads.set(key, { token, tips: have.tips, more: true });
+    this.patchHistory(key, { more: true, moreError: undefined });
     try {
-      const page = await readLog(this.workspace, repo, { cursor: have.cursor, limit: HISTORY_PAGE });
-      if (this.historyReads.get(repo)?.token !== token) return;
-      this.historyReads.delete(repo);
-      const commits = this.state.history[repo]?.commits ?? [];
+      const page = await readLog(this.workspace, repo, { ...(ref !== undefined ? { ref } : {}), cursor: have.cursor, limit: HISTORY_PAGE });
+      if (this.historyReads.get(key)?.token !== token) return;
+      this.historyReads.delete(key);
+      const commits = this.state.history[key]?.commits ?? [];
       const known = new Set(commits.map((c) => c.sha));
-      this.patchHistory(repo, { commits: [...commits, ...page.commits.filter((c) => !known.has(c.sha))], cursor: page.cursor, more: false });
+      this.patchHistory(key, { commits: [...commits, ...page.commits.filter((c) => !known.has(c.sha))], cursor: page.cursor, more: false });
     } catch (error) {
-      if (this.historyReads.get(repo)?.token !== token) return;
-      this.historyReads.delete(repo);
-      this.patchHistory(repo, { more: false, moreError: messageOf(error) });
+      if (this.historyReads.get(key)?.token !== token) return;
+      this.historyReads.delete(key);
+      this.patchHistory(key, { more: false, moreError: messageOf(error) });
     }
   }
 
-  selectCommit(repo: string, sha: string): void {
-    if (this.state.history[repo]?.selected !== sha) this.patchHistory(repo, { selected: sha });
+  selectCommit(repo: string, ref: string | undefined, sha: string): void {
+    const key = historyKey(repo, ref);
+    if (this.state.history[key]?.selected !== sha) this.patchHistory(key, { selected: sha });
   }
 
   /** The runs the owners name, read once each: a run's goal and its tasks do not change under a branch list. */

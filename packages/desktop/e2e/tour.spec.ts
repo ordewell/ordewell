@@ -27,7 +27,7 @@ import {
   type Sandbox,
 } from './fixtures';
 import { assertPartition, combinations, legName, owns, parseLeg } from './legs';
-import { CARD_SELECTORS, LIFT_MIN, liftChecks, TEXT_MIN, type LiftResult } from './surfaces';
+import { CARD_SELECTORS, LIFT_MIN, labelChecks, liftChecks, SHOWN_MIN, TEXT_MIN, type LiftResult } from './surfaces';
 
 const OUT = path.join(DESKTOP, 'test-results', 'tour');
 const SIZES = [{ width: 1280, height: 800 }, { width: 1512, height: 982 }, { width: 1920, height: 1080 }] as const;
@@ -83,7 +83,7 @@ const OPENCODE_MODELS = [
 
 type Theme = typeof THEMES[number];
 interface Size { readonly width: number; readonly height: number }
-type CheckId = 'a' | 'b' | 'c' | 'd' | 'e' | 'f' | 'g' | 'h' | 'i' | 'j';
+type CheckId = 'a' | 'b' | 'c' | 'd' | 'e' | 'f' | 'g' | 'h' | 'i' | 'j' | 'k';
 
 const CHECK_NAMES: Record<CheckId, string> = {
   a: 'title bar controls visible, in the viewport, unclipped and unobscured',
@@ -96,6 +96,7 @@ const CHECK_NAMES: Record<CheckId, string> = {
   h: 'no element of a graph card overflows the card or overlaps a sibling',
   i: `every card's fill stands off its backdrop by at least ${LIFT_MIN}:1, and its text reads at ${TEXT_MIN}:1 (e2e/surfaces.ts)`,
   j: 'allowlist rows fit, scroll, title truncated ids and distinguish shared labels with visible providers',
+  k: `important names and titles (branches, commits, paths, projects, tasks, models) show at least ${SHOWN_MIN}px of their text, carry a tooltip where cut, and read at ${TEXT_MIN}:1 (e2e/surfaces.ts)`,
 };
 const CHAT_FILL = 0.9;
 
@@ -527,6 +528,18 @@ async function allowlistLayout(list: Locator): Promise<Check> {
   return { id: 'j', name: CHECK_NAMES.j, pass: problems.length === 0, count: new Set(problems).size, details: limited(problems) };
 }
 
+/**
+ * The state's important labels, as `labels` finds them by role and name: each
+ * shows a useful part of its text, titles what it cuts and reads at the
+ * contrast floor. A label left to its ellipsis keeps the check honest only
+ * while some of it still shows, so a hidden label fails rather than passes.
+ */
+async function labelFit(labels: Locator): Promise<Check> {
+  const found = await labels.evaluateAll(labelChecks, { textMin: TEXT_MIN, shownMin: SHOWN_MIN });
+  const problems = (await labels.count()) === 0 ? ['no label to measure: the locator found none'] : found;
+  return { id: 'k', name: CHECK_NAMES.k, pass: problems.length === 0, count: new Set(problems).size, details: limited(problems) };
+}
+
 /** Polls until no loading text shows, for at most the grace period; the shots then judge what is left. */
 async function waitForLoading(page: Page): Promise<number> {
   const start = Date.now();
@@ -849,6 +862,83 @@ async function sashProbe(page: Page): Promise<Record<string, unknown>> {
   return result;
 }
 
+/**
+ * Check k on labels whose answer is known, in this renderer with its fonts: a
+ * label a snapping scroller leaves cut at its edge, though the scroller can
+ * show it whole, passes; a label its own ellipsis cuts, with no tooltip, fails;
+ * a folder shortened in the middle, in a box narrower than its kept tail, still
+ * shows a few characters of its head, with the app's own MiddleText styles; and
+ * the scroller ends where it was, snapping as before. What it finds fails the
+ * tour under TOUR_STRICT.
+ */
+async function labelCheckControl(page: Page): Promise<Record<string, unknown>> {
+  await page.evaluate(() => {
+    // Three 250px snap columns in a 300px scroller: the second column's label starts at 250px, so 50px of it
+    // shows; showing it whole needs about 50px of scroll, nearer the first snap point (0) than the second (250).
+    const host = document.createElement('div');
+    host.dataset.tourControl = 'labels';
+    host.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483647;width:300px;height:40px;overflow:auto;scroll-snap-type:x mandatory;background:#fff;color:#000;font:13px sans-serif;white-space:nowrap';
+    const track = document.createElement('div');
+    track.style.cssText = 'display:flex;width:max-content';
+    const columns = [0, 1, 2].map(() => {
+      const column = document.createElement('div');
+      column.style.cssText = 'flex:none;width:250px;scroll-snap-align:start';
+      track.append(column);
+      return column;
+    });
+    const reachable = document.createElement('span');
+    reachable.dataset.control = 'reachable';
+    reachable.textContent = 'beyond the snap';
+    columns[1]!.append(reachable);
+    const cut = document.createElement('span');
+    cut.dataset.control = 'cut';
+    cut.style.cssText = 'display:block;width:40px;overflow:hidden;text-overflow:ellipsis';
+    cut.textContent = 'a label its own ellipsis cuts, with no tooltip';
+    columns[0]!.append(cut);
+    host.append(track);
+    document.body.append(host);
+    // MiddleText's markup for a commit's file folder, with pathTail's 40-character tail: about 250px of tail in a 120px box.
+    const narrow = document.createElement('div');
+    narrow.dataset.tourControl = 'middle';
+    narrow.style.cssText = 'position:fixed;left:0;top:48px;z-index:2147483647;width:120px;display:flex;background:#fff;color:#000;font:12px sans-serif';
+    const folder = 'src/search/normalisation-of-composed-and-decomposed-unicode-forms';
+    const mid = document.createElement('span');
+    mid.className = 'mid';
+    mid.title = folder;
+    for (const [part, text] of [['mid-head', folder.slice(0, -40)], ['mid-tail', folder.slice(-40)]] as const) {
+      const span = document.createElement('span');
+      span.className = part;
+      span.textContent = text;
+      mid.append(span);
+    }
+    narrow.append(mid);
+    document.body.append(narrow);
+  });
+  const host = page.locator('[data-tour-control="labels"]');
+  const judge = (control: string): Promise<string[]> => host.locator(`[data-control="${control}"]`).evaluateAll(labelChecks, { textMin: TEXT_MIN, shownMin: SHOWN_MIN });
+  const result: Record<string, unknown> = {};
+  const reachable = await judge('reachable');
+  const cut = await judge('cut');
+  const middle = await page.locator('[data-tour-control="middle"] .mid').evaluateAll(labelChecks, { textMin: TEXT_MIN, shownMin: SHOWN_MIN });
+  await page.locator('[data-tour-control="middle"]').evaluate((el) => el.remove());
+  const after = await host.evaluate((el) => ({ left: Math.round(el.scrollLeft), snap: getComputedStyle(el).scrollSnapType }));
+  // What the check works around, recorded: scrollIntoView under the snap, where it lands.
+  result.snappedScrollIntoView = await host.evaluate((el) => {
+    el.querySelector('[data-control="reachable"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    return Math.round(el.scrollLeft);
+  });
+  await host.evaluate((el) => el.remove());
+  Object.assign(result, { reachable, cut, middle, after });
+  const wrong: string[] = [];
+  if (reachable.length > 0) wrong.push(`a label the scroller can show whole fails: ${reachable.join('; ')}`);
+  if (!cut.some((p) => p.includes('cut short with no tooltip'))) wrong.push(`a label cut with no tooltip passes: ${cut.join('; ') || 'no problem found'}`);
+  if (middle.length > 0) wrong.push(`a folder shortened in the middle loses a part: ${middle.join('; ')}`);
+  if (after.left !== 0 || !after.snap.includes('mandatory')) wrong.push(`the scroller was left at ${after.left}px, snapping ${after.snap}`);
+  fitFailures.push(...wrong.map((w) => `check k control: ${w}`));
+  result.wrong = wrong;
+  return result;
+}
+
 async function graphProbe(page: Page, graph: Locator): Promise<Record<string, unknown>> {
   await emulate(page, SIZES[0]);
   await settle(page);
@@ -912,7 +1002,7 @@ async function graphProbe(page: Page, graph: Locator): Promise<Record<string, un
 
 function writeReport(): void {
   fs.mkdirSync(OUT, { recursive: true });
-  const failing: Record<CheckId, number> = { a: 0, b: 0, c: 0, d: 0, e: 0, f: 0, g: 0, h: 0, i: 0, j: 0 };
+  const failing: Record<CheckId, number> = { a: 0, b: 0, c: 0, d: 0, e: 0, f: 0, g: 0, h: 0, i: 0, j: 0, k: 0 };
   for (const record of states) for (const shot of record.shots) for (const c of shot.checks) if (!c.pass) failing[c.id] += 1;
   const report = {
     generatedAt: new Date().toISOString(),
@@ -998,7 +1088,9 @@ test('the visual tour', async () => {
   mock = started.process;
 
   // Recents as a returning user has them: this repository, another project, and one since deleted.
-  const other = path.join(box.tmp, 'another-project');
+  // The other project's name is longer than its card or a menu row, so the captures show how a name gives way.
+  const LONG_PROJECT = 'another-project-whose-folder-name-runs-longer-than-any-card-or-menu-row';
+  const other = path.join(box.tmp, LONG_PROJECT);
   fs.mkdirSync(other);
   fs.mkdirSync(box.userData, { recursive: true });
   const now = Date.now();
@@ -1026,6 +1118,8 @@ test('the visual tour', async () => {
     await expect(welcome.locator('.welcome-recent[data-path]')).toHaveCount(3);
     await expect(welcome.locator('.welcome-recent[data-state="loading"]')).toHaveCount(0, { timeout: 30_000 });
     await expect(welcome.locator('.welcome-recent[data-state="missing"]')).toHaveCount(1);
+  }, {
+    measure: async () => labelFit(welcome.getByRole('button', { name: LONG_PROJECT, exact: true }).or(welcome.getByTitle(other, { exact: true }))),
   });
 
   const win = await openFolder(app, welcome, box.repo).catch(() => undefined);
@@ -1053,7 +1147,10 @@ test('the visual tour', async () => {
   await state(win, 'project-switcher', 'The title bar\'s project switcher open: recent folders, Open Folder… and Open in new window', async () => {
     await expect(need(win).getByRole('contentinfo')).toContainText('Claude Code', { timeout: 60_000 });
     await openSwitcher();
-  }, { ensure: openSwitcher });
+  }, {
+    ensure: openSwitcher,
+    measure: async () => labelFit(switchMenu().getByRole('menuitem', { name: LONG_PROJECT })),
+  });
   if (win && await switchMenu().isVisible()) await win.keyboard.press('Escape');
 
   await state(win, 'planning', 'Session while planning', async (record) => {
@@ -1086,10 +1183,19 @@ test('the visual tour', async () => {
     const graph = await graphTab();
     await expect(graph.getByRole('button', { name: /^#1 Add a greeting module, running/ })).toBeVisible({ timeout: 60_000 });
     await pause(page, 600);
+    // The graph snaps to its stages, which is what check k has to see past to measure a card at a stage's edge.
+    probes.labelCheckControl = await labelCheckControl(page);
     probes.graphNavigation = await graphProbe(page, graph);
     // The probe scrolled the view: bring the first stage back, as a fresh open shows it.
     await graph.evaluate((el) => el.scrollTo({ left: 0, top: 0 }));
     await expect(graph.locator('.graph-card').first()).toBeVisible();
+  }, {
+    // The tour plan's #3 has a title and a provider-qualified model longer than its card: each gives way at a word, titled.
+    measure: async () => {
+      const graph = need(editor).getByRole('grid', { name: 'Plan graph' });
+      return labelFit(graph.getByTitle('Port the tokenizer to the streaming parser and keep every existing fixture passing', { exact: true })
+        .or(graph.getByTitle('Model: opencode-go/deepseek-v4.1-flash', { exact: true })));
+    },
   });
 
   await state(win, 'graph-reveal', 'A graph card clicked: its task opens in the plan panel', async () => {
@@ -1226,25 +1332,37 @@ test('the visual tour', async () => {
     await message.fill('Note what the checkout is for');
   });
 
-  await state(win, 'git-graph', 'Git commit graph', async () => {
-    const page = need(win);
-    await need(views).getByRole('tab', { name: 'Git' }).click();
-    await page.getByRole('navigation', { name: 'Git' }).getByRole('button', { name: 'Show the commit graph', exact: true }).first().click();
-    await expect(page.getByRole('list', { name: 'Commits' })).toBeVisible({ timeout: 30_000 });
-    await page.getByRole('list', { name: 'Commits' }).getByRole('button').first().click();
-  });
-
   // Branch folders, History and a Fetch held pending need a remote and slash-named branches the run made none of.
   // Its upload-pack waits while the hold file exists, so the Fetch stays pending for every capture and ends on release.
   const gitSide = (): Locator => need(win).getByRole('navigation', { name: 'Git' });
   const gitView = (name: 'Branches' | 'History'): Locator => gitSide().getByRole('group', { name: 'Git sidebar view' }).getByRole('button', { name });
-  // The activity tab toggles: clicking it while git-graph left Git showing would close the sidebar.
+  // The activity tab toggles: clicking it while an earlier state left Git showing would close the sidebar.
   const openGit = async (): Promise<void> => { if (!await gitSide().isVisible()) await need(views).getByRole('tab', { name: 'Git' }).click(); };
   const fetchButton = (): Locator => gitSide().getByRole('group', { name: /^Sync / }).getByRole('button', { name: 'Fetch', exact: true });
+  const editorTabs = (): Locator => need(editor).getByRole('tablist', { name: 'Editor tabs' }).getByRole('tab');
   const holdFetch = path.join(box.tmp, 'hold-fetch');
   holds.push(holdFetch);
   const FOLDED = ['feature/sso', 'feature/search-box'];
-  await state(win, 'git-branch-folders', 'Git Branches: slash-named branches folded under feature/, and a remote', async () => {
+  // A branch, a commit subject and a file path longer than any row they land in: each must still show a useful part, titled.
+  const LONG_BRANCH = 'feature/search-box-rewritten-for-unicode-normalisation-and-very-long-query-strings';
+  const LONG_SUBJECT = 'Normalise every query string to NFC before it reaches the search index, so accented names match however they were typed';
+  const LONG_DIR = ['src', 'search', 'normalisation-of-composed-and-decomposed-unicode-forms'];
+  const LONG_FILE = 'unicode-query-normaliser-for-composed-and-decomposed-forms.ts';
+  const longSide = path.join(box.tmp, 'long-branch');
+  let longSha = '';
+  // The branch row sits in the feature folder, which a refresh may leave folded.
+  const browseLong = async (): Promise<void> => {
+    await openGit();
+    await gitView('Branches').click();
+    const folder = gitSide().getByRole('button', { name: /^feature/ }).and(gitSide().locator('[aria-expanded]'));
+    await expect(folder.first()).toBeVisible({ timeout: 30_000 });
+    if (await folder.first().getAttribute('aria-expanded') !== 'true') await folder.first().click();
+    await gitSide().getByRole('button', { name: LONG_BRANCH, exact: true }).click();
+    await expect(gitSide().getByRole('list', { name: `History of ${LONG_BRANCH}`, exact: true })).toBeVisible({ timeout: 30_000 });
+  };
+  const longRow = (): Locator => gitSide().getByRole('button', { name: `Commit ${longSha}: ${LONG_SUBJECT}`, exact: true });
+
+  await state(win, 'git-branch-folders', 'Git Branches: slash-named branches folded under feature/, one name longer than the sidebar, and a remote', async () => {
     const origin = path.join(box.tmp, 'origin.git');
     const uploadPack = path.join(box.tmp, 'held-upload-pack.sh');
     fs.writeFileSync(uploadPack, `#!/bin/sh\nwhile [ -e '${holdFetch}' ]; do sleep 0.1; done\nexec git upload-pack "$@"\n`, { mode: 0o755 });
@@ -1253,26 +1371,122 @@ test('the visual tour', async () => {
     git(box, 'push', '-q', 'origin', 'HEAD:refs/heads/main');
     git(box, 'config', 'remote.origin.uploadpack', uploadPack);
     for (const name of FOLDED) git(box, 'branch', name);
+    // The long branch's commit is made in a worktree of its own, so the checkout and its index stay as the earlier states left them.
+    git(box, 'worktree', 'add', '-q', '-b', LONG_BRANCH, longSide);
+    fs.mkdirSync(path.join(longSide, ...LONG_DIR), { recursive: true });
+    fs.writeFileSync(path.join(longSide, ...LONG_DIR, LONG_FILE), 'export const normalise = (query: string): string => query.normalize(\'NFC\');\n');
+    git(box, '-C', longSide, 'add', '.');
+    git(box, '-C', longSide, 'commit', '-q', '-m', LONG_SUBJECT);
+    git(box, 'worktree', 'remove', longSide);
+    longSha = git(box, 'rev-parse', '--short=7', LONG_BRANCH).trim();
     await openGit();
     await gitView('Branches').click();
     await gitSide().getByRole('button', { name: /^Refresh the branches/ }).click();
-    const folder = gitSide().locator('.git-folder-main').filter({ hasText: /^feature/ });
-    await expect(folder).toBeVisible({ timeout: 30_000 });
-    if (await folder.getAttribute('aria-expanded') !== 'true') await folder.click();
+    const folder = gitSide().getByRole('button', { name: /^feature/ }).and(gitSide().locator('[aria-expanded]'));
+    await expect(folder.first()).toBeVisible({ timeout: 30_000 });
+    if (await folder.first().getAttribute('aria-expanded') !== 'true') await folder.first().click();
     const inside = gitSide().getByRole('list', { name: 'feature', exact: true });
-    for (const name of FOLDED) await expect(inside.getByRole('button', { name, exact: true })).toBeVisible();
+    for (const name of [...FOLDED, LONG_BRANCH]) await expect(inside.getByRole('button', { name, exact: true })).toBeVisible();
     await expect(gitSide().getByRole('button', { name: 'origin/main', exact: true })).toBeVisible();
     await expect(gitView('Branches')).toHaveAttribute('aria-pressed', 'true');
+  }, {
+    measure: async () => labelFit(gitSide().getByRole('button', { name: LONG_BRANCH, exact: true })
+      .or(gitSide().getByRole('group', { name: 'Your checkout' }).getByTitle(/^Your checkout: /))),
   });
 
-  await state(win, 'git-history', 'Git History: the sidebar switched from Branches to the checkout\'s commits', async () => {
-    await openGit();
-    await gitView('History').click();
+  await state(win, 'git-graph', 'Git graph in the sidebar: a branch picked in Branches replaces the list with its history, the centre\'s tabs unchanged', async () => {
+    const opened = await editorTabs().count();
+    const active = await editorTabs().and(need(win).locator('[aria-selected="true"]')).getAttribute('title');
+    await browseLong();
     await expect(gitView('History')).toHaveAttribute('aria-pressed', 'true');
     await expect(gitView('Branches')).toHaveAttribute('aria-pressed', 'false');
-    const rows = gitSide().getByRole('list', { name: 'History' }).getByRole('button', { name: /^Commit [0-9a-f]{7}: / });
+    await expect(longRow()).toBeVisible({ timeout: 30_000 });
+    await expect(gitSide().getByText(/^Browsing only: your checkout stays on /)).toBeVisible();
+    await expect(gitSide().getByRole('button', { name: 'Show your checkout’s history' })).toBeVisible();
+    // The graph lives under the left navigation now: the centre has no commit list and kept every tab it had, the same one in front.
+    await expect(need(win).getByRole('list', { name: 'Commits' })).toHaveCount(0);
+    await expect(editorTabs()).toHaveCount(opened);
+    if (active !== null) await expect(editorTabs().and(need(win).locator('[aria-selected="true"]'))).toHaveAttribute('title', active);
+  }, {
+    measure: async () => labelFit(longRow().or(gitSide().getByText(/^Browsing only: /))),
+  });
+
+  await state(win, 'git-commit', 'A commit picked in History: it opens in a preview tab, the sidebar still on the history', async () => {
+    if (!await longRow().isVisible()) await browseLong();
+    const titles = (): Promise<string[]> => editorTabs().evaluateAll((tabs) => tabs.map((t) => t.getAttribute('title') ?? ''));
+    const before = await titles();
+    // A group holds one preview at most: an earlier one (a file opened from the explorer, say) gives its place to the commit.
+    const previews = before.filter((t) => / \(preview: /.test(t) && !t.startsWith(`Commit ${longSha} `));
+    const kept = before.filter((t) => !/ \(preview: /.test(t));
+    await longRow().click();
+    const tab = editorTabs().filter({ hasText: `Commit ${longSha}` });
+    await expect(tab).toHaveAttribute('aria-selected', 'true');
+    await expect(tab).toHaveAttribute('title', /\(preview: /);
+    await expect(editorTabs()).toHaveCount(kept.length + 1);
+    await expect.poll(titles).toEqual(expect.arrayContaining(kept));
+    for (const replaced of previews) await expect.poll(titles).not.toContain(replaced);
+    const detail = need(editor).getByRole('complementary', { name: 'Commit' });
+    await expect(detail.getByRole('heading', { name: LONG_SUBJECT })).toBeVisible({ timeout: 30_000 });
+    await expect(detail.getByRole('button', { name: [...LONG_DIR, LONG_FILE].join('/') })).toBeVisible();
+    await expect(longRow()).toHaveAttribute('aria-current', 'true');
+    await expect(gitSide().getByRole('list', { name: `History of ${LONG_BRANCH}`, exact: true })).toBeVisible();
+  }, {
+    measure: async () => {
+      const detail = need(editor).getByRole('complementary', { name: 'Commit' });
+      return labelFit(detail.getByRole('heading', { name: LONG_SUBJECT })
+        .or(detail.getByRole('button', { name: [...LONG_DIR, LONG_FILE].join('/') }))
+        .or(longRow()));
+    },
+  });
+
+  await state(win, 'git-commit-file', 'A commit\'s file opened: its diff in a preview tab, the commit\'s tab kept beside it', async () => {
+    const detail = need(editor).getByRole('complementary', { name: 'Commit' });
+    if (!await detail.isVisible()) {
+      if (!await longRow().isVisible()) await browseLong();
+      await longRow().click();
+    }
+    const opened = await editorTabs().count();
+    await detail.getByRole('button', { name: [...LONG_DIR, LONG_FILE].join('/') }).click();
+    const diff = editorTabs().filter({ hasText: `${LONG_FILE} @ ${longSha}` });
+    await expect(diff).toHaveAttribute('aria-selected', 'true');
+    await expect(diff).toHaveAttribute('title', /\(preview: /);
+    // Opening a file keeps the commit: its preview tab became a kept one rather than giving way to the diff.
+    await expect(editorTabs().filter({ hasText: `Commit ${longSha}` })).toHaveAttribute('title', `Commit ${longSha}`);
+    await expect(editorTabs()).toHaveCount(opened + 1);
+    await expect(gitSide().getByRole('list', { name: `History of ${LONG_BRANCH}`, exact: true })).toBeVisible();
+  }, {
+    measure: async () => labelFit(editorTabs().filter({ hasText: `${LONG_FILE} @ ${longSha}` })),
+  });
+
+  await state(win, 'git-history', 'Git History from the palette\'s Git: Show history: the sidebar back on the checkout\'s commits, the centre\'s tabs unchanged', async () => {
+    const page = need(win);
+    // The reset beside the scope leaves a browsed branch for the checkout's own history.
+    await browseLong();
+    await gitSide().getByRole('button', { name: 'Show your checkout’s history' }).click();
+    await expect(gitSide().getByRole('list', { name: 'History', exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(gitSide().getByRole('button', { name: 'Show your checkout’s history' })).toHaveCount(0);
+    // Browse again and leave Git for Sessions: the command must bring Git back, on History, and drop the browsed branch.
+    await browseLong();
+    await gitView('Branches').click();
+    await need(views).getByRole('tab', { name: /^Sessions/ }).click();
+    await expect(gitSide()).toBeHidden();
+    const opened = await editorTabs().count();
+    const active = await editorTabs().and(page.locator('[aria-selected="true"]')).getAttribute('title');
+    await page.keyboard.press('ControlOrMeta+K');
+    const palette = page.getByRole('dialog', { name: 'Command palette' });
+    await palette.getByRole('combobox', { name: 'Search commands' }).fill('Git: Show history');
+    await expect(palette.getByRole('option', { selected: true })).toHaveText(/^Git: Show history/);
+    await page.keyboard.press('Enter');
+    await expect(palette).toBeHidden();
+    await expect(gitView('History')).toHaveAttribute('aria-pressed', 'true');
+    await expect(gitView('Branches')).toHaveAttribute('aria-pressed', 'false');
+    const rows = gitSide().getByRole('list', { name: 'History', exact: true }).getByRole('button', { name: /^Commit [0-9a-f]{7}: / });
     await expect(rows.first()).toBeVisible({ timeout: 30_000 });
+    await expect(gitSide().getByRole('list', { name: `History of ${LONG_BRANCH}`, exact: true })).toHaveCount(0);
     await expect(gitSide().getByRole('list', { name: 'feature', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('list', { name: 'Commits' })).toHaveCount(0);
+    await expect(editorTabs()).toHaveCount(opened);
+    if (active !== null) await expect(editorTabs().and(page.locator('[aria-selected="true"]'))).toHaveAttribute('title', active);
   });
 
   await state(win, 'git-fetch-busy', 'Git Fetch pending, back on Branches: its icon turning, Pull and Push held', async () => {
@@ -1293,12 +1507,18 @@ test('the visual tour', async () => {
       await expect(fetchButton()).toBeEnabled({ timeout: 30_000 });
     },
   });
-  // Whether or not the state was reached, the later states meet the repository as they did before these three.
+  // Whether or not the states were reached, the later ones meet the repository and the centre as they did before these.
   fs.rmSync(holdFetch, { force: true });
   await expect(fetchButton()).toBeEnabled({ timeout: 30_000 }).catch(() => undefined);
+  for (const title of [`${LONG_FILE} @ ${longSha}`, `Commit ${longSha}`]) {
+    const close = need(editor).getByRole('button', { name: `Close ${title}`, exact: true });
+    if (await close.count() > 0) await close.click().catch(() => undefined);
+  }
   try {
     git(box, 'remote', 'remove', 'origin');
-    git(box, 'branch', '-D', ...FOLDED);
+    if (fs.existsSync(longSide)) git(box, 'worktree', 'remove', '--force', longSide);
+    const made = git(box, 'branch', '--list', '--format=%(refname:short)', ...FOLDED, LONG_BRANCH).split('\n').filter(Boolean);
+    if (made.length > 0) git(box, 'branch', '-D', ...made);
   } catch (error) {
     probes.gitStatesCleanup = `the tour's remote and branches were not all removed: ${String(error)}`;
   }

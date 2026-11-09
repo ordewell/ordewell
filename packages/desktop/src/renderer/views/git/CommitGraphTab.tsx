@@ -4,10 +4,10 @@ import { Button, EmptyState, IconButton } from '@ordewell/ui/design';
 import type { FrameApi, Tab, Unregister } from '../../frame/api';
 import { messageOf } from '../../session/daemon';
 import { all } from '../Stub';
-import { MiddleText, Notice } from '../sidebarKit';
+import { MiddleText, Notice, pathTail } from '../sidebarKit';
 import { openRun } from './gitActions';
 import { readBranches, readCommit, readLog, type Branches, type CommitDetail, type CommitSummary } from './gitData';
-import { ago, commitDiffTabId, commitTabId, landedTaskOf, parseCommitTabId, parseCommitsTabId, refChips, shortSha, type LandedTask } from './gitModel';
+import { ago, commitDiffTabId, commitWhen, commitTabId, landedTaskOf, parseCommitTabId, parseCommitsTabId, refChips, shortSha, type LandedTask } from './gitModel';
 import { gitStoreFor, ownersOf, type RunInfo } from './gitStore';
 import { Chip, Lanes } from './GraphParts';
 import { assignLanes } from './lanes';
@@ -78,7 +78,11 @@ function Detail({ api, repo, sha, summary, linked, close }: { api: FrameApi; rep
         <h3>{shown?.subject ?? shortSha(sha)}</h3>
         {close && <IconButton icon={X} label="Close the commit" onClick={close} />}
       </div>
-      <p className="git-detail-meta">{shortSha(sha)}{shown && ` · ${shown.author} · ${shown.date}`}</p>
+      <p className="git-detail-meta" title={shown ? `${sha}\n${shown.date}` : sha}>
+        <span className="git-detail-sha">{shortSha(sha)}</span>
+        {shown && <span>{shown.author}</span>}
+        {shown && <span>{commitWhen(shown.date)}</span>}
+      </p>
       {linked && (
         <p className="git-detail-landed">
           <span>Landed from</span>
@@ -94,17 +98,23 @@ function Detail({ api, repo, sha, summary, linked, close }: { api: FrameApi; rep
           {detail.commit.body.trim() && <pre className="git-detail-body">{detail.commit.body.trim()}</pre>}
           {detail.files.length === 0 ? <p className="git-hint">This commit changes no files.</p> : (
             <ul className="git-list">
-              {detail.files.map((file) => (
-                <li key={file.path} className="srow git-file">
-                  <button type="button" className="srow-main" title={file.path} onClick={() => open(file.path, true)} onDoubleClick={() => open(file.path, false)}>
-                    <span className={`sbadge sbadge-${file.status}`} aria-label={file.status}>{file.status}</span>
-                    <MiddleText className="git-file-name" text={file.path} tail={20} />
-                  </button>
-                  {file.added === null ? <span className="git-file-counts">binary</span> : (
-                    <span className="git-file-counts"><span className="git-file-added">+{file.added}</span><span className="git-file-removed">−{file.removed ?? 0}</span></span>
-                  )}
-                </li>
-              ))}
+              {detail.files.map((file) => {
+                const at = file.path.lastIndexOf('/');
+                const base = file.path.slice(at + 1);
+                const dir = at < 0 ? '' : file.path.slice(0, at);
+                return (
+                  <li key={file.path} className="srow git-file">
+                    <button type="button" className="srow-main" title={file.path} aria-label={`${file.status} ${file.path}`} onClick={() => open(file.path, true)} onDoubleClick={() => open(file.path, false)}>
+                      <span className={`sbadge sbadge-${file.status}`} aria-label={file.status}>{file.status}</span>
+                      <span className="git-file-base">{base}</span>
+                      {dir && <MiddleText className="git-file-dir" text={dir} tail={pathTail(dir)} />}
+                    </button>
+                    {file.added === null ? <span className="git-file-counts">binary</span> : (
+                      <span className="git-file-counts"><span className="git-file-added">+{file.added}</span><span className="git-file-removed">−{file.removed ?? 0}</span></span>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </>

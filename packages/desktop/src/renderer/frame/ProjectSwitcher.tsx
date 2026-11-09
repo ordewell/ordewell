@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, Folder } from 'lucide-react';
 import { Icon } from '@ordewell/ui/design';
 import type { RecentWorkspace } from '../../shared/bridge';
+import { middleEllipsis } from '../welcome/model';
 import { formatChord, isMac, parseChord } from './keys';
 import { onMenuKey, Popover } from './Popover';
 import { useFrameState, useFrameStore } from './store';
@@ -13,12 +14,18 @@ export function workspaceName(path: string): string {
 /** The File menu's chord: main's accelerator owns it, so the frame only names it. */
 const OPEN_FOLDER_KEYS = 'Mod+O';
 
+interface Destination extends RecentWorkspace {
+  /** What assistive technology reads: the name alone, or with its path where another folder shares the name. */
+  spoken: string;
+}
+
 /** Where the switcher can go: not this window's own folder, and not a folder that is gone. */
-function destinations(recents: readonly RecentWorkspace[], here: string): RecentWorkspace[] {
+function destinations(recents: readonly RecentWorkspace[], here: string): Destination[] {
   const others = recents.filter((entry) => !entry.missing && entry.path !== here);
   const shared = new Set(others.map((entry) => entry.name).filter((name, i, names) => names.indexOf(name) !== i));
-  // Two folders with one name are told apart by their paths, as the File menu does.
-  return others.map((entry) => (shared.has(entry.name) ? { ...entry, name: `${entry.name} — ${entry.displayPath}` } : entry));
+  // Two folders with one name are told apart by their paths, as the File menu does. The row already shows the
+  // path beside the name, so only the spoken name carries it: printing it in both put the path on screen twice.
+  return others.map((entry) => ({ ...entry, spoken: shared.has(entry.name) ? `${entry.name} — ${entry.displayPath}` : entry.name }));
 }
 
 /**
@@ -83,9 +90,10 @@ export function ProjectSwitcher(): JSX.Element {
             {shown.length === 0 && <li role="presentation" className="frame-menu-empty">No other recent folders</li>}
             {shown.map((entry) => (
               <li key={entry.path} role="none">
-                <button type="button" role="menuitem" aria-label={entry.name} title={entry.path} onClick={() => choose(entry.path)}>
+                <button type="button" role="menuitem" aria-label={entry.spoken} title={entry.path} onClick={() => choose(entry.path)}>
                   <span className="frame-project-entry">{entry.name}</span>
-                  <span className="frame-menu-hint">{entry.displayPath}</span>
+                  {/* A middle ellipsis keeps both ends: two same-named folders differ in the parent, the end is the name. */}
+                  <span className="frame-menu-hint">{middleEllipsis(entry.displayPath)}</span>
                 </button>
               </li>
             ))}

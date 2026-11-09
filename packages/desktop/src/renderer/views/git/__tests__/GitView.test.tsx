@@ -171,7 +171,8 @@ describe('the Branches and History views', () => {
     expect(await screen.findByRole('list', { name: 'History' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Switch to feature/login' })).toBeNull();
     expect(screen.getByRole('group', { name: /^Sync/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Show the commit graph' })).toBeInTheDocument();
+    // The history is here in the sidebar: there is no second, centre graph to open.
+    expect(screen.queryByRole('button', { name: 'Show the commit graph' })).toBeNull();
     expect(daemon.calls('git.log')).toHaveLength(1);
   });
 
@@ -211,7 +212,15 @@ describe('the Branches and History views', () => {
     expect(row).toHaveAttribute('aria-current', 'true');
     const detail = within(await screen.findByRole('complementary', { name: 'Commit' }));
     expect(await detail.findByText('Why it changed.')).toBeInTheDocument();
-    fireEvent.click(detail.getByRole('button', { name: /src\/sso\.ts/ }));
+    // The subject leads; the sha, author and a readable date are its own supporting line, and a file names itself before its folder.
+    expect(detail.getByRole('heading', { name: 'Merge: Wire SSO' })).toBeInTheDocument();
+    expect(detail.getByText('aaaaaaa')).toBeInTheDocument();
+    expect(detail.getByText('Ada')).toBeInTheDocument();
+    const file = detail.getByRole('button', { name: /sso\.ts/ });
+    expect(file).toHaveAttribute('title', 'src/sso.ts');
+    expect(within(file).getByText('sso.ts')).toBeInTheDocument();
+    expect(within(file).getByText('src')).toBeInTheDocument();
+    fireEvent.click(file);
     expect(await screen.findByRole('tab', { name: /sso\.ts @ aaaaaaa/ })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /Commit aaaaaaa/ })).toBeInTheDocument();
   });
@@ -418,6 +427,216 @@ describe('the Branches and History views', () => {
     fireEvent.change(picker, { target: { value: 'libs/ui' } });
     expect(await screen.findByRole('button', { name: 'Commit 9999999: Start the UI kit' })).toBeInTheDocument();
     expect(daemon.calls('git.log').filter(([p]) => p?.repo === 'libs/ui')).toHaveLength(1);
+  });
+});
+
+describe('browsing a branch in the sidebar', () => {
+  const views = () => within(screen.getByRole('group', { name: 'Git sidebar view' }));
+  const side = () => within(screen.getByRole('navigation', { name: 'Git' }));
+  /** The centre's tabs and which one is shown: what browsing must never touch. */
+  const centre = () => store.getSnapshot().layout.groups.map((g) => ({ tabs: g.tabs.map((t) => t.key), active: g.active }));
+  const FEATURE_LOG = [commit('b', ['f'], 'Sign in with a magic link', ['feature/login']), LOG[1]!];
+  const byRef = (params: RouteParams | undefined) => ok({
+    repo: '.', ref: params?.ref ?? 'HEAD', commits: params?.ref === 'feature/login' ? FEATURE_LOG : LOG, cursor: null,
+  });
+
+  it('shows a local branch’s history in the sidebar, read at that branch, and opens no tab', async () => {
+    const daemon = await mount({ 'git.log': byRef });
+    const before = centre();
+    fireEvent.click(screen.getByRole('button', { name: 'feature/login' }));
+    expect(views().getByRole('button', { name: 'History' })).toHaveAttribute('aria-pressed', 'true');
+    expect(await side().findByRole('button', { name: 'Commit bbbbbbb: Sign in with a magic link' })).toBeInTheDocument();
+    expect(daemon.calls('git.log')).toHaveLength(1);
+    expect(daemon.calls('git.log')[0]![0]).toMatchObject({ ref: 'feature/login', limit: '50' });
+    expect(centre()).toEqual(before);
+  });
+
+  it('browses an Ordewell branch, its integration branch and a remote one read-only, with nothing to switch to or delete', async () => {
+    const daemon = await mount({ 'git.log': byRef });
+    const before = centre();
+    const scope = (): HTMLElement => side().getByRole('combobox', { name: 'History of' });
+    fireEvent.click(screen.getByRole('button', { name: 'origin/main' }));
+    expect(scope()).toHaveValue('origin/main');
+    expect(side().getByText('A remote branch, read-only here.')).toBeInTheDocument();
+    await side().findByRole('button', { name: /Commit aaaaaaa/ });
+
+    fireEvent.click(views().getByRole('button', { name: 'Branches' }));
+    fireEvent.click(screen.getByRole('button', { name: 'ordewell/r7/integration, integration' }));
+    expect(scope()).toHaveValue('ordewell/r7/integration');
+    expect(side().getByText('Ordewell’s branch, read-only here.')).toBeInTheDocument();
+    expect(side().queryByRole('button', { name: /^(Switch to|Delete) / })).toBeNull();
+
+    fireEvent.click(views().getByRole('button', { name: 'Branches' }));
+    fireEvent.click(screen.getByRole('button', { name: 'ordewell/r7/t3, read-only' }));
+    expect(scope()).toHaveValue('ordewell/r7/t3');
+    await waitFor(() => expect(daemon.calls('git.log').map(([p]) => p?.ref)).toEqual(['origin/main', 'ordewell/r7/integration', 'ordewell/r7/t3']));
+    expect(daemon.calls('git.switch')).toHaveLength(0);
+    expect(centre()).toEqual(before);
+  });
+
+  it('names the checkout apart from the branch browsed, and keeps Fetch, Pull and Push on the checkout', async () => {
+    const daemon = await mount({ 'git.log': byRef });
+    fireEvent.click(screen.getByRole('button', { name: 'feature/login' }));
+    await side().findByRole('button', { name: /Commit bbbbbbb/ });
+    expect(within(screen.getByRole('group', { name: 'Your checkout' })).getByText('main')).toBeInTheDocument();
+    expect(side().getByText('Browsing only: your checkout stays on main.')).toBeInTheDocument();
+    fireEvent.click(within(screen.getByRole('group', { name: /^Sync/ })).getByRole('button', { name: /^Pull/ }));
+    expect(within(await dialog()).getAllByText(/origin/).length).toBeGreaterThan(0);
+    answer(/^Pull/);
+    await waitFor(() => expect(daemon.calls('git.pull')).toHaveLength(1));
+    expect(daemon.calls('git.pull')[0]![1]).toMatchObject({ confirm: { remote: 'origin', branch: 'main' } });
+    expect(daemon.calls('git.switch')).toHaveLength(0);
+  });
+
+  it('marks the branch shown in History in the list, apart from the checked-out one', async () => {
+    await mount({ 'git.log': byRef });
+    fireEvent.click(screen.getByRole('button', { name: 'feature/login' }));
+    fireEvent.click(views().getByRole('button', { name: 'Branches' }));
+    expect(screen.getByRole('button', { name: 'feature/login' })).toHaveAccessibleDescription('Shown in History');
+    expect(screen.getByRole('button', { name: 'main' })).not.toHaveAccessibleDescription('Shown in History');
+    expect(screen.getByRole('button', { name: 'main' }).closest('li')).toHaveAttribute('aria-current', 'true');
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    expect(await side().findByRole('list', { name: 'History of feature/login' })).toBeInTheDocument();
+  });
+
+  it('changes or resets what History shows from the sidebar, and a history already read is not read again', async () => {
+    const daemon = await mount({ 'git.log': byRef });
+    fireEvent.click(screen.getByRole('button', { name: 'feature/login' }));
+    await side().findByRole('button', { name: /Commit bbbbbbb/ });
+    fireEvent.click(side().getByRole('button', { name: 'Show your checkout’s history' }));
+    expect(side().getByRole('combobox', { name: 'History of' })).toHaveValue('');
+    expect(await side().findByRole('button', { name: /Commit aaaaaaa/ })).toBeInTheDocument();
+    expect(side().queryByRole('button', { name: 'Show your checkout’s history' })).toBeNull();
+    fireEvent.change(side().getByRole('combobox', { name: 'History of' }), { target: { value: 'feature/login' } });
+    expect(await side().findByRole('button', { name: /Commit bbbbbbb/ })).toBeInTheDocument();
+    expect(daemon.calls('git.log').map(([p]) => p?.ref)).toEqual(['feature/login', undefined]);
+  });
+
+  it('shows the checked-out branch as the checkout’s own history', async () => {
+    const daemon = await mount({ 'git.log': byRef });
+    fireEvent.click(screen.getByRole('button', { name: 'main' }));
+    expect(side().getByRole('combobox', { name: 'History of' })).toHaveValue('');
+    await side().findByRole('button', { name: /Commit aaaaaaa/ });
+    expect(daemon.calls('git.log')[0]![0]).not.toHaveProperty('ref');
+  });
+
+  it('opens the checkout’s history in the sidebar from the palette, with Git closed, and opens no tab', async () => {
+    const daemon = await mount({ 'git.log': byRef });
+    fireEvent.click(screen.getByRole('button', { name: 'feature/login' }));
+    await side().findByRole('button', { name: /Commit bbbbbbb/ });
+    act(() => store.api.showActivity('explorer'));
+    expect(screen.queryByRole('navigation', { name: 'Git' })).toBeNull();
+    const before = centre();
+    act(() => store.api.runCommand('git.showGraph'));
+    expect(store.getSnapshot().layout.activity).toBe('git');
+    expect(views().getByRole('button', { name: 'History' })).toHaveAttribute('aria-pressed', 'true');
+    expect(side().getByRole('combobox', { name: 'History of' })).toHaveValue('');
+    expect(await side().findByRole('button', { name: /Commit aaaaaaa/ })).toBeInTheDocument();
+    expect(daemon.calls('git.log').map(([p]) => p?.ref)).toEqual(['feature/login', undefined]);
+    expect(centre()).toEqual(before);
+  });
+
+  it('opens History from the palette in a window that has not shown Git yet', async () => {
+    const daemon = fakeDaemon({
+      'git.repos': ok({ repos: [REPO_STATE] }),
+      'git.branches': ok(BRANCHES),
+      'git.log': ok({ repo: '.', ref: 'HEAD', commits: LOG, cursor: null }),
+      'sessions.list': ok([]),
+    });
+    store = new FrameStore({ workspace: WORKSPACE, platform: 'linux' });
+    offs.push(registerFrameCommands(store), registerSidebar(store.api), registerGraph(store.api), registerDiff(store.api));
+    render(<FrameProvider value={store}><Frame daemon={CONNECTED} /></FrameProvider>);
+    const before = centre();
+    act(() => store.api.runCommand('git.showGraph'));
+    expect(await side().findByRole('button', { name: /Commit aaaaaaa/ })).toBeInTheDocument();
+    expect(views().getByRole('button', { name: 'History' })).toHaveAttribute('aria-pressed', 'true');
+    expect(daemon.calls('git.log')).toHaveLength(1);
+    expect(centre()).toEqual(before);
+  });
+
+  it('keeps the branch browsed across an activity switch, reading it no more', async () => {
+    const daemon = await mount({ 'git.log': byRef });
+    fireEvent.click(screen.getByRole('button', { name: 'feature/login' }));
+    await side().findByRole('button', { name: /Commit bbbbbbb/ });
+    act(() => store.api.showActivity('explorer'));
+    act(() => store.api.showActivity('git'));
+    expect(side().getByRole('combobox', { name: 'History of' })).toHaveValue('feature/login');
+    expect(side().getByRole('button', { name: /Commit bbbbbbb/ })).toBeInTheDocument();
+    expect(daemon.calls('git.log')).toHaveLength(1);
+  });
+
+  it('pages a browsed branch’s history at that branch', async () => {
+    const daemon = await mount({
+      'git.log': (params) => ok(params?.cursor
+        ? { repo: '.', ref: 'feature/login', commits: [LOG[1]!], cursor: null }
+        : { repo: '.', ref: 'feature/login', commits: [FEATURE_LOG[0]!], cursor: sha('f') }),
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'feature/login' }));
+    fireEvent.click(await side().findByRole('button', { name: 'Load more' }));
+    expect(await side().findByRole('button', { name: /Commit fffffff/ })).toBeInTheDocument();
+    expect(daemon.calls('git.log')[1]![0]).toMatchObject({ ref: 'feature/login', cursor: sha('f'), limit: '50' });
+  });
+
+  it('never shows a branch’s late answer under another branch, first page or next', async () => {
+    const feature = deferred();
+    const page = deferred();
+    const daemon = await mount({
+      'git.log': (params) => {
+        if (params?.ref === 'feature/login') return feature.promise;
+        if (params?.cursor) return page.promise;
+        return ok({ repo: '.', ref: 'HEAD', commits: [LOG[0]!], cursor: sha('f') });
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'feature/login' }));
+    await waitFor(() => expect(daemon.calls('git.log')).toHaveLength(1));
+    fireEvent.change(side().getByRole('combobox', { name: 'History of' }), { target: { value: '' } });
+    fireEvent.click(await side().findByRole('button', { name: 'Load more' }));
+    fireEvent.change(side().getByRole('combobox', { name: 'History of' }), { target: { value: 'feature/login' } });
+    await act(async () => { page.settle(ok({ repo: '.', ref: 'HEAD', commits: [commit('9', [], 'The checkout’s next page')], cursor: null })); });
+    expect(side().queryByRole('button', { name: /The checkout’s next page/ })).toBeNull();
+    await act(async () => { feature.settle(ok({ repo: '.', ref: 'feature/login', commits: FEATURE_LOG, cursor: null })); });
+    expect(side().getByRole('button', { name: /Commit bbbbbbb/ })).toBeInTheDocument();
+    fireEvent.change(side().getByRole('combobox', { name: 'History of' }), { target: { value: '' } });
+    expect(side().queryByRole('button', { name: /Commit bbbbbbb/ })).toBeNull();
+    expect(side().getByRole('button', { name: /The checkout’s next page/ })).toBeInTheDocument();
+    expect(daemon.calls('git.log')).toHaveLength(3);
+  });
+
+  it('goes back to the checkout’s history once the branch browsed is deleted, and drops its late answer', async () => {
+    const late = deferred();
+    let branches: unknown = BRANCHES;
+    const daemon = await mount({
+      'git.branches': () => ok(branches),
+      'git.log': (params) => (params?.ref === 'feature/login' ? late.promise : ok({ repo: '.', ref: 'HEAD', commits: LOG, cursor: null })),
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'feature/login' }));
+    await waitFor(() => expect(daemon.calls('git.log')).toHaveLength(1));
+    branches = { ...BRANCHES, local: [BRANCHES.local[0]!] };
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh the branches and history' }));
+    expect(await side().findByRole('button', { name: /Commit aaaaaaa/ })).toBeInTheDocument();
+    expect(side().getByRole('combobox', { name: 'History of' })).toHaveValue('');
+    await act(async () => { late.settle(ok({ repo: '.', ref: 'feature/login', commits: FEATURE_LOG, cursor: null })); });
+
+    // Made again, it is a new branch: it is browsed afresh, not shown from the answer the deletion dropped.
+    branches = BRANCHES;
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh the branches and history' }));
+    await waitFor(() => expect(daemon.calls('git.branches').length).toBeGreaterThan(2));
+    expect(side().getByRole('combobox', { name: 'History of' })).toHaveValue('');
+    fireEvent.change(side().getByRole('combobox', { name: 'History of' }), { target: { value: 'feature/login' } });
+    await waitFor(() => expect(daemon.calls('git.log').filter(([p]) => p?.ref === 'feature/login')).toHaveLength(2));
+  });
+
+  it('browses a branch from a detached or unborn checkout, naming the checkout as it is', async () => {
+    const detached = { ...BRANCHES, current: null, detached: true, local: BRANCHES.local.map((b) => ({ ...b, current: false })) };
+    const daemon = await mount({
+      'git.repos': ok({ repos: [{ ...REPO_STATE, branch: null, detached: true }] }),
+      'git.log': byRef,
+    }, detached, 'Switch to main');
+    fireEvent.click(screen.getByRole('button', { name: 'main' }));
+    expect(side().getByRole('combobox', { name: 'History of' })).toHaveValue('main');
+    expect(side().getByRole('option', { name: 'Your checkout (detached HEAD)' })).toBeInTheDocument();
+    expect(side().getByText('Browsing only: your checkout stays on detached HEAD.')).toBeInTheDocument();
+    await waitFor(() => expect(daemon.calls('git.log')[0]![0]).toMatchObject({ ref: 'main' }));
   });
 });
 
