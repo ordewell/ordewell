@@ -364,12 +364,16 @@ async function setTheme(page: Page, theme: Theme): Promise<void> {
  * finite animation ran for QUIET_MS of frames. SETTLE_MS, the fixed wait this
  * replaced, stays its limit, so a page that never goes quiet is judged as late
  * as it always was. A spinner runs for ever and is not waited for; a canvas
- * that resizes changes its attributes, so it is.
+ * that resizes changes its attributes, so it is. A finite animation still
+ * running at that limit is finished rather than shot halfway: frames come
+ * slowly while a window wakes, and a theme's 120ms fades were once judged
+ * mid-way after three seconds of them.
  */
 async function settle(page: Page): Promise<void> {
   await page.evaluate(async ({ limit, quiet }) => {
     const deadline = performance.now() + limit;
     const frame = (): Promise<number> => new Promise((resolve) => requestAnimationFrame(resolve));
+    const finite = (): Animation[] => document.getAnimations().filter((a) => a.playState === 'running' && Number.isFinite(Number(a.effect?.getComputedTiming().endTime)));
     await Promise.race([document.fonts.ready, new Promise((resolve) => setTimeout(resolve, limit))]);
     let changed = performance.now();
     const mark = (): void => { changed = performance.now(); };
@@ -380,8 +384,14 @@ async function settle(page: Page): Promise<void> {
       await frame();
       await frame();
       while (performance.now() < deadline) {
-        if (document.getAnimations().some((a) => a.playState === 'running' && Number.isFinite(Number(a.effect?.getComputedTiming().endTime)))) mark();
+        if (finite().length) mark();
         if (performance.now() - changed >= quiet) return;
+        await frame();
+      }
+      const late = finite();
+      if (late.length) {
+        for (const a of late) a.finish();
+        await frame();
         await frame();
       }
     } finally {
