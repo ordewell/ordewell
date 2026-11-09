@@ -239,7 +239,7 @@ const ROOT_OWNERS = [
   [/^\.gitattributes$/, () => ({ windows: allFull(WINDOWS_SUITES), checks: ['harness'] })],
 
   // bench/ (offline harnesses): each path owes what reads it.
-  [/^bench\/.*\.md$|^bench\/(live|scale)\/\.gitignore$/, owes()],
+  [/^bench\/.*\.md$|^bench\/(live|scale|planner-eval)\/\.gitignore$/, owes()],
   // The fake Claude Code: core's and cli's tests spawn it, as do the VS Code
   // integration test, the desktop e2e and tour, the container suites and the
   // pipeline and scale harnesses.
@@ -265,6 +265,8 @@ const ROOT_OWNERS = [
   // verdict.mjs judges the container suites' report; its test runs in bench.
   [/^bench\/containers\//, owes('engine', 'bench')],
   [/^bench\/lab\//, owes('bench')],
+  // Run by hand against real models; only its offline tests run, in bench.
+  [/^bench\/planner-eval\//, owes('bench')],
   // Its tests run in bench, and root lint reads its entry.ts.
   [/^bench\/scale\//, owes('bench', 'lint')],
 

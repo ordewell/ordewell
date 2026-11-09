@@ -1,0 +1,37 @@
+{
+  "id": "g4",
+  "title": "A failure to explain",
+  "kind": "failure to explain",
+  "goal": "A task row's findings badge names the mildest finding instead of the worst: a task whose handoff holds a major and an info finding shows 'info'. The core test 'labels a severity, and names the worst one a row can show' in packages/core/src/models/__tests__/Handoff.test.ts fails, and so does 'carries the summary, the whole finding count and the worst severity the digest keeps' in packages/core/src/taskRow/__tests__/taskRow.test.ts. Find the cause and fix it so that both tests pass without changing what they expect.",
+  "setup": {
+    "patches": [
+      {
+        "file": "packages/core/src/models/Handoff.ts",
+        "find": "if (worst === null || SEVERITY_RANK[severity] < SEVERITY_RANK[worst]) worst = severity;",
+        "replace": "if (worst === null || SEVERITY_RANK[severity] > SEVERITY_RANK[worst]) worst = severity;"
+      }
+    ],
+    "failingTest": {
+      "workspace": "packages/core",
+      "file": "src/models/__tests__/Handoff.test.ts",
+      "name": "labels a severity, and names the worst one a row can show"
+    }
+  },
+  "key": {
+    "taskCount": { "min": 2, "max": 5 },
+    "parallelAllowed": true,
+    "sharedDecisions": [],
+    "keepTogether": [],
+    "reproduceFirst": {
+      "reproduce": "(reproduc|repro\\b|run (the )?(failing )?tests?|failing test|vitest|Handoff\\.test)",
+      "fix": "(fix|correct|repair|restore)",
+      "plannerRanTest": "(vitest|npm (run )?test|Handoff\\.test|taskRow\\.test)"
+    },
+    "researchHypotheses": true,
+    "integrationRisks": [
+      "A fix guessed without reproducing, which may 'fix' the test instead of the code.",
+      "Hypotheses investigated inside the fix task, or by the planner reading the whole of core itself."
+    ],
+    "expectedStrategy": "Reproduce first (a script or read-only task running the failing test, or the planner running it itself), then one or more research tasks each testing a hypothesis, then the fix depending on them, verified by the same test."
+  }
+}
