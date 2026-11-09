@@ -32,6 +32,8 @@ import {
   appendUserAction,
   processLeaseHost,
   savedRunLooksLive,
+  planProgressCount,
+  type SessionRunActivity,
   deleteSession,
   reclaimContainers,
   changeContainers,
@@ -489,6 +491,30 @@ export class OrchestratorPool {
     return this.sessions.get(sessionId)?.currentPlanState ?? null;
   }
   getGoal(sessionId: string): string { return this.sessions.get(sessionId)?.currentGoal ?? ''; }
+  /**
+   * A session's run as the session list says it (`SessionRunActivity`): for
+   * one held here for this workspace, this daemon's own word, by the test and
+   * the count the open session's header uses, so its row reads the same open
+   * or not; for one another host holds, that host's lease's `runLive`, read
+   * without taking it and only while its holder lives (ADR-0049); otherwise
+   * nothing. An id held here for another workspace says nothing of this one's.
+   */
+  runActivity(sessionId: string, workspace: string): SessionRunActivity | undefined {
+    const session = this.heldHere(sessionId, workspace);
+    if (session) {
+      if (!session.isExecuting && !session.activity.advancesOnItsOwn) return undefined;
+      return { live: true, ...planProgressCount(session.runSnapshot().tasks) };
+    }
+    let held: ReturnType<LeaseHost['peek']>;
+    try {
+      held = (this.leaseHost ?? processLeaseHost()).peek(sessionId, workspace);
+    } catch {
+      // An unreadable lease is no word that a run is live, and must not cost the whole list.
+      return undefined;
+    }
+    // A holder that died with runners still going is no run: nothing drives it on.
+    return held && !held.orphanedRunners && held.holder.runLive === true ? { live: true } : undefined;
+  }
   /** Null for a session this process is not holding: there is no run to describe. */
   runSnapshot(sessionId: string): RunView | null { return this.sessions.get(sessionId)?.runSnapshot() ?? null; }
   /** The planner turn answering in a session this process holds, if one is. */

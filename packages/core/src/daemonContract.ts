@@ -402,7 +402,24 @@ export interface ChildTaskControlResponse {
   id?: string;
 }
 
-export type SessionListResponse = SessionMeta[];
+/**
+ * A session's run as the daemon finds it when it answers the list: at work
+ * now, which the saved `status` cannot say (it reads `approved` for as long
+ * as a run lasts). `done`/`total` count as `planProgressCount` does and come
+ * only from a session this daemon holds; another host's run (ADR-0049) is
+ * known only by its lease's `runLive`, so it carries no counts and may lag
+ * its settling by a heartbeat.
+ */
+export interface SessionRunActivity {
+  live: true;
+  done?: number;
+  total?: number;
+}
+
+/** A listed session: its saved record, and `run` while it is at work. No `run` means none, or a daemon that predates it. */
+export type SessionListEntry = SessionMeta & { run?: SessionRunActivity };
+
+export type SessionListResponse = SessionListEntry[];
 
 export interface SettingsResponse {
   orchestratorModel: string;
