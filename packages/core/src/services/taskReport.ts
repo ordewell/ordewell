@@ -1,6 +1,6 @@
 import type { ScriptResult } from '../models/Execution';
 import type { Task } from '../models/Task';
-import { handoffWakeLines, heldHandoff, heldWords, wordsFrom, type HandoffDigest, type HandoffTaskName } from '../models/Handoff';
+import { HANDOFF_PUSH_CHARS, handoffWakeLines, heldHandoff, heldWords, wordsFrom, type HandoffDigest, type HandoffTaskName } from '../models/Handoff';
 import { fitTail } from './TaskQuery';
 import { redactAgentText } from '../utils/redactSecrets';
 
@@ -57,8 +57,14 @@ export function researchReport(task: Reported & Pick<Task, 'outputSummary' | 'ha
       : `${task.verdict?.reported === 'blocked' ? 'It was blocked' : 'It failed'}${reasonLabel(task)}: ${heldReason(task, task.verdict?.reason ?? 'no reason was given')}`;
   if (task.handoff) return `${verdict}\n${handoffWakeText(task, task.handoff, taskName, whose)}`;
   const report = task.outputSummary?.report ?? task.outputSummary?.logTail ?? tail;
-  return `${verdict}\n${report ? `${wordsFrom('Report', whose)}\n${heldBlock(task, report)}` : 'It supplied no report.'}`;
+  if (!report) return `${verdict}\nIt supplied no report.`;
+  // Within a pushed handoff's ceiling, as a handoff would be: the report's whole length is the attempt's log's (ADR-0047).
+  const pushed = report.length > HANDOFF_PUSH_CHARS ? report.slice(0, HANDOFF_PUSH_CHARS).trimEnd() : report;
+  const rest = pushed === report ? '' : `\n${REPORT_REST}`;
+  return `${verdict}\n${wordsFrom('Report', whose)}\n${heldBlock(task, pushed)}${rest}`;
 }
+
+const REPORT_REST = "The rest of the report is in the attempt's log: read it with task_output.";
 
 /**
  * Whether a task's attempt is over in a way a report can tell: it passed, it

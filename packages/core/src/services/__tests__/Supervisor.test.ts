@@ -269,6 +269,46 @@ describe('Supervisor', () => {
       vi.useRealTimers();
     });
 
+    it('carries the run\'s end its task caused in its own turn, when that end is all the supervisor has to say', async () => {
+      vi.useFakeTimers();
+      const h = host({ level: 'act' });
+      const supervisor = new Supervisor(h, { debounceMs: 10 });
+
+      supervisor.observe({ kind: 'task_passed', taskId: 't2' });
+      supervisor.observe(report('user'));
+      supervisor.observe({ kind: 'run_finished', detail: '4 of 4 tasks completed' });
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(delivered(h)).toEqual([[[
+        'Run update:',
+        '- task #1 "Task t1", whose result you asked for, has ended. It passed.',
+        '  It printed nothing.',
+        '- the run finished: 4 of 4 tasks completed',
+        'Since the last update:',
+        '- task #2 "Task t2" passed',
+      ].join('\n'), 'user']]);
+      expect(supervisor.awaitsRunEnd).toBe(false);
+      expect(h.wakeUpEnded).toHaveBeenCalledTimes(1);
+      vi.useRealTimers();
+    });
+
+    it('leaves the run\'s end with the supervisor\'s other events, in their turn', async () => {
+      vi.useFakeTimers();
+      const h = host({ level: 'act' });
+      const supervisor = new Supervisor(h, { debounceMs: 10 });
+
+      supervisor.observe(report('user'));
+      supervisor.observe({ kind: 'task_failed', taskId: 't2', detail: 'broke' });
+      supervisor.observe({ kind: 'run_finished', detail: '1 of 2 tasks completed, 1 failed' });
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(delivered(h)).toEqual([
+        ['Run update:\n- task #2 "Task t2" failed: broke\n- the run finished: 1 of 2 tasks completed, 1 failed', undefined],
+        [expect.stringMatching(/^Run update:\n- task #1 "Task t1", whose result you asked for[^]*It printed nothing\.$/), 'user'],
+      ]);
+      vi.useRealTimers();
+    });
+
     it('outlives a new run the user starts, which drops the supervisor\'s own undelivered events', async () => {
       vi.useFakeTimers();
       const h = host({ level: 'watch' });

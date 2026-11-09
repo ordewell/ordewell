@@ -474,7 +474,7 @@ export class Supervisor {
         return;
       }
       // A report owed to the user's turn is not the supervisor waking itself, nor is an update that opens no turn.
-      const own = batch.attention.filter((e) => e.report?.authority !== 'user');
+      const { own } = turnsOf(batch);
       if (own.length > 0 && !this.idle(own) && !this.host.stoppedByUser(tasksOf(own))) this.countWakeUp();
       this.deliver(batch);
     }, Math.max(0, due - this.now()));
@@ -509,12 +509,12 @@ export class Supervisor {
   /**
    * A batch goes to the planner as the turns that act on it: the supervisor's
    * own, and one for the reports owed to tasks the user's turn started, which
-   * acts as that turn did (ADR-0037, R3) and so never shares a turn with the
-   * supervisor's events.
+   * acts as that turn did (ADR-0037, R3), as {@link turnsOf} splits them.
+   * Whichever turn carries the run's end releases the deferred handoff once it
+   * is over.
    */
   private deliver(batch: WakeBatch): void {
-    const theirs = batch.attention.filter((e) => e.report?.authority === 'user');
-    const own = batch.attention.filter((e) => e.report?.authority !== 'user');
+    const { own, theirs } = turnsOf(batch);
     const { describe, blockedBy } = this.host.digestReader();
     const digest = (part: WakeBatch) => wakeUpDigest(part, describe, blockedBy);
     // A failure is the wake-up turn's to handle, in {@link turn}; the batch stays pending meanwhile.
@@ -530,9 +530,28 @@ export class Supervisor {
       });
     }
     if (theirs.length > 0) {
-      void this.host.deliver(digest({ attention: theirs, sinceLast: own.length > 0 ? [] : batch.sinceLast }), 'user', undefined, tasksOf(theirs)).catch(() => {});
+      const runEnd = theirs.some((e) => e.kind === 'run_finished');
+      const sent = this.host.deliver(digest({ attention: theirs, sinceLast: own.length > 0 ? [] : batch.sinceLast }), 'user', undefined, tasksOf(theirs)).catch(() => {});
+      if (runEnd) void sent.then(() => {
+        this.runEndPending = false;
+        this.host.wakeUpEnded();
+      });
     }
   }
+}
+
+/**
+ * The turns a batch opens (ADR-0037 R3): the supervisor's own, and one for
+ * the reports owed to the user's turn, which never shares a turn with what the
+ * supervisor is woken to act on. The run's end alone is not that: it is what
+ * the last report's task caused, so it rides in the report's turn, in the
+ * order it came, rather than opening a second turn before it.
+ */
+function turnsOf(batch: WakeBatch): { own: RunEvent[]; theirs: RunEvent[] } {
+  const theirs = batch.attention.filter((e) => e.report?.authority === 'user');
+  const own = batch.attention.filter((e) => e.report?.authority !== 'user');
+  if (theirs.length === 0 || !own.every((e) => e.kind === 'run_finished')) return { own, theirs };
+  return { own: [], theirs: batch.attention };
 }
 
 /** The tasks these events are wholly about; undefined when any of them is about the run. */
