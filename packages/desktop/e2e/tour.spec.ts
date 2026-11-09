@@ -1228,6 +1228,8 @@ test('the visual tour', async () => {
   // Its upload-pack waits while the hold file exists, so the Fetch stays pending for every capture and ends on release.
   const gitSide = (): Locator => need(win).getByRole('navigation', { name: 'Git' });
   const gitView = (name: 'Branches' | 'History'): Locator => gitSide().getByRole('group', { name: 'Git sidebar view' }).getByRole('button', { name });
+  // The activity tab toggles: clicking it while git-graph left Git showing would close the sidebar.
+  const openGit = async (): Promise<void> => { if (!await gitSide().isVisible()) await need(views).getByRole('tab', { name: 'Git' }).click(); };
   const fetchButton = (): Locator => gitSide().getByRole('group', { name: /^Sync / }).getByRole('button', { name: 'Fetch', exact: true });
   const holdFetch = path.join(box.tmp, 'hold-fetch');
   holds.push(holdFetch);
@@ -1241,7 +1243,7 @@ test('the visual tour', async () => {
     git(box, 'push', '-q', 'origin', 'HEAD:refs/heads/main');
     git(box, 'config', 'remote.origin.uploadpack', uploadPack);
     for (const name of FOLDED) git(box, 'branch', name);
-    await need(views).getByRole('tab', { name: 'Git' }).click();
+    await openGit();
     await gitView('Branches').click();
     await gitSide().getByRole('button', { name: /^Refresh the branches/ }).click();
     const folder = gitSide().locator('.git-folder-main').filter({ hasText: /^feature/ });
@@ -1254,6 +1256,7 @@ test('the visual tour', async () => {
   });
 
   await state(win, 'git-history', 'Git History: the sidebar switched from Branches to the checkout\'s commits', async () => {
+    await openGit();
     await gitView('History').click();
     await expect(gitView('History')).toHaveAttribute('aria-pressed', 'true');
     await expect(gitView('Branches')).toHaveAttribute('aria-pressed', 'false');
@@ -1263,6 +1266,7 @@ test('the visual tour', async () => {
   });
 
   await state(win, 'git-fetch-busy', 'Git Fetch pending, back on Branches: its icon turning, Pull and Push held', async () => {
+    await openGit();
     await gitView('Branches').click();
     await expect(gitSide().getByRole('list', { name: 'feature', exact: true })).toBeVisible();
     fs.writeFileSync(holdFetch, '');
