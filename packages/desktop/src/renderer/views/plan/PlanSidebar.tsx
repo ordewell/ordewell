@@ -110,6 +110,7 @@ export function register(api: FrameApi): Unregister {
       id: 'sessions',
       title: 'Sessions',
       order: 10,
+      collapsible: true,
       actions: () => <IconButton icon={Plus} label="New session" onClick={() => host.newSession()} />,
       render: () => <Sessions host={host} />,
     }),
