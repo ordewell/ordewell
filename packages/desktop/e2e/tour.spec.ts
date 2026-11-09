@@ -862,6 +862,62 @@ async function sashProbe(page: Page): Promise<Record<string, unknown>> {
   return result;
 }
 
+/**
+ * Check k on labels whose answer is known, in this renderer with its fonts: a
+ * label a snapping scroller leaves cut at its edge, though the scroller can
+ * show it whole, passes; a label its own ellipsis cuts, with no tooltip, fails;
+ * and the scroller ends where it was, snapping as before. What it finds fails
+ * the tour under TOUR_STRICT.
+ */
+async function labelCheckControl(page: Page): Promise<Record<string, unknown>> {
+  await page.evaluate(() => {
+    // Three 250px snap columns in a 300px scroller: the second column's label starts at 250px, so 50px of it
+    // shows; showing it whole needs about 50px of scroll, nearer the first snap point (0) than the second (250).
+    const host = document.createElement('div');
+    host.dataset.tourControl = 'labels';
+    host.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483647;width:300px;height:40px;overflow:auto;scroll-snap-type:x mandatory;background:#fff;color:#000;font:13px sans-serif;white-space:nowrap';
+    const track = document.createElement('div');
+    track.style.cssText = 'display:flex;width:max-content';
+    const columns = [0, 1, 2].map(() => {
+      const column = document.createElement('div');
+      column.style.cssText = 'flex:none;width:250px;scroll-snap-align:start';
+      track.append(column);
+      return column;
+    });
+    const reachable = document.createElement('span');
+    reachable.dataset.control = 'reachable';
+    reachable.textContent = 'beyond the snap';
+    columns[1]!.append(reachable);
+    const cut = document.createElement('span');
+    cut.dataset.control = 'cut';
+    cut.style.cssText = 'display:block;width:40px;overflow:hidden;text-overflow:ellipsis';
+    cut.textContent = 'a label its own ellipsis cuts, with no tooltip';
+    columns[0]!.append(cut);
+    host.append(track);
+    document.body.append(host);
+  });
+  const host = page.locator('[data-tour-control="labels"]');
+  const judge = (control: string): Promise<string[]> => host.locator(`[data-control="${control}"]`).evaluateAll(labelChecks, { textMin: TEXT_MIN, shownMin: SHOWN_MIN });
+  const result: Record<string, unknown> = {};
+  const reachable = await judge('reachable');
+  const cut = await judge('cut');
+  const after = await host.evaluate((el) => ({ left: Math.round(el.scrollLeft), snap: getComputedStyle(el).scrollSnapType }));
+  // What the check works around, recorded: scrollIntoView under the snap, where it lands.
+  result.snappedScrollIntoView = await host.evaluate((el) => {
+    el.querySelector('[data-control="reachable"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    return Math.round(el.scrollLeft);
+  });
+  await host.evaluate((el) => el.remove());
+  Object.assign(result, { reachable, cut, after });
+  const wrong: string[] = [];
+  if (reachable.length > 0) wrong.push(`a label the scroller can show whole fails: ${reachable.join('; ')}`);
+  if (!cut.some((p) => p.includes('cut short with no tooltip'))) wrong.push(`a label cut with no tooltip passes: ${cut.join('; ') || 'no problem found'}`);
+  if (after.left !== 0 || !after.snap.includes('mandatory')) wrong.push(`the scroller was left at ${after.left}px, snapping ${after.snap}`);
+  fitFailures.push(...wrong.map((w) => `check k control: ${w}`));
+  result.wrong = wrong;
+  return result;
+}
+
 async function graphProbe(page: Page, graph: Locator): Promise<Record<string, unknown>> {
   await emulate(page, SIZES[0]);
   await settle(page);
@@ -1106,6 +1162,8 @@ test('the visual tour', async () => {
     const graph = await graphTab();
     await expect(graph.getByRole('button', { name: /^#1 Add a greeting module, running/ })).toBeVisible({ timeout: 60_000 });
     await pause(page, 600);
+    // The graph snaps to its stages, which is what check k has to see past to measure a card at a stage's edge.
+    probes.labelCheckControl = await labelCheckControl(page);
     probes.graphNavigation = await graphProbe(page, graph);
     // The probe scrolled the view: bring the first stage back, as a fresh open shows it.
     await graph.evaluate((el) => el.scrollTo({ left: 0, top: 0 }));
@@ -1334,12 +1392,18 @@ test('the visual tour', async () => {
 
   await state(win, 'git-commit', 'A commit picked in History: it opens in a preview tab, the sidebar still on the history', async () => {
     if (!await longRow().isVisible()) await browseLong();
-    const opened = await editorTabs().count();
+    const titles = (): Promise<string[]> => editorTabs().evaluateAll((tabs) => tabs.map((t) => t.getAttribute('title') ?? ''));
+    const before = await titles();
+    // A group holds one preview at most: an earlier one (a file opened from the explorer, say) gives its place to the commit.
+    const previews = before.filter((t) => / \(preview: /.test(t) && !t.startsWith(`Commit ${longSha} `));
+    const kept = before.filter((t) => !/ \(preview: /.test(t));
     await longRow().click();
     const tab = editorTabs().filter({ hasText: `Commit ${longSha}` });
     await expect(tab).toHaveAttribute('aria-selected', 'true');
     await expect(tab).toHaveAttribute('title', /\(preview: /);
-    await expect(editorTabs()).toHaveCount(opened + 1);
+    await expect(editorTabs()).toHaveCount(kept.length + 1);
+    await expect.poll(titles).toEqual(expect.arrayContaining(kept));
+    for (const replaced of previews) await expect.poll(titles).not.toContain(replaced);
     const detail = need(editor).getByRole('complementary', { name: 'Commit' });
     await expect(detail.getByRole('heading', { name: LONG_SUBJECT })).toBeVisible({ timeout: 30_000 });
     await expect(detail.getByRole('button', { name: [...LONG_DIR, LONG_FILE].join('/') })).toBeVisible();

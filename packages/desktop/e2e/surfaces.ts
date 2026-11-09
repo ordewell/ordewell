@@ -161,7 +161,8 @@ export const SHOWN_MIN = 64;
  * an ellipsis, a clamp or a clipping ancestor must carry a tooltip; and each
  * text must read at `textMin`:1 on what is painted under it. It repeats
  * liftChecks' colour arithmetic, since a function sent to the page takes
- * nothing from this module. A label scrolled away is scrolled to and back.
+ * nothing from this module. A label scrolled away is scrolled to and back,
+ * with any scroll snapping held off meanwhile.
  */
 export function labelChecks(labels: Element[], input: { textMin: number; shownMin: number }): string[] {
   type Rgba = [number, number, number, number];
@@ -212,9 +213,19 @@ export function labelChecks(labels: Element[], input: { textMin: number; shownMi
     return { width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
   };
   const scrolled: [Element, number, number][] = [];
+  // A mandatory snap pulls scrollIntoView back to the nearest snap point, which can leave
+  // the label still cut at the scroller's edge (the plan graph snaps to stage starts).
+  // Snapping is suspended while the labels are brought to view, so each is measured as
+  // presented in full; what clips it itself, or an ancestor that cannot scroll, still counts.
+  const snaps = new Map<HTMLElement, string>();
   for (const label of labels) {
-    for (let at = label.parentElement; at; at = at.parentElement) if (at.scrollHeight > at.clientHeight || at.scrollWidth > at.clientWidth) scrolled.push([at, at.scrollTop, at.scrollLeft]);
+    for (let at = label.parentElement; at; at = at.parentElement) {
+      if (at.scrollHeight <= at.clientHeight && at.scrollWidth <= at.clientWidth) continue;
+      scrolled.push([at, at.scrollTop, at.scrollLeft]);
+      if (at instanceof HTMLElement && !snaps.has(at) && getComputedStyle(at).scrollSnapType !== 'none') snaps.set(at, at.style.scrollSnapType);
+    }
   }
+  for (const el of snaps.keys()) el.style.scrollSnapType = 'none';
 
   const problems: string[] = [];
   for (const label of labels) {
@@ -263,5 +274,7 @@ export function labelChecks(labels: Element[], input: { textMin: number; shownMi
     if (visible < Math.min(natural, input.shownMin) - 1) problems.push(`"${name}" shows ${Math.round(visible)}px of its ${Math.round(natural)}px of text`);
   }
   for (const [el, top, left] of scrolled.reverse()) { el.scrollTop = top; el.scrollLeft = left; }
+  // Back on the position it was snapped to, the scroller snaps again as it did.
+  for (const [el, inline] of snaps) el.style.scrollSnapType = inline;
   return problems;
 }
