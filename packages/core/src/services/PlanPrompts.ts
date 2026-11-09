@@ -324,7 +324,7 @@ const EXECUTION_TOOLS_SECTION = [
  * workspace, two tasks on one file really do overwrite each other.
  */
 const ISOLATED_PARALLELISM_RULE =
-  '- Each change task runs in its own git worktree, and its work is merged in afterwards, so tasks that edit the same files can still run in parallel. Never add a dependency just because two tasks touch the same file — keep dependencies for genuine logical ordering.';
+  '- Each change task runs in its own git worktree and is merged afterwards. Never add a dependency just because two tasks touch the same file.';
 
 /** A task's copy of the workspace sits elsewhere, so an absolute path the planner researched points past it. */
 const ISOLATED_PATHS_RULE =
@@ -361,17 +361,20 @@ function opsTaskSection(conversation: boolean): string[] {
 
 /**
  * When slices run in parallel, for the conversation and the one-shot planner
- * alike: by default, so nobody has to ask for it, and split only along
- * decisions nobody else relies on, since a slice built on a guess at another's
- * interface is redone when the guess is wrong.
+ * alike: split only along decisions nobody else relies on, since a slice built
+ * on a guess at another's interface is redone when the guess is wrong. A
+ * breaking change split from its consumers or its migration leaves each part
+ * broken until the others land, however disjoint their files. That parallel is
+ * the default is the conversation's DEFAULTS and {@link ONE_SHOT_PARALLEL_DEFAULT}.
  */
 export const PARALLELISM_RULE: readonly string[] = [
-  '- Make slices parallel by default, without waiting to be asked: tasks with no dependency between them run at once.',
-  '- Slices are parallel when none decides something another relies on (an interface, a schema, a name, a behaviour): make that shared decision a leading task the others depend on.',
+  '- Slices are parallel when none decides something another relies on (an interface, a schema, a name, a behaviour): make that shared decision a leading task the others depend on. A breaking change to a name, schema or interface travels with its consumers and its migration, in one task or an expand-contract chain: disjoint files do not make them parallel.',
   '- Each brief states its boundary: what is out of scope, and which tasks running in parallel own the neighbouring files or areas, named by what they own. A decision several tasks share (an interface, a name, a limit such as a size ceiling a test pins) is named in each brief that touches it, with the task that owns it.',
-  '- Keep one chain of reasoning in one task: split, each part guesses at the others.',
-  '- Keep each slice independently demoable, and a small job one task: atomising it only adds handoffs.',
+  '- Keep one chain of reasoning, or a small job, in one task: split, each part guesses at the others, and atomising only adds handoffs.',
 ];
+
+/** The one-shot planner has no DEFAULTS block to say this. */
+const ONE_SHOT_PARALLEL_DEFAULT = '- Make slices parallel by default, without waiting to be asked: tasks with no dependency between them run at once.';
 
 /** Even under worktree isolation, tasks appending to one shared file still race each other's merges. */
 const SHARED_APPEND_FILE_RULE =
@@ -591,7 +594,7 @@ function strategySection(execution: boolean): string[] {
       ? '- A small effect you can state as exact commands: one script task. In the user\'s turn, run it with run_script; when it belongs to a larger plan, make it a script task in that plan. An effect that needs judgment is an ops task.'
       : '- A small effect you can state as exact commands: one script task, in a plan of its own. An effect that needs judgment is an ops task.',
     '- A build with known steps: a plan of vertical slices, under BUILD PLANS below. Its tests, type checks and self-review belong inside its implementation tasks.',
-    '- A failure to explain: reproduce it first, investigate competing hypotheses in parallel, then fix. A failing test or a command that fails is the reproduction, and what the fix is checked against. When one sealed command settles a hypothesis, test it yourself this turn. Give each other hypothesis a research task of its own that reports the evidence for and against it (WHO EXPLORES). Plan the fix once the reports name the cause. A simple fix reproduces and validates its regression within its own task.',
+    '- A failure to explain: reproduce it first, investigate competing hypotheses in parallel, then fix. A failing test or a command that fails is the reproduction, and what the fix is checked against. When one sealed command settles a hypothesis, test it yourself this turn. Give each other hypothesis a research task of its own that reports the evidence for and against it (WHO EXPLORES). Plan the fix once the reports name the cause. A simple fix reproduces and validates its regression within its own task. If you could not run the failing test yourself, the fix task runs it first and records the failure before changing code.',
     '- A goal the user states as done only when something passes ("until the tests pass", "review and fix until there are no confirmed issues"): a loop, under LOOPS below. It sits at the end of a build or a fix.',
     '- An open problem with no known path: a search (WHO EXPLORES). Plan only the first round of exploration, as research tasks that each report on one question. Their reports wake you: read them, then extend the plan with the next round, or with the build they point to.',
     'A goal can hold more than one kind: answer what your research answers, then plan the rest.',
@@ -825,6 +828,7 @@ function corePlannerPrompt(isolatedExecution: IsolatedExecution, tools = false):
   '- "sliceType" is required on every task, and "autonomy" on every "ai" task, at every depth — a "subtasks" entry is a full task object with all the same required fields, not a bare label.',
   '',
   'DEPENDENCY & PARALLELISM RULES:',
+  ONE_SHOT_PARALLEL_DEFAULT,
   ...PARALLELISM_RULE,
   '- Only add dependencies when the second slice truly depends on artifacts (files, APIs) that the first slice creates.',
   SHARED_APPEND_FILE_RULE,

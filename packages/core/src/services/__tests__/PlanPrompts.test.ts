@@ -465,6 +465,7 @@ describe('who explores: three tiers, search (ADR-0037 R5)', () => {
 
 describe('the coordinator role and its defaults (#5)', () => {
   const words = (p: string) => p.split(/\s+/).filter(Boolean).length;
+  const section = (p: string, header: string) => p.slice(p.indexOf(`\n${header}\n`) + 1, p.indexOf('\n\n', p.indexOf(`\n${header}\n`) + 1));
   const backends = [
     { harness: false, runner: undefined },
     { harness: true, runner: 'claude-code' },
@@ -505,6 +506,27 @@ describe('the coordinator role and its defaults (#5)', () => {
     const p = buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness, runner });
     expect(p).toMatch(/Each brief states its boundary: what is out of scope, and which tasks running in parallel own the neighbouring files or areas, named by what they own\./);
     expect(p).toMatch(/A decision several tasks share \(an interface, a name, a limit such as a size ceiling a test pins\) is named in each brief that touches it, with the task that owns it\./);
+  });
+
+  // The bench's G2 planners split a rename from its consumers and its migration because their files were disjoint.
+  it.each(backends)('keeps a breaking change with its consumers and its migration (harness: $harness, $runner)', ({ harness, runner }) => {
+    const p = buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness, runner });
+    expect(section(p, 'DEPENDENCY & PARALLELISM:')).toMatch(/A breaking change to a name, schema or interface travels with its consumers and its migration, in one task or an expand-contract chain: disjoint files do not make them parallel\./);
+    expect(p).toContain('EXPAND-CONTRACT —');
+  });
+
+  it('tells the one-shot planner, which has no DEFAULTS, both that slices are parallel by default and that a breaking change is not', () => {
+    for (const p of [oneShot(false), oneShot(LONE_REPO)]) {
+      expect(p).toContain('- Make slices parallel by default, without waiting to be asked: tasks with no dependency between them run at once.');
+      expect(p).toMatch(/A breaking change to a name, schema or interface travels with its consumers and its migration/);
+    }
+    expect(conversation(false)).not.toContain('Make slices parallel by default');
+  });
+
+  // The bench's G4 planners could not run the failing test in their sandbox, then planned a fix with no reproduction.
+  it.each(backends)('has the fix task reproduce a failure the planner could not run (harness: $harness, $runner)', ({ harness, runner }) => {
+    const p = buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness, runner });
+    expect(section(p, 'STRATEGY:')).toMatch(/- A failure to explain:.* If you could not run the failing test yourself, the fix task runs it first and records the failure before changing code\./);
   });
 
   // Every line of the system prompt is paid for on each turn; the rewrite had to fit in what was there.
