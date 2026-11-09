@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ExecutionCommandName } from '../../models/Execution';
 import { FakeWorktreeIsolation, fakeConfig } from '../../testing';
 import { ExecutionCommands, type ExecutionHost } from '../ExecutionCommands';
+import { SURFACE_CONTROLS } from '../surfaceControls';
 import { COMMAND_GRANTS, FLOOR_GRANTS, GRANTS, type Grant, type Mandate, type NodeAuthority } from '../Mandate';
 import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import { makeSession, taskOf } from './sessionTestKit';
@@ -34,7 +35,7 @@ const child = (grants: readonly Grant[], over: Partial<Mandate> = {}, depth = 1)
 
 const SUBPLANNER = { kind: 'subplanner', depth: 1 } as const;
 
-const seamAt = (node: NodeAuthority) => new ExecutionCommands({ host: { autonomous: () => true, autorun: () => true } as unknown as ExecutionHost, consent: { request: vi.fn() }, authority: node });
+const seamAt = (node: NodeAuthority) => new ExecutionCommands({ host: { autonomous: () => true, autorun: () => true, userControls: () => SURFACE_CONTROLS.tui, mergesByThemselves: () => false } as unknown as ExecutionHost, consent: { request: vi.fn() }, authority: node });
 
 describe('a subplanner at the seam (ADR-0056 M6)', () => {
   const COMMANDS = Object.keys(COMMAND_GRANTS) as ExecutionCommandName[];
@@ -71,7 +72,7 @@ describe('a subplanner at the seam (ADR-0056 M6)', () => {
   it('refuses the user\'s own controls as to any model, whatever it holds', () => {
     expect(seamAt(child([...GRANTS])).consent(SUBPLANNER, 'mark_complete')).toEqual({
       kind: 'refuse',
-      reason: 'Mark complete is the user\'s alone: it lands the work as if someone had checked it, and only they vouch for work. If you think it is done, tell them why; they can mark it complete.',
+      reason: 'Marking a task complete is the user\'s alone: it lands the work as if someone had checked it, and only they vouch for work. If you think it is done, tell them why; they can mark it complete (/complete <id>).',
     });
   });
 

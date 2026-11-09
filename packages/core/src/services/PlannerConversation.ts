@@ -314,6 +314,8 @@ export interface PlannerConversationHost {
   catalog(): TaskQueryCatalog;
   /** Whether autorun is on now (ADR-0030); the planner is told in the turn after it changes. */
   autorun(): boolean;
+  /** The SURFACE AND SETTINGS block as it stands now (ADR-0030); none for a planner with no user, which is told no controls. */
+  surfaceFacts?(): string | null;
   /** The enabled runners and allowlist as of now; the planner is told in the turn after either changes. */
   assignmentScope(): AssignmentScope;
   tasks(): readonly Task[];
@@ -613,6 +615,7 @@ export class PlannerConversation {
       tasks: () => host.tasks(),
       plannerTools: () => host.aiService().plannerToolsAttached?.() ?? false,
       compactions: () => host.aiService().compactions?.() ?? 0,
+      surfaceFacts: () => host.surfaceFacts?.() ?? null,
     });
     this.blocks = new PromptBlocks({
       catalog: () => this.catalogBlock(),
@@ -1141,12 +1144,14 @@ export class PlannerConversation {
       this.holdWrites(userTurn, this.userEntries(goal, now), [this.userPrompt(goal.text, now)]);
       this.briefing.opened(opening.autorun ?? false);
       this.blocks.restart();
+      // What no prompt states, the surface and settings among it, rides the first message: told once the turn lands.
+      userTurn.briefing = this.briefing.brief();
       const turn = await this.host.aiService().startConversation({
         ...opening,
         // The system prompt's goal is the text as typed; skill bodies ride the
         // first message alone, so the planner holds each one once.
         goal: goal.text,
-        initialMessage: plannerInput([plannerMessage(goal.text, goal.skills)]),
+        initialMessage: plannerInput([...userTurn.briefing.blocks, plannerMessage(goal.text, goal.skills)]),
         onProgress: userTurn.stream.sink(),
         signal: userTurn.signal,
         compaction: this.compaction,

@@ -213,9 +213,10 @@ describe('skill invocation in a session', () => {
     })]);
     const request = ai.startConversation.mock.calls[0][0] as ConversationRequest;
     expect(request.goal).toBe('/grilling design the cache');
-    expect(request.initialMessage).toBe(plannerMessage('/grilling design the cache', [
+    // The turn may open with the briefing's standing facts (ADR-0030); the goal and its skills close it.
+    expect(request.initialMessage?.endsWith(plannerMessage('/grilling design the cache', [
       { invokedBy: 'user', name: 'grilling', source: 'global', path: '/skills/grilling/SKILL.md', content: '# Grilling\n\nBody.' },
-    ]));
+    ]))).toBe(true);
   });
 
   it('titles the saved session with the verbatim goal', async () => {

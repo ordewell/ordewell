@@ -34,6 +34,8 @@ export function bundledDaemonEntry(): string {
  *
  * No `--watch-parent`: a utility process ends with the app that forked it,
  * and that flag would have a lease refusal name this app as a TUI (ADR-0049).
+ * `--desktop-app` marks its lease instead, so its planner is told the desktop
+ * app's controls (ADR-0030).
  */
 export function forkBundledDaemon(port: number): OwnedProcess {
   const entry = bundledDaemonEntry();
@@ -41,7 +43,7 @@ export function forkBundledDaemon(port: number): OwnedProcess {
   const pidFile = daemonPidFilePath(port);
   mkdirSync(dirname(pidFile), { recursive: true });
 
-  const child = utilityProcess.fork(entry, ['--port', String(port), '--pid-file', pidFile], {
+  const child = utilityProcess.fork(entry, ['--port', String(port), '--pid-file', pidFile, '--desktop-app'], {
     serviceName: 'Ordewell daemon',
     stdio: 'pipe',
     // main has already widened PATH with the login shell's (index.ts): a GUI

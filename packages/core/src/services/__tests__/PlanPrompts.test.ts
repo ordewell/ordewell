@@ -994,6 +994,16 @@ describe('delegation in the planner prompt (ADR-0055 D4, D21)', () => {
     expect(naming).toEqual([]);
   });
 
+  it('points the root planner at the SURFACE AND SETTINGS block for the user\'s controls, and names no button (ADR-0030)', () => {
+    const text = prompt({});
+    expect(text).toMatch(/name it by the control SURFACE AND SETTINGS lists for it/);
+    expect(text).not.toMatch(/press Merge all|checkpoint card|which button to press/);
+  });
+
+  it('points a subplanner at no SURFACE AND SETTINGS block, which it is never sent', () => {
+    expect(prompt({ subplanner: brief })).not.toContain('SURFACE AND SETTINGS');
+  });
+
   it('tells a subplanner how it ends, what it may not change, and that nobody answers it', () => {
     const text = prompt({ subplanner: brief });
     expect(text.startsWith('You are a subplanner')).toBe(true);

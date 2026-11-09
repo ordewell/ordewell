@@ -442,7 +442,10 @@ nothing is held between the call and the plan.
 **Planner briefing** (`PlannerBriefing`) — what the planner is told once per
 change rather than in every turn: that autorun was switched (ADR-0030), that
 the user changed the runners or allowlist it may assign, the run updates no
-turn has carried yet (ADR-0029), and a **Level brief**. The next turn carries
+turn has carried yet (ADR-0029), a **Level brief**, and the **SURFACE AND
+SETTINGS** block: the user's surface, automatic merging, autorun, the supervisor
+level, the Parallel limit and the **Surface controls**, sent on the first turn
+of each live context and again when one of them changes (ADR-0030). The next turn carries
 it, whoever opens it, and it counts as told only when that turn lands an answer
 the planner gave: one that fails, is stopped, hits the usage limit or is
 abandoned may not have read it, so the turn after says it again. An opening —
@@ -3851,6 +3854,19 @@ argument prints the options the picker would have shown. There is deliberately n
 `/plan` slash command: typing the goal *is* how planning starts there, and an
 alias for it only shadowed `/planner` on tab-completion. `ordewell plan --goal`
 remains, because it is the only non-interactive way in.
+
+**Surface controls** (`SURFACE_CONTROLS`, `services/surfaceControls.ts`;
+ADR-0030) — how each surface takes each action only the user takes (merge,
+answer a checkpoint, approve or run the plan, skip, force start, mark, revert,
+interrupt, the queued-message controls, cancel a resume, approve the review,
+compact): one row each for the TUI, VS Code, the desktop app and an unknown
+surface, which names every surface's. The TUI's are slash commands and keys
+(`/merge`). The surface is read from the live **Session lease**'s host
+(`surfaceOf`). The planner hears its row in the **SURFACE AND SETTINGS** block of
+its **Planner briefing**, and a refusal that tells it what the user does names
+the action and that row's control.
+*Avoid:* "buttons" for the actions — the TUI has none; name the action, and the
+control only as the surface's row words it.
 
 **Catalog** (`catalog.ts`) — the one owner of the `/api/models` body's shape, for
 every client of it. `normalizeCatalog` is what tags each model with the runners

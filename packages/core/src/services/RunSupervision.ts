@@ -52,7 +52,7 @@ export interface RunSupervisionHost extends Pick<SupervisorHost, 'deliver' | 'pu
   checkpointQuestion(taskId: string): string | undefined;
   /**
    * Where the work the run landed stands: merged into the user's branch with
-   * the run cleared up, waiting for Merge all, or null: the run did not
+   * the run cleared up, waiting to be merged, or null: the run did not
    * isolate, or landed nothing.
    */
   landedWork(): 'merged' | 'pending' | null;
@@ -126,6 +126,18 @@ export class RunSupervision {
   /** The level the supervisor acts at now: the run's, lowered during it perhaps, and Off once it failed. */
   get level(): SupervisorLevel {
     return this.supervisor.level;
+  }
+
+  /**
+   * The merging and level that hold now: the run's while one is under way,
+   * which the user's changes reach at once, and otherwise the user's, which
+   * the next run copies (ADR-0030).
+   */
+  standing(): { running: boolean; mergeAtGatesAutomatically: boolean; level: SupervisorLevel } {
+    const run = this.running ? this.settings() : undefined;
+    if (run) return { running: true, mergeAtGatesAutomatically: run.mergeAtGatesAutomatically, level: this.level };
+    const user = this.host.userSettings();
+    return { running: false, mergeAtGatesAutomatically: user.mergeAtGatesAutomatically, level: user.supervisorLevel };
   }
 
   /**
@@ -296,7 +308,7 @@ export class RunSupervision {
     const { total, completed, failed, blocked, skipped } = executionSummary(flattenTasks([...this.host.tasks()]));
     const landed = this.host.landedWork();
     const merge = landed === 'merged' ? `; everything it landed is merged into ${this.host.mergeTarget?.() ?? 'the user\'s branch'}, so there is nothing to merge`
-      : landed === 'pending' ? '; its landed work waits for Merge all' : '';
+      : landed === 'pending' ? '; its landed work is not merged yet' : '';
     this.supervisor.observe({ kind: 'run_finished', detail: `${completed} of ${total} tasks completed${failed > 0 ? `, ${failed} failed` : ''}${blocked > 0 ? `, ${blocked} blocked` : ''}${skipped > 0 ? `, ${skipped} skipped` : ''}${merge}` });
     if (!this.supervisor.awaitsRunEnd) this.handOver();
   }

@@ -288,12 +288,15 @@ wake-up turn at Act the supervisor approves it, so the task goes on, or rejects
 it with a reason, which the runner is told and acts on; a rejection without a
 reason is refused, since the runner would be left with nothing to act on. A
 planner turn in the user's own turn is refused: the user is in the conversation
-and answers from the task's checkpoint card, and the refusal tells the planner
-to tell them what the runner asks and what it would answer. The supervisor
+and answers it themselves, by their surface's control for it
+([ADR-0030](0030-global-run-settings.md), "What the planner is told"), and the
+refusal names that control and tells the planner to tell them what the runner
+asks and what it would answer. The supervisor
 below Act and autorun are refused the same way. A checkpoint is not answered
 with `message_task`: that is refused too, and each refusal is worded for who
-asked — the checkpoint tool to the supervisor at Act, the card to a planner
-turn, Approve or Reject to the user. **A checkpoint that asks for the user's
+asked — the checkpoint tool to the supervisor at Act, the user's own answer
+and their surface's control for it to a planner turn, Approve or Reject to the
+user. **A checkpoint that asks for the user's
 judgement on an irreversible or outward effect — a deletion, a push, a payment,
 a message to someone — is escalated to the user, not approved.** The supervisor
 leaves it waiting and tells the user what it asks and why it did not answer.
@@ -312,8 +315,10 @@ supervisor's judgement on the rest.
   Act, may start anything, on a first plan as on an approved one, which makes the
   plan approved.
   `merge_all`, `skip_task` and `answer_checkpoint` are refused: the user is in
-  the conversation, and presses Merge all, skips the task or answers its
-  checkpoint from the card themselves. A skip decides that
+  the conversation, and merges, skips the task or answers its checkpoint
+  themselves, and the refusal names their surface's control for it. With
+  automatic merging on, a refused `merge_all` says the merge happens by itself
+  rather than asking the user for one. A skip decides that
   work will not be waited for, which only the user, or a supervisor they let
   act, decides. A `run_script` call asks the user on the approval card, shown
   the script as written, unless the effect allowlist covers it, or autorun in
@@ -379,13 +384,14 @@ slash commands and the CLI's `--yes` follow the same asking, and a call with no
 terminal to ask on is a no.
 
 **The user's own controls are commands at the same seam.** Besides the tools
-above, which the user's buttons reach as the user, the seam has a command for
-each control only the user presses: `force_start`, `mark_complete`,
+above, which the user's own controls reach as the user, the seam has a command
+for each action only the user takes: `force_start`, `mark_complete`,
 `mark_not_done`, `interrupt_task`, a force send (`message_task` with `force`),
 `force_send_queued`, `remove_queued`, `cancel_resume` and `approve_review`.
 Resume now is `retry_task` from `session` on a paused task. A planner turn,
 the supervisor or autorun asking for one is refused: the user is in the
-conversation and presses it. The checkpoint answer, `answer_checkpoint`, is
+conversation and does it themselves, and the refusal names the action and their
+surface's control for it. The checkpoint answer, `answer_checkpoint`, is
 the user's control too, and the one the supervisor at Act may also press (above). The supervisor never Mark completes,
 at any level. The user's `answer_approval` may allow, allow for the task, or
 deny with a note; everyone else's still only denies or escalates. Each command
@@ -746,3 +752,4 @@ until #30 exists.
 - 2026-10-31 — the user's Stop stands the supervisor down until they start work again, at every level and through a reload, and what was held waits on the plan; their stop of one task holds back only what is about it, and a loop guard refuses the supervisor's start of it. Seen in review: a held failure opened a turn on a stopped run, which at Act could start it again.
 - 2026-11-01 — landed work whose check has not passed holds the supervisor's `merge_all` and the automatic merges (ADR-0055 D9); a child's questions go to its parent, and what lowers a root ends a child (ADR-0056 M8).
 - 2026-11-01 — a Stop reaches a subtree, tombstone first, and a child's claim reads its ancestors' ([ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D16).
+- 2026-11-09 — a refusal of the user's own action names the action and the user's surface's control for it rather than a card or button, and a refused `merge_all` with automatic merging on says the merge happens by itself ([ADR-0030](0030-global-run-settings.md)).
