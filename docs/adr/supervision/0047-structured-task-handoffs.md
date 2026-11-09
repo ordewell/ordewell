@@ -49,7 +49,7 @@ handoff:
 - **`summary`** (required, at most 1,500 characters): written for the next
   agent, not as a log. With a `commit`, it no longer repeats what changed and
   why: it holds the exact specifics the next agent needs (paths, symbols,
-  decisions) beside the artifacts, what is left and what to watch, and may be
+  decisions, interfaces, assumptions) beside the artifacts, what is left or open, and may be
   empty when there is nothing to add. Without one it says what changed too.
 - **`commit`** (`{subject, body?}`): the commit message, written for a human
   reviewer: what changed and why. The subject is one line of 1 to 100
@@ -305,3 +305,4 @@ merges findings; and any new setting.
 - 2026-10-31 — a `task` reference is pinned to its attempt, and renders as `#12@2/F3` ([ADR-0057](0057-information-moves-by-reference.md) R1).
 - 2026-11-01 — the tool is `read`, `read_task` an alias at the call; a runner's stated failure reason says whose words it is; a handoff across levels is ADR-0057's ([ADR-0057](0057-information-moves-by-reference.md) R2, R3, R11).
 - 2026-11-01 — a board's sharing is ADR-0057's, as a handoff across levels is.
+- 2026-11-09 — the contract asks a summary for decisions, interfaces, assumptions and what is open, and tells a runner to keep its own context lean.
