@@ -75,6 +75,20 @@ may ask questions; one generic nudge answers, so the report shows the planner's
 own choice rather than a scripted one. `--real --goal "..." --replies "a::b"`
 still runs a single goal the old way.
 
+## Planner eval (`bench/planner-eval/`)
+
+A planning-only A/B of the planner prompt on real models, driven through the
+real `ordewell` terminal UI. Each run goes as far as `submit_plan` and stops
+there; it never approves or runs a plan. Three variants are compared: the
+baseline build with two nudges in the goal, the candidate build without them,
+and the candidate with the read meter on. Each submitted plan is measured,
+checked against the goal's answer key and reviewed by a citation-checked
+rubric. The report gives a verdict per backend for each comparison.
+`node bench/planner-eval/run.mjs --mock` is the offline dry run against
+`bench/live/mock-provider.mjs`; `--smoke` and `--full` run the real models.
+See [its README](planner-eval/README.md) for prerequisites, every flag and
+what each metric means.
+
 ## Execution pipeline harness (`bench/pipeline/`)
 
 - `fake-claude/` — a deterministic stand-in for the `claude` CLI: no LLM, no

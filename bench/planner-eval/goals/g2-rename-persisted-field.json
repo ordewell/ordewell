@@ -1,0 +1,24 @@
+{
+  "id": "g2",
+  "title": "Coupled rename of a persisted field, with migration",
+  "kind": "coupled rename across core, the MCP schema and saved sessions",
+  "goal": "Rename the task field `userStoriesCovered` to `coveredStories` everywhere it appears. That includes the Task model and its copies in packages/core (Task.ts, PlannedTask.ts, TaskQuery.ts, TaskOps.ts, TaskExecution.ts, SessionMessage.ts, runView.ts), the planner prompts (PlanPrompts.ts), the planner's MCP tool schema (`planTask` in packages/core/src/services/mcp/tools.ts, which submit_plan uses), and every reader in packages/cli, packages/vscode and packages/ui. Sessions saved before the rename persist the old name in .ordewell/sessions/*.json and must load with their values under the new name: add the migration where every plan-shape migration lives (`migrateLoadedPlan` in packages/core/src/models/Task.ts) and a test in packages/core/src/models/__tests__/migrateLoadedPlan.test.ts. When this is done no code reads or writes `userStoriesCovered` except that migration, and the MCP schema accepts only the new name. The build, typecheck and tests of every package must pass.",
+  "key": {
+    "taskCount": { "min": 1, "max": 3 },
+    "parallelAllowed": false,
+    "sharedDecisions": [],
+    "keepTogether": [
+      {
+        "id": "rename",
+        "description": "The rename, the MCP schema change and the migration: one task, or an expand-contract chain (add the new name and migration, move readers, drop the old name) where each step depends on the one before. Never parallel slices by package.",
+        "match": "(userStoriesCovered|coveredStories|rename|migrat|schema)"
+      }
+    ],
+    "integrationRisks": [
+      "Parallel per-package slices: each leaves the build broken until all land, and two of them edit the shared core types.",
+      "The MCP schema renamed in one task while the prompts or the model still use the old name in another.",
+      "The migration forgotten, so old sessions silently lose their stories."
+    ],
+    "expectedStrategy": "One task that renames end to end with the migration and its test; or a serial expand-contract chain. No parallel slices."
+  }
+}
