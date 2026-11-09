@@ -6,6 +6,8 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { taskRowView } from '@ordewell/core/plan-utils';
 import type { Task } from '@ordewell/core';
 import { RUNNER_NAMES, RunnerBadge, runnerName } from '../runners';
+import { RefreshCw } from 'lucide-react';
+import { Button } from '../Button';
 import { Tabs } from '../Tabs';
 import TaskSummary from '../../chat/components/TaskSummary';
 
@@ -103,5 +105,30 @@ describe('the task summary', () => {
     render(<TaskSummary task={task} row={{ ...row, chatAvailable: true }} onOpenChat={onOpenChat} />);
     fireEvent.click(screen.getByRole('button', { name: 'Open chat' }));
     expect(onOpenChat).toHaveBeenCalledOnce();
+  });
+});
+
+describe('a busy button', () => {
+  it('turns its icon, says it is busy and refuses a press, with the turning stopped under reduced motion', () => {
+    const press = vi.fn();
+    render(<Button icon={RefreshCw} busy onClick={press}>Fetch</Button>);
+    const button = screen.getByRole('button', { name: 'Fetch' });
+    expect(button).toHaveAttribute('aria-busy', 'true');
+    expect(button).toBeDisabled();
+    expect(button.querySelector('svg')).toHaveClass('ow-spin');
+    fireEvent.click(button);
+    expect(press).not.toHaveBeenCalled();
+
+    const rules = readFileSync(resolve(__dirname, '../../design.css'), 'utf8');
+    // The guard is the media block that holds the rule, not any later one.
+    expect(rules).toMatch(/prefers-reduced-motion: reduce\) \{[^@]*?\.ow-spin \{ animation: none; \}/);
+  });
+
+  it('is an ordinary button, with no busy mark or turning icon, when nothing is pending', () => {
+    render(<Button icon={RefreshCw}>Fetch</Button>);
+    const button = screen.getByRole('button', { name: 'Fetch' });
+    expect(button).not.toHaveAttribute('aria-busy');
+    expect(button).toBeEnabled();
+    expect(button.querySelector('svg')).not.toHaveClass('ow-spin');
   });
 });

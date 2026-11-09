@@ -20,6 +20,9 @@ export interface RunInfo {
   tasks: ScopeTask[];
 }
 
+/** The remote-moving actions of a repository: one at a time, whoever started it. */
+export type SyncKind = 'fetch' | 'pull' | 'push';
+
 export interface GitState {
   repos: RepoState[];
   /** The repository `branches` was read for. */
@@ -31,6 +34,8 @@ export interface GitState {
   runs: Readonly<Record<string, RunInfo>>;
   /** Counts each read, so a view that drew from an earlier one knows to read again. */
   round: number;
+  /** The fetch, pull or push running on each repository now, from any surface that started it. */
+  syncing: Readonly<Record<string, SyncKind>>;
 }
 
 export function ownersOf(branches: Branches | undefined): Owner[] {
@@ -45,7 +50,7 @@ export function ownersOf(branches: Branches | undefined): Owner[] {
 }
 
 export class GitStore {
-  private state: GitState = { repos: [], repo: undefined, branches: undefined, error: undefined, loading: false, runs: {}, round: 0 };
+  private state: GitState = { repos: [], repo: undefined, branches: undefined, error: undefined, loading: false, runs: {}, round: 0, syncing: {} };
   private readonly listeners = new Set<() => void>();
   private reads = 0;
   private goals: Map<string, string> | undefined;
@@ -62,6 +67,25 @@ export class GitStore {
   private set(patch: Partial<GitState>): void {
     this.state = { ...this.state, ...patch };
     for (const listener of this.listeners) listener();
+  }
+
+  /**
+   * Runs `work` as the one fetch, pull or push on `repo`, and says so to every
+   * button that shows it. The palette and both sidebars start through here, so a
+   * second start while one runs is refused (`false`) rather than queued behind
+   * git, and the mark is lifted however `work` ends.
+   */
+  async sync(repo: string, kind: SyncKind, work: () => Promise<void>): Promise<boolean> {
+    if (this.state.syncing[repo]) return false;
+    this.set({ syncing: { ...this.state.syncing, [repo]: kind } });
+    try {
+      await work();
+    } finally {
+      const rest = { ...this.state.syncing };
+      delete rest[repo];
+      this.set({ syncing: rest });
+    }
+    return true;
   }
 
   /**
@@ -134,4 +158,10 @@ export function useGit(api: FrameApi): { git: GitStore; state: GitState; repo: s
 export function runName(runs: Readonly<Record<string, RunInfo>>, owner: { sessionId: string; runId: string }): string {
   const goal = runs[owner.sessionId]?.goal;
   return goal ? `run ${owner.runId} of “${goal}”` : `run ${owner.runId}`;
+}
+
+/** The sync action running on `repo` now, for the buttons that offer one. */
+export function useSyncing(api: FrameApi, repo: string): SyncKind | undefined {
+  const git = gitStoreFor(api);
+  return useSyncExternalStore(git.subscribe, () => git.getSnapshot().syncing[repo]);
 }

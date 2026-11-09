@@ -225,6 +225,85 @@ describe('the confirms', () => {
     expect(daemon.calls('git.push')[0]![1]).toMatchObject({ confirm: { remote: 'origin', branch: 'main' } });
   });
 
+  describe('a fetch in flight', () => {
+    // The confirm dialog has a "Pull from origin" button of its own: scope to the sync bar.
+    const syncButton = (name: RegExp) => within(screen.getByRole('group', { name: /^Sync/ })).getByRole('button', { name });
+    const fetchButton = () => syncButton(/^Fetch/);
+    const pullButton = () => syncButton(/^Pull/);
+    const deferred = () => {
+      let settle!: (result: ReturnType<typeof ok>) => void;
+      const promise = new Promise<ReturnType<typeof ok>>((resolve) => { settle = resolve; });
+      return { promise, settle };
+    };
+
+    it('turns only the Fetch icon, says it is busy, and holds the other sync buttons', async () => {
+      const pending = deferred();
+      await mount({ 'git.fetch': pending.promise });
+      expect(fetchButton()).not.toHaveAttribute('aria-busy');
+      fireEvent.click(fetchButton());
+      await waitFor(() => expect(fetchButton()).toHaveAttribute('aria-busy', 'true'));
+      expect(fetchButton().querySelector('svg')).toHaveClass('ow-spin');
+      expect(fetchButton()).toBeDisabled();
+      for (const name of [/^Pull/, /^Push/]) {
+        expect(syncButton(name)).toBeDisabled();
+        expect(syncButton(name)).not.toHaveAttribute('aria-busy');
+        expect(syncButton(name).querySelector('svg')).not.toHaveClass('ow-spin');
+      }
+      await act(async () => { pending.settle(ok({ repo: REPO_STATE })); });
+      await waitFor(() => expect(fetchButton()).not.toHaveAttribute('aria-busy'));
+      expect(fetchButton().querySelector('svg')).not.toHaveClass('ow-spin');
+      expect(fetchButton()).toBeEnabled();
+      expect(pullButton()).toBeEnabled();
+    });
+
+    it('is restored when git refuses, with the refusal still in the banner', async () => {
+      const pending = deferred();
+      await mount({ 'git.fetch': pending.promise });
+      fireEvent.click(fetchButton());
+      await waitFor(() => expect(fetchButton()).toHaveAttribute('aria-busy', 'true'));
+      await act(async () => { pending.settle({ ok: false, status: 500, error: 'Could not resolve host.', data: { code: 'git_failed' } }); });
+      await waitFor(() => expect(fetchButton()).not.toHaveAttribute('aria-busy'));
+      expect(fetchButton()).toBeEnabled();
+      expect(screen.getByText('Could not resolve host.')).toBeInTheDocument();
+    });
+
+    it('shows a palette fetch on the sidebar button, and a second one sends nothing', async () => {
+      const pending = deferred();
+      const daemon = await mount({ 'git.fetch': pending.promise });
+      act(() => store.api.runCommand('git.fetch'));
+      await waitFor(() => expect(fetchButton()).toHaveAttribute('aria-busy', 'true'));
+      expect(fetchButton()).toBeDisabled();
+      act(() => store.api.runCommand('git.fetch'));
+      expect(daemon.calls('git.fetch')).toHaveLength(1);
+      await act(async () => { pending.settle(ok({ repo: REPO_STATE })); });
+      await waitFor(() => expect(fetchButton()).not.toHaveAttribute('aria-busy'));
+    });
+
+    it('does not spin while a pull waits to be confirmed, and restores the buttons on Cancel', async () => {
+      const daemon = await mount();
+      fireEvent.click(pullButton());
+      await dialog();
+      expect(pullButton()).not.toHaveAttribute('aria-busy');
+      expect(pullButton().querySelector('svg')).not.toHaveClass('ow-spin');
+      answer('Cancel');
+      await waitFor(() => expect(pullButton()).toBeEnabled());
+      expect(daemon.calls('git.pull')).toEqual([]);
+    });
+
+    it('turns the Pull icon only once the confirmed pull is sent', async () => {
+      const pending = deferred();
+      await mount({ 'git.pull': pending.promise });
+      fireEvent.click(pullButton());
+      await dialog();
+      answer('Pull from origin');
+      await waitFor(() => expect(pullButton()).toHaveAttribute('aria-busy', 'true'));
+      expect(pullButton().querySelector('svg')).toHaveClass('ow-spin');
+      expect(fetchButton().querySelector('svg')).not.toHaveClass('ow-spin');
+      await act(async () => { pending.settle(ok({ repo: REPO_STATE })); });
+      await waitFor(() => expect(pullButton()).not.toHaveAttribute('aria-busy'));
+    });
+  });
+
   it('confirms a stash pop and a drop by the stash’s name', async () => {
     const daemon = await mount();
     fireEvent.click(screen.getByRole('button', { name: 'Pop stash@{0}' }));

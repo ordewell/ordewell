@@ -203,6 +203,7 @@ function Sidebar({ api }: { api: FrameApi }): JSX.Element {
             <SyncBar
               label={name}
               state={syncStateOf(ctx)}
+              running={state.syncing[repo]}
               actions={{ fetch: () => fetchRepo(ctx), pull: () => pullBranch(ctx), push: () => pushBranch(ctx) }}
             />
           </div>
@@ -263,9 +264,10 @@ export function register(api: FrameApi): Unregister {
     const { branches, repo } = store.getSnapshot();
     return branches && repo !== undefined ? { api, repo, branches } : undefined;
   };
+  const syncing = (): boolean => { const { repo, syncing: running } = store.getSnapshot(); return repo !== undefined && running[repo] !== undefined; };
   return all(
     api.registerSidebar({ activity: 'git', id: 'branches', title: 'Branches', render: () => <Sidebar api={api} /> }),
-    api.registerCommand({ id: 'git.fetch', title: 'Git: Fetch', enabled: () => !api.readOnly && context() !== undefined, run: () => { const ctx = context(); if (ctx) void fetchRepo(ctx); } }),
+    api.registerCommand({ id: 'git.fetch', title: 'Git: Fetch', enabled: () => !api.readOnly && context() !== undefined && !syncing(), run: () => { const ctx = context(); if (ctx) void fetchRepo(ctx); } }),
     api.registerCommand({ id: 'git.refresh', title: 'Git: Refresh branches', enabled: () => !api.readOnly, run: () => { const { repo } = store.getSnapshot(); if (repo !== undefined) void store.refresh(repo); } }),
     api.registerCommand({ id: 'git.showGraph', title: 'Git: Show commit graph', enabled: () => store.getSnapshot().repo !== undefined, run: () => { const { repo } = store.getSnapshot(); if (repo !== undefined) showGraph(api, repo, undefined, false); } }),
   );
