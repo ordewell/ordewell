@@ -3860,40 +3860,13 @@ body.vscode-high-contrast-light .task-card.expanded {
   border-color: var(--accent);
 }
 
+/* The picked model reads in the text colour: a hue per model family would read as a status (green, red, amber). */
 .model-picker-label {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-/* Named families */
-.model-picker-label.model-sonnet { color: var(--accent); }
-.model-picker-label.model-opus { color: var(--purple); }
-.model-picker-label.model-haiku { color: var(--orange); }
-.model-picker-label.model-fable { color: var(--accent); }
-.model-picker-label.model-deepseek { color: var(--cyan); }
-.model-picker-label.model-kimi { color: var(--green); }
-.model-picker-label.model-gpt { color: #10a37f; }
-.model-picker-label.model-gemini { color: #4285f4; }
-.model-picker-label.model-qwen { color: #ff9500; }
-.model-picker-label.model-glm { color: #af52de; }
-.model-picker-label.model-minimax { color: #ff3b30; }
-.model-picker-label.model-mimo { color: #5ac8fa; }
-/* Hash palette */
-.model-picker-label.model-hash-0 { color: var(--accent); }
-.model-picker-label.model-hash-1 { color: var(--purple); }
-.model-picker-label.model-hash-2 { color: var(--cyan); }
-.model-picker-label.model-hash-3 { color: var(--green); }
-.model-picker-label.model-hash-4 { color: var(--orange); }
-.model-picker-label.model-hash-5 { color: #10a37f; }
-.model-picker-label.model-hash-6 { color: #af52de; }
-.model-picker-label.model-hash-7 { color: #ff3b30; }
-/* Legacy */
-.model-picker-label.sonnet { color: var(--accent); }
-.model-picker-label.opus { color: var(--purple); }
-.model-picker-label.deepseek { color: var(--cyan); }
-.model-picker-label.kimi { color: var(--green); }
 
 .model-picker-arrow {
   font-size: 8px;
