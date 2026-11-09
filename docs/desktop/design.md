@@ -1062,7 +1062,9 @@ The History view, in the same sidebar:
     through the history leaves one tab behind; a double click keeps it. The
     last commit opened is marked (`aria-current`) and is kept per repository.
     ↑ and ↓ step between rows, Home and End go to the first and the last.
-  - *Load more* reads the next 50 commits.
+  - *Load more* reads the next 50 commits. It waits while the history is
+    read again, and after that read failed, since the page it would ask for
+    follows rows about to be replaced.
   - *Refresh* (⟳) reads the branches again, and the history with them.
 
   Switching away from, or deleting, a locked branch is refused with the run
@@ -1070,8 +1072,8 @@ The History view, in the same sidebar:
   to or deleted here.
 - **Loading.**
   - *History* is read only once it is first shown, 50 commits at a time. It
-    is read again only when a branch tip moves (a fetch, a switch, a commit)
-    or on Refresh. A read again keeps the rows on screen and as many commits
+    is read again only when a branch tip moves (a fetch, a switch, a commit),
+    or a detached checkout's head does, or on Refresh. A read again keeps the rows on screen and as many commits
     as were shown, up to the daemon's ceiling of 500, so the person's place
     stands. Each repository keeps its own history and its own pick, and an
     answer for a read that a later one overtook, or for a repository no longer
@@ -1406,8 +1408,9 @@ A VS Code holder
       the holder in the tooltip.
 
     The open session has the selected row's accent bar.
-  - *A session not open here* reads its run from the session list's `run`
-    entry, not its saved status: *Running n/m* while its run is live in this
+  - *A session not open here,* or open read-only (its holder's run sends this
+    window nothing), reads its run from the session list's `run` entry, not
+    its saved status: *Running n/m* while its run is live in this
     daemon, and *Running* without counts while another host holds it, which
     can trail that host by a heartbeat. The list is read again every 5 s while such a row is
     live and every 15 s otherwise, never while the window is hidden or the

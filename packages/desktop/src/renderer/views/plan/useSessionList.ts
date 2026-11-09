@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { DaemonCallResult } from '../../../shared/bridge';
 import { parseSessions, type SessionRow } from '../../sessions';
 
-/** How soon the list is read again while a session not open here has a run live: its row should settle soon after the run does. */
+/** How soon the list is read again while a row it speaks for has a run live: its row should settle soon after the run does. */
 export const LIVE_LIST_MS = 5_000;
 /** How soon otherwise: a run another window or host starts in a session not open here sends this one no frame to say so. */
 export const IDLE_LIST_MS = 15_000;
@@ -20,15 +20,16 @@ function withoutRun(row: SessionRow): SessionRow {
 
 /**
  * The workspace's sessions, as GET /api/sessions lists them, kept fresh for
- * the rows whose session is not open here. The daemon has no workspace-wide
- * event, and a socket per row would be a socket per session, so this is one
+ * every row but `ownId`'s, the session whose run this window hears over its
+ * own socket (undefined when the open one is read-only). The daemon has no
+ * workspace-wide event, and a socket per row would be a socket per session, so this is one
  * timer and one read at a time per list: sooner while another row is live, and
  * none while the window is hidden or the daemon away. `changed` is the open
  * session's own news (a new id, a goal, a plan status) and reads again at once.
  */
-export function useSessionList(workspace: string, connected: boolean, openId: string | undefined, changed: string): SessionList {
+export function useSessionList(workspace: string, connected: boolean, ownId: string | undefined, changed: string): SessionList {
   const [listed, setListed] = useState<{ workspace: string; sessions: SessionList }>();
-  const openRef = useRef(openId);
+  const ownRef = useRef(ownId);
   const readRef = useRef<() => void>();
 
   useEffect(() => {
@@ -53,7 +54,7 @@ export function useSessionList(workspace: string, connected: boolean, openId: st
         // A read that failed keeps the rows it had, which are still saved as they say, but no run it can no longer vouch for.
         return { workspace, sessions: prev.sessions.map(withoutRun) };
       });
-      otherLive = Array.isArray(answer) && answer.some((s) => s.run && s.id !== openRef.current);
+      otherLive = Array.isArray(answer) && answer.some((s) => s.run && s.id !== ownRef.current);
       if (again) { again = false; read(); } else schedule();
     };
     function read(): void {
@@ -80,11 +81,11 @@ export function useSessionList(workspace: string, connected: boolean, openId: st
 
   const seen = useRef(changed);
   useEffect(() => {
-    openRef.current = openId;
+    ownRef.current = ownId;
     if (seen.current === changed) return;
     seen.current = changed;
     readRef.current?.();
-  }, [openId, changed]);
+  }, [ownId, changed]);
 
   return listed?.workspace === workspace ? listed.sessions : undefined;
 }

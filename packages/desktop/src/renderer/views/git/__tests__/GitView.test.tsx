@@ -201,6 +201,8 @@ describe('the Branches and History views', () => {
     fireEvent.click(views().getByRole('button', { name: 'History' }));
     const row = await screen.findByRole('button', { name: 'Commit aaaaaaa: Merge: Wire SSO' });
     expect(row.querySelector('svg.git-lanes circle')).not.toBeNull();
+    // The row names the short sha; its tooltip has the full one, to read or compare (design W11).
+    expect(row).toHaveAttribute('title', expect.stringContaining(`${sha('a')} · Ada`));
     expect(within(row).getByText('main')).toHaveAttribute('title', expect.stringMatching(/^main: /));
     expect(within(row).queryByText('HEAD')).not.toBeInTheDocument();
 
@@ -321,6 +323,28 @@ describe('the Branches and History views', () => {
     expect(daemon.calls('git.log')).toHaveLength(1);
   });
 
+  it('reads a detached checkout’s history again only when its head or a branch moved', async () => {
+    const detached = { ...BRANCHES, current: null, detached: true, local: BRANCHES.local.map((b) => ({ ...b, current: false })) };
+    let head = sha('a');
+    const daemon = await mount({
+      'git.repos': () => ok({ repos: [{ ...REPO_STATE, branch: null, detached: true, head }] }),
+      'git.fetch': () => ok({ repo: { ...REPO_STATE, branch: null, detached: true, head } }),
+    }, detached, 'Switch to main');
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    await screen.findByRole('button', { name: /Commit aaaaaaa/ });
+    const fetch = (): void => { fireEvent.click(within(screen.getByRole('group', { name: /^Sync/ })).getByRole('button', { name: /^Fetch/ })); };
+    let before = daemon.calls('git.branches').length;
+    fetch();
+    await waitFor(() => expect(daemon.calls('git.branches').length).toBeGreaterThan(before));
+    expect(daemon.calls('git.log')).toHaveLength(1);
+
+    head = sha('9');
+    before = daemon.calls('git.branches').length;
+    fetch();
+    await waitFor(() => expect(daemon.calls('git.log')).toHaveLength(2));
+    expect(daemon.calls('git.branches').length).toBeGreaterThan(before);
+  });
+
   it('reads a tag that moved no branch in on an explicit Refresh, keeping the rows on screen meanwhile', async () => {
     const later = deferred();
     let reads = 0;
@@ -335,6 +359,36 @@ describe('the Branches and History views', () => {
     expect(screen.getByRole('button', { name: 'Commit aaaaaaa: Merge: Wire SSO' })).toBeInTheDocument();
     await act(async () => { later.settle(ok({ repo: '.', ref: 'HEAD', commits: [{ ...LOG[0]!, refs: [...LOG[0]!.refs, 'v2.0'] }, LOG[1]!], cursor: null })); });
     expect(within(screen.getByRole('button', { name: 'Commit aaaaaaa: Merge: Wire SSO' })).getByText('v2.0')).toBeInTheDocument();
+  });
+
+  it('holds Load more while the history is read again, and while that read failed, so a click is never lost', async () => {
+    const later = deferred();
+    let reads = 0;
+    const daemon = await mount({
+      'git.log': (params) => {
+        if (params?.cursor) return ok({ repo: '.', ref: 'HEAD', commits: [commit('f', [], 'Add the login button')], cursor: null });
+        reads += 1;
+        if (reads === 2) return later.promise;
+        if (reads === 3) return { ok: false as const, status: 500, error: 'fatal: bad object', data: { code: 'git_failed' } };
+        return ok({ repo: '.', ref: 'HEAD', commits: [commit('a', ['f'], 'Merge: Wire SSO', ['HEAD', 'main'])], cursor: sha('f') });
+      },
+    });
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    expect(await screen.findByRole('button', { name: 'Load more' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh the branches and history' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Load more' })).toBeDisabled());
+    await act(async () => { later.settle(ok({ repo: '.', ref: 'HEAD', commits: [commit('a', ['f'], 'Merge: Wire SSO', ['HEAD', 'main'])], cursor: sha('f') })); });
+    expect(screen.getByRole('button', { name: 'Load more' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh the branches and history' }));
+    expect(await screen.findByText('fatal: bad object')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Load more' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Load more' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    expect(await screen.findByRole('button', { name: /Commit fffffff/ })).toBeInTheDocument();
+    expect(daemon.calls('git.log').filter(([params]) => params?.cursor)).toHaveLength(1);
   });
 
   it('keeps each repository’s history and pick its own, and drops a late answer for the one no longer shown', async () => {
