@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ArrowDownToLine, ArrowUpFromLine, RefreshCw } from 'lucide-react';
 import { Button } from '@ordewell/ui/design';
+import type { SyncKind } from './gitStore';
 import '../sidebarKit.css';
 
 /*
@@ -44,13 +45,20 @@ export function pushBlocked(state: SyncState): string | undefined {
   return undefined;
 }
 
-export function SyncBar({ state, actions, label }: { state: SyncState; actions: SyncActions; label: string }): JSX.Element {
-  // One action at a time: a second press while git is working would queue behind it and confuse which one answered.
-  const [busy, setBusy] = useState<'fetch' | 'pull' | 'push'>();
-  const run = (which: 'fetch' | 'pull' | 'push'): void => {
-    setBusy(which);
-    void actions[which]().finally(() => setBusy(undefined));
+/**
+ * `running` is the action git is doing now, whoever started it (the palette's
+ * Fetch included); it turns that button's icon. A press also holds all three
+ * from the click until its action ends, since Pull and Push ask first and
+ * nothing is running while the question is open.
+ */
+export function SyncBar({ state, actions, label, running }: { state: SyncState; actions: SyncActions; label: string; running?: SyncKind }): JSX.Element {
+  const [pressed, setPressed] = useState(false);
+  const run = (which: SyncKind): void => {
+    setPressed(true);
+    // Every refusal is worded in a banner where the action ran; what is left to catch here only has to release the buttons.
+    actions[which]().catch(() => undefined).finally(() => setPressed(false));
   };
+  const busy = pressed || running !== undefined;
   const reading = state.hasRemote === undefined;
   const pull = pullBlocked(state);
   const push = pushBlocked(state);
@@ -65,9 +73,9 @@ export function SyncBar({ state, actions, label }: { state: SyncState; actions: 
         </div>
       )}
       <div className="sync-actions">
-        <Button size="sm" icon={RefreshCw} disabled={busy !== undefined || reading || fetchBlocked !== undefined} title={fetchBlocked ?? 'Fetch from the remote'} onClick={() => run('fetch')}>Fetch</Button>
-        <Button size="sm" icon={ArrowDownToLine} disabled={busy !== undefined || reading || pull !== undefined} title={pull ?? 'Pull'} onClick={() => run('pull')}>Pull</Button>
-        <Button size="sm" icon={ArrowUpFromLine} disabled={busy !== undefined || reading || push !== undefined} title={push ?? 'Push'} onClick={() => run('push')}>Push</Button>
+        <Button size="sm" icon={RefreshCw} busy={running === 'fetch'} disabled={busy || reading || fetchBlocked !== undefined} title={fetchBlocked ?? 'Fetch from the remote'} onClick={() => run('fetch')}>Fetch</Button>
+        <Button size="sm" icon={ArrowDownToLine} busy={running === 'pull'} disabled={busy || reading || pull !== undefined} title={pull ?? 'Pull'} onClick={() => run('pull')}>Pull</Button>
+        <Button size="sm" icon={ArrowUpFromLine} busy={running === 'push'} disabled={busy || reading || push !== undefined} title={push ?? 'Push'} onClick={() => run('push')}>Push</Button>
       </div>
       {why.length > 0 && <p className="sync-why">{why.join(' ')}</p>}
     </div>

@@ -38,6 +38,50 @@ export function trackMark(branch: Pick<BranchInfo, 'ahead' | 'behind' | 'upstrea
   return [branch.ahead > 0 ? `↑${branch.ahead}` : '', branch.behind > 0 ? `↓${branch.behind}` : ''].filter(Boolean).join(' ');
 }
 
+export type BranchNode =
+  | { kind: 'folder'; key: string; /** The prefix it stands for, without a trailing slash. */ path: string; label: string; count: number; /** It holds the branch HEAD is on. */ current: boolean; children: BranchNode[] }
+  | { kind: 'leaf'; key: string; label: string; branch: BranchInfo };
+
+/**
+ * Slash-delimited branch names as folders, the way the sidebar groups them.
+ * A chain of folders that each hold only one folder folds into one row, so
+ * `ordewell/r7/…` costs a row and not two. A branch named like a folder
+ * (`feature` beside `feature/login`) stays its own row: keys tell the two
+ * apart, and every action takes the branch's full name, never the label.
+ */
+export function branchTree(branches: readonly BranchInfo[]): BranchNode[] {
+  interface Dir { folders: Map<string, Dir>; leaves: BranchInfo[] }
+  const root: Dir = { folders: new Map(), leaves: [] };
+  for (const branch of branches) {
+    const segments = branch.name.split('/');
+    let dir = root;
+    for (const segment of segments.slice(0, -1)) {
+      let next = dir.folders.get(segment);
+      if (!next) dir.folders.set(segment, (next = { folders: new Map(), leaves: [] }));
+      dir = next;
+    }
+    dir.leaves.push(branch);
+  }
+  const nodes = (dir: Dir, prefix: string): BranchNode[] => [
+    ...[...dir.folders].map(([segment, sub]): BranchNode => {
+      let label = segment;
+      let inner = sub;
+      while (inner.leaves.length === 0 && inner.folders.size === 1) {
+        const [[next, deeper]] = [...inner.folders];
+        label = `${label}/${next}`;
+        inner = deeper;
+      }
+      const path = prefix + label;
+      const children = nodes(inner, `${path}/`);
+      const count = children.reduce((n, c) => n + (c.kind === 'folder' ? c.count : 1), 0);
+      const current = children.some((c) => (c.kind === 'folder' ? c.current : c.branch.current));
+      return { kind: 'folder', key: `folder:${path}`, path, label, count, current, children };
+    }),
+    ...dir.leaves.map((branch): BranchNode => ({ kind: 'leaf', key: `branch:${branch.name}`, label: branch.name.slice(prefix.length), branch })),
+  ];
+  return nodes(root, '');
+}
+
 export type RefKind = 'head' | 'branch' | 'remote' | 'tag' | 'ordewell';
 
 export interface RefChip {
@@ -138,6 +182,16 @@ export function commitsTabId(repo: string, ref?: string): string {
 export function parseCommitsTabId(id: string): { repo: string; ref?: string } {
   const at = id.indexOf(SEP);
   return at < 0 ? { repo: id } : { repo: id.slice(0, at), ref: id.slice(at + SEP.length) };
+}
+
+/** One commit's message and files, full width. */
+export function commitTabId(repo: string, sha: string): string {
+  return [repo, sha].join(SEP);
+}
+
+export function parseCommitTabId(id: string): { repo: string; sha: string } {
+  const at = id.lastIndexOf(SEP);
+  return { repo: id.slice(0, at), sha: id.slice(at + SEP.length) };
 }
 
 export function commitDiffTabId(repo: string, sha: string, path: string): string {

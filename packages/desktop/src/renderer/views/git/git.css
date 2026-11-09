@@ -66,6 +66,8 @@
 .git-detail-body { margin: 0; padding: var(--ow-space-1) var(--ow-space-3); white-space: pre-wrap; overflow-wrap: anywhere; font: var(--ow-type-body); }
 .git-detail-landed { display: flex; align-items: center; gap: var(--ow-space-1); padding: 0 var(--ow-space-3); color: var(--ow-fg-secondary); font: var(--ow-type-small); min-width: 0; }
 .git-detail-landed .git-owner { flex: 1; max-width: none; justify-content: flex-start; }
+/* Opened from the sidebar's history, a commit takes the whole tab: no graph beside it to border. */
+.git-detail.git-detail-tab { flex: 1; width: auto; height: 100%; border-left: 0; padding-block: var(--ow-space-2); }
 .git-file { gap: var(--ow-space-2); }
 .git-file-counts { flex: none; display: inline-flex; gap: var(--ow-space-1); font: var(--ow-type-code-small); font-variant-numeric: tabular-nums; color: var(--ow-fg-secondary); }
 .git-file-added { color: var(--ow-status-passed); }
@@ -97,3 +99,32 @@
 .git-lanes path { fill: none; stroke-width: 2; }
 .git-lanes circle { stroke-width: 2; }
 .git-lanes .git-merge { fill: var(--ow-bg); }
+
+/* The sidebar's two views. One narrow switch, as the plan graph's density is: the pressed half is the view shown. */
+.git-mode { display: flex; margin: 0 var(--ow-space-3); border: 1px solid var(--ow-border-widget); border-radius: var(--ow-radius-sm); overflow: hidden; }
+.git-mode button { flex: 1 1 0; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: var(--ow-space-1); min-height: var(--ow-hit); padding: 0 var(--ow-space-2); border: 0; background: transparent; color: var(--ow-fg-secondary); font: var(--ow-type-small); white-space: nowrap; cursor: pointer; }
+.git-mode button + button { border-inline-start: 1px solid var(--ow-border-widget); }
+.git-mode button[aria-pressed='true'] { background: var(--ow-bg-selected); color: var(--ow-fg); }
+.git-mode button:hover { background: var(--ow-bg-hover); }
+.git-mode button:focus-visible { outline: var(--ow-focus-width) solid var(--ow-focus-ring); outline-offset: calc(var(--ow-focus-offset) * -1); }
+.git-mode .ow-icon { flex: none; }
+
+/* A folder's rows step in by its depth; the chevron sits where a branch's icon does, so names line up. */
+.git-list .srow { padding-inline-start: calc(var(--ow-space-3) + var(--git-depth, 0) * var(--ow-space-4)); }
+.git-folder { display: block; }
+.git-folder-main .srow-label { color: var(--ow-fg-secondary); }
+
+/*
+ * The sidebar's history: a row is 28px, the lanes' own row, so a lane runs on
+ * unbroken; lanes past a third of the sidebar are cut off, never the subject.
+ */
+.git-history { display: flex; flex-direction: column; min-width: 0; }
+.git-history-state { display: flex; flex-direction: column; align-items: flex-start; gap: var(--ow-space-2); padding: 0 var(--ow-space-3) var(--ow-space-2); }
+.git-hlist { margin: 0; padding: 0; list-style: none; }
+.git-hrow { display: flex; align-items: center; gap: var(--ow-space-1); width: 100%; height: 28px; padding: 0 var(--ow-space-2) 0 var(--ow-space-2); border: 0; background: transparent; color: var(--ow-fg); font: var(--ow-type-body); text-align: left; cursor: pointer; }
+.git-hrow:hover { background: var(--ow-bg-hover); }
+.git-hrow:focus-visible { outline: 1px solid var(--ow-focus-ring); outline-offset: -1px; }
+.git-hrow[aria-current='true'] { background: var(--ow-bg-selected); }
+.git-hrow .git-lanes { max-width: 33%; }
+.git-hrow-subject { flex: 1 1 auto; min-width: 3em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-hrow-refs { display: inline-flex; gap: var(--ow-space-half); flex: 0 1 auto; min-width: 0; max-width: 45%; overflow: hidden; }

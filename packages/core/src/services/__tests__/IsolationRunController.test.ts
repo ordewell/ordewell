@@ -202,6 +202,21 @@ describe('IsolationRunController', () => {
       expect(isolation.taskIdsFor('prepare')).toEqual([]);
     });
 
+    it('says a task diff is unattributable only in a run decided shared, and not yet recorded in an isolated one', async () => {
+      const shared = new FakeWorktreeIsolation();
+      shared.availability = { active: false, reason: 'disabled' };
+      const sharedRuns = setup(shared).runs;
+      expect(await sharedRuns.taskDiff('t1', {})).toMatchObject({ available: false, cause: 'no-run' });
+      await sharedRuns.decide(async () => undefined);
+      expect(await sharedRuns.taskDiff('t1', {})).toMatchObject({ available: false, cause: 'not-attributable', reason: expect.stringContaining('shares the checkout') });
+
+      const { runs } = setup();
+      await runs.decide(async () => undefined);
+      const before = await runs.taskDiff('t1', {});
+      expect(before).toMatchObject({ available: false, cause: 'no-record' });
+      expect(before.available === false && before.reason).not.toMatch(/shar/i);
+    });
+
     it('reopens the kept worktree for a conflict repair', async () => {
       const { runs, isolation } = setup();
       await runs.decide(async () => undefined);

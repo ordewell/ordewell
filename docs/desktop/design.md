@@ -137,7 +137,8 @@ left, where VS Code users look for it.
     commit graph tabs belong to the workspace and stay put.
   - Each tab shows its icon in its area hue. The active tab has a 2 px marker
     along its top edge in the same hue: teal for the planner, task and plan
-    graph tabs, indigo for files, mint for diffs, orchid for the commit graph.
+    graph tabs, indigo for files, mint for diffs, slate for the commit graph
+    and commit tabs.
   - A single centre tab is never wider than its content needs. The Details
     view sits in a column at most 800 px wide, centred, with 24 px of padding
     on each side. A chat, once it has a message, uses its tab's full width.
@@ -902,8 +903,19 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
     Monaco's diff editor.
   - *The header* names the repository, the task, and the base the diff is
     compared with.
+  - *The Changes sidebar in a run scope* lists the run's tasks under a
+    collapsible *Review* heading, each task a card of its changed files, then
+    *Whole run vs base*, the conflicts, the merge gates and Merge all. Review
+    folds the task list alone: the whole run, the waits and Merge all are never
+    folded away. Folded under a filter, Review says to open it to see the
+    tasks that match, and a folded task card shows how many of its files match
+    (`2/7`, read as "2 of 7 files match").
 - **Actions.**
   - Side by side or inline. Next and previous change.
+  - A task card turns over by a click anywhere on its head, title and chevron
+    alike, or by Enter or Space. Revert… and Show in plan stay buttons of their
+    own and never turn it. Review's fold is the window's; each task card's and
+    Whole run's are kept per session. Every one outlives an activity switch.
   - A line comment, sent to the task as a `message_task` quoting the file and
     the line. A running task gets it now, a finished one on its next attempt,
     as ADR-0023 says.
@@ -912,9 +924,20 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
   - Revert a task from its diff (with `revert-preview`).
 - **Loading.** The file list first, then the selected patch.
 - **Empty.** "No changes in this task." A research or read-only task lands
-  nothing (ADR-0046).
+  nothing (ADR-0046). The daemon names why a task has no diff
+  (`cause` on the task-diff answer), and the view reads that with the live
+  task, since the saved run it answers from trails the live one:
+  - *Quiet,* in `--ow-fg-secondary`: "No changes yet." for a task that has not
+    started, or whose worktree record has not reached the saved run. A running
+    task's quiet answer is read again a few times, backing off from 1 s to
+    16 s, once the window is shown and the daemon connected; past that,
+    Refresh reads it again. A settled task is never polled.
+  - *Unavailable,* minimal amber with an info glyph and no alert: a read-only
+    task, an ops or writing script task, a run that shares the checkout, or a
+    task that ended with no worktree record.
 - **Error.** A diff whose task branch is gone says so. A binary file shows its
-  sizes only.
+  sizes only. A read that truly failed (git, the file system, an artifact, or
+  an answer with no cause this app knows) stays red, as an alert.
 
 ### W10. The user's checkout changes and the commit box
 
@@ -956,6 +979,14 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
   remote and the branch (G3).
 - **Loading.** Status refreshes on focus and on a run's landing frames. An
   action in flight disables its buttons.
+  - *Fetch, pull and push* run one at a time per repository, whichever
+    surface started them: this sidebar, the Git sidebar's Fetch or the
+    palette's *Git: Fetch*. The one running is `busy`: its icon turns, it is
+    `aria-busy`, and it stays at full strength while the other two are
+    disabled. Pull and push are busy only once their confirm is accepted. The
+    icon turns only while the action is pending, and never under reduced
+    motion. A second start while one runs is refused, and announced as
+    "web is already syncing."; the palette's Fetch is disabled meanwhile.
 - **Empty.** "No changes in web." Ahead and behind still show.
 - **Error.**
   - A refused action shows git's own text in the box: a hook that failed, a
@@ -964,46 +995,97 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
   - `confirm_stale` reopens the confirm with the new state.
   - `pushed` explains why amend is gone.
 
-### W11. The Git view — commit graph and branches
+### W11. The Git view — branches, history and the commit graph
 
 ```
 ├────┬──────────────────────────────┬─────────────────────────────────────────────────────────┤
-│▌⑃  │ ⑃ BRANCHES   web             │ Planner │ ⑃ Commit graph · web ✕                        │
-│    │ ▾ Local                      │  ● 9c1e2d0  Fix setup instructions      you    2m      │
-│    │   ● main  ↑2   ⊡ run r7      │  │ ● 77ab310 ordewell: land #1 Read …   ordewell 1h   │
-│    │     feature/sso              │  │╱  (ordewell/r7/integration)                         │
-│    │ ▾ Ordewell (read-only)       │  ● 4f2a91c  Bump deps                  you    1d      │
-│    │     ordewell/r7/integration  │  ● e81f004  Merge branch 'feature/x'   you    2d      │
-│    │     ordewell/r7/1 ✓          │  ├─╮                                                   │
-│    │ ▾ Remote origin              │  │ ● 3d0a9b2 Add x                     ana    2d      │
-│    │     origin/main              │  ● │ …                                                 │
-│    │ ▾ Stashes                    │  Load more ↓                                           │
+│▌⑃  │ ⑃ BRANCHES   web           ⟳ │ Planner │ ⑃ Commit graph · web ✕                        │
+│    │ [⑂ Branches] [◷ History]     │  ● 9c1e2d0  Fix setup instructions      you    2m      │
+│    │ ▾ Local                      │  │ ● 77ab310 ordewell: land #1 Read …   ordewell 1h   │
+│    │   ● main  ↑2   ⊡ run r7      │  │╱  (ordewell/r7/integration)                         │
+│    │   ▾ feature              2   │  ● 4f2a91c  Bump deps                  you    1d      │
+│    │       sso                    │  ● e81f004  Merge branch 'feature/x'   you    2d      │
+│    │       x                      │  ├─╮                                                   │
+│    │ ▾ Ordewell (read-only)       │  │ ● 3d0a9b2 Add x                     ana    2d      │
+│    │   ▸ ordewell/r7          3   │  ● │ …                                                 │
+│    │ ▾ Remote origin              │  Load more ↓                                           │
+│    │     origin/main              │                                                        │
+│    │ ▾ Stashes                    │                                                        │
 │    │     ordewell: before Merge … │                                                        │
-│    │ [+ Branch]                   │                                                        │
+```
+
+The History view, in the same sidebar:
+
+```
+│    │ [⑂ Branches] [◷ History]     │
+│    │ ● Fix setup instructions main│
+│    │ │ ● ordewell: land #1 Read … │
+│    │ ●╱ Bump deps          v1.2   │
+│    │ ● Merge branch 'feature/x'   │
+│    │ [Load more]                  │
 ```
 
 - **Shows.**
+  - *A Branches/History switch* at the sidebar's head: two `aria-pressed`
+    buttons in a group named "Git sidebar view". The choice is the window's
+    and outlives an activity switch and a change of repository.
   - *Branches* (`GET /api/git/branches`):
     - local branches, with ahead and behind;
     - Ordewell's branches, in their own read-only group;
     - remote-tracking branches, as of the last fetch;
     - stashes.
 
-    A lock marks a live run's landing branch, naming the run.
-  - *The commit graph,* a tab (orchid marker), paged by cursor
+    A lock marks a live run's landing branch, naming the run. A branch name
+    with slashes is folded under its prefixes (`feature/` holds `sso` and
+    `x`), each folder showing its branch count; a row still names its branch
+    in full to a screen reader and in its tooltip.
+  - *History:* the checkout's commits down the sidebar, one row each, with the
+    commit graph's lanes drawn small beside the subject and its branch and tag
+    chips (the HEAD chip is left out: the current branch's chip already says
+    it). The full sha, the author and the age are in the row's tooltip.
+  - *The commit graph,* a tab (slate marker), paged by cursor
     (`GET /api/git/log`). A commit opens its message and files
     (`GET /api/git/commit`), and a file opens its patch.
+  - *A commit tab* (slate marker, the `git-commit-horizontal` icon) opened from
+    History: the commit's subject, sha, author, date, message and files. A file
+    opens its patch in a commit-diff tab, keeping the commit tab first.
 - **Actions.**
   - Create, switch and delete a branch.
   - Pop or drop a stash, each asking first.
   - Fetch.
+  - *A folder* turns over by a click anywhere on its row, chevron and name
+    alike, by Enter or Space, and by Right to open and Left to close. Until the
+    person chooses, a folder is open when its group is short enough to start
+    open, or when it holds the checked-out branch. The choice is kept per
+    repository, group and folder, and outlives an activity switch.
+  - *A History row:* a click opens the commit as a preview tab, so stepping
+    through the history leaves one tab behind; a double click keeps it. The
+    last commit opened is marked (`aria-current`) and is kept per repository.
+    ↑ and ↓ step between rows, Home and End go to the first and the last.
+  - *Load more* reads the next 50 commits. It waits while the history is
+    read again, and after that read failed, since the page it would ask for
+    follows rows about to be replaced.
+  - *Refresh* (⟳) reads the branches again, and the history with them.
 
   Switching away from, or deleting, a locked branch is refused with the run
   named (W12). An Ordewell branch can be viewed and diffed, but never switched
   to or deleted here.
-- **Loading.** The first page of the graph, then more on scroll.
-- **Empty.** A repository with no commits says so.
-- **Error.** A `git_failed` action shows git's text in place.
+- **Loading.**
+  - *History* is read only once it is first shown, 50 commits at a time. It
+    is read again only when a branch tip moves (a fetch, a switch, a commit),
+    or a detached checkout's head does, or on Refresh. A read again keeps the rows on screen and as many commits
+    as were shown, up to the daemon's ceiling of 500, so the person's place
+    stands. Each repository keeps its own history and its own pick, and an
+    answer for a read that a later one overtook, or for a repository no longer
+    shown, is dropped.
+  - A fetch that brings only tags moves no branch tip, so History keeps its
+    chips until Refresh; the commit graph tab reads its labels again on every
+    fetch.
+  - *The commit graph:* the first page, then more on Load more.
+- **Empty.** A repository with no commits says so, in History and the graph.
+- **Error.** A `git_failed` action shows git's text in place. A history that
+  cannot be read says so, with Try again; a Load more that fails says so under
+  the rows and keeps them.
 
 ### W12. Branch action confirm
 
@@ -1315,8 +1397,10 @@ A VS Code holder
 
 - **Shows.**
   - *Needs you,* as W7, collapsible, with its count.
-  - *This workspace's sessions,* newest first (`GET /api/sessions`). Each is a
-    two-line row:
+  - *This workspace's sessions,* newest first (`GET /api/sessions`), under a
+    *Sessions* heading that folds on its own: folding one of the two sections
+    never folds the other, and each choice outlives an activity switch. Each
+    is a two-line row:
     - the goal, with an ellipsis;
     - the session's status as a shape plus a word (*Planning*, *Draft*,
       *Approved*, *Running n/m*, *Settled*, *Failed*), and its relative time;
@@ -1324,6 +1408,14 @@ A VS Code holder
       the holder in the tooltip.
 
     The open session has the selected row's accent bar.
+  - *A session not open here,* or open read-only (its holder's run sends this
+    window nothing), reads its run from the session list's `run` entry, not
+    its saved status: *Running n/m* while its run is live in this
+    daemon, and *Running* without counts while another host holds it, which
+    can trail that host by a heartbeat. The list is read again every 5 s while such a row is
+    live and every 15 s otherwise, never while the window is hidden or the
+    daemon away. A read that fails keeps the rows, but drops the Running it can
+    no longer vouch for.
 - **Actions.**
   - Click a row to switch session: the planner tab, the plan panel and the
     session's tabs swap.
@@ -1570,7 +1662,7 @@ reaches 4.5:1 on every background of its theme, hover and selected included.
 | `--ow-area-sessions` | `#EE93B0` rose | `#A8325C` | Sessions |
 | `--ow-area-explorer` | `#9DA8FA` indigo | `#4650BF` | Explorer, file tabs |
 | `--ow-area-changes` | `#5ECDB0` mint | `#0D7258` | Changes, diff tabs |
-| `--ow-area-git` | `#D292E9` orchid | `#8838A6` | Git, the commit graph tab |
+| `--ow-area-git` | `#9DB3CF` slate | `#4F6683` | Git, the commit graph and commit tabs |
 
 Each area hue reaches 4.5:1 on chrome and surface in its theme, beyond the 3:1
 an icon needs, so it can stay legible if a later design uses it for a

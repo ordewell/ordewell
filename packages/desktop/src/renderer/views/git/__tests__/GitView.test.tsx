@@ -71,7 +71,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function mount(extra: Answers = {}, branches: unknown = BRANCHES) {
+async function mount(extra: Answers = {}, branches: unknown = BRANCHES, ready: string | RegExp = 'Switch to feature/login') {
   const daemon = fakeDaemon({
     'git.repos': ok({ repos: [REPO_STATE] }),
     'git.switch': ok({ repo: REPO_STATE }),
@@ -90,9 +90,16 @@ async function mount(extra: Answers = {}, branches: unknown = BRANCHES) {
   offs.push(registerFrameCommands(store), registerSidebar(store.api), registerGraph(store.api), registerDiff(store.api));
   render(<FrameProvider value={store}><Frame daemon={CONNECTED} /></FrameProvider>);
   act(() => store.api.showActivity('git'));
-  await screen.findByRole('button', { name: 'Switch to feature/login' });
+  await screen.findByRole('button', { name: ready });
   return daemon;
 }
+
+/** An answer the test hands over when it chooses, to hold a read in flight. */
+const deferred = () => {
+  let settle!: (result: ReturnType<typeof ok>) => void;
+  const promise = new Promise<ReturnType<typeof ok>>((resolve) => { settle = resolve; });
+  return { promise, settle };
+};
 
 /** The confirm dialog, which draws into the body outside the frame. */
 async function dialog(): Promise<HTMLElement> {
@@ -148,6 +155,328 @@ describe('the Git sidebar', () => {
   it('shows the lock a live run puts on its landing branch', async () => {
     await mount();
     expect(screen.getByTitle('A live run lands on main')).toHaveTextContent('run r7');
+  });
+});
+
+describe('the Branches and History views', () => {
+  const views = () => within(screen.getByRole('group', { name: 'Git sidebar view' }));
+
+  it('starts on Branches, and History keeps the branch and sync controls while it reads the history once', async () => {
+    const daemon = await mount();
+    expect(views().getByRole('button', { name: 'Branches' })).toHaveAttribute('aria-pressed', 'true');
+    expect(views().getByRole('button', { name: 'History' })).toHaveAttribute('aria-pressed', 'false');
+    expect(daemon.calls('git.log')).toHaveLength(0);
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    expect(views().getByRole('button', { name: 'History' })).toHaveAttribute('aria-pressed', 'true');
+    expect(await screen.findByRole('list', { name: 'History' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Switch to feature/login' })).toBeNull();
+    expect(screen.getByRole('group', { name: /^Sync/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show the commit graph' })).toBeInTheDocument();
+    expect(daemon.calls('git.log')).toHaveLength(1);
+  });
+
+  it('keeps the view across an activity switch, and going back and forth reads the history no more', async () => {
+    const daemon = await mount();
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    await screen.findByRole('button', { name: /Commit aaaaaaa/ });
+    act(() => store.api.showActivity('explorer'));
+    act(() => store.api.showActivity('git'));
+    expect(await screen.findByRole('list', { name: 'History' })).toBeInTheDocument();
+    expect(views().getByRole('button', { name: 'History' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(views().getByRole('button', { name: 'Branches' }));
+    expect(screen.getByRole('button', { name: 'Switch to feature/login' })).toBeInTheDocument();
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    expect(screen.getByRole('button', { name: /Commit aaaaaaa/ })).toBeInTheDocument();
+    expect(daemon.calls('git.log')).toHaveLength(1);
+  });
+
+  it('draws the graph’s lanes beside each subject and its refs, and opens a commit in a tab of its own that its files open beside', async () => {
+    await mount({
+      'git.show': (params) => ok({
+        commit: { ...LOG[0]!, body: 'Why it changed.' },
+        files: [{ path: 'src/sso.ts', status: 'M', added: 1, removed: 1 }],
+        ...(params?.path ? { patch: 'diff --git a/src/sso.ts b/src/sso.ts\n' } : {}),
+      }),
+    });
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    const row = await screen.findByRole('button', { name: 'Commit aaaaaaa: Merge: Wire SSO' });
+    expect(row.querySelector('svg.git-lanes circle')).not.toBeNull();
+    // The row names the short sha; its tooltip has the full one, to read or compare (design W11).
+    expect(row).toHaveAttribute('title', expect.stringContaining(`${sha('a')} · Ada`));
+    expect(within(row).getByText('main')).toHaveAttribute('title', expect.stringMatching(/^main: /));
+    expect(within(row).queryByText('HEAD')).not.toBeInTheDocument();
+
+    fireEvent.click(row);
+    expect(await screen.findByRole('tab', { name: /Commit aaaaaaa/ })).toBeInTheDocument();
+    expect(row).toHaveAttribute('aria-current', 'true');
+    const detail = within(await screen.findByRole('complementary', { name: 'Commit' }));
+    expect(await detail.findByText('Why it changed.')).toBeInTheDocument();
+    fireEvent.click(detail.getByRole('button', { name: /src\/sso\.ts/ }));
+    expect(await screen.findByRole('tab', { name: /sso\.ts @ aaaaaaa/ })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Commit aaaaaaa/ })).toBeInTheDocument();
+  });
+
+  it('reads one page, then the next only when asked, and offers no more at the root', async () => {
+    const daemon = await mount({
+      'git.log': (params) => ok(params?.cursor
+        ? { repo: '.', ref: 'HEAD', commits: [commit('f', [], 'Add the login button')], cursor: null }
+        : { repo: '.', ref: 'HEAD', commits: [commit('a', ['f'], 'Merge: Wire SSO', ['HEAD', 'main'])], cursor: sha('f') }),
+    });
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    await screen.findByRole('button', { name: /Commit aaaaaaa/ });
+    expect(daemon.calls('git.log')[0]![0]).toMatchObject({ limit: '50' });
+    expect(daemon.calls('git.log')[0]![0]).not.toHaveProperty('cursor');
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    expect(await screen.findByRole('button', { name: /Commit fffffff/ })).toBeInTheDocument();
+    expect(daemon.calls('git.log')[1]![0]).toMatchObject({ cursor: sha('f'), limit: '50' });
+    expect(screen.queryByRole('button', { name: 'Load more' })).not.toBeInTheDocument();
+    expect(daemon.calls('git.log')).toHaveLength(2);
+  });
+
+  it('says when the history cannot be read and reads it again on Try again', async () => {
+    let fail = true;
+    const daemon = await mount({
+      'git.log': () => (fail
+        ? { ok: false as const, status: 500, error: 'fatal: not a git repository', data: { code: 'git_failed' } }
+        : ok({ repo: '.', ref: 'HEAD', commits: LOG, cursor: null })),
+    });
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    expect(await screen.findByText('fatal: not a git repository')).toBeInTheDocument();
+    fail = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('button', { name: /Commit aaaaaaa/ })).toBeInTheDocument();
+    expect(screen.queryByText('fatal: not a git repository')).not.toBeInTheDocument();
+    expect(daemon.calls('git.log')).toHaveLength(2);
+  });
+
+  it('says a repository with no commits has no history', async () => {
+    await mount({ 'git.log': ok({ repo: '.', ref: 'HEAD', commits: [], cursor: null }) });
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    expect(await screen.findByText('No commits yet')).toBeInTheDocument();
+  });
+
+  it('reads the history again once a fetch moves a branch, and drops the answer that read overtook', async () => {
+    const first = deferred();
+    let reads = 0;
+    const moved = { ...BRANCHES, remote: [branch('origin/main', { sha: sha('f') })] };
+    let branches: unknown = BRANCHES;
+    const daemon = await mount({
+      'git.branches': () => ok(branches),
+      'git.fetch': ok({ repo: REPO_STATE }),
+      'git.log': () => (++reads === 1 ? first.promise : ok({ repo: '.', ref: 'HEAD', commits: [commit('a', ['f'], 'After the fetch', ['HEAD', 'main'])], cursor: null })),
+    });
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    await waitFor(() => expect(daemon.calls('git.log')).toHaveLength(1));
+    branches = moved;
+    fireEvent.click(within(screen.getByRole('group', { name: /^Sync/ })).getByRole('button', { name: /^Fetch/ }));
+    expect(await screen.findByRole('button', { name: 'Commit aaaaaaa: After the fetch' })).toBeInTheDocument();
+    await act(async () => { first.settle(ok({ repo: '.', ref: 'HEAD', commits: LOG, cursor: null })); });
+    expect(screen.getByRole('button', { name: 'Commit aaaaaaa: After the fetch' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Commit fffffff/ })).not.toBeInTheDocument();
+    expect(daemon.calls('git.log')).toHaveLength(2);
+  });
+
+  it('drops a page that a read again overtook', async () => {
+    const page = deferred();
+    let branches: unknown = BRANCHES;
+    const daemon = await mount({
+      'git.branches': () => ok(branches),
+      'git.fetch': ok({ repo: REPO_STATE }),
+      'git.log': (params) => (params?.cursor
+        ? page.promise
+        : ok({ repo: '.', ref: 'HEAD', commits: [commit('a', ['f'], 'Merge: Wire SSO', ['HEAD', 'main'])], cursor: sha('f') })),
+    });
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Load more' }));
+    await waitFor(() => expect(daemon.calls('git.log')).toHaveLength(2));
+    branches = { ...BRANCHES, remote: [branch('origin/main', { sha: sha('f') })] };
+    fireEvent.click(within(screen.getByRole('group', { name: /^Sync/ })).getByRole('button', { name: /^Fetch/ }));
+    await waitFor(() => expect(daemon.calls('git.log')).toHaveLength(3));
+    await act(async () => { page.settle(ok({ repo: '.', ref: 'HEAD', commits: [commit('9', [], 'A stale page')], cursor: null })); });
+    expect(screen.queryByRole('button', { name: /A stale page/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Load more' })).not.toHaveAttribute('aria-busy');
+  });
+
+  it('keeps a page in flight when the view is switched away and back', async () => {
+    const page = deferred();
+    const daemon = await mount({
+      'git.log': (params) => (params?.cursor
+        ? page.promise
+        : ok({ repo: '.', ref: 'HEAD', commits: [commit('a', ['f'], 'Merge: Wire SSO', ['HEAD', 'main'])], cursor: sha('f') })),
+    });
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Load more' }));
+    fireEvent.click(views().getByRole('button', { name: 'Branches' }));
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    await act(async () => { page.settle(ok({ repo: '.', ref: 'HEAD', commits: [commit('f', [], 'Add the login button')], cursor: null })); });
+    expect(await screen.findByRole('button', { name: /Commit fffffff/ })).toBeInTheDocument();
+    expect(daemon.calls('git.log')).toHaveLength(2);
+  });
+
+  it('reads nothing again when a fetch moves no branch', async () => {
+    const daemon = await mount({ 'git.fetch': ok({ repo: REPO_STATE }) });
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    await screen.findByRole('button', { name: /Commit aaaaaaa/ });
+    const before = daemon.calls('git.branches').length;
+    fireEvent.click(within(screen.getByRole('group', { name: /^Sync/ })).getByRole('button', { name: /^Fetch/ }));
+    await waitFor(() => expect(daemon.calls('git.branches').length).toBeGreaterThan(before));
+    expect(daemon.calls('git.log')).toHaveLength(1);
+  });
+
+  it('reads a detached checkout’s history again only when its head or a branch moved', async () => {
+    const detached = { ...BRANCHES, current: null, detached: true, local: BRANCHES.local.map((b) => ({ ...b, current: false })) };
+    let head = sha('a');
+    const daemon = await mount({
+      'git.repos': () => ok({ repos: [{ ...REPO_STATE, branch: null, detached: true, head }] }),
+      'git.fetch': () => ok({ repo: { ...REPO_STATE, branch: null, detached: true, head } }),
+    }, detached, 'Switch to main');
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    await screen.findByRole('button', { name: /Commit aaaaaaa/ });
+    const fetch = (): void => { fireEvent.click(within(screen.getByRole('group', { name: /^Sync/ })).getByRole('button', { name: /^Fetch/ })); };
+    let before = daemon.calls('git.branches').length;
+    fetch();
+    await waitFor(() => expect(daemon.calls('git.branches').length).toBeGreaterThan(before));
+    expect(daemon.calls('git.log')).toHaveLength(1);
+
+    head = sha('9');
+    before = daemon.calls('git.branches').length;
+    fetch();
+    await waitFor(() => expect(daemon.calls('git.log')).toHaveLength(2));
+    expect(daemon.calls('git.branches').length).toBeGreaterThan(before);
+  });
+
+  it('reads a tag that moved no branch in on an explicit Refresh, keeping the rows on screen meanwhile', async () => {
+    const later = deferred();
+    let reads = 0;
+    const daemon = await mount({
+      'git.log': () => (++reads === 1 ? ok({ repo: '.', ref: 'HEAD', commits: LOG, cursor: null }) : later.promise),
+    });
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    const row = await screen.findByRole('button', { name: 'Commit aaaaaaa: Merge: Wire SSO' });
+    expect(within(row).queryByText('v2.0')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh the branches and history' }));
+    await waitFor(() => expect(daemon.calls('git.log')).toHaveLength(2));
+    expect(screen.getByRole('button', { name: 'Commit aaaaaaa: Merge: Wire SSO' })).toBeInTheDocument();
+    await act(async () => { later.settle(ok({ repo: '.', ref: 'HEAD', commits: [{ ...LOG[0]!, refs: [...LOG[0]!.refs, 'v2.0'] }, LOG[1]!], cursor: null })); });
+    expect(within(screen.getByRole('button', { name: 'Commit aaaaaaa: Merge: Wire SSO' })).getByText('v2.0')).toBeInTheDocument();
+  });
+
+  it('holds Load more while the history is read again, and while that read failed, so a click is never lost', async () => {
+    const later = deferred();
+    let reads = 0;
+    const daemon = await mount({
+      'git.log': (params) => {
+        if (params?.cursor) return ok({ repo: '.', ref: 'HEAD', commits: [commit('f', [], 'Add the login button')], cursor: null });
+        reads += 1;
+        if (reads === 2) return later.promise;
+        if (reads === 3) return { ok: false as const, status: 500, error: 'fatal: bad object', data: { code: 'git_failed' } };
+        return ok({ repo: '.', ref: 'HEAD', commits: [commit('a', ['f'], 'Merge: Wire SSO', ['HEAD', 'main'])], cursor: sha('f') });
+      },
+    });
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    expect(await screen.findByRole('button', { name: 'Load more' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh the branches and history' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Load more' })).toBeDisabled());
+    await act(async () => { later.settle(ok({ repo: '.', ref: 'HEAD', commits: [commit('a', ['f'], 'Merge: Wire SSO', ['HEAD', 'main'])], cursor: sha('f') })); });
+    expect(screen.getByRole('button', { name: 'Load more' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh the branches and history' }));
+    expect(await screen.findByText('fatal: bad object')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Load more' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Load more' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    expect(await screen.findByRole('button', { name: /Commit fffffff/ })).toBeInTheDocument();
+    expect(daemon.calls('git.log').filter(([params]) => params?.cursor)).toHaveLength(1);
+  });
+
+  it('keeps each repository’s history and pick its own, and drops a late answer for the one no longer shown', async () => {
+    const lib = deferred();
+    const libBranches = { ...BRANCHES, repo: 'libs/ui', local: [branch('main', { current: true, sha: sha('9') })], ordewell: [], remote: [], stashes: [], worktrees: [] };
+    const daemon = await mount({
+      'git.repos': ok({ repos: [REPO_STATE, { ...REPO_STATE, repo: 'libs/ui', head: sha('9') }] }),
+      'git.branches': (params) => ok(params?.repo === 'libs/ui' ? libBranches : BRANCHES),
+      'git.log': (params) => (params?.repo === 'libs/ui' ? lib.promise : ok({ repo: '.', ref: 'HEAD', commits: LOG, cursor: null })),
+    });
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Commit fffffff: Add the login button' }));
+    expect(screen.getByRole('button', { name: 'Commit fffffff: Add the login button' })).toHaveAttribute('aria-current', 'true');
+
+    const picker = await screen.findByRole('combobox', { name: 'Repository' });
+    fireEvent.change(picker, { target: { value: 'libs/ui' } });
+    await waitFor(() => expect(daemon.calls('git.log').some(([p]) => p?.repo === 'libs/ui')).toBe(true));
+    expect(await screen.findByText('Loading the history…')).toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: 'History' })).not.toBeInTheDocument();
+
+    fireEvent.change(picker, { target: { value: '.' } });
+    expect(await screen.findByRole('button', { name: 'Commit fffffff: Add the login button' })).toHaveAttribute('aria-current', 'true');
+    await act(async () => { lib.settle(ok({ repo: 'libs/ui', ref: 'HEAD', commits: [commit('9', [], 'Start the UI kit', ['HEAD', 'main'])], cursor: null })); });
+    expect(screen.queryByRole('button', { name: /Start the UI kit/ })).not.toBeInTheDocument();
+    expect(daemon.calls('git.log').filter(([p]) => p?.repo === '.')).toHaveLength(1);
+
+    fireEvent.change(picker, { target: { value: 'libs/ui' } });
+    expect(await screen.findByRole('button', { name: 'Commit 9999999: Start the UI kit' })).toBeInTheDocument();
+    expect(daemon.calls('git.log').filter(([p]) => p?.repo === 'libs/ui')).toHaveLength(1);
+  });
+});
+
+describe('branch folders', () => {
+  const folder = (name: string) => screen.getByRole('button', { name: new RegExp(`^${name} \\d+ branch`) });
+
+  it('folds a slash-named branch under its prefix, by click or by arrow, and keeps the fold across an activity switch', async () => {
+    await mount();
+    const feature = folder('feature');
+    expect(feature).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('list', { name: 'feature' })).toContainElement(screen.getByRole('button', { name: 'Switch to feature/login' }));
+
+    fireEvent.click(feature);
+    expect(feature).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('button', { name: 'Switch to feature/login' })).not.toBeInTheDocument();
+
+    fireEvent.keyDown(feature, { key: 'ArrowRight' });
+    expect(feature).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.keyDown(feature, { key: 'ArrowLeft' });
+    expect(feature).toHaveAttribute('aria-expanded', 'false');
+
+    act(() => store.api.showActivity('explorer'));
+    act(() => store.api.showActivity('git'));
+    expect(await screen.findByRole('button', { name: /^feature \d+ branch/ })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('keeps a branch named like a folder beside it, each action on its full name', async () => {
+    const daemon = await mount({}, { ...BRANCHES, local: [branch('main', { current: true }), branch('feature', { sha: sha('b') }), branch('feature/login', { sha: sha('c') })] });
+    const inFolder = within(screen.getByRole('list', { name: 'feature' }));
+    expect(inFolder.getByRole('button', { name: 'feature/login' })).toHaveTextContent('login');
+    expect(inFolder.queryByRole('button', { name: 'Switch to feature' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to feature' }));
+    await dialog();
+    answer('Switch to feature');
+    await waitFor(() => expect(daemon.calls('git.switch')).toHaveLength(1));
+    expect(daemon.calls('git.switch')[0]![1]).toEqual({ workspace: WORKSPACE, repo: '.', branch: 'feature' });
+  });
+
+  it('marks the current branch and keeps Ordewell’s read-only inside their folders', async () => {
+    await mount();
+    expect(screen.getByRole('button', { name: 'main' }).closest('li')).toHaveAttribute('aria-current', 'true');
+    const run = within(screen.getByRole('list', { name: 'ordewell/r7' }));
+    expect(run.getByRole('button', { name: 'ordewell/r7/t3, read-only' })).toHaveTextContent('t3');
+    expect(screen.queryByRole('button', { name: /^(Switch to|Delete) ordewell\// })).not.toBeInTheDocument();
+  });
+
+  it('starts a long group folded but for the folder that holds the checkout, and names each row in full', async () => {
+    const long = 'a-very-long-branch-name-that-cannot-fit-in-a-narrow-sidebar';
+    const local = [
+      ...Array.from({ length: 10 }, (_, i) => branch(`chore/c${i}`, { sha: sha('b') })),
+      branch(`wip/${long}`, { current: true }),
+    ];
+    await mount({}, { ...BRANCHES, local }, /^Local/);
+    fireEvent.click(screen.getByRole('button', { name: /^Local/ }));
+    expect(screen.getByRole('button', { name: /^chore 10 branches/ })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByRole('button', { name: /^wip 1 branch/ })).toHaveAttribute('aria-expanded', 'true');
+    const row = screen.getByRole('button', { name: `wip/${long}` });
+    expect(row).toHaveAttribute('title', `wip/${long}`);
+    expect(row).toHaveTextContent(long);
   });
 });
 
@@ -223,6 +552,79 @@ describe('the confirms', () => {
     answer('Push to origin');
     await waitFor(() => expect(daemon.calls('git.push')).toHaveLength(1));
     expect(daemon.calls('git.push')[0]![1]).toMatchObject({ confirm: { remote: 'origin', branch: 'main' } });
+  });
+
+  describe('a fetch in flight', () => {
+    // The confirm dialog has a "Pull from origin" button of its own: scope to the sync bar.
+    const syncButton = (name: RegExp) => within(screen.getByRole('group', { name: /^Sync/ })).getByRole('button', { name });
+    const fetchButton = () => syncButton(/^Fetch/);
+    const pullButton = () => syncButton(/^Pull/);
+    it('turns only the Fetch icon, says it is busy, and holds the other sync buttons', async () => {
+      const pending = deferred();
+      await mount({ 'git.fetch': pending.promise });
+      expect(fetchButton()).not.toHaveAttribute('aria-busy');
+      fireEvent.click(fetchButton());
+      await waitFor(() => expect(fetchButton()).toHaveAttribute('aria-busy', 'true'));
+      expect(fetchButton().querySelector('svg')).toHaveClass('ow-spin');
+      expect(fetchButton()).toBeDisabled();
+      for (const name of [/^Pull/, /^Push/]) {
+        expect(syncButton(name)).toBeDisabled();
+        expect(syncButton(name)).not.toHaveAttribute('aria-busy');
+        expect(syncButton(name).querySelector('svg')).not.toHaveClass('ow-spin');
+      }
+      await act(async () => { pending.settle(ok({ repo: REPO_STATE })); });
+      await waitFor(() => expect(fetchButton()).not.toHaveAttribute('aria-busy'));
+      expect(fetchButton().querySelector('svg')).not.toHaveClass('ow-spin');
+      expect(fetchButton()).toBeEnabled();
+      expect(pullButton()).toBeEnabled();
+    });
+
+    it('is restored when git refuses, with the refusal still in the banner', async () => {
+      const pending = deferred();
+      await mount({ 'git.fetch': pending.promise });
+      fireEvent.click(fetchButton());
+      await waitFor(() => expect(fetchButton()).toHaveAttribute('aria-busy', 'true'));
+      await act(async () => { pending.settle({ ok: false, status: 500, error: 'Could not resolve host.', data: { code: 'git_failed' } }); });
+      await waitFor(() => expect(fetchButton()).not.toHaveAttribute('aria-busy'));
+      expect(fetchButton()).toBeEnabled();
+      expect(screen.getByText('Could not resolve host.')).toBeInTheDocument();
+    });
+
+    it('shows a palette fetch on the sidebar button, and a second one sends nothing', async () => {
+      const pending = deferred();
+      const daemon = await mount({ 'git.fetch': pending.promise });
+      act(() => store.api.runCommand('git.fetch'));
+      await waitFor(() => expect(fetchButton()).toHaveAttribute('aria-busy', 'true'));
+      expect(fetchButton()).toBeDisabled();
+      act(() => store.api.runCommand('git.fetch'));
+      expect(daemon.calls('git.fetch')).toHaveLength(1);
+      await act(async () => { pending.settle(ok({ repo: REPO_STATE })); });
+      await waitFor(() => expect(fetchButton()).not.toHaveAttribute('aria-busy'));
+    });
+
+    it('does not spin while a pull waits to be confirmed, and restores the buttons on Cancel', async () => {
+      const daemon = await mount();
+      fireEvent.click(pullButton());
+      await dialog();
+      expect(pullButton()).not.toHaveAttribute('aria-busy');
+      expect(pullButton().querySelector('svg')).not.toHaveClass('ow-spin');
+      answer('Cancel');
+      await waitFor(() => expect(pullButton()).toBeEnabled());
+      expect(daemon.calls('git.pull')).toEqual([]);
+    });
+
+    it('turns the Pull icon only once the confirmed pull is sent', async () => {
+      const pending = deferred();
+      await mount({ 'git.pull': pending.promise });
+      fireEvent.click(pullButton());
+      await dialog();
+      answer('Pull from origin');
+      await waitFor(() => expect(pullButton()).toHaveAttribute('aria-busy', 'true'));
+      expect(pullButton().querySelector('svg')).toHaveClass('ow-spin');
+      expect(fetchButton().querySelector('svg')).not.toHaveClass('ow-spin');
+      await act(async () => { pending.settle(ok({ repo: REPO_STATE })); });
+      await waitFor(() => expect(pullButton()).not.toHaveAttribute('aria-busy'));
+    });
   });
 
   it('confirms a stash pop and a drop by the stash’s name', async () => {

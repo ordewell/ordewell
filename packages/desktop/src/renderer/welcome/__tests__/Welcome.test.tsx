@@ -245,6 +245,25 @@ describe('Welcome: recent projects', () => {
     expect(bridge.app.openWorkspace).toHaveBeenCalledWith('/Users/me/code/acme');
   });
 
+  it("says Running for a session whose run is live, and stores only its saved status, which outlives the run", async () => {
+    const bridge = installBridge({
+      recents: [recent()],
+      routes: {
+        'git.repos': () => ok({ repos: [{ repo: '.', branch: 'main' }] }),
+        // Saved Approved throughout its run: only `run` says it is at work now.
+        'sessions.list': () => ok([{ id: 's1', goal: 'Split tax lines', status: 'approved', updatedAt: '2026-11-04T11:00:00Z', taskCount: 2, run: { live: true } }]),
+        'plans.escalations': () => ok({ escalations: [] }),
+      },
+    });
+    render(<Welcome status={CONNECTED} />);
+    const card = (await screen.findByRole('button', { name: 'acme' })).closest('li');
+    if (!card) throw new Error('no card');
+    expect(await within(card).findByText('· Running')).toBeInTheDocument();
+    await waitFor(() => expect(bridge.app.rememberRecent).toHaveBeenCalledWith('/Users/me/code/acme', expect.objectContaining({
+      lastSession: { id: 's1', goal: 'Split tax lines', status: 'approved', updatedAt: '2026-11-04T11:00:00Z' },
+    })));
+  });
+
   it('keeps the stored lines and says live state is unavailable when the daemon is down', async () => {
     installBridge({ recents: [recent({ git: { kind: 'branch', name: 'main' }, lastSession: { id: 's0', goal: 'Stored goal', status: 'completed', updatedAt: '2026-11-01T00:00:00Z' } })] });
     render(<Welcome status={{ state: 'port-taken', port: 7878 }} />);

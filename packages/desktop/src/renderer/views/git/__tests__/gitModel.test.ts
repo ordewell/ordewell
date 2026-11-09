@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Branches, BranchInfo } from '../gitData';
 import {
-  ago, commitDiffTabId, commitsTabId, isOrdewellRef, landedTaskOf, landingSubject, parseCommitDiffTabId, parseCommitsTabId, plural, refChips, repoDisplay,
+  ago, branchTree, commitDiffTabId, commitsTabId, isOrdewellRef, landedTaskOf, landingSubject, parseCommitDiffTabId, parseCommitsTabId, plural, refChips, repoDisplay,
   runMark, splitUpstream, trackMark,
 } from '../gitModel';
 
@@ -107,5 +107,42 @@ describe('tab ids', () => {
 
   it('round-trips a commit file id', () => {
     expect(parseCommitDiffTabId(commitDiffTabId('web', 'abc123', 'src/a/b.ts'))).toEqual({ repo: 'web', sha: 'abc123', path: 'src/a/b.ts' });
+  });
+});
+
+describe('branchTree', () => {
+  const names = (...n: string[]) => n.map((name) => branch(name));
+  const shape = (nodes: ReturnType<typeof branchTree>): unknown[] => nodes.map((n) => (n.kind === 'folder' ? { folder: n.label, path: n.path, count: n.count, children: shape(n.children) } : n.branch.name));
+
+  it('groups slash-delimited names into folders, folders before branches, and keeps each branch’s full name', () => {
+    expect(shape(branchTree(names('main', 'feature/login', 'feature/sso', 'fix/typo')))).toEqual([
+      { folder: 'feature', path: 'feature', count: 2, children: ['feature/login', 'feature/sso'] },
+      { folder: 'fix', path: 'fix', count: 1, children: ['fix/typo'] },
+      'main',
+    ]);
+  });
+
+  it('labels a branch by its last segment', () => {
+    const [folder] = branchTree(names('feature/login'));
+    expect(folder.kind === 'folder' && folder.children[0].label).toBe('login');
+  });
+
+  it('folds a chain of single folders into one, so a deep prefix costs one row', () => {
+    expect(shape(branchTree(names('ordewell/r7/integration', 'ordewell/r7/t3')))).toEqual([
+      { folder: 'ordewell/r7', path: 'ordewell/r7', count: 2, children: ['ordewell/r7/integration', 'ordewell/r7/t3'] },
+    ]);
+  });
+
+  it('keeps a branch named like a folder beside that folder, with keys apart', () => {
+    const tree = branchTree(names('feature', 'feature/login'));
+    expect(shape(tree)).toEqual([{ folder: 'feature', path: 'feature', count: 1, children: ['feature/login'] }, 'feature']);
+    expect(new Set(tree.map((n) => n.key)).size).toBe(2);
+  });
+
+  it('marks the folders that hold the current branch', () => {
+    const tree = branchTree([branch('a/b/c', { current: true }), branch('a/d'), branch('e/f')]);
+    expect(tree.map((n) => n.kind === 'folder' && n.current)).toEqual([true, false]);
+    const [a] = tree;
+    expect(a.kind === 'folder' && a.children.map((n) => n.kind === 'folder' && n.current)).toEqual([true, false]);
   });
 });

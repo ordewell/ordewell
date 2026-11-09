@@ -20,7 +20,8 @@ export type Live =
 /** Only the newest few can be live in practice; asking every session would cost a call each for nothing. */
 const LIVE_SESSIONS = 3;
 
-async function readLive(path: string): Promise<LiveFacts | undefined> {
+/** The live facts to draw, and the last session as it is saved, which is all the store may keep. */
+async function readLive(path: string): Promise<{ facts: LiveFacts; lastSession?: RecentSession } | undefined> {
   const call = window.ordewell.daemon.call;
   const [repos, sessions] = await Promise.all([
     call('git.repos', { workspace: path }),
@@ -30,14 +31,18 @@ async function readLive(path: string): Promise<LiveFacts | undefined> {
   const rows = sessions.ok ? parseSessions(sessions.data) : undefined;
   if (!git && !rows) return undefined;
   const facts: LiveFacts = { ...(git ? { git } : {}) };
+  let lastSession: RecentSession | undefined;
   if (rows) {
     const newest = rows[0];
-    facts.session = newest ? { id: newest.id, goal: newest.goal, status: newest.status, updatedAt: newest.updatedAt } : null;
+    if (newest) lastSession = { id: newest.id, goal: newest.goal, status: newest.status, updatedAt: newest.updatedAt };
+    // A run's plan is saved approved while it lasts: the daemon's `run` says it is at work now. Stored, that word
+    // would outlive the run, so the card draws it and the store keeps the saved status.
+    facts.session = lastSession && newest?.run ? { ...lastSession, status: 'running' } : lastSession ?? null;
     const waits = await Promise.all(rows.slice(0, LIVE_SESSIONS).map((row) => call('plans.escalations', { sessionId: row.id })));
     const needsYou = needsYouCount(waits);
     if (needsYou !== undefined) facts.needsYou = needsYou;
   }
-  return facts;
+  return { facts, ...(lastSession ? { lastSession } : {}) };
 }
 
 /**
@@ -65,14 +70,14 @@ export function useLiveFacts(recents: RecentWorkspace[] | undefined, status: Dae
     for (const entry of recents ?? []) {
       if (entry.missing || asked.current.has(entry.path)) continue;
       asked.current.add(entry.path);
-      void readLive(entry.path).catch(() => undefined).then((facts) => {
-        if (facts && (facts.git || facts.session)) {
+      void readLive(entry.path).catch(() => undefined).then((read) => {
+        if (read && (read.facts.git || read.lastSession)) {
           void window.ordewell.app.rememberRecent(entry.path, {
-            ...(facts.git ? { git: facts.git } : {}),
-            ...(facts.session ? { lastSession: facts.session } : {}),
+            ...(read.facts.git ? { git: read.facts.git } : {}),
+            ...(read.lastSession ? { lastSession: read.lastSession } : {}),
           });
         }
-        if (mounted.current) setAnswers((seen) => ({ ...seen, [entry.path]: facts ?? null }));
+        if (mounted.current) setAnswers((seen) => ({ ...seen, [entry.path]: read?.facts ?? null }));
       });
     }
   }, [connected, recents]);

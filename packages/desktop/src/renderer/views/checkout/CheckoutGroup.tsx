@@ -20,6 +20,7 @@ import {
 } from './checkoutModel';
 import { checkoutDiffTabId, checkoutDiffTitle } from './checkoutTabs';
 import { fetchRepo, popStash, pullBranch, pushBranch, stashChanges, type GitContext } from '../git/gitActions';
+import { useSyncing } from '../git/gitStore';
 import { SyncBar } from '../git/SyncBar';
 import { useRepoBranches } from '../git/useRepoBranches';
 import { LONG_LIST, MiddleText, Notice, SidebarGroup } from '../sidebarKit';
@@ -161,6 +162,7 @@ function RepoSection({ api, host, repo, first, onRefresh }: {
   // What the sync line and the stash menu act on moves with the branch, its commit and the tree: read again when any does, and when the menu opens.
   const branches = useRepoBranches(api, repo.info.repo, `${repo.info.branch}|${repo.info.head}|${repo.info.ahead}|${repo.info.behind}|${changeCount}|${menuOpen}`);
   const git: GitContext | undefined = branches ? { api, repo: repo.info.repo, branches } : undefined;
+  const syncing = useSyncing(api, repo.info.repo);
 
   useEffect(() => {
     if (!first) return;
@@ -412,6 +414,7 @@ function RepoSection({ api, host, repo, first, onRefresh }: {
 
       <SyncBar
         label={label}
+        running={syncing}
         state={{
           upstream: repo.info.upstream,
           ahead: repo.info.ahead,

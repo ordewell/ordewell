@@ -354,9 +354,11 @@ kbd.frame-menu-hint { font-family: inherit; }
 .frame-tab-fixed { padding-right: var(--ow-space-3); }
 .frame-tab[data-tab-kind='planner'] > .ow-icon { color: var(--ow-area-planner); }
 .frame-tab[data-tab-kind='file'] > .ow-icon { color: var(--ow-area-explorer); }
-.frame-tab[data-tab-kind='diff'] > .ow-icon { color: var(--ow-area-changes); }
+.frame-tab[data-tab-kind='diff'] > .ow-icon, .frame-tab[data-tab-kind='commit-diff'] > .ow-icon { color: var(--ow-area-changes); }
+.frame-tab[data-tab-kind='commits'] > .ow-icon, .frame-tab[data-tab-kind='commit'] > .ow-icon { color: var(--ow-area-git); }
 .frame-group-focused .frame-tab-active[data-tab-kind='file']::before { background: var(--ow-area-explorer); }
-.frame-group-focused .frame-tab-active[data-tab-kind='diff']::before { background: var(--ow-area-changes); }
+.frame-group-focused .frame-tab-active[data-tab-kind='diff']::before, .frame-group-focused .frame-tab-active[data-tab-kind='commit-diff']::before { background: var(--ow-area-changes); }
+.frame-group-focused .frame-tab-active[data-tab-kind='commits']::before, .frame-group-focused .frame-tab-active[data-tab-kind='commit']::before { background: var(--ow-area-git); }
 .frame-tab:focus-visible { outline-offset: calc(var(--ow-focus-offset) * -1); }
 .frame-tab-preview .frame-tab-title { font-style: italic; }
 .frame-tab-close { visibility: hidden; }

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DaemonProbe, DaemonStopOutcome } from '@ordewell/core/daemon-client';
 import type { DaemonStatus } from '../../../shared/bridge';
 import { DaemonManager, type DaemonManagerDeps, type OwnedProcess } from '../DaemonManager';
-import type { LiveRun } from '../liveRuns';
+import { findLiveRuns, type DaemonGet, type LiveRun } from '../liveRuns';
 
 const PORT = 3742;
 const CONTRACT = 1;
@@ -326,6 +326,54 @@ describe('DaemonManager: version mismatch', () => {
     expect(result).toEqual({ ok: false, message: 'A run is live on that daemon (“Ship it” in /w), so it can\'t restart now.' });
     expect(stopExternal).not.toHaveBeenCalled();
     expect(daemon.current().state).toBe('mismatch');
+  });
+
+  /** The daemon's answers as it gives them mid-run: the plan saved approved, the run said by the list's `run`. */
+  const daemonWith = (rows: unknown[], sessions: Record<string, unknown>): DaemonGet => async (routeId, params) => {
+    if (routeId === 'workspaces.list') return { ok: true, data: { workspaces: ['/w'] } };
+    if (routeId === 'sessions.list') return { ok: true, data: rows };
+    const id = params && typeof params === 'object' ? Reflect.get(params, 'id') : undefined;
+    return routeId === 'sessions.get' && typeof id === 'string' && id in sessions ? { ok: true, data: sessions[id] } : { ok: false };
+  };
+
+  it('refuses the restart under a run whose plan is saved approved, as a run\'s plan is', async () => {
+    const w = world(foreign(2));
+    const stopExternal = vi.fn(async (): Promise<DaemonStopOutcome> => ({ kind: 'stale' }));
+    const get = daemonWith(
+      [{ id: 's1', status: 'approved', goal: 'Ship it', run: { live: true, done: 1, total: 3 } }],
+      { s1: { meta: { status: 'approved' }, run: { tasks: [], activity: { starting: false, running: true, scheduled: false, advancesOnItsOwn: true } } } },
+    );
+    const { daemon } = manager(w, { stopExternal, liveRuns: () => findLiveRuns(get) });
+    await daemon.connect();
+    expect(await daemon.restart()).toEqual({ ok: false, message: 'A run is live on that daemon (“Ship it” in /w), so it can\'t restart now.' });
+    expect(stopExternal).not.toHaveBeenCalled();
+    expect(daemon.current().state).toBe('mismatch');
+  });
+
+  it('restarts under a run another host holds: it goes on there, not in this daemon', async () => {
+    const w = world(foreign(2));
+    const stopExternal = vi.fn(async (): Promise<DaemonStopOutcome> => {
+      w.set({ kind: 'unreachable' });
+      return { kind: 'stopped', pid: 42, filePid: 42 };
+    });
+    const get = daemonWith([{ id: 's1', status: 'approved', goal: 'Joined', run: { live: true } }], { s1: { meta: { status: 'approved' } } });
+    const { daemon } = manager(w, { stopExternal, liveRuns: () => findLiveRuns(get) });
+    await daemon.connect();
+    expect(await daemon.restart()).toEqual({ ok: true });
+    expect(stopExternal).toHaveBeenCalledWith(PORT);
+  });
+
+  it('refuses the restart when the daemon says work is live, though its list names no run', async () => {
+    // An older daemon lists no `run`, and its running plan reads approved; its own word on /api/server still holds.
+    const w = world({ kind: 'daemon', identity: { pid: 42, version: '0.12.1', contract: 2, live: true } });
+    const stopExternal = vi.fn(async (): Promise<DaemonStopOutcome> => ({ kind: 'stale' }));
+    const get = daemonWith([{ id: 's1', status: 'approved', goal: 'Ship it' }], {});
+    const { daemon } = manager(w, { stopExternal, liveRuns: () => findLiveRuns(get) });
+    await daemon.connect();
+    const result = await daemon.restart();
+    expect(result.ok).toBe(false);
+    expect(result.ok ? '' : result.message).toMatch(/under way on that daemon/);
+    expect(stopExternal).not.toHaveBeenCalled();
   });
 
   it('refuses the restart when it cannot tell whether a run is live', async () => {

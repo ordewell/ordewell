@@ -23,7 +23,11 @@ export function sessionsRoute(pool: OrchestratorPool) {
   router.get('/', (c) => {
     try {
       const ws = c.req.query('workspace') || process.cwd();
-      const sessions: SessionListResponse = getSessionList(ws);
+      // The saved status reads approved for as long as a run lasts: whether one is at work is the pool's word, or its holder's.
+      const sessions: SessionListResponse = getSessionList(ws).map((meta) => {
+        const run = pool.runActivity(meta.id, ws);
+        return run ? { ...meta, run } : meta;
+      });
       return c.json(sessions);
     } catch (err) {
       return failure(c, err, 'list sessions');

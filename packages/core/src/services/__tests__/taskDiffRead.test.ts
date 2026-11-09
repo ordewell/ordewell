@@ -70,9 +70,9 @@ describe.skipIf(process.platform === 'win32')('readSavedPatch', () => {
   });
 
   it('says which file it cannot find, which repository it does not have, and a patch no longer kept', () => {
-    expect(readSavedPatch(patch, saved, { path: 'nope.ts' })).toEqual({ available: false, reason: expect.stringContaining('No changed file matches "nope.ts"') });
-    expect(readSavedPatch(patch, saved, { repo: 'web' })).toEqual({ available: false, reason: expect.stringContaining('No repository matches "web"') });
-    expect(readSavedPatch(undefined, saved, {})).toEqual({ available: false, reason: expect.stringContaining('the patch attempt 2 saved is no longer') });
+    expect(readSavedPatch(patch, saved, { path: 'nope.ts' })).toEqual({ available: false, reason: expect.stringContaining('No changed file matches "nope.ts"'), cause: 'error' });
+    expect(readSavedPatch(patch, saved, { repo: 'web' })).toEqual({ available: false, reason: expect.stringContaining('No repository matches "web"'), cause: 'error' });
+    expect(readSavedPatch(undefined, saved, {})).toEqual({ available: false, reason: expect.stringContaining('the patch attempt 2 saved is no longer'), cause: 'error' });
   });
 
   // The session's directory is one a change task's commands can write, so the file is the task's work only while it is the bytes its artifact records.
@@ -81,8 +81,8 @@ describe.skipIf(process.platform === 'win32')('readSavedPatch', () => {
     flipped[flipped.length - 2] ^= 1;
 
     for (const changed of [flipped, patch.subarray(0, -1)]) {
-      expect(readSavedPatch(changed, saved, {})).toEqual({ available: false, reason: expect.stringContaining('has changed since attempt 2 saved it') });
-      expect(readSavedPatch(changed, saved, { path: 'a.ts' })).toEqual({ available: false, reason: expect.stringContaining('has changed since attempt 2 saved it') });
+      expect(readSavedPatch(changed, saved, {})).toEqual({ available: false, reason: expect.stringContaining('has changed since attempt 2 saved it'), cause: 'error' });
+      expect(readSavedPatch(changed, saved, { path: 'a.ts' })).toEqual({ available: false, reason: expect.stringContaining('has changed since attempt 2 saved it'), cause: 'error' });
     }
   });
 });
