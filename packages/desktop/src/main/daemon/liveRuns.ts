@@ -1,10 +1,16 @@
 import type { RouteId, RouteParams } from '../../shared/routes';
 
-/** A run that stopping its daemon would stop, named the way a refusal names it (ADR-0063 H3). */
+/** A live run, named the way a refusal or the quit dialog names it (ADR-0063 H3, H5). */
 export interface LiveRun {
   sessionId: string;
   goal: string;
   workspace: string;
+  /**
+   * Another host holds it (ADR-0049), so it goes on whatever happens to this
+   * app's daemon: a session joined in its holder's daemon (H8), a TUI's, an
+   * editor's. Absent for a run this daemon holds, which stops with it.
+   */
+  elsewhere?: true;
 }
 
 export type DaemonGet = (routeId: RouteId, params?: RouteParams) => Promise<{ ok: boolean; data?: unknown }>;
@@ -14,15 +20,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Whether a session's run would stop with its daemon. Only the run's own
- * activity says so: a plan marked running whose scheduler has nothing at work
- * and nothing on its way is a run that stopped, and an older daemon that
- * sends no activity is taken at its status word.
+ * Whether a run this daemon holds is at work: the scheduler has something at
+ * work or on its way. A snapshot with no activity is an older daemon's, taken
+ * at its status word.
  */
-function isLive(session: unknown): boolean {
-  if (!isRecord(session) || !isRecord(session.meta) || session.meta.status !== 'running') return false;
-  if (!isRecord(session.run) || !isRecord(session.run.activity)) return true;
-  const a = session.run.activity;
+function heldRunIsLive(run: Record<string, unknown>, status: unknown): boolean {
+  if (!isRecord(run.activity)) return status === 'running';
+  const a = run.activity;
   return a.starting === true || a.running === true || a.scheduled === true || a.advancesOnItsOwn === true;
 }
 
@@ -30,6 +34,12 @@ function isLive(session: unknown): boolean {
  * Every live run on the daemon, across the workspaces it has sessions in, or
  * undefined when any answer was missing: the caller refuses to stop a daemon
  * it could not check, so a partial answer must not read as "none".
+ *
+ * A run's plan is saved approved for as long as it lasts, so the saved status
+ * cannot say one is at work: the list's `run` does (`SessionListEntry`). A row
+ * an older daemon lists without one is taken at its status word, as before.
+ * The session's own read then tells a run this daemon holds, whose snapshot
+ * it carries, from one another host holds, which it does not.
  */
 export async function findLiveRuns(get: DaemonGet): Promise<LiveRun[] | undefined> {
   const workspaces = await get('workspaces.list');
@@ -42,10 +52,20 @@ export async function findLiveRuns(get: DaemonGet): Promise<LiveRun[] | undefine
     if (!list.ok || !Array.isArray(list.data)) return undefined;
     for (const meta of list.data) {
       if (!isRecord(meta) || typeof meta.id !== 'string') return undefined;
-      if (meta.status !== 'running') continue;
+      const listedLive = isRecord(meta.run) && meta.run.live === true;
+      if (!listedLive && meta.status !== 'running') continue;
       const session = await get('sessions.get', { id: meta.id, workspace });
-      if (!session.ok) return undefined;
-      if (isLive(session.data)) live.push({ sessionId: meta.id, goal: typeof meta.goal === 'string' ? meta.goal : meta.id, workspace });
+      if (!session.ok || !isRecord(session.data)) return undefined;
+      const run = { sessionId: meta.id, goal: typeof meta.goal === 'string' ? meta.goal : meta.id, workspace };
+      const held = session.data.run;
+      if (isRecord(held)) {
+        if (heldRunIsLive(held, meta.status)) live.push(run);
+      } else if (listedLive) {
+        live.push({ ...run, elsewhere: true });
+      } else {
+        // An older daemon's running plan with no snapshot to say otherwise.
+        live.push(run);
+      }
     }
   }
   return live;

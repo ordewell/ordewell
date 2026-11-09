@@ -1,9 +1,76 @@
 import { join, resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { closePrompt, guardClose, onLastWindowClosed, quitPrompt } from '../lifecycle';
+import { findLiveRuns, type DaemonGet } from '../daemon/liveRuns';
+import { closePrompt, guardClose, onLastWindowClosed, quitPrompt, runsQuitStops } from '../lifecycle';
 import { isInside } from '../paths';
 
 const run = { sessionId: 's1', goal: 'Ship it', workspace: '/w' };
+const joined = { sessionId: 's9', goal: 'Joined', workspace: '/w', elsewhere: true as const };
+
+/**
+ * The app's daemon as it answers mid-run: s1's plan saved approved, at work in
+ * this daemon; s9 held by another host, known by its lease; s2 settled.
+ */
+function daemonMidRun(options: { s1Live?: boolean; s9Live?: boolean } = {}): DaemonGet {
+  const { s1Live = true, s9Live = false } = options;
+  const rows = [
+    { id: 's1', status: 'approved', goal: 'Ship it', ...(s1Live ? { run: { live: true, done: 1, total: 2 } } : {}) },
+    { id: 's2', status: 'approved', goal: 'Settled' },
+    { id: 's9', status: 'approved', goal: 'Joined', ...(s9Live ? { run: { live: true } } : {}) },
+  ];
+  const sessions: Record<string, unknown> = {
+    s1: { meta: { status: 'approved' }, run: { tasks: [], activity: { starting: false, running: s1Live, scheduled: false, advancesOnItsOwn: s1Live } } },
+    s9: { meta: { status: 'approved' } },
+  };
+  return async (routeId, params) => {
+    if (routeId === 'workspaces.list') return { ok: true, data: { workspaces: ['/w'] } };
+    if (routeId === 'sessions.list') return { ok: true, data: rows };
+    const id = params && typeof params === 'object' ? Reflect.get(params, 'id') : undefined;
+    return routeId === 'sessions.get' && typeof id === 'string' && id in sessions ? { ok: true, data: sessions[id] } : { ok: false };
+  };
+}
+
+describe('closing the last window, as the daemon answers (ADR-0063 H5)', () => {
+  it('keeps the tray under a run whose plan is saved approved, and quits once it settled', async () => {
+    expect(onLastWindowClosed(await findLiveRuns(daemonMidRun()), 'linux')).toBe('tray');
+    expect(onLastWindowClosed(await findLiveRuns(daemonMidRun({ s1Live: false })), 'linux')).toBe('quit');
+  });
+
+  it('keeps the tray under a joined session\'s run: the app is how the user gets back to it', async () => {
+    expect(onLastWindowClosed(await findLiveRuns(daemonMidRun({ s1Live: false, s9Live: true })), 'win32')).toBe('tray');
+  });
+
+  it('keeps the tray when the daemon cannot be read', async () => {
+    expect(onLastWindowClosed(await findLiveRuns(async () => ({ ok: false })), 'linux')).toBe('tray');
+  });
+});
+
+describe('quitting, as the daemon answers (ADR-0063 H5)', () => {
+  it('asks to stop an owned daemon\'s run whose plan is saved approved, and stops only that one', async () => {
+    const live = await findLiveRuns(daemonMidRun({ s9Live: true }));
+    const prompt = quitPrompt(live, true);
+    expect(prompt?.message).toBe('A run is in progress. Quit and stop it?');
+    expect(prompt?.detail).toContain('• Ship it (/w)');
+    expect(prompt?.detail).toContain('Another host holds this one, so it goes on:\n• Joined (/w)');
+    expect(prompt?.confirmLabel).toBe('Stop and quit');
+    expect(runsQuitStops(live, true)).toEqual([run]);
+  });
+
+  it('says a run another host holds goes on, though this app owns its daemon', () => {
+    const prompt = quitPrompt([joined], true);
+    expect(prompt?.message).toBe('A run is in progress. Quit Ordewell?');
+    expect(prompt?.detail).toContain('• Joined (/w)');
+    expect(prompt?.detail).toContain('Another host holds it, so it goes on');
+    expect(prompt?.detail).not.toContain('stops the daemon');
+    expect(prompt?.confirmLabel).toBe('Quit');
+    expect(runsQuitStops([joined], true)).toEqual([]);
+  });
+
+  it('stops nothing in a daemon it attached to, or when the runs could not be checked', () => {
+    expect(runsQuitStops([run], false)).toEqual([]);
+    expect(runsQuitStops(undefined, true)).toEqual([]);
+  });
+});
 
 describe('onLastWindowClosed (ADR-0063 H5)', () => {
   it('keeps the app in the tray while a run is live, or when that cannot be told', () => {
