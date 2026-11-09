@@ -1,52 +1,89 @@
 // Offline proof of the planner eval's pure parts: metrics, answer keys, the
 // rubric's citation filter, aggregation and verdicts, redaction, the settings
-// guard, the driver's reading of a turn, the command line and the TUI's
-// terminal. Nothing here starts a model, a daemon or a terminal.
+// guard, the driver's reading of a turn, the command line, the TUI's terminal,
+// the budget recorder and re-scoring. Nothing here starts a model, a daemon or
+// a terminal.
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import http from 'node:http';
 import { describe, it } from 'node:test';
-import { aggregate, markdown, median, spread, verdict } from './lib/aggregate.mjs';
 import {
-  ANSWER, BASELINE_REF, CELLS, CONFIRM, NUDGES, QUOTA, VARIANTS, goalText, loadGoals, missingFor, mockCell, parseArgs,
-  runEnv, runId, runSettings, selectRuns, substituteFor,
+  aggregate, isComplete, markdown, median, meterSummary, spread, verdict, widthInRange,
+} from './lib/aggregate.mjs';
+import {
+  blockOf, budgetRecord, budgetSource, claudeTranscriptDir, claudeTurnInputs, reportsOwnReads, startRecorder,
+} from './lib/budget.mjs';
+import {
+  ANSWER, BASELINE_REF, CELLS, CONFIRM, NUDGES, QUOTA, TEST_COMMANDS, VARIANTS, goalText, loadGoals, missingFor, mockCell,
+  parseArgs, runEnv, runId, runSettings, selectRuns, substituteFor, timeoutFor,
 } from './lib/config.mjs';
 import { guardFiles, snapshot } from './lib/guard.mjs';
-import { keyChecks, keyViolations } from './lib/keys.mjs';
+import { keyChecks, keyHash, keyViolations, plannerRanTest } from './lib/keys.mjs';
 import {
   criticalPath, ownReadShare, planDigest, readMeter, runMetrics, sessionParts, width, wordingViolations,
 } from './lib/metrics.mjs';
 import { classifyTurn, newestSession } from './lib/observe.mjs';
 import { REDACTED, redactJson, redactor } from './lib/redact.mjs';
 import { citedOnly, questionsFor, rubricPrompt } from './lib/rubric.mjs';
-import { applyPatches } from './lib/target.mjs';
+import { applyPatches, linkTree, workParent } from './lib/target.mjs';
 import { ptyCommand, shellQuote, stripAnsi, typed } from './lib/tui.mjs';
 
 const goals = loadGoals();
 const goal = (id) => goals.find((g) => g.id === id);
 const task = (id, title, extra = {}) => ({ id, title, prompt: `${title}.`, dependencies: [], ...extra });
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'planner-eval-test-'));
+const repo = path.resolve(import.meta.dirname, '..', '..');
+const atBaseline = (args) => {
+  try {
+    return execFileSync('git', args, { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch {
+    return null;
+  }
+};
 
 describe('the goals', () => {
-  it('are G1 to G4, each with a goal and a key whose patterns compile', () => {
-    assert.deepEqual(goals.map((g) => g.id), ['g1', 'g2', 'g3', 'g4']);
+  it('are G1 to G5, each with a goal and a key whose patterns compile', () => {
+    assert.deepEqual(goals.map((g) => g.id), ['g1', 'g2', 'g3', 'g4', 'g5']);
     for (const g of goals) {
       assert.ok(g.goal.length > 40, g.id);
       assert.ok(g.key.taskCount.min <= g.key.taskCount.max, g.id);
       for (const d of g.key.sharedDecisions ?? []) [d.match, d.dependents].forEach((p) => new RegExp(p, 'i'));
       for (const k of g.key.keepTogether ?? []) new RegExp(k.match, 'i');
+      const r = g.key.reproduceFirst;
+      if (r) [r.reproduce, r.fix, r.plannerRanTest, r.validates, r.reproduceInFix, ...[r.causeNamed ?? []].flat()].forEach((p) => new RegExp(p, 'i'));
+      if (g.key.breadth) new RegExp(g.key.breadth.packages, 'i');
+      if (g.expectedSlices) assert.ok(g.expectedSlices.min <= g.expectedSlices.max, g.id);
     }
+    assert.deepEqual(goal('g1').expectedSlices, { min: 4, max: 6, tolerance: 1 });
+  });
+
+  it('hash a key with the goal text, so a changed key or goal is a changed hash', () => {
+    const g = goal('g4');
+    assert.equal(keyHash(g), keyHash(structuredClone(g)));
+    assert.notEqual(keyHash(g), keyHash({ ...g, key: { ...g.key, taskCount: { min: 1, max: 9 } } }));
+    assert.equal(keyHash(g), keyHash({ ...g, expectedSlices: { min: 1, max: 2 } }), 'what is only reported is not in the hash');
+  });
+
+  it("hold G5's ground truth: every source file importing a child-process API at the baseline", (t) => {
+    const { command, files } = goal('g5').groundTruth;
+    const pattern = /git grep -lE "([^"]+)"/.exec(command)[1];
+    const listed = atBaseline(['grep', '-lE', pattern, BASELINE_REF, '--', ...['core', 'cli', 'desktop', 'vscode', 'web'].map((p) => `packages/${p}/src`)]);
+    if (listed === null) {
+      t.skip(`the baseline commit ${BASELINE_REF} is not in this clone (a shallow checkout)`);
+      return;
+    }
+    const found = listed.split('\n').filter(Boolean).map((l) => l.slice(BASELINE_REF.length + 1))
+      .filter((f) => !/__tests__|\.test\.|\/test\/|\/testing\//.test(f)).sort();
+    assert.deepEqual(found, [...files].sort());
   });
 
   it("plant G4's bug exactly once in the baseline's Handoff.ts", (t) => {
-    const repo = path.resolve(import.meta.dirname, '..', '..');
-    let source;
-    try {
-      source = execFileSync('git', ['show', `${BASELINE_REF}:packages/core/src/models/Handoff.ts`], { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-    } catch {
+    const source = atBaseline(['show', `${BASELINE_REF}:packages/core/src/models/Handoff.ts`]);
+    if (source === null) {
       t.skip(`the baseline commit ${BASELINE_REF} is not in this clone (a shallow checkout)`);
       return;
     }
@@ -115,28 +152,43 @@ describe('readMeter', () => {
 });
 
 describe('wordingViolations', () => {
-  const say = (content) => [{ role: 'assistant', content }];
+  const PLANNED = [{ role: 'user', content: 'goal' }, { role: 'assistant', content: 'Click the card. Press go.' }, { kind: 'plan_generated', content: 'Plan generated' }];
+  const say = (content) => [...PLANNED, { role: 'assistant', content }];
+  const rules = (found) => [...new Set(found.map((f) => f.rule))].sort();
 
-  it('flags buttons, cards, press, Execute plan and Merge all in the chat', () => {
-    const found = wordingViolations(say('Press the Execute plan button. The card shows it. Then Merge all.'), { autoMerge: false });
-    assert.deepEqual([...new Set(found.map((f) => f.rule))].sort(), ["names a button", "names a card", "says 'Execute plan'", "says 'Merge all'", "says 'press'"].sort());
+  it('flags an instruction to operate a control the terminal lacks, in the hand-back only', () => {
+    const found = wordingViolations(say('Click the Execute plan button to start. You can open the task card. Press go when ready. Then choose Merge all.'), { autoMerge: false });
+    assert.deepEqual(rules(found), ["names a button", "names a card", "says 'Execute plan'", "says 'Merge all'", "says 'click'", "says 'press' without a key"].sort());
+    assert.deepEqual(wordingViolations(PLANNED, { autoMerge: true }), [], 'what came before the plan was handed back is not scanned');
   });
 
-  it('ignores quoted and inline-code text a task must change, and what the user said', () => {
-    const history = [{ role: 'user', content: 'press the button' }, ...say("Change `Merge all` and the 'press Enter' hint, and \"the card\".")];
-    assert.deepEqual(wordingViolations(history, { autoMerge: true }), []);
+  it('leaves a description, a quote, a code identifier and a key press alone', () => {
+    const text = [
+      'The plan adds a usage line to the task card.',
+      "Change `Merge all` and the 'press Enter' hint, and \"the card\".",
+      'Task 2 edits renderTaskCard in packages/cli/src/tui/card.ts.',
+      'Press Enter to start the plan. Press `a` to approve.',
+    ].join(' ');
+    assert.deepEqual(wordingViolations([{ role: 'user', content: 'press the button' }, ...say(text)], { autoMerge: true }), []);
   });
 
   it("leaves a button or card alone in a sentence about VS Code, the webview or desktop", () => {
-    const found = wordingViolations(say("The VS Code task card's header shows usage. The desktop button stays. The card shows it."), { autoMerge: false });
-    assert.deepEqual(found.map((f) => f.quote), ['The card shows it.']);
+    const found = wordingViolations(say('You will see a VS Code task card. Open the desktop button. You can click the card.'), { autoMerge: false });
+    assert.deepEqual(found.map((f) => f.quote), ['You can click the card.', 'You can click the card.']);
   });
 
-  it('flags asking the user to merge only while automatic merging is on', () => {
-    const text = 'When it finishes, you can merge the branch. Then merge it.';
-    assert.equal(wordingViolations(say(text), { autoMerge: true }).length, 2);
+  it('exempts a term the goal itself uses', () => {
+    const found = wordingViolations(say('You can open the task card to see the usage.'), { autoMerge: false, goalText: 'Show token usage on the task card.' });
+    assert.deepEqual(found, []);
+  });
+
+  it('flags asking the user to merge only while automatic merging is on, and not where it merges by itself', () => {
+    const text = "When it finishes, you'll need to merge the branch. Then merge it. Type /merge after.";
+    assert.equal(wordingViolations(say(text), { autoMerge: true }).length, 3);
     assert.equal(wordingViolations(say(text), { autoMerge: false }).length, 0);
-    assert.equal(wordingViolations(say('Each gate merges by itself.'), { autoMerge: true }).length, 0);
+    for (const fine of ['Each gate merges by itself.', 'You can merge nothing: the run merges automatically.', 'You will see the run merge each gate.']) {
+      assert.deepEqual(wordingViolations(say(fine), { autoMerge: true }), [], fine);
+    }
   });
 });
 
@@ -211,21 +263,67 @@ describe('keyChecks', () => {
     assert.deepEqual(keyViolations(keyChecks(goal('g3'), two)).map((c) => c.check), ['task count']);
   });
 
-  it('wants G4 reproduced first and its hypotheses researched before the fix', () => {
-    const fix = task('3', 'Fix the worst-severity comparison', { dependencies: ['1', '2'] });
+  it('wants G4 reproduced first, validated by the named tests, and its hypotheses researched while the cause is unknown', () => {
+    const fix = task('3', 'Fix the worst-severity comparison', { dependencies: ['1', '2'], prompt: 'Fix it, then run Handoff.test.ts and taskRow.test.ts.' });
     const good = [task('1', 'Reproduce the failing test'), task('2', 'Hypothesis: the rank comparison', { research: true }), fix];
     assert.deepEqual(keyViolations(keyChecks(goal('g4'), good)), []);
     const guessed = [task('1', 'Fix the worst-severity comparison')];
-    assert.deepEqual(keyViolations(keyChecks(goal('g4'), guessed)).map((c) => c.check).sort(), ['hypotheses in research tasks', 'reproduce first', 'task count'].sort());
+    assert.deepEqual(keyViolations(keyChecks(goal('g4'), guessed)).map((c) => c.check).sort(),
+      ['hypotheses in research tasks', 'reproduce first', 'validated by the failing tests'].sort());
   });
 
-  it("accepts the planner's own run of the failing test as the reproduction", () => {
-    const plan = [task('2', 'Check the rank order', { research: true }), task('3', 'Fix the comparison', { dependencies: ['2'] })];
-    const researchLog = [{ tool: 'bash', args: '{"command":"npx vitest run src/models/__tests__/Handoff.test.ts"}' }];
-    const repro = keyChecks(goal('g4'), plan, { researchLog }).find((c) => c.check === 'reproduce first');
-    assert.equal(repro.status, 'pass');
-    const byAgent = keyChecks(goal('g4'), plan, { researchLog: [{ ...researchLog[0], subagentId: 's' }] }).find((c) => c.check === 'reproduce first');
-    assert.equal(byAgent.status, 'fail');
+  it('accepts one G4 task that names the cause and runs the failing tests before and after its change', () => {
+    const one = [task('1', 'Fix worstSeverity in Handoff.ts', {
+      prompt: 'The comparison at Handoff.ts:42 reads SEVERITY_RANK backwards. Run Handoff.test.ts first and record the failure before changing code, '
+        + 'then fix worstSeverity and run Handoff.test.ts and taskRow.test.ts.',
+    })];
+    const checks = keyChecks(goal('g4'), one);
+    assert.deepEqual(keyViolations(checks), []);
+    assert.equal(checks.find((c) => c.check === 'hypotheses in research tasks').status, 'na');
+    const unvalidated = [task('1', 'Fix worstSeverity in Handoff.ts', { prompt: 'SEVERITY_RANK is read backwards at line 42; run the tests first, before you change it.' })];
+    // Running "the tests" without naming them neither reproduces nor validates anything the goal named.
+    assert.deepEqual(keyViolations(keyChecks(goal('g4'), unvalidated)).map((c) => c.check), ['reproduce first', 'validated by the failing tests']);
+  });
+
+  it("accepts the planner's own run of the failing test only where it saw a test result", () => {
+    const plan = [task('2', 'Check the rank order', { research: true }), task('3', 'Fix the comparison', { dependencies: ['2'], prompt: 'Then run Handoff.test.ts.' })];
+    const ran = { tool: 'bash', args: '{"command":"npx vitest run src/models/__tests__/Handoff.test.ts"}', result: ' FAIL  src/models/__tests__/Handoff.test.ts\n Test Files  1 failed (1)' };
+    const status = (researchLog) => keyChecks(goal('g4'), plan, { researchLog }).find((c) => c.check === 'reproduce first').status;
+    assert.equal(status([ran]), 'pass');
+    assert.equal(status([{ ...ran, subagentId: 's' }]), 'fail', "an agent's run is not the planner's");
+    assert.equal(status([{ ...ran, result: 'sh: 1: vitest: not found' }]), 'fail', 'a sealed run that found no test runner saw nothing fail');
+    assert.equal(status([{ ...ran, result: undefined }]), 'fail');
+    assert.equal(plannerRanTest([ran], 'taskRow\\.test'), false, 'the command must name the test');
+  });
+
+  it('counts change tasks only: one verify/fix loop pair and a docs task are not the work split', () => {
+    const work = task('1', 'Reword the hint');
+    const loop = [work, task('v', 'Check the hint wording', { type: 'script', loop: { max: 2, body: ['f'] }, dependencies: ['1'] }), task('f', 'Fix what the check found', { dependencies: ['v'] })];
+    assert.deepEqual(keyViolations(keyChecks(goal('g3'), loop)), []);
+    const rename = [task('1', 'Rename the field in core'), task('2', 'Verify the rename'), task('3', 'Update the docs for the rename')];
+    assert.equal(keyChecks(goal('g2'), rename).find((c) => c.check === 'kept together: rename').status, 'pass');
+  });
+
+  it('wants G5 handed out by package before any change, with the planner reading little itself', () => {
+    const plan = [
+      task('r1', 'Survey spawn sites in packages/core', { research: true }),
+      task('r2', 'Survey spawn sites in cli, web and vscode', { research: true }),
+      task('h', 'Add a child environment helper in core', { dependencies: ['r1', 'r2'] }),
+      task('c', 'Route the cli spawn sites through the helper', { dependencies: ['h'] }),
+      task('w', 'Route the web spawn sites through the helper', { dependencies: ['h'] }),
+    ];
+    const reads = (n, bytes = 10) => Array.from({ length: n }, () => ({ tool: 'grep', result: 'x'.repeat(bytes) }));
+    assert.deepEqual(keyViolations(keyChecks(goal('g5'), plan, { researchLog: reads(3) })), []);
+    assert.deepEqual(keyViolations(keyChecks(goal('g5'), plan, { researchLog: reads(11) })).map((c) => c.check), ['own reads within budget']);
+    assert.deepEqual(keyViolations(keyChecks(goal('g5'), plan, { researchLog: reads(2, 40_000) })).map((c) => c.check), ['own reads within budget']);
+    const oneSurvey = [task('r', 'Survey every package', { research: true }), ...plan.slice(2).map((t) => ({ ...t, dependencies: t.id === 'h' ? ['r'] : t.dependencies }))];
+    assert.deepEqual(keyViolations(keyChecks(goal('g5'), oneSurvey)).map((c) => c.check), ['delegated by package before any fix']);
+    const agents = [
+      { tool: 'spawn_research_agent', args: { prompt: 'List the spawn sites in packages/core.' } },
+      { tool: 'agent_tool', toolLabel: 'Agent', args: { prompt: 'List the spawn sites in packages/cli and packages/web.' } },
+    ];
+    assert.equal(keyChecks(goal('g5'), plan.slice(2).map((t) => ({ ...t, dependencies: t.id === 'h' ? [] : t.dependencies })), { researchLog: agents })
+      .find((c) => c.check === 'delegated by package before any fix').status, 'pass');
   });
 });
 
@@ -266,11 +364,16 @@ describe('the rubric', () => {
 
 describe('aggregation', () => {
   const rec = (variant, n, extra = {}) => ({
-    id: `g1--c--${variant}--r${n}`, cell: 'c', variant, goal: 'g1', repeat: n,
-    metrics: { submitted: true, taskCount: 4, width: 2, ownReadShare: 0.5, wordingViolations: [], ...(extra.metrics ?? {}) },
+    id: `${extra.goal ?? 'g1'}--c--${variant}--r${n}${extra.suffix ?? ''}`, cell: 'c', variant, goal: extra.goal ?? 'g1', repeat: n,
+    metrics: { submitted: true, stopped: 'plan submitted', taskCount: 4, width: 5, ownReadShare: 0.5, wordingViolations: [], ...(extra.metrics ?? {}) },
     keyChecks: extra.keyChecks ?? [{ check: 'task count', status: 'pass', detail: '' }],
     ...(extra.rubric ? { rubric: extra.rubric } : {}),
+    ...(extra.error ? { error: extra.error } : {}),
   });
+  const failing = (n) => Array.from({ length: n }, () => ({ check: 'task count', status: 'fail', detail: '9' }));
+  const compare = (records) => verdict(records, goals, { cell: 'c', baseline: 'V0', candidate: 'V1' });
+  const criterion = (v, name) => v.criteria.find((c) => c.name.startsWith(name));
+  const reported = (v, name) => v.reported.find((c) => c.name.startsWith(name));
 
   it('takes medians and spread over finite numbers only', () => {
     assert.equal(median([3, 1, null, 2]), 2);
@@ -279,38 +382,79 @@ describe('aggregation', () => {
     assert.deepEqual(spread([2, undefined, 5]), { min: 2, max: 5 });
   });
 
-  it('passes a candidate that matches the baseline on every criterion', () => {
-    const v = verdict([rec('V0', 1), rec('V1', 1)], goals, { cell: 'c', baseline: 'V0', candidate: 'V1' });
+  it('passes a candidate that matches the baseline, and judges on key and true wording violations alone', () => {
+    const v = compare([rec('V0', 1), rec('V1', 1)]);
     assert.equal(v.result, 'pass');
+    assert.deepEqual(v.criteria.map((c) => c.name), ['key violations per run', 'true wording violations per run']);
   });
 
-  it('fails a narrower, more self-reading, violating or silent candidate', () => {
-    const narrower = verdict([rec('V0', 1), rec('V1', 1, { metrics: { width: 1 } })], goals, { cell: 'c', baseline: 'V0', candidate: 'V1' });
-    assert.equal(narrower.criteria.find((c) => c.name.startsWith('width on g1')).pass, false);
-    const reads = verdict([rec('V0', 1), rec('V1', 1, { metrics: { ownReadShare: 0.9 } })], goals, { cell: 'c', baseline: 'V0', candidate: 'V1' });
-    assert.equal(reads.result, 'fail');
-    const wording = verdict([rec('V0', 1), rec('V1', 1, { metrics: { wordingViolations: [{ rule: 'says press', quote: 'Press' }] } })], goals, { cell: 'c', baseline: 'V0', candidate: 'V1' });
-    assert.equal(wording.criteria.find((c) => c.name.startsWith('wording')).pass, false);
-    const silent = verdict([rec('V0', 1), rec('V1', 1, { metrics: { submitted: false } })], goals, { cell: 'c', baseline: 'V0', candidate: 'V1' });
-    assert.equal(silent.criteria.find((c) => c.name.startsWith('plans submitted')).pass, false);
-    const keys = verdict([rec('V0', 1), rec('V1', 1, { keyChecks: [{ check: 'task count', status: 'fail', detail: '9' }] })], goals, { cell: 'c', baseline: 'V0', candidate: 'V1' });
-    assert.equal(keys.result, 'fail');
+  it('reports width, own reads and rubric problems without judging on them', () => {
+    const reviewed = { ok: true, problems: [{ question: 'split', claims: [{ text: 'split', taskIds: ['1'], quotes: [] }] }] };
+    const v = compare([rec('V0', 1, { rubric: { ok: true, problems: [] } }), rec('V1', 1, { metrics: { width: 1, ownReadShare: 0.9 }, rubric: reviewed })]);
+    assert.equal(v.result, 'pass');
+    assert.deepEqual(reported(v, 'width on g1 in 4-6 ±1'), { name: 'width on g1 in 4-6 ±1', baseline: '1/1', candidate: '0/1' });
+    assert.equal(reported(v, 'own-read share').candidate, 0.9);
+    assert.equal(reported(v, 'rubric problems').candidate, 1);
+  });
+
+  it('fails more key violations than run-to-run spread allows, and a run with no plan counts one', () => {
+    // The baseline's repeats differ by 2 violations a run, so a candidate within 1 of its mean holds.
+    const base = [rec('V0', 1, { keyChecks: failing(2) }), rec('V0', 2)];
+    assert.equal(compare([...base, rec('V1', 1, { keyChecks: failing(2) })]).result, 'pass');
+    const worse = compare([...base, rec('V1', 1, { keyChecks: failing(3) })]);
+    assert.equal(worse.result, 'fail');
+    assert.equal(criterion(worse, 'key violations').allowance, 1);
+    const silent = compare([rec('V0', 1), rec('V1', 1, { metrics: { submitted: false, stopped: 'turn limit' } })]);
+    assert.equal(criterion(silent, 'key violations').candidate, 1);
+    assert.equal(silent.result, 'fail');
+  });
+
+  it('holds at zero true wording violations, and fails them above the baseline', () => {
+    const said = { metrics: { wordingViolations: [{ rule: "says 'click'", quote: 'Click it.' }] } };
+    assert.equal(criterion(compare([rec('V0', 1, said), rec('V1', 1)]), 'true wording').pass, true);
+    assert.equal(criterion(compare([rec('V0', 1), rec('V1', 1, said)]), 'true wording').pass, false);
+  });
+
+  it('counts a timed-out run toward completion only, never as a clean plan', () => {
+    const timedOut = rec('V1', 1, { suffix: 't', error: 'timeout after 900s', metrics: { stopped: 'timeout', submitted: false } });
+    assert.equal(isComplete(timedOut), false);
+    assert.equal(isComplete(rec('V1', 1, { metrics: { stopped: 'tui exited' } })), false);
+    assert.equal(isComplete(rec('V1', 1, { metrics: { stopped: 'turn limit', submitted: false } })), true);
+    const v = compare([rec('V0', 1), rec('V1', 1, { keyChecks: failing(1) }), timedOut]);
+    assert.equal(criterion(v, 'key violations').candidate, 1, 'the timeout neither adds a violation nor dilutes one');
+    assert.equal(reported(v, 'completion rate').candidate, 0.5);
+    assert.equal(compare([rec('V0', 1), timedOut]).result, 'incomplete', 'a side that only timed out has nothing to judge');
+    const [summary] = aggregate([timedOut], goals).summaries;
+    assert.deepEqual([summary.runs, summary.complete, summary.timeouts, summary.violations.length], [1, 0, 1, 0]);
   });
 
   it('calls a comparison with a side missing incomplete, never a pass', () => {
-    assert.equal(verdict([rec('V0', 1)], goals, { cell: 'c', baseline: 'V0', candidate: 'V1' }).result, 'incomplete');
+    assert.equal(compare([rec('V0', 1)]).result, 'incomplete');
   });
 
-  it('compares rubric problems only where a review ran', () => {
-    const reviewed = { ok: true, problems: [{ question: 'split', claims: [{ text: 'split', taskIds: ['1'], quotes: [] }] }] };
-    const v = verdict([rec('V0', 1, { rubric: { ok: true, problems: [] } }), rec('V1', 1, { rubric: reviewed })], goals, { cell: 'c', baseline: 'V0', candidate: 'V1' });
-    assert.equal(v.criteria.find((c) => c.name.startsWith('rubric')).pass, false);
+  it("measures width against the goal's expected slices, where it names them", () => {
+    assert.equal(widthInRange(rec('V0', 1, { metrics: { width: 3 } }), goal('g1')), true);
+    assert.equal(widthInRange(rec('V0', 1, { metrics: { width: 8 } }), goal('g1')), false);
+    assert.equal(widthInRange(rec('V0', 1), goal('g3')), null);
+    assert.equal(widthInRange(rec('V0', 1, { metrics: { submitted: false } }), goal('g1')), null);
+  });
+
+  it('tells a run whose meter line carried a count from one that only saw the first turn', () => {
+    const budget = (meters) => ({ metrics: { budget: { source: 'proxy', expected: true, turns: meters.map((meter) => ({ block: 'b', meter })) } } });
+    const rows = meterSummary([
+      rec('V2', 1, budget(['Your own reads: about 0 tokens last turn', 'Your own reads: about 900 tokens last turn'])),
+      rec('V2', 2, budget(['Your own reads: about 0 tokens last turn'])),
+      rec('V2', 3, budget([null])),
+      rec('V1', 1),
+    ]);
+    assert.deepEqual(rows, [{ cell: 'c', variant: 'V2', source: 'proxy', expected: true, recorded: 3, withLine: 2, withCount: 1 }]);
   });
 
   it('lists every violation, error and substitution in the markdown', () => {
     const records = [
       rec('V0', 1, { keyChecks: [{ check: 'task count', status: 'fail', detail: '9 tasks' }] }),
       { ...rec('V1', 1), error: 'timed out | badly', substitution: { from: 'opencode-go/x', to: 'openrouter/x', reason: 'quota' } },
+      rec('V1', 2),
     ];
     const md = markdown(aggregate(records, goals), { meta: { mode: 'test' } });
     assert.match(md, /key: task count: 9 tasks/);
@@ -406,8 +550,8 @@ describe('the run matrix', () => {
     const runs = selectRuns(parseArgs(['--full']), { goals });
     const required = CELLS.filter((c) => !c.optional).length;
     assert.equal(required, 6);
-    assert.equal(runs.length, 4 * required * 3 * 3);
-    assert.equal(selectRuns(parseArgs(['--full', '--with-optional']), { goals }).length, 4 * CELLS.length * 3 * 3);
+    assert.equal(runs.length, goals.length * required * 3 * 3);
+    assert.equal(selectRuns(parseArgs(['--full', '--with-optional']), { goals }).length, goals.length * CELLS.length * 3 * 3);
   });
 
   it('narrows by backend, goal and variant', () => {
@@ -415,7 +559,7 @@ describe('the run matrix', () => {
     assert.deepEqual([...new Set(runs.map((r) => r.cell.id))], ['opencode/deepseek-v4.1-flash', 'opencode/glm-5.3-flash']);
     assert.ok(runs.every((r) => r.goal.id === 'g4' && r.variant.id === 'V1'));
     assert.equal(runs.length, 4);
-    assert.equal(selectRuns(parseArgs(['--full', '--backend', 'cline']), { goals }).length, 4 * 3 * 3, 'an optional cell runs when named');
+    assert.equal(selectRuns(parseArgs(['--full', '--backend', 'cline']), { goals }).length, goals.length * 3 * 3, 'an optional cell runs when named');
   });
 
   it('refuses an unknown flag and a bad number', () => {
@@ -424,6 +568,19 @@ describe('the run matrix', () => {
     assert.throws(() => parseArgs(['--goal']), /needs a value/);
     assert.equal(parseArgs(['--mock']).review, false);
     assert.equal(parseArgs(['--timeout=30', '--smoke']).timeoutMs, 30_000);
+  });
+
+  it('gives an API planner a longer limit, and reads the re-score and baseline flags', () => {
+    const opts = parseArgs(['--full', '--timeout', '600']);
+    assert.equal(opts.apiTimeoutMs, 1_200_000);
+    assert.equal(timeoutFor(CELLS.find((c) => c.id === 'openrouter/glm-5.3-flash'), opts), 1_200_000);
+    assert.equal(timeoutFor(CELLS.find((c) => c.id === 'claude-code/haiku'), opts), 600_000);
+    assert.equal(timeoutFor(mockCell(3799), opts), 600_000);
+    assert.equal(parseArgs(['--full', '--api-timeout', '90']).apiTimeoutMs, 90_000);
+    const rescore = parseArgs(['--rescore', 'a', '--out', 'b', '--no-review']);
+    assert.deepEqual([rescore.mode, rescore.rescore, rescore.out, rescore.review], ['rescore', 'a', 'b', false]);
+    assert.equal(parseArgs(['--rescore', 'a']).review, true);
+    assert.equal(parseArgs(['--full', '--baseline-from', 'stored']).baselineFrom, 'stored');
   });
 
   it('appends the nudges to V0 alone, verbatim', () => {
@@ -445,6 +602,8 @@ describe('the run matrix', () => {
     assert.equal(env.ORCHESTRATOR_MODEL, 'haiku');
     assert.equal(env.ORDEWELL_SETTINGS_PATH, 's.json');
     assert.equal(env.HOME, 'h');
+    assert.deepEqual(env.ORDEWELL_APPROVAL_ALLOW.split(','), TEST_COMMANDS);
+    assert.ok(TEST_COMMANDS.includes('npx vitest run'));
     const or = runEnv(base, { cell: CELLS.find((c) => c.id === 'openrouter/glm-5.3-flash'), variant: VARIANTS.V2, settingsPath: 's', maxParallel: 1, enabledRunners: ['claude-code'] });
     assert.equal(or.OPENROUTER_API_KEY, 'k');
     assert.equal(or.ORDEWELL_PLANNER_READ_METER, '1');
@@ -491,5 +650,165 @@ describe('the terminal', () => {
     assert.equal(shellQuote("it's"), `'it'\\''s'`);
     assert.equal(typed('a\nb'), '\x1b[200~a\nb\x1b[201~');
     assert.equal(stripAnsi('\x1b[1;32mok\x1b[0m\x1b]0;title\x07'), 'ok');
+  });
+});
+
+describe("a run's clone", () => {
+  it("copies a build's node_modules in as real files and recreates its links verbatim", () => {
+    const dir = tmp();
+    const from = path.join(dir, 'build', 'node_modules');
+    fs.mkdirSync(path.join(from, 'pkg', 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(from, 'pkg', 'lib', 'index.js'), 'ok');
+    const linked = process.platform !== 'win32';
+    if (linked) fs.symlinkSync(path.join('..', '..', 'packages', 'core'), path.join(from, 'core'), 'dir');
+    const to = path.join(dir, 'clone', 'node_modules');
+    linkTree(from, to);
+    assert.equal(fs.readFileSync(path.join(to, 'pkg', 'lib', 'index.js'), 'utf8'), 'ok');
+    assert.ok(!fs.lstatSync(path.join(to, 'pkg')).isSymbolicLink(), 'a directory is a directory of the clone, not a link out of it');
+    if (linked) assert.equal(fs.readlinkSync(path.join(to, 'core')), path.join('..', '..', 'packages', 'core'));
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("puts the clones where the builds' file system is, falling back to the first candidate", () => {
+    const dir = tmp();
+    assert.equal(workParent(dir, [path.join(dir, 'missing'), os.tmpdir()]), os.tmpdir());
+    assert.equal(workParent(path.join(dir, 'missing'), ['a', 'b']), 'a');
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('the budget block', () => {
+  const block = [
+    'CONTEXT AND BUDGETS (this turn):',
+    '- Context: about 12000 tokens of 200000.',
+    '- Your own reads: about 900 tokens last turn, 1400 in this conversation (approximate, from characters).',
+  ].join('\n');
+
+  it('reads the block and its meter line from a turn, the last one where a turn holds two', () => {
+    assert.equal(blockOf(`Earlier.\n${block}\n\nThe user said: go.`), block);
+    assert.equal(blockOf('no block here'), null);
+    const rec = budgetRecord(['first turn, before any block', `x\n${block}`], { source: 'proxy', expected: true });
+    assert.deepEqual(rec, { source: 'proxy', expected: true, turns: [{ block, meter: block.split('\n')[2].slice(2) }] });
+    const noMeter = budgetRecord([block.split('\n').slice(0, 2).join('\n')], { source: 'transcript', expected: false });
+    assert.equal(noMeter.turns[0].meter, null);
+  });
+
+  it('knows which runners report their own reads and where this bench can see their turns', () => {
+    const cell = (id) => CELLS.find((c) => c.id === id);
+    assert.equal(reportsOwnReads(cell('claude-code/haiku')), true);
+    assert.equal(budgetSource(cell('claude-code/haiku')), 'transcript');
+    assert.equal(budgetSource(cell('openrouter/glm-5.3-flash')), 'proxy');
+    assert.equal(budgetSource(mockCell(1)), 'proxy');
+    const codex = CELLS.find((c) => c.provider === 'codex');
+    assert.equal(reportsOwnReads(codex), false);
+    assert.equal(budgetSource(codex), null);
+    assert.equal(budgetSource(CELLS.find((c) => c.provider === 'opencode')), null);
+  });
+
+  it("reads the planner's own turns from Claude Code's transcript, oldest first, not a subagent's", () => {
+    const dir = tmp();
+    const projects = claudeTranscriptDir(path.join(dir, 'work', 'run.1'), { CLAUDE_CONFIG_DIR: path.join(dir, 'config') });
+    assert.equal(path.dirname(projects), path.join(dir, 'config', 'projects'));
+    assert.match(path.basename(projects), /^[A-Za-z0-9-]+$/);
+    fs.mkdirSync(projects, { recursive: true });
+    const entry = (at, content, extra = {}) => JSON.stringify({ type: 'user', timestamp: at, message: { role: 'user', content }, ...extra });
+    fs.writeFileSync(path.join(projects, 's.jsonl'), [
+      entry('2026-01-01T00:00:02Z', [{ type: 'text', text: `second\n${block}` }, { type: 'tool_result', content: 'x' }]),
+      entry('2026-01-01T00:00:01Z', 'first'),
+      entry('2026-01-01T00:00:03Z', 'an agent', { isSidechain: true }),
+      JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: 'reply' } }),
+      'not json',
+    ].join('\n'));
+    assert.deepEqual(claudeTurnInputs(projects), ['first', `second\n${block}`]);
+    assert.deepEqual(claudeTurnInputs(path.join(dir, 'none')), []);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("records an API planner's turns through a pass-through proxy, each once", async () => {
+    const upstream = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ path: req.url, auth: req.headers.authorization ?? null, got: JSON.parse(body || 'null')?.messages?.length ?? null }));
+      });
+    });
+    await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+    const recorder = await startRecorder(`http://127.0.0.1:${upstream.address().port}/v1/`);
+    try {
+      const post = (messages) => fetch(`${recorder.url}/chat/completions`, {
+        method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer k' }, body: JSON.stringify({ messages }),
+      }).then((r) => r.json());
+      const turn1 = [{ role: 'system', content: 's' }, { role: 'user', content: 'goal' }];
+      assert.deepEqual(await post(turn1), { path: '/v1/chat/completions', auth: 'Bearer k', got: 2 });
+      await post([...turn1, { role: 'assistant', content: 'a' }, { role: 'user', content: [{ type: 'text', text: block }] }]);
+      assert.deepEqual(recorder.inputs(), ['goal', block]);
+    } finally {
+      await recorder.stop();
+      await new Promise((resolve) => upstream.close(resolve));
+    }
+  });
+});
+
+describe('re-scoring stored runs', () => {
+  const runBench = (args) => spawnSync(process.execPath, [path.join(import.meta.dirname, 'run.mjs'), ...args], {
+    encoding: 'utf8', env: { ...process.env, NODE_OPTIONS: '' }, timeout: 60_000,
+  });
+  const session = (tasks) => ({
+    plan: { tasks },
+    conversation: { conversationHistory: [{ role: 'user', content: 'goal' }, { kind: 'plan_generated', content: 'Plan generated' }], researchLog: [] },
+  });
+  const store = (dir, id, record, tasks) => {
+    fs.writeFileSync(path.join(dir, `${id}.json`), JSON.stringify({ id, cell: 'c', repeat: 1, ...record }));
+    if (tasks) fs.writeFileSync(path.join(dir, `${id}.session.json`), JSON.stringify(session(tasks)));
+  };
+
+  it('scores each run with the current key, drops a review the changed key made stale, and fails a stored timeout', () => {
+    const dir = tmp();
+    const from = path.join(dir, 'stored');
+    fs.mkdirSync(from);
+    fs.writeFileSync(path.join(from, 'meta.json'), JSON.stringify({ mode: 'full', started: 'then' }));
+    const fix = [task('1', 'Fix worstSeverity in Handoff.ts', { prompt: 'Handoff.ts:42 reads SEVERITY_RANK backwards; run Handoff.test.ts first, before you change it, then run taskRow.test.ts.' })];
+    const rubric = { ok: true, problems: [] };
+    store(from, 'g4--c--V0--r1', { goal: 'g4', variant: 'V0', keyHash: 'old', rubric, metrics: { submitted: true, stopped: 'plan submitted', turns: 2 } }, fix);
+    store(from, 'g1--c--V0--r1', { goal: 'g1', variant: 'V0', keyHash: keyHash(goal('g1')), rubric, metrics: { submitted: true, stopped: 'plan submitted' } }, [task('1', 'Core')]);
+    store(from, 'g3--c--V1--r1', { goal: 'g3', variant: 'V1', metrics: { submitted: false, stopped: 'timeout', wallMs: 900_000 } }, []);
+    const to = path.join(dir, 'rescored');
+    const out = runBench(['--rescore', from, '--out', to, '--no-review']);
+    assert.equal(out.status, 0, out.stdout + out.stderr);
+    const read = (id) => JSON.parse(fs.readFileSync(path.join(to, `${id}.json`), 'utf8'));
+    const g4 = read('g4--c--V0--r1');
+    assert.equal(g4.keyHash, keyHash(goal('g4')));
+    assert.deepEqual(keyViolations(g4.keyChecks), []);
+    assert.equal(g4.rubric, undefined);
+    assert.equal(g4.rubricStale, true);
+    assert.deepEqual(read('g1--c--V0--r1').rubric, rubric, 'an unchanged key keeps its review');
+    assert.equal(read('g3--c--V1--r1').error, 'timeout after 900s');
+    assert.ok(fs.existsSync(path.join(to, 'g4--c--V0--r1.session.json')));
+    const { passes } = JSON.parse(fs.readFileSync(path.join(to, 'meta.json'), 'utf8'));
+    assert.equal(passes[0].mode, 'rescore');
+    assert.deepEqual(passes[0].fromPasses, [{ mode: 'full', started: 'then' }]);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(from, 'g4--c--V0--r1.json'), 'utf8')).keyHash, 'old', 'the stored run is left as it was');
+    assert.equal(runBench(['--rescore', from, '--out', from, '--no-review']).status, 1);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("compares a new candidate with a stored directory's V0, where the new directory ran none of its own", () => {
+    const dir = tmp();
+    const [stored, fresh] = [path.join(dir, 'stored'), path.join(dir, 'fresh')];
+    fs.mkdirSync(stored);
+    fs.mkdirSync(fresh);
+    const metrics = { submitted: true, stopped: 'plan submitted', wordingViolations: [] };
+    store(stored, 'g3--c--V0--r1', { goal: 'g3', variant: 'V0', metrics, keyChecks: [] });
+    store(stored, 'g4--c--V0--r1', { goal: 'g4', variant: 'V0', metrics, keyChecks: [] });
+    store(fresh, 'g3--c--V1--r1', { goal: 'g3', variant: 'V1', metrics, keyChecks: [] });
+    store(fresh, 'g4--c--V0--r1', { goal: 'g4', variant: 'V0', metrics, keyChecks: [{ check: 'x', status: 'fail', detail: 'fresh' }] });
+    const out = runBench(['--report', fresh, '--baseline-from', stored]);
+    assert.equal(out.status, 0, out.stdout + out.stderr);
+    const { records, verdicts } = JSON.parse(fs.readFileSync(path.join(fresh, 'report.json'), 'utf8'));
+    const v0 = records.filter((r) => r.variant === 'V0');
+    assert.deepEqual(v0.map((r) => [r.goal, r.source ?? 'own']).sort(), [['g3', stored], ['g4', 'own']]);
+    assert.equal(verdicts.find((v) => v.candidate === 'V1').result, 'pass');
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });

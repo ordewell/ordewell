@@ -134,23 +134,27 @@ function byteLength(value) {
 export function readMeter(researchLog) {
   let ownReads = 0;
   let ownReadBytes = 0;
-  let agentCalls = 0;
   const subagents = new Set();
   for (const entry of researchLog ?? []) {
     if (entry?.type === 'subagent') {
       subagents.add(entry.subagentId ?? entry.id);
       continue;
     }
-    if (entry?.type !== undefined || typeof entry?.tool !== 'string') continue;
-    if (entry.subagentId) continue;
-    if (entry.tool === 'spawn_research_agent' || (entry.tool === 'agent_tool' && AGENT_TOOL_LABELS.test(String(entry.toolLabel ?? '')))) {
-      agentCalls++;
-    } else if (OWN_READ_TOOLS.has(entry.tool)) {
+    if (!isOwnStep(entry) || isAgentCall(entry)) continue;
+    if (OWN_READ_TOOLS.has(entry.tool)) {
       ownReads++;
       ownReadBytes += byteLength(entry.result);
     }
   }
-  return { ownReads, ownReadBytes, agentsSpawned: Math.max(agentCalls, subagents.size) };
+  return { ownReads, ownReadBytes, agentsSpawned: Math.max(agentCalls(researchLog).length, subagents.size) };
+}
+
+const isOwnStep = (entry) => entry?.type === undefined && typeof entry?.tool === 'string' && !entry.subagentId;
+const isAgentCall = (entry) => entry.tool === 'spawn_research_agent' || (entry.tool === 'agent_tool' && AGENT_TOOL_LABELS.test(String(entry.toolLabel ?? '')));
+
+/** What the planner handed an agent, one brief per spawn call, as its arguments hold it. */
+export function agentCalls(researchLog) {
+  return (researchLog ?? []).filter((e) => isOwnStep(e) && isAgentCall(e)).map((e) => (typeof e.args === 'string' ? e.args : JSON.stringify(e.args ?? '')));
 }
 
 /**
@@ -163,52 +167,84 @@ export function ownReadShare({ ownReads, agentsSpawned, researchTasks }) {
   return all === 0 ? null : ownReads / all;
 }
 
-/** Inline code and quoted strings: a planner quoting the text a task must change is not telling the user to press anything. */
+// Where a planner's chat quotes text or names code, the placeholder keeps the sentence's shape: "press `Enter`" still reads as a key.
+const QUOTED = 'QUOTED';
+
+/** Inline code, quoted strings and code identifiers: a planner quoting what a task must change is not telling the user to press anything. */
 function unquoted(text) {
   return text
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/`[^`\n]*`/g, ' ')
-    .replace(/"[^"\n]*"/g, ' ')
-    .replace(/“[^”\n]*”/g, ' ')
-    .replace(/(^|[\s(])'[^'\n]+'(?=[\s.,;:!?)]|$)/g, '$1 ');
+    .replace(/`[^`\n]*`/g, QUOTED)
+    .replace(/"[^"\n]*"/g, QUOTED)
+    .replace(/“[^”\n]*”/g, QUOTED)
+    .replace(/(^|[\s(])'[^'\n]+'(?=[\s.,;:!?)]|$)/g, `$1${QUOTED}`)
+    // camelCase or PascalCase with an inner capital, snake_case, a path, a file name.
+    .replace(/\b[A-Za-z]+[a-z0-9][A-Z]\w*\b|\b\w+_\w+\b|[\w.-]*\/[\w./-]+|\b[\w-]+\.(?:tsx?|jsx?|mjs|json|md|css|ya?ml)\b/g, QUOTED);
 }
 
 function sentences(text) {
-  return text.split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim()).filter(Boolean);
+  return text.replace(/```[\s\S]*?```/g, '\n').split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim()).filter(Boolean);
 }
 
 // VS Code's webview and the desktop app do have cards and buttons, and a goal may be about them
 // (G1's usage shows on the VS Code task card), so a sentence naming one of those surfaces is exempt.
 const OTHER_SURFACE = /\b(vs ?code|webview|desktop)\b/i;
 
+/** A sentence that tells the user to do something: it addresses them, or opens with an imperative. */
+const ADDRESSES_USER = /\b(you|your|yourself|please)\b/i;
+const IMPERATIVE = /^(?:(?:then|and|now|just|simply|so)\s+)?(press|click|tap|hit|use|open|select|choose|approve|merge|run|type|start|execute|go)\b/i;
+const instructs = (sentence) => ADDRESSES_USER.test(sentence) || IMPERATIVE.test(sentence);
+
+/**
+ * Controls the terminal UI does not have. `press` is allowed with a key
+ * (press Enter, press `a`): the terminal is driven by keys.
+ */
 const WORDING_RULES = [
   { rule: 'names a button', pattern: /\bbuttons?\b/i, exempt: OTHER_SURFACE },
   { rule: 'names a card', pattern: /\bcards?\b/i, exempt: OTHER_SURFACE },
-  { rule: "says 'press'", pattern: /\bpress(es|ed|ing)?\b/i },
+  { rule: "says 'click'", pattern: /\b(click|tap)(s|ed|ing)?\b/i, exempt: OTHER_SURFACE },
+  {
+    rule: "says 'press' without a key",
+    pattern: /\bpress(es|ed|ing)?\b(?!\s+(?:the\s+)?(?:QUOTED|enter|return|esc(?:ape)?|tab|space|ctrl|shift|alt|cmd|[a-z0-9]\b|[a-z]-|key))/i,
+  },
   { rule: "says 'Execute plan'", pattern: /\bexecute plan\b/i },
   { rule: "says 'Merge all'", pattern: /\bmerge all\b/i },
 ];
 
-// A sentence that puts merging on the user: addressed to them, an imperative opening, or a merge command.
-const ASKS_TO_MERGE = /\bmerg(e|ing)\b/i;
-const ADDRESSES_USER = /\b(you|your|yourself|please)\b|^(then\s+|and\s+)?merge\b|\/merge\b|\/handoff merge\b/i;
+// The user as the one merging: "you can merge", "please merge", or "merge" opening a clause as an imperative.
+const USER_MERGES = /\b(?:you|please)(?:'\w+)?(?:\s+(?:can|could|should|need|must|will|would|may|might|then|just|now|to|have|want|go|ahead|and|also|still|only|simply))*\s+merge\b|(^|[,;:]\s*)(?:(?:then|and|now|just|simply|so)\s+)?merge\b/i;
+const MERGE_COMMAND = /(^|[\s`])\/(handoff\s+)?merge\b/i;
+const BY_ITSELF = /\bautomatic(ally)?\b|\bby itself\b|\bon its own\b/i;
+
+/** The chat after the plan was handed back: what the planner told the user to do with it. */
+function handBack(history) {
+  const at = (history ?? []).findIndex((m) => m?.kind === 'plan_generated');
+  return at < 0 ? [] : history.slice(at + 1).filter((m) => m?.role === 'assistant' && typeof m.content === 'string');
+}
 
 /**
- * What the planner told the user about controls it has no business naming on
- * the terminal UI: a button or card, 'press', 'Execute plan', 'Merge all', or a
- * request to merge while the run merges by itself. Read off the assistant's
- * chat only, with code and quotations removed.
+ * What the planner, handing the plan back, told the user to do with a control
+ * the terminal UI does not have (a button or card, 'click', 'press' without a
+ * key, 'Execute plan', 'Merge all'), or to merge while the run merges by
+ * itself. Only instructions to the user count: a sentence describing the code,
+ * or quoting it, is not one. A term the goal itself uses is the goal's, so a
+ * rule whose pattern the goal matches is not applied.
  */
-export function wordingViolations(history, { autoMerge }) {
+export function wordingViolations(history, { autoMerge, goalText = '' } = {}) {
   const found = [];
-  for (const message of history ?? []) {
-    if (message?.role !== 'assistant' || typeof message.content !== 'string') continue;
-    for (const sentence of sentences(unquoted(message.content))) {
-      for (const { rule, pattern, exempt } of WORDING_RULES) {
-        if (pattern.test(sentence) && !exempt?.test(sentence)) found.push({ rule, quote: sentence.slice(0, 240) });
+  const rules = WORDING_RULES.filter(({ pattern }) => !pattern.test(goalText));
+  for (const message of handBack(history)) {
+    for (const raw of sentences(message.content)) {
+      const sentence = unquoted(raw);
+      const quote = raw.slice(0, 240);
+      if (instructs(sentence)) {
+        for (const { rule, pattern, exempt } of rules) {
+          if (pattern.test(sentence) && !exempt?.test(sentence)) found.push({ rule, quote });
+        }
       }
-      if (autoMerge && ASKS_TO_MERGE.test(sentence) && ADDRESSES_USER.test(sentence)) {
-        found.push({ rule: 'asks the user to merge while automatic merging is on', quote: sentence.slice(0, 240) });
+      // A merge command is an instruction even quoted: it is the thing the user would type.
+      const asksToMerge = MERGE_COMMAND.test(raw) || USER_MERGES.test(sentence);
+      if (autoMerge && asksToMerge && !BY_ITSELF.test(raw)) {
+        found.push({ rule: 'asks the user to merge while automatic merging is on', quote });
       }
     }
   }
@@ -233,9 +269,11 @@ function usageNumbers(usage) {
 
 /**
  * Every mechanical number for one run. `driver` is what the driver recorded:
- * its turns, wall time and how it stopped.
+ * its turns, wall time and how it stopped. `goalText` is what the planner was
+ * asked, whose terms its wording may repeat. `budget` is the budget blocks
+ * recorded from its turn input (budget.mjs), where this bench could see them.
  */
-export function runMetrics(session, { researchLog, driver = {}, autoMerge = true } = {}) {
+export function runMetrics(session, { researchLog, driver = {}, autoMerge = true, goalText = '', budget = null } = {}) {
   const parts = sessionParts(session, researchLog);
   const all = flatten(parts.tasks);
   const top = parts.tasks;
@@ -255,7 +293,9 @@ export function runMetrics(session, { researchLog, driver = {}, autoMerge = true
     ...usageNumbers(parts.usage),
     ...meter,
     ownReadShare: ownReadShare({ ...meter, researchTasks }),
-    wordingViolations: wordingViolations(parts.history, { autoMerge: autoMergeOn }),
+    wordingViolations: wordingViolations(parts.history, { autoMerge: autoMergeOn, goalText }),
+    budget,
+    meterLines: budget ? budget.turns.filter((t) => t.meter).length : null,
     turns: driver.turns ?? null,
     wallMs: driver.wallMs ?? null,
     stopped: driver.stopped ?? null,

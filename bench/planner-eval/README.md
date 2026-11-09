@@ -7,9 +7,10 @@ plan. The submitted plan is then measured, checked against the goal's answer
 key, and optionally reviewed by a rubric.
 
 The question it answers: does the candidate planner prompt, given no nudges,
-plan at least as parallel (where the key allows) and at least as delegated as
-the baseline given nudges? And does it do that without breaking the key, and
-without telling the user about controls the terminal UI does not have?
+break the goals' answer keys no more often than the baseline given nudges, and
+without telling the user to operate a control the terminal UI does not have?
+How parallel and how delegated each side planned is reported beside that, and
+judges nothing.
 
 ## Variants
 
@@ -35,25 +36,53 @@ commit. Each build is a worktree of this checkout. To free one, run
 ## Target
 
 Every run plans against a throwaway repository: a `git archive` of the baseline
-ref, committed as one commit in a fresh `git init` with no remote. Its
-`node_modules` are symlinked from the baseline build, so the planner (and G4's
-reproduction) can run the tests. G4's goal first applies its bug patch
-(`setup.patches` in `goals/g4-failure-to-explain.json`), which makes exactly two core tests fail.
-Each run gets its own clone of the template under the OS temp directory. The
-clone is removed afterwards unless `--keep` is given.
+ref, committed as one commit in a fresh `git init` with no remote. G4's goal
+first applies its bug patch (`setup.patches` in
+`goals/g4-failure-to-explain.json`), which makes exactly two core tests fail.
+
+Each run gets its own clone of the template, under the OS temp directory, or
+under `~/.cache` when only that shares the builds' file system. The baseline
+build's `node_modules` are put into each clone as real files: hard links where
+the file system allows, copies where it does not, and each workspace link
+recreated as it was, so `@ordewell/core` resolves to the clone's own package
+rather than the build's. The clone is removed afterwards unless `--keep` is
+given.
+
+The planner may run the tests there without asking. `TEST_COMMANDS` in
+`lib/config.mjs` (`npx vitest run`, `npm test` and their kin) reach the
+planner allowlist (ADR-0026) through `ORDEWELL_APPROVAL_ALLOW`. A command no
+rule covers runs sealed and is stopped at a minute, which a cold vitest start
+can take. The bench grants this, not the planner prompt.
 
 ## Goals and answer keys
 
 | Goal | What it asks | What the key expects |
 | --- | --- | --- |
-| G1 | per-task token usage on every surface | a leading task that decides the usage shape, which every surface task depends on; the surfaces in parallel; 3–8 tasks |
+| G1 | per-task token usage on every surface | a leading task that decides the usage shape, which every surface task depends on; 3–8 tasks. Width is compared with 4–6 slices ±1, reported only |
 | G2 | rename a persisted field, with migration | the rename and its migration kept together (one task, or a serial chain); 1–3 tasks; no parallel split |
 | G3 | a hint's wording fix plus its test | one task |
-| G4 | a findings badge names the mildest severity | reproduce first (a task, or the planner's own run of the failing test); the hypotheses go to research tasks before the fix; 2–5 tasks |
+| G4 | a findings badge names the mildest severity | 1–5 tasks. Reproduce first: the planner ran the failing test and saw its result, a reproduction task precedes every fix, or the fix runs the failing tests before it changes code. The fix, or a task after it, runs the named tests. Hypotheses go to research tasks before the fix only when no fix names the cause |
+| G5 | which child-process spawn sites pass `process.env` unfiltered, then a helper that filters it | 3–7 tasks; at least two agents or research tasks, briefed by package, before any change; the planner's own reads at most 10 and 60 KB. Width is compared with 2–5 slices ±1, reported only |
 
 Each `goals/gN-*.json` holds the goal text and its `key`. The key's
 `expectedStrategy` and `integrationRisks` are prose for the rubric reviewer.
 The other fields are checked mechanically (`lib/keys.mjs`).
+
+The task count counts the tasks that do the work. One verify/fix loop pair (or
+one verify task where there is no loop) is left out, and a key's "kept
+together" counts change tasks only: research, read-only, verify, loop and docs
+tasks change none of the code it is about.
+
+G4's fix may say it runs the failing tests first, as the planner is told to
+have it do when it could not run them itself; that passes only with the
+validation beside it. A planner's own test run counts only when its result
+shows a test run (vitest's summary or a failing file): a refused or sealed run
+saw nothing fail.
+
+G5's `groundTruth` lists every source file that imports a child-process API at
+the baseline commit, with the `git grep` that found them; a test checks the
+list against that commit. `expectedSlices` sits beside the key, outside it, so
+changing it leaves the key's hash alone.
 
 ## What a run does
 
@@ -142,7 +171,7 @@ node bench/planner-eval/run.mjs --mock
 # Smoke: G1 on claude-code/haiku, once per variant, reviewed.
 node bench/planner-eval/run.mjs --smoke
 
-# Everything: G1–G4 x the six cells x V0/V1/V2, three times each.
+# Everything: G1–G5 x the six cells x V0/V1/V2, three times each.
 OPENROUTER_API_KEY=... node bench/planner-eval/run.mjs --full --candidate-ref <branch>
 
 # A slice, and a resume after an interruption.
@@ -152,13 +181,26 @@ node bench/planner-eval/run.mjs --full --resume bench/planner-eval/.results/<sta
 # Print the runs without starting any; re-aggregate a results directory.
 node bench/planner-eval/run.mjs --full --list
 node bench/planner-eval/run.mjs --report bench/planner-eval/.results/<stamp>
+
+# Score stored runs again with today's keys and metrics, into a new directory.
+node bench/planner-eval/run.mjs --rescore bench/planner-eval/.results/<stamp> --out bench/planner-eval/.results/<stamp>-rescored
+
+# Run only the candidate, and compare it with V0 runs stored elsewhere.
+node bench/planner-eval/run.mjs --full --variant V1 --baseline-from bench/planner-eval/.results/<stamp>-rescored
 ```
 
 `--help` lists every flag. The useful ones:
 
 - `--concurrency N` (default 2) sets how many runs go at once. Each has its own
   daemon, port, settings file and clone.
-- `--timeout S` (default 900) is the most a single run may take.
+- `--timeout S` (default 900) is the most a single run may take. A run that
+  reaches it is a failed run, not a plan with no violations: it counts toward
+  completion only, and `--resume` runs it again.
+- `--api-timeout S` (default twice `--timeout`) is the same for an API
+  planner over OpenRouter, whose turns take longer.
+- `--baseline-from DIR` takes V0's runs from DIR wherever this directory has
+  none for that cell and goal. A V0 run of its own replaces the borrowed ones
+  for its cell and goal.
 - `--repeats N` overrides the mode's repeat count.
 
 ## Results
@@ -170,8 +212,10 @@ committed), or to `--out`:
   and substitution.
 - `<run>.session.json`: the session as the daemon served it, redacted.
 - `<run>.screen.log`: the TUI's terminal output.
-- `meta.json`: the mode, the refs and their commits, the harness versions and
-  the flags.
+- `meta.json`: one pass per invocation, each with its mode, the refs and their
+  commits, the harness versions, the flags, the goals and runs it ran, its
+  timeouts and any `--baseline-from`. A `--resume` adds a pass and overwrites
+  none.
 - `report.json` and `report.md`: the aggregate.
 
 ## Metrics
@@ -196,9 +240,14 @@ subtask runs inside its parent.
 | own-read share | own reads ÷ (own reads + agents + research tasks): how much of its look at the code the planner did itself (`–` when it looked at nothing) |
 | key viol. | answer-key checks that failed |
 | rubric problems | rubric questions answered 'problem' with at least one cited claim |
-| wording viol. | sentences in the planner's chat that name a button or card, say 'press', 'Execute plan' or 'Merge all', or ask the user to merge while automatic merging is on; quoted text and code are ignored, since a task may need to change them, and so is a button or card in a sentence naming VS Code, the webview or desktop, which do have them |
+| wording viol. | true wording violations: sentences in the planner's hand-back after `submit_plan` that tell the user to operate a control the terminal UI does not have (press a button, open a card, click 'Execute plan' or 'Merge all'), or ask the user to merge while automatic merging is on and do not say it happens automatically or by itself. A sentence that describes rather than instructs is not one. Quoted text, code identifiers and the goal's own terms are exempt, since a task may need to change them, and so is a sentence naming VS Code, the webview or desktop, which do have those controls |
+| meter lines | turns whose recorded input carried the read meter line (see Read meter) |
 | turns | driver turns: the goal plus each reply the driver sent |
 | wall ms | from the goal pasted to the driver stopping |
+
+A run is complete when it has metrics, no error, and stopped for a reason
+other than its timeout, a TUI exit or an error. Only complete runs enter the
+medians and the verdict.
 
 A planner that reports no usage, such as the mock, leaves the token columns
 empty rather than zero.
@@ -215,7 +264,9 @@ plan's digest and a fixed list of questions:
 - the task count, and which tasks are too small
 - parallel tasks that decide the same interface
 - whether the prompts name their paths
-- for G4, reproduction first and hypotheses in research
+- for G4, reproduction first, validation by the failing tests, and
+  hypotheses in research only where the cause is not named
+- for G5, delegation by package before any change
 
 Every claim must cite a task id from the plan, or quote the plan verbatim. A
 claim that does neither is discarded, and an answer left with no cited claim
@@ -225,22 +276,62 @@ claims.
 ## Verdicts
 
 The report gives one verdict per backend for V1 against V0 and for V2
-against V1. The candidate passes when each of these holds:
+against V1, over the goals both sides have complete runs of. Two criteria
+judge it, each against run-to-run spread:
 
-- Key violations per run are no more than the baseline's.
-- Rubric problems per run are no more than the baseline's, where both sides
-  were reviewed.
-- The median own-read share is no higher.
-- The median width is no lower on each goal whose key allows parallel work
-  (G1, G4).
-- There are zero wording violations.
-- No fewer plans are submitted.
+- key violations per run, where a complete run with no plan counts one;
+- true wording violations per run, where zero always holds.
 
-A criterion with no data on a side makes the verdict 'incomplete', never a
-pass. Every violation, error and substitution is listed by run.
+A criterion holds when the candidate's mean is no more than the baseline's
+plus half the wider of the two sides' ranges of per-repeat means: how far two
+passes of the same build already differ.
+
+Reported beside it, judging nothing:
+
+- the completion rate, so a timeout or a crash shows here and nowhere else;
+- for each goal with `expectedSlices`, how many runs planned a width in range;
+- the median own-read share and own read bytes;
+- rubric problems per run, where both sides were reviewed.
+
+Width and share describe a plan's shape, which a key already judges where it
+matters. A criterion with no data on a side makes the verdict 'incomplete',
+never a pass. Every violation, error and substitution is listed by run.
 
 The report holds medians and spreads over the repeats it ran. It makes no
 claim beyond those runs.
+
+## Read meter
+
+V2 turns on `ORDEWELL_PLANNER_READ_METER`, which adds a line to the budget
+block (`CONTEXT AND BUDGETS (this turn):`) of each planner turn: "Your own
+reads: about N tokens last turn, M in this conversation". The line counts what
+came before the turn, so it reads zero on the first turn and a count reaches
+the planner only from its second turn.
+
+Ordewell keeps no turn's input, so the bench records the block from outside,
+in each record's `metrics.budget`:
+
+- an API planner, and the mock, through a local proxy on
+  `OPENROUTER_BASE_URL` that passes every request on and keeps the user turns;
+- Claude Code from its own transcript of the session, under
+  `$CLAUDE_CONFIG_DIR` or `~/.claude`.
+
+OpenCode keeps its turns in its own store, which the bench does not read, so
+its runs record none. Codex and the ACP harnesses never get the line: they are
+controls, and a V2 verdict on them measures the build, not the meter. The
+report's meter table gives, per cell and variant, the runs recorded, those
+whose input carried the line, and those that carried it on more than one turn.
+
+## Re-scoring
+
+`--rescore DIR` reads every run record in DIR and scores it again with the
+current keys and metrics from its saved session, into `--out` (default
+`DIR-rescored`, never DIR itself). Each record keeps the hash of the key it was
+scored under; a record with none was scored with the goals at `312cc3c1`. The
+rubric is reviewed again only where that hash changed; with `--no-review` the
+old review is dropped and the record is marked `rubricStale`. A timed-out run stays a failed run. The new `meta.json` keeps
+the source's passes under `fromPasses`. Records stored before this bench
+recorded the budget block have no meter data.
 
 ## Your settings
 
@@ -255,10 +346,14 @@ removes only the token files of the daemons it started.
 `planner-eval.test.mjs` proves the pure parts offline:
 
 - the metrics, keys and rubric filter
-- aggregation and verdicts
+- the wording check, on hand-backs that do and do not instruct
+- aggregation, verdicts, completion and the spread allowance
+- the clone's `node_modules`, the budget block and its proxy
+- re-scoring and `--baseline-from`, through `run.mjs` itself
 - redaction and the guard
 - the driver's reading of a turn
 - the run matrix and the terminal command
-- G4's patch, against the baseline's `Handoff.ts`
+- G4's patch, against the baseline's `Handoff.ts`, and G5's ground truth,
+  against the baseline's `git grep`
 
 `npm run test:bench` runs it. `--mock` is the end-to-end dry run.
