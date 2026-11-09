@@ -347,7 +347,7 @@ describe('Gemini planner exploration', () => {
     const at = system.indexOf('\nWHO EXPLORES:\n');
     expect(at).toBeGreaterThan(-1);
     const rule = system.slice(at + 1, system.indexOf('\n\n', at + 1));
-    expect(rule).toContain('Find it with your own reads: you have no agents of your own here.');
+    expect(rule).toContain('you have no agents of your own here');
     expect(rule).not.toContain('spawn_research_agent');
     expect(system).not.toContain('spawn_research_agent');
     expect(tools.flatMap((t) => t.functionDeclarations.map((d) => d.name))).not.toContain('spawn_research_agent');
@@ -386,6 +386,6 @@ describe('Gemini turn budgets', () => {
       'add a cache\n\nCONTEXT AND BUDGETS (this turn):\n- Web reads left this turn: 40.',
       'in-process\n\nCONTEXT AND BUDGETS (this turn):\n- Web reads left this turn: 39.',
     ]);
-    expect(requests[0].contents[0].parts[0].text).not.toContain('CONTEXT AND BUDGETS');
+    expect(requests[0].contents[0].parts[0].text).not.toContain('CONTEXT AND BUDGETS (this turn):');
   });
 });

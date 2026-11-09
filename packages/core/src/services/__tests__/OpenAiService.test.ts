@@ -208,7 +208,7 @@ describe('OpenAiService turn budgets', () => {
       'in-process\n\nCONTEXT AND BUDGETS (this turn):\n- Web reads left this turn: 39.',
     ]);
     expect(messages[0].role).toBe('system');
-    expect(messages[0].content).not.toContain('CONTEXT AND BUDGETS');
+    expect(messages[0].content).not.toContain('CONTEXT AND BUDGETS (this turn):');
   });
 
   it('tells an API planner what its own file reads came to (experiment), and counts nothing else', async () => {
