@@ -20,6 +20,7 @@ import type { TaskRevertPreview } from './services/taskRevert';
 import type { ContainerStatus } from './services/container/containerSetup';
 import type { ContainerProblem } from './services/container/containerPreflight';
 import type { TaskDiffResult } from './services/taskDiffRead';
+export type { TaskDiffCause } from './services/taskDiffRead';
 
 /**
  * The daemon contract: every HTTP body the local daemon sends, in one place.
