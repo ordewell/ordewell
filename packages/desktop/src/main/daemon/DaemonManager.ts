@@ -124,7 +124,10 @@ export class DaemonManager {
   /**
    * *Restart daemon* on a mismatch (H3): refused while a run is live there,
    * since stopping that daemon stops the run, and refused when that cannot be
-   * told, for the same reason.
+   * told, for the same reason. A run another host holds goes on without it.
+   * The daemon's own word on its work (`/api/server`'s `live`, ADR-0048) is
+   * asked too: a daemon of another version may list no run it holds, and
+   * stopping it would cut one off all the same.
    */
   async restart(): Promise<ActionResult> {
     if (this.status.state !== 'mismatch') return { ok: false, message: 'Only a daemon of another version is restarted.' };
@@ -132,9 +135,14 @@ export class DaemonManager {
     if (live === undefined) {
       return { ok: false, message: 'Could not tell whether a run is live on that daemon, so it was left running.' };
     }
-    if (live.length > 0) {
-      const names = live.map((run) => `“${run.goal}” in ${run.workspace}`).join(', ');
+    const here = live.filter((run) => !run.elsewhere);
+    if (here.length > 0) {
+      const names = here.map((run) => `“${run.goal}” in ${run.workspace}`).join(', ');
       return { ok: false, message: `A run is live on that daemon (${names}), so it can't restart now.` };
+    }
+    const probe = await this.deps.probe(this.port);
+    if (probe.kind === 'daemon' && probe.identity.live === true) {
+      return { ok: false, message: 'Work is under way on that daemon (a run or a planner turn), so it can\'t restart now.' };
     }
 
     const outcome = await this.deps.stopExternal(this.port);
