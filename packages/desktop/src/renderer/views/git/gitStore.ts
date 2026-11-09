@@ -37,6 +37,8 @@ export interface History {
   tips: string;
   status: 'loading' | 'ready' | 'error';
   error?: string;
+  /** A read again is in flight over the rows on screen: the next page waits for the cursor it brings. */
+  rereading?: boolean;
   /** A Load more is in flight. */
   more: boolean;
   moreError?: string;
@@ -147,16 +149,18 @@ export class GitStore {
    * What the history of `repo` was read against: every branch tip, so a branch
    * read again over the same tips (the sidebar shown again, a fetch that
    * brought nothing) costs no log read. A detached checkout moves no tip when
-   * it commits, and a failed branch read says nothing, so those count each read.
+   * it commits, so its head counts as one; a failed branch read, or a detached
+   * head not known, says nothing, so those count each read.
    * A fetch that brought only tags moves no tip either: an explicit Refresh
    * reads them in.
    */
   historyTips(repo: string): string | undefined {
-    const { repo: read, branches, round } = this.state;
+    const { repo: read, branches, round, repos } = this.state;
     if (read !== repo) return undefined;
-    if (!branches || branches.detached) return `round ${round}`;
+    const head = branches?.detached ? repos.find((r) => r.repo === repo)?.head : undefined;
+    if (!branches || (branches.detached && !head)) return `round ${round}`;
     const reread = this.historyRereads.get(repo) ?? 0;
-    return JSON.stringify([reread, branches.current, ...[...branches.local, ...branches.ordewell, ...branches.remote].map((b) => [b.name, b.sha])]);
+    return JSON.stringify([reread, branches.current, head ?? null, ...[...branches.local, ...branches.ordewell, ...branches.remote].map((b) => [b.name, b.sha])]);
   }
 
   /**
@@ -176,16 +180,16 @@ export class GitStore {
     const token = ++this.historyTokens;
     this.historyReads.set(repo, { token, tips, more: false });
     const limit = Math.min(HISTORY_MAX, Math.max(HISTORY_PAGE, have?.commits.length ?? 0));
-    this.patchHistory(repo, { status: have?.status === 'ready' ? 'ready' : 'loading', error: undefined, more: false, moreError: undefined });
+    this.patchHistory(repo, { status: have?.status === 'ready' ? 'ready' : 'loading', error: undefined, rereading: true, more: false, moreError: undefined });
     try {
       const page = await readLog(this.workspace, repo, { limit });
       if (this.historyReads.get(repo)?.token !== token) return;
       this.historyReads.delete(repo);
-      this.patchHistory(repo, { commits: page.commits, cursor: page.cursor, tips, status: 'ready' });
+      this.patchHistory(repo, { commits: page.commits, cursor: page.cursor, tips, status: 'ready', rereading: false });
     } catch (error) {
       if (this.historyReads.get(repo)?.token !== token) return;
       this.historyReads.delete(repo);
-      this.patchHistory(repo, { tips, status: 'error', error: messageOf(error) });
+      this.patchHistory(repo, { tips, status: 'error', error: messageOf(error), rereading: false });
     }
   }
 

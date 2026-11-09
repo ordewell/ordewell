@@ -23,7 +23,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { bandDefaults, paneBounds } from '../src/renderer/frame/layout';
 import {
-  appEnv, closeApp, DESKTOP, DETECTION_FAILED, fakedRunners, fakeDaemon, freePort, launchApp, makeSandbox, MIXED, MIXED_RUNNERS, NONE_INSTALLED, openFolder, removeSandbox, ROOT, startMock, untilListening,
+  appEnv, closeApp, DESKTOP, DETECTION_FAILED, fakedRunners, fakeDaemon, freePort, git, launchApp, makeSandbox, MIXED, MIXED_RUNNERS, NONE_INSTALLED, openFolder, removeSandbox, ROOT, startMock, untilListening,
   type Sandbox,
 } from './fixtures';
 import { assertPartition, combinations, legName, owns, parseLeg } from './legs';
@@ -136,6 +136,8 @@ const daemons: ChildProcess[] = [];
 const ports: number[] = [];
 const states: StateRecord[] = [];
 const consoleErrors: ConsoleError[] = [];
+/** Files that hold an operation pending while they exist: removed before anything is closed, so nothing waits on a tour that ended. */
+const holds: string[] = [];
 const probes: Record<string, unknown> = {};
 const cdps = new WeakMap<Page, CDPSession>();
 
@@ -958,6 +960,7 @@ test.beforeAll(() => {
 });
 
 test.afterAll(async () => {
+  for (const hold of holds) fs.rmSync(hold, { force: true });
   const visible: unknown[] = [];
   for (const app of apps) {
     await stubDialogs(app).catch(() => undefined);
@@ -1219,6 +1222,86 @@ test('the visual tour', async () => {
     await page.getByRole('navigation', { name: 'Git' }).getByRole('button', { name: 'Show the commit graph', exact: true }).first().click();
     await expect(page.getByRole('list', { name: 'Commits' })).toBeVisible({ timeout: 30_000 });
     await page.getByRole('list', { name: 'Commits' }).getByRole('button').first().click();
+  });
+
+  // Branch folders, History and a Fetch held pending need a remote and slash-named branches the run made none of.
+  // Its upload-pack waits while the hold file exists, so the Fetch stays pending for every capture and ends on release.
+  const gitSide = (): Locator => need(win).getByRole('navigation', { name: 'Git' });
+  const gitView = (name: 'Branches' | 'History'): Locator => gitSide().getByRole('group', { name: 'Git sidebar view' }).getByRole('button', { name });
+  const fetchButton = (): Locator => gitSide().getByRole('group', { name: /^Sync / }).getByRole('button', { name: 'Fetch', exact: true });
+  const holdFetch = path.join(box.tmp, 'hold-fetch');
+  holds.push(holdFetch);
+  const FOLDED = ['feature/sso', 'feature/search-box'];
+  await state(win, 'git-branch-folders', 'Git Branches: slash-named branches folded under feature/, and a remote', async () => {
+    const origin = path.join(box.tmp, 'origin.git');
+    const uploadPack = path.join(box.tmp, 'held-upload-pack.sh');
+    fs.writeFileSync(uploadPack, `#!/bin/sh\nwhile [ -e '${holdFetch}' ]; do sleep 0.1; done\nexec git upload-pack "$@"\n`, { mode: 0o755 });
+    git(box, 'init', '-q', '--bare', origin);
+    git(box, 'remote', 'add', 'origin', origin);
+    git(box, 'push', '-q', 'origin', 'HEAD:refs/heads/main');
+    git(box, 'config', 'remote.origin.uploadpack', uploadPack);
+    for (const name of FOLDED) git(box, 'branch', name);
+    await need(views).getByRole('tab', { name: 'Git' }).click();
+    await gitView('Branches').click();
+    await gitSide().getByRole('button', { name: /^Refresh the branches/ }).click();
+    const folder = gitSide().locator('.git-folder-main').filter({ hasText: /^feature/ });
+    await expect(folder).toBeVisible({ timeout: 30_000 });
+    if (await folder.getAttribute('aria-expanded') !== 'true') await folder.click();
+    const inside = gitSide().getByRole('list', { name: 'feature', exact: true });
+    for (const name of FOLDED) await expect(inside.getByRole('button', { name, exact: true })).toBeVisible();
+    await expect(gitSide().getByRole('button', { name: 'origin/main', exact: true })).toBeVisible();
+    await expect(gitView('Branches')).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  await state(win, 'git-history', 'Git History: the sidebar switched from Branches to the checkout\'s commits', async () => {
+    await gitView('History').click();
+    await expect(gitView('History')).toHaveAttribute('aria-pressed', 'true');
+    await expect(gitView('Branches')).toHaveAttribute('aria-pressed', 'false');
+    const rows = gitSide().getByRole('list', { name: 'History' }).getByRole('button', { name: /^Commit [0-9a-f]{7}: / });
+    await expect(rows.first()).toBeVisible({ timeout: 30_000 });
+    await expect(gitSide().getByRole('list', { name: 'feature', exact: true })).toHaveCount(0);
+  });
+
+  await state(win, 'git-fetch-busy', 'Git Fetch pending, back on Branches: its icon turning, Pull and Push held', async () => {
+    await gitView('Branches').click();
+    await expect(gitSide().getByRole('list', { name: 'feature', exact: true })).toBeVisible();
+    fs.writeFileSync(holdFetch, '');
+    await fetchButton().click();
+    await expect(fetchButton()).toHaveAttribute('aria-busy', 'true');
+    await expect(fetchButton()).toBeDisabled();
+    await expect(fetchButton().locator('.ow-spin')).toBeVisible();
+    const sync = gitSide().getByRole('group', { name: /^Sync / });
+    await expect(sync.getByRole('button', { name: 'Pull', exact: true })).toBeDisabled();
+    await expect(sync.getByRole('button', { name: 'Push', exact: true })).toBeDisabled();
+  }, {
+    restore: async () => {
+      fs.rmSync(holdFetch, { force: true });
+      await expect(fetchButton()).toBeEnabled({ timeout: 30_000 });
+    },
+  });
+  // Whether or not the state was reached, the later states meet the repository as they did before these three.
+  fs.rmSync(holdFetch, { force: true });
+  await expect(fetchButton()).toBeEnabled({ timeout: 30_000 }).catch(() => undefined);
+  try {
+    git(box, 'remote', 'remove', 'origin');
+    git(box, 'branch', '-D', ...FOLDED);
+  } catch (error) {
+    probes.gitStatesCleanup = `the tour's remote and branches were not all removed: ${String(error)}`;
+  }
+
+  const reviewToggle = (): Locator => need(changes).getByRole('heading', { name: /^Review/ }).getByRole('button');
+  await state(win, 'changes-review-folded', 'Changes: Review folded, the whole run and Merge all still shown', async () => {
+    await need(views).getByRole('tab', { name: 'Changes' }).click();
+    await expect(reviewToggle()).toBeVisible({ timeout: 30_000 });
+    if (await reviewToggle().getAttribute('aria-expanded') !== 'false') await reviewToggle().click();
+    await expect(reviewToggle()).toHaveAttribute('aria-expanded', 'false');
+    await expect(need(changes).getByRole('region', { name: /^Task #1/ })).toHaveCount(0);
+    await expect(need(changes).getByRole('region', { name: 'Whole run vs base' })).toBeVisible({ timeout: 30_000 });
+    await expect(need(changes).getByRole('button', { name: 'Merge all…' })).toBeVisible();
+  }, {
+    restore: async () => {
+      if (await reviewToggle().getAttribute('aria-expanded') === 'false') await reviewToggle().click();
+    },
   });
 
   await state(win, 'terminal', 'Terminal open', async () => {

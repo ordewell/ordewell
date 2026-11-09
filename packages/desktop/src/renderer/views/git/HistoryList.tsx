@@ -68,7 +68,7 @@ export function HistoryList({ api, repo, branches }: { api: FrameApi; repo: stri
                 className="git-hrow"
                 aria-current={commit.sha === history.selected ? 'true' : undefined}
                 aria-label={`Commit ${short}: ${commit.subject}`}
-                title={`${commit.subject}\n${short} · ${commit.author} · ${ago(commit.date)}`}
+                title={`${commit.subject}\n${commit.sha} · ${commit.author} · ${ago(commit.date)}`}
                 onClick={() => open(commit.sha, true)}
                 onDoubleClick={() => open(commit.sha, false)}
               >
@@ -83,7 +83,8 @@ export function HistoryList({ api, repo, branches }: { api: FrameApi; repo: stri
       {history.moreError && <Notice tone="error">{history.moreError}</Notice>}
       {history.cursor && (
         <div className="git-more">
-          <Button size="sm" busy={history.more} onClick={() => void git.loadMoreHistory(repo)}>Load more</Button>
+          {/* Its cursor is the last read's: while a read again replaces it, or after that read failed, a page from it could not be trusted. */}
+          <Button size="sm" busy={history.more} disabled={history.rereading || history.status !== 'ready'} onClick={() => void git.loadMoreHistory(repo)}>Load more</Button>
         </div>
       )}
     </div>

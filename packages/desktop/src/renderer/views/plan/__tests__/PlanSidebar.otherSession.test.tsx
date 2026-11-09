@@ -188,6 +188,38 @@ describe('Sessions: a run in a session that is not the open one', () => {
     expect(daemon.calls('sessions.list')).toHaveLength(3);
   });
 
+  it('reads the open row from the list while a VS Code window holds it, at the live cadence', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // VS Code holds s1 and runs it: this window can only draw the saved file, which says approved throughout.
+    const sessionHeld = { holder: { hostId: 'h1', pid: 4242, host: { kind: 'vscode' }, since: '2026-11-03T09:00:00.000Z', heartbeatAt: '2026-11-03T09:00:00.000Z', runnerGroups: [] } };
+    let holderLive = true;
+    const daemon = fakeDaemon({
+      'sessions.load': { ok: false, status: 409, error: 'Conflict', data: { ok: false, error: 'held', code: 'session_held', sessionHeld } },
+      'sessions.get': () => ok({ meta: { id: 's1', goal: 'Ship the parser' }, plan: surfacePlan(TASKS, 'approved') }),
+      // Another host's run is its lease's word, with no counts (OrchestratorPool.runActivity).
+      'sessions.list': () => ok([
+        { id: 's1', goal: 'Ship the parser', status: 'approved', taskCount: 1, updatedAt: '2026-11-03T09:00:00.000Z', ...(holderLive ? { run: { live: true } } : {}) },
+      ]),
+    });
+    const host = new DaemonHost('/work/acme');
+    hosts.push(host);
+    await act(() => host.open('s1'));
+    expect(host.getSnapshot().readOnly).toBe(true);
+    render(<Sessions host={host} />);
+
+    const row = await screen.findByRole('button', { name: /Ship the parser/ });
+    expect(row).toHaveAttribute('aria-current', 'true');
+    expect(within(row).getByText('Running')).toBeInTheDocument();
+    expect(rowStatus(/Ship the parser/)).toBe('running');
+
+    // The holder's run ends: the open row settles within one live read, not the idle one.
+    holderLive = false;
+    await act(async () => { await vi.advanceTimersByTimeAsync(LIVE_LIST_MS); });
+    expect(screen.getByRole('button', { name: /Ship the parser.*Approved/ })).toBeInTheDocument();
+    expect(rowStatus(/Ship the parser/)).not.toBe('running');
+    expect(daemon.calls('sessions.close')).toHaveLength(0);
+  });
+
   it("drops a row's run, and keeps the row, when a later read fails", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     let fail = false;
