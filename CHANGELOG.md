@@ -22,6 +22,12 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Changed
 
+- **Planner:** a task's first message no longer carries a plan map (the
+  sibling titles, statuses and runners, and the "do ONLY the task marked" line),
+  and `ORDEWELL_PLAN_MAP_ENABLED` is gone. The planner is told that each brief
+  names its own boundary, what is out of scope and which parallel tasks own the
+  neighbouring files or areas, and names a shared decision in each brief that
+  touches it, with the task that owns it.
 - **Terminal:** `/handoff` is now `/merge`, the word the other surfaces use for
   Merge all. `/merge` opens the review overlay on Merge; `/merge review`,
   `discard` and `cleanup` take those steps directly. `/handoff` still works for

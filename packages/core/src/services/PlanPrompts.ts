@@ -367,8 +367,9 @@ function opsTaskSection(conversation: boolean): string[] {
  */
 export const PARALLELISM_RULE: readonly string[] = [
   '- Make slices parallel by default, without waiting to be asked: tasks with no dependency between them run at once.',
-  '- Slices are parallel when none of them decides something another relies on: an interface, a schema, a name, a behaviour. Make such a shared decision a leading task the others depend on, and name that interface\'s exact path in every slice\'s prompt.',
-  '- Keep one chain of reasoning in one task: split, each part works from a guess at the others.',
+  '- Slices are parallel when none decides something another relies on (an interface, a schema, a name, a behaviour): make that shared decision a leading task the others depend on.',
+  '- Each brief states its boundary: what is out of scope, and which tasks running in parallel own the neighbouring files or areas, named by what they own. A decision several tasks share (an interface, a name, a limit such as a size ceiling a test pins) is named in each brief that touches it, with the task that owns it.',
+  '- Keep one chain of reasoning in one task: split, each part guesses at the others.',
   '- Keep each slice independently demoable, and a small job one task: atomising it only adds handoffs.',
 ];
 
@@ -670,7 +671,6 @@ function buildConversationBody(
     'SLICE CLASSIFICATION:',
     '- "autonomy": AFK (agent works autonomously) or HITL (needs user confirmation)',
     '- "sliceType": Same vocabulary as autonomy.',
-    '- AFK tasks have no "userSteps"; HITL tasks may.',
     '- User tasks (type "user") always have sliceType "HITL".',
     '- "sliceType" is required on every task, and "autonomy" on every "ai" task, at every depth — a "subtasks" entry is a full task object with all the same required fields, not a bare label.',
     '',
@@ -684,7 +684,7 @@ function buildConversationBody(
     '',
     'BUILD PLANS:',
     'When the strategy is a build, these rules apply as well. No other strategy is planned as vertical slices.',
-    '- Design each task as a VERTICAL TRACER-BULLET SLICE — a narrow but complete, independently demoable path, not a horizontal layer, which nobody can demo on its own.',
+    '- Design each task as a VERTICAL TRACER-BULLET SLICE — a narrow but complete, independently demoable path, not a horizontal layer.',
     '- Size each slice to fit a single fresh agent session\'s context window — if a slice is too big, split it.',
     '- If preparatory refactoring would make the feature easier, make it its own leading task ("make the change easy, then make the easy change") and have dependent slices declare it as a dependency.',
     '- Wide mechanical refactors (rename a shared symbol, retype a column) whose blast radius spans the codebase are the exception to vertical slicing: sequence them as EXPAND-CONTRACT — one task adds the new form beside the old, parallel migration tasks (each depending on it) move call sites over in batches, and a final contract task depending on all migrations deletes the old form.',
@@ -717,7 +717,7 @@ function buildConversationBody(
     '',
     'CONVENTIONS:',
     '- When suggesting libraries, frameworks, or patterns, first check the codebase already uses them (package.json, imports, surrounding files): a well-known library is not therefore installed.',
-    '- Follow the existing code style, naming conventions, and architectural patterns of the project.',
+    '- Follow the project\'s existing style, naming and patterns.',
     '',
     ...(tools
       ? PLANNER_TOOLS_CATALOG
@@ -759,7 +759,7 @@ function taskSkillsSection(skills: readonly SkillInfo[]): string[] {
   const attachable = modelInvocableTaskSkills(skills);
   return [
     'TASK SKILLS:',
-    '- "skills" optionally lists task skills by name; their instructions are put in that task\'s prompt when it runs. Omit it on tasks that need none.',
+    '- "skills" optionally lists task skills by name; their instructions are put in that task\'s prompt when it runs.',
     '- A name that does not exist yet is accepted with a warning, so a task may name a skill that a task it depends on creates (.ordewell/skills/<name>/SKILL.md). Only skills with applies-to: task can be attached.',
     '- When the user asks to use a task skill, attach it to the tasks it fits.',
     ...(attachable.length === 0 ? [] : [

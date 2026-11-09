@@ -173,7 +173,7 @@ export class EmbeddedNewlineError extends Error {
   constructor(readonly command: string) {
     super(
       `Cannot start "${command}" on Windows: its prompt spans multiple lines, and the only launcher found on PATH was a batch shim (${command}.cmd).\n\n` +
-      `cmd.exe stops reading a command line at the first line break and silently discards the rest, so the agent would be handed a prompt cut off at its first blank line: no plan map, no prior task output, and no instruction to report back when it is done.\n\n` +
+      `cmd.exe stops reading a command line at the first line break and silently discards the rest, so the agent would be handed a prompt cut off at its first blank line: no prior task output, and no instruction to report back when it is done.\n\n` +
       `Install the native executable from the coding agent's own Windows installer or release binary. Ordewell will launch it directly, with no interpreter in the way. A PowerShell shim (${command}.ps1) beside the batch one is also enough.`,
     );
     this.name = 'EmbeddedNewlineError';
