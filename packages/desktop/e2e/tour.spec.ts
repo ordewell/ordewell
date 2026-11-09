@@ -866,8 +866,10 @@ async function sashProbe(page: Page): Promise<Record<string, unknown>> {
  * Check k on labels whose answer is known, in this renderer with its fonts: a
  * label a snapping scroller leaves cut at its edge, though the scroller can
  * show it whole, passes; a label its own ellipsis cuts, with no tooltip, fails;
- * and the scroller ends where it was, snapping as before. What it finds fails
- * the tour under TOUR_STRICT.
+ * a folder shortened in the middle, in a box narrower than its kept tail, still
+ * shows a few characters of its head, with the app's own MiddleText styles; and
+ * the scroller ends where it was, snapping as before. What it finds fails the
+ * tour under TOUR_STRICT.
  */
 async function labelCheckControl(page: Page): Promise<Record<string, unknown>> {
   await page.evaluate(() => {
@@ -895,12 +897,30 @@ async function labelCheckControl(page: Page): Promise<Record<string, unknown>> {
     columns[0]!.append(cut);
     host.append(track);
     document.body.append(host);
+    // MiddleText's markup for a commit's file folder, with pathTail's 40-character tail: about 250px of tail in a 120px box.
+    const narrow = document.createElement('div');
+    narrow.dataset.tourControl = 'middle';
+    narrow.style.cssText = 'position:fixed;left:0;top:48px;z-index:2147483647;width:120px;display:flex;background:#fff;color:#000;font:12px sans-serif';
+    const folder = 'src/search/normalisation-of-composed-and-decomposed-unicode-forms';
+    const mid = document.createElement('span');
+    mid.className = 'mid';
+    mid.title = folder;
+    for (const [part, text] of [['mid-head', folder.slice(0, -40)], ['mid-tail', folder.slice(-40)]] as const) {
+      const span = document.createElement('span');
+      span.className = part;
+      span.textContent = text;
+      mid.append(span);
+    }
+    narrow.append(mid);
+    document.body.append(narrow);
   });
   const host = page.locator('[data-tour-control="labels"]');
   const judge = (control: string): Promise<string[]> => host.locator(`[data-control="${control}"]`).evaluateAll(labelChecks, { textMin: TEXT_MIN, shownMin: SHOWN_MIN });
   const result: Record<string, unknown> = {};
   const reachable = await judge('reachable');
   const cut = await judge('cut');
+  const middle = await page.locator('[data-tour-control="middle"] .mid').evaluateAll(labelChecks, { textMin: TEXT_MIN, shownMin: SHOWN_MIN });
+  await page.locator('[data-tour-control="middle"]').evaluate((el) => el.remove());
   const after = await host.evaluate((el) => ({ left: Math.round(el.scrollLeft), snap: getComputedStyle(el).scrollSnapType }));
   // What the check works around, recorded: scrollIntoView under the snap, where it lands.
   result.snappedScrollIntoView = await host.evaluate((el) => {
@@ -908,10 +928,11 @@ async function labelCheckControl(page: Page): Promise<Record<string, unknown>> {
     return Math.round(el.scrollLeft);
   });
   await host.evaluate((el) => el.remove());
-  Object.assign(result, { reachable, cut, after });
+  Object.assign(result, { reachable, cut, middle, after });
   const wrong: string[] = [];
   if (reachable.length > 0) wrong.push(`a label the scroller can show whole fails: ${reachable.join('; ')}`);
   if (!cut.some((p) => p.includes('cut short with no tooltip'))) wrong.push(`a label cut with no tooltip passes: ${cut.join('; ') || 'no problem found'}`);
+  if (middle.length > 0) wrong.push(`a folder shortened in the middle loses a part: ${middle.join('; ')}`);
   if (after.left !== 0 || !after.snap.includes('mandatory')) wrong.push(`the scroller was left at ${after.left}px, snapping ${after.snap}`);
   fitFailures.push(...wrong.map((w) => `check k control: ${w}`));
   result.wrong = wrong;
