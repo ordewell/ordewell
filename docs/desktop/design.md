@@ -128,17 +128,17 @@ left, where VS Code users look for it.
   - The **Planner** tab always comes first. It is pinned and has no close
     button. It holds the open session's planner conversation, with the session
     header at its top and the composer at its foot.
-  - **Task**, **file**, **diff**, **commit graph** and **plan graph** tabs open
+  - **Task**, **file**, **diff**, **commit** and **plan graph** tabs open
     beside it. A single click opens a preview tab, shown in italics, and the
     next preview replaces it. A double click, an edit, or a message typed in it
     keeps the tab.
   - Task, diff and graph tabs belong to the session that opened them. Switching
     session swaps them out and brings that session's own tabs back. File and
-    commit graph tabs belong to the workspace and stay put.
+    commit tabs belong to the workspace and stay put.
   - Each tab shows its icon in its area hue. The active tab has a 2 px marker
     along its top edge in the same hue: teal for the planner, task and plan
-    graph tabs, indigo for files, mint for diffs, slate for the commit graph
-    and commit tabs.
+    graph tabs, indigo for files, mint for diffs (a commit's file too),
+    slate for commit tabs.
   - A single centre tab is never wider than its content needs. The Details
     view sits in a column at most 800 px wide, centred, with 24 px of padding
     on each side. A chat, once it has a message, uses its tab's full width.
@@ -995,64 +995,96 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
   - `confirm_stale` reopens the confirm with the new state.
   - `pushed` explains why amend is gone.
 
-### W11. The Git view — branches, history and the commit graph
+### W11. The Git view — branches and history, in the sidebar
 
 ```
 ├────┬──────────────────────────────┬─────────────────────────────────────────────────────────┤
-│▌⑃  │ ⑃ BRANCHES   web           ⟳ │ Planner │ ⑃ Commit graph · web ✕                        │
-│    │ [⑂ Branches] [◷ History]     │  ● 9c1e2d0  Fix setup instructions      you    2m      │
-│    │ ▾ Local                      │  │ ● 77ab310 ordewell: land #1 Read …   ordewell 1h   │
-│    │   ● main  ↑2   ⊡ run r7      │  │╱  (ordewell/r7/integration)                         │
-│    │   ▾ feature              2   │  ● 4f2a91c  Bump deps                  you    1d      │
-│    │       sso                    │  ● e81f004  Merge branch 'feature/x'   you    2d      │
-│    │       x                      │  ├─╮                                                   │
-│    │ ▾ Ordewell (read-only)       │  │ ● 3d0a9b2 Add x                     ana    2d      │
-│    │   ▸ ordewell/r7          3   │  ● │ …                                                 │
-│    │ ▾ Remote origin              │  Load more ↓                                           │
+│▌⑃  │ web                        ⟳ │ Planner │ Commit 9c1e2d0 │ setup.md @ 9c1e2d0 ✕        │
+│    │ ⑃ main                       │                                                        │
+│    │ [Fetch] [Pull ↓1] [Push ↑2]  │  Fix setup instructions                                │
+│    │ [⑂ Branches] [◷ History]     │  9c1e2d0 · you · 2 minutes ago                         │
+│    │ ▾ Local                    + │  …message…                                             │
+│    │   ✓ main  ↑2   ⊡ run r7      │  M docs/setup.md                                       │
+│    │   ▾ feature              2   │                                                        │
+│    │       sso                    │                                                        │
+│    │       x                      │                                                        │
+│    │ ▾ Ordewell                   │                                                        │
+│    │   ▸ ordewell/r7          3   │                                                        │
+│    │ ▾ Remote                     │                                                        │
 │    │     origin/main              │                                                        │
 │    │ ▾ Stashes                    │                                                        │
 │    │     ordewell: before Merge … │                                                        │
 ```
 
-The History view, in the same sidebar:
+Pressing `feature/sso` turns the same sidebar to its History; the centre is
+left as it was:
 
 ```
+│    │ ⑃ main                       │
 │    │ [⑂ Branches] [◷ History]     │
-│    │ ● Fix setup instructions main│
-│    │ │ ● ordewell: land #1 Read … │
-│    │ ●╱ Bump deps          v1.2   │
-│    │ ● Merge branch 'feature/x'   │
+│    │ [History of: feature/sso ▾] ↶│
+│    │ Browsing only: your checkout │
+│    │ stays on main.               │
+│    │ ● Add SSO callback           │
+│    │ │ a41c09e · ana · 1d         │
+│    │ ●╱ Bump deps                 │
+│    │    4f2a91c · you · 2d  v1.2  │
 │    │ [Load more]                  │
 ```
 
 - **Shows.**
-  - *A Branches/History switch* at the sidebar's head: two `aria-pressed`
-    buttons in a group named "Git sidebar view". The choice is the window's
-    and outlives an activity switch and a change of repository.
+  - *The repository's name* at the head, with Refresh, and a Repository
+    picker when the workspace holds several.
+  - *Your checkout:* the checked-out branch (or "Detached HEAD") in
+    `body-strong`, and Fetch, Pull and Push under it. They act on the
+    checkout whatever the list below shows, and its tooltip says so.
+  - *A Branches/History switch:* two `aria-pressed` buttons in a group named
+    "Git sidebar view". The choice is the window's and outlives an activity
+    switch and a change of repository.
   - *Branches* (`GET /api/git/branches`):
     - local branches, with ahead and behind;
     - Ordewell's branches, in their own read-only group;
+    - worktrees, and the integration branch of a live run;
     - remote-tracking branches, as of the last fetch;
     - stashes.
 
     A lock marks a live run's landing branch, naming the run. A branch name
     with slashes is folded under its prefixes (`feature/` holds `sso` and
     `x`), each folder showing its branch count; a row still names its branch
-    in full to a screen reader and in its tooltip.
-  - *History:* the checkout's commits down the sidebar, one row each, with the
-    commit graph's lanes drawn small beside the subject and its branch and tag
-    chips (the HEAD chip is left out: the current branch's chip already says
-    it). The full sha, the author and the age are in the row's tooltip.
-  - *The commit graph,* a tab (slate marker), paged by cursor
-    (`GET /api/git/log`). A commit opens its message and files
-    (`GET /api/git/commit`), and a file opens its patch.
-  - *A commit tab* (slate marker, the `git-commit-horizontal` icon) opened from
-    History: the commit's subject, sha, author, date, message and files. A file
-    opens its patch in a commit-diff tab, keeping the commit tab first.
+    in full to a screen reader and in its tooltip. The checked-out branch is
+    told by its tick and weight, not by a colour: green is a status's. The
+    branch History is showing keeps the selected background on Branches.
+  - *History:* commits down the sidebar, two lines a row: the subject, then
+    its branch and tag chips and the short sha, author and age, with the
+    commit graph's lanes drawn small beside them. The HEAD chip is left out,
+    since the checkout's own chip says it. The full sha and the chips are in
+    the row's tooltip. Its head names whose history it is: a "History of"
+    picker (your checkout, or any local, Ordewell or remote branch), and,
+    while a branch is browsed, a ↶ "Show your checkout’s history" button and
+    a line saying the checkout stays where it is ("Browsing only: your
+    checkout stays on main.", or that an Ordewell or remote branch is
+    read-only here).
+  - *A commit tab* (slate marker, the `git-commit-horizontal` icon, titled
+    `Commit <short sha>`): the subject as its heading, the sha, author,
+    date, message and files. Each file is named by its status and path, the
+    path whole in its tooltip.
+  - *A commit-diff tab* (mint marker, as a diff's, titled
+    `<file name> @ <short sha>`): one file's patch in that commit.
+
+  The Git view opens no centre tab of its own. Branches and History replace
+  each other in the sidebar; only a commit, and a file in it, open tabs.
 - **Actions.**
-  - Create, switch and delete a branch.
+  - *A branch row* (local, Ordewell or remote): a click browses its history.
+    The sidebar turns to History with that branch picked; nothing is checked
+    out and no tab opens, so the centre keeps what was open. A browsed branch
+    the next read no longer lists falls back to the checkout's history.
+  - Create, switch and delete a branch: the + on Local, and a row's own
+    Switch and Delete buttons.
   - Pop or drop a stash, each asking first.
-  - Fetch.
+  - Fetch, Pull and Push, on the checkout.
+  - *Git: Show history* (`git.showGraph`, kept under its old id so a binding
+    to it still works) shows the Git sidebar on History with the checkout's
+    own history, whatever was browsed before.
   - *A folder* turns over by a click anywhere on its row, chevron and name
     alike, by Enter or Space, and by Right to open and Left to close. Until the
     person chooses, a folder is open when its group is short enough to start
@@ -1060,8 +1092,11 @@ The History view, in the same sidebar:
     repository, group and folder, and outlives an activity switch.
   - *A History row:* a click opens the commit as a preview tab, so stepping
     through the history leaves one tab behind; a double click keeps it. The
-    last commit opened is marked (`aria-current`) and is kept per repository.
-    ↑ and ↓ step between rows, Home and End go to the first and the last.
+    last commit opened is marked (`aria-current`) and is kept per repository
+    and branch. ↑ and ↓ step between rows, Home and End go to the first and
+    the last.
+  - *A file in a commit tab* opens its patch as a preview commit-diff tab,
+    and keeps the commit tab, so the commit stays open beside its file.
   - *Load more* reads the next 50 commits. It waits while the history is
     read again, and after that read failed, since the page it would ask for
     follows rows about to be replaced.
@@ -1073,16 +1108,15 @@ The History view, in the same sidebar:
 - **Loading.**
   - *History* is read only once it is first shown, 50 commits at a time. It
     is read again only when a branch tip moves (a fetch, a switch, a commit),
-    or a detached checkout's head does, or on Refresh. A read again keeps the rows on screen and as many commits
-    as were shown, up to the daemon's ceiling of 500, so the person's place
-    stands. Each repository keeps its own history and its own pick, and an
+    or a detached checkout's head does, or on Refresh. A read again keeps the
+    rows on screen and as many commits as were shown, up to the daemon's
+    ceiling of 500, so the person's place stands. Each repository keeps its own history and its own pick, and an
     answer for a read that a later one overtook, or for a repository no longer
-    shown, is dropped.
+    shown, is dropped. A browsed branch keeps its own history beside the
+    checkout's.
   - A fetch that brings only tags moves no branch tip, so History keeps its
-    chips until Refresh; the commit graph tab reads its labels again on every
-    fetch.
-  - *The commit graph:* the first page, then more on Load more.
-- **Empty.** A repository with no commits says so, in History and the graph.
+    chips until Refresh.
+- **Empty.** A repository with no commits says so in History.
 - **Error.** A `git_failed` action shows git's text in place. A history that
   cannot be read says so, with Try again; a Load more that fails says so under
   the rows and keeps them.
@@ -1662,7 +1696,7 @@ reaches 4.5:1 on every background of its theme, hover and selected included.
 | `--ow-area-sessions` | `#EE93B0` rose | `#A8325C` | Sessions |
 | `--ow-area-explorer` | `#9DA8FA` indigo | `#4650BF` | Explorer, file tabs |
 | `--ow-area-changes` | `#5ECDB0` mint | `#0D7258` | Changes, diff tabs |
-| `--ow-area-git` | `#9DB3CF` slate | `#4F6683` | Git, the commit graph and commit tabs |
+| `--ow-area-git` | `#9DB3CF` slate | `#4F6683` | Git, and commit tabs |
 
 Each area hue reaches 4.5:1 on chrome and surface in its theme, beyond the 3:1
 an icon needs, so it can stay legible if a later design uses it for a
@@ -1893,15 +1927,32 @@ number updates in place: elapsed times, counts and usage.
 | Token | Size / line height | Weight | Use |
 |---|---|---|---|
 | `--ow-type-caption` | 11 / 16 | 500 | badges, the status bar, stage chips, tab counts |
-| `--ow-type-overline` (new) | 11 / 16, `letter-spacing: 0.06em`, uppercase | 600 | sidebar and section headers (SESSIONS, STAGE 2) |
+| `--ow-type-overline` | 11 / 16, `letter-spacing: 0.06em`, uppercase | 600 | sidebar and section headers (SESSIONS, STAGE 2) |
 | `--ow-type-small` | 12 / 18 | 400 | metadata, a row's second and third lines, tooltips |
-| `--ow-type-body` | 13 / 20 | 400 | UI body, rows' first lines, inputs, menus, buttons |
-| `--ow-type-body-strong` | 13 / 20 | 600 | titles in rows and cards (a button's label uses 500) |
-| `--ow-type-chat` (new) | 14 / 22 | 400 | planner and task conversations, Details' prose |
-| `--ow-type-heading` | 15 / 22 | 600 | session header goal, dialog titles; the Welcome tagline at 400 |
+| `--ow-type-body` | 13 / 20 | 400 | UI body, rows' first lines, inputs, menus |
+| `--ow-type-label` | 13 / 20 | 500 | a button's label, a link that acts as one |
+| `--ow-type-body-strong` | 13 / 20 | 600 | the name a row or card is about: a task, session, project, branch or commit title, the checkout's branch |
+| `--ow-type-chat` | 14 / 22 | 400 | planner and task conversations, Details' prose |
+| `--ow-type-heading` | 15 / 22 | 600 | session header goal, dialog titles, a commit tab's subject; the Welcome tagline at 400 |
 | `--ow-type-title` | 20 / 28 | 600 | empty states, Settings' page title |
 | `--ow-type-code` | 12.5 / 19 | 400 | Monaco, the terminal, peeks, code in chat |
-| `--ow-type-code-small` (new) | 12 / 18 | 400 | paths, branches and commands inside rows and cards |
+| `--ow-type-code-small` | 12 / 18 | 400 | paths, branches and commands inside rows and cards |
+
+The roles rank what a surface says, and colour follows the rank:
+
+- **The name leads.** What a row, card, menu item or dialog is about (its
+  task, session, project, branch, commit or model) is the first thing on it,
+  in `body-strong` or `heading` and `--ow-fg`. Metadata under or beside it (a
+  path, a sha, an author, an age, a count, a status line) is `small`,
+  `caption` or `code-small` in `--ow-fg-secondary`, never the reverse.
+- **Nothing reads under 11 px.** `caption` and `overline` are the floor, in
+  the shared chat styles too.
+- **Emphasis is earned.** A required action or a warning keeps its weight
+  and its status colour (amber is Needs you's alone; red is a failure), and a
+  kind badge that is not a status is neutral. A model's or runner's name is
+  text, not a colour: a hue per family would read as a status.
+- **Selection is teal and weight, never a status colour.** The selected row
+  takes `--ow-bg-selected`; the checked-out branch its tick and weight.
 
 ### Icon sizes
 
@@ -2034,13 +2085,21 @@ title bar. These rules exist so that cannot happen. The checklist checks them.
    or breadcrumb is the one `flex: 1 1 auto; min-width: 0` element, with
    `overflow: hidden; text-overflow: ellipsis; white-space: nowrap`. Paths and
    branches use a middle ellipsis. Truncated text has its full value in a
-   tooltip.
+   tooltip. Where a row holds a name and its metadata, the name shrinks last
+   and the metadata keeps a share: a project menu item keeps at least a third
+   of its row for its folder, which is what tells two same-named projects
+   apart. A model line on a graph card steps through shorter forms (effort,
+   then provider, then trailing words, then the runner's name) before it cuts
+   a word.
 4. **Actions reserve their space.** A row's hover actions take their width
    all the time (`visibility: hidden` until shown), so the title never
    reflows under the pointer.
 5. **Heights are fixed.** Rows, tabs, headers and chips have the heights
    above. Their text is one line, or the variant's fixed number of lines.
-   Nothing grows a row except the defined third line.
+   Nothing grows a row except the defined third line. Two kinds of text wrap
+   instead, since cutting them would cut what the person must act on: a Needs
+   you title, clamped at two lines with the rest in its tooltip, and a
+   banner's or a notice's message, which wraps anywhere.
 6. **Counts are tabular** and sit in a box sized for three digits, so a count
    ticking from 9 to 10 moves nothing.
 7. **Scroll containers clip their own content.** A focus ring inside one is
@@ -2059,7 +2118,7 @@ a status.
 |---|---|---|---|
 | Sessions | `layers` | Planner tab | `message-square-text` |
 | Explorer | `files` | Changes | `file-diff` |
-| Git | `git-branch` | Commit graph | `git-graph` |
+| Git | `git-branch` | Commit | `git-commit-horizontal` |
 | Settings | `settings` | Command palette | `command` |
 | Plan graph (button and tab) | `workflow` | Critical path | `route` |
 | Previous / next stage | `chevron-left` / `chevron-right` | New session | `plus` |
@@ -2211,6 +2270,13 @@ are permanent, so findings can cite them.
   40 px and the status bar 24 px.
 - **O5.** Hovering a row does not move its title.
 - **O6.** A count changing from 9 to 10 moves nothing beside it.
+- **O7.** A name a row, card, menu item or tab is about (a branch, commit,
+  path, project, task or model) shows at least 64 px of its text, or all of
+  it, and each part of it at least half that, so a long neighbour never
+  squeezes it to nothing. Where it is cut, it has a tooltip, and it reads at
+  4.5:1. The tour's check `k` (`labelChecks` in `e2e/surfaces.ts`) measures
+  this on long branch, commit, path, project, task and model names, as the
+  app paints them, in both themes and every size.
 
 **Actions**
 

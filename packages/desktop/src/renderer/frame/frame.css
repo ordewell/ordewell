@@ -85,6 +85,8 @@
 .frame-project-menu button { display: flex; align-items: center; gap: var(--ow-space-2); }
 .frame-project-entry { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .frame-menu-hint { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: right; color: var(--ow-fg-secondary); font: var(--ow-type-small); }
+/* A long name must not squeeze its folder's path to nothing: the path is what tells two same-named projects apart. */
+.frame-project-menu span.frame-menu-hint { min-width: 35%; }
 kbd.frame-menu-hint { font-family: inherit; }
 .frame-menu-check { flex: none; display: inline-flex; width: 14px; }
 .frame-menu-empty { padding: var(--ow-space-1) var(--ow-space-3); color: var(--ow-fg-secondary); font: var(--ow-type-small); }
@@ -384,7 +386,7 @@ kbd.frame-menu-hint { font-family: inherit; }
 .frame-banner-icon { margin-top: 2px; }
 .frame-banner-text { flex: 1 1 auto; min-width: 0; }
 .frame-banner h2 { margin: 0; font: var(--ow-type-body-strong); color: var(--ow-fg); text-transform: none; letter-spacing: 0; }
-.frame-banner p { margin: var(--ow-space-half) 0 0; color: var(--ow-fg-secondary); }
+.frame-banner p { margin: var(--ow-space-half) 0 0; color: var(--ow-fg-secondary); overflow-wrap: anywhere; }
 .frame-banner-info { border-left-color: var(--ow-accent); }
 .frame-banner-info .frame-banner-icon { color: var(--ow-accent); }
 .frame-banner-warning { border-left-color: var(--ow-status-warning); }
