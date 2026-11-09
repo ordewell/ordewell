@@ -5,7 +5,10 @@
  * `planner-eval.test.mjs` proves every verdict on hand-written records.
  *
  * A run record is what run.mjs writes per run:
- *   { id, cell, variant, goal, repeat, metrics, keyChecks, rubric?, error?, substitution? }
+ *   { id, cell, variant, goal, repeat, build, model, keyHash, metrics, keyChecks, rubric?, error?, substitution? }
+ *
+ * A run that timed out, lost its TUI or failed is not a planner's answer: it
+ * counts toward the completion rate and nowhere else.
  */
 
 export const COMPARISONS = [
@@ -31,6 +34,7 @@ export const NUMERIC = [
   ['keyViolations', 'key viol.'],
   ['rubricProblems', 'rubric problems'],
   ['wordingViolations', 'wording viol.'],
+  ['meterLines', 'meter lines'],
   ['turns', 'turns'],
   ['wallMs', 'wall ms'],
 ];
@@ -49,21 +53,38 @@ export function spread(values) {
   return xs.length === 0 ? null : { min: Math.min(...xs), max: Math.max(...xs) };
 }
 
-/** The numbers of one run as the report counts them: violations as counts, a failed run as nothing. */
+/** Whether a run reached an answer: a plan, or the planner's last word before the turn limit. */
+export function isComplete(record) {
+  return !record.error && Boolean(record.metrics) && !['timeout', 'tui exited', 'error', null, undefined].includes(record.metrics.stopped);
+}
+
+/**
+ * The numbers of one run as the report counts them: violations as counts. A
+ * complete run that submitted no plan answered nothing a key can check, so it
+ * counts as one key violation, and a variant cannot pass by planning nothing.
+ */
 export function runNumbers(record) {
   const m = record.metrics ?? {};
   return {
     ...Object.fromEntries(NUMERIC.map(([k]) => [k, m[k] ?? null])),
-    keyViolations: (record.keyChecks ?? []).filter((c) => c.status === 'fail').length,
+    keyViolations: m.submitted ? (record.keyChecks ?? []).filter((c) => c.status === 'fail').length : 1,
     rubricProblems: record.rubric?.ok ? record.rubric.problems.length : null,
     wordingViolations: Array.isArray(m.wordingViolations) ? m.wordingViolations.length : null,
   };
 }
 
+/** Whether a run's width falls in the slices its goal expects, tolerance included; null where the goal names none. */
+export function widthInRange(record, goal) {
+  const e = goal?.expectedSlices;
+  if (!e || !record.metrics?.submitted || !finite(record.metrics.width)) return null;
+  const tol = e.tolerance ?? 0;
+  return record.metrics.width >= e.min - tol && record.metrics.width <= e.max + tol;
+}
+
 const groupKey = (r) => `${r.cell}\u0000${r.variant}\u0000${r.goal}`;
 
-/** One summary per (cell, variant, goal): medians, spread, submissions, and every violation by run. */
-export function summarize(records) {
+/** One summary per (cell, variant, goal): completion, then medians, spread and violations over the complete runs. */
+export function summarize(records, goals = []) {
   const groups = new Map();
   for (const r of records) {
     if (!groups.has(groupKey(r))) groups.set(groupKey(r), []);
@@ -71,25 +92,31 @@ export function summarize(records) {
   }
   return [...groups.values()].map((runs) => {
     const { cell, variant, goal } = runs[0];
-    const numbers = runs.map(runNumbers);
+    const complete = runs.filter(isComplete);
+    const numbers = complete.map(runNumbers);
     const stats = Object.fromEntries(NUMERIC.map(([k]) => {
       const vs = numbers.map((n) => n[k]);
       return [k, { median: median(vs), spread: spread(vs) }];
     }));
     const violations = [];
-    for (const r of runs) {
+    for (const r of complete) {
+      if (!r.metrics.submitted) violations.push({ run: r.id, kind: 'key', what: `no plan submitted (${r.metrics.stopped})` });
       for (const c of r.keyChecks ?? []) if (c.status === 'fail') violations.push({ run: r.id, kind: 'key', what: `${c.check}: ${c.detail}` });
       for (const p of r.rubric?.ok ? r.rubric.problems : []) {
         violations.push({ run: r.id, kind: 'rubric', what: `${p.question}: ${p.claims.map((c) => c.text).join(' | ')}` });
       }
-      for (const w of r.metrics?.wordingViolations ?? []) violations.push({ run: r.id, kind: 'wording', what: `${w.rule}: "${w.quote}"` });
+      for (const w of r.metrics.wordingViolations ?? []) violations.push({ run: r.id, kind: 'wording', what: `${w.rule}: "${w.quote}"` });
     }
+    const inRange = complete.map((r) => widthInRange(r, goals.find((g) => g.id === goal))).filter((v) => v !== null);
     return {
       cell,
       variant,
       goal,
       runs: runs.length,
-      submitted: runs.filter((r) => r.metrics?.submitted).length,
+      complete: complete.length,
+      timeouts: runs.filter((r) => r.metrics?.stopped === 'timeout' || /^timeout\b/.test(String(r.error ?? ''))).length,
+      submitted: complete.filter((r) => r.metrics.submitted).length,
+      widthInRange: inRange.length ? { inRange: inRange.filter(Boolean).length, of: inRange.length } : null,
       errors: runs.filter((r) => r.error).map((r) => ({ run: r.id, error: r.error })),
       substitutions: runs.filter((r) => r.substitution).map((r) => ({ run: r.id, ...r.substitution })),
       stats,
@@ -98,54 +125,104 @@ export function summarize(records) {
   });
 }
 
-const sum = (xs) => xs.filter(finite).reduce((a, b) => a + b, 0);
-const perRun = (records, pick) => {
-  const xs = records.map(pick).filter(finite);
-  return xs.length === 0 ? null : sum(xs) / xs.length;
-};
+const mean = (xs) => (xs.length === 0 ? null : xs.reduce((a, b) => a + b, 0) / xs.length);
 
 /**
- * Candidate against baseline for one backend, over every goal both ran:
- *   - key violations per run no more (and rubric problems per run no more, where reviewed)
- *   - own-read share (median) no higher
- *   - width (median) no lower, on each goal whose key allows parallel work
- *   - zero wording violations
- *   - plans submitted no fewer, so a variant cannot pass by planning nothing
- * A criterion with no data on either side is null and makes the verdict incomplete.
+ * One side's runs of a per-run number: the mean over every run, and the range
+ * of the per-repeat means, which is how far two passes of the same build
+ * already differ.
+ */
+function perRepeat(records, pick) {
+  const values = records.map((r) => ({ repeat: r.repeat, v: pick(runNumbers(r)) })).filter((x) => finite(x.v));
+  if (values.length === 0) return null;
+  const byRepeat = new Map();
+  for (const { repeat, v } of values) byRepeat.set(repeat, [...(byRepeat.get(repeat) ?? []), v]);
+  const means = [...byRepeat.values()].map(mean);
+  return { mean: mean(values.map((x) => x.v)), range: Math.max(...means) - Math.min(...means), runs: values.length };
+}
+
+/**
+ * Candidate against baseline for one backend, over the goals both sides have
+ * complete runs of. The verdict rests on two criteria, each judged against
+ * run-to-run spread: the candidate holds when its mean is no more than the
+ * baseline's plus half the wider of the two sides' per-repeat ranges.
+ *   - key violations per run (a complete run with no plan counts one)
+ *   - true wording violations per run; zero always holds
+ * Completion, width against the goal's expected slices, own-read share and
+ * bytes, and rubric problems are reported beside it and judge nothing: width
+ * and share describe a plan's shape, which a key already judges where it matters.
  */
 export function verdict(records, goals, { cell, baseline, candidate }) {
-  const side = (variant) => records.filter((r) => r.cell === cell && r.variant === variant);
+  const all = (variant) => records.filter((r) => r.cell === cell && r.variant === variant);
+  const completeGoals = (rs) => new Set(rs.filter(isComplete).map((r) => r.goal));
+  const shared = [...completeGoals(all(baseline))].filter((g) => completeGoals(all(candidate)).has(g));
+  const side = (variant) => all(variant).filter((r) => isComplete(r) && shared.includes(r.goal));
+  const completion = (variant) => {
+    const rs = all(variant);
+    return rs.length ? rs.filter(isComplete).length / rs.length : null;
+  };
+  if (all(baseline).length === 0 || all(candidate).length === 0) {
+    return { cell, baseline, candidate, result: 'incomplete', criteria: [], reported: [], note: 'one side has no runs' };
+  }
   const base = side(baseline);
   const cand = side(candidate);
-  if (base.length === 0 || cand.length === 0) return { cell, baseline, candidate, result: 'incomplete', criteria: [], note: 'one side has no runs' };
-  const nums = (rs) => rs.map(runNumbers);
   const criteria = [];
-  const add = (name, b, c, pass) => criteria.push({ name, baseline: b, candidate: c, pass: b === null || c === null ? null : pass(b, c) });
+  const judge = (name, pick, { zeroHolds = false } = {}) => {
+    const b = perRepeat(base, pick);
+    const c = perRepeat(cand, pick);
+    const allowance = b && c ? Math.max(b.range, c.range) / 2 : null;
+    const pass = !b || !c ? null : (zeroHolds && c.mean === 0) || c.mean <= b.mean + allowance;
+    criteria.push({ name, baseline: b?.mean ?? null, candidate: c?.mean ?? null, allowance, pass });
+  };
+  judge('key violations per run', (n) => n.keyViolations);
+  judge('true wording violations per run', (n) => n.wordingViolations, { zeroHolds: true });
 
-  add('key violations per run (no more)', perRun(nums(base), (n) => n.keyViolations), perRun(nums(cand), (n) => n.keyViolations), (b, c) => c <= b);
-  const reviewed = (rs) => (rs.some((r) => r.rubric?.ok) ? perRun(nums(rs.filter((r) => r.rubric?.ok)), (n) => n.rubricProblems) : null);
-  const rb = reviewed(base);
-  const rc = reviewed(cand);
-  if (rb !== null || rc !== null) add('rubric problems per run (no more)', rb, rc, (b, c) => c <= b);
-  add('own-read share, median (no higher)', median(nums(base).map((n) => n.ownReadShare)), median(nums(cand).map((n) => n.ownReadShare)), (b, c) => c <= b);
-  for (const goal of goals.filter((g) => g.key.parallelAllowed)) {
-    const w = (rs) => median(nums(rs.filter((r) => r.goal === goal.id && r.metrics?.submitted)).map((n) => n.width));
-    const b = w(base);
-    const c = w(cand);
-    if (b !== null || c !== null) add(`width on ${goal.id}, median (no lower)`, b, c, (x, y) => y >= x);
+  const reported = [];
+  const report = (name, b, c) => reported.push({ name, baseline: b, candidate: c });
+  report('completion rate', completion(baseline), completion(candidate));
+  for (const goal of goals.filter((g) => g.expectedSlices && shared.includes(g.id))) {
+    const share = (rs) => {
+      const xs = rs.filter((r) => r.goal === goal.id).map((r) => widthInRange(r, goal)).filter((v) => v !== null);
+      return xs.length ? `${xs.filter(Boolean).length}/${xs.length}` : null;
+    };
+    const { min, max, tolerance = 0 } = goal.expectedSlices;
+    report(`width on ${goal.id} in ${min}-${max} ±${tolerance}`, share(base), share(cand));
   }
-  add('wording violations (zero)', sum(nums(base).map((n) => n.wordingViolations)), sum(nums(cand).map((n) => n.wordingViolations)), (_b, c) => c === 0);
-  add('plans submitted (no fewer)', base.filter((r) => r.metrics?.submitted).length, cand.filter((r) => r.metrics?.submitted).length, (b, c) => c >= b);
+  const med = (rs, k) => median(rs.map(runNumbers).map((n) => n[k]));
+  report('own-read share, median', med(base, 'ownReadShare'), med(cand, 'ownReadShare'));
+  report('own read bytes, median', med(base, 'ownReadBytes'), med(cand, 'ownReadBytes'));
+  const reviewed = (rs) => perRepeat(rs.filter((r) => r.rubric?.ok), (n) => n.rubricProblems)?.mean ?? null;
+  report('rubric problems per run', reviewed(base), reviewed(cand));
 
-  const result = criteria.some((c) => c.pass === false) ? 'fail' : criteria.some((c) => c.pass === null) ? 'incomplete' : 'pass';
-  return { cell, baseline, candidate, result, criteria };
+  const result = criteria.some((c) => c.pass === false) ? 'fail' : shared.length === 0 || criteria.some((c) => c.pass === null) ? 'incomplete' : 'pass';
+  return {
+    cell, baseline, candidate, result, goals: shared, criteria, reported,
+    ...(shared.length === 0 ? { note: 'no goal has complete runs on both sides' } : {}),
+  };
+}
+
+/** Per cell and variant: the runs that recorded their turn input, and how many carried the meter line. */
+export function meterSummary(records) {
+  const rows = new Map();
+  for (const r of records.filter((x) => x.metrics?.budget)) {
+    const key = `${r.cell}\u0000${r.variant}`;
+    const row = rows.get(key) ?? { cell: r.cell, variant: r.variant, source: r.metrics.budget.source, expected: r.metrics.budget.expected, recorded: 0, withLine: 0, withCount: 0 };
+    row.recorded++;
+    const lines = r.metrics.budget.turns.filter((t) => t.meter).length;
+    if (lines > 0) row.withLine++;
+    // The first turn's line reads zero: a count reaches the planner from its second turn.
+    if (lines > 1) row.withCount++;
+    rows.set(key, row);
+  }
+  return [...rows.values()];
 }
 
 export function aggregate(records, goals) {
   const cells = [...new Set(records.map((r) => r.cell))];
   return {
-    summaries: summarize(records),
+    summaries: summarize(records, goals),
     verdicts: cells.flatMap((cell) => COMPARISONS.map((c) => verdict(records, goals, { cell, ...c }))),
+    meter: meterSummary(records),
   };
 }
 
@@ -162,29 +239,54 @@ function stat(s) {
 
 const cellText = (s) => String(s).replace(/\|/g, '\\|').replace(/\n/g, ' ');
 
-export function markdown({ summaries, verdicts }, { title = 'Planner eval', meta = {} } = {}) {
+export function markdown({ summaries, verdicts, meter = [] }, { title = 'Planner eval', meta = {} } = {}) {
   const out = [`# ${title}`, ''];
   for (const [k, v] of Object.entries(meta)) out.push(`- ${k}: ${cellText(v)}`);
   if (Object.keys(meta).length) out.push('');
-  out.push('Each number is the median over repeats, with [min–max] when the repeats differ.', '');
+  out.push('Each number is the median over the complete runs, with [min–max] when they differ. A run that timed out, lost its TUI or failed counts only toward completion.', '');
+  out.push('## Completion', '', '| backend | variant | runs | complete | rate | timeouts |', '| --- | --- | --- | --- | --- | --- |');
+  const byCell = new Map();
+  for (const s of summaries) {
+    const key = `${s.cell}\u0000${s.variant}`;
+    const row = byCell.get(key) ?? { cell: s.cell, variant: s.variant, runs: 0, complete: 0, timeouts: 0 };
+    row.runs += s.runs;
+    row.complete += s.complete;
+    row.timeouts += s.timeouts;
+    byCell.set(key, row);
+  }
+  for (const r of [...byCell.values()].sort((a, b) => `${a.cell}${a.variant}`.localeCompare(`${b.cell}${b.variant}`))) {
+    out.push(`| ${cellText(r.cell)} | ${r.variant} | ${r.runs} | ${r.complete} | ${fmt(r.runs ? r.complete / r.runs : null)} | ${r.timeouts} |`);
+  }
+  out.push('');
   for (const goal of [...new Set(summaries.map((s) => s.goal))].sort()) {
     out.push(`## ${goal}`, '');
-    out.push(`| backend | variant | runs | plans | ${NUMERIC.map(([, label]) => label).join(' | ')} |`);
-    out.push(`|${' --- |'.repeat(NUMERIC.length + 4)}`);
+    out.push(`| backend | variant | runs | complete | plans | width in range | ${NUMERIC.map(([, label]) => label).join(' | ')} |`);
+    out.push(`|${' --- |'.repeat(NUMERIC.length + 6)}`);
     for (const s of summaries.filter((x) => x.goal === goal).sort((a, b) => `${a.cell}${a.variant}`.localeCompare(`${b.cell}${b.variant}`))) {
-      out.push(`| ${cellText(s.cell)} | ${s.variant} | ${s.runs} | ${s.submitted} | ${NUMERIC.map(([k]) => stat(s.stats[k])).join(' | ')} |`);
+      const range = s.widthInRange ? `${s.widthInRange.inRange}/${s.widthInRange.of}` : '–';
+      out.push(`| ${cellText(s.cell)} | ${s.variant} | ${s.runs} | ${s.complete} | ${s.submitted} | ${range} | ${NUMERIC.map(([k]) => stat(s.stats[k])).join(' | ')} |`);
     }
     out.push('');
   }
   out.push('## Verdicts', '');
+  out.push('Judged: the candidate holds when its mean is no more than the baseline\'s plus the allowance, half the wider per-repeat range of the two sides. Reported rows judge nothing.', '');
   for (const v of verdicts) {
     out.push(`### ${cellText(v.cell)}: ${v.candidate} vs ${v.baseline} — ${v.result}`, '');
     if (v.note) out.push(v.note, '');
-    if (v.criteria.length) {
-      out.push('| criterion | baseline | candidate | holds |', '| --- | --- | --- | --- |');
-      for (const c of v.criteria) out.push(`| ${c.name} | ${fmt(c.baseline)} | ${fmt(c.candidate)} | ${c.pass === null ? 'no data' : c.pass ? 'yes' : 'no'} |`);
+    if (v.goals?.length) out.push(`Goals both sides completed: ${v.goals.join(', ')}.`, '');
+    if (v.criteria.length || v.reported?.length) {
+      out.push('| criterion | baseline | candidate | allowance | holds |', '| --- | --- | --- | --- | --- |');
+      for (const c of v.criteria) out.push(`| ${c.name} | ${fmt(c.baseline)} | ${fmt(c.candidate)} | ${fmt(c.allowance)} | ${c.pass === null ? 'no data' : c.pass ? 'yes' : 'no'} |`);
+      for (const c of v.reported ?? []) out.push(`| ${c.name} | ${fmt(c.baseline)} | ${fmt(c.candidate)} | | reported |`);
       out.push('');
     }
+  }
+  if (meter.length) {
+    out.push('## Read meter', '');
+    out.push('Each run\'s turn input as recorded outside Ordewell (an API planner\'s requests, Claude Code\'s transcript). The meter line reads zero on the first turn, so a count reaches the planner only from its second.', '');
+    out.push('| backend | variant | source | meter on | runs recorded | with the line | with a count |', '| --- | --- | --- | --- | --- | --- | --- |');
+    for (const m of meter) out.push(`| ${cellText(m.cell)} | ${m.variant} | ${m.source} | ${m.expected ? 'yes' : 'no'} | ${m.recorded} | ${m.withLine} | ${m.withCount} |`);
+    out.push('');
   }
   out.push('## Violations', '');
   const listed = summaries.flatMap((s) => s.violations.map((v) => ({ ...v, cell: s.cell, variant: s.variant, goal: s.goal })));

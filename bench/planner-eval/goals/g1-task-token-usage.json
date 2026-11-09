@@ -3,6 +3,7 @@
   "title": "Per-task token usage on every surface",
   "kind": "wide feature with one shared decision",
   "goal": "Show each task's token usage on every surface that shows a task. For a task, show three counts summed over all of its attempts: input tokens not read from a cache, cached input tokens, and output tokens. The data is already recorded per attempt (Task.attemptUsage, AttemptUsage in packages/core/src/models/Usage.ts). Today every surface draws only the context share and the reported cost and never a token count, as ADR-0017 U1 (docs/adr/surfaces/0017-shared-conversation-view.md) decides; amend U1 to allow these per-task counts, with a History line. The surfaces are: the TUI's task view (packages/cli/src/tui), `ordewell status` (packages/cli/src/commands/status.ts), the VS Code task log panel and task card (packages/vscode/src/providers/TaskLogPanel.ts, packages/ui/src/tasklog, packages/ui/src/chat/components/TaskCard.tsx) and the desktop app's task tab (packages/desktop/src/renderer/views/task/TaskTab.tsx). Every surface must show the same numbers in the same compact wording (for example '12k in · 30k cached · 4k out'), and a task with no recorded usage shows nothing. Add or update tests for the shared computation and for each surface.",
+  "expectedSlices": { "min": 4, "max": 6, "tolerance": 1 },
   "key": {
     "taskCount": { "min": 3, "max": 8 },
     "parallelAllowed": true,

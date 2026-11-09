@@ -9,6 +9,7 @@
  * planner more than another's.
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { must } from './proc.mjs';
 
@@ -44,9 +45,38 @@ export async function ensureTemplate({ repo, templatesDir, sha, goal }) {
 }
 
 /**
- * A run's own clone of `template` at `dir`. With `modulesFrom`, the clone's
- * `node_modules` (gitignored there) are links to a build of the same commit,
- * so a planner that runs a test finds the tools installed.
+ * A copy of the tree at `from` into `to`: each file hard-linked where the two
+ * share a file system and copied where they do not, each symlink recreated
+ * verbatim so a workspace package's relative link (`@ordewell/core` →
+ * `../../packages/core`) resolves inside the copy, not back in the build.
+ */
+export function linkTree(from, to) {
+  fs.mkdirSync(to, { recursive: true });
+  for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
+    const src = path.join(from, entry.name);
+    const dest = path.join(to, entry.name);
+    if (entry.isSymbolicLink()) {
+      const target = fs.readlinkSync(src);
+      const dir = fs.statSync(src, { throwIfNoEntry: false })?.isDirectory();
+      fs.symlinkSync(target, dest, dir ? (process.platform === 'win32' ? 'junction' : 'dir') : 'file');
+    } else if (entry.isDirectory()) {
+      linkTree(src, dest);
+    } else {
+      try {
+        fs.linkSync(src, dest);
+      } catch {
+        fs.copyFileSync(src, dest);
+      }
+    }
+  }
+}
+
+/**
+ * A run's own clone of `template` at `dir`. With `modulesFrom`, the clone gets
+ * the `node_modules` (gitignored there) of a build of the same commit as real
+ * directories inside it, not links out of it: a planner's test command that
+ * the sandbox seals sees only the workspace, and a link to the build resolves
+ * to nothing there.
  */
 export async function cloneTarget({ template, dir, modulesFrom }) {
   await must('git', ['clone', '-q', template, dir]);
@@ -57,10 +87,20 @@ export async function cloneTarget({ template, dir, modulesFrom }) {
     for (const rel of roots) {
       const from = path.join(modulesFrom, rel, 'node_modules');
       const to = path.join(dir, rel, 'node_modules');
-      if (fs.existsSync(from) && fs.existsSync(path.dirname(to)) && !fs.existsSync(to)) {
-        fs.symlinkSync(from, to, process.platform === 'win32' ? 'junction' : 'dir');
-      }
+      if (fs.existsSync(from) && fs.existsSync(path.dirname(to)) && !fs.existsSync(to)) linkTree(from, to);
     }
   }
   return dir;
+}
+
+/**
+ * Where the runs' clones go: the system's temporary directory, unless it is
+ * on another file system than the builds, in which case a directory beside
+ * the user's cache that shares theirs, so `linkTree` links rather than copies
+ * a build's node_modules into every clone.
+ */
+export function workParent(buildsDir, candidates = [os.tmpdir(), path.join(os.homedir(), '.cache')]) {
+  const device = (p) => fs.statSync(p, { throwIfNoEntry: false })?.dev;
+  const want = device(buildsDir);
+  return candidates.find((c) => want !== undefined && device(c) === want) ?? candidates[0];
 }

@@ -97,6 +97,20 @@ export function loadGoals(dir = path.join(HERE, 'goals')) {
 }
 
 /**
+ * The test commands a planner may run in its clone without asking, added to
+ * the built-in planner allowlist (ADR-0026) through ORDEWELL_APPROVAL_ALLOW.
+ * A command no rule covers runs sealed, and a sealed run is stopped at a
+ * minute, which a cold vitest start in this repository can take: G4 asks the
+ * planner to see a test fail, so the bench lets it. Each entry is a binary
+ * and its leading words, as `plannerAllowlist.ts` reads a rule.
+ */
+export const TEST_COMMANDS = [
+  'npx vitest', 'npx vitest run', 'npx vitest run *', 'npx vitest *',
+  'npm test', 'npm run test', 'npm run test *', 'npm exec vitest',
+  'node_modules/.bin/vitest', './node_modules/.bin/vitest', 'vitest', 'vitest run', 'vitest run *',
+];
+
+/**
  * The environment one planning run's daemon and TUI start with. It starts
  * from the bench's own, since HOME must stay real for every harness's login,
  * and then sets every planner variable the CLI would otherwise fill from
@@ -120,6 +134,7 @@ export function runEnv(base, { cell, variant, settingsPath, maxParallel, enabled
     ORDEWELL_ENABLED_RUNNERS: enabledRunners.join(','),
     ORDEWELL_SETTINGS_PATH: settingsPath,
     ORDEWELL_NO_VERSION_CHECK: '1',
+    ORDEWELL_APPROVAL_ALLOW: TEST_COMMANDS.join(','),
     ...(cell.env ?? {}),
     ...variant.env,
   };
@@ -136,7 +151,8 @@ export function runSettings({ cell, enabledRunners }) {
 }
 
 const FLAG_VALUES = new Set(['--backend', '--goal', '--variant', '--repeats', '--concurrency', '--timeout', '--candidate-ref',
-  '--baseline-ref', '--resume', '--out', '--max-parallel', '--runners', '--review-model', '--review-timeout', '--mock-persona', '--report']);
+  '--baseline-ref', '--resume', '--out', '--max-parallel', '--runners', '--review-model', '--review-timeout', '--mock-persona', '--report',
+  '--rescore', '--baseline-from', '--api-timeout']);
 const FLAG_SWITCHES = new Set(['--smoke', '--full', '--mock', '--no-review', '--with-optional', '--keep', '--list', '--help']);
 
 const list = (v) => (v === undefined ? undefined : String(v).split(',').map((s) => s.trim()).filter(Boolean));
@@ -154,13 +170,14 @@ export function parseArgs(argv) {
       raw[name] = value;
     } else throw new Error(`unknown argument: ${a}`);
   }
-  const mode = raw['--smoke'] ? 'smoke' : raw['--full'] ? 'full' : raw['--mock'] ? 'mock' : raw['--report'] ? 'report' : null;
+  const mode = raw['--smoke'] ? 'smoke' : raw['--full'] ? 'full' : raw['--mock'] ? 'mock' : raw['--report'] ? 'report' : raw['--rescore'] ? 'rescore' : null;
   const positive = (name, fallback) => {
     if (raw[name] === undefined) return fallback;
     const n = Number(raw[name]);
     if (!Number.isInteger(n) || n < 1) throw new Error(`${name} must be a whole number, 1 or more`);
     return n;
   };
+  const timeout = positive('--timeout', 900);
   return {
     mode,
     help: Boolean(raw['--help']),
@@ -170,12 +187,15 @@ export function parseArgs(argv) {
     variants: list(raw['--variant']),
     repeats: positive('--repeats', mode === 'full' ? 3 : 1),
     concurrency: positive('--concurrency', 2),
-    timeoutMs: positive('--timeout', 900) * 1000,
+    timeoutMs: timeout * 1000,
+    apiTimeoutMs: positive('--api-timeout', 2 * timeout) * 1000,
     candidateRef: raw['--candidate-ref'] ?? 'HEAD',
     baselineRef: raw['--baseline-ref'] ?? BASELINE_REF,
     resume: raw['--resume'],
     out: raw['--out'],
     report: raw['--report'],
+    rescore: raw['--rescore'],
+    baselineFrom: raw['--baseline-from'],
     maxParallel: positive('--max-parallel', 4),
     runners: list(raw['--runners']),
     review: !raw['--no-review'] && !raw['--mock'],
@@ -211,6 +231,14 @@ export function selectRuns(opts, { goals, cells = CELLS }) {
 }
 
 export const runId = (cell, variant, goal, repeat) => `${goal.id}--${cell.id.replace(/[^A-Za-z0-9.-]+/g, '_')}--${variant.id}--r${repeat}`;
+
+/**
+ * How long one run of `cell` may plan. An API planner reads through
+ * OpenRouter, one round trip per tool call, and the stored runs show it
+ * taking longest of every backend, so it gets a limit of its own rather than
+ * having its slow runs scored as failures of the planner.
+ */
+export const timeoutFor = (cell, opts) => (cell.provider === 'openrouter' && !cell.id.startsWith('mock/') ? opts.apiTimeoutMs : opts.timeoutMs);
 
 /** What a cell lacks on this host: a binary not on PATH, a variable not set. Empty when it can run. */
 export function missingFor(cell, { env, onPath }) {

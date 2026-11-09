@@ -18,20 +18,28 @@
     }
   },
   "key": {
-    "taskCount": { "min": 2, "max": 5 },
+    "taskCount": { "min": 1, "max": 5 },
     "parallelAllowed": true,
     "sharedDecisions": [],
     "keepTogether": [],
     "reproduceFirst": {
       "reproduce": "(reproduc|repro\\b|run (the )?(failing )?tests?|failing test|vitest|Handoff\\.test)",
       "fix": "(fix|correct|repair|restore)",
-      "plannerRanTest": "(vitest|npm (run )?test|Handoff\\.test|taskRow\\.test)"
+      "plannerRanTest": "(vitest|npm (run )?test|Handoff\\.test|taskRow\\.test)",
+      "causeNamed": [
+        "Handoff\\.ts",
+        "worstSeverity",
+        "(SEVERITY_RANK|Handoff\\.ts:\\d+|\\blines? \\d+)"
+      ],
+      "validates": "(Handoff\\.test|taskRow\\.test|labels a severity|carries the summary|(both|the two) (named |failing |target )?tests)",
+      "reproduceInFix": "(\\brun[^.\\n]{0,80}\\b(first|before)\\b|\\bbefore (you )?(chang|edit|touch|fix|mak)\\w*|\\bconfirm[^.\\n]{0,40}\\bfail|\\brecord[^.\\n]{0,40}\\bfail|\\bsee[^.\\n]{0,20}\\bfail)"
     },
     "researchHypotheses": true,
     "integrationRisks": [
       "A fix guessed without reproducing, which may 'fix' the test instead of the code.",
-      "Hypotheses investigated inside the fix task, or by the planner reading the whole of core itself."
+      "Hypotheses investigated inside the fix task, or by the planner reading the whole of core itself.",
+      "A fix that names the cause but never runs the two failing tests, so nothing shows it held."
     ],
-    "expectedStrategy": "Reproduce first (a script or read-only task running the failing test, or the planner running it itself), then one or more research tasks each testing a hypothesis, then the fix depending on them, verified by the same test."
+    "expectedStrategy": "Reproduce first (the planner running the failing tests itself, a script or read-only task running them, or the fix task running them before it changes code). If the planner found the cause, one fix task that names it (Handoff.ts, worstSeverity and the rank comparison) and validates with the two named tests is enough; if it did not, research tasks each testing a hypothesis, then the fix depending on them, verified by the same tests."
   }
 }

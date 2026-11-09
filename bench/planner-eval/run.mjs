@@ -10,6 +10,7 @@
  *   node bench/planner-eval/run.mjs --full
  *   node bench/planner-eval/run.mjs --mock          offline, against bench/live/mock-provider.mjs
  *   node bench/planner-eval/run.mjs --report <dir>  aggregate a results directory again
+ *   node bench/planner-eval/run.mjs --rescore <dir> score a results directory again with today's keys
  *
  * See bench/planner-eval/README.md for the flags and what every metric means.
  */
@@ -17,35 +18,39 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { aggregate, markdown } from './lib/aggregate.mjs';
+import { aggregate, isComplete, markdown } from './lib/aggregate.mjs';
+import { budgetRecord, budgetSource, claudeTranscriptDir, claudeTurnInputs, reportsOwnReads, startRecorder } from './lib/budget.mjs';
 import { ensureBuild, repoRoot, resolveRef, cliMain } from './lib/builds.mjs';
 import {
   CELLS, HERE, MAX_DRIVER_TURNS, QUOTA, VARIANTS, goalText, loadGoals, missingFor, mockCell, parseArgs,
-  runEnv, runSettings, selectRuns, substituteFor,
+  runEnv, runSettings, selectRuns, substituteFor, timeoutFor,
 } from './lib/config.mjs';
 import { guardFiles } from './lib/guard.mjs';
-import { keyChecks } from './lib/keys.mjs';
+import { keyChecks, keyHash } from './lib/keys.mjs';
 import { planDigest, runMetrics, sessionParts } from './lib/metrics.mjs';
 import { classifyTurn, daemonClient, newestSession, readToken, tokenPath } from './lib/observe.mjs';
 import { freePort, onPath, run, sleep, until } from './lib/proc.mjs';
 import { redactJson, redactor } from './lib/redact.mjs';
 import { reviewPlan } from './lib/rubric.mjs';
-import { cloneTarget, ensureTemplate } from './lib/target.mjs';
+import { cloneTarget, ensureTemplate, workParent } from './lib/target.mjs';
 import { startTui } from './lib/tui.mjs';
 
-const USAGE = `usage: node bench/planner-eval/run.mjs (--smoke | --full | --mock | --report <dir>) [options]
+const USAGE = `usage: node bench/planner-eval/run.mjs (--smoke | --full | --mock | --report <dir> | --rescore <dir>) [options]
 
   --smoke                 G1 on claude-code/haiku, once per variant
   --full                  every goal, backend and variant, three times
   --mock                  offline dry run against bench/live/mock-provider.mjs, this checkout's build
   --report <dir>          aggregate the records in <dir> again; runs nothing
+  --rescore <dir>         score the runs stored in <dir> again with the current keys and metrics, into --out
+                          (default <dir>-rescored); the rubric is reviewed again only where a key changed
 
   --backend a,b           cells by id or prefix (claude-code, opencode/glm-5.3-flash, openrouter, cline ...)
   --goal g1,g4            goals by id
   --variant V0,V1         variants (V0 baseline + nudges, V1 candidate, V2 candidate + read meter)
   --repeats N             repeats per (goal, backend, variant)
   --concurrency N         runs at once (default 2)
-  --timeout S             seconds a run may take before it is stopped (default 900)
+  --timeout S             seconds a run may take before it is stopped (default 900); a stopped run is a failed run
+  --api-timeout S         the same for an API (openrouter) planner (default twice --timeout)
   --candidate-ref REF     the build V1 and V2 use (default HEAD)
   --baseline-ref REF      the build V0 uses and every target is cut from (default 0ecc6412)
   --runners a,b           ORDEWELL_ENABLED_RUNNERS for every run (default: the cell's planner runner)
@@ -56,7 +61,8 @@ const USAGE = `usage: node bench/planner-eval/run.mjs (--smoke | --full | --mock
   --with-optional         include the ACP cells (cline, copilot-cli, qwen-code, gemini-cli, cursor-agent)
   --mock-persona M        the mock provider's persona (default mock/interviewer)
   --out <dir>             results directory (default bench/planner-eval/.results/<stamp>)
-  --resume <dir>          continue a results directory, skipping every run already recorded without an error
+  --resume <dir>          continue a results directory, skipping every run already complete
+  --baseline-from <dir>   take V0's runs from <dir> (a stored or re-scored directory) where this one has none
   --keep                  keep each run's target clone
   --list                  print the runs and the cells this host cannot run, and stop`;
 
@@ -121,6 +127,12 @@ function quotaHit(outcome, screen) {
   return match ? (said || screen.slice(-400)).trim().slice(0, 300) : null;
 }
 
+/** The planner's turns as Claude Code kept them, under the workspace path as given or as the OS resolves it. */
+function transcriptInputs(workspace, env) {
+  const dirs = new Set([claudeTranscriptDir(workspace, env), claudeTranscriptDir(fs.realpathSync.native(workspace), env)]);
+  return [...dirs].flatMap(claudeTurnInputs);
+}
+
 /** One planning run, start to finish: target, settings, TUI, conversation, capture, teardown. */
 async function planOnce({ spec, cell, build, template, modulesFrom, opts, dir, workRoot }) {
   const workspace = path.join(workRoot, spec.id);
@@ -133,6 +145,11 @@ async function planOnce({ spec, cell, build, template, modulesFrom, opts, dir, w
   const enabledRunners = opts.runners ?? [plannerRunner(cell)];
   writeJson(settingsPath, runSettings({ cell, enabledRunners }));
   const env = runEnv(process.env, { cell, variant: spec.variant, settingsPath, maxParallel: opts.maxParallel, enabledRunners });
+  const source = budgetSource(cell);
+  const recorder = source === 'proxy'
+    ? await startRecorder(env.OPENROUTER_BASE_URL || env.OPENAI_BASE_URL || 'https://openrouter.ai/api/v1')
+    : null;
+  if (recorder) env.OPENROUTER_BASE_URL = recorder.url;
   const tui = startTui({ main: build.main, workspace, port, env, logFile: path.join(dir, `${spec.id}.screen.log`), redact });
   let token = null;
   try {
@@ -142,9 +159,12 @@ async function planOnce({ spec, cell, build, template, modulesFrom, opts, dir, w
     // The TUI attaches after the daemon answers; a paste before its first frame is lost.
     await until('the TUI to draw', STARTUP_MS, async () => tui.screen().trim().length > 0);
     await sleep(3000);
-    const outcome = await drive({ tui, client, workspace, goal: spec.goal, variant: spec.variant, timeoutMs: opts.timeoutMs });
-    return { outcome, screen: tui.screen(), token };
+    const outcome = await drive({ tui, client, workspace, goal: spec.goal, variant: spec.variant, timeoutMs: timeoutFor(cell, opts) });
+    const inputs = recorder ? recorder.inputs() : source === 'transcript' ? transcriptInputs(workspace, env) : [];
+    const expected = spec.variant.env.ORDEWELL_PLANNER_READ_METER === '1' && reportsOwnReads(cell);
+    return { outcome, screen: tui.screen(), token, budget: source ? budgetRecord(inputs, { source, expected }) : null };
   } finally {
+    await recorder?.stop();
     await tui.stop();
     // The TUI stops the daemon it owns; this covers a TUI that died before it could.
     await run(process.execPath, [build.main, 'stop', '--server', '--port', String(port)], { env, timeoutMs: 30_000 });
@@ -153,14 +173,35 @@ async function planOnce({ spec, cell, build, template, modulesFrom, opts, dir, w
   }
 }
 
+/**
+ * Why a stop that is not the planner's answer failed the run. A timeout is the
+ * bench's limit, not a plan with nothing wrong in it: scored as one, a run
+ * that never finished read as zero violations.
+ */
+function stopError(stopped, { timeoutMs, lastText = '' } = {}) {
+  if (stopped === 'timeout') return `timeout after ${Math.round(timeoutMs / 1000)}s`;
+  if (stopped === 'tui exited') return 'the TUI exited before the planner answered';
+  if (stopped === 'error') return lastText.slice(0, 300) || 'the planner turn failed';
+  return null;
+}
+
+/** A run's metrics and key checks from its session, with the keys and metrics as they are now. */
+function score(goal, session, { driver, budget = null }) {
+  const parts = sessionParts(session);
+  const metrics = runMetrics(session, { driver, autoMerge: true, goalText: goal.goal, budget });
+  return { metrics, keyChecks: metrics.submitted ? keyChecks(goal, parts.tasks, { researchLog: parts.researchLog }) : [] };
+}
+
 async function record({ spec, builds, templates, opts, dir, workRoot }) {
   const build = builds[spec.variant.build];
-  const base = { id: spec.id, cell: spec.cell.id, variant: spec.variant.id, goal: spec.goal.id, repeat: spec.repeat, build: build.sha };
+  const base = {
+    id: spec.id, cell: spec.cell.id, variant: spec.variant.id, goal: spec.goal.id, repeat: spec.repeat, build: build.sha, keyHash: keyHash(spec.goal),
+  };
   let cell = spec.cell;
   let substitution;
   for (;;) {
     try {
-      const { outcome, screen, token } = await planOnce({
+      const { outcome, screen, token, budget } = await planOnce({
         spec, cell, build, template: templates[spec.goal.id], modulesFrom: builds.baseline.mock ? null : builds.baseline.dir, opts, dir, workRoot,
       });
       const quota = quotaHit(outcome, screen);
@@ -173,21 +214,20 @@ async function record({ spec, builds, templates, opts, dir, workRoot }) {
       }
       const session = outcome.session ?? {};
       fs.writeFileSync(path.join(dir, `${spec.id}.session.json`), `${redactJson(session, redactor(process.env, [token]))}\n`);
-      const parts = sessionParts(session);
-      const metrics = runMetrics(session, { driver: outcome, autoMerge: true });
-      const checks = metrics.submitted ? keyChecks(spec.goal, parts.tasks, { researchLog: parts.researchLog }) : [];
+      const { metrics, keyChecks: checks } = score(spec.goal, session, { driver: outcome, budget });
       let rubric;
       if (metrics.submitted && opts.review) {
         say(`${spec.id}: reviewing the plan`);
-        rubric = await reviewPlan(spec.goal, planDigest(parts.tasks), { model: opts.reviewModel, timeoutMs: opts.reviewTimeoutMs });
+        rubric = await reviewPlan(spec.goal, planDigest(sessionParts(session).tasks), { model: opts.reviewModel, timeoutMs: opts.reviewTimeoutMs });
       }
+      const error = quota && !metrics.submitted ? `quota: ${quota}` : stopError(outcome.stopped, { timeoutMs: timeoutFor(cell, opts), lastText: outcome.lastText });
       return {
         ...base,
         model: cell.model,
         metrics,
         keyChecks: checks,
         ...(rubric ? { rubric } : {}),
-        ...(quota && !metrics.submitted ? { error: `quota: ${quota}` } : outcome.stopped === 'error' ? { error: outcome.lastText.slice(0, 300) } : {}),
+        ...(error ? { error } : {}),
         ...(substitution ? { substitution } : {}),
       };
     } catch (error) {
@@ -211,14 +251,145 @@ function loadRecords(dir) {
     .filter((r) => r && r.id && r.cell);
 }
 
-function writeReport(dir, goals) {
-  const records = loadRecords(dir);
-  const meta = fs.existsSync(path.join(dir, 'meta.json')) ? JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')) : {};
+/**
+ * A results directory's passes, oldest first. Each invocation adds one rather
+ * than replacing the last, so a directory resumed with other flags still says
+ * what produced each of its runs. A directory from before passes holds one
+ * object, which becomes the first.
+ */
+function readPasses(dir) {
+  const file = path.join(dir, 'meta.json');
+  if (!fs.existsSync(file)) return [];
+  const meta = JSON.parse(fs.readFileSync(file, 'utf8'));
+  return Array.isArray(meta?.passes) ? meta.passes : [meta];
+}
+
+function addPass(dir, pass) {
+  writeJson(path.join(dir, 'meta.json'), { passes: [...readPasses(dir), pass] });
+}
+
+/**
+ * V0's runs from a stored directory, for a comparison that does not run V0
+ * again: every one whose (backend, goal) this directory has no V0 run of, so
+ * a fresh V0 run replaces the stored ones rather than mixing with them.
+ */
+function borrowedBaseline(records, from) {
+  const own = new Set(records.filter((r) => r.variant === 'V0').map((r) => `${r.cell}\u0000${r.goal}`));
+  return loadRecords(from)
+    .filter((r) => r.variant === 'V0' && !own.has(`${r.cell}\u0000${r.goal}`))
+    .map((r) => ({ ...r, source: from }));
+}
+
+function writeReport(dir, goals, { baselineFrom } = {}) {
+  const passes = readPasses(dir);
+  const from = baselineFrom ?? passes.findLast((p) => p.baselineFrom)?.baselineFrom;
+  const own = loadRecords(dir);
+  const records = from ? [...own, ...borrowedBaseline(own, path.resolve(from))] : own;
   const result = aggregate(records, goals);
-  writeJson(path.join(dir, 'report.json'), { meta, ...result, records });
-  const flat = Object.fromEntries(Object.entries(meta).map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)]));
+  writeJson(path.join(dir, 'report.json'), { meta: { passes }, ...result, records });
+  const flat = Object.fromEntries(passes.flatMap((pass, i) => Object.entries(pass)
+    .map(([k, v]) => [passes.length > 1 ? `pass ${i + 1} ${k}` : k, typeof v === 'string' ? v : JSON.stringify(v)])));
   fs.writeFileSync(path.join(dir, 'report.md'), redact(markdown(result, { title: 'Planner eval', meta: flat })));
   return { records, result };
+}
+
+/** The goal files as the stored runs that carry no key hash were scored: as the bench was first committed. */
+const LEGACY_GOALS_REF = '312cc3c1';
+
+async function legacyKeyHashes(repo) {
+  const listing = await run('git', ['ls-tree', '--name-only', LEGACY_GOALS_REF, 'bench/planner-eval/goals/'], { cwd: repo, timeoutMs: 30_000 });
+  const hashes = new Map();
+  if (listing.code !== 0) return hashes;
+  for (const file of listing.out.split('\n').map((l) => l.trim()).filter((l) => l.endsWith('.json'))) {
+    const shown = await run('git', ['show', `${LEGACY_GOALS_REF}:${file}`], { cwd: repo, timeoutMs: 30_000 });
+    if (shown.code !== 0) continue;
+    const goal = JSON.parse(shown.out);
+    hashes.set(goal.id, keyHash(goal));
+  }
+  return hashes;
+}
+
+/** A stored run's files in a new directory: linked where the two share a file system, copied where not. */
+function carry(from, to, name) {
+  const src = path.join(from, name);
+  if (!fs.existsSync(src)) return;
+  const dest = path.join(to, name);
+  fs.rmSync(dest, { force: true });
+  try {
+    fs.linkSync(src, dest);
+  } catch {
+    fs.copyFileSync(src, dest);
+  }
+}
+
+/**
+ * Every stored run scored again with the keys and metrics as they are now,
+ * from the session file it kept. The rubric reviewer read the goal and its
+ * key, so a review stands where the key hash it was made under still holds
+ * and is made again where the key changed (or dropped, marked stale, with
+ * --no-review). A stored timeout scored as a plan becomes the failed run it was.
+ */
+async function rescore(opts, goals) {
+  const from = path.resolve(opts.rescore);
+  const to = path.resolve(opts.out ?? `${from}-rescored`);
+  if (to === from) throw new Error('--rescore writes into a new directory: give --out another path');
+  fs.mkdirSync(to, { recursive: true });
+  const legacy = await legacyKeyHashes(await repoRoot(HERE));
+  const stored = loadRecords(from);
+  const tally = { rescored: 0, kept: 0, reviewed: 0, stale: 0, failed: 0 };
+  await pool(stored, opts.concurrency, async (old) => {
+    for (const ext of ['session.json', 'screen.log', 'settings.json']) carry(from, to, `${old.id}.${ext}`);
+    const goal = goals.find((g) => g.id === old.goal);
+    const sessionFile = path.join(from, `${old.id}.session.json`);
+    if (!goal || !old.metrics || !fs.existsSync(sessionFile)) {
+      writeJson(path.join(to, `${old.id}.json`), old);
+      tally.kept++;
+      return;
+    }
+    const session = JSON.parse(fs.readFileSync(sessionFile, 'utf8'));
+    const driver = { turns: old.metrics.turns, wallMs: old.metrics.wallMs, stopped: old.metrics.stopped };
+    const { metrics, keyChecks: checks } = score(goal, session, { driver, budget: old.metrics.budget ?? null });
+    const hash = keyHash(goal);
+    const error = old.error ?? stopError(driver.stopped, { timeoutMs: driver.wallMs ?? 0 });
+    let rubric = old.rubric;
+    let rubricStale = false;
+    if (rubric && (old.keyHash ?? legacy.get(goal.id)) !== hash) {
+      rubric = undefined;
+      rubricStale = true;
+    }
+    if (rubricStale && opts.review && metrics.submitted && !error) {
+      say(`${old.id}: reviewing the plan again under the changed key`);
+      rubric = await reviewPlan(goal, planDigest(sessionParts(session).tasks), { model: opts.reviewModel, timeoutMs: opts.reviewTimeoutMs });
+      rubricStale = false;
+      tally.reviewed++;
+    }
+    const rest = Object.fromEntries(Object.entries(old).filter(([k]) => !['rubric', 'rubricStale', 'error'].includes(k)));
+    const rec = {
+      ...rest,
+      keyHash: hash,
+      metrics,
+      keyChecks: checks,
+      ...(rubric ? { rubric } : {}),
+      ...(rubricStale ? { rubricStale: true } : {}),
+      ...(error ? { error } : {}),
+      rescoredFrom: old.keyHash ?? `${LEGACY_GOALS_REF} (legacy)`,
+    };
+    writeJson(path.join(to, `${old.id}.json`), rec);
+    tally.rescored++;
+    if (rubricStale) tally.stale++;
+    if (error && !old.error) tally.failed++;
+  });
+  addPass(to, {
+    mode: 'rescore',
+    started: new Date().toISOString(),
+    from,
+    fromPasses: readPasses(from),
+    keys: goals.map((g) => `${g.id} ${keyHash(g)}`).join(', '),
+    review: opts.review ? `claude -p --model ${opts.reviewModel}, where a key changed` : 'off: changed keys leave their rubric stale',
+    ...(opts.baselineFrom ? { baselineFrom: path.resolve(opts.baselineFrom) } : {}),
+  });
+  writeReport(to, goals);
+  return { to, tally };
 }
 
 /** The mock provider, on a port of its own, for `--mock`. */
@@ -247,8 +418,15 @@ async function main() {
   }
   const goals = loadGoals();
   if (opts.mode === 'report') {
-    const { records } = writeReport(path.resolve(opts.report), goals);
+    const { records } = writeReport(path.resolve(opts.report), goals, { baselineFrom: opts.baselineFrom });
     say(`aggregated ${records.length} record(s) into ${path.join(opts.report, 'report.md')}`);
+    return 0;
+  }
+  if (opts.mode === 'rescore') {
+    const { to, tally } = await rescore(opts, goals);
+    say(`re-scored ${tally.rescored} run(s) into ${to}: ${tally.reviewed} reviewed again, ${tally.stale} rubric(s) left stale, `
+      + `${tally.failed} now failed (a timeout or lost TUI), ${tally.kept} kept as stored`);
+    say(`report: ${path.join(to, 'report.md')}`);
     return 0;
   }
   const repo = await repoRoot(HERE);
@@ -270,7 +448,7 @@ async function main() {
 
     const dir = path.resolve(opts.resume ?? opts.out ?? path.join(HERE, '.results', new Date().toISOString().replace(/[:.]/g, '-')));
     fs.mkdirSync(dir, { recursive: true });
-    const done = new Set(loadRecords(dir).filter((r) => !r.error).map((r) => r.id));
+    const done = new Set(loadRecords(dir).filter(isComplete).map((r) => r.id));
     const todo = runnable.filter((r) => !opts.resume || !done.has(r.id));
 
     // Every planner variable is set per run and the settings file is the run's own; the token and `.env` have no override.
@@ -298,7 +476,7 @@ async function main() {
     const templates = {};
     for (const goal of goals) if (todo.some((r) => r.goal.id === goal.id)) templates[goal.id] = await ensureTemplate({ repo, templatesDir, sha: targetSha, goal });
 
-    const meta = {
+    addPass(dir, {
       mode: opts.mode,
       started: new Date().toISOString(),
       baseline: `${opts.baselineRef} (${builds.baseline.sha.slice(0, 12)})`,
@@ -309,10 +487,13 @@ async function main() {
       review: opts.review ? `claude -p --model ${opts.reviewModel}` : 'off',
       harnesses: await harnessVersions(cells),
       skipped: skipped.map((s) => `${s.cell} (${s.missing.join('; ')})`).join(', ') || 'none',
-    };
-    writeJson(path.join(dir, 'meta.json'), meta);
+      goals: [...new Set(todo.map((r) => r.goal.id))].join(', '),
+      runs: todo.length,
+      timeouts: `${opts.timeoutMs / 1000}s, API planners ${opts.apiTimeoutMs / 1000}s`,
+      ...(opts.baselineFrom ? { baselineFrom: path.resolve(opts.baselineFrom) } : {}),
+    });
 
-    const workRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'planner-eval-'));
+    const workRoot = fs.mkdtempSync(path.join(workParent(buildsDir), 'planner-eval-'));
     say(`${todo.length} run(s), ${opts.concurrency} at a time, into ${dir}`);
     let finished = 0;
     await pool(todo, opts.concurrency, async (spec) => {
@@ -324,7 +505,7 @@ async function main() {
     });
     if (!opts.keep) fs.rmSync(workRoot, { recursive: true, force: true });
 
-    const { result } = writeReport(dir, goals);
+    const { result } = writeReport(dir, goals, { baselineFrom: opts.baselineFrom });
     for (const v of result.verdicts) say(`${v.cell}: ${v.candidate} vs ${v.baseline}: ${v.result}`);
     say(`report: ${path.join(dir, 'report.md')}`);
     return 0;
