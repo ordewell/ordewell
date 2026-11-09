@@ -33,7 +33,11 @@ export function handoffActions(handoff: HandoffView): ReadonlyArray<{ id: Handof
 
 const reposOf = (handoff: HandoffView): string => handoff.repos.map((r) => r.path).join(', ');
 
-export const HANDOFF_USAGE = `/handoff [${HANDOFF_ACTIONS.map((a) => a.id).join('|')}]`;
+/** Merge is the bare command, so the usage names the other three; `/merge merge` still works for the sake of the old `/handoff merge`. */
+export const HANDOFF_USAGE = `/merge [${HANDOFF_ACTIONS.filter((a) => a.id !== 'merge').map((a) => a.id).join('|')}]`;
+
+/** The overlay opens on Merge, the action `/merge` is named for: Enter asks the confirmation. */
+const MERGE_INDEX = HANDOFF_ACTIONS.findIndex((a) => a.id === 'merge');
 
 /** Lines of diff the overlay shows at once, given the rows its frame gets: title, blank, footer. */
 export const diffRoom = (rows: number): number => Math.max(1, rows - 3);
@@ -51,10 +55,18 @@ export function currentHandoff(state: TuiState): HandoffView | null {
 /** A merge while the run is still going leaves the run in place: its later tasks land on the same branch. */
 const midRun = (state: TuiState): boolean => state.status === 'executing';
 
-/** `/handoff` alone opens the overlay; `/handoff <action>` takes that action without the detour. */
+/**
+ * `/merge` alone opens the overlay on Merge; `/merge <action>` takes that
+ * action without the detour. Mid-run the overlay would only be a detour to the
+ * one thing on offer, a merge that leaves the run going, so it asks that directly.
+ */
 export function handoffCommand(state: TuiState, arg: string | undefined): Step {
-  if (!state.sessionId || !currentHandoff(state)) return fail(state, 'No isolated run to hand off: a plan that ran in worktrees leaves one here.');
-  if (arg === undefined) return { state: { ...state, overlay: { kind: 'handoff', index: 0, diff: null } }, effects: [] };
+  if (!state.sessionId || !currentHandoff(state)) return fail(state, 'No isolated run to merge: a plan that ran in worktrees leaves one here.');
+  if (arg === undefined) {
+    return midRun(state)
+      ? runHandoffAction(state, 'merge')
+      : { state: { ...state, overlay: { kind: 'handoff', index: MERGE_INDEX, diff: null } }, effects: [] };
+  }
   const action = HANDOFF_ACTIONS.find((a) => a.id === arg.toLowerCase());
   if (!action) return fail(state, `Usage: ${HANDOFF_USAGE}`);
   return runHandoffAction(state, action.id);
@@ -73,15 +85,15 @@ export function handoffArrived(state: TuiState, handoff: HandoffView): TuiState 
   const received = { ...state, handoff };
 
   if (handoff.deferredTo === 'supervisor') {
-    return say(received, 'system', `Run finished on ${branch}${where}: ${tasks}. The supervisor may merge it; /handoff to review it yourself.`);
+    return say(received, 'system', `Run finished on ${branch}${where}: ${tasks}. The supervisor may merge it; /merge to review it yourself.`);
   }
   const returned = state.handoff?.deferredTo === 'supervisor' && handoffBranchName(state.handoff) === branch;
   const told = say(
     received,
     'system',
     returned
-      ? `The supervisor left ${branch}${where} to you: ${tasks}. /handoff to review and land it.`
-      : `Run finished on ${branch}${where}: ${tasks}. /handoff to review and land it.`,
+      ? `The supervisor left ${branch}${where} to you: ${tasks}. /merge to review and land it.`
+      : `Run finished on ${branch}${where}: ${tasks}. /merge to review and land it.`,
   );
   return state.overlay ? told : { ...told, overlay: { kind: 'handoff', index: 0, diff: null } };
 }
@@ -89,7 +101,7 @@ export function handoffArrived(state: TuiState, handoff: HandoffView): TuiState 
 export function runHandoffAction(state: TuiState, id: HandoffActionId): Step {
   const { sessionId } = state;
   const handoff = currentHandoff(state);
-  if (!sessionId || !handoff) return fail(state, 'No isolated run to hand off.');
+  if (!sessionId || !handoff) return fail(state, 'No isolated run to merge.');
   const closed: TuiState = { ...state, overlay: null };
 
   switch (id) {
@@ -185,7 +197,7 @@ export function confirmedHandoff(state: TuiState, kind: 'merge-run' | 'discard-r
   return { state: closed, effects: [effect] };
 }
 
-/** The diff arrived: show it in the overlay, opening it if the request came from `/handoff review`. */
+/** The diff arrived: show it in the overlay, opening it if the request came from `/merge review`. */
 export function showDiff(state: TuiState, diff: string): TuiState {
   const handoff = currentHandoff(state);
   if (diff.trim() === '') return say(state, 'system', `Nothing differs from ${handoff ? handoffBaseLine(handoff, 8) : 'the base commit'}.`);

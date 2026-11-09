@@ -430,7 +430,7 @@ export function runHints(state: TuiState): string[] {
   const waiting = state.tasks.filter((t) => t.status === 'awaiting_user').length;
   if (waiting > 0) return [waiting === 1 ? '1 task waits for you' : `${waiting} tasks wait for you`, `${waiting} waiting`];
   // As plain as a task that waits on the user: the run waits on a merge (ADR-0020).
-  return state.runMerge?.paused && !state.child ? ['paused for Merge all: /handoff merge', 'paused · /handoff merge', 'merge paused'] : [];
+  return state.runMerge?.paused && !state.child ? ['paused for Merge all: /merge', 'paused · /merge', 'merge paused'] : [];
 }
 
 export const runHint = (state: TuiState): string => runHints(state)[0] ?? '';
@@ -1120,7 +1120,7 @@ export function planLayout(state: TuiState, rows: number, cols: number): PlanLay
     totalUsage ? style.grey(truncate(totalUsage, cols)) : '',
   ];
   if (unmerged > 0) {
-    const landed = style.dim(truncate(`${unmerged} landed task${unmerged === 1 ? '' : 's'} not merged: /handoff merge`, cols));
+    const landed = style.dim(truncate(`${unmerged} landed task${unmerged === 1 ? '' : 's'} not merged: /merge`, cols));
     if (totalUsage) lines.push(landed);
     else lines[1] = landed;
   }

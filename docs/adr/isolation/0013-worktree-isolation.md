@@ -363,7 +363,7 @@ everything below applies per repo of the group.
   (`stash-and-continue`, `run-without`), `resolve-conflict` and
   `revert-preview`. The TUI marks a
   conflicted task in the plan pane and shows a branch and worktree only in a
-  task's expanded detail; the handoff overlay (`/handoff`) opens on
+  task's expanded detail; the handoff overlay (`/merge`) opens on
   `isolation_handoff` when nothing else is open, and a blocked run asks with a
   three-way picker. The CLI has `ordewell handoff
   [review|merge|discard|cleanup]` and `ordewell run --stash` /
@@ -571,3 +571,5 @@ literal git command lines or private fields.
 - 2026-11-03 — *no remote operation* is about Ordewell's own account: a person's fetch, pull and push through a host is ADR-0062's.
 - 2026-11-05 — a script task's resolver takes its runner's default mode, and its runner is admitted to the plan when it is not one of its runners.
 - 2026-11-08 — every exit of a spawn lets go of its workspace once, as its end decided: a cancel and a Stop keep the worktree, a removal does not.
+- 2026-11-09 — the terminal's command is `/merge`, as the other surfaces say
+  "Merge all"; `/handoff` stays a deprecated alias.

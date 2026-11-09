@@ -29,7 +29,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'run', usage: '/run', description: 'Execute the approved plan', category: 'planning' },
   { name: 'stop', usage: '/stop', description: 'Stop the planner or the running execution, whichever is active', category: 'planning' },
   { name: 'resend', usage: '/resend cancel', description: "Keep what waits on the planner's usage limit from being sent at the reset: it goes with your next message", category: 'planning' },
-  { name: 'handoff', usage: '/handoff [review|merge|discard|cleanup]', description: "Land an isolated run's branch: review it, merge it into yours, or discard it", category: 'planning' },
+  { name: 'merge', usage: '/merge [review|discard|cleanup]', description: "Land an isolated run's branch: merge it into yours (asks first), or review it, discard it or clean it up", category: 'planning' },
 
   // Tasks
   { name: 'add-task', usage: '/add-task <title>', description: 'Add a task to the current plan', category: 'tasks' },
@@ -91,13 +91,24 @@ export interface CommandAlias {
   name: string;
   target: string;
   description: string;
+  /** The alias is an old name kept for a release or two: using it works and says to use the target. */
+  deprecated?: true;
 }
 
 export const COMMAND_ALIASES: CommandAlias[] = [
   // Editors call reopening a saved session "resume"; here it must open the same
   // saved-session picker as /sessions, not restart a task or a runner.
   { name: 'resume', target: 'sessions', description: 'Alias for /sessions: open a saved session, not restart a task' },
+  // The command that lands a run's work was /handoff until it took the verb the other surfaces use ("Merge all").
+  { name: 'handoff', target: 'merge', description: 'Deprecated: use /merge', deprecated: true },
 ];
+
+/** What a deprecated spelling says when it is used; null for a current command or an alias that is a plain synonym. */
+export function renamedNotice(name: string): string | null {
+  const key = name.replace(/^\//, '').toLowerCase();
+  const alias = COMMAND_ALIASES.find((a) => a.name === key && a.deprecated);
+  return alias ? `renamed: use /${alias.target}` : null;
+}
 
 /**
  * The built-in table with each alias placed right after the command it spells,

@@ -291,3 +291,30 @@ describe('task-chat boundary', () => {
     expect(composerCompletions(token, null)).toContain('resume');
   });
 });
+
+describe('/merge and its deprecated alias /handoff', () => {
+  it('lists /merge as the command that lands a run, showing all four actions', () => {
+    const merge = SLASH_COMMANDS.find((c) => c.name === 'merge');
+    expect(merge?.usage).toBe('/merge [review|discard|cleanup]');
+    expect(merge?.description).toMatch(/merge/i);
+    expect(SLASH_COMMANDS.map((c) => c.name)).not.toContain('handoff');
+  });
+
+  it('keeps /handoff as an alias of /merge that says it is deprecated', () => {
+    expect(canonicalCommandName('/handoff')).toBe('merge');
+    const alias = slashCommandTable().find((c) => c.name === 'handoff');
+    expect(alias?.description).toMatch(/deprecated: use \/merge/i);
+    const table = slashCommandTable().map((c) => c.name);
+    expect(table.indexOf('handoff')).toBe(table.indexOf('merge') + 1);
+  });
+
+  it('a skill named handoff or merge may not shadow them', () => {
+    registerSkillCommands([
+      { name: 'handoff', description: 'A skill pretending to be handoff' },
+      { name: 'merge', description: 'A skill pretending to be merge' },
+    ]);
+    expect(findCommand('handoff')?.source).toBeUndefined();
+    expect(findCommand('merge')?.source).toBeUndefined();
+    registerSkillCommands([]);
+  });
+});

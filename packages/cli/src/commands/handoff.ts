@@ -10,7 +10,7 @@ const USAGE = `Usage: ordewell handoff [review|merge|discard|cleanup] [--session
 
 /**
  * Land an isolated run's branch (ADR-0013) — the terminal counterpart of the
- * TUI's `/handoff`. Merge and discard are the steps that cannot be undone, so
+ * TUI's `/merge`. Merge and discard are the steps that cannot be undone, so
  * they ask first; `--yes` is the explicit, scriptable way to have asked already.
  */
 export async function handleHandoff(

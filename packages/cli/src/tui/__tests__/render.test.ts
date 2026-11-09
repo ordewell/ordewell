@@ -725,12 +725,12 @@ describe('plan pane run hints', () => {
   });
 
   it('carries the Merge all pause in its title, in either chat', () => {
-    expect(text({ cols: 140, tasks, status: 'executing', runMerge: mergePaused })).toContain('paused for Merge all: /handoff merge');
-    expect(text({ cols: 140, tasks, status: 'executing', runMerge: mergePaused, ...taskChat })).toContain('paused for Merge all: /handoff merge');
+    expect(text({ cols: 140, tasks, status: 'executing', runMerge: mergePaused })).toContain('paused for Merge all: /merge');
+    expect(text({ cols: 140, tasks, status: 'executing', runMerge: mergePaused, ...taskChat })).toContain('paused for Merge all: /merge');
   });
 
   it('shortens the Merge all pause to what the pane is wide enough for, keeping the command', () => {
-    expect(text({ tasks, status: 'executing', runMerge: mergePaused })).toContain('Plan 1/3 · paused · /handoff merge');
+    expect(text({ tasks, status: 'executing', runMerge: mergePaused })).toContain('Plan 1/3 · paused · /merge');
   });
 
   it('carries the hint in the stacked plan\'s title where a narrow terminal puts the plan under the chat', () => {
@@ -945,7 +945,7 @@ describe('overlays', () => {
 
   it('scrolls the help sheet to reach the commands below the fold', () => {
     const top = text({ overlay: { kind: 'help', scroll: 0 }, rows: 24 });
-    const down = text({ overlay: { kind: 'help', scroll: 16 }, rows: 24 });
+    const down = text({ overlay: { kind: 'help', scroll: 17 }, rows: 24 });
     expect(top).not.toContain('/allowlist');
     expect(down).toContain('/allowlist');
   });
