@@ -77,6 +77,30 @@ describe('research reports and authority (ADR-0037 R2, R3)', () => {
     expect(env.planner.calls[1].message).toContain('Report 1');
   });
 
+  it.each(['watch', 'act'] as const)('wakes at %s once for the last report and the run\'s end it causes, the report first', async (supervisorLevel) => {
+    const env = await supervised([], { settings: { supervisorLevel } });
+    await userTurn(env);
+    await add(env, 2);
+    const [first, last] = research(env);
+    await until(() => env.run.spawnedIds().length === 2);
+    await report(env, first.id, 'done', 'Report 0');
+    await until(() => env.planner.calls.length === 2);
+    env.planner.calls[1].finish(prose('Scout 0 found it; Scout 1 is still looking.'));
+    await settled();
+    await until(() => !env.session.isPlannerBusy);
+
+    await report(env, last.id, 'done', 'Report 1');
+    await until(() => env.planner.calls.length === 3);
+    await settled();
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+
+    expect(env.planner.calls).toHaveLength(3);
+    const wake = env.planner.calls[2].message;
+    expect(wake).toContain('Report 1');
+    expect(wake).toContain('the run finished: 2 of 2 tasks completed');
+    expect(wake.indexOf('Report 1')).toBeLessThan(wake.indexOf('the run finished'));
+  });
+
   it.each(['off', 'watch', 'act'] as const)('wakes at %s with the whole task_complete summary and user authority', async (supervisorLevel) => {
     const env = await supervised([task('t1', 1)], { settings: { supervisorLevel } });
     await userTurn(env);
