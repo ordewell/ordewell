@@ -348,7 +348,12 @@ function Results({ api, target, query, mode, onError, keys }: ResultsProps): JSX
   if (matches.length === 0) return <EmptyState className="ex-state" icon={FileSearch} title={mode === 'text' ? 'No line matches' : 'No file matches'} />;
   return (
     <ul className="ex-results" aria-label="Search results">
-      {matches.map((match, index) => (
+      {matches.map((match, index) => {
+        const at = match.path.lastIndexOf('/');
+        const base = match.path.slice(at + 1);
+        const dir = at < 0 ? '' : match.path.slice(0, at);
+        const where = match.line !== undefined ? `${match.path}:${match.line}` : match.path;
+        return (
         <li key={`${match.path}:${match.line ?? ''}`}>
           <button
             type="button"
@@ -356,14 +361,16 @@ function Results({ api, target, query, mode, onError, keys }: ResultsProps): JSX
             onClick={() => open(match, false)}
             onDoubleClick={() => open(match, true)}
           >
-            <span className="ex-result-path" title={match.path}>
-              <span className="ex-result-name">{match.path}</span>
+            <span className="ex-result-path" title={where}>
+              <span className="ex-result-name">{base}</span>
               {match.line !== undefined && <span className="ex-result-line">:{match.line}</span>}
+              {dir && <span className="ex-result-dir">{dir}</span>}
             </span>
             {match.preview && <span className="ex-result-preview">{match.preview}</span>}
           </button>
         </li>
-      ))}
+        );
+      })}
       {truncated && <li className="ex-more">Showing the first {matches.length}. Narrow the search.</li>}
     </ul>
   );

@@ -23,7 +23,7 @@ import { fetchRepo, popStash, pullBranch, pushBranch, stashChanges, type GitCont
 import { useSyncing } from '../git/gitStore';
 import { SyncBar } from '../git/SyncBar';
 import { useRepoBranches } from '../git/useRepoBranches';
-import { LONG_LIST, MiddleText, Notice, SidebarGroup } from '../sidebarKit';
+import { LONG_LIST, MiddleText, Notice, SidebarGroup, pathTail } from '../sidebarKit';
 import './checkout.css';
 
 /*
@@ -124,13 +124,13 @@ function Row({ api, repo, file, staged, busy, actions }: {
       <button
         type="button"
         className="srow-main checkout-file"
-        title={name}
+        title={file.from ? `${name}\nRenamed from ${file.from}` : name}
         onClick={() => openFile(api, repo, file, staged ? 'staged' : 'unstaged', true)}
         onDoubleClick={() => openFile(api, repo, file, staged ? 'staged' : 'unstaged', false)}
       >
         <span className={`sbadge sbadge-${file.status}`} aria-label={LETTER_WORD[file.status]}>{file.status}</span>
         <span className="checkout-name">{base}</span>
-        {file.from ? <MiddleText className="checkout-dir" text={`from ${file.from}`} /> : dir && <MiddleText className="checkout-dir" text={dir} />}
+        {file.from ? <MiddleText className="checkout-dir" text={`from ${file.from}`} tail={pathTail(file.from)} /> : dir && <MiddleText className="checkout-dir" text={dir} />}
       </button>
       <span className="srow-actions" aria-busy={busy !== undefined}>{actions}</span>
     </li>
