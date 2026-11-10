@@ -1923,7 +1923,9 @@ by what it separates: 4 within one control, 8 between controls.
 
 ### Type
 
-Inter for UI, and JetBrains Mono for code, paths, branches and commands. Both
+Inter for UI, and JetBrains Mono for code, paths, SHAs, ref chips and commands. A
+branch's name in a row is Inter, because it fits about a tenth more at the
+sidebar's narrow widths and the name leads. Both
 are bundled, with no network font. The weights are 400, 500 and 600 only.
 Tabular numbers (`font-variant-numeric: tabular-nums`) are used wherever a
 number updates in place: elapsed times, counts and usage.
@@ -1935,18 +1937,19 @@ number updates in place: elapsed times, counts and usage.
 | `--ow-type-small` | 12 / 18 | 400 | metadata, a row's second and third lines, tooltips |
 | `--ow-type-body` | 13 / 20 | 400 | UI body, rows' first lines, inputs, menus |
 | `--ow-type-label` | 13 / 20 | 500 | a button's label, a link that acts as one |
-| `--ow-type-body-strong` | 13 / 20 | 600 | the name a row or card is about: a task, session, project, branch or commit title, the checkout's branch |
+| `--ow-type-body-strong` | 13 / 20 | 600 | the name a row or card is about: a task, session, project or commit title; the checked-out branch's name (a branch row's label is `body` in Inter, and weight 600 only for the current one) |
 | `--ow-type-chat` | 14 / 22 | 400 | planner and task conversations, Details' prose |
 | `--ow-type-heading` | 15 / 22 | 600 | session header goal, dialog titles, a commit tab's subject; the Welcome tagline at 400 |
 | `--ow-type-title` | 20 / 28 | 600 | empty states, Settings' page title |
 | `--ow-type-code` | 12.5 / 19 | 400 | Monaco, the terminal, peeks, code in chat |
-| `--ow-type-code-small` | 12 / 18 | 400 | paths, branches and commands inside rows and cards |
+| `--ow-type-code-small` | 12 / 18 | 400 | paths, SHAs, ref chips, metadata and commands inside rows and cards (not a branch row's own label) |
 
 The roles rank what a surface says, and colour follows the rank:
 
 - **The name leads.** What a row, card, menu item or dialog is about (its
   task, session, project, branch, commit or model) is the first thing on it,
-  in `body-strong` or `heading` and `--ow-fg`. Metadata under or beside it (a
+  in `body-strong` or `heading` and `--ow-fg` (a branch's name in a row is
+  `body`, and `body-strong` when it is the checked-out one). Metadata under or beside it (a
   path, a sha, an author, an age, a count, a status line) is `small`,
   `caption` or `code-small` in `--ow-fg-secondary`, never the reverse.
 - **Nothing reads under 11 px.** `caption` and `overline` are the floor, in
@@ -1965,8 +1968,8 @@ The roles rank what a surface says, and colour follows the rank:
 | The activity bar | 22 | 1.5 |
 | Empty states | 40 | 1.5 |
 | Panel and sidebar headers, the title bar, dialog titles | 16 | 1.5 |
-| Buttons, tabs, menus, rows' first line | 16 | 1.5 |
-| A row's or card's second line, the status bar, chips | 14 | 1.5 |
+| Buttons, tabs, menus, rows' first line, a group's or folder's chevron, a view switch's icons | 16 | 1.5 |
+| A mark on a row's or card's second line, the status bar, chips (never a first-line icon) | 14 | 1.5 |
 | Inside a badge, a stage chip, beside `type.caption` | 12 | 1.75 (so it doesn't thin out) |
 | Status shapes | 14 in rows and cards, 16 in the tab header, 12 in chips and the rail | — |
 
@@ -2152,6 +2155,8 @@ a status.
 | Commit | `git-commit-horizontal` | Branch create | `git-branch-plus` |
 | Fetch | `refresh-cw` | Pull / push | `arrow-down-to-line` / `arrow-up-from-line`, drawn as `PullIcon` / `PushIcon` |
 | Stash / pop | `archive` / `archive-restore` | Discard | `undo` |
+| Switch branch | `arrow-right-left` | Refresh (re-read from disk) | `rotate-cw` |
+| Remote branch | `cloud` | | |
 | Stage / unstage a file | `plus` / `minus` | Open in editor | `external-link` |
 | Folder / file | `folder` / `file` | Ignored | `eye-off` |
 | Read-only, held | `lock` | Daemon | `server` |
@@ -2326,8 +2331,9 @@ are permanent, so findings can cite them.
 
 - **Y1.** Every font size and line height is a step of [the type scale](#type).
 - **Y2.** Every margin, padding and gap is a step of [the spacing scale](#spacing).
-- **Y3.** Code, paths, branches and commands are in JetBrains Mono. Everything
-  else is in Inter.
+- **Y3.** Code, paths, SHAs, ref chips, metadata and commands are in JetBrains
+  Mono. Everything else is in Inter, a branch row's name included, in weight
+  600 for the checked-out branch.
 
 **Focus and screen readers**
 
