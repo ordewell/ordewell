@@ -4,8 +4,6 @@ status: accepted
 
 # 0009 — Coding agents as planners: the harness planner backend
 
-*Pending:* T8's OpenCode scout stays behind `ORDEWELL_OPENCODE_SCOUT=1` until its live adversarial probe (`bench/live/opencode-scout-probe.mjs`) passes against a real OpenCode 2.x.
-
 
 ## Problem
 
@@ -182,18 +180,17 @@ model's behalf, which is precisely what a coding agent replaces.
   per-model `supportedReasoningEfforts`, OpenCode's `models`. The surfaces
   already render a model + variant picker. The cheap-planner thesis therefore
   survives on a subscription: plan with Haiku, execute with Opus.
-- **Research subagents are inert on this backend (T8).** `spawn_research_agent`
-  is a Ordewell-executed tool with no meaning when the agent owns its own
-  subagent mechanism. It is hidden rather than silently ignored. A harness's
-  own subagents are awaited before the turn ends (`MAX_AGENT_WAITS`), and
-  serve orientation. OpenCode's would run with whatever permission their
-  agent has, so its planner has none, save on 2.x with
-  `ORDEWELL_OPENCODE_SCOUT=1`: there its `subagent` tool starts Ordewell's
-  read-only `ordewell-scout` alone, one level deep and in the foreground, and
-  only when the server's resolved rules for it are Ordewell's
-  ([ADR-0026](../planner-envelope/0026-one-envelope-for-every-planner.md)).
-  The prompt names the scout where it is on. Either way they serve
-  orientation: what the planner needs this turn and no later task acts on. Evidence, what needs a worktree, another runner or model, the user's
+- **A harness planner's in-turn agents are its own, save OpenCode's (T8).**
+  `spawn_research_agent` is an Ordewell-executed tool with no meaning when the
+  agent owns its own subagent mechanism, so it is hidden rather than silently
+  ignored. A harness's own subagents are awaited before the turn ends
+  (`MAX_AGENT_WAITS`). OpenCode's would run with whatever permission their
+  agent has, so they are denied, and an OpenCode planner is served Ordewell's
+  own read-only agent as `spawn_research_agent` instead, where its workspace
+  names a model for it
+  ([ADR-0066](../planner-envelope/0066-opencode-planners-get-ordewells-research-agent.md)).
+  Either kind serves orientation: what the planner needs this turn and no later task acts
+  on. Evidence, what needs a worktree, another runner or model, the user's
   sight, or a later task to act on, is a task of its own: a research task
   whose report returns to the planner where the planner must decide on it, a
   plain read-only task its dependent reads otherwise ([ADR-0037](../supervision/0037-research-tasks-wake-the-planner.md), R1, R5).
@@ -405,4 +402,4 @@ this backend should understand they are trading speed for not holding a key.
   planner picker; a missing CLI is still left off and named in the install hint.
 - 2026-11-04 — Cursor plans ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)).
 - 2026-11-05 — Cline plans ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)).
-- 2026-11-10 — an OpenCode 2.x planner may start Ordewell's read-only scout as its in-turn agent, behind `ORDEWELL_OPENCODE_SCOUT=1` and a check of its resolved rules (ADR-0026).
+- 2026-11-10 — an OpenCode planner's in-turn agent is Ordewell's research agent over MCP, where its workspace names the model (ADR-0066).

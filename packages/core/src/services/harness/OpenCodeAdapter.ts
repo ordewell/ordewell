@@ -4,8 +4,8 @@ import { randomBytes } from 'crypto';
 import { isCredentialVariable } from './credentialEnv';
 import type { NativeShellLauncher } from '../sandbox/nativeShellLauncher';
 import { ProcessLifecycle } from './ProcessLifecycle';
-import { OpenCodeV2, SCOUT_WITHHELD } from './OpenCodeV2';
-import { OPENCODE_CONFIG_VARIABLE, OPENCODE_ORDEWELL, OPENCODE_PLANNER_ENV, OPENCODE_READ_ONLY_PERMISSION, leaseGateway, scoutRequested } from './openCodeOrdewell';
+import { OpenCodeV2 } from './OpenCodeV2';
+import { OPENCODE_CONFIG_VARIABLE, OPENCODE_ORDEWELL, OPENCODE_PLANNER_ENV, OPENCODE_READ_ONLY_PERMISSION, leaseGateway } from './openCodeOrdewell';
 import { envValue } from '../../utils/shellPath';
 import { awaitAttach, MCP_ATTACH_TIMEOUT_MS, type AttachState } from './ordewellBinding';
 import { taskCompletionContract, type McpClientConfig } from '../mcp';
@@ -90,9 +90,6 @@ interface OpenCodePart {
     metadata?: { sessionId?: string; model?: { providerID?: string; modelID?: string }; diff?: unknown; exists?: unknown };
   };
 }
-
-/** Why a 1.x planner asked for the scout has none. */
-const V1_NO_SCOUT = 'OpenCode 1.x has no subagent rule that admits one agent alone, so the planner keeps every agent denied.';
 
 /** `permission.asked` (and its v2 spelling) — the only server→client request OpenCode makes. */
 interface OpenCodePermissionAsk {
@@ -302,8 +299,6 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
   private readonly steers = new PendingSteers();
   /** Set once the server turns out to speak the 2.x API, which then owns the session. */
   private v2: OpenCodeV2 | null = null;
-  /** Whether this start asked for the scout, behind its gate (ADR-0026). */
-  private scoutAsked = false;
   /** The Ordewell server this process was configured with; null when none was given or its config could not be merged. */
   private ordewell: McpClientConfig | null = null;
   /** The sealed launcher this planner's own shell goes through, when the opt-in is on (ADR-0036 N2). */
@@ -336,9 +331,6 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
     // server with no password cannot be spoken to at all.
     const password = randomBytes(24).toString('base64url');
     const nativeShell = this.nativeShell?.prefix;
-    // Read once, before the server starts: its config and the session's rules must agree (ADR-0026).
-    this.scoutAsked = scoutRequested(opts);
-    const scout = this.scoutAsked || undefined;
     // What a lease holds in place of an Anthropic key (ADR-0059 L7), read before the server starts: a task's model traffic must go to its gateway, not to Anthropic with a token that means nothing there.
     const gateway = leaseGateway(this.deps.placement?.env);
     const command = () => ({
@@ -355,7 +347,7 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
         const readOnly = opts.kind === 'task' && readOnlyTask(opts);
         const role = readOnly ? 'readOnlyTask' : opts.kind;
         const ordewellConfig = opts.kind === 'planner' || readOnly
-          ? OPENCODE_ORDEWELL.configContent(existing, opts.mcp ?? null, role, projectServers, opts.kind === 'task' ? opts : undefined, nativeShell, gateway ?? undefined, scout) ?? OPENCODE_ORDEWELL.configContent(undefined, opts.mcp ?? null, role, projectServers, opts.kind === 'task' ? opts : undefined, nativeShell, gateway ?? undefined, scout)
+          ? OPENCODE_ORDEWELL.configContent(existing, opts.mcp ?? null, role, projectServers, opts.kind === 'task' ? opts : undefined, nativeShell, gateway ?? undefined) ?? OPENCODE_ORDEWELL.configContent(undefined, opts.mcp ?? null, role, projectServers, opts.kind === 'task' ? opts : undefined, nativeShell, gateway ?? undefined)
           : opts.mcp || gateway ? OPENCODE_ORDEWELL.configContent(existing, opts.mcp ?? null, 'task', undefined, undefined, undefined, gateway ?? undefined) : null;
         if ((opts.mcp || gateway) && ordewellConfig === null) {
           console.error('[opencode] OPENCODE_CONFIG_CONTENT is not a JSON object, so the Ordewell tools were not injected.');
@@ -426,7 +418,6 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
       this.v2 = new OpenCodeV2({
         version,
         nativeShell: this.nativeShell?.prefix ?? null,
-        scout: this.scoutAsked,
         request: (method, path, body, signal, timeoutMs) => this.request(method, path, body, signal, timeoutMs),
         json: (method, path, body, signal, timeoutMs) => this.json(method, path, body, signal, timeoutMs),
         openEvents: (signal) => this.deps.fetch(`${this.baseUrl}/api/event`, { signal, headers: this.headers() }),
@@ -547,7 +538,7 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
         tools: DISABLED_TOOLS,
         ...(model ? { model } : {}),
         ...(this.planner?.effort ? { variant: this.planner.effort } : {}),
-        ...(this.planner ? this.v1System(this.planner) : {}),
+        ...(this.planner ? plannerSystem(this.planner) : {}),
       };
       const reply = await Promise.race([this.json<OpenCodeMessageResponse>('POST', `/session/${this.sessionId}/message`, body, signal, null), stream.failed]);
 
@@ -1158,18 +1149,6 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
   version(): string | null { return this.serverVersion; }
 
   unusableProjectServers(): ProjectMcpServer[] { return this.v2?.unusableProjectServers() ?? []; }
-
-  scoutWithheld(): string | null {
-    if (this.v2) return this.v2.scoutWithheld();
-    return this.scoutAsked && this.planner ? V1_NO_SCOUT : null;
-  }
-
-  /** 1.x has no subagent rule that names one agent, so its planner keeps every agent denied and is told the scout is not there (ADR-0026). */
-  private v1System(planner: PlannerStartOptions): { system?: string } {
-    const { system } = plannerSystem(planner);
-    if (!this.scoutAsked) return system ? { system } : {};
-    return { system: [system, SCOUT_WITHHELD].filter(Boolean).join('\n\n') };
-  }
 
   /** 2.x only: a 1.x server's saved output was never checked, so it is asked about as any outside read. */
   savedOutput(abs: string): boolean { return this.v2?.savedOutput(abs) ?? false; }

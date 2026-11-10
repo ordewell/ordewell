@@ -28,6 +28,14 @@ export const SUBAGENT_LIMITS = {
   toolOutputMaxChars: 20000,
 };
 
+/**
+ * The tools a research agent served to a harness planner over MCP may call
+ * (ADR-0066): the workspace reads alone. No shell, sealed or not, no web, and
+ * no spawn, so the agent widens the planner's envelope by nothing but the
+ * reads its own read tools already have.
+ */
+export const CONFINED_RESEARCH_TOOLS: ReadonlySet<string> = new Set(['read_file', 'read_files', 'glob', 'grep', 'find_symbol', 'list_dir']);
+
 export interface SubagentDeps {
   /**
    * Builds a fresh chat (own history, subagent system prompt, cheap model).
@@ -53,6 +61,12 @@ export interface SubagentDeps {
   usage?: () => UsageTotals | undefined;
   /** Structured lifecycle/thinking/tool_call/tool_result events for the UI while the subagent works. */
   onProgress?: (progress: ResearchProgress) => void;
+  /**
+   * The tools this agent may call, which can only narrow the research set: a
+   * call to any other is refused with a synthetic result, never dispatched.
+   * Absent: every research tool.
+   */
+  tools?: ReadonlySet<string>;
 }
 
 export interface SubagentToolOutcome {
@@ -129,6 +143,7 @@ function withoutContext({ contextTokens: _context, ...record }: UsageRecord): Us
 async function runLoop(prompt: string, deps: SubagentDeps): Promise<string> {
   if (deps.signal?.aborted) return '[research agent aborted before starting]';
   const fs = nonPromptingFs(deps.fs);
+  const allowed = deps.tools ? new Set([...deps.tools].filter((name) => ALLOWED_TOOL_NAMES.has(name))) : ALLOWED_TOOL_NAMES;
   const chat = deps.createChat(
     (delta) => deps.onProgress?.({ type: 'thinking', text: delta, subagentId: deps.subagentId }),
     // The record says who made the call: unstamped, the ledger would read the
@@ -145,8 +160,8 @@ async function runLoop(prompt: string, deps: SubagentDeps): Promise<string> {
       // Anything outside the read-only allowlist (recursive spawn, hallucinated
       // write tools) is refused with a synthetic result — never dispatched — so
       // the API history stays valid and nothing executes.
-      if (!ALLOWED_TOOL_NAMES.has(tc.name)) {
-        const refusal = `Tool "${tc.name}" is not available. You are a read-only research subagent: your only tools are ${[...ALLOWED_TOOL_NAMES].join(', ')}. You cannot spawn further agents or modify files. If a specific resource would have answered your question, name it in your digest so the planner can fetch it directly. Otherwise continue with the available tools, then reply with your digest.`;
+      if (!allowed.has(tc.name)) {
+        const refusal = `Tool "${tc.name}" is not available. You are a read-only research subagent: your only tools are ${[...allowed].join(', ')}. You cannot spawn further agents or modify files. If a specific resource would have answered your question, name it in your digest so the planner can fetch it directly. Otherwise continue with the available tools, then reply with your digest.`;
         results.push({ name: tc.name, output: refusal, truncated: false, totalChars: refusal.length, id: tc.id });
         continue;
       }

@@ -507,6 +507,17 @@ turn; work across turns is a task in the plan. *Avoid:* choosing between a
 research task and the planner's own agents by how long a lookup will take —
 the planner cannot know that before it starts; choose by what the result is.
 
+**Research subagent** (`spawn_research_agent`, `runResearchAgent`; ADR-0005,
+ADR-0066) — one stateless read-only agent Ordewell runs on an API provider's
+chat for a planner's orientation, confined to the workspace read tools, which
+returns only its digest within the planner's turn. An API planner starts one
+wherever its service can run subagents. An OpenCode planner, whose own agents
+are denied, is served it over Ordewell's MCP server where its workspace sets
+`ORDEWELL_RESEARCH_AGENT_MODEL=<provider>:<model>`; Claude Code and Codex use
+their own subagents, and an ACP planner has none.
+*Avoid:* "research task" — that is a task in the plan, whose handoff a later
+turn reads; "scout" — the OpenCode agent this replaced.
+
 **ResearchStep outcome** — how one research tool call ended, as data:
 `success | failure | refused | denied | not_executed`, derived once by
 `classifyOutcome` and carried on every `research_step_done` alongside the
@@ -792,7 +803,7 @@ through git). On a name clash global wins and the workspace copy is reported
 as shadowed. The built-in `grilling`, `to-spec` and `improve-codebase-architecture` are user-only; the built-in `diagnose` and `explore` planner skills and the `tdd` task skill are model-invocable (ADR-0024). Ordewell never ships, reads, or
 references runner-native skill mechanisms (`.claude/skills`, OpenCode plugins,
 etc.) to deliver a skill. Research subagents (`spawn_research_agent`, ADR-0005)
-are a tool of an API planner whose service can run them, not a skill.
+are a planner's tool, not a skill.
 *Avoid:* "mode toggle", "skill toggle" — a skill is chosen per message or per
 task, never switched on in settings; "skill file", "slash command" for these —
 those are runner-side concepts.
@@ -2801,18 +2812,6 @@ discarded session kills its own process and revokes its token when it lands,
 and a one-shot never touches the conversation's session.
 *Avoid:* using it for the plan-level **Session**, which outlives many planner
 sessions.
-
-**Scout** (`ordewell-scout`) — the one agent an OpenCode 2.x *harness planner*
-may start with its own `subagent` tool: defined by Ordewell, it reads the
-workspace with `read`, `glob`, `grep` and `list` and is denied everything else,
-runs one level deep in the foreground, and returns a digest for the planner's
-orientation. It is offered only with `ORDEWELL_OPENCODE_SCOUT=1`, and only when
-the OpenCode server's resolved rules for it are Ordewell's; otherwise the
-planner keeps every agent denied, and the planner and the person are told why
-(ADR-0026). OpenCode 1.x never has one.
-*Avoid:* "research agent" or "research subagent" — those are the API planner's
-`spawn_research_agent` subagents (ADR-0005); and do not use the scout for
-evidence a later task acts on, which is a task of its own (ADR-0037 R5).
 
 **Saved output** — a tool result too long for the context that a runner saved
 to a file outside the workspace, telling the model to read it back: Claude

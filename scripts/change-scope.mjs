@@ -263,7 +263,7 @@ const ROOT_OWNERS = [
   // Run by hand against a dev build; no check runs them.
   [/^bench\/live\/(webview-[^/]+|host-driver|load-playwright|screenshot-header-tmp)\.mjs$/, owes()],
   // Run by hand against a real agent and a real model (ADR-0026, ADR-0060); no check runs them.
-  [/^bench\/live\/(opencode-scout|acp-subagent)-probe\.mjs$/, owes()],
+  [/^bench\/live\/(opencode-research-agent|acp-subagent)-probe\.mjs$/, owes()],
   // verdict.mjs judges the container suites' report; its test runs in bench.
   [/^bench\/containers\//, owes('engine', 'bench')],
   [/^bench\/lab\//, owes('bench')],

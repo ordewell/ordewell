@@ -7,8 +7,6 @@ amends: ["0008", "0009"]
 
 *Pending:* the ACP planners' subagent controls are checked against source and documentation, not a live run, until `node bench/live/acp-subagent-probe.mjs` passes against each installed ACP planner.
 
-*Pending:* the OpenCode scout stays behind `ORDEWELL_OPENCODE_SCOUT=1` until its live adversarial probe (`bench/live/opencode-scout-probe.mjs`) passes against a real OpenCode 2.x; then the variable goes and the scout is on for every 2.x planner.
-
 ## Problem
 
 ADR-0008 gave the API planner a research envelope: read-only commands run,
@@ -56,7 +54,10 @@ ops task when it needs judgment
   never classifies a planner's command.
 - Harness shells are withheld: Claude's `Bash` and `Monitor`, OpenCode's
   `bash` and `shell` (and its `task` and `subagent` tools, which would run an
-  agent with whatever permission it has, save the scout below). Codex's shell stays, inside its read-only,
+  agent with whatever permission it has). An OpenCode planner's in-turn agent
+  is Ordewell's own instead, `spawn_research_agent` on its token, where its
+  workspace names a model for it
+  ([ADR-0066](0066-opencode-planners-get-ordewells-research-agent.md)). Codex's shell stays, inside its read-only,
   network-less sandbox; its instructions point it at `run_command`, as a
   task's point it at its tools. Where that sandbox cannot start, Codex's shell
   is switched off and `run_command` is its only one
@@ -117,8 +118,7 @@ How each runner raises them, checked live (Claude Code 2.1.296, codex-cli
   requests are still declined at once.
 - **OpenCode** gets Ordewell's whole permission policy for the planner's
   server, replacing any it inherited: a catch-all `ask`, its own read tools
-  allowed, every write, subagent and question tool denied (on 2.x, every
-  subagent but the scout below), and its shell
+  allowed, every write, subagent and question tool denied, and its shell
   denied too unless the native-shell opt-in is on, when `bash` and `shell`
   ask and run through Ordewell's launcher (ADR-0036 N2). Then a user's MCP
   tool, `webfetch` and `external_directory` each arrive as
@@ -132,31 +132,6 @@ How each runner raises them, checked live (Claude Code 2.1.296, codex-cli
   denies `execute`; Ordewell's own server is replaced at start with
   `codemode: false`, so `run_command` and the completion tools are tools of
   their own, and a 2.x that cannot do that is refused as a planner.
-- **OpenCode 2.x's scout.** With `ORDEWELL_OPENCODE_SCOUT` set to exactly
-  `1`, an OpenCode 2.x planner may delegate breadth to one agent Ordewell
-  defines, `ordewell-scout`, through its own `subagent` tool. The scout's
-  permission denies everything first and then allows `read`, `glob`, `grep`
-  and `list` alone: no write, shell, `execute`, web, question, skill or
-  subagent tool, and no MCP tool, Ordewell's included. The planner's session
-  admits that agent alone (`subagent` on `ordewell-scout` allowed after every
-  subagent denied), `experimental.subagent_depth` is 1, and a background call
-  fails the turn, since its report would arrive after the turn, outside
-  Ordewell's view. Ordewell's layer only adds rules, so its deny-all holding
-  depends on the server's merge order. OpenCode 2.2.5 places a user-global
-  `agent` or `agents` entry of that name, an agent file, a legacy `tools` map
-  and a top-level permission before it. Its managed config (`/etc/opencode`,
-  or ProgramData on Windows) is read after, and another release may order
-  them differently. So before the planner's session is created, Ordewell
-  reads the scout as the server resolved it (`GET /api/agent`). It enables the scout only when, after the
-  last rule that denies every tool everywhere, each rule is a deny or an
-  allow of one of the four read tools on every path, and all four are there.
-  Any other answer, or none, leaves the scout out: the session keeps every
-  subagent denied, the planner is told the scout is not available, and the
-  reason is a warning in the planner's chat, beside its other degradations.
-  A resumed session keeps the scout only when its rules agree with that
-  check. OpenCode 1.x has no rule that admits one agent alone, so its `task`
-  stays denied whatever the variable says, and the planner is told so. With
-  the variable unset, a planner's config and prompt do not change.
 - **An ACP runner** plans only when its profile claims the planner role on
   evidence ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)
   R3), as GitHub Copilot CLI 1.0.105, Qwen Code 0.26.6, Cline 3.0.74, Gemini
@@ -294,8 +269,7 @@ refused from a workspace's environment files (ADR-0016). The effect allowlist
   rule. The shell tools are disallowed outright too unless the native-shell
   opt-in is on, in which case `Bash` and `Monitor` ask and run under
   Ordewell's sealed profile (ADR-0036 N2, N6); a saved allow rule cannot skip
-  that ask. An OpenCode planner's policy is Ordewell's alone, and its scout
-  runs only when the server resolved the scout's rules as Ordewell wrote them.
+  that ask. An OpenCode planner's policy is Ordewell's alone.
 - **A command's output is research.** `run_command` renders as the planner's
   `bash` step in every surface, and so does a command the opt-in lets through
   the harness's own shell (ADR-0036 N2.3).
@@ -321,19 +295,6 @@ refused from a workspace's environment files (ADR-0016). The effect allowlist
   tool's own name, behind the user's exclusions, is what the allowlist reads.
 - **Let the planner write files.** Rejected: every effect needs a record, a
   verdict and a place in the plan, which only a task has.
-- **Give an OpenCode planner an Ordewell-run API subagent over MCP**
-  (`spawn_research_agent` on the planner's token, confined read tools).
-  Rejected: it bills a separate API key and vendor setting where the scout
-  runs on the planner's own runner and login; it is a second model client
-  whose reads Ordewell must confine itself, with the same lexical symlink gap
-  as the API planner's subagents; and each call holds one MCP tool call open
-  for as long as the research takes, which OpenCode 1.x's client limit was
-  never measured against. The scout's risk is narrower to check: one agent
-  definition the server's own resolved rules can be read back against.
-- **Leave every OpenCode subagent denied.** Rejected for 2.x: its planner was
-  the only harness planner with no in-turn agent, so breadth that needs no
-  task became a research task. 1.x keeps it, as its rules cannot admit one
-  agent alone.
 
 ## History
 
@@ -391,3 +352,4 @@ refused from a workspace's environment files (ADR-0016). The effect allowlist
 - 2026-11-05 — Cline plans, made to ask before every use of its own tools (ADR-0060).
 - 2026-11-10 — an OpenCode 2.x planner's `subagent` tool admits Ordewell's read-only scout alone, behind `ORDEWELL_OPENCODE_SCOUT=1` and only when the server's resolved rules for it match Ordewell's; 1.x unchanged; the MCP research subagent rejected.
 - 2026-11-10 — every ACP planner's own subagent or delegation tool is withheld by its restricted start and refused by name; a background subagent fails the turn (ADR-0060 R3).
+- 2026-11-10 — the scout is removed after its live probe failed: an OpenCode planner's own agents are all denied, and its in-turn agent is Ordewell's research agent over MCP where its workspace names the model (ADR-0066).

@@ -1,5 +1,5 @@
 import { Task, ConversationMessage, DiscoveredModel, PlannerNativeSession, ReplyRun, ResearchLogEntry, ResearchProgress, RunnerId } from '../models/Task';
-import { IConfig } from '../interfaces/IConfig';
+import type { IConfig } from '../interfaces/IConfig';
 import { IFileSystem } from '../interfaces/IFileSystem';
 import { IWebFetcher } from '../interfaces/IWebFetcher';
 import type { IApproval } from '../interfaces/IApproval';
@@ -11,6 +11,7 @@ import { GeminiService } from './GeminiService';
 import { OpenAiService } from './OpenAiService';
 import { isCliProvider } from './ProviderRegistry';
 import { CliAgentAiService, type CliAgentAiServiceDeps } from './harness/CliAgentAiService';
+import type { OfferedResearchAgent } from './harness/researchAgentSetting';
 import type { IsolatedExecution, PlannerModes } from './plannerModes';
 import type { PlannerToolHandler } from './mcp';
 import type { SkillInfo } from './SkillsService';
@@ -317,10 +318,32 @@ export interface IAiService {
  */
 export function createAiService(config: IConfig, deps?: CliAgentAiServiceDeps & PlannerContextDeps): IAiService {
   if (isCliProvider(config.aiProvider)) {
-    return new CliAgentAiService(config, deps);
+    // Offered only where the workspace names the agent's model (ADR-0066).
+    return new CliAgentAiService(config, { researchAgent: (offer) => harnessResearchChat(config, offer), ...deps });
   }
   if (config.aiProvider === 'google') {
     return new GeminiService(config, { turnBudgets: deps?.turnBudgets, modelLimits: deps?.modelLimits, autoCompaction: deps?.autoCompaction });
   }
   return new OpenAiService(config, { turnBudgets: deps?.turnBudgets, modelLimits: deps?.modelLimits, autoCompaction: deps?.autoCompaction });
+}
+
+/**
+ * The confined research chat a harness planner's `spawn_research_agent` runs
+ * on (ADR-0066): the provider, model and key `ORDEWELL_RESEARCH_AGENT_MODEL`
+ * resolved to, its tools narrowed to the workspace reads. Billed to that
+ * provider's key, not to the planner runner's account.
+ */
+export function harnessResearchChat(config: IConfig, offer: OfferedResearchAgent): ReturnType<NonNullable<CliAgentAiServiceDeps['researchAgent']>> {
+  // The offer replaces what reaches the provider; the rest of the config is the user's own.
+  const agentConfig: IConfig = Object.create(config, {
+    aiProvider: { value: offer.vendor },
+    researchSubagentModel: { value: offer.model },
+    getProviderApiKey: { value: () => offer.apiKey },
+    getProviderBaseUrl: { value: () => offer.baseUrl },
+  });
+  const service = new OpenAiService(agentConfig);
+  return {
+    createChat: (onReasoning, onUsage, only) => service.confinedResearchChat(onReasoning, onUsage, only),
+    model: offer.model,
+  };
 }

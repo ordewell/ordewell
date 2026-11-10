@@ -2,7 +2,7 @@ export { OrdewellMcpServer, sharedMcpServer, ORDEWELL_MCP_PATH } from './Ordewel
 export type { McpContact, McpCredential, McpRefusal, TaskTokenScope, PlannerTokenScope } from './OrdewellMcpServer';
 export { mcpClientConfig, ownerOnlyConfigFile, ORDEWELL_MCP_SERVER_NAME } from './clientConfig';
 export type { McpClientConfig, OwnerOnlyFile } from './clientConfig';
-export { TASK_TOOLS, READ_ONLY_TASK_TOOLS, PLANNER_TOOLS, PLANNER_EXECUTION_TOOLS, TASK_COMPLETE_TOOL, TASK_COMPLETION_CONTRACT, taskCompletionContract, taskToolSet, plannerToolSet, toolListing } from './tools';
+export { TASK_TOOLS, READ_ONLY_TASK_TOOLS, PLANNER_TOOLS, PLANNER_EXECUTION_TOOLS, PLANNER_RESEARCH_AGENT, TASK_COMPLETE_TOOL, TASK_COMPLETION_CONTRACT, taskCompletionContract, taskToolSet, plannerToolSet, toolListing } from './tools';
 export type {
   McpTool,
   TaskToolHandler,
@@ -17,6 +17,7 @@ export type {
   ListRunnersArgs,
   ListModelsArgs,
   LoadSkillArgs,
+  SpawnResearchAgentArgs,
   RunCommandArgs,
   TaskRunCommandArgs,
   SubmitPlanArgs,

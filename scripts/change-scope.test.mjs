@@ -418,7 +418,7 @@ describe('a path outside the workspaces that only some checks read', () => {
     ['bench/live/drive-binary.mjs', {}, {}, ['binary']],
     ['bench/live/webview-harness.mjs', {}, {}, []],
     ['bench/live/host-driver.mjs', {}, {}, []],
-    ['bench/live/opencode-scout-probe.mjs', {}, {}, []],
+    ['bench/live/opencode-research-agent-probe.mjs', {}, {}, []],
     ['bench/live/acp-subagent-probe.mjs', {}, {}, []],
     ['bench/containers/verdict.mjs', {}, {}, ['bench', 'engine', 'harness']],
     ['bench/lab/lab.mjs', {}, {}, ['bench', 'harness']],
