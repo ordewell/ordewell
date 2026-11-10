@@ -1541,10 +1541,10 @@ describe('CliAgentAiService — Codex', () => {
     };
     const withheld = await start(true);
     expect(withheld.config.features).toEqual({ multi_agent: false, multi_agent_v2: false });
-    expect(withheld.developerInstructions).not.toContain('your own subagents');
+    expect(withheld.developerInstructions).not.toContain('your spawn_agent tool');
     const planner = await start(false);
     expect(planner.config.features).toBeUndefined();
-    expect(planner.developerInstructions).toContain('your own subagents');
+    expect(planner.developerInstructions).toContain('your spawn_agent tool');
   });
 
   it('tells a planner on Windows which shell run_command runs there, and one elsewhere nothing', async () => {

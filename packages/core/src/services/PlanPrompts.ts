@@ -162,7 +162,8 @@ export function inTurnAgents(harness: boolean, runner?: RunnerId, subagents = tr
   if (!harness) return 'spawn_research_agent';
   switch (runner) {
     case 'claude-code': return 'your Agent tool';
-    case 'codex': return 'your own subagents, if this session has them';
+    // Codex's multi-agent tool, on by default (codex-cli 0.167.0; its `features.multi_agent`).
+    case 'codex': return 'your spawn_agent tool';
     // Ordewell's own agent, served over MCP where the session can run one; OpenCode's own subagents stay withheld (ADR-0026).
     case 'opencode': return research ? 'spawn_research_agent' : null;
     // No ACP planner's own subagents are confirmed inside the envelope, so each start withholds them (ADR-0026).
@@ -190,12 +191,13 @@ export function inTurnAgents(harness: boolean, runner?: RunnerId, subagents = tr
  * prompt (#33, #112) can include it unchanged.
  */
 export function whoExploresSection(agents: InTurnAgents): string[] {
-  // A count the planner can check mid-turn: left to judge "a wider question", planners read whole packages themselves (ADR-0037 R5).
-  const trigger = 'before you read across more than one package or directory tree, or past about ten reads for one question';
+  // Decided before reading, by area, not by a count: no planner can count its reads mid-turn, and on the bench's breadth goal a count delegated nothing for Codex or OpenCode (ADR-0037 R5).
+  const trigger = 'with the map read, before you read inside any package or top-level area the goal touches';
+  const inside = 'Inside one, read yourself only a targeted lookup whose answer decides your next step.';
   const agentTier = agents === null
-    ? `- A research task, past that: ${trigger}, give each package or independent question a research task, so only their reports reach you. You have no agents of your own here: research tasks are how you delegate.`
+    ? `- A research task, for the rest: ${trigger}, give each area a research task, so only their reports reach you. ${inside} You have no agents of your own here: research tasks are how you delegate.`
     : [
-      `- An agent, awaited, past that: ${trigger}, send agents, one per package or independent question, in parallel, so only their digests reach you; a question whose parts depend on each other stays with one. ${agents === 'spawn_research_agent' ? 'Use spawn_research_agent, whose agents return within your tool round.' : `Use ${agents} and wait for its results inside this reply, never in the background: once your turn ends, nothing you say reaches the user.`}`,
+      `- An agent, awaited, for the rest: ${trigger}, send one agent per area, in parallel, so only their digests reach you. ${inside} ${agents === 'spawn_research_agent' ? 'Use spawn_research_agent, whose agents return within your tool round.' : `Use ${agents} and wait for its results inside this reply, never in the background: once your turn ends, nothing you say reaches the user.`}`,
       'Each returns a digest of about 1-2k tokens: conclusion first, file:line references, decisions found, what is uncertain; no pasted file bodies.',
     ].join(' ');
   return [
@@ -403,7 +405,7 @@ const SHARED_APPEND_FILE_RULE =
  * `research` (ADR-0056 M6), so it has no research tasks to delegate to either:
  * what is wider than its own reads it reads too, or gives a task.
  */
-const NO_RESEARCH_TIER: readonly [RegExp, string] = [/^- A research task, past that: .*$/m, '- Your own reads, past that: you have no agents of your own here and no research tasks, so a wider question you need this turn is yours to read too. Keep only its conclusion, and give anything larger a task.'];
+const NO_RESEARCH_TIER: readonly [RegExp, string] = [/^- A research task, for the rest: .*$/m, '- Your own reads, for the rest: you have no agents of your own here and no research tasks, so a wider question you need this turn is yours to read too. Keep only its conclusion, and give anything larger a task.'];
 
 /**
  * What a planner must know about a repo group (ADR-0014), as a section of its
