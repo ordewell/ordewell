@@ -1,6 +1,6 @@
 import * as path from 'path';
 import { flattenTasks, isSkillName, skillNames, type Task, type TaskSkillSnapshot } from '../models/Task';
-import { skillsDirOf, workspaceSkillRoots, type SkillInfo, type SkillsService } from './SkillsService';
+import { skillsDirOf, skillTooLarge, workspaceSkillRoots, type SkillInfo, type SkillsService } from './SkillsService';
 import { opLabel, type OpRef, type TaskOp } from './TaskOps';
 import { requestedSkills } from './PlanValidator';
 import { cleanEnv, execFileWithTimeout } from './gitExec';
@@ -89,6 +89,7 @@ async function check(entries: SkillEntry[], lookup: SkillLookup): Promise<SkillC
       const skill = lookup.findSkill(name);
       if (!skill) warnings.push(notFoundWarning(named, name));
       else if (skill.appliesTo !== 'task') errors.push({ ...(taskId ? { taskId } : {}), ...(op ? { op } : {}), message: plannerSkillMessage(owner, skill) });
+      else if (skillTooLarge(skill)) errors.push({ ...(taskId ? { taskId } : {}), ...(op ? { op } : {}), message: `${owner ? `${owner}: ` : ''}${skillTooLarge(skill)}.` });
       else warnings.push({ owner: named, skill });
     }
   }
@@ -248,11 +249,13 @@ export function resolveTaskSkills(
 ): TaskSkillSnapshot[] {
   const missing: string[] = [];
   const planner: SkillInfo[] = [];
+  const oversize: string[] = [];
   const resolved: TaskSkillSnapshot[] = [];
   for (const name of task.skills ?? []) {
     const skill = lookup.findSkill(name);
     if (!skill) missing.push(name);
     else if (skill.appliesTo !== 'task') planner.push(skill);
+    else if (skillTooLarge(skill)) oversize.push(skillTooLarge(skill)!);
     else resolved.push({ name: skill.name, source: skill.source, path: skill.path, content: skill.content });
   }
   const problems: string[] = [];
@@ -266,6 +269,7 @@ export function resolveTaskSkills(
     );
   }
   for (const skill of planner) problems.push(`"${skill.name}" is a planner skill (applies-to: planner, ${skill.path}), not a task skill`);
+  problems.push(...oversize);
   if (problems.length > 0) throw new TaskSkillsError(`Task "${task.title}" did not start: ${problems.join('; ')}.`);
   return resolved;
 }

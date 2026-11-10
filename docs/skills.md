@@ -43,6 +43,22 @@ To keep one of these from being offered, add `disable-model-invocation: true` to
 your copy in `~/.ordewell/skills/<name>/SKILL.md`; Ordewell will not overwrite
 it.
 
+## Size cap
+
+A skill body may have at most 2,000 words (the frontmatter is not counted). The
+body goes whole into a runner's prompt or the planner's context, so one large
+skill would bloat everything it is attached to. The largest built-in is about
+half the cap. Ordewell never truncates a skill; one over the cap is refused:
+
+- attaching it to a task is an error at plan check, naming its size and the
+  cap, and a task that still names it fails before its runner starts;
+- `load_skill` returns the same message instead of the body;
+- the planner's catalog marks it `(too large to load: …)`, and
+  `ordewell skills` marks it the same way (`words` and `tooLarge` in `--json`).
+
+Split a large skill into several, or move reference text into files the skill
+points at.
+
 ## Built-in skills
 
 | Skill | For | Who invokes it |

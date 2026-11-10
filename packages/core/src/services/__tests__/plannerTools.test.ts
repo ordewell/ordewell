@@ -9,7 +9,7 @@ import { OrdewellMcpServer, PLANNER_TOOLS } from '../mcp';
 import type { ConversationRequest } from '../AiService';
 import type { SessionRuntimeSettings } from '../createSession';
 import { surfacePlan, type SessionMessage, type SessionNotice } from '../SessionMessage';
-import type { SkillInfo, SkillsService } from '../SkillsService';
+import { SKILL_WORD_CAP, type SkillInfo, type SkillsService } from '../SkillsService';
 import type { SkillLookup } from '../taskSkills';
 import { PlanChangeCheck, requestScope } from '../PlanChangeCheck';
 import { createTask, flattenTasks, type DiscoveredModel, type Task } from '../../models/Task';
@@ -300,6 +300,21 @@ describe('load_skill', () => {
     expect(prompt).toContain('- review-plan: Use review-plan to plan');
     expect(prompt).toContain('load_skill');
     expect(prompt).not.toContain('review-plan BODY v1');
+  });
+
+  it('refuses to load a skill over the word cap, naming its size, and marks it in the catalog', async () => {
+    const huge = plannerSkill('huge', { content: Array.from({ length: SKILL_WORD_CAP + 1 }, () => 'w').join(' ') });
+    const files = new Map([[huge.name, huge]]);
+    let loaded: Awaited<ReturnType<typeof loadSkill>> | undefined;
+    const claude = fakeClaude({ turn: async (mcp) => { loaded = await loadSkill(mcp!, huge.name); return 'Done.'; } });
+    const { session } = plannerSession(claude, {}, { skillsService: skillCatalog(files) });
+    await session.startPlanning('goal', ['claude-code']);
+
+    expect(loaded?.isError).toBe(true);
+    expect(loaded?.text).toContain(`"huge" is ${SKILL_WORD_CAP + 1} words, over the ${SKILL_WORD_CAP}-word cap`);
+    const args = claude.lastArgs();
+    expect(args[args.indexOf('--append-system-prompt') + 1]).toContain(`- huge (too large to load: ${SKILL_WORD_CAP + 1} words, cap ${SKILL_WORD_CAP}):`);
+    expect(session.planState!.conversationHistory!.some((e) => e.kind === 'skill_load')).toBe(false);
   });
 
   it('refuses a load after the planner turn settled, without changing the transcript', async () => {

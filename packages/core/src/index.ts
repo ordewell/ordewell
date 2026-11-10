@@ -209,6 +209,9 @@ export type { RewindTarget, ConversationCompaction, PlannerSubmission } from './
 export {
   SkillsService,
   createSkillsService,
+  SKILL_WORD_CAP,
+  skillTooLarge,
+  skillWords,
   BUILTIN_SKILL_NAMES,
   type SkillInfo,
   type SkillMetadata,

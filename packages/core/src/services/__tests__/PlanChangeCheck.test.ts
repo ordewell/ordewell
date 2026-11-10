@@ -142,7 +142,7 @@ describe('an edit, as it commits', () => {
     const { live, check } = fakeSession(plan());
     const asked = vi.fn();
     let release = () => {};
-    const tdd = { name: 'tdd', path: '/g/tdd/SKILL.md', appliesTo: 'task', source: 'global' } as SkillInfo;
+    const tdd = { name: 'tdd', path: '/g/tdd/SKILL.md', appliesTo: 'task', source: 'global', content: 'Red, green.' } as SkillInfo;
     live.skills = {
       findSkill: (name) => (name === 'tdd' ? tdd : undefined),
       searchedDirs: () => [],
