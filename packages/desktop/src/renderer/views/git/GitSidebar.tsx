@@ -1,6 +1,7 @@
-import { Fragment, useEffect, useId, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { Fragment, useEffect, useId, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { ArrowDownToLine, Check, ChevronDown, ChevronRight, GitBranch, GitBranchPlus, History, Lock, RefreshCw, Trash2, Undo2 } from 'lucide-react';
-import { Button, EmptyState, Icon, IconButton } from '@ordewell/ui/design';
+import { Archive, ArchiveRestore, RotateCcw } from 'lucide-react';
+import { Button, Icon, IconButton } from '@ordewell/ui/design';
 import type { FrameApi, Unregister } from '../../frame/api';
 import { useDisclosure } from '../../frame/store';
 import { all } from '../Stub';
@@ -116,41 +117,91 @@ function NewBranch({ ctx, close }: { ctx: GitContext; close(): void }): JSX.Elem
   );
 }
 
-function Stashes({ ctx }: { ctx: GitContext }): JSX.Element {
+/** The stash form, opened by the archive action in the Stashes header; Esc closes it and hands focus back to that action. */
+function NewStash({ ctx, close }: { ctx: GitContext; close(): void }): JSX.Element {
   const [message, setMessage] = useState('');
-  const { stashes } = ctx.branches;
+  const [busy, setBusy] = useState(false);
+  const submit = (event: FormEvent): void => {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    void stashChanges(ctx, message).then(close);
+  };
   return (
-    <SidebarGroup title="Stashes" count={stashes.length} startOpen={stashes.length <= LONG_LIST}>
-      <form className="sform" aria-label="Stash changes" onSubmit={(event) => { event.preventDefault(); void stashChanges(ctx, message).then(() => setMessage('')); }}>
-        <input type="text" className="frame-input" aria-label="Stash message" placeholder="Message (optional)" value={message} onChange={(event) => setMessage(event.target.value)} />
-        <div className="sform-actions"><Button type="submit" size="sm">Stash changes</Button></div>
-      </form>
-      {stashes.length === 0 ? <p className="git-hint">No stashes.</p> : (
-        <ul className="git-list">
-          {stashes.map((stash) => (
-            <li key={stash.sha} className="srow">
-              <span className="srow-main srow-plain" title={`${stash.ref}: ${stash.message}`}>
-                <span className="srow-note git-stash-ref">{stash.ref}</span>
-                <MiddleText className="srow-label" text={stash.message} />
-              </span>
-              <span className="srow-actions">
-                <Button size="sm" aria-label={`Pop ${stash.ref}`} onClick={() => void popStash(ctx, stash)}>Pop</Button>
-                <IconButton icon={Trash2} label={`Drop ${stash.ref}`} onClick={() => void dropStash(ctx, stash)} />
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </SidebarGroup>
+    <form className="sform" aria-label="Stash changes" onSubmit={submit} onKeyDown={(event) => {
+      if (event.key === 'Escape') { event.preventDefault(); close(); }
+    }}>
+      <input type="text" className="frame-input" autoFocus aria-label="Stash message" placeholder="Message (optional)" value={message} onChange={(event) => setMessage(event.target.value)} />
+      <div className="sform-actions">
+        <Button type="submit" size="sm" variant="primary" disabled={busy}>Stash changes</Button>
+        <Button size="sm" onClick={close}>Cancel</Button>
+      </div>
+    </form>
   );
 }
 
-function WorktreeRow({ api, tree, runs }: { api: FrameApi; tree: WorktreeInfo; runs: Readonly<Record<string, RunInfo>> }): JSX.Element {
+function Stashes({ ctx }: { ctx: GitContext }): JSX.Element {
+  const [creating, setCreating] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const { stashes } = ctx.branches;
+  const close = (): void => { setCreating(false); trigger.current?.focus(); };
+  return (
+    <>
+      {/* Outside the group, as New branch is: a folded Stashes must still show the form its action opened. */}
+      {creating && <NewStash ctx={ctx} close={close} />}
+      <SidebarGroup
+        title="Stashes"
+        count={stashes.length}
+        startOpen={stashes.length <= LONG_LIST}
+        actions={<IconButton ref={trigger} icon={Archive} label="New stash" onClick={() => setCreating(true)} />}
+      >
+        {stashes.length === 0 ? <p className="git-hint">No stashes.</p> : (
+          <ul className="git-list">
+            {stashes.map((stash) => (
+              <li key={stash.sha} className="srow git-stash">
+                <span className="srow-main srow-plain git-stash-main" title={`${stash.ref}: ${stash.message}`}>
+                  <MiddleText className="git-stash-message" text={stash.message} />
+                  <span className="git-stash-ref">{stash.ref}</span>
+                </span>
+                {/* Always shown, not on hover: a hidden control cannot be reached by Tab. */}
+                <span className="srow-actions">
+                  <IconButton icon={ArchiveRestore} label={`Pop ${stash.ref}`} onClick={() => void popStash(ctx, stash)} />
+                  <IconButton icon={Trash2} label={`Drop ${stash.ref}`} onClick={() => void dropStash(ctx, stash)} />
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </SidebarGroup>
+    </>
+  );
+}
+
+/**
+ * Where a worktree sits, from the repository's own folder: inside it as `.ordewell/worktrees/…`, beside it as `../name`.
+ * The renderer knows no home directory, so one far from the repository is shown whole.
+ */
+function relativeTo(root: string, path: string): string {
+  const slashed = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '');
+  const base = slashed(root).split('/');
+  const target = slashed(path).split('/');
+  let shared = 0;
+  while (shared < base.length && shared < target.length && base[shared] === target[shared]) shared += 1;
+  const up = base.length - shared;
+  // Nothing in common beyond the root of the disk, or too many levels up to read at a glance.
+  if (shared < 2 || up > 2) return slashed(path);
+  const rest = target.slice(shared);
+  return [...Array<string>(up).fill('..'), ...rest].join('/') || '.';
+}
+
+/** An Ordewell worktree; the person's own checkout is the group at the top, so it is left out of this list. */
+function WorktreeRow({ api, repo, tree, runs }: { api: FrameApi; repo: string; tree: WorktreeInfo; runs: Readonly<Record<string, RunInfo>> }): JSX.Element {
+  const where = relativeTo(repoDisplay(api.workspace, repo).path, tree.path);
   return (
     <li className="srow git-worktree">
       <span className="srow-main srow-plain git-worktree-main" title={tree.path}>
-        <span className="git-worktree-name">{tree.main ? 'Your checkout' : tree.branch ?? 'detached'}</span>
-        <MiddleText className="git-worktree-path" text={tree.path} tail={pathTail(tree.path)} />
+        {tree.branch ? <MiddleText className="git-worktree-name" text={tree.branch} /> : <span className="git-worktree-name">detached</span>}
+        <MiddleText className="git-worktree-path" text={where} tail={pathTail(where)} />
       </span>
       {tree.owner && <OwnerLink api={api} runs={runs} owner={tree.owner} />}
     </li>
@@ -291,9 +342,24 @@ function syncStateOf(ctx: GitContext): SyncState {
   };
 }
 
+/** The groups' rows in their final height, so the list moves nothing when it arrives (checklist S1); still, with no spinner. */
+function BranchesSkeleton(): JSX.Element {
+  return (
+    <div className="git-skeleton" role="status" aria-label="Loading branches…" aria-busy="true">
+      {[[34, 62, 48], [40, 56]].map((widths, group) => (
+        <Fragment key={group}>
+          <div className="git-skeleton-row git-skeleton-head"><span className="git-skeleton-bar" style={{ width: '24%' }} /></div>
+          {widths.map((width, row) => <div key={row} className="git-skeleton-row"><span className="git-skeleton-bar" style={{ width: `${width}%` }} /></div>)}
+        </Fragment>
+      ))}
+    </div>
+  );
+}
+
 function Sidebar({ api }: { api: FrameApi }): JSX.Element {
   const { git, state, repo, setRepo } = useGit(api);
   const [creating, setCreating] = useState(false);
+  const newBranch = useRef<HTMLButtonElement>(null);
   const { branches } = state;
   const history = state.view === 'history';
   const multi = state.repos.length > 1;
@@ -310,6 +376,9 @@ function Sidebar({ api }: { api: FrameApi }): JSX.Element {
   const integration = branches?.ordewell.filter((b) => b.owner && !b.owner.taskId) ?? [];
   const others = branches?.ordewell.filter((b) => !(b.owner && !b.owner.taskId)) ?? [];
   const name = repoDisplay(api.workspace, repo).name;
+  // The checkout is the group at the top, so the list holds only the worktrees Ordewell made.
+  const trees = branches?.worktrees.filter((tree) => !tree.main) ?? [];
+  const treeCount = trees.length + integration.length;
 
   return (
     <div className="git-side">
@@ -322,8 +391,13 @@ function Sidebar({ api }: { api: FrameApi }): JSX.Element {
           {state.repos.map((r) => <option key={r.repo} value={r.repo}>{r.repo === '.' ? 'Workspace' : r.repo}{r.branch ? ` (${r.branch})` : ''}</option>)}
         </select>
       )}
-      {state.error && <Notice tone="error">{state.error}</Notice>}
-      {!ctx && !state.error && <EmptyState className="git-state" icon={GitBranch} title="Loading the branches…" />}
+      {state.error && (
+        <div className="git-side-error">
+          <Notice tone="error">{state.error}</Notice>
+          <Button size="sm" icon={RotateCcw} disabled={state.loading} onClick={() => void git.refresh(repo)}>Try again</Button>
+        </div>
+      )}
+      {!ctx && !state.error && <BranchesSkeleton />}
       {ctx && (
         <>
           <div className="git-current" role="group" aria-label="Your checkout">
@@ -348,12 +422,12 @@ function Sidebar({ api }: { api: FrameApi }): JSX.Element {
           ) : (
             <>
               {/* Outside the group: a folded Local must still show the form its + opened. */}
-              {creating && <NewBranch ctx={ctx} close={() => setCreating(false)} />}
+              {creating && <NewBranch ctx={ctx} close={() => { setCreating(false); newBranch.current?.focus(); }} />}
               <SidebarGroup
                 title="Local"
                 count={ctx.branches.local.length}
                 startOpen={ctx.branches.local.length <= LONG_LIST}
-                actions={<IconButton icon={GitBranchPlus} label="New branch" onClick={() => setCreating(true)} />}
+                actions={<IconButton ref={newBranch} icon={GitBranchPlus} label="New branch" onClick={() => setCreating(true)} />}
               >
                 {ctx.branches.local.length === 0 ? <p className="git-hint">This repository has no branches yet.</p> : (
                   <BranchFolders branches={ctx.branches.local} scope={`${repo}:local`} leaf={(b, label, depth) => <LocalRow key={b.name} ctx={ctx} branch={b} viewing={isViewed(b.name)} label={label} depth={depth} />} />
@@ -366,12 +440,14 @@ function Sidebar({ api }: { api: FrameApi }): JSX.Element {
                 </SidebarGroup>
               )}
 
-              <SidebarGroup title="Worktrees" count={ctx.branches.worktrees.length + integration.length} startOpen={ctx.branches.worktrees.length + integration.length <= LONG_LIST}>
-                <ul className="git-list">
-                  {ctx.branches.worktrees.map((tree) => <WorktreeRow key={tree.path} api={api} tree={tree} runs={state.runs} />)}
-                  {integration.map((b) => <OrdewellRow key={b.name} api={api} repo={repo} branch={b} runs={state.runs} viewing={isViewed(b.name)} integration />)}
-                </ul>
-              </SidebarGroup>
+              {treeCount > 0 && (
+                <SidebarGroup title="Worktrees" count={treeCount} startOpen={treeCount <= LONG_LIST}>
+                  <ul className="git-list">
+                    {trees.map((tree) => <WorktreeRow key={tree.path} api={api} repo={repo} tree={tree} runs={state.runs} />)}
+                    {integration.map((b) => <OrdewellRow key={b.name} api={api} repo={repo} branch={b} runs={state.runs} viewing={isViewed(b.name)} integration />)}
+                  </ul>
+                </SidebarGroup>
+              )}
 
               {ctx.branches.remote.length > 0 && (
                 <SidebarGroup title="Remote" count={ctx.branches.remote.length} startOpen={ctx.branches.remote.length <= LONG_LIST}>

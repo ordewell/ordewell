@@ -114,7 +114,29 @@ describe('the Git sidebar', () => {
     expect(screen.getByLabelText('2 commits ahead, 1 commit behind')).toHaveTextContent('↑2 ↓1');
     expect(screen.getByRole('button', { name: 'origin/main' })).toBeInTheDocument();
     expect(screen.getByTitle('stash@{0}: WIP on main')).toBeInTheDocument();
-    expect(screen.getByText('Your checkout')).toBeInTheDocument();
+    // The checkout is the group at the top, not a row of Worktrees.
+    expect(screen.queryByText('Your checkout')).toBeNull();
+  });
+
+  it('lists only the other worktrees, by their path from the repository, the whole path in the tooltip', async () => {
+    await mount();
+    const row = screen.getByTitle('/work/acme/.ordewell/worktrees/r7/t3');
+    expect(row).toHaveTextContent('ordewell/r7/t3');
+    expect(row).toHaveTextContent('.ordewell/worktrees/r7/t3');
+    expect(row).not.toHaveTextContent('/work/acme');
+    expect(within(row).getByTitle('ordewell/r7/t3')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: /^Worktrees/ })).toHaveTextContent('2');
+  });
+
+  it('shows a worktree beside the repository as ../name', async () => {
+    const beside = { path: '/work/other', branch: 'topic', head: sha('a'), main: false };
+    await mount({}, { ...BRANCHES, ordewell: [], worktrees: [BRANCHES.worktrees[0]!, beside] });
+    expect(screen.getByTitle('/work/other')).toHaveTextContent('../other');
+  });
+
+  it('hides Worktrees when only the checkout is left', async () => {
+    await mount({}, { ...BRANCHES, ordewell: [], worktrees: [BRANCHES.worktrees[0]!] });
+    expect(screen.queryByRole('region', { name: /^Worktrees/ })).toBeNull();
   });
 
   it('links each Ordewell worktree to its task, and the integration branch to its run', async () => {
@@ -150,6 +172,67 @@ describe('the Git sidebar', () => {
     const unhandled = fireEvent.keyDown(within(form).getByRole('textbox'), { key: 'Escape' });
     expect(unhandled).toBe(false);
     expect(screen.queryByRole('form', { name: 'New branch' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'New branch' })).toHaveFocus();
+  });
+
+  it('keeps the stash form behind its action in the header, and Esc closes it back to that action', async () => {
+    await mount();
+    expect(screen.queryByRole('form', { name: 'Stash changes' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'New stash' }));
+    const form = screen.getByRole('form', { name: 'Stash changes' });
+    expect(within(form).getByRole('textbox', { name: 'Stash message' })).toHaveFocus();
+    expect(fireEvent.keyDown(within(form).getByRole('textbox'), { key: 'Escape' })).toBe(false);
+    expect(screen.queryByRole('form', { name: 'Stash changes' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'New stash' })).toHaveFocus();
+  });
+
+  it('stashes with the message typed, after asking', async () => {
+    const daemon = await mount({ 'git.stash': ok({ repo: REPO_STATE }) });
+    fireEvent.click(screen.getByRole('button', { name: 'New stash' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Stash message' }), { target: { value: 'half done' } });
+    fireEvent.click(within(screen.getByRole('form', { name: 'Stash changes' })).getByRole('button', { name: 'Stash changes' }));
+    answer('Stash changes');
+    await waitFor(() => expect(daemon.calls('git.stash')).toHaveLength(1));
+    expect(daemon.calls('git.stash')[0]![1]).toMatchObject({ message: 'half done' });
+    await waitFor(() => expect(screen.queryByRole('form', { name: 'Stash changes' })).toBeNull());
+  });
+
+  it('keeps a stash row’s Pop and Drop in reach of the keyboard, named', async () => {
+    await mount();
+    const row = screen.getByTitle('stash@{0}: WIP on main').closest('li')!;
+    expect(row).toHaveClass('git-stash');
+    for (const name of ['Pop stash@{0}', 'Drop stash@{0}']) {
+      const button = within(row).getByRole('button', { name });
+      button.focus();
+      expect(button).toHaveFocus();
+    }
+  });
+
+  it('shows a static skeleton while the branches are first read, then the list in its place', async () => {
+    const pending = deferred();
+    await mount({ 'git.branches': () => pending.promise }, BRANCHES, 'Refresh the branches');
+    const skeleton = screen.getByRole('status', { name: 'Loading branches…' });
+    expect(skeleton).toHaveAttribute('aria-busy', 'true');
+    expect(skeleton.querySelector('svg')).toBeNull();
+    expect(screen.queryByText('Loading the branches…')).toBeNull();
+    await act(async () => { pending.settle(ok(BRANCHES)); });
+    expect(await screen.findByRole('button', { name: 'Switch to feature/login' })).toBeInTheDocument();
+    expect(screen.queryByRole('status', { name: 'Loading branches…' })).toBeNull();
+  });
+
+  it('says when the branches cannot be read and reads them again on Try again', async () => {
+    let fail = true;
+    const daemon = await mount({
+      'git.branches': () => (fail
+        ? { ok: false as const, status: 500, error: 'fatal: not a git repository', data: { code: 'git_failed' } }
+        : ok(BRANCHES)),
+    }, BRANCHES, 'Try again');
+    expect(screen.getByRole('alert')).toHaveTextContent('fatal: not a git repository');
+    fail = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('button', { name: 'Switch to feature/login' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(daemon.calls('git.branches')).toHaveLength(2);
   });
 
   it('shows the lock a live run puts on its landing branch', async () => {

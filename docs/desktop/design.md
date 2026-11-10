@@ -1048,7 +1048,11 @@ left as it was:
   - *Branches* (`GET /api/git/branches`):
     - local branches, with ahead and behind;
     - Ordewell's branches, in their own read-only group;
-    - worktrees, and the integration branch of a live run;
+    - worktrees, and the integration branch of a live run. The checkout is
+      the group at the top, so it is not listed again: a worktree row names
+      its branch, with the path from the repository under it (`.ordewell/…`,
+      or `../name` beside it; the renderer knows no home directory) and the
+      whole path in its tooltip. With none to list, the group is left out;
     - remote-tracking branches, as of the last fetch;
     - stashes.
 
@@ -1084,7 +1088,10 @@ left as it was:
     the next read no longer lists falls back to the checkout's history.
   - Create, switch and delete a branch: the + on Local, and a row's own
     Switch and Delete buttons.
-  - Pop or drop a stash, each asking first.
+  - Stash the checkout's changes: the archive action in the Stashes header
+    opens a message field, as + opens New branch on Local; Esc or Cancel
+    closes it and returns focus to the action. Pop and Drop sit on each stash
+    row, always shown so Tab reaches them, each asking first.
   - Fetch, Pull and Push, on the checkout.
   - *Git: Show history* (`git.showGraph`, kept under its old id so a binding
     to it still works) shows the Git sidebar on History with the checkout's
@@ -1120,9 +1127,13 @@ left as it was:
     checkout's.
   - A fetch that brings only tags moves no branch tip, so History keeps its
     chips until Refresh.
-- **Empty.** A repository with no commits says so in History.
-- **Error.** A `git_failed` action shows git's text in place. A history that
-  cannot be read says so, with Try again; a Load more that fails says so under
+  - The first read of the branches shows a static skeleton in the groups' own
+    28 px rows, no spinner, named "Loading branches…" to a screen reader.
+- **Empty.** A repository with no commits says so in History. No stashes
+  says so in one line under the Stashes header.
+- **Error.** A `git_failed` action shows git's text in place. Branches that
+  cannot be read say so with Try again under the notice, which reads them
+  again. A history that cannot be read says so, with Try again; a Load more that fails says so under
   the rows and keeps them.
 
 ### W12. Branch action confirm
