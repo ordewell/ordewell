@@ -4,7 +4,7 @@ import { basename, dirname, join, sep } from 'path';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CONNECTORS } from '../harness/connectors';
 import { acpOrdewellBinding } from '../harness/acpOrdewell';
-import { acpRoles } from '../harness/acpRoles';
+import { acpRoles, decideRestricted } from '../harness/acpRoles';
 import { discoverAcpModels } from '../harness/acpModels';
 import { decidePlannerPermission } from '../harness/plannerPermissions';
 import { ModelDiscovery, type AcpClientImpl, type ExecImpl } from '../ModelDiscovery';
@@ -533,6 +533,19 @@ const prompts = (agent: FakeAcpAgent) => agent.requests('session/prompt').map((r
 const at = (value: string | undefined, dir: string) => value?.replaceAll('{{PRIVATE_DIR}}/', `${dir}${sep}`).replaceAll('{{PRIVATE_DIR}}', dir);
 
 /** What the recording found once the process was gone: the worktree as it was, and the private directory, which held only the settings file, removed. */
+/**
+ * A restricted start's private directory: the recordings predate the global
+ * settings file that withholds `spawn_agent`, so they hold the MCP file alone.
+ */
+const RESTRICTED_FILES = ['cline_mcp_settings.json', 'global-settings.json'];
+
+/** The global settings a restricted start handed Cline, read from where its env names them. */
+function withheld(env: NodeJS.ProcessEnv, dir: string): unknown {
+  const path = env.CLINE_GLOBAL_SETTINGS_PATH ?? '';
+  expect(path).toBe(join(dir, 'global-settings.json'));
+  return JSON.parse(readFileSync(path, 'utf8'));
+}
+
 const UNTOUCHED = { worktree: { gitStatus: '' }, privateDir: { entries: ['cline_mcp_settings.json'], removed: true }, leftBehind: { privateDirs: [], clineProcesses: [] } };
 
 describe('cline read-only tasks, replayed from Cline 3.0.74 (ADR-0028, ADR-0046, ADR-0060)', () => {
@@ -551,7 +564,8 @@ describe('cline read-only tasks, replayed from Cline 3.0.74 (ADR-0028, ADR-0046,
     expect(dir).toBe(at(recorded?.cwd, dir));
     expect([env.TMPDIR, env.TMP, env.TEMP]).toEqual([recorded?.env?.TMPDIR, recorded?.env?.TMP, recorded?.env?.TEMP].map((v) => at(v, dir)));
     expect(env.CLINE_MCP_SETTINGS_PATH).toBe(at(recorded?.env?.CLINE_MCP_SETTINGS_PATH, dir));
-    expect(readdirSync(dir)).toEqual(['cline_mcp_settings.json']);
+    expect(readdirSync(dir)).toEqual(RESTRICTED_FILES);
+    expect(withheld(env, dir)).toEqual({ disabledTools: ['spawn_agent'] });
     expect(agent.requests('session/new').map((r) => (r.params as { cwd: string }).cwd)).toEqual([dir]);
   });
 
@@ -818,7 +832,8 @@ describe('cline as a planner, replayed from Cline 3.0.74 (ADR-0026, ADR-0060)', 
     expect(dir).toBe(at(recorded?.cwd, dir));
     expect([env.TMPDIR, env.TMP, env.TEMP]).toEqual([recorded?.env?.TMPDIR, recorded?.env?.TMP, recorded?.env?.TEMP].map((v) => at(v, dir)));
     expect(env.CLINE_MCP_SETTINGS_PATH).toBe(at(recorded?.env?.CLINE_MCP_SETTINGS_PATH, dir));
-    expect(readdirSync(dir)).toEqual(['cline_mcp_settings.json']);
+    expect(readdirSync(dir)).toEqual(RESTRICTED_FILES);
+    expect(withheld(env, dir)).toEqual({ disabledTools: ['spawn_agent'] });
     const token = mcp.headers.Authorization;
     const expected = JSON.stringify(recorded?.settings).replace('{{MCP_URL}}', mcp.url).replace('Bearer [REDACTED]', token);
     expect(agent.settingsReads.map((read) => JSON.parse(read.contents ?? ''))).toEqual([JSON.parse(expected)]);
@@ -892,6 +907,84 @@ describe('cline as a planner, replayed from Cline 3.0.74 (ADR-0026, ADR-0060)', 
     expect(note('planner', 'summary')).toMatchObject({ ...UNTOUCHED, worktree: { entries: ['.cline', '.clinerules', '.git', 'README.md'], gitStatus: '' }, hooksRan: [], completed: [] });
     expect(agent.problems).toEqual([]);
     await agent.finished;
+  });
+});
+
+describe('cline\'s own agents on a restricted start (ADR-0026)', () => {
+  it('keeps the user\'s telemetry, update and plugin choices in the settings it hands a planner, adding spawn_agent to their disabled tools and nothing else', async () => {
+    const own = join(temp, 'own-global-settings.json');
+    writeFileSync(own, JSON.stringify({
+      telemetryOptOut: true,
+      autoUpdateEnabled: false,
+      disabledPlugins: ['their-plugin'],
+      disabledAgentPlugins: ['their-agent-plugin'],
+      disabledTools: ['fetch_web_content'],
+      tools: { web_search: { enabled: 'yes' } },
+      planActMode: 'act',
+    }));
+    vi.stubEnv('CLINE_GLOBAL_SETTINGS_PATH', own);
+    const { mcp } = await plannerToken();
+    const { spawned, adapter } = cline(replay('planner'));
+    await adapter.start(plannerStart(mcp));
+
+    expect(withheld(spawned.lastEnv(), spawned.lastCwd() ?? '')).toEqual({
+      telemetryOptOut: true,
+      autoUpdateEnabled: false,
+      disabledPlugins: ['their-plugin'],
+      disabledAgentPlugins: ['their-agent-plugin'],
+      disabledTools: ['fetch_web_content', 'spawn_agent'],
+    });
+  });
+
+  it.each([
+    ['CLINE_DATA_DIR', (dir: string) => join(dir, 'settings', 'global-settings.json')],
+    ['CLINE_DIR', (dir: string) => join(dir, 'data', 'settings', 'global-settings.json')],
+  ] as const)('reads the user\'s own disabled tools where %s puts them', async (name, settingsAt) => {
+    const dir = join(temp, 'own');
+    mkdirSync(dirname(settingsAt(dir)), { recursive: true });
+    writeFileSync(settingsAt(dir), JSON.stringify({ disabledTools: ['fetch_web_content'] }));
+    vi.stubEnv(name, dir);
+    const { mcp } = await plannerToken();
+    const { spawned, adapter } = cline(replay('planner'));
+    await adapter.start(plannerStart(mcp));
+
+    expect(withheld(spawned.lastEnv(), spawned.lastCwd() ?? '')).toEqual({ disabledTools: ['fetch_web_content', 'spawn_agent'] });
+  });
+
+  it('withholds spawn_agent alone when the user\'s own settings are not an object', async () => {
+    const own = join(temp, 'own-global-settings.json');
+    writeFileSync(own, JSON.stringify(['spawn_agent']));
+    vi.stubEnv('CLINE_GLOBAL_SETTINGS_PATH', own);
+    const { mcp } = await plannerToken();
+    const { spawned, adapter } = cline(replay('planner'));
+    await adapter.start(plannerStart(mcp));
+
+    expect(withheld(spawned.lastEnv(), spawned.lastCwd() ?? '')).toEqual({ disabledTools: ['spawn_agent'] });
+  });
+
+  it('hands a writable task no settings of its own: its agents are the plan\'s to allow', async () => {
+    const { mcp } = await taskToken();
+    const { spawned, adapter } = cline(replay('ordewell-tool'));
+    await adapter.start(taskStart(mcp));
+
+    expect(spawned.lastEnv().CLINE_GLOBAL_SETTINGS_PATH).toBeUndefined();
+  });
+
+  it.each([
+    ['spawn_agent', 'think', 'spawn_agent: Review the parser for missed edge cases'],
+    ['a configured subagent', 'other', 'subagent_reviewer: Look over the diff'],
+    ['a subagent with no summary', 'other', 'subagent_reviewer'],
+  ])('refuses %s by the tool its title names, whatever kind Cline gives it, on a planner and a read-only start', (_label, kind, title) => {
+    const request: AcpToolCall = { toolCallId: 'call-1', title, kind };
+    for (const start of [{ kind: 'planner' as const }, { kind: 'task' as const, cwd: CWD, workspaceRoot: CWD }]) {
+      expect(decideRestricted({ request }, { kind: 'other' }, start, CLINE_PROFILE)).toEqual({ decision: 'deny', note: expect.stringContaining('No other agent may be started here') });
+    }
+  });
+
+  it('does not take a tool whose name only mentions an agent for one that starts one', () => {
+    const request: AcpToolCall = { toolCallId: 'call-1', title: 'ordewell__spawn_agent_notes: x', kind: 'other' };
+    expect(CLINE_PROFILE.delegation?.toolOf({ request })).toBe('ordewell__spawn_agent_notes');
+    expect(decideRestricted({ request }, { kind: 'other' }, { kind: 'planner' }, CLINE_PROFILE)).toBeUndefined();
   });
 });
 

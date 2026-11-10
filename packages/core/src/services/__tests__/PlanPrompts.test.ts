@@ -346,14 +346,19 @@ describe('research tasks (ADR-0037)', () => {
 });
 
 describe('who explores: three tiers, search (ADR-0037 R5)', () => {
+  const ACP_PLANNERS = ['copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent'] as const;
+  const noAgents = /- A research task, past that: .*You have no agents of your own here: research tasks are how you delegate\./;
   const awaited = (agents: string) => new RegExp(`Use ${agents} and wait for its results inside this reply, never in the background: once your turn ends, nothing you say reaches the user\\.`);
   const backends = [
     { name: 'an API planner', harness: false, runner: undefined, inTurn: /- An agent, awaited, past that: .*Use spawn_research_agent, whose agents return within your tool round\./ },
     { name: 'Claude Code', harness: true, runner: 'claude-code', inTurn: awaited('your Agent tool') },
     { name: 'Codex', harness: true, runner: 'codex', inTurn: awaited('your own subagents, if this session has them,?') },
-    { name: 'OpenCode', harness: true, runner: 'opencode', inTurn: /- A research task, past that: .*You have no agents of your own here: research tasks are how you delegate\./ },
+    { name: 'OpenCode', harness: true, runner: 'opencode', inTurn: noAgents },
+    // ADR-0026: no ACP planner's own subagents are confirmed inside the envelope, so each is withheld and it delegates to research tasks.
+    ...ACP_PLANNERS.map((runner) => ({ name: runner, harness: true, runner, inTurn: noAgents })),
     { name: 'an unnamed harness', harness: true, runner: undefined, inTurn: awaited('your own agents, if you have any,?') },
   ] as const;
+  const hasNoAgents = (runner: RunnerId | undefined) => runner === 'opencode' || (ACP_PLANNERS as readonly (string | undefined)[]).includes(runner);
   const prompt = (harness: boolean, runner?: RunnerId) => buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness, runner });
   const section = (p: string, header: string) => {
     const at = p.indexOf(`\n${header}\n`);
@@ -398,7 +403,7 @@ describe('who explores: three tiers, search (ADR-0037 R5)', () => {
 
   it.each(backends)('asks for a digest, one agent per independent question, only where there are agents to brief, for $name', ({ harness, runner }) => {
     const rule = section(prompt(harness, runner), 'WHO EXPLORES:');
-    if (runner === 'opencode') {
+    if (hasNoAgents(runner)) {
       expect(rule).not.toMatch(/digest|An agent, awaited/);
       return;
     }

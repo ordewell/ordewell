@@ -135,7 +135,8 @@ const availableCommandSchema = obj({
 
 const usageCostSchema = obj({ amount: z.number().optional(), currency: z.string().optional() });
 
-const chunk = obj({ content: contentBlockSchema, messageId: z.string().nullish() });
+/** `_meta` as for a tool call: a subagent's chunk names the call that started it there. */
+const chunk = obj({ content: contentBlockSchema, messageId: z.string().nullish(), _meta: meta });
 
 const updateSchemas = {
   agent_message_chunk: chunk,

@@ -5,6 +5,7 @@ import { CONNECTORS } from '../harness/connectors';
 import { acpOrdewellBinding } from '../harness/acpOrdewell';
 import { QWEN_CODE_PROFILE } from '../harness/qwenProfile';
 import { decidePlannerPermission } from '../harness/plannerPermissions';
+import { decideRestricted } from '../harness/acpRoles';
 import type { AcpToolCall } from '../harness/acpSchema';
 import type { AgentEvent, AgentProcessDeps, PlannerStartOptions, TaskModeAgentAdapter, TaskStartOptions } from '../harness/AgentAdapter';
 import { QWEN_CODE_MANIFEST } from '../../plugins/builtin/qwen.manifest';
@@ -46,6 +47,18 @@ function note(name: string, event: string): Extract<Recorded, { dir: 'note' }> |
 
 /** The arguments Qwen was recorded running under. */
 const recordedArgs = (name: string): string[] => note(name, 'spawn')?.args ?? [];
+
+/**
+ * Qwen's tools that start or steer another agent, withheld from a restricted
+ * start by a flag the recordings predate, so it is put after the approval mode
+ * as the adapter puts it (ADR-0026).
+ */
+const WITHHELD = ['--exclude-tools', 'agent,create_sub_session,list_agents,send_message,team_create,team_delete,team_plan_approval,request_shutdown,workflow'];
+function restrictedArgs(name: string): string[] {
+  const args = recordedArgs(name);
+  const at = args.indexOf('--approval-mode') + 2;
+  return [...args.slice(0, at), ...WITHHELD, ...args.slice(at)];
+}
 
 /** What Ordewell sent Qwen to set, as the recording shows it, in order. */
 function settingsOf(params: unknown): { configId: string; value: string } {
@@ -438,7 +451,7 @@ describe('qwen-code roles, replayed from Qwen Code 0.26.6 (ADR-0026, ADR-0028, A
 
     const dir = spawned.lastCwd() ?? '';
     expect(dir.startsWith(CWD)).toBe(false);
-    expect(spawned.lastArgs()).toEqual(recordedArgs(name));
+    expect(spawned.lastArgs()).toEqual(restrictedArgs(name));
     const { hooksRan, ...launch } = launchedAs(name, dir);
     expect({ cwd: dir, tmpdir: spawned.lastEnv().TMPDIR, startDirAtSpawn: readdirSync(dir) }).toEqual(launch);
     expect((agent.requests('session/new')[0].params as { cwd: string }).cwd).toBe(dir);
@@ -446,6 +459,18 @@ describe('qwen-code roles, replayed from Qwen Code 0.26.6 (ADR-0026, ADR-0028, A
     expect(hooksRan).toEqual([]);
     expect(agent.requests('session/set_config_option').map((r) => settingsOf(r.params))).toEqual(recordedSettings(name));
     expect(agent.problems).toEqual([]);
+  });
+
+  it('refuses a call of its agent tools by the name Qwen gives it in _meta, whatever kind it says, on a planner and a read-only start (ADR-0026)', async () => {
+    const { mcp } = await readOnlyToken();
+    const call = (toolName: string, kind: string): AcpToolCall => ({ toolCallId: 'c-1', title: '{"subagent_type":"Explore"}', kind, _meta: { toolName } });
+    for (const start of [{ kind: 'planner' } as const, readOnlyStart(mcp)]) {
+      for (const tool of WITHHELD[1].split(',')) {
+        expect(decideRestricted({ request: call(tool, 'think') }, { kind: 'other' }, start, QWEN_CODE_PROFILE)).toEqual({ decision: 'deny', note: expect.stringContaining('No other agent may be started here') });
+      }
+      expect(decideRestricted({ request: call('advisor', 'think') }, { kind: 'other' }, start, QWEN_CODE_PROFILE)).toEqual({ decision: 'allow' });
+      expect(decideRestricted({ request: { toolCallId: 'c-2', title: 'Thinking', kind: 'think' } }, { kind: 'other' }, start, QWEN_CODE_PROFILE)).toEqual({ decision: 'allow' });
+    }
   });
 
   it('plans with Ordewell\'s planner tools alone, each allowed by its name in _meta: it lists, submits a plan and starts it, leaving nothing behind', async () => {

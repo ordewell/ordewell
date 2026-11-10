@@ -8,6 +8,7 @@ import { discoverAcpModels } from '../harness/acpModels';
 import { GEMINI_CLI_PROFILE } from '../harness/geminiProfile';
 import { ORDEWELL_TOOL_NAMES } from '../harness/ordewellBinding';
 import { decidePlannerPermission } from '../harness/plannerPermissions';
+import { decideRestricted } from '../harness/acpRoles';
 import type { AcpToolCall } from '../harness/acpSchema';
 import type { AgentEvent, AgentProcessDeps, PlannerStartOptions, TaskModeAgentAdapter, TaskStartOptions } from '../harness/AgentAdapter';
 import { VENDORS } from '../apiProviders';
@@ -597,6 +598,7 @@ describe('gemini-cli roles, replayed from Gemini CLI 0.66.0 (ADR-0026, ADR-0028,
       ['run_shell_command', '.'],
       [['web_fetch', 'google_web_search'], '.'],
       [['enter_plan_mode', 'exit_plan_mode'], undefined],
+      [['invoke_agent', 'codebase_investigator', 'cli_help', 'generalist', 'browser_agent'], undefined],
     ]);
 
     const asking = rules.filter((rule) => rule.decision === 'ask_user');
@@ -612,6 +614,35 @@ describe('gemini-cli roles, replayed from Gemini CLI 0.66.0 (ADR-0026, ADR-0028,
     expect(rules.filter((rule) => rule.mcpName !== undefined)).toEqual([
       expect.objectContaining({ toolName: '*', mcpName: '*', decision: 'deny', priority: 998 }),
     ]);
+  });
+
+  it('withholds Gemini\'s subagents from a restricted start by name, so the model is never shown them (ADR-0026)', () => {
+    const rules = policyRules(GEMINI_CLI_PROFILE.restricted?.files?.[0].render('/private') ?? '');
+    const agents = rules.find((rule) => Array.isArray(rule.toolName) && rule.toolName.includes('invoke_agent'));
+    // No `argsPattern`: Gemini then takes the tool out of what the model is shown, rather than refusing each call.
+    expect(agents).toEqual({
+      toolName: ['invoke_agent', 'codebase_investigator', 'cli_help', 'generalist', 'browser_agent'],
+      decision: 'deny',
+      priority: 999,
+      denyMessage: expect.stringContaining('No other agent may be started here'),
+    });
+  });
+
+  it.each([
+    ['invoke_agent__call_7', 'think'],
+    ['codebase_investigator__call_2', 'think'],
+    ['generalist__call_3', 'other'],
+  ] as const)('refuses %s by the name its call id carries, whatever its kind, on a planner and a read-only start', (toolCallId, kind) => {
+    const request: AcpToolCall = { toolCallId, title: 'Delegating to agent \'generalist\'', kind };
+    for (const start of [{ kind: 'planner' as const }, { kind: 'task' as const, cwd: CWD, workspaceRoot: CWD }]) {
+      expect(decideRestricted({ request }, { kind: 'other' }, start, GEMINI_CLI_PROFILE)).toEqual({ decision: 'deny', note: expect.stringContaining('No other agent may be started here') });
+    }
+  });
+
+  it('does not take an Ordewell tool whose name ends like a subagent\'s for one', () => {
+    const request: AcpToolCall = { toolCallId: 'mcp_ordewell_invoke_agent__call_1', title: 'x', kind: 'other' };
+    expect(GEMINI_CLI_PROFILE.delegation?.toolOf({ request })).toBe('mcp_ordewell_invoke_agent');
+    expect(decideRestricted({ request }, { kind: 'other' }, { kind: 'planner' }, GEMINI_CLI_PROFILE)).toBeUndefined();
   });
 
   it.each(ROLE_RECORDINGS)('starts a %s session as it was recorded: under the policy, in a directory of its own holding only it, where none of the workspace\'s hooks ran', async (name) => {
