@@ -5,7 +5,7 @@ import {
   accountLimitsOf, assignedRunnerOf, EMPTY_TASK_LOG_FOLLOW, followTaskLog, lastServedModel, taskActionCommand,
   taskLogHeaderView, type TaskLogFollow,
 } from '@ordewell/core/plan-utils';
-import { diffConversation, type HostToTaskLog, type TaskLogStatus, type TaskLogToHost } from '@ordewell/ui/protocol';
+import { diffConversation, type HostToTaskLog, type TaskLogRefund, type TaskLogStatus, type TaskLogToHost } from '@ordewell/ui/protocol';
 import type { TaskLogBridge } from '@ordewell/ui';
 import { callDaemon, messageOf } from './daemon';
 
@@ -113,10 +113,10 @@ export class TaskLogHost implements TaskLogBridge {
         this.control(callDaemon('plans.taskCommands', { sessionId: this.port.sessionId, taskId: this.taskId }, { name: msg.name, args: msg.args }));
         return;
       case 'sendTaskMessage':
-        this.control(this.command({ command: 'message_task', task: this.taskId, text: msg.text }), msg.text);
+        this.control(this.command({ command: 'message_task', task: this.taskId, text: msg.text }), { draft: msg.text });
         return;
       case 'removeQueuedTaskMessage':
-        this.control(this.command({ command: 'remove_queued', task: this.taskId, id: msg.id }));
+        this.control(this.command({ command: 'remove_queued', task: this.taskId, id: msg.id }), { takeBack: msg.id });
         return;
       case 'sendTaskMessageNow':
         this.control(this.command({ command: 'message_task', task: this.taskId, text: msg.text, force: true }));
@@ -273,12 +273,11 @@ export class TaskLogHost implements TaskLogBridge {
     return callDaemon('plans.executeCommand', { sessionId: this.port.sessionId }, command);
   }
 
-  /** `draft` is what the box gave up to send: a refusal hands it back, as only the host knows it was refused. */
-  private control(run: Promise<unknown>, draft?: string): void {
-    run.catch((error: unknown) => this.showError(error, draft));
+  private control(run: Promise<unknown>, refund: TaskLogRefund = {}): void {
+    run.catch((error: unknown) => this.showError(error, refund));
   }
 
-  private showError(error: unknown, draft?: string): void {
-    this.emit({ type: 'showError', error: messageOf(error), ...(draft ? { draft } : {}) });
+  private showError(error: unknown, { draft, takeBack }: TaskLogRefund = {}): void {
+    this.emit({ type: 'showError', error: messageOf(error), ...(draft ? { draft } : {}), ...(takeBack ? { takeBack } : {}) });
   }
 }

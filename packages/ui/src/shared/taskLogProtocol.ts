@@ -69,7 +69,15 @@ export type HostToTaskLog =
    * the header.
    */
   | { type: 'accountLimits'; limits: readonly AccountLimitSnapshot[] }
-  | { type: 'showError'; error: string; draft?: string };
+  /**
+   * A refused control. `draft` is what the box gave up to send, handed back;
+   * `takeBack` names the queued message whose take-back the runner beat, so
+   * what Esc put in the box for it comes out again (ADR-0018 V1).
+   */
+  | { type: 'showError'; error: string; draft?: string; takeBack?: string };
+
+/** What a refused control hands back to the box, which only the host knows was refused. */
+export type TaskLogRefund = Pick<Extract<HostToTaskLog, { type: 'showError' }>, 'draft' | 'takeBack'>;
 
 export type TaskLogToHost =
   | { type: 'ready' }

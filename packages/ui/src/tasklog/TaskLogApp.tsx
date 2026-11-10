@@ -85,7 +85,7 @@ export default function TaskLogApp({ composerLabel }: {
   const canSend = text.trim().length > 0;
   // Esc takes back one message at a time, and the row only goes when the status
   // says so: an id waiting on that is skipped by the next Esc. The value is the
-  // text put in the composer for it, kept to undo the fill if it was handed over.
+  // text put in the composer for it, kept to undo the fill if the runner had it first.
   const takingBack = useRef(new Map<string, string | null>());
   const [, redraw] = useReducer((n: number) => n + 1, 0);
   const composer = useRef(text);
@@ -124,6 +124,11 @@ export default function TaskLogApp({ composerLabel }: {
         case 'showError':
           setError(msg.error);
           if (msg.draft) { const draft = msg.draft; setText((current) => current.trim() ? current : draft); }
+          if (msg.takeBack) {
+            const filled = takingBack.current.get(msg.takeBack);
+            takingBack.current.delete(msg.takeBack);
+            if (filled) setText((current) => current === filled ? '' : current);
+          }
           break;
       }
     };
@@ -199,12 +204,14 @@ export default function TaskLogApp({ composerLabel }: {
 
   // A message that was handed over before the removal landed stays queued, so
   // what Esc put in the box for it is taken out again, unless it was edited.
+  // One that left the queue was taken back or delivered, which the queue does
+  // not tell apart: its entry waits for the host's refusal, if one comes.
   useEffect(() => {
     for (const [id, filled] of [...takingBack.current]) {
       const listed = status?.queued.find((m) => m.id === id);
-      if (listed && !listed.handedOver && !listed.forced) continue;
+      if (!listed || (!listed.handedOver && !listed.forced)) continue;
       takingBack.current.delete(id);
-      if (listed && filled !== null) setText((current) => current === filled ? '' : current);
+      if (filled !== null) setText((current) => current === filled ? '' : current);
     }
   }, [status?.queued]);
 

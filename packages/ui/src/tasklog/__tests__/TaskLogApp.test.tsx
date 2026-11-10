@@ -777,6 +777,34 @@ describe('the task log tab (ADR-0018, V1)', () => {
       expect(boxOf().value).toBe('second, but better');
     });
 
+    it('undoes the fill when the runner read the message before the removal landed, and keeps one that was taken back', () => {
+      render(<TaskLogApp />);
+      init({ working: true, queued: two });
+      esc(boxOf());
+      expect(boxOf().value).toBe('second');
+      // Delivered: the queue alone reads as a removal, so the fill waits for the host's answer.
+      send({ type: 'status', status: status({ working: true, queued: [two[0]!] }) });
+      expect(boxOf().value).toBe('second');
+      send({ type: 'showError', error: 'That message to the task was already delivered or taken back.', takeBack: 'q2' });
+      expect(boxOf().value).toBe('');
+      expect(screen.getByText(/already delivered/)).toBeTruthy();
+
+      esc(boxOf());
+      expect(boxOf().value).toBe('first');
+      send({ type: 'status', status: status({ working: true, queued: [] }) });
+      expect(boxOf().value).toBe('first');
+    });
+
+    it('keeps what was typed over the fill when a take-back the runner beat is refused', () => {
+      render(<TaskLogApp />);
+      init({ working: true, queued: two });
+      esc(boxOf());
+      act(() => { fireEvent.change(boxOf(), { target: { value: 'second, but better' } }); });
+      send({ type: 'status', status: status({ working: true, queued: [two[0]!] }) });
+      send({ type: 'showError', error: 'already delivered', takeBack: 'q2' });
+      expect(boxOf().value).toBe('second, but better');
+    });
+
     it('marks the newest removable row with the key that takes it back', () => {
       render(<TaskLogApp />);
       init({ working: true, queued: two });
