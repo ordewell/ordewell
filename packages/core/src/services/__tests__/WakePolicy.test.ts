@@ -6,7 +6,7 @@ import type { StartWait } from '../readiness';
 const DEBOUNCE = 1000;
 
 /** The plan has nothing left to wait for: what is held goes at the window, as all of it once did. */
-const DUE: WakeFacts = { nothingCanStart: true, cohortDone: new Set(), blocksWork: new Set(), requestAt: null };
+const DUE: WakeFacts = { nothingCanStart: true, cohortDone: new Set(), blocksWork: new Set(), blocksAny: new Set(), acting: false, requestAt: null };
 const QUIET: WakeFacts = { ...DUE, nothingCanStart: false };
 
 function event(kind: RunEvent['kind'], at: number, taskId?: string): RunEvent {
@@ -314,6 +314,25 @@ describe('wakeDue (ADR-0057 R4)', () => {
     expect(wakeDue([event('task_idle', 0, 't1')], facts({ blocksWork: new Set(['t1']), ttlMs: TTL }), DEBOUNCE)?.reason).toBe('max_age');
   });
 
+  it('at Act, wakes a failure anything depends on after its own merge window, as if nothing held it', () => {
+    const act = facts({ acting: true, blocksAny: new Set(['t1']), ttlMs: TTL });
+    expect(wakeDue([event('task_idle', 0, 't2'), event('task_failed', 500, 't1')], act, DEBOUNCE)).toEqual({ at: 500 + DEBOUNCE, reason: 'failure_has_dependents' });
+  });
+
+  it('at Act, still wakes sooner when the plan already calls for it', () => {
+    const act = facts({ acting: true, blocksAny: new Set(['t1']), nothingCanStart: true, ttlMs: TTL });
+    expect(wakeDue([event('task_idle', 0, 't2'), event('task_failed', 500, 't1')], act, DEBOUNCE)).toEqual({ at: DEBOUNCE, reason: 'nothing_can_start' });
+  });
+
+  it('holds, even at Act, a failure nothing depends on, and silence', () => {
+    expect(wakeDue([event('task_failed', 0, 't1')], facts({ acting: true, blocksAny: new Set(['t9']), ttlMs: TTL }), DEBOUNCE)?.reason).toBe('max_age');
+    expect(wakeDue([event('task_idle', 0, 't1')], facts({ acting: true, blocksAny: new Set(['t1']), ttlMs: TTL }), DEBOUNCE)?.reason).toBe('max_age');
+  });
+
+  it('holds at Watch a failure something depends on, until it blocks work that would be ready', () => {
+    expect(wakeDue([event('task_failed', 0, 't1')], facts({ acting: false, blocksAny: new Set(['t1']), ttlMs: TTL }), DEBOUNCE)?.reason).toBe('max_age');
+  });
+
   it('is due for nothing while nothing is held', () => {
     expect(wakeDue([], none, DEBOUNCE)).toBeNull();
   });
@@ -336,6 +355,7 @@ describe('what the plan says for a wake (ADR-0057 R4)', () => {
 
     const facts = planWakeFacts(plan, waits, true);
     expect(facts.blocksWork).toEqual(new Set(['a']));
+    expect(facts.blocksAny).toEqual(new Set(['a']));
     expect(facts.nothingCanStart).toBe(true);
     expect(facts.cohortDone.has('a')).toBe(true);
   });
@@ -350,6 +370,7 @@ describe('what the plan says for a wake (ADR-0057 R4)', () => {
 
     const facts = planWakeFacts(plan, waits, true);
     expect(facts.blocksWork).toEqual(new Set());
+    expect(facts.blocksAny).toEqual(new Set(['a']));
     expect(facts.nothingCanStart).toBe(false);
     expect(facts.cohortDone.has('a')).toBe(false);
   });
@@ -360,6 +381,10 @@ describe('what the plan says for a wake (ADR-0057 R4)', () => {
 
     expect(planWakeFacts(plan(running('b', { dependencies: ['root'] })), waits, true).cohortDone.has('a')).toBe(false);
     expect(planWakeFacts(plan(done('b', { dependencies: ['root'] })), waits, true).cohortDone.has('a')).toBe(true);
+  });
+
+  it('a failed task nothing depends on blocks nothing', () => {
+    expect(planWakeFacts([failed('a'), running('b')], new Map([['a', [STARTED]], ['b', [STARTED]]]), true).blocksAny).toEqual(new Set());
   });
 
   it('a sibling waiting to start holds its cohort open while a scheduler would start it, and not after', () => {
