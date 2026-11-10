@@ -1081,7 +1081,8 @@ left as it was:
       or `../name` beside it; the renderer knows no home directory) and the
       whole path in its tooltip. With none to list, the group is left out;
     - remote-tracking branches, as of the last fetch;
-    - stashes.
+    - stashes, each named by its message without git's `On <branch>:` or
+      `WIP on <branch>:` lead, which the tooltip keeps whole.
 
     A lock marks a live run's landing branch, naming the run. A branch name
     with slashes is folded under its prefixes (`feature/` holds `sso` and

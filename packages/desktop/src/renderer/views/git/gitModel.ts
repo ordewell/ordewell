@@ -29,6 +29,14 @@ export function shortSha(sha: string): string {
   return sha.slice(0, 7);
 }
 
+/**
+ * A stash's row label: its message without the "On main: " or "WIP on main: " git puts first, which would take the row's
+ * width from the words the person wrote. The row's tooltip keeps git's message whole.
+ */
+export function stashLabel(message: string): string {
+  return message.replace(/^(?:WIP on|On) [^:]+: /, '') || message;
+}
+
 export function plural(count: number, one: string, many = `${one}s`): string {
   return `${count} ${count === 1 ? one : many}`;
 }
