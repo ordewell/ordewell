@@ -40,15 +40,26 @@ export const SEND_NOW_KEY = { glyph: MAC ? '⌘⏎' : 'Ctrl+Enter', name: MAC ? 
 export const isSendNowKey = (e: React.KeyboardEvent): boolean =>
   e.key === 'Enter' && !e.shiftKey && (e.ctrlKey || e.metaKey);
 
-/** The Send button's tooltip while Enter queues: it names the other key too. */
+/**
+ * The Send button's tooltip while Enter queues: it names the other key too,
+ * Ctrl+Enter, or Cmd+Enter on macOS, which sends what is queued with it.
+ */
 export const QUEUE_TITLE = `Queue (Enter) · Send now (${SEND_NOW_KEY.name})`;
 
 /**
- * The composer's key hint while a turn runs and something is typed: Enter
- * queues it, the chord interrupts the turn and sends it next. It stands in for
- * a second button.
+ * The composer's key hint while a turn runs: Enter queues what is typed, the
+ * chord interrupts the turn and sends everything queued with the typed text
+ * last. It stands in for a second button. `held` is the empty composer's form,
+ * where Enter has nothing to queue and only the chord applies.
  */
-export function SendKeyHint() {
+export function SendKeyHint({ held = false }: { held?: boolean }) {
+  if (held) {
+    return (
+      <div className="send-key-hint">
+        <kbd>{SEND_NOW_KEY.glyph}</kbd> send queued now
+      </div>
+    );
+  }
   return (
     <div className="send-key-hint">
       <kbd>{ENTER_KEY}</kbd> queue · <kbd>{SEND_NOW_KEY.glyph}</kbd> send now
@@ -61,17 +72,22 @@ export function SendKeyHint() {
  * compact stack above the composer in the user bubble's shape. Each shows
  * where it stands; its actions surface on hover or focus. The send-now chord
  * works on whichever one holds focus, as it does in the composer.
+ *
+ * `onSendAllNow` is a send now for the stack as a whole, for a surface whose
+ * queue goes as one message: one control after the last row, and the chord on
+ * any row that has no send now of its own.
  */
-export default function PendingMessages({ messages }: { messages: readonly PendingMessage[] }) {
+export default function PendingMessages({ messages, onSendAllNow }: { messages: readonly PendingMessage[]; onSendAllNow?: () => void }) {
   if (messages.length === 0) return null;
   return (
     <ul className="pending-messages" aria-label="Pending messages">
       {messages.map((m) => (
         <li key={m.key} className={`pending-message ${m.state}`}
           onKeyDown={(e) => {
-            if (!isSendNowKey(e) || !m.onSendNow) return;
+            const send = m.onSendNow ?? onSendAllNow;
+            if (!isSendNowKey(e) || !send) return;
             e.preventDefault();
-            m.onSendNow();
+            send();
           }}>
           <div className="pending-message-text" title={m.text}>{m.text}</div>
           <div className="pending-message-meta">
@@ -94,6 +110,14 @@ export default function PendingMessages({ messages }: { messages: readonly Pendi
           </div>
         </li>
       ))}
+      {onSendAllNow && (
+        <li className="pending-messages-actions">
+          <button type="button" className="pending-messages-now" onClick={onSendAllNow}
+            title={`Interrupt the running turn and send ${messages.length === 1 ? 'this' : 'these'} now, as one message (${SEND_NOW_KEY.name})`}>
+            Send {messages.length === 1 ? 'now' : 'all now'} <kbd aria-hidden="true">{SEND_NOW_KEY.glyph}</kbd>
+          </button>
+        </li>
+      )}
     </ul>
   );
 }
