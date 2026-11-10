@@ -803,7 +803,9 @@ describe('planner rules for change and ops tasks (ADR-0020)', () => {
       expect(p).toContain('is the task\'s result a change to files in the repository?');
       expect(p).toContain('"ops": true');
       expect(p).toMatch(/bump the version and redeploy/);
-      expect(p).toMatch(/a push and a reword of the same branch\) must not run in parallel — make one depend on the other/);
+      expect(p).toMatch(/\(a push and a reword\)/);
+      expect(p).toMatch(/Two ops tasks that collide must not run in parallel — make one depend on the other/);
+      expect(p).toMatch(/builds, installs or file writes in the checkout/);
     }
   });
 
