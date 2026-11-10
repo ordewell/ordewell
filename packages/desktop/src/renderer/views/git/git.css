@@ -156,9 +156,13 @@
 .git-hrow-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
 .git-hrow-subject { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .git-hrow-meta { display: flex; align-items: center; gap: var(--ow-space-1); min-width: 0; color: var(--ow-fg-secondary); font: var(--ow-type-code-small); }
-.git-hrow-refs { display: inline-flex; gap: var(--ow-space-half); flex: 0 1 auto; min-width: 0; max-width: 60%; overflow: hidden; }
-/* One chip, at least 64 px of its name or all of it (design.md O7); the +N beside it never shrinks. */
-.git-hrow-refs .git-chip { min-width: min(64px, calc(var(--chars, 8) * 1ch + 10px)); }
+/*
+ * The chip and its +N are the line's own items, so the chip's floor holds against the age and author: a box around them
+ * shrank to its text-wide minimum or, clipped, cut the chip at its border and the +N to a +.
+ */
+.git-hrow-refs { display: contents; }
+/* One chip, at least 64 px of its name or all of it (design.md O7), and at most 60% of the line; the +N beside it never shrinks. */
+.git-hrow-refs .git-chip { max-width: 60%; min-width: min(64px, calc(var(--chars, 8) * 1ch + 10px)); }
 .git-hrow-refs .git-chip-more { flex: none; min-width: 0; color: var(--ow-fg-secondary); }
 .git-chip-mark { flex: none; margin-inline-start: var(--ow-space-half); vertical-align: -1px; }
 .git-hrow-info { flex: 1 1 auto; min-width: 4ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
