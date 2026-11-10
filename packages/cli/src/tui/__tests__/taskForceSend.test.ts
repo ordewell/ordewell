@@ -156,7 +156,7 @@ describe('what the task view shows for force send', () => {
 
   it('lists ctrl-s and Esc in the help sheet, each task-view line whole', () => {
     const sheet = helpLayout(200, 160).lines.map((l) => l.replace(/\x1b\[[0-9;]*m/g, '')); // eslint-disable-line no-control-regex
-    expect(sheet).toContain('  ctrl-s sends now: interrupts the running step, then delivers every queued message and the composer text at once, in the order typed');
+    expect(sheet).toContain('  ctrl-s sends all now: interrupts the running step, then delivers every queued message and the composer text at once, in the order typed');
     expect(sheet).toContain('  esc takes back the newest queued message, into the composer when it is empty, then clears the draft, then returns');
     expect(sheet.some((l) => l.includes('ctrl-r removes the picked one'))).toBe(true);
     expect(sheet.some((l) => l.includes('ctrl-x stops the runner\'s running turn, and it then waits for your next message'))).toBe(true);

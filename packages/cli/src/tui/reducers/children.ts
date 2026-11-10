@@ -271,7 +271,7 @@ function sendToChild(state: TuiState, text: string): Step {
 export function sendAllToChild(state: TuiState): Step {
   const typed = state.editor.text.trim();
   const held = unsendAll(state.queuedPrompts);
-  const text = held ? (typed ? `${held.text}\n${typed}` : held.text) : typed;
+  const text = held ? aheadOfDraft(held.text, typed) : typed;
   if (!text) return step(state);
   return sendToChild({ ...state, editor: typed ? commit(state.editor) : state.editor, queuedPrompts: EMPTY_HOLD }, text);
 }

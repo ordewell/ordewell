@@ -192,6 +192,14 @@ describe('words held while the subplanner answers', () => {
     expect(ended.state.queuedPrompts).toEqual([]);
   });
 
+  it('the turn\'s end sends two held messages as one, glued in the order typed', () => {
+    const ended = reduce(held(answering(), 'first', 'second'), turn('planner_turn_ended'));
+
+    expect(ended.effects).toEqual([{ type: 'messageChild', rootId: 'root', childId: 'c1', text: 'first\nsecond' }]);
+    expect(ended.state.queuedPrompts).toEqual([]);
+    expect(said(ended.state)).toContain('first\nsecond');
+  });
+
   it('esc takes back the newest held message, then the draft, then goes back up', () => {
     const two = held(answering(), 'first', 'second');
 

@@ -2,7 +2,10 @@
  * Prompts the user sent while a planner turn was in flight, waiting to be the
  * next turn's input. The hold is a plain immutable list, oldest first, so a
  * pure reducer can keep it in state and a host can keep it in a field — and
- * either can draw it as is.
+ * either can draw it as is. Every surface follows one rule (ADR-0017 Q1-Q3):
+ * the turn's end and Send now send everything held as one message, glued in the
+ * order typed (Send now with the composer's text last), and Esc takes back only
+ * the newest.
  */
 export type PromptHold = readonly string[];
 
@@ -18,15 +21,10 @@ export function holdPrompt(hold: PromptHold, text: string): PromptHold {
   return [...hold, text];
 }
 
-/** The prompt a settled turn sends next: the oldest, so they go in the order typed. */
-export function drainNext(hold: PromptHold): TakenPrompt | undefined {
-  const [text, ...rest] = hold;
-  return text === undefined ? undefined : { text, rest };
-}
-
 /**
  * Takes back the newest prompt — the one the user most likely just regretted —
- * while the older ones stay queued behind the turn.
+ * while the older ones stay queued behind the turn. Esc is the only way to take
+ * back less than the whole hold.
  */
 export function unsendLatest(hold: PromptHold): TakenPrompt | undefined {
   if (hold.length === 0) return undefined;
@@ -34,18 +32,10 @@ export function unsendLatest(hold: PromptHold): TakenPrompt | undefined {
 }
 
 /**
- * Takes one prompt out by position — a "Send now" on that held row — leaving
- * every other prompt in the order it was typed.
- */
-export function takeAt(hold: PromptHold, index: number): TakenPrompt | undefined {
-  if (index < 0 || index >= hold.length) return undefined;
-  return { text: hold[index], rest: [...hold.slice(0, index), ...hold.slice(index + 1)] };
-}
-
-/**
- * A stopped turn takes its queue with it: the prompts were written against a
- * turn that no longer exists, so they come back as one draft to edit and
- * resend rather than firing off after the stop.
+ * The whole hold as one message, glued in the order typed. A settled turn sends
+ * it, Send now sends it ahead of the composer's text, and a stopped turn hands
+ * it back as one draft to edit and resend: the prompts were written against a
+ * turn that no longer exists, so they never fire off after the stop.
  */
 export function unsendAll(hold: PromptHold): TakenPrompt | undefined {
   if (hold.length === 0) return undefined;

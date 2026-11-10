@@ -7,8 +7,6 @@ export interface PendingMessage {
   key: string;
   text: string;
   state: PendingState;
-  /** Absent once it is already going: a forced message has nothing left to send now. */
-  onSendNow?: () => void;
   /** Absent when it cannot be taken back, e.g. the runner already has it. */
   onRemove?: () => void;
   /** The ×'s tooltip, when removing it has a shortcut of its own. */
@@ -42,27 +40,29 @@ export const isSendNowKey = (e: React.KeyboardEvent): boolean =>
 
 /**
  * The Send button's tooltip while Enter queues: it names the other key too,
- * Ctrl+Enter, or Cmd+Enter on macOS, which sends what is queued with it.
+ * Ctrl+Enter, or Cmd+Enter on macOS, which sends everything queued and what is
+ * typed, as one message.
  */
-export const QUEUE_TITLE = `Queue (Enter) · Send now (${SEND_NOW_KEY.name})`;
+export const QUEUE_TITLE = `Queue (Enter) · Send all now (${SEND_NOW_KEY.name})`;
 
 /**
  * The composer's key hint while a turn runs: Enter queues what is typed, the
  * chord interrupts the turn and sends everything queued with the typed text
  * last. It stands in for a second button. `held` is the empty composer's form,
- * where Enter has nothing to queue and only the chord applies.
+ * where Enter has nothing to queue and only the chord applies. The wording is
+ * the TUI's: "send all now".
  */
 export function SendKeyHint({ held = false }: { held?: boolean }) {
   if (held) {
     return (
       <div className="send-key-hint">
-        <kbd>{SEND_NOW_KEY.glyph}</kbd> send queued now
+        <kbd>{SEND_NOW_KEY.glyph}</kbd> send all now
       </div>
     );
   }
   return (
     <div className="send-key-hint">
-      <kbd>{ENTER_KEY}</kbd> queue · <kbd>{SEND_NOW_KEY.glyph}</kbd> send now
+      <kbd>{ENTER_KEY}</kbd> queue · <kbd>{SEND_NOW_KEY.glyph}</kbd> send all now
     </div>
   );
 }
@@ -70,12 +70,10 @@ export function SendKeyHint({ held = false }: { held?: boolean }) {
 /**
  * Messages typed while a turn runs and not yet read, oldest first, drawn as a
  * compact stack above the composer in the user bubble's shape. Each shows
- * where it stands; its actions surface on hover or focus. The send-now chord
- * works on whichever one holds focus, as it does in the composer.
- *
- * `onSendAllNow` is a send now for the stack as a whole, for a surface whose
- * queue goes as one message: one control after the last row, and the chord on
- * any row that has no send now of its own.
+ * where it stands; its remove surfaces on hover or focus. They go as one
+ * message, so one "Send all now" after the last row serves the stack, and the
+ * send-now chord works on whichever row holds focus, as it does in the
+ * composer. The planner chat and a task's chat draw the same stack.
  */
 export default function PendingMessages({ messages, onSendAllNow }: { messages: readonly PendingMessage[]; onSendAllNow?: () => void }) {
   if (messages.length === 0) return null;
@@ -84,22 +82,14 @@ export default function PendingMessages({ messages, onSendAllNow }: { messages: 
       {messages.map((m) => (
         <li key={m.key} className={`pending-message ${m.state}`}
           onKeyDown={(e) => {
-            const send = m.onSendNow ?? onSendAllNow;
-            if (!isSendNowKey(e) || !send) return;
+            if (!isSendNowKey(e) || !onSendAllNow) return;
             e.preventDefault();
-            send();
+            onSendAllNow();
           }}>
           <div className="pending-message-text" title={m.text}>{m.text}</div>
           <div className="pending-message-meta">
             <span className="pending-message-state" title={STATE_TITLE[m.state]}>{STATE_LABEL[m.state]}</span>
             <span className="pending-message-actions">
-              {m.onSendNow && (
-                <button type="button" className="pending-message-now" onClick={m.onSendNow}
-                  title={`Interrupt the running step and send this next (${SEND_NOW_KEY.name})`}
-                  aria-label={`Send now: ${m.text}`}>
-                  Send now <kbd aria-hidden="true">{SEND_NOW_KEY.glyph}</kbd>
-                </button>
-              )}
               {m.onRemove && (
                 <button type="button" className="pending-message-remove" onClick={m.onRemove}
                   title={m.removeTitle ?? 'Remove this message'} aria-label={`Remove pending message: ${m.text}`}>
@@ -113,8 +103,8 @@ export default function PendingMessages({ messages, onSendAllNow }: { messages: 
       {onSendAllNow && (
         <li className="pending-messages-actions">
           <button type="button" className="pending-messages-now" onClick={onSendAllNow}
-            title={`Interrupt the running turn and send ${messages.length === 1 ? 'this' : 'these'} now, as one message (${SEND_NOW_KEY.name})`}>
-            Send {messages.length === 1 ? 'now' : 'all now'} <kbd aria-hidden="true">{SEND_NOW_KEY.glyph}</kbd>
+            title={`Interrupt the running turn and send everything queued now, as one message (${SEND_NOW_KEY.name})`}>
+            Send all now <kbd aria-hidden="true">{SEND_NOW_KEY.glyph}</kbd>
           </button>
         </li>
       )}

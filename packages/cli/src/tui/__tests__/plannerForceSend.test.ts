@@ -231,7 +231,7 @@ describe('what the planner chat shows for force send', () => {
   it('documents ctrl-s for the planner in the help sheet', () => {
     // eslint-disable-next-line no-control-regex
     const sheet = helpLayout(200, 200).lines.map((line) => line.replace(/\x1b\[[0-9;]*m/g, ''));
-    expect(sheet.some((line) => line.includes('ctrl-s sends now') && line.includes('planner') && line.includes('every queued prompt'))).toBe(true);
+    expect(sheet.some((line) => line.includes('ctrl-s sends all now') && line.includes('planner') && line.includes('every queued message'))).toBe(true);
   });
 });
 

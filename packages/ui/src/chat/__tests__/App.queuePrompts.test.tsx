@@ -57,7 +57,7 @@ describe('queued prompts', () => {
     const unsend = document.querySelectorAll('.pending-message-remove');
     expect(unsend).toHaveLength(1);
     expect(unsend[0].getAttribute('aria-label')).toBe('Remove pending message: two');
-    expect(unsend[0].getAttribute('title')).toBe('Unsend (Esc)');
+    expect(unsend[0].getAttribute('title')).toBe('Take back (Esc)');
     fireEvent.click(unsend[0]);
 
     expect(api.post).toHaveBeenCalledWith({ type: 'unsendPrompt', toComposer: true });
@@ -159,7 +159,6 @@ describe('queued prompts', () => {
     post({ type: 'heldPrompts', prompts: ['one', 'two'] });
     type('half a thought');
 
-    expect(document.querySelectorAll('.pending-message-now')).toHaveLength(0);
     const buttons = [...document.querySelectorAll('.pending-messages-now')];
     expect(buttons).toHaveLength(1);
     expect(buttons[0].textContent).toBe('Send all now Ctrl+Enter');
@@ -183,7 +182,7 @@ describe('queued prompts', () => {
     post({ type: 'plannerTurn', active: true });
     post({ type: 'heldPrompts', prompts: ['one'] });
 
-    expect(document.querySelector('.send-key-hint')?.textContent).toBe('Ctrl+Enter send queued now');
+    expect(document.querySelector('.send-key-hint')?.textContent).toBe('Ctrl+Enter send all now');
     expect(document.querySelector('.send-btn')?.getAttribute('title')).toBe('Stop (Esc Esc)');
   });
 
@@ -194,8 +193,8 @@ describe('queued prompts', () => {
     type('stop, use Postgres');
 
     expect(document.querySelectorAll('.chat-input-row button')).toHaveLength(1);
-    expect(document.querySelector('.send-key-hint')?.textContent).toBe('Enter queue · Ctrl+Enter send now');
-    expect(document.querySelector('.send-btn')?.getAttribute('title')).toBe('Queue (Enter) · Send now (Ctrl+Enter)');
+    expect(document.querySelector('.send-key-hint')?.textContent).toBe('Enter queue · Ctrl+Enter send all now');
+    expect(document.querySelector('.send-btn')?.getAttribute('title')).toBe('Queue (Enter) · Send all now (Ctrl+Enter)');
   });
 
   it('sends now on Ctrl+Enter', () => {

@@ -1582,14 +1582,14 @@ function commandSheetBody(cols: number): string[] {
   body.push(
     style.grey('tab switches panes · pgup/pgdn scroll · ctrl-o toggles full detail · esc takes back the newest queued prompt (drops it beside a draft), otherwise esc twice stops · ctrl-l clears · ctrl-c quits'),
     style.grey('alt-enter inserts a newline · ? lists the plan pane\'s keys, once tab has put you there'),
-    style.grey('  in the planner chat, ctrl-s sends now: stops the running planner turn and sends every queued prompt, then the composer text, as one message'),
+    style.grey('  in the planner chat, ctrl-s sends all now: stops the running planner turn and sends every queued message, then the composer text, as one message'),
   );
   // One line each: the sheet clips every line to the frame, and the task
   // view's keys run far past any width on a single one.
   body.push(
     '',
     style.bold('In a task chat (enter on a started task)'),
-    style.grey('  ctrl-s sends now: interrupts the running step, then delivers every queued message and the composer text at once, in the order typed'),
+    style.grey('  ctrl-s sends all now: interrupts the running step, then delivers every queued message and the composer text at once, in the order typed'),
     style.grey('  esc takes back the newest queued message, into the composer when it is empty, then clears the draft, then returns'),
     style.grey('  ctrl-n/ctrl-p pick a pending message · ctrl-r removes the picked one'),
     style.grey('  ctrl-x stops the runner\'s running turn, and it then waits for your next message: on a task paused on a usage limit, it keeps it from resuming'),

@@ -10,7 +10,7 @@ import { runnerName } from '../design/runners';
 import { taskCommand, useRunnerCommands } from '../chat/components/RunnerCommands';
 import ElapsedTime from '../chat/components/ElapsedTime';
 import AccountLimitRows from '../chat/components/AccountLimitRows';
-import PendingMessages, { QUEUE_TITLE, SEND_NOW_KEY, SendKeyHint, isSendNowKey, type PendingMessage } from '../chat/components/PendingMessages';
+import PendingMessages, { QUEUE_TITLE, SendKeyHint, isSendNowKey, type PendingMessage } from '../chat/components/PendingMessages';
 import type { AccountLimitSnapshot, TaskActivity, TaskLogHeaderUsage, TaskLogHeaderView } from '@ordewell/core';
 
 /**
@@ -177,6 +177,11 @@ export default function TaskLogApp({ composerLabel }: {
     }
   };
 
+  // The group's own control sends what is queued only: a draft stays where it is, as in the planner chat.
+  const sendQueuedNow = (): void => {
+    if (removable[0]) bridge.post({ type: 'sendQueuedTaskMessageNow', id: removable[0].id });
+  };
+
   // The newest one a person queued that is not already being taken back.
   const newestToTakeBack = () => [...removable].reverse().find((m) => !takingBack.current.has(m.id));
   const newestRemovable = newestToTakeBack();
@@ -208,7 +213,7 @@ export default function TaskLogApp({ composerLabel }: {
     text: m.text,
     state: m.forced ? 'sending' : m.handedOver ? 'waiting' : 'queued',
     onRemove: m.forced || m.handedOver || child ? undefined : () => bridge.post({ type: 'removeQueuedTaskMessage', id: m.id }),
-    ...(m.id === newestRemovable?.id ? { removeTitle: 'Remove this message (Esc takes back the newest)' } : {}),
+    ...(m.id === newestRemovable?.id ? { removeTitle: 'Take back (Esc)' } : {}),
   })), [status?.queued, child, newestRemovable?.id, bridge]);
 
   // The pairing is what keeps a stray tap from interrupting a turn, so an arm
@@ -322,15 +327,7 @@ export default function TaskLogApp({ composerLabel }: {
 
       {stopArmed && <div className="stop-hint" role="status">Press Esc again to stop</div>}
 
-      {!script && removable.length > 0 && (
-        <div className="pending-messages-bar">
-          <button type="button" className="pending-message-now" onClick={sendNow}
-            title={`Interrupt the running step and send every queued message now (${SEND_NOW_KEY.name} sends all now)`}>
-            Send all now <kbd aria-hidden="true">{SEND_NOW_KEY.glyph}</kbd>
-          </button>
-        </div>
-      )}
-      {!script && <PendingMessages messages={pending} />}
+      {!script && <PendingMessages messages={pending} onSendAllNow={removable.length > 0 ? sendQueuedNow : undefined} />}
 
       {child?.note ? <div className="task-log-readonly" role="note">{child.note}</div> : script ? (
         <div className="task-log-readonly" role="note">
@@ -356,7 +353,7 @@ export default function TaskLogApp({ composerLabel }: {
               </svg>
             )}
           </button>
-          {canSendNow && <SendKeyHint />}
+          {canSendNow && (canSend ? <SendKeyHint /> : <SendKeyHint held />)}
         </div>
       )}
     </div>
