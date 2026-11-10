@@ -1,4 +1,4 @@
-import { abbreviateHome, createSkillsService, EnvConfig, type SkillInfo } from '@ordewell/core';
+import { abbreviateHome, createSkillsService, EnvConfig, skillTooLarge, skillWords, SKILL_WORD_CAP, type SkillInfo } from '@ordewell/core';
 import { hasFlag, positionals, workspaceOf } from '../utils';
 import { fail } from './shared';
 
@@ -21,6 +21,7 @@ export function handleSkills(subArgs: string[]): void {
     appliesTo: skill.appliesTo,
     invocation: invocation(skill),
     path: abbreviateHome(skill.path),
+    ...(skillTooLarge(skill) ? { words: skillWords(skill), tooLarge: true } : {}),
   }));
   const shadowed = catalog.shadowed.map(({ skill, shadowedBy }) => ({
     name: skill.name,
@@ -48,7 +49,7 @@ export function handleSkills(subArgs: string[]): void {
   }
 
   const headers = ['Name', 'Scope', 'Applies-to', 'Invocation', 'SKILL.md'];
-  const rows = skills.map((skill) => [skill.name, skill.scope, skill.appliesTo, skill.invocation, skill.path]);
+  const rows = skills.map((skill) => [skill.name + ('tooLarge' in skill ? ` (too large: ${skill.words} words, cap ${SKILL_WORD_CAP})` : ''), skill.scope, skill.appliesTo, skill.invocation, skill.path]);
   const widths = headers.map((header, i) => Math.max(header.length, ...rows.map((row) => row[i].length)));
   const format = (row: string[]) => row.map((cell, i) => i === row.length - 1 ? cell : cell.padEnd(widths[i])).join('  ');
   console.log(format(headers));

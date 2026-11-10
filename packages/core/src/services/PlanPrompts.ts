@@ -7,7 +7,7 @@ import { DEFAULT_PLANNER_MODES, type IsolatedExecution, type PlannerModes } from
 import { TASK_QUERY_PROTOCOL, TASK_READ_TOOLS_PROTOCOL } from './TaskQuery';
 import { SELF_REPO } from './isolationRecord';
 import { taskRefOf } from './TaskRefs';
-import type { SkillInfo } from './SkillsService';
+import { SKILL_WORD_CAP, skillTooLarge, skillWords, type SkillInfo } from './SkillsService';
 import { modelInvocablePlannerSkills, modelInvocableTaskSkills } from './skillInvocation';
 import { quotedMessageArgs } from './landingMessage';
 
@@ -772,12 +772,17 @@ function buildConversationBody(
   ].join('\n');
 }
 
+/** A skill over the word cap is listed but marked, so the planner does not load or attach it. */
+function sizeMark(skill: SkillInfo): string {
+  return skillTooLarge(skill) ? ` (too large to load: ${skillWords(skill)} words, cap ${SKILL_WORD_CAP})` : '';
+}
+
 function plannerSkillsBlock(skills: readonly SkillInfo[]): string[] {
   const loadable = modelInvocablePlannerSkills(skills);
   return loadable.length === 0 ? [] : [
     'ORDEWELL PLANNER SKILLS:',
     'Call load_skill(name) when one of these skills would help:',
-    ...loadable.map((skill) => `- ${skill.name}: ${skill.description}`),
+    ...loadable.map((skill) => `- ${skill.name}${sizeMark(skill)}: ${skill.description}`),
   ];
 }
 
@@ -795,7 +800,7 @@ function taskSkillsSection(skills: readonly SkillInfo[]): string[] {
     '- When the user asks to use a task skill, attach it to the tasks it fits.',
     ...(attachable.length === 0 ? [] : [
       'Task skills you may attach:',
-      ...attachable.map((skill) => `- ${skill.name}: ${skill.description}`),
+      ...attachable.map((skill) => `- ${skill.name}${sizeMark(skill)}: ${skill.description}`),
       'Attach one of these to a task only where its description says it applies. Never attach a skill to every task by default.',
     ]),
     '',

@@ -61,6 +61,24 @@ export interface ShadowedSkill {
   shadowedBy: SkillInfo;
 }
 
+/**
+ * The most words a skill body may have. A skill's body is put whole into a
+ * runner's prompt or the planner's context, so one large skill bloats every
+ * task it is attached to; the largest built-in is well under half of this.
+ * An oversize skill is refused wherever it would be used, never truncated.
+ */
+export const SKILL_WORD_CAP = 2000;
+
+export function skillWords(skill: Pick<SkillInfo, 'content'>): number {
+  return skill.content.split(/\s+/).filter(Boolean).length;
+}
+
+/** Why a skill cannot be used, or undefined when its body is within {@link SKILL_WORD_CAP}. */
+export function skillTooLarge(skill: Pick<SkillInfo, 'name' | 'content'>): string | undefined {
+  const words = skillWords(skill);
+  return words > SKILL_WORD_CAP ? `"${skill.name}" is ${words} words, over the ${SKILL_WORD_CAP}-word cap for a skill; shorten it` : undefined;
+}
+
 /** A skill folder no name can reach — `/name`, a plan and a spawn all use the folder name — so it is listed nowhere. */
 export interface InvalidSkill {
   name: string;
