@@ -790,6 +790,7 @@ describe('the confirms', () => {
         expect(syncButton(name)).toBeDisabled();
         expect(syncButton(name)).not.toHaveAttribute('aria-busy');
         expect(syncButton(name).querySelector('svg')).not.toHaveClass('ow-spin');
+        expect(syncButton(name).querySelector('svg')).not.toHaveClass('ow-glide');
       }
       await act(async () => { pending.settle(ok({ repo: REPO_STATE })); });
       await waitFor(() => expect(fetchButton()).not.toHaveAttribute('aria-busy'));
@@ -821,28 +822,40 @@ describe('the confirms', () => {
       await waitFor(() => expect(fetchButton()).not.toHaveAttribute('aria-busy'));
     });
 
-    it('does not spin while a pull waits to be confirmed, and restores the buttons on Cancel', async () => {
+    it('does not move while a pull waits to be confirmed, and restores the buttons on Cancel', async () => {
       const daemon = await mount();
       fireEvent.click(pullButton());
       await dialog();
       expect(pullButton()).not.toHaveAttribute('aria-busy');
-      expect(pullButton().querySelector('svg')).not.toHaveClass('ow-spin');
+      expect(pullButton().querySelector('svg')).not.toHaveClass('ow-glide');
       answer('Cancel');
       await waitFor(() => expect(pullButton()).toBeEnabled());
       expect(daemon.calls('git.pull')).toEqual([]);
     });
 
-    it('turns the Pull icon only once the confirmed pull is sent', async () => {
+    // A turned arrow points backwards half the time: Pull's and Push's glide their way instead, the line held still.
+    it.each([
+      { kind: 'pull' as const, name: /^Pull/, confirm: 'Pull from origin', way: 'down' },
+      { kind: 'push' as const, name: /^Push/, confirm: 'Push to origin', way: 'up' },
+    ])('glides the $kind arrow $way, never turning it, only once the confirmed $kind is sent', async ({ kind, name, confirm, way }) => {
       const pending = deferred();
-      await mount({ 'git.pull': pending.promise });
-      fireEvent.click(pullButton());
+      await mount({ [`git.${kind}`]: pending.promise });
+      fireEvent.click(syncButton(name));
       await dialog();
-      answer('Pull from origin');
-      await waitFor(() => expect(pullButton()).toHaveAttribute('aria-busy', 'true'));
-      expect(pullButton().querySelector('svg')).toHaveClass('ow-spin');
+      answer(confirm);
+      await waitFor(() => expect(syncButton(name)).toHaveAttribute('aria-busy', 'true'));
+      expect(syncButton(name)).toBeDisabled();
+      const icon = syncButton(name).querySelector('svg')!;
+      expect(icon).toHaveClass('ow-glide');
+      expect(icon).not.toHaveClass('ow-spin');
+      const arrow = icon.querySelector(`.ow-glide-${way}`)!;
+      expect(arrow).not.toBeNull();
+      // The line is the svg's own child, outside the group that moves.
+      expect(arrow.contains(icon.querySelector(':scope > path'))).toBe(false);
       expect(fetchButton().querySelector('svg')).not.toHaveClass('ow-spin');
       await act(async () => { pending.settle(ok({ repo: REPO_STATE })); });
-      await waitFor(() => expect(pullButton()).not.toHaveAttribute('aria-busy'));
+      await waitFor(() => expect(syncButton(name)).not.toHaveAttribute('aria-busy'));
+      expect(syncButton(name).querySelector('svg')).not.toHaveClass('ow-glide');
     });
   });
 
