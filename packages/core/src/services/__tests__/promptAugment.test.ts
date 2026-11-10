@@ -491,6 +491,10 @@ describe('composeAugmentedPrompt', () => {
     expect(out).toMatch(/do not write the report to a file/);
   });
 
+  it('asks that a number a later task may need sit in the summary or a finding, not only in the report', () => {
+    expect(TASK_COMPLETION_CONTRACT).toMatch(/number you measured.*\(a timing, a count, a size\).*in the summary or a finding, not only in the report/);
+  });
+
   it('tells the runner to wait on the PID of a process it started, never on a match by command name', () => {
     expect(TASK_COMPLETION_CONTRACT).toMatch(/wait on the PID of a process you started yourself/);
     expect(TASK_COMPLETION_CONTRACT).toMatch(/never by matching its command name/);

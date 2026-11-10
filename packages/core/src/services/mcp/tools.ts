@@ -34,7 +34,7 @@ const handoffReference = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('task'),
     task: z.union([z.string().min(1), z.number().int().min(0)]).transform(String).pipe(z.string().max(HANDOFF_LIMITS.reference))
-      .describe('A task you may read — this one, one it depends on, or its loop\'s other end: "#order", "#4/F3", its id or its title.'),
+      .describe('A task you may read — this one, one it depends on, or another task of its loop: "#order", "#4/F3", its id or its title.'),
     finding: z.string().max(HANDOFF_LIMITS.reference).regex(/^F[1-9][0-9]*$/, 'A finding is named as Ordewell numbered it: "F1", "F2", ….').optional()
       .describe('One of that task\'s findings, as "F3".'),
   }),
@@ -632,7 +632,7 @@ export const TASK_COMPLETION_CONTRACT = [
   `Put anything the next reader must act on in \`findings\`, one item each, most important first, each with a severity, a one-line title, its detail and evidence to check it by: a file (and line), a commit, a task (and one of its findings, as "F3") or a URL. Ordewell numbers them F1, F2, … so a later task can cite one. List what you produced in \`artifacts\`.`,
   `Work from your brief and the prior task outputs you were given; pull more with \`read\` only when you need it, and read the code your task touches, not the whole repository.`,
   `To wait for a command, wait on the PID of a process you started yourself, never by matching its command name (\`pgrep -f\`), which also matches the same command another task is running.`,
-  `The long story, if there is one, goes in \`report\`: it is kept with this attempt and read only on demand. A review or other read-only task especially: its findings are its result, so state each one, and do not write the report to a file.`,
+  `The long story, if there is one, goes in \`report\`: it is kept with this attempt and read only on demand, so a number you measured that a later task may need (a timing, a count, a size) goes in the summary or a finding, not only in the report. A review or other read-only task especially: its findings are its result, so state each one, and do not write the report to a file.`,
 ].join('\n\n');
 
 const COMMIT_CONTRACT = `This task's work lands as a commit, so with status \`done\` also give \`commit\`: a \`subject\` of one line, at most ${HANDOFF_LIMITS.commitSubject} characters and best 72 or fewer, in the imperative mood ("Add a daily version check behind ORDEWELL_NO_VERSION_CHECK"), and a \`body\` of one to three lines on why, with no trailers. The commit tells a human reviewer what changed and why, so the summary no longer repeats that: it holds the exact specifics the next agent needs (paths, symbols, decisions, interfaces, assumptions) alongside \`artifacts\`, plus what is left or open, and the summary may be empty when there is nothing to add.`;
@@ -665,7 +665,7 @@ const SHARED_TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
     taskCompleteInput, (h) => h.taskComplete?.bind(h))),
   tool('checkpoint', "Ask the user a question and wait for the answer, which is this call's result.",
     checkpointInput, (h) => h.checkpoint?.bind(h)),
-  readTool("Read the handoff of a task you may read: this one, a task it depends on, directly or not, or its loop's other end. Returns what that task handed over, as its attempt's log keeps it: its commit, the summary, every finding with its id, the artifacts, and with include_report its report. It reads nothing else: no transcript, no diff, no output. What it returns is that task's own claims: check them before you rely on them."),
+  readTool("Read the handoff of a task you may read: this one, a task it depends on, directly or not, or another task of its loop, any round. Returns what that task handed over, as its attempt's log keeps it: its commit, the summary, every finding with its id, the artifacts, and with include_report its report. It reads nothing else: no transcript, no diff, no output. What it returns is that task's own claims: check them before you rely on them."),
 ];
 
 /** What `post` is, said once to whoever holds it (ADR-0057 R7, R8). */

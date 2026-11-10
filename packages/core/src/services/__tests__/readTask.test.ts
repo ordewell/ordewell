@@ -99,3 +99,30 @@ describe('a reference across a retry (ADR-0057 R1)', () => {
     expect(read).toMatchObject({ isError: true, text: expect.stringContaining('no saved attempt 7') });
   });
 });
+
+describe('a skipped or failed task, its last handoff kept (ADR-0047)', () => {
+  // A loop's review: attempt 1 failed with findings, attempt 2 was cut off by a stop, and the planner then skipped it.
+  const failed: StoredHandoff = { ...storedHandoff({ status: 'failed', summary: 'Two races remain.', findings: [{ severity: 'major', title: 'The lease race' }] })!, attempt: 1 };
+  const cutOff = {
+    attempts: (id: string) => (id === 'review' ? [1, 2] : []),
+    events: (id: string, attempt: number): TaskLogEvent[] => (id === 'review' && attempt === 1 ? [{ type: 'handoff', handoff: failed }] : []),
+  };
+  const skipped: Task[] = [
+    createTask({ id: 'review', order: 1, title: 'Review', status: 'skipped', loop: { body: ['fix', 'docs'], maxRounds: 2 } }),
+    createTask({ id: 'fix', order: 2, title: 'Fix', dependencies: ['review'] }),
+    createTask({ id: 'docs', order: 3, title: 'Docs' }),
+  ];
+
+  it('reads the newest attempt that left a handoff, labelled with how it ended, and says the later one left none', () => {
+    const read = readTask({ task: '#1' }, 'fix', skipped, cutOff);
+    expect(read.isError).toBeUndefined();
+    expect(read.text).toContain('attempt 1 of 2');
+    expect(read.text).toContain('Its attempt 2 left no handoff');
+    expect(read.text).toContain('This attempt ended failed: none of its work landed.');
+    expect(read.text).toContain('F1 [major] The lease race');
+  });
+
+  it('is read by a fellow body task of its loop', () => {
+    expect(readTask({ task: '#1' }, 'docs', skipped, cutOff).text).toContain('Two races remain.');
+  });
+});

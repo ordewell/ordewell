@@ -164,7 +164,7 @@ A runner-facing tool joins the task side on the same mechanism.
   The plan keeps a bounded digest; the attempt log keeps the full handoff.
   Dependents get the summary and whole findings within 4,000 characters per
   dependency. `read` pulls the rest for the task itself, its transitive
-  dependencies and its loop's other end; it exposes no transcript or diff.
+  dependencies and the other tasks of its loop; it exposes no transcript or diff.
   The planner reads the digest with `task_query` and the full handoff with
   `task_output`, under its existing read budget.
 - **`checkpoint` waits for the answer (V5).** The call stays open until the
