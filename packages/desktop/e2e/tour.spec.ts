@@ -1528,7 +1528,7 @@ test('the visual tour', async () => {
     git(box, 'update-ref', `refs/remotes/origin/${PULL_BRANCH}`, next);
     beforePull = head;
     git(box, 'branch', `--set-upstream-to=origin/${PULL_BRANCH}`);
-    await gitSide().getByRole('button', { name: /^Refresh the branches/ }).click();
+    await gitSide().getByRole('button', { name: /^Reload branches/ }).click();
     await expect(pullButton()).toBeEnabled({ timeout: 30_000 });
     fs.writeFileSync(holdFetch, '');
     await pullButton().click();

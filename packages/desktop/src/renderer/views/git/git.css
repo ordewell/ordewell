@@ -5,6 +5,14 @@
 .git-side-name { flex: 1; min-width: 0; display: flex; font: var(--ow-type-body-strong); }
 .git-repo { margin: 0 var(--ow-space-3); width: auto; }
 .git-state { padding: var(--ow-space-6) var(--ow-space-3); }
+.git-side-error { display: flex; flex-direction: column; align-items: flex-start; gap: var(--ow-space-2); padding: 0 var(--ow-space-3) var(--ow-space-2) 0; }
+.git-side-error .snotice { align-self: stretch; }
+.git-side-error .ow-button { margin-left: var(--ow-space-3); }
+/* Bars at the groups' own row height, --ow-bg-hover in place of text (design.md, Shared states); static, so nothing moves. */
+.git-skeleton { padding: var(--ow-space-half) 0; }
+.git-skeleton-row { display: flex; align-items: center; height: var(--ow-row); padding: 0 var(--ow-space-3) 0 var(--ow-space-8); }
+.git-skeleton-head { padding-left: var(--ow-space-3); }
+.git-skeleton-bar { height: 10px; border-radius: var(--ow-radius-sm); background: var(--ow-bg-hover); }
 .git-current { display: flex; flex-direction: column; gap: var(--ow-space-2); }
 .git-current-name { display: flex; align-items: center; gap: var(--ow-space-2); padding: 0 var(--ow-space-2) 0 var(--ow-space-3); font: var(--ow-type-body-strong); }
 .git-current-name > .ow-icon { flex: none; color: var(--ow-fg-secondary); }
@@ -17,7 +25,17 @@
 .git-lock { flex: none; display: inline-flex; align-items: center; gap: var(--ow-space-half); max-width: 40%; color: var(--ow-fg-secondary); font: var(--ow-type-code-small); white-space: nowrap; }
 .git-lock span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .git-lock .ow-icon { flex: none; }
-.git-stash-ref { max-width: none; }
+/*
+ * A stash row: its message over its ref, and Pop and Drop always shown. The shared rule hides a row's actions until
+ * hover, which also takes them out of the tab order; these two are the row's whole use, so they stay reachable.
+ */
+.srow-main.git-stash-main { flex-direction: column; align-items: stretch; gap: 0; height: auto; padding: var(--ow-space-1) 0; }
+.git-stash-message { min-width: 0; }
+.git-stash-ref { color: var(--ow-fg-secondary); font: var(--ow-type-code-small); }
+.git-stash .srow-actions { visibility: visible; }
+.git-stash .srow-actions .ow-icon-button:focus-visible { outline: 1px solid var(--ow-focus-ring); outline-offset: -1px; }
+/* The row's own title names the whole path, ref and message; a title on the text inside would hide it. */
+.git-worktree-path, .git-stash-message { pointer-events: none; }
 /* Two selectors: sidebarKit.css may load after this file, and its row height and centring must not win. */
 .srow-main.git-worktree-main { flex-direction: column; align-items: stretch; justify-content: center; gap: 0; height: var(--ow-row-double); padding: 0; }
 /* The state sits under the branch name, not beside it: a long branch must never share a line with it. */
