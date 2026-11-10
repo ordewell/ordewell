@@ -259,9 +259,9 @@ export function toOpenAiTools(plannerTools = false, board = false): OpenAI.Chat.
   })) : [])];
 }
 
-/** The subagent's own tool list in OpenAI format. */
-export function toOpenAiSubagentTools(): OpenAI.Chat.Completions.ChatCompletionTool[] {
-  return projectOpenAi(subagentToolSpecs());
+/** The subagent's own tool list in OpenAI format; `only` narrows it, as a confined agent's is (ADR-0066). */
+export function toOpenAiSubagentTools(only?: ReadonlySet<string>): OpenAI.Chat.Completions.ChatCompletionTool[] {
+  return projectOpenAi(only ? subagentToolSpecs().filter((t) => only.has(t.name)) : subagentToolSpecs());
 }
 
 const SCHEMA_TYPE: Record<ParamType, SchemaType> = {

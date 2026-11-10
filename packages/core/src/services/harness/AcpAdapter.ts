@@ -719,10 +719,10 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
   }
 
   /**
-   * A restricted start's subagent works within its turn or not at all, as
-   * OpenCode's scout does (ADR-0026): one still working once the call that
-   * started it is over, or once the turn is answered, would read, call and
-   * report where no turn's ledger sees it. Ending the process ends it.
+   * A restricted start's subagent works within its turn or not at all
+   * (ADR-0026): one still working once the call that started it is over, or
+   * once the turn is answered, would read, call and report where no turn's
+   * ledger sees it. Ending the process ends it.
    */
   private failBackgroundSubagent(): void {
     this.fail(`${this.name} started a subagent that worked on after the call that started it was over, outside Ordewell's view`);

@@ -133,6 +133,10 @@ const loadSkillInput = z.object({
   name: z.string().min(1).describe('The name of an Ordewell planner skill to load.'),
 });
 
+const spawnResearchAgentInput = z.object({
+  prompt: z.string().trim().min(1).describe('A self-contained research task: the area or question, the paths or symbols to start from, and exactly what the digest must report back.'),
+});
+
 const taskRef = z.union([z.string().min(1), z.number().int().min(0)]).describe('A task id, "#order" ("#2.1" for a subtask), a bare order, or a title.');
 
 const readTaskInput = z.object({
@@ -299,6 +303,7 @@ export type ApplyPatchArgs = z.infer<typeof applyPatchInput>;
 export type ListRunnersArgs = z.infer<typeof listRunnersInput>;
 export type ListModelsArgs = z.infer<typeof listModelsInput>;
 export type LoadSkillArgs = z.infer<typeof loadSkillInput>;
+export type SpawnResearchAgentArgs = z.infer<typeof spawnResearchAgentInput>;
 export type RunCommandArgs = z.infer<typeof runCommandInput>;
 export type TaskRunCommandArgs = z.infer<typeof taskRunCommandInput>;
 export type FetchArgs = z.infer<typeof fetchInput>;
@@ -378,6 +383,8 @@ export interface PlannerToolHandler {
   /** An entry on this node's board (ADR-0057 R8); a planner lists it where `read` is. */
   post?: Run<PostArgs>;
   loadSkill?: Run<LoadSkillArgs>;
+  /** Ordewell's own research agent (ADR-0066); only a token with `research` lists it. */
+  spawnResearchAgent?: Run<SpawnResearchAgentArgs>;
   runCommand?: Run<RunCommandArgs>;
   fetch?: Run<FetchArgs>;
   webSearch?: Run<WebSearchArgs>;
@@ -782,6 +789,16 @@ export const PLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
   ...PLANNER_EXECUTION_TOOLS,
 ];
 
+/**
+ * Ordewell's research agent for a harness planner that has no agents of its
+ * own (ADR-0066): one stateless agent per call, on the model the workspace
+ * names for it, that reads the workspace and nothing else, and answers with
+ * its digest when it ends. Read-only by the hint: it changes nothing.
+ */
+export const PLANNER_RESEARCH_AGENT = tool<PlannerToolHandler, typeof spawnResearchAgentInput>('spawn_research_agent',
+  'Launch a stateless read-only research agent that explores the workspace with its own read tools (read, glob, grep, list) and returns its digest as this call\'s result, within your turn. Use it for orientation: a subsystem to map, a question that means reading across several files. To explore several independent areas, call it several times in one reply. The agent sees nothing of this conversation, so its prompt must be self-contained: the question, the paths or symbols to start from, and what the digest must report back (the conclusion and file:line references, no pasted file bodies). It has no shell and no web: run commands and read pages yourself. Do not use it to read one known file.',
+  spawnResearchAgentInput, (h) => h.spawnResearchAgent?.bind(h), PLANNER_READ_ONLY);
+
 /** A task as a planner that may delegate writes it: the same list, and `type` takes one more value (ADR-0055 D1). */
 const delegatingPlanTask = planTask.extend({
   type: z.enum(taskKinds(true)).optional(),
@@ -810,7 +827,9 @@ const delegatingAnswerCheckpointInput = answerCheckpointInput.extend({
  * a byte (ADR-0055 D21). A subplanner ends and asks with the tools a runner
  * does (D4), read-only by the hint since they change no file of the workspace.
  */
-export function plannerToolSet({ delegates, subplanner }: { delegates?: boolean; subplanner?: boolean } = {}): readonly McpTool<PlannerToolHandler>[] {
+export function plannerToolSet({ delegates, subplanner, research }: { delegates?: boolean; subplanner?: boolean; research?: boolean } = {}): readonly McpTool<PlannerToolHandler>[] {
+  // ADR-0066: the research agent comes last, so a list with it starts as the list without it does, byte for byte.
+  if (research) return [...plannerToolSet({ delegates, subplanner }), PLANNER_RESEARCH_AGENT];
   if (!delegates && !subplanner) return PLANNER_TOOLS;
   const tools = delegates ? PLANNER_TOOLS.map((one) => {
     if (one.name === 'submit_plan') return tool<PlannerToolHandler, typeof delegatingSubmitPlanInput>('submit_plan', one.description, delegatingSubmitPlanInput, (h) => h.submitPlan?.bind(h) as Run<z.infer<typeof delegatingSubmitPlanInput>> | undefined, PLANNER_READ_ONLY);
