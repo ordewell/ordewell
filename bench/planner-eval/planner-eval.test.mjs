@@ -1,7 +1,7 @@
 // Offline proof of the planner eval's pure parts: metrics, answer keys, the
 // rubric's citation filter, aggregation and verdicts, redaction, the settings
 // guard, the driver's reading of a turn, the command line, the TUI's terminal,
-// the budget recorder and re-scoring. Nothing here starts a model, a daemon or
+// and re-scoring. Nothing here starts a model, a daemon or
 // a terminal.
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -9,14 +9,10 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import http from 'node:http';
 import { describe, it } from 'node:test';
 import {
-  aggregate, isComplete, markdown, median, meterSummary, spread, verdict, widthInRange,
+  aggregate, isComplete, markdown, median, spread, verdict, widthInRange,
 } from './lib/aggregate.mjs';
-import {
-  blockOf, budgetRecord, budgetSource, claudeTranscriptDir, claudeTurnInputs, reportsOwnReads, startRecorder,
-} from './lib/budget.mjs';
 import {
   ANSWER, BASELINE_REF, CELLS, CONFIRM, NUDGES, QUOTA, quotaOf, TEST_COMMANDS, VARIANTS, goalText, loadGoals, missingFor, mockCell,
   parseArgs, runEnv, runId, runSettings, selectRuns, substituteFor, timeoutFor,
@@ -24,7 +20,7 @@ import {
 import { guardFiles, snapshot } from './lib/guard.mjs';
 import { keyChecks, keyHash, keyViolations, plannerRanTest } from './lib/keys.mjs';
 import {
-  criticalPath, ownReadShare, planDigest, readMeter, agentCalls, runMetrics, sessionParts, width, wordingViolations,
+  criticalPath, ownReadShare, planDigest, ownReadTally, agentCalls, runMetrics, sessionParts, width, wordingViolations,
 } from './lib/metrics.mjs';
 import { classifyTurn, newestSession } from './lib/observe.mjs';
 import { REDACTED, redactJson, redactor } from './lib/redact.mjs';
@@ -129,7 +125,7 @@ describe('plan shape', () => {
   });
 });
 
-describe('readMeter', () => {
+describe('ownReadTally', () => {
   it("counts the planner's own reads and their bytes, not a subagent's, and agents both ways", () => {
     const log = [
       { tool: 'read_file', result: 'héllo' },
@@ -142,7 +138,7 @@ describe('readMeter', () => {
       { tool: 'submit_plan' },
       { type: 'user_prompt', content: 'goal' },
     ];
-    assert.deepEqual(readMeter(log), { ownReads: 2, ownReadBytes: 8, agentsSpawned: 2 });
+    assert.deepEqual(ownReadTally(log), { ownReads: 2, ownReadBytes: 8, agentsSpawned: 2 });
   });
 
   it("counts Ordewell's research agent under an MCP server prefix, as OpenCode logs it", () => {
@@ -153,9 +149,9 @@ describe('readMeter', () => {
       { tool: 'agent_tool', toolLabel: 'other_spawn_research_agent' },
       { tool: 'read_file', result: 'ab' },
     ];
-    assert.equal(readMeter(log).agentsSpawned, 3);
+    assert.equal(ownReadTally(log).agentsSpawned, 3);
     assert.equal(agentCalls(log).length, 3);
-    assert.equal(readMeter(log).ownReads, 1);
+    assert.equal(ownReadTally(log).ownReads, 1);
   });
 
   it('gives no own-read share for a planner that looked at nothing', () => {
@@ -469,17 +465,6 @@ describe('aggregation', () => {
     assert.equal(widthInRange(rec('V0', 1, { metrics: { submitted: false } }), goal('g1')), null);
   });
 
-  it('tells a run whose meter line carried a count from one that only saw the first turn', () => {
-    const budget = (meters) => ({ metrics: { budget: { source: 'proxy', expected: true, turns: meters.map((meter) => ({ block: 'b', meter })) } } });
-    const rows = meterSummary([
-      rec('V2', 1, budget(['Your own reads: about 0 tokens last turn', 'Your own reads: about 900 tokens last turn'])),
-      rec('V2', 2, budget(['Your own reads: about 0 tokens last turn'])),
-      rec('V2', 3, budget([null])),
-      rec('V1', 1),
-    ]);
-    assert.deepEqual(rows, [{ cell: 'c', variant: 'V2', source: 'proxy', expected: true, recorded: 3, withLine: 2, withCount: 1 }]);
-  });
-
   it('lists every violation, error and substitution in the markdown', () => {
     const records = [
       rec('V0', 1, { keyChecks: [{ check: 'task count', status: 'fail', detail: '9 tasks' }] }),
@@ -573,15 +558,15 @@ describe('classifyTurn', () => {
 describe('the run matrix', () => {
   it('runs smoke as G1 on claude-code/haiku once per variant', () => {
     const runs = selectRuns(parseArgs(['--smoke']), { goals });
-    assert.deepEqual(runs.map((r) => r.id), ['g1--claude-code_haiku--V0--r1', 'g1--claude-code_haiku--V1--r1', 'g1--claude-code_haiku--V2--r1']);
+    assert.deepEqual(runs.map((r) => r.id), ['g1--claude-code_haiku--V0--r1', 'g1--claude-code_haiku--V1--r1']);
   });
 
   it('runs full as every goal, required cell and variant, three times', () => {
     const runs = selectRuns(parseArgs(['--full']), { goals });
     const required = CELLS.filter((c) => !c.optional).length;
     assert.equal(required, 6);
-    assert.equal(runs.length, goals.length * required * 3 * 3);
-    assert.equal(selectRuns(parseArgs(['--full', '--with-optional']), { goals }).length, goals.length * CELLS.length * 3 * 3);
+    assert.equal(runs.length, goals.length * required * 2 * 3);
+    assert.equal(selectRuns(parseArgs(['--full', '--with-optional']), { goals }).length, goals.length * CELLS.length * 2 * 3);
   });
 
   it('narrows by backend, goal and variant', () => {
@@ -589,7 +574,7 @@ describe('the run matrix', () => {
     assert.deepEqual([...new Set(runs.map((r) => r.cell.id))], ['opencode/deepseek-v4.1-flash', 'opencode/glm-5.3-flash']);
     assert.ok(runs.every((r) => r.goal.id === 'g4' && r.variant.id === 'V1'));
     assert.equal(runs.length, 4);
-    assert.equal(selectRuns(parseArgs(['--full', '--backend', 'cline']), { goals }).length, goals.length * 3 * 3, 'an optional cell runs when named');
+    assert.equal(selectRuns(parseArgs(['--full', '--backend', 'cline']), { goals }).length, goals.length * 2 * 3, 'an optional cell runs when named');
   });
 
   it('refuses an unknown flag and a bad number', () => {
@@ -617,16 +602,13 @@ describe('the run matrix', () => {
     const g = goal('g3');
     assert.equal(goalText(g, VARIANTS.V0), `${g.goal}\n\n${NUDGES[0]}\n\n${NUDGES[1]}`);
     assert.equal(goalText(g, VARIANTS.V1), g.goal);
-    assert.equal(goalText(g, VARIANTS.V2), g.goal);
-    assert.deepEqual(VARIANTS.V2.env, { ORDEWELL_PLANNER_READ_METER: '1' });
   });
 
   it("hands a run's environment the planner, its own settings, and an OpenRouter key only where it plans through one", () => {
-    const base = { OPENROUTER_API_KEY: 'k', ORDEWELL_PLANNER_READ_METER: '1', NODE_OPTIONS: '--x', HOME: 'h' };
+    const base = { OPENROUTER_API_KEY: 'k', NODE_OPTIONS: '--x', HOME: 'h' };
     const cell = CELLS.find((c) => c.id === 'claude-code/haiku');
     const env = runEnv(base, { cell, variant: VARIANTS.V1, settingsPath: 's.json', maxParallel: 4, enabledRunners: ['claude-code'] });
     assert.equal(env.OPENROUTER_API_KEY, undefined);
-    assert.equal(env.ORDEWELL_PLANNER_READ_METER, undefined);
     assert.equal(env.NODE_OPTIONS, undefined);
     assert.equal(env.AI_PROVIDER, 'claude-code');
     assert.equal(env.ORCHESTRATOR_MODEL, 'haiku');
@@ -634,9 +616,8 @@ describe('the run matrix', () => {
     assert.equal(env.HOME, 'h');
     assert.deepEqual(env.ORDEWELL_APPROVAL_ALLOW.split(','), TEST_COMMANDS);
     assert.ok(TEST_COMMANDS.includes('npx vitest run'));
-    const or = runEnv(base, { cell: CELLS.find((c) => c.id === 'openrouter/glm-5.3-flash'), variant: VARIANTS.V2, settingsPath: 's', maxParallel: 1, enabledRunners: ['claude-code'] });
+    const or = runEnv(base, { cell: CELLS.find((c) => c.id === 'openrouter/glm-5.3-flash'), variant: VARIANTS.V1, settingsPath: 's', maxParallel: 1, enabledRunners: ['claude-code'] });
     assert.equal(or.OPENROUTER_API_KEY, 'k');
-    assert.equal(or.ORDEWELL_PLANNER_READ_METER, '1');
     const mock = runEnv(base, { cell: mockCell(3799), variant: VARIANTS.V0, settingsPath: 's', maxParallel: 1, enabledRunners: [] });
     assert.equal(mock.OPENROUTER_BASE_URL, 'http://127.0.0.1:3799/v1');
   });
@@ -671,7 +652,7 @@ describe('the run matrix', () => {
   });
 
   it('names runs so a file name can hold them', () => {
-    assert.equal(runId(CELLS[2], VARIANTS.V2, goal('g2'), 3), 'g2--opencode_deepseek-v4.1-flash--V2--r3');
+    assert.equal(runId(CELLS[2], VARIANTS.V1, goal('g2'), 3), 'g2--opencode_deepseek-v4.1-flash--V1--r3');
   });
 });
 
@@ -713,79 +694,6 @@ describe("a run's clone", () => {
     assert.equal(workParent(dir, [path.join(dir, 'missing'), os.tmpdir()]), os.tmpdir());
     assert.equal(workParent(path.join(dir, 'missing'), ['a', 'b']), 'a');
     fs.rmSync(dir, { recursive: true, force: true });
-  });
-});
-
-describe('the budget block', () => {
-  const block = [
-    'CONTEXT AND BUDGETS (this turn):',
-    '- Context: about 12000 tokens of 200000.',
-    '- Your own reads: about 900 tokens last turn, 1400 in this conversation (approximate, from characters).',
-  ].join('\n');
-
-  it('reads the block and its meter line from a turn, the last one where a turn holds two', () => {
-    assert.equal(blockOf(`Earlier.\n${block}\n\nThe user said: go.`), block);
-    assert.equal(blockOf('no block here'), null);
-    const rec = budgetRecord(['first turn, before any block', `x\n${block}`], { source: 'proxy', expected: true });
-    assert.deepEqual(rec, { source: 'proxy', expected: true, turns: [{ block, meter: block.split('\n')[2].slice(2) }] });
-    const noMeter = budgetRecord([block.split('\n').slice(0, 2).join('\n')], { source: 'transcript', expected: false });
-    assert.equal(noMeter.turns[0].meter, null);
-  });
-
-  it('knows which runners report their own reads and where this bench can see their turns', () => {
-    const cell = (id) => CELLS.find((c) => c.id === id);
-    assert.equal(reportsOwnReads(cell('claude-code/haiku')), true);
-    assert.equal(budgetSource(cell('claude-code/haiku')), 'transcript');
-    assert.equal(budgetSource(cell('openrouter/glm-5.3-flash')), 'proxy');
-    assert.equal(budgetSource(mockCell(1)), 'proxy');
-    const codex = CELLS.find((c) => c.provider === 'codex');
-    assert.equal(reportsOwnReads(codex), false);
-    assert.equal(budgetSource(codex), null);
-    assert.equal(budgetSource(CELLS.find((c) => c.provider === 'opencode')), null);
-  });
-
-  it("reads the planner's own turns from Claude Code's transcript, oldest first, not a subagent's", () => {
-    const dir = tmp();
-    const projects = claudeTranscriptDir(path.join(dir, 'work', 'run.1'), { CLAUDE_CONFIG_DIR: path.join(dir, 'config') });
-    assert.equal(path.dirname(projects), path.join(dir, 'config', 'projects'));
-    assert.match(path.basename(projects), /^[A-Za-z0-9-]+$/);
-    fs.mkdirSync(projects, { recursive: true });
-    const entry = (at, content, extra = {}) => JSON.stringify({ type: 'user', timestamp: at, message: { role: 'user', content }, ...extra });
-    fs.writeFileSync(path.join(projects, 's.jsonl'), [
-      entry('2026-01-01T00:00:02Z', [{ type: 'text', text: `second\n${block}` }, { type: 'tool_result', content: 'x' }]),
-      entry('2026-01-01T00:00:01Z', 'first'),
-      entry('2026-01-01T00:00:03Z', 'an agent', { isSidechain: true }),
-      JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: 'reply' } }),
-      'not json',
-    ].join('\n'));
-    assert.deepEqual(claudeTurnInputs(projects), ['first', `second\n${block}`]);
-    assert.deepEqual(claudeTurnInputs(path.join(dir, 'none')), []);
-    fs.rmSync(dir, { recursive: true, force: true });
-  });
-
-  it("records an API planner's turns through a pass-through proxy, each once", async () => {
-    const upstream = http.createServer((req, res) => {
-      let body = '';
-      req.on('data', (c) => { body += c; });
-      req.on('end', () => {
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ path: req.url, auth: req.headers.authorization ?? null, got: JSON.parse(body || 'null')?.messages?.length ?? null }));
-      });
-    });
-    await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
-    const recorder = await startRecorder(`http://127.0.0.1:${upstream.address().port}/v1/`);
-    try {
-      const post = (messages) => fetch(`${recorder.url}/chat/completions`, {
-        method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer k' }, body: JSON.stringify({ messages }),
-      }).then((r) => r.json());
-      const turn1 = [{ role: 'system', content: 's' }, { role: 'user', content: 'goal' }];
-      assert.deepEqual(await post(turn1), { path: '/v1/chat/completions', auth: 'Bearer k', got: 2 });
-      await post([...turn1, { role: 'assistant', content: 'a' }, { role: 'user', content: [{ type: 'text', text: block }] }]);
-      assert.deepEqual(recorder.inputs(), ['goal', block]);
-    } finally {
-      await recorder.stop();
-      await new Promise((resolve) => upstream.close(resolve));
-    }
   });
 });
 

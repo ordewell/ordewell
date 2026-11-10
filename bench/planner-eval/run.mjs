@@ -19,7 +19,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { aggregate, isComplete, markdown } from './lib/aggregate.mjs';
-import { budgetRecord, budgetSource, claudeTranscriptDir, claudeTurnInputs, reportsOwnReads, startRecorder } from './lib/budget.mjs';
 import { ensureBuild, repoRoot, resolveRef, cliMain } from './lib/builds.mjs';
 import {
   CELLS, HERE, MAX_DRIVER_TURNS, VARIANTS, goalText, loadGoals, missingFor, mockCell, parseArgs, quotaOf,
@@ -46,12 +45,12 @@ const USAGE = `usage: node bench/planner-eval/run.mjs (--smoke | --full | --mock
 
   --backend a,b           cells by id or prefix (claude-code, opencode/glm-5.3-flash, openrouter, cline ...)
   --goal g1,g4            goals by id
-  --variant V0,V1         variants (V0 baseline + nudges, V1 candidate, V2 candidate + read meter)
+  --variant V0,V1         variants (V0 baseline + nudges, V1 candidate)
   --repeats N             repeats per (goal, backend, variant)
   --concurrency N         runs at once (default 2)
   --timeout S             seconds a run may take before it is stopped (default 900); a stopped run is a failed run
   --api-timeout S         the same for an API (openrouter) planner (default twice --timeout)
-  --candidate-ref REF     the build V1 and V2 use (default HEAD)
+  --candidate-ref REF     the build V1 uses (default HEAD)
   --baseline-ref REF      the build V0 uses and every target is cut from (default 0ecc6412)
   --runners a,b           ORDEWELL_ENABLED_RUNNERS for every run (default: the cell's planner runner)
   --max-parallel N        ORDEWELL_MAX_PARALLEL for every run (default 4)
@@ -122,12 +121,6 @@ async function drive({ tui, client, workspace, goal, variant, timeoutMs }) {
   }
 }
 
-/** The planner's turns as Claude Code kept them, under the workspace path as given or as the OS resolves it. */
-function transcriptInputs(workspace, env) {
-  const dirs = new Set([claudeTranscriptDir(workspace, env), claudeTranscriptDir(fs.realpathSync.native(workspace), env)]);
-  return [...dirs].flatMap(claudeTurnInputs);
-}
-
 /** One planning run, start to finish: target, settings, TUI, conversation, capture, teardown. */
 async function planOnce({ spec, cell, build, template, modulesFrom, opts, dir, workRoot }) {
   const workspace = path.join(workRoot, spec.id);
@@ -140,11 +133,6 @@ async function planOnce({ spec, cell, build, template, modulesFrom, opts, dir, w
   const enabledRunners = opts.runners ?? [plannerRunner(cell)];
   writeJson(settingsPath, runSettings({ cell, enabledRunners }));
   const env = runEnv(process.env, { cell, variant: spec.variant, settingsPath, maxParallel: opts.maxParallel, enabledRunners });
-  const source = budgetSource(cell);
-  const recorder = source === 'proxy'
-    ? await startRecorder(env.OPENROUTER_BASE_URL || env.OPENAI_BASE_URL || 'https://openrouter.ai/api/v1')
-    : null;
-  if (recorder) env.OPENROUTER_BASE_URL = recorder.url;
   const tui = startTui({ main: build.main, workspace, port, env, logFile: path.join(dir, `${spec.id}.screen.log`), redact });
   let token = null;
   try {
@@ -155,11 +143,8 @@ async function planOnce({ spec, cell, build, template, modulesFrom, opts, dir, w
     await until('the TUI to draw', STARTUP_MS, async () => tui.screen().trim().length > 0);
     await sleep(3000);
     const outcome = await drive({ tui, client, workspace, goal: spec.goal, variant: spec.variant, timeoutMs: timeoutFor(cell, opts) });
-    const inputs = recorder ? recorder.inputs() : source === 'transcript' ? transcriptInputs(workspace, env) : [];
-    const expected = spec.variant.env.ORDEWELL_PLANNER_READ_METER === '1' && reportsOwnReads(cell);
-    return { outcome, screen: tui.screen(), token, budget: source ? budgetRecord(inputs, { source, expected }) : null };
+    return { outcome, screen: tui.screen(), token };
   } finally {
-    await recorder?.stop();
     await tui.stop();
     // The TUI stops the daemon it owns; this covers a TUI that died before it could.
     await run(process.execPath, [build.main, 'stop', '--server', '--port', String(port)], { env, timeoutMs: 30_000 });
@@ -181,9 +166,9 @@ function stopError(stopped, { timeoutMs, lastText = '' } = {}) {
 }
 
 /** A run's metrics and key checks from its session, with the keys and metrics as they are now. */
-function score(goal, session, { driver, budget = null }) {
+function score(goal, session, { driver }) {
   const parts = sessionParts(session);
-  const metrics = runMetrics(session, { driver, autoMerge: true, goalText: goal.goal, budget });
+  const metrics = runMetrics(session, { driver, autoMerge: true, goalText: goal.goal });
   return { metrics, keyChecks: metrics.submitted ? keyChecks(goal, parts.tasks, { researchLog: parts.researchLog }) : [] };
 }
 
@@ -196,7 +181,7 @@ async function record({ spec, builds, templates, opts, dir, workRoot }) {
   let substitution;
   for (;;) {
     try {
-      const { outcome, screen, token, budget } = await planOnce({
+      const { outcome, screen, token } = await planOnce({
         spec, cell, build, template: templates[spec.goal.id], modulesFrom: builds.baseline.mock ? null : builds.baseline.dir, opts, dir, workRoot,
       });
       const quota = quotaOf({ ...outcome, screen });
@@ -209,7 +194,7 @@ async function record({ spec, builds, templates, opts, dir, workRoot }) {
       }
       const session = outcome.session ?? {};
       fs.writeFileSync(path.join(dir, `${spec.id}.session.json`), `${redactJson(session, redactor(process.env, [token]))}\n`);
-      const { metrics, keyChecks: checks } = score(spec.goal, session, { driver: outcome, budget });
+      const { metrics, keyChecks: checks } = score(spec.goal, session, { driver: outcome });
       let rubric;
       if (metrics.submitted && opts.review) {
         say(`${spec.id}: reviewing the plan`);
@@ -343,7 +328,7 @@ async function rescore(opts, goals) {
     }
     const session = JSON.parse(fs.readFileSync(sessionFile, 'utf8'));
     const driver = { turns: old.metrics.turns, wallMs: old.metrics.wallMs, stopped: old.metrics.stopped };
-    const { metrics, keyChecks: checks } = score(goal, session, { driver, budget: old.metrics.budget ?? null });
+    const { metrics, keyChecks: checks } = score(goal, session, { driver });
     const hash = keyHash(goal);
     const error = old.error ?? stopError(driver.stopped, { timeoutMs: driver.wallMs ?? 0 });
     let rubric = old.rubric;
@@ -461,7 +446,7 @@ async function main() {
     } else {
       const wanted = new Set(todo.map((r) => r.variant.build));
       const shas = { baseline: await resolveRef(repo, opts.baselineRef), candidate: await resolveRef(repo, opts.candidateRef) };
-      // The baseline build also lends the target clones its node_modules, so it is built even when only V1/V2 run.
+      // The baseline build also lends the target clones its node_modules, so it is built even when only V1 runs.
       for (const which of ['baseline', ...(wanted.has('candidate') ? ['candidate'] : [])]) {
         builds[which] = await ensureBuild({ repo, buildsDir, sha: shas[which], say });
       }
