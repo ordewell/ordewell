@@ -19,7 +19,10 @@ core stack:
 
 - `mock-provider.mjs` — a local OpenAI-compatible server simulating budget-model
   quirks (streamed reasoning, fenced JSON with trailing commas, prose preambles,
-  empty turns, grilling-ignoring eagerness). Deterministic and offline.
+  empty turns, grilling-ignoring eagerness). Deterministic and offline. Binds
+  127.0.0.1:3799 when started by hand; `--port 0` binds a free port and prints it
+  on the ready line, which `start-mock.mjs` parses for every script and test
+  that starts one, so concurrent runs never share a port.
 - `scenarios.mjs` — the webview harness's scripted conversation tour, and
   `GOAL_SCENARIOS`: one scenario per kind of goal the planner's strategy step
   teaches (#108), driven by the live harness below.

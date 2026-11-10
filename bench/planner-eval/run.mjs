@@ -33,6 +33,7 @@ import { redactJson, redactor } from './lib/redact.mjs';
 import { reviewPlan } from './lib/rubric.mjs';
 import { cloneTarget, ensureTemplate, workParent } from './lib/target.mjs';
 import { startTui } from './lib/tui.mjs';
+import { startMock as start } from '../live/start-mock.mjs';
 
 const USAGE = `usage: node bench/planner-eval/run.mjs (--smoke | --full | --mock | --report <dir> | --rescore <dir>) [options]
 
@@ -372,11 +373,9 @@ async function rescore(opts, goals) {
   return { to, tally };
 }
 
-/** The mock provider, on a port of its own, for `--mock`. */
-async function startMock(repo) {
-  const port = await freePort();
-  const child = spawn(process.execPath, [path.join(repo, 'bench', 'live', 'mock-provider.mjs'), '--port', String(port)], { stdio: 'ignore' });
-  await until('the mock provider', 15_000, () => fetch(`http://127.0.0.1:${port}/v1/models`).then(() => true));
+/** The mock provider, on a port the OS picks, for `--mock`. */
+async function startMock() {
+  const { port, child } = await start();
   return { port, stop: () => child.kill() };
 }
 
@@ -410,7 +409,7 @@ async function main() {
     return 0;
   }
   const repo = await repoRoot(HERE);
-  const mock = opts.mode === 'mock' ? await startMock(repo) : null;
+  const mock = opts.mode === 'mock' ? await startMock() : null;
   try {
     const cells = mock ? [mockCell(mock.port, opts.mockPersona)] : CELLS;
     const runs = selectRuns(opts, { goals, cells });

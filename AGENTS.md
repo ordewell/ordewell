@@ -126,9 +126,13 @@ type errors that describe the wrong problem.
 Offline end-to-end drive of the planner loop — no API key, no network:
 
 ```bash
-node bench/live/mock-provider.mjs &     # 127.0.0.1:3799
+node bench/live/mock-provider.mjs &     # 127.0.0.1:3799 by hand; `--port 0` picks a free one and prints it
 node bench/live/drive-conversation.mjs
 ```
+
+CI, `npm run ci`, `test:changed` and the other harnesses start the mock on
+`--port 0` and read the port from its ready line (`bench/live/start-mock.mjs`),
+so two worktrees' runs never collide on 3799.
 
 ## Layout
 

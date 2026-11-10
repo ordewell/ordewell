@@ -6,12 +6,11 @@
  * `drive-conversation.mjs` imports the built core in-process and so proves none
  * of that. It is ADR-0065's proof that the binary starts and runs.
  *
- *   node bench/live/drive-binary.mjs --bin <path-to-ordewell> [--mock-port 3799]
+ *   node bench/live/drive-binary.mjs --bin <path-to-ordewell> 
  *
- * It starts `mock-provider.mjs` itself on --mock-port (as scripts/ci.mjs's
- * plannerE2e does) and refuses to run if that port is already taken, since a
- * mock left over from an aborted run would be talked to instead. Do not start
- * one beforehand. This script's own `node` starts the mock and nothing else;
+ * It starts `mock-provider.mjs` itself on a port the OS picks (as scripts/ci.mjs's
+ * plannerE2e does), so a mock left over from an aborted run is never talked to
+ * and two runs never contend. Do not start one beforehand. This script's own `node` starts the mock and nothing else;
  * every spawn of the binary gets the environment below.
  *
  * Environment of every binary spawn (built from scratch, not inherited, so a
@@ -44,6 +43,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { startMock } from './start-mock.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WIN = process.platform === 'win32';
@@ -54,9 +54,8 @@ function arg(name, fallback) {
 }
 
 const binArg = arg('bin');
-const mockPort = Number(arg('mock-port', '3799'));
-if (!binArg || !Number.isInteger(mockPort) || mockPort <= 0) {
-  console.error('Usage: node bench/live/drive-binary.mjs --bin <path-to-ordewell> [--mock-port 3799]');
+if (!binArg) {
+  console.error('Usage: node bench/live/drive-binary.mjs --bin <path-to-ordewell>');
   process.exit(2);
 }
 const bin = path.resolve(binArg);
@@ -143,9 +142,6 @@ const pass = (message) => console.log(`ok   ${where}. ${message}`);
 async function main() {
   if (!fs.existsSync(bin)) fail(`--bin ${bin} does not exist`);
 
-  if (!(await portFree(mockPort))) {
-    fail(`port ${mockPort} is already taken; stop whatever holds it (an old mock-provider?) or pass --mock-port`);
-  }
 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-binary-'));
   cleanups.push(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
@@ -188,6 +184,9 @@ async function main() {
   daemonLog = path.join(home, '.ordewell', 'server.log');
 
   const daemonPort = await freePort();
+  // The mock, which this script owns, on a port the OS picks.
+  const { port: mockPort, child: mock } = await startMock();
+  cleanups.push(() => { mock.kill(); });
   const env = {
     PATH: pathDirs.join(path.delimiter),
     HOME: home,
@@ -210,16 +209,6 @@ async function main() {
   };
   const ordewell = (args, { env: extra, ...opts } = {}) => run(bin, args, { ...opts, env: { ...env, ...extra }, cwd: workspace });
   console.log(`bin ${bin}\nhome ${home}\ndaemon port ${daemonPort}, mock port ${mockPort}\nPATH has no node: ${pathDirs.length} dirs`);
-
-  // The mock, which this script owns.
-  const mock = spawn(process.execPath, [path.join(__dirname, 'mock-provider.mjs'), '--port', String(mockPort)], { stdio: ['ignore', 'ignore', 'inherit'] });
-  cleanups.push(() => { mock.kill(); });
-  let mockExited = false;
-  mock.on('exit', () => { mockExited = true; });
-  await until('the mock provider to listen', 10_000, async () => {
-    if (mockExited) fail('the mock provider exited at startup');
-    return !(await portFree(mockPort));
-  });
 
   // 1. --version
   const version = await ordewell(['--version'], { timeoutMs: 30_000 });
