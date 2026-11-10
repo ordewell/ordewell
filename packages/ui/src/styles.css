@@ -6328,6 +6328,21 @@ body.vscode-high-contrast-light .task-card.expanded {
   gap: 6px;
 }
 
+/* The task log's one send-all control, over the stack it sends. */
+.pending-messages-bar {
+  display: flex;
+  flex-shrink: 0;
+  justify-content: flex-end;
+  padding: 6px 14px 0;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-primary);
+}
+
+.pending-messages-bar + .pending-messages {
+  border-top: none;
+  padding-top: 2px;
+}
+
 /* The stack and the composer read as one block. */
 .pending-messages + .chat-input,
 .pending-messages + .task-log-composer {

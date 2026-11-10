@@ -1,4 +1,4 @@
-import type { AccountLimitSnapshot, ApprovalDecision, DisplayBlock, StructuredTurnEnd, TaskLogHeaderView } from '@ordewell/core';
+import type { AccountLimitSnapshot, ApprovalDecision, DisplayBlock, StructuredTurnEnd, TaskLogHeaderView, TaskMessageFrom } from '@ordewell/core';
 
 /*
  * The messages between the extension host and a task-log panel (ADR-0018, V1).
@@ -16,6 +16,8 @@ export interface TaskLogQueuedMessage {
   handedOver?: boolean;
   /** Force sent: it goes as soon as the running turn is interrupted (ADR-0023, F1). */
   forced?: boolean;
+  /** Ordewell's own message, not a person's: it is never taken back or glued into theirs. */
+  from?: TaskMessageFrom;
 }
 
 /**
