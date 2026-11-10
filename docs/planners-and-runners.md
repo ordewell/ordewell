@@ -18,6 +18,25 @@ key, because the agent is signed in on its own and the account you already use w
 it pays for planning. The planner's models and effort levels come from the same list
 Ordewell discovers for that runner's tasks, described below.
 
+A harness planner explores with its own subagents within its turn: Claude Code's
+`Agent` tool, Codex's subagents. OpenCode's own would run with whatever permission their
+agent has, so Ordewell denies them and offers its own read-only research agent instead,
+as the tool `spawn_research_agent`, once a workspace names the model it runs on:
+
+```bash
+# .ordewell/env, or exported where the daemon starts
+ORDEWELL_RESEARCH_AGENT_MODEL=openrouter:deepseek/deepseek-v4.1-flash
+```
+
+The value is `<provider>:<model>`, the provider one `ordewell planner` lists, and the
+agent pays with that provider's own key, `OPENROUTER_API_KEY` here, billed apart from
+the planner's login. The agent only reads the workspace: no shell, web or MCP tool, and
+no agent of its own
+([ADR-0066](adr/planner-envelope/0066-opencode-planners-get-ordewells-research-agent.md)).
+Google Gemini cannot serve it. Without the variable an OpenCode planner has no in-turn
+agent and delegates with research tasks; with a value that cannot serve one, such as a
+provider whose key is missing, the planner does the same and the chat says why.
+
 An **API planner** calls a provider's API, with your key where the provider needs
 one. Providers include OpenRouter, Google Gemini, DeepSeek, Moonshot / Kimi and xAI;
 `ordewell planner` shows the full list and marks each provider whose key is missing

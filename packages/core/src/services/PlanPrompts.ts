@@ -10,7 +10,6 @@ import { taskRefOf } from './TaskRefs';
 import type { SkillInfo } from './SkillsService';
 import { modelInvocablePlannerSkills, modelInvocableTaskSkills } from './skillInvocation';
 import { quotedMessageArgs } from './landingMessage';
-import { OPENCODE_SCOUT_AGENT } from './harness/openCodeOrdewell';
 
 // Keeps the message the merge was given; `strip` drops the `# Conflicts:` lines git adds to it.
 const COMMIT_MERGE = 'git commit --no-edit --cleanup=strip';
@@ -52,9 +51,12 @@ export function buildResearchToolsPrompt(subagents = true): string {
  * must be dense, self-contained, and carry exact file paths — never questions,
  * never a task plan.
  */
-export function buildSubagentSystemPrompt(): string {
+export function buildSubagentSystemPrompt(confined = false): string {
   return [
-    'You are a read-only research subagent working for a project planner. You receive one self-contained research task, explore the workspace with your tools, and reply with a single digest. You never modify files and cannot spawn further agents. You may fetch or search the web, but a read that would need approval is refused — note the gap in your digest rather than retrying.',
+    confined
+      // ADR-0066: the agent a harness planner calls over MCP reads the workspace and nothing else.
+      ? 'You are a read-only research subagent working for a project planner. You receive one self-contained research task, explore the workspace with your tools, and reply with a single digest. Your tools only read files inside the workspace: you have no shell, no web and no way to modify files or spawn further agents. When a command or a web page would answer the question, name it in your digest for the planner to run or read.'
+      : 'You are a read-only research subagent working for a project planner. You receive one self-contained research task, explore the workspace with your tools, and reply with a single digest. You never modify files and cannot spawn further agents. You may fetch or search the web, but a read that would need approval is refused — note the gap in your digest rather than retrying.',
     '',
     'Work efficiently: batch independent tool calls in one reply; prefer glob/grep to locate, then read only what matters. Your tool budget is small — stop exploring when you can answer the task.',
     '',
@@ -146,22 +148,24 @@ function researchPhaseBlock(harnessMode: boolean, researchShell?: ConversationVa
 
 /**
  * The agents a planner explores with inside its own turn, named as its backend
- * names them, or null when it has none: an OpenCode planner's subagents are
- * withheld but for Ordewell's read-only scout, which it has only on 2.x behind
- * its gate (ADR-0009 T8, ADR-0026), and an API planner's service may have no
+ * names them, or null when it has none: an OpenCode planner's own subagents
+ * are withheld (ADR-0009 T8, ADR-0026), so it has Ordewell's research agent
+ * only where the workspace names its model (ADR-0066), and an API planner's service may have no
  * research subagents to spawn (Gemini, which does not override
  * `createSubagentChat`). An OpenAI-compatible planner's are Ordewell's own
  * (ADR-0005), which return within the tool round that started them.
  */
 export type InTurnAgents = string | null;
 
-export function inTurnAgents(harness: boolean, runner?: RunnerId, subagents = true, scout = false): InTurnAgents {
+export function inTurnAgents(harness: boolean, runner?: RunnerId, subagents = true, research = false): InTurnAgents {
   if (!subagents) return null;
   if (!harness) return 'spawn_research_agent';
   switch (runner) {
     case 'claude-code': return 'your Agent tool';
-    case 'codex': return 'your own subagents, if this session has them';
-    case 'opencode': return scout ? `the \`${OPENCODE_SCOUT_AGENT}\` subagent through your \`subagent\` tool` : null;
+    // Codex's multi-agent tool, on by default (codex-cli 0.167.0; its `features.multi_agent`).
+    case 'codex': return 'your spawn_agent tool';
+    // Ordewell's own agent, served over MCP where the session can run one; OpenCode's own subagents stay withheld (ADR-0026).
+    case 'opencode': return research ? 'spawn_research_agent' : null;
     // No ACP planner's own subagents are confirmed inside the envelope, so each start withholds them (ADR-0026).
     case 'copilot-cli':
     case 'qwen-code':
@@ -187,12 +191,13 @@ export function inTurnAgents(harness: boolean, runner?: RunnerId, subagents = tr
  * prompt (#33, #112) can include it unchanged.
  */
 export function whoExploresSection(agents: InTurnAgents): string[] {
-  // A count the planner can check mid-turn: left to judge "a wider question", planners read whole packages themselves (ADR-0037 R5).
-  const trigger = 'before you read across more than one package or directory tree, or past about ten reads for one question';
+  // Decided before reading, by area, not by a count: no planner can count its reads mid-turn, and on the bench's breadth goal a count delegated nothing for Codex or OpenCode (ADR-0037 R5).
+  const trigger = 'with the map read, before you read inside any package or top-level area the goal touches';
+  const inside = 'Inside one, read yourself only a targeted lookup whose answer decides your next step.';
   const agentTier = agents === null
-    ? `- A research task, past that: ${trigger}, give each package or independent question a research task, so only their reports reach you. You have no agents of your own here: research tasks are how you delegate.`
+    ? `- A research task, for the rest: ${trigger}, give each area a research task, so only their reports reach you. ${inside} You have no agents of your own here: research tasks are how you delegate.`
     : [
-      `- An agent, awaited, past that: ${trigger}, send agents, one per package or independent question, in parallel, so only their digests reach you; a question whose parts depend on each other stays with one. ${agents === 'spawn_research_agent' ? 'Use spawn_research_agent, whose agents return within your tool round.' : `Use ${agents} and wait for its results inside this reply, never in the background: once your turn ends, nothing you say reaches the user.`}`,
+      `- An agent, awaited, for the rest: ${trigger}, send one agent per area, in parallel, so only their digests reach you. ${inside} ${agents === 'spawn_research_agent' ? 'Use spawn_research_agent, whose agents return within your tool round.' : `Use ${agents} and wait for its results inside this reply, never in the background: once your turn ends, nothing you say reaches the user.`}`,
       'Each returns a digest of about 1-2k tokens: conclusion first, file:line references, decisions found, what is uncertain; no pasted file bodies.',
     ].join(' ');
   return [
@@ -260,8 +265,12 @@ export interface ConversationVariant {
   runner?: RunnerId;
   /** The skill catalog: task skills it can attach on every path, planner skills it can load only with tools. */
   skills?: readonly SkillInfo[];
-  /** An OpenCode planner was offered Ordewell's scout (ADR-0026); its adapter tells it so where the server's resolved agent withheld it. */
-  scout?: boolean;
+  /**
+   * A harness planner without agents of its own is served Ordewell's
+   * `spawn_research_agent` over MCP (ADR-0066). Absent, the prompt does not
+   * change by a byte.
+   */
+  researchAgent?: boolean;
   /** Whether an API planner's service can run Ordewell's research subagents, which Gemini's cannot (it has no `createSubagentChat`), and a subplanner without `research` its harness's (ADR-0056 M6). */
   subagents?: boolean;
   /** Every AI task gets its own worktree (ADR-0013), so file overlap no longer forces an order; of every repo of a group (ADR-0014). */
@@ -396,7 +405,7 @@ const SHARED_APPEND_FILE_RULE =
  * `research` (ADR-0056 M6), so it has no research tasks to delegate to either:
  * what is wider than its own reads it reads too, or gives a task.
  */
-const NO_RESEARCH_TIER: readonly [RegExp, string] = [/^- A research task, past that: .*$/m, '- Your own reads, past that: you have no agents of your own here and no research tasks, so a wider question you need this turn is yours to read too. Keep only its conclusion, and give anything larger a task.'];
+const NO_RESEARCH_TIER: readonly [RegExp, string] = [/^- A research task, for the rest: .*$/m, '- Your own reads, for the rest: you have no agents of your own here and no research tasks, so a wider question you need this turn is yours to read too. Keep only its conclusion, and give anything larger a task.'];
 
 /**
  * What a planner must know about a repo group (ADR-0014), as a section of its
@@ -631,7 +640,7 @@ function buildConversationBody(
 ): string {
   const tools = variant.harness ?? false;
   const autorun = variant.autorun ?? false;
-  const agents = inTurnAgents(tools, variant.runner, variant.subagents ?? true, variant.scout ?? false);
+  const agents = inTurnAgents(tools, variant.runner, variant.subagents ?? true, variant.researchAgent ?? false);
   const submit = tools
     ? 'call list_runners and list_models, then submit the final task plan with submit_plan'
     : 'emit the final task plan as a JSON object with a "tasks" array';

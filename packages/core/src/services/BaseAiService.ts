@@ -224,7 +224,16 @@ export abstract class BaseAiService {
    * live reasoning deltas on models that expose them, same as the top-level loop;
    * `onUsage` takes each call's usage, as the planner's own chat reports it.
    */
-  protected createSubagentChat(_onReasoning?: (delta: string) => void, _onUsage?: (record: UsageRecord) => void): ResearchChat | null { return null; }
+  protected createSubagentChat(_onReasoning?: (delta: string) => void, _onUsage?: (record: UsageRecord) => void, _only?: ReadonlySet<string>): ResearchChat | null { return null; }
+
+  /**
+   * A confined research chat for a harness planner's `spawn_research_agent`
+   * (ADR-0066): this service's subagent chat with the workspace reads alone
+   * declared, or null where it has none (Gemini).
+   */
+  confinedResearchChat(onReasoning: (delta: string) => void, onUsage: (record: UsageRecord) => void, only: ReadonlySet<string>): ResearchChat | null {
+    return this.createSubagentChat(onReasoning, onUsage, only);
+  }
 
   /**
    * One spawn_research_agent tool call, executed at the service layer (not in

@@ -86,7 +86,7 @@ denyMessage = ${JSON.stringify(DELEGATION_REFUSED)}
 function restrictedPolicy(): string {
   const served = [
     taskToolSet({}), taskToolSet({ readOnly: true }), taskToolSet({ board: true }), taskToolSet({ readOnly: true, board: true }),
-    plannerToolSet({ delegates: true, subplanner: true }),
+    plannerToolSet({ delegates: true, subplanner: true, research: true }),
   ];
   const names = [...new Set(served.flat().map((tool) => JSON.stringify(`${SERVER_PREFIX}${tool.name}`)))];
   return `${REFUSED_NATIVE_TOOLS}

@@ -53,6 +53,8 @@ export interface PlannerTokenScope {
   delegates?: boolean;
   /** A subplanner's token (ADR-0055 D5): it serves `task_complete` and `checkpoint` too, which its handler sends to the parent's attempt. */
   subplanner?: boolean;
+  /** It serves Ordewell's `spawn_research_agent` (ADR-0066), for a harness planner with no agents of its own: a token without it does not change by a byte. */
+  research?: boolean;
 }
 
 /** Where a runner reaches the server and what it presents there. Never put either half in a prompt. */

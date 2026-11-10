@@ -53,3 +53,13 @@ describe('a subplanner\'s token', () => {
     await server.dispose();
   });
 });
+
+describe('a token serving the research agent (ADR-0066)', () => {
+  it('names spawn_research_agent past a planner\'s tools, so a client pre-allows it, and no other tool', async () => {
+    const server = new OrdewellMcpServer();
+    const research = await server.issuePlannerToken({ sessionId: 's', research: true });
+    expect(research.extraTools).toEqual(['spawn_research_agent']);
+    expect(ordewellToolNames('planner', [], research.extraTools)).toEqual([...PLANNER_TOOLS.map((t) => t.name), 'spawn_research_agent']);
+    await server.dispose();
+  });
+});

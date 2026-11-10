@@ -4,16 +4,13 @@ import { REQUEST_TIMEOUT_MS } from '../openCodeTransport';
 import type { AgentEvent, AgentProcessDeps, AgentStartOptions, SpawnFn, TaskStartOptions, TaskModeAgentAdapter } from '../AgentAdapter';
 import { mcpClientConfig, TASK_COMPLETION_CONTRACT, taskCompletionContract } from '../../mcp';
 import type { RunnerPlacement } from '../../executionLease';
-import { OPENCODE_PLANNER_PERMISSION, OPENCODE_SCOUT_AGENT, scoutAgentConfig } from '../openCodeOrdewell';
-import { SCOUT_WITHHELD } from '../OpenCodeV2';
+import { OPENCODE_PLANNER_PERMISSION } from '../openCodeOrdewell';
 import { OPENCODE_MANIFEST } from '../../../plugins/builtin/opencode.manifest';
 import { modeIds, fakeSpawn, sseResponse, type FakeEventStream } from '../../__tests__/harnessTestKit';
 import type { StructuredEvent } from '../../../interfaces/IRunner';
 import { toTaskLogEvent } from '../../../models/TaskLog';
 import { replayTaskLog } from '../../../conversation/taskLog';
 import { patient } from '../../../testing';
-
-const scout = { agent: { [OPENCODE_SCOUT_AGENT]: scoutAgentConfig() } };
 
 /**
  * OpenCode's task mode (ADR-0018, #55): `opencode serve` driven over HTTP
@@ -1039,8 +1036,7 @@ describe('OpenCodeAdapter planner — still read-only', () => {
       system: 'PLAN',
     });
     // Its server's whole permission policy is Ordewell's (ADR-0026), with no language server and none of the project's config (ADR-0028).
-    // Byte for byte: with ORDEWELL_OPENCODE_SCOUT unset, nothing of the scout reaches the config (ADR-0026).
-    expect(env.OPENCODE_CONFIG_CONTENT).toBe(JSON.stringify({ lsp: false, permission: OPENCODE_PLANNER_PERMISSION }));
+    expect(JSON.parse(env.OPENCODE_CONFIG_CONTENT ?? 'null')).toEqual({ lsp: false, permission: OPENCODE_PLANNER_PERMISSION });
     expect(env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe('1');
     expect(server.requests.find((r) => r.path === '/permission/per_1/reply')?.body).toEqual({ reply: 'reject' });
     expect(server.requests.some((r) => r.path.endsWith('/prompt_async'))).toBe(false);
@@ -1070,29 +1066,6 @@ describe('OpenCodeAdapter planner — still read-only', () => {
 
     expect(server.requests.find((r) => r.path === `/session/${SES}/permissions/per_1`)?.body).toEqual({ response: 'reject' });
     expect(server.requests.some((r) => r.path === `/session/${SES}/permissions/per_2`)).toBe(false);
-    adapter.dispose();
-  });
-
-  // 1.x has no rule that admits one agent alone: its planner keeps `task` denied, and is told the scout its prompt names is not there.
-  it('withholds the scout from a 1.x planner, says why, and tells the planner', async () => {
-    vi.stubEnv('ORDEWELL_OPENCODE_SCOUT', '1');
-    const { server, release } = plannerServer();
-    const { adapter } = await startTask(server, { kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN' });
-    const turn = adapter.send('the goal', () => undefined);
-    await server.stream();
-    release();
-    await turn;
-
-    const message = server.requests.find((r) => r.path === `/session/${SES}/message` && r.method === 'POST');
-    expect(message?.body).toMatchObject({ tools: { task: false }, system: `PLAN\n\n${SCOUT_WITHHELD}` });
-    expect(adapter.scoutWithheld?.()).toMatch(/OpenCode 1\.x/);
-    adapter.dispose();
-  });
-
-  it('reports nothing withheld from a 1.x planner that never asked for the scout', async () => {
-    const { adapter } = await startTask(fakeServer(), { kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN' });
-
-    expect(adapter.scoutWithheld?.()).toBeNull();
     adapter.dispose();
   });
 });
@@ -1156,67 +1129,6 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
     const { adapter, env } = await startTask(fakeServer(), { kind: 'planner', cwd: '/repo', systemPrompt: 'plan read-only', mcp });
 
     expect(configOf(env)).toEqual({ mcp: { ordewell }, lsp: false, ...unevicted, permission: { ...OPENCODE_PLANNER_PERMISSION, ...plannerAllow } });
-    adapter.dispose();
-  });
-
-  // ADR-0026: the scout is gated until its live probe passes; only the exact value `1` opens the gate.
-  it.each([undefined, '', '0', 'true', ' 1'])('gives the planner no scout and no subagent depth with ORDEWELL_OPENCODE_SCOUT=%j', async (value) => {
-    vi.stubEnv('ORDEWELL_OPENCODE_SCOUT', value);
-    const { adapter, env } = await startTask(fakeServer(), { kind: 'planner', cwd: '/repo', systemPrompt: 'plan read-only', mcp });
-
-    expect(env.OPENCODE_CONFIG_CONTENT).toBe(JSON.stringify({ mcp: { ordewell }, lsp: false, ...unevicted, permission: { ...OPENCODE_PLANNER_PERMISSION, ...plannerAllow } }));
-    adapter.dispose();
-  });
-
-  it('gives the planner the scout and pins its depth with ORDEWELL_OPENCODE_SCOUT=1', async () => {
-    vi.stubEnv('ORDEWELL_OPENCODE_SCOUT', '1');
-    const { adapter, env } = await startTask(fakeServer(), { kind: 'planner', cwd: '/repo', systemPrompt: 'plan read-only', mcp });
-
-    expect(configOf(env)).toEqual({ mcp: { ordewell }, lsp: false, experimental: { location_idle_timeout: false, subagent_depth: 1 }, ...scout, permission: { ...OPENCODE_PLANNER_PERMISSION, ...plannerAllow } });
-    adapter.dispose();
-  });
-
-  it('gives a subplanner without research no scout, whatever the gate says', async () => {
-    vi.stubEnv('ORDEWELL_OPENCODE_SCOUT', '1');
-    const { adapter, env } = await startTask(fakeServer(), { kind: 'planner', cwd: '/repo', systemPrompt: 'plan read-only', mcp, noSubagents: true });
-
-    expect(configOf(env)).toEqual({ mcp: { ordewell }, lsp: false, ...unevicted, permission: { ...OPENCODE_PLANNER_PERMISSION, ...plannerAllow } });
-    adapter.dispose();
-  });
-
-  // ADR-0026: the planner may start this one agent, in 1.x's shape, which both lines read (1.18.35 throws on a V2 `permissions` key).
-  it('gives the planner Ordewell\'s scout over an inherited one of the same name, in a shape both OpenCode lines load', async () => {
-    vi.stubEnv('ORDEWELL_OPENCODE_SCOUT', '1');
-    vi.stubEnv('OPENCODE_CONFIG_CONTENT', JSON.stringify({
-      agent: { 'ordewell-scout': { model: 'cheap/model', permission: { bash: 'allow', edit: 'allow' } }, reviewer: { mode: 'subagent', prompt: 'r' } },
-      agents: { 'ordewell-scout': { permissions: [{ action: '*', resource: '*', effect: 'allow' }] } },
-      mode: { 'ordewell-scout': { tools: { bash: true } } },
-      experimental: { subagent_depth: 5 },
-    }));
-    const { adapter, env } = await startTask(fakeServer(), { kind: 'planner', cwd: '/repo', systemPrompt: 'plan read-only', mcp });
-    const config = configOf(env) as { agent: Record<string, Record<string, unknown>>; agents?: unknown; mode?: unknown; experimental: Record<string, unknown> };
-
-    expect(config.agent['ordewell-scout']).toEqual(scoutAgentConfig());
-    expect(config.agent.reviewer).toEqual({ mode: 'subagent', prompt: 'r' });
-    expect(config).not.toHaveProperty('agents');
-    expect(config).not.toHaveProperty('mode');
-    expect(config.experimental).toEqual({ location_idle_timeout: false, subagent_depth: 1 });
-    expect(JSON.stringify(config)).not.toContain('"permissions"');
-    // The catch-all comes first, so the last match for any tool not named is a deny; only the read tools are allowed.
-    const rules = scoutAgentConfig().permission as Record<string, string>;
-    expect(Object.keys(rules)[0]).toBe('*');
-    expect(Object.entries(rules).filter(([, effect]) => effect === 'allow').map(([tool]) => tool).sort()).toEqual(['glob', 'grep', 'list', 'read']);
-    for (const tool of ['bash', 'shell', 'execute', 'edit', 'write', 'apply_patch', 'webfetch', 'websearch', 'external_directory', 'task', 'subagent', 'question']) expect(rules[tool]).toBe('deny');
-    expect(Object.keys(rules).some((tool) => tool.startsWith('ordewell_'))).toBe(false);
-    adapter.dispose();
-  });
-
-  it('gives a task no scout and leaves its subagent depth alone', async () => {
-    vi.stubEnv('ORDEWELL_OPENCODE_SCOUT', '1');
-    vi.stubEnv('OPENCODE_CONFIG_CONTENT', JSON.stringify({ experimental: { subagent_depth: 3 } }));
-    const { adapter, env } = await startTask(fakeServer(), taskStart({ mcp }));
-
-    expect(configOf(env)).toEqual({ mcp: { ordewell }, experimental: { subagent_depth: 3, location_idle_timeout: false }, permission: taskAllow });
     adapter.dispose();
   });
 
