@@ -411,6 +411,31 @@ describe('DaemonHost held prompts', () => {
     expect(seen.filter((m) => m.type === 'heldPrompts').at(-1)).toMatchObject({ prompts: [] });
   });
 
+  it.each([
+    ['refused', 'planner_not_ready', ['one\ntwo\nthree']],
+    ['stopped', 'planner_turn_stopped', []],
+  ])('gives back what a send now took only when its turn was %s', async (_case, code, unsent) => {
+    const daemon = fakeDaemon({
+      'sessions.load': ok({ ok: true, sessionId: 's1', goal: 'Ship the parser', plan: PLAN }),
+      'plans.converseMessage': async () => {
+        daemon.push('s1', { type: 'planner_turn_started', turnId: 'p1', sessionId: 's1', stream: 'd1', seq: 1 });
+        await host.handle({ type: 'holdPrompt', text: 'one' });
+        await host.handle({ type: 'holdPrompt', text: 'two' });
+        await host.handle({ type: 'sendMessageNow', text: 'three' });
+        return ok({ plan: PLAN });
+      },
+      'plans.converseMessageNow': { ok: false, status: 409, error: 'refused', data: { error: 'No.', code } },
+    });
+    const host = hostWith();
+    const seen = watch(host);
+    await opened(daemon, host);
+
+    await act(() => host.handle({ type: 'sendMessage', text: 'first', typed: true }));
+
+    expect(seen.flatMap((m) => (m.type === 'promptUnsent' ? [m.text] : []))).toEqual(unsent);
+    expect(seen.filter((m) => m.type === 'heldPrompts').at(-1)).toMatchObject({ prompts: [] });
+  });
+
   it('sends now with no turn in flight as a plain send', async () => {
     const daemon = fakeDaemon({
       'sessions.load': ok({ ok: true, sessionId: 's1', goal: 'Ship the parser', plan: PLAN }),

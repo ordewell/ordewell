@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { createSession, flattenTasks, loadSession, RunnerRegistry, BufferedTaskOutputSource, createTask } from '@ordewell/core';
+import { createSession, flattenTasks, loadSession, RunnerRegistry, BufferedTaskOutputSource, createTask, PlannerTurnStoppedError } from '@ordewell/core';
 import type { IAiService, IRunner, LegacyPlanState, ModelResolver, Session, SessionMessage } from '@ordewell/core';
 import { fakeConfig, fakeFileSystem } from '@ordewell/core/testing';
 import { ChatViewProvider } from '../../providers/ChatViewProvider';
@@ -555,6 +555,21 @@ describe('webview messages reach the session through one entry point each', () =
       expect(lastHold()).toEqual([]);
       // Nothing was left held to follow the forced turn.
       expect(converse).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['refused', new Error('the daemon is gone'), ['one\ntwo\nuse Postgres']],
+      ['stopped', new PlannerTurnStoppedError(), []],
+    ])('gives back what a send now took only when its turn was %s', async (_case, error, unsent) => {
+      vi.spyOn(h.session, 'forceSendPrompt').mockRejectedValue(error);
+      h.deps.isGeneratingPlan = () => true;
+      h.deps.chatProvider.conversation.holdPrompt('one');
+      h.deps.chatProvider.conversation.holdPrompt('two');
+
+      await h.route({ type: 'sendMessageNow', text: 'use Postgres' });
+
+      expect(h.posts.flatMap((m) => (m.type === 'promptUnsent' ? [m.text] : []))).toEqual(unsent);
+      expect(lastHold()).toEqual([]);
     });
 
     it('sends nothing now when nothing is held and nothing is typed', async () => {
