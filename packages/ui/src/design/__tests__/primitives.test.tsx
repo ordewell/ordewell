@@ -8,6 +8,7 @@ import type { Task } from '@ordewell/core';
 import { RUNNER_NAMES, RunnerBadge, runnerName } from '../runners';
 import { RefreshCw } from 'lucide-react';
 import { Button } from '../Button';
+import { PullIcon, PushIcon } from '../arrows';
 import { Tabs } from '../Tabs';
 import TaskSummary from '../../chat/components/TaskSummary';
 
@@ -124,11 +125,62 @@ describe('a busy button', () => {
     expect(rules).toMatch(/prefers-reduced-motion: reduce\) \{[^@]*?\.ow-spin \{ animation: none; \}/);
   });
 
-  it('is an ordinary button, with no busy mark or turning icon, when nothing is pending', () => {
-    render(<Button icon={RefreshCw}>Fetch</Button>);
-    const button = screen.getByRole('button', { name: 'Fetch' });
-    expect(button).not.toHaveAttribute('aria-busy');
-    expect(button).toBeEnabled();
-    expect(button.querySelector('svg')).not.toHaveClass('ow-spin');
+  it('is an ordinary button, with no busy mark or moving icon, when nothing is pending', () => {
+    render(<><Button icon={RefreshCw}>Fetch</Button><Button icon={PullIcon} busyMotion="glide">Pull</Button></>);
+    for (const name of ['Fetch', 'Pull']) {
+      const button = screen.getByRole('button', { name });
+      expect(button).not.toHaveAttribute('aria-busy');
+      expect(button).toBeEnabled();
+      expect(button.querySelector('svg')).not.toHaveClass('ow-spin');
+      expect(button.querySelector('svg')).not.toHaveClass('ow-glide');
+    }
+  });
+
+  it.each([
+    { icon: PullIcon, name: 'Pull', way: 'down', shift: /0% \{ transform: translateY\(-\d+px\)[^}]*\}[^@]*100% \{ transform: translateY\(\d+px\)/ },
+    { icon: PushIcon, name: 'Push', way: 'up', shift: /0% \{ transform: translateY\(\d+px\)[^}]*\}[^@]*100% \{ transform: translateY\(-\d+px\)/ },
+  ])('glides $name\'s arrow $way with its line still, never turning it, and holds it under reduced motion', ({ icon, name, way, shift }) => {
+    const press = vi.fn();
+    render(<Button icon={icon} busy busyMotion="glide" onClick={press}>{name}</Button>);
+    const button = screen.getByRole('button', { name });
+    expect(button).toHaveAttribute('aria-busy', 'true');
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(press).not.toHaveBeenCalled();
+
+    const svg = button.querySelector('svg')!;
+    expect(svg).toHaveClass('ow-glide');
+    expect(svg).not.toHaveClass('ow-spin');
+    const arrow = svg.querySelector(`g.ow-glide-${way}`)!;
+    expect(arrow.querySelectorAll('path')).toHaveLength(2);
+    // The line is drawn outside the moving group, and the arrow is clipped short of it.
+    const line = svg.querySelector(':scope > path')!;
+    expect(arrow.contains(line)).toBe(false);
+    const clip = arrow.parentElement!.getAttribute('clip-path')!;
+    expect(clip).toMatch(/^url\(#[\w-]+\)$/);
+    expect(svg.querySelector(`clipPath${clip.slice(4, -1)}`)).not.toBeNull();
+
+    const rules = readFileSync(resolve(__dirname, '../../design.css'), 'utf8');
+    const keyframes = rules.match(new RegExp(`@keyframes ow-glide-${way} \\{[\\s\\S]*?\\n\\}`))![0];
+    expect(keyframes).toMatch(shift);
+    expect(keyframes).not.toMatch(/rotate/);
+    expect(rules).toMatch(new RegExp(`\\.ow-glide \\.ow-glide-${way} \\{ animation: ow-glide-${way} `));
+    expect(rules).toMatch(new RegExp(`prefers-reduced-motion: reduce\\) \\{[^@]*?\\.ow-glide \\.ow-glide-${way}[^{]*\\{ animation: none; \\}`));
+  });
+
+  it('turns its icon by default, so a button that does not ask for a glide is unchanged', () => {
+    render(<Button busy>Load more</Button>);
+    const button = screen.getByRole('button', { name: 'Load more' });
+    expect(button).toHaveAttribute('aria-busy', 'true');
+    expect(button.querySelector('svg')).toBeNull();
+    cleanup();
+    render(<Button icon={PullIcon} busy>Pull</Button>);
+    expect(screen.getByRole('button', { name: 'Pull' }).querySelector('svg')).toHaveClass('ow-spin');
+  });
+
+  it('gives each arrow on a page its own clip', () => {
+    const { container } = render(<><PullIcon /><PullIcon /><PushIcon /></>);
+    const ids = [...container.querySelectorAll('clipPath')].map((c) => c.id);
+    expect(new Set(ids).size).toBe(3);
   });
 });

@@ -981,12 +981,16 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
   action in flight disables its buttons.
   - *Fetch, pull and push* run one at a time per repository, whichever
     surface started them: this sidebar, the Git sidebar's Fetch or the
-    palette's *Git: Fetch*. The one running is `busy`: its icon turns, it is
+    palette's *Git: Fetch*. The one running is `busy`: its icon moves, it is
     `aria-busy`, and it stays at full strength while the other two are
-    disabled. Pull and push are busy only once their confirm is accepted. The
-    icon turns only while the action is pending, and never under reduced
-    motion. A second start while one runs is refused, and announced as
-    "web is already syncing."; the palette's Fetch is disabled meanwhile.
+    disabled. Fetch's circling arrows turn. Pull's and Push's arrows never
+    turn, since a turned arrow points the wrong way half the time: the arrow
+    glides down into its line for Pull, or up out of it for Push, while the
+    line stays still (`busyMotion="glide"`). Pull and push are busy only once
+    their confirm is accepted. The icon moves only while the action is
+    pending, and holds still under reduced motion. A second start while one
+    runs is refused, and announced as "web is already syncing."; the
+    palette's Fetch is disabled meanwhile.
 - **Empty.** "No changes in web." Ahead and behind still show.
 - **Error.**
   - A refused action shows git's own text in the box: a hook that failed, a
@@ -2065,8 +2069,17 @@ This app, then Advanced. Every field in a card takes the `inset` surface.
     - `--ow-motion-base`, 160 ms: panels, popovers, a tab switch;
     - `--ow-motion-slow` (new), 240 ms: an overlay drawer, a stage snap.
   - The easing is `cubic-bezier(0.2, 0, 0, 1)`.
+  - A busy button's icon moves for as long as its action is pending. An
+    icon that reads the same at any angle, such as Fetch's, turns once every
+    1.2 s, linear. A directional arrow, Pull's or Push's, is never turned. It
+    glides along its own direction instead, translate only so its strokes
+    stay crisp, over 1.4 s on the standard easing. It eases in from behind
+    its resting place, rests where the idle icon draws it, then speeds on and
+    fades, clipped where it meets its line, which never moves.
   - Under `prefers-reduced-motion`, every duration is 0, the running shape
-    stops turning, and stage snaps jump.
+    stops turning, a busy button's icon holds still at rest, and stage snaps
+    jump. The busy button still reads as working: it keeps full strength and
+    the progress cursor.
   - Nothing moves to celebrate.
 
 ### Layout rules that prevent overlap
@@ -2137,7 +2150,7 @@ a status.
 | Conflict | `triangle-alert` | Usage limit | `hourglass` |
 | Dependency in / out | `arrow-left-to-line` / `arrow-right-from-line` | Interrupt | `octagon-x` |
 | Commit | `git-commit-horizontal` | Branch create | `git-branch-plus` |
-| Fetch | `refresh-cw` | Pull / push | `arrow-down-to-line` / `arrow-up-from-line` |
+| Fetch | `refresh-cw` | Pull / push | `arrow-down-to-line` / `arrow-up-from-line`, drawn as `PullIcon` / `PushIcon` |
 | Stash / pop | `archive` / `archive-restore` | Discard | `undo` |
 | Stage / unstage a file | `plus` / `minus` | Open in editor | `external-link` |
 | Folder / file | `folder` / `file` | Ignored | `eye-off` |
@@ -2147,6 +2160,11 @@ a status.
 | Split | `columns-2` | Terminal panel | `panel-bottom` |
 | Status: not started, passed, failed, blocked | `circle`, `circle-check`, `circle-x`, `ban` | Status: running | `loader-circle` |
 | Status: skipped | `circle-dashed` | Status: waiting for merge | `git-merge` |
+
+**Pull and push** are drawn by the design kit as `PullIcon` and `PushIcon`:
+Lucide's `arrow-down-to-line` and `arrow-up-from-line`, stroke for stroke,
+with the arrow its own group so a busy button can glide it while the line
+stays still.
 
 **Custom glyphs.** There are eight, drawn on the logo's motif: round-capped
 strokes converging on a teal dot. They are drawn on a 24 px grid, with a

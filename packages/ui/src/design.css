@@ -61,10 +61,36 @@
 .ow-status-turning > svg { animation: ow-turn 1.6s linear infinite; }
 .ow-spin { animation: ow-turn 1.2s linear infinite; }
 
-/* The running shape stops turning; it still reads as running by its half fill. */
+/*
+ * A busy Pull or Push: the arrow glides along its own way and the line stays
+ * still. Translate only, never rotate, so the strokes stay crisp. It eases in,
+ * rests where the idle icon draws it, then speeds on and fades. Distances are
+ * in the icon's 24px grid; the icon's clip hides the arrow at the line.
+ */
+@keyframes ow-glide-down {
+  0% { transform: translateY(-9px); opacity: 0; }
+  40% { transform: translateY(0); opacity: 1; }
+  55% { transform: translateY(0); opacity: 1; animation-timing-function: cubic-bezier(0.4, 0, 1, 1); }
+  100% { transform: translateY(6px); opacity: 0; }
+}
+@keyframes ow-glide-up {
+  0% { transform: translateY(9px); opacity: 0; }
+  40% { transform: translateY(0); opacity: 1; }
+  55% { transform: translateY(0); opacity: 1; animation-timing-function: cubic-bezier(0.4, 0, 1, 1); }
+  100% { transform: translateY(-6px); opacity: 0; }
+}
+.ow-glide .ow-glide-down { animation: ow-glide-down 1.4s var(--ow-motion-easing) infinite; }
+.ow-glide .ow-glide-up { animation: ow-glide-up 1.4s var(--ow-motion-easing) infinite; }
+
+/*
+ * The running shape stops turning; it still reads as running by its half fill.
+ * A busy button's icon holds still, at rest, and the button reads as working by
+ * its full strength and its busy cursor.
+ */
 @media (prefers-reduced-motion: reduce) {
   .ow-status-turning > svg { animation: none; }
   .ow-spin { animation: none; }
+  .ow-glide .ow-glide-down, .ow-glide .ow-glide-up { animation: none; }
 }
 
 /* Buttons: small 24, default 28, large 36; icon and label 8px apart. */
@@ -88,7 +114,7 @@
 .ow-button-lg { height: var(--ow-height-button-lg); padding: 0 var(--ow-space-4); }
 .ow-button-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .ow-button:disabled { opacity: 0.5; cursor: default; }
-/* Working, not unavailable: full strength, so it still reads as busy where the icon does not turn (reduced motion). */
+/* Working, not unavailable: full strength, so it still reads as busy where the icon does not move (reduced motion). */
 .ow-button[aria-busy='true']:disabled { opacity: 1; cursor: progress; }
 .ow-button:focus-visible { outline: var(--ow-focus-width) solid var(--ow-focus-ring, var(--ow-accent)); outline-offset: var(--ow-focus-offset); }
 .ow-button-primary { background: var(--ow-accent-fill); border-color: var(--ow-accent-fill); color: var(--ow-accent-on); }
