@@ -972,8 +972,10 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
     width Fetch leaves. Each holds its count after its word: behind for Pull,
     ahead for Push, nothing when it is 0, and `99+` past two digits. The count
     sits in a box held for two tabular figures, so a count that changes moves
-    nothing. Below about 212px of line, the words become screen-reader text,
-    and the arrows and counts stay.
+    nothing. Below about 203px of line, the words become screen-reader text,
+    and the arrows and counts stay, centred in their buttons. The line is
+    210px at the 240px sidebar once the list's scrollbar shows, so the words
+    still fit there and do not come and go as the list grows.
     - *Tooltips name the target,* with the count:
       "Pull 1 commit from origin/main" and "Push 2 commits to origin/main".
       A disabled button's tooltip and accessible description give its reason,

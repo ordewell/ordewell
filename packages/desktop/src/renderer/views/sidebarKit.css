@@ -83,15 +83,20 @@
 .sync-branch { flex: 0 1 auto; font: var(--ow-type-body-strong); }
 .sync-upstream { flex: 0 1000 auto; margin-left: auto; color: var(--ow-fg-secondary); font: var(--ow-type-code-small); }
 .sync-actions { display: flex; gap: var(--ow-space-1); min-width: 0; }
-.sync-actions .sync-move { position: relative; flex: 1 1 0; justify-content: flex-start; gap: var(--ow-space-1); padding: 0 var(--ow-space-2); }
+.sync-actions .sync-move { position: relative; flex: 1 1 0; justify-content: flex-start; gap: var(--ow-space-1); padding: 0 calc(var(--ow-space-1) + var(--ow-space-half)); }
 .sync-move .ow-button-label { display: flex; align-items: baseline; gap: var(--ow-space-1); }
 .sync-word { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .sync-move .sync-n { min-width: 2ch; text-align: start; color: inherit; }
 .sync-actions .sync-fetch { flex: none; width: var(--ow-hit-icon); padding: 0; }
 .sync-fetch .ow-button-label { display: none; }
 .sync-note { margin: 0; color: var(--ow-fg-secondary); font: var(--ow-type-small); overflow-wrap: anywhere; }
-/* Under about 212px the words no longer fit beside a count: the arrows and counts stay, the words stay readable to a screen reader. */
-@container sync (max-width: 211px) {
+/*
+ * Under about 203px the words no longer fit beside a count: the arrows and counts stay, centred, and the words stay readable
+ * to a screen reader. The line at the 240px sidebar is 216px, or 210px once the list's scrollbar takes its 6px, so the words
+ * must fit in 210 for them not to come and go as the list grows.
+ */
+@container sync (max-width: 202px) {
+  .sync-actions .sync-move { justify-content: center; }
   .sync-word { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 }
 
