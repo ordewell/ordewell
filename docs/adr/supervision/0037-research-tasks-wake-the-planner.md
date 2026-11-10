@@ -89,22 +89,26 @@ before the turn ends.**
     targeted lookups (a known file, a symbol, one grep) whose detail decides
     its next step or question. It stops when it can decide the next step, not
     when it understands the whole architecture.
-  - *An in-turn agent, awaited* before the turn ends, past a trigger the
-    planner can check mid-turn: before it reads across more than one package
-    or directory tree, or past about ten reads for one question. A planner
-    left to judge "a wider question" read whole packages itself.
-    [ADR-0005](../planner/0005-parallel-research-subagents.md)'s
-    `spawn_research_agent` for an API planner whose service can run subagents,
-    the harness's own subagents for a harness planner as ADR-0009 T8 says.
-    One agent per package or independent question, run in parallel; a
-    question whose parts depend on each other stays with one. Each returns a
-    digest of about 1-2k tokens: conclusion first, file:line references,
-    decisions found, what is uncertain, no pasted file bodies. An OpenCode or
-    a Gemini planner has no agents of its own, so past the same trigger it
-    delegates to research tasks, one per package or independent question. A
-    harness planner whose agents are withheld because its mandate lacks
-    `research` (ADR-0056 M6) has neither, so it reads that too, keeping only
-    the conclusion.
+  - *An in-turn agent, awaited* before the turn ends, decided before the
+    planner reads, not by a count: with the map read, and before it reads
+    inside any package or top-level area the goal touches, it sends one agent
+    per area, in parallel, and reads inside one itself only a targeted lookup
+    whose answer decides its next step. No planner can count its reads
+    mid-turn: a trigger of "about ten reads" delegated nothing for Codex or
+    OpenCode on the bench's breadth goal, and one left to judge "a wider
+    question" read whole packages itself. The prompt names each backend's
+    route: [ADR-0005](../planner/0005-parallel-research-subagents.md)'s
+    `spawn_research_agent` for an API planner whose service can run
+    subagents and for an OpenCode planner served Ordewell's research agent
+    (ADR-0066), Claude Code's Agent tool, and Codex's `spawn_agent`, on by
+    default (`features.multi_agent`, codex-cli 0.167.0), as ADR-0009 T8 says.
+    Each returns a digest of about 1-2k tokens: conclusion first, file:line
+    references, decisions found, what is uncertain, no pasted file bodies. An
+    OpenCode planner without the research agent, an ACP planner and a Gemini
+    planner have no agents of their own, so they give each area a research
+    task instead. A harness planner whose agents are withheld because its
+    mandate lacks `research` (ADR-0056 M6) has neither, so it reads that too,
+    keeping only the conclusion.
   - *A task* is the evidence tier: when finding out needs a worktree (a
     failing test, a build, a reproduction), another runner or model should
     judge it, the user should see it and be able to stop it, or a later task
@@ -215,3 +219,4 @@ before the turn ends.**
 - 2026-10-25 — a long report in a run update opens on its own in VS Code, which has no detail switch any more (R6; ADR-0017 X1).
 - 2026-11-09 — who explores is three tiers: the planner reads the project's guides, a map and targeted lookups itself, sends wider questions to in-turn agents returning digests, and gives tasks what needs a worktree, another model, the user's sight or a later task's action; the context rule and session freshness join it (R5).
 - 2026-11-10 — the agent tier gets a checkable trigger (more than one package or directory tree, or about ten reads for one question), and a planner without agents delegates past it to research tasks instead of reading (R5).
+- 2026-11-10 — the agent tier is decided per area before reading, not by a count of reads, and the prompt names each backend's route (Codex's `spawn_agent`) (R5).

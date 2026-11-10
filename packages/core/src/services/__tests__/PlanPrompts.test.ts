@@ -347,12 +347,12 @@ describe('research tasks (ADR-0037)', () => {
 
 describe('who explores: three tiers, search (ADR-0037 R5)', () => {
   const ACP_PLANNERS = ['copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent'] as const;
-  const noAgents = /- A research task, past that: .*You have no agents of your own here: research tasks are how you delegate\./;
+  const noAgents = /- A research task, for the rest: .*You have no agents of your own here: research tasks are how you delegate\./;
   const awaited = (agents: string) => new RegExp(`Use ${agents} and wait for its results inside this reply, never in the background: once your turn ends, nothing you say reaches the user\\.`);
   const backends = [
-    { name: 'an API planner', harness: false, runner: undefined, inTurn: /- An agent, awaited, past that: .*Use spawn_research_agent, whose agents return within your tool round\./ },
+    { name: 'an API planner', harness: false, runner: undefined, inTurn: /- An agent, awaited, for the rest: .*Use spawn_research_agent, whose agents return within your tool round\./ },
     { name: 'Claude Code', harness: true, runner: 'claude-code', inTurn: awaited('your Agent tool') },
-    { name: 'Codex', harness: true, runner: 'codex', inTurn: awaited('your own subagents, if this session has them,?') },
+    { name: 'Codex', harness: true, runner: 'codex', inTurn: awaited('your spawn_agent tool') },
     { name: 'OpenCode', harness: true, runner: 'opencode', inTurn: noAgents },
     // ADR-0026: no ACP planner's own subagents are confirmed inside the envelope, so each is withheld and it delegates to research tasks.
     ...ACP_PLANNERS.map((runner) => ({ name: runner, harness: true, runner, inTurn: noAgents })),
@@ -373,7 +373,7 @@ describe('who explores: three tiers, search (ADR-0037 R5)', () => {
     expect(inTurnAgents(true, 'opencode', false, true)).toBeNull();
     for (const runner of ACP_PLANNERS) expect(inTurnAgents(true, runner, true, true)).toBeNull();
     const rule = section(buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness: true, runner: 'opencode', researchAgent: true }), 'WHO EXPLORES:');
-    expect(rule).toMatch(/- An agent, awaited, past that: .*Use spawn_research_agent, whose agents return within your tool round\./);
+    expect(rule).toMatch(/- An agent, awaited, for the rest: .*Use spawn_research_agent, whose agents return within your tool round\./);
     expect(rule).not.toMatch(noAgents);
   });
 
@@ -421,20 +421,43 @@ describe('who explores: three tiers, search (ADR-0037 R5)', () => {
       expect(rule).not.toMatch(/digest|An agent, awaited/);
       return;
     }
-    expect(rule).toMatch(/send agents, one per package or independent question, in parallel, so only their digests reach you; a question whose parts depend on each other stays with one\./);
+    expect(rule).toMatch(/send one agent per area, in parallel, so only their digests reach you\./);
     expect(rule).toMatch(/Each returns a digest of about 1-2k tokens: conclusion first, file:line references, decisions found, what is uncertain; no pasted file bodies\./);
   });
 
-  // On the bench's breadth goal, planners left to "a wider question" read whole packages themselves; a count of trees and reads they can check mid-turn.
+  // On the bench's breadth goal a count of reads delegated nothing for Codex or OpenCode: no planner can count its reads mid-turn, so the decision is made per area, before reading, by a route each backend has.
+  const structural = 'with the map read, before you read inside any package or top-level area the goal touches, ';
+  const lookup = /Inside one, read yourself only a targeted lookup whose answer decides your next step\./;
   it.each([
-    { runner: 'claude-code', delegate: /- An agent, awaited, past that: before you read across more than one package or directory tree, or past about ten reads for one question, send agents, one per package or independent question, in parallel, so only their digests reach you;/ },
-    { runner: 'opencode', delegate: /- A research task, past that: before you read across more than one package or directory tree, or past about ten reads for one question, give each package or independent question a research task, so only their reports reach you\. You have no agents of your own here: research tasks are how you delegate\./ },
-  ] as const)('gives a checkable trigger for delegating breadth, for $runner', ({ runner, delegate }) => {
-    const rule = section(prompt(true, runner), 'WHO EXPLORES:');
-    expect(rule).toMatch(delegate);
-    expect(rule).toMatch(/- Read it yourself: the project's own guides .*, a map of its directories, and targeted lookups .* whose detail decides your next step/);
-    expect(rule).not.toMatch(/is yours to read too|a wider question/);
-    if (runner === 'opencode') expect(rule).not.toMatch(/send agents|spawn_research_agent|Agent tool/);
+    { name: 'Claude Code', variant: { harness: true, runner: 'claude-code' }, route: 'Use your Agent tool and wait for its results inside this reply' },
+    { name: 'Codex', variant: { harness: true, runner: 'codex' }, route: 'Use your spawn_agent tool and wait for its results inside this reply' },
+    { name: 'OpenCode served the research agent', variant: { harness: true, runner: 'opencode', researchAgent: true }, route: 'Use spawn_research_agent, whose agents return within your tool round.' },
+    { name: 'an API planner', variant: { harness: false }, route: 'Use spawn_research_agent, whose agents return within your tool round.' },
+  ] as const)('sends one agent per area before reading inside it, by its own route, for $name', ({ variant, route }) => {
+    const rule = section(buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, variant), 'WHO EXPLORES:');
+    const tier = rule.split('\n').find((line) => line.startsWith('- An agent, awaited, for the rest: '));
+    expect(tier).toContain(`- An agent, awaited, for the rest: ${structural}send one agent per area, in parallel, so only their digests reach you.`);
+    expect(tier).toMatch(lookup);
+    expect(tier).toContain(route);
+    expect(rule).not.toMatch(/ten reads|past that|a wider question|directory tree/);
+  });
+
+  it.each([
+    { name: 'OpenCode without the research agent', variant: { harness: true, runner: 'opencode' } },
+    ...ACP_PLANNERS.map((runner) => ({ name: runner, variant: { harness: true, runner } })),
+    { name: 'an API planner with no subagents', variant: { harness: false, subagents: false } },
+  ] as const)('gives each area a research task before reading inside it, for $name', ({ variant }) => {
+    const rule = section(buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, variant), 'WHO EXPLORES:');
+    expect(rule).toContain(`- A research task, for the rest: ${structural}give each area a research task, so only their reports reach you.`);
+    expect(rule).toMatch(lookup);
+    expect(rule).toMatch(noAgents);
+    expect(rule).not.toMatch(/send one agent|spawn_research_agent|spawn_agent|Agent tool|ten reads|a wider question/);
+  });
+
+  it('leaves a harness planner whose agents are withheld its own reads, with no research tasks to send (ADR-0056 M6)', () => {
+    const rule = section(buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness: true, runner: 'codex', subagents: false }), 'WHO EXPLORES:');
+    expect(rule).toMatch(/^- Your own reads, for the rest: you have no agents of your own here and no research tasks/m);
+    expect(rule).not.toMatch(/- A research task, for the rest|- An agent, awaited|spawn_agent/);
   });
 
   it.each(backends)('keeps the session fresh, naming the turn block by its header and no command, for $name', ({ harness, runner }) => {
@@ -563,6 +586,13 @@ describe('the coordinator role and its defaults (#5)', () => {
   it('keeps the harness prompt within its word budget', () => {
     const p = buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, {
       harness: true, runner: 'claude-code', autorun: true, execution: true, isolatedExecution: { repos: ['.'], shared: [] },
+    });
+    expect(words(p)).toBeLessThanOrEqual(5210);
+  });
+
+  it('keeps a Codex planner, named its spawn_agent tool, within the same budget', () => {
+    const p = buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, {
+      harness: true, runner: 'codex', autorun: true, execution: true, isolatedExecution: { repos: ['.'], shared: [] },
     });
     expect(words(p)).toBeLessThanOrEqual(5210);
   });
