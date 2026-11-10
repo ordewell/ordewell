@@ -870,7 +870,7 @@ export async function applySavedPatch(args: ApplyPatchArgs, site: ApplyPatchSite
   const readable = readableTaskIds(site.plan, site.callerId);
   if (!readable.has(target.id)) {
     const allowed = flattenTasks(site.plan).filter((t) => readable.has(t.id)).map((t) => named(t.id));
-    return refuse(`${name} is not a task this one may read. It may read itself, the tasks it depends on, directly or not, and its loop's other end: ${listed(allowed)}.`);
+    return refuse(`${name} is not a task this one may read. It may read itself, the tasks it depends on, directly or not, and the other tasks of its loop: ${listed(allowed)}.`);
   }
 
   const attempts = site.log.attempts(target.id);

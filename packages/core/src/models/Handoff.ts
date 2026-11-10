@@ -172,6 +172,8 @@ export interface HandoffDigest {
   subtree?: SubtreeReport;
   /** A delegated task's words with no {@link subtree} to say whose they are: a repair's, or a report that never opened a child. */
   held?: true;
+  /** How the attempt ended, as its call said, where it did not pass: a reader is told so before it builds on the words. */
+  outcome?: 'blocked' | 'failed';
 }
 
 /** The whole handoff, as the attempt's log keeps it. */
@@ -236,6 +238,7 @@ export function storedHandoff(handoff: Handoff, redact: (text: string) => string
   const commit = handoff.status === 'done' && handoff.commit ? redactedCommit(withoutTrailers(handoff.commit), redact) : undefined;
   if (!commit && !summary && findings.length === 0 && artifacts.length === 0 && !report) return undefined;
   return {
+    ...(handoff.status === 'blocked' || handoff.status === 'failed' ? { outcome: handoff.status } : {}),
     ...(commit ? { commit } : {}),
     summary,
     findings,
@@ -299,6 +302,7 @@ export function handoffDigest(handoff: StoredHandoff): HandoffDigest {
     ...(handoff.attempt !== undefined ? { attempt: handoff.attempt } : {}),
     ...(handoff.subtree ? { subtree: handoff.subtree } : {}),
     ...(handoff.held ? { held: true } : {}),
+    ...(handoff.outcome ? { outcome: handoff.outcome } : {}),
   };
 }
 
@@ -538,11 +542,12 @@ export function heldHandoff<H extends HandoffDigest>(task: { type?: string }, ha
 
 const holdsWords = (handoff: HandoffDigest): boolean => handoff.subtree !== undefined || handoff.held === true;
 
-/** A handoff's opening as text: its commit, subject then body, then the summary. */
+/** A handoff's opening as text: how it ended where it did not pass, its commit, subject then body, then the summary. */
 export function openingLines(handoff: HandoffDigest): string[] {
-  const { commit, summary } = handoff;
-  if (!commit) return [summary];
-  return [`Commit: ${onOneLine(commit.subject)}`, ...(commit.body ? splitLines(commit.body) : []), ...(summary ? ['', summary] : [])];
+  const { commit, summary, outcome } = handoff;
+  const ended = outcome ? [`This attempt ended ${outcome}: none of its work landed.`] : [];
+  if (!commit) return [...ended, summary];
+  return [...ended, `Commit: ${onOneLine(commit.subject)}`, ...(commit.body ? splitLines(commit.body) : []), ...(summary ? ['', summary] : [])];
 }
 
 /** {@link openingLines} as its reader is given them: held, when they are a delegated task's. */
@@ -723,8 +728,10 @@ export function handoffLines(handoff: HandoffDigest | StoredHandoff, taskName: H
 
 /**
  * The tasks whose handoffs `taskId` may cite and read (ADR-0047): itself, its
- * transitive dependencies, and its loop's other end — a check its body tasks,
- * a body task its check (ADR-0045). The plan's own graph scopes the reach.
+ * transitive dependencies, and every other task of its loop — a check its body
+ * tasks, a body task its check and its fellow body tasks (ADR-0045), since a
+ * round's fix builds on what the last round's tasks found. The plan's own
+ * graph scopes the reach.
  */
 export function readableTaskIds(plan: readonly Task[], taskId: string): Set<string> {
   const tasks = flattenTasks(plan);
@@ -736,9 +743,9 @@ export function readableTaskIds(plan: readonly Task[], taskId: string): Set<stri
     readable.add(id);
     pending.push(...(byId.get(id)?.dependencies ?? []));
   }
-  for (const id of byId.get(taskId)?.loop?.body ?? []) readable.add(id);
-  const check = checkOf(tasks, taskId);
-  if (check) readable.add(check.id);
+  for (const check of [byId.get(taskId), checkOf(tasks, taskId)]) {
+    if (check?.loop) for (const id of [check.id, ...check.loop.body]) readable.add(id);
+  }
   return readable;
 }
 
@@ -833,7 +840,7 @@ function pinIn(scope: ReferenceScope, producer: { id: string; attempt?: number; 
   const target = resolved.task;
   const named = titledTaskRefOf(plan, target.id) ?? target.id;
   if (!readable.has(target.id)) {
-    refuse(`${field}.task: ${JSON.stringify(written)} is ${named}, which this task may not read: only itself, a task it depends on, or its loop's other end.`);
+    refuse(`${field}.task: ${JSON.stringify(written)} is ${named}, which this task may not read: only itself, a task it depends on, or another task of its loop.`);
     return undefined;
   }
   const given = oneFinding(resolved.finding);
