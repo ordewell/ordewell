@@ -10,6 +10,7 @@ import { taskRefOf } from './TaskRefs';
 import type { SkillInfo } from './SkillsService';
 import { modelInvocablePlannerSkills, modelInvocableTaskSkills } from './skillInvocation';
 import { quotedMessageArgs } from './landingMessage';
+import { OPENCODE_SCOUT_AGENT } from './harness/openCodeOrdewell';
 
 // Keeps the message the merge was given; `strip` drops the `# Conflicts:` lines git adds to it.
 const COMMIT_MERGE = 'git commit --no-edit --cleanup=strip';
@@ -146,20 +147,21 @@ function researchPhaseBlock(harnessMode: boolean, researchShell?: ConversationVa
 /**
  * The agents a planner explores with inside its own turn, named as its backend
  * names them, or null when it has none: an OpenCode planner's subagents are
- * withheld (ADR-0009 T8, ADR-0026), and an API planner's service may have no
+ * withheld but for Ordewell's read-only scout, which it has only on 2.x behind
+ * its gate (ADR-0009 T8, ADR-0026), and an API planner's service may have no
  * research subagents to spawn (Gemini, which does not override
  * `createSubagentChat`). An OpenAI-compatible planner's are Ordewell's own
  * (ADR-0005), which return within the tool round that started them.
  */
 export type InTurnAgents = string | null;
 
-export function inTurnAgents(harness: boolean, runner?: RunnerId, subagents = true): InTurnAgents {
+export function inTurnAgents(harness: boolean, runner?: RunnerId, subagents = true, scout = false): InTurnAgents {
   if (!subagents) return null;
   if (!harness) return 'spawn_research_agent';
   switch (runner) {
     case 'claude-code': return 'your Agent tool';
     case 'codex': return 'your own subagents, if this session has them';
-    case 'opencode': return null;
+    case 'opencode': return scout ? `the \`${OPENCODE_SCOUT_AGENT}\` subagent through your \`subagent\` tool` : null;
     default: return 'your own agents, if you have any';
   }
 }
@@ -251,6 +253,8 @@ export interface ConversationVariant {
   runner?: RunnerId;
   /** The skill catalog: task skills it can attach on every path, planner skills it can load only with tools. */
   skills?: readonly SkillInfo[];
+  /** An OpenCode planner was offered Ordewell's scout (ADR-0026); its adapter tells it so where the server's resolved agent withheld it. */
+  scout?: boolean;
   /** Whether an API planner's service can run Ordewell's research subagents, which Gemini's cannot (it has no `createSubagentChat`), and a subplanner without `research` its harness's (ADR-0056 M6). */
   subagents?: boolean;
   /** Every AI task gets its own worktree (ADR-0013), so file overlap no longer forces an order; of every repo of a group (ADR-0014). */
@@ -620,7 +624,7 @@ function buildConversationBody(
 ): string {
   const tools = variant.harness ?? false;
   const autorun = variant.autorun ?? false;
-  const agents = inTurnAgents(tools, variant.runner, variant.subagents ?? true);
+  const agents = inTurnAgents(tools, variant.runner, variant.subagents ?? true, variant.scout ?? false);
   const submit = tools
     ? 'call list_runners and list_models, then submit the final task plan with submit_plan'
     : 'emit the final task plan as a JSON object with a "tasks" array';

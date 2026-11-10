@@ -2802,6 +2802,18 @@ and a one-shot never touches the conversation's session.
 *Avoid:* using it for the plan-level **Session**, which outlives many planner
 sessions.
 
+**Scout** (`ordewell-scout`) — the one agent an OpenCode 2.x *harness planner*
+may start with its own `subagent` tool: defined by Ordewell, it reads the
+workspace with `read`, `glob`, `grep` and `list` and is denied everything else,
+runs one level deep in the foreground, and returns a digest for the planner's
+orientation. It is offered only with `ORDEWELL_OPENCODE_SCOUT=1`, and only when
+the OpenCode server's resolved rules for it are Ordewell's; otherwise the
+planner keeps every agent denied, and the planner and the person are told why
+(ADR-0026). OpenCode 1.x never has one.
+*Avoid:* "research agent" or "research subagent" — those are the API planner's
+`spawn_research_agent` subagents (ADR-0005); and do not use the scout for
+evidence a later task acts on, which is a task of its own (ADR-0037 R5).
+
 **Saved output** — a tool result too long for the context that a runner saved
 to a file outside the workspace, telling the model to read it back: Claude
 Code's session `tool-results/` folder, the file OpenCode 2.x names in

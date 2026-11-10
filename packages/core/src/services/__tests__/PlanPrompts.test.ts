@@ -456,6 +456,21 @@ describe('who explores: three tiers, search (ADR-0037 R5)', () => {
     }
   });
 
+  // ADR-0026: behind ORDEWELL_OPENCODE_SCOUT, an OpenCode 2.x planner delegates breadth to Ordewell's read-only scout.
+  it('points an OpenCode planner given the scout at it, and leaves the prompt unchanged by a byte without it', () => {
+    const opencode = (variant: Record<string, unknown>) => buildConversationSystemPrompt('goal', '', {}, ['opencode'], undefined, { harness: true, runner: 'opencode', ...variant });
+    const rule = section(opencode({ scout: true }), 'WHO EXPLORES:');
+
+    expect(rule).toMatch(/- An agent, awaited, past that: .*Use the `ordewell-scout` subagent through your `subagent` tool and wait for its results inside this reply, never in the background/);
+    expect(rule).not.toMatch(/You have no agents of your own here/);
+    expect(section(opencode({ scout: true }), 'DEFAULTS:')).toMatch(/agents in one turn, and tasks/);
+    expect(opencode({ scout: false })).toBe(opencode({}));
+    // A subplanner without research has no agents, whatever the gate says, and another runner has its own.
+    expect(opencode({ scout: true, subagents: false })).toBe(opencode({ subagents: false }));
+    expect(buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness: true, runner: 'claude-code', scout: true }))
+      .toBe(buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness: true, runner: 'claude-code' }));
+  });
+
   it('tells an API planner whose service has no research subagents to delegate to research tasks', () => {
     const p = buildConversationSystemPrompt('goal', '', {}, ['gemini'], undefined, { subagents: false });
     const rule = section(p, 'WHO EXPLORES:');
