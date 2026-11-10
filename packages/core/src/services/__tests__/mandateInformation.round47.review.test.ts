@@ -29,7 +29,7 @@ describe('a held event comes back on a reload (ADR-0057 R4, ADR-0029)', () => {
       saveState: () => undefined,
       stoppedByUser: () => false,
       digestReader: () => ({ describe: (id: string) => id, blockedBy: () => [] }),
-      wakeFacts: () => ({ nothingCanStart: false, cohortDone: new Set<string>(), blocksWork: new Set<string>(), ttlMs: 40, requestAt: null }),
+      wakeFacts: () => ({ nothingCanStart: false, cohortDone: new Set<string>(), blocksWork: new Set<string>(), blocksAny: new Set<string>(), ttlMs: 40, requestAt: null }),
       readBudget: () => 5,
       retryLimit: () => 2,
       restartPlanner: () => undefined,
