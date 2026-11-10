@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { EMPTY_HOLD, aheadOfDraft, drainNext, holdPrompt, takeAt, unsendAll, unsendLatest } from '../promptHold';
+import { EMPTY_HOLD, aheadOfDraft, drainNext, glued, holdPrompt, takeAt, unsendAll, unsendLatest } from '../promptHold';
 
 describe('prompt hold', () => {
   it('sends held prompts in the order they were typed', () => {
@@ -27,6 +27,11 @@ describe('prompt hold', () => {
 
     expect(unsendAll(held)).toEqual({ text: 'one\ntwo', rest: [] });
     expect(unsendAll(EMPTY_HOLD)).toBeUndefined();
+  });
+
+  it('glues held messages into one, oldest first, a line each (ADR-0023, F1, F5)', () => {
+    expect(glued(['one', 'two', 'now'])).toBe('one\ntwo\nnow');
+    expect(glued(['alone'])).toBe('alone');
   });
 
   it('puts an unsent prompt back above the draft being typed', () => {

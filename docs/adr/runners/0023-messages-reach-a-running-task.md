@@ -29,9 +29,11 @@ and reaches the model at the runner's next step boundary — after the tool call
 in flight, within the same turn. Where a runner cannot take a message
 mid-turn, or refuses one, the message waits for the turn to end, as before.
 *Force send* interrupts the running tool call and delivers its message
-straight away. In the planner chat, force send stops the planner turn in
-flight and answers its message in the turn that replaces it; it is
-turn-scoped and never touches the run's tasks.**
+straight away, with everything the person still has queued glued ahead of it
+as one message; a turn's end likewise sends what they queued as one message.
+In the planner chat, force send stops the planner turn in flight and answers
+the held prompts and its own in the turn that replaces it; it is turn-scoped
+and never touches the run's tasks.**
 
 ## Key properties
 
@@ -96,19 +98,32 @@ turn-scoped and never touches the run's tasks.**
   `message_handed_over`, a message back in the queue is `message_queued`
   again, and one that never reaches the runner is `message_undelivered`
   (D7). A forced message carries `forced` on its `message_queued` and
-  `turn_start`. All of it replays the same way on reload (ADR-0018, P1).
+  `turn_start`. A message glued into another (F1) leaves the queue as a
+  `message_removed`, logged before the message that carries its text. All of
+  it replays the same way on reload (ADR-0018, P1).
 
 ### Force send
 
-- **Interrupt the tool call, then deliver (F1).** Force send soft-interrupts
-  the running turn — which stops the tool call in flight — and sends the
-  forced message as the turn that replaces it. The runners' interrupts are the
-  ones ADR-0018 M1 already uses: Claude's `control_request` interrupt, Codex's
-  `turn/interrupt`, OpenCode's abort, with kill-and-resume as the fallback.
-  With no turn running, force send is a plain send. Any message in the queue
-  can be force sent too, queued or handed over. One already handed over is
-  never sent a second time — the model would read it twice: the interrupt
-  alone makes it go first. Claude Code runs it in the turn that follows the
+- **Interrupt the tool call, then deliver everything held (F1).** Force send
+  soft-interrupts the running turn — which stops the tool call in flight — and
+  sends the forced message as the turn that replaces it. The runners'
+  interrupts are the ones ADR-0018 M1 already uses: Claude's `control_request`
+  interrupt, Codex's `turn/interrupt`, OpenCode's abort, with kill-and-resume
+  as the fallback. With no turn running, force send is a plain send. The
+  person's messages still in Ordewell's queue go with it: they are glued,
+  in the order sent and a line each, ahead of the composer's text into the
+  one forced message, and each leaves the queue. Only the person's own
+  queued messages are glued — never one the runner already has (handed over,
+  or being offered), one already forced, a runner command, or a message
+  Ordewell sent (the supervisor's, a completion reminder). Any message in the
+  queue can be force sent by id too, queued or handed over. A queued one of
+  the person's takes their other queued messages with it, glued in the order
+  sent under its id; a surface with an empty composer force sends the oldest
+  one, which sends everything held. One already handed over is never sent a
+  second time — the model would read it twice: the interrupt alone makes it
+  go first, and what the person still has queued stays queued, in order,
+  since forcing it would overtake the messages the runner holds that were
+  sent before it (F2). Claude Code runs it in the turn that follows the
   interrupt; Codex discards it and the OpenCode 1.x adapter lets go of it
   (D4), so Ordewell sends it as that turn. It is marked forced either way.
   One the runner reports delivered while the interrupt is on its way has
@@ -120,8 +135,11 @@ turn-scoped and never touches the run's tasks.**
   `Ctrl+Enter` in the VS Code task log, and the daemon's `execute-command` route
   carrying `message_task` with `force` or `force_send_queued`. The planner chat's force send is
   F5.
-- **The forced message goes first; the rest keep their order (F2).** Messages
-  still in Ordewell's queue follow the forced one in the order they were sent.
+- **The forced message goes first; the rest keep their order (F2).** What
+  is still in Ordewell's queue after a force send — a command, a message
+  Ordewell sent, or the person's messages left behind a handed-over one —
+  follows the forced one in the order it was sent, and the person's
+  messages left in a row there go out as one at the turn's end (F1).
   Messages already handed over to the runner are where the runners differ:
   Claude Code keeps them in the conversation and the model reads them ahead
   of the forced message (they were sent first), in the current turn or in a
@@ -142,12 +160,16 @@ turn-scoped and never touches the run's tasks.**
   therefore stops the agent waiting on the command, not the command itself,
   and the adapter drops that late report as belonging to a finished turn.
 - **In the planner chat, force send is turn-scoped (F5).** A prompt typed
-  while the planner answers waits for the turn's end, held by the surface.
-  Force send (`Session.forceSendPrompt`, `POST …/converse/message/now`)
-  stops the planner turn in flight through the same path a stop takes — the
-  harness planner's tool call in flight is stopped, and a plan change it had
-  already committed stays (ADR-0022, P2) — and answers the forced prompt alone
-  in the turn that replaces it.
+  while the planner answers waits for the turn's end, held by the surface;
+  at the turn's end everything held is sent as one message, glued in the
+  order typed, a line each. Force send (`Session.forceSendPrompt`,
+  `POST …/converse/message/now`) glues every held prompt, in the order typed,
+  ahead of the composer's text into one forced message, with the same join a
+  task's queue uses (`glued`, `conversation/promptHold`). It stops the planner
+  turn in flight through the same path a stop takes — the harness planner's
+  tool call in flight is stopped, and a plan change it had already committed
+  stays (ADR-0022, P2) — and answers that one forced message alone in the
+  turn that replaces it.
   The forced prompt waits before the stop, ahead of every input waiting but
   an earlier forced one, and behind the inputs the stopped turn took, so
   nothing starts in between and the rest keep their order (F2). A force
@@ -312,6 +334,20 @@ interrupt (D4 covers it either way).
 - **Treat the write or POST as delivery.** Every runner accepts the message
   long before the model sees it, and Codex can still discard an accepted
   steer. The queue would claim a delivery that may not have happened.
+- **Send held messages one at a time.** The first design: a turn's end sent
+  the oldest queued message as the next turn and the rest waited behind it,
+  one turn each, and a force send sent only its own text ahead of them. The
+  runner then answered a half-typed thought, and the person's later lines
+  arrived as corrections to an answer already under way, a turn each; a force
+  send overtook the very messages it was meant to hurry. Replaced by gluing
+  what the person queued into one message (F1, F5). A command and Ordewell's
+  own messages still go alone: a runner reads a command only at a message's
+  start, and the supervisor's words are not the person's.
+- **Glue the person's queued messages behind a handed-over message force sent
+  by id.** It sends everything at once, as a force send from the composer
+  does, but the glued message would overtake the messages the runner holds
+  that were sent before it (F2). Rejected: they wait, and go glued at the
+  forced turn's end.
 - **Force send as interrupt plus a normal send.** The interrupted turn would
   become "waiting for input" for a moment, and the forced message would queue
   behind anything already waiting. F2 and F3 exist to avoid both.
@@ -331,7 +367,10 @@ interrupt (D4 covers it either way).
   delivered at the next step" on a capable adapter, "queued until the turn
   ends" otherwise. `queued()` reports both states and marks forced messages;
   `removeQueued` refuses a handed-over message; `forceSendQueued` takes one,
-  and is false only once the message was delivered.
+  and is false only once the message was delivered. `forceSend`,
+  `forceSendQueued` and the turn-end delivery glue the person's queued
+  messages inside the runner session, atomically; no surface glues a task's
+  queue itself.
   `forceSend` and `forceSendQueued` join the capability.
 - A task-mode adapter's `steer(id, text)` is optional and answers whether the
   runner accepted the message; delivery and a drop come back as adapter
@@ -364,3 +403,4 @@ interrupt (D4 covers it either way).
 - 2026-10-24 — the daemon's force send routes are replaced by the one `execute-command` route (ADR-0006 S3).
 - 2026-10-26 — F5: a force send keeps what the stopped turn's tool calls already committed; nothing is deferred behind an edit (ADR-0022, P2).
 - 2026-11-04 — ACP runners take the turn-end queue, with `session/cancel` then `session/prompt` for force send (ADR-0060).
+- 2026-11-10 — F1, F2, F5: a force send and a turn's end glue everything the person queued into one message, instead of sending held messages one at a time.

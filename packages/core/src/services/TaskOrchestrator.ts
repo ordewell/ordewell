@@ -616,8 +616,9 @@ export class TaskOrchestrator {
 
   /**
    * Force send (ADR-0023, F1–F3): interrupt the running turn and deliver the
-   * message as the next one, ahead of anything queued, without the task
-   * waiting for input in between. A task already waiting for input just takes it.
+   * message as the next one, ahead of anything queued and with what the person
+   * queued glued ahead of it, without the task waiting for input in between. A
+   * task already waiting for input just takes it.
    */
   forceSendTaskMessage(taskId: string, text: string): string {
     return this.attempts.message(taskId, text, 'force', (session, message) => session.forceSend(message));
@@ -633,7 +634,7 @@ export class TaskOrchestrator {
     return this.attempts.message(taskId, command, 'command', (session) => session.invokeCommand(name, args));
   }
 
-  /** Force send a message not yet delivered, queued or handed over; false once it was delivered. */
+  /** Force send a message not yet delivered, queued or handed over, the person's other queued ones glued in with a queued one; false once it was delivered. */
   forceSendQueuedTaskMessage(taskId: string, id: string): boolean {
     return this.attempts.forceSendQueued(taskId, id);
   }

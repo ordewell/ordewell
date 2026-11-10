@@ -1152,8 +1152,14 @@ that the model has it, mid-turn (`message_delivered`) or as the message that
 opened a turn (`turn_start`); or *undelivered*. Sent with no turn running, it
 opens a turn at once. The queue lists queued and handed-over messages until
 delivery; a message handed over and then let go of by the runner is queued
-again. Completion evidence that arrives while one is undelivered is held, and
-a message the runner reads voids it.
+again. The person's queued messages travel together: when a turn ends, those
+waiting in a row open the next turn as one message, glued in the order sent, a
+line each, under the oldest one's id; the others leave the queue
+(`message_removed`). A runner command and a message Ordewell sent (the
+supervisor's, a completion reminder) are never glued and go as a turn of their
+own. The runner session glues, atomically; no surface does. Completion
+evidence that arrives while one is undelivered is held, and a message the
+runner reads voids it.
 *Avoid:* "queued prompt" (the planner conversation's hold); "sent" or
 "delivered" for a handed-over
 message — the write or POST succeeding is not delivery.
@@ -1210,16 +1216,25 @@ and Codex's protocol (it names the call, not the delivery).
 **Force send** (`forceSend`, `forceSendQueued`; "Send now" on the surfaces) — interrupt
 the running turn, stopping the tool call in flight, and deliver a message as
 the turn that replaces it, ahead of everything still queued (ADR-0023,
-F1–F4). The task stays `in_progress` through the switch. With no turn running
-it is a plain send. A queued or handed-over message can be force sent; a
-handed-over one is not sent twice — the interrupt makes it go first. On Codex the interrupt stops the agent waiting,
+F1–F4). Everything the person queued that the runner does not have yet goes
+with it: glued, in the order sent, ahead of the composer's text into one forced
+message, each glued one leaving the queue — never a handed-over or forced
+message, a **Runner command** or one Ordewell sent. The task stays
+`in_progress` through the switch. With no turn running it is a plain send. A
+queued or handed-over message can be force sent by id: a queued one of the
+person's takes the rest they queued with it, under its id (a surface with an
+empty composer force sends the oldest); a handed-over one is not sent twice —
+the interrupt makes it go first, and the rest stay queued, so nothing overtakes
+what the runner holds. On Codex the interrupt stops the agent waiting,
 not the command, which runs to its end. TUI `ctrl-s`, VS Code *Send now* /
 `Ctrl+Enter`.
 In the planner chat (`Session.forceSendPrompt`, F5) it is turn-scoped: it
 stops the **Planner turn** in flight the way a stop does — the turn's
 **Turn effects** settle as for any stop — and **PlanTurns** answers the forced
 message alone in the turn that replaces it, ahead of every input waiting;
-nothing can start in between. It never stops, halts or edits the run's tasks.
+nothing can start in between. That message is every held prompt, glued in the
+order typed ahead of the composer's text, as a turn's end sends everything held
+as one message. It never stops, halts or edits the run's tasks.
 The stopped turn ends with `forceSent` on its `planner_turn_ended`, so a
 surface keeps the prompts it holds, in order, instead of handing them back as
 it does after a stop; the forced message carries `forced` on its

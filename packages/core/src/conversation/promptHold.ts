@@ -49,7 +49,15 @@ export function takeAt(hold: PromptHold, index: number): TakenPrompt | undefined
  */
 export function unsendAll(hold: PromptHold): TakenPrompt | undefined {
   if (hold.length === 0) return undefined;
-  return { text: hold.join('\n'), rest: EMPTY_HOLD };
+  return { text: glued(hold), rest: EMPTY_HOLD };
+}
+
+/**
+ * Held messages sent together read as one message, oldest first, a line each:
+ * the one join every queue uses, a planner chat's or a task's (ADR-0023, F1, F5).
+ */
+export function glued(texts: readonly string[]): string {
+  return texts.join('\n');
 }
 
 /** Where an unsent prompt lands in the drafting input: above what is being typed, never replacing it. */

@@ -222,16 +222,17 @@ describe('force sending and taking back task messages', () => {
     env.load([task('t1', 1)]);
     await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
     const first = await sendTaskMessage(env, 't1', 'first');
-    const second = await sendTaskMessage(env, 't1', 'second');
 
     expect(await env.run({ command: 'force_send_queued', task: 't1', id: first })).toEqual({ ok: true, message: 'Sent your queued message to task #1 "Task t1" now: its turn is interrupted, and the runner reads it next.' });
     expect(env.latest('t1').interrupts).toBe(1);
+    const second = await sendTaskMessage(env, 't1', 'second');
     expect(await env.run({ command: 'remove_queued', task: 't1', id: second })).toEqual({ ok: true, message: 'Took back your queued message to task #1 "Task t1".' });
     expect(env.latest('t1').queued()).toEqual([]);
     expect(env.latest('t1').delivered).toEqual(['first']);
     expect((await env.run({ command: 'remove_queued', task: 't1', id: second })).message).toBe('That message to task #1 "Task t1" was already delivered or taken back.');
-    expect(env.timeline().slice(-3).map((m) => m.text)).toEqual([
+    expect(env.timeline().slice(-4).map((m) => m.text)).toEqual([
       'You force sent a queued message to task #1 "Task t1".',
+      'You sent task #1 "Task t1" a message: "second"',
       'You took back a queued message to task #1 "Task t1".',
       'You asked to take back a queued message to task #1 "Task t1"; refused: That message to task #1 "Task t1" was already delivered or taken back.',
     ]);

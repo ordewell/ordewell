@@ -26,6 +26,7 @@ import { mapAgentTool, normalizeAgentArgs } from './harness/agentTools';
 import { createTaskAdapter } from './harness/connectors';
 import { settleWithin } from './harness/settleWithin';
 import { sameMessage } from '../utils/sameMessage';
+import { glued } from '../conversation/promptHold';
 import { checkHandoff, type HandoffCheck } from '../models/Handoff';
 
 /**
@@ -246,6 +247,11 @@ interface PendingMessage {
   from?: TaskMessageFrom;
   /** The runner's own command this runs (#66): a turn of its own, never handed into a running one. */
   command?: InvokedCommand;
+}
+
+/** The person's own message, waiting in Ordewell's queue: what a force send or a turn's end glues together (ADR-0023, F1). */
+function gluable(message: PendingMessage): boolean {
+  return message.stage === 'queued' && !message.forced && !message.command && !message.from;
 }
 
 type Opening = Partial<Pick<PendingMessage, 'id' | 'forced' | 'from' | 'command'>>;
@@ -638,24 +644,43 @@ export class StructuredSession extends AbstractRunnerSession {
   forceSend(text: string): string {
     if (!this.runningTurn()) return this.sendMessage(text);
     this.messageCount += 1;
-    const message: PendingMessage = { id: `msg-${this.messageCount}`, text, stage: 'queued' };
+    const held = this.takeGluable();
+    const message: PendingMessage = { id: `msg-${this.messageCount}`, text: glued([...held.map((m) => m.text), text]), stage: 'queued' };
     this.force(message);
     return message.id;
   }
 
   /**
-   * Force send a message not yet delivered. One the runner already has is not
-   * sent again — the model would read it twice. The interrupt alone makes it
-   * go first: the runner reads it in the turn that follows, or lets go of it
-   * and it is sent as that turn from here (D4). False once delivered, or gone.
+   * Force send a message not yet delivered, and with it everything else the
+   * person queued: one forced message, glued in the order they were sent,
+   * under the named one's id (F1). False once delivered, or gone.
    */
   forceSendQueued(id: string): boolean {
-    const message = this.queue.find((m) => m.id === id);
-    if (!message) return false;
-    if (message.forced) return true;
-    this.queue = this.queue.filter((m) => m !== message);
-    this.force(message);
+    const named = this.queue.find((m) => m.id === id);
+    if (!named) return false;
+    if (gluable(named)) {
+      this.forceGlued(named);
+      return true;
+    }
+    // One the runner already has is not sent again, nor glued into: the model
+    // would read it twice. The interrupt alone makes it go first — the runner
+    // reads it in the turn that follows, or lets go of it and it is sent as
+    // that turn from here (ADR-0023, D4). What the person still has queued is
+    // left queued, in order: forced, it would overtake the messages the runner
+    // holds that were sent before it (F2), and only a runner that steers holds
+    // one, so it is offered at the forced turn's first step anyway (D2), and
+    // whatever is left goes glued at that turn's end. A forced one is already in
+    // place; a command or Ordewell's own message is forced alone, as it is.
+    if (named.forced) return true;
+    this.queue = this.queue.filter((m) => m !== named);
+    this.force(named);
     return true;
+  }
+
+  /** `keeper`'s id carries every gluable message's text, keeper's included; the rest leave the queue. */
+  private forceGlued(keeper: PendingMessage): void {
+    const held = this.takeGluable(keeper);
+    this.force({ ...keeper, text: glued(held.map((m) => m.text)) });
   }
 
   /**
@@ -676,6 +701,19 @@ export class StructuredSession extends AbstractRunnerSession {
     this.interrupt().catch((err: unknown) => {
       console.error(`[structured] Force send could not interrupt task ${this.taskId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
     });
+  }
+
+  /**
+   * What the person queued that is still in Ordewell's hands, taken out of the
+   * queue oldest first to be glued into one message (ADR-0023, F1). Never what
+   * the runner already has, a forced message, a command, or Ordewell's own.
+   * Each leaves every folded view of the queue before the glued one appears.
+   */
+  private takeGluable(keeper?: PendingMessage): PendingMessage[] {
+    const taken = this.queue.filter(gluable);
+    this.queue = this.queue.filter((m) => !gluable(m));
+    for (const { id } of taken) if (id !== keeper?.id) this.emitEvent({ type: 'message_removed', messageId: id });
+    return taken;
   }
 
   private runningTurn(): boolean {
@@ -1052,13 +1090,18 @@ export class StructuredSession extends AbstractRunnerSession {
   /**
    * Between turns the oldest message opens the next one — but only once it is
    * back in Ordewell's hands: while it is on offer or owed, nothing overtakes it.
+   * The person's messages queued in a row behind it go with it, glued under its
+   * id (F1); a forced message, a command or Ordewell's own goes alone.
    */
   private deliverNext(): void {
     if (this.exited || this.exiting || this.stopping || this.sending || (this.turn && !this.turn.ended)) return;
     const head = this.queue[0];
     if (!head || this.queue.some((message) => message.stage !== 'queued')) return;
-    this.queue.shift();
-    this.deliver(head.text, head);
+    const apart = this.queue.findIndex((message) => !gluable(message));
+    const turn = gluable(head) ? this.queue.slice(0, apart < 0 ? this.queue.length : apart) : [head];
+    this.queue = this.queue.slice(turn.length);
+    for (const { id } of turn.slice(1)) this.emitEvent({ type: 'message_removed', messageId: id });
+    this.deliver(glued(turn.map((message) => message.text)), head);
   }
 
   private undeliverQueued(): void {
