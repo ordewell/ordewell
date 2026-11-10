@@ -683,8 +683,10 @@ composer's Stop stops it, and a message typed meanwhile waits for it); CLI
 "clear", which loses what was decided.
 
 **Context checkpoint** (`ConversationMessage.checkpoint`: `{ id, keptFrom,
-trigger }`) — a `compaction` entry in `conversationHistory` that a summary
-became. `keptFrom` is the transcript index where verbatim replay resumes, at or
+trigger, record? }`) — a `compaction` entry in `conversationHistory` that a summary
+became. Where the plan holds a **Decision record**, the entry restates it whole,
+then `Where we are:` and the summary, and `record` counts the entries restated,
+so the context it starts is told only those added later (ADR-0067). `keptFrom` is the transcript index where verbatim replay resumes, at or
 before the entry itself. The summary stands for everything before that index.
 The `id` stays the same across saves, forks and the wire. A checkpoint is only
 appended, and its cut never passes an input a planner turn still holds, so
@@ -699,6 +701,20 @@ compaction replaced what it condensed. It is read as a checkpoint cutting at
 index 1, and reloads drawn first without the research older than its first kept
 message, since those turns are gone.
 *Avoid:* "snapshot": a checkpoint copies no transcript.
+
+**Decision record** (`decisionRecord` on the plan state; `decisionRecord.ts`;
+ADR-0067) — what the planner has settled, written by its `record` tool as each
+thing is said: decisions with their why (D1, …), the user's constraints in their
+own words (C1, …), rejected options with their why (R1, …) and open questions
+(Q1, …). Entries are only added, a later one superseding an earlier by id, and
+a batch lands whole or not at all. A constraint must quote a user message, and
+every text is redacted as a summary is. The planner is told the standing
+entries whole once per live context, like the plan block, then only those it
+did not record itself; a **Context checkpoint** restates the record before its
+summary, so a restart keeps it word for word. Surfaces read it on the serialized
+plan.
+*Avoid:* "notes" or "memory", which say nothing of what it holds or that a
+checkpoint carries it; "summary", which is the paraphrase it exists to avoid.
 
 **Compaction event** (`planner_compaction`, carrying a `PlannerCompaction`) —
 one phase of a planner compaction as surfaces are told it (ADR-0017 C1):

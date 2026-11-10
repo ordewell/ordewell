@@ -463,12 +463,13 @@ describe('who explores: three tiers, search (ADR-0037 R5)', () => {
     expect(rule).not.toMatch(/- A research task, for the rest|- An agent, awaited|spawn_agent/);
   });
 
-  it.each(backends)('keeps the session fresh, naming the turn block by its header and no command, for $name', ({ harness, runner }) => {
+  it.each(backends)('keeps the session fresh, keeping the decision record (ADR-0067) and naming the turn block by its header and no command, for $name', ({ harness, runner }) => {
     const rule = section(prompt(harness, runner), 'WHO EXPLORES:');
     expect(rule).toMatch(/when you replan, say explicitly what the new plan replaces/);
     expect(rule).toMatch(/before a major decision, restate the current goal, the decisions agreed with the user and the plan/);
     expect(rule).toMatch(/CONTEXT AND BUDGETS shows how full your context is and what remains of your reads/);
-    expect(rule).toMatch(/past 40% of its window, suggest compacting at a quiet moment, with no task report pending, using the control your SURFACE AND SETTINGS facts list/);
+    expect(rule).toMatch(/Note with record, as each is made, every decision and its why, constraint verbatim, rejected option and why, and open question\./);
+    expect(rule).toMatch(/At a phase boundary, or once it shows your context past 40-50% of its window, suggest compacting with no task report pending, using the control your SURFACE AND SETTINGS facts list/);
     expect(rule).not.toMatch(/\/compact|\/clear/);
   });
 

@@ -121,6 +121,8 @@ export interface ContextCondenseRequest {
   replay?: ConversationMessage[];
   /** The current plan's lines, which the summary is told outrank its own account of task state. */
   planLines: readonly string[] | null;
+  /** The decision record the summary is written beside, which the checkpoint restates whole (ADR-0067); null when nothing in it stands. */
+  record?: string | null;
   /** Liveness and spend: each summary call's usage, which measures nothing of the planner's context. */
   onProgress: (progress: ResearchProgress) => void;
   signal?: AbortSignal;

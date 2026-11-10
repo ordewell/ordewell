@@ -1,4 +1,4 @@
-import { PLANNER_EXECUTION_TOOLS, PLANNER_POST, PLANNER_TASK_READ_TOOLS, SEALED_PARAM, SEALED_RUNS, type McpTool, type PlannerToolHandler } from './mcp/tools';
+import { PLANNER_EXECUTION_TOOLS, PLANNER_POST, PLANNER_RECORD, PLANNER_TASK_READ_TOOLS, SEALED_PARAM, SEALED_RUNS, type McpTool, type PlannerToolHandler } from './mcp/tools';
 import type OpenAI from 'openai';
 import { SchemaType, type FunctionDeclaration, type Schema } from '@google/generative-ai';
 
@@ -227,9 +227,13 @@ export function listsPost(offer: { delegates?: boolean; subplanner?: boolean } |
   return offer?.delegates === true || offer?.subplanner === true;
 }
 
-/** The planner's tools declared as their MCP schemas stand. `post` comes last, so a list with it starts as the flat list does, byte for byte. */
+/**
+ * The planner's tools declared as their MCP schemas stand: the task reads and
+ * the decision record (ADR-0067), every planner's. `post` comes last, so a
+ * list with it starts as the flat list does, byte for byte.
+ */
 function plannerListed(board: boolean): readonly McpTool<PlannerToolHandler>[] {
-  return board ? [...PLANNER_TASK_READ_TOOLS, PLANNER_POST] : PLANNER_TASK_READ_TOOLS;
+  return [...PLANNER_TASK_READ_TOOLS, PLANNER_RECORD, ...(board ? [PLANNER_POST] : [])];
 }
 
 function projectOpenAi(specs: ResearchToolSpec[]): OpenAI.Chat.Completions.ChatCompletionTool[] {

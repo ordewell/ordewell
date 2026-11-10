@@ -1,4 +1,5 @@
-import type { TaskStatus } from '../models/Task';
+import type { DecisionRecordEntry, TaskStatus } from '../models/Task';
+import { recordBlock, recordChanges } from './decisionRecord';
 
 /** A task the plan block does not list, which it can still name by its reference. */
 export interface UnlistedRow {
@@ -40,6 +41,10 @@ export interface PromptBlocksSource {
   plan(): PlanView | null;
   /** The compactions the backend has counted (`IAiService.compactions`). */
   compactions(): number;
+  /** The decision record as it stands (ADR-0067). */
+  record(): readonly DecisionRecordEntry[];
+  /** How many of its entries the summary heading the model context restates: what a replayed context holds of it. */
+  seeded(): number;
 }
 
 /** One turn's blocks, and what makes them held. */
@@ -62,6 +67,8 @@ interface Held {
   plan: HeldPlan | null;
   /** The backend's count as the turn was built: a compaction since may have taken the blocks out. */
   compactions: number;
+  /** How many decision record entries the planner holds, told or written itself. */
+  record: number;
 }
 
 const NOT_RUNNING = 'Execution is not running.';
@@ -77,7 +84,9 @@ const NOT_RUNNING = 'Execution is not running.';
  * Whenever the live context may not hold an intact copy, the next turn sends
  * the whole block again: a stale plan in the planner's head costs more than a
  * long turn. An emptied plan has no whole block to send, so it is stated
- * plainly, and again until a turn that carried that lands.
+ * plainly, and again until a turn that carried that lands. The decision
+ * record rides the same way (ADR-0067): whole into a context that holds none
+ * of it, then only the entries the planner did not write itself.
  */
 export class PromptBlocks {
   private held: Held | null = null;
@@ -87,6 +96,8 @@ export class PromptBlocks {
    * sent, so an empty plan can only be stated, never diffed.
    */
   private mayHoldTasks = false;
+  /** The backend's count as the last turn was built, whether or not that turn landed. */
+  private counted: number | undefined;
 
   constructor(private readonly source: PromptBlocksSource) {}
 
@@ -94,6 +105,9 @@ export class PromptBlocks {
   next(): TurnBlocks {
     const compactions = this.source.compactions();
     const held = this.held?.compactions === compactions ? this.held : null;
+    const record = this.source.record();
+    const recordTold = held ? held.record : this.recordBaseline(compactions, record.length);
+    this.counted = compactions;
     // Taken, not read: only a turn that lands normally puts it back. One that
     // fails, is stopped or is sent again may have been cut off before the
     // model read what it was sent, while its message stays in the context, so
@@ -106,20 +120,39 @@ export class PromptBlocks {
     const blocks = [
       catalog !== null && catalog !== held?.catalog ? catalog : null,
       plan ? planBlock(plan, held?.plan ?? null, this.mayHoldTasks) : null,
+      recordTold === 0 ? recordBlock(record) : recordChanges(record, recordTold),
     ].filter((block): block is string => block !== null);
     if (rows.length > 0) this.mayHoldTasks = true;
     // A plan with no tasks has no line to hold; re-adding one sends the whole
     // block, since the planner never held this plan's protocol.
-    const sent: Held = { catalog, plan: rows.length > 0 ? { rows: byId(rows), unlisted: byId(unlisted) } : null, compactions };
+    const sent: Held = { catalog, plan: rows.length > 0 ? { rows: byId(rows), unlisted: byId(unlisted) } : null, compactions, record: record.length };
     return {
       blocks,
       heard: () => {
-        this.held = sent;
+        // What the planner recorded in the turn so far it was answered with.
+        this.held = { ...sent, record: Math.max(sent.record, this.source.record().length) };
         // Only a heard no-tasks turn proves the planner now holds the empty
         // plan: any other turn may have been cut off before it read one.
         if (rows.length === 0) this.mayHoldTasks = false;
       },
     };
+  }
+
+  /**
+   * What a context the turn cannot vouch for holds of the record (ADR-0067).
+   * One rebuilt from the transcript holds the seed of its newest checkpoint,
+   * which no record change block followed; one the backend compacted itself
+   * may hold neither, so it is told the record whole.
+   */
+  private recordBaseline(compactions: number, length: number): number {
+    if (this.counted !== undefined && this.counted !== compactions) return 0;
+    const seeded = this.source.seeded();
+    return seeded <= length ? seeded : 0;
+  }
+
+  /** The planner recorded entries itself, answered with each: a context that holds the record holds them too. */
+  recorded(): void {
+    if (this.held) this.held = { ...this.held, record: this.source.record().length };
   }
 
   /** The live context is gone or replaced: it holds none of the blocks. What it was told of a plan with tasks is kept: a replay may still carry that. */

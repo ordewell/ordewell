@@ -151,7 +151,7 @@ describe('the Claude Code planner with the Ordewell server injected', () => {
     expect(args.join(' ')).not.toContain(bearer(injected));
     expect(args[args.indexOf('--allowedTools') + 1].split(',')).toEqual([
       'mcp__ordewell__list_runners', 'mcp__ordewell__list_models', 'mcp__ordewell__submit_plan',
-      'mcp__ordewell__edit_plan', 'mcp__ordewell__task_query', 'mcp__ordewell__task_output', 'mcp__ordewell__task_diff',
+      'mcp__ordewell__edit_plan', 'mcp__ordewell__task_query', 'mcp__ordewell__task_output', 'mcp__ordewell__task_diff', 'mcp__ordewell__record',
       'mcp__ordewell__run_command', 'mcp__ordewell__load_skill',
       'mcp__ordewell__run_plan', 'mcp__ordewell__run_task', 'mcp__ordewell__stop_task', 'mcp__ordewell__stop_run',
       'mcp__ordewell__retry_task', 'mcp__ordewell__skip_task', 'mcp__ordewell__message_task', 'mcp__ordewell__answer_approval', 'mcp__ordewell__answer_checkpoint', 'mcp__ordewell__merge_all',
@@ -2339,6 +2339,31 @@ describe('task_diff through the planner handler', () => {
       expect(answers[2].hasMore).toBe(true);
       expect(answers[3]).toMatchObject({ output: expect.stringContaining('+after'), hasMore: false });
     } finally { rmSync(workspace, { recursive: true, force: true }); }
+  });
+});
+
+describe('record (ADR-0067)', () => {
+  it('keeps decisions on the plan from the first turn, before any task, and shows the plan again', async () => {
+    const answers: { isError: boolean; body: unknown }[] = [];
+    const planner = plannerSession(fakeClaude({ turn: async (mcp) => {
+      answers.push(await call(mcp!, 'record', { entries: [
+        { kind: 'decision', text: 'Cache in Redis', why: 'it is already deployed' },
+        { kind: 'constraint', text: 'add a cache' },
+      ] }));
+      answers.push(await call(mcp!, 'record', { entries: [{ kind: 'rejected', text: 'Memcached' }] }));
+      return 'Which eviction policy?';
+    } }));
+
+    await planner.session.startPlanning('add a cache', ['claude-code']);
+
+    expect(answers[0]).toEqual({ isError: false, body: { ok: true, added: [{ id: 'D1', kind: 'decision' }, { id: 'C1', kind: 'constraint' }] } });
+    expect(answers[1]).toEqual({ isError: true, body: { ok: false, errors: ['Entry 1: a rejection needs its why.'] } });
+    expect(planner.session.planState?.decisionRecord).toEqual([
+      expect.objectContaining({ id: 'D1', text: 'Cache in Redis', why: 'it is already deployed' }),
+      expect.objectContaining({ id: 'C1', text: 'add a cache' }),
+    ]);
+    const shown = planner.broadcast.mock.calls.filter(([m]) => m.type === 'plan_generated').at(-1)?.[0] as { plan: { decisionRecord?: unknown[] } };
+    expect(shown.plan.decisionRecord).toHaveLength(2);
   });
 });
 

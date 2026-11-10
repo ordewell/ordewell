@@ -271,12 +271,13 @@ The planner conversation, its harness backends, its research and its skills.
 
 | ADR | Title | Status | Amends | Amended by |
 |---|---|---|---|---|
-| [0002](planner/0002-planner-as-conversation-loop.md) | Planner as a conversation loop (messages only) | accepted | — | — |
+| [0002](planner/0002-planner-as-conversation-loop.md) | Planner as a conversation loop (messages only) | accepted | — | [0067](planner/0067-the-planners-decision-record.md) |
 | [0005](planner/0005-parallel-research-subagents.md) | Parallel read-only research subagents for the planner | accepted | — | — |
 | [0009](planner/0009-coding-agents-as-planners.md) | Coding agents as planners: the harness planner backend | accepted | — | [0026](planner-envelope/0026-one-envelope-for-every-planner.md), [0029](supervision/0029-the-supervisor.md), [0033](planner-envelope/0033-codex-planner-without-its-sandbox.md), [0035](supervision/0035-effects-are-consented-and-recorded.md), [0037](supervision/0037-research-tasks-wake-the-planner.md), [0038](routing/0038-runner-install-verdicts-expire.md), [0040](routing/0040-a-slow-model-discovery-never-gates-the-planner-pick.md), [0052](routing/0052-a-signed-out-coding-agent-is-flagged-and-signs-in-from-the-chat.md), [0055](supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md), [0060](runners/0060-acp-runners-are-data-on-one-connector.md), [0066](planner-envelope/0066-opencode-planners-get-ordewells-research-agent.md) |
 | [0012](planner/0012-the-task-query-read-channel.md) | The task-query read channel: reading a task before rewriting it | accepted | — | [0057](supervision/0057-information-moves-by-reference.md) |
 | [0024](planner/0024-unified-skills.md) | Unified skills: one format, one loader, two audiences | accepted | — | — |
 | [0044](planner/0044-the-planners-usage-limit-waits-and-resends.md) | A planner's usage limit waits and resends, and a limit counts only in a turn Ordewell started | accepted | [0018](runners/0018-structured-runner-transport.md), [0029](supervision/0029-the-supervisor.md) | — |
+| [0067](planner/0067-the-planners-decision-record.md) | The planner keeps a decision record, and a checkpoint is seeded with it | accepted | [0002](planner/0002-planner-as-conversation-loop.md) | — |
 
 ### planner-envelope/
 

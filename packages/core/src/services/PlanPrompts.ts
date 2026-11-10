@@ -131,7 +131,7 @@ function researchPhaseBlock(harnessMode: boolean, researchShell?: ConversationVa
   const toolSpecific = harnessMode
     ? [
       '- You are planning, not implementing: edit, create or delete no file, and run no command that changes the workspace, since every change is a task of the plan',
-      '- Run commands — git, gh, cloud CLIs, the project\'s own tooling — with the run_command tool, not a shell of your own. MCP tools the user configured (issue trackers, todo lists) are yours to read from too. Reads run at once; anything else is approved or refused by the user\'s settings. When something the plan needs to change is refused, add it to the plan instead: a script task when you can state the exact commands, an ops task when it needs judgment',
+      '- Run commands (git, gh, cloud CLIs, the project\'s tooling) with run_command, not a shell of your own. MCP tools the user configured (issue trackers, todo lists) are yours to read from too. Reads run at once; anything else is approved or refused by the user\'s settings. When something the plan needs to change is refused, add it to the plan instead: a script task when you can state the exact commands, an ops task when it needs judgment',
       ...researchShellLine(researchShell),
       `- ${sealedGuide('run_command')}`,
     ]
@@ -210,7 +210,8 @@ export function whoExploresSection(agents: InTurnAgents): string[] {
     '- A first plan may be research tasks alone, when the plan cannot be outlined without their evidence: the outline is a line per task saying what it asks, and you plan the rest when their reports wake you. A vague goal the user can clarify is not one: ask first.',
     '- Search: a problem that needs rounds of branching, where each round\'s reports decide the next, is the explore skill: rounds of research tasks. Where it is which of several approaches to take, the skill has explorers save their prototypes with save_patch, choose on a check fixed beforehand, and has the build task depend on the chosen explorer and apply its patch with apply_patch.',
     '- Give each delegated piece a self-contained brief, since a task never sees this conversation: its goal, its inputs, what to report back, and how its result will be checked. Plan the integration step, and prefer evidence you can check (a test, an exit code) over a task\'s own word.',
-    '- Keep the session fresh: when you replan, say explicitly what the new plan replaces; before a major decision, restate the current goal, the decisions agreed with the user and the plan. Your turn\'s CONTEXT AND BUDGETS shows how full your context is and what remains of your reads. When it shows your context past 40% of its window, suggest compacting at a quiet moment, with no task report pending, using the control your SURFACE AND SETTINGS facts list.',
+    // The record, not a summary, is what a checkpoint carries over intact (ADR-0067), so it is kept as things are decided.
+    '- Keep the session fresh: when you replan, say explicitly what the new plan replaces; before a major decision, restate the current goal, the decisions agreed with the user and the plan. Note with record, as each is made, every decision and its why, constraint verbatim, rejected option and why, and open question. Your turn\'s CONTEXT AND BUDGETS shows how full your context is and what remains of your reads. At a phase boundary, or once it shows your context past 40-50% of its window, suggest compacting with no task report pending, using the control your SURFACE AND SETTINGS facts list.',
   ];
 }
 
@@ -467,7 +468,7 @@ const SUBPLANNER_WORDING: readonly (readonly [RegExp, string])[] = [
   [/^2\. Ask clarifying questions grounded in your findings\. Reference actual files\. When the goal is vague, .*$/m, '2. No person reads this conversation, so nobody answers a question: decide from your findings, and write what you assumed into the task it bears on. What only someone above you can decide ends this with task_complete and status "blocked", saying exactly what is needed.'],
   [/ Be direct: avoid unnecessary preamble, summaries, or explanations unless the user asks for detail\./, ' Be direct: avoid preamble, summaries and explanations.'],
   [/: once your turn ends, nothing you say reaches the user\./, ': once your turn ends, nothing you say reaches anyone.'],
-  [/ When it shows your context past 40% of its window, suggest compacting at a quiet moment, .*$/m, ''],
+  [/ At a phase boundary, or once it shows your context past .*$/m, ''],
   [/ the decisions agreed with the user and the plan\./, ' your brief and the plan.'],
   [/ Reads run at once; anything else is approved or refused by the user's settings\./, ' Reads run at once, and nothing asks: what the allowlist does not cover runs sealed, or is refused.'],
   [/^- Synthesize tool findings\b.*$/m, '- What you learn reaches the plan above only through your task_complete handoff.'],
@@ -716,9 +717,9 @@ function buildConversationBody(
     'BUILD PLANS:',
     'When the strategy is a build, these rules apply as well. No other strategy is planned as vertical slices.',
     '- Design each task as a VERTICAL TRACER-BULLET SLICE — a narrow but complete, independently demoable path, not a horizontal layer.',
-    '- Size each slice to fit a single fresh agent session\'s context window — if a slice is too big, split it.',
+    '- Size each slice to fit a single fresh agent session\'s context window.',
     '- If preparatory refactoring would make the feature easier, make it its own leading task ("make the change easy, then make the easy change") and have dependent slices declare it as a dependency.',
-    '- Wide mechanical refactors (rename a shared symbol, retype a column) whose blast radius spans the codebase are the exception to vertical slicing: sequence them as EXPAND-CONTRACT — one task adds the new form beside the old, parallel migration tasks (each depending on it) move call sites over in batches, and a final contract task depending on all migrations deletes the old form.',
+    '- Wide mechanical refactors (rename a shared symbol, retype a column) are the exception to vertical slicing: sequence them as EXPAND-CONTRACT — one task adds the new form beside the old, parallel migration tasks (each depending on it) move call sites over in batches, and a final contract task depending on all migrations deletes the old form.',
     '- "userStoriesCovered" links a slice to the user stories it delivers, in their exact words. Leave it out when the goal states none.',
     '- Reference specific files and patterns from your research in task prompts.',
     SHARED_APPEND_FILE_RULE,
@@ -747,7 +748,7 @@ function buildConversationBody(
       ]),
     '',
     'CONVENTIONS:',
-    '- When suggesting libraries, frameworks, or patterns, first check the codebase already uses them (package.json, imports, surrounding files): a well-known library is not therefore installed.',
+    '- When suggesting libraries, frameworks, or patterns, first check the codebase already uses them (package.json, imports): a well-known library is not therefore installed.',
     '- Follow the project\'s existing style, naming and patterns.',
     '',
     ...(tools
