@@ -100,13 +100,10 @@ async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDep
       else await sendChat(msg.text, true, undefined, deps);
       return;
     case 'unsendPrompt':
-      deps.chatProvider.conversation.unsendPrompt();
+      deps.chatProvider.conversation.unsendPrompt(msg.toComposer);
       return;
     case 'sendMessageNow':
       await sendChatNow(msg.text, deps);
-      return;
-    case 'sendHeldPromptNow':
-      await sendHeldPromptNow(msg.index, deps);
       return;
     // A Retry compaction is a planner turn the chat did not send, so nothing
     // else releases what was typed while it ran.
@@ -231,32 +228,32 @@ async function sendChat(text: string, typed: boolean, runners: RunnerId[] | unde
 }
 
 /**
- * Send now (ADR-0023, F5). A planner turn in flight is stopped and the forced
- * message answered in the turn that replaces it; with none in flight it is a
- * plain send, so the same key works before a turn opens. The held prompts stay
- * held — a force send is not a user stop — and drain in order once the forced
- * turn ends.
+ * Send now (ADR-0017 Q2, ADR-0023 F5). Everything held goes with it, glued in
+ * the order typed with the composer's text — which may be empty — last, as one
+ * message. A planner turn in flight is stopped and that message answered in
+ * the turn that replaces it; with none in flight it is a plain send, so the
+ * same key works before a turn opens. A slash command is the extension's to
+ * run, not a prompt: it takes nothing from the hold.
  */
 async function sendChatNow(text: string, deps: WebviewRouterDeps): Promise<void> {
-  if (!deps.isGeneratingPlan()) {
+  if (text.startsWith('/') && isKnownSlashCommand(text)) {
     await sendChat(text, true, undefined, deps);
     return;
   }
-  if (text.trim()) deps.chatProvider.conversation.note('user', text);
-  await handleSendMessageNow(text, deps);
+  const all = deps.chatProvider.conversation.takeAll(text);
+  if (!all.trim()) return;
+  if (!deps.isGeneratingPlan()) {
+    await sendChat(all, true, undefined, deps);
+    return;
+  }
+  deps.chatProvider.conversation.note('user', all);
+  await handleSendMessageNow(all, deps);
   sendNextHeldPrompt(deps);
-}
-
-/** Send one held prompt now, by position: it is taken out of the hold and force sent; the rest keep their order. */
-async function sendHeldPromptNow(index: number, deps: WebviewRouterDeps): Promise<void> {
-  const text = deps.chatProvider.conversation.takePrompt(index);
-  if (text === undefined) return;
-  await sendChatNow(text, deps);
 }
 
 /**
  * The turn is over once its handler has returned — its abort cleared, its
- * plan applied — so the oldest queued prompt goes now. A handler that returns
+ * plan applied — so everything held goes now, as one message. A handler that returns
  * mid-turn (a slash command) sends nothing: the turn still generating drains
  * the queue when it ends. The one place a held prompt is released, whoever ran
  * the turn: the Command Palette's compaction calls it too. Released twice for

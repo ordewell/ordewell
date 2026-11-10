@@ -384,6 +384,96 @@ describe('DaemonHost held prompts', () => {
     await waitFor(() => expect(daemon.calls('plans.converseMessage')).toEqual([[{ sessionId: 's1' }, { message: 'and add tests' }]]));
   });
 
+  it.each([
+    ['the typed text last', 'three', 'one\ntwo\nthree'],
+    ['an empty composer', '', 'one\ntwo'],
+  ])('sends now everything held, glued in order, with %s, stopping the turn in flight', async (_case, typed, sent) => {
+    const daemon = fakeDaemon({
+      'sessions.load': ok({ ok: true, sessionId: 's1', goal: 'Ship the parser', plan: PLAN }),
+      'plans.converseMessage': async () => {
+        daemon.push('s1', { type: 'planner_turn_started', turnId: 'p1', sessionId: 's1', stream: 'd1', seq: 1 });
+        await host.handle({ type: 'holdPrompt', text: 'one' });
+        await host.handle({ type: 'holdPrompt', text: 'two' });
+        await host.handle({ type: 'sendMessageNow', text: typed });
+        return ok({ plan: PLAN });
+      },
+      'plans.converseMessageNow': ok({ plan: PLAN }),
+    });
+    const host = hostWith();
+    const seen = watch(host);
+    await opened(daemon, host);
+
+    await act(() => host.handle({ type: 'sendMessage', text: 'first', typed: true }));
+
+    expect(daemon.calls('plans.converseMessageNow').map(([, body]) => body)).toEqual([{ message: sent }]);
+    // Nothing was left held to follow the forced turn.
+    expect(daemon.calls('plans.converseMessage').map(([, body]) => body)).toEqual([{ message: 'first' }]);
+    expect(seen.filter((m) => m.type === 'heldPrompts').at(-1)).toMatchObject({ prompts: [] });
+  });
+
+  it('sends now with no turn in flight as a plain send', async () => {
+    const daemon = fakeDaemon({
+      'sessions.load': ok({ ok: true, sessionId: 's1', goal: 'Ship the parser', plan: PLAN }),
+      'plans.converseMessage': ok({ plan: PLAN }),
+      'plans.converseMessageNow': ok({ plan: PLAN }),
+    });
+    const host = hostWith();
+    watch(host);
+    await opened(daemon, host);
+
+    await act(() => host.handle({ type: 'sendMessageNow', text: 'a normal reply' }));
+    await act(() => host.handle({ type: 'sendMessageNow', text: '' }));
+
+    expect(daemon.calls('plans.converseMessageNow')).toEqual([]);
+    expect(daemon.calls('plans.converseMessage').map(([, body]) => body)).toEqual([{ message: 'a normal reply' }]);
+  });
+
+  it('sends everything held as one message once the turn ends', async () => {
+    const daemon = fakeDaemon({
+      'sessions.load': ok({ ok: true, sessionId: 's1', goal: 'Ship the parser', plan: PLAN }),
+      'plans.converseMessage': async (_params, body) => {
+        if ((body as { message: string }).message === 'first') {
+          daemon.push('s1', { type: 'planner_turn_started', turnId: 'p1', sessionId: 's1', stream: 'd1', seq: 1 });
+          await host.handle({ type: 'holdPrompt', text: 'one' });
+          await host.handle({ type: 'holdPrompt', text: 'two' });
+        }
+        return ok({ plan: PLAN });
+      },
+    });
+    const host = hostWith();
+    watch(host);
+    await opened(daemon, host);
+
+    await act(() => host.handle({ type: 'sendMessage', text: 'first', typed: true }));
+
+    expect(daemon.calls('plans.converseMessage').map(([, body]) => body)).toEqual([{ message: 'first' }, { message: 'one\ntwo' }]);
+  });
+
+  it.each([
+    [true, ['two', 'one']],
+    [false, []],
+  ])('takes back the newest held prompt, into the composer only when it was empty (%s)', async (toComposer, unsent) => {
+    const daemon = fakeDaemon({
+      'sessions.load': ok({ ok: true, sessionId: 's1', goal: 'Ship the parser', plan: PLAN }),
+      'plans.converseMessage': async () => {
+        daemon.push('s1', { type: 'planner_turn_started', turnId: 'p1', sessionId: 's1', stream: 'd1', seq: 1 });
+        await host.handle({ type: 'holdPrompt', text: 'one' });
+        await host.handle({ type: 'holdPrompt', text: 'two' });
+        await host.handle({ type: 'unsendPrompt', toComposer });
+        await host.handle({ type: 'unsendPrompt', toComposer });
+        return ok({ plan: PLAN });
+      },
+    });
+    const host = hostWith();
+    const seen = watch(host);
+    await opened(daemon, host);
+
+    await act(() => host.handle({ type: 'sendMessage', text: 'first', typed: true }));
+
+    expect(seen.flatMap((m) => (m.type === 'promptUnsent' ? [m.text] : []))).toEqual(unsent);
+    expect(daemon.calls('plans.converseMessage')).toHaveLength(1);
+  });
+
   it('holds what is typed during the next session\'s turn after a switch overtook a turn of the last one', async () => {
     let finishFirst = (): void => undefined;
     let finishSecond = (): void => undefined;

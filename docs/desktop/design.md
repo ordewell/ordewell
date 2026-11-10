@@ -488,7 +488,10 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
   - *The plan panel* fills in row by row as the draft streams. A partial task is
     drawn as a skeleton row.
 - **Actions.**
-  - Message the planner, or send now. Stop planning.
+  - Message the planner. While a turn runs, ⏎ queues a message and ⌘⏎ /
+    Ctrl+Enter sends now: every queued message, in the order typed, with what
+    is in the composer last, as one message. Esc takes back the newest queued
+    message, into the composer only when it is empty. Stop planning.
   - Switch the planner, model and effort.
   - Fork, rewind or compact the conversation (header `⋯`).
   - A planner question with options draws as buttons in the conversation.
@@ -2213,7 +2216,7 @@ strokes converging on a teal dot. They are drawn on a 24 px grid, with a
 | ⌘W / Ctrl+W, ⌃Tab / Ctrl+Tab | Close tab (never the planner tab), next tab |
 | ⌘\\ / Ctrl+\\ | Split the editor |
 | ⌘S / Ctrl+S | Save (checkout only) |
-| ⌘⏎ / Ctrl+Enter | Send in a composer; commit in the commit box |
+| ⌘⏎ / Ctrl+Enter | Send now while a turn runs: in the planner chat, the queued messages and the composer's text as one; commit in the commit box |
 | Esc | Close a popover, peek, drawer or dialog; return focus where it was |
 | F6 / Shift+F6 | Move focus between regions: title bar, sidebar, centre, plan panel, terminal, status bar |
 | F7 / Shift+F7 (diff) | Monaco's accessible diff viewer, next and previous change |

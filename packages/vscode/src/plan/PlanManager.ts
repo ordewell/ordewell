@@ -220,8 +220,8 @@ export async function handleContinueConversation(
 /**
  * Send now in the planner chat (ADR-0023, F5): the Session stops the turn in
  * flight and answers `text` in the turn that replaces it. The run's tasks are
- * untouched, and the host's held prompts are not given back — they drain in
- * order once the forced turn ends.
+ * untouched. `text` already carries the host's held prompts, glued ahead of
+ * what was typed, so nothing is left held to follow it.
  */
 export async function handleSendMessageNow(
   text: string,
