@@ -78,6 +78,19 @@ export const mockCell = (port, persona = 'mock/interviewer') => ({
 /** A usage limit or exhausted quota, as OpenCode and the providers behind it word one. */
 export const QUOTA = /\b(quota|usage limit|rate[- ]limit(ed)?|insufficient (credits?|balance|funds)|credits? (exhausted|exceeded)|limit (reached|exceeded)|too many requests|429)\b/i;
 
+/**
+ * The quota text of a run that ended without a plan, or null. Only what the
+ * runner or provider reported counts: the turn's error event, or the output of
+ * a TUI that died with a non-zero status. The planner's own prose never does:
+ * a goal about token usage says 'usage limit' without any provider having.
+ */
+export function quotaOf({ stopped, lastText = '', exitCode = 0, signal = null, screen = '' }) {
+  if (stopped === 'plan submitted') return null;
+  const report = stopped === 'error' ? lastText : stopped === 'tui exited' && (exitCode || signal) ? screen.slice(-4000) : '';
+  const match = QUOTA.exec(report);
+  return match ? report.trim().slice(-400) : null;
+}
+
 /** The cell an OpenCode Go cell becomes when its quota runs out, or null when it has no fallback. */
 export function substituteFor(cell) {
   if (!cell.fallback) return null;

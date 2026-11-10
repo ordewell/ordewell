@@ -241,8 +241,9 @@ export function wordingViolations(history, { autoMerge, goalText = '' } = {}) {
           if (pattern.test(sentence) && !exempt?.test(sentence)) found.push({ rule, quote });
         }
       }
-      // A merge command is an instruction even quoted: it is the thing the user would type.
-      const asksToMerge = MERGE_COMMAND.test(raw) || USER_MERGES.test(sentence);
+      // The command may be quoted ("Type `/handoff merge`"), but only a sentence that addresses
+      // the user asks for it: one that quotes it as text a task writes, as the goal's own hint does, describes code.
+      const asksToMerge = instructs(sentence) && (MERGE_COMMAND.test(raw) || USER_MERGES.test(sentence));
       if (autoMerge && asksToMerge && !BY_ITSELF.test(raw)) {
         found.push({ rule: 'asks the user to merge while automatic merging is on', quote });
       }

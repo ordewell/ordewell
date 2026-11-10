@@ -22,7 +22,7 @@ import { aggregate, isComplete, markdown } from './lib/aggregate.mjs';
 import { budgetRecord, budgetSource, claudeTranscriptDir, claudeTurnInputs, reportsOwnReads, startRecorder } from './lib/budget.mjs';
 import { ensureBuild, repoRoot, resolveRef, cliMain } from './lib/builds.mjs';
 import {
-  CELLS, HERE, MAX_DRIVER_TURNS, QUOTA, VARIANTS, goalText, loadGoals, missingFor, mockCell, parseArgs,
+  CELLS, HERE, MAX_DRIVER_TURNS, VARIANTS, goalText, loadGoals, missingFor, mockCell, parseArgs, quotaOf,
   runEnv, runSettings, selectRuns, substituteFor, timeoutFor,
 } from './lib/config.mjs';
 import { guardFiles } from './lib/guard.mjs';
@@ -98,7 +98,10 @@ async function drive({ tui, client, workspace, goal, variant, timeoutMs }) {
   };
   await send(goalText(goal, variant));
   for (;;) {
-    if (!tui.alive) return { stopped: 'tui exited', turns, session, lastText, wallMs: Date.now() - started };
+    if (!tui.alive) {
+      const { code, signal } = await tui.exited;
+      return { stopped: 'tui exited', exitCode: code, signal, turns, session, lastText, wallMs: Date.now() - started };
+    }
     if (Date.now() > deadline) return { stopped: 'timeout', turns, session, lastText, wallMs: Date.now() - started };
     await sleep(POLL_MS);
     const meta = newestSession(await client.sessions(workspace).catch(() => []));
@@ -117,14 +120,6 @@ async function drive({ tui, client, workspace, goal, variant, timeoutMs }) {
     if (turns >= MAX_DRIVER_TURNS) return { stopped: 'turn limit', turns, session, lastText, wallMs: Date.now() - started };
     await send(turn.reply);
   }
-}
-
-/** Whether a run that ended without a plan ran out of its provider's quota. */
-function quotaHit(outcome, screen) {
-  if (outcome.stopped === 'plan submitted') return null;
-  const said = outcome.stopped === 'error' || outcome.lastText.length < 600 ? outcome.lastText : '';
-  const match = QUOTA.exec(said) ?? QUOTA.exec(screen.slice(-4000));
-  return match ? (said || screen.slice(-400)).trim().slice(0, 300) : null;
 }
 
 /** The planner's turns as Claude Code kept them, under the workspace path as given or as the OS resolves it. */
@@ -204,7 +199,7 @@ async function record({ spec, builds, templates, opts, dir, workRoot }) {
       const { outcome, screen, token, budget } = await planOnce({
         spec, cell, build, template: templates[spec.goal.id], modulesFrom: builds.baseline.mock ? null : builds.baseline.dir, opts, dir, workRoot,
       });
-      const quota = quotaHit(outcome, screen);
+      const quota = quotaOf({ ...outcome, screen });
       const fallback = quota && !substitution ? substituteFor(cell) : null;
       if (fallback && missingFor(fallback, { env: process.env, onPath }).length === 0) {
         say(`${spec.id}: quota hit on ${cell.model}; rerunning with ${fallback.model}`);
