@@ -31,7 +31,7 @@ const RAISE_ABOVE = 'A raise is the plan above this one to give: answer without 
 const QUESTION_MOVED = 'That question has moved on: reading the plan again.';
 const WORDS_KEPT = 'Your words are kept: Esc takes them to the composer of the plan above.';
 const STOPS_THE_RUN = 'Stopping the whole run: a plan below the root has no stop of its own. A message waiting on a pause goes with it.';
-const COMMANDS_HERE = new Set(['help', 'stop', 'quit']);
+const COMMANDS_HERE = new Set(['help', 'decisions', 'stop', 'quit']);
 
 /** Whose stream a plan's frame came down: the root, whichever plan is viewed. */
 export const rootId = (state: TuiState): string => rootFrame(state).sessionId ?? '';

@@ -945,7 +945,7 @@ describe('overlays', () => {
 
   it('scrolls the help sheet to reach the commands below the fold', () => {
     const top = text({ overlay: { kind: 'help', scroll: 0 }, rows: 24 });
-    const down = text({ overlay: { kind: 'help', scroll: 17 }, rows: 24 });
+    const down = text({ overlay: { kind: 'help', scroll: 18 }, rows: 24 });
     expect(top).not.toContain('/allowlist');
     expect(down).toContain('/allowlist');
   });

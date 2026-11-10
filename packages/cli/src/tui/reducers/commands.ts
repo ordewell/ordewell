@@ -40,6 +40,10 @@ function dispatchCommand(state: TuiState, parsed: ParsedCommand): Step {
   switch (name) {
     case 'help':
       return step({ ...state, overlay: { kind: 'help', scroll: 0 } });
+    case 'decisions':
+      return args[0] && args[0].toLowerCase() !== 'all'
+        ? fail(state, 'Usage: /decisions [all]')
+        : step({ ...state, overlay: { kind: 'record', scroll: 0, ...(args[0] ? { all: true } : {}) } });
     case 'quit':
       return step({ ...state, exiting: true }, [{ type: 'exit' }]);
     case 'refresh':

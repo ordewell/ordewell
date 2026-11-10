@@ -2,7 +2,7 @@ import { firstGrapheme, graphemes, pad, sanitize, stripAnsi, style, truncate, wi
 import { cursorInLines } from './editor';
 import { SLASH_COMMANDS, activeToken, composerCompletions, runnerCommandFor, skillMatchKind, slashTokens } from './slash';
 import {
-  approvalLayout, bodyPanes, bodyRows, composerView, selectionArea, selectionColumns, chatLayout, footerHints, helpLayout, type HelpSheet, packHints, planLayout, planOffset,
+  approvalLayout, bodyPanes, bodyRows, composerView, selectionArea, selectionColumns, chatLayout, footerHints, helpLayout, recordLayout, type HelpSheet, packHints, planLayout, planOffset,
   stopHint,
   chatActivity,
   runnerStoppable,
@@ -521,6 +521,7 @@ function renderPlan(state: TuiState, rows: number, cols: number): string[] {
 function renderOverlay(state: TuiState, rows: number, cols: number): string[] {
   const overlay = state.overlay!;
   if (overlay.kind === 'help') return renderHelp(overlay.scroll ?? 0, overlay.sheet ?? 'commands', rows, cols);
+  if (overlay.kind === 'record') return renderRecord(state, overlay, rows, cols);
   if (overlay.kind === 'approval') {
     return frame('Approval needed', approvalLayout(state, overlay.request, overlay.scroll ?? 0, rows, cols).lines, rows, cols);
   }
@@ -764,6 +765,13 @@ function renderHelp(scroll: number, sheet: HelpSheet, rows: number, cols: number
   const footer = style.grey(offset < maxScroll ? '↑↓ scroll · any other key closes' : 'any key closes');
 
   return frame(sheet === 'keys' ? 'Keys' : 'Commands', [...lines.slice(offset, offset + room), footer], rows, cols);
+}
+
+function renderRecord(state: TuiState, overlay: Extract<Overlay, { kind: 'record' }>, rows: number, cols: number): string[] {
+  const { lines, room, maxScroll } = recordLayout(state.decisionRecord, overlay.all === true, rows, cols);
+  const offset = Math.min(overlay.scroll ?? 0, maxScroll);
+  const footer = style.grey(offset < maxScroll ? '↑↓ scroll · any other key closes' : 'any key closes');
+  return frame('Decision record', [...lines.slice(offset, offset + room), footer], rows, cols);
 }
 
 /** Most rows of a quoted message a confirmation shows before it cuts to an ellipsis. */
