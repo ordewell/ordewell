@@ -42,6 +42,7 @@ import { workspaceEnvOf } from '../workspaceEnv';
 import { augmentedPath, withPath } from '../../utils/shellPath';
 import { BUILTIN_MANIFESTS } from '../../plugins/builtin';
 import { collectResearchContext } from '../ContextCollector';
+import { OPENCODE_SCOUT_ENV, scoutRequested } from './openCodeOrdewell';
 import { sensitiveEnvValues } from '../outboundSecrets';
 import type { AgentAdapter, AgentEvent, AgentProcessDeps, PlannerStartOptions, UsageLimitSignal } from './AgentAdapter';
 import { connectorFor, createPlannerAdapter } from './connectors';
@@ -163,6 +164,8 @@ class PlannerSession {
   notice?: (level: 'info' | 'warn' | 'error', message: string) => void;
   /** The setting's reason was already said this session; see {@link CliAgentAiService.noticeNativeShell}. */
   nativeShellNoticed = false;
+  /** The scout's withheld reason was already said this session; see {@link CliAgentAiService.noticeScout}. */
+  scoutNoticed = false;
   /**
    * The agent's own session id, kept across a process death so the next turn
    * can resume warm context instead of re-reading the repository. Never
@@ -382,13 +385,15 @@ export class CliAgentAiService implements IAiService {
 
     const contextStr = await collectResearchContext(req.fs, req.runners);
     const researchShell = this.researchShell();
+    // Decided with the prompt, before the adapter starts: one whose server withholds the scout tells the planner so (ADR-0026).
+    const scout = this.runner === 'opencode' && scoutRequested({ kind: 'planner', ...(req.plannerTools.noSubagents ? { noSubagents: true } : {}) });
     const systemPrompt = buildConversationSystemPrompt(
       req.goal,
       contextStr,
       req.modelsByRunner,
       req.runners,
       req.runnerModes,
-      { harness: true, runner: this.runner, isolatedExecution: req.isolatedExecution, skills: req.skills, execution: req.plannerTools !== undefined, autorun: req.autorun, delegation: req.delegation, subplanner: req.subplanner, ...(req.plannerTools.noSubagents ? { subagents: false } : {}), ...(researchShell ? { researchShell } : {}) },
+      { harness: true, runner: this.runner, isolatedExecution: req.isolatedExecution, skills: req.skills, execution: req.plannerTools !== undefined, autorun: req.autorun, delegation: req.delegation, subplanner: req.subplanner, ...(req.plannerTools.noSubagents ? { subagents: false } : {}), ...(scout ? { scout } : {}), ...(researchShell ? { researchShell } : {}) },
     );
 
     const fetcher = req.fetcher;
@@ -972,6 +977,7 @@ export class CliAgentAiService implements IAiService {
     // A harness that reports its version as it connects (OpenCode 2.x) has it
     // before the first turn; Claude Code names it on `init`, inside one.
     session.nativeShellVersion = spawned.adapter.version?.() ?? session.nativeShellVersion;
+    this.noticeScout(session, spawned.adapter);
     return spawned.adapter;
   }
 
@@ -1004,6 +1010,14 @@ export class CliAgentAiService implements IAiService {
       version: session.nativeShellVersion,
       platform: this.processDeps.platform ?? process.platform,
     }).offered;
+  }
+
+  /** The gate's one warning per session when the adapter left the scout out, and why (ADR-0026). */
+  private noticeScout(session: PlannerSession, adapter: AgentAdapter): void {
+    const withheld = session.scoutNoticed ? null : adapter.scoutWithheld?.() ?? null;
+    if (!withheld) return;
+    session.scoutNoticed = true;
+    session.notice?.('warn', `${OPENCODE_SCOUT_ENV} is set, but this planner has no scout: ${withheld}`);
   }
 
   /**

@@ -344,6 +344,12 @@ export interface AgentAdapter {
   unusableProjectServers?(): ProjectMcpServer[];
 
   /**
+   * Why a planner that asked for Ordewell's scout (ADR-0026) was not given it,
+   * or null when it was or never asked. Known once the adapter has started.
+   */
+  scoutWithheld?(): string | null;
+
+  /**
    * Whether `abs`, already resolved on disk, is output this runner saved
    * outside the workspace for this session and told its planner to read back
    * (ADR-0032). The planner reads it as it reads the workspace. Absent on a

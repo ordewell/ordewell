@@ -3,7 +3,7 @@ import { realpathSync } from 'fs';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { AgentEvent, PlannerStartOptions, TaskStartOptions } from './AgentAdapter';
 import { taskCompletionContract } from '../mcp';
-import { OPENCODE_ORDEWELL, plannerPermission, readOnlySessionRules, OPENCODE_SEARCH_OFF, type OpenCodeSessionRule as SessionRule } from './openCodeOrdewell';
+import { OPENCODE_ORDEWELL, OPENCODE_SCOUT_AGENT, OPENCODE_SCOUT_SESSION_RULE, plannerPermission, scoutRulesMismatch, readOnlySessionRules, OPENCODE_SEARCH_OFF, type OpenCodeSessionRule as SessionRule } from './openCodeOrdewell';
 import { hunksOf } from './fileDiff';
 import { heldServersNote } from './projectServers';
 import type { ProjectMcpServer } from './repoConfig';
@@ -35,6 +35,20 @@ const SEARCH_OFF_RULES: SessionRule[] = Object.entries(OPENCODE_SEARCH_OFF)
  * A planner's session denies it outright.
  */
 const CODE_MODE_OFF_RULES: SessionRule[] = [{ action: 'execute', resource: '*', effect: 'deny' }];
+/**
+ * After {@link plannerRules}' `subagent` deny: the planner may start Ordewell's
+ * scout and no other agent (ADR-0026). The child runs under the scout's own
+ * rules alone, which the server's config gives it and {@link scoutRulesMismatch}
+ * checks as the server resolved them.
+ */
+const SCOUT_RULES: SessionRule[] = [OPENCODE_SCOUT_SESSION_RULE];
+function rulesAllowScout(rules: unknown): boolean {
+  return Array.isArray(rules) && rules.some((r) => isRecord(r) && r.action === OPENCODE_SCOUT_SESSION_RULE.action && r.resource === OPENCODE_SCOUT_AGENT && r.effect === 'allow');
+}
+export const SCOUT_INSTRUCTIONS = `For breadth, delegate one question at a time to the \`${OPENCODE_SCOUT_AGENT}\` subagent with your \`subagent\` tool, in the foreground. It reads the workspace and nothing else, and returns a digest. No other agent can be started, and a background call fails the turn.`;
+/** What a planner that asked for the scout is told when it was left out, so the prompt's own mention of it does not stand. */
+export const SCOUT_WITHHELD = `The \`${OPENCODE_SCOUT_AGENT}\` subagent is not available in this session: delegate breadth to a research task instead.`;
+export const BACKGROUND_SCOUT = 'The planner started a subagent in the background. Its report would arrive after this turn, outside Ordewell\'s view, so the turn is failed. Delegate in the foreground.';
 function codeModeOnly(version: string | undefined, role: 'planner' | 'task'): string {
   return `OpenCode${version ? ` ${version}` : ''} cannot run the ${role} safely: it can only offer Ordewell's tools inside code mode, which runs code the model writes without asking. `
     + `This ${role} needs an OpenCode version that can list MCP tools outside code mode. Update OpenCode, or choose another runner.`;
@@ -150,6 +164,8 @@ export interface OpenCodeV2Host {
   version?: string;
   /** The native-shell launcher every command of a planner must run in (ADR-0036 N2); null when the opt-in is off. */
   nativeShell?: string | null;
+  /** Whether the server's config was given Ordewell's scout, behind its gate (ADR-0026). */
+  scout?: boolean;
   /** The user's MCP servers the server listed, for telling a planner's MCP tool request from a built-in's (ADR-0026). */
   mcpServers?(): readonly string[];
   /** `timeoutMs` is how long the server may take to answer, a default when left out and none when null. */
@@ -249,6 +265,10 @@ export class OpenCodeV2 {
   private interruptRequested = false;
   /** Whether a planner's own `websearch` is on for its session (ADR-0027). */
   private ownSearch = true;
+  /** Whether the planner's session lets it start the scout (ADR-0026). */
+  private scout = false;
+  /** Why a planner that asked for the scout was not given it. */
+  private withheld: string | null = null;
   /** Approved project servers whose tools are listed as tools of their own. */
   private exposed: string[] = [];
   /** Approved project servers whose tools this OpenCode would list only inside `execute`, which a planner may not use. */
@@ -282,10 +302,26 @@ export class OpenCodeV2 {
 
   unusableProjectServers(): ProjectMcpServer[] { return [...this.unusable]; }
 
+  scoutWithheld(): string | null { return this.withheld; }
+
+  /**
+   * The scout is enabled only once the server resolves it exactly as Ordewell
+   * wrote it: Ordewell's layer only adds rules, and a config the server reads
+   * after it (the managed one) or a release that merges in another order can
+   * leave one after its deny-all (ADR-0026).
+   */
+  private async decideScout(): Promise<void> {
+    if (this.role !== 'planner' || !this.host.scout || (this.opts.kind === 'planner' && this.opts.noSubagents)) return;
+    const resolved = await this.host.json<unknown>('GET', '/api/agent').then((agents) => ({ agents }), () => null);
+    this.withheld = resolved ? scoutRulesMismatch(resolved.agents) : `OpenCode's resolved ${OPENCODE_SCOUT_AGENT} could not be read, so its rules could not be checked.`;
+    this.scout = this.withheld === null;
+  }
+
   savedOutput(abs: string): boolean { return this.saved.has(abs); }
 
   async start(): Promise<void> {
     await this.exposeServers();
+    await this.decideScout();
     const resume = this.opts.resumeSessionId;
     if (resume) {
       // A resume id names a session on disk, not on this process — so it is checked rather than trusted.
@@ -296,7 +332,9 @@ export class OpenCodeV2 {
       // would leave the new process with a shell it may not use, or with one it may when the user turned it off.
       const resumable = !readOnlyTask(this.opts)
         && (this.role === 'task' || rulesDeny(existing?.data?.permissions, 'execute'))
-        && this.shellRulesMatch(existing?.data?.permissions);
+        && this.shellRulesMatch(existing?.data?.permissions)
+        // A session that allows the scout must not outlive the gate or the check, nor one without it a scout now enabled.
+        && (this.role === 'task' || rulesAllowScout(existing?.data?.permissions) === this.scout);
       if (existing?.data?.id && resumable) {
         this.sessionId = existing.data.id;
         // The instructions follow its rules too.
@@ -317,7 +355,7 @@ export class OpenCodeV2 {
     const created = await this.host.json<{ data?: { id?: string } }>('POST', '/api/session', {
       agent: this.agent,
       ...(this.model ? { model: this.model } : {}),
-      permissions: [...(this.opts.kind === 'task' && readOnlyTask(this.opts) ? readOnlySessionRules(this.opts) : this.role === 'planner' ? [...plannerRules(this.nativeShell !== null), ...(this.ownSearch ? [] : SEARCH_OFF_RULES), ...CODE_MODE_OFF_RULES] : TASK_RULES), ...this.ordewellRules()],
+      permissions: [...(this.opts.kind === 'task' && readOnlyTask(this.opts) ? readOnlySessionRules(this.opts) : this.role === 'planner' ? [...plannerRules(this.nativeShell !== null), ...(this.ownSearch ? [] : SEARCH_OFF_RULES), ...CODE_MODE_OFF_RULES, ...(this.scout ? SCOUT_RULES : [])] : TASK_RULES), ...this.ordewellRules()],
     });
     if (!created?.data?.id) throw new Error(`The OpenCode ${this.role} server did not return a session id.`);
     this.sessionId = created.data.id;
@@ -405,7 +443,8 @@ export class OpenCodeV2 {
       return;
     }
     const unusable = heldServersNote(this.unusable.map((server) => ({ server, reason: UNUSABLE })));
-    const system = [plannerSystem(this.opts, this.ownSearch).system, unusable].filter(Boolean).join('\n\n');
+    const scout = this.scout ? SCOUT_INSTRUCTIONS : this.withheld ? SCOUT_WITHHELD : '';
+    const system = [plannerSystem(this.opts, this.ownSearch).system, scout, unusable].filter(Boolean).join('\n\n');
     if (!system) return;
     const response = await this.host.request('PUT', `/api/experimental/session/${this.sessionId}/instructions/entries/ordewell-planner`, { value: system });
     if (!response.ok) throw new Error(`OpenCode did not take the planner instructions: ${response.status} ${response.statusText}`);
@@ -688,6 +727,8 @@ export class OpenCodeV2 {
         if ((name === 'bash' || name === 'shell') && typeof input.command === 'string') {
           state.shellCalls.set(id, { command: input.command, session: data.sessionID ?? '' });
         }
+        // 2.x has no rule for `background`, and a backgrounded child reports after the turn (ADR-0026).
+        if (!subagentId && this.role === 'planner' && name === 'subagent' && input.background === true) turn.failure ??= BACKGROUND_SCOUT;
         const brief = typeof input.description === 'string' ? input.description : typeof input.prompt === 'string' ? input.prompt : '';
         state.briefs.set(id, brief);
         onEvent({ type: 'tool_call', id, name, args: input, subagentId });

@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { OpenCodeAdapter } from '../OpenCodeAdapter';
+import { BACKGROUND_SCOUT, SCOUT_INSTRUCTIONS, SCOUT_WITHHELD } from '../OpenCodeV2';
 import type { AgentEvent, AgentProcessDeps, AgentStartOptions, SpawnFn, TaskStartOptions, TaskModeAgentAdapter } from '../AgentAdapter';
 import { fakeSpawn, sseResponse, type FakeEventStream } from '../../__tests__/harnessTestKit';
 import { OPENCODE_ORDEWELL, OPENCODE_PLANNER_PERMISSION, OPENCODE_SEARCH_OFF } from '../openCodeOrdewell';
@@ -220,6 +221,8 @@ describe('OpenCode 2.x — start', () => {
     const prompt = server.requests.find((r) => r.method === 'PUT');
     expect(prompt?.path).toBe(`/api/experimental/session/${SES}/instructions/entries/ordewell-planner`);
     expect(prompt?.body).toEqual({ value: 'PLAN' });
+    // The scout is gated (ADR-0026): without ORDEWELL_OPENCODE_SCOUT=1 nobody asks for the agent it would check.
+    expect(server.requests.some((r) => r.path === '/api/agent')).toBe(false);
     adapter.dispose();
   });
 
@@ -289,6 +292,8 @@ describe('OpenCode 2.x — start', () => {
 });
 
 const codeModeOff = [{ action: 'execute', resource: '*', effect: 'deny' }];
+/** After the planner's `subagent` deny, so the last match lets it start Ordewell's scout and nothing else. */
+const scoutAllow = [{ action: 'subagent', resource: 'ordewell-scout', effect: 'allow' }];
 const rules = (policy: Record<string, string>) => Object.entries(policy).map(([action, effect]) => ({ action, resource: '*', effect }));
 /** Ordewell's tools, each allowed by its exact name: a pattern would cover a server named `ordewell_<anything>` too. */
 const ordewellAllow = [
@@ -1510,4 +1515,146 @@ it('reports OpenCode 2.x manual compaction failure even when execution ends norm
   await turn;
   expect(events.filter((e) => e.type === 'error' || e.type === 'turn_end' || e.type === 'compaction')).toEqual([{ type: 'error', message: 'Nothing to compact yet' }]);
   adapter.dispose();
+});
+
+/**
+ * The scout as OpenCode 2.2.5 resolved it from Ordewell's planner config, from
+ * `GET /api/agent`: its defaults, the planner layer's own policy, the scout's
+ * map migrated (write, patch and apply_patch to `edit`, bash to `shell`, task
+ * to `subagent`), then the denies OpenCode appends to every agent.
+ */
+const RESOLVED_SCOUT = [
+  { action: '*', resource: '*', effect: 'allow' }, { action: 'read', resource: '*.env', effect: 'ask' }, { action: 'read', resource: '*.env.*', effect: 'ask' }, { action: 'read', resource: '*.env.example', effect: 'allow' },
+  { action: '*', resource: '*', effect: 'deny' }, { action: 'read', resource: '*', effect: 'allow' },
+  { action: '*', resource: '*', effect: 'deny' },
+  ...['edit', 'edit', 'edit', 'edit', 'multiedit', 'shell', 'shell', 'execute', 'browser', 'webfetch', 'websearch', 'codesearch', 'external_directory', 'subagent', 'subagent', 'question', 'todowrite', 'todoread', 'skill', 'lsp'].map((action) => ({ action, resource: '*', effect: 'deny' })),
+  ...['read', 'glob', 'grep', 'list'].map((action) => ({ action, resource: '*', effect: 'allow' })),
+  { action: 'browser', resource: '*', effect: 'deny' }, { action: 'skill', resource: 'browser', effect: 'deny' },
+];
+const agents = (permissions: unknown, id = 'ordewell-scout') => ({ location: 'server', data: [{ id: 'build', name: 'build', mode: 'primary', permissions: [] }, { id, name: id, mode: 'subagent', system: 'p', permissions }] });
+
+// ADR-0026: the planner may start Ordewell's read-only scout, on 2.x, behind ORDEWELL_OPENCODE_SCOUT=1, once the server's resolved agent is Ordewell's.
+describe('OpenCode 2.x — the scout (ADR-0026)', () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  async function scoutPlanner(resolved: Reply = agents(RESOLVED_SCOUT), overrides: Record<string, unknown> = {}, routes: Record<string, (body: unknown) => Reply> = {}) {
+    vi.stubEnv('ORDEWELL_OPENCODE_SCOUT', '1');
+    const server = fakeServer({ 'GET /api/agent': () => resolved, 'GET /api/config': () => [document({ websearch: { provider: 'exa' } })], ...routes });
+    const { adapter } = await start(server, plannerStart(overrides));
+    const created = server.requests.find((r) => r.method === 'POST' && r.path === '/api/session')?.body as { permissions: Array<{ action: string; resource: string; effect: string }> } | undefined;
+    const instructions = (server.requests.find((r) => r.path.endsWith('/instructions/entries/ordewell-planner'))?.body as { value: string } | undefined)?.value ?? '';
+    return { server, adapter, created, instructions };
+  }
+
+  it('lets the planner start the scout once the server resolves it as Ordewell wrote it', async () => {
+    const { adapter, created, instructions } = await scoutPlanner();
+
+    expect(created?.permissions).toEqual([...rules(OPENCODE_PLANNER_PERMISSION), ...codeModeOff, ...scoutAllow]);
+    expect(instructions).toBe(`PLAN\n\n${SCOUT_INSTRUCTIONS}`);
+    expect(adapter.scoutWithheld()).toBeNull();
+    adapter.dispose();
+  });
+
+  it.each([
+    ['a global `agents.ordewell-scout` appends an allow-all', agents([...RESOLVED_SCOUT, { action: '*', resource: '*', effect: 'allow' }]), /allows \* on \*/],
+    ['a global permission allows a tool Ordewell does not name, after its catch-all', agents([...RESOLVED_SCOUT.slice(0, 7), { action: 'mytool_run', resource: '*', effect: 'allow' }, ...RESOLVED_SCOUT.slice(7)]), /allows mytool_run on \*/],
+    ['a shell rule asks after the catch-all', agents([...RESOLVED_SCOUT, { action: 'shell', resource: '*', effect: 'ask' }]), /asks shell on \*/],
+    ['a read rule is narrowed to a pattern', agents([...RESOLVED_SCOUT, { action: 'read', resource: '/home/*', effect: 'allow' }]), /allows read on \/home\/\*/],
+    ['no rule denies everything', agents(RESOLVED_SCOUT.slice(0, 4)), /no deny-all/],
+    ['a read tool is missing', agents(RESOLVED_SCOUT.filter((r) => r.action !== 'grep')), /does not allow grep/],
+    ['the server lists no such agent', agents(RESOLVED_SCOUT, 'reviewer'), /does not list ordewell-scout/],
+    ['the server lists it with no rules', agents(undefined), /no rules/],
+    ['the agent route fails', { status: 500 }, /could not be read/],
+  ])('leaves the scout out, and says why, where %s', async (_label, resolved, why) => {
+    const { adapter, created, instructions } = await scoutPlanner(resolved);
+
+    expect(created?.permissions).toEqual([...rules(OPENCODE_PLANNER_PERMISSION), ...codeModeOff]);
+    expect(instructions).toBe(`PLAN\n\n${SCOUT_WITHHELD}`);
+    expect(adapter.scoutWithheld()).toMatch(why);
+    adapter.dispose();
+  });
+
+  it('asks nothing of a subplanner without research, which has no agents', async () => {
+    const { server, adapter, created, instructions } = await scoutPlanner(agents(RESOLVED_SCOUT), { noSubagents: true });
+
+    expect(server.requests.some((r) => r.path === '/api/agent')).toBe(false);
+    expect(created?.permissions).toEqual([...rules(OPENCODE_PLANNER_PERMISSION), ...codeModeOff]);
+    expect(instructions).toBe('PLAN');
+    expect(adapter.scoutWithheld()).toBeNull();
+    adapter.dispose();
+  });
+
+  // OpenCode evaluates a session's rules last match first; the scout's allow follows the planner's `subagent` deny.
+  it('creates the planner session so the last matching rule allows the scout and denies every other agent', async () => {
+    const { adapter, created } = await scoutPlanner();
+    const wildcard = (pattern: string, value: string) => new RegExp(`^${pattern.split('*').map((p) => p.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`).test(value);
+    const decide = (agent: string) => [...created?.permissions ?? []].reverse().find((r) => wildcard(r.action, 'subagent') && wildcard(r.resource, agent))?.effect;
+
+    expect(decide('ordewell-scout')).toBe('allow');
+    for (const agent of ['general', 'explore', 'build', 'plan', 'ordewell-scout-2']) expect(decide(agent)).toBe('deny');
+    adapter.dispose();
+  });
+
+  // A session keeps the rules it was created with: one that allows the scout must not outlive the gate or the check, nor one without it a scout now enabled.
+  it.each([
+    ['allows the scout, which is enabled', true, agents(RESOLVED_SCOUT), true],
+    ['denies it, which is enabled', false, agents(RESOLVED_SCOUT), false],
+    ['allows it, which the check withheld', true, { status: 500 }, false],
+    ['denies it, which the check withheld', false, { status: 500 }, true],
+  ])('resumes a planner session whose rules %s only where they agree', async (_label, allowed, resolved, resumed) => {
+    const permissions = [...rules(OPENCODE_PLANNER_PERMISSION), ...codeModeOff, ...(allowed ? scoutAllow : [])];
+    const { server, adapter } = await scoutPlanner(resolved, { resumeSessionId: 'ses_old' }, { 'GET /api/session/ses_old': () => ({ data: { id: 'ses_old', permissions } }) });
+
+    expect(server.requests.some((r) => r.method === 'POST' && r.path === '/api/session')).toBe(!resumed);
+    adapter.dispose();
+  });
+
+  it('resumes no session that allows the scout once the gate is off', async () => {
+    const server = fakeServer({ 'GET /api/session/ses_old': () => ({ data: { id: 'ses_old', permissions: [...rules(OPENCODE_PLANNER_PERMISSION), ...codeModeOff, ...scoutAllow] } }) });
+    const { adapter } = await start(server, plannerStart({ resumeSessionId: 'ses_old' }));
+
+    expect(server.requests.some((r) => r.method === 'POST' && r.path === '/api/session')).toBe(true);
+    adapter.dispose();
+  });
+
+  // A background child would report after the turn, outside the planner's digest and Ordewell's view.
+  it('fails a planner turn that starts a subagent in the background', async () => {
+    const { server, adapter } = await scoutPlanner();
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('go', (e) => events.push(e));
+    const stream = await server.stream();
+    await until(() => server.requests.some((r) => r.path.endsWith('/prompt')));
+
+    stream.push(started());
+    for (const f of call('call_bg', { agent: 'ordewell-scout', description: 'Map the services', prompt: 'map them', background: true }, 'subagent')) stream.push(f);
+    stream.push(frame('session.tool.success', { assistantMessageID: MSG, id: 'call_bg', content: [{ type: 'text', text: 'started in the background' }] }));
+    stream.push(succeeded());
+    await turn;
+
+    expect(events.at(-1)).toEqual({ type: 'error', message: BACKGROUND_SCOUT });
+    adapter.dispose();
+  });
+
+  it('lets a planner\'s foreground scout run, and a task start a background agent of its own', async () => {
+    vi.stubEnv('ORDEWELL_OPENCODE_SCOUT', '1');
+    for (const [opts, input] of [
+      [plannerStart(), { agent: 'ordewell-scout', description: 'Map', prompt: 'map' }],
+      [taskStart(), { agent: 'general', description: 'Map', prompt: 'map', background: true }],
+    ] as const) {
+      const server = fakeServer({ 'GET /api/agent': () => agents(RESOLVED_SCOUT) });
+      const { adapter } = await start(server, opts);
+      const events: AgentEvent[] = [];
+      const turn = adapter.send('go', (e) => events.push(e));
+      const stream = await server.stream();
+      await until(() => server.requests.some((r) => r.path.endsWith('/prompt')));
+      stream.push(started());
+      for (const f of call('call_fg', input, 'subagent')) stream.push(f);
+      stream.push(frame('session.tool.success', { assistantMessageID: MSG, id: 'call_fg', content: [{ type: 'text', text: 'done' }] }));
+      stream.push(succeeded());
+      await turn;
+
+      expect(events.at(-1)).toEqual({ type: 'turn_end' });
+      adapter.dispose();
+    }
+  });
 });

@@ -73,6 +73,89 @@ export function plannerPermission(nativeShell: boolean): Record<string, OpenCode
   return nativeShell ? { ...OPENCODE_PLANNER_PERMISSION, bash: 'ask', shell: 'ask' } : OPENCODE_PLANNER_PERMISSION;
 }
 
+/**
+ * The one OpenCode agent a 2.x planner may delegate to: Ordewell's scout, a
+ * read-only subagent for breadth (ADR-0026, ADR-0009 T8). It is written in
+ * 1.x's `agent` + `permission` shape, the one both versions load: 1.18.35
+ * refuses a config carrying V2 `permissions` outright, and 2.x migrates this
+ * map into the agent's rules, after the global ones. A child session carries
+ * no session rules of its own, so these are its whole policy. The catch-all
+ * denies, so a tool OpenCode adds later is denied too; every known write, run,
+ * web, delegation and ask action is also named, because a user's own
+ * `agent.ordewell-scout.permission` merged in before this layer would
+ * otherwise keep the position of its own `*` rule. A user-global entry can
+ * still add rules this layer cannot remove, so a 2.x planner reads the agent
+ * back as the server resolved it ({@link scoutRulesMismatch}).
+ */
+export const OPENCODE_SCOUT_AGENT = 'ordewell-scout';
+
+export const OPENCODE_SCOUT_PERMISSION: Record<string, OpenCodeSessionRule['effect']> = {
+  '*': 'deny',
+  edit: 'deny', write: 'deny', patch: 'deny', apply_patch: 'deny', multiedit: 'deny',
+  bash: 'deny', shell: 'deny', execute: 'deny', browser: 'deny',
+  webfetch: 'deny', websearch: 'deny', codesearch: 'deny', external_directory: 'deny',
+  task: 'deny', subagent: 'deny', question: 'deny', todowrite: 'deny', todoread: 'deny',
+  skill: 'deny', lsp: 'deny',
+  read: 'allow', glob: 'allow', grep: 'allow', list: 'allow',
+};
+
+const SCOUT_PROMPT = [
+  'You are Ordewell\'s scout: a read-only researcher for a planner.',
+  'Read the workspace with read, glob, grep and list only. Every other tool is denied, and nobody can approve one.',
+  'Answer the brief you were given with a short digest: the files and lines that matter, what they show, and what you could not settle.',
+].join(' ');
+
+/** The scout's whole entry: no model, so it runs on the planner's; no `steps`, so 2.x's default bound holds. */
+export function scoutAgentConfig(): Record<string, unknown> {
+  return {
+    mode: 'subagent',
+    description: 'Read-only workspace research for the Ordewell planner. Give it one question; it returns a digest.',
+    prompt: SCOUT_PROMPT,
+    permission: { ...OPENCODE_SCOUT_PERMISSION },
+  };
+}
+
+/** Until its live probe passes, only this variable set to exactly `1` offers the scout (ADR-0026). */
+export const OPENCODE_SCOUT_ENV = 'ORDEWELL_OPENCODE_SCOUT';
+
+/** Whether this start asks for the scout: a planner that may have agents at all, with the gate open. */
+export function scoutRequested(opts: { kind: 'planner' | 'task'; noSubagents?: true }, env: NodeJS.ProcessEnv = process.env): boolean {
+  return opts.kind === 'planner' && !opts.noSubagents && env[OPENCODE_SCOUT_ENV] === '1';
+}
+
+const SCOUT_READS = Object.entries(OPENCODE_SCOUT_PERMISSION).filter(([, effect]) => effect === 'allow').map(([tool]) => tool);
+
+/**
+ * Why the scout's rules as the 2.x server resolved them (`GET /api/agent`'s
+ * `permissions`, evaluated last match first) are not Ordewell's, or null when
+ * they are. Everything before the last deny-all is shadowed by it. After it,
+ * OpenCode may migrate a name (bash to `shell`, write to `edit`) and append
+ * denies of its own, so a deny passes whatever it names; an allow passes only
+ * for one of the scout's read tools on every path, and those must all be
+ * there. Anything else came from a config outside Ordewell's layer.
+ */
+export function scoutRulesMismatch(agents: unknown): string | null {
+  const listed = isRecord(agents) && Array.isArray(agents.data) ? agents.data.find((a) => isRecord(a) && a.id === OPENCODE_SCOUT_AGENT) : undefined;
+  if (!isRecord(listed)) return `OpenCode does not list ${OPENCODE_SCOUT_AGENT} among its agents.`;
+  const rules = listed.permissions;
+  if (!Array.isArray(rules) || rules.length === 0) return `OpenCode lists ${OPENCODE_SCOUT_AGENT} with no rules.`;
+  const changed = (detail: string) => `OpenCode's resolved ${OPENCODE_SCOUT_AGENT} ${detail}: a config outside Ordewell's (an \`agent\` or \`agents\` entry of that name in OpenCode's managed config, or one this release merges after Ordewell's) changed it.`;
+  const rule = (r: unknown) => isRecord(r) ? { action: String(r.action), resource: String(r.resource), effect: String(r.effect) } : { action: '?', resource: '?', effect: '?' };
+  const last = rules.map(rule).reduce((at, r, i) => r.action === '*' && r.resource === '*' && r.effect === 'deny' ? i : at, -1);
+  if (last < 0) return changed('has no deny-all rule');
+  const allowed = new Set<string>();
+  for (const r of rules.slice(last + 1).map(rule)) {
+    if (r.effect === 'deny') continue;
+    if (r.effect !== 'allow' || r.resource !== '*' || !SCOUT_READS.includes(r.action)) return changed(`${r.effect === 'allow' ? 'allows' : r.effect === 'ask' ? 'asks' : r.effect} ${r.action} on ${r.resource} after its deny-all`);
+    allowed.add(r.action);
+  }
+  const missing = SCOUT_READS.find((tool) => !allowed.has(tool));
+  return missing ? changed(`does not allow ${missing}`) : null;
+}
+
+/** The 2.x session rule that lets a planner start the scout and no other agent, after its `subagent` deny. */
+export const OPENCODE_SCOUT_SESSION_RULE: OpenCodeSessionRule = { action: 'subagent', resource: OPENCODE_SCOUT_AGENT, effect: 'allow' };
+
 /** ADR-0046: nobody can approve native tools; only reads and the task token's tools run. */
 export const OPENCODE_READ_ONLY_PERMISSION: Record<string, OpenCodeSessionRule['effect']> = {
   ...OPENCODE_PLANNER_PERMISSION,
@@ -129,7 +212,7 @@ export interface OpenCodeOrdewellBinding extends OrdewellToolBinding<string> {
    * at the lease's own address with the stand-in, so OpenCode's model traffic
    * never needs the key or the network.
    */
-  configContent(existing: string | undefined, mcp: McpClientConfig | null, role: OrdewellToolRole, projectServers?: Record<string, unknown>, site?: Pick<TaskStartOptions, 'cwd' | 'workspaceRoot'>, nativeShell?: string, gateway?: LeaseGateway): string | null;
+  configContent(existing: string | undefined, mcp: McpClientConfig | null, role: OrdewellToolRole, projectServers?: Record<string, unknown>, site?: Pick<TaskStartOptions, 'cwd' | 'workspaceRoot'>, nativeShell?: string, gateway?: LeaseGateway, scout?: boolean): string | null;
   /** The rules a 2.x session is created with so the server's tools never wait on a person (ADR-0022, S3). */
   sessionRules(mcp: McpClientConfig, role: OrdewellToolRole): OpenCodeSessionRule[];
   /**
@@ -234,7 +317,7 @@ export function withoutParentOrdewell(content: string): string {
  * layer that also decides the policy, so a user's own config cannot choose a
  * different shell for the planner.
  */
-function mergeOrdewellConfig(existing: string | undefined, mcp: McpClientConfig | null, role: OrdewellToolRole, projectServers: Record<string, unknown> = {}, site?: Pick<TaskStartOptions, 'cwd' | 'workspaceRoot'>, nativeShell?: string, gateway?: LeaseGateway): string | null {
+function mergeOrdewellConfig(existing: string | undefined, mcp: McpClientConfig | null, role: OrdewellToolRole, projectServers: Record<string, unknown> = {}, site?: Pick<TaskStartOptions, 'cwd' | 'workspaceRoot'>, nativeShell?: string, gateway?: LeaseGateway, scout = false): string | null {
   let base: Record<string, unknown> = {};
   if (existing?.trim()) {
     let parsed: unknown;
@@ -245,6 +328,8 @@ function mergeOrdewellConfig(existing: string | undefined, mcp: McpClientConfig 
   // A planner's policy is Ordewell's alone: a permission the workspace grants its own sessions is not one it grants the planner.
   const restricted = role !== 'task';
   if (restricted) { delete base.permission; delete base.permissions; }
+  // The scout is Ordewell's alone too: an inherited entry of the same name must not lend it a model or a rule.
+  if (scout) for (const key of ['agent', 'agents', 'mode']) dropEntries(base, key, (name) => name === OPENCODE_SCOUT_AGENT);
   // A bare `"permission": "allow"` is the whole policy; the rule needs an object to join.
   const policy = typeof base.permission === 'string' ? { '*': base.permission } : base.permission;
   const servers = {
@@ -265,7 +350,11 @@ function mergeOrdewellConfig(existing: string | undefined, mcp: McpClientConfig 
     // Ordewell's tools outside code mode: a planner idle that long lost them
     // for good (ADR-0022 S4; checked against 2.1.4). 1.x has no such
     // eviction, and ignores the key (checked against 1.18.35's config parser).
-    ...(mcp ? { experimental: { location_idle_timeout: false } } : {}),
+    // The scout's nesting is pinned here, over a user's global config: 2.x
+    // counts depth from the root session, so 1 lets the planner start the
+    // scout and the scout start nothing (1.x lowers it to its own key).
+    ...(mcp || scout ? { experimental: { ...(mcp ? { location_idle_timeout: false } : {}), ...(scout ? { subagent_depth: 1 } : {}) } } : {}),
+    ...(scout ? { agent: { [OPENCODE_SCOUT_AGENT]: scoutAgentConfig() } } : {}),
     // L7: a lease's key stops at its gateway, and OpenCode is pointed there with
     // the stand-in. Its own provider block would otherwise send the token to
     // Anthropic, where it means nothing, and the task's model call would fail.
