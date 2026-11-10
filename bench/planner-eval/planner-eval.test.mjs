@@ -18,7 +18,7 @@ import {
   blockOf, budgetRecord, budgetSource, claudeTranscriptDir, claudeTurnInputs, reportsOwnReads, startRecorder,
 } from './lib/budget.mjs';
 import {
-  ANSWER, BASELINE_REF, CELLS, CONFIRM, NUDGES, QUOTA, TEST_COMMANDS, VARIANTS, goalText, loadGoals, missingFor, mockCell,
+  ANSWER, BASELINE_REF, CELLS, CONFIRM, NUDGES, QUOTA, quotaOf, TEST_COMMANDS, VARIANTS, goalText, loadGoals, missingFor, mockCell,
   parseArgs, runEnv, runId, runSettings, selectRuns, substituteFor, timeoutFor,
 } from './lib/config.mjs';
 import { guardFiles, snapshot } from './lib/guard.mjs';
@@ -170,6 +170,23 @@ describe('wordingViolations', () => {
       'Press Enter to start the plan. Press `a` to approve.',
     ].join(' ');
     assert.deepEqual(wordingViolations([{ role: 'user', content: 'press the button' }, ...say(text)], { autoMerge: true }), []);
+  });
+
+  it("does not take a goal's quoted hint text for an instruction to merge (G3)", () => {
+    const hint = 'merging paused: /handoff merge';
+    const text = [
+      `- **#1 Change the merge-pause hint and its tests** (change task) — rewrites the longest \`runHints\` entry to \`${hint}\` in \`packages/cli/src/tui/layout.ts\`.`,
+      `It changes the longest run hint in \`packages/cli/src/tui/layout.ts\` to \`${hint}\` and leaves the two shorter forms alone.`,
+      `- \`packages/cli/src/tui/layout.ts:433\`: the longest hint becomes \`${hint}\`.`,
+      `**Change the hint** in \`packages/cli/src/tui/layout.ts\`: the longest form becomes \`'${hint}'\`.`,
+    ].join('\n');
+    assert.deepEqual(wordingViolations(say(text), { autoMerge: true }), []);
+  });
+
+  it('still flags an instruction to merge, quoted command or not', () => {
+    for (const text of ['Note the verify task is a merge gate: it waits until you merge the change tasks.', 'Type `/handoff merge` when the tasks finish.', 'Run /handoff merge to land it.', 'You can merge them yourself.']) {
+      assert.deepEqual(rules(wordingViolations(say(text), { autoMerge: true })), ['asks the user to merge while automatic merging is on'], text);
+    }
   });
 
   it("leaves a button or card alone in a sentence about VS Code, the webview or desktop", () => {
@@ -629,6 +646,15 @@ describe('the run matrix', () => {
     assert.deepEqual(missingFor(go, { env: {}, onPath: () => false }), ['opencode is not on PATH']);
     assert.ok(QUOTA.test('Error: monthly usage limit reached'));
     assert.ok(!QUOTA.test('Add a rate column'));
+  });
+
+  it("detects a quota only from the runner's error event or a failed exit, never the planner's prose", () => {
+    const prose = "Task 2 adds a usage limit line to the card, so the user sees the token usage limit reached by a task.";
+    assert.equal(quotaOf({ stopped: 'timeout', lastText: prose, screen: prose }), null);
+    assert.equal(quotaOf({ stopped: 'tui exited', lastText: prose, exitCode: 0, screen: prose }), null);
+    assert.equal(quotaOf({ stopped: 'plan submitted', lastText: 'usage limit', screen: '' }), null);
+    assert.match(quotaOf({ stopped: 'error', lastText: 'Error: monthly usage limit reached' }), /usage limit/);
+    assert.match(quotaOf({ stopped: 'tui exited', exitCode: 1, screen: 'fatal: 429 Too Many Requests' }), /429/);
   });
 
   it('names runs so a file name can hold them', () => {
