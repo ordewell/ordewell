@@ -21,7 +21,22 @@ Ordewell discovers for that runner's tasks, described below.
 A harness planner explores with its own subagents within its turn: Claude Code's
 `Agent` tool, Codex's subagents. OpenCode's own would run with whatever permission their
 agent has, so Ordewell denies them and offers its own read-only research agent instead,
-as the tool `spawn_research_agent`, once a workspace names the model it runs on:
+as the tool `spawn_research_agent`. The agent only reads the workspace: no shell, web or
+MCP tool, and no agent of its own
+([ADR-0066](adr/planner-envelope/0066-opencode-planners-get-ordewells-research-agent.md)).
+
+On OpenCode 2.x it needs no setting: it runs on your own OpenCode login and the
+planner's model, in a second `opencode serve` that Ordewell starts on the planner's
+first call and closes when the planner session ends. That serve loads none of your
+OpenCode configuration, MCP servers or plugins, and Ordewell checks what it loaded
+before using it. Each call is a session in your OpenCode history, titled
+`Ordewell research: …`. If the serve fails that check or cannot start, or your login
+cannot run the planner's model, the chat says why once and the planner delegates with
+research tasks for the rest of the session
+([troubleshooting](troubleshooting.md#the-research-agent-is-unavailable-on-opencode)).
+On OpenCode 1.x the planner always delegates with research tasks.
+
+To run it on an API provider instead, on OpenCode 1.x or 2.x, name its model:
 
 ```bash
 # .ordewell/env, or exported where the daemon starts
@@ -30,12 +45,9 @@ ORDEWELL_RESEARCH_AGENT_MODEL=openrouter:deepseek/deepseek-v4.1-flash
 
 The value is `<provider>:<model>`, the provider one `ordewell planner` lists, and the
 agent pays with that provider's own key, `OPENROUTER_API_KEY` here, billed apart from
-the planner's login. The agent only reads the workspace: no shell, web or MCP tool, and
-no agent of its own
-([ADR-0066](adr/planner-envelope/0066-opencode-planners-get-ordewells-research-agent.md)).
-Google Gemini cannot serve it. Without the variable an OpenCode planner has no in-turn
-agent and delegates with research tasks; with a value that cannot serve one, such as a
-provider whose key is missing, the planner does the same and the chat says why.
+the planner's login. Google Gemini cannot serve it. Set, the variable wins over the
+login; with a value that cannot serve an agent, such as a provider whose key is
+missing, the planner delegates with research tasks and the chat says why.
 
 An **API planner** calls a provider's API, with your key where the provider needs
 one. Providers include OpenRouter, Google Gemini, DeepSeek, Moonshot / Kimi and xAI;

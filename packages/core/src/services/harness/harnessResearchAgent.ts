@@ -34,7 +34,7 @@ export interface HarnessResearchAgentDeps {
 }
 
 /** A counting semaphore: MCP calls arrive one by one, so the bound is held across them, not per batch. */
-function semaphore(limit: number) {
+export function semaphore(limit: number) {
   let running = 0;
   const waiting: (() => void)[] = [];
   return async <T>(signal: AbortSignal, run: () => Promise<T>, onAbort: () => T): Promise<T> => {
