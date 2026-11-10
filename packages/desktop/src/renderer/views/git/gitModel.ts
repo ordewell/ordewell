@@ -117,6 +117,45 @@ export function refChips(refs: readonly string[], branches: Branches | undefined
   return chips.sort((a, b) => order[a.kind] - order[b.kind]);
 }
 
+/** What a narrow history row says of a commit's refs: one chip, a count of the rest, every name. */
+export interface RefSummary {
+  lead: (RefChip & { tracked?: string }) | undefined;
+  /** The names beyond the lead chip; a remote-tracking ref folded into its branch is not one. */
+  more: number;
+  /** Every name, HEAD left out, for a tooltip or a screen reader. */
+  names: string[];
+}
+
+/**
+ * The refs of a commit as a row too narrow for several chips tells them: the
+ * first of refChips' order, the checked-out branch before any other branch.
+ * A local branch and the remote-tracking ref of the same name at this commit
+ * are one chip, marked `tracked`, so `feature/sso` and `origin/feature/sso`
+ * do not count as two.
+ */
+export function summarizeRefs(chips: readonly RefChip[]): RefSummary {
+  const shown = chips.filter((chip) => chip.kind !== 'head');
+  const locals = new Set(shown.filter((chip) => chip.kind === 'branch').map((chip) => chip.text));
+  const trackedBy = new Map<string, string>();
+  const folded = new Set<RefChip>();
+  for (const chip of shown) {
+    const name = chip.kind === 'remote' ? chip.text.slice(chip.text.indexOf('/') + 1) : undefined;
+    if (name !== undefined && locals.has(name) && !trackedBy.has(name)) {
+      trackedBy.set(name, chip.text);
+      folded.add(chip);
+    }
+  }
+  const rank = (chip: RefChip): number => (chip.current ? -1 : 0);
+  const kept = shown.filter((chip) => !folded.has(chip)).sort((a, b) => rank(a) - rank(b));
+  const first = kept[0];
+  const tracked = first && first.kind === 'branch' ? trackedBy.get(first.text) : undefined;
+  return {
+    lead: first && (tracked ? { ...first, tracked } : first),
+    more: Math.max(0, kept.length - 1),
+    names: shown.map((chip) => chip.text),
+  };
+}
+
 /** A task as the graph links a landed commit to it. */
 export interface LandedTask {
   taskId: string;
