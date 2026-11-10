@@ -5,12 +5,6 @@ amends: ["0009", "0026"]
 
 # 0066 — OpenCode planners get Ordewell's own research agent
 
-*Pending:* the research agent is checked by unit tests and a fake provider,
-not a live run, until `node bench/live/opencode-research-agent-probe.mjs`
-passes against a real OpenCode 2.x planner: every attempt to make the agent
-act refused, a call of several minutes returning within the turn, three at
-once.
-
 ## Problem
 
 A harness planner's own subagents serve orientation: breadth the planner
@@ -118,3 +112,4 @@ throwaway home.
 ## History
 
 - 2026-11-10 — accepted.
+- 2026-11-10 — live probe passed against OpenCode v2.2.5: every adversarial attempt refused or unoffered, a 300s call returned within the turn, three agents at once.
