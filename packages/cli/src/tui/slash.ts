@@ -27,6 +27,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   // start planning, and an alias for it only shadowed `/planner` on completion.
   { name: 'approve', usage: '/approve', description: 'Approve the drafted plan', category: 'planning' },
   { name: 'run', usage: '/run', description: 'Execute the approved plan', category: 'planning' },
+  { name: 'decisions', usage: '/decisions [all]', description: "Read the planner's decision record: what it decided, your constraints, what it rejected and what is open (all: superseded entries too)", category: 'planning' },
   { name: 'stop', usage: '/stop', description: 'Stop the planner or the running execution, whichever is active', category: 'planning' },
   { name: 'resend', usage: '/resend cancel', description: "Keep what waits on the planner's usage limit from being sent at the reset: it goes with your next message", category: 'planning' },
   { name: 'merge', usage: '/merge [review|discard|cleanup]', description: "Land an isolated run's branch: merge it into yours (asks first), or review it, discard it or clean it up", category: 'planning' },

@@ -7703,3 +7703,60 @@ body.vscode-high-contrast-light .pending-message {
   justify-content: flex-end;
   gap: var(--ow-space-2, 8px);
 }
+
+/* The planner's decision record (ADR-0067): collapsed above the composer, read-only. */
+.decision-record {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.decision-record-summary {
+  padding: 6px 14px;
+  cursor: pointer;
+}
+
+.decision-record-count {
+  margin-left: 6px;
+  color: var(--text-tertiary, var(--text-secondary));
+}
+
+.decision-record-body {
+  max-height: 30vh;
+  overflow-y: auto;
+  padding: 0 14px 8px;
+}
+
+.decision-record-heading {
+  margin: 8px 0 2px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.decision-record-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.decision-record-entry {
+  padding: 2px 0;
+  overflow-wrap: anywhere;
+}
+
+.decision-record-entry.superseded {
+  opacity: 0.65;
+}
+
+.decision-record-id {
+  font-family: var(--font-mono, monospace);
+  color: var(--text-primary);
+}
+
+.decision-record-toggle {
+  display: block;
+  margin-top: 8px;
+}

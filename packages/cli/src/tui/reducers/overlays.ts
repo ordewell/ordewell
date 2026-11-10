@@ -1,5 +1,5 @@
 import { isApiProvider, overrideNeedsConfirmation } from '@ordewell/core';
-import { bodyRows, helpScrollMax } from '../layout';
+import { bodyRows, helpScrollMax, recordScrollMax } from '../layout';
 import { findTask, refFor, visibleItems, type PickerItem, type PickerState, type TuiState } from '../state';
 import type { Key } from '../keys';
 import { handleApprovalKey, scrollApproval } from './approvals';
@@ -16,7 +16,7 @@ import { chooseAnswer, chooseEscalation, confirmedAnswer, noteEntered } from './
 import { handleStepperKey } from './stepper';
 
 export function handleOverlayKey(state: TuiState, overlay: NonNullable<TuiState['overlay']>, key: Key): Step {
-  if (overlay.kind === 'help') return handleHelpKey(state, overlay, key);
+  if (overlay.kind === 'help' || overlay.kind === 'record') return handleSheetKey(state, overlay, key);
   if (overlay.kind === 'approval') {
     const scrolled = scrollApproval(state, overlay, key);
     if (scrolled) return scrolled;
@@ -115,7 +115,7 @@ function runConfirm(
  * it. The offsets here run the other way to the panes' — the sheet is
  * top-anchored, so a positive delta moves *down* it.
  */
-function handleHelpKey(state: TuiState, overlay: Extract<NonNullable<TuiState['overlay']>, { kind: 'help' }>, key: Key): Step {
+function handleSheetKey(state: TuiState, overlay: Extract<NonNullable<TuiState['overlay']>, { kind: 'help' | 'record' }>, key: Key): Step {
   const page = pageNotch(bodyRows(state));
   const move: Record<string, number> = {
     down: 1,
@@ -127,7 +127,7 @@ function handleHelpKey(state: TuiState, overlay: Extract<NonNullable<TuiState['o
   };
   const delta = move[key.name];
   if (delta === undefined) return step({ ...state, overlay: null });
-  return step({ ...state, overlay: { ...overlay, scroll: clamp((overlay.scroll ?? 0) + delta, helpScrollMax(state)) } });
+  return step({ ...state, overlay: { ...overlay, scroll: clamp((overlay.scroll ?? 0) + delta, overlay.kind === 'help' ? helpScrollMax(state) : recordScrollMax(state)) } });
 }
 
 function handlePromptKey(

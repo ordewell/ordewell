@@ -14,6 +14,7 @@ import ChildPlanPanel, { ChildQuestions, NO_CHILD_NOTICE, UndeliveredAnswers, ty
 import { reduceHost, runnersOn, INITIAL_HOST_STATE, type HostState } from './hostState';
 import ModelSelector, { API_PROVIDER_LABELS } from './components/ModelSelector';
 import PlanCardGroup from './components/PlanCardGroup';
+import DecisionRecordPanel from './components/DecisionRecordPanel';
 import PlanApprovalCard from './components/PlanApprovalCard';
 import { SpeakerLabelsContext } from './speakerLabels';
 import UsageLine from './components/UsageLine';
@@ -1406,6 +1407,8 @@ export default function App({ layout = 'chat', selection, goal }: {
       </div>
 
       {layout === 'chat' && renderPlanDock()}
+
+      {layout === 'chat' && <DecisionRecordPanel record={plan?.decisionRecord} />}
 
       <UsageLine
         block={usageBlock}
