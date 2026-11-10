@@ -20,11 +20,20 @@ import type { UsageRecord, UsageTotals } from '../models/Usage';
  * the service → executeTool import chain stays acyclic.
  */
 
+/**
+ * One budget for both research agents, the API-key one and OpenCode's login
+ * one (ADR-0066). In the G5 bench every useful digest sat at the old 6,000-char
+ * cap (5.0-6.2 KB), so the cap was binding, and two DeepSeek agents ran out of
+ * their 10 steps mid-audit; the planner then re-read those areas itself. 16
+ * steps lets a five-package audit finish, and 8,000 chars holds a per-package
+ * map while staying a digest. A run that still runs out returns what it found,
+ * marked partial, naming what it left unread (`partialDigest`).
+ */
 export const SUBAGENT_LIMITS = {
   /** Max spawn calls in flight at once; extra calls in the same turn wait for a slot. */
   maxConcurrent: 3,
-  maxSteps: 10,
-  digestMaxChars: 6000,
+  maxSteps: 16,
+  digestMaxChars: 8000,
   toolOutputMaxChars: 20000,
 };
 
@@ -140,6 +149,28 @@ function withoutContext({ contextTokens: _context, ...record }: UsageRecord): Us
   return record;
 }
 
+/** What a research call asked for and never got, in a line the planner can hand to another agent. */
+export function describeCall(name: string, args: Record<string, unknown>): string {
+  const text = JSON.stringify(args);
+  return `${name} ${text.length > 200 ? `${text.slice(0, 200)}...` : text}`;
+}
+
+/**
+ * A digest cut short by the step budget: the findings so far under a PARTIAL
+ * header, then exactly what the cut-off step wanted to read. The unread list
+ * is built from the calls, not from the model, and survives the cap, so the
+ * planner can send another agent there instead of reading it itself.
+ */
+export function partialDigest(found: string, unread: string[], maxSteps = SUBAGENT_LIMITS.maxSteps): string {
+  const header = `[PARTIAL: the ${maxSteps}-step budget ran out before this research was finished. Treat the findings below as incomplete.]`;
+  const left = unread.length
+    ? `Left unread:\n${unread.slice(0, 10).map((u) => `- ${u}`).join('\n')}${unread.length > 10 ? `\n- (+${unread.length - 10} more)` : ''}`
+    : 'Left unread: whatever the next step would have read; the brief was not fully covered.';
+  const room = Math.max(0, SUBAGENT_LIMITS.digestMaxChars - header.length - left.length - 8);
+  const body = found.trim().length > room ? `${found.trim().slice(0, room)}\n[... findings truncated]` : found.trim();
+  return `${header}\n\n${body}\n\n${left}`;
+}
+
 async function runLoop(prompt: string, deps: SubagentDeps): Promise<string> {
   if (deps.signal?.aborted) return '[research agent aborted before starting]';
   const fs = nonPromptingFs(deps.fs);
@@ -199,8 +230,10 @@ async function runLoop(prompt: string, deps: SubagentDeps): Promise<string> {
   // Step budget exhausted while the model still wants tools: answer the
   // pending calls synthetically (history stays valid, nothing executes) and
   // push for the digest — mirrors the parent loop's wrap-up rounds.
+  let unread: string[] | undefined;
   if (turn.hasToolCalls && !deps.signal?.aborted) {
-    const notice = `Research budget exhausted (${SUBAGENT_LIMITS.maxSteps} tool rounds) — this call was NOT executed and no further tool calls will be. Reply now with your digest of everything learned so far.`;
+    unread = turn.toolCalls.map((tc) => describeCall(tc.name, tc.args));
+    const notice = `Research budget exhausted (${SUBAGENT_LIMITS.maxSteps} tool rounds) — this call was NOT executed and no further tool calls will be. Reply now with your digest of everything learned so far; the planner is told what you left unread.`;
     turn = await chat.sendToolResults(
       turn.toolCalls.map((tc) => ({ name: tc.name, output: notice, truncated: false, totalChars: notice.length, id: tc.id })),
       deps.signal,
@@ -208,6 +241,7 @@ async function runLoop(prompt: string, deps: SubagentDeps): Promise<string> {
   }
 
   const digest = turn.text;
+  if (unread) return partialDigest(digest, unread);
   return digest.length > SUBAGENT_LIMITS.digestMaxChars
     ? digest.slice(0, SUBAGENT_LIMITS.digestMaxChars) + `\n[... digest truncated to ${SUBAGENT_LIMITS.digestMaxChars} chars, total ${digest.length}]`
     : digest;
@@ -249,4 +283,23 @@ export async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (i
     }));
   }
   return results;
+}
+
+/**
+ * One read a research agent outside this loop asked for (ADR-0066): the
+ * OpenCode 2.x agent on the user's login, served over a research token.
+ * The same confinement and the same limits as {@link runResearchAgent}'s own
+ * calls: only {@link CONFINED_RESEARCH_TOOLS}, every path inside the
+ * workspace root, nothing that could ask anyone, read_file capped at 2000
+ * lines unless asked otherwise, and output cut to the subagent's limit.
+ */
+export async function confinedRead(name: string, args: Record<string, unknown>, fs: IFileSystem, signal?: AbortSignal): Promise<ToolOutcome> {
+  if (!CONFINED_RESEARCH_TOOLS.has(name)) return refused(`${name} is not available. You are a read-only research subagent: only ${[...CONFINED_RESEARCH_TOOLS].join(', ')}.`);
+  const call = { ...args };
+  if (name === 'read_file' && !('maxBytes' in call) && !('limit' in call)) call.limit = 2000;
+  const res = await executeTool(name, call, nonPromptingFs(fs), undefined, signal);
+  const max = SUBAGENT_LIMITS.toolOutputMaxChars;
+  return res.output.length > max
+    ? { ...res, output: res.output.slice(0, max) + `\n[... truncated to ${max} chars, total ${res.output.length}]`, truncated: true }
+    : res;
 }

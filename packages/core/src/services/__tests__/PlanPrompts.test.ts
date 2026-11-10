@@ -427,7 +427,7 @@ describe('who explores: three tiers, search (ADR-0037 R5)', () => {
 
   // On the bench's breadth goal a count of reads delegated nothing for Codex or OpenCode: no planner can count its reads mid-turn, so the decision is made per area, before reading, by a route each backend has.
   const structural = 'with the map read, before you read inside any package or top-level area the goal touches, ';
-  const lookup = /Inside one, read yourself only a targeted lookup whose answer decides your next step\./;
+  const lookup = /Inside one, read yourself only a targeted lookup whose answer decides your next step, and nothing once /;
   it.each([
     { name: 'Claude Code', variant: { harness: true, runner: 'claude-code' }, route: 'Use your Agent tool and wait for its results inside this reply' },
     { name: 'Codex', variant: { harness: true, runner: 'codex' }, route: 'Use your spawn_agent tool and wait for its results inside this reply' },
@@ -438,6 +438,8 @@ describe('who explores: three tiers, search (ADR-0037 R5)', () => {
     const tier = rule.split('\n').find((line) => line.startsWith('- An agent, awaited, for the rest: '));
     expect(tier).toContain(`- An agent, awaited, for the rest: ${structural}send one agent per area, in parallel, so only their digests reach you.`);
     expect(tier).toMatch(lookup);
+    // DeepSeek kept reading inside areas it had delegated (#57): once covered, a gap or doubt goes to another agent.
+    expect(tier).toContain('and nothing once a digest or a research task\'s report covers it: send a gap, a doubt or what a partial digest left unread to another agent, naming what is missing.');
     expect(tier).toContain(route);
     expect(rule).not.toMatch(/ten reads|past that|a wider question|directory tree/);
   });
@@ -450,6 +452,7 @@ describe('who explores: three tiers, search (ADR-0037 R5)', () => {
     const rule = section(buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, variant), 'WHO EXPLORES:');
     expect(rule).toContain(`- A research task, for the rest: ${structural}give each area a research task, so only their reports reach you.`);
     expect(rule).toMatch(lookup);
+    expect(rule).toContain('and nothing once a research task\'s report covers it: send a gap, a doubt or what a partial report left unread to another research task, naming what is missing.');
     expect(rule).toMatch(noAgents);
     expect(rule).not.toMatch(/send one agent|spawn_research_agent|spawn_agent|Agent tool|ten reads|a wider question/);
   });
@@ -803,7 +806,9 @@ describe('planner rules for change and ops tasks (ADR-0020)', () => {
       expect(p).toContain('is the task\'s result a change to files in the repository?');
       expect(p).toContain('"ops": true');
       expect(p).toMatch(/bump the version and redeploy/);
-      expect(p).toMatch(/a push and a reword of the same branch\) must not run in parallel — make one depend on the other/);
+      expect(p).toMatch(/\(a push and a reword\)/);
+      expect(p).toMatch(/Two ops tasks that collide must not run in parallel — make one depend on the other/);
+      expect(p).toMatch(/builds, installs or file writes in the checkout/);
     }
   });
 

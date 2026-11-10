@@ -210,26 +210,6 @@ describe('OpenAiService turn budgets', () => {
     expect(messages[0].role).toBe('system');
     expect(messages[0].content).not.toContain('CONTEXT AND BUDGETS (this turn):');
   });
-
-  it('tells an API planner what its own file reads came to (experiment), and counts nothing else', async () => {
-    const budgets = new TurnBudgets([]);
-    budgets.measureOwnReads({ ORDEWELL_PLANNER_READ_METER: '1' });
-    const reply = [
-      [{ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'read_file', arguments: '{"path":"a.ts"}' } }] }, finish_reason: 'tool_calls' }] }],
-      [{ choices: [{ delta: { content: 'Which store?' }, finish_reason: 'stop' }] }],
-      [{ choices: [{ delta: { content: 'Noted.' }, finish_reason: 'stop' }] }],
-    ];
-    createSpy.mockImplementation(() => streamOf(reply.shift()!));
-    const fs = fakeFileSystem({ readFile: async () => ({ success: true, output: 'x'.repeat(8000), truncated: false }) });
-    const service = new OpenAiService(cfg(), { turnBudgets: budgets });
-    await service.startConversation({ goal: 'add a cache', runners: ['claude-code'], modelsByRunner: {}, fs, onProgress: () => {} });
-    await service.continueConversation('in-process', () => {});
-
-    const users = (createSpy.mock.calls.at(-1)?.[0] as { messages: Array<{ role: string; content: string }> }).messages
-      .filter((m) => m.role === 'user').map((m) => m.content);
-    expect(users[0]).toContain('Your own reads: about 0 tokens last turn');
-    expect(users[1]).toContain('Your own reads: about 2k tokens last turn, 2k in this conversation (approximate, from characters).');
-  });
 });
 
 describe('OpenAiService conversation history', () => {

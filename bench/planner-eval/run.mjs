@@ -19,21 +19,21 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { aggregate, isComplete, markdown } from './lib/aggregate.mjs';
-import { budgetRecord, budgetSource, claudeTranscriptDir, claudeTurnInputs, reportsOwnReads, startRecorder } from './lib/budget.mjs';
 import { ensureBuild, repoRoot, resolveRef, cliMain } from './lib/builds.mjs';
 import {
   CELLS, HERE, MAX_DRIVER_TURNS, VARIANTS, goalText, loadGoals, missingFor, mockCell, parseArgs, quotaOf,
-  runEnv, runSettings, selectRuns, substituteFor, timeoutFor,
+  approvalPolicy, runEnv, runSettings, selectRuns, substituteFor, timeoutFor,
 } from './lib/config.mjs';
 import { guardFiles } from './lib/guard.mjs';
 import { keyChecks, keyHash } from './lib/keys.mjs';
 import { planDigest, runMetrics, sessionParts } from './lib/metrics.mjs';
-import { classifyTurn, daemonClient, newestSession, readToken, tokenPath } from './lib/observe.mjs';
+import { classifyTurn, daemonClient, newestSession, plannerApprovals, readToken, replyLanded, tokenPath } from './lib/observe.mjs';
 import { freePort, onPath, run, sleep, until } from './lib/proc.mjs';
 import { redactJson, redactor } from './lib/redact.mjs';
 import { reviewPlan } from './lib/rubric.mjs';
 import { cloneTarget, ensureTemplate, workParent } from './lib/target.mjs';
 import { startTui } from './lib/tui.mjs';
+import { startMock as start } from '../live/start-mock.mjs';
 
 const USAGE = `usage: node bench/planner-eval/run.mjs (--smoke | --full | --mock | --report <dir> | --rescore <dir>) [options]
 
@@ -46,12 +46,12 @@ const USAGE = `usage: node bench/planner-eval/run.mjs (--smoke | --full | --mock
 
   --backend a,b           cells by id or prefix (claude-code, opencode/glm-5.3-flash, openrouter, cline ...)
   --goal g1,g4            goals by id
-  --variant V0,V1         variants (V0 baseline + nudges, V1 candidate, V2 candidate + read meter)
+  --variant V0,V1         variants (V0 baseline + nudges, V1 candidate)
   --repeats N             repeats per (goal, backend, variant)
   --concurrency N         runs at once (default 2)
   --timeout S             seconds a run may take before it is stopped (default 900); a stopped run is a failed run
   --api-timeout S         the same for an API (openrouter) planner (default twice --timeout)
-  --candidate-ref REF     the build V1 and V2 use (default HEAD)
+  --candidate-ref REF     the build V1 uses (default HEAD)
   --baseline-ref REF      the build V0 uses and every target is cut from (default 0ecc6412)
   --runners a,b           ORDEWELL_ENABLED_RUNNERS for every run (default: the cell's planner runner)
   --max-parallel N        ORDEWELL_MAX_PARALLEL for every run (default 4)
@@ -81,51 +81,90 @@ function writeJson(file, value, extra = []) {
   fs.writeFileSync(file, `${redactJson(value, scrub)}\n`);
 }
 
-/** Drive one planning conversation to a plan, a stop or the deadline. */
+/** How long a sent line may go unseen (no new message, no busy turn) before the driver sends it once more. */
+const LANDING_MS = 45_000;
+
+/**
+ * Drive one planning conversation to a plan, a stop or the deadline. Two
+ * things the TUI does can lose the driver's line without a trace: its modal
+ * approval card swallows a bracketed paste. So the driver answers any open
+ * planner approval card (the goal's `approvals`, allow by default) through the
+ * daemon, confirms each line landed, and resends it once if not. A run that
+ * ends with a card still open is its own outcome, not a silent planner.
+ */
 async function drive({ tui, client, workspace, goal, variant, timeoutMs }) {
   const started = Date.now();
   const deadline = started + timeoutMs;
+  const policy = approvalPolicy(goal);
   let turns = 0;
   let sentAt = 0;
   let sawBusy = false;
   let session = null;
   let lastText = '';
+  let pending = null;
+  let approvalsAnswered = 0;
+  let openApprovals = 0;
+  let resends = 0;
   const send = async (text) => {
     sentAt = session ? sessionParts(session).history.length : 0;
     sawBusy = false;
     turns++;
+    pending = { text, at: Date.now(), resent: false };
     await tui.send(text);
+  };
+  const done = (stopped, extra = {}) => ({
+    stopped, turns, session, lastText, wallMs: Date.now() - started, approvalsAnswered, resends, ...extra,
+  });
+  /** Answer every planner card the daemon lists; the count left open afterwards. */
+  const settleApprovals = async (id) => {
+    const body = await client.approvals(id, workspace).catch(() => null);
+    let open = 0;
+    for (const card of plannerApprovals(body)) {
+      const ok = await client.decide(id, card.id, workspace, policy === 'allow').then(() => true, () => false);
+      if (ok) approvalsAnswered++;
+      else open++;
+    }
+    return open;
   };
   await send(goalText(goal, variant));
   for (;;) {
     if (!tui.alive) {
       const { code, signal } = await tui.exited;
-      return { stopped: 'tui exited', exitCode: code, signal, turns, session, lastText, wallMs: Date.now() - started };
+      return done('tui exited', { exitCode: code, signal });
     }
-    if (Date.now() > deadline) return { stopped: 'timeout', turns, session, lastText, wallMs: Date.now() - started };
     await sleep(POLL_MS);
     const meta = newestSession(await client.sessions(workspace).catch(() => []));
-    if (!meta) continue;
-    const next = await client.session(meta.id, workspace).catch(() => null);
-    if (!next) continue;
-    session = next;
+    if (meta) {
+      const next = await client.session(meta.id, workspace).catch(() => null);
+      if (next) session = next;
+      openApprovals = await settleApprovals(meta.id);
+    }
+    if (Date.now() > deadline) {
+      // A card the planner is blocked on is not a planner that fell silent.
+      const open = meta ? plannerApprovals(await client.approvals(meta.id, workspace).catch(() => null)).length : 0;
+      return done(open > 0 || openApprovals > 0 ? 'timeout with a pending approval' : 'timeout');
+    }
+    if (!meta || !session) continue;
+    if (pending && !replyLanded(session, { sentAt, sawBusy })) {
+      if (!pending.resent && Date.now() - pending.at > LANDING_MS && openApprovals === 0) {
+        pending.resent = true;
+        resends++;
+        await tui.send(pending.text);
+      }
+      continue;
+    }
+    pending = null;
     const turn = classifyTurn(session, { sentAt, sawBusy });
     if (turn.state === 'busy') {
       sawBusy = sawBusy || Boolean(session.plannerTurnId) || (session.conversation?.pendingTurns ?? []).length > 0;
       continue;
     }
     lastText = turn.text ?? '';
-    if (turn.state === 'plan') return { stopped: 'plan submitted', turns, session, lastText, wallMs: Date.now() - started };
-    if (turn.state === 'error') return { stopped: 'error', turns, session, lastText, wallMs: Date.now() - started };
-    if (turns >= MAX_DRIVER_TURNS) return { stopped: 'turn limit', turns, session, lastText, wallMs: Date.now() - started };
+    if (turn.state === 'plan') return done('plan submitted');
+    if (turn.state === 'error') return done('error');
+    if (turns >= MAX_DRIVER_TURNS) return done('turn limit');
     await send(turn.reply);
   }
-}
-
-/** The planner's turns as Claude Code kept them, under the workspace path as given or as the OS resolves it. */
-function transcriptInputs(workspace, env) {
-  const dirs = new Set([claudeTranscriptDir(workspace, env), claudeTranscriptDir(fs.realpathSync.native(workspace), env)]);
-  return [...dirs].flatMap(claudeTurnInputs);
 }
 
 /** One planning run, start to finish: target, settings, TUI, conversation, capture, teardown. */
@@ -140,11 +179,6 @@ async function planOnce({ spec, cell, build, template, modulesFrom, opts, dir, w
   const enabledRunners = opts.runners ?? [plannerRunner(cell)];
   writeJson(settingsPath, runSettings({ cell, enabledRunners }));
   const env = runEnv(process.env, { cell, variant: spec.variant, settingsPath, maxParallel: opts.maxParallel, enabledRunners });
-  const source = budgetSource(cell);
-  const recorder = source === 'proxy'
-    ? await startRecorder(env.OPENROUTER_BASE_URL || env.OPENAI_BASE_URL || 'https://openrouter.ai/api/v1')
-    : null;
-  if (recorder) env.OPENROUTER_BASE_URL = recorder.url;
   const tui = startTui({ main: build.main, workspace, port, env, logFile: path.join(dir, `${spec.id}.screen.log`), redact });
   let token = null;
   try {
@@ -155,11 +189,8 @@ async function planOnce({ spec, cell, build, template, modulesFrom, opts, dir, w
     await until('the TUI to draw', STARTUP_MS, async () => tui.screen().trim().length > 0);
     await sleep(3000);
     const outcome = await drive({ tui, client, workspace, goal: spec.goal, variant: spec.variant, timeoutMs: timeoutFor(cell, opts) });
-    const inputs = recorder ? recorder.inputs() : source === 'transcript' ? transcriptInputs(workspace, env) : [];
-    const expected = spec.variant.env.ORDEWELL_PLANNER_READ_METER === '1' && reportsOwnReads(cell);
-    return { outcome, screen: tui.screen(), token, budget: source ? budgetRecord(inputs, { source, expected }) : null };
+    return { outcome, screen: tui.screen(), token };
   } finally {
-    await recorder?.stop();
     await tui.stop();
     // The TUI stops the daemon it owns; this covers a TUI that died before it could.
     await run(process.execPath, [build.main, 'stop', '--server', '--port', String(port)], { env, timeoutMs: 30_000 });
@@ -175,15 +206,16 @@ async function planOnce({ spec, cell, build, template, modulesFrom, opts, dir, w
  */
 function stopError(stopped, { timeoutMs, lastText = '' } = {}) {
   if (stopped === 'timeout') return `timeout after ${Math.round(timeoutMs / 1000)}s`;
+  if (stopped === 'timeout with a pending approval') return `timeout with a pending approval after ${Math.round(timeoutMs / 1000)}s`;
   if (stopped === 'tui exited') return 'the TUI exited before the planner answered';
   if (stopped === 'error') return lastText.slice(0, 300) || 'the planner turn failed';
   return null;
 }
 
 /** A run's metrics and key checks from its session, with the keys and metrics as they are now. */
-function score(goal, session, { driver, budget = null }) {
+function score(goal, session, { driver }) {
   const parts = sessionParts(session);
-  const metrics = runMetrics(session, { driver, autoMerge: true, goalText: goal.goal, budget });
+  const metrics = runMetrics(session, { driver, autoMerge: true, goalText: goal.goal });
   return { metrics, keyChecks: metrics.submitted ? keyChecks(goal, parts.tasks, { researchLog: parts.researchLog }) : [] };
 }
 
@@ -196,7 +228,7 @@ async function record({ spec, builds, templates, opts, dir, workRoot }) {
   let substitution;
   for (;;) {
     try {
-      const { outcome, screen, token, budget } = await planOnce({
+      const { outcome, screen, token } = await planOnce({
         spec, cell, build, template: templates[spec.goal.id], modulesFrom: builds.baseline.mock ? null : builds.baseline.dir, opts, dir, workRoot,
       });
       const quota = quotaOf({ ...outcome, screen });
@@ -209,7 +241,7 @@ async function record({ spec, builds, templates, opts, dir, workRoot }) {
       }
       const session = outcome.session ?? {};
       fs.writeFileSync(path.join(dir, `${spec.id}.session.json`), `${redactJson(session, redactor(process.env, [token]))}\n`);
-      const { metrics, keyChecks: checks } = score(spec.goal, session, { driver: outcome, budget });
+      const { metrics, keyChecks: checks } = score(spec.goal, session, { driver: outcome });
       let rubric;
       if (metrics.submitted && opts.review) {
         say(`${spec.id}: reviewing the plan`);
@@ -342,8 +374,8 @@ async function rescore(opts, goals) {
       return;
     }
     const session = JSON.parse(fs.readFileSync(sessionFile, 'utf8'));
-    const driver = { turns: old.metrics.turns, wallMs: old.metrics.wallMs, stopped: old.metrics.stopped };
-    const { metrics, keyChecks: checks } = score(goal, session, { driver, budget: old.metrics.budget ?? null });
+    const driver = { turns: old.metrics.turns, wallMs: old.metrics.wallMs, stopped: old.metrics.stopped, approvalsAnswered: old.metrics.approvalsAnswered, resends: old.metrics.resends };
+    const { metrics, keyChecks: checks } = score(goal, session, { driver });
     const hash = keyHash(goal);
     const error = old.error ?? stopError(driver.stopped, { timeoutMs: driver.wallMs ?? 0 });
     let rubric = old.rubric;
@@ -387,11 +419,9 @@ async function rescore(opts, goals) {
   return { to, tally };
 }
 
-/** The mock provider, on a port of its own, for `--mock`. */
-async function startMock(repo) {
-  const port = await freePort();
-  const child = spawn(process.execPath, [path.join(repo, 'bench', 'live', 'mock-provider.mjs'), '--port', String(port)], { stdio: 'ignore' });
-  await until('the mock provider', 15_000, () => fetch(`http://127.0.0.1:${port}/v1/models`).then(() => true));
+/** The mock provider, on a port the OS picks, for `--mock`. */
+async function startMock() {
+  const { port, child } = await start();
   return { port, stop: () => child.kill() };
 }
 
@@ -425,7 +455,7 @@ async function main() {
     return 0;
   }
   const repo = await repoRoot(HERE);
-  const mock = opts.mode === 'mock' ? await startMock(repo) : null;
+  const mock = opts.mode === 'mock' ? await startMock() : null;
   try {
     const cells = mock ? [mockCell(mock.port, opts.mockPersona)] : CELLS;
     const runs = selectRuns(opts, { goals, cells });
@@ -461,7 +491,7 @@ async function main() {
     } else {
       const wanted = new Set(todo.map((r) => r.variant.build));
       const shas = { baseline: await resolveRef(repo, opts.baselineRef), candidate: await resolveRef(repo, opts.candidateRef) };
-      // The baseline build also lends the target clones its node_modules, so it is built even when only V1/V2 run.
+      // The baseline build also lends the target clones its node_modules, so it is built even when only V1 runs.
       for (const which of ['baseline', ...(wanted.has('candidate') ? ['candidate'] : [])]) {
         builds[which] = await ensureBuild({ repo, buildsDir, sha: shas[which], say });
       }

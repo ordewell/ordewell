@@ -11,6 +11,29 @@ const SUMMARY_OPEN = '<conversation_summary>';
 const SUMMARY_CLOSE = '</conversation_summary>';
 
 /**
+ * What a summary of the conversation keeps, for an API planner's summary call
+ * and a harness planner's summary turn alike: one source, so neither falls
+ * behind the other.
+ */
+export const HISTORY_KEEPS = 'Keep: the user\'s goal; every instruction, constraint and preference still standing, with any skill loaded into the conversation by name and what it requires; the decisions made and why; open questions and what the planner was waiting on; the findings; and what the planner said it did or would do.';
+
+/** What every summary keeps, of the history or of a turn. */
+export const SUMMARY_KEEPS: readonly string[] = [
+  'Keep exactly, as the conversation has them: file paths, symbols, line references, commands and their outcomes, URLs, task references and quoted requirements.',
+  'Task statuses and run state are not yours to keep: the current plan is authoritative, and what the conversation says about task state may be stale.',
+  // A summary is replayed into every later context and may be copied into a
+  // brief, so a value in it multiplies; the rule about it is what is needed
+  // (ADR-0061 P1). Ordewell redacts what it can recognise either way.
+  'Never copy a secret\'s value — an API key, token or password, pasted or read — into the summary: keep the rule about it, naming the secret without its value (the key goes only into task environments, never into a brief).',
+];
+
+export const SUMMARY_TAGS = `Put the summary between ${SUMMARY_OPEN} and ${SUMMARY_CLOSE}, and nothing outside the tags.`;
+
+export function currentPlanBlock(planLines: readonly string[] | null): string[] {
+  return planLines && planLines.length > 0 ? ['<current_plan>', ...planLines, '</current_plan>'] : [];
+}
+
+/**
  * The hidden turn that asks the planner to condense its own conversation.
  * The tags are the contract, not decoration: a harness planner reports a
  * failure as an ordinary reply, so a reply without them is how a dead agent
@@ -19,10 +42,11 @@ const SUMMARY_CLOSE = '</conversation_summary>';
 export function summaryRequest(planLines: readonly string[] | null): string {
   return [
     'The user asked to condense this planning conversation. Write a summary that will replace everything said so far, so the conversation can carry on from it alone.',
-    'Keep: the goal, the decisions made, the constraints, the open questions, the key file and code findings, and where the plan stands now.',
-    'Reply in plain prose. Do not emit task operations, plan JSON or task reads, and do not run tools — the tasks are not changing in this turn.',
-    `Put the summary between ${SUMMARY_OPEN} and ${SUMMARY_CLOSE}, and nothing outside the tags.`,
-    ...(planLines ? ['<current_plan>', ...planLines, '</current_plan>'] : []),
+    HISTORY_KEEPS,
+    ...SUMMARY_KEEPS,
+    'Reply in plain prose or short lists. Do not emit task operations, plan JSON or task reads, and do not run tools — the tasks are not changing in this turn.',
+    SUMMARY_TAGS,
+    ...currentPlanBlock(planLines),
   ].join('\n');
 }
 

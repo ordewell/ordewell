@@ -98,7 +98,7 @@ describe('a planner edit, a runner switched off that the plan once used', () => 
     s.live.enabled = ['claude-code', 'codex', 'opencode'];
     let release = () => {};
     let asked = false;
-    const tdd = { name: 'tdd', path: '/g/tdd/SKILL.md', appliesTo: 'task', source: 'global' } as SkillInfo;
+    const tdd = { name: 'tdd', path: '/g/tdd/SKILL.md', appliesTo: 'task', source: 'global', content: 'Red, green.' } as SkillInfo;
     s.live.skills = {
       findSkill: (name) => (name === 'tdd' ? tdd : undefined),
       searchedDirs: () => [],

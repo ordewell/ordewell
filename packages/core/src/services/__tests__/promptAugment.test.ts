@@ -491,6 +491,11 @@ describe('composeAugmentedPrompt', () => {
     expect(out).toMatch(/do not write the report to a file/);
   });
 
+  it('tells the runner to wait on the PID of a process it started, never on a match by command name', () => {
+    expect(TASK_COMPLETION_CONTRACT).toMatch(/wait on the PID of a process you started yourself/);
+    expect(TASK_COMPLETION_CONTRACT).toMatch(/never by matching its command name/);
+  });
+
   it('asks only a change task for its commit, and moves what changed and why out of its summary (ADR-0047)', () => {
     const change = taskCompletionContract({ commits: true });
 

@@ -318,8 +318,8 @@ export interface IAiService {
  */
 export function createAiService(config: IConfig, deps?: CliAgentAiServiceDeps & PlannerContextDeps): IAiService {
   if (isCliProvider(config.aiProvider)) {
-    // Offered only where the workspace names the agent's model (ADR-0066).
-    return new CliAgentAiService(config, { researchAgent: (offer) => harnessResearchChat(config, offer), ...deps });
+    // The API-key agent where the workspace names its model, else the login agent on OpenCode 2.x (ADR-0066).
+    return new CliAgentAiService(config, { researchAgent: (offer) => harnessResearchChat(config, offer), loginResearch: { command: 'opencode' }, ...deps });
   }
   if (config.aiProvider === 'google') {
     return new GeminiService(config, { turnBudgets: deps?.turnBudgets, modelLimits: deps?.modelLimits, autoCompaction: deps?.autoCompaction });

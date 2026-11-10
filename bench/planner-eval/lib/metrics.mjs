@@ -131,29 +131,78 @@ function byteLength(value) {
   return typeof value === 'string' ? Buffer.byteLength(value, 'utf8') : 0;
 }
 
+// The suffix the session log appends where it clips a tool result (CliAgentAiService `truncate`, BaseAiService).
+const CLIPPED = /\n\[\.\.\. truncated, total (\d+) chars\]$/;
+
+/**
+ * The size of a tool result before the session log clipped it to its first
+ * LOG_MAX_CHARS: the total the suffix names, plus the extra bytes the kept
+ * text's multi-byte characters take. An unclipped result is measured as it is.
+ */
+export function resultBytes(value) {
+  if (typeof value !== 'string') return 0;
+  const clipped = CLIPPED.exec(value);
+  if (!clipped) return byteLength(value);
+  const kept = value.slice(0, clipped.index);
+  return Math.max(Number(clipped[1]), kept.length) + (byteLength(kept) - kept.length);
+}
+
+/**
+ * What an ACP planner reads through, which the log carries as an `agent_tool`
+ * under the harness's own name: Ordewell's `run_command` (also under an MCP
+ * server prefix) and the file-system requests a client may serve.
+ */
+const ACP_READ_LABEL = /^(?:(?:mcp__)?ordewell_{1,2})?(?:run_?command|read_?text_?file|fs[/_]read_?text_?file|read_?file|list_?directory|search_?files?)$/i;
+
+/** A step the planner ran to read: a tool of the research vocabulary, or an ACP planner's command and file requests. */
+const isOwnRead = (entry) => OWN_READ_TOOLS.has(entry.tool) || (entry.tool === 'agent_tool' && ACP_READ_LABEL.test(String(entry.toolLabel ?? '')));
+
+// A research task a planner adds is written in its plan call's arguments.
+const addsResearchTask = (entry) => /"research"\s*:\s*true/.test(typeof entry.args === 'string' ? entry.args : JSON.stringify(entry.args ?? ''));
+
 /**
  * What the planner read itself and what it handed to agents. A step a research
  * subagent ran carries its `subagentId` and is that agent's read, not the
  * planner's. Agents are counted as the larger of the spawn calls and the
  * distinct subagents logged, since a harness planner's own `Agent` call logs no
  * subagent entry and Ordewell's `spawn_research_agent` logs both.
+ *
+ * Bytes are the results' true sizes (`resultBytes`), and the reads are also
+ * split at the planner's first delegation (its first agent call or a call
+ * that adds a research task): `…Before` is what it read ahead of handing
+ * anything off, `…After` what it read once it had.
  */
-export function readMeter(researchLog) {
-  let ownReads = 0;
-  let ownReadBytes = 0;
+export function ownReadTally(researchLog) {
+  const zero = () => ({ reads: 0, bytes: 0 });
+  const before = zero();
+  const after = zero();
   const subagents = new Set();
+  let delegated = false;
   for (const entry of researchLog ?? []) {
     if (entry?.type === 'subagent') {
       subagents.add(entry.subagentId ?? entry.id);
       continue;
     }
-    if (!isOwnStep(entry) || isAgentCall(entry)) continue;
-    if (OWN_READ_TOOLS.has(entry.tool)) {
-      ownReads++;
-      ownReadBytes += byteLength(entry.result);
+    if (!isOwnStep(entry)) continue;
+    if (isAgentCall(entry)) {
+      delegated = true;
+      continue;
     }
+    if (isOwnRead(entry)) {
+      const side = delegated ? after : before;
+      side.reads++;
+      side.bytes += resultBytes(entry.result);
+    } else if (addsResearchTask(entry)) delegated = true;
   }
-  return { ownReads, ownReadBytes, agentsSpawned: Math.max(agentCalls(researchLog).length, subagents.size) };
+  return {
+    ownReads: before.reads + after.reads,
+    ownReadBytes: before.bytes + after.bytes,
+    ownReadsBeforeDelegation: before.reads,
+    ownReadBytesBeforeDelegation: before.bytes,
+    ownReadsAfterDelegation: after.reads,
+    ownReadBytesAfterDelegation: after.bytes,
+    agentsSpawned: Math.max(agentCalls(researchLog).length, subagents.size),
+  };
 }
 
 const isOwnStep = (entry) => entry?.type === undefined && typeof entry?.tool === 'string' && !entry.subagentId;
@@ -278,15 +327,14 @@ function usageNumbers(usage) {
 /**
  * Every mechanical number for one run. `driver` is what the driver recorded:
  * its turns, wall time and how it stopped. `goalText` is what the planner was
- * asked, whose terms its wording may repeat. `budget` is the budget blocks
- * recorded from its turn input (budget.mjs), where this bench could see them.
+ * asked, whose terms its wording may repeat.
  */
-export function runMetrics(session, { researchLog, driver = {}, autoMerge = true, goalText = '', budget = null } = {}) {
+export function runMetrics(session, { researchLog, driver = {}, autoMerge = true, goalText = '' } = {}) {
   const parts = sessionParts(session, researchLog);
   const all = flatten(parts.tasks);
   const top = parts.tasks;
   const submitted = planSubmitted(parts);
-  const meter = readMeter(parts.researchLog);
+  const tally = ownReadTally(parts.researchLog);
   const researchTasks = all.filter(isResearch).length;
   const autoMergeOn = parts.runSettings.mergeAtGatesAutomatically ?? autoMerge;
   return {
@@ -299,14 +347,14 @@ export function runMetrics(session, { researchLog, driver = {}, autoMerge = true
     readOnlyTasks: all.filter(isReadOnly).length,
     loopTasks: all.filter(isLoop).length,
     ...usageNumbers(parts.usage),
-    ...meter,
-    ownReadShare: ownReadShare({ ...meter, researchTasks }),
+    ...tally,
+    ownReadShare: ownReadShare({ ...tally, researchTasks }),
     wordingViolations: wordingViolations(parts.history, { autoMerge: autoMergeOn, goalText }),
-    budget,
-    meterLines: budget ? budget.turns.filter((t) => t.meter).length : null,
     turns: driver.turns ?? null,
     wallMs: driver.wallMs ?? null,
     stopped: driver.stopped ?? null,
+    approvalsAnswered: driver.approvalsAnswered ?? null,
+    resends: driver.resends ?? null,
   };
 }
 

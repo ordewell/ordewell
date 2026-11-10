@@ -43,6 +43,10 @@
  *
  * Usage: node bench/live/mock-provider.mjs [--port 3799] [--hold-file <path>]
  *
+ * By hand it binds 3799. A test or script that must not collide with another
+ * checkout's run passes `--port 0` and reads the port actually bound from the
+ * ready line on stdout (`mock provider listening on http://127.0.0.1:<port>/v1`).
+ *
  * With --hold-file, a turn streams its reasoning and then waits while that file
  * exists, so a caller can look at the planner mid-turn (the desktop's visual
  * tour, packages/desktop/e2e/tour.spec.ts) and let it finish by deleting it.
@@ -531,5 +535,5 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(port, '127.0.0.1', () => {
-  console.log(`mock provider listening on http://127.0.0.1:${port}/v1`);
+  console.log(`mock provider listening on http://127.0.0.1:${server.address().port}/v1`);
 });

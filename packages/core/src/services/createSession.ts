@@ -50,6 +50,8 @@ import { WebReadPolicy } from './webReadPolicy';
 import { sharedWebResponseCache, type WebResponseCache } from './WebResponseCache';
 import { sharedSearchProvider } from './DuckDuckGoSearchProvider';
 import { PROVIDER_PRIORITY, providerForRunner, runnerForProvider } from './ProviderRegistry';
+import { VENDORS } from './apiProviders';
+import type { HeldValue } from '../utils/redactSecrets';
 import { ModelResolver } from './ModelResolver';
 import { plannerModesFrom } from './plannerModes';
 import { RUN_SETTINGS_DEFAULTS, runSettingsOf, type GlobalRunSettings, type UserSettings } from './SettingsService';
@@ -401,6 +403,12 @@ function childSessionDeps(deps: SessionDeps, { task, cwd, placement, authority, 
   };
 }
 
+/** Withdrawn by either: the caller's own signal, or the end of the planner turn that raised it. */
+function withTurnEnd(signal: AbortSignal | undefined, turnEnded: AbortSignal | undefined): AbortSignal | undefined {
+  if (!signal || !turnEnded) return signal ?? turnEnded;
+  return AbortSignal.any([signal, turnEnded]);
+}
+
 /**
  * The planner's own prompts. A turn's abort or a plan change settles these;
  * a task runner's request belongs to its attempt, and is denied when that
@@ -442,8 +450,6 @@ export function createSession(deps: SessionDeps): Session {
     () => taskReadsLine(conversation?.readsLeft),
     () => webReadsLine(webReads.remaining()),
   ]);
-  // An experiment, off unless ORDEWELL_PLANNER_READ_METER is exactly `1`.
-  turnBudgets.measureOwnReads();
   // An API planner reads these before each call: its model's limits from the
   // catalogs already held (a fetch is started, never awaited, for a model they
   // lack), and the config file's switch, so a change applies from the next call.
@@ -603,7 +609,10 @@ export function createSession(deps: SessionDeps): Session {
     // Read per request, so a change of autonomy level or allowlist applies to the next call.
     mode: (kind) => effectiveApprovalMode(deps.config.approvalMode, deps.config.autonomousMode, kind),
     preApproved: () => plannerAllowlistOf(deps.config),
-    ask: (req, signal) => approvals.ask(req, { signal }),
+    // A planner request raised during a turn is that turn's: once the turn is
+    // over nothing waits on the answer, and a card left open would swallow
+    // the user's next message, so it is withdrawn however the turn ends.
+    ask: (req, signal) => approvals.ask(req, { signal: withTurnEnd(signal, conversation?.liveTurnEnded) }),
     // The interactive path (`asked`) already broadcasts approval_request +
     // approval_settled; only the silent sources need a signal, or a
     // remembered/pre-approved/mode grant is invisible to every surface.
@@ -687,7 +696,9 @@ export function createSession(deps: SessionDeps): Session {
       const host = deps.leaseHost ?? (deps.saveSession ? undefined : processLeaseHost());
       return host ? host.lease(onLost, runLive) : UNLEASED;
     },
-    conversation: (host) => (conversation = new PlannerConversation(host)),
+    conversation: (host) => (conversation = new PlannerConversation(host, {
+      heldSecrets: () => [...namedConfigSecrets(deps.config), ...outboundSecrets().map((value) => ({ value }))],
+    })),
     child: deps.child,
     placement: deps.placement,
     eventLog: deps.eventLog ?? ((rootSessionId, stateRoot) => {
@@ -728,6 +739,11 @@ function configSecrets(config: IConfig): string[] {
     config.apiKey, config.openAiApiKey, config.openrouterKey, config.geminiKey, config.openaiCompatibleApiKey,
     ...PROVIDER_PRIORITY.map((provider) => config.getProviderApiKey(provider)),
   ];
+}
+
+/** The vendor keys the config holds, by the variable each is handed over as: what a summary names in a key's place. */
+function namedConfigSecrets(config: IConfig): HeldValue[] {
+  return PROVIDER_PRIORITY.map((provider) => ({ name: VENDORS[provider].apiKeyEnvVar, value: config.getProviderApiKey(provider) }));
 }
 
 /** What {@link createSession} hands a Session: every collaborator, already built and wired. */

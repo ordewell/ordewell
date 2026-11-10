@@ -21,7 +21,6 @@ export const NUDGES = [
 export const VARIANTS = {
   V0: { id: 'V0', build: 'baseline', nudges: true, env: {}, about: `Ordewell at ${BASELINE_REF}, goal plus the two nudges` },
   V1: { id: 'V1', build: 'candidate', nudges: false, env: {}, about: 'the candidate ref, goal alone' },
-  V2: { id: 'V2', build: 'candidate', nudges: false, env: { ORDEWELL_PLANNER_READ_METER: '1' }, about: 'V1 with ORDEWELL_PLANNER_READ_METER=1' },
 };
 
 /** The answer to a clarifying question and the confirmation of an outline, verbatim. */
@@ -65,6 +64,40 @@ export const CELLS = [
   { id: 'gemini-cli/default', provider: 'gemini-cli', model: '', needs: { bin: 'gemini' }, optional: true },
   { id: 'cursor-agent/default', provider: 'cursor-agent', model: '', needs: { bin: 'cursor-agent' }, optional: true },
 ];
+
+/**
+ * The variable each ACP harness reads its model from, set beside the cell's
+ * ORCHESTRATOR_MODEL when `--model` names one: Cline drops a foreign slug from
+ * the planner settings while its catalog is cold (BaseConfig.plannerChoiceFor),
+ * so its own variable carries the choice. Qwen Code reads the OpenAI-compatible
+ * one (with OPENAI_BASE_URL and OPENAI_API_KEY, which the host sets). A harness
+ * not listed has no such variable, so the bench cannot name its model.
+ */
+export const ACP_MODEL_ENV = { cline: 'CLINE_MODEL', 'qwen-code': 'OPENAI_MODEL' };
+
+/** `--model cline=deepseek/deepseek-v4.1-flash,qwen-code=glm` as `{ cline: ..., 'qwen-code': ... }`; throws on a harness it cannot name. */
+export function parseModels(value) {
+  const models = {};
+  for (const part of String(value ?? '').split(',').map((s) => s.trim()).filter(Boolean)) {
+    const at = part.indexOf('=');
+    const provider = at < 0 ? '' : part.slice(0, at).trim();
+    const model = at < 0 ? '' : part.slice(at + 1).trim();
+    if (!provider || !model) throw new Error(`--model wants <harness>=<model>, got '${part}'`);
+    if (!ACP_MODEL_ENV[provider]) throw new Error(`--model cannot name a model for ${provider}: only ${Object.keys(ACP_MODEL_ENV).join(', ')}`);
+    models[provider] = model;
+  }
+  return models;
+}
+
+/** The cell with the model `--model` names for its harness, under an id that says so; the cell itself when none applies. */
+export function withModel(cell, models = {}) {
+  const model = models[cell.provider];
+  if (!model || !ACP_MODEL_ENV[cell.provider]) return cell;
+  return { ...cell, id: `${cell.provider}/${model.replace(/[^A-Za-z0-9.-]+/g, '_')}`, model, env: { ...(cell.env ?? {}), [ACP_MODEL_ENV[cell.provider]]: model } };
+}
+
+/** What a goal's `approvals` says to do with a planner approval card the driver finds open: allow unless the goal says deny. */
+export const approvalPolicy = (goal) => (goal?.approvals === 'deny' ? 'deny' : 'allow');
 
 /** The offline cell `--mock` runs against bench/live/mock-provider.mjs, whose persona the model names. */
 export const mockCell = (port, persona = 'mock/interviewer') => ({
@@ -135,7 +168,6 @@ export function runEnv(base, { cell, variant, settingsPath, maxParallel, enabled
   // A vendor key is handed only to the cell that plans through it.
   const usesOpenRouter = cell.provider === 'openrouter' || /^openrouter\//.test(cell.model);
   if (!usesOpenRouter) delete env.OPENROUTER_API_KEY;
-  delete env.ORDEWELL_PLANNER_READ_METER;
   delete env.NODE_OPTIONS;
   return {
     ...env,
@@ -165,7 +197,7 @@ export function runSettings({ cell, enabledRunners }) {
 
 const FLAG_VALUES = new Set(['--backend', '--goal', '--variant', '--repeats', '--concurrency', '--timeout', '--candidate-ref',
   '--baseline-ref', '--resume', '--out', '--max-parallel', '--runners', '--review-model', '--review-timeout', '--mock-persona', '--report',
-  '--rescore', '--baseline-from', '--api-timeout']);
+  '--rescore', '--baseline-from', '--api-timeout', '--model']);
 const FLAG_SWITCHES = new Set(['--smoke', '--full', '--mock', '--no-review', '--with-optional', '--keep', '--list', '--help']);
 
 const list = (v) => (v === undefined ? undefined : String(v).split(',').map((s) => s.trim()).filter(Boolean));
@@ -215,6 +247,7 @@ export function parseArgs(argv) {
     reviewModel: raw['--review-model'] ?? 'opus',
     reviewTimeoutMs: positive('--review-timeout', 600) * 1000,
     mockPersona: raw['--mock-persona'] ?? 'mock/interviewer',
+    models: parseModels(raw['--model']),
     withOptional: Boolean(raw['--with-optional']),
     keep: Boolean(raw['--keep']),
   };
@@ -229,7 +262,7 @@ const matches = (wanted, id) => !wanted || wanted.some((w) => w === id || id.sta
  */
 export function selectRuns(opts, { goals, cells = CELLS }) {
   const smoke = opts.mode === 'smoke';
-  const pickedCells = cells.filter((c) => (opts.backends ? matches(opts.backends, c.id) : smoke ? c.id === 'claude-code/haiku' : !c.optional || opts.withOptional || opts.mode === 'mock'));
+  const pickedCells = cells.map((c) => withModel(c, opts.models)).filter((c) => (opts.backends ? matches(opts.backends, c.id) : smoke ? c.id === 'claude-code/haiku' : !c.optional || opts.withOptional || opts.mode === 'mock'));
   const pickedGoals = goals.filter((g) => (opts.goals ? opts.goals.some((w) => w.toLowerCase() === g.id) : smoke || opts.mode === 'mock' ? g.id === 'g1' : true));
   const pickedVariants = Object.values(VARIANTS).filter((v) => !opts.variants || opts.variants.includes(v.id));
   const runs = [];

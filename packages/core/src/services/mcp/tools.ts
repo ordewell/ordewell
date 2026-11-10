@@ -631,6 +631,7 @@ export const TASK_COMPLETION_CONTRACT = [
   `Its \`summary\` is this task's handoff to the next task: the planner and the tasks that depend on this one read it first, and nothing else you write reaches them unless they ask. Write it for that reader, not as a log: what changed and the decisions behind it; the interfaces and paths a dependent relies on; the assumptions you acted on; what is left or open. It is at most ${HANDOFF_LIMITS.summary} characters, and a call over a limit is refused: the long form goes in \`report\`.`,
   `Put anything the next reader must act on in \`findings\`, one item each, most important first, each with a severity, a one-line title, its detail and evidence to check it by: a file (and line), a commit, a task (and one of its findings, as "F3") or a URL. Ordewell numbers them F1, F2, … so a later task can cite one. List what you produced in \`artifacts\`.`,
   `Work from your brief and the prior task outputs you were given; pull more with \`read\` only when you need it, and read the code your task touches, not the whole repository.`,
+  `To wait for a command, wait on the PID of a process you started yourself, never by matching its command name (\`pgrep -f\`), which also matches the same command another task is running.`,
   `The long story, if there is one, goes in \`report\`: it is kept with this attempt and read only on demand. A review or other read-only task especially: its findings are its result, so state each one, and do not write the report to a file.`,
 ].join('\n\n');
 

@@ -508,13 +508,18 @@ research task and the planner's own agents by how long a lookup will take —
 the planner cannot know that before it starts; choose by what the result is.
 
 **Research subagent** (`spawn_research_agent`, `runResearchAgent`; ADR-0005,
-ADR-0066) — one stateless read-only agent Ordewell runs on an API provider's
-chat for a planner's orientation, confined to the workspace read tools, which
-returns only its digest within the planner's turn. An API planner starts one
-wherever its service can run subagents. An OpenCode planner, whose own agents
-are denied, is served it over Ordewell's MCP server where its workspace sets
-`ORDEWELL_RESEARCH_AGENT_MODEL=<provider>:<model>`; Claude Code and Codex use
-their own subagents, and an ACP planner has none.
+ADR-0066) — one stateless read-only agent Ordewell runs for a planner's
+orientation, confined to the workspace read tools, which returns only its
+digest within the planner's turn. An API planner starts one on its provider's
+chat wherever its service can run subagents. An OpenCode planner, whose own
+agents are denied, is served it over Ordewell's MCP server: by default on
+OpenCode 2.x as the **login research agent**, a session in a locked-down
+`opencode serve` of Ordewell's on the user's own login and the planner's
+model, checked before use and unavailable for the rest of the planner session
+once that check or its first call fails; or, where the workspace sets
+`ORDEWELL_RESEARCH_AGENT_MODEL=<provider>:<model>`, on that API provider
+instead. Claude Code and Codex use their own subagents, and an ACP planner has
+none.
 *Avoid:* "research task" — that is a task in the plan, whose handoff a later
 turn reads; "scout" — the OpenCode agent this replaced.
 
@@ -3024,7 +3029,9 @@ for its whole life (`IRunnerSession.secrets`). It hides what the record holds,
 exactly and in every part of eight characters or more, in everything the
 runner writes before any sink sees it. Every reader of the session's output
 redacts with the same record. A secret Ordewell never held is left to the
-name and shape rules of agent-text redaction, which are defence in depth
+name and shape rules of agent-text redaction, which are defence in depth.
+A planner summary is redacted against what the session holds as its
+checkpoint is committed, a held vendor key named by its variable in its place
 ([ADR-0061](docs/adr/platform/0061-held-secrets-are-hidden-exactly-and-agent-text-by-name-in-depth.md)).
 *Avoid:* "known secrets", "the secret list": the record is per session, and
 "held" says that Ordewell handed the value over.

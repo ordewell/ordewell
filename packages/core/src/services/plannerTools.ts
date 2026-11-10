@@ -1,5 +1,5 @@
 import { flattenTasks, type RunnerId, type SkillLoad, type Task } from '../models/Task';
-import type { SkillInfo } from './SkillsService';
+import { skillTooLarge, type SkillInfo } from './SkillsService';
 import { modelInvocablePlannerSkills, snapshotSkill } from './skillInvocation';
 import { autonomyLevelLabel, readOnlyMode } from './ModeResolver';
 import type { AssignmentAdjustment } from './TaskAssignment';
@@ -156,6 +156,8 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       if (!skill) {
         return { isError: true, text: `Skill "${name}" cannot be loaded by the planner. Loadable skills: ${skills.map((s) => s.name).join(', ') || '(none)'}.` };
       }
+      const oversize = skillTooLarge(skill);
+      if (oversize) return { isError: true, text: `Skill ${oversize}.` };
       if (!host.recordSkillLoad(snapshotSkill(skill, 'planner'))) {
         return { isError: true, text: 'No planning turn is open to load a skill.' };
       }

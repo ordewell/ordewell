@@ -347,6 +347,46 @@ list found in VS Code's old `ordewell.enabledRunners` setting is copied there
 once, unless the file already holds a choice, and then cleared; an empty list
 there is not copied. If a window shows an older list, refresh the runner list.
 
+## The research agent is unavailable on OpenCode
+
+The chat shows one line, *The login research agent is unavailable for this
+planner session, which delegates with research tasks instead*, and the reason.
+For the rest of that planner session the OpenCode planner delegates its
+research with research tasks; a new session tries again.
+
+### Cause
+
+On OpenCode 2.x the planner's research agent runs on your own login, in a
+second `opencode serve` Ordewell starts with none of your configuration
+([ADR-0066](adr/planner-envelope/0066-opencode-planners-get-ordewells-research-agent.md)).
+Before using it, Ordewell asks that serve what it loaded, and refuses it
+unless its permission rules are Ordewell's alone, Ordewell's is its only MCP
+server and every plugin is one of OpenCode's built-ins. The reason says which:
+
+- *loaded permission rules other than Ordewell's*, *loaded MCP servers
+  besides Ordewell's* or *loaded a plugin beyond OpenCode's built-ins*: some
+  configuration reaches every OpenCode process on this machine, usually
+  because an administrator manages OpenCode here. Ordewell does not run its
+  agent beside it.
+- *its OpenCode server … before it was ready*: `opencode serve` did not
+  start; the reason ends with what it printed.
+- `provider.auth` or `provider.no-route`: your OpenCode login cannot run the
+  planner's model.
+
+### Fix
+
+For a login or model problem, run `opencode` and sign in, or pick a planner
+model your login can run. Where the machine's OpenCode is managed, name an API
+provider's model for the agent instead, which runs outside OpenCode:
+
+```bash
+# .ordewell/env
+ORDEWELL_RESEARCH_AGENT_MODEL=openrouter:deepseek/deepseek-v4.1-flash
+```
+
+with that provider's key, `OPENROUTER_API_KEY` here, set as well
+([planners and runners](planners-and-runners.md)).
+
 ## The planner hit its usage limit
 
 The transcript shows a failure line with the limit's reset time, and VS Code

@@ -145,7 +145,7 @@ describe('Supervisor', () => {
     return {
       run: () => run, deliver: vi.fn(async () => undefined), pump: vi.fn(), saveState: vi.fn(), stoppedByUser: () => false, digestReader: () => ({ describe: describeTask, blockedBy: () => [] }),
       // Nothing left to wait for: what is held goes at the window, as the tests here want it to (WakePolicy.test.ts holds the rest).
-      wakeFacts: () => ({ nothingCanStart: true, cohortDone: new Set<string>(), blocksWork: new Set<string>(), requestAt: null }), readBudget: () => 12, retryLimit: () => 2,
+      wakeFacts: () => ({ nothingCanStart: true, cohortDone: new Set<string>(), blocksWork: new Set<string>(), blocksAny: new Set<string>(), requestAt: null }), readBudget: () => 12, retryLimit: () => 2,
       restartPlanner: vi.fn(), abandonTurn: vi.fn(), goUnsupervised: vi.fn(), wakeUpEnded: vi.fn(), dropToWatch: vi.fn(), notice: vi.fn(),
     };
   }
@@ -187,7 +187,7 @@ describe('Supervisor', () => {
     it('holds past the window what the plan does not call for, and wakes when it is due', async () => {
       vi.useFakeTimers();
       const h = host({ level: 'act' });
-      const wakeFacts = () => ({ nothingCanStart: false, cohortDone: new Set<string>(), blocksWork: new Set<string>(), ttlMs: 1000, requestAt: null });
+      const wakeFacts = () => ({ nothingCanStart: false, cohortDone: new Set<string>(), blocksWork: new Set<string>(), blocksAny: new Set<string>(), ttlMs: 1000, requestAt: null });
       const supervisor = new Supervisor({ ...h, wakeFacts }, { debounceMs: 10 });
 
       supervisor.observe({ kind: 'task_failed', taskId: 't1', detail: 'broke' });
@@ -199,11 +199,26 @@ describe('Supervisor', () => {
       vi.useRealTimers();
     });
 
+    it.each<[SupervisedRun['level'], number]>([['act', 1], ['watch', 0]])('at %s, a failure other tasks depend on wakes at the window %i time(s), while the rest runs', async (level, wakes) => {
+      vi.useFakeTimers();
+      const h = host({ level });
+      const wakeFacts = () => ({ nothingCanStart: false, cohortDone: new Set<string>(), blocksWork: new Set<string>(), blocksAny: new Set(['t1']), ttlMs: 1_000_000, requestAt: null });
+      const supervisor = new Supervisor({ ...h, wakeFacts }, { debounceMs: 10 });
+
+      supervisor.observe({ kind: 'task_failed', taskId: 't1', detail: 'broke' });
+      await vi.advanceTimersByTimeAsync(9);
+      expect(h.deliver).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(h.deliver).toHaveBeenCalledTimes(wakes);
+      vi.useRealTimers();
+    });
+
     it('wakes at once past the window when an event makes the held ones due', async () => {
       vi.useFakeTimers();
       const h = host({ level: 'act' });
       const cohortDone = new Set<string>();
-      const wakeFacts = () => ({ nothingCanStart: false, cohortDone, blocksWork: new Set<string>(), ttlMs: 1_000_000, requestAt: null });
+      const wakeFacts = () => ({ nothingCanStart: false, cohortDone, blocksWork: new Set<string>(), blocksAny: new Set<string>(), ttlMs: 1_000_000, requestAt: null });
       const supervisor = new Supervisor({ ...h, wakeFacts }, { debounceMs: 10 });
 
       supervisor.observe({ kind: 'task_failed', taskId: 't1', detail: 'broke' });

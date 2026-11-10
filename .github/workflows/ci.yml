@@ -214,22 +214,26 @@ jobs:
         id: planner-loop
         if: needs.scope.outputs.planner != 'false'
         run: |
-          node bench/live/mock-provider.mjs &
+          # The mock binds a port of its own (--port 0) and prints it on its
+          # ready line, so no fixed port can collide; a fixed sleep raced on loaded
+          # runners and orphaned the mock on drive failure.
+          node bench/live/mock-provider.mjs --port 0 > mock.log &
           MOCK_PID=$!
           trap 'kill $MOCK_PID 2>/dev/null' EXIT
-          # Wait for the mock provider to bind its port rather than a fixed sleep,
-          # which raced on loaded runners and orphaned the mock on drive failure.
+          PORT=
           for i in $(seq 1 50); do
-            if node -e "require('net').connect(3799).on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"; then break; fi
+            PORT=$(sed -n 's|.*127\.0\.0\.1:\([0-9]*\)/v1.*|\1|p' mock.log | head -n 1)
+            [ -n "$PORT" ] && break
             sleep 0.2
           done
-          node bench/live/drive-conversation.mjs
+          [ -n "$PORT" ] || { echo "the mock provider never reported its port"; exit 1; }
+          node bench/live/drive-conversation.mjs --port "$PORT"
 
       # The standalone binary (ADR-0065), linux-x64 only: cli-build.yml builds
       # every target on its own runner for a pull request that touches it and
       # for a release. It bundles from the sources and core's dist alone, so
-      # it needs no build but core's. The drive starts its own mock on 3799,
-      # which the planner loop above has let go, and takes Node off PATH.
+      # it needs no build but core's. The drive starts its own mock on a port the
+      # OS picks and takes Node off PATH.
       - name: Build the standalone CLI binary
         id: build-binary
         if: needs.scope.outputs.binary != 'false'
@@ -838,14 +842,20 @@ jobs:
       - name: Planner conversation loop on Windows
         if: needs.scope.outputs.planner != 'false'
         run: |
-          node bench/live/mock-provider.mjs &
+          # The mock binds a port of its own (--port 0) and prints it on its
+          # ready line, so no fixed port can collide; a fixed sleep raced on loaded
+          # runners and orphaned the mock on drive failure.
+          node bench/live/mock-provider.mjs --port 0 > mock.log &
           MOCK_PID=$!
           trap 'kill $MOCK_PID 2>/dev/null' EXIT
+          PORT=
           for i in $(seq 1 50); do
-            if node -e "require('net').connect(3799).on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"; then break; fi
+            PORT=$(sed -n 's|.*127\.0\.0\.1:\([0-9]*\)/v1.*|\1|p' mock.log | head -n 1)
+            [ -n "$PORT" ] && break
             sleep 0.2
           done
-          node bench/live/drive-conversation.mjs
+          [ -n "$PORT" ] || { echo "the mock provider never reported its port"; exit 1; }
+          node bench/live/drive-conversation.mjs --port "$PORT"
 
       - name: Resolve the VS Code version under test
         id: vscode-version

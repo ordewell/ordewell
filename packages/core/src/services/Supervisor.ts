@@ -1,6 +1,6 @@
 import type { SupervisorLevel } from '../models/Execution';
 import type { TurnAuthority } from '../models/Task';
-import { createWakePolicy, cut, isHeldEvent, LEFT_OUT_ROOM, REPORT_LEAD, RIDE_ALONG_CHARS, SINCE_LAST, WAKE_MAX_CHARS, type RunEvent, type RunEventKind, type WakeBatch, type WakeFacts, type WakePolicy, type WakePolicySnapshot } from './WakePolicy';
+import { createWakePolicy, cut, isHeldEvent, LEFT_OUT_ROOM, REPORT_LEAD, RIDE_ALONG_CHARS, SINCE_LAST, WAKE_MAX_CHARS, type RunEvent, type RunEventKind, type WakeBatch, type WakeHostFacts, type WakePolicy, type WakePolicySnapshot } from './WakePolicy';
 import { classifyRunnerStop } from './runnerExit';
 import { WAKE_UP_RATE, wakeUpRateTripped, type WakeUpRate } from './LoopGuards';
 import { PlannerContextPausedError, PlannerTurnDiscardedError, PlannerTurnFailedError, PlannerTurnStoppedError, PlannerUsageLimitError, type PlanChange, type WakeBrief, type WakeUpTurn } from './PlannerConversation';
@@ -74,7 +74,7 @@ export interface SupervisorHost {
   /** What a digest reads of the plan, built once as it goes out: reading it per name is what made a large one quadratic. */
   digestReader(): DigestReader;
   /** What the plan and the planner's prompt cache say now, for the decision the policy makes (ADR-0057 R4). */
-  wakeFacts(): WakeFacts;
+  wakeFacts(): WakeHostFacts;
   /** Reads a wake-up turn may make, as the plan sets them. */
   readBudget(): number;
   /** Retries the supervisor may make of one task in a run, as the plan sets them. */
@@ -166,7 +166,7 @@ export class Supervisor {
   }
 
   private newPolicy(): WakePolicy {
-    return createWakePolicy({ debounceMs: this.debounceMs, facts: () => this.host.wakeFacts() });
+    return createWakePolicy({ debounceMs: this.debounceMs, facts: () => ({ ...this.host.wakeFacts(), acting: this.level === 'act' }) });
   }
 
   /**

@@ -26,6 +26,7 @@ import type { StartWait, StartWaitKind } from './readiness';
 import { SubagentRuns } from './SubagentRuns';
 import type { ConversationCompactionHost, LandedHistory } from './budgetedChat';
 import { ContextSummaryError } from './contextSummary';
+import { redactSummaryText, type HeldValue } from '../utils/redactSecrets';
 import { PlannerContextExhaustedError } from './plannerContextBudget';
 import { boundedWakeUps } from './WakePolicy';
 
@@ -111,10 +112,14 @@ function spendRead(reads: ReadBudget, signature: string): 'refused' | 'answer' |
  */
 export class PlannerTurn {
   private readonly controller = new AbortController();
+  private readonly over = new AbortController();
   private dropped = false;
   private forced = false;
 
   get signal(): AbortSignal { return this.controller.signal; }
+
+  /** Aborts once the turn is over however it ended — stopped, abandoned or settled — so what it raised can be withdrawn. */
+  get ended(): AbortSignal { return this.over.signal; }
 
   /** The plan it was answering was dropped under it, so nothing it settles may land. */
   get abandoned(): boolean { return this.dropped; }
@@ -125,11 +130,17 @@ export class PlannerTurn {
   stop(by?: 'force_send'): void {
     if (by === 'force_send' && !this.controller.signal.aborted) this.forced = true;
     this.controller.abort();
+    this.over.abort();
   }
 
   abandon(): void {
     this.dropped = true;
     this.controller.abort();
+    this.over.abort();
+  }
+
+  end(): void {
+    this.over.abort();
   }
 }
 
@@ -366,6 +377,15 @@ export interface PlannerConversationHost {
   usageLimit(said: TurnFailure, answered: boolean): PlannerLimit;
   /** A turn ended with the planner paused on its context: arm the pause on the inputs it took, saved with the failure it records. */
   contextPaused(details: Pick<PlannerContextPause, 'model' | 'reason' | 'done' | 'doneTruncated'>): PlannerContextPause;
+}
+
+/** What the conversation is built with besides its host. */
+export interface PlannerConversationOptions {
+  /**
+   * The values Ordewell holds, read afresh at each checkpoint: a summary names
+   * a named one in its place and hides the rest (ADR-0061 P1).
+   */
+  heldSecrets?: () => Iterable<HeldValue>;
 }
 
 /**
@@ -608,7 +628,7 @@ export class PlannerConversation {
     planLines: () => this.planRows()?.rows.map(({ line }) => line) ?? null,
   };
 
-  constructor(private readonly host: PlannerConversationHost) {
+  constructor(private readonly host: PlannerConversationHost, private readonly options: PlannerConversationOptions = {}) {
     this.briefing = new PlannerBriefing({
       autorun: () => host.autorun(),
       scope: () => host.assignmentScope(),
@@ -736,6 +756,7 @@ export class PlannerConversation {
       turn,
       release: () => {
         callerSignal?.removeEventListener('abort', relay);
+        turn.end();
         // An abandoned turn gave the slot up already, maybe to its successor.
         if (this.live !== turn) return;
         this.live = null;
@@ -743,6 +764,11 @@ export class PlannerConversation {
         this.host.turnReleased?.();
       },
     };
+  }
+
+  /** When the turn holding the conversation is over, for what the host raises during it: none is held when undefined. */
+  get liveTurnEnded(): AbortSignal | undefined {
+    return this.live?.ended;
   }
 
   /** The user turn being answered, for what the host raises during it — an approval the turn's research asks for. */
@@ -944,7 +970,7 @@ export class PlannerConversation {
     this.host.onProgress({ type: 'compaction', compaction: { phase: 'started', ...compaction, at: new Date().toISOString() } });
     let outcome: PlannerCompactionOutcome = 'failed';
     try {
-      const summary = await this.summarize(turn.signal);
+      const summary = this.redactSummary(await this.summarize(turn.signal));
       if (this.host.plan() !== plan || compactionCut(this.transcript) !== cut) throw new ConversationEditError('The conversation changed while it was being condensed: nothing was condensed.');
       this.commitCheckpoint(condensedNotice(summary), cut, 'manual', compaction.id);
       outcome = 'condensed';
@@ -977,13 +1003,18 @@ export class PlannerConversation {
       throw new Error(`A compaction cannot cut the conversation at ${keptFrom}: that is behind its last summary or past an input not yet answered.`);
     }
     const timestamp = new Date().toISOString();
-    const entry: ConversationMessage = { role: 'assistant', content, timestamp, kind: 'compaction', checkpoint: { id, keptFrom, trigger } };
+    const entry: ConversationMessage = { role: 'assistant', content: this.redactSummary(content), timestamp, kind: 'compaction', checkpoint: { id, keptFrom, trigger } };
     this.host.mutate(() => {
       this.appendEntries([entry]);
       // What the native session holds is what this condensed away.
       delete this.requirePlan().plannerSession;
       return true;
     }, () => this.host.broadcastPlan());
+  }
+
+  /** A summary as it may be kept: replayed into every later context, so no secret's value (ADR-0061 P1). */
+  private redactSummary(text: string): string {
+    return redactSummaryText(text, this.options.heldSecrets?.() ?? []);
   }
 
   /**

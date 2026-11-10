@@ -65,7 +65,7 @@ export interface WakeBatch {
   sinceLast: RunEvent[];
 }
 
-/** The events no one is waiting on: held until the plan or the cache says it is time (ADR-0057 R4). */
+/** The events no one is waiting on: held until the plan or the cache says it is time, or an Act supervisor can retry a failure (ADR-0057 R4). */
 const HELD_KINDS: ReadonlySet<RunEventKind> = new Set<RunEventKind>(['task_failed', 'task_idle']);
 
 /** Whether an event is held rather than waking at once. */
@@ -138,6 +138,8 @@ export interface WakePlanFacts {
   cohortDone: ReadonlySet<string>;
   /** The failed tasks holding back work that would otherwise be ready. */
   blocksWork: ReadonlySet<string>;
+  /** The failed tasks holding back any task at all, ready or not, however far back. */
+  blocksAny: ReadonlySet<string>;
 }
 
 /** The planner's prompt cache, as its provider counts it: from the start of a request. */
@@ -148,9 +150,15 @@ export interface WakeCacheClock {
   requestAt: number | null;
 }
 
-export type WakeFacts = WakePlanFacts & WakeCacheClock;
+/** What the plan and the planner's cache say, as the supervisor's host reads them. */
+export type WakeHostFacts = WakePlanFacts & WakeCacheClock;
 
-export type WakeReason = 'run_ended' | 'at_once' | 'nothing_can_start' | 'cohort_done' | 'failure_blocks_work' | 'max_age';
+export type WakeFacts = WakeHostFacts & {
+  /** The supervisor acts now: it can retry or skip a failure while the rest runs. */
+  acting: boolean;
+};
+
+export type WakeReason = 'run_ended' | 'at_once' | 'nothing_can_start' | 'cohort_done' | 'failure_blocks_work' | 'failure_has_dependents' | 'max_age';
 
 export interface WakeDue {
   /** On the events' clock; a moment already past means now. */
@@ -171,7 +179,7 @@ export function wakeDue(held: readonly RunEvent[], facts: () => WakeFacts, debou
   // A fixed window from the event: one that restarted on each event could be held off by tasks that keep settling.
   const waited = held.find((e) => !isHeldEvent(e));
   if (waited) return { at: waited.at + debounceMs, reason: 'at_once' };
-  const { nothingCanStart, cohortDone, blocksWork, ttlMs = UNKNOWN_CACHE_TTL_MS, requestAt } = facts();
+  const { nothingCanStart, cohortDone, blocksWork, blocksAny, acting, ttlMs = UNKNOWN_CACHE_TTL_MS, requestAt } = facts();
   const merged = first.at + debounceMs;
   if (nothingCanStart) return { at: merged, reason: 'nothing_can_start' };
   if (held.some((e) => e.taskId !== undefined && cohortDone.has(e.taskId))) return { at: merged, reason: 'cohort_done' };
@@ -180,6 +188,9 @@ export function wakeDue(held: readonly RunEvent[], facts: () => WakeFacts, debou
   const warmUntil = requestAt === null ? Number.NEGATIVE_INFINITY : requestAt + life;
   // A prefix warm as the event came is what the wake must reach; one already cold has nothing to save, and the event its full age.
   const aged = warmUntil > first.at ? Math.min(warmUntil, first.at + life) : first.at + life;
+  // At Act a retry runs beside the rest: holding it until its dependents are ready would add it to the critical path.
+  const retryable = acting ? held.find((e) => e.kind === 'task_failed' && e.taskId !== undefined && blocksAny.has(e.taskId)) : undefined;
+  if (retryable && retryable.at + debounceMs < Math.max(merged, aged)) return { at: retryable.at + debounceMs, reason: 'failure_has_dependents' };
   return { at: Math.max(merged, aged), reason: 'max_age' };
 }
 
@@ -213,14 +224,16 @@ export function planWakeFacts(plan: readonly Task[], waits: ReadonlyMap<string, 
   const blocked = new Set<string>();
   for (const [id, held] of waits) if (held.some((w) => w.kind === 'blocked')) blocked.add(id);
   const blocksWork = new Set<string>();
+  const blocksAny = new Set<string>();
   for (const held of waits.values()) {
     const failed = held.flatMap((w) => (w.kind === 'blocked' ? w.failed : []));
     if (failed.length === 0) continue;
+    for (const id of failed) blocksAny.add(id);
     // Otherwise ready: all it waits for is what failed, however far back.
     const otherwise = held.every((w) => w.kind === 'blocked' || passes(w) || (w.kind === 'dependencies' && w.waiting.every((id) => failed.includes(id) || blocked.has(id))));
     if (otherwise) for (const id of failed) blocksWork.add(id);
   }
-  return { nothingCanStart: !tasks.some(moves), cohortDone, blocksWork };
+  return { nothingCanStart: !tasks.some(moves), cohortDone, blocksWork, blocksAny };
 }
 
 export interface WakePolicyOptions {

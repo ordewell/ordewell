@@ -209,6 +209,9 @@ export type { RewindTarget, ConversationCompaction, PlannerSubmission } from './
 export {
   SkillsService,
   createSkillsService,
+  SKILL_WORD_CAP,
+  skillTooLarge,
+  skillWords,
   BUILTIN_SKILL_NAMES,
   type SkillInfo,
   type SkillMetadata,
@@ -374,3 +377,6 @@ export { compareVersions, parseVersion } from './utils/version';
 
 export { walkPlan, taskPlacement, subtreeIds } from './services/PlanTree';
 export type { TreeTask, TaskPlacement } from './services/PlanTree';
+// The OpenCode 2.x login research agent's parts (ADR-0066), for its live probe in bench/live.
+export { confinedRead } from './services/ResearchSubagents';
+export { loginResearchAgent, startResearchServe, lazyServe, openCodeResearchAgent, researchToolNames } from './services/harness/openCodeResearchAgent';

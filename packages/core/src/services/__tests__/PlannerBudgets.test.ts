@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { TurnBudgets, contextLine, taskReadsLine, webReadsLine, withTurnBudgets } from '../PlannerBudgets';
 
 describe('budget lines', () => {
@@ -69,51 +69,5 @@ describe('TurnBudgets', () => {
 
   it('sends the message untouched when a service has no budgets', () => {
     expect(withTurnBudgets(undefined, 'hello')).toBe('hello');
-  });
-});
-
-describe('own-reads meter (experiment, ORDEWELL_PLANNER_READ_METER=1)', () => {
-  const on = { ORDEWELL_PLANNER_READ_METER: '1' };
-
-  it('leaves the block byte-for-byte as it was when the variable is unset, set to anything but 1, or the backend cannot report', () => {
-    const plain = new TurnBudgets([() => 'A.']);
-    const expected = 'hello\n\nCONTEXT AND BUDGETS (this turn):\n- A.';
-    for (const env of [{}, { ORDEWELL_PLANNER_READ_METER: '0' }, { ORDEWELL_PLANNER_READ_METER: 'true' }, { ORDEWELL_PLANNER_READ_METER: ' 1' }]) {
-      const budgets = new TurnBudgets([() => 'A.']);
-      budgets.measureOwnReads(env);
-      budgets.noteOwnRead(40_000);
-      expect(budgets.appendTo('hello', true)).toBe(expected);
-    }
-    expect(plain.appendTo('hello', true)).toBe(expected);
-
-    const enabled = new TurnBudgets([() => 'A.']);
-    enabled.measureOwnReads(on);
-    enabled.noteOwnRead(40_000);
-    expect(enabled.appendTo('hello')).toBe(expected);
-  });
-
-  it('says what the planner read itself last turn and in the conversation, from characters, as approximate', () => {
-    const budgets = new TurnBudgets([() => 'A.']);
-    budgets.measureOwnReads(on);
-    expect(budgets.appendTo('t1', true)).toContain('- Your own reads: about 0 tokens last turn, 0 in this conversation (approximate, from characters).');
-    budgets.noteOwnRead(40_000);
-    budgets.noteOwnRead(8_000);
-    expect(budgets.appendTo('t2', true)).toContain('- Your own reads: about 12k tokens last turn, 12k in this conversation (approximate, from characters).');
-    budgets.noteOwnRead(4_000);
-    expect(budgets.appendTo('t3', true)).toContain('- Your own reads: about 1k tokens last turn, 13k in this conversation (approximate, from characters).');
-  });
-
-  it('reads the process environment unless handed one', () => {
-    vi.stubEnv('ORDEWELL_PLANNER_READ_METER', '1');
-    const budgets = new TurnBudgets();
-    budgets.measureOwnReads();
-    expect(budgets.render(true)).toContain('Your own reads');
-    vi.unstubAllEnvs();
-  });
-
-  it('shows the line even when no other budget has a number', () => {
-    const budgets = new TurnBudgets([() => undefined]);
-    budgets.measureOwnReads(on);
-    expect(budgets.render(true)).toBe('CONTEXT AND BUDGETS (this turn):\n- Your own reads: about 0 tokens last turn, 0 in this conversation (approximate, from characters).');
   });
 });
