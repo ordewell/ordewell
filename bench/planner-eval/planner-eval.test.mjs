@@ -24,7 +24,7 @@ import {
 import { guardFiles, snapshot } from './lib/guard.mjs';
 import { keyChecks, keyHash, keyViolations, plannerRanTest } from './lib/keys.mjs';
 import {
-  criticalPath, ownReadShare, planDigest, readMeter, runMetrics, sessionParts, width, wordingViolations,
+  criticalPath, ownReadShare, planDigest, readMeter, agentCalls, runMetrics, sessionParts, width, wordingViolations,
 } from './lib/metrics.mjs';
 import { classifyTurn, newestSession } from './lib/observe.mjs';
 import { REDACTED, redactJson, redactor } from './lib/redact.mjs';
@@ -143,6 +143,19 @@ describe('readMeter', () => {
       { type: 'user_prompt', content: 'goal' },
     ];
     assert.deepEqual(readMeter(log), { ownReads: 2, ownReadBytes: 8, agentsSpawned: 2 });
+  });
+
+  it("counts Ordewell's research agent under an MCP server prefix, as OpenCode logs it", () => {
+    const log = [
+      { tool: 'agent_tool', toolLabel: 'ordewell_spawn_research_agent', args: { prompt: 'List spawn sites in packages/core.' } },
+      { tool: 'agent_tool', toolLabel: 'ordewell__spawn_research_agent' },
+      { tool: 'mcp__ordewell__spawn_research_agent' },
+      { tool: 'agent_tool', toolLabel: 'other_spawn_research_agent' },
+      { tool: 'read_file', result: 'ab' },
+    ];
+    assert.equal(readMeter(log).agentsSpawned, 3);
+    assert.equal(agentCalls(log).length, 3);
+    assert.equal(readMeter(log).ownReads, 1);
   });
 
   it('gives no own-read share for a planner that looked at nothing', () => {

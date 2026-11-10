@@ -23,6 +23,13 @@ export const READ_ONLY_MODES = new Set(['plan', 'read-only', 'readonly', 'read_o
 /** A harness planner's own in-turn agent tool, by the name it reports (Claude Code's `Agent`/`Task`, OpenCode's `task`). */
 const AGENT_TOOL_LABELS = /^(agent|task|subagent|spawn_?agent)$/i;
 
+/**
+ * Ordewell's research agent as a harness reports an MCP tool: Claude Code
+ * `mcp__ordewell__spawn_research_agent`, OpenCode `ordewell_spawn_research_agent`
+ * (server name, one underscore), both with or without the prefix.
+ */
+const RESEARCH_AGENT_TOOL = /^(?:(?:mcp__)?ordewell_{1,2})?spawn_research_agent$/i;
+
 /** The session pieces every metric reads, from a `GET /api/sessions/:id` body or a saved session file. */
 export function sessionParts(session, researchLog) {
   const plan = session?.plan ?? {};
@@ -150,7 +157,7 @@ export function readMeter(researchLog) {
 }
 
 const isOwnStep = (entry) => entry?.type === undefined && typeof entry?.tool === 'string' && !entry.subagentId;
-const isAgentCall = (entry) => entry.tool === 'spawn_research_agent' || (entry.tool === 'agent_tool' && AGENT_TOOL_LABELS.test(String(entry.toolLabel ?? '')));
+const isAgentCall = (entry) => RESEARCH_AGENT_TOOL.test(String(entry.tool ?? '')) || (entry.tool === 'agent_tool' && (AGENT_TOOL_LABELS.test(String(entry.toolLabel ?? '')) || RESEARCH_AGENT_TOOL.test(String(entry.toolLabel ?? ''))));
 
 /** What the planner handed an agent, one brief per spawn call, as its arguments hold it. */
 export function agentCalls(researchLog) {
