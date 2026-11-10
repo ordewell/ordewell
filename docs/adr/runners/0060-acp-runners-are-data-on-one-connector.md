@@ -5,7 +5,7 @@ amends: ["0008", "0009", "0018", "0022", "0023", "0025", "0026", "0028", "0046"]
 
 # 0060 — ACP runners are data on one connector
 
-*Pending:* each profile's subagent control (R3) is confirmed from the agent's source or documentation, not a recording, until `node bench/live/acp-subagent-probe.mjs` passes against it.
+*Pending:* the subagent control (R3) of Copilot CLI, Gemini CLI and Cursor Agent is confirmed from the agent's source or documentation, not a recording, until `node bench/live/acp-subagent-probe.mjs` passes against it.
 
 ## Problem
 
@@ -1333,3 +1333,4 @@ the private directory:
   delegation tool (Qwen's `--exclude-tools`, Cline's `disabledTools`, Gemini's
   policy, Copilot's `--excluded-tools`, Cursor's hooks), refused by name too;
   a background subagent, or a Cursor `cursor/task` notice, fails the start.
+- 2026-11-10 — R3: the live subagent probe passed for Qwen Code 0.27.1 and Cline 3.0.74 (OpenRouter `deepseek/deepseek-v4.1-flash`); Cline's `spawn_agent` was absent from the model's tools, so the refusal by name was not exercised live.

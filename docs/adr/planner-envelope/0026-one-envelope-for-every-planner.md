@@ -5,7 +5,7 @@ amends: ["0008", "0009"]
 
 # 0026 — One envelope for every planner
 
-*Pending:* the ACP planners' subagent controls are checked against source and documentation, not a live run, until `node bench/live/acp-subagent-probe.mjs` passes against each installed ACP planner.
+*Pending:* the subagent controls of Copilot CLI, Gemini CLI and Cursor Agent are checked against source and documentation, not a live run, until `node bench/live/acp-subagent-probe.mjs` passes against each.
 
 ## Problem
 
@@ -353,3 +353,4 @@ refused from a workspace's environment files (ADR-0016). The effect allowlist
 - 2026-11-10 — an OpenCode 2.x planner's `subagent` tool admits Ordewell's read-only scout alone, behind `ORDEWELL_OPENCODE_SCOUT=1` and only when the server's resolved rules for it match Ordewell's; 1.x unchanged; the MCP research subagent rejected.
 - 2026-11-10 — every ACP planner's own subagent or delegation tool is withheld by its restricted start and refused by name; a background subagent fails the turn (ADR-0060 R3).
 - 2026-11-10 — the scout is removed after its live probe failed: an OpenCode planner's own agents are all denied, and its in-turn agent is Ordewell's research agent over MCP where its workspace names the model (ADR-0066).
+- 2026-11-10 — the live ACP subagent probe passed for Qwen Code 0.27.1 and Cline 3.0.74 (OpenRouter `deepseek/deepseek-v4.1-flash`): control read, every attempt refused or absent.
