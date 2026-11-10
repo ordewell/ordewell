@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Branches, BranchInfo } from '../gitData';
 import {
   ago, branchTree, commitDiffTabId, commitWhen, commitsTabId, isOrdewellRef, landedTaskOf, landingSubject, parseCommitDiffTabId, parseCommitsTabId, plural, refChips, repoDisplay, summarizeRefs,
-  runMark, splitUpstream, trackMark,
+  runMark, splitUpstream, tipAge, tipSummary, trackMark,
 } from '../gitModel';
 
 const branch = (name: string, extra: Partial<BranchInfo> = {}): BranchInfo => ({ name, sha: 'a'.repeat(40), upstream: null, ahead: 0, behind: 0, current: false, ...extra });
@@ -58,6 +58,22 @@ describe('naming', () => {
     expect(ago('2025-01-05T12:00:00Z', now)).toBe('5d');
     expect(ago('2024-09-10T12:00:00Z', now)).toBe('4mo');
     expect(ago('not a date', now)).toBe('');
+  });
+
+  it('ages a branch\'s tip, and says nothing when the daemon sent no date', () => {
+    const now = Date.parse('2025-01-10T12:00:00Z');
+    expect(tipAge({ date: '2025-01-07T12:00:00+00:00' }, now)).toBe('3d');
+    expect(tipAge({}, now)).toBe('');
+    expect(tipAge({ date: 'garbled' }, now)).toBe('');
+  });
+
+  it('sums up a tip as its subject and age for a tooltip', () => {
+    const now = Date.parse('2025-01-10T12:00:00Z');
+    expect(tipSummary({ subject: 'Fix the login redirect', date: '2025-01-07T12:00:00Z' }, now)).toBe('Fix the login redirect · 3d ago');
+    expect(tipSummary({ subject: 'Fix', date: '2025-01-10T11:59:59Z' }, now)).toBe('Fix · just now');
+    expect(tipSummary({ subject: 'Only a subject' }, now)).toBe('Only a subject');
+    expect(tipSummary({ date: '2025-01-09T12:00:00Z' }, now)).toBe('1d ago');
+    expect(tipSummary({}, now)).toBe('');
   });
 
   it('dates a commit for its own tab, and leaves what is no date as it was', () => {

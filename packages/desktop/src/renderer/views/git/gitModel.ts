@@ -218,6 +218,21 @@ export function ago(iso: string, now: number = Date.now()): string {
   return `${Math.floor(days / 30)}mo`;
 }
 
+/** How long ago a branch's tip was committed: "2d", "now", or empty when the daemon sent no date. */
+export function tipAge(branch: Pick<BranchInfo, 'date'>, now: number = Date.now()): string {
+  return branch.date ? ago(branch.date, now) : '';
+}
+
+/**
+ * What a branch row says beyond its name, for the tooltip and the accessible
+ * description: the tip's subject and age ("Fix the login redirect · 2d ago").
+ * Empty when the daemon sent neither.
+ */
+export function tipSummary(branch: Pick<BranchInfo, 'date' | 'subject'>, now: number = Date.now()): string {
+  const age = tipAge(branch, now);
+  return [branch.subject, age && (age === 'now' ? 'just now' : `${age} ago`)].filter(Boolean).join(' · ');
+}
+
 /** A commit's date for its own tab, where there is room for it: `Jan 5, 2025, 12:00 PM`, or the text as given when it is not a date. */
 export function commitWhen(iso: string): string {
   const at = Date.parse(iso);

@@ -719,6 +719,10 @@ export interface GitBranchInfo {
   ahead: number;
   behind: number;
   current: boolean;
+  /** The tip commit's committer date, ISO 8601 with its offset; empty if git gave none. */
+  date: string;
+  /** The tip commit's subject line. */
+  subject: string;
   /** Set on a branch Ordewell made, when a saved run still names it. */
   owner?: OrdewellRefOwner;
   /** The saved runs that land on this branch at Merge all: their landing branch (ADR-0062 G7). */

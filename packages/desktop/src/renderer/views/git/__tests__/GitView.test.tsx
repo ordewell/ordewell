@@ -175,6 +175,33 @@ describe('the Git sidebar', () => {
     expect(current.querySelector('.srow-trail .srow-rest')).toHaveTextContent('↓1 ↑2');
   });
 
+  it('shows a level branch\'s tip age in the slot, and the tip’s subject and age in its tooltip and description', async () => {
+    const threeDaysAgo = new Date(Date.now() - 3 * 86_400_000 - 60_000).toISOString();
+    const subject = 'Fix "login" redirect, 100% sure';
+    await mount({}, {
+      ...BRANCHES,
+      local: [BRANCHES.local[0]!, branch('feature/login', { sha: sha('b'), date: threeDaysAgo, subject }), branch('bare')],
+      remote: [branch('origin/main', { date: threeDaysAgo, subject: 'Remote tip' })],
+    });
+    const row = screen.getByRole('button', { name: 'feature/login' });
+    const li = row.closest('li')!;
+    expect(li.querySelector('.srow-trail .srow-rest')).toHaveTextContent('3d');
+    expect(row).toHaveAttribute('title', `feature/login\n${subject} · 3d ago`);
+    expect(row).toHaveAccessibleDescription(`${subject} · 3d ago`);
+    // A diverged branch shows ↓↑ in the slot and keeps the age to the tooltip, so the slot never holds two values.
+    const main = screen.getByRole('button', { name: 'main' }).closest('li')!;
+    expect(main.querySelector('.srow-rest')).toHaveTextContent('↓1 ↑2');
+    expect(main.querySelector('.srow-rest')).not.toHaveTextContent('d');
+    // A branch the daemon sent no tip for keeps its plain name and an empty slot.
+    const bare = screen.getByRole('button', { name: 'bare' });
+    expect(bare).toHaveAttribute('title', 'bare');
+    expect(bare).not.toHaveAttribute('aria-describedby');
+    expect(bare.closest('li')!.querySelector('.srow-rest')).toBeEmptyDOMElement();
+    const remote = screen.getByRole('button', { name: 'origin/main' });
+    expect(remote.closest('li')!.querySelector('.srow-trail .srow-rest')).toHaveTextContent('3d');
+    expect(remote).toHaveAttribute('title', 'origin/main\nRemote tip · 3d ago');
+  });
+
   it('steps a deep branch in by its depth and keeps its full name in its tooltip', async () => {
     const deep = 'team/web/feature/sso/callback';
     await mount({}, { ...BRANCHES, local: [BRANCHES.local[0]!, branch('feature/login', { sha: sha('b') }), branch(deep), branch('team/web/feature/sso/state'), branch('team/web/feature/login'), branch('team/web/fix/x'), branch('team/api/y')] });

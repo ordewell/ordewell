@@ -618,14 +618,15 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
   async function branches(target: ReadTarget): Promise<GitBranchesResponse> {
     const scope = await scopeOf(target);
     const cwd = scope.cwd;
-    const refs = await gitOut(cwd, ['for-each-ref', '--format=%(refname)%00%(objectname)%00%(upstream:short)%00%(upstream:track,nobracket)%00%(HEAD)', 'refs/heads', 'refs/remotes']);
+    const refs = await gitOut(cwd, ['for-each-ref', '--format=%(refname)%00%(objectname)%00%(upstream:short)%00%(upstream:track,nobracket)%00%(HEAD)%00%(committerdate:iso-strict)%00%(contents:subject)', 'refs/heads', 'refs/remotes']);
     const answer: GitBranchesResponse = { repo: scope.at.repo, current: null, detached: false, local: [], ordewell: [], remote: [], stashes: [], worktrees: [] };
     for (const line of refs.split('\n').filter(Boolean)) {
-      const [refname, sha, upstream, track, head] = line.split('\0');
+      // The subject is last and git folds it to one line; NUL cannot occur in a commit message, so no subject can split a field.
+      const [refname, sha, upstream, track, head, date, subject] = line.split('\0');
       const local = refname.startsWith('refs/heads/');
       const name = refname.replace(/^refs\/(heads|remotes)\//, '');
       if (!local && name.endsWith('/HEAD')) continue;
-      const branch: GitBranchInfo = { name, sha, upstream: upstream || null, ...trackOf(track), current: head === '*' };
+      const branch: GitBranchInfo = { name, sha, upstream: upstream || null, ...trackOf(track), current: head === '*', date: date ?? '', subject: subject ?? '' };
       if (branch.current) answer.current = name;
       (local ? (ORDEWELL_REFS.test(name) ? answer.ordewell : answer.local) : answer.remote).push(branch);
     }

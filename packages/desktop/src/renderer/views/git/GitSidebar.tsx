@@ -14,7 +14,7 @@ import {
   type GitContext,
 } from './gitActions';
 import type { BranchInfo, Branches, Owner, WorktreeInfo } from './gitData';
-import { branchTree, plural, repoDisplay, runMark, trackMark, type BranchNode } from './gitModel';
+import { branchTree, plural, repoDisplay, runMark, tipAge, tipSummary, trackMark, type BranchNode } from './gitModel';
 import { gitStoreFor, useGit, type GitStore, type RunInfo } from './gitStore';
 import { HistoryList } from './HistoryList';
 import { SyncBar, type SyncState } from './SyncBar';
@@ -64,27 +64,46 @@ function OwnerLink({ api, runs, owner }: { api: FrameApi; runs: Readonly<Record<
 /** How deep a row sits in its folders, for its indent. */
 const indent = (depth: number): CSSProperties => ({ '--git-depth': depth } as CSSProperties);
 
+/**
+ * The tip's age, or how far a branch is from its upstream, for the row's one
+ * rest value. A diverged branch shows ↓↑ and any other its age, never both:
+ * a slot that holds one short value keeps the same width whichever the row
+ * shows, so the name does not reflow from row to row or under the pointer
+ * (O4 and Layout rule 4), and at the sidebar's 240 px minimum two values side
+ * by side would take the room the name needs. A diverged branch is the one
+ * whose count is the news; the age is still in its tooltip.
+ */
+function RestNote({ branch }: { branch: BranchInfo }): JSX.Element | null {
+  const mark = trackMark(branch);
+  if (mark) return <span className="srow-note" aria-label={`${plural(branch.behind, 'commit')} behind, ${plural(branch.ahead, 'commit')} ahead`}>{mark}</span>;
+  const age = tipAge(branch);
+  return age ? <span className="srow-note" aria-hidden="true">{age}</span> : null;
+}
+
+/** The name, then the tip's subject and age: a row's tooltip and, through `aria-describedby`, its description. */
+const branchTitle = (branch: BranchInfo, lead = branch.name): string => [lead, tipSummary(branch)].filter(Boolean).join('\n');
+
 /*
  * A branch of the person's own. Past its name sits one trailing slot
- * (sidebarKit.css .srow-trail): at rest it shows how far the branch is behind
- * and ahead of its upstream, and under the pointer or keyboard focus Switch and
- * Delete take the same box, so the name gives up only the wider of the two.
+ * (sidebarKit.css .srow-trail): at rest it shows RestNote, and under the
+ * pointer or keyboard focus Switch and Delete take the same box, so the name
+ * gives up only the wider of the two.
  */
 function LocalRow({ ctx, branch, viewing, label = branch.name, depth = 0 }: { ctx: GitContext; branch: BranchInfo; viewing: boolean; label?: string; depth?: number }): JSX.Element {
-  const mark = trackMark(branch);
   const held = runMark(branch);
   const hold = branch.landingFor && held ? `A live run lands on ${branch.name}` : undefined;
+  const tip = tipSummary(branch);
+  const tipId = useId();
   return (
     <li className={`srow git-branch${viewing ? ' git-viewing' : ''}`} style={indent(depth)} aria-current={branch.current ? 'true' : undefined}>
-      <button type="button" className="srow-main" aria-label={branch.name} {...viewingProps(viewing)} title={branch.upstream ? `${branch.name} tracks ${branch.upstream}` : branch.name} onClick={() => gitStoreFor(ctx.api).browse(ctx.repo, branch.name)}>
+      <button type="button" className="srow-main" aria-label={branch.name} {...viewingProps(viewing)} aria-describedby={tip ? tipId : undefined} title={branchTitle(branch, branch.upstream ? `${branch.name} tracks ${branch.upstream}` : branch.name)} onClick={() => gitStoreFor(ctx.api).browse(ctx.repo, branch.name)}>
         <span className="git-lead">{branch.current ? <Icon icon={Check} size={14} /> : <Icon icon={GitBranch} size={14} />}</span>
         <MiddleText className="srow-label" text={label} />
       </button>
+      {tip && <span id={tipId} hidden>{tip}</span>}
       {hold && <span className="git-lock" title={hold}><Icon icon={Lock} size={12} /><span>{held}</span></span>}
       <span className="srow-trail">
-        <span className="srow-rest">
-          {mark && <span className="srow-note" aria-label={`${plural(branch.behind, 'commit')} behind, ${plural(branch.ahead, 'commit')} ahead`}>{mark}</span>}
-        </span>
+        <span className="srow-rest"><RestNote branch={branch} /></span>
         {!branch.current && (
           <span className="srow-actions">
             <IconButton icon={ArrowRightLeft} label={`Switch to ${branch.name}`} onClick={() => void switchBranch(ctx, branch.name)} />
@@ -189,12 +208,16 @@ function OrdewellRow({ api, repo, branch, runs, viewing, integration, label = br
 }
 
 function RemoteRow({ api, repo, branch, viewing, label = branch.name, depth = 0 }: { api: FrameApi; repo: string; branch: BranchInfo; viewing: boolean; label?: string; depth?: number }): JSX.Element {
+  const tip = tipSummary(branch);
+  const tipId = useId();
   return (
     <li className={`srow${viewing ? ' git-viewing' : ''}`} style={indent(depth)}>
-      <button type="button" className="srow-main" aria-label={branch.name} {...viewingProps(viewing)} title={branch.name} onClick={() => gitStoreFor(api).browse(repo, branch.name)}>
+      <button type="button" className="srow-main" aria-label={branch.name} {...viewingProps(viewing)} aria-describedby={tip ? tipId : undefined} title={branchTitle(branch)} onClick={() => gitStoreFor(api).browse(repo, branch.name)}>
         <span className="git-lead"><Icon icon={Cloud} size={16} /></span>
         <MiddleText className="srow-label" text={label} />
       </button>
+      {tip && <span id={tipId} hidden>{tip}</span>}
+      <span className="srow-trail"><span className="srow-rest"><RestNote branch={branch} /></span></span>
     </li>
   );
 }
