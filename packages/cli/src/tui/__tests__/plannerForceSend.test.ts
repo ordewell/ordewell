@@ -223,13 +223,13 @@ describe('what the planner chat shows for force send', () => {
 });
 
 describe('what the task view shows for force send', () => {
-  it('names ctrl-s on the selected queued row, and sending now once forced', () => {
+  it('names Esc and send-all on the newest queued row, ctrl-r on the picked one, and sending now once forced', () => {
     const state = initialState({
       sessionId: 's1', rows: 30, cols: 200, tasks: [task()],
       taskView: log([{ id: 'm1', text: 'use Postgres' }, { id: 'm2', text: 'stop now', forced: true }]),
     });
     const out = plain(state);
-    expect(out).toContain('use Postgres · queued · ctrl-s sends now · ctrl-r removes');
+    expect(out).toContain('use Postgres · queued · esc takes back · ctrl-s sends all now · ctrl-r removes');
     expect(out).toContain('stop now · sending now…');
   });
 });

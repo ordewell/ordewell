@@ -139,7 +139,7 @@ and completion evidence.
   switch ([ADR-0041](../routing/0041-a-tasks-model-follows-the-runners-own-switch.md)).
   Ordewell's run and plan commands are neither offered nor run
   there; they stay on the plan pane, its keys and the planner chat, and Esc
-  still leaves the view. Claude Code (checked on 2.1.299): the `initialize`
+  still leaves the view once nothing queued is left to take back. Claude Code (checked on 2.1.299): the `initialize`
   control request lists every command with its description, argument hint,
   aliases and a `builtin` flag before any turn; each turn's `init` names the
   skills, the commands only its own TUI runs (left out) and the MCP servers;
@@ -364,8 +364,13 @@ and completion evidence.
   requests cannot be answered.
 - **Surfaces (V1, #57).** In the TUI, Enter on a task in the plan pane
   swaps the chat pane to the task view: a distinct accent colour, a state
-  header, a `→ Task N` composer label whose `/` is the runner's (R1), and Esc
-  to return. In VS Code each task
+  header, a `→ Task N` composer label whose `/` is the runner's (R1), and Esc,
+  which acts on the queue first: it takes back the newest message the runner
+  has not been handed (into the composer only when that is empty; otherwise
+  it is dropped), then clears the draft, and returns to the plan only once
+  neither is left. A take-back the runner beat is refused, and the text Esc put
+  in the composer comes out again. Send now (ctrl-s) delivers everything
+  queued at once, the composer text last, as the planner chat's does. In VS Code each task
   that has started an attempt has an editor tab opened on demand ("Open
   chat"); a task never run has no chat, and the control is absent. It never
   opens automatically, reopening focuses it, and closing it never affects the
@@ -526,3 +531,4 @@ transport is retained for take-over.
 - 2026-10-31 — K1: a continue waits on a task's dependencies and merge gate as a retry does.
 - 2026-10-31 — U1: an edit making a paused task manual ends its pause as it lands; Execute, a planner's `run_plan` and signing off the review start nothing under a hold and take no resume back, and the reset gives back the plan's run.
 - 2026-11-04 — S3: GitHub Copilot CLI runs through the ACP connector; C2: an ACP runner takes the contract through its own channel or a first-prompt preamble (ADR-0060).
+- 2026-11-10 — V1: in the TUI task view Esc takes back the newest queued message before it clears the draft or returns, and send now sends the whole queue, as the planner chat's keys do.

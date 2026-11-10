@@ -168,6 +168,75 @@ describe('speaking to the viewed subplanner', () => {
   });
 });
 
+// A subplanner's turn has no stop here, so what is typed while it answers is
+// held on screen and goes when the turn ends, as the planner chat's queue does.
+describe('words held while the subplanner answers', () => {
+  const turn = (type: 'planner_turn_started' | 'planner_turn_ended'): Action => ({
+    type: 'sessionMessage', sessionId: 'c1',
+    message: type === 'planner_turn_started' ? { type, turnId: 't1' } : { type, turnId: 't1', outcome: 'message' },
+  });
+  const answering = (): TuiState => step(inChild(), turn('planner_turn_started'));
+  const held = (state: TuiState, ...texts: string[]): TuiState => texts.reduce((s, text) => step(typed(s, text), key('enter')), state);
+
+  it('enter holds the message, the screen shows it, and the turn\'s end sends it', () => {
+    const { state, effects } = reduce(typed(answering(), 'also check the docs'), key('enter'));
+
+    expect(effects).toEqual([]);
+    expect(state.queuedPrompts).toEqual(['also check the docs']);
+    expect(said(state)).not.toContain('also check the docs');
+    expect(state.editor.text).toBe('');
+    expect(screen(state)).toMatch(/also check the docs · queued/);
+
+    const ended = reduce(state, turn('planner_turn_ended'));
+    expect(ended.effects).toEqual([{ type: 'messageChild', rootId: 'root', childId: 'c1', text: 'also check the docs' }]);
+    expect(ended.state.queuedPrompts).toEqual([]);
+  });
+
+  it('esc takes back the newest held message, then the draft, then goes back up', () => {
+    const two = held(answering(), 'first', 'second');
+
+    const taken = step(two, key('escape'));
+    expect(taken.sessionId).toBe('c1');
+    expect(taken.queuedPrompts).toEqual(['first']);
+    expect(taken.editor.text).toBe('second');
+
+    // The composer holds words now, so the next one taken back is dropped rather than heaped on them.
+    const dropped = step(taken, key('escape'));
+    expect(dropped.queuedPrompts).toEqual([]);
+    expect(dropped.editor.text).toBe('second');
+
+    const cleared = step(dropped, key('escape'));
+    expect(cleared.sessionId).toBe('c1');
+    expect(cleared.editor.text).toBe('');
+
+    expect(step(cleared, key('escape')).sessionId).toBe('root');
+  });
+
+  it('names taking back and sending all in the footer while a message is held, as the planner chat does', () => {
+    const hints = footerHints(held(answering(), 'also check the docs'));
+
+    expect(hints.join(' · ')).toContain('esc takes back the newest · ctrl-s sends all now');
+    expect(hints).not.toContain('esc back');
+  });
+
+  it('ctrl-s sends everything held at once, in the order typed, the composer last', () => {
+    const { state, effects } = reduce(typed(held(answering(), 'first', 'second'), 'third'), key('ctrl-s'));
+
+    expect(effects).toEqual([{ type: 'messageChild', rootId: 'root', childId: 'c1', text: 'first\nsecond\nthird' }]);
+    expect(state.queuedPrompts).toEqual([]);
+    expect(state.editor.text).toBe('');
+    expect(said(state)).toContain('first\nsecond\nthird');
+  });
+
+  it('ctrl-s sends the composer at once while the turn runs, rather than holding it', () => {
+    expect(effectsOf(typed(answering(), 'now please'), key('ctrl-s'))).toEqual([{ type: 'messageChild', rootId: 'root', childId: 'c1', text: 'now please' }]);
+  });
+
+  it('enter sends at once when no turn runs', () => {
+    expect(effectsOf(typed(inChild(), 'hello'), key('enter'))).toEqual([{ type: 'messageChild', rootId: 'root', childId: 'c1', text: 'hello' }]);
+  });
+});
+
 describe('a child\'s task view', () => {
   const inTask = (): TuiState => step(step(step(inChild(), key('tab')), key('down')), key('enter'));
 
@@ -560,6 +629,16 @@ describe('what the daemon refuses', () => {
     expect(state.editor.text).toBe('half a thought');
     expect(said(state)).toMatch(/That plan is gone/);
     expect(effects).toEqual([{ type: 'closeChild', childId: 'c1' }]);
+  });
+
+  it('words held for a gone child go up with its draft, in the order typed', () => {
+    const answering = step(inChild(), { type: 'sessionMessage', sessionId: 'c1', message: { type: 'planner_turn_started', turnId: 't1' } });
+    const holding = step(typed(answering, 'held first'), key('enter'));
+
+    const state = step(typed(holding, 'half a thought'), { type: 'childGone', sessionId: 'c1', message: 'That plan is gone.' });
+
+    expect(state.sessionId).toBe('root');
+    expect(state.editor.text).toBe('held first\nhalf a thought');
   });
 
   it('that draft goes ahead of the one waiting there, and behind any refused words', () => {
@@ -960,7 +1039,8 @@ describe('the help sheets', () => {
     const sheet = helpLayout(80, 160).lines.join('\n');
 
     expect(sheet).toContain('In a subplanner (enter on a delegated task)');
-    expect(sheet).toContain('esc goes back one plan');
+    expect(sheet).toContain('esc takes back the newest held message, then clears the draft, then goes back one plan');
+    expect(sheet).toContain('while the subplanner answers, enter holds a message until its turn ends · ctrl-s sends everything held at once, without interrupting it');
     expect(sheet).toContain('ended');
     expect(sheet).toContain('/stop stops the whole run');
   });

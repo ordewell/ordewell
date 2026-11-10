@@ -1,8 +1,8 @@
 import { observeTaskServedModel } from '../accountLimits';
-import { EMPTY_TASK_LOG_FOLLOW, followTaskLog, parseCount, resumeLabel, runnerToolSubject, taskRowView, truncateCheckpointSummary, type ApprovalDecision } from '@ordewell/core';
+import { EMPTY_TASK_LOG_FOLLOW, followTaskLog, parseCount, resumeLabel, runnerToolSubject, taskRowView, truncateCheckpointSummary, type ApprovalDecision, type QueuedTaskMessage } from '@ordewell/core';
 import { commit } from '../editor';
 import type { Key } from '../keys';
-import { continuesTask, findTask, refFor, queuedTarget, resumesTask, scriptTaskView, waitingApproval, waitingCheckpoint, type TaskLogState, type TuiState } from '../state';
+import { continuesTask, findTask, newestRemovable, refFor, queuedTarget, removable, resumesTask, scriptTaskView, waitingApproval, waitingCheckpoint, type TaskLogState, type TuiState } from '../state';
 import { say } from '../transcript';
 import { fail, step, type Step, type Action } from './shared';
 
@@ -45,11 +45,54 @@ export function continueTaskStep(state: TuiState, sessionId: string, taskId: str
   return step(opened.state, [...opened.effects, { type: 'continueTask', sessionId, taskId, text, ...(watch ? { watch: true } : {}) }]);
 }
 
+/** The queue's own bookkeeping once the log moved it: the pick stays on a row, and a removal the log has shown is no longer awaited. */
 function clampQueueIndex(tv: TaskLogState): TaskLogState {
-  if (tv.queuedIndex === null) return tv;
-  if (tv.view.queued.length === 0) return { ...tv, queuedIndex: null };
-  const max = tv.view.queued.length - 1;
-  return tv.queuedIndex <= max ? tv : { ...tv, queuedIndex: max };
+  const removing = tv.removing?.filter((id) => tv.view.queued.some((m) => m.id === id));
+  const settled = removing && removing.length !== tv.removing?.length ? { ...tv, removing } : tv;
+  if (settled.queuedIndex === null) return settled;
+  if (settled.view.queued.length === 0) return { ...settled, queuedIndex: null };
+  const max = settled.view.queued.length - 1;
+  return settled.queuedIndex <= max ? settled : { ...settled, queuedIndex: max };
+}
+
+/**
+ * Asks the daemon to take a queued message back. Its row goes only when the
+ * log says so; `fill` puts its text in the composer meanwhile, which a refusal
+ * takes out again (see `taskMessageKept`).
+ */
+function askRemoval(state: TuiState, tv: TaskLogState, sessionId: string, message: QueuedTaskMessage, fill: boolean): Step {
+  const editor = fill
+    ? { ...state.editor, text: message.text, cursor: message.text.length, historyIndex: state.editor.history.length, draft: '' }
+    : state.editor;
+  return step({ ...state, editor, taskView: { ...tv, removing: [...(tv.removing ?? []), message.id] } }, [
+    { type: 'removeTaskMessage', sessionId, taskId: tv.taskId, messageId: message.id, ...(fill ? { filled: message.text } : {}) },
+  ]);
+}
+
+/**
+ * Esc on a task's queue: the newest message the runner can still give back
+ * comes out of it, into the composer only while that is empty, else it is
+ * dropped. Null when there is none, so Esc goes on to the draft and the way
+ * back. A child's queue has no route for removal, so its Esc is the way back.
+ */
+export function takeBackNewest(state: TuiState): Step | null {
+  const tv = state.taskView;
+  if (!tv || !state.sessionId || state.child || scriptTaskView(state)) return null;
+  const newest = tv.view.queued[newestRemovable(tv)];
+  return newest ? askRemoval(state, tv, state.sessionId, newest, !state.editor.text.trim()) : null;
+}
+
+/**
+ * The runner took the message before the removal reached it. The words Esc
+ * put in the composer come out again, unless the person has typed over them,
+ * since keeping them would send the message twice.
+ */
+export function taskMessageKept(state: TuiState, action: Extract<Action, { type: 'taskMessageKept' }>): TuiState {
+  const editor = action.filled !== undefined && state.editor.text === action.filled ? { ...state.editor, text: '', cursor: 0 } : state.editor;
+  const tv = state.taskView;
+  if (!tv || tv.taskId !== action.taskId) return say({ ...state, editor }, 'system', action.message);
+  const removing = tv.removing?.filter((id) => id !== action.messageId);
+  return { ...state, editor, taskView: { ...tv, removing, notice: action.message } };
 }
 
 export function taskLogAbandoned(state: TuiState): TuiState {
@@ -150,9 +193,10 @@ function answerWaiting(state: TuiState, tv: TaskLogState, sessionId: string, dec
 
 /**
  * Force send (ADR-0023, F1): the composer's text or, with the composer empty,
- * the selected queued message — interrupting the running turn to go next.
- * One key for both, so sending now is always the same reach whichever
- * message it is.
+ * the oldest queued message the runner can still be handed, interrupting the
+ * running turn to go next. The daemon glues the rest of the queue behind
+ * either, in the order typed, so send now sends everything waiting at once and
+ * a pick has nothing to choose.
  */
 function sendNow(state: TuiState, tv: TaskLogState, sessionId: string): Step {
   const text = state.editor.text.trim();
@@ -165,8 +209,8 @@ function sendNow(state: TuiState, tv: TaskLogState, sessionId: string): Step {
     }
     return step({ ...state, editor: commit(state.editor) }, [{ type: 'forceSendTaskMessage', sessionId, taskId: tv.taskId, text }]);
   }
-  const queued = tv.view.queued[queuedTarget(tv)];
-  if (!queued) return step(say(state, 'system', 'Nothing to send now: type a message, or pick a queued one with ctrl-n/ctrl-p.'));
+  const queued = tv.view.queued.find((m) => removable(tv, m));
+  if (!queued) return step(say(state, 'system', 'Nothing to send now: type a message first.'));
   // The forced message moves to the head of the queue, so a pick by index
   // would land on another one; the default follows the newest instead.
   return step({ ...state, taskView: { ...tv, queuedIndex: null } }, [
@@ -205,7 +249,8 @@ export function handleTaskViewKey(state: TuiState, key: Key): Step | null {
     const queued = tv.view.queued[queuedTarget(tv)];
     if (!queued) return step(say(state, 'system', 'No queued message to remove.'));
     if (queued.handedOver) return step(say(state, 'system', 'The runner already has that message; it can no longer be taken back.'));
-    return step(state, [{ type: 'removeTaskMessage', sessionId: state.sessionId, taskId: tv.taskId, messageId: queued.id }]);
+    if (tv.removing?.includes(queued.id)) return step(state);
+    return askRemoval(state, tv, state.sessionId, queued, false);
   }
 
   if (key.name === 'ctrl-s') return sendNow(state, tv, state.sessionId);

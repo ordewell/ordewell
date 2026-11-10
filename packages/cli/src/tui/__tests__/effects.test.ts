@@ -2578,9 +2578,9 @@ describe('a structured task\'s log, messages and interrupt', () => {
     const refusal = new DaemonError('That message to task #1 "Build" was already delivered or taken back.', 400, 'refused');
     const h = harness({ execute: vi.fn().mockRejectedValue(refusal) });
 
-    await runEffect({ type: 'removeTaskMessage', sessionId: 's1', taskId: 't1', messageId: 'm1' }, h.deps);
+    await runEffect({ type: 'removeTaskMessage', sessionId: 's1', taskId: 't1', messageId: 'm1', filled: 'use Postgres' }, h.deps);
 
-    expect(h.actions).toEqual([{ type: 'failed', message: refusal.message, code: 'refused' }]);
+    expect(h.actions).toEqual([{ type: 'taskMessageKept', sessionId: 's1', taskId: 't1', messageId: 'm1', filled: 'use Postgres', message: refusal.message }]);
   });
 
   it('continues a finished task, holding the execution stream open when asked to watch (ADR-0018, K1)', async () => {
