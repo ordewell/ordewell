@@ -1,6 +1,6 @@
 import * as path from 'path';
 import { resolveDefaultMode, taggedReadOnlyMode, unavailableTaskModeMessage } from './ModeResolver';
-import { McpAttachError, McpAttachTimeout, RunnerStartupExit } from './harness/ordewellBinding';
+import { McpAttachError, McpAttachTimeout, RunnerStartupExit, SessionNotResumable } from './harness/ordewellBinding';
 import type { RunnerId, Task, TaskOutputSummary, TaskSkillSnapshot, Verdict } from '../models/Task';
 import type { INotification } from '../interfaces/INotification';
 import type { IRunner, IRunnerSession, QueuedTaskMessage, StructuredTurnEnd } from '../interfaces/IRunner';
@@ -168,6 +168,8 @@ interface TaskAttempt extends EndedAttempt {
   readonly hold: BudgetHold | null;
   /** What its lease opened, which the attempt's result is read from (L2); null until then. */
   opened: OpenLease | null;
+  /** The runner session last saved on its task while it runs; unset until its runner is seated. */
+  noted?: string | null;
   /**
    * Whether what ended it keeps its worktree (ADR-0013): a cancel or a Stop
    * does. Its ender could not reach a workspace still being made, so the
@@ -865,7 +867,7 @@ export class Attempts {
       attempt.attaching = null;
       attempt.session = session;
       // A child's id is written as it is seated, and is what a crash leaves to reopen or discard it by, a repair or no (ADR-0055 D17).
-      if (task.type !== 'delegated') store.setTaskRunnerSessionId(task.id, undefined);
+      if (task.type !== 'delegated') this.noteNativeSession(task, attempt, session);
       store.clearCarriedFrom(task.id);
       if (kind.kind === 'carryOver' && previousWork?.outcome === 'fallback') {
         this.host.tell('warn', `Task "${task.title}" starts fresh on ${attempt.runner}: the work its paused attempt on ${kind.from} left conflicts with the integration tip, so it was not carried over. It is kept on branch ${quotedList([...new Set(previousWork.preserved.map((kept) => kept.branch))])}.`);
@@ -912,6 +914,24 @@ export class Attempts {
       }
     });
     session.onTurnEnd((reason) => this.turnEnded(task.id, attempt, session, reason));
+    // The runner names its session once it has begun, and no event says when.
+    if (task.type !== 'delegated') session.onEvent(() => this.noteNativeSession(task, attempt, session));
+  }
+
+  /**
+   * The runner's session is saved on the task as soon as it reports one, not
+   * only as the attempt ends: an Ordewell that dies unasked ends no attempt,
+   * and a restart reads only what was saved (ADR-0018 K1). What is saved is
+   * what the lease exports, as at the end (ADR-0059 L2).
+   */
+  private noteNativeSession(task: Task, attempt: TaskAttempt, session: IRunnerSession): void {
+    if (attempt.planScope !== this.planScope || this.live.get(task.id) !== attempt) return;
+    const reported = session.nativeSessionId();
+    if (attempt.noted !== undefined && attempt.noted === reported) return;
+    attempt.noted = reported;
+    const nativeSessionId = reported && attempt.opened ? attempt.opened.exportResult({ runner: attempt.runner, nativeSessionId: reported }).sessionState.nativeSessionId : reported;
+    this.deps.store.setTaskRunnerSessionId(task.id, nativeSessionId ?? undefined, attempt.runner);
+    this.host.emit('onTaskChanged');
   }
 
   /** Only the task's current attempt shows a receipt: a runner from an earlier one, still winding down, changes nothing. */
@@ -963,10 +983,14 @@ export class Attempts {
     if (attempt.kind.kind === 'continuation' && !attachTimeout) {
       // A runner that exits while starting on a saved session has refused it.
       const refused = err instanceof RunnerStartupExit;
-      const reason = unresumedMessage(task, refused ? `${attempt.runner} could not find its saved session` : `could not start: ${message}`);
-      if (refused) this.deps.store.setTaskRunnerSessionId(task.id, undefined);
+      const unresumable = err instanceof SessionNotResumable;
+      const reason = unresumedMessage(task, refused ? `${attempt.runner} could not find its saved session`
+        : unresumable ? `${attempt.runner} cannot resume a saved session`
+        : `could not start: ${message.replace(/\.$/, '')}`);
+      // Kept, either would only offer the same Continue to fail again.
+      if (refused || unresumable) this.deps.store.setTaskRunnerSessionId(task.id, undefined);
       // A child stays until a fresh attempt gives it up: its record is what the next Continue reopens it by (ADR-0055 D17).
-      return failed({ leaves: 'failed', summary: summarizeOutput(reason, refused ? message : ''), keepWorktree: task.type === 'delegated', notice: { level: 'error', text: reason, toastOnly: true } });
+      return failed({ leaves: 'failed', summary: summarizeOutput(reason, refused || unresumable ? message : ''), keepWorktree: task.type === 'delegated', notice: { level: 'error', text: reason, toastOnly: true } });
     }
     if (attempt.kind.kind === 'repair') return failed({ leaves: 'conflict', why: `could not start: ${message}` });
     if (attachTimeout) {

@@ -219,8 +219,11 @@ and completion evidence.
   there once the interrupt grace runs out is killed. A continue waits on that
   wind-down (K1). A plan adopted under it is a new scope: what the old runner still
   reports is dropped, never written to a task of the new plan that reuses its
-  id. The native session id is saved per attempt, with the count of its
-  cost the session ended on.
+  id. The native session id is saved on the task as soon as the runner reports
+  it, and again as the attempt ends, with the count of its cost the session
+  ended on: an Ordewell that dies unasked winds nothing down, and a restart
+  reads only what was saved, so a task it was running is still continued in
+  that session.
 - **Continue (K1).** A retry that resumes the saved native session with the
   user's message as the next turn. It is verified and landed like any attempt.
   It is offered on completed and failed structured tasks with a saved session
@@ -232,7 +235,10 @@ and completion evidence.
   are left alone, as with retry, and unfinished dependencies or a merge gate
   refuse it as they refuse a retry. If the runner
   refuses the resume, the attempt fails; no fresh session is started in its
-  place. In an isolated run the task workspace is recreated at the same path
+  place. An agent that offers no way back into a session (an ACP agent with
+  neither `session/resume` nor `session/load`) is known only once it has
+  started: the continue fails saying the runner cannot resume a saved session
+  and that Retry starts the task afresh, and the saved session is dropped. In an isolated run the task workspace is recreated at the same path
   from the current integration tips, then the previous attempt's unlanded work
   is merged into it. Before removing the kept worktrees, Ordewell commits
   uncommitted edits, including new files and deletions, to rescue commits and
@@ -533,3 +539,4 @@ transport is retained for take-over.
 - 2026-10-31 — U1: an edit making a paused task manual ends its pause as it lands; Execute, a planner's `run_plan` and signing off the review start nothing under a hold and take no resume back, and the reset gives back the plan's run.
 - 2026-11-04 — S3: GitHub Copilot CLI runs through the ACP connector; C2: an ACP runner takes the contract through its own channel or a first-prompt preamble (ADR-0060).
 - 2026-11-10 — W1: a tool call in flight pauses the idle timer until its result or its turn's end; each idle flag in an attempt doubles the silence the next one needs.
+- 2026-11-10 — K1: the native session id is saved as soon as the runner reports it, so a task interrupted by Ordewell stopping can be continued; an agent that cannot resume fails the continue in plain words and points to Retry.

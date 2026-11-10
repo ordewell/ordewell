@@ -30,7 +30,7 @@ import { acpAsk, acpRoles, decideRestricted } from './acpRoles';
 import { PermissionLedger, type LedgerStance } from './permissionLedger';
 import { readOnlyTask } from './plannerPermissions';
 import { instructionsBlock, isRecord } from './repoConfig';
-import { awaitAttach, listed, MCP_ATTACH_TIMEOUT_MS, type AttachState } from './ordewellBinding';
+import { awaitAttach, listed, MCP_ATTACH_TIMEOUT_MS, SessionNotResumable, type AttachState } from './ordewellBinding';
 import { settleWithin } from './settleWithin';
 import { compareVersions } from '../../utils/version';
 import { describeSignIn, signInOf, TERMINAL_UI_SIGN_IN } from '../signInHint';
@@ -474,7 +474,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
   private async resumeSession(started: Started, id: string): Promise<void> {
     const { sessionCapabilities, loadSession } = this.capabilities;
     const method = sessionCapabilities?.resume ? 'session/resume' : loadSession ? 'session/load' : null;
-    if (!method) throw new Error(`${this.name} could not resume session ${id}: it offers neither session/resume nor session/load.`);
+    if (!method) throw new SessionNotResumable(`${this.name} could not resume session ${id}: it offers neither session/resume nor session/load.`);
     this.sessionId = id;
     const resumed = await this.setupCall(method, {
       sessionId: id,

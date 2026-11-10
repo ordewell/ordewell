@@ -44,6 +44,18 @@ export class RunnerStartupExit extends Error {
   }
 }
 
+/**
+ * A runner whose agent offers no way to take a saved session up again, found
+ * only once it has said what it can: a Continue it was started for cannot
+ * happen on it, now or later (ADR-0018 K1).
+ */
+export class SessionNotResumable extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SessionNotResumable';
+  }
+}
+
 /** Which token's tools a runner is handed (ADR-0022, A1); a read-only task's add `run_command`, `fetch` and `web_search` (ADR-0046). */
 export type OrdewellToolRole = 'task' | 'readOnlyTask' | 'planner';
 

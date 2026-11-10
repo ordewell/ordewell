@@ -30,7 +30,9 @@
  *
  * A `session/cancel` answers the open prompt with stopReason `cancelled`, and
  * the work it began stops with it. With FAKE_ACP_LOG set, every prompt, tool
- * call and reply is appended to that file as a line of JSON.
+ * call and reply is appended to that file as a line of JSON. With
+ * FAKE_ACP_NO_RESUME set, it offers neither session/resume nor session/load, as
+ * an agent that cannot take a saved session up again.
  *
  * The planner half is here for a driver that starts copilot-cli as the
  * planner. The pipeline plans through its API planner, so it exercises this
@@ -44,6 +46,7 @@ import { randomUUID } from 'node:crypto';
 const CUE = /<fake-acp>([\s\S]*?)<\/fake-acp>/;
 const MCP_PROTOCOL_VERSION = '2025-06-18';
 const cwd = process.cwd();
+const resumable = !process.env.FAKE_ACP_NO_RESUME;
 
 const sessions = new Map();
 const agentRequests = new Map();
@@ -422,10 +425,10 @@ async function handleRequest(id, method, params) {
         protocolVersion: 1,
         agentInfo: { name: 'fake-acp', title: 'Fake ACP Agent', version: '1.0.105' },
         agentCapabilities: {
-          loadSession: true,
+          ...(resumable ? { loadSession: true } : {}),
           promptCapabilities: { image: false, audio: false, embeddedContext: false },
           mcpCapabilities: { http: true, sse: false },
-          sessionCapabilities: { resume: {}, close: {} },
+          sessionCapabilities: resumable ? { resume: {}, close: {} } : { close: {} },
         },
       });
       return;
