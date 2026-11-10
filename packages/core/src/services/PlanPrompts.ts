@@ -178,12 +178,12 @@ export function inTurnAgents(harness: boolean, runner?: RunnerId, subagents = tr
  * prompt (#33, #112) can include it unchanged.
  */
 export function whoExploresSection(agents: InTurnAgents): string[] {
-  const wider = 'mapping a subsystem, a question that means reading across several files, a comparison';
+  // A count the planner can check mid-turn: left to judge "a wider question", planners read whole packages themselves (ADR-0037 R5).
+  const trigger = 'before you read across more than one package or directory tree, or past about ten reads for one question';
   const agentTier = agents === null
-    ? `- Your own reads, past that: you have no agents of your own here, so a wider question you need this turn (${wider}) is yours to read too. Keep only its conclusion, and give anything larger a task.`
+    ? `- A research task, past that: ${trigger}, give each package or independent question a research task, so only their reports reach you. You have no agents of your own here: research tasks are how you delegate.`
     : [
-      `- An agent, awaited: ${wider}. ${agents === 'spawn_research_agent' ? 'Use spawn_research_agent, whose agents return within your tool round.' : `Use ${agents} and wait for its results inside this reply, never in the background: once your turn ends, nothing you say reaches the user.`}`,
-      'One agent per independent question, several in parallel; a question whose parts depend on each other stays with one. One agent for a fact, two to four for a comparison, more only for broad research.',
+      `- An agent, awaited, past that: ${trigger}, send agents, one per package or independent question, in parallel, so only their digests reach you; a question whose parts depend on each other stays with one. ${agents === 'spawn_research_agent' ? 'Use spawn_research_agent, whose agents return within your tool round.' : `Use ${agents} and wait for its results inside this reply, never in the background: once your turn ends, nothing you say reaches the user.`}`,
       'Each returns a digest of about 1-2k tokens: conclusion first, file:line references, decisions found, what is uncertain; no pasted file bodies.',
     ].join(' ');
   return [
@@ -381,6 +381,13 @@ const SHARED_APPEND_FILE_RULE =
   '- Tasks that run in parallel must not each append to the same shared file (changelogs, registries, index lists) — give that edit to the final task, or to one task the others depend on.';
 
 /**
+ * A harness planner's agents are withheld exactly when its mandate lacks
+ * `research` (ADR-0056 M6), so it has no research tasks to delegate to either:
+ * what is wider than its own reads it reads too, or gives a task.
+ */
+const NO_RESEARCH_TIER: readonly [RegExp, string] = [/^- A research task, past that: .*$/m, '- Your own reads, past that: you have no agents of your own here and no research tasks, so a wider question you need this turn is yours to read too. Keep only its conclusion, and give anything larger a task.'];
+
+/**
  * What a planner must know about a repo group (ADR-0014), as a section of its
  * own; nothing for tasks in the shared root or a lone repository with nothing
  * shared, whose prompts stay as they were. The repos are named as the workspace
@@ -423,7 +430,8 @@ export function buildConversationSystemPrompt(
 ): string {
   const modelsJson = modelsJsonFor(modelsByRunner, runners);
   const body = buildConversationBody(goal, context, modelsJson, runners, readOnlyGuide(runnerModes, variant.harness ?? false, true), variant);
-  return variant.subplanner ? asSubplanner(body, variant.subplanner, modelsByRunner) : body;
+  const tiered = variant.harness && variant.subagents === false ? body.replace(...NO_RESEARCH_TIER) : body;
+  return variant.subplanner ? asSubplanner(tiered, variant.subplanner, modelsByRunner) : tiered;
 }
 
 /**

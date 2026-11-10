@@ -230,7 +230,8 @@ describe('CliAgentAiService — Claude Code', () => {
     expect(disallowed.includes('Task')).toBe(withheld);
     const prompt = args[args.indexOf('--append-system-prompt') + 1];
     expect(prompt.includes('your Agent tool')).toBe(!withheld);
-    if (withheld) expect(prompt).toContain('you have no agents of your own here');
+    if (withheld) expect(prompt).toContain('you have no agents of your own here and no research tasks');
+    expect(prompt).not.toContain('research tasks are how you delegate');
   });
 
   describe('a subplanner\'s own process (ADR-0057 R11)', () => {
