@@ -131,8 +131,9 @@ and never touches the run's tasks.**
   ends as a plain interrupt does (M1). A delivered message has left the
   queue, so there is nothing to send now; force sending one already forced
   changes nothing. The surfaces: `ctrl-s` in the TUI task view (the composer
-  text, or the selected queued message when the composer is empty), *Send now* and
-  `Ctrl+Enter` in the VS Code task log, and the daemon's `execute-command` route
+  text, or the oldest queued message when the composer is empty; either sends the
+  whole queue), *Send all now* and `Ctrl+Enter` in the task log, which draw the
+  planner chat's queue control, and the daemon's `execute-command` route
   carrying `message_task` with `force` or `force_send_queued`. The planner chat's force send is
   F5.
 - **The forced message goes first; the rest keep their order (F2).** What
@@ -404,3 +405,4 @@ interrupt (D4 covers it either way).
 - 2026-10-26 — F5: a force send keeps what the stopped turn's tool calls already committed; nothing is deferred behind an edit (ADR-0022, P2).
 - 2026-11-04 — ACP runners take the turn-end queue, with `session/cancel` then `session/prompt` for force send (ADR-0060).
 - 2026-11-10 — F1, F2, F5: a force send and a turn's end glue everything the person queued into one message, instead of sending held messages one at a time.
+- 2026-11-10 — F1: the task log draws the planner chat's queue control ("Send all now") instead of a bar of its own, and the TUI's ctrl-s with an empty composer sends the oldest queued message and so the whole queue, whatever row is picked.
