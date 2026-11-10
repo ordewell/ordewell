@@ -450,7 +450,7 @@ export abstract class BaseFileSystem implements IFileSystem {
       // mode refuses whatever would ask (ADR-0046).
       const standing = approval.peek?.(request);
       if (standing?.decision === 'deny' && standing.source === 'mode' && await site.sandbox.canSeal()) return this.runSealed(site, command, request, 'refused', signal);
-      if (!(await approval.request(request))) {
+      if (!(await (signal ? approval.request(request, { signal }) : approval.request(request)))) {
         if (site.task) return refusal(`Command not run: ${command}\n${taskRefusal(standing)} ${TASK_CONTINUE}`);
         return refusal(outside.length > 0
           ? `Access denied: "${command}" touches ${touched}, outside the workspace root (${root}), and was not approved. Keep research inside the workspace, or ask the user to approve this location.${cdUnfollowed(command, this.policyOptions()) ? CD_HINT : ''}`
