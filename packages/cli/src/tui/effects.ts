@@ -491,10 +491,19 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       return;
     }
 
-    // One already delivered is refused in the daemon's words.
-    case 'removeTaskMessage':
-      await api.execute(effect.sessionId, { command: 'remove_queued', task: effect.taskId, id: effect.messageId });
+    // One already delivered is refused in the daemon's words, which the task
+    // view shows while it takes back out any text Esc filled in for it. The
+    // daemon being away is `runEffect`'s to revive.
+    case 'removeTaskMessage': {
+      const { sessionId, taskId, messageId, filled } = effect;
+      try {
+        await api.execute(sessionId, { command: 'remove_queued', task: taskId, id: messageId });
+      } catch (err) {
+        if (!(err instanceof DaemonError)) throw err;
+        deps.dispatch({ type: 'taskMessageKept', sessionId, taskId, messageId, ...(filled !== undefined ? { filled } : {}), message: explain(err) });
+      }
       return;
+    }
 
     // The task log shows the forced message at the head of the queue, then
     // the interrupt, then the turn it opens; nothing to dispatch here.

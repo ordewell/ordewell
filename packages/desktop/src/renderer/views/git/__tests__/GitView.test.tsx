@@ -111,7 +111,7 @@ const answer = (name: string | RegExp): void => { fireEvent.click(within(screen.
 describe('the Git sidebar', () => {
   it('lists the branches, the stashes and the worktrees, with the checkout’s upstream marks', async () => {
     await mount();
-    expect(screen.getByLabelText('2 commits ahead, 1 commit behind')).toHaveTextContent('↑2 ↓1');
+    expect(screen.getByLabelText('1 commit behind, 2 commits ahead')).toHaveTextContent('↓1 ↑2');
     expect(screen.getByRole('button', { name: 'origin/main' })).toBeInTheDocument();
     expect(screen.getByTitle('stash@{0}: WIP on main')).toBeInTheDocument();
     // The checkout is the group at the top, not a row of Worktrees.
@@ -235,6 +235,67 @@ describe('the Git sidebar', () => {
     expect(daemon.calls('git.branches')).toHaveLength(2);
   });
 
+  it('lists the checked-out branch first in Local, before every folder', async () => {
+    await mount({}, { ...BRANCHES, local: [branch('feature/login', { sha: sha('b') }), branch('fix/typo'), BRANCHES.local[0]!, branch('release/2')] });
+    const local = screen.getByRole('list', { name: 'feature' }).closest('li')!.parentElement!;
+    const [first, ...rest] = [...local.children];
+    expect(first!.querySelector('.srow-main')).toHaveAccessibleName('main');
+    expect(first).toHaveAttribute('aria-current', 'true');
+    expect(rest.map((li) => li.querySelector('.srow-main')?.textContent)).toEqual(['feature1', 'fix1', 'release1']);
+  });
+
+  it('puts the upstream marks and the actions in one trailing slot, with Switch drawn apart from Pull', async () => {
+    await mount({}, { ...BRANCHES, local: [BRANCHES.local[0]!, branch('feature/login', { sha: sha('b'), upstream: 'origin/feature/login', ahead: 3, behind: 4 })] });
+    const row = screen.getByRole('button', { name: 'feature/login' }).closest('li')!;
+    const trail = row.querySelector('.srow-trail')!;
+    expect(within(trail as HTMLElement).getByLabelText('4 commits behind, 3 commits ahead')).toHaveTextContent('↓4 ↑3');
+    const actions = trail.querySelector('.srow-actions')!;
+    expect(within(actions as HTMLElement).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual(['Switch to feature/login', 'Delete feature/login']);
+    expect(within(actions as HTMLElement).getByRole('button', { name: 'Switch to feature/login' }).querySelector('svg')).toHaveClass('lucide-arrow-right-left');
+    // The checked-out branch has nothing to switch to or delete: its slot holds the marks alone.
+    const current = screen.getByRole('button', { name: 'main' }).closest('li')!;
+    expect(current.querySelector('.srow-trail .srow-actions')).toBeNull();
+    expect(current.querySelector('.srow-trail .srow-rest')).toHaveTextContent('↓1 ↑2');
+  });
+
+  it('shows a level branch\'s tip age in the slot, and the tip’s subject and age in its tooltip and description', async () => {
+    const threeDaysAgo = new Date(Date.now() - 3 * 86_400_000 - 60_000).toISOString();
+    const subject = 'Fix "login" redirect, 100% sure';
+    await mount({}, {
+      ...BRANCHES,
+      local: [BRANCHES.local[0]!, branch('feature/login', { sha: sha('b'), date: threeDaysAgo, subject }), branch('bare')],
+      remote: [branch('origin/main', { date: threeDaysAgo, subject: 'Remote tip' })],
+    });
+    const row = screen.getByRole('button', { name: 'feature/login' });
+    const li = row.closest('li')!;
+    expect(li.querySelector('.srow-trail .srow-rest')).toHaveTextContent('3d');
+    expect(row).toHaveAttribute('title', `feature/login\n${subject} · 3d ago`);
+    expect(row).toHaveAccessibleDescription(`${subject} · 3d ago`);
+    // A diverged branch shows ↓↑ in the slot and keeps the age to the tooltip, so the slot never holds two values.
+    const main = screen.getByRole('button', { name: 'main' }).closest('li')!;
+    expect(main.querySelector('.srow-rest')).toHaveTextContent('↓1 ↑2');
+    expect(main.querySelector('.srow-rest')).not.toHaveTextContent('d');
+    // A branch the daemon sent no tip for keeps its plain name and an empty slot.
+    const bare = screen.getByRole('button', { name: 'bare' });
+    expect(bare).toHaveAttribute('title', 'bare');
+    expect(bare).not.toHaveAttribute('aria-describedby');
+    expect(bare.closest('li')!.querySelector('.srow-rest')).toBeEmptyDOMElement();
+    const remote = screen.getByRole('button', { name: 'origin/main' });
+    expect(remote.closest('li')!.querySelector('.srow-trail .srow-rest')).toHaveTextContent('3d');
+    expect(remote).toHaveAttribute('title', 'origin/main\nRemote tip · 3d ago');
+  });
+
+  it('steps a deep branch in by its depth and keeps its full name in its tooltip', async () => {
+    const deep = 'team/web/feature/sso/callback';
+    await mount({}, { ...BRANCHES, local: [BRANCHES.local[0]!, branch('feature/login', { sha: sha('b') }), branch(deep), branch('team/web/feature/sso/state'), branch('team/web/feature/login'), branch('team/web/fix/x'), branch('team/api/y')] });
+    const button = screen.getByRole('button', { name: deep });
+    expect(button).toHaveAttribute('title', deep);
+    expect(button).toHaveTextContent(/^callback$/);
+    // team, web, feature and sso are four folders deep; git.css caps how far that indents.
+    expect(button.closest('li')!.style.getPropertyValue('--git-depth')).toBe('4');
+    expect(screen.getByRole('button', { name: `Switch to ${deep}` })).toBeInTheDocument();
+  });
+
   it('shows the lock a live run puts on its landing branch', async () => {
     await mount();
     expect(screen.getByTitle('A live run lands on main')).toHaveTextContent('run r7');
@@ -293,7 +354,7 @@ describe('the Branches and History views', () => {
       }),
     });
     fireEvent.click(views().getByRole('button', { name: 'History' }));
-    const row = await screen.findByRole('button', { name: 'Commit aaaaaaa: Merge: Wire SSO' });
+    const row = await screen.findByRole('button', { name: /^Commit aaaaaaa: Merge: Wire SSO/ });
     expect(row.querySelector('svg.git-lanes circle')).not.toBeNull();
     // The row names the short sha; its tooltip has the full one, to read or compare (design W11).
     expect(row).toHaveAttribute('title', expect.stringContaining(`${sha('a')} · Ada`));
@@ -351,10 +412,54 @@ describe('the Branches and History views', () => {
     expect(daemon.calls('git.log')).toHaveLength(2);
   });
 
+  it('shows one ref chip with the rest counted, a branch and its remote as one, and names everything', async () => {
+    const refs = ['HEAD', 'release/2.4', 'feature/sso', 'origin/feature/sso', 'origin/main', 'v2.0'];
+    const branches = { ...BRANCHES, local: [...BRANCHES.local, branch('release/2.4', { sha: sha('a') }), branch('feature/sso', { sha: sha('a') })], remote: [branch('origin/main'), branch('origin/feature/sso')] };
+    await mount({ 'git.log': ok({ repo: '.', ref: 'HEAD', commits: [{ ...LOG[0]!, refs }], cursor: null }) }, branches);
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    const row = await screen.findByRole('button', { name: /^Commit aaaaaaa: Merge: Wire SSO/ });
+    // release/2.4 leads (no branch here is checked out at this commit); feature/sso folds in its remote, so feature/sso, origin/main and v2.0 are the +3.
+    expect(row.querySelectorAll('.git-hrow-refs .git-chip:not(.git-chip-more)')).toHaveLength(1);
+    expect(within(row).getByText('release/2.4')).toBeInTheDocument();
+    expect(within(row).getByText('+3')).toBeInTheDocument();
+    expect(row).toHaveAccessibleName(/by Ada, .+ ago, refs release\/2\.4, feature\/sso, origin\/feature\/sso, origin\/main, v2\.0$/);
+    expect(row).toHaveAttribute('title', expect.stringContaining('release/2.4, feature/sso, origin/feature/sso, origin/main, v2.0'));
+  });
+
+  it('marks a branch that its remote-tracking ref shares the commit with, and leads with the checked-out branch', async () => {
+    await mount();
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    const row = await screen.findByRole('button', { name: /^Commit aaaaaaa: Merge: Wire SSO/ });
+    const chip = within(row).getByText('main');
+    expect(chip.querySelector('.git-chip-mark')).not.toBeNull();
+    expect(chip).toHaveAttribute('title', expect.stringContaining('Also on origin/main'));
+    expect(within(row).queryByText(/^\+\d/)).toBeNull();
+  });
+
+  it('orders the metadata age, author, then the sha that the ellipsis cuts last', async () => {
+    await mount();
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    const row = await screen.findByRole('button', { name: /^Commit aaaaaaa: Merge: Wire SSO/ });
+    expect(row.querySelector('.git-hrow-info')?.textContent).toMatch(/^\d+(mo|d|h|m) · Ada · aaaaaaa$/);
+  });
+
+  it('says in words, not only by a fade, that the lanes are cut off', async () => {
+    const rect = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({ width: 5, height: 44, x: 0, y: 0, top: 0, left: 0, right: 5, bottom: 44, toJSON: () => ({}) });
+    try {
+      await mount();
+      fireEvent.click(views().getByRole('button', { name: 'History' }));
+      const list = await screen.findByRole('list', { name: 'History' });
+      await waitFor(() => expect(list).toHaveClass('git-hlist-clipped'));
+      expect(list).toHaveAccessibleDescription(/further lanes are cut off/);
+    } finally { rect.mockRestore(); }
+  });
+
   it('says a repository with no commits has no history', async () => {
     await mount({ 'git.log': ok({ repo: '.', ref: 'HEAD', commits: [], cursor: null }) });
     fireEvent.click(views().getByRole('button', { name: 'History' }));
     expect(await screen.findByText('No commits yet')).toBeInTheDocument();
+    // One line (design S2): no second sentence under the title.
+    expect(screen.queryByText(/Commit something/)).toBeNull();
   });
 
   it('reads the history again once a fetch moves a branch, and drops the answer that read overtook', async () => {
@@ -371,9 +476,9 @@ describe('the Branches and History views', () => {
     await waitFor(() => expect(daemon.calls('git.log')).toHaveLength(1));
     branches = moved;
     fireEvent.click(within(screen.getByRole('group', { name: /^Sync/ })).getByRole('button', { name: /^Fetch/ }));
-    expect(await screen.findByRole('button', { name: 'Commit aaaaaaa: After the fetch' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /^Commit aaaaaaa: After the fetch/ })).toBeInTheDocument();
     await act(async () => { first.settle(ok({ repo: '.', ref: 'HEAD', commits: LOG, cursor: null })); });
-    expect(screen.getByRole('button', { name: 'Commit aaaaaaa: After the fetch' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Commit aaaaaaa: After the fetch/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Commit fffffff/ })).not.toBeInTheDocument();
     expect(daemon.calls('git.log')).toHaveLength(2);
   });
@@ -454,13 +559,16 @@ describe('the Branches and History views', () => {
       'git.log': () => (++reads === 1 ? ok({ repo: '.', ref: 'HEAD', commits: LOG, cursor: null }) : later.promise),
     });
     fireEvent.click(views().getByRole('button', { name: 'History' }));
-    const row = await screen.findByRole('button', { name: 'Commit aaaaaaa: Merge: Wire SSO' });
-    expect(within(row).queryByText('v2.0')).not.toBeInTheDocument();
+    const row = await screen.findByRole('button', { name: /^Commit aaaaaaa: Merge: Wire SSO/ });
+    expect(row).not.toHaveAccessibleName(/v2\.0/);
     fireEvent.click(screen.getByRole('button', { name: 'Reload branches and history' }));
     await waitFor(() => expect(daemon.calls('git.log')).toHaveLength(2));
-    expect(screen.getByRole('button', { name: 'Commit aaaaaaa: Merge: Wire SSO' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Commit aaaaaaa: Merge: Wire SSO/ })).toBeInTheDocument();
     await act(async () => { later.settle(ok({ repo: '.', ref: 'HEAD', commits: [{ ...LOG[0]!, refs: [...LOG[0]!.refs, 'v2.0'] }, LOG[1]!], cursor: null })); });
-    expect(within(screen.getByRole('button', { name: 'Commit aaaaaaa: Merge: Wire SSO' })).getByText('v2.0')).toBeInTheDocument();
+    // One chip leads; a new tag is counted in the +N and named in the row's name and tooltip.
+    const tagged = screen.getByRole('button', { name: /^Commit aaaaaaa: Merge: Wire SSO/ });
+    expect(tagged).toHaveAccessibleName(/v2\.0/);
+    expect(within(tagged).getByText('+1')).toBeInTheDocument();
   });
 
   it('holds Load more while the history is read again, and while that read failed, so a click is never lost', async () => {
@@ -502,8 +610,8 @@ describe('the Branches and History views', () => {
       'git.log': (params) => (params?.repo === 'libs/ui' ? lib.promise : ok({ repo: '.', ref: 'HEAD', commits: LOG, cursor: null })),
     });
     fireEvent.click(views().getByRole('button', { name: 'History' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Commit fffffff: Add the login button' }));
-    expect(screen.getByRole('button', { name: 'Commit fffffff: Add the login button' })).toHaveAttribute('aria-current', 'true');
+    fireEvent.click(await screen.findByRole('button', { name: /^Commit fffffff: Add the login button/ }));
+    expect(screen.getByRole('button', { name: /^Commit fffffff: Add the login button/ })).toHaveAttribute('aria-current', 'true');
 
     const picker = await screen.findByRole('combobox', { name: 'Repository' });
     fireEvent.change(picker, { target: { value: 'libs/ui' } });
@@ -512,13 +620,13 @@ describe('the Branches and History views', () => {
     expect(screen.queryByRole('list', { name: 'History' })).not.toBeInTheDocument();
 
     fireEvent.change(picker, { target: { value: '.' } });
-    expect(await screen.findByRole('button', { name: 'Commit fffffff: Add the login button' })).toHaveAttribute('aria-current', 'true');
+    expect(await screen.findByRole('button', { name: /^Commit fffffff: Add the login button/ })).toHaveAttribute('aria-current', 'true');
     await act(async () => { lib.settle(ok({ repo: 'libs/ui', ref: 'HEAD', commits: [commit('9', [], 'Start the UI kit', ['HEAD', 'main'])], cursor: null })); });
     expect(screen.queryByRole('button', { name: /Start the UI kit/ })).not.toBeInTheDocument();
     expect(daemon.calls('git.log').filter(([p]) => p?.repo === '.')).toHaveLength(1);
 
     fireEvent.change(picker, { target: { value: 'libs/ui' } });
-    expect(await screen.findByRole('button', { name: 'Commit 9999999: Start the UI kit' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /^Commit 9999999: Start the UI kit/ })).toBeInTheDocument();
     expect(daemon.calls('git.log').filter(([p]) => p?.repo === 'libs/ui')).toHaveLength(1);
   });
 });
@@ -538,7 +646,7 @@ describe('browsing a branch in the sidebar', () => {
     const before = centre();
     fireEvent.click(screen.getByRole('button', { name: 'feature/login' }));
     expect(views().getByRole('button', { name: 'History' })).toHaveAttribute('aria-pressed', 'true');
-    expect(await side().findByRole('button', { name: 'Commit bbbbbbb: Sign in with a magic link' })).toBeInTheDocument();
+    expect(await side().findByRole('button', { name: /^Commit bbbbbbb: Sign in with a magic link/ })).toBeInTheDocument();
     expect(daemon.calls('git.log')).toHaveLength(1);
     expect(daemon.calls('git.log')[0]![0]).toMatchObject({ ref: 'feature/login', limit: '50' });
     expect(centre()).toEqual(before);
@@ -776,7 +884,7 @@ describe('branch folders', () => {
     expect(screen.queryByRole('button', { name: /^(Switch to|Delete) ordewell\// })).not.toBeInTheDocument();
   });
 
-  it('starts a long group folded but for the folder that holds the checkout, and names each row in full', async () => {
+  it('starts a long group folded, the checkout leading it under its full name, and names each row in full', async () => {
     const long = 'a-very-long-branch-name-that-cannot-fit-in-a-narrow-sidebar';
     const local = [
       ...Array.from({ length: 10 }, (_, i) => branch(`chore/c${i}`, { sha: sha('b') })),
@@ -785,8 +893,10 @@ describe('branch folders', () => {
     await mount({}, { ...BRANCHES, local }, /^Local/);
     fireEvent.click(screen.getByRole('button', { name: /^Local/ }));
     expect(screen.getByRole('button', { name: /^chore 10 branches/ })).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.getByRole('button', { name: /^wip 1 branch/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.queryByRole('button', { name: /^wip 1 branch/ })).toBeNull();
     const row = screen.getByRole('button', { name: `wip/${long}` });
+    expect(row.closest('li')).toHaveAttribute('aria-current', 'true');
+    expect(row.closest('ul')!.firstElementChild).toBe(row.closest('li'));
     expect(row).toHaveAttribute('title', `wip/${long}`);
     expect(row).toHaveTextContent(long);
   });

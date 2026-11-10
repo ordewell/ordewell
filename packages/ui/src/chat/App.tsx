@@ -620,7 +620,7 @@ export default function App({ layout = 'chat', selection, goal }: {
     bridge.post({ type: 'sendMessageNow', text });
   }, [plannerBusy, handleSend]);
 
-  // The held group's own Send now sends only what is held; the composer's
+  // The held group's own Send all now sends only what is held; the composer's
   // draft stays where it is.
   const handleSendHeldNow = useCallback(() => {
     setStopArmed(false);
@@ -634,7 +634,7 @@ export default function App({ layout = 'chat', selection, goal }: {
     text,
     state: 'queued',
     onRemove: index === held.length - 1 ? () => handleUnsend(composerEmptyRef.current) : undefined,
-    removeTitle: 'Unsend (Esc)',
+    removeTitle: 'Take back (Esc)',
   })), [held, handleUnsend]);
 
   const stopTurn = useCallback(() => {

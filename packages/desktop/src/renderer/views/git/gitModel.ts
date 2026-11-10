@@ -33,26 +33,39 @@ export function plural(count: number, one: string, many = `${one}s`): string {
   return `${count} ${count === 1 ? one : many}`;
 }
 
-/** How many commits a branch is ahead and behind its upstream, as the sidebar marks it; empty when level. */
+/**
+ * How many commits a branch is behind and ahead of its upstream, as the
+ * sidebar marks it; empty when level. Behind comes first, as the sync bar
+ * puts it, so the two never read in opposite orders on one screen.
+ */
 export function trackMark(branch: Pick<BranchInfo, 'ahead' | 'behind' | 'upstream'>): string {
-  return [branch.ahead > 0 ? `↑${branch.ahead}` : '', branch.behind > 0 ? `↓${branch.behind}` : ''].filter(Boolean).join(' ');
+  return [branch.behind > 0 ? `↓${branch.behind}` : '', branch.ahead > 0 ? `↑${branch.ahead}` : ''].filter(Boolean).join(' ');
 }
 
 export type BranchNode =
   | { kind: 'folder'; key: string; /** The prefix it stands for, without a trailing slash. */ path: string; label: string; count: number; /** It holds the branch HEAD is on. */ current: boolean; children: BranchNode[] }
   | { kind: 'leaf'; key: string; label: string; branch: BranchInfo };
 
+/** Names in the order a person reads a list of them: case aside, and `release/1.10` after `release/1.9`. */
+const byName = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
+
 /**
  * Slash-delimited branch names as folders, the way the sidebar groups them.
- * A chain of folders that each hold only one folder folds into one row, so
- * `ordewell/r7/…` costs a row and not two. A branch named like a folder
- * (`feature` beside `feature/login`) stays its own row: keys tell the two
- * apart, and every action takes the branch's full name, never the label.
+ * The branch HEAD is on leads the list under its full name, outside any
+ * folder, so the checkout is the first row and not the last. Every other row,
+ * folder and branch alike, is in one alphabetical order at each level, the
+ * same in every group. A chain of folders that each hold only one folder folds
+ * into one row, so `ordewell/r7/…` costs a row and not two. A branch named
+ * like a folder (`feature` beside `feature/login`) stays its own row, just
+ * before it: keys tell the two apart, and every action takes the branch's full
+ * name, never the label.
  */
 export function branchTree(branches: readonly BranchInfo[]): BranchNode[] {
   interface Dir { folders: Map<string, Dir>; leaves: BranchInfo[] }
   const root: Dir = { folders: new Map(), leaves: [] };
+  const pinned = branches.filter((b) => b.current);
   for (const branch of branches) {
+    if (branch.current) continue;
     const segments = branch.name.split('/');
     let dir = root;
     for (const segment of segments.slice(0, -1)) {
@@ -78,8 +91,12 @@ export function branchTree(branches: readonly BranchInfo[]): BranchNode[] {
       return { kind: 'folder', key: `folder:${path}`, path, label, count, current, children };
     }),
     ...dir.leaves.map((branch): BranchNode => ({ kind: 'leaf', key: `branch:${branch.name}`, label: branch.name.slice(prefix.length), branch })),
+    // Ties are a branch beside its namesake folder, branch first, or names apart only in case, by code point.
+  ].sort((a, b) => byName.compare(a.label, b.label) || (a.kind !== b.kind ? (a.kind === 'leaf' ? -1 : 1) : a.label < b.label ? -1 : 1));
+  return [
+    ...pinned.map((branch): BranchNode => ({ kind: 'leaf', key: `branch:${branch.name}`, label: branch.name, branch })),
+    ...nodes(root, ''),
   ];
-  return nodes(root, '');
 }
 
 export type RefKind = 'head' | 'branch' | 'remote' | 'tag' | 'ordewell';
@@ -115,6 +132,45 @@ export function refChips(refs: readonly string[], branches: Branches | undefined
   });
   const order: Record<RefKind, number> = { head: 0, branch: 1, ordewell: 2, remote: 3, tag: 4 };
   return chips.sort((a, b) => order[a.kind] - order[b.kind]);
+}
+
+/** What a narrow history row says of a commit's refs: one chip, a count of the rest, every name. */
+export interface RefSummary {
+  lead: (RefChip & { tracked?: string }) | undefined;
+  /** The names beyond the lead chip; a remote-tracking ref folded into its branch is not one. */
+  more: number;
+  /** Every name, HEAD left out, for a tooltip or a screen reader. */
+  names: string[];
+}
+
+/**
+ * The refs of a commit as a row too narrow for several chips tells them: the
+ * first of refChips' order, the checked-out branch before any other branch.
+ * A local branch and the remote-tracking ref of the same name at this commit
+ * are one chip, marked `tracked`, so `feature/sso` and `origin/feature/sso`
+ * do not count as two.
+ */
+export function summarizeRefs(chips: readonly RefChip[]): RefSummary {
+  const shown = chips.filter((chip) => chip.kind !== 'head');
+  const locals = new Set(shown.filter((chip) => chip.kind === 'branch').map((chip) => chip.text));
+  const trackedBy = new Map<string, string>();
+  const folded = new Set<RefChip>();
+  for (const chip of shown) {
+    const name = chip.kind === 'remote' ? chip.text.slice(chip.text.indexOf('/') + 1) : undefined;
+    if (name !== undefined && locals.has(name) && !trackedBy.has(name)) {
+      trackedBy.set(name, chip.text);
+      folded.add(chip);
+    }
+  }
+  const rank = (chip: RefChip): number => (chip.current ? -1 : 0);
+  const kept = shown.filter((chip) => !folded.has(chip)).sort((a, b) => rank(a) - rank(b));
+  const first = kept[0];
+  const tracked = first && first.kind === 'branch' ? trackedBy.get(first.text) : undefined;
+  return {
+    lead: first && (tracked ? { ...first, tracked } : first),
+    more: Math.max(0, kept.length - 1),
+    names: shown.map((chip) => chip.text),
+  };
 }
 
 /** A task as the graph links a landed commit to it. */
@@ -160,6 +216,21 @@ export function ago(iso: string, now: number = Date.now()): string {
   const days = Math.floor(hours / 24);
   if (days < 60) return `${days}d`;
   return `${Math.floor(days / 30)}mo`;
+}
+
+/** How long ago a branch's tip was committed: "2d", "now", or empty when the daemon sent no date. */
+export function tipAge(branch: Pick<BranchInfo, 'date'>, now: number = Date.now()): string {
+  return branch.date ? ago(branch.date, now) : '';
+}
+
+/**
+ * What a branch row says beyond its name, for the tooltip and the accessible
+ * description: the tip's subject and age ("Fix the login redirect · 2d ago").
+ * Empty when the daemon sent neither.
+ */
+export function tipSummary(branch: Pick<BranchInfo, 'date' | 'subject'>, now: number = Date.now()): string {
+  const age = tipAge(branch, now);
+  return [branch.subject, age && (age === 'now' ? 'just now' : `${age} ago`)].filter(Boolean).join(' · ');
 }
 
 /** A commit's date for its own tab, where there is room for it: `Jan 5, 2025, 12:00 PM`, or the text as given when it is not a date. */

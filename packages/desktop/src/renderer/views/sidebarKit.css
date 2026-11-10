@@ -41,6 +41,20 @@
 /* Hidden, not removed: the label's room does not change when the pointer arrives. */
 .srow-actions { flex: none; display: flex; align-items: center; gap: var(--ow-space-half); visibility: hidden; }
 .srow:hover .srow-actions, .srow:focus-within .srow-actions { visibility: visible; }
+/*
+ * One trailing slot, for a row whose actions stand in for what it shows at
+ * rest. .srow-rest holds one short, right-aligned value (↓1 ↑2, or a tip's age); .srow-actions follows it.
+ * Both fill one grid cell as wide as the wider of the two, so the label gives
+ * up room for one of them, not both, and never reflows under the pointer
+ * (design.md, Layout rules, 4). The rest fades rather than hides, so a screen
+ * reader still reads it while a control in the row has focus; a row with no
+ * actions keeps it shown.
+ */
+.srow-trail { flex: none; display: grid; grid-template-columns: minmax(0, auto); justify-items: end; align-items: center; max-width: 40%; }
+.srow-trail > * { grid-area: 1 / 1; }
+.srow-rest { display: flex; align-items: center; gap: var(--ow-space-2); min-width: 0; max-width: 100%; font-variant-numeric: tabular-nums; }
+.srow-rest > * { flex: 0 1 auto; min-width: 0; max-width: none; }
+.srow:hover .srow-rest:not(:last-child), .srow:focus-within .srow-rest:not(:last-child) { opacity: 0; pointer-events: none; }
 
 /* A status letter (M, A, D…) in its fixed box; the colour is the status vocabulary's. */
 .sbadge { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 16px; font: var(--ow-type-code-small); color: var(--ow-fg-secondary); }

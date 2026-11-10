@@ -516,8 +516,8 @@ describe('the task log tab (ADR-0018, V1)', () => {
       act(() => { fireEvent.change(input, { target: { value: 'stop, use Postgres' } }); });
 
       expect(document.querySelectorAll('.task-log-composer button')).toHaveLength(1);
-      expect(document.querySelector('.send-key-hint')?.textContent).toBe('Enter queue · Ctrl+Enter send now');
-      expect(screen.getByLabelText('Send').getAttribute('title')).toBe('Queue (Enter) · Send now (Ctrl+Enter)');
+      expect(document.querySelector('.send-key-hint')?.textContent).toBe('Enter queue · Ctrl+Enter send all now');
+      expect(screen.getByLabelText('Send').getAttribute('title')).toBe('Queue (Enter) · Send all now (Ctrl+Enter)');
 
       act(() => { fireEvent.keyDown(input, { key: 'Enter', metaKey: true }); });
       expect(api.post).toHaveBeenCalledWith({ type: 'sendTaskMessageNow', text: 'stop, use Postgres' });
@@ -644,7 +644,7 @@ describe('the task log tab (ADR-0018, V1)', () => {
     it.each([['Meta', { metaKey: true }], ['Ctrl', { ctrlKey: true }]])('%s+Enter with an empty composer force-sends the oldest queued message, and the hint shows', (_name, chord) => {
       render(<TaskLogApp />);
       init({ working: true, queued: two });
-      expect(document.querySelector('.send-key-hint')?.textContent).toBe('Enter queue · Ctrl+Enter send now');
+      expect(document.querySelector('.send-key-hint')?.textContent).toBe('Ctrl+Enter send all now');
 
       act(() => { fireEvent.keyDown(boxOf(), { key: 'Enter', ...chord }); });
       expect(api.post).toHaveBeenCalledTimes(2); // ready + one send
@@ -675,6 +675,16 @@ describe('the task log tab (ADR-0018, V1)', () => {
       act(() => { fireEvent.click(screen.getByRole('button', { name: /Send all now/ })); });
       expect(api.post).toHaveBeenLastCalledWith({ type: 'sendQueuedTaskMessageNow', id: 'q1' });
       expect(document.querySelectorAll('.pending-message-remove')).toHaveLength(2);
+    });
+
+    it('the group control sends what is queued and leaves the draft where it is, as the planner chat\'s does', () => {
+      render(<TaskLogApp />);
+      init({ working: true, queued: two });
+      act(() => { fireEvent.change(boxOf(), { target: { value: 'half a thought' } }); });
+      expect(screen.getByRole('button', { name: /Send all now/ }).className).toBe('pending-messages-now');
+      act(() => { fireEvent.click(screen.getByRole('button', { name: /Send all now/ })); });
+      expect(api.post).toHaveBeenLastCalledWith({ type: 'sendQueuedTaskMessageNow', id: 'q1' });
+      expect(boxOf().value).toBe('half a thought');
     });
 
     it('offers no group control when nothing is removable, nor on a child', () => {
@@ -771,7 +781,7 @@ describe('the task log tab (ADR-0018, V1)', () => {
       render(<TaskLogApp />);
       init({ working: true, queued: two });
       const buttons = [...document.querySelectorAll('.pending-message-remove')].map((el) => el.getAttribute('title'));
-      expect(buttons).toEqual(['Remove this message', 'Remove this message (Esc takes back the newest)']);
+      expect(buttons).toEqual(['Remove this message', 'Take back (Esc)']);
     });
 
     it('does not remove or force from a child plan\'s tab', () => {
@@ -933,7 +943,7 @@ describe('a message the runner reads mid-turn (ADR-0023)', () => {
 
     expect(screen.getByText('waiting for the current step')).toBeTruthy();
     expect(screen.queryByLabelText('Send now: use Postgres')).toBeNull();
-    const removes = screen.getAllByTitle(/^Remove this message/);
+    const removes = screen.getAllByTitle('Take back (Esc)');
     expect(removes).toHaveLength(1);
     act(() => { fireEvent.click(removes[0]); });
     expect(api.post).toHaveBeenCalledWith({ type: 'removeQueuedTaskMessage', id: 'm2' });

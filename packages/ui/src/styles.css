@@ -6328,21 +6328,6 @@ body.vscode-high-contrast-light .task-card.expanded {
   gap: 6px;
 }
 
-/* The task log's one send-all control, over the stack it sends. */
-.pending-messages-bar {
-  display: flex;
-  flex-shrink: 0;
-  justify-content: flex-end;
-  padding: 6px 14px 0;
-  border-top: 1px solid var(--border-subtle);
-  background: var(--bg-primary);
-}
-
-.pending-messages-bar + .pending-messages {
-  border-top: none;
-  padding-top: 2px;
-}
-
 /* The stack and the composer read as one block. */
 .pending-messages + .chat-input,
 .pending-messages + .task-log-composer {
@@ -6419,7 +6404,6 @@ body.vscode-high-contrast-light .pending-message {
   .pending-message-actions { opacity: 1; }
 }
 
-.pending-message-now,
 .pending-messages-now,
 .pending-message-remove {
   display: inline-flex;
@@ -6440,15 +6424,14 @@ body.vscode-high-contrast-light .pending-message {
   font-size: 13px;
 }
 
-/* The planner chat's held prompts go as one message, so one Send now serves
-   them all: always shown, under the last row, where the stack meets the
-   composer whose chord does the same. */
+/* Queued messages go as one message, so one Send all now serves them all:
+   under the last row, where the stack meets the composer whose chord does
+   the same. */
 .pending-messages-actions {
   display: flex;
   justify-content: flex-end;
 }
 
-.pending-message-now:hover,
 .pending-messages-now:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
@@ -6459,7 +6442,6 @@ body.vscode-high-contrast-light .pending-message {
   color: var(--red);
 }
 
-.pending-message-now:focus-visible,
 .pending-messages-now:focus-visible,
 .pending-message-remove:focus-visible {
   outline: 1px solid var(--accent);
@@ -6489,7 +6471,6 @@ body.vscode-high-contrast-light .pending-message {
 }
 
 .send-key-hint kbd,
-.pending-message-now kbd,
 .pending-messages-now kbd {
   padding: 0 3px;
   border: 1px solid var(--border-muted);

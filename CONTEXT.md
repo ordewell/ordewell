@@ -1235,9 +1235,9 @@ message alone in the turn that replaces it, ahead of every input waiting;
 nothing can start in between. That message is every held prompt, glued in the
 order typed ahead of the composer's text, as a turn's end sends everything held
 as one message. It never stops, halts or edits the run's tasks.
-The stopped turn ends with `forceSent` on its `planner_turn_ended`, so a
-surface keeps the prompts it holds, in order, instead of handing them back as
-it does after a stop; the forced message carries `forced` on its
+The stopped turn ends with `forceSent` on its `planner_turn_ended`: the held
+prompts have already gone in the forced message, so a surface hands nothing
+back as it does after a stop; the forced message carries `forced` on its
 `planner_turn_started`, its transcript entry and its pending input, so a
 reload still marks it. Daemon `POST /api/plans/:id/converse/message/now`.
 *Avoid:* "force-start" (starting a task past its dependencies), "priority" or
@@ -3359,8 +3359,9 @@ keeps running: into the input when it is empty, otherwise the prompt is
 discarded. A stopped turn gives every held prompt back to the input, in the
 order typed; a new or reloaded session drops them. Drawn after the
 conversation, never in it: a prompt joins the conversation only once it is
-sent. The TUI still sends one per settled turn, oldest first, and its ctrl-s
-and unsend take the newest above any draft.
+sent. The rule is the same on every surface: the TUI's ctrl-s is the send now,
+with or without a draft, and its Esc the unsend; a subplanner's chat holds and
+sends the same way.
 *Avoid:* "pending message" (that names the whole queue's existence, not one
 entry); *Avoid:* treating unsend as cancel — nothing in flight is stopped; the
 prompt simply never goes; *Avoid:* "queued prompt" for an input a **Live
