@@ -1,7 +1,7 @@
 /**
  * From run records to the report: medians and spread per backend, variant and
  * goal, every violation listed with the run it came from, and a verdict per
- * backend for each comparison (V1 against V0, V2 against V1). Pure, so
+ * backend for each comparison (V1 against V0). Pure, so
  * `planner-eval.test.mjs` proves every verdict on hand-written records.
  *
  * A run record is what run.mjs writes per run:
@@ -13,7 +13,6 @@
 
 export const COMPARISONS = [
   { baseline: 'V0', candidate: 'V1' },
-  { baseline: 'V1', candidate: 'V2' },
 ];
 
 /** The per-run numbers the report summarises, in its column order. */
@@ -34,7 +33,6 @@ export const NUMERIC = [
   ['keyViolations', 'key viol.'],
   ['rubricProblems', 'rubric problems'],
   ['wordingViolations', 'wording viol.'],
-  ['meterLines', 'meter lines'],
   ['turns', 'turns'],
   ['wallMs', 'wall ms'],
 ];
@@ -201,28 +199,11 @@ export function verdict(records, goals, { cell, baseline, candidate }) {
   };
 }
 
-/** Per cell and variant: the runs that recorded their turn input, and how many carried the meter line. */
-export function meterSummary(records) {
-  const rows = new Map();
-  for (const r of records.filter((x) => x.metrics?.budget)) {
-    const key = `${r.cell}\u0000${r.variant}`;
-    const row = rows.get(key) ?? { cell: r.cell, variant: r.variant, source: r.metrics.budget.source, expected: r.metrics.budget.expected, recorded: 0, withLine: 0, withCount: 0 };
-    row.recorded++;
-    const lines = r.metrics.budget.turns.filter((t) => t.meter).length;
-    if (lines > 0) row.withLine++;
-    // The first turn's line reads zero: a count reaches the planner from its second turn.
-    if (lines > 1) row.withCount++;
-    rows.set(key, row);
-  }
-  return [...rows.values()];
-}
-
 export function aggregate(records, goals) {
   const cells = [...new Set(records.map((r) => r.cell))];
   return {
     summaries: summarize(records, goals),
     verdicts: cells.flatMap((cell) => COMPARISONS.map((c) => verdict(records, goals, { cell, ...c }))),
-    meter: meterSummary(records),
   };
 }
 
@@ -239,7 +220,7 @@ function stat(s) {
 
 const cellText = (s) => String(s).replace(/\|/g, '\\|').replace(/\n/g, ' ');
 
-export function markdown({ summaries, verdicts, meter = [] }, { title = 'Planner eval', meta = {} } = {}) {
+export function markdown({ summaries, verdicts }, { title = 'Planner eval', meta = {} } = {}) {
   const out = [`# ${title}`, ''];
   for (const [k, v] of Object.entries(meta)) out.push(`- ${k}: ${cellText(v)}`);
   if (Object.keys(meta).length) out.push('');
@@ -280,13 +261,6 @@ export function markdown({ summaries, verdicts, meter = [] }, { title = 'Planner
       for (const c of v.reported ?? []) out.push(`| ${c.name} | ${fmt(c.baseline)} | ${fmt(c.candidate)} | | reported |`);
       out.push('');
     }
-  }
-  if (meter.length) {
-    out.push('## Read meter', '');
-    out.push('Each run\'s turn input as recorded outside Ordewell (an API planner\'s requests, Claude Code\'s transcript). The meter line reads zero on the first turn, so a count reaches the planner only from its second.', '');
-    out.push('| backend | variant | source | meter on | runs recorded | with the line | with a count |', '| --- | --- | --- | --- | --- | --- | --- |');
-    for (const m of meter) out.push(`| ${cellText(m.cell)} | ${m.variant} | ${m.source} | ${m.expected ? 'yes' : 'no'} | ${m.recorded} | ${m.withLine} | ${m.withCount} |`);
-    out.push('');
   }
   out.push('## Violations', '');
   const listed = summaries.flatMap((s) => s.violations.map((v) => ({ ...v, cell: s.cell, variant: s.variant, goal: s.goal })));

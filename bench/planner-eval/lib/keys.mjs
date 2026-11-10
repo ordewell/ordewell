@@ -9,7 +9,7 @@
  * mentions every neighbour it must not touch.
  */
 import { createHash } from 'node:crypto';
-import { agentCalls, ancestors, flatten, isLoop, isReadOnly, isResearch, readMeter, width } from './metrics.mjs';
+import { agentCalls, ancestors, flatten, isLoop, isReadOnly, isResearch, ownReadTally, width } from './metrics.mjs';
 
 const pattern = (source) => new RegExp(source, 'i');
 const titleOf = (t) => String(t.title ?? '');
@@ -186,7 +186,7 @@ function breadthChecks(spec, top, up, researchLog) {
   const packagesRe = pattern(spec.packages);
   const named = new Set(briefs.flatMap((b) => [...b.matchAll(new RegExp(packagesRe.source, 'gi'))].map((m) => m[0].toLowerCase().replace(/\s+/g, ''))));
   const delegated = briefs.length >= spec.minDelegated && named.size >= 2;
-  const { ownReads, ownReadBytes } = readMeter(researchLog);
+  const { ownReads, ownReadBytes } = ownReadTally(researchLog);
   const within = ownReads <= spec.maxOwnReads && ownReadBytes <= spec.maxOwnReadBytes;
   return [
     {

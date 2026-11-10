@@ -75,17 +75,6 @@ export function mapAgentTool(name: string): MappedTool {
   return { tool: 'agent_tool', toolLabel: name };
 }
 
-const WORKSPACE_READ_TOOLS: ReadonlySet<ResearchToolType> = new Set(['read_file', 'read_files', 'glob', 'grep', 'find_symbol', 'list_dir']);
-
-/**
- * Whether an agent's call is a read of the workspace by the agent itself. Not
- * one of Ordewell's own MCP tools, whose names map onto the same members once
- * their prefix is stripped: `mcp__ordewell__read` reads a task, not a file.
- */
-export function isWorkspaceRead(name: string): boolean {
-  return !ORDEWELL_TOOL_PREFIX.test(name.trim()) && WORKSPACE_READ_TOOLS.has(mapAgentTool(name).tool);
-}
-
 /**
  * Normalize an agent's tool arguments into the shapes `summarizeToolCall`
  * already knows how to read, so a harness `Read` gets a one-line summary

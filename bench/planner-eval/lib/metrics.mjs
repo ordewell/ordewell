@@ -138,7 +138,7 @@ function byteLength(value) {
  * distinct subagents logged, since a harness planner's own `Agent` call logs no
  * subagent entry and Ordewell's `spawn_research_agent` logs both.
  */
-export function readMeter(researchLog) {
+export function ownReadTally(researchLog) {
   let ownReads = 0;
   let ownReadBytes = 0;
   const subagents = new Set();
@@ -278,15 +278,14 @@ function usageNumbers(usage) {
 /**
  * Every mechanical number for one run. `driver` is what the driver recorded:
  * its turns, wall time and how it stopped. `goalText` is what the planner was
- * asked, whose terms its wording may repeat. `budget` is the budget blocks
- * recorded from its turn input (budget.mjs), where this bench could see them.
+ * asked, whose terms its wording may repeat.
  */
-export function runMetrics(session, { researchLog, driver = {}, autoMerge = true, goalText = '', budget = null } = {}) {
+export function runMetrics(session, { researchLog, driver = {}, autoMerge = true, goalText = '' } = {}) {
   const parts = sessionParts(session, researchLog);
   const all = flatten(parts.tasks);
   const top = parts.tasks;
   const submitted = planSubmitted(parts);
-  const meter = readMeter(parts.researchLog);
+  const tally = ownReadTally(parts.researchLog);
   const researchTasks = all.filter(isResearch).length;
   const autoMergeOn = parts.runSettings.mergeAtGatesAutomatically ?? autoMerge;
   return {
@@ -299,11 +298,9 @@ export function runMetrics(session, { researchLog, driver = {}, autoMerge = true
     readOnlyTasks: all.filter(isReadOnly).length,
     loopTasks: all.filter(isLoop).length,
     ...usageNumbers(parts.usage),
-    ...meter,
-    ownReadShare: ownReadShare({ ...meter, researchTasks }),
+    ...tally,
+    ownReadShare: ownReadShare({ ...tally, researchTasks }),
     wordingViolations: wordingViolations(parts.history, { autoMerge: autoMergeOn, goalText }),
-    budget,
-    meterLines: budget ? budget.turns.filter((t) => t.meter).length : null,
     turns: driver.turns ?? null,
     wallMs: driver.wallMs ?? null,
     stopped: driver.stopped ?? null,

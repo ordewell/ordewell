@@ -18,7 +18,6 @@ judges nothing.
 | --- | --- | --- | --- |
 | V0 | `--baseline-ref` (default `0ecc6412`) | the goal, then the two nudges below, verbatim | — |
 | V1 | `--candidate-ref` (default `HEAD`) | the goal alone | — |
-| V2 | as V1 | the goal alone | `ORDEWELL_PLANNER_READ_METER=1` |
 
 V0's nudges, each its own paragraph:
 
@@ -171,7 +170,7 @@ node bench/planner-eval/run.mjs --mock
 # Smoke: G1 on claude-code/haiku, once per variant, reviewed.
 node bench/planner-eval/run.mjs --smoke
 
-# Everything: G1–G5 x the six cells x V0/V1/V2, three times each.
+# Everything: G1–G5 x the six cells x V0/V1, three times each.
 OPENROUTER_API_KEY=... node bench/planner-eval/run.mjs --full --candidate-ref <branch>
 
 # A slice, and a resume after an interruption.
@@ -241,7 +240,6 @@ subtask runs inside its parent.
 | key viol. | answer-key checks that failed |
 | rubric problems | rubric questions answered 'problem' with at least one cited claim |
 | wording viol. | true wording violations: sentences in the planner's hand-back after `submit_plan` that tell the user to operate a control the terminal UI does not have (press a button, open a card, click 'Execute plan' or 'Merge all'), or ask the user to merge while automatic merging is on and do not say it happens automatically or by itself. A sentence that describes rather than instructs is not one. Quoted text, code identifiers and the goal's own terms are exempt, since a task may need to change them, and so is a sentence naming VS Code, the webview or desktop, which do have those controls |
-| meter lines | turns whose recorded input carried the read meter line (see Read meter) |
 | turns | driver turns: the goal plus each reply the driver sent |
 | wall ms | from the goal pasted to the driver stopping |
 
@@ -275,8 +273,7 @@ claims.
 
 ## Verdicts
 
-The report gives one verdict per backend for V1 against V0 and for V2
-against V1, over the goals both sides have complete runs of. Two criteria
+The report gives one verdict per backend for V1 against V0, over the goals both sides have complete runs of. Two criteria
 judge it, each against run-to-run spread:
 
 - key violations per run, where a complete run with no plan counts one;
@@ -300,28 +297,6 @@ never a pass. Every violation, error and substitution is listed by run.
 The report holds medians and spreads over the repeats it ran. It makes no
 claim beyond those runs.
 
-## Read meter
-
-V2 turns on `ORDEWELL_PLANNER_READ_METER`, which adds a line to the budget
-block (`CONTEXT AND BUDGETS (this turn):`) of each planner turn: "Your own
-reads: about N tokens last turn, M in this conversation". The line counts what
-came before the turn, so it reads zero on the first turn and a count reaches
-the planner only from its second turn.
-
-Ordewell keeps no turn's input, so the bench records the block from outside,
-in each record's `metrics.budget`:
-
-- an API planner, and the mock, through a local proxy on
-  `OPENROUTER_BASE_URL` that passes every request on and keeps the user turns;
-- Claude Code from its own transcript of the session, under
-  `$CLAUDE_CONFIG_DIR` or `~/.claude`.
-
-OpenCode keeps its turns in its own store, which the bench does not read, so
-its runs record none. Codex and the ACP harnesses never get the line: they are
-controls, and a V2 verdict on them measures the build, not the meter. The
-report's meter table gives, per cell and variant, the runs recorded, those
-whose input carried the line, and those that carried it on more than one turn.
-
 ## Re-scoring
 
 `--rescore DIR` reads every run record in DIR and scores it again with the
@@ -330,8 +305,7 @@ current keys and metrics from its saved session, into `--out` (default
 scored under; a record with none was scored with the goals at `312cc3c1`. The
 rubric is reviewed again only where that hash changed; with `--no-review` the
 old review is dropped and the record is marked `rubricStale`. A timed-out run stays a failed run. The new `meta.json` keeps
-the source's passes under `fromPasses`. Records stored before this bench
-recorded the budget block have no meter data.
+the source's passes under `fromPasses`.
 
 ## Your settings
 
@@ -348,7 +322,7 @@ removes only the token files of the daemons it started.
 - the metrics, keys and rubric filter
 - the wording check, on hand-backs that do and do not instruct
 - aggregation, verdicts, completion and the spread allowance
-- the clone's `node_modules`, the budget block and its proxy
+- the clone's `node_modules`
 - re-scoring and `--baseline-from`, through `run.mjs` itself
 - redaction and the guard
 - the driver's reading of a turn

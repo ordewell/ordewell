@@ -673,63 +673,6 @@ describe('CliAgentAiService — Claude Code', () => {
     expect(spawned.lastArgs().join(' ')).not.toContain('CONTEXT AND BUDGETS (this turn):');
   });
 
-  describe('own-reads meter (experiment)', () => {
-    const metered = (provider: 'claude-code' | 'codex' | 'opencode') => {
-      const budgets = new TurnBudgets([]);
-      budgets.measureOwnReads({ ORDEWELL_PLANNER_READ_METER: '1' });
-      const sent: string[] = [];
-      const turn1: AgentEvent[] = [
-        { type: 'tool_call', id: 'r1', name: 'Read', args: { file_path: 'a.ts' } },
-        { type: 'tool_result', id: 'r1', name: 'Read', output: 'a'.repeat(8000), success: true },
-        { type: 'tool_call', id: 'g1', name: 'Grep', args: { pattern: 'x' } },
-        { type: 'tool_result', id: 'g1', name: 'Grep', output: 'g'.repeat(4000), success: true },
-        // Not the planner's own workspace reads: a subagent's, Ordewell's task read (its name is `read` too), a shell, a web read.
-        { type: 'tool_call', id: 's1', name: 'Read', args: { file_path: 'b.ts' }, subagentId: 'sa1' },
-        { type: 'tool_result', id: 's1', name: 'Read', output: 's'.repeat(40_000), success: true, subagentId: 'sa1' },
-        { type: 'tool_call', id: 'o1', name: 'mcp__ordewell__read', args: { task: '#1' } },
-        { type: 'tool_result', id: 'o1', name: '', output: 'o'.repeat(40_000), success: true },
-        { type: 'tool_call', id: 'o2', name: 'ordewell_read', args: { task: '#2' } },
-        { type: 'tool_result', id: 'o2', name: 'ordewell_read', output: 'o'.repeat(40_000), success: true },
-        { type: 'tool_call', id: 'b1', name: 'Bash', args: { command: 'cat a.ts' } },
-        { type: 'tool_result', id: 'b1', name: '', output: 'b'.repeat(40_000), success: true },
-        { type: 'tool_call', id: 'w1', name: 'WebFetch', args: { url: 'https://example.com' } },
-        { type: 'tool_result', id: 'w1', name: '', output: 'w'.repeat(40_000), success: true },
-        { type: 'assistant_text', runId: 'r', text: 'Which store?' },
-        { type: 'turn_end' },
-      ];
-      const turn2: AgentEvent[] = [{ type: 'assistant_text', runId: 'r', text: 'Done.' }, { type: 'turn_end' }];
-      const queue = [turn1, turn2];
-      const svc = new CliAgentAiService(fakeConfig({ aiProvider: provider }), {
-        createAdapter: () => ({
-          agentId: provider, exited: false, start: async () => {},
-          send: async (message, onEvent) => { sent.push(message); for (const event of queue.shift() ?? []) onEvent(event); },
-          nativeSessionId: () => null, dispose: () => {}, mcpAttached: async () => true,
-        }),
-        workspaceRoot: () => '/repo',
-        mcpServer: fakeMcpServer(),
-        turnBudgets: budgets,
-      });
-      return { svc, sent };
-    };
-
-    it('tells a Claude Code planner what its own reads came to, leaving out a subagent, Ordewell, shell and web reads', async () => {
-      const { svc, sent } = metered('claude-code');
-      await svc.startConversation(request());
-      await svc.continueConversation('Redis, please.', () => {});
-
-      expect(sent[0]).toContain('Your own reads: about 0 tokens last turn');
-      expect(sent[1]).toContain('Your own reads: about 3k tokens last turn, 3k in this conversation (approximate, from characters).');
-    });
-
-    it('adds no line for a Codex planner, which reads through a shell it cannot tell apart', async () => {
-      const { svc, sent } = metered('codex');
-      await svc.startConversation(request());
-      await svc.continueConversation('Redis, please.', () => {});
-
-      expect(sent.join('\n')).not.toContain('Your own reads');
-    });
-  });
-
   it('replays a persisted transcript instead of re-running research', async () => {
     const { svc, spawned } = service('claude-code', [fixture('claude-code', 'prose')]);
     await svc.startConversation(request({

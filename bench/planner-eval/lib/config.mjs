@@ -21,7 +21,6 @@ export const NUDGES = [
 export const VARIANTS = {
   V0: { id: 'V0', build: 'baseline', nudges: true, env: {}, about: `Ordewell at ${BASELINE_REF}, goal plus the two nudges` },
   V1: { id: 'V1', build: 'candidate', nudges: false, env: {}, about: 'the candidate ref, goal alone' },
-  V2: { id: 'V2', build: 'candidate', nudges: false, env: { ORDEWELL_PLANNER_READ_METER: '1' }, about: 'V1 with ORDEWELL_PLANNER_READ_METER=1' },
 };
 
 /** The answer to a clarifying question and the confirmation of an outline, verbatim. */
@@ -135,7 +134,6 @@ export function runEnv(base, { cell, variant, settingsPath, maxParallel, enabled
   // A vendor key is handed only to the cell that plans through it.
   const usesOpenRouter = cell.provider === 'openrouter' || /^openrouter\//.test(cell.model);
   if (!usesOpenRouter) delete env.OPENROUTER_API_KEY;
-  delete env.ORDEWELL_PLANNER_READ_METER;
   delete env.NODE_OPTIONS;
   return {
     ...env,

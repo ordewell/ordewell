@@ -7,7 +7,7 @@ import { buildPlanWithResults } from './PlanPrompts';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
 import { generatePlanWithRepair, classifyPlannerReply } from './PlanRepair';
 import { settleReply, type ReplyAttempt } from './settleReply';
-import { compactResearchResults, RECOVERABLE_READ_TOOLS, type CompactableMessage } from './contextCompaction';
+import { compactResearchResults, type CompactableMessage } from './contextCompaction';
 import type { RunnerModeInfo } from './ModeResolver';
 import type { PlanIntake } from './PlanChangeCheck';
 import { collectResearchContext } from './ContextCollector';
@@ -419,17 +419,6 @@ export abstract class BaseAiService {
   }
 
   /**
-   * The own-reads meter (an experiment): the planner's own workspace reads,
-   * by the size of what went into its context. A subagent's digest, a task
-   * read, a web read and a call refused unrun are not among them.
-   */
-  private noteOwnReads(logEntries: readonly ResearchStep[], toolResults: readonly ToolResult[]): void {
-    logEntries.forEach((entry, i) => {
-      if (entry.outcome === 'success' && RECOVERABLE_READ_TOOLS.has(entry.tool)) this.turnBudgets?.noteOwnRead(toolResults[i].output.length);
-    });
-  }
-
-  /**
    * Run one planner conversation turn (ADR-0002): send the message, satisfy
    * tool calls until the model answers in prose or JSON, and settle the reply
    * through {@link settleReply}, which owns classification and every
@@ -450,7 +439,7 @@ export abstract class BaseAiService {
     let first = firstCall;
     return settleReply({
       // The turn's own input carries the budgets, not the system prompt, which stays cacheable.
-      message: withTurnBudgets(this.turnBudgets, message, true),
+      message: withTurnBudgets(this.turnBudgets, message),
       send: (text) => {
         const opening = first;
         first = undefined;
@@ -532,8 +521,6 @@ export abstract class BaseAiService {
       const thinking = turn.reasoning ? turn.reasoning.slice(-200) : '';
       const { toolResults, logEntries } = await this.runRound(chat, turn.toolCalls, ctx, onProgress, step, thinking, signal);
       researchLog.push(...logEntries);
-      // Before the countdown note below, which is not a read.
-      this.noteOwnReads(logEntries, toolResults);
       BaseAiService.appendBudgetCountdown(toolResults, MAX_STEPS - step - 1, 'reply to the user (summary, question, or plan JSON)');
       turn = await call(() => chat.sendToolResults(toolResults, signal));
     }

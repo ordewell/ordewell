@@ -79,9 +79,8 @@ still runs a single goal the old way.
 
 A planning-only A/B of the planner prompt on real models, driven through the
 real `ordewell` terminal UI. Each run goes as far as `submit_plan` and stops
-there; it never approves or runs a plan. Three variants are compared: the
-baseline build with two nudges in the goal, the candidate build without them,
-and the candidate with the read meter on. Each submitted plan is measured,
+there; it never approves or runs a plan. Two variants are compared: the
+baseline build with two nudges in the goal and the candidate build without them. Each submitted plan is measured,
 checked against the goal's answer key and reviewed by a citation-checked
 rubric. The report gives a verdict per backend for each comparison.
 `node bench/planner-eval/run.mjs --mock` is the offline dry run against
