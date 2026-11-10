@@ -391,10 +391,9 @@ export function queuedTarget(tv: TaskLogState): number {
   return -1;
 }
 
-/** A prompt a force send took out of the composer, or out of the queue at `queueIndex`. */
+/** What a force send took out of the queue and the composer, glued into the one message it sent. */
 export interface ForcedPrompt {
   text: string;
-  queueIndex?: number;
 }
 
 /**

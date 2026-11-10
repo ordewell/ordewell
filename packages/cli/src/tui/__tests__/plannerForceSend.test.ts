@@ -8,9 +8,9 @@ import type { TaskLogState, TaskView, TuiState } from '../state';
 
 /**
  * Send now in the planner chat (ADR-0023, F5): ctrl-s stops the planner turn
- * in flight and answers the composer text — or, with the composer empty, the
- * newest queued prompt — in the turn that replaces it. Turn-scoped: the run's
- * tasks are never touched, and the prompts still queued keep their order.
+ * in flight and answers, in the turn that replaces it, every queued prompt in
+ * the order typed and then the composer text, glued into one message.
+ * Turn-scoped: the run's tasks are never touched.
  */
 
 const ctrlS = { type: 'key' as const, key: { name: 'ctrl-s' } };
@@ -27,6 +27,9 @@ const withDraft = (state: TuiState, text: string): TuiState => ({
 // eslint-disable-next-line no-control-regex
 const plain = (state: TuiState): string => render(state).join('\n').replace(/\x1b\[[0-9;]*m/g, '');
 const lastSaid = (state: TuiState) => state.conversation.blocks.at(-1);
+/** Queue each of `texts` behind the turn in flight, as enter does. */
+const submitAll = (state: TuiState, texts: string[]): TuiState =>
+  texts.reduce((s, text) => reduce(withDraft(s, text), key('enter')).state, state);
 
 const task = (over: Partial<TaskView> = {}): TaskView => ({
   id: 't1', order: 2, title: 'Refactor PlanStore', type: 'ai', status: 'in_progress', dependencies: [], assignedRunner: 'claude-code',
@@ -78,16 +81,17 @@ describe('ctrl-s in the planner chat', () => {
     expect(settled.planner).toBe('idle');
   });
 
-  it('force sends the newest queued prompt when the composer is empty, keeping the rest in order', () => {
-    const { state, effects } = reduce(planning({ queuedPrompts: ['one', 'two'] }), ctrlS);
-    expect(effects).toEqual([{ type: 'forceSendPlannerMessage', sessionId: 's1', message: 'two' }]);
-    expect(state.queuedPrompts).toEqual(['one']);
+  it('glues every queued prompt, in the order typed, into one forced message and empties the hold', () => {
+    const { state, effects } = reduce(planning({ queuedPrompts: ['a', 'b', 'c'] }), ctrlS);
+    expect(effects).toEqual([{ type: 'forceSendPlannerMessage', sessionId: 's1', message: 'a\nb\nc' }]);
+    expect(state.queuedPrompts).toEqual([]);
   });
 
-  it('prefers the composer text over the queued prompts', () => {
-    const { state, effects } = reduce(withDraft(planning({ queuedPrompts: ['one', 'two'] }), 'this one'), ctrlS);
-    expect(effects).toEqual([{ type: 'forceSendPlannerMessage', sessionId: 's1', message: 'this one' }]);
-    expect(state.queuedPrompts).toEqual(['one', 'two']);
+  it('glues the composer text after the queued prompts and empties both', () => {
+    const { state, effects } = reduce(withDraft(planning({ queuedPrompts: ['a', 'b', 'c'] }), ' d '), ctrlS);
+    expect(effects).toEqual([{ type: 'forceSendPlannerMessage', sessionId: 's1', message: 'a\nb\nc\nd' }]);
+    expect(state.queuedPrompts).toEqual([]);
+    expect(state.editor.text).toBe('');
   });
 
   it('is a plain send when no turn is running', () => {
@@ -110,31 +114,34 @@ describe('ctrl-s in the planner chat', () => {
   it('says what to do when there is nothing to send', () => {
     const { state, effects } = reduce(planning(), ctrlS);
     expect(effects).toEqual([]);
-    expect(lastSaid(state)).toMatchObject({ text: expect.stringMatching(/type a message, or queue one/) });
+    expect(lastSaid(state)).toMatchObject({ text: expect.stringMatching(/^Nothing to send now: type a message/) });
   });
 });
 
 describe('the queue across a stop', () => {
-  it('keeps the held prompts when the stopped turn was a force send', () => {
-    const sent = reduce(withDraft(planning({ queuedPrompts: ['one', 'two'] }), 'now'), ctrlS).state;
-    const { state, effects } = reduce(sent, { type: 'failed', message: 'The planner turn was stopped.', code: 'planner_turn_stopped', turn: true });
+  it('keeps the prompts queued behind a force send when the turn it replaced reports stopped', () => {
+    const sent = reduce(withDraft(planning(), 'now'), ctrlS).state;
+    const held = submitAll(sent, ['one', 'two']);
+    const { state, effects } = reduce(held, { type: 'failed', message: 'The planner turn was stopped.', code: 'planner_turn_stopped', turn: true });
 
     expect(state.queuedPrompts).toEqual(['one', 'two']);
     expect(state.planner).toBe('planning');
     expect(effects).toEqual([]);
   });
 
-  it('keeps the held prompts when the turn a force send stopped settles with what it had said', () => {
-    const sent = reduce(withDraft(planning({ queuedPrompts: ['one', 'two'] }), 'now'), ctrlS).state;
-    const stopped = reduce(sent, { type: 'planUpdated', plan: {}, sessionId: 's1' });
+  it('sends the prompts queued behind a force send as one message once the forced turn settles', () => {
+    const sent = reduce(withDraft(planning(), 'now'), ctrlS).state;
+    const held = submitAll(sent, ['one', 'two']);
+    const stopped = reduce(held, { type: 'planUpdated', plan: {}, sessionId: 's1' });
 
     expect(stopped.effects).toEqual([]);
     expect(stopped.state.queuedPrompts).toEqual(['one', 'two']);
     expect(stopped.state.planner).toBe('planning');
 
     const forced = reduce(stopped.state, { type: 'planUpdated', plan: {}, sessionId: 's1' });
-    expect(forced.effects).toEqual([{ type: 'sendMessage', sessionId: 's1', message: 'one' }]);
-    expect(forced.state.queuedPrompts).toEqual(['two']);
+    expect(forced.effects).toEqual([{ type: 'sendMessage', sessionId: 's1', message: 'one\ntwo' }]);
+    expect(forced.state.queuedPrompts).toEqual([]);
+    expect(lastSaid(forced.state)).toMatchObject({ role: 'user', text: 'one\ntwo' });
   });
 
   it('shows the error and puts the composer text back when the forced send itself failed', () => {
@@ -156,16 +163,16 @@ describe('the queue across a stop', () => {
     expect(state.editor.text).toBe('use Postgres\nand also');
   });
 
-  it('puts a force-sent queued prompt back at its position when the send failed', () => {
+  it('puts the glued queued prompts back in the composer, above what was typed since, when the send failed', () => {
     const sent = reduce(planning({ queuedPrompts: ['one', 'two', 'three'] }), ctrlS).state;
-    expect(sent.queuedPrompts).toEqual(['one', 'two']);
+    expect(sent.queuedPrompts).toEqual([]);
 
-    const { state, effects } = reduce(sent, { type: 'failed', message: 'nope', code: 'session_not_found', turn: true });
+    const { state, effects } = reduce(withDraft(sent, 'and also'), { type: 'failed', message: 'nope', code: 'session_not_found', turn: true });
 
-    // The turn dying is a turn ending, so the oldest prompt goes out as it does after any failure.
-    expect(effects).toEqual([{ type: 'sendMessage', sessionId: 's1', message: 'one' }]);
-    expect(state.queuedPrompts).toEqual(['two', 'three']);
-    expect(lastSaid(state)).toMatchObject({ role: 'user', text: 'one' });
+    expect(effects).toEqual([]);
+    expect(state.queuedPrompts).toEqual([]);
+    expect(state.editor.text).toBe('one\ntwo\nthree\nand also');
+    expect(state.editor.cursor).toBe(state.editor.text.length);
   });
 
   it('still returns the queue to the input on a user stop', () => {
@@ -182,23 +189,23 @@ describe('what the planner chat shows for force send', () => {
   it('names ctrl-s on the queued prompt, the hint dropping first at a narrow width', () => {
     const state = planning({ queuedPrompts: ['a parked thought'], cols: 200 });
     const row = plain(state).split('\n').find((line) => line.includes('a parked thought')) ?? '';
-    expect(row).toContain('queued · esc to unsend · ctrl-s sends now');
+    expect(row).toContain('queued · esc takes back · ctrl-s sends all now');
 
     const narrow = planning({ queuedPrompts: ['a parked thought'], cols: 50 });
     const narrowRow = plain(narrow).split('\n').find((line) => line.includes('a parked thought')) ?? '';
     expect(narrowRow).toContain('a parked thought');
-    expect(narrowRow).not.toContain('ctrl-s sends now');
+    expect(narrowRow).not.toContain('ctrl-s sends all now');
   });
 
-  it('puts the queued hints on the newest prompt only, the one esc and ctrl-s take', () => {
+  it('puts the queued hints on the newest prompt only, the one esc takes', () => {
     const out = plain(planning({ queuedPrompts: ['first thought', 'second thought'], cols: 200 }));
     expect(out).toMatch(/first thought · queued(?! ·)/);
-    expect(out).toContain('second thought · queued · esc to unsend · ctrl-s sends now');
+    expect(out).toContain('second thought · queued · esc takes back · ctrl-s sends all now');
   });
 
-  it('drops ctrl-s from the newest prompt while the composer holds text, which ctrl-s would send instead', () => {
+  it('says esc drops the newest prompt while the composer holds text, and ctrl-s still sends it all', () => {
     const out = plain(withDraft(planning({ queuedPrompts: ['a parked thought'], cols: 200 }), 'typing'));
-    expect(out).toMatch(/a parked thought · queued · esc to unsend(?! ·)/);
+    expect(out).toContain('a parked thought · queued · esc drops · ctrl-s sends all now');
   });
 
   it('marks the forced user message, from a reloaded transcript too', () => {
@@ -215,10 +222,16 @@ describe('what the planner chat shows for force send', () => {
     expect(footerHints(planning({ planner: 'idle' }))).not.toContain('ctrl-s send now');
   });
 
+  it('names what esc and ctrl-s do with queued prompts in the chat footer', () => {
+    const held = planning({ queuedPrompts: ['one', 'two'] });
+    expect(footerHints(held)).toEqual(expect.arrayContaining(['esc take back newest', 'ctrl-s send all now']));
+    expect(footerHints(withDraft(held, 'typing'))).toEqual(expect.arrayContaining(['esc drop newest', 'ctrl-s send all now']));
+  });
+
   it('documents ctrl-s for the planner in the help sheet', () => {
     // eslint-disable-next-line no-control-regex
     const sheet = helpLayout(200, 200).lines.map((line) => line.replace(/\x1b\[[0-9;]*m/g, ''));
-    expect(sheet.some((line) => line.includes('ctrl-s sends now') && line.includes('planner'))).toBe(true);
+    expect(sheet.some((line) => line.includes('ctrl-s sends now') && line.includes('planner') && line.includes('every queued prompt'))).toBe(true);
   });
 });
 
