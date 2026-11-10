@@ -48,6 +48,12 @@ sink sees it: plain output, events, the completion report, and why a start
 failed. Every reader of the session's output, the output source among them,
 redacts with the same record. No sink is handed the values separately.
 
+A planner summary is the other text Ordewell keeps that a model wrote over a
+secret. A checkpoint's summary is replayed into every later planner context
+and may be copied into a brief, so a value in it multiplies. It is redacted
+once, as the checkpoint is committed, against every value the session holds
+(P1).
+
 ## Key properties
 
 - **Held values are exact, at every sink (H1).**
@@ -94,6 +100,23 @@ redacts with the same record. No sink is handed the values separately.
   credential name labels it in one of the forms below, and when its shape
   passes the form's test. A form not in the list is not covered.
 
+- **A planner summary keeps the rule, never the value (P1).**
+  - Both summary prompts, the API planner's summary call and the harness
+    planner's summary turn, share one source (`conversationSummary.ts`). It
+    tells the model to keep the rule about a secret, naming it, and never its
+    value.
+  - `PlannerConversation.commitCheckpoint` redacts what it stores, manual and
+    automatic checkpoints alike, with `redactSummaryText`. A whole value the
+    session holds by a name becomes `[secret held as NAME]`, so the planner can
+    still say which variable a task needs. Today the names are the vendor keys
+    the config holds, by their environment variables. Every other held value
+    is hidden by H1, and the rest is redacted as agent text, by name and shape
+    (N1).
+  - A key the user pastes that Ordewell does not hold is masked, not named.
+    For a task to use it, it belongs in the workspace's environment
+    ([ADR-0016](0016-per-workspace-environment.md)), under a name the plan can
+    cite.
+
 ## The forms N1 reads
 
 | Form | Examples |
@@ -128,6 +151,9 @@ redacts with the same record. No sink is handed the values separately.
 - A secret Ordewell never held that has no credential name and no known shape.
 - A runner's own transcript files and PTY, which are not runner text that
   Ordewell keeps.
+- The user's own messages in the transcript, kept as they were written, and a
+  planner's live context, which is dropped at a checkpoint. P1 covers what a
+  checkpoint replays in their place.
 
 ## Considered options
 
@@ -171,3 +197,4 @@ redacts with the same record. No sink is handed the values separately.
 
 - 2026-11-05 — accepted.
 - 2026-11-05 — parts are found inside escapes and through them, escapes are read to a bound, the text channel is one stream, sibling values are read past the gutter, and a read is trimmed after it is redacted.
+- 2026-11-10 — planner summaries are redacted at the checkpoint, a held value named by its variable, and both summary prompts keep a secret's rule, not its value (P1).

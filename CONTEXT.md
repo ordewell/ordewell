@@ -3024,7 +3024,9 @@ for its whole life (`IRunnerSession.secrets`). It hides what the record holds,
 exactly and in every part of eight characters or more, in everything the
 runner writes before any sink sees it. Every reader of the session's output
 redacts with the same record. A secret Ordewell never held is left to the
-name and shape rules of agent-text redaction, which are defence in depth
+name and shape rules of agent-text redaction, which are defence in depth.
+A planner summary is redacted against what the session holds as its
+checkpoint is committed, a held vendor key named by its variable in its place
 ([ADR-0061](docs/adr/platform/0061-held-secrets-are-hidden-exactly-and-agent-text-by-name-in-depth.md)).
 *Avoid:* "known secrets", "the secret list": the record is per session, and
 "held" says that Ordewell handed the value over.

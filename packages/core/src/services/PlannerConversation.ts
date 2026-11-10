@@ -26,6 +26,7 @@ import type { StartWait, StartWaitKind } from './readiness';
 import { SubagentRuns } from './SubagentRuns';
 import type { ConversationCompactionHost, LandedHistory } from './budgetedChat';
 import { ContextSummaryError } from './contextSummary';
+import { redactSummaryText, type HeldValue } from '../utils/redactSecrets';
 import { PlannerContextExhaustedError } from './plannerContextBudget';
 import { boundedWakeUps } from './WakePolicy';
 
@@ -368,6 +369,15 @@ export interface PlannerConversationHost {
   contextPaused(details: Pick<PlannerContextPause, 'model' | 'reason' | 'done' | 'doneTruncated'>): PlannerContextPause;
 }
 
+/** What the conversation is built with besides its host. */
+export interface PlannerConversationOptions {
+  /**
+   * The values Ordewell holds, read afresh at each checkpoint: a summary names
+   * a named one in its place and hides the rest (ADR-0061 P1).
+   */
+  heldSecrets?: () => Iterable<HeldValue>;
+}
+
 /**
  * A conversation edit (rewind, fork) the conversation refused because the
  * request itself is wrong — no such message, nothing to fork. Transport-agnostic
@@ -608,7 +618,7 @@ export class PlannerConversation {
     planLines: () => this.planRows()?.rows.map(({ line }) => line) ?? null,
   };
 
-  constructor(private readonly host: PlannerConversationHost) {
+  constructor(private readonly host: PlannerConversationHost, private readonly options: PlannerConversationOptions = {}) {
     this.briefing = new PlannerBriefing({
       autorun: () => host.autorun(),
       scope: () => host.assignmentScope(),
@@ -944,7 +954,7 @@ export class PlannerConversation {
     this.host.onProgress({ type: 'compaction', compaction: { phase: 'started', ...compaction, at: new Date().toISOString() } });
     let outcome: PlannerCompactionOutcome = 'failed';
     try {
-      const summary = await this.summarize(turn.signal);
+      const summary = this.redactSummary(await this.summarize(turn.signal));
       if (this.host.plan() !== plan || compactionCut(this.transcript) !== cut) throw new ConversationEditError('The conversation changed while it was being condensed: nothing was condensed.');
       this.commitCheckpoint(condensedNotice(summary), cut, 'manual', compaction.id);
       outcome = 'condensed';
@@ -977,13 +987,18 @@ export class PlannerConversation {
       throw new Error(`A compaction cannot cut the conversation at ${keptFrom}: that is behind its last summary or past an input not yet answered.`);
     }
     const timestamp = new Date().toISOString();
-    const entry: ConversationMessage = { role: 'assistant', content, timestamp, kind: 'compaction', checkpoint: { id, keptFrom, trigger } };
+    const entry: ConversationMessage = { role: 'assistant', content: this.redactSummary(content), timestamp, kind: 'compaction', checkpoint: { id, keptFrom, trigger } };
     this.host.mutate(() => {
       this.appendEntries([entry]);
       // What the native session holds is what this condensed away.
       delete this.requirePlan().plannerSession;
       return true;
     }, () => this.host.broadcastPlan());
+  }
+
+  /** A summary as it may be kept: replayed into every later context, so no secret's value (ADR-0061 P1). */
+  private redactSummary(text: string): string {
+    return redactSummaryText(text, this.options.heldSecrets?.() ?? []);
   }
 
   /**

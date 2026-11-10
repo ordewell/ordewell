@@ -50,6 +50,8 @@ import { WebReadPolicy } from './webReadPolicy';
 import { sharedWebResponseCache, type WebResponseCache } from './WebResponseCache';
 import { sharedSearchProvider } from './DuckDuckGoSearchProvider';
 import { PROVIDER_PRIORITY, providerForRunner, runnerForProvider } from './ProviderRegistry';
+import { VENDORS } from './apiProviders';
+import type { HeldValue } from '../utils/redactSecrets';
 import { ModelResolver } from './ModelResolver';
 import { plannerModesFrom } from './plannerModes';
 import { RUN_SETTINGS_DEFAULTS, runSettingsOf, type GlobalRunSettings, type UserSettings } from './SettingsService';
@@ -685,7 +687,9 @@ export function createSession(deps: SessionDeps): Session {
       const host = deps.leaseHost ?? (deps.saveSession ? undefined : processLeaseHost());
       return host ? host.lease(onLost, runLive) : UNLEASED;
     },
-    conversation: (host) => (conversation = new PlannerConversation(host)),
+    conversation: (host) => (conversation = new PlannerConversation(host, {
+      heldSecrets: () => [...namedConfigSecrets(deps.config), ...outboundSecrets().map((value) => ({ value }))],
+    })),
     child: deps.child,
     placement: deps.placement,
     eventLog: deps.eventLog ?? ((rootSessionId, stateRoot) => {
@@ -726,6 +730,11 @@ function configSecrets(config: IConfig): string[] {
     config.apiKey, config.openAiApiKey, config.openrouterKey, config.geminiKey, config.openaiCompatibleApiKey,
     ...PROVIDER_PRIORITY.map((provider) => config.getProviderApiKey(provider)),
   ];
+}
+
+/** The vendor keys the config holds, by the variable each is handed over as: what a summary names in a key's place. */
+function namedConfigSecrets(config: IConfig): HeldValue[] {
+  return PROVIDER_PRIORITY.map((provider) => ({ name: VENDORS[provider].apiKeyEnvVar, value: config.getProviderApiKey(provider) }));
 }
 
 /** What {@link createSession} hands a Session: every collaborator, already built and wired. */
