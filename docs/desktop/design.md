@@ -957,13 +957,33 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
 │    │ ⓘ main is run r7's landing   │                                                         │
 │    │   branch: actions here are   │                                                         │
 │    │   noted in its timeline.     │                                                         │
-│    │ ↓ 0 ↑ 2  [Fetch][Pull][Push] │                                                         │
+│    │ [↓ Pull   ] [↑ Push 2  ] [⟳] │                                                         │
 ```
 
 - **Shows.**
   - *Per repository, the checkout's files:* staged, unstaged, untracked and
     conflicted (`GET /api/git/status`).
-  - *The commit box,* and the branch's ahead and behind against its upstream.
+  - *The commit box.*
+  - *The sync line:* Pull, Push and an icon-only Fetch on one 28px line, all
+    three fitting at the sidebar's 200px minimum. Pull and Push share the
+    width Fetch leaves. Each holds its count after its word: behind for Pull,
+    ahead for Push, nothing when it is 0, and `99+` past two digits. The count
+    sits in a box held for two tabular figures, so a count that changes moves
+    nothing. Below about 212px of line, the words become screen-reader text,
+    and the arrows and counts stay.
+    - *Tooltips name the target,* with the count:
+      "Pull 1 commit from origin/main" and "Push 2 commits to origin/main".
+      A disabled button's tooltip and accessible description give its reason,
+      such as "Nothing to pull: origin/main has no new commits".
+    - *A note line* shows only for a state the person has to act on: "Not
+      published: Push publishes it." (no upstream), "No remote: add one to
+      fetch, pull or push." and "No branch is checked out: Pull and Push need
+      one." Being up to date, ahead or behind needs no line.
+    - *This sidebar's sync line has no branch line:* the repository's head
+      already names the branch. The Git sidebar (W11) draws one above the
+      buttons, 28px tall: the current-branch icon at 16px, the name in
+      weight 600, then the upstream in secondary small code type. When the
+      line is short, the upstream gives way before the name.
   - *A note* when the branch is a live run's landing branch (ADR-0062 G6).
 
   Selecting a file opens its working-tree diff in Monaco.
@@ -973,7 +993,9 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
     title bar's primary stays the session's.
   - *Amend*, shown only while HEAD is unpushed (G4).
   - Stash and pop, from the `Commit ▾` menu.
-  - Fetch, pull and push to the tracking remote.
+  - Fetch, pull and push to the tracking remote. Pull comes before Push,
+    behind before ahead, everywhere the two are drawn. Fetch keeps its
+    `refresh-cw`.
 
   Discard asks first, listing the files. Pull and push ask first, naming the
   remote and the branch (G3).
@@ -991,7 +1013,7 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
     pending, and holds still under reduced motion. A second start while one
     runs is refused, and announced as "web is already syncing."; the
     palette's Fetch is disabled meanwhile.
-- **Empty.** "No changes in web." Ahead and behind still show.
+- **Empty.** "No changes in web." The sync line and its counts still show.
 - **Error.**
   - A refused action shows git's own text in the box: a hook that failed, a
     rejected push, a missing credential. It also shows the route's refusal
@@ -1004,8 +1026,8 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
 ```
 ├────┬──────────────────────────────┬─────────────────────────────────────────────────────────┤
 │▌⑃  │ web                        ⟳ │ Planner │ Commit 9c1e2d0 │ setup.md @ 9c1e2d0 ✕        │
-│    │ ⑃ main                       │                                                        │
-│    │ [Fetch] [Pull ↓1] [Push ↑2]  │  Fix setup instructions                                │
+│    │ ✓ main           origin/main │                                                        │
+│    │ [↓ Pull 1 ] [↑ Push 2  ] [⟳] │  Fix setup instructions                                │
 │    │ [⑂ Branches] [◷ History]     │  9c1e2d0 · you · 2 minutes ago                         │
 │    │ ▾ Local                    + │  …message…                                             │
 │    │   ✓ main  ↑2   ⊡ run r7      │  M docs/setup.md                                       │
@@ -1024,7 +1046,7 @@ Pressing `feature/sso` turns the same sidebar to its History; the centre is
 left as it was:
 
 ```
-│    │ ⑃ main                       │
+│    │ ✓ main           origin/main │
 │    │ [⑂ Branches] [◷ History]     │
 │    │ [History of: feature/sso ▾] ↶│
 │    │ Browsing only: your checkout │
