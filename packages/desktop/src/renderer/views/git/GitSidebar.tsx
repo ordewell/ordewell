@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useId, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
-import { ArrowDownToLine, Check, ChevronDown, ChevronRight, GitBranch, GitBranchPlus, History, Lock, Trash2, Undo2 } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, GitBranch, GitBranchPlus, History, Lock, Trash2, Undo2 } from 'lucide-react';
+import { ArrowRightLeft } from 'lucide-react';
 import { Cloud, RotateCw } from 'lucide-react';
 import { Button, EmptyState, Icon, IconButton } from '@ordewell/ui/design';
 import type { FrameApi, Unregister } from '../../frame/api';
@@ -63,6 +64,12 @@ function OwnerLink({ api, runs, owner }: { api: FrameApi; runs: Readonly<Record<
 /** How deep a row sits in its folders, for its indent. */
 const indent = (depth: number): CSSProperties => ({ '--git-depth': depth } as CSSProperties);
 
+/*
+ * A branch of the person's own. Past its name sits one trailing slot
+ * (sidebarKit.css .srow-trail): at rest it shows how far the branch is behind
+ * and ahead of its upstream, and under the pointer or keyboard focus Switch and
+ * Delete take the same box, so the name gives up only the wider of the two.
+ */
 function LocalRow({ ctx, branch, viewing, label = branch.name, depth = 0 }: { ctx: GitContext; branch: BranchInfo; viewing: boolean; label?: string; depth?: number }): JSX.Element {
   const mark = trackMark(branch);
   const held = runMark(branch);
@@ -73,11 +80,17 @@ function LocalRow({ ctx, branch, viewing, label = branch.name, depth = 0 }: { ct
         <span className="git-lead">{branch.current ? <Icon icon={Check} size={14} /> : <Icon icon={GitBranch} size={14} />}</span>
         <MiddleText className="srow-label" text={label} />
       </button>
-      {mark && <span className="srow-note" aria-label={`${plural(branch.ahead, 'commit')} ahead, ${plural(branch.behind, 'commit')} behind`}>{mark}</span>}
       {hold && <span className="git-lock" title={hold}><Icon icon={Lock} size={12} /><span>{held}</span></span>}
-      <span className="srow-actions">
-        {!branch.current && <IconButton icon={ArrowDownToLine} label={`Switch to ${branch.name}`} onClick={() => void switchBranch(ctx, branch.name)} />}
-        {!branch.current && <IconButton icon={Trash2} label={`Delete ${branch.name}`} onClick={() => void deleteBranch(ctx, branch.name)} />}
+      <span className="srow-trail">
+        <span className="srow-rest">
+          {mark && <span className="srow-note" aria-label={`${plural(branch.behind, 'commit')} behind, ${plural(branch.ahead, 'commit')} ahead`}>{mark}</span>}
+        </span>
+        {!branch.current && (
+          <span className="srow-actions">
+            <IconButton icon={ArrowRightLeft} label={`Switch to ${branch.name}`} onClick={() => void switchBranch(ctx, branch.name)} />
+            <IconButton icon={Trash2} label={`Delete ${branch.name}`} onClick={() => void deleteBranch(ctx, branch.name)} />
+          </span>
+        )}
       </span>
     </li>
   );

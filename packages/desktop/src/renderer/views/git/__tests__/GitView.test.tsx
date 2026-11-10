@@ -111,7 +111,7 @@ const answer = (name: string | RegExp): void => { fireEvent.click(within(screen.
 describe('the Git sidebar', () => {
   it('lists the branches, the stashes and the worktrees, with the checkout’s upstream marks', async () => {
     await mount();
-    expect(screen.getByLabelText('2 commits ahead, 1 commit behind')).toHaveTextContent('↑2 ↓1');
+    expect(screen.getByLabelText('1 commit behind, 2 commits ahead')).toHaveTextContent('↓1 ↑2');
     expect(screen.getByRole('button', { name: 'origin/main' })).toBeInTheDocument();
     expect(screen.getByTitle('stash@{0}: WIP on main')).toBeInTheDocument();
     expect(screen.getByText('Your checkout')).toBeInTheDocument();
@@ -150,6 +150,40 @@ describe('the Git sidebar', () => {
     const unhandled = fireEvent.keyDown(within(form).getByRole('textbox'), { key: 'Escape' });
     expect(unhandled).toBe(false);
     expect(screen.queryByRole('form', { name: 'New branch' })).toBeNull();
+  });
+
+  it('lists the checked-out branch first in Local, before every folder', async () => {
+    await mount({}, { ...BRANCHES, local: [branch('feature/login', { sha: sha('b') }), branch('fix/typo'), BRANCHES.local[0]!, branch('release/2')] });
+    const local = screen.getByRole('list', { name: 'feature' }).closest('li')!.parentElement!;
+    const [first, ...rest] = [...local.children];
+    expect(first!.querySelector('.srow-main')).toHaveAccessibleName('main');
+    expect(first).toHaveAttribute('aria-current', 'true');
+    expect(rest.map((li) => li.querySelector('.srow-main')?.textContent)).toEqual(['feature1', 'fix1', 'release1']);
+  });
+
+  it('puts the upstream marks and the actions in one trailing slot, with Switch drawn apart from Pull', async () => {
+    await mount({}, { ...BRANCHES, local: [BRANCHES.local[0]!, branch('feature/login', { sha: sha('b'), upstream: 'origin/feature/login', ahead: 3, behind: 4 })] });
+    const row = screen.getByRole('button', { name: 'feature/login' }).closest('li')!;
+    const trail = row.querySelector('.srow-trail')!;
+    expect(within(trail as HTMLElement).getByLabelText('4 commits behind, 3 commits ahead')).toHaveTextContent('↓4 ↑3');
+    const actions = trail.querySelector('.srow-actions')!;
+    expect(within(actions as HTMLElement).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual(['Switch to feature/login', 'Delete feature/login']);
+    expect(within(actions as HTMLElement).getByRole('button', { name: 'Switch to feature/login' }).querySelector('svg')).toHaveClass('lucide-arrow-right-left');
+    // The checked-out branch has nothing to switch to or delete: its slot holds the marks alone.
+    const current = screen.getByRole('button', { name: 'main' }).closest('li')!;
+    expect(current.querySelector('.srow-trail .srow-actions')).toBeNull();
+    expect(current.querySelector('.srow-trail .srow-rest')).toHaveTextContent('↓1 ↑2');
+  });
+
+  it('steps a deep branch in by its depth and keeps its full name in its tooltip', async () => {
+    const deep = 'team/web/feature/sso/callback';
+    await mount({}, { ...BRANCHES, local: [BRANCHES.local[0]!, branch('feature/login', { sha: sha('b') }), branch(deep), branch('team/web/feature/sso/state'), branch('team/web/feature/login'), branch('team/web/fix/x'), branch('team/api/y')] });
+    const button = screen.getByRole('button', { name: deep });
+    expect(button).toHaveAttribute('title', deep);
+    expect(button).toHaveTextContent(/^callback$/);
+    // team, web, feature and sso are four folders deep; git.css caps how far that indents.
+    expect(button.closest('li')!.style.getPropertyValue('--git-depth')).toBe('4');
+    expect(screen.getByRole('button', { name: `Switch to ${deep}` })).toBeInTheDocument();
   });
 
   it('shows the lock a live run puts on its landing branch', async () => {
@@ -693,7 +727,7 @@ describe('branch folders', () => {
     expect(screen.queryByRole('button', { name: /^(Switch to|Delete) ordewell\// })).not.toBeInTheDocument();
   });
 
-  it('starts a long group folded but for the folder that holds the checkout, and names each row in full', async () => {
+  it('starts a long group folded, the checkout leading it under its full name, and names each row in full', async () => {
     const long = 'a-very-long-branch-name-that-cannot-fit-in-a-narrow-sidebar';
     const local = [
       ...Array.from({ length: 10 }, (_, i) => branch(`chore/c${i}`, { sha: sha('b') })),
@@ -702,8 +736,10 @@ describe('branch folders', () => {
     await mount({}, { ...BRANCHES, local }, /^Local/);
     fireEvent.click(screen.getByRole('button', { name: /^Local/ }));
     expect(screen.getByRole('button', { name: /^chore 10 branches/ })).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.getByRole('button', { name: /^wip 1 branch/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.queryByRole('button', { name: /^wip 1 branch/ })).toBeNull();
     const row = screen.getByRole('button', { name: `wip/${long}` });
+    expect(row.closest('li')).toHaveAttribute('aria-current', 'true');
+    expect(row.closest('ul')!.firstElementChild).toBe(row.closest('li'));
     expect(row).toHaveAttribute('title', `wip/${long}`);
     expect(row).toHaveTextContent(long);
   });

@@ -33,26 +33,39 @@ export function plural(count: number, one: string, many = `${one}s`): string {
   return `${count} ${count === 1 ? one : many}`;
 }
 
-/** How many commits a branch is ahead and behind its upstream, as the sidebar marks it; empty when level. */
+/**
+ * How many commits a branch is behind and ahead of its upstream, as the
+ * sidebar marks it; empty when level. Behind comes first, as the sync bar
+ * puts it, so the two never read in opposite orders on one screen.
+ */
 export function trackMark(branch: Pick<BranchInfo, 'ahead' | 'behind' | 'upstream'>): string {
-  return [branch.ahead > 0 ? `↑${branch.ahead}` : '', branch.behind > 0 ? `↓${branch.behind}` : ''].filter(Boolean).join(' ');
+  return [branch.behind > 0 ? `↓${branch.behind}` : '', branch.ahead > 0 ? `↑${branch.ahead}` : ''].filter(Boolean).join(' ');
 }
 
 export type BranchNode =
   | { kind: 'folder'; key: string; /** The prefix it stands for, without a trailing slash. */ path: string; label: string; count: number; /** It holds the branch HEAD is on. */ current: boolean; children: BranchNode[] }
   | { kind: 'leaf'; key: string; label: string; branch: BranchInfo };
 
+/** Names in the order a person reads a list of them: case aside, and `release/1.10` after `release/1.9`. */
+const byName = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
+
 /**
  * Slash-delimited branch names as folders, the way the sidebar groups them.
- * A chain of folders that each hold only one folder folds into one row, so
- * `ordewell/r7/…` costs a row and not two. A branch named like a folder
- * (`feature` beside `feature/login`) stays its own row: keys tell the two
- * apart, and every action takes the branch's full name, never the label.
+ * The branch HEAD is on leads the list under its full name, outside any
+ * folder, so the checkout is the first row and not the last. Every other row,
+ * folder and branch alike, is in one alphabetical order at each level, the
+ * same in every group. A chain of folders that each hold only one folder folds
+ * into one row, so `ordewell/r7/…` costs a row and not two. A branch named
+ * like a folder (`feature` beside `feature/login`) stays its own row, just
+ * before it: keys tell the two apart, and every action takes the branch's full
+ * name, never the label.
  */
 export function branchTree(branches: readonly BranchInfo[]): BranchNode[] {
   interface Dir { folders: Map<string, Dir>; leaves: BranchInfo[] }
   const root: Dir = { folders: new Map(), leaves: [] };
+  const pinned = branches.filter((b) => b.current);
   for (const branch of branches) {
+    if (branch.current) continue;
     const segments = branch.name.split('/');
     let dir = root;
     for (const segment of segments.slice(0, -1)) {
@@ -78,8 +91,12 @@ export function branchTree(branches: readonly BranchInfo[]): BranchNode[] {
       return { kind: 'folder', key: `folder:${path}`, path, label, count, current, children };
     }),
     ...dir.leaves.map((branch): BranchNode => ({ kind: 'leaf', key: `branch:${branch.name}`, label: branch.name.slice(prefix.length), branch })),
+    // Ties are a branch beside its namesake folder, branch first, or names apart only in case, by code point.
+  ].sort((a, b) => byName.compare(a.label, b.label) || (a.kind !== b.kind ? (a.kind === 'leaf' ? -1 : 1) : a.label < b.label ? -1 : 1));
+  return [
+    ...pinned.map((branch): BranchNode => ({ kind: 'leaf', key: `branch:${branch.name}`, label: branch.name, branch })),
+    ...nodes(root, ''),
   ];
-  return nodes(root, '');
 }
 
 export type RefKind = 'head' | 'branch' | 'remote' | 'tag' | 'ordewell';
