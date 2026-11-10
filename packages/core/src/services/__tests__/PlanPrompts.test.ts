@@ -348,10 +348,10 @@ describe('research tasks (ADR-0037)', () => {
 describe('who explores: three tiers, search (ADR-0037 R5)', () => {
   const awaited = (agents: string) => new RegExp(`Use ${agents} and wait for its results inside this reply, never in the background: once your turn ends, nothing you say reaches the user\\.`);
   const backends = [
-    { name: 'an API planner', harness: false, runner: undefined, inTurn: /- An agent, awaited: .*Use spawn_research_agent, whose agents return within your tool round\./ },
+    { name: 'an API planner', harness: false, runner: undefined, inTurn: /- An agent, awaited, past that: .*Use spawn_research_agent, whose agents return within your tool round\./ },
     { name: 'Claude Code', harness: true, runner: 'claude-code', inTurn: awaited('your Agent tool') },
     { name: 'Codex', harness: true, runner: 'codex', inTurn: awaited('your own subagents, if this session has them,?') },
-    { name: 'OpenCode', harness: true, runner: 'opencode', inTurn: /- Your own reads, past that: you have no agents of your own here, so a wider question you need this turn .* is yours to read too\./ },
+    { name: 'OpenCode', harness: true, runner: 'opencode', inTurn: /- A research task, past that: .*You have no agents of your own here: research tasks are how you delegate\./ },
     { name: 'an unnamed harness', harness: true, runner: undefined, inTurn: awaited('your own agents, if you have any,?') },
   ] as const;
   const prompt = (harness: boolean, runner?: RunnerId) => buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness, runner });
@@ -402,9 +402,20 @@ describe('who explores: three tiers, search (ADR-0037 R5)', () => {
       expect(rule).not.toMatch(/digest|An agent, awaited/);
       return;
     }
-    expect(rule).toMatch(/One agent per independent question, several in parallel; a question whose parts depend on each other stays with one\./);
-    expect(rule).toMatch(/One agent for a fact, two to four for a comparison, more only for broad research\./);
+    expect(rule).toMatch(/send agents, one per package or independent question, in parallel, so only their digests reach you; a question whose parts depend on each other stays with one\./);
     expect(rule).toMatch(/Each returns a digest of about 1-2k tokens: conclusion first, file:line references, decisions found, what is uncertain; no pasted file bodies\./);
+  });
+
+  // On the bench's breadth goal, planners left to "a wider question" read whole packages themselves; a count of trees and reads they can check mid-turn.
+  it.each([
+    { runner: 'claude-code', delegate: /- An agent, awaited, past that: before you read across more than one package or directory tree, or past about ten reads for one question, send agents, one per package or independent question, in parallel, so only their digests reach you;/ },
+    { runner: 'opencode', delegate: /- A research task, past that: before you read across more than one package or directory tree, or past about ten reads for one question, give each package or independent question a research task, so only their reports reach you\. You have no agents of your own here: research tasks are how you delegate\./ },
+  ] as const)('gives a checkable trigger for delegating breadth, for $runner', ({ runner, delegate }) => {
+    const rule = section(prompt(true, runner), 'WHO EXPLORES:');
+    expect(rule).toMatch(delegate);
+    expect(rule).toMatch(/- Read it yourself: the project's own guides .*, a map of its directories, and targeted lookups .* whose detail decides your next step/);
+    expect(rule).not.toMatch(/is yours to read too|a wider question/);
+    if (runner === 'opencode') expect(rule).not.toMatch(/send agents|spawn_research_agent|Agent tool/);
   });
 
   it.each(backends)('keeps the session fresh, naming the turn block by its header and no command, for $name', ({ harness, runner }) => {
@@ -445,10 +456,10 @@ describe('who explores: three tiers, search (ADR-0037 R5)', () => {
     }
   });
 
-  it('tells an API planner whose service has no research subagents to read itself', () => {
+  it('tells an API planner whose service has no research subagents to delegate to research tasks', () => {
     const p = buildConversationSystemPrompt('goal', '', {}, ['gemini'], undefined, { subagents: false });
     const rule = section(p, 'WHO EXPLORES:');
-    expect(rule).toMatch(/you have no agents of your own here/);
+    expect(rule).toMatch(/You have no agents of your own here: research tasks are how you delegate/);
     expect(rule).not.toContain('spawn_research_agent');
     expect(section(p, 'DEFAULTS:')).not.toMatch(/agents/);
   });
