@@ -142,7 +142,7 @@ function researchPhaseBlock(harnessMode: boolean, researchShell?: ConversationVa
   return [
     'RESEARCH PHASE:',
     ...toolSpecific,
-    '- Synthesize tool findings into your messages. The user does not see raw tool output; only your synthesis reaches them.',
+    '- Synthesize tool findings: the user never sees raw tool output.',
   ].join('\n');
 }
 
@@ -193,11 +193,12 @@ export function inTurnAgents(harness: boolean, runner?: RunnerId, subagents = tr
 export function whoExploresSection(agents: InTurnAgents): string[] {
   // Decided before reading, by area, not by a count: no planner can count its reads mid-turn, and on the bench's breadth goal a count delegated nothing for Codex or OpenCode (ADR-0037 R5).
   const trigger = 'with the map read, before you read inside any package or top-level area the goal touches';
-  const inside = 'Inside one, read yourself only a targeted lookup whose answer decides your next step.';
+  // A carve-out for lookups that outlived the digests let DeepSeek re-read 8-14 times inside areas it had delegated (#57): once an area is covered, a doubt goes to another delegate.
+  const inside = (covered: string, partial: string, next: string) => `Inside one, read yourself only a targeted lookup whose answer decides your next step, and nothing once ${covered} covers it: send a gap, a doubt or what a partial ${partial} left unread to ${next}, naming what is missing.`;
   const agentTier = agents === null
-    ? `- A research task, for the rest: ${trigger}, give each area a research task, so only their reports reach you. ${inside} You have no agents of your own here: research tasks are how you delegate.`
+    ? `- A research task, for the rest: ${trigger}, give each area a research task, so only their reports reach you. ${inside('a research task\'s report', 'report', 'another research task')} You have no agents of your own here: research tasks are how you delegate.`
     : [
-      `- An agent, awaited, for the rest: ${trigger}, send one agent per area, in parallel, so only their digests reach you. ${inside} ${agents === 'spawn_research_agent' ? 'Use spawn_research_agent, whose agents return within your tool round.' : `Use ${agents} and wait for its results inside this reply, never in the background: once your turn ends, nothing you say reaches the user.`}`,
+      `- An agent, awaited, for the rest: ${trigger}, send one agent per area, in parallel, so only their digests reach you. ${inside('a digest or a research task\'s report', 'digest', 'another agent')} ${agents === 'spawn_research_agent' ? 'Use spawn_research_agent, whose agents return within your tool round.' : `Use ${agents} and wait for its results inside this reply, never in the background: once your turn ends, nothing you say reaches the user.`}`,
       'Each returns a digest of about 1-2k tokens: conclusion first, file:line references, decisions found, what is uncertain; no pasted file bodies.',
     ].join(' ');
   return [
@@ -469,7 +470,7 @@ const SUBPLANNER_WORDING: readonly (readonly [RegExp, string])[] = [
   [/ When it shows your context past 40% of its window, suggest compacting at a quiet moment, .*$/m, ''],
   [/ the decisions agreed with the user and the plan\./, ' your brief and the plan.'],
   [/ Reads run at once; anything else is approved or refused by the user's settings\./, ' Reads run at once, and nothing asks: what the allowlist does not cover runs sealed, or is refused.'],
-  [/^- Synthesize tool findings into your messages\..*$/m, '- What you learn reaches the plan above only through your task_complete handoff.'],
+  [/^- Synthesize tool findings\b.*$/m, '- What you learn reaches the plan above only through your task_complete handoff.'],
   [/^- A first plan may be research tasks alone, (.*?) A vague goal the user can clarify is not one: ask first\./m, '- A first plan may be research tasks alone, $1'],
   [/^- A small effect you can state as exact commands: one script task\. In the user's turn, run it with run_script; when it belongs to a larger plan, make it a script task in that plan\./m, '- A small effect you can state as exact commands: one script task, in the plan or with run_script.'],
   [/^- AUTORUN is on: .*$/m, '- Your plan starts when your reply ends. Once submit_plan has taken it, end your reply with one line, and do not start its tasks yourself.'],
@@ -478,7 +479,6 @@ const SUBPLANNER_WORDING: readonly (readonly [RegExp, string])[] = [
   [/an absolute path into the workspace reaches the user's own checkout instead, where the earlier tasks' work is not merged yet/, 'an absolute path into the workspace reaches the delegated task\'s own checkout instead, where the earlier tasks\' work is not merged yet'],
   [/ Each task runs in its runner's mode for the user's autonomy level \(Full or Guarded\)/, ' Each task runs in its runner\'s mode for this node\'s autonomy level (Full or Guarded)'],
   [/^4\. When the strategy calls for a plan and you have enough context, produce a prose outline.*\n5\. .*$/m, '4. When the strategy calls for a plan and you have enough context, call submit_plan. Nobody reads an outline, so write none.'],
-  [/^- Write the outline in your reply before submitting the plan\.\n/m, ''],
   [/^Three reads per user message;/m, 'Three reads per turn;'],
   [/^When the user asks you to start, stop or retry work, do it with these tools rather than asking them to\. Ordewell checks every call, may ask the user first, and a refusal says why and what would be accepted\. When you suggest something only the user does, name it by the control SURFACE AND SETTINGS lists for it, never a button it does not name\.$/m, 'You start, stop and retry the work yourself with these tools. Ordewell checks every call, and a refusal says why and what would be accepted.'],
   [/ The user consents to it as written, unless AUTORUN is on and autonomy is Full\./, ' It runs sealed unless you were granted `effect`.'],
@@ -739,7 +739,7 @@ function buildConversationBody(
     ...(tools
       ? [
         '- Submit the plan only through submit_plan: JSON written in your reply is never read as a plan.',
-        autorun ? '- Write the outline in your reply before submitting the plan.' : '- Show the outline before submitting. Do not skip the outline.',
+        ...(autorun ? [] : ['- Show the outline before submitting. Do not skip the outline.']),
       ]
       : [
         '- When committing the plan, output only the JSON object, with no markdown code block around it: anything else fails to parse.',
@@ -756,7 +756,7 @@ function buildConversationBody(
     'MODEL SELECTION GUIDELINES:',
     '- Use stronger models for complex refactoring, architecture changes, security-critical code.',
     '- Use weaker/faster models for simple file operations, test generation, config changes, documentation.',
-    `- Assign thinkingEffort based on task complexity, choosing only from the assigned model's "variants" list ${tools ? 'from list_models' : 'above'} (e.g. low for simple tasks, high for complex ones). Omit thinkingEffort if the model has no variants.`,
+    `- Assign thinkingEffort based on task complexity, choosing only from the assigned model's "variants" list ${tools ? 'from list_models' : 'above'}. Omit thinkingEffort if the model has no variants.`,
     '',
     'READ-ONLY TASKS:',
     modeGuide,
