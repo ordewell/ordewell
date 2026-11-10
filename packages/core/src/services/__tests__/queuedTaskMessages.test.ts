@@ -46,11 +46,11 @@ describe('queued task messages before settlement', () => {
     expect(orchestrator.storeInstance.get('t1')?.handoff?.summary).toBe('Work with tests');
   });
 
-  it('delivers several queued messages in order without a status flicker', async () => {
+  it('delivers a message queued behind each turn, in order, without a status flicker', async () => {
     const { orchestrator, session } = scheduled();
     await orchestrator.forceStartTask('t1');
-    for (const text of ['one', 'two', 'three']) orchestrator.sendTaskMessage('t1', text);
-    for (let i = 0; i < 3; i++) {
+    for (const [i, text] of ['one', 'two', 'three'].entries()) {
+      orchestrator.sendTaskMessage('t1', text);
       session.reportComplete({ status: 'done', summary: `Turn ${i}` });
       session.emitTurnEnd('completed');
       await flushMicrotasks(50);

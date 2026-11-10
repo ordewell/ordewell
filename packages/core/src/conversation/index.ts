@@ -16,7 +16,7 @@ export { approvalKindText, approvalStatusText, compactionText, handoffFindingsTe
 export type { HandoffPeekSubject } from './labels';
 export type { DiffRow, DiffRowKind } from './format';
 export type { OutputPreview } from './format';
-export { EMPTY_HOLD, holdPrompt, drainNext, unsendLatest, unsendAll, takeAt, aheadOfDraft } from './promptHold';
+export { EMPTY_HOLD, holdPrompt, drainNext, unsendLatest, unsendAll, takeAt, aheadOfDraft, glued } from './promptHold';
 export type { PromptHold, TakenPrompt } from './promptHold';
 export { NO_TURN, followTurn, stopTurn, closeTurn } from './turnGate';
 export type { TurnGate, GatedConversation } from './turnGate';
