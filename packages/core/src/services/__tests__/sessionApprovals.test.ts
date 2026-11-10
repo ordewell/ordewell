@@ -1,6 +1,8 @@
 import * as path from 'path';
 import { describe, it, expect, vi } from 'vitest';
-import { makeSession } from './sessionTestKit';
+import { makeSession, FakeRunnerSession, testWorkspace } from './sessionTestKit';
+import { createTask } from '../../models/Task';
+import type { IRunner } from '../../interfaces/IRunner';
 import { BaseFileSystem } from '../BaseFileSystem';
 import { PlannerShellSandbox } from '../sandbox/plannerSandbox';
 import { fakeConfig } from '../../testing';
@@ -420,6 +422,97 @@ describe('Session approval flow', () => {
       expect(await Promise.race([orphan, Promise.resolve('still-blocked')])).toBe('still-blocked');
       session.resolveApproval(approvalRequests(messages)[1].id, false);
       await orphan;
+    });
+  });
+
+  /**
+   * A harness planner (Cline over ACP) may end its turn with one of Ordewell's
+   * tool calls still parked on an approval. Nothing will wait on that answer,
+   * and a modal card left open swallows the user's next message.
+   */
+  describe('a planning turn that ends with an approval pending', () => {
+    function sessionEndingMidApproval() {
+      const messages: SessionMessage[] = [];
+      const fsAdapter = new ProbeFileSystem();
+      const parked: { outcome?: Promise<ToolOutcome> } = {};
+      const session = makeSession({
+        fsAdapter,
+        broadcast: (msg) => { messages.push(msg); },
+        aiService: {
+          hasActiveConversation: () => true,
+          startConversation: async () => {
+            parked.outcome = fsAdapter.bash('npm test');
+            await vi.waitFor(() => expect(approvalRequests(messages)).toHaveLength(1));
+            return { kind: 'message' as const, text: 'Asked to run the suite.', researchLog: [] };
+          },
+        },
+      });
+      return { session, fsAdapter, messages, parked };
+    }
+
+    it('denies it as the turn ends, closes its card on every surface, and ignores a late answer', async () => {
+      const { session, fsAdapter, messages, parked } = sessionEndingMidApproval();
+
+      await session.startPlanning('goal', ['claude-code']);
+
+      const { id } = approvalRequests(messages)[0];
+      expect(session.outstandingApprovals()).toEqual([]);
+      expect(messages).toContainEqual({ type: 'approval_settled', id, granted: false });
+      expect((await parked.outcome)?.output).toContain('not approved');
+      expect(session.resolveApproval(id, true)).toBe(false);
+      expect(fsAdapter.bashCalls).toEqual([]);
+    });
+
+    it('withdraws a request whose tool call was cancelled, with no turn to end', async () => {
+      const { session, fsAdapter, messages } = sessionWithProbe();
+      const call = new AbortController();
+
+      const outcome = fsAdapter.bash('npm test', call.signal);
+      await vi.waitFor(() => expect(approvalRequests(messages)).toHaveLength(1));
+      call.abort();
+
+      expect((await outcome).output).toContain('not approved');
+      expect(session.outstandingApprovals()).toEqual([]);
+    });
+
+    it('leaves a running task\'s request open: the runner still waits on it', async () => {
+      const messages: SessionMessage[] = [];
+      const fsAdapter = new ProbeFileSystem();
+      const runners: FakeRunnerSession[] = [];
+      const runner = {
+        spawn: vi.fn(async (opts: Parameters<IRunner['spawn']>[0]) => {
+          const spawned = new FakeRunnerSession(`s${runners.length + 1}`, opts.taskId);
+          runners.push(spawned);
+          return spawned;
+        }),
+        stop: vi.fn(), stopAll: vi.fn(), activeCount: 0,
+      } as IRunner;
+      const session = makeSession({
+        fsAdapter,
+        runner,
+        config: fakeConfig({ autonomousMode: false }),
+        broadcast: (msg) => { messages.push(msg); },
+        aiService: {
+          hasActiveConversation: () => false,
+          startConversation: async () => {
+            void fsAdapter.bash('npm test');
+            await vi.waitFor(() => expect(session.outstandingApprovals()).toHaveLength(2));
+            return { kind: 'message' as const, text: 'Asked to run the suite.', researchLog: [] };
+          },
+        },
+      });
+      const now = new Date().toISOString();
+      session.loadPlan({
+        tasks: [createTask({ id: 't1', order: 1, title: 'Task t1', prompt: 'do t1', assignedRunner: 'claude-code', taskMode: 'acceptEdits' })],
+        generatedAt: now, status: 'approved', runners: ['claude-code'], lastUpdated: now,
+      }, 'goal', testWorkspace, { persist: false });
+      await session.execute({ command: 'run_plan' }, { kind: 'user' });
+      runners[0].requestPermission('p1', 'Bash', { command: 'git push --force' });
+      await vi.waitFor(() => expect(session.outstandingApprovals()).toHaveLength(1));
+
+      await session.continueConversation('run the suite');
+
+      expect(session.outstandingApprovals().map((a) => a.request)).toEqual([expect.objectContaining({ kind: 'runner_tool', taskId: 't1' })]);
     });
   });
 

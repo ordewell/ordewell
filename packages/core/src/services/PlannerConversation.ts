@@ -111,10 +111,14 @@ function spendRead(reads: ReadBudget, signature: string): 'refused' | 'answer' |
  */
 export class PlannerTurn {
   private readonly controller = new AbortController();
+  private readonly over = new AbortController();
   private dropped = false;
   private forced = false;
 
   get signal(): AbortSignal { return this.controller.signal; }
+
+  /** Aborts once the turn is over however it ended — stopped, abandoned or settled — so what it raised can be withdrawn. */
+  get ended(): AbortSignal { return this.over.signal; }
 
   /** The plan it was answering was dropped under it, so nothing it settles may land. */
   get abandoned(): boolean { return this.dropped; }
@@ -125,11 +129,17 @@ export class PlannerTurn {
   stop(by?: 'force_send'): void {
     if (by === 'force_send' && !this.controller.signal.aborted) this.forced = true;
     this.controller.abort();
+    this.over.abort();
   }
 
   abandon(): void {
     this.dropped = true;
     this.controller.abort();
+    this.over.abort();
+  }
+
+  end(): void {
+    this.over.abort();
   }
 }
 
@@ -736,6 +746,7 @@ export class PlannerConversation {
       turn,
       release: () => {
         callerSignal?.removeEventListener('abort', relay);
+        turn.end();
         // An abandoned turn gave the slot up already, maybe to its successor.
         if (this.live !== turn) return;
         this.live = null;
@@ -743,6 +754,11 @@ export class PlannerConversation {
         this.host.turnReleased?.();
       },
     };
+  }
+
+  /** When the turn holding the conversation is over, for what the host raises during it: none is held when undefined. */
+  get liveTurnEnded(): AbortSignal | undefined {
+    return this.live?.ended;
   }
 
   /** The user turn being answered, for what the host raises during it — an approval the turn's research asks for. */
