@@ -271,7 +271,7 @@ describe('the Branches and History views', () => {
       }),
     });
     fireEvent.click(views().getByRole('button', { name: 'History' }));
-    const row = await screen.findByRole('button', { name: 'Commit aaaaaaa: Merge: Wire SSO' });
+    const row = await screen.findByRole('button', { name: /^Commit aaaaaaa: Merge: Wire SSO/ });
     expect(row.querySelector('svg.git-lanes circle')).not.toBeNull();
     // The row names the short sha; its tooltip has the full one, to read or compare (design W11).
     expect(row).toHaveAttribute('title', expect.stringContaining(`${sha('a')} · Ada`));
@@ -329,10 +329,54 @@ describe('the Branches and History views', () => {
     expect(daemon.calls('git.log')).toHaveLength(2);
   });
 
+  it('shows one ref chip with the rest counted, a branch and its remote as one, and names everything', async () => {
+    const refs = ['HEAD', 'release/2.4', 'feature/sso', 'origin/feature/sso', 'origin/main', 'v2.0'];
+    const branches = { ...BRANCHES, local: [...BRANCHES.local, branch('release/2.4', { sha: sha('a') }), branch('feature/sso', { sha: sha('a') })], remote: [branch('origin/main'), branch('origin/feature/sso')] };
+    await mount({ 'git.log': ok({ repo: '.', ref: 'HEAD', commits: [{ ...LOG[0]!, refs }], cursor: null }) }, branches);
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    const row = await screen.findByRole('button', { name: /^Commit aaaaaaa: Merge: Wire SSO/ });
+    // release/2.4 leads (no branch here is checked out at this commit); feature/sso folds in its remote, so feature/sso, origin/main and v2.0 are the +3.
+    expect(row.querySelectorAll('.git-hrow-refs .git-chip:not(.git-chip-more)')).toHaveLength(1);
+    expect(within(row).getByText('release/2.4')).toBeInTheDocument();
+    expect(within(row).getByText('+3')).toBeInTheDocument();
+    expect(row).toHaveAccessibleName(/by Ada, .+ ago, refs release\/2\.4, feature\/sso, origin\/feature\/sso, origin\/main, v2\.0$/);
+    expect(row).toHaveAttribute('title', expect.stringContaining('release/2.4, feature/sso, origin/feature/sso, origin/main, v2.0'));
+  });
+
+  it('marks a branch that its remote-tracking ref shares the commit with, and leads with the checked-out branch', async () => {
+    await mount();
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    const row = await screen.findByRole('button', { name: /^Commit aaaaaaa: Merge: Wire SSO/ });
+    const chip = within(row).getByText('main');
+    expect(chip.querySelector('.git-chip-mark')).not.toBeNull();
+    expect(chip).toHaveAttribute('title', expect.stringContaining('Also on origin/main'));
+    expect(within(row).queryByText(/^\+\d/)).toBeNull();
+  });
+
+  it('orders the metadata age, author, then the sha that the ellipsis cuts last', async () => {
+    await mount();
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    const row = await screen.findByRole('button', { name: /^Commit aaaaaaa: Merge: Wire SSO/ });
+    expect(row.querySelector('.git-hrow-info')?.textContent).toMatch(/^\d+(mo|d|h|m) · Ada · aaaaaaa$/);
+  });
+
+  it('says in words, not only by a fade, that the lanes are cut off', async () => {
+    const rect = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({ width: 5, height: 44, x: 0, y: 0, top: 0, left: 0, right: 5, bottom: 44, toJSON: () => ({}) });
+    try {
+      await mount();
+      fireEvent.click(views().getByRole('button', { name: 'History' }));
+      const list = await screen.findByRole('list', { name: 'History' });
+      await waitFor(() => expect(list).toHaveClass('git-hlist-clipped'));
+      expect(list).toHaveAccessibleDescription(/further lanes are cut off/);
+    } finally { rect.mockRestore(); }
+  });
+
   it('says a repository with no commits has no history', async () => {
     await mount({ 'git.log': ok({ repo: '.', ref: 'HEAD', commits: [], cursor: null }) });
     fireEvent.click(views().getByRole('button', { name: 'History' }));
     expect(await screen.findByText('No commits yet')).toBeInTheDocument();
+    // One line (design S2): no second sentence under the title.
+    expect(screen.queryByText(/Commit something/)).toBeNull();
   });
 
   it('reads the history again once a fetch moves a branch, and drops the answer that read overtook', async () => {
@@ -349,9 +393,9 @@ describe('the Branches and History views', () => {
     await waitFor(() => expect(daemon.calls('git.log')).toHaveLength(1));
     branches = moved;
     fireEvent.click(within(screen.getByRole('group', { name: /^Sync/ })).getByRole('button', { name: /^Fetch/ }));
-    expect(await screen.findByRole('button', { name: 'Commit aaaaaaa: After the fetch' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /^Commit aaaaaaa: After the fetch/ })).toBeInTheDocument();
     await act(async () => { first.settle(ok({ repo: '.', ref: 'HEAD', commits: LOG, cursor: null })); });
-    expect(screen.getByRole('button', { name: 'Commit aaaaaaa: After the fetch' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Commit aaaaaaa: After the fetch/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Commit fffffff/ })).not.toBeInTheDocument();
     expect(daemon.calls('git.log')).toHaveLength(2);
   });
@@ -432,13 +476,16 @@ describe('the Branches and History views', () => {
       'git.log': () => (++reads === 1 ? ok({ repo: '.', ref: 'HEAD', commits: LOG, cursor: null }) : later.promise),
     });
     fireEvent.click(views().getByRole('button', { name: 'History' }));
-    const row = await screen.findByRole('button', { name: 'Commit aaaaaaa: Merge: Wire SSO' });
-    expect(within(row).queryByText('v2.0')).not.toBeInTheDocument();
+    const row = await screen.findByRole('button', { name: /^Commit aaaaaaa: Merge: Wire SSO/ });
+    expect(row).not.toHaveAccessibleName(/v2\.0/);
     fireEvent.click(screen.getByRole('button', { name: 'Reload branches and history' }));
     await waitFor(() => expect(daemon.calls('git.log')).toHaveLength(2));
-    expect(screen.getByRole('button', { name: 'Commit aaaaaaa: Merge: Wire SSO' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Commit aaaaaaa: Merge: Wire SSO/ })).toBeInTheDocument();
     await act(async () => { later.settle(ok({ repo: '.', ref: 'HEAD', commits: [{ ...LOG[0]!, refs: [...LOG[0]!.refs, 'v2.0'] }, LOG[1]!], cursor: null })); });
-    expect(within(screen.getByRole('button', { name: 'Commit aaaaaaa: Merge: Wire SSO' })).getByText('v2.0')).toBeInTheDocument();
+    // One chip leads; a new tag is counted in the +N and named in the row's name and tooltip.
+    const tagged = screen.getByRole('button', { name: /^Commit aaaaaaa: Merge: Wire SSO/ });
+    expect(tagged).toHaveAccessibleName(/v2\.0/);
+    expect(within(tagged).getByText('+1')).toBeInTheDocument();
   });
 
   it('holds Load more while the history is read again, and while that read failed, so a click is never lost', async () => {
@@ -480,8 +527,8 @@ describe('the Branches and History views', () => {
       'git.log': (params) => (params?.repo === 'libs/ui' ? lib.promise : ok({ repo: '.', ref: 'HEAD', commits: LOG, cursor: null })),
     });
     fireEvent.click(views().getByRole('button', { name: 'History' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Commit fffffff: Add the login button' }));
-    expect(screen.getByRole('button', { name: 'Commit fffffff: Add the login button' })).toHaveAttribute('aria-current', 'true');
+    fireEvent.click(await screen.findByRole('button', { name: /^Commit fffffff: Add the login button/ }));
+    expect(screen.getByRole('button', { name: /^Commit fffffff: Add the login button/ })).toHaveAttribute('aria-current', 'true');
 
     const picker = await screen.findByRole('combobox', { name: 'Repository' });
     fireEvent.change(picker, { target: { value: 'libs/ui' } });
@@ -490,13 +537,13 @@ describe('the Branches and History views', () => {
     expect(screen.queryByRole('list', { name: 'History' })).not.toBeInTheDocument();
 
     fireEvent.change(picker, { target: { value: '.' } });
-    expect(await screen.findByRole('button', { name: 'Commit fffffff: Add the login button' })).toHaveAttribute('aria-current', 'true');
+    expect(await screen.findByRole('button', { name: /^Commit fffffff: Add the login button/ })).toHaveAttribute('aria-current', 'true');
     await act(async () => { lib.settle(ok({ repo: 'libs/ui', ref: 'HEAD', commits: [commit('9', [], 'Start the UI kit', ['HEAD', 'main'])], cursor: null })); });
     expect(screen.queryByRole('button', { name: /Start the UI kit/ })).not.toBeInTheDocument();
     expect(daemon.calls('git.log').filter(([p]) => p?.repo === '.')).toHaveLength(1);
 
     fireEvent.change(picker, { target: { value: 'libs/ui' } });
-    expect(await screen.findByRole('button', { name: 'Commit 9999999: Start the UI kit' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /^Commit 9999999: Start the UI kit/ })).toBeInTheDocument();
     expect(daemon.calls('git.log').filter(([p]) => p?.repo === 'libs/ui')).toHaveLength(1);
   });
 });
@@ -516,7 +563,7 @@ describe('browsing a branch in the sidebar', () => {
     const before = centre();
     fireEvent.click(screen.getByRole('button', { name: 'feature/login' }));
     expect(views().getByRole('button', { name: 'History' })).toHaveAttribute('aria-pressed', 'true');
-    expect(await side().findByRole('button', { name: 'Commit bbbbbbb: Sign in with a magic link' })).toBeInTheDocument();
+    expect(await side().findByRole('button', { name: /^Commit bbbbbbb: Sign in with a magic link/ })).toBeInTheDocument();
     expect(daemon.calls('git.log')).toHaveLength(1);
     expect(daemon.calls('git.log')[0]![0]).toMatchObject({ ref: 'feature/login', limit: '50' });
     expect(centre()).toEqual(before);

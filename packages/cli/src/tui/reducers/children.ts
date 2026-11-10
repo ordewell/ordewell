@@ -1,6 +1,7 @@
-import { aheadOfDraft, parseCount, type ChildPlanEntry, type ChildPlanView, type DaemonErrorCode, type RunTask } from '@ordewell/core';
+import { EMPTY_HOLD, aheadOfDraft, holdPrompt, parseCount, unsendAll, unsendLatest, type ChildPlanEntry, type ChildPlanView, type DaemonErrorCode, type RunTask } from '@ordewell/core';
 import type { Key } from '../keys';
-import { initialState, questionAbove, rootFrame, viewOnly, type TuiState } from '../state';
+import { commit } from '../editor';
+import { initialState, plannerInFlight, questionAbove, rootFrame, viewOnly, type TuiState } from '../state';
 import { say } from '../transcript';
 import { scrollChat, scrollDelta, settlePanes } from './pointer';
 import { answerCheckpoint, openTaskView } from './taskView';
@@ -122,7 +123,7 @@ export function onParent(state: TuiState, act: (parent: TuiState) => Step): Step
   const out = act({ ...parent, ...shared(state) });
   if (out.state.sessionId !== parent.sessionId) {
     // Another session is another conversation; a plan going from under the person leaves their words theirs.
-    const left = rootId(out.state) === rootId(state) ? carried(out.state, state.editor.text) : out.state;
+    const left = rootId(out.state) === rootId(state) ? carried(out.state, ownWords(state)) : out.state;
     return { state: left, effects: [...out.effects, { type: 'closeChild', childId: state.sessionId }] };
   }
   return { state: { ...state, ...shared(out.state), child: { ...state.child, parent: out.state } }, effects: out.effects };
@@ -243,11 +244,48 @@ export function childKey(state: TuiState, key: Key): Step | null {
   return key.name === 'enter' || key.name === 'char' ? step(reportError(state, VIEW_ONLY)) : step(state);
 }
 
-/** The composer of a viewed child: it answers the question above first, and otherwise speaks to the subplanner. */
+/**
+ * The composer of a viewed child: it answers the question above first, and
+ * otherwise speaks to the subplanner. While the subplanner's turn runs the
+ * words are held on screen, as the planner chat holds them, and go when that
+ * turn ends (`drainQueue`); the daemon would queue them too, but out of sight
+ * of the Esc that takes them back.
+ */
 export function speakToChild(state: TuiState, cleared: TuiState, text: string): Step {
   if (questionAbove(state)) return answerAbove(cleared, 'approve', text);
+  if (plannerInFlight(state)) return step({ ...cleared, queuedPrompts: holdPrompt(state.queuedPrompts, text) });
+  return sendToChild(cleared, text);
+}
+
+function sendToChild(state: TuiState, text: string): Step {
   if (!state.sessionId) return step(state);
-  return step(say(cleared, 'user', text), [{ type: 'sendMessage', sessionId: state.sessionId, message: text }]);
+  return step(say(state, 'user', text), [{ type: 'sendMessage', sessionId: state.sessionId, message: text }]);
+}
+
+/**
+ * ctrl-s in a subplanner's chat: everything held goes now, one message in the
+ * order typed with the composer's text last. No route interrupts a
+ * subplanner's turn (ADR-0055), so a busy one reads it when that turn ends,
+ * from the daemon's queue rather than this screen's.
+ */
+export function sendAllToChild(state: TuiState): Step {
+  const typed = state.editor.text.trim();
+  const held = unsendAll(state.queuedPrompts);
+  const text = held ? (typed ? `${held.text}\n${typed}` : held.text) : typed;
+  if (!text) return step(state);
+  return sendToChild({ ...state, editor: typed ? commit(state.editor) : state.editor, queuedPrompts: EMPTY_HOLD }, text);
+}
+
+/**
+ * Esc in a subplanner's chat, ahead of the draft and the way back up: the
+ * newest held message comes out, into the composer only when it is empty,
+ * since heaping it on words being typed would leave two to untangle.
+ */
+export function takeBackHeld(state: TuiState): TuiState | null {
+  const newest = unsendLatest(state.queuedPrompts);
+  if (!newest) return null;
+  const editor = state.editor.text.trim() ? state.editor : { ...state.editor, text: newest.text, cursor: newest.text.length };
+  return { ...state, queuedPrompts: newest.rest, editor };
 }
 
 /** Whether a built-in command means anything on a plan below the root. */
@@ -294,7 +332,13 @@ export function childLost(state: TuiState): TuiState {
 /** Leaves a plan the daemon no longer serves, saying so on the plan it lands on. A draft it held was not given up: `leaveChild` carries only an ended plan's. */
 export function childGone(state: TuiState, message: string, text?: string): Step {
   const left = leaveChild(state);
-  return { ...left, state: refused(viewOnly(state) ? left.state : givenBack(left.state, state.editor.text), message, text) };
+  return { ...left, state: refused(viewOnly(state) ? left.state : givenBack(left.state, ownWords(state)), message, text) };
+}
+
+/** What the person typed on this plan and has not sent: what it holds, in the order typed, then the draft. */
+function ownWords(state: TuiState): string {
+  const held = unsendAll(state.queuedPrompts);
+  return held ? aheadOfDraft(held.text, state.editor.text) : state.editor.text;
 }
 
 /**
