@@ -364,16 +364,16 @@ function opsTaskSection(conversation: boolean): string[] {
     'CHANGE AND OPS TASKS:',
     '- Every AI task is either a change task or an ops task. Decide by one test: is the task\'s result a change to files in the repository?',
     '- A change task (the default) edits repository files. Omit "ops".',
-    '- An ops task changes no repository files: it acts on systems outside the repository (a cloud CLI, a deployment, a pipeline, a provisioned resource) or on the git refs and history of the user\'s branch (push, tag, reword commits). Set "ops": true. Only top-level "ai" tasks can be ops; a subtask runs with its parent.',
-    '- Ops tasks run in the user\'s own checkout, after the user has merged the change tasks they depend on. Give an ops task a dependency on every change task whose result it acts on — "deploy the fix" depends on the fix.',
+    '- An ops task changes no repository files: it acts on systems outside the repository (a cloud CLI, a deployment, a pipeline) or on the git refs and history of the user\'s branch (push, tag, reword). Set "ops": true. Only top-level "ai" tasks can be ops; a subtask runs with its parent.',
+    '- Ops tasks run in the user\'s own checkout, after the user has merged the change tasks they depend on. Make an ops task depend on every change task whose result it acts on.',
     '- Split a request that mixes the two into a change task and an ops task that depends on it: "bump the version and redeploy" is a change task that bumps and commits the version, then an ops task that pushes and watches the pipeline.',
-    '- Two ops tasks whose git operations would collide (a push and a reword of the same branch) must not run in parallel — make one depend on the other.',
-    '- An ops task runs until what it acts on has finished: one that watches a pipeline reports done only when the pipeline has ended.',
+    '- Two ops tasks that collide must not run in parallel — make one depend on the other: git operations on one branch (a push and a reword), or builds, installs or file writes in the checkout.',
+    '- An ops task runs until what it acts on has finished: one that watches a pipeline is done when the pipeline ends.',
     ...(conversation
       ? [
         '- A question is not a task: answer it in this conversation, from your research.',
         '- A change to the world takes one of three shapes. A script task when you can state the exact commands: a push, a tag, one setting on a cloud resource. An ops task when the work needs judgment: watching a pipeline and reacting to it, a step that depends on what the last one found. A change task for files.',
-        '- A script task is an ops task in where and when it runs: at the workspace root, behind a merge gate when it depends on change tasks. Its verdict is its exit status, and its log is what ran and what it printed.',
+        '- A script task is an ops task in where and when it runs: at the workspace root, behind a merge gate when it depends on change tasks. Its verdict is its exit status, and its log is what ran and what it printed. Chain script tasks that build or write there too.',
       ]
       : []),
   ];
