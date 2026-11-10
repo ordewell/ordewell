@@ -27,8 +27,10 @@
 .git-worktree-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .git-worktree-path { color: var(--ow-fg-secondary); font: var(--ow-type-code-small); }
 /* A run or task link: the 24px hit target the checklist asks of every control, with the text the part that shrinks. */
-.git-owner { flex: none; display: inline-flex; align-items: center; min-width: 0; max-width: 45%; height: var(--ow-hit); padding: 0 var(--ow-space-2); border: 0; border-radius: var(--ow-radius-md); background: transparent; color: var(--ow-accent); font: var(--ow-type-small); cursor: pointer; }
+.git-owner { flex: none; display: inline-flex; align-items: center; min-width: 0; max-width: 45%; height: var(--ow-hit); padding: 0 var(--ow-space-2); border: 0; border-radius: var(--ow-radius-md); background: transparent; color: var(--ow-fg-link); font: var(--ow-type-small); cursor: pointer; }
+/* The link colour, not the accent: it is text, and reads at 4.5:1 on the sidebar, a hovered row and a selected one in both themes. */
 .git-owner:hover { background: var(--ow-bg-hover); }
+.git-owner:hover .git-owner-text { text-decoration: underline; }
 .git-owner:focus-visible { outline: 1px solid var(--ow-focus-ring); outline-offset: -1px; }
 .git-owner-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -115,8 +117,13 @@
 .git-mode button:focus-visible { outline: var(--ow-focus-width) solid var(--ow-focus-ring); outline-offset: calc(var(--ow-focus-offset) * -1); }
 .git-mode .ow-icon { flex: none; }
 
-/* A folder's rows step in by its depth; the chevron sits where a branch's icon does, so names line up. */
-.git-list .srow { padding-inline-start: calc(var(--ow-space-3) + var(--git-depth, 0) * var(--ow-space-4)); }
+/*
+ * A folder's rows step in by its depth; the chevron sits where a branch's icon
+ * does, so names line up. The indent stops at two steps, and a step narrows
+ * with the sidebar, so a deep name keeps design.md O7's 64 px beside Switch and
+ * Delete at the 200 px minimum; the row's tooltip names the full path.
+ */
+.git-list .srow { padding-inline-start: calc(var(--ow-space-3) + min(var(--git-depth, 0), 2) * min(var(--ow-space-4), 6%)); }
 .git-folder { display: block; }
 .git-folder-main .srow-label { color: var(--ow-fg-secondary); }
 

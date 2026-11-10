@@ -1051,9 +1051,18 @@ left as it was:
     A lock marks a live run's landing branch, naming the run. A branch name
     with slashes is folded under its prefixes (`feature/` holds `sso` and
     `x`), each folder showing its branch count; a row still names its branch
-    in full to a screen reader and in its tooltip. The checked-out branch is
-    told by its tick and weight, not by a colour: green is a status's. The
-    branch History is showing keeps the selected background on Branches.
+    in full to a screen reader and in its tooltip. Folders step in by depth up
+    to two steps and no further, so a deep name keeps O7's 64 px at the
+    sidebar's minimum. The checked-out branch leads Local under its full name,
+    outside any folder, and is told by its tick and weight, not by a colour:
+    green is a status's. Every other row, folder and branch alike, is in one
+    alphabetical order (case aside, numbers by value) at each level, in every
+    group. A local branch ends in one trailing slot: at rest it shows
+    `↓ behind ↑ ahead`, in the sync bar's order, and on hover or keyboard
+    focus Switch (`arrow-right-left`) and Delete take the same box, so the
+    name gives up only the wider of the two and never moves. The branch
+    History is showing keeps the selected background on Branches. A run or
+    task link beside a branch or worktree is drawn in the link colour.
   - *History:* commits down the sidebar, two lines a row: the subject, then
     its branch and tag chips and the short sha, author and age, with the
     commit graph's lanes drawn small beside them. The HEAD chip is left out,

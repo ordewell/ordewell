@@ -26,9 +26,10 @@ describe('naming', () => {
     expect(splitUpstream('origin')).toEqual({ remote: 'origin', branch: '' });
   });
 
-  it('marks ahead and behind, and nothing when level', () => {
-    expect(trackMark({ ahead: 1, behind: 2, upstream: 'origin/main' })).toBe('↑1 ↓2');
+  it('marks behind then ahead, as the sync bar does, and nothing when level', () => {
+    expect(trackMark({ ahead: 1, behind: 2, upstream: 'origin/main' })).toBe('↓2 ↑1');
     expect(trackMark({ ahead: 0, behind: 3, upstream: 'origin/main' })).toBe('↓3');
+    expect(trackMark({ ahead: 4, behind: 0, upstream: 'origin/main' })).toBe('↑4');
     expect(trackMark({ ahead: 0, behind: 0, upstream: 'origin/main' })).toBe('');
   });
 
@@ -119,11 +120,48 @@ describe('branchTree', () => {
   const names = (...n: string[]) => n.map((name) => branch(name));
   const shape = (nodes: ReturnType<typeof branchTree>): unknown[] => nodes.map((n) => (n.kind === 'folder' ? { folder: n.label, path: n.path, count: n.count, children: shape(n.children) } : n.branch.name));
 
-  it('groups slash-delimited names into folders, folders before branches, and keeps each branch’s full name', () => {
-    expect(shape(branchTree(names('main', 'feature/login', 'feature/sso', 'fix/typo')))).toEqual([
+  it('groups slash-delimited names into folders, folders and branches in one alphabetical order, and keeps each branch’s full name', () => {
+    expect(shape(branchTree(names('zeta', 'main', 'fix/typo', 'feature/sso', 'feature/login', 'develop')))).toEqual([
+      'develop',
       { folder: 'feature', path: 'feature', count: 2, children: ['feature/login', 'feature/sso'] },
       { folder: 'fix', path: 'fix', count: 1, children: ['fix/typo'] },
       'main',
+      'zeta',
+    ]);
+  });
+
+  it('sorts as a person reads: case aside, and numbers by their value', () => {
+    expect(shape(branchTree(names('release/1.10', 'Hotfix', 'release/1.9', 'alpha')))).toEqual([
+      'alpha', 'Hotfix', { folder: 'release', path: 'release', count: 2, children: ['release/1.9', 'release/1.10'] },
+    ]);
+  });
+
+  it('pins the checked-out branch first, under its full name and outside its folder', () => {
+    const tree = branchTree([branch('feature/login'), branch('fix/typo'), branch('main', { current: true }), branch('release/2')]);
+    expect(shape(tree)).toEqual([
+      'main',
+      { folder: 'feature', path: 'feature', count: 1, children: ['feature/login'] },
+      { folder: 'fix', path: 'fix', count: 1, children: ['fix/typo'] },
+      { folder: 'release', path: 'release', count: 1, children: ['release/2'] },
+    ]);
+    const nested = branchTree([branch('feature/a'), branch('feature/sso', { current: true }), branch('dev')]);
+    expect(shape(nested)).toEqual(['feature/sso', 'dev', { folder: 'feature', path: 'feature', count: 1, children: ['feature/a'] }]);
+    expect(nested[0]).toMatchObject({ kind: 'leaf', label: 'feature/sso', key: 'branch:feature/sso' });
+  });
+
+  it('nests deep, branching refs level by level, each level in the same order', () => {
+    const tree = branchTree(names('team/web/feature/sso/b', 'team/web/feature/sso/a', 'team/web/fix/x', 'team/api/y', 'team/web/feature/login'));
+    expect(shape(tree)).toEqual([
+      { folder: 'team', path: 'team', count: 5, children: [
+        { folder: 'api', path: 'team/api', count: 1, children: ['team/api/y'] },
+        { folder: 'web', path: 'team/web', count: 4, children: [
+          { folder: 'feature', path: 'team/web/feature', count: 3, children: [
+            'team/web/feature/login',
+            { folder: 'sso', path: 'team/web/feature/sso', count: 2, children: ['team/web/feature/sso/a', 'team/web/feature/sso/b'] },
+          ] },
+          { folder: 'fix', path: 'team/web/fix', count: 1, children: ['team/web/fix/x'] },
+        ] },
+      ] },
     ]);
   });
 
@@ -139,15 +177,13 @@ describe('branchTree', () => {
   });
 
   it('keeps a branch named like a folder beside that folder, with keys apart', () => {
-    const tree = branchTree(names('feature', 'feature/login'));
-    expect(shape(tree)).toEqual([{ folder: 'feature', path: 'feature', count: 1, children: ['feature/login'] }, 'feature']);
+    const tree = branchTree(names('feature/login', 'feature'));
+    expect(shape(tree)).toEqual(['feature', { folder: 'feature', path: 'feature', count: 1, children: ['feature/login'] }]);
     expect(new Set(tree.map((n) => n.key)).size).toBe(2);
   });
 
-  it('marks the folders that hold the current branch', () => {
+  it('leaves no folder holding the checked-out branch, since it leads the list', () => {
     const tree = branchTree([branch('a/b/c', { current: true }), branch('a/d'), branch('e/f')]);
-    expect(tree.map((n) => n.kind === 'folder' && n.current)).toEqual([true, false]);
-    const [a] = tree;
-    expect(a.kind === 'folder' && a.children.map((n) => n.kind === 'folder' && n.current)).toEqual([true, false]);
+    expect(shape(tree)).toEqual(['a/b/c', { folder: 'a', path: 'a', count: 1, children: ['a/d'] }, { folder: 'e', path: 'e', count: 1, children: ['e/f'] }]);
   });
 });
