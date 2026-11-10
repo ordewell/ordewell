@@ -112,6 +112,24 @@ const ours = (kind: 'container' | 'volume' | 'network') => (kind === 'container'
   .map(([name]) => name);
 const isAttempt = (name: string) => !name.endsWith('-egress');
 
+/**
+ * A clean-up reads every mirror in the engine, one helper container each, about
+ * a second apiece. Other checkouts' runs leave theirs here, and a host that has
+ * seen a few hundred takes longer than any test may, so the clean-ups under test
+ * list only this run's: what they are asked is what they do with a project's pins.
+ */
+const amongOurs = (): DockerCli => {
+  const real = new SpawnedDockerCli();
+  return {
+    entry: (args, opts) => real.entry(args, opts),
+    call: async (args, opts) => {
+      const ran = await real.call(args, opts);
+      if (!args.includes('name=ordewell-mirror-')) return ran;
+      return { ...ran, stdout: ran.stdout.split('\n').filter((name) => name && !notThisRuns(name)).join('\n') };
+    },
+  };
+};
+
 const dirs: string[] = [];
 function tempDir(prefix = 'ordewell-container-'): string {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
@@ -164,6 +182,7 @@ function session(root: string, tasks: Task[], settings = settingsOf(), { egress,
     childDeps: () => ({ ...(planner ? { aiService: { reset: vi.fn(), ...planner.service } as unknown as IAiService } : {}), fsAdapter: { ...fakeFs(), getWorkspaceRoot: () => root } }),
     execution: (local, context) => new DockerExecutionBackend(local, {
       settings,
+      cli: amongOurs(),
       broker: new CredentialBroker(key ?? { ANTHROPIC_API_KEY: 'sk-ant-api03-not-a-real-key' }),
       ...(egress ? { egress } : {}),
       sessionId: context.sessionId,
@@ -931,6 +950,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     /** Docker lists a volume it is removing with no label for a moment, so another run's can pass for one left here. */
     const nothingLeftBy = (volumes: readonly string[]) => vi.waitFor(() => expect(leftBy(volumes)).toEqual([]));
     const pinsIn = (mirror: string) => docker('run', '--rm', '--init', '--pids-limit', '8192', '--memory', '256m', '--network', 'none', '-v', `${mirror}:/mirror:ro`, IMAGE, 'sh', '-c', 'for m in /mirror/*.git; do git -C "$m" for-each-ref refs/ordewell/pins; done').split('\n').filter(Boolean);
+    const reclaim = (tree: string) => reclaimContainers(tree, LOGIN, { cli: amongOurs() });
     const failing = (id: string) => [createTask({ id, order: 1, title: 'Leave work', prompt: cue({ write: { 'partial.txt': 'half done\n' }, status: 'blocked', reason: 'stuck' }), assignedRunner: 'claude-code' })];
 
     it('goes with a Clean up: its volumes, and a mirror nothing else leans on', async () => {
@@ -964,7 +984,7 @@ describe.skipIf(skip)('a task in a real container', () => {
       const stranded = `ordewell-stranded-${process.pid}-net`;
       docker('network', 'create', '--internal', '--label', `ordewell.tree=${tree}`, stranded);
 
-      await reclaimContainers(tree, LOGIN);
+      await reclaim(tree);
 
       await nothingLeftBy(volumes);
       expect(ours('network')).not.toContain(stranded);
@@ -985,12 +1005,12 @@ describe.skipIf(skip)('a task in a real container', () => {
       second.parent.destroy();
       await Promise.all([first.parent.gone, second.parent.gone]);
 
-      await reclaimContainers(`docker-e2e-${process.pid}-p1`, LOGIN);
+      await reclaim(`docker-e2e-${process.pid}-p1`);
 
       expect(ours('volume')).toContain(mirror);
       expect(pinsIn(mirror)).toHaveLength(2);
 
-      await reclaimContainers(`docker-e2e-${process.pid}-p2`, LOGIN);
+      await reclaim(`docker-e2e-${process.pid}-p2`);
 
       await nothingLeftBy(volumes);
     }, patient(120_000));
