@@ -305,7 +305,6 @@ describe('the task-log registry (ADR-0018, V1)', () => {
   });
 
   it.each([
-    { type: 'removeQueuedTaskMessage', id: 'q1' },
     { type: 'sendQueuedTaskMessageNow', id: 'q1' },
     { type: 'sendTaskMessageNow', text: 'now' },
     { type: 'interruptTask' },
@@ -334,6 +333,18 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     __panels[0].__receive({ type: 'sendTaskMessage', text: 'hello' });
 
     await vi.waitFor(() => expect(posted(__panels[0])).toContainEqual({ type: 'showError', error: 'Task is not running.', draft: 'hello' }));
+  });
+
+  it('names the message whose take-back the runner beat, so the box can let go of what Esc put there (ADR-0018 V1)', async () => {
+    const h = harness();
+    h.session.execute.mockResolvedValue({ ok: false, outcome: 'refused', message: 'That message to task 1 was already delivered or taken back.' });
+    h.registry.open('t1');
+    __panels[0].__receive({ type: 'ready' });
+    __panels[0].webview.postMessage.mockClear();
+
+    __panels[0].__receive({ type: 'removeQueuedTaskMessage', id: 'q1' });
+
+    await vi.waitFor(() => expect(posted(__panels[0])).toContainEqual({ type: 'showError', error: 'That message to task 1 was already delivered or taken back.', takeBack: 'q1' }));
   });
 
   it('closing the tab never touches the task, and reopening loads it afresh', () => {

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Branches, BranchInfo } from '../gitData';
 import {
   ago, branchTree, commitDiffTabId, commitWhen, commitsTabId, isOrdewellRef, landedTaskOf, landingSubject, parseCommitDiffTabId, parseCommitsTabId, plural, refChips, repoDisplay, summarizeRefs,
-  runMark, splitUpstream, tipAge, tipSummary, trackMark,
+  runMark, splitUpstream, stashLabel, tipAge, tipSummary, trackMark,
 } from '../gitModel';
 
 const branch = (name: string, extra: Partial<BranchInfo> = {}): BranchInfo => ({ name, sha: 'a'.repeat(40), upstream: null, ahead: 0, behind: 0, current: false, ...extra });
@@ -19,6 +19,13 @@ describe('naming', () => {
     expect(repoDisplay('/work/acme/', '.')).toEqual({ name: 'acme', path: '/work/acme' });
     expect(repoDisplay('/work/acme', 'web')).toEqual({ name: 'web', path: '/work/acme/web' });
     expect(repoDisplay('/work/acme', '/elsewhere/api')).toEqual({ name: '/elsewhere/api', path: '/elsewhere/api' });
+  });
+
+  it('labels a stash by the words written, without the branch git puts first', () => {
+    expect(stashLabel('On main: half-done docs')).toBe('half-done docs');
+    expect(stashLabel('WIP on feature/sso: 1a2b3c4 Add SAML')).toBe('1a2b3c4 Add SAML');
+    expect(stashLabel('On main: notes: second thoughts')).toBe('notes: second thoughts');
+    expect(stashLabel('WIP on main')).toBe('WIP on main');
   });
 
   it('splits an upstream at its first slash, so a branch with slashes keeps them', () => {

@@ -73,6 +73,14 @@ describe('ctrl-s in the task view', () => {
     expect(reduce(opened({ ...handed, removing: ['m2'] }), ctrlS).effects).toEqual([{ type: 'forceSendQueuedTaskMessage', sessionId: 's1', taskId: 't1', messageId: 'm3' }]);
   });
 
+  it('passes over a message Ordewell queued: an empty ctrl-s sends the person\'s, or nothing', () => {
+    const ordewell: TaskLogEvent = { type: 'message_queued', messageId: 'm0', text: 'Call task_complete.', from: 'ordewell' };
+    expect(reduce(opened(log([ordewell, ...queued], null)), ctrlS).effects).toEqual([{ type: 'forceSendQueuedTaskMessage', sessionId: 's1', taskId: 't1', messageId: 'm1' }]);
+    const alone = reduce(opened(log([ordewell], null)), ctrlS);
+    expect(alone.effects).toEqual([]);
+    expect(lastSaid(alone.state)).toMatchObject({ text: expect.stringMatching(/^Nothing to send now/) });
+  });
+
   it('has nothing to send now when the runner already has every queued message', () => {
     const { state, effects } = reduce(opened(log([...queued, { type: 'message_handed_over', messageId: 'm1' }, { type: 'message_handed_over', messageId: 'm2' }])), ctrlS);
     expect(effects).toEqual([]);

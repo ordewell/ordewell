@@ -753,6 +753,8 @@ const draftOnScreen = (state: TuiState): boolean => !!state.editor.text && !view
 function interrupt(state: TuiState): Step {
   if (state.overlay) return step({ ...state, overlay: null });
   if (draftOnScreen(state)) return step({ ...state, editor: { ...state.editor, text: '', cursor: 0 } });
+  // Held messages are this plan's alone: leaving would drop them unseen, so they come out into the composer first.
+  if (state.child && state.queuedPrompts.length > 0 && !viewOnly(state)) return step(queueToEditor(state));
   if (state.child) return leaveChild(state);
   return step({ ...state, exiting: true }, [{ type: 'exit' }]);
 }

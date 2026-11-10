@@ -15,7 +15,7 @@ import {
   type GitContext,
 } from './gitActions';
 import type { BranchInfo, Branches, Owner, WorktreeInfo } from './gitData';
-import { branchTree, plural, repoDisplay, runMark, tipAge, tipSummary, trackMark, type BranchNode } from './gitModel';
+import { branchTree, plural, repoDisplay, runMark, stashLabel, tipAge, tipSummary, trackMark, type BranchNode } from './gitModel';
 import { gitStoreFor, useGit, type GitStore, type RunInfo } from './gitStore';
 import { HistoryList } from './HistoryList';
 import { SyncBar, type SyncState } from './SyncBar';
@@ -98,7 +98,7 @@ function LocalRow({ ctx, branch, viewing, label = branch.name, depth = 0 }: { ct
   return (
     <li className={`srow git-branch${viewing ? ' git-viewing' : ''}`} style={indent(depth)} aria-current={branch.current ? 'true' : undefined}>
       <button type="button" className="srow-main" aria-label={branch.name} {...viewingProps(viewing)} aria-describedby={tip ? tipId : undefined} title={branchTitle(branch, branch.upstream ? `${branch.name} tracks ${branch.upstream}` : branch.name)} onClick={() => gitStoreFor(ctx.api).browse(ctx.repo, branch.name)}>
-        <span className="git-lead">{branch.current ? <Icon icon={Check} size={14} /> : <Icon icon={GitBranch} size={14} />}</span>
+        <span className="git-lead">{branch.current ? <Icon icon={Check} size={16} /> : <Icon icon={GitBranch} size={16} />}</span>
         <MiddleText className="srow-label" text={label} />
       </button>
       {tip && <span id={tipId} hidden>{tip}</span>}
@@ -193,7 +193,7 @@ function Stashes({ ctx }: { ctx: GitContext }): JSX.Element {
             {stashes.map((stash) => (
               <li key={stash.sha} className="srow git-stash">
                 <span className="srow-main srow-plain git-stash-main" title={`${stash.ref}: ${stash.message}`}>
-                  <MiddleText className="git-stash-message" text={stash.message} />
+                  <MiddleText className="git-stash-message" text={stashLabel(stash.message)} />
                   <span className="git-stash-ref">{stash.ref}</span>
                 </span>
                 {/* Always shown, not on hover: a hidden control cannot be reached by Tab. */}

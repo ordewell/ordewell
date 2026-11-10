@@ -247,7 +247,8 @@ async function sendChatNow(text: string, deps: WebviewRouterDeps): Promise<void>
     return;
   }
   deps.chatProvider.conversation.note('user', all);
-  await handleSendMessageNow(all, deps);
+  // A refused forced turn gives back what it took, held prompts and draft alike, as the TUI's restoreForced does.
+  if (await handleSendMessageNow(all, deps)) deps.chatProvider.conversation.giveBack(all);
   sendNextHeldPrompt(deps);
 }
 

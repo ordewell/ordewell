@@ -116,6 +116,16 @@ export class ConversationViewHost {
   }
 
   /**
+   * A Send now the planner refused before its turn began: what it took from
+   * the hold and the composer goes back to the composer, above anything typed
+   * since, rather than being lost with a turn that never ran (as the TUI's
+   * restoreForced does). A stop is not a refusal: its caller does not call this.
+   */
+  giveBack(text: string): void {
+    if (text.trim()) this.post({ type: 'promptUnsent', text });
+  }
+
+  /**
    * The user stopped the planner. The turn ends on screen now rather than when
    * the backend notices the abort, and whatever it still streams until its
    * real end is dropped. Queued prompts go back to the input rather than

@@ -187,6 +187,12 @@ describe('ESC with messages queued in a task chat', () => {
     expect(back.state.focus).toBe('plan');
   });
 
+  it('passes over a message Ordewell queued: it is not the person\'s to take back', () => {
+    const first = esc(queued({ type: 'message_queued', messageId: 'm3', text: 'Call task_complete.', from: 'ordewell' }));
+    expect(removals(first.effects)).toEqual([{ type: 'removeTaskMessage', sessionId: 's1', taskId: 't1', messageId: 'm2', filled: 'also tests' }]);
+    expect(first.state.editor.text).toBe('also tests');
+  });
+
   it('puts the newest in an empty composer, and the next one is dropped while that text is there', () => {
     const first = esc(queued());
     expect(removals(first.effects)).toEqual([{ type: 'removeTaskMessage', sessionId: 's1', taskId: 't1', messageId: 'm2', filled: 'also tests' }]);

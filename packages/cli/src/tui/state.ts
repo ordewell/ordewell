@@ -397,9 +397,12 @@ export function queuedTarget(tv: TaskLogState): number {
   return -1;
 }
 
-/** A queued message the runner can still give back: not being sent now, not handed over, not already on its way back. */
+/**
+ * A queued message of the person's the runner can still give back: not one Ordewell sent, not being sent now, not
+ * handed over, not already on its way back. Esc takes back and an empty ctrl-s sends only these (ADR-0023 F1).
+ */
 export const removable = (tv: TaskLogState, message: QueuedTaskMessage): boolean =>
-  !message.forced && !message.handedOver && !tv.removing?.includes(message.id);
+  !message.from && !message.forced && !message.handedOver && !tv.removing?.includes(message.id);
 
 /** The index of the queued message Esc takes back next: the newest removable one, or -1. */
 export function newestRemovable(tv: TaskLogState): number {

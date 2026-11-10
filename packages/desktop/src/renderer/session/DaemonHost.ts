@@ -848,7 +848,10 @@ export class DaemonHost {
       // is a plain send, as in the extension's sendChatNow.
       case 'sendMessageNow': {
         const text = this.view.conversation.takeAll(msg.text);
-        if (text.trim()) await this.say(text, this.generating);
+        if (!text.trim()) return;
+        if (!this.generating) { await this.say(text, false); return; }
+        // A forced turn that is refused gives back what it took, as in the extension's sendChatNow.
+        await this.say(text, true, undefined, () => this.view.conversation.giveBack(text));
         return;
       }
       // Typed while the chat saw a turn in flight: one that has ended since leaves nothing to wait for, as in the extension.
@@ -951,7 +954,7 @@ export class DaemonHost {
   }
 
   /** One planner turn: the first of a fresh session starts it, every later one is a message. */
-  private async turn(text: string, now: boolean, runners?: readonly RunnerId[]): Promise<void> {
+  private async turn(text: string, now: boolean, runners?: readonly RunnerId[], refused?: () => void): Promise<void> {
     await this.plannerTurn(async (sessionId) => {
       let response: PlanResponse;
       if (this.fresh) {
@@ -967,7 +970,11 @@ export class DaemonHost {
         if (sessionId !== this.sessionId) return;
       }
       this.showPlan(response.plan);
-    }, (error) => this.showError(error));
+    }, (error) => {
+      this.showError(error);
+      // A stop or a left session ended the turn on purpose; anything else refused it, and what it carried is not lost.
+      if (!(error instanceof DaemonError && (error.code === 'planner_turn_stopped' || error.code === 'planner_turn_discarded'))) refused?.();
+    });
   }
 
   /**
@@ -997,9 +1004,9 @@ export class DaemonHost {
   }
 
   /** A prompt the user sent, shown as theirs and answered in a turn, as the extension's sendChat does (webviewRouter). */
-  private async say(text: string, now: boolean, runners?: readonly RunnerId[]): Promise<void> {
+  private async say(text: string, now: boolean, runners?: readonly RunnerId[], refused?: () => void): Promise<void> {
     if (text.trim()) this.view.conversation.note('user', text);
-    await this.turn(text, now, runners);
+    await this.turn(text, now, runners, refused);
   }
 
   /**
