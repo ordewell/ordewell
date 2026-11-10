@@ -22,18 +22,22 @@ import type { UsageRecord, UsageTotals } from '../models/Usage';
 
 /**
  * One budget for both research agents, the API-key one and OpenCode's login
- * one (ADR-0066). In the G5 bench every useful digest sat at the old 6,000-char
- * cap (5.0-6.2 KB), so the cap was binding, and two DeepSeek agents ran out of
- * their 10 steps mid-audit; the planner then re-read those areas itself. 16
- * steps lets a five-package audit finish, and 8,000 chars holds a per-package
- * map while staying a digest. A run that still runs out returns what it found,
- * marked partial, naming what it left unread (`partialDigest`).
+ * one (ADR-0066). Sized from the g5-t67 re-run (3 DeepSeek + 3 GLM planners,
+ * 27 agents): 19 ran out of their 16 steps, and each of those had made exactly
+ * 16 rounds of reads (3-4 calls a round) with the next round still grepping;
+ * the 8 that finished took 5-15 rounds, median 11. The 19 are cut off, so 24
+ * is an estimate, not a measurement: it covers the finishers with room and
+ * gives a cut-off agent half again its budget. The cap bound too: 20 of the 27
+ * digests were truncated at the old 8,000 chars, 18 of them partials whose
+ * closing "Uncertainties" section was what got cut, so it is 12,000. A run
+ * that still runs out returns what it found, marked partial, naming the reads
+ * it left (`partialDigest`).
  */
 export const SUBAGENT_LIMITS = {
   /** Max spawn calls in flight at once; extra calls in the same turn wait for a slot. */
   maxConcurrent: 3,
-  maxSteps: 16,
-  digestMaxChars: 8000,
+  maxSteps: 24,
+  digestMaxChars: 12000,
   toolOutputMaxChars: 20000,
 };
 
@@ -166,8 +170,13 @@ export function partialDigest(found: string, unread: string[], maxSteps = SUBAGE
   const left = unread.length
     ? `Left unread:\n${unread.slice(0, 10).map((u) => `- ${u}`).join('\n')}${unread.length > 10 ? `\n- (+${unread.length - 10} more)` : ''}`
     : 'Left unread: whatever the next step would have read; the brief was not fully covered.';
-  const room = Math.max(0, SUBAGENT_LIMITS.digestMaxChars - header.length - left.length - 8);
-  const body = found.trim().length > room ? `${found.trim().slice(0, room)}\n[... findings truncated]` : found.trim();
+  const marker = '\n[... findings truncated ...]\n';
+  const room = Math.max(0, SUBAGENT_LIMITS.digestMaxChars - header.length - left.length - 4);
+  const text = found.trim();
+  // Keep the end: an agent closes with what it did not cover, which is what
+  // the planner needs most from a partial digest.
+  const head = Math.max(0, Math.floor((room - marker.length) * 0.6));
+  const body = text.length > room ? `${text.slice(0, head)}${marker}${text.slice(text.length - Math.max(0, room - marker.length - head))}` : text;
   return `${header}\n\n${body}\n\n${left}`;
 }
 
@@ -233,7 +242,7 @@ async function runLoop(prompt: string, deps: SubagentDeps): Promise<string> {
   let unread: string[] | undefined;
   if (turn.hasToolCalls && !deps.signal?.aborted) {
     unread = turn.toolCalls.map((tc) => describeCall(tc.name, tc.args));
-    const notice = `Research budget exhausted (${SUBAGENT_LIMITS.maxSteps} tool rounds) — this call was NOT executed and no further tool calls will be. Reply now with your digest of everything learned so far; the planner is told what you left unread.`;
+    const notice = `Research budget exhausted (${SUBAGENT_LIMITS.maxSteps} tool rounds) — this call was NOT executed and no further tool calls will be. Reply now with your digest of everything learned so far, and end it with a "Not covered" section naming the files and areas you did not get to, so the planner can send another agent there.`;
     turn = await chat.sendToolResults(
       turn.toolCalls.map((tc) => ({ name: tc.name, output: notice, truncated: false, totalChars: notice.length, id: tc.id })),
       deps.signal,
