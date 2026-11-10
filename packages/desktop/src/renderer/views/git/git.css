@@ -19,9 +19,9 @@
 .git-lock .ow-icon { flex: none; }
 .git-stash-ref { max-width: none; }
 /* Two selectors: sidebarKit.css may load after this file, and its row height and centring must not win. */
-.srow-main.git-worktree-main { flex-direction: column; align-items: stretch; gap: 0; height: auto; padding: var(--ow-space-1) 0; }
+.srow-main.git-worktree-main { flex-direction: column; align-items: stretch; justify-content: center; gap: 0; height: var(--ow-row-double); padding: 0; }
 /* The state sits under the branch name, not beside it: a long branch must never share a line with it. */
-.srow-main.git-ordewell-main { height: auto; padding: var(--ow-space-1) 0; }
+.srow-main.git-ordewell-main { height: var(--ow-row-double); padding: 0; gap: var(--ow-space-2); }
 .git-ordewell-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .git-ordewell-note { color: var(--ow-fg-secondary); font: var(--ow-type-code-small); }
 .git-worktree-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

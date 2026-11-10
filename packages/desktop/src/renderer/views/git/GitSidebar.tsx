@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useId, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
-import { Check, ChevronDown, ChevronRight, GitBranch, GitBranchPlus, History, Lock, RefreshCw, Trash2, Undo2 } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, GitBranch, GitBranchPlus, History, Lock, Trash2, Undo2 } from 'lucide-react';
 import { ArrowRightLeft } from 'lucide-react';
+import { Cloud, RotateCw } from 'lucide-react';
 import { Button, EmptyState, Icon, IconButton } from '@ordewell/ui/design';
 import type { FrameApi, Unregister } from '../../frame/api';
 import { useDisclosure } from '../../frame/store';
@@ -176,7 +177,7 @@ function OrdewellRow({ api, repo, branch, runs, viewing, integration, label = br
   return (
     <li className={`srow${viewing ? ' git-viewing' : ''}`} style={indent(depth)}>
       <button type="button" className="srow-main git-ordewell-main" aria-label={`${branch.name}, ${note}`} {...viewingProps(viewing)} title={`${branch.name}: Ordewell’s, read-only here`} onClick={() => gitStoreFor(api).browse(repo, branch.name)}>
-        <span className="git-lead"><Icon icon={Lock} size={14} /></span>
+        <span className="git-lead"><Icon icon={Lock} size={16} /></span>
         <span className="git-ordewell-text">
           <MiddleText text={label} />
           <span className="git-ordewell-note">{note}</span>
@@ -191,7 +192,7 @@ function RemoteRow({ api, repo, branch, viewing, label = branch.name, depth = 0 
   return (
     <li className={`srow${viewing ? ' git-viewing' : ''}`} style={indent(depth)}>
       <button type="button" className="srow-main" aria-label={branch.name} {...viewingProps(viewing)} title={branch.name} onClick={() => gitStoreFor(api).browse(repo, branch.name)}>
-        <span className="git-lead"><Icon icon={GitBranch} size={14} /></span>
+        <span className="git-lead"><Icon icon={Cloud} size={16} /></span>
         <MiddleText className="srow-label" text={label} />
       </button>
     </li>
@@ -219,7 +220,7 @@ function Folder({ node, depth, scope, short, leaf }: { node: Extract<BranchNode,
     <li className="git-folder">
       <div className="srow" style={indent(depth)}>
         <button type="button" className="srow-main git-folder-main" aria-expanded={open} aria-controls={open ? body : undefined} title={`${node.path}/: ${plural(node.count, 'branch', 'branches')}`} onClick={() => setOpen(!open)} onKeyDown={keys}>
-          <span className="git-lead"><Icon icon={open ? ChevronDown : ChevronRight} size={14} /></span>
+          <span className="git-lead"><Icon icon={open ? ChevronDown : ChevronRight} size={16} /></span>
           <MiddleText className="srow-label" text={node.label} />
           <span className="srow-note" aria-label={plural(node.count, 'branch', 'branches')}>{node.count}</span>
         </button>
@@ -248,8 +249,8 @@ function BranchFolders({ branches, scope, leaf }: { branches: readonly BranchInf
 function ViewSwitch({ git, history }: { git: GitStore; history: boolean }): JSX.Element {
   return (
     <div className="git-mode" role="group" aria-label="Git sidebar view">
-      <button type="button" aria-pressed={!history} onClick={() => git.setView('branches')}><Icon icon={GitBranch} size={14} />Branches</button>
-      <button type="button" aria-pressed={history} onClick={() => git.setView('history')}><Icon icon={History} size={14} />History</button>
+      <button type="button" aria-pressed={!history} onClick={() => git.setView('branches')}><Icon icon={GitBranch} size={16} />Branches</button>
+      <button type="button" aria-pressed={history} onClick={() => git.setView('history')}><Icon icon={History} size={16} />History</button>
     </div>
   );
 }
@@ -328,7 +329,7 @@ function Sidebar({ api }: { api: FrameApi }): JSX.Element {
     <div className="git-side">
       <div className="git-side-head">
         <span className="git-side-name"><MiddleText text={name} tail={8} /></span>
-        <IconButton icon={RefreshCw} label={history ? 'Refresh the branches and history' : 'Refresh the branches'} onClick={() => void git.refresh(repo, { history: true })} />
+        <IconButton icon={RotateCw} label={history ? 'Reload branches and history' : 'Reload branches'} title="Re-read the branches and history from disk" onClick={() => void git.refresh(repo, { history: true })} />
       </div>
       {multi && (
         <select className="ow-select frame-input git-repo" aria-label="Repository" value={repo} onChange={(event) => setRepo(event.target.value)}>
@@ -409,7 +410,7 @@ export function register(api: FrameApi): Unregister {
   };
   const syncing = (): boolean => { const { repo, syncing: running } = store.getSnapshot(); return repo !== undefined && running[repo] !== undefined; };
   return all(
-    api.registerSidebar({ activity: 'git', id: 'branches', title: 'Branches', render: () => <Sidebar api={api} /> }),
+    api.registerSidebar({ activity: 'git', id: 'branches', title: 'Git', ownsHeading: true, render: () => <Sidebar api={api} /> }),
     api.registerCommand({ id: 'git.fetch', title: 'Git: Fetch', enabled: () => !api.readOnly && context() !== undefined && !syncing(), run: () => { const ctx = context(); if (ctx) void fetchRepo(ctx); } }),
     api.registerCommand({ id: 'git.refresh', title: 'Git: Refresh branches', enabled: () => !api.readOnly, run: () => { const { repo } = store.getSnapshot(); if (repo !== undefined) void store.refresh(repo, { history: true }); } }),
     // Kept under its old id so a binding to it still works: the history it shows is the checkout's, in the sidebar, whatever was open there.

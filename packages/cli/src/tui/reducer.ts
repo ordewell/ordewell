@@ -838,7 +838,7 @@ function handleKey(state: TuiState, key: Key): Step {
 
   if (key.name === 'enter') return submit(state);
   // Send now in the planner chat (ADR-0023, F5): mid-turn it interrupts the
-  // turn and sends the composer text (or the newest queued prompt) next; with
+  // turn and sends every queued prompt and the composer text, glued, next; with
   // no turn in flight it is the plain send enter is. A TUI command in the
   // composer is not a message to send, so it runs as it does on enter.
   if (key.name === 'ctrl-s') {

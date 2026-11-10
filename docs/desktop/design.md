@@ -488,7 +488,10 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
   - *The plan panel* fills in row by row as the draft streams. A partial task is
     drawn as a skeleton row.
 - **Actions.**
-  - Message the planner, or send now. Stop planning.
+  - Message the planner. While a turn runs, ⏎ queues a message and ⌘⏎ /
+    Ctrl+Enter sends now: every queued message, in the order typed, with what
+    is in the composer last, as one message. Esc takes back the newest queued
+    message, into the composer only when it is empty. Stop planning.
   - Switch the planner, model and effort.
   - Fork, rewind or compact the conversation (header `⋯`).
   - A planner question with options draws as buttons in the conversation.
@@ -981,12 +984,16 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
   action in flight disables its buttons.
   - *Fetch, pull and push* run one at a time per repository, whichever
     surface started them: this sidebar, the Git sidebar's Fetch or the
-    palette's *Git: Fetch*. The one running is `busy`: its icon turns, it is
+    palette's *Git: Fetch*. The one running is `busy`: its icon moves, it is
     `aria-busy`, and it stays at full strength while the other two are
-    disabled. Pull and push are busy only once their confirm is accepted. The
-    icon turns only while the action is pending, and never under reduced
-    motion. A second start while one runs is refused, and announced as
-    "web is already syncing."; the palette's Fetch is disabled meanwhile.
+    disabled. Fetch's circling arrows turn. Pull's and Push's arrows never
+    turn, since a turned arrow points the wrong way half the time: the arrow
+    glides down into its line for Pull, or up out of it for Push, while the
+    line stays still (`busyMotion="glide"`). Pull and push are busy only once
+    their confirm is accepted. The icon moves only while the action is
+    pending, and holds still under reduced motion. A second start while one
+    runs is refused, and announced as "web is already syncing."; the
+    palette's Fetch is disabled meanwhile.
 - **Empty.** "No changes in web." Ahead and behind still show.
 - **Error.**
   - A refused action shows git's own text in the box: a hook that failed, a
@@ -1928,7 +1935,9 @@ by what it separates: 4 within one control, 8 between controls.
 
 ### Type
 
-Inter for UI, and JetBrains Mono for code, paths, branches and commands. Both
+Inter for UI, and JetBrains Mono for code, paths, SHAs, ref chips and commands. A
+branch's name in a row is Inter, because it fits about a tenth more at the
+sidebar's narrow widths and the name leads. Both
 are bundled, with no network font. The weights are 400, 500 and 600 only.
 Tabular numbers (`font-variant-numeric: tabular-nums`) are used wherever a
 number updates in place: elapsed times, counts and usage.
@@ -1940,18 +1949,19 @@ number updates in place: elapsed times, counts and usage.
 | `--ow-type-small` | 12 / 18 | 400 | metadata, a row's second and third lines, tooltips |
 | `--ow-type-body` | 13 / 20 | 400 | UI body, rows' first lines, inputs, menus |
 | `--ow-type-label` | 13 / 20 | 500 | a button's label, a link that acts as one |
-| `--ow-type-body-strong` | 13 / 20 | 600 | the name a row or card is about: a task, session, project, branch or commit title, the checkout's branch |
+| `--ow-type-body-strong` | 13 / 20 | 600 | the name a row or card is about: a task, session, project or commit title; the checked-out branch's name (a branch row's label is `body` in Inter, and weight 600 only for the current one) |
 | `--ow-type-chat` | 14 / 22 | 400 | planner and task conversations, Details' prose |
 | `--ow-type-heading` | 15 / 22 | 600 | session header goal, dialog titles, a commit tab's subject; the Welcome tagline at 400 |
 | `--ow-type-title` | 20 / 28 | 600 | empty states, Settings' page title |
 | `--ow-type-code` | 12.5 / 19 | 400 | Monaco, the terminal, peeks, code in chat |
-| `--ow-type-code-small` | 12 / 18 | 400 | paths, branches and commands inside rows and cards |
+| `--ow-type-code-small` | 12 / 18 | 400 | paths, SHAs, ref chips, metadata and commands inside rows and cards (not a branch row's own label) |
 
 The roles rank what a surface says, and colour follows the rank:
 
 - **The name leads.** What a row, card, menu item or dialog is about (its
   task, session, project, branch, commit or model) is the first thing on it,
-  in `body-strong` or `heading` and `--ow-fg`. Metadata under or beside it (a
+  in `body-strong` or `heading` and `--ow-fg` (a branch's name in a row is
+  `body`, and `body-strong` when it is the checked-out one). Metadata under or beside it (a
   path, a sha, an author, an age, a count, a status line) is `small`,
   `caption` or `code-small` in `--ow-fg-secondary`, never the reverse.
 - **Nothing reads under 11 px.** `caption` and `overline` are the floor, in
@@ -1970,8 +1980,8 @@ The roles rank what a surface says, and colour follows the rank:
 | The activity bar | 22 | 1.5 |
 | Empty states | 40 | 1.5 |
 | Panel and sidebar headers, the title bar, dialog titles | 16 | 1.5 |
-| Buttons, tabs, menus, rows' first line | 16 | 1.5 |
-| A row's or card's second line, the status bar, chips | 14 | 1.5 |
+| Buttons, tabs, menus, rows' first line, a group's or folder's chevron, a view switch's icons | 16 | 1.5 |
+| A mark on a row's or card's second line, the status bar, chips (never a first-line icon) | 14 | 1.5 |
 | Inside a badge, a stage chip, beside `type.caption` | 12 | 1.75 (so it doesn't thin out) |
 | Status shapes | 14 in rows and cards, 16 in the tab header, 12 in chips and the rail | — |
 
@@ -2074,8 +2084,17 @@ This app, then Advanced. Every field in a card takes the `inset` surface.
     - `--ow-motion-base`, 160 ms: panels, popovers, a tab switch;
     - `--ow-motion-slow` (new), 240 ms: an overlay drawer, a stage snap.
   - The easing is `cubic-bezier(0.2, 0, 0, 1)`.
+  - A busy button's icon moves for as long as its action is pending. An
+    icon that reads the same at any angle, such as Fetch's, turns once every
+    1.2 s, linear. A directional arrow, Pull's or Push's, is never turned. It
+    glides along its own direction instead, translate only so its strokes
+    stay crisp, over 1.4 s on the standard easing. It eases in from behind
+    its resting place, rests where the idle icon draws it, then speeds on and
+    fades, clipped where it meets its line, which never moves.
   - Under `prefers-reduced-motion`, every duration is 0, the running shape
-    stops turning, and stage snaps jump.
+    stops turning, a busy button's icon holds still at rest, and stage snaps
+    jump. The busy button still reads as working: it keeps full strength and
+    the progress cursor.
   - Nothing moves to celebrate.
 
 ### Layout rules that prevent overlap
@@ -2146,8 +2165,10 @@ a status.
 | Conflict | `triangle-alert` | Usage limit | `hourglass` |
 | Dependency in / out | `arrow-left-to-line` / `arrow-right-from-line` | Interrupt | `octagon-x` |
 | Commit | `git-commit-horizontal` | Branch create | `git-branch-plus` |
-| Fetch | `refresh-cw` | Pull / push | `arrow-down-to-line` / `arrow-up-from-line` |
+| Fetch | `refresh-cw` | Pull / push | `arrow-down-to-line` / `arrow-up-from-line`, drawn as `PullIcon` / `PushIcon` |
 | Stash / pop | `archive` / `archive-restore` | Discard | `undo` |
+| Switch branch | `arrow-right-left` | Refresh (re-read from disk) | `rotate-cw` |
+| Remote branch | `cloud` | | |
 | Stage / unstage a file | `plus` / `minus` | Open in editor | `external-link` |
 | Folder / file | `folder` / `file` | Ignored | `eye-off` |
 | Read-only, held | `lock` | Daemon | `server` |
@@ -2156,6 +2177,11 @@ a status.
 | Split | `columns-2` | Terminal panel | `panel-bottom` |
 | Status: not started, passed, failed, blocked | `circle`, `circle-check`, `circle-x`, `ban` | Status: running | `loader-circle` |
 | Status: skipped | `circle-dashed` | Status: waiting for merge | `git-merge` |
+
+**Pull and push** are drawn by the design kit as `PullIcon` and `PushIcon`:
+Lucide's `arrow-down-to-line` and `arrow-up-from-line`, stroke for stroke,
+with the arrow its own group so a busy button can glide it while the line
+stays still.
 
 **Custom glyphs.** There are eight, drawn on the logo's motif: round-capped
 strokes converging on a teal dot. They are drawn on a 24 px grid, with a
@@ -2199,7 +2225,7 @@ strokes converging on a teal dot. They are drawn on a 24 px grid, with a
 | ⌘W / Ctrl+W, ⌃Tab / Ctrl+Tab | Close tab (never the planner tab), next tab |
 | ⌘\\ / Ctrl+\\ | Split the editor |
 | ⌘S / Ctrl+S | Save (checkout only) |
-| ⌘⏎ / Ctrl+Enter | Send in a composer; commit in the commit box |
+| ⌘⏎ / Ctrl+Enter | Send now while a turn runs: in the planner chat, the queued messages and the composer's text as one; commit in the commit box |
 | Esc | Close a popover, peek, drawer or dialog; return focus where it was |
 | F6 / Shift+F6 | Move focus between regions: title bar, sidebar, centre, plan panel, terminal, status bar |
 | F7 / Shift+F7 (diff) | Monaco's accessible diff viewer, next and previous change |
@@ -2317,8 +2343,9 @@ are permanent, so findings can cite them.
 
 - **Y1.** Every font size and line height is a step of [the type scale](#type).
 - **Y2.** Every margin, padding and gap is a step of [the spacing scale](#spacing).
-- **Y3.** Code, paths, branches and commands are in JetBrains Mono. Everything
-  else is in Inter.
+- **Y3.** Code, paths, SHAs, ref chips, metadata and commands are in JetBrains
+  Mono. Everything else is in Inter, a branch row's name included, in weight
+  600 for the checked-out branch.
 
 **Focus and screen readers**
 

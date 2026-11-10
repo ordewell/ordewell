@@ -1,49 +1,44 @@
-import { aheadOfDraft, drainNext, unsendAll, unsendLatest as unsendNewest } from '@ordewell/core';
+import { aheadOfDraft, unsendAll, unsendLatest as unsendNewest } from '@ordewell/core';
 import { commit } from '../editor';
 import { plannerInFlight, planPaneOpen, type TuiState } from '../state';
 import { cutTurn, say } from '../transcript';
 import { step, type Effect, type Step } from './shared';
 
 /**
- * A planner turn ending is the moment the next queued prompt goes out. The
- * actions that end a turn (`planUpdated`'s settle branch, `failed`) funnel
- * through here: one prompt is spoken and sent, and the status says planning
- * again only while the queue keeps going.
+ * A planner turn ending is the moment the queued prompts go out. The actions
+ * that end a turn (`planUpdated`'s settle branch, `failed`) funnel through
+ * here: everything held is spoken and sent as one message, in the order typed,
+ * and the status says planning again only when there was something to send.
  *
  * Nothing is drained when no turn was in flight — a failure during execution,
  * or a plan refresh running alongside a run, is not a settling turn.
  */
 export function drainQueue(state: TuiState, settled: TuiState): Step {
-  const next = drainNext(state.queuedPrompts);
+  const held = unsendAll(state.queuedPrompts);
   // The arm aimed at the turn that just ended lapses with it — the next turn
   // starts unarmed, and its first Esc has to earn the stop again.
   const ended = disarmStop({ ...settled, stopRequested: false, forceSendPending: null });
-  if (!next) return step(ended);
-  const spoken = say(ended, 'user', next.text);
+  if (!held) return step(ended);
+  const spoken = say(ended, 'user', held.text);
   const effect: Effect | null = state.sessionId
-    ? { type: 'sendMessage', sessionId: state.sessionId, message: next.text }
+    ? { type: 'sendMessage', sessionId: state.sessionId, message: held.text }
     : null;
   return step(
-    { ...spoken, queuedPrompts: next.rest, planner: 'planning' },
+    { ...spoken, queuedPrompts: held.rest, planner: 'planning' },
     effect ? [effect] : [],
   );
 }
 
 /**
- * A force send that never started its turn gives the prompt back: to the
- * composer, above what was typed since, or to its place in the queue.
+ * A force send that never started its turn gives its message back to the
+ * composer, above what was typed since: the queued prompts it carried come
+ * back with it, as one draft, rather than resending on their own.
  */
 export function restoreForced(state: TuiState): TuiState {
   const { forceSendPending: forced } = state;
   if (!forced) return state;
-  const cleared = { ...state, forceSendPending: null };
-  if (forced.queueIndex === undefined) {
-    const text = aheadOfDraft(forced.text, state.editor.text);
-    return { ...cleared, editor: { ...state.editor, text, cursor: text.length } };
-  }
-  const queued = [...state.queuedPrompts];
-  queued.splice(Math.min(forced.queueIndex, queued.length), 0, forced.text);
-  return { ...cleared, queuedPrompts: queued };
+  const text = aheadOfDraft(forced.text, state.editor.text);
+  return { ...state, forceSendPending: null, editor: { ...state.editor, text, cursor: text.length } };
 }
 
 /** The arm lapsed — through the scheduled effect or a different key. */
@@ -81,50 +76,46 @@ export function queueToEditor(state: TuiState): TuiState {
 }
 
 /**
- * Takes the newest queued prompt back: its text goes above whatever draft is
- * in the box, separated by a newline, and the planner keeps running. The editor
- * is rebuilt wholesale rather than patched, because the takeback replaces what
- * the user was composing rather than joining its history.
+ * Takes the newest queued prompt back while the planner keeps running. Into
+ * an empty composer it comes back to edit, the editor rebuilt wholesale since
+ * the takeback is not part of its history; beside a draft it is dropped, as
+ * the draft is what the user is writing now and must not be rearranged.
  */
 function unsendLatest(state: TuiState): Step {
   const latest = unsendNewest(state.queuedPrompts);
   if (!latest) return step(state);
-  const text = aheadOfDraft(latest.text, state.editor.text);
+  const dropped = { ...state, queuedPrompts: latest.rest, stopArmed: false };
+  if (state.editor.text.trim()) return step(dropped);
+  const { text } = latest;
   return step({
-    ...state,
-    queuedPrompts: latest.rest,
-    stopArmed: false,
-    editor: { ...state.editor, text, cursor: latest.text.length, historyIndex: state.editor.history.length, draft: '' },
+    ...dropped,
+    editor: { ...state.editor, text, cursor: text.length, historyIndex: state.editor.history.length, draft: '' },
   });
 }
 
 /**
  * Send now in the planner chat (ADR-0023, F5): stop the planner turn in flight
- * and answer the composer's text in the turn that replaces it — or, with the
- * composer empty, the newest queued prompt. Turn-scoped: the run's tasks are
- * never touched, and the prompts still held keep their order behind the forced
- * one. Only reached while a turn is in flight; with none it is a plain send
- * (see `submit`).
+ * and answer, in the turn that replaces it, every queued prompt in the order
+ * typed and then the composer's text, glued into one message — the hold is
+ * one thought the user had not finished sending, never a backlog to replay
+ * out of order. Turn-scoped: the run's tasks are never touched. Only reached
+ * while a turn is in flight; with none it is a plain send (see `submit`).
  */
 export function forceSendPlanner(state: TuiState): Step {
   if (!state.sessionId) return step(state);
-  const text = state.editor.text.trim();
-  if (text) {
-    return step({ ...state, editor: commit(state.editor), stopRequested: false, forceSendPending: { text } }, [
-      { type: 'forceSendPlannerMessage', sessionId: state.sessionId, message: text },
-    ]);
-  }
-  const latest = unsendNewest(state.queuedPrompts);
-  if (!latest) return step(say(state, 'system', 'Nothing to send now: type a message, or queue one with enter.'));
-  const forced = { text: latest.text, queueIndex: latest.rest.length };
-  return step({ ...state, queuedPrompts: latest.rest, stopRequested: false, forceSendPending: forced }, [
-    { type: 'forceSendPlannerMessage', sessionId: state.sessionId, message: latest.text },
+  const draft = state.editor.text.trim();
+  const held = unsendAll(state.queuedPrompts);
+  const text = held ? aheadOfDraft(held.text, draft) : draft;
+  if (!text) return step(say(state, 'system', 'Nothing to send now: type a message, or queue some with enter.'));
+  const editor = draft ? commit(state.editor) : state.editor;
+  return step({ ...state, editor, queuedPrompts: held?.rest ?? state.queuedPrompts, stopRequested: false, forceSendPending: { text } }, [
+    { type: 'forceSendPlannerMessage', sessionId: state.sessionId, message: text },
   ]);
 }
 
 /**
  * Esc on an in-flight planner turn, in order of the user's intent:
- * 1. take back the newest queued prompt (the planner keeps running);
+ * 1. take back the newest queued prompt (the planner keeps running), one per press;
  * 2. arm a stop — a second Esc commits it, anything else disarms;
  * 3. commit the stop.
  *

@@ -8,7 +8,7 @@ import type { IAiService, IRunner, LegacyPlanState, ModelResolver, Session, Sess
 import { fakeConfig, fakeFileSystem } from '@ordewell/core/testing';
 import { ChatViewProvider } from '../../providers/ChatViewProvider';
 import type { HostToWebview, WebviewToHost } from '@ordewell/ui/protocol';
-import { routeWebviewMessage, type WebviewRouterDeps } from '../webviewRouter';
+import { routeWebviewMessage, sendNextHeldPrompt, type WebviewRouterDeps } from '../webviewRouter';
 
 const showWarningMessage = vscode.window.showWarningMessage as unknown as ReturnType<typeof vi.fn>;
 
@@ -534,19 +534,73 @@ describe('webview messages reach the session through one entry point each', () =
       expect(converse).toHaveBeenCalledWith('a normal reply');
     });
 
-    it('sends one held prompt now by position, leaving the rest held in order', async () => {
+    function lastHold(): readonly string[] | undefined {
+      const holds = h.posts.filter((m): m is Extract<HostToWebview, { type: 'heldPrompts' }> => m.type === 'heldPrompts');
+      return holds.at(-1)?.prompts;
+    }
+
+    it.each([
+      ['the composer\'s text last', 'use Postgres', 'one\ntwo\nuse Postgres'],
+      ['an empty composer', '', 'one\ntwo'],
+    ])('sends now everything held, glued in order, with %s', async (_case, typed, sent) => {
       const force = vi.spyOn(h.session, 'forceSendPrompt').mockResolvedValue(h.session.planState!);
+      const converse = vi.spyOn(h.session, 'continueConversation').mockResolvedValue(h.session.planState!);
       h.deps.isGeneratingPlan = () => true;
       h.deps.chatProvider.conversation.holdPrompt('one');
       h.deps.chatProvider.conversation.holdPrompt('two');
-      h.deps.chatProvider.conversation.holdPrompt('three');
 
-      await h.route({ type: 'sendHeldPromptNow', index: 1 });
+      await h.route({ type: 'sendMessageNow', text: typed });
 
-      expect(force).toHaveBeenCalledWith('two');
-      const holds = h.posts.filter((m): m is Extract<HostToWebview, { type: 'heldPrompts' }> => m.type === 'heldPrompts');
-      expect(holds.at(-1)?.prompts).toEqual(['one', 'three']);
-      expect(h.posts.some((m) => m.type === 'promptUnsent')).toBe(false);
+      expect(force.mock.calls).toEqual([[sent]]);
+      expect(lastHold()).toEqual([]);
+      // Nothing was left held to follow the forced turn.
+      expect(converse).not.toHaveBeenCalled();
+    });
+
+    it('sends nothing now when nothing is held and nothing is typed', async () => {
+      const force = vi.spyOn(h.session, 'forceSendPrompt').mockResolvedValue(h.session.planState!);
+      h.deps.isGeneratingPlan = () => true;
+
+      await h.route({ type: 'sendMessageNow', text: '' });
+
+      expect(force).not.toHaveBeenCalled();
+    });
+
+    it('sends now with no turn running as a plain send of everything held', async () => {
+      const converse = vi.spyOn(h.session, 'continueConversation').mockResolvedValue(h.session.planState!);
+      const force = vi.spyOn(h.session, 'forceSendPrompt').mockResolvedValue(h.session.planState!);
+      h.deps.isGeneratingPlan = () => true;
+      h.deps.chatProvider.conversation.holdPrompt('one');
+      h.deps.isGeneratingPlan = () => false;
+
+      await h.route({ type: 'sendMessageNow', text: 'two' });
+
+      expect(force).not.toHaveBeenCalled();
+      expect(converse.mock.calls.map((c) => c[0])).toEqual(['one\ntwo']);
+    });
+
+    it('sends everything held as one message once the turn ends', async () => {
+      const converse = vi.spyOn(h.session, 'continueConversation').mockResolvedValue(h.session.planState!);
+      h.deps.chatProvider.conversation.holdPrompt('one');
+      h.deps.chatProvider.conversation.holdPrompt('two');
+
+      sendNextHeldPrompt(h.deps);
+
+      await vi.waitFor(() => expect(converse.mock.calls.map((c) => c[0])).toEqual(['one\ntwo']));
+      expect(lastHold()).toEqual([]);
+    });
+
+    it.each([
+      [true, ['two']],
+      [false, []],
+    ])('takes back the newest held prompt, into the composer only when it was empty (%s)', async (toComposer, unsent) => {
+      h.deps.chatProvider.conversation.holdPrompt('one');
+      h.deps.chatProvider.conversation.holdPrompt('two');
+
+      await h.route({ type: 'unsendPrompt', toComposer });
+
+      expect(lastHold()).toEqual(['one']);
+      expect(h.posts.flatMap((m) => (m.type === 'promptUnsent' ? [m.text] : []))).toEqual(unsent);
     });
 
     /** A live planner whose replies the test hands back one at a time, keeping each call's message and signal. */

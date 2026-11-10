@@ -57,7 +57,7 @@ export function SidebarGroup({ title, label, count, actions, startOpen = true, c
       <div className="sgroup-head">
         <h4 id={id} className="sgroup-title">
           <button type="button" className="sgroup-toggle" aria-expanded={open} onClick={() => setOpen((was) => !was)}>
-            <Icon icon={open ? ChevronDown : ChevronRight} size={14} />
+            <Icon icon={open ? ChevronDown : ChevronRight} size={16} />
             <span className="sgroup-name">{title}</span>
             {count !== undefined && <span className="ow-count">{count}</span>}
           </button>

@@ -25,7 +25,7 @@ describe('queued prompt rows on a narrow pane', () => {
 
   it('names the hint on a wide pane', () => {
     const [row] = queuedPromptRows(initialState({ queuedPrompts: ['a parked thought'] }), 120);
-    expect(plain(row)).toContain('a parked thought · queued · esc to unsend · ctrl-s sends now');
+    expect(plain(row)).toContain('a parked thought · queued · esc takes back · ctrl-s sends all now');
   });
 });
 

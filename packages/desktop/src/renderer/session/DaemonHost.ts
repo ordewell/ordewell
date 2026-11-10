@@ -843,22 +843,22 @@ export class DaemonHost {
       case 'changeSettings':
         await this.changeSettings(msg.change);
         return;
-      case 'sendMessageNow':
-        await this.say(msg.text, true);
+      // Send now (ADR-0017 Q2): everything held goes with the composer's text,
+      // as one message. Only a turn in flight is stopped for it; with none, it
+      // is a plain send, as in the extension's sendChatNow.
+      case 'sendMessageNow': {
+        const text = this.view.conversation.takeAll(msg.text);
+        if (text.trim()) await this.say(text, this.generating);
         return;
+      }
       // Typed while the chat saw a turn in flight: one that has ended since leaves nothing to wait for, as in the extension.
       case 'holdPrompt':
         if (this.generating) this.view.conversation.holdPrompt(msg.text);
         else await this.handle({ type: 'sendMessage', text: msg.text, typed: true });
         return;
       case 'unsendPrompt':
-        this.view.conversation.unsendPrompt();
+        this.view.conversation.unsendPrompt(msg.toComposer);
         return;
-      case 'sendHeldPromptNow': {
-        const text = this.view.conversation.takePrompt(msg.index);
-        if (text !== undefined) await this.say(text, true);
-        return;
-      }
       case 'stopResearch':
         this.view.conversation.stop();
         if (!this.fresh) await callDaemon('plans.stopPlanning', { sessionId: this.sessionId });
@@ -972,7 +972,7 @@ export class DaemonHost {
 
   /**
    * A call that is a planner turn: what is typed meanwhile is held, and the
-   * oldest held prompt goes once it ends, whoever asked for the turn.
+   * held prompts go once it ends, as one message, whoever asked for the turn.
    */
   private async plannerTurn(run: (sessionId: string) => Promise<void>, failed: (error: unknown) => void): Promise<void> {
     const sessionId = this.sessionId;
@@ -990,7 +990,7 @@ export class DaemonHost {
     if (this.turnsIn(sessionId) === 0) await this.sendHeldPrompt();
   }
 
-  /** The oldest prompt typed while the planner was busy, sent now that it is not. */
+  /** Every prompt typed while the planner was busy, glued and sent now that it is not. */
   private async sendHeldPrompt(): Promise<void> {
     const next = this.view.conversation.nextPrompt();
     if (next !== undefined) await this.say(next, false);

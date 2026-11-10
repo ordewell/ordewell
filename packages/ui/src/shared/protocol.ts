@@ -163,16 +163,19 @@ export type WebviewToHost =
    * when the turn ends — or at once, if the turn ended before this arrived.
    */
   | { type: 'holdPrompt'; text: string }
-  /** Take back the newest queued prompt; the host answers with `promptUnsent`. */
-  | { type: 'unsendPrompt' }
   /**
-   * Send now (ADR-0023, F5): stop the planner turn in flight and answer `text`
-   * in the turn that replaces it, ahead of anything waiting. With no turn
+   * Take back the newest queued prompt. With `toComposer`, the composer was
+   * empty and the host answers with `promptUnsent` to fill it; otherwise the
+   * prompt is discarded.
+   */
+  | { type: 'unsendPrompt'; toComposer: boolean }
+  /**
+   * Send now (ADR-0023, F5): stop the planner turn in flight and answer, in
+   * the turn that replaces it, everything held glued in the order typed with
+   * `text` last. `text` is the composer's and may be empty. With no turn
    * running it is a plain send.
    */
   | { type: 'sendMessageNow'; text: string }
-  /** Send one held prompt now, by its position in the hold; the rest stay held in order. */
-  | { type: 'sendHeldPromptNow'; index: number }
   | { type: 'ready' }
   /** The user's answer to an escalation in the inbox; the host asks the Session and replies with `escalationAnswered`. */
   | ({ type: 'answerEscalation' } & EscalationAnswer)
