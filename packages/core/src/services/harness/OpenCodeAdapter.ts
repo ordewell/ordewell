@@ -26,8 +26,8 @@ const RECOVERY_POLL_INTERVAL_MS = 2000;
 const RECOVERY_TIMEOUT_MS = 900000;
 /** How often a task turn reads `/session/status` itself — see {@link OpenCodeAdapter.pollStatus}. */
 const STATUS_POLL_INTERVAL_MS = 1000;
-/** The Basic-auth username `serve` defaults to. Set explicitly so a host's own `OPENCODE_SERVER_USERNAME` cannot win. */
-const SERVER_USERNAME = 'opencode';
+/** The Basic-auth username `serve` accepts: 2.x ignores `OPENCODE_SERVER_USERNAME` and takes only this one. Set explicitly so a host's own variable cannot win on 1.x. */
+export const SERVER_USERNAME = 'opencode';
 const MCP_STATUS_POLL_MS = 200;
 /**
  * How long 2.x takes, after it says a server is connected, to offer the model
