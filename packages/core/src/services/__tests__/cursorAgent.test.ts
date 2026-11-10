@@ -582,6 +582,15 @@ const DENY_ALL = {
   sandbox: { mode: 'disabled' },
 };
 
+/** The hooks a restricted start hands Cursor: every subagent and every Task call blocked, the hook failing closed. */
+const NO_SUBAGENTS = {
+  version: 1,
+  hooks: {
+    subagentStart: [{ command: 'exit 2', failClosed: true }],
+    preToolUse: [{ command: 'exit 2', matcher: '^Task$', failClosed: true }],
+  },
+};
+
 const ALLOWED_ONCE = { outcome: 'selected', optionId: 'allow-once' };
 
 describe('cursor-agent roles, replayed from Cursor CLI 2026.10.22 (ADR-0026, ADR-0028, ADR-0046, ADR-0060)', () => {
@@ -599,7 +608,7 @@ describe('cursor-agent roles, replayed from Cursor CLI 2026.10.22 (ADR-0026, ADR
     }
   });
 
-  it.each(ROLES)('starts %s in a directory of its own with Cursor\'s own read, write and shell tools denied, as it was recorded running none of the workspace\'s hooks or rules', async (name) => {
+  it.each(ROLES)('starts %s in a directory of its own with Cursor\'s own read, write and shell tools denied and its subagents blocked, as it was recorded running none of the workspace\'s hooks or rules', async (name) => {
     const { spawned, agent, adapter } = cursor(replay(name, CONTACT_ON));
     await adapter.start(await startOf(name));
 
@@ -611,18 +620,38 @@ describe('cursor-agent roles, replayed from Cursor CLI 2026.10.22 (ADR-0026, ADR
     // Cursor's home of configuration is this start's own, holding the deny list and nothing of the user's.
     const home = join(dir, 'CURSOR_CONFIG_DIR');
     expect(spawned.lastEnv().CURSOR_CONFIG_DIR).toBe(home);
-    expect(readdirSync(home)).toEqual(['cli-config.json']);
+    expect(readdirSync(home).sort()).toEqual(['cli-config.json', 'hooks.json']);
     expect(JSON.parse(readFileSync(join(home, 'cli-config.json'), 'utf8'))).toEqual(DENY_ALL);
+    expect(JSON.parse(readFileSync(join(home, 'hooks.json'), 'utf8'))).toEqual(NO_SUBAGENTS);
     // Windows has no POSIX modes: there the home's privacy is the per-user temp directory it is made in.
     if (process.platform !== 'win32') {
       expect(statSync(home).mode & 0o777).toBe(0o700);
       expect(statSync(join(home, 'cli-config.json')).mode & 0o777).toBe(0o600);
+      expect(statSync(join(home, 'hooks.json')).mode & 0o777).toBe(0o600);
     }
     expect((agent.requests('session/new')[0].params as { cwd: string }).cwd).toBe(dir);
     expect(agent.requests('session/set_mode')).toEqual([]);
     expect(agent.requests('session/set_config_option').map((r) => r.params)).toEqual(recordedOut(name, 'session/set_config_option'));
     expect(recordedOutcome(name)).toMatchObject({ hooksRan: [], ruleLoaded: false, agentsLoaded: false, leftBehind: [] });
     expect(agent.problems).toEqual([]);
+  });
+
+  // Cursor's docs (cli/acp) name `cursor/task` the notice "about subagent task
+  // completion"; no recording has one, as none started a subagent.
+  it.each(['planner', 'read-only'])('ends a %s start that Cursor reports a subagent\'s work in: the hooks that block one did not hold', async (name) => {
+    const notice: FakeAcpStep = { notify: 'cursor/task', params: { toolCallId: 't-1', description: 'Look around', prompt: 'Read src/', subagentType: 'explore' } };
+    const { spawned, adapter } = cursor(replay(name, { ...CONTACT_ON, 'session/prompt': [notice] }));
+    await adapter.start(await startOf(name));
+    const events: AgentEvent[] = [];
+    await adapter.send('go', (event) => {
+      events.push(event);
+      if (event.type === 'permission_request' && !event.decided) adapter.answerPermission?.(event.id, { decision: 'allow' });
+    });
+
+    const role = name === 'planner' ? 'planner session' : 'read-only task';
+    expect(events).toContainEqual({ type: 'error', message: `${CURSOR_AGENT_MANIFEST.displayName} started a subagent, which this start withholds, so this ${role} cannot go on.` });
+    expect(spawned.processes[0].killed).toBe(true);
+    expect(CURSOR_AGENT_PROFILE.delegation?.notices).toEqual(['cursor/task']);
   });
 
   it('leaves a writable start as it was: in the worktree, on the user\'s own configuration, with only its mode\'s arguments', async () => {
@@ -698,8 +727,8 @@ describe('cursor-agent roles, replayed from Cursor CLI 2026.10.22 (ADR-0026, ADR
     const request: AcpToolCall = { toolCallId: report.toolCallId, title: report.title, kind };
     const { mcp } = await readOnlyToken();
 
-    expect(decideRestricted({ request, report }, { kind: 'other' }, readOnlyStart(mcp))).toMatchObject({ decision: 'deny' });
-    expect(decideRestricted({ request, report }, { kind: 'other' }, { kind: 'planner' })).toMatchObject({ decision: 'deny' });
+    expect(decideRestricted({ request, report }, { kind: 'other' }, readOnlyStart(mcp), CURSOR_AGENT_PROFILE)).toMatchObject({ decision: 'deny' });
+    expect(decideRestricted({ request, report }, { kind: 'other' }, { kind: 'planner' }, CURSOR_AGENT_PROFILE)).toMatchObject({ decision: 'deny' });
   });
 
   it.each([

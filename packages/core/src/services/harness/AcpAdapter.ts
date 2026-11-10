@@ -22,7 +22,7 @@ import {
   type AcpSessionState,
   type AcpToolCall,
 } from './acpSchema';
-import { endTurn, newTurn, reduceUpdate, type AcpTurn } from './acpEvents';
+import { endTurn, newTurn, outlivesItsCall, reduceUpdate, subagentStillWorking, type AcpTurn } from './acpEvents';
 import { acpOrdewellBinding } from './acpOrdewell';
 import { currentValue, findOption, optionValues, type OptionRole } from './acpOptions';
 import type { AcpAskedCall, AcpExtensionHandler, AcpProfile } from './acpProfiles';
@@ -112,7 +112,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
   private startDir: string | null = null;
   /** The mode a restricted session settled in, which it may not leave; watched once the settings are applied. */
   private settledMode: { id: string | undefined } | null = null;
-  /** Why this process may take no further turn: it left the mode its restricted start held. */
+  /** Why this process may take no further turn: it left the mode its restricted start held, or a subagent outlived its call. */
   private failure: string | null = null;
   private turn: AcpTurn | null = null;
   /**
@@ -163,6 +163,12 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     }
     this.rpc.onRequest('session/request_permission', (params, request) => this.onPermission(params, request.id, request.cancelled));
     this.rpc.onNotification('session/update', (params) => this.onUpdate(params));
+    for (const method of profile.delegation?.notices ?? []) {
+      if (ACP_CLIENT_NAMESPACES.some((ns) => method.startsWith(ns))) continue;
+      this.rpc.onNotification(method, () => {
+        if (this.restricted) this.fail(`${this.name} started a subagent, which this start withholds`);
+      });
+    }
     void this.processEnded.then(() => {
       this.rpc.close('The agent exited.');
       this.cancelPermissions();
@@ -212,7 +218,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
         role: started.kind === 'planner' ? 'planner' : 'task',
         autoApprove: false,
         // The ledger asks while the request is being held, so its call is here.
-        decide: (request) => decideRestricted(this.held.get(request.id)!.asked, request.ask ?? { kind: 'other' }, started),
+        decide: (request) => decideRestricted(this.held.get(request.id)!.asked, request.ask ?? { kind: 'other' }, started, this.profile),
       };
     }
     return { role: 'task', autoApprove: this.profile.mode === undefined && started?.kind === 'task' && started.flags.modeSettings.approvals === 'auto' };
@@ -644,7 +650,9 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
       if (response.ok) {
         const parsed = parseAcp(promptResponseSchema, response.result);
         const { stopReason, usage } = parsed.ok ? parsed.value : { stopReason: { unreadable: parsed.error }, usage: undefined };
-        for (const event of endTurn(turn, stopReason, usage, this.cancelSent)) this.announce(event);
+        const background = this.restricted && !this.cancelSent && subagentStillWorking(turn);
+        for (const event of endTurn(turn, stopReason, usage, this.cancelSent)) if (!(background && event.type === 'turn_end')) this.announce(event);
+        if (background) this.failBackgroundSubagent();
       } else if (this.cancelSent) {
         // Some agents answer a cancelled prompt with an error rather than a
         // `cancelled` stop: it is still the interrupt we asked for.
@@ -684,6 +692,10 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
       this.holdSettledMode(update.currentModeId);
       return;
     }
+    if (this.restricted && outlivesItsCall(this.turn, update)) {
+      this.failBackgroundSubagent();
+      return;
+    }
     if (this.turn) {
       if (update.sessionUpdate === 'tool_call' && !this.reports.has(update.toolCallId)) this.reports.set(update.toolCallId, update);
       const step = reduceUpdate(this.turn, update);
@@ -702,8 +714,23 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
    */
   private holdSettledMode(now: string | undefined): void {
     const settled = this.settledMode;
-    if (!settled || now === settled.id || this.failure !== null) return;
-    this.failure = `${this.name} left the mode it was started in ("${settled.id ?? 'none'}" to "${now ?? 'none'}"), so this ${this.started?.kind === 'planner' ? 'planner session' : 'read-only task'} cannot go on.`;
+    if (!settled || now === settled.id) return;
+    this.fail(`${this.name} left the mode it was started in ("${settled.id ?? 'none'}" to "${now ?? 'none'}")`);
+  }
+
+  /**
+   * A restricted start's subagent works within its turn or not at all, as
+   * OpenCode's scout does (ADR-0026): one still working once the call that
+   * started it is over, or once the turn is answered, would read, call and
+   * report where no turn's ledger sees it. Ending the process ends it.
+   */
+  private failBackgroundSubagent(): void {
+    this.fail(`${this.name} started a subagent that worked on after the call that started it was over, outside Ordewell's view`);
+  }
+
+  private fail(what: string): void {
+    if (this.failure !== null) return;
+    this.failure = `${what}, so this ${this.started?.kind === 'planner' ? 'planner session' : 'read-only task'} cannot go on.`;
     this.announce({ type: 'error', message: this.failure });
     this.dispose();
   }

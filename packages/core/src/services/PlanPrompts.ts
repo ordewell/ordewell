@@ -162,6 +162,13 @@ export function inTurnAgents(harness: boolean, runner?: RunnerId, subagents = tr
     case 'claude-code': return 'your Agent tool';
     case 'codex': return 'your own subagents, if this session has them';
     case 'opencode': return scout ? `the \`${OPENCODE_SCOUT_AGENT}\` subagent through your \`subagent\` tool` : null;
+    // No ACP planner's own subagents are confirmed inside the envelope, so each start withholds them (ADR-0026).
+    case 'copilot-cli':
+    case 'qwen-code':
+    case 'cline':
+    case 'gemini-cli':
+    case 'cursor-agent':
+      return null;
     default: return 'your own agents, if you have any';
   }
 }

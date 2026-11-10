@@ -3,6 +3,16 @@ import { ORDEWELL_MCP_SERVER_NAME } from '../mcp/clientConfig';
 import type { AcpProfile } from './acpProfiles';
 import { qwenCredentials, qwenVendorModel } from './qwenCredentials';
 
+/**
+ * Qwen 0.27.1's tools that start or steer another agent (its `ToolNames`).
+ * `--exclude-tools` is merged with `permissions.deny` in the ACP path as well,
+ * and a whole-tool deny is never registered, so the model is not shown them;
+ * the bundled settings docs say the same of `permissions.deny`. Removing them
+ * matters beyond refusing their requests: Qwen runs a subagent at auto-edit in
+ * a trusted folder whatever the parent's mode (ADR-0026).
+ */
+const AGENT_TOOLS = ['agent', 'create_sub_session', 'list_agents', 'send_message', 'team_create', 'team_delete', 'team_plan_approval', 'request_shutdown', 'workflow'];
+
 /** Qwen names an MCP tool `mcp__<server>__<tool>`, in what it shows the model and in `_meta.toolName` of its requests. */
 const SERVER_PREFIX = `mcp__${ORDEWELL_MCP_SERVER_NAME}__`;
 
@@ -55,6 +65,12 @@ export const QWEN_CODE_PROFILE: AcpProfile = {
   // code (ADR-0028): in a private directory of its own, also its temp
   // directory, a planted hook was recorded not running, and Qwen reaches the
   // workspace only by asking, which puts every read to the envelope.
-  restricted: { args: ['--approval-mode', 'default'], privateCwd: true, toolSearch: 'tool_search' },
+  restricted: { args: ['--approval-mode', 'default', '--exclude-tools', AGENT_TOOLS.join(',')], privateCwd: true, toolSearch: 'tool_search' },
+  // A call of one that got through anyway is refused by the name in its
+  // `_meta.toolName`: Qwen sends `agent` as kind `other`.
+  delegation: {
+    tools: AGENT_TOOLS,
+    toolOf: ({ request }) => (typeof request._meta?.toolName === 'string' ? request._meta.toolName : null),
+  },
   roles: { plans: true, readOnly: true },
 };

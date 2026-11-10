@@ -25,6 +25,28 @@ const RESTRICTED_CLI_CONFIG = JSON.stringify({
 });
 
 /**
+ * Cursor's hooks for a restricted start: every subagent's start and every
+ * call of its Task tool, which starts one, blocked (ADR-0026). Cursor's
+ * settings have no permission for Task, and a subagent is given every tool
+ * its parent has. Cursor's hooks reference names both events, and documents
+ * that exit status 2 blocks the action and `failClosed` blocks it when the
+ * hook itself fails. `exit 2` means the same to sh, cmd and PowerShell, so
+ * the hook does the same wherever Cursor runs it. The matcher is anchored, so
+ * a matcher read without regard to case cannot catch `task_complete`.
+ * Unconfirmed: the CLI reference does not mention hooks, nor whether
+ * `CURSOR_CONFIG_DIR` is where it finds the user's `hooks.json`, and no
+ * recording started a subagent. `cursor/task` is the backstop, and the live
+ * probe (`bench/live/acp-subagent-probe.mjs`) checks the hooks.
+ */
+const RESTRICTED_HOOKS = JSON.stringify({
+  version: 1,
+  hooks: {
+    subagentStart: [{ command: 'exit 2', failClosed: true }],
+    preToolUse: [{ command: 'exit 2', matcher: '^Task$', failClosed: true }],
+  },
+});
+
+/**
  * Cursor's CLI over ACP (`cursor-agent acp`), checked against the recordings
  * in `__tests__/fixtures/acp/cursor-agent/` (ADR-0060).
  *
@@ -67,6 +89,10 @@ export const CURSOR_AGENT_PROFILE: AcpProfile = {
   // A model set in a restricted start is kept in that start's own home of
   // configuration, and goes with it.
   extensionRequests: CURSOR_EXTENSION_REQUESTS,
+  // Cursor's ACP docs name `cursor/task` its notice "about subagent task
+  // completion". It is a notification, so there is nothing to refuse, and no
+  // recording shows how a Task call is reported, so none is refused by name.
+  delegation: { tools: [], toolOf: () => null, notices: ['cursor/task'] },
   // Cursor's default mode writes an edit without asking, as recorded, so
   // asking cannot be what stops a write. It refuses a tool its settings deny
   // without asking either, and reports the call completed with no content:
@@ -90,7 +116,10 @@ export const CURSOR_AGENT_PROFILE: AcpProfile = {
     args: ['--sandbox', 'disabled'],
     privateCwd: true,
     configDirs: [CURSOR_CONFIG_HOME],
-    files: [{ fileName: `${CURSOR_CONFIG_HOME}/cli-config.json`, render: () => RESTRICTED_CLI_CONFIG }],
+    files: [
+      { fileName: `${CURSOR_CONFIG_HOME}/cli-config.json`, render: () => RESTRICTED_CLI_CONFIG },
+      { fileName: `${CURSOR_CONFIG_HOME}/hooks.json`, render: () => RESTRICTED_HOOKS },
+    ],
   },
   roles: { plans: true, readOnly: true },
 };

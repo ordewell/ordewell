@@ -2500,6 +2500,37 @@ describe('AcpAdapter roles (ADR-0026, ADR-0046)', () => {
     }
   });
 
+  it('refuses a request for the agent\'s own subagent or delegation tool by name, whatever kind it arrives as, think included (ADR-0026)', async () => {
+    const delegating: AcpProfile = {
+      ...ROLES_PROFILE,
+      delegation: { tools: ['spawn_agent', 'send_message'], toolOf: ({ request }) => request.title?.split(':')[0] ?? null },
+    };
+    const calls = (): FakeAcpStep[] => [
+      ...handshake(),
+      { expect: 'session/prompt' },
+      ask('think', 'c-spawn', { title: 'spawn_agent: look around' }),
+      ask('other', 'c-send', { title: 'send_message' }),
+      ask('read', 'c-spawn-read', { title: 'spawn_agent', locations: [{ path: '/repo/src/a.ts' }] }),
+      ask('think', 'c-think', { title: 'update_topic' }),
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    ];
+    for (const start of [plannerStart(), readOnlyStart()]) {
+      const { agent, adapter } = setup(calls(), delegating);
+      await adapter.start(start);
+      const held: string[] = [];
+      const decided: Array<[string | undefined, unknown]> = [];
+      await adapter.send('go', (e) => {
+        if (e.type !== 'permission_request') return;
+        if (e.decided) decided.push([e.toolUseId, e.decided]);
+        else { held.push(e.toolUseId ?? ''); adapter.answerPermission(e.id, { decision: 'allow' }); }
+      });
+      const refusal = { decision: 'deny', note: expect.stringContaining('No other agent may be started here') };
+      expect(decided.filter(([id]) => id !== 'c-think')).toEqual([['c-spawn', refusal], ['c-send', refusal], ['c-spawn-read', refusal]]);
+      expect(held).toEqual([]);
+      expect(chosen(agent)).toEqual(['opt-c', 'opt-c', 'opt-c', 'opt-b']);
+    }
+  });
+
   it('judges a request by the turn\'s report of its call where the request leaves the kind out', async () => {
     const { agent, adapter } = setup([
       ...handshake(),
@@ -2716,6 +2747,112 @@ describe('AcpAdapter roles (ADR-0026, ADR-0046)', () => {
       { notify: 'session/update', params: update('current_mode_update', { currentModeId: 'write' }) },
       { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
     ], ROLES_PROFILE);
+    await adapter.start(taskStart('ask', { flags: resolveTaskRunnerFlags(ROLES_MANIFEST, { mode: 'ask' }) }));
+    expect((await turn(adapter, 'go')).some((e) => e.type === 'error')).toBe(false);
+    expect(spawned.processes[0].killed).toBe(false);
+  });
+
+  // Qwen Code 0.27.1 names the call that started a subagent in each of its updates' `_meta.parentToolCallId`.
+  const spawn = (status: string) => update('tool_call_update', { toolCallId: 'p-1', title: 'agent', status });
+  const fromSubagent = (fields: Record<string, unknown>) => update('tool_call', { title: 'Read a.ts', status: 'in_progress', ...fields, _meta: { parentToolCallId: 'p-1' } });
+  const BACKGROUND = (role: string) => `Fake Agent started a subagent that worked on after the call that started it was over, outside Ordewell's view, so this ${role} cannot go on.`;
+
+  it('lets a planner\'s subagent work while the call that started it is open, its calls shown as its own', async () => {
+    const { adapter, spawned } = setup([
+      ...handshake(),
+      { expect: 'session/prompt' },
+      { notify: 'session/update', params: update('tool_call', { toolCallId: 'p-1', title: 'agent', status: 'in_progress' }) },
+      { notify: 'session/update', params: fromSubagent({ toolCallId: 'c-1' }) },
+      { notify: 'session/update', params: update('tool_call_update', { toolCallId: 'c-1', status: 'completed' }) },
+      { notify: 'session/update', params: spawn('completed') },
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    ], ROLES_PROFILE);
+    await adapter.start(plannerStart());
+    const events = await turn(adapter, 'go');
+    expect(events).toContainEqual({ type: 'tool_call', id: 'c-1', name: 'Read a.ts', args: {}, subagentId: 'p-1' });
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    expect(spawned.processes[0].killed).toBe(false);
+  });
+
+  it('fails a planner whose subagent works on after the call that started it, mid-turn, and takes no further turn', async () => {
+    const { agent, adapter, spawned } = setup([
+      ...handshake(),
+      { expect: 'session/prompt' },
+      { notify: 'session/update', params: update('tool_call', { toolCallId: 'p-1', title: 'agent', status: 'in_progress' }) },
+      { notify: 'session/update', params: spawn('completed') },
+      { notify: 'session/update', params: fromSubagent({ toolCallId: 'c-1' }) },
+    ], ROLES_PROFILE);
+    await adapter.start(plannerStart());
+
+    const events = await turn(adapter, 'go');
+    expect(events).toContainEqual({ type: 'error', message: BACKGROUND('planner session') });
+    expect(events.some((e) => e.type === 'tool_call' && e.id === 'c-1')).toBe(false);
+    expect(spawned.processes[0].killed).toBe(true);
+    expect(await turn(adapter, 'again')).toEqual([{ type: 'error', message: BACKGROUND('planner session') }]);
+    expect(agent.requests('session/prompt')).toHaveLength(1);
+  });
+
+  it('fails a read-only task whose subagent is still working when its turn is answered, in place of the turn\'s end', async () => {
+    const { adapter, spawned } = setup([
+      ...handshake(),
+      { expect: 'session/prompt' },
+      { notify: 'session/update', params: update('tool_call', { toolCallId: 'p-1', title: 'agent', status: 'in_progress' }) },
+      { notify: 'session/update', params: fromSubagent({ toolCallId: 'c-1' }) },
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    ], ROLES_PROFILE);
+    await adapter.start(readOnlyStart());
+
+    const events = await turn(adapter, 'go');
+    expect(events[events.length - 1]).toEqual({ type: 'error', message: BACKGROUND('read-only task') });
+    expect(events.some((e) => e.type === 'turn_end')).toBe(false);
+    expect(spawned.processes[0].killed).toBe(true);
+  });
+
+  it('fails a planner whose subagent reports after the turn, and takes no further turn', async () => {
+    const { adapter, spawned } = setup([
+      ...handshake(),
+      { expect: 'session/prompt' },
+      { notify: 'session/update', params: update('tool_call', { toolCallId: 'p-1', title: 'agent', status: 'completed' }) },
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+      { notify: 'session/update', params: fromSubagent({ toolCallId: 'c-1' }) },
+    ], ROLES_PROFILE);
+    await adapter.start(plannerStart());
+
+    expect((await turn(adapter, 'go')).some((e) => e.type === 'error')).toBe(false);
+    await expect.poll(() => spawned.processes[0].killed).toBe(true);
+    expect(await turn(adapter, 'again')).toEqual([{ type: 'error', message: BACKGROUND('planner session') }]);
+  });
+
+  it('lets a writable task\'s subagent work on, since only a restricted start is held to its turn', async () => {
+    const { adapter, spawned } = setup([
+      ...handshake(),
+      { expect: 'session/prompt' },
+      { notify: 'session/update', params: update('tool_call', { toolCallId: 'p-1', title: 'agent', status: 'completed' }) },
+      { notify: 'session/update', params: fromSubagent({ toolCallId: 'c-1' }) },
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    ], ROLES_PROFILE);
+    await adapter.start(taskStart('ask', { flags: resolveTaskRunnerFlags(ROLES_MANIFEST, { mode: 'ask' }) }));
+    expect((await turn(adapter, 'go')).some((e) => e.type === 'error')).toBe(false);
+    expect(spawned.processes[0].killed).toBe(false);
+  });
+
+  it('fails a restricted start whose agent sends a notice its profile names as a subagent\'s, and leaves a writable start\'s alone', async () => {
+    const noticing: AcpProfile = { ...ROLES_PROFILE, delegation: { tools: [], toolOf: () => null, notices: ['x/subagent_done'] } };
+    const steps = (): FakeAcpStep[] => [
+      ...handshake(),
+      { expect: 'session/prompt' },
+      { notify: 'x/subagent_done', params: { toolCallId: 's-1', subagentType: 'explore' } },
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    ];
+    const NOTICED = (role: string) => `Fake Agent started a subagent, which this start withholds, so this ${role} cannot go on.`;
+    for (const [start, role] of [[plannerStart(), 'planner session'], [readOnlyStart(), 'read-only task']] as const) {
+      const { adapter, spawned } = setup(steps(), noticing);
+      await adapter.start(start);
+      expect(await turn(adapter, 'go')).toContainEqual({ type: 'error', message: NOTICED(role) });
+      expect(spawned.processes[0].killed).toBe(true);
+      expect(await turn(adapter, 'again')).toEqual([{ type: 'error', message: NOTICED(role) }]);
+    }
+    const { adapter, spawned } = setup(steps(), noticing);
     await adapter.start(taskStart('ask', { flags: resolveTaskRunnerFlags(ROLES_MANIFEST, { mode: 'ask' }) }));
     expect((await turn(adapter, 'go')).some((e) => e.type === 'error')).toBe(false);
     expect(spawned.processes[0].killed).toBe(false);
@@ -2957,7 +3094,7 @@ describe('AcpAdapter restricted start\'s own files (ADR-0060, R3)', () => {
 
       const dir = spawned.lastCwd()!;
       expect(spawned.lastCommand()).toBe('copilot');
-      expect(spawned.lastArgs()).toEqual(['--acp', '--stdio', '--deny-tool=write', '--deny-tool=shell', '--deny-tool=url', '--disable-builtin-mcps']);
+      expect(spawned.lastArgs()).toEqual(['--acp', '--stdio', '--deny-tool=write', '--deny-tool=shell', '--deny-tool=url', '--disable-builtin-mcps', '--excluded-tools', expect.stringContaining('task,')]);
       // What the spawn adds to, or changes in, the environment it inherits; PATH
       // is the host's, under the host's own spelling (Windows names it `Path`).
       const added = Object.entries(spawned.lastEnv()).filter(([name, value]) => name.toUpperCase() !== 'PATH' && process.env[name] !== value);

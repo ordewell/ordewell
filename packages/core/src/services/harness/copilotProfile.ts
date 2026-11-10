@@ -7,6 +7,18 @@ import { COPILOT_REPO_CONFIG } from './copilotRepoConfig';
 const SERVER_PREFIX = `${ORDEWELL_MCP_SERVER_NAME}-`;
 
 /**
+ * Copilot's tools that start, list or steer another agent or session. The
+ * first four are what GitHub's CLI reference lists as its "agent and task
+ * delegation tools" for `--excluded-tools`; the rest are names the 1.0.108
+ * binary carries for tools behind feature flags or settings (an execution and
+ * a code-search subagent, `sessionManagementTools.create`), which no reference
+ * lists. Nothing in that binary was seen refusing a name it does not offer, and
+ * the live probe (`bench/live/acp-subagent-probe.mjs`) checks Copilot starts
+ * with them all (ADR-0026).
+ */
+const DELEGATION_TOOLS = ['task', 'read_agent', 'write_agent', 'list_agents', 'execution_subagent', 'search_code_subagent', 'create_session', 'send_session_message'];
+
+/**
  * GitHub Copilot CLI over ACP (`copilot --acp --stdio`), the reference ACP
  * runner (ADR-0060, R2), checked against the recordings in
  * `__tests__/fixtures/acp/copilot-cli/`.
@@ -46,9 +58,12 @@ export const COPILOT_CLI_PROFILE: AcpProfile = {
   // reaches the worktree only by asking, which puts every read to the
   // envelope (ADR-0028). Copilot ends its turn on a refused request, so a
   // read-only task that asks to write stops there and is reminded to call
-  // task_complete (ADR-0018 W1).
+  // task_complete (ADR-0018 W1). A subagent would work outside the adapter's
+  // sight, so `--excluded-tools` takes every agent-starting tool out of what
+  // the model is shown (ADR-0026). The reference documents the flag for the
+  // CLI, not for ACP: no recording shows it holding there yet.
   restricted: {
-    args: ['--deny-tool=write', '--deny-tool=shell', '--deny-tool=url', '--disable-builtin-mcps'],
+    args: ['--deny-tool=write', '--deny-tool=shell', '--deny-tool=url', '--disable-builtin-mcps', '--excluded-tools', DELEGATION_TOOLS.join(',')],
     env: { COPILOT_ALLOW_ALL: 'false' },
     privateCwd: true,
   },
@@ -56,5 +71,15 @@ export const COPILOT_CLI_PROFILE: AcpProfile = {
   // the repository's instruction files itself: they reach it as text in its
   // private directory's AGENTS.md, after Ordewell's own (ADR-0060, R3).
   repoConfig: COPILOT_REPO_CONFIG,
+  // Copilot's report of a native call carries no tool name, only its own words
+  // or the model's description, so a subagent is known by the `agent_type`
+  // its input names, as the binary's own prompts call `task` with. No
+  // recording shows the call over ACP: this is unconfirmed, and holds only
+  // should a version ask before starting one the flag left in.
+  delegation: { tools: ['task'], toolOf: ({ request }) => (typeof inputOf(request.rawInput).agent_type === 'string' ? 'task' : null) },
   roles: { plans: true, readOnly: true },
 };
+
+function inputOf(raw: unknown): Record<string, unknown> {
+  return typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+}

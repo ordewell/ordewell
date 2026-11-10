@@ -200,6 +200,46 @@ describe('reduceUpdate', () => {
     });
   });
 
+  // Qwen Code 0.27.1 marks every update a subagent makes with the call that
+  // started it, in `_meta.parentToolCallId`.
+  describe('a subagent\'s updates', () => {
+    const child = { _meta: { parentToolCallId: 'p-1', subagentType: 'Explore' } };
+
+    it('attributes its calls and their results to the call that started it', () => {
+      const { events } = feed([
+        { sessionUpdate: 'tool_call', toolCallId: 'p-1', title: 'agent', status: 'in_progress', rawInput: { prompt: 'look' } },
+        { sessionUpdate: 'tool_call', toolCallId: 'c-1', title: 'Read a.ts', status: 'in_progress', rawInput: { path: 'a.ts' }, ...child },
+        { sessionUpdate: 'tool_call_update', toolCallId: 'c-1', status: 'completed', rawOutput: 'text' },
+      ]);
+      expect(events).toEqual([
+        { type: 'tool_call', id: 'p-1', name: 'agent', args: { prompt: 'look' } },
+        { type: 'tool_call', id: 'c-1', name: 'Read a.ts', args: { path: 'a.ts' }, subagentId: 'p-1' },
+        { type: 'tool_result', id: 'c-1', name: 'Read a.ts', output: 'text', success: true, subagentId: 'p-1' },
+      ]);
+    });
+
+    it('attributes a call the turn closes to the call that started it', () => {
+      const turn = feed([{ sessionUpdate: 'tool_call', toolCallId: 'c-1', title: 'Search', status: 'pending', ...child }]).turn;
+      expect(endTurn(turn, 'end_turn', undefined, false).slice(0, 2)).toEqual([
+        { type: 'tool_call', id: 'c-1', name: 'Search', args: {}, subagentId: 'p-1' },
+        { type: 'tool_result', id: 'c-1', name: 'Search', output: 'The turn ended before this call reported a result.', success: false, subagentId: 'p-1' },
+      ]);
+    });
+
+    it('keeps its words out of the planner\'s answer and shows its thoughts as its own', () => {
+      const { turn, events } = feed([text('Looking. '), text('I found it.', child), { ...thought('hm'), ...child }, text('Done.')]);
+      expect(events.filter((e) => e.type !== 'assistant_text_delta')).toEqual([{ type: 'thinking_delta', text: 'hm', subagentId: 'p-1' }]);
+      expect(endTurn(turn, 'end_turn', undefined, false).filter((e) => e.type === 'assistant_text' || e.type === 'thinking')).toEqual([
+        { type: 'assistant_text', runId: expect.any(String), text: 'Looking. Done.' },
+      ]);
+    });
+
+    it('shows nothing of a thought that carries no text', () => {
+      const { events } = feed([{ sessionUpdate: 'agent_thought_chunk', content: { type: 'image', data: 'AA==', mimeType: 'image/png' }, ...child }]);
+      expect(events).toEqual([]);
+    });
+  });
+
   describe('usage_update', () => {
     it('reports the context meter and nothing that adds up', () => {
       const { events } = feed([{ sessionUpdate: 'usage_update', used: 53000, size: 200000, cost: { amount: 0.045, currency: 'USD' } }]);

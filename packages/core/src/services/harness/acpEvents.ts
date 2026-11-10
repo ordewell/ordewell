@@ -23,6 +23,8 @@ interface OpenCall {
   args: Record<string, unknown>;
   /** Whether its `tool_call` event has gone out; a `pending` call's waits for its input. */
   announced: boolean;
+  /** The call that started the subagent making this one, which its events carry as `subagentId`. */
+  parent?: string;
 }
 
 export interface AcpTurn {
@@ -52,6 +54,8 @@ export interface AcpStep {
 }
 
 export function reduceUpdate(turn: AcpTurn, update: AcpSessionUpdate): AcpStep {
+  const parent = parentCall(update);
+  if (parent !== undefined) return subagentUpdate(turn, update, parent);
   switch (update.sessionUpdate) {
     case 'agent_message_chunk':
       return chunk(turn, 'message', update.content, update.messageId);
@@ -70,6 +74,50 @@ export function reduceUpdate(turn: AcpTurn, update: AcpSessionUpdate): AcpStep {
     // user_message_chunk only replays history on session/load. The rest hold
     // state the connector reads from the update itself, and an unknown kind
     // is none of this reducer's business.
+    default:
+      return { turn, events: [] };
+  }
+}
+
+/**
+ * The call that started the subagent an update comes from. Qwen Code marks
+ * every update a subagent makes with it in `_meta.parentToolCallId`; the
+ * specification has no field for it.
+ */
+export function parentCall(update: AcpSessionUpdate | AcpToolCall): string | undefined {
+  const meta: unknown = '_meta' in update ? update._meta : undefined;
+  const parent = typeof meta === 'object' && meta !== null ? (meta as Record<string, unknown>).parentToolCallId : undefined;
+  return typeof parent === 'string' && parent !== '' ? parent : undefined;
+}
+
+/**
+ * Whether an update comes from a subagent working on past the call that
+ * started it: that call is over, or was never this turn's, or there is no
+ * turn. Such a subagent's work goes on outside the turn it was asked in.
+ */
+export function outlivesItsCall(turn: AcpTurn | null, update: AcpSessionUpdate): boolean {
+  const parent = parentCall(update);
+  return parent !== undefined && !(turn !== null && parent in turn.open);
+}
+
+/** Whether a subagent's call was still open when the turn was answered: the subagent had not finished. */
+export function subagentStillWorking(turn: AcpTurn): boolean {
+  return Object.values(turn.open).some((call) => call.parent !== undefined);
+}
+
+// A subagent's words are its report to the agent that started it, which that
+// agent answers from, so they are not the turn's answer; its thoughts and
+// calls are shown as its own, as OpenCode's subagent's are. None of it opens
+// or closes the agent's own runs.
+function subagentUpdate(turn: AcpTurn, update: AcpSessionUpdate, parent: string): AcpStep {
+  switch (update.sessionUpdate) {
+    case 'agent_thought_chunk':
+      return update.content.type === 'text' && update.content.text !== undefined
+        ? { turn, events: [{ type: 'thinking_delta', text: update.content.text, subagentId: parent }] }
+        : { turn, events: [] };
+    case 'tool_call':
+    case 'tool_call_update':
+      return toolCall(turn, update, parent);
     default:
       return { turn, events: [] };
   }
@@ -113,7 +161,7 @@ function toolName(update: AcpToolCall): string {
 // Announcing it there gave the call an empty summary, so it waits for the
 // first update past `pending`, as the native OpenCode adapter does. An agent
 // that sends no status is announced at once: nothing says more is coming.
-function toolCall(turn: AcpTurn, update: AcpToolCall & { sessionUpdate: string }): AcpStep {
+function toolCall(turn: AcpTurn, update: AcpToolCall & { sessionUpdate: string }, parent?: string): AcpStep {
   const id = update.toolCallId;
   if (turn.finished.includes(id)) return { turn, events: [] };
   const events: AgentEvent[] = [];
@@ -123,6 +171,8 @@ function toolCall(turn: AcpTurn, update: AcpToolCall & { sessionUpdate: string }
     args: update.rawInput === undefined || update.rawInput === null ? (prior?.args ?? {}) : toolArgs(update.rawInput),
     announced: prior?.announced ?? false,
   };
+  const owner = prior?.parent ?? parent;
+  if (owner !== undefined) call.parent = owner;
   // An update without a status leaves it unchanged, so a call still unannounced stays pending.
   const pending = update.status === 'pending' || ((update.status === undefined || update.status === null) && prior !== undefined);
   if (!call.announced && !pending) {
@@ -132,12 +182,16 @@ function toolCall(turn: AcpTurn, update: AcpToolCall & { sessionUpdate: string }
   if (update.status !== 'completed' && update.status !== 'failed') return { turn: { ...turn, open: { ...turn.open, [id]: call } }, events };
   const rest = { ...turn.open };
   delete rest[id];
-  events.push({ type: 'tool_result', id, name: call.name, output: toolOutput(update), success: update.status === 'completed' });
+  events.push(result(id, call, toolOutput(update), update.status === 'completed'));
   return { turn: { ...turn, open: rest, finished: [...turn.finished, id] }, events };
 }
 
 function announce(id: string, call: OpenCall): AgentEvent {
-  return { type: 'tool_call', id, name: call.name, args: call.args };
+  return { type: 'tool_call', id, name: call.name, args: call.args, ...(call.parent !== undefined ? { subagentId: call.parent } : {}) };
+}
+
+function result(id: string, call: OpenCall, output: string, success: boolean): AgentEvent {
+  return { type: 'tool_result', id, name: call.name, output, success, ...(call.parent !== undefined ? { subagentId: call.parent } : {}) };
 }
 
 /** Only called with a present `rawInput`: the caller keeps the prior arguments for an absent one. */
@@ -179,7 +233,7 @@ export function endTurn(turn: AcpTurn, stopReason: string | { unreadable: string
   // A call still open has no result coming: the turn it belonged to is over.
   for (const [id, call] of Object.entries(turn.open)) {
     if (!call.announced) events.push(announce(id, call));
-    events.push({ type: 'tool_result', id, name: call.name, output: 'The turn ended before this call reported a result.', success: false });
+    events.push(result(id, call, 'The turn ended before this call reported a result.', false));
   }
   for (const run of turn.thoughts) events.push({ type: 'thinking', text: run.text });
   for (const run of turn.messages) events.push({ type: 'assistant_text', runId: run.runId, text: run.text });
