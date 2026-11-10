@@ -78,6 +78,12 @@ describe('spawn_research_agent over MCP (ADR-0066)', () => {
             ['spawn_research_agent', { prompt: 'recurse' }],
             ['run_command', { command: 'ls' }],
             ['Agent', { prompt: 'x' }],
+            ['apply_patch', { patch: '*** Add File: x' }],
+            ['task', { prompt: 'a general subagent' }],
+            // MCP tools, under the names a runner gives them: Ordewell's own and another server's.
+            ['ordewell_run_command', { command: 'echo hi' }],
+            ['mcp__ordewell__submit_plan', { tasks: [] }],
+            ['probe_ping', {}],
           ]),
           textTurn('digest'),
         ], onUsage);
@@ -91,8 +97,11 @@ describe('spawn_research_agent over MCP (ADR-0066)', () => {
     expect(reply).toEqual({ text: 'digest' });
     expect(only).toBe(CONFINED_RESEARCH_TOOLS);
     expect(touched).toEqual([]);
+    // What the model is offered: only the confined reads, so none of the above is a tool it could name.
+    const offered = (toOpenAiSubagentTools(only) as { function: { name: string } }[]).map((t) => t.function.name).sort();
+    expect(offered).toEqual([...CONFINED_RESEARCH_TOOLS].sort());
     const outputs = script.received[0].map((r) => r.output);
-    expect(outputs).toHaveLength(8);
+    expect(outputs).toHaveLength(13);
     for (const out of outputs) {
       expect(out).toMatch(/is not available/);
       expect(out).toContain('read_file, read_files, glob, grep, find_symbol, list_dir');
