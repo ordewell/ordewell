@@ -22,12 +22,12 @@ import { aggregate, isComplete, markdown } from './lib/aggregate.mjs';
 import { ensureBuild, repoRoot, resolveRef, cliMain } from './lib/builds.mjs';
 import {
   CELLS, HERE, MAX_DRIVER_TURNS, VARIANTS, goalText, loadGoals, missingFor, mockCell, parseArgs, quotaOf,
-  runEnv, runSettings, selectRuns, substituteFor, timeoutFor,
+  approvalPolicy, runEnv, runSettings, selectRuns, substituteFor, timeoutFor,
 } from './lib/config.mjs';
 import { guardFiles } from './lib/guard.mjs';
 import { keyChecks, keyHash } from './lib/keys.mjs';
 import { planDigest, runMetrics, sessionParts } from './lib/metrics.mjs';
-import { classifyTurn, daemonClient, newestSession, readToken, tokenPath } from './lib/observe.mjs';
+import { classifyTurn, daemonClient, newestSession, plannerApprovals, readToken, replyLanded, tokenPath } from './lib/observe.mjs';
 import { freePort, onPath, run, sleep, until } from './lib/proc.mjs';
 import { redactJson, redactor } from './lib/redact.mjs';
 import { reviewPlan } from './lib/rubric.mjs';
@@ -80,43 +80,88 @@ function writeJson(file, value, extra = []) {
   fs.writeFileSync(file, `${redactJson(value, scrub)}\n`);
 }
 
-/** Drive one planning conversation to a plan, a stop or the deadline. */
+/** How long a sent line may go unseen (no new message, no busy turn) before the driver sends it once more. */
+const LANDING_MS = 45_000;
+
+/**
+ * Drive one planning conversation to a plan, a stop or the deadline. Two
+ * things the TUI does can lose the driver's line without a trace: its modal
+ * approval card swallows a bracketed paste. So the driver answers any open
+ * planner approval card (the goal's `approvals`, allow by default) through the
+ * daemon, confirms each line landed, and resends it once if not. A run that
+ * ends with a card still open is its own outcome, not a silent planner.
+ */
 async function drive({ tui, client, workspace, goal, variant, timeoutMs }) {
   const started = Date.now();
   const deadline = started + timeoutMs;
+  const policy = approvalPolicy(goal);
   let turns = 0;
   let sentAt = 0;
   let sawBusy = false;
   let session = null;
   let lastText = '';
+  let pending = null;
+  let approvalsAnswered = 0;
+  let openApprovals = 0;
+  let resends = 0;
   const send = async (text) => {
     sentAt = session ? sessionParts(session).history.length : 0;
     sawBusy = false;
     turns++;
+    pending = { text, at: Date.now(), resent: false };
     await tui.send(text);
+  };
+  const done = (stopped, extra = {}) => ({
+    stopped, turns, session, lastText, wallMs: Date.now() - started, approvalsAnswered, resends, ...extra,
+  });
+  /** Answer every planner card the daemon lists; the count left open afterwards. */
+  const settleApprovals = async (id) => {
+    const body = await client.approvals(id, workspace).catch(() => null);
+    let open = 0;
+    for (const card of plannerApprovals(body)) {
+      const ok = await client.decide(id, card.id, workspace, policy === 'allow').then(() => true, () => false);
+      if (ok) approvalsAnswered++;
+      else open++;
+    }
+    return open;
   };
   await send(goalText(goal, variant));
   for (;;) {
     if (!tui.alive) {
       const { code, signal } = await tui.exited;
-      return { stopped: 'tui exited', exitCode: code, signal, turns, session, lastText, wallMs: Date.now() - started };
+      return done('tui exited', { exitCode: code, signal });
     }
-    if (Date.now() > deadline) return { stopped: 'timeout', turns, session, lastText, wallMs: Date.now() - started };
     await sleep(POLL_MS);
     const meta = newestSession(await client.sessions(workspace).catch(() => []));
-    if (!meta) continue;
-    const next = await client.session(meta.id, workspace).catch(() => null);
-    if (!next) continue;
-    session = next;
+    if (meta) {
+      const next = await client.session(meta.id, workspace).catch(() => null);
+      if (next) session = next;
+      openApprovals = await settleApprovals(meta.id);
+    }
+    if (Date.now() > deadline) {
+      // A card the planner is blocked on is not a planner that fell silent.
+      const open = meta ? plannerApprovals(await client.approvals(meta.id, workspace).catch(() => null)).length : 0;
+      return done(open > 0 || openApprovals > 0 ? 'timeout with a pending approval' : 'timeout');
+    }
+    if (!meta || !session) continue;
+    if (pending && !replyLanded(session, { sentAt, sawBusy })) {
+      if (!pending.resent && Date.now() - pending.at > LANDING_MS && openApprovals === 0) {
+        pending.resent = true;
+        resends++;
+        await tui.send(pending.text);
+      }
+      continue;
+    }
+    pending = null;
     const turn = classifyTurn(session, { sentAt, sawBusy });
     if (turn.state === 'busy') {
       sawBusy = sawBusy || Boolean(session.plannerTurnId) || (session.conversation?.pendingTurns ?? []).length > 0;
       continue;
     }
     lastText = turn.text ?? '';
-    if (turn.state === 'plan') return { stopped: 'plan submitted', turns, session, lastText, wallMs: Date.now() - started };
-    if (turn.state === 'error') return { stopped: 'error', turns, session, lastText, wallMs: Date.now() - started };
-    if (turns >= MAX_DRIVER_TURNS) return { stopped: 'turn limit', turns, session, lastText, wallMs: Date.now() - started };
+    if (turn.state === 'plan') return done('plan submitted');
+    if (turn.state === 'error') return done('error');
+    if (turns >= MAX_DRIVER_TURNS) return done('turn limit');
     await send(turn.reply);
   }
 }
@@ -160,6 +205,7 @@ async function planOnce({ spec, cell, build, template, modulesFrom, opts, dir, w
  */
 function stopError(stopped, { timeoutMs, lastText = '' } = {}) {
   if (stopped === 'timeout') return `timeout after ${Math.round(timeoutMs / 1000)}s`;
+  if (stopped === 'timeout with a pending approval') return `timeout with a pending approval after ${Math.round(timeoutMs / 1000)}s`;
   if (stopped === 'tui exited') return 'the TUI exited before the planner answered';
   if (stopped === 'error') return lastText.slice(0, 300) || 'the planner turn failed';
   return null;
@@ -327,7 +373,7 @@ async function rescore(opts, goals) {
       return;
     }
     const session = JSON.parse(fs.readFileSync(sessionFile, 'utf8'));
-    const driver = { turns: old.metrics.turns, wallMs: old.metrics.wallMs, stopped: old.metrics.stopped };
+    const driver = { turns: old.metrics.turns, wallMs: old.metrics.wallMs, stopped: old.metrics.stopped, approvalsAnswered: old.metrics.approvalsAnswered, resends: old.metrics.resends };
     const { metrics, keyChecks: checks } = score(goal, session, { driver });
     const hash = keyHash(goal);
     const error = old.error ?? stopError(driver.stopped, { timeoutMs: driver.wallMs ?? 0 });

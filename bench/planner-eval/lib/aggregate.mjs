@@ -28,6 +28,8 @@ export const NUMERIC = [
   ['outputTokens', 'out'],
   ['ownReads', 'own reads'],
   ['ownReadBytes', 'own read bytes'],
+  ['ownReadBytesBeforeDelegation', 'bytes before delegating'],
+  ['ownReadBytesAfterDelegation', 'bytes after delegating'],
   ['agentsSpawned', 'agents'],
   ['ownReadShare', 'own-read share'],
   ['keyViolations', 'key viol.'],
@@ -51,9 +53,11 @@ export function spread(values) {
   return xs.length === 0 ? null : { min: Math.min(...xs), max: Math.max(...xs) };
 }
 
+const isTimeout = (r) => /^timeout\b/.test(String(r.metrics?.stopped ?? '')) || /^timeout\b/.test(String(r.error ?? ''));
+
 /** Whether a run reached an answer: a plan, or the planner's last word before the turn limit. */
 export function isComplete(record) {
-  return !record.error && Boolean(record.metrics) && !['timeout', 'tui exited', 'error', null, undefined].includes(record.metrics.stopped);
+  return !record.error && Boolean(record.metrics) && !['timeout', 'timeout with a pending approval', 'tui exited', 'error', null, undefined].includes(record.metrics.stopped);
 }
 
 /**
@@ -112,7 +116,8 @@ export function summarize(records, goals = []) {
       goal,
       runs: runs.length,
       complete: complete.length,
-      timeouts: runs.filter((r) => r.metrics?.stopped === 'timeout' || /^timeout\b/.test(String(r.error ?? ''))).length,
+      timeouts: runs.filter(isTimeout).length,
+      pendingApprovalTimeouts: runs.filter((r) => isTimeout(r) && /pending approval/.test(`${r.metrics?.stopped} ${r.error ?? ''}`)).length,
       submitted: complete.filter((r) => r.metrics.submitted).length,
       widthInRange: inRange.length ? { inRange: inRange.filter(Boolean).length, of: inRange.length } : null,
       errors: runs.filter((r) => r.error).map((r) => ({ run: r.id, error: r.error })),
@@ -225,18 +230,19 @@ export function markdown({ summaries, verdicts }, { title = 'Planner eval', meta
   for (const [k, v] of Object.entries(meta)) out.push(`- ${k}: ${cellText(v)}`);
   if (Object.keys(meta).length) out.push('');
   out.push('Each number is the median over the complete runs, with [min–max] when they differ. A run that timed out, lost its TUI or failed counts only toward completion.', '');
-  out.push('## Completion', '', '| backend | variant | runs | complete | rate | timeouts |', '| --- | --- | --- | --- | --- | --- |');
+  out.push('## Completion', '', '| backend | variant | runs | complete | rate | timeouts | of them with a pending approval |', '| --- | --- | --- | --- | --- | --- | --- |');
   const byCell = new Map();
   for (const s of summaries) {
     const key = `${s.cell}\u0000${s.variant}`;
-    const row = byCell.get(key) ?? { cell: s.cell, variant: s.variant, runs: 0, complete: 0, timeouts: 0 };
+    const row = byCell.get(key) ?? { cell: s.cell, variant: s.variant, runs: 0, complete: 0, timeouts: 0, pendingApprovalTimeouts: 0 };
     row.runs += s.runs;
     row.complete += s.complete;
     row.timeouts += s.timeouts;
+    row.pendingApprovalTimeouts += s.pendingApprovalTimeouts;
     byCell.set(key, row);
   }
   for (const r of [...byCell.values()].sort((a, b) => `${a.cell}${a.variant}`.localeCompare(`${b.cell}${b.variant}`))) {
-    out.push(`| ${cellText(r.cell)} | ${r.variant} | ${r.runs} | ${r.complete} | ${fmt(r.runs ? r.complete / r.runs : null)} | ${r.timeouts} |`);
+    out.push(`| ${cellText(r.cell)} | ${r.variant} | ${r.runs} | ${r.complete} | ${fmt(r.runs ? r.complete / r.runs : null)} | ${r.timeouts} | ${r.pendingApprovalTimeouts} |`);
   }
   out.push('');
   for (const goal of [...new Set(summaries.map((s) => s.goal))].sort()) {

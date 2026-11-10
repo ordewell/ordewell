@@ -30,7 +30,20 @@ export function daemonClient(port, token) {
     if (!res.ok) throw new Error(`GET ${route.split('?')[0]} answered ${res.status}`);
     return res.json();
   };
+  const post = async (route, body) => {
+    const res = await fetch(`http://127.0.0.1:${port}${route}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) throw new Error(`POST ${route.split('?')[0]} answered ${res.status}`);
+    return res.json();
+  };
   return {
+    approvals: (id, workspace) => get(`/api/approvals/${encodeURIComponent(id)}?workspace=${encodeURIComponent(workspace)}`),
+    decide: (id, approvalId, workspace, granted) => post(
+      `/api/approvals/${encodeURIComponent(id)}/${encodeURIComponent(approvalId)}?workspace=${encodeURIComponent(workspace)}`, { granted }),
     sessions: (workspace) => get(`/api/sessions?workspace=${encodeURIComponent(workspace)}`),
     session: (id, workspace) => get(`/api/sessions/${encodeURIComponent(id)}?workspace=${encodeURIComponent(workspace)}`),
   };
@@ -64,6 +77,21 @@ export function classifyTurn(session, { sentAt, sawBusy = false }) {
   if (OUTLINE.test(text)) return { state: 'outline', text, reply: CONFIRM };
   if (text.includes('?')) return { state: 'question', text, reply: ANSWER };
   return { state: 'stalled', text, reply: CONFIRM };
+}
+
+/**
+ * Whether the line the driver sent reached the planner: the history grew past
+ * where it stood at the send, or the planner went busy. A paste the TUI's
+ * modal swallowed (an approval card) does neither.
+ */
+export function replyLanded(session, { sentAt, sawBusy = false }) {
+  if (sawBusy || session?.plannerTurnId || (session?.conversation?.pendingTurns ?? []).length > 0) return true;
+  return sessionParts(session).history.length > sentAt;
+}
+
+/** The planner's own open approval cards in an `/api/approvals` body; a task runner's are answered in its task view. */
+export function plannerApprovals(body) {
+  return (body?.pending ?? []).filter((p) => p?.id && p.request?.kind !== 'runner_tool');
 }
 
 /** The session the run started: the workspace's only one, or its newest. */

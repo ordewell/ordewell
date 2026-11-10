@@ -15,14 +15,14 @@ import {
 } from './lib/aggregate.mjs';
 import {
   ANSWER, BASELINE_REF, CELLS, CONFIRM, NUDGES, QUOTA, quotaOf, TEST_COMMANDS, VARIANTS, goalText, loadGoals, missingFor, mockCell,
-  parseArgs, runEnv, runId, runSettings, selectRuns, substituteFor, timeoutFor,
+  approvalPolicy, parseArgs, runEnv, runId, runSettings, selectRuns, substituteFor, timeoutFor, withModel,
 } from './lib/config.mjs';
 import { guardFiles, snapshot } from './lib/guard.mjs';
 import { keyChecks, keyHash, keyViolations, plannerRanTest } from './lib/keys.mjs';
 import {
-  criticalPath, ownReadShare, planDigest, ownReadTally, agentCalls, runMetrics, sessionParts, width, wordingViolations,
+  criticalPath, ownReadShare, planDigest, ownReadTally, agentCalls, resultBytes, runMetrics, sessionParts, width, wordingViolations,
 } from './lib/metrics.mjs';
-import { classifyTurn, newestSession } from './lib/observe.mjs';
+import { classifyTurn, newestSession, plannerApprovals, replyLanded } from './lib/observe.mjs';
 import { REDACTED, redactJson, redactor } from './lib/redact.mjs';
 import { citedOnly, questionsFor, rubricPrompt } from './lib/rubric.mjs';
 import { applyPatches, linkTree, workParent } from './lib/target.mjs';
@@ -138,7 +138,10 @@ describe('ownReadTally', () => {
       { tool: 'submit_plan' },
       { type: 'user_prompt', content: 'goal' },
     ];
-    assert.deepEqual(ownReadTally(log), { ownReads: 2, ownReadBytes: 8, agentsSpawned: 2 });
+    assert.deepEqual(ownReadTally(log), {
+      ownReads: 2, ownReadBytes: 8, ownReadsBeforeDelegation: 2, ownReadBytesBeforeDelegation: 8,
+      ownReadsAfterDelegation: 0, ownReadBytesAfterDelegation: 0, agentsSpawned: 2,
+    });
   });
 
   it("counts Ordewell's research agent under an MCP server prefix, as OpenCode logs it", () => {
@@ -152,6 +155,30 @@ describe('ownReadTally', () => {
     assert.equal(ownReadTally(log).agentsSpawned, 3);
     assert.equal(agentCalls(log).length, 3);
     assert.equal(ownReadTally(log).ownReads, 1);
+  });
+
+  it("counts an ACP planner's commands and file requests, at their true size, split at the first delegation", () => {
+    const clipped = `${'x'.repeat(10_000)}\n[... truncated, total 250000 chars]`;
+    const log = [
+      { tool: 'agent_tool', toolLabel: 'run_command', result: clipped },
+      { tool: 'agent_tool', toolLabel: 'ordewell_run_command', result: 'ab' },
+      { tool: 'agent_tool', toolLabel: 'fs/read_text_file', result: 'abc' },
+      { tool: 'agent_tool', toolLabel: 'TodoWrite', result: 'not a read' },
+      { tool: 'submit_plan', args: '{"tasks":[{"research":true}]}' },
+      { tool: 'agent_tool', toolLabel: 'run_command', result: 'abcd' },
+    ];
+    const tally = ownReadTally(log);
+    assert.deepEqual([tally.ownReads, tally.ownReadBytes], [4, 250_009]);
+    assert.deepEqual([tally.ownReadsBeforeDelegation, tally.ownReadBytesBeforeDelegation], [3, 250_005]);
+    assert.deepEqual([tally.ownReadsAfterDelegation, tally.ownReadBytesAfterDelegation], [1, 4]);
+    const byAgent = ownReadTally([{ tool: 'read_file', result: 'a' }, { tool: 'spawn_research_agent' }, { tool: 'grep', result: 'bb' }]);
+    assert.deepEqual([byAgent.ownReadsBeforeDelegation, byAgent.ownReadsAfterDelegation], [1, 1]);
+  });
+
+  it('measures a clipped result by the total its suffix names, and an unclipped one as it is', () => {
+    assert.equal(resultBytes(`${'é'.repeat(10)}\n[... truncated, total 500 chars]`), 510);
+    assert.equal(resultBytes('héllo'), 6);
+    assert.equal(resultBytes(undefined), 0);
   });
 
   it('gives no own-read share for a planner that looked at nothing', () => {
@@ -549,6 +576,16 @@ describe('classifyTurn', () => {
     assert.equal(classifyTurn(at([goalMsg]), { sentAt: 0, sawBusy: true }).state, 'stalled');
   });
 
+  it('knows whether the line it sent landed, and which approval cards are the planner\'s', () => {
+    assert.equal(replyLanded(at([goalMsg]), { sentAt: 1 }), false);
+    assert.equal(replyLanded(at([goalMsg, { role: 'user', content: 'x' }]), { sentAt: 1 }), true);
+    assert.equal(replyLanded(at([goalMsg], { turn: true }), { sentAt: 1 }), true);
+    assert.equal(replyLanded(at([goalMsg]), { sentAt: 1, sawBusy: true }), true);
+    const body = { pending: [{ id: 'a', request: { kind: 'research_command' } }, { id: 'b', request: { kind: 'runner_tool' } }, {}] };
+    assert.deepEqual(plannerApprovals(body).map((p) => p.id), ['a']);
+    assert.deepEqual(plannerApprovals(undefined), []);
+  });
+
   it('picks the newest session', () => {
     assert.equal(newestSession([{ id: 'a', updatedAt: '2026-01-01' }, { id: 'b', updatedAt: '2026-02-01' }]).id, 'b');
     assert.equal(newestSession(undefined), null);
@@ -575,6 +612,25 @@ describe('the run matrix', () => {
     assert.ok(runs.every((r) => r.goal.id === 'g4' && r.variant.id === 'V1'));
     assert.equal(runs.length, 4);
     assert.equal(selectRuns(parseArgs(['--full', '--backend', 'cline']), { goals }).length, goals.length * 2 * 3, 'an optional cell runs when named');
+  });
+
+  it('names an ACP planner\'s model through its own variable, under an id that says so', () => {
+    const opts = parseArgs(['--full', '--backend', 'cline,qwen-code', '--model', 'cline=deepseek/deepseek-v4.1-flash,qwen-code=glm-5.3']);
+    assert.deepEqual(opts.models, { cline: 'deepseek/deepseek-v4.1-flash', 'qwen-code': 'glm-5.3' });
+    const cells = [...new Set(selectRuns(opts, { goals }).map((r) => r.cell))];
+    assert.deepEqual(cells.map((c) => [c.id, c.model]), [['cline/deepseek_deepseek-v4.1-flash', 'deepseek/deepseek-v4.1-flash'], ['qwen-code/glm-5.3', 'glm-5.3']]);
+    assert.equal(cells[0].env.CLINE_MODEL, 'deepseek/deepseek-v4.1-flash');
+    assert.equal(cells[1].env.OPENAI_MODEL, 'glm-5.3');
+    const env = runEnv({}, { cell: cells[0], variant: VARIANTS.V1, settingsPath: 's', maxParallel: 4, enabledRunners: ['cline'] });
+    assert.deepEqual([env.ORCHESTRATOR_MODEL, env.CLINE_MODEL], ['deepseek/deepseek-v4.1-flash', 'deepseek/deepseek-v4.1-flash']);
+    assert.equal(withModel(CELLS[0], { cline: 'x' }), CELLS[0], 'a cell of another harness is left alone');
+    assert.throws(() => parseArgs(['--model', 'gemini-cli=x']), /cannot name a model/);
+    assert.throws(() => parseArgs(['--model', 'cline']), /<harness>=<model>/);
+  });
+
+  it('answers a planner approval card unless the goal says deny', () => {
+    assert.equal(approvalPolicy({ id: 'g1' }), 'allow');
+    assert.equal(approvalPolicy({ id: 'g1', approvals: 'deny' }), 'deny');
   });
 
   it('refuses an unknown flag and a bad number', () => {
