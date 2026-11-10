@@ -43,8 +43,7 @@
 .srow:hover .srow-actions, .srow:focus-within .srow-actions { visibility: visible; }
 /*
  * One trailing slot, for a row whose actions stand in for what it shows at
- * rest. .srow-rest holds short values, right-aligned (↓1 ↑2 now; a tip's age
- * goes beside it, the gap between them its own); .srow-actions follows it.
+ * rest. .srow-rest holds one short, right-aligned value (↓1 ↑2, or a tip's age); .srow-actions follows it.
  * Both fill one grid cell as wide as the wider of the two, so the label gives
  * up room for one of them, not both, and never reflows under the pointer
  * (design.md, Layout rules, 4). The rest fades rather than hides, so a screen

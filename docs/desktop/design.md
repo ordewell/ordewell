@@ -1087,9 +1087,13 @@ left as it was:
     green is a status's. Every other row, folder and branch alike, is in one
     alphabetical order (case aside, numbers by value) at each level, in every
     group. A local branch ends in one trailing slot: at rest it shows
-    `↓ behind ↑ ahead`, in the sync bar's order, and on hover or keyboard
+    `↓ behind ↑ ahead`, in the sync bar's order, when it has diverged and the
+    tip's age (`3d`, in code-small, tabular) otherwise, never both, so the slot
+    keeps one width; a remote branch shows its age there. On hover or keyboard
     focus Switch (`arrow-right-left`) and Delete take the same box, so the
-    name gives up only the wider of the two and never moves. The branch
+    name gives up only the wider of the two and never moves. The row's tooltip
+    and accessible description carry the tip's subject and age after the
+    full name. The branch
     History is showing keeps the selected background on Branches. A run or
     task link beside a branch or worktree is drawn in the link colour.
   - *History:* commits down the sidebar, two lines a row: the subject, then
