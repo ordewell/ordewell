@@ -5,7 +5,9 @@ amends: ["0009", "0026"]
 
 # 0066 — OpenCode planners get Ordewell's own research agent
 
-*Pending:* the login agent's confinement and its pre-use check are proven against a fake OpenCode 2.x serve only; they will be confirmed, or this ADR corrected, by the live probe (`bench/live/opencode-login-research-agent-probe.mjs`) on a real OpenCode login.
+The live probe of the login agent ran on 2026-11-10 against OpenCode v2.2.5, model `opencode-go/glm-5.3-flash` on the user's login with no provider key in the environment (`bench/live/opencode-login-research-agent-probe.mjs`). Startup took 1307 ms and the pre-use check passed: the resolved rules were deny-all plus the six `ordewell_*` reads, the only MCP server was `ordewell` (connected) and no plugin was loaded. The control call quoted its marker and its usage was filed under the subagent id. The write, shell, execute, credential, `opencode`, skill, MCP and nested attempts all held, with the tree unchanged and no canary leaked; a 300 s call returned within the turn, three agents ran at once and five of five parallel calls finished, and the serve ended on close. The probe made about 17 research sessions, one per call, and left them in the user's OpenCode session list; it printed no count and its throwaway project directory was removed before they were listed, so the figure is an estimate.
+
+*Open limitations:* the model declined every hostile brief in words and never attempted an off-list tool call, so the dispatch-time refusal and the tripwire were not exercised on a real OpenCode; only the permission read-back and the model's own refusals back the confinement there. The pre-use check was run on one machine with no managed-config paths, so a managed machine is untested.
 
 ## Problem
 
@@ -204,3 +206,4 @@ runs a real OpenCode, on the user's login with a throwaway home.
 - 2026-11-10 — accepted.
 - 2026-11-10 — live probe passed against OpenCode v2.2.5: every adversarial attempt refused or unoffered, a 300s call returned within the turn, three agents at once.
 - 2026-11-10 — the login agent is the default on OpenCode 2.x, behind a pre-use check and the tripwire; the variable became the override (R2, R8–R11).
+- 2026-11-10 — settled after the login-agent live probe on OpenCode v2.2.5: pre-use check passed, hostile attempts held by the model's refusal, tripwire not exercised live.
