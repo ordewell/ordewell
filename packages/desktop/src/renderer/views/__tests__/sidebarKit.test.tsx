@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { MiddleText, SidebarGroup, pathTail } from '../sidebarKit';
+import { MiddleText, SidebarGroup, splitMiddle } from '../sidebarKit';
 import { SyncBar, pullBlocked, pushBlocked, type SyncState } from '../git/SyncBar';
 
 const TRACKING: SyncState = { upstream: 'origin/main', ahead: 2, behind: 1, hasRemote: true, branchless: false };
@@ -27,9 +27,14 @@ describe('SidebarGroup', () => {
 
 describe('MiddleText', () => {
   it('keeps the tail of a long text and the whole of it as the tooltip', () => {
-    const { container } = render(<MiddleText text="packages/desktop/src/renderer/views/git/GitSidebar.tsx" tail={14} />);
-    expect(container.querySelector('.mid-tail')?.textContent).toBe('GitSidebar.tsx');
+    const { container } = render(<MiddleText text="packages/desktop/src/renderer/views/git/GitSidebar.tsx" path />);
+    expect(container.querySelector('.mid-tail')?.textContent).toBe('/GitSidebar.tsx');
     expect(container.querySelector('.mid')).toHaveAttribute('title', 'packages/desktop/src/renderer/views/git/GitSidebar.tsx');
+  });
+
+  it('splits a long branch at a word boundary in the markup', () => {
+    const { container } = render(<MiddleText text="feature/search-box-rewritten-for-unicode-normalisation-and-very-long-query-strings" />);
+    expect(container.querySelector('.mid-tail')?.textContent).toBe('query-strings');
   });
 
   it('leaves a short text whole', () => {
@@ -39,12 +44,50 @@ describe('MiddleText', () => {
   });
 });
 
-describe('pathTail', () => {
-  it('keeps the last segment of a path whole, within bounds', () => {
-    expect(pathTail('a/b')).toBe(12);
-    expect(pathTail('src/components/TheVeryLongPrimaryNavigationControllerWithAnExtraordinaryName.tsx')).toBe(40);
+describe('splitMiddle', () => {
+  it('keeps whole trailing words of a long branch, not a mid-word cut', () => {
+    const branch = 'feature/search-box-rewritten-for-unicode-normalisation-and-very-long-query-strings';
+    expect(splitMiddle(branch)).toEqual({ head: branch.slice(0, -'query-strings'.length), tail: 'query-strings' });
+  });
+
+  it('cuts at every kind of word boundary, within 40% of the text', () => {
+    for (const text of ['release_candidate_for_the_new_checkout_flow_final', 'a long name with several words in it, ending here', 'v2.14.0.rc.1.build.2024.11.09.hotfix.final.r2']) {
+      const split = splitMiddle(text)!;
+      expect(split.head + split.tail).toBe(text);
+      expect(split.tail.length).toBeGreaterThanOrEqual(12);
+      expect(split.tail.length).toBeLessThanOrEqual(Math.max(12, Math.floor(text.length * 0.4)));
+      expect('-_. '.includes(split.head.at(-1)!)).toBe(true);
+    }
+  });
+
+  it('keeps a path\'s last segment, with its slash', () => {
     const path = 'packages/desktop/src/renderer/views/git/GitSidebar.tsx';
-    expect(pathTail(path)).toBe('/GitSidebar.tsx'.length);
+    expect(splitMiddle(path, { path: true })?.tail).toBe('/GitSidebar.tsx');
+    expect(splitMiddle('/home/me/.ordewell/worktrees/324bfb86/14-sidebar-shorten', { path: true })?.tail).toBe('/14-sidebar-shorten');
+    // A short last segment takes the folder before it, to reach the least tail.
+    expect(splitMiddle('src/components/navigation/shell/index.tsx', { path: true })?.tail).toBe('/shell/index.tsx');
+  });
+
+  it('keeps a path\'s last segment past the 40% share, up to 40 characters', () => {
+    const name = 'TheVeryLongPrimaryNavigation.tsx';
+    const path = `src/components/${name}`;
+    expect(splitMiddle(path, { path: true })?.tail).toBe(`/${name}`);
+    const longer = `src/${'segment'.repeat(10)}.tsx`;
+    expect(splitMiddle(longer, { path: true })?.tail.length).toBeLessThanOrEqual(40);
+  });
+
+  it('falls back to a plain cut for one long word, and to the longest boundary tail that fits', () => {
+    const word = 'a'.repeat(60);
+    expect(splitMiddle(word)).toEqual({ head: 'a'.repeat(48), tail: 'a'.repeat(12) });
+    expect(splitMiddle(word, { path: true })?.tail).toBe('a'.repeat(24));
+    const long = `feature/${'b'.repeat(50)}-end`;
+    expect(splitMiddle(long)?.tail).toBe('bbbbbbbb-end');
+  });
+
+  it('leaves a short text whole', () => {
+    expect(splitMiddle('main')).toBeUndefined();
+    expect(splitMiddle('feature/login-form')).toBeUndefined();
+    expect(splitMiddle('feature/login-form-x', { tail: 16 })).toBeUndefined();
   });
 });
 

@@ -2125,7 +2125,10 @@ title bar. These rules exist so that cannot happen. The checklist checks them.
 3. **Labels shrink, icons and actions don't.** The text in a row, tab, chip
    or breadcrumb is the one `flex: 1 1 auto; min-width: 0` element, with
    `overflow: hidden; text-overflow: ellipsis; white-space: nowrap`. Paths and
-   branches use a middle ellipsis. Truncated text has its full value in a
+   branches use a middle ellipsis, and the end it keeps starts at a word or
+   path boundary (`-`, `_`, `.`, a space or `/`): whole trailing words, at
+   most about 40% of the name, or a path's whole last segment. The head keeps
+   `3em` before the tail gives way. Truncated text has its full value in a
    tooltip. Where a row holds a name and its metadata, the name shrinks last
    and the metadata keeps a share: a project menu item keeps at least a third
    of its row for its folder, which is what tells two same-named projects
@@ -2321,7 +2324,8 @@ are permanent, so findings can cite them.
 - **O7.** A name a row, card, menu item or tab is about (a branch, commit,
   path, project, task or model) shows at least 64 px of its text, or all of
   it, and each part of it at least half that, so a long neighbour never
-  squeezes it to nothing. Where it is cut, it has a tooltip, and it reads at
+  squeezes it to nothing (the middle ellipsis's `3em` head floor is what keeps
+  that half, 2em would not). Where it is cut, it has a tooltip, and it reads at
   4.5:1. The tour's check `k` (`labelChecks` in `e2e/surfaces.ts`) measures
   this on long branch, commit, path, project, task and model names, as the
   app paints them, in both themes and every size.

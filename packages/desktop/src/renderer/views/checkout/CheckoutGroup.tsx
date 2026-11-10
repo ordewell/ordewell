@@ -23,7 +23,7 @@ import { fetchRepo, popStash, pullBranch, pushBranch, stashChanges, type GitCont
 import { useSyncing } from '../git/gitStore';
 import { SyncBar } from '../git/SyncBar';
 import { useRepoBranches } from '../git/useRepoBranches';
-import { LONG_LIST, MiddleText, Notice, SidebarGroup, pathTail } from '../sidebarKit';
+import { LONG_LIST, MiddleText, Notice, SidebarGroup } from '../sidebarKit';
 import './checkout.css';
 
 /*
@@ -130,7 +130,7 @@ function Row({ api, repo, file, staged, busy, actions }: {
       >
         <span className={`sbadge sbadge-${file.status}`} aria-label={LETTER_WORD[file.status]}>{file.status}</span>
         <span className="checkout-name">{base}</span>
-        {file.from ? <MiddleText className="checkout-dir" text={`from ${file.from}`} tail={pathTail(file.from)} /> : dir && <MiddleText className="checkout-dir" text={dir} />}
+        {file.from ? <MiddleText className="checkout-dir" text={`from ${file.from}`} path /> : dir && <MiddleText className="checkout-dir" text={dir} path />}
       </button>
       <span className="srow-actions" aria-busy={busy !== undefined}>{actions}</span>
     </li>
