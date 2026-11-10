@@ -3,7 +3,7 @@ import { createTask, type ConversationMessage, type LegacyPlanState, type Resear
 import type { SessionMessage } from '../SessionMessage';
 import type { ConversationRequest, ConversationTurn, IAiService, TurnRun } from '../AiService';
 import type { TaskOp } from '../TaskOps';
-import { type WakeBrief, ConversationBusyError, ConversationEditError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnFailedError, PlannerTurnStoppedError, PlannerUsageLimitError, type PlannerConversationHost } from '../PlannerConversation';
+import { type WakeBrief, ConversationBusyError, ConversationEditError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnFailedError, PlannerTurnStoppedError, PlannerUsageLimitError, type PlannerConversationHost, type PlannerConversationOptions } from '../PlannerConversation';
 import type { SkillInfo } from '../SkillsService';
 import type { TurnFailure } from '../runnerExit';
 import { fakePlanChanges, passed, refused } from './planChangesTestKit';
@@ -39,7 +39,7 @@ function fakeAi(overrides: Partial<IAiService> = {}): IAiService {
  * A host whose mutation ritual is just "run the op, count a persist" — enough
  * to tell a committed turn from one that never reached disk.
  */
-function fakeHost(ai: IAiService, plan: LegacyPlanState | null = dialoguePlan()) {
+function fakeHost(ai: IAiService, plan: LegacyPlanState | null = dialoguePlan(), options?: PlannerConversationOptions) {
   const state = { plan, persists: 0 };
   const checks = fakePlanChanges({ tasks: () => state.plan?.tasks ?? [], runners: () => ['claude-code'], catalog: () => ({ modelsByRunner: {} }) });
   const host: PlannerConversationHost = {
@@ -71,7 +71,7 @@ function fakeHost(ai: IAiService, plan: LegacyPlanState | null = dialoguePlan())
     capturePrd: vi.fn(),
     turnAborted: vi.fn(),
   };
-  const conversation = new PlannerConversation(host);
+  const conversation = new PlannerConversation(host, options);
   return { conversation, host, state, checks };
 }
 
@@ -446,6 +446,37 @@ const summaryTurn = (summary: string, extra = ''): ConversationTurn => ({
   kind: 'message',
   text: `${extra}<conversation_summary>\n${summary}\n</conversation_summary>`,
   researchLog: [],
+});
+
+describe('PlannerConversation compact: secrets in a summary (ADR-0061 P1)', () => {
+  // OpenRouter's shape, fake: sk-or-v1- and 64 hex characters.
+  const KEY = `sk-or-v1-${'0123456789abcdef'.repeat(4)}`;
+  const leaked = `The user pasted their OpenRouter key ${KEY} for the bench; it goes only into task environments, never a brief.`;
+  const parts = (secret: string) => Array.from({ length: secret.length - 7 }, (_, i) => secret.slice(i, i + 8));
+
+  it('stores and returns no part of a key the summary quotes, keeping the rule about it', async () => {
+    const ai = fakeAi({ continueConversation: vi.fn().mockResolvedValue(summaryTurn(leaked)) });
+    const { conversation, state } = fakeHost(ai, threeTurnPlan());
+
+    const { summary } = await conversation.compact();
+
+    const stored = state.plan!.conversationHistory!.at(-1)!.content;
+    for (const text of [stored, summary]) {
+      for (const part of parts(KEY.slice('sk-or-v1-'.length))) expect(text).not.toContain(part);
+      expect(text).toContain('it goes only into task environments, never a brief.');
+    }
+  });
+
+  it('names a key Ordewell holds, so the planner can still refer to it', async () => {
+    const ai = fakeAi({ condenseContext: vi.fn(async () => leaked) });
+    const { conversation, state } = fakeHost(ai, threeTurnPlan(), { heldSecrets: () => [{ name: 'OPENROUTER_API_KEY', value: KEY }] });
+
+    await conversation.compact();
+
+    const stored = state.plan!.conversationHistory!.at(-1)!.content;
+    expect(stored).toContain('The user pasted their OpenRouter key [secret held as OPENROUTER_API_KEY] for the bench;');
+    for (const part of parts(KEY)) expect(stored).not.toContain(part);
+  });
 });
 
 describe('PlannerConversation compact', () => {

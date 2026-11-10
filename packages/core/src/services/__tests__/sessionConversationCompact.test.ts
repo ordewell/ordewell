@@ -3,7 +3,7 @@ import { createTask, type ConversationMessage, type LegacyPlanState } from '../.
 import type { ConversationTurn, IAiService } from '../AiService';
 import type { SessionMessage } from '../SessionMessage';
 import { ConversationBusyError, ConversationEditError } from '../PlannerConversation';
-import { makeSession, testWorkspace, saves } from './sessionTestKit';
+import { fakeConfig, makeSession, testWorkspace, saves } from './sessionTestKit';
 import { fromTranscript } from '../../conversation/transcript';
 import { reduceConversation } from '../../conversation/reduce';
 
@@ -501,5 +501,23 @@ describe('Session.compactConversation — what surfaces are told', () => {
     await expect(session.compactConversation()).rejects.toThrow(/too short/);
 
     expect(lifecycle(sent)).toEqual([]);
+  });
+});
+
+describe('Session.compactConversation: a key in the summary', () => {
+  // OpenRouter's shape, fake: sk-or-v1- and 64 hex characters.
+  const KEY = `sk-or-v1-${'fedcba9876543210'.repeat(4)}`;
+
+  it('saves the name a configured key is held by in its place, and no part of it', async () => {
+    const { planner } = apiStylePlanner(summary(`The user gave their OpenRouter key ${KEY}; it goes only into task environments.`));
+    const config = fakeConfig({ openrouterKey: KEY, getProviderApiKey: (provider) => (provider === 'openrouter' ? KEY : '') });
+    const session = makeSession({ aiService: planner, config });
+    session.loadPlan(plannedDialogue(), GOAL, testWorkspace, { persist: false });
+
+    await session.compactConversation();
+
+    const saved = saves(session).mock.calls.at(-1)![0].conversationHistory!.at(-1)!.content;
+    expect(saved).toContain('The user gave their OpenRouter key [secret held as OPENROUTER_API_KEY]; it goes only into task environments.');
+    expect(saved).not.toContain(KEY.slice(-8));
   });
 });

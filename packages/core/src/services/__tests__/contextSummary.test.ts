@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { CompactableMessage } from '../contextCompaction';
+import { summaryRequest } from '../conversationSummary';
 import { condense, effectLedger, renderMessages, summaryLimits, ContextSummaryError, SUMMARY_LIMITS, type SummaryCall, type SummaryCallRequest } from '../contextSummary';
 
 const tagged = (text: string) => `<conversation_summary>${text}</conversation_summary>`;
@@ -115,5 +116,35 @@ describe('effectLedger', () => {
       '- run_task({"task":"#2"}) → Started #2.',
       '- fetch({"url":"https://example.com"}) → no result recorded',
     ]);
+  });
+});
+
+describe('what a summary is asked to keep, by an API planner or a harness one', () => {
+  async function apiInstructions(subject: 'history' | 'turn'): Promise<string> {
+    const call = scripted();
+    await condense(call, { ...request([said('user', 'build me a parser'), said('assistant', 'Which formats? '.repeat(40))]), subject });
+    return call.requests[0].instructions;
+  }
+
+  it('keeps the rule about a secret, never its value, in every summary prompt', async () => {
+    for (const prompt of [summaryRequest(null), await apiInstructions('history'), await apiInstructions('turn')]) {
+      expect(prompt).toMatch(/never (?:copy|write|quote)[^.]*value/i);
+      expect(prompt).toContain('the key goes only into task environments');
+    }
+  });
+
+  it('asks a harness planner for everything an API planner keeps of the history', async () => {
+    const harness = summaryRequest(['#1 build the lexer']);
+    for (const kept of [
+      'every instruction, constraint and preference still standing',
+      'any skill loaded into the conversation by name and what it requires',
+      'Keep exactly, as the conversation has them: file paths, symbols, line references, commands and their outcomes, URLs, task references and quoted requirements.',
+      'Task statuses and run state are not yours to keep: the current plan is authoritative',
+      'open questions and what the planner was waiting on',
+    ]) {
+      expect(harness).toContain(kept);
+      expect(await apiInstructions('history')).toContain(kept);
+    }
+    expect(harness).toContain('<current_plan>\n#1 build the lexer\n</current_plan>');
   });
 });
