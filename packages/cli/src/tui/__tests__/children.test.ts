@@ -220,6 +220,19 @@ describe('words held while the subplanner answers', () => {
     expect(step(cleared, key('escape')).sessionId).toBe('root');
   });
 
+  it('ctrl-c brings every held message into the composer before it clears it and goes back up', () => {
+    const out = step(held(answering(), 'first', 'second'), key('ctrl-c'));
+    expect(out.sessionId).toBe('c1');
+    expect(out.queuedPrompts).toEqual([]);
+    expect(out.editor.text).toBe('first\nsecond');
+
+    const cleared = step(out, key('ctrl-c'));
+    expect(cleared.sessionId).toBe('c1');
+    expect(cleared.editor.text).toBe('');
+
+    expect(step(cleared, key('ctrl-c')).sessionId).toBe('root');
+  });
+
   it('names taking back and sending all in the footer while a message is held, as the planner chat does', () => {
     const hints = footerHints(held(answering(), 'also check the docs'));
 
