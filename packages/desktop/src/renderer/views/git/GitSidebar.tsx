@@ -328,12 +328,9 @@ function Sidebar({ api }: { api: FrameApi }): JSX.Element {
       {ctx && (
         <>
           <div className="git-current" role="group" aria-label="Your checkout">
-            <div className="git-current-name" title="Your checkout: Fetch, Pull and Push act on it">
-              <Icon icon={GitBranch} size={14} />
-              <MiddleText className="git-current-label" text={ctx.branches.detached ? 'Detached HEAD' : ctx.branches.current ?? 'No branch yet'} />
-            </div>
             <SyncBar
               label={name}
+              branch={ctx.branches.detached ? 'Detached HEAD' : ctx.branches.current ?? 'No branch yet'}
               state={syncStateOf(ctx)}
               running={state.syncing[repo]}
               actions={{ fetch: () => fetchRepo(ctx), pull: () => pullBranch(ctx), push: () => pushBranch(ctx) }}

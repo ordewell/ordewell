@@ -783,6 +783,18 @@ describe('the confirms', () => {
     expect(daemon.calls('git.push')[0]![1]).toMatchObject({ confirm: { remote: 'origin', branch: 'main' } });
   });
 
+  it('draws the checkout as its branch and upstream, then Pull, Push and an icon-only Fetch, each saying what it moves', async () => {
+    await mount();
+    const checkout = within(screen.getByRole('group', { name: 'Your checkout' }));
+    expect(checkout.getByTitle(/^Your checkout: /)).toHaveTextContent(/^main\s*origin\/main$/);
+    const sync = within(screen.getByRole('group', { name: /^Sync/ }));
+    expect(sync.getAllByRole('button').map((b) => b.getAttribute('aria-label') ?? b.querySelector('.sync-word')?.textContent)).toEqual(['Pull', 'Push', 'Fetch']);
+    expect(sync.getByRole('button', { name: 'Pull' })).toHaveAccessibleDescription('Pull 1 commit from origin/main');
+    expect(sync.getByRole('button', { name: 'Push' })).toHaveAccessibleDescription('Push 2 commits to origin/main');
+    expect(sync.queryByText(/↓|↑/)).toBeNull();
+    expect(screen.getByRole('group', { name: /^Sync/ }).querySelector('.sync-note')).toBeNull();
+  });
+
   describe('a fetch in flight', () => {
     // The confirm dialog has a "Pull from origin" button of its own: scope to the sync bar.
     const syncButton = (name: RegExp) => within(screen.getByRole('group', { name: /^Sync/ })).getByRole('button', { name });

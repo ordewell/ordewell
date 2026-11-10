@@ -51,29 +51,82 @@ describe('pathTail', () => {
 describe('SyncBar', () => {
   const actions = () => ({ fetch: vi.fn(async () => undefined), pull: vi.fn(async () => undefined), push: vi.fn(async () => undefined) });
 
-  it('shows the counts and runs the action pressed', () => {
+  it('draws each count inside its button, behind before ahead, and runs the action pressed', () => {
     const a = actions();
     render(<SyncBar state={TRACKING} actions={a} label="main" />);
-    expect(screen.getByText('↓ 1 ↑ 2')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Pull' }));
+    const pull = screen.getByRole('button', { name: 'Pull' });
+    expect(pull.querySelector('.sync-n')).toHaveTextContent('1');
+    expect(screen.getByRole('button', { name: 'Push' }).querySelector('.sync-n')).toHaveTextContent('2');
+    expect(pull.compareDocumentPosition(screen.getByRole('button', { name: 'Push' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(pull);
     expect(a.pull).toHaveBeenCalledTimes(1);
   });
 
-  it('says in words why pull and push cannot act', () => {
-    render(<SyncBar state={{ ...TRACKING, ahead: 0, behind: 0 }} actions={actions()} label="main" />);
-    expect(screen.getByRole('button', { name: 'Pull' })).toBeDisabled();
-    expect(screen.getByText(/Nothing to pull/)).toBeVisible();
-    expect(screen.getByText(/Nothing to push/)).toBeVisible();
+  it('names the target and the count, in plural or not, in each tooltip', () => {
+    render(<SyncBar state={{ ...TRACKING, ahead: 1, behind: 3 }} actions={actions()} label="main" />);
+    expect(screen.getByRole('button', { name: 'Pull' })).toHaveAttribute('title', 'Pull 3 commits from origin/main');
+    expect(screen.getByRole('button', { name: 'Push' })).toHaveAttribute('title', 'Push 1 commit to origin/main');
+    expect(screen.getByRole('button', { name: 'Fetch' })).toHaveAccessibleDescription('Fetch from the remote');
   });
 
-  it('names the missing remote once', () => {
+  // The box keeps its room when empty, so 0 becoming 1 moves nothing; over two digits it says 99+.
+  it('draws no count for nothing to move, and caps a long one', () => {
+    render(<SyncBar state={{ ...TRACKING, ahead: 0, behind: 250 }} actions={actions()} label="main" />);
+    const push = screen.getByRole('button', { name: 'Push' }).querySelector('.sync-n');
+    expect(push).toBeInTheDocument();
+    expect(push).toBeEmptyDOMElement();
+    expect(screen.getByRole('button', { name: 'Pull' }).querySelector('.sync-n')).toHaveTextContent('99+');
+  });
+
+  it('keeps an up-to-date branch to the buttons: each reason is a tooltip and a description, not a line', () => {
+    const { container } = render(<SyncBar state={{ ...TRACKING, ahead: 0, behind: 0 }} actions={actions()} label="main" />);
+    const pull = screen.getByRole('button', { name: 'Pull' });
+    expect(pull).toBeDisabled();
+    expect(pull).toHaveAccessibleDescription('Nothing to pull: origin/main has no new commits');
+    expect(screen.getByRole('button', { name: 'Push' })).toHaveAccessibleDescription('Nothing to push: origin/main has every commit');
+    expect(screen.getByRole('button', { name: 'Fetch' })).toBeEnabled();
+    expect(container.querySelector('.sync-note')).toBeNull();
+  });
+
+  it('says once, on its own line, that there is no remote', () => {
     render(<SyncBar state={{ upstream: null, ahead: 0, behind: 0, hasRemote: false, branchless: false }} actions={actions()} label="main" />);
-    expect(screen.getAllByText('No remote is configured.')).toHaveLength(1);
+    expect(screen.getAllByText('No remote: add one to fetch, pull or push.')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Fetch' })).toHaveAccessibleDescription('Nothing to fetch: no remote is configured');
+    expect(screen.getByRole('button', { name: 'Push' })).toHaveAccessibleDescription('Nothing to push: no remote is configured');
   });
 
-  it('lets a branch without an upstream be pushed, but not pulled', () => {
+  it('says a detached or unborn HEAD has no branch to move', () => {
+    render(<SyncBar state={{ upstream: null, ahead: 0, behind: 0, hasRemote: true, branchless: true }} actions={actions()} label="main" />);
+    expect(screen.getByText('No branch is checked out: Pull and Push need one.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pull' })).toHaveAccessibleDescription('Nothing to pull: no branch is checked out');
+  });
+
+  it('lets a branch without an upstream be pushed, but not pulled, and says Push publishes it', () => {
     const state = { ...TRACKING, upstream: null };
     expect(pushBlocked(state)).toBeUndefined();
     expect(pullBlocked(state)).toMatch(/no upstream/);
+    render(<SyncBar state={state} actions={actions()} label="main" />);
+    expect(screen.getByText('Not published: Push publishes it.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Push' })).toBeEnabled();
+  });
+
+  it('holds every button, with no note yet, while the remotes are read', () => {
+    const { container } = render(<SyncBar state={{ ...TRACKING, upstream: null, hasRemote: undefined }} actions={actions()} label="main" />);
+    for (const name of ['Pull', 'Push', 'Fetch']) {
+      expect(screen.getByRole('button', { name })).toBeDisabled();
+      expect(screen.getByRole('button', { name })).toHaveAccessibleDescription('Reading the remotes…');
+    }
+    expect(container.querySelector('.sync-note')).toBeNull();
+  });
+
+  it('draws the checkout line, branch then upstream, only when given a branch', () => {
+    const { container, rerender } = render(<SyncBar state={TRACKING} actions={actions()} label="main" />);
+    expect(container.querySelector('.sync-head')).toBeNull();
+    rerender(<SyncBar state={TRACKING} actions={actions()} label="main" branch="feature/login" />);
+    const head = container.querySelector('.sync-head')!;
+    expect(head.querySelector('.sync-branch')).toHaveTextContent('feature/login');
+    expect(head.querySelector('.sync-upstream')).toHaveTextContent('origin/main');
+    rerender(<SyncBar state={{ ...TRACKING, upstream: null }} actions={actions()} label="main" branch="feature/login" />);
+    expect(container.querySelector('.sync-upstream')).toBeNull();
   });
 });
