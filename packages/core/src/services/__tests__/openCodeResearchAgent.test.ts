@@ -202,12 +202,18 @@ describe('the research serve and its agent', () => {
     expect(peak).toBe(3);
   });
 
-  it('enforces the step budget by interrupting', async () => {
+  it('when the budget runs out, returns what it wrote marked partial and names what the extra step left unread', async () => {
     fresh();
-    const steps = Array.from({ length: 12 }, () => ({ calls: [{ name: 'ordewell_list_dir', args: { path: '.' } }] }));
+    const steps = [
+      ...Array.from({ length: 10 }, () => ({ calls: [{ name: 'ordewell_list_dir', args: { path: '.' } }] })),
+      { calls: [{ name: 'ordewell_read_file', args: { path: 'src/left-over.ts' } }] },
+      { calls: [{ name: 'ordewell_list_dir', args: { path: '.' } }] },
+    ];
     const reply = await agent({ maxSteps: 10 })({ prompt: cue({ steps, text: 'never' }) }, { signal: new AbortController().signal });
-    expect(reply).toMatchObject({ isError: true });
+    expect(reply.isError).toBeFalsy();
+    expect(reply.text).toMatch(/^\[PARTIAL/);
     expect(reply.text).toContain('10-step budget');
+    expect(reply.text).toMatch(/Left unread:[\s\S]*src\/left-over\.ts/);
   });
 
   it('refuses a call while no turn is open', async () => {

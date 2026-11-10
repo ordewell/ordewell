@@ -3,7 +3,7 @@ import { promises as fsp, rmSync } from 'fs';
 import { homedir as osHomedir, tmpdir } from 'os';
 import { join } from 'path';
 import { v4 as uuidv4 } from 'uuid';
-import { CONFINED_RESEARCH_TOOLS, SUBAGENT_LIMITS, confinedRead } from '../ResearchSubagents';
+import { CONFINED_RESEARCH_TOOLS, SUBAGENT_LIMITS, confinedRead, describeCall, partialDigest } from '../ResearchSubagents';
 import { classifyOutcome } from '../researchStepSummary';
 import { parseCliVersion } from '../RunnerInstallation';
 import { addUsage, type UsageTotals } from '../../models/Usage';
@@ -369,6 +369,8 @@ async function runOne(deps: OpenCodeResearchAgentDeps, brief: string, subagentId
   let lastText = '';
   let violation: string | undefined;
   let failure: string | undefined;
+  let overran = false;
+  const unread: string[] = [];
   let interrupted = false;
   const names = new Map<string, string>();
   const stepModels: string[] = [];
@@ -398,7 +400,7 @@ async function runOne(deps: OpenCodeResearchAgentDeps, brief: string, subagentId
       case 'session.step.started':
         steps += 1;
         if (data.model?.providerID && data.model.id) stepModels.push(`${data.model.providerID}/${data.model.id}`);
-        if (steps > maxSteps) { failure ??= `it ran past its ${maxSteps}-step budget`; interrupt(); }
+        if (steps > maxSteps) { overran = true; interrupt(); }
         return;
       case 'session.tool.input.started':
         if (data.id && data.name) names.set(data.id, data.name);
@@ -407,6 +409,7 @@ async function runOne(deps: OpenCodeResearchAgentDeps, brief: string, subagentId
       case 'session.tool.called': {
         const name = (data.id && names.get(data.id)) ?? data.name ?? '';
         if (!allowed.has(name)) { trip(`it called ${name || 'an unnamed tool'}, which is not one of its read tools`); return; }
+        if (overran) unread.push(describeCall(name.slice(RESEARCH_MCP_SERVER.length + 1), (data.input ?? {}) as Record<string, unknown>));
         emit({ type: 'tool_call', tool: name.slice(RESEARCH_MCP_SERVER.length + 1), toolArgs: JSON.stringify(data.input ?? {}), toolCallId: data.id, subagentId });
         return;
       }
@@ -467,6 +470,10 @@ async function runOne(deps: OpenCodeResearchAgentDeps, brief: string, subagentId
     });
     const how = await Promise.race([ended, stream.failed.then(() => 'lost' as const, () => 'lost' as const), serve.exited.then(() => 'lost' as const), grace]);
     if (violation) return finish('failed', `[research agent stopped: ${violation}. Nothing it found is used.]`);
+    if (overran && !signal.aborted && !failure) {
+      const found = (lastText || await readBack(serve, sessionId).catch(() => '')).trim();
+      return finish('done', partialDigest(found, unread, maxSteps));
+    }
     if (signal.aborted || (how === 'interrupted' && !failure)) return finish('stopped', '[research agent stopped]');
     if (how === 'lost') return finish('failed', '[research agent failed: its OpenCode server or event stream was lost]');
     if (failure) return finish('failed', `[research agent failed: ${failure}]`);
