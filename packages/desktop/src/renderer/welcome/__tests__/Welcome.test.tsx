@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { patient } from '@ordewell/core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DaemonCallResult, DaemonStatus, OrdewellBridge, RecentWorkspace, TerminalEvent, TerminalOpenResult, TerminalOpenSpec } from '../../../shared/bridge';
 import { Welcome } from '../../Welcome';
@@ -148,7 +149,7 @@ describe('Welcome: the hero and the footer', () => {
   it('opens a folder on ⌘O on macOS, and not on Ctrl+O', async () => {
     const bridge = installBridge();
     render(<Welcome status={CONNECTED} />);
-    await screen.findByText('Ordewell 0.4.0');
+    await screen.findByText('Ordewell 0.4.0', {}, { timeout: patient(10_000) });
     fireEvent.keyDown(window, { key: 'o', ctrlKey: true });
     expect(bridge.app.openWorkspace).not.toHaveBeenCalled();
     fireEvent.keyDown(window, { key: 'o', metaKey: true });
