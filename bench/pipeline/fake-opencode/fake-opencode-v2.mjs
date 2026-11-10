@@ -49,8 +49,9 @@ const plugins = [{ id: 'opencode', source: { type: 'builtin' }, features: { serv
 const sessions = new Map();
 const streams = new Set();
 const ran = [];
+// Real OpenCode 2.x ignores OPENCODE_SERVER_USERNAME and accepts only `opencode` (checked on 2.2.5).
 const auth = process.env.OPENCODE_SERVER_PASSWORD
-  ? `Basic ${Buffer.from(`${process.env.OPENCODE_SERVER_USERNAME ?? 'opencode'}:${process.env.OPENCODE_SERVER_PASSWORD}`).toString('base64')}` : null;
+  ? `Basic ${Buffer.from(`opencode:${process.env.OPENCODE_SERVER_PASSWORD}`).toString('base64')}` : null;
 
 const glob = (pattern, value) => new RegExp(`^${pattern.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`).test(value);
 const whollyDisabled = (rules, tool) => { const last = rules.findLast((r) => glob(r.action, tool)); return !!last && last.resource === '*' && last.effect === 'deny'; };

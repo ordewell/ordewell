@@ -233,7 +233,7 @@ describe('the login research agent a planner session holds', () => {
   });
   afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
-  function login(workspace: Record<string, string> = {}) {
+  function login(workspace: Record<string, string> = {}, wrapFetch?: (real: typeof fetch) => typeof fetch) {
     const logs: string[] = [];
     const children: ChildProcess[] = [];
     const events: ResearchProgress[] = [];
@@ -244,7 +244,10 @@ describe('the login research agent a planner session holds', () => {
       fs: fakeFs().fs,
       turnSink: () => (p) => { events.push(p); },
       mcpServer: mcp,
-      launch: launchWith({ HOME: join(scratch, 'home'), ...workspace }, children),
+      launch: (() => {
+        const launch = launchWith({ HOME: join(scratch, 'home'), ...workspace }, children);
+        return wrapFetch ? { ...launch, fetch: wrapFetch(launch.fetch) } : launch;
+      })(),
       command: process.execPath,
       args: [FAKE],
       log: (line) => logs.push(line),
@@ -311,6 +314,38 @@ describe('the login research agent a planner session holds', () => {
       await call(cue({ text: 'never' }));
       expect(children).toHaveLength(1);
       expect(logs).toHaveLength(1);
+    } finally { await agent.close(); }
+  });
+
+  it('authenticates every call to its serve as `opencode`, the only user real OpenCode 2.x accepts, whatever OPENCODE_SERVER_USERNAME the host sets', async () => {
+    const users = new Set<string>();
+    const calls: string[] = [];
+    const { agent, call, logs } = login({ OPENCODE_SERVER_USERNAME: 'someone-else' }, (real) => (input, init) => {
+      const header = new Headers(init?.headers).get('authorization') ?? '';
+      users.add(Buffer.from(header.replace(/^Basic /, ''), 'base64').toString().split(':')[0]);
+      calls.push(String(input).replace(/^https?:\/\/[^/]+/, ''));
+      return real(input, init);
+    });
+    try {
+      expect(await call(cue({ text: 'found it' }))).toEqual({ text: 'found it' });
+      expect(logs).toEqual([]);
+      expect([...users]).toEqual(['opencode']);
+      expect(calls).toEqual(expect.arrayContaining(['/api/info', '/api/session', '/api/event']));
+    } finally { await agent.close(); }
+  });
+
+  it('tells the planner the HTTP status and the start of the body when its serve refuses a start-up call', async () => {
+    const { agent, call, logs } = login({}, (real) => (input, init) => {
+      const headers = new Headers(init?.headers);
+      headers.set('authorization', `Basic ${Buffer.from('ordewell:wrong').toString('base64')}`);
+      return real(input, { ...init, headers });
+    });
+    try {
+      const reply = await call(cue({ text: 'never' }));
+      expect(reply.text).toMatch(/research task/);
+      expect(logs).toHaveLength(1);
+      expect(logs[0]).toMatch(/\/api\/info.*401.*unauthorized/);
+      expect(logs[0]).not.toMatch(/no version/);
     } finally { await agent.close(); }
   });
 

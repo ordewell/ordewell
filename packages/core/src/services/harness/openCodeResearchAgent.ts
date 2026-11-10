@@ -15,6 +15,7 @@ import { openEventStream, usageRecord, withDeadline, REQUEST_TIMEOUT_MS, type Ev
 import { NO_TURN_OPEN, semaphore } from './harnessResearchAgent';
 import { RunnerProcess } from './runnerProcess';
 import type { AgentProcessDeps } from './AgentAdapter';
+import { SERVER_USERNAME } from './OpenCodeAdapter';
 
 /*
  * The research agent an OpenCode 2.x planner gets by default (ADR-0066): it
@@ -92,7 +93,7 @@ export function researchServeEnv(user: Record<string, string | undefined>, opts:
     XDG_CACHE_HOME: user.XDG_CACHE_HOME || join(home, '.cache'),
     OPENCODE_DISABLE_PROJECT_CONFIG: '1',
     OPENCODE_CONFIG_CONTENT: JSON.stringify(researchServeConfig(opts.mcp)),
-    OPENCODE_SERVER_USERNAME: 'ordewell',
+    OPENCODE_SERVER_USERNAME: SERVER_USERNAME,
     OPENCODE_SERVER_PASSWORD: opts.password,
   };
 }
@@ -171,7 +172,7 @@ export async function startResearchServe(opts: StartResearchServeOptions): Promi
         reject(new Error(proc.withStderrTail(`its OpenCode server ${proc.describeExit()} before it was ready`)));
       });
     }));
-    const authorization = `Basic ${Buffer.from(`ordewell:${password}`).toString('base64')}`;
+    const authorization = `Basic ${Buffer.from(`${SERVER_USERNAME}:${password}`).toString('base64')}`;
     const json: Json = async <T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> => {
       const deadline = withDeadline(signal, REQUEST_TIMEOUT_MS);
       try {
@@ -186,7 +187,9 @@ export async function startResearchServe(opts: StartResearchServeOptions): Promi
         return (text ? JSON.parse(text) : {}) as T;
       } finally { deadline.clear(); }
     };
-    const info = await json<{ version?: unknown; data?: { version?: unknown } }>('GET', '/api/info').catch(() => null);
+    // A refusal (a 401 above all) must reach the planner's one-line reason with its status, not read as "no version".
+    let info: { version?: unknown; data?: { version?: unknown } } | undefined;
+    try { info = await json('GET', '/api/info'); } catch (err) { throw new Error(`its OpenCode server did not answer /api/info: ${errorLine(err)}`); }
     const version = info?.version ?? info?.data?.version;
     if (typeof version !== 'string' || !/^2\./.test(version)) throw new Error(`it needs OpenCode 2.x, and the serve reported ${typeof version === 'string' ? version : 'no version'}`);
     // As the planner's servers are: a config server is listed only inside code mode (OpenCodeV2.expose).
@@ -203,6 +206,8 @@ export async function startResearchServe(opts: StartResearchServeOptions): Promi
     throw err;
   }
 }
+
+const errorLine = (err: unknown) => (err instanceof Error ? err.message : String(err)).replace(/\s+/g, ' ').trim();
 
 const record = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
@@ -223,7 +228,8 @@ const sameRules = (a: unknown[], b: PermissionRule[]) =>
  * know where such layers live. A read-back that cannot be read fails it too.
  */
 async function preUseCheck(json: Json): Promise<void> {
-  const entries = await json<unknown>('GET', '/api/config').catch(() => undefined);
+  const read = (path: string) => json<unknown>('GET', path).catch((err: unknown) => { throw new Error(`its OpenCode server did not answer ${path}: ${errorLine(err)}`); });
+  const entries = await read('/api/config');
   if (!Array.isArray(entries)) throw new Error('its OpenCode server\'s config could not be read back');
   const rules: unknown[] = [];
   for (const entry of entries) {
@@ -236,14 +242,14 @@ async function preUseCheck(json: Json): Promise<void> {
   }
   if (!sameRules(rules, researchSessionRules())) throw new Error('its OpenCode server loaded permission rules other than Ordewell\'s');
 
-  const servers = record(await json<unknown>('GET', '/api/mcp').catch(() => undefined))?.data;
+  const servers = record(await read('/api/mcp'))?.data;
   if (!Array.isArray(servers)) throw new Error('its OpenCode server\'s MCP servers could not be read back');
   const names = servers.map((server) => String(record(server)?.name ?? ''));
   const others = names.filter((name) => name !== RESEARCH_MCP_SERVER);
   if (others.length > 0) throw new Error(`its OpenCode server loaded MCP servers besides Ordewell's: ${others.join(', ')}`);
   if (!names.includes(RESEARCH_MCP_SERVER)) throw new Error('its OpenCode server did not load Ordewell\'s MCP server');
 
-  const plugins = record(await json<unknown>('GET', '/api/plugin').catch(() => undefined))?.data;
+  const plugins = record(await read('/api/plugin'))?.data;
   if (!Array.isArray(plugins)) throw new Error('its OpenCode server\'s plugins could not be read back');
   const added = plugins.filter((plugin) => record(record(plugin)?.source)?.type !== 'builtin').map((plugin) => {
     const p = record(plugin);
