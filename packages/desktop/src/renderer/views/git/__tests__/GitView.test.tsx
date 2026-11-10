@@ -161,6 +161,16 @@ describe('the Git sidebar', () => {
 describe('the Branches and History views', () => {
   const views = () => within(screen.getByRole('group', { name: 'Git sidebar view' }));
 
+  it('draws no section heading of its own: the repository row is the only heading, on Branches and History alike', async () => {
+    await mount();
+    expect(screen.queryByRole('heading', { name: 'Branches' })).toBeNull();
+    expect(screen.queryByText('Branches', { selector: '.frame-section-title, .frame-section-title *' })).toBeNull();
+    expect(document.querySelector('.frame-section-head')).toBeNull();
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    expect(await screen.findByRole('list', { name: 'History' })).toBeInTheDocument();
+    expect(document.querySelector('.frame-section-head')).toBeNull();
+  });
+
   it('starts on Branches, and History keeps the branch and sync controls while it reads the history once', async () => {
     const daemon = await mount();
     expect(views().getByRole('button', { name: 'Branches' })).toHaveAttribute('aria-pressed', 'true');
@@ -363,7 +373,7 @@ describe('the Branches and History views', () => {
     fireEvent.click(views().getByRole('button', { name: 'History' }));
     const row = await screen.findByRole('button', { name: 'Commit aaaaaaa: Merge: Wire SSO' });
     expect(within(row).queryByText('v2.0')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh the branches and history' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reload branches and history' }));
     await waitFor(() => expect(daemon.calls('git.log')).toHaveLength(2));
     expect(screen.getByRole('button', { name: 'Commit aaaaaaa: Merge: Wire SSO' })).toBeInTheDocument();
     await act(async () => { later.settle(ok({ repo: '.', ref: 'HEAD', commits: [{ ...LOG[0]!, refs: [...LOG[0]!.refs, 'v2.0'] }, LOG[1]!], cursor: null })); });
@@ -385,12 +395,12 @@ describe('the Branches and History views', () => {
     fireEvent.click(views().getByRole('button', { name: 'History' }));
     expect(await screen.findByRole('button', { name: 'Load more' })).toBeEnabled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh the branches and history' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reload branches and history' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Load more' })).toBeDisabled());
     await act(async () => { later.settle(ok({ repo: '.', ref: 'HEAD', commits: [commit('a', ['f'], 'Merge: Wire SSO', ['HEAD', 'main'])], cursor: sha('f') })); });
     expect(screen.getByRole('button', { name: 'Load more' })).toBeEnabled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh the branches and history' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reload branches and history' }));
     expect(await screen.findByText('fatal: bad object')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Load more' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
@@ -612,14 +622,14 @@ describe('browsing a branch in the sidebar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'feature/login' }));
     await waitFor(() => expect(daemon.calls('git.log')).toHaveLength(1));
     branches = { ...BRANCHES, local: [BRANCHES.local[0]!] };
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh the branches and history' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reload branches and history' }));
     expect(await side().findByRole('button', { name: /Commit aaaaaaa/ })).toBeInTheDocument();
     expect(side().getByRole('combobox', { name: 'History of' })).toHaveValue('');
     await act(async () => { late.settle(ok({ repo: '.', ref: 'feature/login', commits: FEATURE_LOG, cursor: null })); });
 
     // Made again, it is a new branch: it is browsed afresh, not shown from the answer the deletion dropped.
     branches = BRANCHES;
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh the branches and history' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reload branches and history' }));
     await waitFor(() => expect(daemon.calls('git.branches').length).toBeGreaterThan(2));
     expect(side().getByRole('combobox', { name: 'History of' })).toHaveValue('');
     fireEvent.change(side().getByRole('combobox', { name: 'History of' }), { target: { value: 'feature/login' } });

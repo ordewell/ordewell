@@ -1381,7 +1381,7 @@ test('the visual tour', async () => {
     longSha = git(box, 'rev-parse', '--short=7', LONG_BRANCH).trim();
     await openGit();
     await gitView('Branches').click();
-    await gitSide().getByRole('button', { name: /^Refresh the branches/ }).click();
+    await gitSide().getByRole('button', { name: /^Reload branches/ }).click();
     const folder = gitSide().getByRole('button', { name: /^feature/ }).and(gitSide().locator('[aria-expanded]'));
     await expect(folder.first()).toBeVisible({ timeout: 30_000 });
     if (await folder.first().getAttribute('aria-expanded') !== 'true') await folder.first().click();
