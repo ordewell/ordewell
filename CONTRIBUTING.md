@@ -71,7 +71,7 @@ Plus the offline end-to-end drive of the planner conversation loop, which needs
 no API key and no network — it runs against a local mock model:
 
 ```bash
-node bench/live/mock-provider.mjs &     # binds 127.0.0.1:3799
+node bench/live/mock-provider.mjs &     # binds 127.0.0.1:3799 (--port 0: a free port, printed)
 node bench/live/drive-conversation.mjs
 ```
 

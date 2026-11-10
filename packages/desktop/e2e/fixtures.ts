@@ -125,15 +125,24 @@ export function appEnv(sandbox: Sandbox, daemonPort: number, mockPort: number, o
   };
 }
 
-/** bench/live's mock provider on a free port, listening before this returns. */
+/** bench/live's mock provider on a port it binds itself (`--port 0`), read from its ready line before this returns. */
 export async function startMock(extraArgs: readonly string[] = []): Promise<{ port: number; process: ChildProcess }> {
-  const port = await freePort();
-  const child = spawn(process.execPath, [path.join(ROOT, 'bench/live/mock-provider.mjs'), '--port', String(port), ...extraArgs], { stdio: 'ignore' });
+  const child = spawn(process.execPath, [path.join(ROOT, 'bench/live/mock-provider.mjs'), '--port', '0', ...extraArgs], { stdio: ['ignore', 'pipe', 'ignore'] });
   // The planner's first turn must never meet a closed port.
-  if (!await untilListening(port, true)) {
-    child.kill();
-    throw new Error(`the mock provider never listened on ${port}`);
-  }
+  const port = await new Promise<number>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('the mock provider never reported its port')), 15_000);
+    let seen = '';
+    child.stdout?.on('data', (chunk: Buffer) => {
+      seen += chunk.toString();
+      const match = /listening on http:\/\/127\.0\.0\.1:(\d+)\/v1/.exec(seen);
+      if (!match) return;
+      clearTimeout(timer);
+      child.stdout?.removeAllListeners('data');
+      child.stdout?.resume();
+      resolve(Number(match[1]));
+    });
+    child.once('exit', () => { clearTimeout(timer); reject(new Error('the mock provider exited at startup')); });
+  }).catch((error: unknown) => { child.kill(); throw error; });
   return { port, process: child };
 }
 

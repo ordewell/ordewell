@@ -12,9 +12,8 @@
 // build every package the later jobs' setup builds again.
 //
 // `--list` prints the steps a run would take, in order, and runs none.
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs';
-import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -23,8 +22,6 @@ import { npm as runNpm } from './npm.mjs';
 import { onPath } from './host-tools.mjs';
 import { platformKey, resolveShellcheck } from './shellcheck.mjs';
 
-const MOCK_PROVIDER_PORT = 3799;
-
 // Nothing in a CI run may reach ordewell.ai (ADR-0048); every step below
 // inherits this. ci.yml sets it for the job too.
 process.env.ORDEWELL_NO_VERSION_CHECK = '1';
@@ -32,27 +29,15 @@ process.env.ORDEWELL_NO_VERSION_CHECK = '1';
 export const sh = (cmd, args, env) => spawnSync(cmd, args, { stdio: 'inherit', env: { ...process.env, ...env } }).status ?? 1;
 const npm = (...args) => runNpm(args);
 
-function portOpen(port) {
-  return new Promise((resolve) => {
-    const socket = connect(port, '127.0.0.1');
-    socket.on('connect', () => { socket.destroy(); resolve(true); });
-    socket.on('error', () => resolve(false));
-  });
-}
-
 async function plannerE2e() {
-  // A mock left over from an aborted run holds the port, and the drive would
-  // silently talk to it instead of the one started here.
-  if (await portOpen(MOCK_PROVIDER_PORT)) {
-    console.error(`Port ${MOCK_PROVIDER_PORT} is already taken; stop whatever holds it (an old mock-provider?) and rerun.`);
-    return 1;
-  }
-  const mock = spawn('node', ['bench/live/mock-provider.mjs'], { stdio: 'inherit' });
+  // Port 0: another checkout's run on this machine may hold the default, and
+  // the drive must talk to the mock started here.
+  const { startMock } = await import('../bench/live/start-mock.mjs');
+  const mock = await startMock();
   try {
-    for (let i = 0; i < 50 && !(await portOpen(MOCK_PROVIDER_PORT)); i++) await new Promise((r) => setTimeout(r, 200));
-    return sh('node', ['bench/live/drive-conversation.mjs']);
+    return sh('node', ['bench/live/drive-conversation.mjs', '--port', String(mock.port)]);
   } finally {
-    mock.kill();
+    mock.child.kill();
   }
 }
 
