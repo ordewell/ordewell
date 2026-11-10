@@ -143,7 +143,7 @@ describe('what the task view shows for force send', () => {
   it('keeps the send-all hint off the queue while the composer holds text, and names it in the footer', () => {
     const out = plain(withDraft(opened(log(queued, null)), 'one more'));
     expect(out).toMatch(/also tests · queued · esc takes back(?! ·)/);
-    expect(footerHints(withDraft(opened(log(queued, null)), 'one more'))).toContain('ctrl-s sends all now');
+    expect(footerHints(withDraft(opened(log(queued, null)), 'one more'))).toContain('ctrl-s send all now');
     expect(footerHints(withDraft(opened(), 'one more'))).toContain('ctrl-s send now');
     expect(footerHints(opened(log(queued, null))).join(' ')).not.toContain('ctrl-s');
   });

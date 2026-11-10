@@ -877,7 +877,7 @@ describe('the keys a child plan offers', () => {
 
     expect(hints).toContain('esc back');
     expect(hints).toContain('tab plan');
-    expect(hints.join(' ')).not.toMatch(/stop planning|esc unsend|ctrl-s/);
+    expect(hints.join(' ')).not.toMatch(/stop planning|esc take back|esc drop|ctrl-s/);
   });
 
   it('does not offer a child runner\'s stop or force keys: they have no route', () => {

@@ -106,8 +106,8 @@ TUI options:
   --port N            Target a daemon on port N
 
 TUI planner chat keys (in the composer):
-  ctrl-s              Send now: stop the running planner turn and send this message next
-                      (with the composer empty, the newest queued prompt)
+  ctrl-s              Send now: stop the running planner turn and send every queued prompt,
+                      then this message, as one message next
 
 TUI task view keys (enter on a task; /help in the TUI lists them all):
   ctrl-s              Send now: interrupt the running step and deliver every queued message

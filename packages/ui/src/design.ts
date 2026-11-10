@@ -9,11 +9,12 @@ export {
   PlanGlyph, LoopGlyph, CheckpointGlyph, RunnerGlyph, MergeAllGlyph, NeedsYouGlyph, ChildPlanGlyph, ViewScopeGlyph,
   type GlyphProps, type IconSize,
 } from './design/glyphs';
+export { PullIcon, PushIcon } from './design/arrows';
 export {
   STATUSES, statusOf, statusLineOf, StatusIndicator,
   type StatusId, type StatusTone, type StatusLook, type StatusIndicatorProps,
 } from './design/status';
-export { Button, type ButtonProps, type ButtonVariant, type ButtonSize } from './design/Button';
+export { Button, type ButtonProps, type ButtonVariant, type ButtonSize, type ButtonBusyMotion } from './design/Button';
 export { Badge, type BadgeProps, type BadgeTone } from './design/Badge';
 export { RUNNER_NAMES, runnerName, RunnerBadge, type RunnerBadgeProps } from './design/runners';
 export { DEFAULT_MODEL_LABEL, modelLabel, modelShortLabel, effortLabel } from './design/assignment';

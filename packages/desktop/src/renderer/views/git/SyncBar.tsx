@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { ArrowDownToLine, ArrowUpFromLine, RefreshCw } from 'lucide-react';
-import { Button } from '@ordewell/ui/design';
+import { RefreshCw } from 'lucide-react';
+import { Button, PullIcon, PushIcon } from '@ordewell/ui/design';
 import type { SyncKind } from './gitStore';
 import '../sidebarKit.css';
 
@@ -47,9 +47,11 @@ export function pushBlocked(state: SyncState): string | undefined {
 
 /**
  * `running` is the action git is doing now, whoever started it (the palette's
- * Fetch included); it turns that button's icon. A press also holds all three
- * from the click until its action ends, since Pull and Push ask first and
- * nothing is running while the question is open.
+ * Fetch included); it moves that button's icon. Fetch's arrows turn; Pull's and
+ * Push's glide along their own way, since a turned arrow points backwards half
+ * the time. A press also holds all three from the click until its action ends,
+ * since Pull and Push ask first and nothing is running while the question is
+ * open.
  */
 export function SyncBar({ state, actions, label, running }: { state: SyncState; actions: SyncActions; label: string; running?: SyncKind }): JSX.Element {
   const [pressed, setPressed] = useState(false);
@@ -74,8 +76,8 @@ export function SyncBar({ state, actions, label, running }: { state: SyncState; 
       )}
       <div className="sync-actions">
         <Button size="sm" icon={RefreshCw} busy={running === 'fetch'} disabled={busy || reading || fetchBlocked !== undefined} title={fetchBlocked ?? 'Fetch from the remote'} onClick={() => run('fetch')}>Fetch</Button>
-        <Button size="sm" icon={ArrowDownToLine} busy={running === 'pull'} disabled={busy || reading || pull !== undefined} title={pull ?? 'Pull'} onClick={() => run('pull')}>Pull</Button>
-        <Button size="sm" icon={ArrowUpFromLine} busy={running === 'push'} disabled={busy || reading || push !== undefined} title={push ?? 'Push'} onClick={() => run('push')}>Push</Button>
+        <Button size="sm" icon={PullIcon} busy={running === 'pull'} busyMotion="glide" disabled={busy || reading || pull !== undefined} title={pull ?? 'Pull'} onClick={() => run('pull')}>Pull</Button>
+        <Button size="sm" icon={PushIcon} busy={running === 'push'} busyMotion="glide" disabled={busy || reading || push !== undefined} title={push ?? 'Push'} onClick={() => run('push')}>Push</Button>
       </div>
       {why.length > 0 && <p className="sync-why">{why.join(' ')}</p>}
     </div>
