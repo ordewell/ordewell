@@ -1093,10 +1093,20 @@ left as it was:
     History is showing keeps the selected background on Branches. A run or
     task link beside a branch or worktree is drawn in the link colour.
   - *History:* commits down the sidebar, two lines a row: the subject, then
-    its branch and tag chips and the short sha, author and age, with the
-    commit graph's lanes drawn small beside them. The HEAD chip is left out,
-    since the checkout's own chip says it. The full sha and the chips are in
-    the row's tooltip. Its head names whose history it is: a "History of"
+    one ref chip and the age, author and short sha (in that order, so the
+    sha is what an ellipsis cuts), with the commit graph's lanes drawn small
+    beside them. The chip is the first of the commit's refs in the order
+    checked-out branch, local branch, Ordewell branch, remote branch, tag; a
+    local branch and its remote-tracking ref at the commit are that one chip,
+    marked with a small cloud, and the other refs are a `+N` beside it. The
+    chip shows at least 64 px of its name or all of it (O7). The HEAD chip is
+    left out, since the checkout's own chip says it. The full sha and every
+    ref name are in the row's tooltip, and the row's name to a screen reader
+    is the short sha, subject, author, age and ref names. Lanes are neutral
+    (a muted stroke, the first lane a step stronger), never a status or area
+    colour; the lane step narrows from 10 to 8 px beyond six lanes, and lanes
+    still cut off by their third of the row fade out and are described to a
+    screen reader. The empty history is one line, "No commits yet". Its head names whose history it is: a "History of"
     picker (your checkout, or any local, Ordewell or remote branch), and,
     while a branch is browsed, a ↶ "Show your checkout’s history" button and
     a line saying the checkout stays where it is ("Browsing only: your

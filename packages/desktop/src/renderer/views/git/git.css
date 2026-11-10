@@ -83,30 +83,21 @@
 .git-file-dir { flex: 1 1 0; color: var(--ow-fg-secondary); font: var(--ow-type-small); }
 
 /*
- * Lane colours cycle through eight of the design's own colours (lanes.ts
- * LANE_COLORS), so a lane follows the theme: no hex lives here (checklist C5).
+ * Lanes are drawn in neutrals, never in a status or area colour: those mean a
+ * state or a place elsewhere (design.md, Visual language). The first lane, the
+ * history's own first-parent line, is a step stronger than the rest; the other
+ * lanes tell apart by where they run, not by hue (lanes.ts LANE_COLORS still
+ * hands every lane an index, and only index 0 is set apart).
  */
-.git-lanes {
-  --git-lane-0: var(--ow-status-running);
-  --git-lane-1: var(--ow-status-blocked);
-  --git-lane-2: var(--ow-status-passed);
-  --git-lane-3: var(--ow-status-merge);
-  --git-lane-4: var(--ow-status-attention);
-  --git-lane-5: var(--ow-accent);
-  --git-lane-6: var(--ow-area-sessions);
-  --git-lane-7: var(--ow-status-idle);
-}
-.git-lane-0 { stroke: var(--git-lane-0); fill: var(--git-lane-0); }
-.git-lane-1 { stroke: var(--git-lane-1); fill: var(--git-lane-1); }
-.git-lane-2 { stroke: var(--git-lane-2); fill: var(--git-lane-2); }
-.git-lane-3 { stroke: var(--git-lane-3); fill: var(--git-lane-3); }
-.git-lane-4 { stroke: var(--git-lane-4); fill: var(--git-lane-4); }
-.git-lane-5 { stroke: var(--git-lane-5); fill: var(--git-lane-5); }
-.git-lane-6 { stroke: var(--git-lane-6); fill: var(--git-lane-6); }
-.git-lane-7 { stroke: var(--git-lane-7); fill: var(--git-lane-7); }
-.git-lanes path { fill: none; stroke-width: 2; }
-.git-lanes circle { stroke-width: 2; }
-.git-lanes .git-merge { fill: var(--ow-bg); }
+.git-lanes { --git-lane: var(--ow-fg-muted); --git-lane-first: var(--ow-fg-secondary); --git-lane-node: var(--ow-bg); }
+.git-lanes path, .git-lanes circle { stroke: var(--git-lane); fill: none; stroke-width: 1.5; }
+.git-lanes circle { fill: var(--git-lane); stroke-width: 2; }
+.git-lanes .git-lane-0 { stroke: var(--git-lane-first); stroke-width: 2; }
+.git-lanes circle.git-lane-0 { fill: var(--git-lane-first); }
+/* A merge is a ring: its hole is the row's own background, so it reads on a hovered or selected row too. */
+.git-lanes circle.git-merge { fill: var(--git-lane-node); }
+.git-hrow:hover .git-lanes { --git-lane-node: var(--ow-bg-hover); }
+.git-hrow[aria-current='true'] .git-lanes { --git-lane-node: var(--ow-bg-selected); }
 
 /* The sidebar's two views. One narrow switch, as the plan graph's density is: the pressed half is the view shown. */
 .git-mode { display: flex; margin: 0 var(--ow-space-3); border: 1px solid var(--ow-border-widget); border-radius: var(--ow-radius-sm); overflow: hidden; }
@@ -131,21 +122,27 @@
  * The sidebar's history: a row is two lines, --ow-row-double, the lanes' own
  * row (HistoryList SIDE_LANES), so a lane runs on unbroken. The subject has the
  * first line to itself; refs, short sha, author and age share the second, the
- * refs giving way first. Lanes past a third of the sidebar are cut off, never
- * the text; each line ends in an ellipsis, its full text in the row's tooltip.
+ * ref chip giving way first. Lanes past a third of the sidebar are cut off, never
+ * the text, and fade out to say the graph goes on; each line ends in an ellipsis,
+ * its full text in the row's tooltip.
  */
 .git-history { display: flex; flex-direction: column; min-width: 0; }
 .git-history-state { display: flex; flex-direction: column; align-items: flex-start; gap: var(--ow-space-2); padding: 0 var(--ow-space-3) var(--ow-space-2); }
 .git-hlist { margin: 0; padding: 0; list-style: none; }
-.git-hrow { display: flex; align-items: center; gap: var(--ow-space-1); width: 100%; height: var(--ow-row-double); padding: 0 var(--ow-space-2) 0 var(--ow-space-2); border: 0; background: transparent; color: var(--ow-fg); font: var(--ow-type-body); text-align: left; cursor: pointer; }
+.git-hrow { display: flex; align-items: center; gap: var(--ow-space-1); width: 100%; height: var(--ow-row-double); padding: 0 var(--ow-space-2) 0 var(--ow-space-3); border: 0; background: transparent; color: var(--ow-fg); font: var(--ow-type-body); text-align: left; cursor: pointer; }
 .git-hrow:hover { background: var(--ow-bg-hover); }
 .git-hrow:focus-visible { outline: 1px solid var(--ow-focus-ring); outline-offset: -1px; }
 .git-hrow[aria-current='true'] { background: var(--ow-bg-selected); }
-.git-hrow .git-lanes { max-width: 33%; }
+.git-hrow .git-lanes { flex: none; max-width: 33%; }
+.git-hlist-clipped .git-lanes { mask-image: linear-gradient(to right, black calc(100% - 12px), transparent); }
 .git-hrow-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
 .git-hrow-subject { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .git-hrow-meta { display: flex; align-items: center; gap: var(--ow-space-1); min-width: 0; color: var(--ow-fg-secondary); font: var(--ow-type-code-small); }
 .git-hrow-refs { display: inline-flex; gap: var(--ow-space-half); flex: 0 1 auto; min-width: 0; max-width: 60%; overflow: hidden; }
+/* One chip, at least 64 px of its name or all of it (design.md O7); the +N beside it never shrinks. */
+.git-hrow-refs .git-chip { min-width: min(64px, calc(var(--chars, 8) * 1ch + 10px)); }
+.git-hrow-refs .git-chip-more { flex: none; min-width: 0; color: var(--ow-fg-secondary); }
+.git-chip-mark { flex: none; margin-inline-start: var(--ow-space-half); vertical-align: -1px; }
 .git-hrow-info { flex: 1 1 auto; min-width: 4ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The checked-out branch's chip is set apart by its weight and a stronger border, as its row is in the branch list. */
 .git-hrow .git-chip-current { border-color: var(--ow-fg-secondary); }

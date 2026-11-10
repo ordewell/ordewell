@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Branches, BranchInfo } from '../gitData';
 import {
-  ago, branchTree, commitDiffTabId, commitWhen, commitsTabId, isOrdewellRef, landedTaskOf, landingSubject, parseCommitDiffTabId, parseCommitsTabId, plural, refChips, repoDisplay,
+  ago, branchTree, commitDiffTabId, commitWhen, commitsTabId, isOrdewellRef, landedTaskOf, landingSubject, parseCommitDiffTabId, parseCommitsTabId, plural, refChips, repoDisplay, summarizeRefs,
   runMark, splitUpstream, trackMark,
 } from '../gitModel';
 
@@ -82,6 +82,30 @@ describe('refChips', () => {
 
   it('reads every name as a tag while the branch list is not known, but still marks Ordewell’s', () => {
     expect(refChips(['main', 'ordewell/r7/t3'], undefined).map((c) => c.kind)).toEqual(['ordewell', 'tag']);
+  });
+});
+
+describe('summarizeRefs', () => {
+  const sum = (refs: string[]) => summarizeRefs(refChips(refs, BRANCHES));
+
+  it('leads with the checked-out branch, then counts the rest and names them all but HEAD', () => {
+    const s = sum(['HEAD', 'feature', 'main', 'v1.0']);
+    expect(s.lead?.text).toBe('main');
+    expect(s.more).toBe(2);
+    expect(s.names).toEqual(['feature', 'main', 'v1.0']);
+  });
+
+  it('folds a remote-tracking ref into the local branch of its name, and leaves another remote alone', () => {
+    const folded = sum(['main', 'origin/main']);
+    expect(folded.lead).toMatchObject({ text: 'main', tracked: 'origin/main' });
+    expect(folded.more).toBe(0);
+    expect(sum(['feature', 'origin/main']).more).toBe(1);
+    expect(sum(['origin/main']).lead?.tracked).toBeUndefined();
+  });
+
+  it('leads with Ordewell’s branch before a remote or a tag, and with nothing when there is no ref', () => {
+    expect(sum(['v1.0', 'origin/main', 'ordewell/r7/integration']).lead?.kind).toBe('ordewell');
+    expect(sum([])).toEqual({ lead: undefined, more: 0, names: [] });
   });
 });
 

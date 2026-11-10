@@ -1,3 +1,5 @@
+import type { CSSProperties } from 'react';
+import { Cloud } from 'lucide-react';
 import type { RefChip } from './gitModel';
 import type { GraphRow } from './lanes';
 
@@ -40,7 +42,15 @@ export function chipTitle(chip: RefChip): string {
   return chip.kind === 'head' ? 'HEAD: your checkout' : `${chip.text}: ${chip.kind === 'remote' ? 'remote branch' : chip.kind}`;
 }
 
-export function Chip({ chip }: { chip: RefChip }): JSX.Element {
+export function Chip({ chip, tracked }: { chip: RefChip; tracked?: string }): JSX.Element {
   const classes = ['git-chip', `git-chip-${chip.kind}`, chip.current ? 'git-chip-current' : ''].filter(Boolean).join(' ');
-  return <span className={classes} title={chipTitle(chip)}>{chip.kind === 'ordewell' ? `Ordewell · ${chip.text}` : chip.text}</span>;
+  const text = chip.kind === 'ordewell' ? `Ordewell · ${chip.text}` : chip.text;
+  // --chars lets the sidebar's 64 px floor give way to a name shorter than it, so "main" is not padded out to a pill.
+  const style = { '--chars': text.length + (tracked ? 2 : 0) } as CSSProperties;
+  return (
+    <span className={classes} style={style} title={tracked ? `${chipTitle(chip)}\nAlso on ${tracked}` : chipTitle(chip)}>
+      {text}
+      {tracked && <Cloud className="git-chip-mark" size={10} strokeWidth={1.5} aria-hidden="true" />}
+    </span>
+  );
 }
