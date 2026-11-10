@@ -20,6 +20,11 @@
  * planner of its own, so a start the adapter ended (a subagent got past what
  * withholds it) cannot hide the attempts after it.
  *
+ * A planner with no file-read tool of its own (Cline's) reads through
+ * Ordewell's run_command, so the probe's stub answers a plain read of the
+ * marker with its content, still recording the call; every other call keeps
+ * the stub. It refuses to run on a packages/core/dist older than core's sources.
+ *
  * Attempts, per runner (each prints PASS or FAIL; any FAIL exits 1):
  *   control      the planner reads a workspace file itself and quotes it, so
  *                a refusal below is the agent's, not a model that never ran
@@ -46,8 +51,14 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { runCommandStub, staleCore } from './acp-subagent-probe-lib.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const stale = staleCore(path.join(here, '../../packages/core/dist/index.mjs'), path.join(here, '../../packages/core/src'));
+if (stale) {
+  console.error(`Rebuild core first: npm run build -w packages/core (${stale})`);
+  process.exit(2);
+}
 const core = await import(pathToFileURL(path.join(here, '../../packages/core/dist/index.mjs')).href).catch((err) => {
   console.error(`Build core first: npm run build -w packages/core (${err.message})`);
   process.exit(2);
@@ -243,13 +254,13 @@ async function probe(runner, probeMcp) {
     return;
   }
   const ordewellCalls = [];
-  const record = (tool) => async () => {
+  const record = (tool, answer = () => 'The probe records this call and does nothing else.') => async (args) => {
     ordewellCalls.push(tool);
-    return { text: 'The probe records this call and does nothing else.' };
+    return { text: answer(args) };
   };
   const server = new core.OrdewellMcpServer();
   const credential = await server.issuePlannerToken({ sessionId: `acp-subagent-probe-${runner}-${nonce}` }, {
-    listRunners: record('list_runners'), listModels: record('list_models'), runCommand: record('run_command'),
+    listRunners: record('list_runners'), listModels: record('list_models'), runCommand: record('run_command', (args) => runCommandStub(args, workspace, path.join(workspace, 'notes', 'marker.txt'))),
     fetch: record('fetch'), webSearch: record('web_search'), taskQuery: record('task_query'), submitPlan: record('submit_plan'),
   });
   const mcp = core.mcpClientConfig(credential);

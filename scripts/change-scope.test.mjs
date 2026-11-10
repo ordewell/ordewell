@@ -420,6 +420,8 @@ describe('a path outside the workspaces that only some checks read', () => {
     ['bench/live/host-driver.mjs', {}, {}, []],
     ['bench/live/opencode-research-agent-probe.mjs', {}, {}, []],
     ['bench/live/acp-subagent-probe.mjs', {}, {}, []],
+    ['bench/live/acp-subagent-probe-lib.mjs', {}, {}, ['bench', 'harness']],
+    ['bench/live/acp-subagent-probe.test.mjs', {}, {}, ['bench', 'harness']],
     ['bench/containers/verdict.mjs', {}, {}, ['bench', 'engine', 'harness']],
     ['bench/lab/lab.mjs', {}, {}, ['bench', 'harness']],
     ['bench/planner-eval/run.mjs', {}, {}, ['bench', 'harness']],
