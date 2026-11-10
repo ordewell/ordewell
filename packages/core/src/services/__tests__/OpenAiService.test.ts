@@ -512,6 +512,24 @@ describe('OpenAiService execution tools (ADR-0029)', () => {
     expect(turn.researchLog[0]).toMatchObject({ tool: 'agent_tool', toolLabel: 'post', success: true, result: 'Posted board:root:E1.' });
   });
 
+  it('declares `record` to every planner and answers it through the offered handler (ADR-0067)', async () => {
+    const recordCall = { entries: [{ kind: 'decision', text: 'Use v2', why: 'v1 is deprecated' }] };
+    createSpy
+      .mockReturnValueOnce(streamOf([{ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call-1', function: { name: 'record', arguments: JSON.stringify(recordCall) } }] }, finish_reason: 'tool_calls' }] }]))
+      .mockReturnValueOnce(streamOf([{ choices: [{ delta: { content: 'Recorded.' }, finish_reason: 'stop' }] }]));
+    const record = vi.fn(async () => ({ text: '{"ok":true,"added":[{"id":"D1","kind":"decision"}]}' }));
+
+    const turn = await new OpenAiService(cfg({ researchMaxSteps: 10 } as Partial<IConfig>)).startConversation({
+      goal: 'use v2', runners: ['claude-code'], modelsByRunner: {}, fs: fakeFileSystem(), onProgress: () => {},
+      plannerTools: { sessionId: 's1', handler: { record } },
+    });
+
+    expect(toolNames(0)).toContain('record');
+    expect(toolNames(0)).not.toContain('post');
+    expect(record).toHaveBeenCalledWith(recordCall, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(turn.researchLog[0]).toMatchObject({ tool: 'agent_tool', toolLabel: 'record', success: true });
+  });
+
   it('declares `post` to a subplanner, and to no flat planner', async () => {
     createSpy.mockImplementation(() => streamOf([{ choices: [{ delta: { content: 'Hello.' }, finish_reason: 'stop' }] }]));
     const start = (plannerTools: { sessionId: string; handler: object; subplanner?: boolean }) => new OpenAiService(cfg({ researchMaxSteps: 10 } as Partial<IConfig>)).startConversation({

@@ -5,6 +5,7 @@ import { TASK_LOG_KINDS } from '../taskLogRead';
 import type { ToolOutcome } from '../../interfaces/IFileSystem';
 import { HANDOFF_LIMITS } from '../../models/Handoff';
 import { ONE_LINE } from '../../models/lineBreaks';
+import { DECISION_RECORD_KINDS } from '../../models/Task';
 import { BOARD_LIMITS, BOARD_REF, BOARD_TYPES, TASK_ENTRY_TYPES, type BoardEntryType } from '../../models/Board';
 
 /**
@@ -250,6 +251,16 @@ const taskDiffInput = z.object({
   since: z.number().int().min(0).optional().describe('A previous nextOffset, in characters of this diff or file list.'),
 });
 
+// ADR-0067: bounded per call and per entry, since the whole record rides every fresh context.
+const recordInput = z.object({
+  entries: z.array(z.object({
+    kind: z.enum(DECISION_RECORD_KINDS),
+    text: z.string().max(600),
+    why: z.string().max(400).optional(),
+    supersedes: z.string().optional().describe('The id of the entry this one replaces, as Q1.'),
+  })).min(1).max(20).describe('One batch, whole or not at all.'),
+});
+
 const runPlanInput = z.object({});
 
 const oneTaskInput = z.object({ task: taskRef });
@@ -313,6 +324,7 @@ export type EditPlanArgs = z.infer<typeof editPlanInput>;
 export type TaskQueryArgs = z.infer<typeof taskQueryInput>;
 export type TaskOutputArgs = z.infer<typeof taskOutputInput>;
 export type TaskDiffArgs = z.infer<typeof taskDiffInput>;
+export type RecordArgs = z.infer<typeof recordInput>;
 export type RunPlanArgs = z.infer<typeof runPlanInput>;
 export type OneTaskArgs = z.infer<typeof oneTaskInput>;
 export type RetryTaskArgs = z.infer<typeof retryTaskInput>;
@@ -395,6 +407,8 @@ export interface PlannerToolHandler {
   taskQuery?: Run<TaskQueryArgs>;
   taskOutput?: Run<TaskOutputArgs>;
   taskDiff?: Run<TaskDiffArgs>;
+  /** The decision record (ADR-0067): it writes only the plan, as `edit_plan` does. */
+  record?: Run<RecordArgs>;
   runPlan?: Run<RunPlanArgs>;
   runTask?: Run<OneTaskArgs>;
   stopTask?: Run<OneTaskArgs>;
@@ -761,6 +775,14 @@ export const PLANNER_EXECUTION_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
     runScriptInput, (h) => h.runScript?.bind(h), PLANNER_EXECUTES),
 ];
 
+/**
+ * The planner's decision record (ADR-0067). Named, as `post` is, so an API
+ * planner lists it beside its reads: it writes only Ordewell's plan.
+ */
+export const PLANNER_RECORD = tool<PlannerToolHandler, typeof recordInput>('record',
+  'Add to the decision record, which outlives every compaction: a decision with its why, a constraint quoted verbatim from the user, a rejected option with its why, an open question. Record each as it is made; supersede an entry by its id once it no longer stands.',
+  recordInput, (h) => h.record?.bind(h), PLANNER_READ_ONLY);
+
 export const PLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
   tool('list_runners', 'List the runners enabled right now, and whether each takes a read-only task. Call it just before submit_plan.',
     listRunnersInput, (h) => h.listRunners?.bind(h), PLANNER_READ_ONLY),
@@ -776,6 +798,7 @@ export const PLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
     taskOutputInput, (h) => h.taskOutput?.bind(h), PLANNER_READ_ONLY),
   tool('task_diff', 'Read what a task changed since it started: file stats with repository paths, or a single file patch with path and repo. Paged by since/nextOffset. Shared runs without recorded changes report not available.',
     taskDiffInput, (h) => h.taskDiff?.bind(h), PLANNER_READ_ONLY),
+  PLANNER_RECORD,
   tool('run_command', `Run a shell command for research: git, gh, az, kubectl, the project's own tooling, anything you need to look at. Read-only commands run at once; others ask the user, once per command family; commands that write files never change anything. ${SEALED_RUNS} Use it instead of a shell of your own.`,
     runCommandInput, (h) => h.runCommand?.bind(h), PLANNER_READ_ONLY),
   // Fallbacks (ADR-0027): a runner's own fetch or search, where it has one, is

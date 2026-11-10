@@ -23,6 +23,8 @@ export type {
   AwaitingReason,
   ContextCheckpoint,
   ConversationMessage,
+  DecisionRecordEntry,
+  DecisionRecordKind,
   DiscoveredModel,
   LegacyPlanState,
   PlanState,
@@ -223,6 +225,8 @@ export {
 } from './services/SkillsService';
 export { globalDataDir, migrateOldConfigDir } from './utils/globalDataDir';
 export { writePrivateFile, ensurePrivateDir } from './utils/privateFile';
+// What a surface draws of a plan's decision record: the entries no later one supersedes (ADR-0067).
+export { live as standingRecord } from './services/decisionRecord';
 export { installMethod, isSea, seaRuntimeDir, seaVersion, upgradeCommand } from './utils/seaRuntime';
 export type { InstallMethod, SeaDeps, SeaModule } from './utils/seaRuntime';
 export type {

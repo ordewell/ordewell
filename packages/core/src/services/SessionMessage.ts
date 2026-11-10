@@ -186,6 +186,8 @@ export type SerializedPlan = {
   generatedAt: string;
   conversationHistory?: SerializedConversationMessage[];
   prdMarkdown?: string;
+  /** The planner's decision record, superseded entries included (ADR-0067): `standingRecord()` reads what stands. */
+  decisionRecord?: LegacyPlanState['decisionRecord'];
 };
 
 /** How a planner turn ended: the reply kind it settled on, a user stop, or a failure. */
@@ -696,6 +698,7 @@ export function serializePlan(plan: LegacyPlanState): SerializedPlan {
     ...(plan.plannerContextPause ? { plannerContextPause: plan.plannerContextPause } : {}),
     conversationHistory: surfaceConversation(plan.conversationHistory),
     prdMarkdown: plan.prdMarkdown,
+    ...(plan.decisionRecord?.length ? { decisionRecord: plan.decisionRecord } : {}),
   };
 }
 

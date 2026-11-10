@@ -665,6 +665,32 @@ export interface ContextCheckpoint {
   /** An index into the whole transcript, at or before the checkpoint entry itself. */
   keptFrom: number;
   trigger: 'manual' | 'auto';
+  /** How many decision record entries the checkpoint's seed restates (ADR-0067); absent when it restated none. */
+  record?: number;
+}
+
+/** What a decision record entry holds (ADR-0067): a choice, the user's own limit, a dropped option, or something still to settle. */
+export const DECISION_RECORD_KINDS = ['decision', 'constraint', 'rejected', 'question'] as const;
+export type DecisionRecordKind = typeof DECISION_RECORD_KINDS[number];
+
+/**
+ * One entry in the planner's decision record (ADR-0067). The record is only
+ * appended to: an entry that no longer stands is superseded by a later one
+ * naming it, so the record as it was at any transcript point is a prefix.
+ */
+export interface DecisionRecordEntry {
+  /** The kind's letter and its count within the kind: D1, C2, R1, Q3. */
+  id: string;
+  kind: DecisionRecordKind;
+  /** A constraint's is the user's words, verbatim. */
+  text: string;
+  /** Why a decision was taken or an option rejected. */
+  why?: string;
+  /** The id of the entry this one replaces; a decision superseding a question answers it. */
+  supersedes?: string;
+  /** The transcript index of the user message whose turn recorded it, so a rewind before it drops it. */
+  at: number;
+  timestamp: string;
 }
 
 /**
@@ -880,6 +906,8 @@ export interface LegacyPlanState {
   conversationHistory?: ConversationMessage[];
   /** The subplanner's native session, for a Continue to take up (ADR-0055 D17): `heard` is how much of the Model context it holds. Absent on a root plan. */
   plannerSession?: PlannerNativeSession & { heard: number };
+  /** What the planner recorded as decided, required, rejected and open, resent like the plan and seeding every checkpoint (ADR-0067). */
+  decisionRecord?: DecisionRecordEntry[];
   /** Full markdown PRD once written by the planner (PRD mode), also saved to .scratch/<slug>/PRD.md. */
   prdMarkdown?: string;
   /** Planner turn inputs no turn has answered yet (ADR-0029); a reload replays them. */

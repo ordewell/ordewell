@@ -292,7 +292,7 @@ const codeModeOff = [{ action: 'execute', resource: '*', effect: 'deny' }];
 const rules = (policy: Record<string, string>) => Object.entries(policy).map(([action, effect]) => ({ action, resource: '*', effect }));
 /** Ordewell's tools, each allowed by its exact name: a pattern would cover a server named `ordewell_<anything>` too. */
 const ordewellAllow = [
-  'list_runners', 'list_models', 'submit_plan', 'edit_plan', 'task_query', 'task_output', 'task_diff', 'run_command', 'fetch', 'web_search', 'load_skill',
+  'list_runners', 'list_models', 'submit_plan', 'edit_plan', 'task_query', 'task_output', 'task_diff', 'record', 'run_command', 'fetch', 'web_search', 'load_skill',
   'run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'skip_task', 'message_task', 'answer_approval', 'answer_checkpoint', 'merge_all', 'run_script',
 ].map((tool) => ({ action: `ordewell_${tool}`, resource: '*', effect: 'allow' }));
 const taskAllow = ['task_complete', 'checkpoint', 'read', 'apply_patch'].map((tool) => ({ action: `ordewell_${tool}`, resource: '*', effect: 'allow' }));

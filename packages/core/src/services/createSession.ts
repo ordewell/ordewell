@@ -926,6 +926,7 @@ export class Session {
     submitPlan: (tasks, turn) => this.submitPlanFromTool(tasks, turn),
     unread: () => this.subplanner !== undefined,
     editPlan: (ops, turn) => this.editPlanFromTool(ops, turn),
+    record: (entries, turn) => this.conversation.recordFromTool(entries, turn),
     tasks: () => this.store.planTasks,
     read: (signature, answer) => this.conversation.read(signature, answer),
     liveOutput: (taskId, opts) => this.orchestrator.getLiveOutput(taskId, opts),

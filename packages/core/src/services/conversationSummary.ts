@@ -39,7 +39,7 @@ export function currentPlanBlock(planLines: readonly string[] | null): string[] 
  * failure as an ordinary reply, so a reply without them is how a dead agent
  * is told apart from a summary before it can replace the transcript.
  */
-export function summaryRequest(planLines: readonly string[] | null): string {
+export function summaryRequest(planLines: readonly string[] | null, record: string | null = null): string {
   return [
     'The user asked to condense this planning conversation. Write a summary that will replace everything said so far, so the conversation can carry on from it alone.',
     HISTORY_KEEPS,
@@ -47,7 +47,20 @@ export function summaryRequest(planLines: readonly string[] | null): string {
     'Reply in plain prose or short lists. Do not emit task operations, plan JSON or task reads, and do not run tools — the tasks are not changing in this turn.',
     SUMMARY_TAGS,
     ...currentPlanBlock(planLines),
+    ...recordBeside(record),
   ].join('\n');
+}
+
+/**
+ * The decision record a summary is written beside (ADR-0067). The checkpoint
+ * restates it whole ahead of the summary, so the summary is told to leave it
+ * out and say where things stand: what it would paraphrase is already kept.
+ */
+export function recordBeside(record: string | null): string[] {
+  return record ? [
+    'The decision record below is restated whole beside your summary: do not repeat its entries. Say where things stand — what is in progress, what the planner was waiting on — and what else the record does not hold.',
+    record,
+  ] : [];
 }
 
 /** The last tagged block wins: a model may name the tag while introducing it. */
@@ -62,12 +75,14 @@ export function extractSummary(reply: string): string | null {
  * replayed to the model like any assistant message, so it tells the model
  * what the entry is as well as the user.
  */
-export function condensedNotice(summary: string, trigger: ContextCheckpoint['trigger'] = 'manual'): string {
+export function condensedNotice(summary: string, trigger: ContextCheckpoint['trigger'] = 'manual', record: string | null = null): string {
   return [
     trigger === 'manual'
       ? 'Conversation condensed: the summary below stands in for the earlier messages from here on, and the last two exchanges were kept as they were. The full conversation stays in the history. The task list is unchanged.'
       : 'Conversation condensed automatically to fit the model\'s context: the summary below stands in for the earlier messages from here on, and the most recent exchanges that fit were kept as they were. The full conversation stays in the history. Task and run state are the current plan\'s, not this summary\'s.',
     '',
+    // The seed of the next context (ADR-0067): the record as it was written, then the summary for the rest.
+    ...(record ? ['The decision record stands as written; the summary after it says where things are.', record, '', 'Where we are:'] : []),
     summary,
   ].join('\n');
 }
@@ -110,6 +125,13 @@ export function modelContext(transcript: readonly ConversationMessage[]): Conver
   const checkpoint = newestCheckpoint(transcript);
   const verbatim = (checkpoint ? transcript.slice(checkpoint.keptFrom) : transcript).filter((m) => m.kind !== 'compaction');
   return checkpoint ? [transcript[checkpoint.at], ...verbatim] : verbatim;
+}
+
+/** How many decision record entries the summary heading the model context restates (ADR-0067): none without a checkpoint. */
+export function seededRecord(transcript: readonly ConversationMessage[]): number {
+  const checkpoint = newestCheckpoint(transcript);
+  const record = checkpoint ? transcript[checkpoint.at].checkpoint?.record : undefined;
+  return typeof record === 'number' && Number.isInteger(record) && record > 0 ? record : 0;
 }
 
 /** Where the planner's context resumes verbatim: no new checkpoint may cut before it. */

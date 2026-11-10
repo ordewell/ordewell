@@ -1,9 +1,11 @@
-import { flattenTasks, type ConversationMessage, type LegacyPlanState, type ResearchLogEntry, type Task, type TaskStatus } from '../models/Task';
+import { flattenTasks, type ConversationMessage, type DecisionRecordEntry, type LegacyPlanState, type ResearchLogEntry, type Task, type TaskStatus } from '../models/Task';
 
 /** The dialogue record a fork carries — what {@link PlannerConversation.clone} returns. */
 export interface ForkedDialogue {
   conversationHistory: ConversationMessage[];
   researchLog: ResearchLogEntry[];
+  /** What the planner recorded in that dialogue (ADR-0067): a rewind keeps what came before its point. */
+  decisionRecord?: DecisionRecordEntry[];
 }
 
 /**
@@ -44,6 +46,7 @@ export function forkPlanState(plan: LegacyPlanState, tasks: readonly Task[], dia
     runners: [...plan.runners],
     conversationHistory: dialogue.conversationHistory,
     researchLog: dialogue.researchLog,
+    ...(dialogue.decisionRecord && dialogue.decisionRecord.length > 0 ? { decisionRecord: dialogue.decisionRecord } : {}),
     ...(plan.prdMarkdown !== undefined ? { prdMarkdown: plan.prdMarkdown } : {}),
     // The user's approval is of the tasks, which travel; without it a fork of an executed plan would count every task approved.
     // Only of the tasks that travel: an id left behind would approve whatever task the fork's planner later gives it (ADR-0029).
