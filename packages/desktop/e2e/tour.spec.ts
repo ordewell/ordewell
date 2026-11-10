@@ -1361,7 +1361,8 @@ test('the visual tour', async () => {
     await gitSide().getByRole('button', { name: LONG_BRANCH, exact: true }).click();
     await expect(gitSide().getByRole('list', { name: `History of ${LONG_BRANCH}`, exact: true })).toBeVisible({ timeout: 30_000 });
   };
-  const longRow = (): Locator => gitSide().getByRole('button', { name: `Commit ${longSha}: ${LONG_SUBJECT}`, exact: true });
+  // The row's name goes on past the subject (by its author, its age, its refs), so it is matched from the start, not whole.
+  const longRow = (): Locator => gitSide().getByRole('button', { name: new RegExp(`^Commit ${longSha}: ${LONG_SUBJECT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(, |$)`) });
 
   await state(win, 'git-branch-folders', 'Git Branches: slash-named branches folded under feature/, one name longer than the sidebar, and a remote', async () => {
     const origin = path.join(box.tmp, 'origin.git');
