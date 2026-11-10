@@ -20,8 +20,8 @@
 .mid { display: flex; min-width: 0; overflow: hidden; white-space: nowrap; }
 /*
  * The tail gives way only once the head is down to a few characters, so a narrow box clips the end instead of spilling
- * over its neighbour. The head keeps those few (3em, over design.md O7's floor for each part) because a path cut to its tail
- * alone no longer tells two folders apart; a long tail (pathTail keeps up to 40) would otherwise take the whole box.
+ * over its neighbour. The head keeps those few (3em: design.md O7 asks each part for 32px, which 2em, about 24-26px, does not give) because a path cut to its tail
+ * alone no longer tells two folders apart; a long tail (splitMiddle keeps a path's last segment, up to 40) would otherwise take the whole box.
  * The head's weight does the ordering: a tail left shrinking alone with a factor under 1 would take only that share of what overflows.
  */
 .mid-head { flex: 0 1000 auto; min-width: 3em; overflow: hidden; text-overflow: ellipsis; }

@@ -897,15 +897,16 @@ async function labelCheckControl(page: Page): Promise<Record<string, unknown>> {
     columns[0]!.append(cut);
     host.append(track);
     document.body.append(host);
-    // MiddleText's markup for a commit's file folder, with pathTail's 40-character tail: about 250px of tail in a 120px box.
+    // MiddleText's markup for a commit's file folder, as splitMiddle cuts it at its longest (a last segment of 40 characters, kept whole): about 250px of tail in a 120px box.
     const narrow = document.createElement('div');
     narrow.dataset.tourControl = 'middle';
     narrow.style.cssText = 'position:fixed;left:0;top:48px;z-index:2147483647;width:120px;display:flex;background:#fff;color:#000;font:12px sans-serif';
-    const folder = 'src/search/normalisation-of-composed-and-decomposed-unicode-forms';
+    const folder = 'src/search/normalisation-of-composed-unicode-forms';
+    const at = folder.lastIndexOf('/');
     const mid = document.createElement('span');
     mid.className = 'mid';
     mid.title = folder;
-    for (const [part, text] of [['mid-head', folder.slice(0, -40)], ['mid-tail', folder.slice(-40)]] as const) {
+    for (const [part, text] of [['mid-head', folder.slice(0, at)], ['mid-tail', folder.slice(at)]] as const) {
       const span = document.createElement('span');
       span.className = part;
       span.textContent = text;

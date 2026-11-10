@@ -4,7 +4,7 @@ import { Button, EmptyState, IconButton } from '@ordewell/ui/design';
 import type { FrameApi, Tab, Unregister } from '../../frame/api';
 import { messageOf } from '../../session/daemon';
 import { all } from '../Stub';
-import { MiddleText, Notice, pathTail } from '../sidebarKit';
+import { MiddleText, Notice } from '../sidebarKit';
 import { openRun } from './gitActions';
 import { readBranches, readCommit, readLog, type Branches, type CommitDetail, type CommitSummary } from './gitData';
 import { ago, commitDiffTabId, commitWhen, commitTabId, landedTaskOf, parseCommitTabId, parseCommitsTabId, refChips, shortSha, type LandedTask } from './gitModel';
@@ -107,7 +107,7 @@ function Detail({ api, repo, sha, summary, linked, close }: { api: FrameApi; rep
                     <button type="button" className="srow-main" title={file.path} aria-label={`${file.status} ${file.path}`} onClick={() => open(file.path, true)} onDoubleClick={() => open(file.path, false)}>
                       <span className={`sbadge sbadge-${file.status}`} aria-label={file.status}>{file.status}</span>
                       <span className="git-file-base">{base}</span>
-                      {dir && <MiddleText className="git-file-dir" text={dir} tail={pathTail(dir)} />}
+                      {dir && <MiddleText className="git-file-dir" text={dir} path />}
                     </button>
                     {file.added === null ? <span className="git-file-counts">binary</span> : (
                       <span className="git-file-counts"><span className="git-file-added">+{file.added}</span><span className="git-file-removed">−{file.removed ?? 0}</span></span>

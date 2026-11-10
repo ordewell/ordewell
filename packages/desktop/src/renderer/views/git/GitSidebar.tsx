@@ -6,7 +6,7 @@ import { useDisclosure } from '../../frame/store';
 import { all } from '../Stub';
 import { onCheckoutChange } from '../checkout/checkoutEvents';
 import { scopeStoreFor } from '../scope/scopeStore';
-import { LONG_LIST, MiddleText, Notice, SidebarGroup, pathTail } from '../sidebarKit';
+import { LONG_LIST, MiddleText, Notice, SidebarGroup } from '../sidebarKit';
 import {
   createBranch, deleteBranch, dropStash, fetchRepo, openRun, popStash, pullBranch, pushBranch, stashChanges, switchBranch, syncTarget,
   type GitContext,
@@ -150,7 +150,7 @@ function WorktreeRow({ api, tree, runs }: { api: FrameApi; tree: WorktreeInfo; r
     <li className="srow git-worktree">
       <span className="srow-main srow-plain git-worktree-main" title={tree.path}>
         <span className="git-worktree-name">{tree.main ? 'Your checkout' : tree.branch ?? 'detached'}</span>
-        <MiddleText className="git-worktree-path" text={tree.path} tail={pathTail(tree.path)} />
+        <MiddleText className="git-worktree-path" text={tree.path} path />
       </span>
       {tree.owner && <OwnerLink api={api} runs={runs} owner={tree.owner} />}
     </li>

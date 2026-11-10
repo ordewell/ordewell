@@ -12,27 +12,51 @@ import './sidebarKit.css';
 /** A list longer than this starts folded: a long section opens on demand. */
 export const LONG_LIST = 10;
 
+/** The longest tail a path keeps, so a very long file name still leaves its folders a head. */
+const PATH_TAIL_MAX = 40;
+/** A tail shorter than this is a stub ("-x"), not a name worth keeping. */
+const TAIL_STUB = 6;
+
 /**
- * A text that is shortened in the middle, so the end of a path or branch (the
- * part that tells one from the next) stays; the whole of it is the tooltip.
+ * Where a text is cut for MiddleText: the tail starts at a word or path boundary (after "-", "_", "." or a space, or at a "/"), so the end that tells one name from the next reads whole ("…query-strings", not "…uery-stri").
+ * It is the shortest boundary tail of at least `tail` characters and at most about 40% of the text, so the head keeps the room; a path keeps its last segment whole, up to PATH_TAIL_MAX, whatever the share.
+ * When no boundary fits (one long word, or a last segment longer than the budget) it keeps the longest boundary tail that does, then a plain cut of `tail` characters (a path's, of the budget).
+ * Returns undefined for a text short enough to show whole.
  */
-export function MiddleText({ text, tail = 12, className }: { text: string; tail?: number; className?: string }): JSX.Element {
-  const classes = ['mid', className].filter(Boolean).join(' ');
-  if (text.length <= tail + 6) return <span className={classes} title={text}><span className="mid-whole">{text}</span></span>;
-  return (
-    <span className={classes} title={text}>
-      <span className="mid-head">{text.slice(0, -tail)}</span>
-      <span className="mid-tail">{text.slice(-tail)}</span>
-    </span>
-  );
+export function splitMiddle(text: string, { tail = 12, path = false }: { tail?: number; path?: boolean } = {}): { head: string; tail: string } | undefined {
+  const n = text.length;
+  if (n <= tail + 6) return undefined;
+  const lastSegment = n - Math.max(0, text.lastIndexOf('/'));
+  const segment = path && lastSegment <= PATH_TAIL_MAX ? lastSegment : 0;
+  const budget = Math.max(Math.floor(n * 0.4), tail, segment);
+  const cuts: number[] = [];
+  for (let at = 1; at < n; at += 1) {
+    const char = text[at]!;
+    if (char === '/') cuts.push(at);
+    else if ('-_. '.includes(text[at - 1]!) && !'-_. '.includes(char)) cuts.push(at);
+  }
+  const fits = cuts.filter((at) => n - at <= budget);
+  const wanted = fits.filter((at) => n - at >= Math.max(tail, segment)).pop();
+  const longest = fits.find((at) => n - at >= TAIL_STUB);
+  const at = wanted ?? longest ?? n - (path ? Math.min(PATH_TAIL_MAX, budget) : tail);
+  return { head: text.slice(0, at), tail: text.slice(at) };
 }
 
 /**
- * The tail to keep of a path or a rename's "from …" line: its last segment and the slash before it, so the name that tells two paths apart is never what the ellipsis takes.
- * Bounded below by MiddleText's own default and above so a long name still leaves the head a few characters.
+ * A text that is shortened in the middle, so the end of a path or branch (the
+ * part that tells one from the next) stays; the whole of it is the tooltip.
+ * `tail` is the least of the end to keep; `path` marks a path, which keeps its last segment.
  */
-export function pathTail(path: string): number {
-  return Math.min(40, Math.max(12, path.length - path.lastIndexOf('/')));
+export function MiddleText({ text, tail = 12, path = false, className }: { text: string; tail?: number; path?: boolean; className?: string }): JSX.Element {
+  const classes = ['mid', className].filter(Boolean).join(' ');
+  const split = splitMiddle(text, { tail, path });
+  if (!split) return <span className={classes} title={text}><span className="mid-whole">{text}</span></span>;
+  return (
+    <span className={classes} title={text}>
+      <span className="mid-head">{split.head}</span>
+      <span className="mid-tail">{split.tail}</span>
+    </span>
+  );
 }
 
 /**
