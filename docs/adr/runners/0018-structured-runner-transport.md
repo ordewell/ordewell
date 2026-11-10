@@ -78,7 +78,13 @@ and completion evidence.
   mid-turn and do **not** change task status: "waiting for approval" is derived
   from the task's pending approvals. The idle timer keeps running during a turn
   and is paused while the task waits, on input, a checkpoint or an open
-  approval, so a long approval wait does not also read as idle. If a queued message is delivered as the
+  approval, so a long approval wait does not also read as idle, and while a
+  tool call is in flight, from its `tool_call` until its `tool_result` or its
+  turn's end, so a runner waiting on a long command it started is not flagged
+  quiet while one with no call in flight and no output still is. Each flag in
+  an attempt doubles the silence the next one needs, and a new attempt starts
+  over, so a long run that prints now and then does not wake its reader again
+  after every line. If a queued message is delivered as the
   turn ends, or the runner still owes one it was handed (M1), the task stays
   `in_progress` with no flicker.
 - **The completion contract lives in the runner's instructions (C2).** A
@@ -526,3 +532,4 @@ transport is retained for take-over.
 - 2026-10-31 — K1: a continue waits on a task's dependencies and merge gate as a retry does.
 - 2026-10-31 — U1: an edit making a paused task manual ends its pause as it lands; Execute, a planner's `run_plan` and signing off the review start nothing under a hold and take no resume back, and the reset gives back the plan's run.
 - 2026-11-04 — S3: GitHub Copilot CLI runs through the ACP connector; C2: an ACP runner takes the contract through its own channel or a first-prompt preamble (ADR-0060).
+- 2026-11-10 — W1: a tool call in flight pauses the idle timer until its result or its turn's end; each idle flag in an attempt doubles the silence the next one needs.
