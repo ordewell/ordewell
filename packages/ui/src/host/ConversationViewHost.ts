@@ -1,7 +1,7 @@
 import type { ApprovalRequestMessage, LegacyPlanState, SurfacePlan, SessionMessage } from '@ordewell/core';
 // The browser-safe entry: a host that runs in a renderer (the desktop app) folds the same view.
 import {
-  drainNext, EMPTY_CONVERSATION, EMPTY_HOLD, followTurn, fromTranscript, holdPrompt, NO_TURN, reconcileApprovals, stopTurn, takeAt, unsendAll, unsendLatest,
+  aheadOfDraft, EMPTY_CONVERSATION, EMPTY_HOLD, followTurn, fromTranscript, holdPrompt, NO_TURN, reconcileApprovals, stopTurn, unsendAll, unsendLatest,
   type ConversationInput, type ConversationView, type DisplayBlock, type GatedConversation, type LocalEntry, type PromptHold,
   type TurnGate,
 } from '@ordewell/core/plan-utils';
@@ -77,38 +77,42 @@ export class ConversationViewHost {
   }
 
   /**
-   * The host decides what comes back, not the webview: a prompt the turn's end
-   * drained in the meantime has already gone, and must not also reappear.
+   * Takes back the newest held prompt. It refills the composer only when the
+   * composer was empty; over a draft it is discarded, so taking it back never
+   * buries what is being typed. The host decides what goes, not the webview: a
+   * prompt the turn's end sent in the meantime has already gone, and must not
+   * also reappear.
    */
-  unsendPrompt(): void {
+  unsendPrompt(toComposer: boolean): void {
     const latest = unsendLatest(this.held);
     if (!latest) return;
-    this.post({ type: 'promptUnsent', text: latest.text });
+    if (toComposer) this.post({ type: 'promptUnsent', text: latest.text });
     this.showHeld(latest.rest);
   }
 
   /**
-   * The oldest queued prompt, taken out of the hold for the caller to send.
-   * Asked by whoever owns the host's turn once it has fully ended — the
-   * `planner_turn_ended` event comes while the turn is still unwinding, too
-   * early to start the next one.
+   * Everything held, as the one message the next turn answers: the prompts
+   * glued in the order typed. Asked by whoever owns the host's turn once it
+   * has fully ended — the `planner_turn_ended` event comes while the turn is
+   * still unwinding, too early to start the next one.
    */
   nextPrompt(): string | undefined {
-    const next = drainNext(this.held);
-    if (!next) return undefined;
-    this.showHeld(next.rest);
-    return next.text;
+    const all = unsendAll(this.held);
+    if (!all) return undefined;
+    this.showHeld(all.rest);
+    return all.text;
   }
 
   /**
-   * Take one held prompt out by position for a "Send now" on its row: the
-   * caller force sends it, and the rest stay held in the order they were typed.
+   * What a Send now sends (ADR-0017 Q2): everything held, glued in the order
+   * typed, with `draft` — the composer's text, which may be empty — last. The
+   * hold empties, so nothing is left to follow the forced turn.
    */
-  takePrompt(index: number): string | undefined {
-    const taken = takeAt(this.held, index);
-    if (!taken) return undefined;
-    this.showHeld(taken.rest);
-    return taken.text;
+  takeAll(draft: string): string {
+    const all = unsendAll(this.held);
+    if (!all) return draft;
+    this.showHeld(all.rest);
+    return aheadOfDraft(all.text, draft);
   }
 
   /**
