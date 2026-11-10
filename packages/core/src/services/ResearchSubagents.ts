@@ -250,3 +250,22 @@ export async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (i
   }
   return results;
 }
+
+/**
+ * One read a research agent outside this loop asked for (ADR-0066): the
+ * OpenCode 2.x agent on the user's login, served over a research token.
+ * The same confinement and the same limits as {@link runResearchAgent}'s own
+ * calls: only {@link CONFINED_RESEARCH_TOOLS}, every path inside the
+ * workspace root, nothing that could ask anyone, read_file capped at 2000
+ * lines unless asked otherwise, and output cut to the subagent's limit.
+ */
+export async function confinedRead(name: string, args: Record<string, unknown>, fs: IFileSystem, signal?: AbortSignal): Promise<ToolOutcome> {
+  if (!CONFINED_RESEARCH_TOOLS.has(name)) return refused(`${name} is not available. You are a read-only research subagent: only ${[...CONFINED_RESEARCH_TOOLS].join(', ')}.`);
+  const call = { ...args };
+  if (name === 'read_file' && !('maxBytes' in call) && !('limit' in call)) call.limit = 2000;
+  const res = await executeTool(name, call, nonPromptingFs(fs), undefined, signal);
+  const max = SUBAGENT_LIMITS.toolOutputMaxChars;
+  return res.output.length > max
+    ? { ...res, output: res.output.slice(0, max) + `\n[... truncated to ${max} chars, total ${res.output.length}]`, truncated: true }
+    : res;
+}

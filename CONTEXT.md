@@ -508,13 +508,18 @@ research task and the planner's own agents by how long a lookup will take —
 the planner cannot know that before it starts; choose by what the result is.
 
 **Research subagent** (`spawn_research_agent`, `runResearchAgent`; ADR-0005,
-ADR-0066) — one stateless read-only agent Ordewell runs on an API provider's
-chat for a planner's orientation, confined to the workspace read tools, which
-returns only its digest within the planner's turn. An API planner starts one
-wherever its service can run subagents. An OpenCode planner, whose own agents
-are denied, is served it over Ordewell's MCP server where its workspace sets
-`ORDEWELL_RESEARCH_AGENT_MODEL=<provider>:<model>`; Claude Code and Codex use
-their own subagents, and an ACP planner has none.
+ADR-0066) — one stateless read-only agent Ordewell runs for a planner's
+orientation, confined to the workspace read tools, which returns only its
+digest within the planner's turn. An API planner starts one on its provider's
+chat wherever its service can run subagents. An OpenCode planner, whose own
+agents are denied, is served it over Ordewell's MCP server: by default on
+OpenCode 2.x as the **login research agent**, a session in a locked-down
+`opencode serve` of Ordewell's on the user's own login and the planner's
+model, checked before use and unavailable for the rest of the planner session
+once that check or its first call fails; or, where the workspace sets
+`ORDEWELL_RESEARCH_AGENT_MODEL=<provider>:<model>`, on that API provider
+instead. Claude Code and Codex use their own subagents, and an ACP planner has
+none.
 *Avoid:* "research task" — that is a task in the plan, whose handoff a later
 turn reads; "scout" — the OpenCode agent this replaced.
 
