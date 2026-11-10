@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useReducer, useRef } from 'react';
 import { ConversationBlocks } from '../chat/components/ChatMessage';
 import { OpenPatchContext } from '../chat/openPatch';
 import { useFollowOutput } from '../chat/followOutput';
@@ -10,7 +10,7 @@ import { runnerName } from '../design/runners';
 import { taskCommand, useRunnerCommands } from '../chat/components/RunnerCommands';
 import ElapsedTime from '../chat/components/ElapsedTime';
 import AccountLimitRows from '../chat/components/AccountLimitRows';
-import PendingMessages, { QUEUE_TITLE, SendKeyHint, isSendNowKey, type PendingMessage } from '../chat/components/PendingMessages';
+import PendingMessages, { QUEUE_TITLE, SEND_NOW_KEY, SendKeyHint, isSendNowKey, type PendingMessage } from '../chat/components/PendingMessages';
 import type { AccountLimitSnapshot, TaskActivity, TaskLogHeaderUsage, TaskLogHeaderView } from '@ordewell/core';
 
 /**
@@ -83,6 +83,13 @@ export default function TaskLogApp({ composerLabel }: {
   const commands = child ? [] : header?.commands ?? [];
   const completion = useRunnerCommands(text, setText, commands);
   const canSend = text.trim().length > 0;
+  // Esc takes back one message at a time, and the row only goes when the status
+  // says so: an id waiting on that is skipped by the next Esc. The value is the
+  // text put in the composer for it, kept to undo the fill if it was handed over.
+  const takingBack = useRef(new Map<string, string | null>());
+  const [, redraw] = useReducer((n: number) => n + 1, 0);
+  const composer = useRef(text);
+  composer.current = text;
 
   useEffect(() => {
     const handler = (msg: HostToTaskLog) => {
@@ -97,6 +104,7 @@ export default function TaskLogApp({ composerLabel }: {
             order: msg.blocks.map((b) => b.id),
             changed: msg.blocks,
           }));
+          takingBack.current.clear();
           setStatus(msg.status);
           setError('');
           break;
@@ -150,23 +158,58 @@ export default function TaskLogApp({ composerLabel }: {
   };
 
   const working = header?.working === true && state?.kind !== 'done' && state?.kind !== 'failed';
+  // What a person queued and the runner can still be made to drop; core glues these into one forced message (ADR-0023).
+  const removable = useMemo(
+    () => child ? [] : (status?.queued ?? []).filter((m) => !m.handedOver && !m.forced && !m.from),
+    [status?.queued, child],
+  );
   // Force send (ADR-0023, F1) needs a turn to interrupt; a finished task's box continues it instead.
-  const canSendNow = !child && working && canSend && !continues && !(commands.length > 0 && text.trim().startsWith('/'));
+  // An empty box sends the queue, so it needs something removable to send.
+  const canSendNow = !child && working && !continues && (canSend ? !(commands.length > 0 && text.trim().startsWith('/')) : removable.length > 0);
 
   const sendNow = (): void => {
     const value = text.trim();
-    if (!value) return;
-    bridge.post({ type: 'sendTaskMessageNow', text: value });
-    setText('');
+    if (value) {
+      bridge.post({ type: 'sendTaskMessageNow', text: value });
+      setText('');
+    } else if (removable[0]) {
+      bridge.post({ type: 'sendQueuedTaskMessageNow', id: removable[0].id });
+    }
   };
+
+  // The newest one a person queued that is not already being taken back.
+  const newestToTakeBack = () => [...removable].reverse().find((m) => !takingBack.current.has(m.id));
+  const newestRemovable = newestToTakeBack();
+
+  const takeBackNewest = (): void => {
+    // Read afresh: a second Esc can land before this render has seen the first.
+    const target = newestToTakeBack();
+    if (!target) return;
+    const fills = !composer.current.trim();
+    takingBack.current.set(target.id, fills ? target.text : null);
+    if (fills) { composer.current = target.text; setText(target.text); }
+    redraw();
+    bridge.post({ type: 'removeQueuedTaskMessage', id: target.id });
+  };
+
+  // A message that was handed over before the removal landed stays queued, so
+  // what Esc put in the box for it is taken out again, unless it was edited.
+  useEffect(() => {
+    for (const [id, filled] of [...takingBack.current]) {
+      const listed = status?.queued.find((m) => m.id === id);
+      if (listed && !listed.handedOver && !listed.forced) continue;
+      takingBack.current.delete(id);
+      if (listed && filled !== null) setText((current) => current === filled ? '' : current);
+    }
+  }, [status?.queued]);
 
   const pending = useMemo((): PendingMessage[] => (status?.queued ?? []).map((m) => ({
     key: m.id,
     text: m.text,
     state: m.forced ? 'sending' : m.handedOver ? 'waiting' : 'queued',
-    onSendNow: m.forced || child ? undefined : () => bridge.post({ type: 'sendQueuedTaskMessageNow', id: m.id }),
     onRemove: m.forced || m.handedOver || child ? undefined : () => bridge.post({ type: 'removeQueuedTaskMessage', id: m.id }),
-  })), [status?.queued, child]);
+    ...(m.id === newestRemovable?.id ? { removeTitle: 'Remove this message (Esc takes back the newest)' } : {}),
+  })), [status?.queued, child, newestRemovable?.id, bridge]);
 
   // The pairing is what keeps a stray tap from interrupting a turn, so an arm
   // lapses on its own, and never outlives the turn it was aimed at.
@@ -182,6 +225,11 @@ export default function TaskLogApp({ composerLabel }: {
 
   const onComposerKeyDown = (e: React.KeyboardEvent): void => {
     if (e.nativeEvent.isComposing || completion.keyDown(e)) return;
+    if (e.key === 'Escape' && newestRemovable) {
+      e.preventDefault();
+      takeBackNewest();
+      return;
+    }
     if (e.key === 'Escape' && working && !child) {
       e.preventDefault();
       if (stopArmed) {
@@ -274,6 +322,14 @@ export default function TaskLogApp({ composerLabel }: {
 
       {stopArmed && <div className="stop-hint" role="status">Press Esc again to stop</div>}
 
+      {!script && removable.length > 0 && (
+        <div className="pending-messages-bar">
+          <button type="button" className="pending-message-now" onClick={sendNow}
+            title={`Interrupt the running step and send every queued message now (${SEND_NOW_KEY.name} sends all now)`}>
+            Send all now <kbd aria-hidden="true">{SEND_NOW_KEY.glyph}</kbd>
+          </button>
+        </div>
+      )}
       {!script && <PendingMessages messages={pending} />}
 
       {child?.note ? <div className="task-log-readonly" role="note">{child.note}</div> : script ? (

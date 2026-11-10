@@ -593,22 +593,39 @@ export default function App({ layout = 'chat', selection, goal }: {
     bridge.post({ type: 'resolveApproval', id, granted });
   }, []);
 
-  const handleUnsend = useCallback(() => {
-    bridge.post({ type: 'unsendPrompt' });
+  // Whether the composer is empty, as it last said: the newest row's × must
+  // do what Esc does, and Esc is told this by the composer itself.
+  const composerEmptyRef = useRef(true);
+  const handleComposerEmpty = useCallback((empty: boolean) => { composerEmptyRef.current = empty; }, []);
+
+  // Takes back the newest held prompt. It refills an empty composer; over a
+  // draft it is discarded, so taking it back never buries what is being typed.
+  const handleUnsend = useCallback((toComposer: boolean) => {
+    bridge.post({ type: 'unsendPrompt', toComposer });
   }, []);
 
-  // Send now (ADR-0023, F5): stop the planner turn and send this ahead of the
-  // queue. With no turn running it is a plain send. A built-in slash command is
-  // the host's either way — the hold never applies to commands — but a skill
-  // invocation (`/name …`) is a planner prompt, so Send now stops the turn.
+  // Send now (ADR-0023, F5): stop the planner turn and send everything held,
+  // glued in the order typed with `text` last, as one message ahead of
+  // anything else. `text` is empty when only what is held goes. With no turn
+  // running it is a plain send. A built-in slash command is the host's either
+  // way — the hold never applies to commands — but a skill invocation
+  // (`/name …`) is a planner prompt, so Send now stops the turn.
   const handleSendNow = useCallback((text: string) => {
-    if (!plannerBusy || isBuiltinSlashCommand(text)) {
+    if (isBuiltinSlashCommand(text) || (!plannerBusy && text)) {
       handleSend(text);
       return;
     }
+    if (!plannerBusy) return;
     setStopArmed(false);
     bridge.post({ type: 'sendMessageNow', text });
   }, [plannerBusy, handleSend]);
+
+  // The held group's own Send now sends only what is held; the composer's
+  // draft stays where it is.
+  const handleSendHeldNow = useCallback(() => {
+    setStopArmed(false);
+    bridge.post({ type: 'sendMessageNow', text: '' });
+  }, []);
 
   // Prompts held for the next planner turn. Only the newest carries the ×:
   // unsend always takes the newest, as Esc does, so it never promises another.
@@ -616,8 +633,7 @@ export default function App({ layout = 'chat', selection, goal }: {
     key: String(index),
     text,
     state: 'queued',
-    onSendNow: () => bridge.post({ type: 'sendHeldPromptNow', index }),
-    onRemove: index === held.length - 1 ? handleUnsend : undefined,
+    onRemove: index === held.length - 1 ? () => handleUnsend(composerEmptyRef.current) : undefined,
     removeTitle: 'Unsend (Esc)',
   })), [held, handleUnsend]);
 
@@ -629,7 +645,7 @@ export default function App({ layout = 'chat', selection, goal }: {
   // Esc during a planner turn, in order of intent: take back the newest queued
   // prompt, else arm a stop, else commit it. Outside a turn it is the input's.
   // The stop is the turn's even mid-run: Esc Esc never halts the tasks.
-  const handleEscape = useCallback((): boolean => {
+  const handleEscape = useCallback((composerEmpty: boolean): boolean => {
     if (expandedTaskId !== null) {
       setExpandedTaskId(null);
       return true;
@@ -637,7 +653,7 @@ export default function App({ layout = 'chat', selection, goal }: {
     if (!plannerBusy) return false;
     if (held.length > 0) {
       setStopArmed(false);
-      handleUnsend();
+      handleUnsend(composerEmpty);
     } else if (stopArmed) {
       setStopArmed(false);
       stopTurn();
@@ -1441,12 +1457,14 @@ export default function App({ layout = 'chat', selection, goal }: {
 
       <PlannerPauseBar pause={plan?.plannerContextPause} busy={plannerBusy} onRetry={handleRetryCompaction} onStop={stopTurn} />
 
-      <PendingMessages messages={pending} />
+      <PendingMessages messages={pending} onSendAllNow={plannerBusy ? handleSendHeldNow : undefined} />
 
       <ChatInput
         key={composerSession}
         onSend={handleSend}
         onSendNow={handleSendNow}
+        heldCount={held.length}
+        onEmptyChange={handleComposerEmpty}
         onStop={stopTurn}
         onEscape={handleEscape}
         disabled={false}

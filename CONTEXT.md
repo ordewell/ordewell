@@ -3334,13 +3334,18 @@ omit or failed, never guessed.
 flight, held and sent as the next turn's input rather than bounced (the
 `ConversationBusyError` path stays for operations that would share the live
 context, such as a Compaction). One module owns it:
-`core/src/conversation/promptHold.ts`, a pure hold both surfaces keep — the TUI
-in its reducer state, VS Code on the host (`ConversationViewHost`). Prompts go
-out **oldest first**, one per settled turn; **unsend takes the newest** back
-into the drafting input, above any draft, and the planner keeps running. A
-stopped turn gives every held prompt back to the input, in the order typed; a
-new or reloaded session drops them. Drawn after the conversation, never in it:
-a prompt joins the conversation only once it is sent.
+`core/src/conversation/promptHold.ts`, a pure hold every surface keeps — the
+TUI in its reducer state, the chat views on their host
+(`ConversationViewHost`). What is held goes out **as one message**, the
+prompts glued in the order typed: when the turn settles, or on a **send now**
+(Ctrl+Enter, Cmd+Enter on macOS), which stops the turn in flight and puts the
+input's text, if any, last. **Unsend takes the newest** back, and the planner
+keeps running: into the input when it is empty, otherwise the prompt is
+discarded. A stopped turn gives every held prompt back to the input, in the
+order typed; a new or reloaded session drops them. Drawn after the
+conversation, never in it: a prompt joins the conversation only once it is
+sent. The TUI still sends one per settled turn, oldest first, and its ctrl-s
+and unsend take the newest above any draft.
 *Avoid:* "pending message" (that names the whole queue's existence, not one
 entry); *Avoid:* treating unsend as cancel — nothing in flight is stopped; the
 prompt simply never goes; *Avoid:* "queued prompt" for an input a **Live

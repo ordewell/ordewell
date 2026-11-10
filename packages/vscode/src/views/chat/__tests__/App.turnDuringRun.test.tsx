@@ -58,6 +58,21 @@ describe('a run started or stopped during a planner turn', () => {
     expect(posted().some((m) => m.type === 'sendMessage')).toBe(false);
   });
 
+  it.each([
+    ['Ctrl+Enter', { ctrlKey: true }],
+    ['Cmd+Enter', { metaKey: true }],
+  ])('sends the held prompts now on %s with the composer empty, while the run goes on', (_key, mods) => {
+    host.provider.planApproved();
+    host.provider.showPlan({ status: 'running', tasks: [] });
+    host.provider.conversation.holdPrompt('also cover caching');
+    host.provider.conversation.flush();
+
+    fireEvent.keyDown(textarea(), { key: 'Enter', ...mods });
+
+    expect(working()).toBe(true);
+    expect(api.postMessage).toHaveBeenCalledWith({ type: 'sendMessageNow', text: '' });
+  });
+
   it('frees the input when the turn ends, while the run goes on', () => {
     host.provider.planApproved();
     host.session(turnEnded);

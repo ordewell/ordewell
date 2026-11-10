@@ -897,15 +897,16 @@ async function labelCheckControl(page: Page): Promise<Record<string, unknown>> {
     columns[0]!.append(cut);
     host.append(track);
     document.body.append(host);
-    // MiddleText's markup for a commit's file folder, with pathTail's 40-character tail: about 250px of tail in a 120px box.
+    // MiddleText's markup for a commit's file folder, as splitMiddle cuts it at its longest (a last segment of 40 characters, kept whole): about 250px of tail in a 120px box.
     const narrow = document.createElement('div');
     narrow.dataset.tourControl = 'middle';
     narrow.style.cssText = 'position:fixed;left:0;top:48px;z-index:2147483647;width:120px;display:flex;background:#fff;color:#000;font:12px sans-serif';
-    const folder = 'src/search/normalisation-of-composed-and-decomposed-unicode-forms';
+    const folder = 'src/search/normalisation-of-composed-unicode-forms';
+    const at = folder.lastIndexOf('/');
     const mid = document.createElement('span');
     mid.className = 'mid';
     mid.title = folder;
-    for (const [part, text] of [['mid-head', folder.slice(0, -40)], ['mid-tail', folder.slice(-40)]] as const) {
+    for (const [part, text] of [['mid-head', folder.slice(0, at)], ['mid-tail', folder.slice(at)]] as const) {
       const span = document.createElement('span');
       span.className = part;
       span.textContent = text;
@@ -1381,7 +1382,7 @@ test('the visual tour', async () => {
     longSha = git(box, 'rev-parse', '--short=7', LONG_BRANCH).trim();
     await openGit();
     await gitView('Branches').click();
-    await gitSide().getByRole('button', { name: /^Refresh the branches/ }).click();
+    await gitSide().getByRole('button', { name: /^Reload branches/ }).click();
     const folder = gitSide().getByRole('button', { name: /^feature/ }).and(gitSide().locator('[aria-expanded]'));
     await expect(folder.first()).toBeVisible({ timeout: 30_000 });
     if (await folder.first().getAttribute('aria-expanded') !== 'true') await folder.first().click();
@@ -1507,9 +1508,49 @@ test('the visual tour', async () => {
       await expect(fetchButton()).toBeEnabled({ timeout: 30_000 });
     },
   });
+  // A pull fetches first, so the same hold keeps it pending. Its upstream is one commit past HEAD with HEAD's own
+  // tree: the pull that lands on release changes no file, and HEAD is put back after it.
+  const PULL_BRANCH = 'tour-pull';
+  const pullButton = (): Locator => gitSide().getByRole('group', { name: /^Sync / }).getByRole('button', { name: 'Pull', exact: true });
+  let beforePull = '';
+  const unpull = (): void => {
+    if (!beforePull) return;
+    if (git(box, 'rev-parse', 'HEAD').trim() !== beforePull) git(box, 'reset', '-q', '--soft', beforePull);
+    git(box, 'branch', '--unset-upstream');
+    beforePull = '';
+  };
+  await state(win, 'git-pull-busy', 'Git Pull pending after its confirm: its arrow gliding down to a still line, Fetch and Push held', async () => {
+    await openGit();
+    await gitView('Branches').click();
+    const head = git(box, 'rev-parse', 'HEAD').trim();
+    const next = git(box, 'commit-tree', `${head}^{tree}`, '-p', head, '-m', 'Upstream moved on').trim();
+    git(box, 'push', '-q', 'origin', `${next}:refs/heads/${PULL_BRANCH}`);
+    git(box, 'update-ref', `refs/remotes/origin/${PULL_BRANCH}`, next);
+    beforePull = head;
+    git(box, 'branch', `--set-upstream-to=origin/${PULL_BRANCH}`);
+    await gitSide().getByRole('button', { name: /^Refresh the branches/ }).click();
+    await expect(pullButton()).toBeEnabled({ timeout: 30_000 });
+    fs.writeFileSync(holdFetch, '');
+    await pullButton().click();
+    await need(win).getByRole('dialog', { name: /^Pull / }).getByRole('button', { name: 'Pull from origin', exact: true }).click();
+    await expect(pullButton()).toHaveAttribute('aria-busy', 'true');
+    await expect(pullButton()).toBeDisabled();
+    // The arrow moves and the line under it does not: no turn on the icon itself.
+    await expect(pullButton().locator('svg.ow-glide .ow-glide-down')).toBeVisible();
+    await expect(pullButton().locator('.ow-spin')).toHaveCount(0);
+    await expect(fetchButton()).toBeDisabled();
+    await expect(gitSide().getByRole('group', { name: /^Sync / }).getByRole('button', { name: 'Push', exact: true })).toBeDisabled();
+  }, {
+    restore: async () => {
+      fs.rmSync(holdFetch, { force: true });
+      await expect(pullButton()).not.toHaveAttribute('aria-busy', 'true', { timeout: 30_000 });
+      unpull();
+    },
+  });
   // Whether or not the states were reached, the later ones meet the repository and the centre as they did before these.
   fs.rmSync(holdFetch, { force: true });
   await expect(fetchButton()).toBeEnabled({ timeout: 30_000 }).catch(() => undefined);
+  try { unpull(); } catch (error) { probes.gitStatesCleanup = `the tour's pull was not undone: ${String(error)}`; }
   for (const title of [`${LONG_FILE} @ ${longSha}`, `Commit ${longSha}`]) {
     const close = need(editor).getByRole('button', { name: `Close ${title}`, exact: true });
     if (await close.count() > 0) await close.click().catch(() => undefined);

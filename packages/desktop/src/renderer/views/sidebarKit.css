@@ -20,8 +20,8 @@
 .mid { display: flex; min-width: 0; overflow: hidden; white-space: nowrap; }
 /*
  * The tail gives way only once the head is down to a few characters, so a narrow box clips the end instead of spilling
- * over its neighbour. The head keeps those few (3em, over design.md O7's floor for each part) because a path cut to its tail
- * alone no longer tells two folders apart; a long tail (pathTail keeps up to 40) would otherwise take the whole box.
+ * over its neighbour. The head keeps those few (3em: design.md O7 asks each part for 32px, which 2em, about 24-26px, does not give) because a path cut to its tail
+ * alone no longer tells two folders apart; a long tail (splitMiddle keeps a path's last segment, up to 40) would otherwise take the whole box.
  * The head's weight does the ordering: a tail left shrinking alone with a factor under 1 would take only that share of what overflows.
  */
 .mid-head { flex: 0 1000 auto; min-width: 3em; overflow: hidden; text-overflow: ellipsis; }
@@ -58,13 +58,28 @@
 .snotice-info { border-left-color: var(--ow-accent); }
 .snotice strong { font: var(--ow-type-body-strong); }
 
-/* The sync line: ↓ n ↑ n, then the three actions. */
-.sync { display: flex; flex-direction: column; gap: var(--ow-space-1); padding: 0 var(--ow-space-3); min-width: 0; }
-.sync-counts { display: flex; align-items: center; gap: var(--ow-space-2); color: var(--ow-fg-secondary); font: var(--ow-type-code); font-variant-numeric: tabular-nums; }
-.sync-counts .sync-count { flex: none; }
-.sync-actions { display: flex; flex-wrap: wrap; gap: var(--ow-space-2); }
-.sync-actions .ow-button { flex: 0 1 auto; min-width: 0; }
-.sync-why { margin: 0; color: var(--ow-fg-secondary); font: var(--ow-type-small); overflow-wrap: anywhere; }
+/*
+ * The sync line (design W10): the checkout's branch and upstream, then Pull, Push and an icon-only Fetch on one 28px
+ * line, then a note only when the person has to act. The upstream gives way before the branch's name. Pull and Push share
+ * what Fetch leaves, so a count changing moves nothing: it sits after the word in a box held for two tabular digits.
+ */
+.sync { container: sync / inline-size; display: flex; flex-direction: column; gap: var(--ow-space-1); padding: 0 var(--ow-space-3); min-width: 0; }
+.sync-head { display: flex; align-items: center; gap: var(--ow-space-2); min-height: var(--ow-row); min-width: 0; }
+.sync-head > .ow-icon { flex: none; color: var(--ow-fg-secondary); }
+.sync-branch { flex: 0 1 auto; font: var(--ow-type-body-strong); }
+.sync-upstream { flex: 0 1000 auto; margin-left: auto; color: var(--ow-fg-secondary); font: var(--ow-type-code-small); }
+.sync-actions { display: flex; gap: var(--ow-space-1); min-width: 0; }
+.sync-actions .sync-move { position: relative; flex: 1 1 0; justify-content: flex-start; gap: var(--ow-space-1); padding: 0 var(--ow-space-2); }
+.sync-move .ow-button-label { display: flex; align-items: baseline; gap: var(--ow-space-1); }
+.sync-word { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sync-move .sync-n { min-width: 2ch; text-align: start; color: inherit; }
+.sync-actions .sync-fetch { flex: none; width: var(--ow-hit-icon); padding: 0; }
+.sync-fetch .ow-button-label { display: none; }
+.sync-note { margin: 0; color: var(--ow-fg-secondary); font: var(--ow-type-small); overflow-wrap: anywhere; }
+/* Under about 212px the words no longer fit beside a count: the arrows and counts stay, the words stay readable to a screen reader. */
+@container sync (max-width: 211px) {
+  .sync-word { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+}
 
 .sform { display: flex; flex-direction: column; gap: var(--ow-space-2); padding: var(--ow-space-1) var(--ow-space-3); min-width: 0; }
 .sform label { display: flex; flex-direction: column; gap: var(--ow-space-half); color: var(--ow-fg-secondary); font: var(--ow-type-small); min-width: 0; }

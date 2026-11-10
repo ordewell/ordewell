@@ -161,6 +161,16 @@ describe('the Git sidebar', () => {
 describe('the Branches and History views', () => {
   const views = () => within(screen.getByRole('group', { name: 'Git sidebar view' }));
 
+  it('draws no section heading of its own: the repository row is the only heading, on Branches and History alike', async () => {
+    await mount();
+    expect(screen.queryByRole('heading', { name: 'Branches' })).toBeNull();
+    expect(screen.queryByText('Branches', { selector: '.frame-section-title, .frame-section-title *' })).toBeNull();
+    expect(document.querySelector('.frame-section-head')).toBeNull();
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    expect(await screen.findByRole('list', { name: 'History' })).toBeInTheDocument();
+    expect(document.querySelector('.frame-section-head')).toBeNull();
+  });
+
   it('starts on Branches, and History keeps the branch and sync controls while it reads the history once', async () => {
     const daemon = await mount();
     expect(views().getByRole('button', { name: 'Branches' })).toHaveAttribute('aria-pressed', 'true');
@@ -407,7 +417,7 @@ describe('the Branches and History views', () => {
     fireEvent.click(views().getByRole('button', { name: 'History' }));
     const row = await screen.findByRole('button', { name: /^Commit aaaaaaa: Merge: Wire SSO/ });
     expect(row).not.toHaveAccessibleName(/v2\.0/);
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh the branches and history' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reload branches and history' }));
     await waitFor(() => expect(daemon.calls('git.log')).toHaveLength(2));
     expect(screen.getByRole('button', { name: /^Commit aaaaaaa: Merge: Wire SSO/ })).toBeInTheDocument();
     await act(async () => { later.settle(ok({ repo: '.', ref: 'HEAD', commits: [{ ...LOG[0]!, refs: [...LOG[0]!.refs, 'v2.0'] }, LOG[1]!], cursor: null })); });
@@ -432,12 +442,12 @@ describe('the Branches and History views', () => {
     fireEvent.click(views().getByRole('button', { name: 'History' }));
     expect(await screen.findByRole('button', { name: 'Load more' })).toBeEnabled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh the branches and history' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reload branches and history' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Load more' })).toBeDisabled());
     await act(async () => { later.settle(ok({ repo: '.', ref: 'HEAD', commits: [commit('a', ['f'], 'Merge: Wire SSO', ['HEAD', 'main'])], cursor: sha('f') })); });
     expect(screen.getByRole('button', { name: 'Load more' })).toBeEnabled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh the branches and history' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reload branches and history' }));
     expect(await screen.findByText('fatal: bad object')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Load more' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
@@ -659,14 +669,14 @@ describe('browsing a branch in the sidebar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'feature/login' }));
     await waitFor(() => expect(daemon.calls('git.log')).toHaveLength(1));
     branches = { ...BRANCHES, local: [BRANCHES.local[0]!] };
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh the branches and history' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reload branches and history' }));
     expect(await side().findByRole('button', { name: /Commit aaaaaaa/ })).toBeInTheDocument();
     expect(side().getByRole('combobox', { name: 'History of' })).toHaveValue('');
     await act(async () => { late.settle(ok({ repo: '.', ref: 'feature/login', commits: FEATURE_LOG, cursor: null })); });
 
     // Made again, it is a new branch: it is browsed afresh, not shown from the answer the deletion dropped.
     branches = BRANCHES;
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh the branches and history' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reload branches and history' }));
     await waitFor(() => expect(daemon.calls('git.branches').length).toBeGreaterThan(2));
     expect(side().getByRole('combobox', { name: 'History of' })).toHaveValue('');
     fireEvent.change(side().getByRole('combobox', { name: 'History of' }), { target: { value: 'feature/login' } });
@@ -820,6 +830,18 @@ describe('the confirms', () => {
     expect(daemon.calls('git.push')[0]![1]).toMatchObject({ confirm: { remote: 'origin', branch: 'main' } });
   });
 
+  it('draws the checkout as its branch and upstream, then Pull, Push and an icon-only Fetch, each saying what it moves', async () => {
+    await mount();
+    const checkout = within(screen.getByRole('group', { name: 'Your checkout' }));
+    expect(checkout.getByTitle(/^Your checkout: /)).toHaveTextContent(/^main\s*origin\/main$/);
+    const sync = within(screen.getByRole('group', { name: /^Sync/ }));
+    expect(sync.getAllByRole('button').map((b) => b.getAttribute('aria-label') ?? b.querySelector('.sync-word')?.textContent)).toEqual(['Pull', 'Push', 'Fetch']);
+    expect(sync.getByRole('button', { name: 'Pull' })).toHaveAccessibleDescription('Pull 1 commit from origin/main');
+    expect(sync.getByRole('button', { name: 'Push' })).toHaveAccessibleDescription('Push 2 commits to origin/main');
+    expect(sync.queryByText(/↓|↑/)).toBeNull();
+    expect(screen.getByRole('group', { name: /^Sync/ }).querySelector('.sync-note')).toBeNull();
+  });
+
   describe('a fetch in flight', () => {
     // The confirm dialog has a "Pull from origin" button of its own: scope to the sync bar.
     const syncButton = (name: RegExp) => within(screen.getByRole('group', { name: /^Sync/ })).getByRole('button', { name });
@@ -837,6 +859,7 @@ describe('the confirms', () => {
         expect(syncButton(name)).toBeDisabled();
         expect(syncButton(name)).not.toHaveAttribute('aria-busy');
         expect(syncButton(name).querySelector('svg')).not.toHaveClass('ow-spin');
+        expect(syncButton(name).querySelector('svg')).not.toHaveClass('ow-glide');
       }
       await act(async () => { pending.settle(ok({ repo: REPO_STATE })); });
       await waitFor(() => expect(fetchButton()).not.toHaveAttribute('aria-busy'));
@@ -868,28 +891,40 @@ describe('the confirms', () => {
       await waitFor(() => expect(fetchButton()).not.toHaveAttribute('aria-busy'));
     });
 
-    it('does not spin while a pull waits to be confirmed, and restores the buttons on Cancel', async () => {
+    it('does not move while a pull waits to be confirmed, and restores the buttons on Cancel', async () => {
       const daemon = await mount();
       fireEvent.click(pullButton());
       await dialog();
       expect(pullButton()).not.toHaveAttribute('aria-busy');
-      expect(pullButton().querySelector('svg')).not.toHaveClass('ow-spin');
+      expect(pullButton().querySelector('svg')).not.toHaveClass('ow-glide');
       answer('Cancel');
       await waitFor(() => expect(pullButton()).toBeEnabled());
       expect(daemon.calls('git.pull')).toEqual([]);
     });
 
-    it('turns the Pull icon only once the confirmed pull is sent', async () => {
+    // A turned arrow points backwards half the time: Pull's and Push's glide their way instead, the line held still.
+    it.each([
+      { kind: 'pull' as const, name: /^Pull/, confirm: 'Pull from origin', way: 'down' },
+      { kind: 'push' as const, name: /^Push/, confirm: 'Push to origin', way: 'up' },
+    ])('glides the $kind arrow $way, never turning it, only once the confirmed $kind is sent', async ({ kind, name, confirm, way }) => {
       const pending = deferred();
-      await mount({ 'git.pull': pending.promise });
-      fireEvent.click(pullButton());
+      await mount({ [`git.${kind}`]: pending.promise });
+      fireEvent.click(syncButton(name));
       await dialog();
-      answer('Pull from origin');
-      await waitFor(() => expect(pullButton()).toHaveAttribute('aria-busy', 'true'));
-      expect(pullButton().querySelector('svg')).toHaveClass('ow-spin');
+      answer(confirm);
+      await waitFor(() => expect(syncButton(name)).toHaveAttribute('aria-busy', 'true'));
+      expect(syncButton(name)).toBeDisabled();
+      const icon = syncButton(name).querySelector('svg')!;
+      expect(icon).toHaveClass('ow-glide');
+      expect(icon).not.toHaveClass('ow-spin');
+      const arrow = icon.querySelector(`.ow-glide-${way}`)!;
+      expect(arrow).not.toBeNull();
+      // The line is the svg's own child, outside the group that moves.
+      expect(arrow.contains(icon.querySelector(':scope > path'))).toBe(false);
       expect(fetchButton().querySelector('svg')).not.toHaveClass('ow-spin');
       await act(async () => { pending.settle(ok({ repo: REPO_STATE })); });
-      await waitFor(() => expect(pullButton()).not.toHaveAttribute('aria-busy'));
+      await waitFor(() => expect(syncButton(name)).not.toHaveAttribute('aria-busy'));
+      expect(syncButton(name).querySelector('svg')).not.toHaveClass('ow-glide');
     });
   });
 

@@ -520,6 +520,7 @@ the daemon has read.
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next or previous tab |
 | `⌘\` / `Ctrl+\` | Split the editor |
 | `⌘S` / `Ctrl+S` | Save, in your checkout |
+| `⌘⏎` / `Ctrl+Enter` | Send now, in the planner chat while a turn runs: what you queued and what you typed, as one message |
 | `⌘⏎` / `Ctrl+Enter` | Commit, in the commit box |
 | `F7` / `Shift+F7` | Next or previous change, in a diff |
 | `Esc` | Close a popover, peek, drawer or dialog |
