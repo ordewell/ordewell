@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn as nodeSpawn, type ChildProcess } from 'child_process';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import type { IFileSystem } from '../../interfaces/IFileSystem';
@@ -8,6 +8,7 @@ import type { ResearchProgress } from '../../models/Task';
 import { OrdewellMcpServer } from '../mcp/OrdewellMcpServer';
 import { confinedRead, CONFINED_RESEARCH_TOOLS } from '../ResearchSubagents';
 import { NO_TURN_OPEN } from '../harness/harnessResearchAgent';
+import { removeDir } from '../../testing';
 import type { AgentProcessDeps } from '../harness/AgentAdapter';
 import {
   lazyServe, loginResearchAgent, openCodeResearchAgent, openCodeVersion, researchSessionRules, researchToolNames, startResearchServe, type ResearchServe,
@@ -94,7 +95,8 @@ describe('the research serve and its agent', () => {
 
   afterAll(async () => {
     await serves?.close();
-    rmSync(scratch, { recursive: true, force: true });
+    // The serve worked in scratch, and Windows holds a directory until the process that worked in it has gone.
+    await removeDir(scratch);
   });
 
   const agent = (extra: Partial<Parameters<typeof openCodeResearchAgent>[0]> = {}) =>
@@ -231,7 +233,7 @@ describe('the login research agent a planner session holds', () => {
     mcp = new OrdewellMcpServer({ heartbeatMs: 60_000 });
     scratch = mkdtempSync(join(tmpdir(), 'oc-login-research-test-'));
   });
-  afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+  afterAll(() => removeDir(scratch));
 
   function login(workspace: Record<string, string> = {}, wrapFetch?: (real: typeof fetch) => typeof fetch) {
     const logs: string[] = [];
