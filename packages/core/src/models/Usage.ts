@@ -25,6 +25,13 @@ export interface UsageRecord {
   model?: string;
   /** A session breakdown can name a model without identifying the current context. */
   aggregate?: true;
+  /**
+   * What a call outside the agent's own turns was for — OpenCode's `title`,
+   * `compaction` or `generate` calls, which it bills but does not put in a
+   * step. A model's totals keep them apart, so a bill that includes them can
+   * be read against the turns.
+   */
+  purpose?: string;
   inputTokens?: number;
   outputTokens?: number;
   /** The share of `inputTokens` served from the provider's prompt cache. */
@@ -274,12 +281,14 @@ export function plannerContextFill(usage: PlannerUsage): ContextFill | undefined
 export interface ModelUsage {
   source: string;
   model?: string;
+  /** Set on the row of calls made outside the agent's own turns ({@link UsageRecord.purpose}). */
+  purpose?: string;
   totals: UsageTotals;
 }
 
 export function addModelUsage(models: readonly ModelUsage[], record: UsageRecord): ModelUsage[] {
-  const index = models.findIndex((m) => m.source === record.source && m.model === record.model);
-  if (index < 0) return [...models, { source: record.source, ...(record.model ? { model: record.model } : {}), totals: addUsage({}, record) }];
+  const index = models.findIndex((m) => m.source === record.source && m.model === record.model && m.purpose === record.purpose);
+  if (index < 0) return [...models, { source: record.source, ...(record.model ? { model: record.model } : {}), ...(record.purpose ? { purpose: record.purpose } : {}), totals: addUsage({}, record) }];
   return models.map((m, i) => i === index ? { ...m, totals: addUsage(m.totals, record) } : m);
 }
 
@@ -376,7 +385,7 @@ export function planUsage(tasks: readonly UsageTask[]): PlanUsage {
       models.push(...usage.byModel ?? []);
     }
     for (const model of models) {
-      const existing = result.byModel.find((m) => m.source === model.source && m.model === model.model);
+      const existing = result.byModel.find((m) => m.source === model.source && m.model === model.model && m.purpose === model.purpose);
       if (existing) existing.totals = addUsageTotals(existing.totals, model.totals);
       else result.byModel.push({ ...model, totals: addUsageTotals({}, model.totals) });
     }
@@ -481,7 +490,7 @@ export function modelCostTitle(byModel: readonly ModelUsage[]): string | undefin
       const kind = p.kind === 'estimate' ? `${source}'s estimate${basis}` : p.kind === 'billed' ? `Amount billed by ${source}` : 'Reported cost';
       return `${kind}${p.billing === 'subscription' ? '; not billed on a subscription' : ''}`;
     }))];
-    return cost.length > 0 ? [`${m.source} / ${m.model ?? 'unattributed'}: ${cost.join(' · ')}${descriptions.length ? ` — ${descriptions.join('; ')}` : ''}`] : [];
+    return cost.length > 0 ? [`${m.source} / ${m.model ?? 'unattributed'}${m.purpose ? ` (${m.purpose})` : ''}: ${cost.join(' · ')}${descriptions.length ? ` — ${descriptions.join('; ')}` : ''}`] : [];
   });
   return lines.length > 0 ? lines.join('\n') : undefined;
 }

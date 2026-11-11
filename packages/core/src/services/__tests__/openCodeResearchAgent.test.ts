@@ -406,3 +406,70 @@ describe('openCodeVersion', () => {
     expect(await openCodeVersion({ cwd, launch: launchWith({}), command: join(cwd, 'no-such-opencode') })).toBeNull();
   });
 });
+
+let titleBase: string;
+
+interface Frame { type: string; data: { sessionID?: string; source?: string; cost?: number; tokens?: unknown } }
+
+/** Runs one prompt on a fresh session and returns every frame the session produced, up to its end. */
+async function framesOf(session: Record<string, unknown>): Promise<Frame[]> {
+  const stream = await fetch(`${titleBase}/api/event`);
+  const reader = stream.body!.getReader();
+  const created = await (await fetch(`${titleBase}/api/session`, { method: 'POST', body: JSON.stringify(session) })).json() as { data: { id: string } };
+  const id = created.data.id;
+  await fetch(`${titleBase}/api/session/${id}/prompt`, { method: 'POST', body: JSON.stringify({ text: 'Do the work.' }) });
+  const frames: Frame[] = [];
+  let buffered = '';
+  const decoder = new TextDecoder();
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffered += decoder.decode(value, { stream: true });
+    const parts = buffered.split('\n\n');
+    buffered = parts.pop() ?? '';
+    for (const part of parts) {
+      const line = part.split('\n').find((l) => l.startsWith('data:'));
+      if (!line) continue;
+      const frame = JSON.parse(line.slice(5)) as Frame;
+      if (frame.data.sessionID !== id) continue;
+      frames.push(frame);
+    }
+    if (frames.some((f) => f.type === 'session.execution.succeeded')) break;
+  }
+  await reader.cancel();
+  return frames;
+}
+
+/*
+ * The fake models the one hidden call v2.2.7 makes: an untitled session's
+ * first prompt generates a title, whose usage reaches a client only as a
+ * `session.usage.recorded` frame. The runner tests lean on it.
+ */
+describe('the fake OpenCode 2.x serve and its title call', () => {
+  let titleChild: ChildProcess;
+  beforeAll(async () => {
+    titleChild = nodeSpawn(process.execPath, [FAKE], { stdio: ['pipe', 'pipe', 'ignore'] });
+    titleBase = await new Promise<string>((done, fail) => {
+      titleChild.once('error', fail);
+      titleChild.stdout!.on('data', (chunk: Buffer) => {
+        const m = /listening on (http:\/\/\S+)/.exec(chunk.toString());
+        if (m) done(m[1]);
+      });
+    });
+  });
+  afterAll(() => { titleChild.kill(); });
+
+  it('reports a title call\'s usage for an untitled session, before the model\'s own work', async () => {
+    const frames = await framesOf({});
+    const usage = frames.filter((f) => f.type === 'session.usage.recorded');
+    expect(usage).toHaveLength(1);
+    expect(usage[0].data).toMatchObject({ source: 'title', cost: 0.0004, tokens: { input: 900, output: 12 } });
+    expect(frames.findIndex((f) => f.type === 'session.usage.recorded')).toBeLessThan(frames.findIndex((f) => f.type === 'session.step.started'));
+  });
+
+  it('makes no title call, and reports none, for a session created with a title', async () => {
+    const frames = await framesOf({ title: 'Ordewell task' });
+    expect(frames.filter((f) => f.type === 'session.usage.recorded')).toEqual([]);
+    expect(frames.some((f) => f.type === 'session.step.ended')).toBe(true);
+  });
+});

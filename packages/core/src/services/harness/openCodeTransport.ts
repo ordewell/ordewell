@@ -130,6 +130,16 @@ export interface OpenCodeTokens {
 }
 
 /**
+ * Any title but OpenCode's placeholder one stops it naming the session itself.
+ * It would do that with a call of its own: the whole first prompt, to the
+ * provider's small model (a gpt-luna, gemini or haiku outside the model the
+ * user chose), billed outside every step the usage here counts. 1.x names a
+ * session the same way, from its first prompt, while its title is still the
+ * placeholder.
+ */
+export const SESSION_TITLE = { planner: 'Ordewell planner', task: 'Ordewell task' } as const;
+
+/**
  * One model call's usage. OpenCode's `input` counts only the uncached prompt —
  * cache reads and writes sit beside it, as with Anthropic
  * ({@link partedPromptUsage}): in the recordings `tokens.total` is input +
@@ -140,7 +150,7 @@ export interface OpenCodeTokens {
  * context limit itself (`input + output + reasoning + cache.read +
  * cache.write`, read in the 2.0.32 binary) — so the prompt and output here.
  */
-export function usageRecord(tokens: OpenCodeTokens | undefined, call: { model?: string; cost?: number; subagentId?: string }): UsageRecord | null {
+export function usageRecord(tokens: OpenCodeTokens | undefined, call: { model?: string; cost?: number; subagentId?: string; purpose?: string }): UsageRecord | null {
   if (!tokens) return null;
   const prompt = partedPromptUsage({ uncached: tokens.input, cacheRead: tokens.cache?.read, cacheWrite: tokens.cache?.write });
   const outputTokens = (tokens.output ?? 0) + (tokens.reasoning ?? 0);
@@ -154,7 +164,11 @@ export function usageRecord(tokens: OpenCodeTokens | undefined, call: { model?: 
   // told apart, so 0 is left unreported: a ledger may not claim a bill of
   // nothing.
   if (typeof call.cost === 'number' && call.cost > 0) record.reportedCost = { amount: call.cost, currency: 'USD', kind: 'estimate' };
-  if (call.subagentId) record.subagentId = call.subagentId;
+  if (call.purpose) {
+    // A title or compaction call's prompt is not the context the agent works in.
+    record.aggregate = true;
+    record.purpose = call.purpose;
+  } else if (call.subagentId) record.subagentId = call.subagentId;
   else record.contextTokens = (prompt.inputTokens ?? 0) + outputTokens;
   return record;
 }
