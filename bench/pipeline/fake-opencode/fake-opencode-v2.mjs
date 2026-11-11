@@ -13,6 +13,10 @@
  *   usage: { input, output } per step;  child: true starts a child session;
  *   fail: { type, message } ends the run with session.execution.failed.
  *
+ * An untitled session's first prompt makes the hidden title call v2.2.7 makes:
+ * its usage arrives only as a session.usage.recorded frame with source "title"
+ * (no step carries it). A session created with a title makes no such call.
+ *
  * What the serve loaded beyond Ordewell's config, for the pre-use check to
  * find: FAKE_OPENCODE_EXTRA_RULE (a permission rule, JSON), FAKE_OPENCODE_EXTRA_MCP
  * (a server name) and FAKE_OPENCODE_EXTRA_PLUGIN (a package name).
@@ -102,6 +106,10 @@ async function run(session, text) {
     return;
   }
   if (cue.child) frame('session.created', { sessionID: `ses_${randomUUID()}`, parentID: id });
+  if (!session.title && !session.titled) {
+    session.titled = true;
+    frame('session.usage.recorded', { sessionID: id, source: 'title', cost: 0.0004, tokens: { input: 900, output: 12, reasoning: 0, cache: { read: 0, write: 0 } } });
+  }
   const tools = await offered(session);
   const steps = [...(cue.steps ?? []), { final: true }];
   for (const step of steps) {

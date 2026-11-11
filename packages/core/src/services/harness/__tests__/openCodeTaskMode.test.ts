@@ -180,6 +180,14 @@ describe('OpenCodeAdapter task mode — start', () => {
     } finally { adapter.dispose(); }
   });
 
+  it('titles the session it creates, so OpenCode makes no call of its own to name it', async () => {
+    const server = fakeServer();
+    const { adapter } = await startTask(server);
+    try {
+      expect(server.requests.find((r) => r.method === 'POST' && r.path === '/session')?.body).toEqual({ title: 'Ordewell task' });
+    } finally { adapter.dispose(); }
+  });
+
   it('serves the worktree behind a per-task password, sent on every request', async () => {
     const server = fakeServer();
     const { adapter, spawned, env } = await startTask(server);

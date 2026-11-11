@@ -213,6 +213,7 @@ describe('OpenCode 2.x — start', () => {
 
     const created = server.requests.find((r) => r.method === 'POST' && r.path === '/api/session');
     expect(created?.body).toEqual({
+      title: 'Ordewell planner',
       agent: 'plan',
       model: { providerID: 'opencode-go', id: 'deepseek-v4.1-flash', variant: 'high' },
       permissions: [...Object.entries(OPENCODE_PLANNER_PERMISSION).map(([action, effect]) => ({ action, resource: '*', effect })), ...codeModeOff],
@@ -229,6 +230,7 @@ describe('OpenCode 2.x — start', () => {
 
     const created = server.requests.find((r) => r.method === 'POST' && r.path === '/api/session');
     expect(created?.body).toEqual({
+      title: 'Ordewell task',
       agent: 'build',
       model: { providerID: 'opencode-go', id: 'deepseek-v4.1-flash', variant: 'max' },
       permissions: [{ action: 'question', resource: '*', effect: 'deny' }],
@@ -363,6 +365,7 @@ describe('OpenCode 2.x — a planner\'s own search (ADR-0027)', () => {
 
     const created = server.requests.find((r) => r.method === 'POST' && r.path === '/api/session');
     expect(created?.body).toEqual({
+      title: 'Ordewell task',
       agent: 'build',
       model: { providerID: 'opencode-go', id: 'deepseek-v4.1-flash' },
       permissions: [{ action: 'question', resource: '*', effect: 'deny' }, ...('mcp' in overrides ? taskAllow : [])],
@@ -1310,6 +1313,34 @@ describe('OpenCode 2.x — shared protocol behaviour', () => {
     expect(events.filter((e) => e.type === 'usage')).toEqual([
       { type: 'usage', record: { source: 'opencode', inputTokens: 5, outputTokens: 2, contextTokens: 7 } },
       { type: 'usage', record: { source: 'opencode', inputTokens: 7, outputTokens: 3, reportedCost: { amount: 0.002, currency: 'USD', kind: 'estimate' }, subagentId: 'call_task' } },
+    ]);
+    adapter.dispose();
+  });
+
+  it('names the session it creates, so OpenCode makes no title call of its own on a model outside the pin', async () => {
+    const planner = fakeServer();
+    const first = await start(planner, plannerStart());
+    expect(planner.requests.find((r) => r.method === 'POST' && r.path === '/api/session')?.body).toMatchObject({ title: 'Ordewell planner' });
+    first.adapter.dispose();
+
+    const task = fakeServer();
+    const second = await start(task, taskStart());
+    expect(task.requests.find((r) => r.method === 'POST' && r.path === '/api/session')?.body).toMatchObject({ title: 'Ordewell task' });
+    second.adapter.dispose();
+  });
+
+  it('counts what OpenCode billed for a title or a compaction as usage that never moves the context meter', async () => {
+    const server = fakeServer();
+    const { adapter, events, turn, stream } = await turnOf(server, plannerStart());
+    stream.push(frame('session.usage.recorded', { source: 'title', cost: 0.004, tokens: { input: 9000, output: 12, reasoning: 0, cache: { read: 0, write: 0 } } }));
+    stream.push(frame('session.usage.recorded', { source: 'compaction', cost: 0, tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 40, write: 0 } } }));
+    stream.push(frame('session.usage.recorded', { source: 'generate', cost: 0.001, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }));
+    stream.push(succeeded());
+    await turn;
+
+    expect(events.filter((e) => e.type === 'usage')).toEqual([
+      { type: 'usage', record: { source: 'opencode', aggregate: true, purpose: 'title', inputTokens: 9000, cachedInputTokens: 0, outputTokens: 12, reportedCost: { amount: 0.004, currency: 'USD', kind: 'estimate' } } },
+      { type: 'usage', record: { source: 'opencode', aggregate: true, purpose: 'compaction', inputTokens: 140, cachedInputTokens: 40, outputTokens: 25 } },
     ]);
     adapter.dispose();
   });

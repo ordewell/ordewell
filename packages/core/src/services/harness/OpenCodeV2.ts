@@ -10,7 +10,7 @@ import type { ProjectMcpServer } from './repoConfig';
 import type { RaisedRequest } from './permissionLedger';
 import {
   autoApproves, delay, interruptAcknowledged, openCodePermissions, openCodePlannerAsk, plannerSystem, openEventStream, permissionReply, raiseOnce, settleTurn, splitModelId, streamTurn,
-  turnLatch, usageRecord, type EventStream, type OpenCodeTokens, type StreamTurn, type TurnLatch,
+  SESSION_TITLE, turnLatch, usageRecord, type EventStream, type OpenCodeTokens, type StreamTurn, type TurnLatch,
 } from './openCodeTransport';
 /** A turn's end is also read from `/api/session/active`, behind the stream, which can drop a frame. */
 const ACTIVE_POLL_INTERVAL_MS = 1000;
@@ -315,6 +315,7 @@ export class OpenCodeV2 {
     // planner is denied: the search ends "cancelled", and the model reads that as a refusal (ADR-0027).
     if (this.role === 'planner') this.ownSearch = searchProviderChosen(await this.host.json<unknown>('GET', '/api/config').catch(() => null));
     const created = await this.host.json<{ data?: { id?: string } }>('POST', '/api/session', {
+      title: SESSION_TITLE[this.role],
       agent: this.agent,
       ...(this.model ? { model: this.model } : {}),
       permissions: [...(this.opts.kind === 'task' && readOnlyTask(this.opts) ? readOnlySessionRules(this.opts) : this.role === 'planner' ? [...plannerRules(this.nativeShell !== null), ...(this.ownSearch ? [] : SEARCH_OFF_RULES), ...CODE_MODE_OFF_RULES] : TASK_RULES), ...this.ordewellRules()],
@@ -596,6 +597,14 @@ export class OpenCodeV2 {
         onEvent({ type: 'compaction', trigger: data.reason === 'manual' ? 'manual' : 'auto' });
         // OpenCode states no size after it: the next call's usage is the first.
         onEvent({ type: 'usage', record: { source: 'opencode', compacted: true } });
+        return;
+      }
+      // A call OpenCode bills outside any step: a title it makes when the session was never named, a compaction.
+      if (frame.type === 'session.usage.recorded') {
+        // On this frame `source` is the kind of call, a string; on a permission ask it is the tool call, an object.
+        const purpose: unknown = data.source;
+        const record = typeof purpose === 'string' && purpose ? usageRecord(data.tokens, { cost: data.cost, purpose }) : null;
+        if (record) onEvent({ type: 'usage', record });
         return;
       }
       if (frame.type === 'session.execution.started') { turn.live = true; return; }

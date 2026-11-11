@@ -13,7 +13,7 @@ import type { ProjectMcpServer } from './repoConfig';
 import { hunksOf, markedLines } from './fileDiff';
 import {
   PendingSteers, autoApproves, delay, interruptAcknowledged, newUserMessageId, openCodePermissions, openCodePlannerAsk, plannerSystem, openEventStream, permissionReply, raiseOnce, settleTurn, splitModelId,
-  REQUEST_TIMEOUT_MS, streamTurn, turnLatch, usageRecord, withDeadline, type EventStream, type PermissionAnswer, type StreamTurn, type TurnLatch,
+  REQUEST_TIMEOUT_MS, SESSION_TITLE, streamTurn, turnLatch, usageRecord, withDeadline, type EventStream, type PermissionAnswer, type StreamTurn, type TurnLatch,
 } from './openCodeTransport';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { AgentEvent, AgentStartOptions, PlannerStartOptions, TaskModeAgentAdapter, TaskStartOptions } from './AgentAdapter';
@@ -452,7 +452,7 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
         throw new Error(`OpenCode could not resume session ${opts.resumeSessionId}: the server does not know it.`);
       }
     }
-    const created = await this.json<{ id?: string }>('POST', '/session', {});
+    const created = await this.json<{ id?: string }>('POST', '/session', { title: SESSION_TITLE[this.role] });
     if (!created?.id) throw new Error(`The OpenCode ${this.role} server did not return a session id.`);
     this.sessionId = created.id;
   }
