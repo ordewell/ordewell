@@ -17,14 +17,15 @@
     "dev": "node scripts/dev.mjs",
     "package": "node scripts/package.mjs",
     "postinstall": "node scripts/ensure-spawn-helper.mjs",
-    "lint": "eslint src e2e playwright.config.ts --ext .ts,.tsx",
+    "lint": "eslint src e2e playwright.config.ts playwright.marketing.config.ts --ext .ts,.tsx",
     "test": "vitest run",
     "test:quick": "vitest run",
     "test:changed": "vitest run --changed --passWithNoTests",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.renderer.json && tsc --noEmit -p tsconfig.e2e.json",
     "test:desktop-e2e": "playwright test -c playwright.config.ts --project acceptance",
-    "test:desktop-tour": "playwright test -c playwright.config.ts --project tour"
+    "test:desktop-tour": "playwright test -c playwright.config.ts --project tour",
+    "marketing:capture": "sh e2e/marketing/xrun.sh playwright test -c playwright.marketing.config.ts"
   },
   "dependencies": {
     "@ordewell/web": "^0.13.1",
