@@ -16,6 +16,13 @@ export const DEFAULT_SUPERVISOR_RETRY_LIMIT = 2;
  */
 export const DEFAULT_WAKE_UP_READ_BUDGET = 12;
 
+/**
+ * The planner's own reads in one turn, once the read limit is turned on: the
+ * calls and the kilobytes their results held, whichever runs out first. Off
+ * by default, pending a bench (ADR-0068).
+ */
+export const DEFAULT_PLANNER_READ_LIMIT = { calls: 10, kb: 60 } as const;
+
 /** A fresh install starts Guarded: its first plan runs each runner's safe mode and asks before risky effects. */
 export const DEFAULT_AUTONOMOUS_MODE = false;
 

@@ -481,6 +481,12 @@ describe('aggregation', () => {
     assert.deepEqual([summary.runs, summary.complete, summary.timeouts, summary.violations.length], [1, 0, 1, 0]);
   });
 
+  it('judges V2 against V1 only on a backend that ran V2', () => {
+    const judged = (records) => aggregate(records, goals).verdicts.map((v) => `${v.baseline}>${v.candidate}`);
+    assert.deepEqual(judged([rec('V0', 1), rec('V1', 1)]), ['V0>V1']);
+    assert.deepEqual(judged([rec('V0', 1), rec('V1', 1), rec('V2', 1)]), ['V0>V1', 'V1>V2']);
+  });
+
   it('calls a comparison with a side missing incomplete, never a pass', () => {
     assert.equal(compare([rec('V0', 1)]).result, 'incomplete');
   });
@@ -604,6 +610,17 @@ describe('the run matrix', () => {
     assert.equal(required, 6);
     assert.equal(runs.length, goals.length * required * 2 * 3);
     assert.equal(selectRuns(parseArgs(['--full', '--with-optional']), { goals }).length, goals.length * CELLS.length * 2 * 3);
+  });
+
+  it('runs V2, the candidate with the planner read limit on, only when named', () => {
+    assert.equal(VARIANTS.V2.build, 'candidate');
+    assert.equal(VARIANTS.V2.nudges, false);
+    assert.deepEqual(VARIANTS.V2.env, { ORDEWELL_PLANNER_READ_LIMIT: 'on' });
+    assert.ok(selectRuns(parseArgs(['--full']), { goals }).every((r) => r.variant.id !== 'V2'));
+    const named = selectRuns(parseArgs(['--smoke', '--variant', 'V1,V2']), { goals });
+    assert.deepEqual(named.map((r) => r.variant.id), ['V1', 'V2']);
+    const env = runEnv({}, { cell: CELLS[0], variant: VARIANTS.V2, settingsPath: 's', maxParallel: 4, enabledRunners: ['claude-code'] });
+    assert.equal(env.ORDEWELL_PLANNER_READ_LIMIT, 'on');
   });
 
   it('narrows by backend, goal and variant', () => {

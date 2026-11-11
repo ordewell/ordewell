@@ -107,12 +107,12 @@ export function withoutSealedMark(output: string): string {
  * can render a refused `rm` or a denied `npm test` distinctly from a
  * successful run without re-deriving the refusal signatures per surface. The
  * refusal/denial strings come from `commandPolicy.ts`, `BaseFileSystem.ts`,
- * `webReadPolicy.ts` and the research-subagent wrapper — keeping the matching
+ * `webReadPolicy.ts`, `plannerReadLimit.ts` and the research-subagent wrapper — keeping the matching
  * here means the signatures stay in one place alongside the human summary.
  */
 export function classifyOutcome(success: boolean, output: string): ResearchStepOutcome {
   if (!success) {
-    if (/^(Command|Fetch|Web search) refused:/.test(output) || /is not available\. You are a read-only research subagent/.test(output)) return 'refused';
+    if (/^(Command|Fetch|Web search) refused:/.test(output) || /^Read limit reached:/.test(output) || /is not available\. You are a read-only research subagent/.test(output)) return 'refused';
     if (/not approved/i.test(output) || /^Access denied:/.test(output) || /needs user approval/i.test(output)) return 'denied';
     return 'failure';
   }

@@ -332,6 +332,13 @@ describe('OpenCode 2.x — a planner\'s own search (ADR-0027)', () => {
     expect(system).toBe(`PLAN\n\n${OPENCODE_ORDEWELL.plannerInstructions(false)}`);
   });
 
+  it('makes the native reads ask where the planner read limit is on, so each is counted (ADR-0068)', async () => {
+    const { permissions } = await planner([{ type: 'directory', path: '/x' }, document({ websearch: { provider: 'exa' } })], { readsAsk: true });
+
+    const asking = { ...OPENCODE_PLANNER_PERMISSION, read: 'ask', glob: 'ask', grep: 'ask', list: 'ask', lsp: 'ask' };
+    expect(permissions).toEqual([...rules(asking), ...codeModeOff, ...ordewellAllow]);
+  });
+
   it('takes the last layer that sets websearch, as OpenCode does', async () => {
     const { permissions } = await planner([document({ websearch: false }), document({ theme: 'x' }), document({ websearch: { provider: 'random' } })]);
 

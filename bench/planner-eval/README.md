@@ -18,6 +18,12 @@ judges nothing.
 | --- | --- | --- | --- |
 | V0 | `--baseline-ref` (default `0ecc6412`) | the goal, then the two nudges below, verbatim | — |
 | V1 | `--candidate-ref` (default `HEAD`) | the goal alone | — |
+| V2 | `--candidate-ref` (default `HEAD`) | the goal alone | `ORDEWELL_PLANNER_READ_LIMIT=on` |
+
+V2 is V1 with the planner's own reads capped per turn at the default limit
+([ADR-0068](../../docs/adr/planner-envelope/0068-a-limit-on-the-planners-own-reads-per-turn.md)). It
+runs only when `--variant` names it, or on `--mock`, and each of its records
+carries the environment it ran under as `env`.
 
 V0's nudges, each its own paragraph:
 
@@ -196,6 +202,9 @@ node bench/planner-eval/run.mjs --report bench/planner-eval/.results/<stamp>
 # Score stored runs again with today's keys and metrics, into a new directory.
 node bench/planner-eval/run.mjs --rescore bench/planner-eval/.results/<stamp> --out bench/planner-eval/.results/<stamp>-rescored
 
+# The candidate with and without the planner read limit, on the OpenCode cells.
+node bench/planner-eval/run.mjs --full --backend opencode --variant V1,V2
+
 # Run only the candidate, and compare it with V0 runs stored elsewhere.
 node bench/planner-eval/run.mjs --full --variant V1 --baseline-from bench/planner-eval/.results/<stamp>-rescored
 ```
@@ -287,7 +296,8 @@ claims.
 
 ## Verdicts
 
-The report gives one verdict per backend for V1 against V0, over the goals both sides have complete runs of. Two criteria
+The report gives one verdict per backend for V1 against V0, and for V2 against
+V1 on a backend that ran V2, over the goals both sides have complete runs of. Two criteria
 judge it, each against run-to-run spread:
 
 - key violations per run, where a complete run with no plan counts one;

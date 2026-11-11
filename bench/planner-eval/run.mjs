@@ -46,7 +46,8 @@ const USAGE = `usage: node bench/planner-eval/run.mjs (--smoke | --full | --mock
 
   --backend a,b           cells by id or prefix (claude-code, opencode/glm-5.3-flash, openrouter, cline ...)
   --goal g1,g4            goals by id
-  --variant V0,V1         variants (V0 baseline + nudges, V1 candidate)
+  --variant V0,V1         variants (V0 baseline + nudges, V1 candidate; V2 candidate
+                          with the planner read limit, only when named)
   --repeats N             repeats per (goal, backend, variant)
   --concurrency N         runs at once (default 2)
   --timeout S             seconds a run may take before it is stopped (default 900); a stopped run is a failed run
@@ -223,6 +224,8 @@ async function record({ spec, builds, templates, opts, dir, workRoot }) {
   const build = builds[spec.variant.build];
   const base = {
     id: spec.id, cell: spec.cell.id, variant: spec.variant.id, goal: spec.goal.id, repeat: spec.repeat, build: build.sha, keyHash: keyHash(spec.goal),
+    // What the variant changed of the environment, such as the planner read limit, so a record says what it ran under.
+    ...(Object.keys(spec.variant.env).length ? { env: spec.variant.env } : {}),
   };
   let cell = spec.cell;
   let substitution;

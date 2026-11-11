@@ -512,6 +512,21 @@ describe('openCodePlannerAsk', () => {
     expect(openCodePlannerAsk('bash', {}, servers, true)).toEqual({ kind: 'native-shell', tool: 'bash' });
     expect(openCodePlannerAsk('shell', { patterns: ['ls'] }, servers)).toEqual({ kind: 'other' });
   });
+
+  it('reads a native read as the planner\'s own read only when the read limit made it ask (ADR-0068)', () => {
+    expect(openCodePlannerAsk('read', { patterns: ['src/a.ts'] }, servers, false, true)).toEqual({ kind: 'native-read', tool: 'read', pattern: 'src/a.ts' });
+    for (const name of ['glob', 'grep', 'list', 'lsp']) {
+      expect(openCodePlannerAsk(name, {}, servers, false, true), name).toEqual({ kind: 'native-read', tool: name });
+    }
+    expect(openCodePlannerAsk('read', { patterns: ['src/a.ts'] }, servers)).toEqual({ kind: 'other' });
+    expect(openCodePlannerAsk('edit', {}, servers, false, true)).toEqual({ kind: 'other' });
+  });
+
+  it('has 1.x\'s read tools ask in the planner\'s config only while the read limit is on (ADR-0068)', () => {
+    const permission = (readsAsk?: boolean) => (JSON.parse(OPENCODE_ORDEWELL.configContent(undefined, null, 'planner', {}, undefined, undefined, undefined, readsAsk) ?? 'null') as { permission: Record<string, string> }).permission;
+    expect(permission()).toEqual(OPENCODE_PLANNER_PERMISSION);
+    expect(permission(true)).toEqual({ ...OPENCODE_PLANNER_PERMISSION, read: 'ask', glob: 'ask', grep: 'ask', list: 'ask', lsp: 'ask' });
+  });
 });
 
 describe('an OpenCode planner\'s web reads (ADR-0027)', () => {

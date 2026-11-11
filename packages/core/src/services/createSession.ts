@@ -47,6 +47,7 @@ import { HttpWebFetcher, type WebTransport } from './HttpWebFetcher';
 import type { ResolveAll } from './egressGuard';
 import type { ISearchProvider } from '../interfaces/ISearchProvider';
 import { WebReadPolicy } from './webReadPolicy';
+import { PlannerReadLimit, plannerReadLimitOf } from './plannerReadLimit';
 import { sharedWebResponseCache, type WebResponseCache } from './WebResponseCache';
 import { sharedSearchProvider } from './DuckDuckGoSearchProvider';
 import { PROVIDER_PRIORITY, providerForRunner, runnerForProvider } from './ProviderRegistry';
@@ -88,7 +89,7 @@ import { PlannerNotReadyError, plannerNotReadyFor } from './plannerReadiness';
 import { recordedRunnerAuth } from './runnerAuth';
 import { installedPlannerAnswered, installedPlannerDetected } from './InstalledPlanner';
 import type { IConfig, PlannerBackendId } from '../interfaces/IConfig';
-import type { IFileSystem } from '../interfaces/IFileSystem';
+import type { BashOptions, IFileSystem, ToolOutcome } from '../interfaces/IFileSystem';
 import type { IWebFetcher } from '../interfaces/IWebFetcher';
 import type { INotification } from '../interfaces/INotification';
 import type { IRunner } from '../interfaces/IRunner';
@@ -142,6 +143,8 @@ export interface SessionRuntimeSettings {
   run?: GlobalRunSettings;
   /** Whether an API planner compacts its own context before a call that would not fit; absent means on. */
   plannerAutoCompaction?: boolean;
+  /** The settings file's `plannerReadLimit`, as written; `plannerReadLimitOf` reads it with its variable. */
+  plannerReadLimit?: UserSettings['plannerReadLimit'];
   /** What a task runner loads of the user's own setup; absent means all of it. */
   taskRunnerConfig?: TaskRunnerConfig;
   /** The `containers` setting, as written; absent means local worktrees (ADR-0059 L4). */
@@ -165,6 +168,7 @@ export function sessionRuntimeSettings(settings: UserSettings): SessionRuntimeSe
     enabledRunners: settings.enabledRunners,
     run: runSettingsOf(settings),
     ...(settings.plannerAutoCompaction !== undefined ? { plannerAutoCompaction: settings.plannerAutoCompaction } : {}),
+    ...(settings.plannerReadLimit !== undefined ? { plannerReadLimit: settings.plannerReadLimit } : {}),
     ...(settings.taskRunnerConfig !== undefined ? { taskRunnerConfig: settings.taskRunnerConfig } : {}),
     ...(settings.containers !== undefined ? { containers: settings.containers } : {}),
   };
@@ -449,6 +453,7 @@ export function createSession(deps: SessionDeps): Session {
     () => contextLine(plannerContextFill(usage.snapshot())),
     () => taskReadsLine(conversation?.readsLeft),
     () => webReadsLine(webReads.remaining()),
+    () => readLimit.line(),
   ]);
   // An API planner reads these before each call: its model's limits from the
   // catalogs already held (a fetch is started, never awaited, for a model they
@@ -632,6 +637,11 @@ export function createSession(deps: SessionDeps): Session {
   deps.fsAdapter.setApproval?.(approvalPolicy);
   const outboundSecrets = () => [...configSecrets(deps.config), ...mcpServer.heldTokens(), ...(aiService().heldSecrets?.() ?? [])];
   deps.fsAdapter.setOutboundSecrets?.(outboundSecrets);
+  // Read per call, so a settings change or the variable applies from the next read.
+  const readLimit = new PlannerReadLimit({
+    limit: () => plannerReadLimitOf(deps.settings().plannerReadLimit, process.env.ORDEWELL_PLANNER_READ_LIMIT),
+    turn: () => conversation?.currentTurnId,
+  });
   const webReads = new WebReadPolicy({
     approval: approvalPolicy,
     secrets: outboundSecrets,
@@ -689,6 +699,7 @@ export function createSession(deps: SessionDeps): Session {
     approvalPolicy,
     taskLogs,
     fetcher,
+    readLimit,
     skillsService: deps.skillsService ?? new SkillsService(deps.workspaceRoot()),
     saveSession: deps.saveSession ?? (deps.placement ? saveUnder(deps.placement) : saveSession),
     lease: (onLost, runLive) => {
@@ -775,6 +786,8 @@ export interface SessionParts {
   /** Where the Session writes what it made of a task's event into that attempt's log. */
   taskLogs: Pick<TaskLogRecorder, 'note'>;
   fetcher: IWebFetcher;
+  /** The planner's own reads per turn (ADR-0068): handed to its backend, and charged here for `run_command`. */
+  readLimit: PlannerReadLimit;
   skillsService: Pick<SkillsService, 'findSkill' | 'listSkills' | 'searchedDirs' | 'forRoot'>;
   saveSession: SaveSession;
   /** Its lease, told by the Session what to do when another host takes it (ADR-0049), and whether its run is live (ADR-0062 G7). */
@@ -851,6 +864,7 @@ export class Session {
   private readonly approvalPolicy: ApprovalPolicy;
   private readonly taskLogs: SessionParts['taskLogs'];
   private readonly fetcher: IWebFetcher;
+  private readonly readLimit: PlannerReadLimit;
   private readonly settingsFn: () => SessionRuntimeSettings;
   /**
    * This session's copy of the user's run settings (ADR-0030), seeded when it
@@ -942,7 +956,7 @@ export class Session {
       if (patch) return Promise.resolve(readSavedPatch(readTaskPatch(this.taskLogLocation, taskId, patch.attempt), patch, options));
       return this.runs.taskDiff(taskId, options);
     },
-    runCommand: (command, signal, opts) => this.fsAdapter.bash(command, signal, opts),
+    runCommand: (command, signal, opts) => this.ownCommand(command, signal, opts),
     fetchUrl: (url) => this.fetcher.fetch(url),
     webSearch: async (query) => this.fetcher.search?.(query),
     execute: (command, signal) => this.commands.run(command, this.turnActor(), signal),
@@ -1005,6 +1019,7 @@ export class Session {
     this.approvalPolicy = parts.approvalPolicy;
     this.taskLogs = parts.taskLogs;
     this.fetcher = parts.fetcher;
+    this.readLimit = parts.readLimit;
     this.skillsService = parts.skillsService;
     this.save = parts.saveSession;
     this.lease = parts.lease((held) => this.leaseLost(held), () => this.runIsLive);
@@ -2736,6 +2751,7 @@ export class Session {
       isolatedExecution: await this.runs.plannerLayout(),
       fs: this.fsAdapter,
       fetcher: this.fetcher,
+      readLimit: this.readLimit,
       approval: this.approvalPolicy,
       notice: (level, message) => this.notice(level, message),
       plannerTools: {
@@ -2751,6 +2767,19 @@ export class Session {
       ...(this.brief ? { subplanner: this.brief } : {}),
       skills: this.workspaceSkills().listSkills(),
     };
+  }
+
+  /**
+   * A harness planner's `run_command`, charged to its read limit (ADR-0068).
+   * The planner's MCP token is its runner's own subagents' too, so a command
+   * one of them runs here counts against the planner as well.
+   */
+  private async ownCommand(command: string, signal?: AbortSignal, opts?: BashOptions): Promise<ToolOutcome> {
+    const admission = this.readLimit.admit();
+    if (!admission.allowed) return { success: false, output: admission.reason, truncated: false };
+    const outcome = await this.fsAdapter.bash(command, signal, opts);
+    this.readLimit.charge(Buffer.byteLength(outcome.output));
+    return outcome;
   }
 
   /** A planner's tools, and for a subplanner the two its parent's attempt answers (ADR-0055 D5). */

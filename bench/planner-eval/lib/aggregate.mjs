@@ -1,18 +1,21 @@
 /**
  * From run records to the report: medians and spread per backend, variant and
  * goal, every violation listed with the run it came from, and a verdict per
- * backend for each comparison (V1 against V0). Pure, so
+ * backend for each comparison (V1 against V0, and V2 against V1 where V2
+ * ran). Pure, so
  * `planner-eval.test.mjs` proves every verdict on hand-written records.
  *
  * A run record is what run.mjs writes per run:
- *   { id, cell, variant, goal, repeat, build, model, keyHash, metrics, keyChecks, rubric?, error?, substitution? }
+ *   { id, cell, variant, goal, repeat, build, model, keyHash, metrics, keyChecks, rubric?, error?, substitution?, env? }
  *
  * A run that timed out, lost its TUI or failed is not a planner's answer: it
  * counts toward the completion rate and nowhere else.
  */
 
+/** An `optional` comparison is judged only on a backend whose candidate ran, as its variant runs only when named. */
 export const COMPARISONS = [
   { baseline: 'V0', candidate: 'V1' },
+  { baseline: 'V1', candidate: 'V2', optional: true },
 ];
 
 /** The per-run numbers the report summarises, in its column order. */
@@ -208,7 +211,9 @@ export function aggregate(records, goals) {
   const cells = [...new Set(records.map((r) => r.cell))];
   return {
     summaries: summarize(records, goals),
-    verdicts: cells.flatMap((cell) => COMPARISONS.map((c) => verdict(records, goals, { cell, ...c }))),
+    verdicts: cells.flatMap((cell) => COMPARISONS
+      .filter((c) => !c.optional || records.some((r) => r.cell === cell && r.variant === c.candidate))
+      .map(({ baseline, candidate }) => verdict(records, goals, { cell, baseline, candidate }))),
   };
 }
 

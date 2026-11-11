@@ -14,11 +14,12 @@ import { fakeMcpServer, fakeSpawn, fixture, openCodeFixture, planJson, scriptedA
 import type { McpToolReply, SubmitPlanArgs } from '../mcp/tools';
 import type { SkillLookup } from '../taskSkills';
 import type { SkillInfo } from '../SkillsService';
-import type { AgentAdapter, AgentEvent, PlannerStartOptions } from '../harness/AgentAdapter';
+import type { AgentAdapter, AgentEvent, AgentStartOptions, PlannerStartOptions } from '../harness/AgentAdapter';
 import type { ApprovalRequest } from '../../interfaces/IApproval';
 import { addPlannerUsage, plannerContextFill } from '../../models/Usage';
 import { TurnStream } from '../replyStream';
 import { WebReadPolicy, type WebRead } from '../webReadPolicy';
+import { PlannerReadLimit } from '../plannerReadLimit';
 import { summarizeToolCall } from '../researchStepSummary';
 import { recordedRunnerAuth, resetRunnerAuth } from '../runnerAuth';
 
@@ -2710,19 +2711,20 @@ describe('CliAgentAiService — resource lifecycle', () => {
    */
   function planners(behave: (index: number) => { holdStart?: boolean; send?: AgentAdapter['send']; answerPermission?: AgentAdapter['answerPermission'] } = () => ({})) {
     const mcp = fakeMcpServer();
-    const processes: Array<{ disposed: boolean; sent: string[]; release: () => void; startCalled: boolean }> = [];
+    const processes: Array<{ disposed: boolean; sent: string[]; release: () => void; startCalled: boolean; started?: AgentStartOptions }> = [];
     const svc = new CliAgentAiService(fakeConfig({ aiProvider: 'claude-code' }), {
       workspaceRoot: () => '/repo',
       mcpServer: mcp,
       createAdapter: () => {
         const behavior = behave(processes.length);
-        const record = { disposed: false, sent: [] as string[], release: () => {}, startCalled: false };
+        const record: (typeof processes)[number] = { disposed: false, sent: [] as string[], release: () => {}, startCalled: false };
         processes.push(record);
         return {
           agentId: 'claude-code',
           exited: false,
-          start: async () => {
+          start: async (opts) => {
             record.startCalled = true;
+            record.started = opts;
             if (behavior.holdStart) await new Promise<void>((resolve) => { record.release = resolve; });
           },
           send: async (message, onEvent, signal, onLiveness) => {
@@ -2877,6 +2879,100 @@ describe('CliAgentAiService — resource lifecycle', () => {
     await expect(svc.startConversation(request({ approval }))).rejects.toThrow('EPIPE');
 
     expect(signals[0]?.aborted).toBe(true);
+  });
+
+  // A native read asks through the envelope, which is where the planner's
+  // read limit stops it (ADR-0068); a subagent's reads are not the planner's.
+  describe('the planner read limit', () => {
+    const read = (id: string, path: string, subagentId?: string): AgentEvent[] => [
+      { type: 'tool_call', id, name: 'Read', args: { file_path: path }, ...(subagentId ? { subagentId } : {}) },
+      { type: 'permission_request', id: `req-${id}`, name: 'Read', detail: path, toolUseId: id, ask: { kind: 'path', path, directory: false } },
+    ];
+    const limitOf = (calls: number, bytes: number) => new PlannerReadLimit({ limit: () => ({ calls, bytes }), turn: () => 't1' });
+
+    /** Each read is answered before its result arrives, as a runner blocks on the answer. */
+    function readsThrough(reads: Array<{ events: AgentEvent[]; output: string }>) {
+      const answers = new Map<string, { decision: string; note?: string }>();
+      const { svc } = planners(() => ({
+        send: async (_message, onEvent) => {
+          for (const { events, output } of reads) {
+            for (const event of events) onEvent(event);
+            const ask = events[1] as Extract<AgentEvent, { type: 'permission_request' }>;
+            await vi.waitFor(() => expect(answers.has(ask.id)).toBe(true));
+            if (answers.get(ask.id)?.decision === 'allow') onEvent({ type: 'tool_result', id: ask.toolUseId!, name: 'Read', output, success: true });
+          }
+          onEvent({ type: 'assistant_text', runId: 'r1', text: 'ok' });
+          onEvent({ type: 'turn_end' });
+        },
+        answerPermission: (id, decision) => { answers.set(id, decision); return true; },
+      }));
+      return { svc, answers };
+    }
+
+    it('denies the planner\'s read past the call limit, and never a subagent\'s', async () => {
+      const { svc, answers } = readsThrough([
+        { events: read('t1', 'a.ts'), output: 'a' },
+        { events: read('t2', 'b.ts'), output: 'b' },
+        { events: read('t3', 'c.ts'), output: 'c' },
+        { events: read('s1', 'd.ts', 'sub-1'), output: 'd' },
+      ]);
+
+      await svc.startConversation(request({ approval: approvalSpy(true), readLimit: limitOf(2, 1_000_000) }));
+
+      expect(answers.get('req-t1')?.decision).toBe('allow');
+      expect(answers.get('req-t2')?.decision).toBe('allow');
+      expect(answers.get('req-t3')).toEqual({ decision: 'deny', note: expect.stringMatching(/^Read limit reached: you have made 2 reads/) });
+      expect(answers.get('req-s1')?.decision).toBe('allow');
+    });
+
+    it('charges what a read returned, and gives back a read the envelope refused', async () => {
+      const { svc, answers } = readsThrough([
+        { events: read('t1', '/etc/hosts'), output: 'never read' },
+        { events: read('t2', 'a.ts'), output: 'x'.repeat(2048) },
+        { events: read('t3', 'b.ts'), output: 'b' },
+      ]);
+
+      await svc.startConversation(request({ approval: approvalSpy(false), readLimit: limitOf(2, 2048) }));
+
+      expect(answers.get('req-t1')?.decision).toBe('deny');
+      expect(answers.get('req-t2')?.decision).toBe('allow');
+      expect(answers.get('req-t3')).toEqual({ decision: 'deny', note: expect.stringContaining('1 read this turn (2 KB)') });
+    });
+
+    it('asks a runner to raise its native reads while the limit is on, and counts each as a read (ADR-0068)', async () => {
+      const nativeRead = (id: string): AgentEvent[] => [
+        { type: 'tool_call', id, name: 'glob', args: {} },
+        { type: 'permission_request', id: `req-${id}`, name: 'glob', detail: '**/*.ts', toolUseId: id, ask: { kind: 'native-read', tool: 'glob', pattern: '**/*.ts' } },
+      ];
+      const answers = new Map<string, { decision: string; note?: string }>();
+      const { svc, processes } = planners(() => ({
+        send: async (_message, onEvent) => {
+          for (const id of ['g1', 'g2']) {
+            for (const event of nativeRead(id)) onEvent(event);
+            await vi.waitFor(() => expect(answers.has(`req-${id}`)).toBe(true));
+            if (answers.get(`req-${id}`)?.decision === 'allow') onEvent({ type: 'tool_result', id, name: 'glob', output: 'a.ts', success: true });
+          }
+          onEvent({ type: 'assistant_text', runId: 'r1', text: 'ok' });
+          onEvent({ type: 'turn_end' });
+        },
+        answerPermission: (id, decision) => { answers.set(id, decision); return true; },
+      }));
+
+      await svc.startConversation(request({ readLimit: limitOf(1, 1_000_000) }));
+
+      expect(processes[0]?.started).toMatchObject({ kind: 'planner', readsAsk: true });
+      expect(answers.get('req-g1')?.decision).toBe('allow');
+      expect(answers.get('req-g2')).toEqual({ decision: 'deny', note: expect.stringMatching(/^Read limit reached: you have made 1 read /) });
+    });
+
+    it('leaves a runner\'s native reads unasked while the limit is off', async () => {
+      const { svc, processes } = planners();
+      const off = new PlannerReadLimit({ limit: () => undefined, turn: () => 't1' });
+
+      await svc.startConversation(request({ readLimit: off }));
+
+      expect(processes[0]?.started).not.toHaveProperty('readsAsk');
+    });
   });
 });
 

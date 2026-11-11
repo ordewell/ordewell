@@ -1,5 +1,5 @@
 /**
- * What the bench runs: the backend matrix, the three variants, the goals, and
+ * What the bench runs: the backend matrix, the variants, the goals, and
  * the command line that filters them. Pure apart from `loadGoals`, which reads
  * the goal files, so `planner-eval.test.mjs` proves the matrix and the flags.
  */
@@ -18,9 +18,12 @@ export const NUDGES = [
   'Keep your context as clear as possible: make use of research tasks to surface to you only the relevant information to make decisions.',
 ];
 
+/** An `optional` variant runs only when `--variant` names it (or on the mock), as an optional cell does. */
 export const VARIANTS = {
   V0: { id: 'V0', build: 'baseline', nudges: true, env: {}, about: `Ordewell at ${BASELINE_REF}, goal plus the two nudges` },
   V1: { id: 'V1', build: 'candidate', nudges: false, env: {}, about: 'the candidate ref, goal alone' },
+  // ADR-0068: the planner's own reads per turn are capped, at the default limit.
+  V2: { id: 'V2', build: 'candidate', nudges: false, optional: true, env: { ORDEWELL_PLANNER_READ_LIMIT: 'on' }, about: 'V1 plus the planner read limit' },
 };
 
 /** The answer to a clarifying question and the confirmation of an outline, verbatim. */
@@ -264,7 +267,7 @@ export function selectRuns(opts, { goals, cells = CELLS }) {
   const smoke = opts.mode === 'smoke';
   const pickedCells = cells.map((c) => withModel(c, opts.models)).filter((c) => (opts.backends ? matches(opts.backends, c.id) : smoke ? c.id === 'claude-code/haiku' : !c.optional || opts.withOptional || opts.mode === 'mock'));
   const pickedGoals = goals.filter((g) => (opts.goals ? opts.goals.some((w) => w.toLowerCase() === g.id) : smoke || opts.mode === 'mock' ? g.id === 'g1' : true));
-  const pickedVariants = Object.values(VARIANTS).filter((v) => !opts.variants || opts.variants.includes(v.id));
+  const pickedVariants = Object.values(VARIANTS).filter((v) => (opts.variants ? opts.variants.includes(v.id) : !v.optional || opts.mode === 'mock'));
   const runs = [];
   for (let repeat = 1; repeat <= opts.repeats; repeat++) {
     for (const goal of pickedGoals) {
