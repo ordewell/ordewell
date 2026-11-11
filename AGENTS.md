@@ -39,7 +39,26 @@ a pull request owes, at the same tiers, and runs the checks this host can
 prove: a full-tier workspace runs `test:coverage`, its per-file floors
 included, and a quick one `test:quick`, which skips the real-git e2e files.
 Whatever it cannot judge runs every suite.
-It always runs what every change owes — building core, the verify scripts and
+
+**Inside a parallel Ordewell run** (you are one of several tasks in worktrees
+under `.ordewell/worktrees/`, and your brief says an integration check follows
+you) test narrowly: `test:changed` and `test:coverage` are that check's job.
+Several full suites at once overload the machine, and the load-induced failures
+they cause (timeouts, container and sandbox tests) are unrelated to your change
+and send tasks back to re-run everything. Run only what proves your own change:
+vitest on the test files covering the files you changed, the typecheck, and lint
+on what you touched. If you changed core, build it first, since the other
+packages compile against its `dist/`. Write test output to a file inside your
+worktree and wait on the PID you started. Outside such a run, or when your
+brief names no integration check, `test:changed` stays the inner loop.
+
+The integration check runs on the merged checkout, where there are no
+uncommitted changes, and `test:changed` selects only from those: it has no base
+ref. So the check runs `npm run build`, `npm run lint`, `npm run typecheck`,
+`npm run test:coverage` (the per-file floors) and `npm run test:bench`. A plan
+that needs the container or desktop e2e adds those on purpose.
+
+`test:changed` always runs what every change owes — building core, the verify scripts and
 the repository-wide guards — and the remaining build, and a prose-only change
 still builds, since a suite tested against a stale `dist/` proves nothing. It
 ends by naming every owed check it could not run, with the reason (a display,
