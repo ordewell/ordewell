@@ -347,7 +347,7 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
         const readOnly = opts.kind === 'task' && readOnlyTask(opts);
         const role = readOnly ? 'readOnlyTask' : opts.kind;
         const ordewellConfig = opts.kind === 'planner' || readOnly
-          ? OPENCODE_ORDEWELL.configContent(existing, opts.mcp ?? null, role, projectServers, opts.kind === 'task' ? opts : undefined, nativeShell, gateway ?? undefined) ?? OPENCODE_ORDEWELL.configContent(undefined, opts.mcp ?? null, role, projectServers, opts.kind === 'task' ? opts : undefined, nativeShell, gateway ?? undefined)
+          ? OPENCODE_ORDEWELL.configContent(existing, opts.mcp ?? null, role, projectServers, opts.kind === 'task' ? opts : undefined, nativeShell, gateway ?? undefined, opts.kind === 'planner' && opts.readsAsk) ?? OPENCODE_ORDEWELL.configContent(undefined, opts.mcp ?? null, role, projectServers, opts.kind === 'task' ? opts : undefined, nativeShell, gateway ?? undefined, opts.kind === 'planner' && opts.readsAsk)
           : opts.mcp || gateway ? OPENCODE_ORDEWELL.configContent(existing, opts.mcp ?? null, 'task', undefined, undefined, undefined, gateway ?? undefined) : null;
         if ((opts.mcp || gateway) && ordewellConfig === null) {
           console.error('[opencode] OPENCODE_CONFIG_CONTENT is not a JSON object, so the Ordewell tools were not injected.');
@@ -1097,7 +1097,7 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
       // The patterns `always` would grant: the runner's own offer, and the only grounds for "Allow for this task".
       ...(ask.always?.length ? { suggestions: ask.always } : {}),
       ...(ask.tool?.callID ? { toolUseId: ask.tool.callID } : {}),
-      ...(!this.task || readOnlyTask(this.task) ? { ask: openCodePlannerAsk(name, ask, this.mcpServers) } : {}),
+      ...(!this.task || readOnlyTask(this.task) ? { ask: openCodePlannerAsk(name, ask, this.mcpServers, false, this.planner?.readsAsk === true) } : {}),
       ordewell: !!this.ordewell && OPENCODE_ORDEWELL.isOrdewellAsk(name),
     }, ask.sessionID ?? this.sessionId ?? '', seen, onEvent);
   }

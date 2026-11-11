@@ -1424,6 +1424,16 @@ continue starts a fresh one.
 *Avoid:* "per-planner budget" (it is per session and turn, shared with
 subagents), "query budget" (that is the *Task query* read budget).
 
+**Planner read limit** — how much the planner may read itself in one turn:
+read-class calls (workspace reads, `run_command`, a harness's own reads and
+shell) and the bytes their results held, 10 calls or 60 KB unless set
+(`plannerReadLimit`, `ORDEWELL_PLANNER_READ_LIMIT`); off unless turned on.
+Past it, the planner's next read is refused with a pointer to a research
+agent or a research task. What research agents and tasks read is never
+charged to it (ADR-0068).
+*Avoid:* "read budget" (that is the *Task query* read budget), "context
+limit" (it counts calls and bytes, not tokens).
+
 **Completion call** — a `task_complete` call carrying `status`, `summary`
 and optional `findings`, `artifacts`, `report` and `reason`, made with a task's
 *task token*: the only runner completion evidence. It is handed

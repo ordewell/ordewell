@@ -63,14 +63,22 @@ export const OPENCODE_PLANNER_PERMISSION: Record<string, OpenCodeSessionRule['ef
   shell: 'deny', subagent: 'deny', browser: 'deny',
 };
 
+/** The read tools a planner's policy allows unasked, unless the read limit has them ask (ADR-0068). */
+export const OPENCODE_READ_TOOLS: readonly string[] = ['read', 'glob', 'grep', 'list', 'lsp'];
+
 /**
  * A planner's policy with the native-shell opt-in on (ADR-0036 N1, N2): the
  * shell asks, and the harness's request becomes the `native-shell` kind the
  * adapter routes to the user's grant. Off, both spellings stay denied, so a
- * planner has `run_command` alone.
+ * planner has `run_command` alone. With `readsAsk`, the read tools ask too,
+ * so the planner read limit sees each one (ADR-0068).
  */
-export function plannerPermission(nativeShell: boolean): Record<string, OpenCodeSessionRule['effect']> {
-  return nativeShell ? { ...OPENCODE_PLANNER_PERMISSION, bash: 'ask', shell: 'ask' } : OPENCODE_PLANNER_PERMISSION;
+export function plannerPermission(nativeShell: boolean, readsAsk = false): Record<string, OpenCodeSessionRule['effect']> {
+  return {
+    ...OPENCODE_PLANNER_PERMISSION,
+    ...(nativeShell ? { bash: 'ask', shell: 'ask' } : {}),
+    ...(readsAsk ? Object.fromEntries(OPENCODE_READ_TOOLS.map((tool) => [tool, 'ask'])) : {}),
+  };
 }
 
 /** ADR-0046: nobody can approve native tools; only reads and the task token's tools run. */
@@ -129,7 +137,7 @@ export interface OpenCodeOrdewellBinding extends OrdewellToolBinding<string> {
    * at the lease's own address with the stand-in, so OpenCode's model traffic
    * never needs the key or the network.
    */
-  configContent(existing: string | undefined, mcp: McpClientConfig | null, role: OrdewellToolRole, projectServers?: Record<string, unknown>, site?: Pick<TaskStartOptions, 'cwd' | 'workspaceRoot'>, nativeShell?: string, gateway?: LeaseGateway): string | null;
+  configContent(existing: string | undefined, mcp: McpClientConfig | null, role: OrdewellToolRole, projectServers?: Record<string, unknown>, site?: Pick<TaskStartOptions, 'cwd' | 'workspaceRoot'>, nativeShell?: string, gateway?: LeaseGateway, readsAsk?: boolean): string | null;
   /** The rules a 2.x session is created with so the server's tools never wait on a person (ADR-0022, S3). */
   sessionRules(mcp: McpClientConfig, role: OrdewellToolRole): OpenCodeSessionRule[];
   /**
@@ -234,7 +242,7 @@ export function withoutParentOrdewell(content: string): string {
  * layer that also decides the policy, so a user's own config cannot choose a
  * different shell for the planner.
  */
-function mergeOrdewellConfig(existing: string | undefined, mcp: McpClientConfig | null, role: OrdewellToolRole, projectServers: Record<string, unknown> = {}, site?: Pick<TaskStartOptions, 'cwd' | 'workspaceRoot'>, nativeShell?: string, gateway?: LeaseGateway): string | null {
+function mergeOrdewellConfig(existing: string | undefined, mcp: McpClientConfig | null, role: OrdewellToolRole, projectServers: Record<string, unknown> = {}, site?: Pick<TaskStartOptions, 'cwd' | 'workspaceRoot'>, nativeShell?: string, gateway?: LeaseGateway, readsAsk?: boolean): string | null {
   let base: Record<string, unknown> = {};
   if (existing?.trim()) {
     let parsed: unknown;
@@ -271,7 +279,7 @@ function mergeOrdewellConfig(existing: string | undefined, mcp: McpClientConfig 
     // Anthropic, where it means nothing, and the task's model call would fail.
     ...(gateway ? { provider: { anthropic: { options: { baseURL: versioned(gateway.baseURL), apiKey: gateway.apiKey } } } } : {}),
     permission: {
-      ...(role === 'planner' ? plannerPermission(nativeShell !== undefined) : role === 'readOnlyTask' ? OPENCODE_READ_ONLY_PERMISSION : {}),
+      ...(role === 'planner' ? plannerPermission(nativeShell !== undefined, readsAsk) : role === 'readOnlyTask' ? OPENCODE_READ_ONLY_PERMISSION : {}),
       ...(role === 'readOnlyTask' && site ? { external_directory: Object.fromEntries(readOnlySessionRules(site).filter((r) => r.action === 'external_directory').map((r) => [r.resource, r.effect])) } : {}),
       ...(mcp ? allowRules(mcp, role) : {}),
     },

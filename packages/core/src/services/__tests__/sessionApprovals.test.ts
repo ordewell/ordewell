@@ -6,6 +6,7 @@ import type { IRunner } from '../../interfaces/IRunner';
 import { BaseFileSystem } from '../BaseFileSystem';
 import { PlannerShellSandbox } from '../sandbox/plannerSandbox';
 import { fakeConfig } from '../../testing';
+import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import type { SessionMessage } from '../SessionMessage';
 import type { ConversationRequest } from '../AiService';
 import type { GrepOptions, ReadFileOpts, ToolOutcome } from '../../interfaces/IFileSystem';
@@ -690,5 +691,44 @@ describe('Session web reads', () => {
     );
 
     expect(decisions.map((d) => d.allowed)).toEqual([true, false]);
+  });
+});
+
+// A harness planner's commands reach the Session as its MCP run_command, so
+// the Session is where they are charged to the planner's read limit (ADR-0068).
+describe('Session planner read limit', () => {
+  it('refuses the harness planner\'s run_command past the limit, and hands the limit to the planner', async () => {
+    const mcp = fakeMcpServer();
+    const fsAdapter = new ProbeFileSystem();
+    const answers: McpToolReply[] = [];
+    const spawned = fakeSpawn([(_written, proc) => {
+      void (async () => {
+        const handler = mcp.plannerHandlers.at(-1)!;
+        const context = { signal: new AbortController().signal };
+        for (const command of ['ls', 'cat a.ts', 'cat b.ts']) answers.push(await handler.runCommand!({ command }, context));
+        proc.emitStdout(fixture('claude-code', 'prose'));
+      })();
+    }]);
+    const config = fakeConfig({ aiProvider: 'claude-code', autonomousMode: false });
+    const svc = new CliAgentAiService(config, {
+      spawn: spawned.spawn, resolvePath: async () => '/usr/bin', platform: 'linux',
+      isDirectory: () => true, exists: () => true, workspaceRoot: () => '/repo', mcpServer: mcp,
+    });
+    const requests: ConversationRequest[] = [];
+    const startConversation = svc.startConversation.bind(svc);
+    svc.startConversation = (req) => { requests.push(req); return startConversation(req); };
+    const session = makeSession({
+      config, aiService: svc, mcpServer: mcp, fsAdapter,
+      settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' }, plannerReadLimit: { calls: 2 } }),
+    });
+    try {
+      await session.startPlanning('upgrade the library', ['claude-code']);
+      expect(fsAdapter.bashCalls).toEqual(['ls', 'cat a.ts']);
+      expect(answers[2]).toEqual(expect.objectContaining({ isError: true }));
+      expect(JSON.stringify(answers[2])).toContain('Read limit reached: you have made 2 reads this turn');
+      expect(requests[0].readLimit?.enabled).toBe(true);
+    } finally {
+      session.destroy();
+    }
   });
 });

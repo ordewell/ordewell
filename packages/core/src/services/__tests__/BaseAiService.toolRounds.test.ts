@@ -3,6 +3,7 @@ import { BaseAiService, type ResearchChat, type ResearchTurn, type ToolResult, t
 import type { IFileSystem } from '../../interfaces/IFileSystem';
 import type { ResearchProgress } from '../../models/Task';
 import { fakeConfig, fakeFileSystem } from '../../testing';
+import { PlannerReadLimit, type ReadLimit } from '../plannerReadLimit';
 
 /**
  * These exercise one tool round through the real loop: what the loop does with
@@ -288,5 +289,44 @@ describe('API planner task reads', () => {
     expect(taskOutput).toHaveBeenCalledOnce();
     expect(taskDiff).not.toHaveBeenCalled();
     expect(chat.toolResultsSent[0][1].output).toContain('Stopped by the user');
+  });
+});
+
+describe('tool rounds — the planner read limit (ADR-0068)', () => {
+  const limitOf = (limit: ReadLimit) => new PlannerReadLimit({ limit: () => limit, turn: () => 'turn-1' });
+
+  it('runs no read past the call limit, answering it with the refusal', async () => {
+    const read = vi.fn(async (p: string) => ({ success: true, output: `body of ${p}`, truncated: false }));
+    const fs = fakeFileSystem({ readFile: read });
+    const chat = new ScriptedChat([
+      toolTurn([
+        { name: 'read_file', args: { path: 'a.ts' }, id: '1' },
+        { name: 'grep', args: { pattern: 'x' }, id: '2' },
+        { name: 'read_file', args: { path: 'c.ts' }, id: '3' },
+      ]),
+      toolTurn([{ name: 'list_dir', args: { path: '.' }, id: '4' }]),
+      proseTurn('done'),
+    ]);
+
+    await new TestService(fakeConfig()).runTurn({ ...ctxFor(chat, fs), readLimit: limitOf({ calls: 2, bytes: 1_000_000 }) });
+
+    expect(read.mock.calls.map(([p]) => p)).toEqual(['a.ts']);
+    const [first, second] = chat.toolResultsSent;
+    expect(first[2].output).toMatch(/^Read limit reached: you have made 2 reads/);
+    expect(second[0].output).toMatch(/^Read limit reached/);
+  });
+
+  it('counts the bytes a read returned, untruncated', async () => {
+    const big = 'x'.repeat(80_000);
+    const fs = fakeFileSystem({ readFile: async () => ({ success: true, output: big, truncated: false }) });
+    const chat = new ScriptedChat([
+      toolTurn([{ name: 'read_file', args: { path: 'a.ts' }, id: '1' }]),
+      toolTurn([{ name: 'read_file', args: { path: 'b.ts' }, id: '2' }]),
+      proseTurn('done'),
+    ]);
+
+    await new TestService(fakeConfig()).runTurn({ ...ctxFor(chat, fs), readLimit: limitOf({ calls: 10, bytes: 60 * 1024 }) });
+
+    expect(chat.toolResultsSent[1][0].output).toContain('(78 KB)');
   });
 });

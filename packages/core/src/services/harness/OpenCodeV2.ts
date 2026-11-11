@@ -3,7 +3,7 @@ import { realpathSync } from 'fs';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { AgentEvent, PlannerStartOptions, TaskStartOptions } from './AgentAdapter';
 import { taskCompletionContract } from '../mcp';
-import { OPENCODE_ORDEWELL, plannerPermission, readOnlySessionRules, OPENCODE_SEARCH_OFF, type OpenCodeSessionRule as SessionRule } from './openCodeOrdewell';
+import { OPENCODE_ORDEWELL, OPENCODE_READ_TOOLS, plannerPermission, readOnlySessionRules, OPENCODE_SEARCH_OFF, type OpenCodeSessionRule as SessionRule } from './openCodeOrdewell';
 import { hunksOf } from './fileDiff';
 import { heldServersNote } from './projectServers';
 import type { ProjectMcpServer } from './repoConfig';
@@ -23,8 +23,8 @@ const IDLE_POLLS_BEFORE_START = 3;
  * matches, after the agent's and the user's own. With the native-shell
  * opt-in, `bash` and `shell` ask instead of denying (ADR-0036 N2).
  */
-function plannerRules(nativeShell: boolean): SessionRule[] {
-  return Object.entries(plannerPermission(nativeShell))
+function plannerRules(nativeShell: boolean, readsAsk: boolean): SessionRule[] {
+  return Object.entries(plannerPermission(nativeShell, readsAsk))
     .map(([action, effect]) => ({ action, resource: '*', effect }));
 }
 const SEARCH_OFF_RULES: SessionRule[] = Object.entries(OPENCODE_SEARCH_OFF)
@@ -279,6 +279,8 @@ export class OpenCodeV2 {
 
   /** The launcher every command must run in, or null when the user's opt-in is off (ADR-0036 N2). */
   private get nativeShell(): string | null { return this.host.nativeShell ?? null; }
+  /** The planner read limit had the read tools ask when this session started (ADR-0068). */
+  private get readsAsk(): boolean { return this.opts.kind === 'planner' && this.opts.readsAsk === true; }
 
   unusableProjectServers(): ProjectMcpServer[] { return [...this.unusable]; }
 
@@ -318,18 +320,23 @@ export class OpenCodeV2 {
       title: SESSION_TITLE[this.role],
       agent: this.agent,
       ...(this.model ? { model: this.model } : {}),
-      permissions: [...(this.opts.kind === 'task' && readOnlyTask(this.opts) ? readOnlySessionRules(this.opts) : this.role === 'planner' ? [...plannerRules(this.nativeShell !== null), ...(this.ownSearch ? [] : SEARCH_OFF_RULES), ...CODE_MODE_OFF_RULES] : TASK_RULES), ...this.ordewellRules()],
+      permissions: [...(this.opts.kind === 'task' && readOnlyTask(this.opts) ? readOnlySessionRules(this.opts) : this.role === 'planner' ? [...plannerRules(this.nativeShell !== null, this.readsAsk), ...(this.ownSearch ? [] : SEARCH_OFF_RULES), ...CODE_MODE_OFF_RULES] : TASK_RULES), ...this.ordewellRules()],
     });
     if (!created?.data?.id) throw new Error(`The OpenCode ${this.role} server did not return a session id.`);
     this.sessionId = created.data.id;
     await this.applyInstructions();
   }
 
-  /** Whether a planner session's own shell rules are the ones the current opt-in needs (ADR-0036 N2). */
+  /**
+   * Whether a planner session's own shell rules are the ones the current
+   * opt-in needs (ADR-0036 N2), and its read rules the ones the read limit
+   * needs (ADR-0068): a read that runs unasked is a read the limit never sees.
+   */
   private shellRulesMatch(rules: unknown): boolean {
     if (this.role !== 'planner') return true;
     const expected = this.nativeShell ? 'ask' : 'deny';
-    return ruleEffect(rules, 'bash') === expected && ruleEffect(rules, 'shell') === expected;
+    return ruleEffect(rules, 'bash') === expected && ruleEffect(rules, 'shell') === expected
+      && OPENCODE_READ_TOOLS.every((tool) => (ruleEffect(rules, tool) === 'ask') === this.readsAsk);
   }
 
   /**
@@ -785,7 +792,7 @@ export class OpenCodeV2 {
       // An unusable one is running too, but what reaches its tools is `execute`, and the planner was told it has none.
       const listed = (this.host.mcpServers?.() ?? []).filter((name) => !this.unusable.some((server) => server.name === name));
       const read = request.name === 'external_directory' && ask.source?.id ? state.readPaths.get(ask.source.id) : undefined;
-      request.ask = openCodePlannerAsk(request.name, { patterns: ask.resources, ...(read ? { metadata: { filepath: read } } : {}) }, [...listed, ...this.exposed], this.nativeShell !== null);
+      request.ask = openCodePlannerAsk(request.name, { patterns: ask.resources, ...(read ? { metadata: { filepath: read } } : {}) }, [...listed, ...this.exposed], this.nativeShell !== null, this.readsAsk);
     }
     raiseOnce(this.permissions, request, session, state.seen, onEvent);
   }

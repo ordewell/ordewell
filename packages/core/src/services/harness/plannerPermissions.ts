@@ -81,6 +81,9 @@ export async function decidePlannerPermission(
   // call is on the timeline already. Asking per command would be a second
   // consent for the same grant, and nobody is there to give it in a one-shot.
   if (ask.kind === 'native-shell') return ALLOW;
+  // It asked only so the read limit could count it (ADR-0068); a read outside
+  // the workspace is decided by the `path` request it raises as well.
+  if (ask.kind === 'native-read') return ALLOW;
   const { approval } = gate;
   if (!approval) return deny(NOBODY_TO_ASK);
 

@@ -542,6 +542,7 @@ export class GeminiService extends BaseAiService implements IAiService {
       autonomousDefault: req.autonomousDefault,
       fetcher: req.fetcher,
       plannerTools: req.plannerTools?.handler,
+      readLimit: req.readLimit,
     };
 
     this.conversation = { ctx, setProgress: (onProgress) => { currentProgress = onProgress; } };

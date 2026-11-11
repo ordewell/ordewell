@@ -563,6 +563,7 @@
     "packages/core/src/services/__tests__/plannerForceSend.test.ts": 280,
     "packages/core/src/services/__tests__/plannerIdleRestart.test.ts": 165,
     "packages/core/src/services/__tests__/plannerModes.test.ts": 5,
+    "packages/core/src/services/__tests__/plannerReadLimit.test.ts": 15,
     "packages/core/src/services/__tests__/plannerReadiness.test.ts": 17,
     "packages/core/src/services/__tests__/plannerReplyTimeline.test.ts": 226,
     "packages/core/src/services/__tests__/plannerRepoConfig.test.ts": 9373,
