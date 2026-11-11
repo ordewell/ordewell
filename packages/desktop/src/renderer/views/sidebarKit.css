@@ -17,8 +17,11 @@
 .sgroup-actions { flex: none; display: flex; align-items: center; gap: var(--ow-space-half); }
 .sgroup-body { display: flex; flex-direction: column; min-width: 0; }
 
-/* A text shortened in the middle: the head gives way, the tail stays. */
-.mid { display: flex; min-width: 0; overflow: hidden; white-space: nowrap; }
+/*
+ * A text shortened in the middle: the head gives way, the tail stays. Spaces are kept, since a cut after a word leaves the
+ * head ending in one, which nowrap would drop at the head's edge and run the two words together.
+ */
+.mid { display: flex; min-width: 0; overflow: hidden; white-space: pre; }
 /*
  * Cut by characters (splitMiddle, where nothing measures text): the tail gives way only once the head is down to a few
  * characters, so a narrow box clips the end instead of spilling over its neighbour. The head keeps those few (3em: design.md

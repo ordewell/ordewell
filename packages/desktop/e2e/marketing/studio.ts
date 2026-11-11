@@ -12,16 +12,20 @@
  * screen is 3840x2160, which holds a 1920x1080 window at 2x whole.
  *
  * What a run shows is pinned: the page's clock (and so every "2 hours ago") is
- * MARKETING_CLOCK and runs on from there, the time zone is UTC, the locale
- * en-US, and a still is grabbed with the caret hidden, transitions off,
+ * MARKETING_CLOCK and runs on from there, the time zone is UTC unless the
+ * scenario's env sets its own, the locale en-US, and a still is grabbed with
+ * the caret hidden, transitions off,
  * animations finished or held, the pointer and its tooltips gone, and two
  * grabs in a row identical. Only the page's clock moves: what main or the
  * daemon stamps (a folder's "opened", a session's start) is real time, which
- * the page reads as a moment ahead of its own and shows as "just now".
+ * the page reads as a moment ahead of its own and shows as "just now". A
+ * scenario that runs tasks, whose elapsed times are the daemon's, takes the
+ * real clock instead (`clock: 'real'`) and dates what it seeds from now.
  */
 import { _electron as electron, expect, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { execFileSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { appEnv, DESKTOP, freePort, openFolder, removeSandbox, startMock, type Sandbox } from '../fixtures';
 import { ffmpeg, ffmpegStart, type Running } from './ffmpeg';
@@ -43,6 +47,22 @@ if (Number.isNaN(CLOCK_MS)) throw new Error(`MARKETING_CLOCK=${CLOCK} is not a d
 
 /** The switch main's testWindows.ts reads: dialogs, the tray and links stay suppressed, as in every e2e run. */
 const TEST_WINDOWS_ENV = 'ORDEWELL_DESKTOP_TEST_WINDOWS';
+
+/**
+ * The daemon's port when it is free, so the status bar names the same one in
+ * every shot and take. Not the default 3742: an install on this machine would
+ * attach to a daemon there.
+ */
+const STEADY_PORT = 47_420;
+
+/** STEADY_PORT, or any free port while another daemon, an earlier take's or anyone's, still holds it. */
+function daemonPort(): Promise<number> {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once('error', () => { void freePort().then(resolve); });
+    server.listen(STEADY_PORT, '127.0.0.1', () => { server.close(() => resolve(STEADY_PORT)); });
+  });
+}
 
 /** The Xvfb display xrun.sh started; a capture refuses any other, so it never grabs a developer's screen. */
 export function display(): string {
@@ -129,6 +149,12 @@ export interface StudioOptions {
   sandbox: Sandbox;
   /** Mock planner persona, as appEnv takes it. */
   persona?: string;
+  /** The planner the app talks to, listening before it resolves; bench/live's mock provider when absent. */
+  planner?: () => Promise<{ port: number; process: ChildProcess }>;
+  /** The app's environment, given the one the studio would launch it with. */
+  env?: (base: Record<string, string>) => Record<string, string>;
+  /** 'pinned' (the default) shows MARKETING_CLOCK as now; 'real' leaves the page on the machine's clock. */
+  clock?: 'pinned' | 'real';
 }
 
 /**
@@ -140,13 +166,12 @@ export interface StudioOptions {
 export async function openStudio(options: StudioOptions): Promise<Studio> {
   display();
   const { sandbox, scale } = options;
-  const mock = await startMock();
-  const daemonPort = await freePort();
-  const env = {
-    ...appEnv(sandbox, daemonPort, mock.port, { persona: options.persona }),
+  const mock = await (options.planner ?? (() => startMock()))();
+  const base = {
+    ...appEnv(sandbox, await daemonPort(), mock.port, { persona: options.persona }),
     TZ: 'UTC', LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8', LANGUAGE: 'en_US',
-    [TEST_WINDOWS_ENV]: 'hidden',
   };
+  const env = { ...(options.env ? options.env(base) : base), [TEST_WINDOWS_ENV]: 'hidden' };
   let app: ElectronApplication;
   try {
     app = await electron.launch({
@@ -163,19 +188,22 @@ export async function openStudio(options: StudioOptions): Promise<Studio> {
     mock.process.kill();
     throw error;
   }
-  const preload = path.join(sandbox.tmp, 'marketing-clock.preload.js');
-  fs.writeFileSync(preload, clockPreload(CLOCK_MS));
-  await app.evaluate(({ session }, filePath) => {
-    session.defaultSession.registerPreloadScript({ type: 'frame', id: 'ordewell-marketing-clock', filePath });
-  }, preload);
-  return new StudioImpl(app, sandbox, scale, mock.process);
+  const pinned = (options.clock ?? 'pinned') === 'pinned';
+  if (pinned) {
+    const preload = path.join(sandbox.tmp, 'marketing-clock.preload.js');
+    fs.writeFileSync(preload, clockPreload(CLOCK_MS));
+    await app.evaluate(({ session }, filePath) => {
+      session.defaultSession.registerPreloadScript({ type: 'frame', id: 'ordewell-marketing-clock', filePath });
+    }, preload);
+  }
+  return new StudioImpl(app, sandbox, scale, mock.process, pinned);
 }
 
 class StudioImpl implements Studio {
   private readonly clocked = new WeakSet<Page>();
   private presented: { page: Page; size: Size } | undefined;
 
-  constructor(readonly app: ElectronApplication, readonly sandbox: Sandbox, readonly scale: number, private readonly mock: ChildProcess) {}
+  constructor(readonly app: ElectronApplication, readonly sandbox: Sandbox, readonly scale: number, private readonly mock: ChildProcess, private readonly pinned: boolean) {}
 
   async welcome(): Promise<Page> {
     const page = await this.app.firstWindow();
@@ -196,7 +224,7 @@ class StudioImpl implements Studio {
 
   /** A window main opened before the clock's preload was registered (the first welcome window) is reloaded once to take it. */
   private async clock(page: Page): Promise<void> {
-    if (this.clocked.has(page)) return;
+    if (!this.pinned || this.clocked.has(page)) return;
     const pinned = (): Promise<boolean> => page.evaluate((at) => Math.abs(Date.now() - at) < 10 * 60_000, CLOCK_MS);
     if (!(await pinned())) {
       await page.reload();
@@ -254,7 +282,7 @@ class StudioImpl implements Studio {
       return record({
         path: file, kind: 'still', view: shot.view, theme: shot.theme, size: shot.size, scale: this.scale, pixels,
         ...(shot.region ? { region: { ...box, name: shot.region.name } } : {}),
-      }, CLOCK);
+      }, this.pinned ? CLOCK : new Date().toISOString());
     } finally {
       await unfreeze(page);
     }
@@ -338,7 +366,8 @@ const FREEZE_ID = 'ordewell-marketing-freeze';
  * Holds the page still for a grab: no caret, no transition, every finite
  * animation at its end and every endless one (a spinner, a blinking cursor) at
  * its first frame, the pointer off the window, so no hover or tooltip shows,
- * and nothing focused, so no focus ring does.
+ * nothing focused, so no focus ring does, and no scrollbar thumb, which a
+ * still cannot scroll (the track keeps its room, so nothing reflows).
  */
 async function freeze(page: Page): Promise<void> {
   await page.mouse.move(-50, -50);
@@ -346,7 +375,7 @@ async function freeze(page: Page): Promise<void> {
     if (!document.getElementById(id)) {
       const style = document.createElement('style');
       style.id = id;
-      style.textContent = '*, *::before, *::after { caret-color: transparent !important; transition: none !important; scroll-behavior: auto !important; }';
+      style.textContent = '*, *::before, *::after { caret-color: transparent !important; transition: none !important; scroll-behavior: auto !important; } ::-webkit-scrollbar-thumb { background: transparent !important; }';
       document.head.append(style);
     }
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
