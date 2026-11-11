@@ -139,6 +139,12 @@ export interface EscalationInput {
   waitsForApproval: (taskId: string) => boolean;
   /** Queued to start with no scheduler, once what holds it clears. */
   startQueued: (taskId: string) => boolean;
+  /**
+   * A resolver task could be added to this task's conflict now: its landing is
+   * in conflict, and no repair or resolver has it (ADR-0015). A landing git
+   * refused waits like a conflict but holds none to resolve.
+   */
+  resolvable: (taskId: string) => boolean;
   /** Why the task is on hold. */
   holdReason: (taskId: string) => string | null | undefined;
   /** Something will run this check between rounds without being asked (ADR-0045 L5). */
@@ -293,7 +299,7 @@ function awaiting(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait
       return {
         kind: 'conflict',
         reason: naming(row, 'Its work could not land: it conflicts with what landed before it.', input, rows),
-        options: [{ id: 'resolve-conflict', label: 'Add a resolver task' }, ...retry(row, input), SKIP, ...completeOption(row, input.run)],
+        options: [...(input.resolvable(task.id) ? [{ id: 'resolve-conflict' as const, label: 'Add a resolver task' }] : []), ...retry(row, input), SKIP, ...completeOption(row, input.run)],
       };
     }
     case 'files-changed':

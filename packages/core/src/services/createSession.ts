@@ -1233,6 +1233,7 @@ export class Session {
       checkpoint: (taskId) => this.orchestrator.getCheckpointQuestion(taskId),
       waitsForApproval: (taskId) => this.record.waitsForApproval(taskId),
       startQueued: (taskId) => this.orchestrator.startQueuedFor(taskId),
+      resolvable: (taskId) => this.orchestrator.canResolveConflict(taskId),
       holdReason: (taskId) => this.orchestrator.holdReason(taskId),
       loopRunsOn: (taskId) => this.orchestrator.loopRunsOn(taskId),
       carried: (taskId) => carried.has(taskId),
