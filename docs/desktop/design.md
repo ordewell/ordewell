@@ -488,7 +488,10 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
   - *The plan panel* fills in row by row as the draft streams. A partial task is
     drawn as a skeleton row.
 - **Actions.**
-  - Message the planner, or send now. Stop planning.
+  - Message the planner. While a turn runs, ⏎ queues a message and ⌘⏎ /
+    Ctrl+Enter sends now: every queued message, in the order typed, with what
+    is in the composer last, as one message. Esc takes back the newest queued
+    message, into the composer only when it is empty. Stop planning.
   - Switch the planner, model and effort.
   - Fork, rewind or compact the conversation (header `⋯`).
   - A planner question with options draws as buttons in the conversation.
@@ -957,13 +960,37 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
 │    │ ⓘ main is run r7's landing   │                                                         │
 │    │   branch: actions here are   │                                                         │
 │    │   noted in its timeline.     │                                                         │
-│    │ ↓ 0 ↑ 2  [Fetch][Pull][Push] │                                                         │
+│    │ [↓ Pull   ] [↑ Push 2  ] [⟳] │                                                         │
 ```
 
 - **Shows.**
   - *Per repository, the checkout's files:* staged, unstaged, untracked and
     conflicted (`GET /api/git/status`).
-  - *The commit box,* and the branch's ahead and behind against its upstream.
+  - *The commit box.*
+  - *The sync line:* Pull, Push and an icon-only Fetch on one 28px line, all
+    three fitting at the sidebar's 200px minimum. Pull and Push share the
+    width Fetch leaves. Each holds its count after its word: behind for Pull,
+    ahead for Push, nothing when it is 0, and `99+` past two digits. The count
+    sits in a box held for two tabular figures, so a count that changes moves
+    nothing. Below about 203px of line, the words become screen-reader text,
+    and the arrows and counts stay, centred in their buttons. The line is
+    210px at the 240px sidebar once the list's scrollbar shows, so the words
+    still fit there and do not come and go as the list grows.
+    - *Tooltips name the target,* with the count:
+      "Pull 1 commit from origin/main" and "Push 2 commits to origin/main".
+      A disabled button's tooltip and accessible description give its reason,
+      such as "Nothing to pull: origin/main has no new commits".
+    - *A note line* shows only for a state the person has to act on: "Not
+      published: Push publishes it." (no upstream), "No remote: add one to
+      fetch, pull or push." and "No branch is checked out: Pull and Push need
+      one." Being up to date, ahead or behind needs no line. The note's lines
+      are balanced, so at the 200px sidebar a second line never holds one
+      word alone.
+    - *This sidebar's sync line has no branch line:* the repository's head
+      already names the branch. The Git sidebar (W11) draws one above the
+      buttons, 28px tall: the current-branch icon at 16px, the name in
+      weight 600, then the upstream in secondary small code type. When the
+      line is short, the upstream gives way before the name.
   - *A note* when the branch is a live run's landing branch (ADR-0062 G6).
 
   Selecting a file opens its working-tree diff in Monaco.
@@ -973,7 +1000,9 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
     title bar's primary stays the session's.
   - *Amend*, shown only while HEAD is unpushed (G4).
   - Stash and pop, from the `Commit ▾` menu.
-  - Fetch, pull and push to the tracking remote.
+  - Fetch, pull and push to the tracking remote. Pull comes before Push,
+    behind before ahead, everywhere the two are drawn. Fetch keeps its
+    `refresh-cw`.
 
   Discard asks first, listing the files. Pull and push ask first, naming the
   remote and the branch (G3).
@@ -981,13 +1010,22 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
   action in flight disables its buttons.
   - *Fetch, pull and push* run one at a time per repository, whichever
     surface started them: this sidebar, the Git sidebar's Fetch or the
-    palette's *Git: Fetch*. The one running is `busy`: its icon turns, it is
+    palette's *Git: Fetch*. The one running is `busy`: its icon moves, it is
     `aria-busy`, and it stays at full strength while the other two are
-    disabled. Pull and push are busy only once their confirm is accepted. The
-    icon turns only while the action is pending, and never under reduced
-    motion. A second start while one runs is refused, and announced as
-    "web is already syncing."; the palette's Fetch is disabled meanwhile.
-- **Empty.** "No changes in web." Ahead and behind still show.
+    disabled. Fetch's circling arrows turn. Pull's and Push's arrows never
+    turn, since a turned arrow points the wrong way half the time: the arrow
+    glides down into its line for Pull, or up out of it for Push, while the
+    line stays still (`busyMotion="glide"`). The busy one's word says what it
+    is doing, "Pulling" or "Pushing", in its count's place, so it reads as
+    working with the icon still. It has no "…": a trailing ellipsis on a
+    button means it asks first, and without one the word fits whole beside
+    its icon at the 240px sidebar. Where the line is too narrow for
+    "Pushing" whole, the busy word goes the way the words go under 203px.
+    Pull and push are busy only once their confirm is accepted. The icon moves only while the action is
+    pending, and holds still under reduced motion. A second start while one
+    runs is refused, and announced as "web is already syncing."; the
+    palette's Fetch is disabled meanwhile.
+- **Empty.** "No changes in web." The sync line and its counts still show.
 - **Error.**
   - A refused action shows git's own text in the box: a hook that failed, a
     rejected push, a missing credential. It also shows the route's refusal
@@ -1000,8 +1038,8 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
 ```
 ├────┬──────────────────────────────┬─────────────────────────────────────────────────────────┤
 │▌⑃  │ web                        ⟳ │ Planner │ Commit 9c1e2d0 │ setup.md @ 9c1e2d0 ✕        │
-│    │ ⑃ main                       │                                                        │
-│    │ [Fetch] [Pull ↓1] [Push ↑2]  │  Fix setup instructions                                │
+│    │ ✓ main           origin/main │                                                        │
+│    │ [↓ Pull 1 ] [↑ Push 2  ] [⟳] │  Fix setup instructions                                │
 │    │ [⑂ Branches] [◷ History]     │  9c1e2d0 · you · 2 minutes ago                         │
 │    │ ▾ Local                    + │  …message…                                             │
 │    │   ✓ main  ↑2   ⊡ run r7      │  M docs/setup.md                                       │
@@ -1020,7 +1058,7 @@ Pressing `feature/sso` turns the same sidebar to its History; the centre is
 left as it was:
 
 ```
-│    │ ⑃ main                       │
+│    │ ✓ main           origin/main │
 │    │ [⑂ Branches] [◷ History]     │
 │    │ [History of: feature/sso ▾] ↶│
 │    │ Browsing only: your checkout │
@@ -1044,26 +1082,57 @@ left as it was:
   - *Branches* (`GET /api/git/branches`):
     - local branches, with ahead and behind;
     - Ordewell's branches, in their own read-only group;
-    - worktrees, and the integration branch of a live run;
+    - worktrees, and the integration branch of a live run. The checkout is
+      the group at the top, so it is not listed again: a worktree row names
+      its branch, with the path from the repository under it (`.ordewell/…`,
+      or `../name` beside it; the renderer knows no home directory) and the
+      whole path in its tooltip. With none to list, the group is left out;
     - remote-tracking branches, as of the last fetch;
-    - stashes.
+    - stashes, each named by its message without git's `On <branch>:` or
+      `WIP on <branch>:` lead, which the tooltip keeps whole.
 
     A lock marks a live run's landing branch, naming the run. A branch name
     with slashes is folded under its prefixes (`feature/` holds `sso` and
     `x`), each folder showing its branch count; a row still names its branch
-    in full to a screen reader and in its tooltip. The checked-out branch is
-    told by its tick and weight, not by a colour: green is a status's. The
-    branch History is showing keeps the selected background on Branches.
+    in full to a screen reader and in its tooltip. Folders step in by depth up
+    to two steps and no further, so a deep name keeps O7's 64 px at the
+    sidebar's minimum. The checked-out branch leads Local under its full name,
+    outside any folder, and is told by its tick and weight, not by a colour:
+    green is a status's. Every other row, folder and branch alike, is in one
+    alphabetical order (case aside, numbers by value) at each level, in every
+    group. A local branch ends in one trailing slot: at rest it shows
+    `↓ behind ↑ ahead`, in the sync bar's order, when it has diverged and the
+    tip's age (`3d`, in code-small, tabular) otherwise, never both, so the slot
+    keeps one width; a remote branch shows its age there. The slot is only as
+    wide as that resting value, so the name keeps every other pixel. On hover
+    or keyboard focus Switch (`arrow-right-left`) and Delete are laid over the
+    row's end, on the row's own fill, with a 16px fade over the end of the
+    name: nothing reflows and the name never moves (layout rules 1 and 4).
+    Both stay in the Tab order, named, with inset focus rings. The row's tooltip
+    and accessible description carry the tip's subject and age after the
+    full name. The branch
+    History is showing keeps the selected background on Branches. A run or
+    task link beside a branch or worktree is drawn in the link colour.
   - *History:* commits down the sidebar, two lines a row: the subject, then
-    its branch and tag chips and the short sha, author and age, with the
-    commit graph's lanes drawn small beside them. The HEAD chip is left out,
-    since the checkout's own chip says it. The full sha and the chips are in
-    the row's tooltip. Its head names whose history it is: a "History of"
+    one ref chip and the age, author and short sha (in that order, so the
+    sha is what an ellipsis cuts), with the commit graph's lanes drawn small
+    beside them. The chip is the first of the commit's refs in the order
+    checked-out branch, local branch, Ordewell branch, remote branch, tag; a
+    local branch and its remote-tracking ref at the commit are that one chip,
+    marked with a small cloud, and the other refs are a `+N` beside it. The
+    chip shows at least 64 px of its name or all of it (O7). The HEAD chip is
+    left out, since the checkout's own chip says it. The full sha and every
+    ref name are in the row's tooltip, and the row's name to a screen reader
+    is the short sha, subject, author, age and ref names. Lanes are neutral
+    (a muted stroke, the first lane a step stronger), never a status or area
+    colour; the lane step narrows from 10 to 8 px beyond six lanes, and lanes
+    still cut off by their third of the row fade out and are described to a
+    screen reader. The empty history is one line, "No commits yet". Its head names whose history it is: a "History of"
     picker (your checkout, or any local, Ordewell or remote branch), and,
     while a branch is browsed, a ↶ "Show your checkout’s history" button and
     a line saying the checkout stays where it is ("Browsing only: your
     checkout stays on main.", or that an Ordewell or remote branch is
-    read-only here).
+    read-only here), its lines balanced like the sync note's.
   - *A commit tab* (slate marker, the `git-commit-horizontal` icon, titled
     `Commit <short sha>`): the subject as its heading, the sha, author,
     date, message and files. Each file is named by its status and path, the
@@ -1080,7 +1149,10 @@ left as it was:
     the next read no longer lists falls back to the checkout's history.
   - Create, switch and delete a branch: the + on Local, and a row's own
     Switch and Delete buttons.
-  - Pop or drop a stash, each asking first.
+  - Stash the checkout's changes: the archive action in the Stashes header
+    opens a message field, as + opens New branch on Local; Esc or Cancel
+    closes it and returns focus to the action. Pop and Drop sit on each stash
+    row, always shown so Tab reaches them, each asking first.
   - Fetch, Pull and Push, on the checkout.
   - *Git: Show history* (`git.showGraph`, kept under its old id so a binding
     to it still works) shows the Git sidebar on History with the checkout's
@@ -1116,9 +1188,13 @@ left as it was:
     checkout's.
   - A fetch that brings only tags moves no branch tip, so History keeps its
     chips until Refresh.
-- **Empty.** A repository with no commits says so in History.
-- **Error.** A `git_failed` action shows git's text in place. A history that
-  cannot be read says so, with Try again; a Load more that fails says so under
+  - The first read of the branches shows a static skeleton in the groups' own
+    28 px rows, no spinner, named "Loading branches…" to a screen reader.
+- **Empty.** A repository with no commits says so in History. No stashes
+  says so in one line under the Stashes header.
+- **Error.** A `git_failed` action shows git's text in place. Branches that
+  cannot be read say so with Try again under the notice, which reads them
+  again. A history that cannot be read says so, with Try again; a Load more that fails says so under
   the rows and keeps them.
 
 ### W12. Branch action confirm
@@ -1919,7 +1995,9 @@ by what it separates: 4 within one control, 8 between controls.
 
 ### Type
 
-Inter for UI, and JetBrains Mono for code, paths, branches and commands. Both
+Inter for UI, and JetBrains Mono for code, paths, SHAs, ref chips and commands. A
+branch's name in a row is Inter, because it fits about a tenth more at the
+sidebar's narrow widths and the name leads. Both
 are bundled, with no network font. The weights are 400, 500 and 600 only.
 Tabular numbers (`font-variant-numeric: tabular-nums`) are used wherever a
 number updates in place: elapsed times, counts and usage.
@@ -1931,18 +2009,19 @@ number updates in place: elapsed times, counts and usage.
 | `--ow-type-small` | 12 / 18 | 400 | metadata, a row's second and third lines, tooltips |
 | `--ow-type-body` | 13 / 20 | 400 | UI body, rows' first lines, inputs, menus |
 | `--ow-type-label` | 13 / 20 | 500 | a button's label, a link that acts as one |
-| `--ow-type-body-strong` | 13 / 20 | 600 | the name a row or card is about: a task, session, project, branch or commit title, the checkout's branch |
+| `--ow-type-body-strong` | 13 / 20 | 600 | the name a row or card is about: a task, session, project or commit title; the checked-out branch's name (a branch row's label is `body` in Inter, and weight 600 only for the current one) |
 | `--ow-type-chat` | 14 / 22 | 400 | planner and task conversations, Details' prose |
 | `--ow-type-heading` | 15 / 22 | 600 | session header goal, dialog titles, a commit tab's subject; the Welcome tagline at 400 |
 | `--ow-type-title` | 20 / 28 | 600 | empty states, Settings' page title |
 | `--ow-type-code` | 12.5 / 19 | 400 | Monaco, the terminal, peeks, code in chat |
-| `--ow-type-code-small` | 12 / 18 | 400 | paths, branches and commands inside rows and cards |
+| `--ow-type-code-small` | 12 / 18 | 400 | paths, SHAs, ref chips, metadata and commands inside rows and cards (not a branch row's own label) |
 
 The roles rank what a surface says, and colour follows the rank:
 
 - **The name leads.** What a row, card, menu item or dialog is about (its
   task, session, project, branch, commit or model) is the first thing on it,
-  in `body-strong` or `heading` and `--ow-fg`. Metadata under or beside it (a
+  in `body-strong` or `heading` and `--ow-fg` (a branch's name in a row is
+  `body`, and `body-strong` when it is the checked-out one). Metadata under or beside it (a
   path, a sha, an author, an age, a count, a status line) is `small`,
   `caption` or `code-small` in `--ow-fg-secondary`, never the reverse.
 - **Nothing reads under 11 px.** `caption` and `overline` are the floor, in
@@ -1961,8 +2040,8 @@ The roles rank what a surface says, and colour follows the rank:
 | The activity bar | 22 | 1.5 |
 | Empty states | 40 | 1.5 |
 | Panel and sidebar headers, the title bar, dialog titles | 16 | 1.5 |
-| Buttons, tabs, menus, rows' first line | 16 | 1.5 |
-| A row's or card's second line, the status bar, chips | 14 | 1.5 |
+| Buttons, tabs, menus, rows' first line, a group's or folder's chevron, a view switch's icons | 16 | 1.5 |
+| A mark on a row's or card's second line, the status bar, chips (never a first-line icon) | 14 | 1.5 |
 | Inside a badge, a stage chip, beside `type.caption` | 12 | 1.75 (so it doesn't thin out) |
 | Status shapes | 14 in rows and cards, 16 in the tab header, 12 in chips and the rail | — |
 
@@ -2065,8 +2144,18 @@ This app, then Advanced. Every field in a card takes the `inset` surface.
     - `--ow-motion-base`, 160 ms: panels, popovers, a tab switch;
     - `--ow-motion-slow` (new), 240 ms: an overlay drawer, a stage snap.
   - The easing is `cubic-bezier(0.2, 0, 0, 1)`.
+  - A busy button's icon moves for as long as its action is pending. An
+    icon that reads the same at any angle, such as Fetch's, turns once every
+    1.2 s, linear. A directional arrow, Pull's or Push's, is never turned. It
+    glides along its own direction instead, translate only so its strokes
+    stay crisp, over 1.4 s on the standard easing. It eases in from behind
+    its resting place, rests where the idle icon draws it, then speeds on and
+    fades, clipped where it meets its line, which never moves.
   - Under `prefers-reduced-motion`, every duration is 0, the running shape
-    stops turning, and stage snaps jump.
+    stops turning, a busy button's icon holds still at rest, and stage snaps
+    jump. The busy button still reads as working: it keeps full strength and
+    the progress cursor, and Pull's and Push's word says "Pulling" or
+    "Pushing".
   - Nothing moves to celebrate.
 
 ### Layout rules that prevent overlap
@@ -2075,17 +2164,30 @@ The first build drew text over icons and lost buttons off the edge of the
 title bar. These rules exist so that cannot happen. The checklist checks them.
 
 1. **Flex, not position.** Rows, headers, tabs, chips and the title bar are
-   flex rows. Nothing is absolutely positioned over text. The only absolutely
-   positioned elements are popovers, tooltips, overlay drawers, the drop
-   outline, and the graph's edge layer, which sits *under* the cards.
+   flex rows. Nothing is absolutely positioned over text at rest. The only
+   absolutely positioned elements are popovers, tooltips, overlay drawers,
+   the drop outline, the graph's edge layer, which sits *under* the cards,
+   and a sidebar row's trailing-slot actions (W11). Those are drawn only
+   while the row is hovered or holds focus, over its end on the row's own
+   opaque fill, with a short fade over the label's end, and the label's full
+   value is in its tooltip.
 2. **Icons are fixed boxes.** An icon is `flex: none` at its size, and is
    separated from its text by a `gap` (`--ow-space-2` in controls,
    `--ow-space-1` in badges), never by a margin on one side or a text indent.
 3. **Labels shrink, icons and actions don't.** The text in a row, tab, chip
    or breadcrumb is the one `flex: 1 1 auto; min-width: 0` element, with
    `overflow: hidden; text-overflow: ellipsis; white-space: nowrap`. Paths and
-   branches use a middle ellipsis. Truncated text has its full value in a
-   tooltip. Where a row holds a name and its metadata, the name shrinks last
+   branches use a middle ellipsis, and the end it keeps starts at a word or
+   path boundary (`-`, `_`, `.`, a space or `/`). In the app the cut is
+   measured against the room the text has, and follows it as it resizes: the
+   tail is the longest run of whole trailing words (a path's segments) that
+   fits beside a head of `3em`, and that tail is never itself ellipsized, so
+   a name is never cut at both ends. When not even the last word fits there,
+   that word is the tail and the head may shrink to its ellipsis. Where
+   nothing measures text (tests), the cut is by characters: whole trailing
+   words, at most about 40% of the name, or a path's whole last segment, and
+   the head keeps `3em` before the tail gives way. Truncated text has its
+   full value in a tooltip. Where a row holds a name and its metadata, the name shrinks last
    and the metadata keeps a share: a project menu item keeps at least a third
    of its row for its folder, which is what tells two same-named projects
    apart. A model line on a graph card steps through shorter forms (effort,
@@ -2093,7 +2195,10 @@ title bar. These rules exist so that cannot happen. The checklist checks them.
    a word.
 4. **Actions reserve their space.** A row's hover actions take their width
    all the time (`visibility: hidden` until shown), so the title never
-   reflows under the pointer.
+   reflows under the pointer. The one exception is a trailing slot, whose
+   actions stand in for a short resting value (W11): the slot reserves that
+   value's width, and the actions are laid over it and the label's end
+   (rule 1), so the title still never reflows.
 5. **Heights are fixed.** Rows, tabs, headers and chips have the heights
    above. Their text is one line, or the variant's fixed number of lines.
    Nothing grows a row except the defined third line. Two kinds of text wrap
@@ -2137,8 +2242,10 @@ a status.
 | Conflict | `triangle-alert` | Usage limit | `hourglass` |
 | Dependency in / out | `arrow-left-to-line` / `arrow-right-from-line` | Interrupt | `octagon-x` |
 | Commit | `git-commit-horizontal` | Branch create | `git-branch-plus` |
-| Fetch | `refresh-cw` | Pull / push | `arrow-down-to-line` / `arrow-up-from-line` |
+| Fetch | `refresh-cw` | Pull / push | `arrow-down-to-line` / `arrow-up-from-line`, drawn as `PullIcon` / `PushIcon` |
 | Stash / pop | `archive` / `archive-restore` | Discard | `undo` |
+| Switch branch | `arrow-right-left` | Refresh (re-read from disk) | `rotate-cw` |
+| Remote branch | `cloud` | | |
 | Stage / unstage a file | `plus` / `minus` | Open in editor | `external-link` |
 | Folder / file | `folder` / `file` | Ignored | `eye-off` |
 | Read-only, held | `lock` | Daemon | `server` |
@@ -2147,6 +2254,11 @@ a status.
 | Split | `columns-2` | Terminal panel | `panel-bottom` |
 | Status: not started, passed, failed, blocked | `circle`, `circle-check`, `circle-x`, `ban` | Status: running | `loader-circle` |
 | Status: skipped | `circle-dashed` | Status: waiting for merge | `git-merge` |
+
+**Pull and push** are drawn by the design kit as `PullIcon` and `PushIcon`:
+Lucide's `arrow-down-to-line` and `arrow-up-from-line`, stroke for stroke,
+with the arrow its own group so a busy button can glide it while the line
+stays still.
 
 **Custom glyphs.** There are eight, drawn on the logo's motif: round-capped
 strokes converging on a teal dot. They are drawn on a 24 px grid, with a
@@ -2190,7 +2302,7 @@ strokes converging on a teal dot. They are drawn on a 24 px grid, with a
 | ⌘W / Ctrl+W, ⌃Tab / Ctrl+Tab | Close tab (never the planner tab), next tab |
 | ⌘\\ / Ctrl+\\ | Split the editor |
 | ⌘S / Ctrl+S | Save (checkout only) |
-| ⌘⏎ / Ctrl+Enter | Send in a composer; commit in the commit box |
+| ⌘⏎ / Ctrl+Enter | Send now while a turn runs: in the planner chat, the queued messages and the composer's text as one; commit in the commit box |
 | Esc | Close a popover, peek, drawer or dialog; return focus where it was |
 | F6 / Shift+F6 | Move focus between regions: title bar, sidebar, centre, plan panel, terminal, status bar |
 | F7 / Shift+F7 (diff) | Monaco's accessible diff viewer, next and previous change |
@@ -2261,7 +2373,8 @@ are permanent, so findings can cite them.
 **Overlap and truncation**
 
 - **O1.** No text overlaps an icon, and no element overlaps another, in any
-  screenshot.
+  screenshot, except a hovered or focused row's trailing-slot actions, which
+  cover its end on an opaque fill (layout rule 1).
 - **O2.** Every truncated text ends in an ellipsis (a middle one for paths
   and branches) and shows its full value in a tooltip.
 - **O3.** Every icon is the size [its context](#icon-sizes) gives, and sits
@@ -2273,7 +2386,9 @@ are permanent, so findings can cite them.
 - **O7.** A name a row, card, menu item or tab is about (a branch, commit,
   path, project, task or model) shows at least 64 px of its text, or all of
   it, and each part of it at least half that, so a long neighbour never
-  squeezes it to nothing. Where it is cut, it has a tooltip, and it reads at
+  squeezes it to nothing (the middle ellipsis's `3em` head floor is what keeps
+  that half, 2em would not; only a name whose last word alone outgrows its
+  row gives the head less). Where it is cut, it has a tooltip, and it reads at
   4.5:1. The tour's check `k` (`labelChecks` in `e2e/surfaces.ts`) measures
   this on long branch, commit, path, project, task and model names, as the
   app paints them, in both themes and every size.
@@ -2308,8 +2423,9 @@ are permanent, so findings can cite them.
 
 - **Y1.** Every font size and line height is a step of [the type scale](#type).
 - **Y2.** Every margin, padding and gap is a step of [the spacing scale](#spacing).
-- **Y3.** Code, paths, branches and commands are in JetBrains Mono. Everything
-  else is in Inter.
+- **Y3.** Code, paths, SHAs, ref chips, metadata and commands are in JetBrains
+  Mono. Everything else is in Inter, a branch row's name included, in weight
+  600 for the checked-out branch.
 
 **Focus and screen readers**
 

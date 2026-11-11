@@ -45,7 +45,7 @@ describe('Esc with a task card expanded', () => {
 
     fireEvent.keyDown(textarea(), { key: 'Escape' });
 
-    expect(api.post).toHaveBeenCalledWith({ type: 'unsendPrompt' });
+    expect(api.post).toHaveBeenCalledWith({ type: 'unsendPrompt', toComposer: false });
     expect(posted().some((m) => m.type === 'stopResearch')).toBe(false);
   });
 

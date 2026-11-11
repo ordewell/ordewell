@@ -181,21 +181,36 @@ an array by hand, while VS Code locked the input for the whole turn and showed
 the same word.)
 
 - **One hold, in core (Q1).** `conversation/promptHold.ts` owns the queue as a
-  plain immutable list with four operations: hold, drain the oldest when a
-  turn ends, unsend the newest, and give everything back when a turn is
-  stopped. It is pure, so the TUI keeps it in reducer state and the VS Code
-  host keeps it in a field; neither re-implements the ordering.
-- **The host holds it in VS Code (Q2).** `ConversationViewHost` holds the
-  prompts the webview sends with `holdPrompt`, draws them through
-  `heldPrompts`, and answers `unsendPrompt` with `promptUnsent` — the host,
-  not the webview, decides what comes back, so a prompt already drained cannot
-  also reappear in the input. The next one goes when the host's handling of the
-  turn has returned, not on `planner_turn_ended`, which arrives while the turn
-  is still unwinding. A new or reloaded session drops the hold with the view.
-- **The same keys on both surfaces (Q3).** The input stays live during a turn.
-  Esc takes back the newest queued prompt while one is waiting; otherwise the
-  first Esc warns and a second within about two seconds stops the turn. Outside
-  a turn Esc clears the input, as before.
+  plain immutable list with its operations: hold, unsend the newest, and take
+  everything at once, glued in the order typed. It is pure, so the TUI keeps
+  it in reducer state and the chat views' host keeps it in a field; neither
+  re-implements the ordering, and both join through its one `glued`.
+- **The host holds it in the chat views (Q2).** In VS Code and the desktop app,
+  which draw the same chat, `ConversationViewHost` holds the prompts the chat
+  sends with `holdPrompt` and draws them through `heldPrompts`. The TUI holds
+  the same list in its reducer, for the planner chat and for a subplanner's.
+  On every surface what is held goes as one message, the prompts glued in the
+  order typed: when the host's
+  handling of the turn has returned — not on `planner_turn_ended`, which
+  arrives while the turn is still unwinding — and on Send now, which glues the
+  composer's text, possibly empty, last and stops the turn in flight to answer
+  it (`sendMessageNow`; with no turn in flight it is a plain send). A stop
+  gives everything held back to the composer instead. The host,
+  not the chat, decides what goes and what comes back, so a prompt already sent
+  cannot also reappear in the input. A new or reloaded session drops the hold
+  with the view.
+- **The same keys on every surface (Q3).** The input stays live during a turn.
+  Esc takes back only the newest queued prompt while one is waiting; otherwise
+  the first Esc warns and a second within about two seconds stops the turn.
+  Outside a turn Esc clears the input, as before. The taken-back prompt fills
+  the composer only when the composer is empty, and is discarded over a draft
+  (`unsendPrompt`'s `toComposer` in the chat views), so it never buries what is
+  being typed; the × on the newest held row does the same. Send now is
+  Ctrl+Enter, or Cmd+Enter on macOS, and ctrl-s in the TUI; it is offered
+  whenever a turn runs and there is text typed or something held, and sends
+  everything held, then the draft, as one message. The held list carries one
+  control that does it ("Send all now"). In a task chat or a subplanner's, the
+  TUI's Esc empties the queue first, then clears the draft, then goes back.
 - **No list for mid-run edits (Q4).** A message sent during a run is a live
   planner turn (ADR-0029), taken at once, so nothing waits for a batch
   boundary and no surface lists edits above the input. The prompt hold above
@@ -251,6 +266,15 @@ the same word.)
   `content` whole for everything that keys on it.
 - **Holding queued prompts in the webview.** It cannot tell whether the turn has already
   ended on the host, and the host is where a held prompt has to be sent from.
+- **One held prompt per turn, and a Send now on each row.** That was the
+  design until 2026-11-10, in the chat views, and in the TUI until the same
+  day's integration, whose ctrl-s sent only the newest: a turn's end drained
+  only the oldest, and a row's Send now force sent that one prompt, leaving the
+  rest held. Prompts
+  typed during one turn are usually one thought said in pieces, so the planner
+  answered the first piece in a whole turn before reading the rest, and a row
+  sent ahead of the ones typed before it. Ctrl/Cmd+Enter also needed text in
+  the composer, so with only held prompts it did nothing at all.
 - **A mutable queue object in core.** The TUI reducer would have had to copy it
   on every action to stay pure; a list with functions over it suits both
   surfaces as is.
@@ -274,3 +298,5 @@ the same word.)
 - 2026-10-25 — the daemon carries a running planner compaction in its read, adoption and socket-join answers, and the TUI folds the lifecycle without a redraw, holding the planner and its queue until the end (C1). Before it, `/compact` redrew the TUI conversation and reset its scroll, a surface that joined mid-compaction saw a silent planner, and a lost reply was read back as a lost turn.
 - 2026-10-25 — C1: an API planner's automatic compaction is announced in its turn, a pruning by its end alone, and one that condensed only the turn's own rounds is never written ([ADR-0002](../planner/0002-planner-as-conversation-loop.md)).
 - 2026-10-25 — C1, found in review: a turn let go mid-compaction ends it as stopped, and the TUI keeps a session loaded mid-turn held until that turn ends, whatever compacts inside it. Before it, the session reported the compaction running for good, and an in-turn compaction's end freed the TUI's planner and sent a held prompt while the turn ran.
+- 2026-11-10 — Q1-Q3: the chat views send everything held as one message, glued in the order typed, at a turn's end and on Send now, which needs no composer text; Esc and the newest row's × refill only an empty composer. Seen live: Cmd+Enter did nothing in VS Code's planner chat with prompts held and the composer empty.
+- 2026-11-10 — Q1-Q3: the TUI follows the same rule, in the planner chat and a subplanner's: a turn's end and ctrl-s send everything held as one message (ctrl-s with or without a draft), Esc takes back only the newest, and the held rows and the task chat's queue draw one "Send all now" control with the same wording. Before it the docs kept a carve-out: one prompt per turn, ctrl-s on the newest.

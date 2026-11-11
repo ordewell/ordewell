@@ -12,6 +12,10 @@
 - **A tool permission a coding-agent planner withdraws, or whose turn ends, now
   leaves the screen at once.**
 - **A disk that refuses a save is now told once** while it keeps refusing.
+- **Queued messages now behave the same in the planner chat, a task chat and
+  the terminal.** A turn's end and Send now (`Ctrl+Enter`, `Cmd+Enter` on macOS,
+  or "Send all now") send everything queued as one message, in the order typed,
+  even with an empty input; Esc takes back only the newest.
 
 ## [0.13.1] - 2026-11-07
 

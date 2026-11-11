@@ -8,8 +8,8 @@ import { lastMessage, messagesOf } from './chat';
 
 /**
  * Prompts typed while a planner turn answers hold in a visible queue instead
- * of pretending to be sent. They go out one at a time as each turn settles,
- * Esc takes the newest back, and double-Esc arms then stops the turn.
+ * of pretending to be sent. They go out together, as one message, when the
+ * turn settles; Esc takes the newest back, and double-Esc arms then stops the turn.
  */
 
 function run(text: string, overrides: Partial<TuiState> = {}) {
@@ -73,7 +73,7 @@ describe('submitting while a planner turn is in flight', () => {
   });
 });
 
-describe('the turn settling sends the next queued prompt', () => {
+describe('the turn settling sends the queued prompts', () => {
   const queued = (over: Partial<TuiState> = {}): TuiState =>
     run('follow up', planningState(over)).state;
 
@@ -91,27 +91,17 @@ describe('the turn settling sends the next queued prompt', () => {
     expect(effects).toEqual([{ type: 'sendMessage', sessionId: 'session-1', message: 'follow up' }]);
   });
 
-  it('sends one per settle, keeping the rest queued until the queue empties', () => {
+  it('sends every queued prompt in one settle, glued in the order typed', () => {
     let state = run('one', planningState()).state;
     state = submitInto(state, 'two');
+    state = submitInto(state, 'three');
 
-    const first = reduce(state, { type: 'planUpdated', plan: {}, sessionId: 'session-1' });
-    expect(first.state.queuedPrompts).toEqual(['two']);
-    expect(lastMessage(first.state)).toMatchObject({ role: 'user', text: 'one' });
-    expect(first.state.planner).toBe('planning');
+    const { state: after, effects } = reduce(state, { type: 'planUpdated', plan: {}, sessionId: 'session-1' });
 
-    // The second settle's plan carries no tasks, so the turn it names ends
-    // without starting another — the drain speaks the last prompt and the turn
-    // the plan itself settled ends idle.
-    const second = reduce(first.state, {
-      type: 'planUpdated',
-      plan: { conversationHistory: [{ role: 'user', content: 'one' }, { role: 'assistant', content: 'on it.' }] },
-      sessionId: 'session-1',
-    });
-    expect(second.state.queuedPrompts).toEqual([]);
-    expect(messagesOf(second.state).filter((m) => m.role === 'user').map((m) => m.text)).toEqual(['one', 'two']);
-    // The drain that sent the last prompt started the next turn.
-    expect(second.state.planner).toBe('planning');
+    expect(effects).toEqual([{ type: 'sendMessage', sessionId: 'session-1', message: 'one\ntwo\nthree' }]);
+    expect(after.queuedPrompts).toEqual([]);
+    expect(messagesOf(after).filter((m) => m.role === 'user').map((m) => m.text)).toEqual(['one\ntwo\nthree']);
+    expect(after.planner).toBe('planning');
   });
 
   it('a failing turn sends the queued prompt too', () => {
@@ -148,22 +138,47 @@ describe('the turn settling sends the next queued prompt', () => {
   });
 });
 
-describe('esc takes the latest queued prompt back', () => {
-  it('restores its text above the draft it unseated, separated by a newline', () => {
-    // The draft sits in the box when the takeback arrives: unsend replaces it,
-    // with the come-back text on top.
-    let state = submitInto(planningState({ editor: { ...initialState().editor, text: 'a draft', cursor: 7 } }), 'first');
+describe('esc takes the newest queued prompt back', () => {
+  it('fills an empty composer with it, the caret at its end, and leaves the older ones queued', () => {
+    let state = submitInto(planningState(), 'first');
+    state = submitInto(state, 'second\nthoughts');
+
+    const { state: after, effects } = press(state, 'escape');
+
+    expect(effects).toEqual([]);
+    expect(after.queuedPrompts).toEqual(['first']);
+    expect(after.editor.text).toBe('second\nthoughts');
+    expect(after.editor.cursor).toBe('second\nthoughts'.length);
+    expect(after.planner).toBe('planning');
+  });
+
+  it('discards it when the composer holds a draft, leaving the draft as it was', () => {
+    let state = submitInto(planningState(), 'first');
     state = submitInto(state, 'second');
-    // A draft typed after queueing, the thing the takeback must keep.
-    const drafted = { ...state, editor: { ...state.editor, text: 'a draft', cursor: 7 } };
+    // A draft typed after queueing, the thing the takeback must not touch.
+    const drafted = { ...state, editor: { ...state.editor, text: 'a draft', cursor: 3 } };
 
     const { state: after, effects } = press(drafted, 'escape');
 
     expect(effects).toEqual([]);
     expect(after.queuedPrompts).toEqual(['first']);
-    expect(after.editor.text).toBe('second\na draft');
-    expect(after.editor.cursor).toBe('second'.length);
+    expect(after.editor).toEqual(drafted.editor);
     expect(after.planner).toBe('planning');
+  });
+
+  it('takes one prompt per press, newest first, before the next esc arms a stop', () => {
+    let state = submitInto(planningState(), 'first');
+    state = submitInto(state, 'second');
+    const drafted = { ...state, editor: { ...state.editor, text: 'a draft', cursor: 7 } };
+
+    const once = press(drafted, 'escape').state;
+    const twice = press(once, 'escape').state;
+    expect(twice.queuedPrompts).toEqual([]);
+    expect(twice.stopArmed).toBe(false);
+
+    const { state: armed, effects } = press(twice, 'escape');
+    expect(armed.stopArmed).toBe(true);
+    expect(effects).toEqual([{ type: 'disarmStop', afterMs: 2000, arm: 1 }]);
   });
 
   it('keeps the planner running — the first esc is not a stop while something is queued', () => {
@@ -173,15 +188,6 @@ describe('esc takes the latest queued prompt back', () => {
 
     expect(effects).toEqual([]);
     expect(after.planner).toBe('planning');
-  });
-
-  it('replacing the editor keeps the history and caret sane when there is no draft', () => {
-    let state = planningState();
-    state = submitInto(state, 'later');
-    const { state: after } = press(state, 'escape');
-
-    expect(after.editor.text).toBe('later');
-    expect(after.editor.cursor).toBe(5);
   });
 });
 
@@ -242,7 +248,8 @@ describe('double esc stops the turn', () => {
 
   it('stopping the planning turn returns still-queued prompts to the editor, not to the daemon', () => {
     // The only stop that leaves anything queued is /stop — the Esc route
-    // unsends before it can arm, so its queue is empty by the time it stops.
+    // takes the queue back one press at a time before it can arm, so its queue
+    // is empty by the time it stops.
     let state = planningState();
     state = submitInto(state, 'one');
     state = submitInto(state, 'two');
@@ -301,7 +308,7 @@ describe('esc when idle is unchanged', () => {
 });
 
 describe('leftover queue on a settling turn whose queue was emptied another way', () => {
-  it('the queue drains only one prompt at a time — unsend last, then settle sends first', () => {
+  it('a prompt taken back stays in the editor while the settle sends what is still queued', () => {
     let state = run('one', planningState()).state;
     state = submitInto(state, 'two');
 
@@ -318,14 +325,14 @@ describe('leftover queue on a settling turn whose queue was emptied another way'
 });
 
 describe('rendering — queued prompts', () => {
-  it('renders as dimmed bubbles below the transcript, in order, the newest marked `queued · esc to unsend`', () => {
+  it('renders as dimmed bubbles below the transcript, in order, the newest marked `queued · esc takes back`', () => {
     style.enabled = false;
     try {
       const out = render(planningState({ queuedPrompts: ['extra thought', 'and another'] })).join('\n');
 
       expect(out).toContain('extra thought');
-      expect(out).toContain('queued · esc to unsend');
-      expect((out.match(/queued · esc to unsend/g) ?? []).length).toBe(1);
+      expect(out).toContain('queued · esc takes back');
+      expect((out.match(/queued · esc takes back/g) ?? []).length).toBe(1);
       // Ordering: the first queued prompt paints above the second.
       expect(out.indexOf('extra thought')).toBeLessThan(out.indexOf('and another'));
     } finally {
@@ -337,7 +344,7 @@ describe('rendering — queued prompts', () => {
     style.enabled = false;
     try {
       const out = render(planningState({ queuedPrompts: [] })).join('\n');
-      expect(out).not.toContain('queued · esc to unsend');
+      expect(out).not.toContain('queued · esc takes back');
     } finally {
       style.enabled = true;
     }

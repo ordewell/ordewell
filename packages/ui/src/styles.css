@@ -6404,7 +6404,7 @@ body.vscode-high-contrast-light .pending-message {
   .pending-message-actions { opacity: 1; }
 }
 
-.pending-message-now,
+.pending-messages-now,
 .pending-message-remove {
   display: inline-flex;
   align-items: center;
@@ -6424,7 +6424,15 @@ body.vscode-high-contrast-light .pending-message {
   font-size: 13px;
 }
 
-.pending-message-now:hover {
+/* Queued messages go as one message, so one Send all now serves them all:
+   under the last row, where the stack meets the composer whose chord does
+   the same. */
+.pending-messages-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.pending-messages-now:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
 }
@@ -6434,7 +6442,7 @@ body.vscode-high-contrast-light .pending-message {
   color: var(--red);
 }
 
-.pending-message-now:focus-visible,
+.pending-messages-now:focus-visible,
 .pending-message-remove:focus-visible {
   outline: 1px solid var(--accent);
   outline-offset: -1px;
@@ -6463,7 +6471,7 @@ body.vscode-high-contrast-light .pending-message {
 }
 
 .send-key-hint kbd,
-.pending-message-now kbd {
+.pending-messages-now kbd {
   padding: 0 3px;
   border: 1px solid var(--border-muted);
   border-radius: 3px;

@@ -98,7 +98,8 @@ export function finishPlannerTurn(
   deps.saveCurrentSession();
 }
 
-export function reportPlannerError(err: unknown, deps: PlanManagerDeps): void {
+/** Whether `err` refused the turn, as opposed to a stop the user asked for or a session already left. */
+export function reportPlannerError(err: unknown, deps: PlanManagerDeps): boolean {
   // Message text is not evidence: a real failure can mention "aborted" (a
   // runner's "transaction aborted"). Core converts a stop, whatever the backend
   // named its error, to PlannerTurnStoppedError; only that and a platform
@@ -106,15 +107,16 @@ export function reportPlannerError(err: unknown, deps: PlanManagerDeps): void {
   const isAbort = err instanceof PlannerTurnDiscardedError || err instanceof PlannerTurnStoppedError || (err instanceof Error && err.name === 'AbortError');
   // The stop already ended the turn on screen; a discarded turn belonged to a
   // session the user has already left.
-  if (isAbort) return;
+  if (isAbort) return false;
   // The session refuses a turn on a planner that cannot plan; the chat says
   // so with its own commands, and as the way out rather than a failure.
   if (err instanceof PlannerNotReadyError) {
     deps.chatProvider.showError(describePlannerNotReady(err.reason, CHAT_COMMANDS));
-    return;
+    return true;
   }
   const message = err instanceof Error ? err.message : String(err);
   deps.chatProvider.showError(`Planner failed: ${message}`);
+  return true;
 }
 
 /**
@@ -159,11 +161,13 @@ export function recheckSignedOutPlanner(
  * session could not see read as idle, and a prompt typed during it started
  * over as a new goal.
  */
-async function inPlannerTurn(deps: PlanManagerDeps, run: () => Promise<void>): Promise<void> {
+/** Whether the turn was refused: it failed, and not because it was stopped or its session left. */
+async function inPlannerTurn(deps: PlanManagerDeps, run: () => Promise<void>): Promise<boolean> {
   try {
     await run();
+    return false;
   } catch (err) {
-    reportPlannerError(err, deps);
+    return reportPlannerError(err, deps);
   }
 }
 
@@ -220,16 +224,17 @@ export async function handleContinueConversation(
 /**
  * Send now in the planner chat (ADR-0023, F5): the Session stops the turn in
  * flight and answers `text` in the turn that replaces it. The run's tasks are
- * untouched, and the host's held prompts are not given back — they drain in
- * order once the forced turn ends.
+ * untouched. `text` already carries the host's held prompts, glued ahead of
+ * what was typed, so nothing is left held to follow it.
  */
+/** Resolves whether the planner refused the forced turn, so the caller can give its message back. */
 export async function handleSendMessageNow(
   text: string,
   deps: PlanManagerDeps,
-): Promise<void> {
+): Promise<boolean> {
   const recheck = recheckSignedOutPlanner(deps);
   if (recheck) await recheck;
-  await inPlannerTurn(deps, async () => {
+  return inPlannerTurn(deps, async () => {
     const prior = JSON.stringify(deps.getCurrentPlan().tasks);
     adoptTurnPlan(prior, await deps.session.forceSendPrompt(text), deps);
   });

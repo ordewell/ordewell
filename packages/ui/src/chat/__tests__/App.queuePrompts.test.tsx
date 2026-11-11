@@ -50,39 +50,58 @@ describe('queued prompts', () => {
     expect(document.querySelector('.pending-messages')?.nextElementSibling?.classList.contains('chat-input')).toBe(true);
   });
 
-  it('takes the newest back with its ×, above the draft, and planning keeps going', () => {
+  it('takes the newest back into an empty composer with its ×, and planning keeps going', () => {
     post({ type: 'plannerTurn', active: true });
     post({ type: 'heldPrompts', prompts: ['one', 'two'] });
-    type('half a thought');
 
     const unsend = document.querySelectorAll('.pending-message-remove');
     expect(unsend).toHaveLength(1);
     expect(unsend[0].getAttribute('aria-label')).toBe('Remove pending message: two');
-    expect(unsend[0].getAttribute('title')).toBe('Unsend (Esc)');
+    expect(unsend[0].getAttribute('title')).toBe('Take back (Esc)');
     fireEvent.click(unsend[0]);
 
-    expect(api.post).toHaveBeenCalledWith({ type: 'unsendPrompt' });
+    expect(api.post).toHaveBeenCalledWith({ type: 'unsendPrompt', toComposer: true });
     // The host answers with what it really took back.
     post({ type: 'promptUnsent', text: 'two' });
     post({ type: 'heldPrompts', prompts: ['one'] });
 
-    expect(textarea().value).toBe('two\nhalf a thought');
+    expect(textarea().value).toBe('two');
     expect(document.querySelectorAll('.pending-message')).toHaveLength(1);
     expect(posted().some((m) => m.type === 'stopResearch')).toBe(false);
     expect(document.querySelector('.chat-msg-working')).not.toBeNull();
   });
 
+  it('discards the newest with its × over a draft, as Esc does', () => {
+    post({ type: 'plannerTurn', active: true });
+    post({ type: 'heldPrompts', prompts: ['one', 'two'] });
+    type('half a thought');
+
+    fireEvent.click(document.querySelector('.pending-message-remove')!);
+
+    expect(api.post).toHaveBeenCalledWith({ type: 'unsendPrompt', toComposer: false });
+  });
+
   it('takes the newest back on Esc while something is queued, instead of arming a stop', () => {
+    post({ type: 'plannerTurn', active: true });
+    post({ type: 'heldPrompts', prompts: ['one', 'two'] });
+
+    press('Escape');
+
+    expect(api.post).toHaveBeenCalledWith({ type: 'unsendPrompt', toComposer: true });
+    expect(document.querySelector('.stop-hint')).toBeNull();
+    expect(posted().some((m) => m.type === 'stopResearch')).toBe(false);
+  });
+
+  it('discards the newest on Esc over a draft, keeping the draft', () => {
     post({ type: 'plannerTurn', active: true });
     post({ type: 'heldPrompts', prompts: ['one'] });
     type('draft');
 
     press('Escape');
 
-    expect(api.post).toHaveBeenCalledWith({ type: 'unsendPrompt' });
+    expect(api.post).toHaveBeenCalledWith({ type: 'unsendPrompt', toComposer: false });
     expect(textarea().value).toBe('draft');
     expect(document.querySelector('.stop-hint')).toBeNull();
-    expect(posted().some((m) => m.type === 'stopResearch')).toBe(false);
   });
 
   describe('double Esc', () => {
@@ -135,26 +154,36 @@ describe('queued prompts', () => {
     expect(document.querySelector('.send-btn')?.getAttribute('title')).toBe('Stop (Esc Esc)');
   });
 
-  it('offers Send now on each held row, and posts that row\'s position', () => {
+  it('offers one Send now for the whole held group, which leaves the draft where it is', () => {
     post({ type: 'plannerTurn', active: true });
     post({ type: 'heldPrompts', prompts: ['one', 'two'] });
+    type('half a thought');
 
-    const buttons = [...document.querySelectorAll('.pending-message-now')];
-    expect(buttons).toHaveLength(2);
-    expect(buttons[0].getAttribute('aria-label')).toBe('Send now: one');
+    const buttons = [...document.querySelectorAll('.pending-messages-now')];
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0].textContent).toBe('Send all now Ctrl+Enter');
     expect(buttons[0].getAttribute('title')).toContain('(Ctrl+Enter)');
-    fireEvent.click(buttons[1]);
+    fireEvent.click(buttons[0]);
 
-    expect(api.post).toHaveBeenCalledWith({ type: 'sendHeldPromptNow', index: 1 });
+    expect(api.post).toHaveBeenCalledWith({ type: 'sendMessageNow', text: '' });
+    expect(textarea().value).toBe('half a thought');
   });
 
-  it('sends a held row now on Ctrl+Enter while focus is on it', () => {
+  it('sends the held group now on Ctrl+Enter while focus is on a held row', () => {
     post({ type: 'plannerTurn', active: true });
     post({ type: 'heldPrompts', prompts: ['one', 'two'] });
 
-    fireEvent.keyDown(document.querySelectorAll('.pending-message-now')[0], { key: 'Enter', ctrlKey: true });
+    fireEvent.keyDown(document.querySelectorAll('.pending-message')[0], { key: 'Enter', ctrlKey: true });
 
-    expect(api.post).toHaveBeenCalledWith({ type: 'sendHeldPromptNow', index: 0 });
+    expect(api.post).toHaveBeenCalledWith({ type: 'sendMessageNow', text: '' });
+  });
+
+  it('names the chord under an empty composer while prompts are held', () => {
+    post({ type: 'plannerTurn', active: true });
+    post({ type: 'heldPrompts', prompts: ['one'] });
+
+    expect(document.querySelector('.send-key-hint')?.textContent).toBe('Ctrl+Enter send all now');
+    expect(document.querySelector('.send-btn')?.getAttribute('title')).toBe('Stop (Esc Esc)');
   });
 
   it('has one button while a turn runs: the hint and its tooltip name the key that sends now', () => {
@@ -164,8 +193,8 @@ describe('queued prompts', () => {
     type('stop, use Postgres');
 
     expect(document.querySelectorAll('.chat-input-row button')).toHaveLength(1);
-    expect(document.querySelector('.send-key-hint')?.textContent).toBe('Enter queue · Ctrl+Enter send now');
-    expect(document.querySelector('.send-btn')?.getAttribute('title')).toBe('Queue (Enter) · Send now (Ctrl+Enter)');
+    expect(document.querySelector('.send-key-hint')?.textContent).toBe('Enter queue · Ctrl+Enter send all now');
+    expect(document.querySelector('.send-btn')?.getAttribute('title')).toBe('Queue (Enter) · Send all now (Ctrl+Enter)');
   });
 
   it('sends now on Ctrl+Enter', () => {
@@ -173,6 +202,29 @@ describe('queued prompts', () => {
     type('stop, use Postgres');
 
     fireEvent.keyDown(textarea(), { key: 'Enter', ctrlKey: true });
+
+    expect(api.post).toHaveBeenCalledWith({ type: 'sendMessageNow', text: 'stop, use Postgres' });
+  });
+
+  // The reported bug: with nothing typed the key fell through to Enter's
+  // submit, which ignores an empty composer, so what was held never went.
+  it.each([
+    ['Ctrl+Enter', { ctrlKey: true }],
+    ['Cmd+Enter', { metaKey: true }],
+  ])('sends what is held now on %s with an empty composer', (_name, chord) => {
+    post({ type: 'plannerTurn', active: true });
+    post({ type: 'heldPrompts', prompts: ['one', 'two'] });
+
+    fireEvent.keyDown(textarea(), { key: 'Enter', ...chord });
+
+    expect(api.post).toHaveBeenCalledWith({ type: 'sendMessageNow', text: '' });
+  });
+
+  it('sends now on Cmd+Enter with text typed', () => {
+    post({ type: 'plannerTurn', active: true });
+    type('stop, use Postgres');
+
+    fireEvent.keyDown(textarea(), { key: 'Enter', metaKey: true });
 
     expect(api.post).toHaveBeenCalledWith({ type: 'sendMessageNow', text: 'stop, use Postgres' });
   });

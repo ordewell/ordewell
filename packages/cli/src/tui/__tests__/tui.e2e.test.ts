@@ -399,7 +399,7 @@ describe('TUI end to end', () => {
     // Parked, visibly, not sent.
     await vi.waitFor(() => expect(h.app.getState().queuedPrompts).toEqual(['Use SQLite']));
     expect(h.screen()).toContain('Use SQLite');
-    expect(h.screen()).toContain('queued · esc to unsend');
+    expect(h.screen()).toContain('queued · esc takes back');
     expect(h.daemon.mocks.sendConversationMessage).not.toHaveBeenCalled();
 
     releaseFirstTurn();

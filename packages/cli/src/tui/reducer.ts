@@ -10,7 +10,7 @@ import type { Key } from './keys';
 import { handleOverlayKey } from './reducers/overlays';
 import { syncApprovals } from './reducers/approvals';
 import { handlePlanKey } from './reducers/planPane';
-import { announceApprovals, announceCheckpoint, answerCheckpoint, continueTaskStep, handleTaskViewKey, openTaskView, taskLogAbandoned, taskLogArrived, taskLogLoaded } from './reducers/taskView';
+import { announceApprovals, announceCheckpoint, answerCheckpoint, continueTaskStep, handleTaskViewKey, openTaskView, takeBackNewest, taskMessageKept, taskLogAbandoned, taskLogArrived, taskLogLoaded } from './reducers/taskView';
 import { newSession, pickRewindTarget, runCommand, updatePlanned } from './reducers/commands';
 import { revertPreviewed } from './reducers/revert';
 import { adoptCompaction, followCompaction } from './reducers/compaction';
@@ -22,7 +22,7 @@ import {
   handleMouseSelect, isMouseSelect, isScrollKey, isWheel, scrollChat, scrollDelta, scrollPointed, settlePanes, settlePlan, toggleDetail,
 } from './reducers/pointer';
 import { clamp, clampSelection, clearNotice, reportError, stale, staleFailure, step, type Action, type Effect, type Step } from './reducers/shared';
-import { belongsAbove, childFailed, childGone, childKey, childLost, childMessaged, childTreeArrived, childrenListed, commandInChild, leaveChild, onParent, readLanded, routeChild, speakToChild } from './reducers/children';
+import { belongsAbove, childFailed, childGone, childKey, childLost, childMessaged, childTreeArrived, childrenListed, commandInChild, leaveChild, onParent, readLanded, routeChild, sendAllToChild, speakToChild, takeBackHeld } from './reducers/children';
 
 export { initialState } from './state';
 export { resolveTaskId } from './reducers/taskEdits';
@@ -256,6 +256,10 @@ function reduceAction(state: TuiState, action: Action): Step {
     case 'taskLog':
       if (stale(state, action.sessionId)) return step(state);
       return step(announceApprovals(taskLogArrived(state, action), action));
+
+    case 'taskMessageKept':
+      if (stale(state, action.sessionId)) return step(state);
+      return step(taskMessageKept(state, action));
 
     case 'taskViewRequested':
       if (stale(state, action.sessionId)) return step(state);
@@ -749,6 +753,8 @@ const draftOnScreen = (state: TuiState): boolean => !!state.editor.text && !view
 function interrupt(state: TuiState): Step {
   if (state.overlay) return step({ ...state, overlay: null });
   if (draftOnScreen(state)) return step({ ...state, editor: { ...state.editor, text: '', cursor: 0 } });
+  // Held messages are this plan's alone: leaving would drop them unseen, so they come out into the composer first.
+  if (state.child && state.queuedPrompts.length > 0 && !viewOnly(state)) return step(queueToEditor(state));
   if (state.child) return leaveChild(state);
   return step({ ...state, exiting: true }, [{ type: 'exit' }]);
 }
@@ -778,10 +784,13 @@ function handleKey(state: TuiState, key: Key): Step {
 
   // ESC backs out of whichever side the TAB selection is on. While the plan
   // pane has something of its own open, Esc collapses that first and the task
-  // view is left as it was; otherwise a task-chat Esc clears the draft, then
-  // closes the view onto the plan with the cursor on that task. An open overlay
-  // still owns Esc ahead of both, so /help closes before either.
+  // view is left as it was; otherwise a task-chat Esc takes back the newest
+  // queued message, then clears the draft, then closes the view onto the plan
+  // with the cursor on that task. An open overlay still owns Esc ahead of
+  // both, so /help closes before either.
   if (key.name === 'escape' && state.taskView && !state.overlay && !planPaneOpen(state)) {
+    const taken = takeBackNewest(state);
+    if (taken) return taken;
     if (draftOnScreen(state)) return step({ ...state, editor: { ...state.editor, text: '', cursor: 0 } });
     return step(returnToPlan(state, state.taskView.taskId));
   }
@@ -793,9 +802,12 @@ function handleKey(state: TuiState, key: Key): Step {
     if (stopped) return stopped;
   }
   if (state.overlay) return handleOverlayKey(state, state.overlay, key);
-  // Below the root, Esc is the way back up from either pane: a draft goes
-  // first, as it does in a task view, and an open row stays the pane's own.
+  // Below the root, Esc is the way back up from either pane: a held message
+  // and then a draft go first, as queued ones do in a task view, and an open
+  // row stays the pane's own.
   if (key.name === 'escape' && state.child && !planPaneOpen(state)) {
+    const taken = takeBackHeld(state);
+    if (taken) return step(taken);
     return draftOnScreen(state) ? step({ ...state, editor: { ...state.editor, text: '', cursor: 0 } }) : leaveChild(state);
   }
   // Above the focus split, because a wheel notch is aimed, not focused. A drag
@@ -838,11 +850,16 @@ function handleKey(state: TuiState, key: Key): Step {
 
   if (key.name === 'enter') return submit(state);
   // Send now in the planner chat (ADR-0023, F5): mid-turn it interrupts the
-  // turn and sends the composer text (or the newest queued prompt) next; with
+  // turn and sends every queued prompt and the composer text, glued, next; with
   // no turn in flight it is the plain send enter is. A TUI command in the
   // composer is not a message to send, so it runs as it does on enter.
   if (key.name === 'ctrl-s') {
-    if (state.child) return submit(state);
+    // A subplanner's turn has no interrupt, so this sends what is held now and
+    // its turn reads it next; with nothing held or running it is enter.
+    if (state.child) {
+      const plain = builtInCommand(state.editor.text) || (state.queuedPrompts.length === 0 && !plannerInFlight(state));
+      return plain ? submit(state) : sendAllToChild(state);
+    }
     return (plannerInFlight(state) || state.turnGate.open !== null) && !builtInCommand(state.editor.text) ? forceSendPlanner(state) : submit(state);
   }
   if (key.name === 'escape') return step({ ...state, editor: { ...state.editor, text: '', cursor: 0 } });
@@ -915,7 +932,6 @@ function submit(state: TuiState): Step {
 
   const builtIn = builtInCommand(text);
   if (builtIn) return commandInChild(cleared, builtIn.name) ?? runCommand(cleared, builtIn);
-  // No planner state here: the daemon holds what a busy subplanner has not read, and its stream shows the turn.
   if (state.child) return speakToChild(state, cleared, text);
 
   // A prompt while a turn answers is held, not sent: the transcript would

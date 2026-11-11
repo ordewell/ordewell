@@ -149,20 +149,25 @@ export interface IRunnerSession {
    * Send a user message: at once when idle; while a turn runs, handed to the
    * runner for its next step where it can take one, otherwise queued until
    * the turn ends (ADR-0023). Returns its id, for {@link removeQueued}.
-   * `from` marks a message Ordewell sent rather than the user.
+   * `from` marks a message Ordewell sent rather than the user. The person's
+   * messages still queued in a row when a turn ends go as one turn, glued a
+   * line each under the oldest one's id (F1).
    */
   sendMessage(text: string, from?: TaskMessageFrom): string;
   /**
    * Force send (ADR-0023, F1–F3): interrupt the running turn, as
    * {@link interrupt} does, and deliver this message as the turn that
-   * replaces it, ahead of anything still queued. The task does not wait for
+   * replaces it, ahead of anything still queued. Everything the person
+   * queued that the runner does not have yet goes with it, glued ahead of
+   * it in the order sent; each leaves the queue. The task does not wait for
    * input in between. With no turn running it is {@link sendMessage}.
    */
   forceSend(text: string): string;
   /**
-   * Force send a message not yet delivered, by id — queued, or handed over,
-   * which is not sent twice: the interrupt makes it go first (ADR-0023, F1).
-   * False once it was delivered.
+   * Force send a message not yet delivered, by id (ADR-0023, F1). A queued
+   * one of the person's takes the rest they queued with it, glued in the order
+   * sent under its id. One the runner has is not sent twice: the interrupt
+   * makes it go first. False once it was delivered.
    */
   forceSendQueued(id: string): boolean;
   /** Take a message back before the runner has it. False once it was handed over or delivered. */

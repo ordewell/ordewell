@@ -40,6 +40,11 @@ class TurnEndAdapter implements TaskModeAgentAdapter {
     return new Promise<void>((resolve) => { this.turn = { onEvent, resolve }; });
   }
 
+  /** A runner command opens a turn of its own, as a message does; `sent` shows it as typed. */
+  invokeCommand(name: string, args: string, onEvent: (event: AgentEvent) => void): Promise<void> {
+    return this.send(args ? `/${name} ${args}` : `/${name}`, onEvent);
+  }
+
   emit(...events: AgentEvent[]): void {
     for (const event of events) this.turn?.onEvent(event);
   }
@@ -148,6 +153,14 @@ async function steering(configure: (adapter: SteeringAdapter) => void = () => {}
   return { ...task, adapter: adapters[0], adapters };
 }
 
+/** A running task on a runner that only takes messages at a turn's end, its prompt already sent. */
+async function turnEnd() {
+  const { runner, adapters } = runnerOf(() => new TurnEndAdapter());
+  const task = observe(await runner.spawn(options({ runner: 'claude-code' })));
+  await vi.waitFor(() => expect(adapters[0].sent).toEqual(['Do the task']));
+  return { ...task, adapter: adapters[0], adapters };
+}
+
 const of = (events: StructuredEvent[], ...types: StructuredEvent['type'][]) => events.filter((e) => types.includes(e.type));
 
 describe('a message sent to a working task, on a runner that takes one mid-turn', () => {
@@ -203,7 +216,7 @@ describe('a message sent to a working task, on a runner that takes one mid-turn'
     expect(adapters[0].sent).toEqual(['Do the task']);
   });
 
-  it('waits for the turn to end when refused, and every later one waits behind it in order', async () => {
+  it('waits for the turn to end when refused, and every later one waits behind it, to go with it in order', async () => {
     const task = await steering((adapter) => { adapter.answers = ['refuse']; });
 
     const first = task.session.sendMessage('one');
@@ -214,13 +227,12 @@ describe('a message sent to a working task, on a runner that takes one mid-turn'
 
     task.adapter.endTurn();
     await flushMicrotasks();
-    expect(task.adapter.sent).toEqual(['Do the task', 'one']);
+    expect(task.adapter.sent).toEqual(['Do the task', 'one\ntwo']);
     expect(task.statesAtTurnEnd).toEqual(['working']);
-    // The new turn takes the next one mid-turn again.
-    expect(task.adapter.steers.map((s) => s.text)).toEqual(['one', 'two']);
+    expect(task.adapter.steers.map((s) => s.text)).toEqual(['one']);
     expect(of(task.events, 'turn_start')).toEqual([
       { type: 'turn_start', text: 'Do the task' },
-      { type: 'turn_start', text: 'one', messageId: first },
+      { type: 'turn_start', text: 'one\ntwo', messageId: first },
     ]);
   });
 
@@ -293,8 +305,8 @@ describe('the races mid-turn delivery has to survive', () => {
 
     task.adapter.answer(first, false);
     await flushMicrotasks();
-    expect(task.adapter.sent).toEqual(['Do the task', 'one']);
-    expect(task.adapter.steers.map((s) => s.text)).toEqual(['one', 'two']);
+    expect(task.adapter.sent).toEqual(['Do the task', 'one\ntwo']);
+    expect(task.adapter.steers.map((s) => s.text)).toEqual(['one']);
   });
 
   it('a message delivered before its steer was answered is not offered or sent again', async () => {
@@ -337,10 +349,9 @@ describe('the races mid-turn delivery has to survive', () => {
     await flushMicrotasks();
 
     expect(task.turnEnds).toEqual(['interrupted']);
-    expect(task.adapter.sent).toEqual(['Do the task', 'one']);
-    expect(of(task.events, 'turn_start').at(-1)).toEqual({ type: 'turn_start', text: 'one', messageId: first });
-    // Once the interrupt has settled, the next message goes into the new turn.
-    expect(task.adapter.steers.map((s) => s.text)).toEqual(['two']);
+    expect(task.adapter.sent).toEqual(['Do the task', 'one\ntwo']);
+    expect(of(task.events, 'turn_start').at(-1)).toEqual({ type: 'turn_start', text: 'one\ntwo', messageId: first });
+    expect(task.adapter.steers).toEqual([]);
   });
 
   it('a runner killed and resumed after an ignored interrupt is sent what the killed one was handed', async () => {
@@ -403,6 +414,44 @@ describe('a runner with no mid-turn delivery', () => {
     await flushMicrotasks();
     expect(adapters[0].sent).toEqual(['Do the task', 'one']);
     expect(of(task.events, 'message_handed_over', 'message_delivered')).toEqual([]);
+  });
+});
+
+describe('a turn\'s end sends what the person queued as one turn (ADR-0023, F1)', () => {
+  it('glues every queued message, in order, into the next turn, under the oldest one\'s id', async () => {
+    const task = await turnEnd();
+    const a = task.session.sendMessage('a');
+    const b = task.session.sendMessage('b');
+    const c = task.session.sendMessage('c');
+
+    task.adapter.endTurn();
+    await flushMicrotasks();
+
+    expect(task.adapter.sent).toEqual(['Do the task', 'a\nb\nc']);
+    expect(of(task.events, 'message_removed')).toEqual([{ type: 'message_removed', messageId: b }, { type: 'message_removed', messageId: c }]);
+    expect(of(task.events, 'turn_start').at(-1)).toEqual({ type: 'turn_start', text: 'a\nb\nc', messageId: a });
+    expect(task.session.queued()).toEqual([]);
+    expect(task.statesAtTurnEnd).toEqual(['working']);
+  });
+
+  it('sends a command and Ordewell\'s own message each as a turn of its own, gluing only the runs between them', async () => {
+    const task = await turnEnd();
+    const a = task.session.sendMessage('a');
+    const b = task.session.sendMessage('b');
+    const supervisor = task.session.sendMessage('from the supervisor', 'ordewell');
+    const c = task.session.sendMessage('c');
+    const command = task.session.invokeCommand('compact');
+    const d = task.session.sendMessage('d');
+    const e = task.session.sendMessage('e');
+
+    for (let turn = 0; turn < 5; turn += 1) {
+      task.adapter.endTurn();
+      await flushMicrotasks();
+    }
+
+    expect(task.adapter.sent).toEqual(['Do the task', 'a\nb', 'from the supervisor', 'c', '/compact', 'd\ne']);
+    expect(of(task.events, 'turn_start').slice(1).map((event) => event.type === 'turn_start' && event.messageId)).toEqual([a, supervisor, c, command, d]);
+    expect(of(task.events, 'message_removed')).toEqual([{ type: 'message_removed', messageId: b }, { type: 'message_removed', messageId: e }]);
   });
 });
 
@@ -529,22 +578,15 @@ describe('force send', () => {
     ]);
   });
 
-  async function turnEnd() {
-    const { runner, adapters } = runnerOf(() => new TurnEndAdapter());
-    const task = observe(await runner.spawn(options({ runner: 'claude-code' })));
-    await vi.waitFor(() => expect(adapters[0].sent).toEqual(['Do the task']));
-    return { ...task, adapter: adapters[0], adapters };
-  }
-
   it('interrupts the turn and opens the next one with the forced message, ahead of the queue, never idle in between', async () => {
     const task = await turnEnd();
-    const one = task.session.sendMessage('one');
-    const two = task.session.sendMessage('two');
+    const supervisor = task.session.sendMessage('from the supervisor', 'ordewell');
     task.adapter.emit({ type: 'tool_call', id: 'c1', name: 'Bash', args: { command: 'sleep 60' } });
 
     const now = task.session.forceSend('stop, use Postgres');
     expect(task.session.queued()).toEqual([
-      { id: now, text: 'stop, use Postgres', forced: true }, { id: one, text: 'one' }, { id: two, text: 'two' },
+      { id: now, text: 'stop, use Postgres', forced: true },
+      { id: supervisor, text: 'from the supervisor', from: 'ordewell' },
     ]);
     await flushMicrotasks();
 
@@ -553,14 +595,15 @@ describe('force send', () => {
     expect(task.adapter.sent).toEqual(['Do the task', 'stop, use Postgres']);
     expect(of(task.events, 'turn_start').at(-1)).toEqual({ type: 'turn_start', text: 'stop, use Postgres', messageId: now, forced: true });
     expect(of(task.events, 'message_queued').at(-1)).toEqual({ type: 'message_queued', messageId: now, text: 'stop, use Postgres', forced: true });
-    expect(task.session.queued()).toEqual([{ id: one, text: 'one' }, { id: two, text: 'two' }]);
+    expect(of(task.events, 'message_removed')).toEqual([]);
+    expect(task.session.queued()).toEqual([{ id: supervisor, text: 'from the supervisor', from: 'ordewell' }]);
 
     task.adapter.endTurn();
     await flushMicrotasks();
-    expect(task.adapter.sent).toEqual(['Do the task', 'stop, use Postgres', 'one']);
+    expect(task.adapter.sent).toEqual(['Do the task', 'stop, use Postgres', 'from the supervisor']);
   });
 
-  it('promotes a queued message by id; one gone is refused', async () => {
+  it('promotes a queued message by id, the ones queued before it glued in ahead; one gone is refused', async () => {
     const task = await turnEnd();
     const one = task.session.sendMessage('one');
     const two = task.session.sendMessage('two');
@@ -569,9 +612,10 @@ describe('force send', () => {
     expect(task.session.forceSendQueued(two)).toBe(true);
     await flushMicrotasks();
 
-    expect(task.adapter.sent).toEqual(['Do the task', 'two']);
-    expect(of(task.events, 'turn_start').at(-1)).toEqual({ type: 'turn_start', text: 'two', messageId: two, forced: true });
-    expect(task.session.queued()).toEqual([{ id: one, text: 'one' }]);
+    expect(task.adapter.sent).toEqual(['Do the task', 'one\ntwo']);
+    expect(of(task.events, 'message_removed')).toEqual([{ type: 'message_removed', messageId: one }]);
+    expect(of(task.events, 'turn_start').at(-1)).toEqual({ type: 'turn_start', text: 'one\ntwo', messageId: two, forced: true });
+    expect(task.session.queued()).toEqual([]);
     expect(task.statesAtTurnEnd).toEqual(['working']);
   });
 
@@ -616,9 +660,10 @@ describe('force send', () => {
 
     expect(task.turnEnds).toEqual(['interrupted']);
     expect(task.statesAtTurnEnd).toEqual(['working']);
-    expect(task.adapters[1].sent).toEqual(['now']);
+    expect(task.adapters[1].sent).toEqual(['queued\nnow']);
     expect(of(task.events, 'turn_start').at(-1)).toMatchObject({ messageId: now, forced: true });
-    expect(task.session.queued()).toEqual([{ id: queued, text: 'queued' }]);
+    expect(of(task.events, 'message_removed')).toEqual([{ type: 'message_removed', messageId: queued }]);
+    expect(task.session.queued()).toEqual([]);
   });
 
   it('is a plain send when no turn runs', async () => {
@@ -644,6 +689,72 @@ describe('force send', () => {
   });
 });
 
+describe('force send glues what the person queued into one message (ADR-0023, F1)', () => {
+  it('sends every queued message, in order, ahead of the forced text as one forced message, and takes each off the queue', async () => {
+    const task = await turnEnd();
+    const a = task.session.sendMessage('a');
+    const b = task.session.sendMessage('b');
+    const c = task.session.sendMessage('c');
+
+    const now = task.session.forceSend('x');
+    expect(task.session.queued()).toEqual([{ id: now, text: 'a\nb\nc\nx', forced: true }]);
+    expect(of(task.events, 'message_removed', 'message_queued').slice(3)).toEqual([
+      { type: 'message_removed', messageId: a },
+      { type: 'message_removed', messageId: b },
+      { type: 'message_removed', messageId: c },
+      { type: 'message_queued', messageId: now, text: 'a\nb\nc\nx', forced: true },
+    ]);
+    await flushMicrotasks();
+
+    expect(task.adapter.sent).toEqual(['Do the task', 'a\nb\nc\nx']);
+    expect(of(task.events, 'turn_start').at(-1)).toEqual({ type: 'turn_start', text: 'a\nb\nc\nx', messageId: now, forced: true });
+    expect(task.session.queued()).toEqual([]);
+  });
+
+  it('sends every queued message, in order, as the one forced message when one of them is force sent', async () => {
+    const task = await turnEnd();
+    const a = task.session.sendMessage('a');
+    const b = task.session.sendMessage('b');
+    const c = task.session.sendMessage('c');
+
+    expect(task.session.forceSendQueued(a)).toBe(true);
+    expect(task.session.queued()).toEqual([{ id: a, text: 'a\nb\nc', forced: true }]);
+    expect(of(task.events, 'message_removed', 'message_queued').slice(3)).toEqual([
+      { type: 'message_removed', messageId: b },
+      { type: 'message_removed', messageId: c },
+      { type: 'message_queued', messageId: a, text: 'a\nb\nc', forced: true },
+    ]);
+    await flushMicrotasks();
+
+    expect(task.turnEnds).toEqual(['interrupted']);
+    expect(task.statesAtTurnEnd).toEqual(['working']);
+    expect(task.adapter.sent).toEqual(['Do the task', 'a\nb\nc']);
+    expect(of(task.events, 'turn_start').at(-1)).toEqual({ type: 'turn_start', text: 'a\nb\nc', messageId: a, forced: true });
+  });
+
+  it('never takes in what the runner has, a forced message, a command, or Ordewell\'s own', async () => {
+    const task = await steering((adapter) => { adapter.interruptAnswer = 'hold'; adapter.answers = ['accept', 'hold']; });
+    const handed = task.session.sendMessage('handed');
+    const offered = task.session.sendMessage('offered');
+    await flushMicrotasks();
+    const supervisor = task.session.sendMessage('from the supervisor', 'ordewell');
+    const command = task.session.invokeCommand('compact');
+    const first = task.session.forceSend('first');
+    const mine = task.session.sendMessage('mine');
+
+    const now = task.session.forceSend('now');
+    expect(of(task.events, 'message_removed')).toEqual([{ type: 'message_removed', messageId: mine }]);
+    expect(task.session.queued()).toEqual([
+      { id: first, text: 'first', forced: true },
+      { id: now, text: 'mine\nnow', forced: true },
+      { id: handed, text: 'handed', handedOver: true },
+      { id: offered, text: 'offered', handedOver: true },
+      { id: supervisor, text: 'from the supervisor', from: 'ordewell' },
+      { id: command, text: '/compact' },
+    ]);
+  });
+});
+
 describe('force send of a message the runner already has (ADR-0023, F1)', () => {
   it('on a runner that keeps it across the interrupt (Claude Code): interrupts, sends nothing twice, and the turn the runner opens for it is the forced one', async () => {
     const task = await steering((adapter) => { adapter.answers = ['accept', 'refuse']; });
@@ -654,6 +765,7 @@ describe('force send of a message the runner already has (ADR-0023, F1)', () => 
 
     expect(task.session.forceSendQueued(handed)).toBe(true);
     expect(task.session.queued()).toEqual([{ id: handed, text: 'use Postgres', handedOver: true, forced: true }, { id: waiting, text: 'then add tests' }]);
+    expect(of(task.events, 'message_removed')).toEqual([]);
     await flushMicrotasks();
 
     expect(task.turnEnds).toEqual(['interrupted']);
@@ -782,7 +894,7 @@ describe('force send through the orchestrator', () => {
     return { orchestrator: orchestratorFor(session), session };
   }
 
-  it('keeps the task in progress through the interrupt, and delivers the forced message first', async () => {
+  it('keeps the task in progress through the interrupt, and delivers the forced message first, what was queued glued ahead of it', async () => {
     const { orchestrator, session } = scheduled();
     await orchestrator.forceStartTask('t1');
     const statuses: string[] = [];
@@ -793,12 +905,12 @@ describe('force send through the orchestrator', () => {
     await flushMicrotasks(50);
 
     expect(session.interrupts).toBe(1);
-    expect(session.delivered).toEqual(['now']);
+    expect(session.delivered).toEqual(['later\nnow']);
     expect(statuses.every((s) => s === 'in_progress')).toBe(true);
-    expect(orchestrator.getQueuedTaskMessages('t1').map((m) => m.text)).toEqual(['later']);
+    expect(orchestrator.getQueuedTaskMessages('t1')).toEqual([]);
   });
 
-  it('promotes a queued message, and refuses one it does not hold', async () => {
+  it('promotes a queued message with the ones queued before it, and refuses one it does not hold', async () => {
     const { orchestrator, session } = scheduled();
     await orchestrator.forceStartTask('t1');
     orchestrator.sendTaskMessage('t1', 'first');
@@ -807,7 +919,7 @@ describe('force send through the orchestrator', () => {
     expect(orchestrator.forceSendQueuedTaskMessage('t1', 'msg-404')).toBe(false);
     expect(orchestrator.forceSendQueuedTaskMessage('t1', second)).toBe(true);
     await flushMicrotasks(50);
-    expect(session.delivered).toEqual(['second']);
+    expect(session.delivered).toEqual(['first\nsecond']);
     expect(orchestrator.storeInstance.get('t1')?.status).toBe('in_progress');
   });
 

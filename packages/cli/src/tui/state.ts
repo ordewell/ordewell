@@ -1,5 +1,5 @@
 import { taskPlacement } from '@ordewell/core/plan-utils';
-import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, TERMINAL_UI_SIGN_IN, describeRunnerSignIn, signInOfVerdict, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, logContinues, logResumes, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type AccountLimitSnapshot, type GlobalRunSettings, type OverrideDirection, type TaskStatus, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ChildPlanEntry, type ConversationView, type HandoffDigest, type IsolationHandoff, type IsolationLandedTask, type IsolationPreview, type PromptHold, type RunTask, type RunView, type SupervisorLevel, type TaskIsolation, type TaskLogFollow, type TaskType, type TurnGate } from '@ordewell/core';
+import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, TERMINAL_UI_SIGN_IN, describeRunnerSignIn, signInOfVerdict, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, logContinues, logResumes, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type AccountLimitSnapshot, type GlobalRunSettings, type OverrideDirection, type TaskStatus, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ChildPlanEntry, type ConversationView, type HandoffDigest, type IsolationHandoff, type IsolationLandedTask, type IsolationPreview, type PromptHold, type QueuedTaskMessage, type RunTask, type RunView, type SupervisorLevel, type TaskIsolation, type TaskLogFollow, type TaskType, type TurnGate } from '@ordewell/core';
 import { emptyEditor, type EditorState } from './editor';
 import type { RunnersResponse } from '../apiClient';
 import type { SaveSettingsEffect } from './reducers/settings';
@@ -367,11 +367,17 @@ export interface Selection {
 export interface TaskLogState extends TaskLogFollow {
   taskId: string;
   /**
-   * Which pending message ctrl-r and ctrl-s (with the composer empty) act on,
-   * as picked with ctrl-n/ctrl-p; null until one is picked, which defaults to
-   * the newest (see `queuedTarget`).
+   * Which pending message ctrl-r acts on, as picked with ctrl-n/ctrl-p; null
+   * until one is picked, which defaults to the newest (see `queuedTarget`).
+   * Esc and ctrl-s take no pick: they act on the whole queue, newest or oldest.
    */
   queuedIndex: number | null;
+  /**
+   * Queued messages whose removal has been asked for and not yet answered:
+   * the row goes only when the log says so, so a quick second Esc aims past
+   * these at the next newest.
+   */
+  removing?: readonly string[];
   /**
    * Why the last key was refused, drawn in the view in place of its key hints
    * until the next key that is not a scroll: the planner chat, where other
@@ -391,10 +397,22 @@ export function queuedTarget(tv: TaskLogState): number {
   return -1;
 }
 
-/** A prompt a force send took out of the composer, or out of the queue at `queueIndex`. */
+/**
+ * A queued message of the person's the runner can still give back: not one Ordewell sent, not being sent now, not
+ * handed over, not already on its way back. Esc takes back and an empty ctrl-s sends only these (ADR-0023 F1).
+ */
+export const removable = (tv: TaskLogState, message: QueuedTaskMessage): boolean =>
+  !message.from && !message.forced && !message.handedOver && !tv.removing?.includes(message.id);
+
+/** The index of the queued message Esc takes back next: the newest removable one, or -1. */
+export function newestRemovable(tv: TaskLogState): number {
+  for (let i = tv.view.queued.length - 1; i >= 0; i--) if (removable(tv, tv.view.queued[i])) return i;
+  return -1;
+}
+
+/** What a force send took out of the queue and the composer, glued into the one message it sent. */
 export interface ForcedPrompt {
   text: string;
-  queueIndex?: number;
 }
 
 /**

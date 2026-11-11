@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { accountLimitsOf, assignedRunnerOf, lastServedModel, taskActionCommand, canContinue, taskLogHeaderView, type AccountLimitSnapshot, type CommandOutcome, type DisplayBlock, type ExecutionActor, type ExecutionCommand, type IsolationView, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
 import { EMPTY_TASK_LOG_FOLLOW, followTaskLog } from '@ordewell/core/plan-utils';
-import { diffConversation, type HostToTaskLog, type TaskLogStatus, type TaskLogToHost } from '@ordewell/ui/protocol';
+import { diffConversation, type HostToTaskLog, type TaskLogRefund, type TaskLogStatus, type TaskLogToHost } from '@ordewell/ui/protocol';
 import { renderWebviewHtml } from './webviewHtml';
 
 /**
@@ -177,10 +177,10 @@ export class TaskLogPanel {
         this.control(() => { this.deps.session.invokeTaskCommand(this.taskId, msg.name, msg.args); });
         return;
       case 'sendTaskMessage':
-        this.controlAsync(() => this.userCommand({ command: 'message_task', task: this.taskId, text: msg.text }), msg.text);
+        this.controlAsync(() => this.userCommand({ command: 'message_task', task: this.taskId, text: msg.text }), { draft: msg.text });
         return;
       case 'removeQueuedTaskMessage':
-        this.controlAsync(() => this.userCommand({ command: 'remove_queued', task: this.taskId, id: msg.id }));
+        this.controlAsync(() => this.userCommand({ command: 'remove_queued', task: this.taskId, id: msg.id }), { takeBack: msg.id });
         return;
       case 'sendTaskMessageNow':
         this.controlAsync(() => this.userCommand({ command: 'message_task', task: this.taskId, text: msg.text, force: true }));
@@ -326,15 +326,14 @@ export class TaskLogPanel {
     if (!outcome.ok) throw new Error(outcome.message);
   }
 
-  /** `draft` is what the box gives up to send: a refusal hands it back, as only the host knows it was refused. */
-  private controlAsync(run: () => Promise<void>, draft?: string): void {
-    run().catch((err: unknown) => this.showError(err, draft));
+  private controlAsync(run: () => Promise<void>, refund: TaskLogRefund = {}): void {
+    run().catch((err: unknown) => this.showError(err, refund));
   }
 
-  private showError(err: unknown, draft?: string): void {
+  private showError(err: unknown, { draft, takeBack }: TaskLogRefund = {}): void {
     const error = err instanceof Error ? err.message : String(err);
     this.deps.log(`Task log control failed: ${error}`);
-    this.panel.webview.postMessage({ type: 'showError', error, ...(draft ? { draft } : {}) } satisfies HostToTaskLog);
+    this.panel.webview.postMessage({ type: 'showError', error, ...(draft ? { draft } : {}), ...(takeBack ? { takeBack } : {}) } satisfies HostToTaskLog);
   }
 }
 
