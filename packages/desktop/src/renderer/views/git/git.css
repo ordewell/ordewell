@@ -18,7 +18,8 @@
 .git-current-name > .ow-icon { flex: none; color: var(--ow-fg-secondary); }
 .git-current-label { flex: 1; min-width: 0; }
 .git-list { margin: 0; padding: 0; list-style: none; }
-.git-hint { margin: 0; padding: var(--ow-space-1) var(--ow-space-3); color: var(--ow-fg-secondary); font: var(--ow-type-small); overflow-wrap: anywhere; }
+/* Balanced like the sync note, so a two-line hint does not end on one word ("main.") alone. */
+.git-hint { margin: 0; padding: var(--ow-space-1) var(--ow-space-3); color: var(--ow-fg-secondary); font: var(--ow-type-small); overflow-wrap: anywhere; text-wrap: balance; }
 .git-lead { flex: none; display: inline-flex; width: 16px; justify-content: center; color: var(--ow-fg-secondary); }
 /* The checked-out branch is told by its tick and its weight; green is a status's, and a branch is not one. */
 .git-branch[aria-current='true'] .git-lead { color: var(--ow-fg); }
@@ -33,7 +34,6 @@
 .git-stash-message { min-width: 0; }
 .git-stash-ref { color: var(--ow-fg-secondary); font: var(--ow-type-code-small); }
 .git-stash .srow-actions { visibility: visible; }
-.git-stash .srow-actions .ow-icon-button:focus-visible { outline: 1px solid var(--ow-focus-ring); outline-offset: -1px; }
 /* The row's own title names the whole path, ref and message; a title on the text inside would hide it. */
 .git-worktree-path, .git-stash-message { pointer-events: none; }
 /* Two selectors: sidebarKit.css may load after this file, and its row height and centring must not win. */
@@ -174,4 +174,4 @@
 .git-scope-row { display: flex; align-items: center; gap: var(--ow-space-1); margin: 0 var(--ow-space-2) 0 var(--ow-space-3); min-width: 0; }
 .git-scope-select { flex: 1 1 auto; min-width: 0; width: auto; text-overflow: ellipsis; }
 .git-scope-row .ow-icon-button { flex: none; }
-.git-list .srow.git-viewing { background: var(--ow-bg-selected); }
+.git-list .srow.git-viewing { background: var(--ow-bg-selected); --srow-fill: var(--ow-bg-selected); }

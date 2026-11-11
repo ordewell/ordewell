@@ -1,6 +1,8 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
-import { MiddleText, SidebarGroup, splitMiddle } from '../sidebarKit';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { MiddleText, SidebarGroup, fitMiddle, setMeasureText, splitMiddle } from '../sidebarKit';
 import { SyncBar, pullBlocked, pushBlocked, type SyncState } from '../git/SyncBar';
 
 const TRACKING: SyncState = { upstream: 'origin/main', ahead: 2, behind: 1, hasRemote: true, branchless: false };
@@ -41,6 +43,121 @@ describe('MiddleText', () => {
     const { container } = render(<MiddleText text="main" />);
     expect(container.querySelector('.mid-tail')).toBeNull();
     expect(screen.getByText('main')).toBeInTheDocument();
+  });
+});
+
+const LONG = 'feature/search-box-rewritten-for-unicode-normalisation-and-very-long-query-strings';
+/** jsdom draws no text: every character is 7px wide, the ellipsis too, and the head's floor is 39px (3em of 13px). */
+const mono = (text: string): number => text.length * 7;
+const FLOOR = { headFloor: 39 };
+
+describe('fitMiddle', () => {
+  it('keeps the longest whole-word tail that fits beside a few characters of head', () => {
+    // 199px of room less the head's 39 leaves 160: "long-query-strings" is 126, "very-long-query-strings" 161.
+    expect(fitMiddle(LONG, 200, mono, FLOOR)).toEqual({ head: LONG.slice(0, -'long-query-strings'.length), tail: 'long-query-strings' });
+    expect(fitMiddle(LONG, 120, mono, FLOOR)?.tail).toBe('strings');
+  });
+
+  it('shows a text that fits whole uncut, even in a box drawn exactly as wide as it', () => {
+    expect(fitMiddle('feature/login', 91, mono, FLOOR)).toBeNull();
+    expect(fitMiddle('feature/login', 90, mono, FLOOR)?.tail).toBe('/login');
+  });
+
+  it('falls back to the last word, with the head down to its ellipsis, when no word fits beside the floor', () => {
+    expect(fitMiddle(LONG, 60, mono, FLOOR)).toEqual({ head: LONG.slice(0, -'strings'.length), tail: 'strings', headMin: 7 });
+  });
+
+  it('falls back to a path\'s last segment, slash and all', () => {
+    const path = 'src/search/normalisation-of-composed-unicode-forms.ts';
+    expect(fitMiddle(path, 100, mono, { ...FLOOR, path: true })?.tail).toBe('forms.ts');
+    expect(fitMiddle(path, 50, mono, { ...FLOOR, path: true })).toEqual({ head: 'src/search', tail: '/normalisation-of-composed-unicode-forms.ts', headMin: 7 });
+  });
+
+  it('cuts one long word by characters, and leaves one too long for any cut to its end\'s ellipsis', () => {
+    expect(fitMiddle('abcdefghijklmnopqrstuvwxyz', 100, mono, FLOOR)?.tail).toBe('stuvwxyz');
+    expect(fitMiddle('abcdefghijklmnopqrstuvwxyz', 40, mono, FLOOR)).toBeNull();
+  });
+});
+
+describe('MiddleText, measured', () => {
+  let width = 0;
+  const resized: ResizeObserverCallback[] = [];
+  const measured = (): void => {
+    setMeasureText(mono);
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({ width }) as DOMRect);
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: ResizeObserverCallback) { resized.push(callback); }
+      observe(): void {}
+      disconnect(): void {}
+    });
+  };
+  const resize = (to: number): void => {
+    width = to;
+    act(() => { for (const callback of resized) callback([{ contentRect: { width: to } } as ResizeObserverEntry], {} as ResizeObserver); });
+  };
+  afterEach(() => {
+    setMeasureText(undefined);
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    resized.length = 0;
+  });
+
+  it('keeps a whole tail as wide as its box allows, the whole head in the markup for CSS to shorten', () => {
+    measured();
+    width = 120;
+    const { container } = render(<MiddleText text={LONG} />);
+    const mid = container.querySelector('.mid')!;
+    expect(mid).toHaveClass('mid-fit');
+    expect(mid.querySelector('.mid-tail')).toHaveTextContent(/^strings$/);
+    expect(mid.querySelector('.mid-head')?.textContent).toBe(LONG.slice(0, -'strings'.length));
+    expect(mid).toHaveAttribute('title', LONG);
+    resize(200);
+    expect(mid.querySelector('.mid-tail')).toHaveTextContent(/^long-query-strings$/);
+    resize(1000);
+    expect(container.querySelector('.mid-whole')).toHaveTextContent(LONG);
+  });
+
+  it('lets the head go down to its ellipsis only when no word fits beside a few characters', () => {
+    measured();
+    width = 60;
+    const { container } = render(<MiddleText text={LONG} />);
+    expect(container.querySelector('.mid')).toHaveClass('mid-tight');
+    expect(container.querySelector('.mid-head')).toHaveStyle({ minWidth: '7px' });
+    expect(container.querySelector('.mid-tail')).toHaveTextContent(/^strings$/);
+  });
+
+  it('cuts by characters where nothing is laid out', () => {
+    measured();
+    width = 0;
+    const { container } = render(<MiddleText text={LONG} />);
+    expect(container.querySelector('.mid')).not.toHaveClass('mid-fit');
+    expect(container.querySelector('.mid-tail')?.textContent).toBe('query-strings');
+  });
+});
+
+/** The rules a row's slot is drawn with: jsdom lays nothing out, so the tour's screenshots prove the drawing and this the rules. */
+const kit = readFileSync(join(__dirname, '../sidebarKit.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+const rule = (selector: string): string => [...kit.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter((m) => m[1]!.split(',').some((s) => s.trim() === selector)).map((m) => m[2]).join(';');
+
+describe('the trailing slot', () => {
+  it('is as wide as its rest value, and lays the actions over the row\'s end on an opaque fill', () => {
+    expect(rule('.srow-trail')).not.toMatch(/grid/);
+    expect(rule('.srow-trail > .srow-actions')).toMatch(/position: absolute/);
+    expect(rule('.srow-trail > .srow-actions')).toMatch(/var\(--ow-bg-sidebar\)/);
+    expect(rule('.srow-trail > .srow-actions::before')).toMatch(/var\(--ow-bg-sidebar\)/);
+    expect(rule('.srow-trail > .srow-actions::before')).toMatch(/mask-image: linear-gradient\(to right, transparent, #000\)/);
+    expect(rule('.srow:has(> .srow-trail)')).toMatch(/position: relative/);
+  });
+
+  it('keeps the actions hidden, not removed, until the row is pointed at or focused, with an inset focus ring', () => {
+    expect(rule('.srow-actions')).toMatch(/visibility: hidden/);
+    expect(rule('.srow:focus-within .srow-actions')).toMatch(/visibility: visible/);
+    expect(rule('.srow-actions .ow-icon-button:focus-visible')).toMatch(/outline-offset: -1px/);
+  });
+
+  it('never shrinks a measured tail', () => {
+    expect(rule('.mid-fit .mid-tail')).toMatch(/flex: none/);
+    expect(rule('.mid-fit .mid-head')).toMatch(/min-width: 0/);
   });
 });
 
@@ -142,6 +259,15 @@ describe('SyncBar', () => {
     render(<SyncBar state={{ upstream: null, ahead: 0, behind: 0, hasRemote: true, branchless: true }} actions={actions()} label="main" />);
     expect(screen.getByText('No branch is checked out: Pull and Push need one.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Pull' })).toHaveAccessibleDescription('Nothing to pull: no branch is checked out');
+  });
+
+  it('says what it is doing in the busy button\'s word, in its count\'s place', () => {
+    const { rerender } = render(<SyncBar state={TRACKING} actions={actions()} label="main" running="pull" />);
+    expect(screen.getByRole('button', { name: 'Pulling' }).querySelector('.sync-n')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Push' }).querySelector('.sync-n')).toHaveTextContent('2');
+    rerender(<SyncBar state={TRACKING} actions={actions()} label="main" running="push" />);
+    expect(screen.getByRole('button', { name: 'Pushing' })).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByRole('button', { name: 'Pull' }).querySelector('.sync-n')).toHaveTextContent('1');
   });
 
   it('lets a branch without an upstream be pushed, but not pulled, and says Push publishes it', () => {

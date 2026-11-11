@@ -1512,7 +1512,8 @@ test('the visual tour', async () => {
   // A pull fetches first, so the same hold keeps it pending. Its upstream is one commit past HEAD with HEAD's own
   // tree: the pull that lands on release changes no file, and HEAD is put back after it.
   const PULL_BRANCH = 'tour-pull';
-  const pullButton = (): Locator => gitSide().getByRole('group', { name: /^Sync / }).getByRole('button', { name: 'Pull', exact: true });
+  // While it runs its word says so: "Pulling".
+  const pullButton = (): Locator => gitSide().getByRole('group', { name: /^Sync / }).getByRole('button', { name: /^Pull(ing)?$/ });
   let beforePull = '';
   const unpull = (): void => {
     if (!beforePull) return;
@@ -1520,7 +1521,7 @@ test('the visual tour', async () => {
     git(box, 'branch', '--unset-upstream');
     beforePull = '';
   };
-  await state(win, 'git-pull-busy', 'Git Pull pending after its confirm: its arrow gliding down to a still line, Fetch and Push held', async () => {
+  await state(win, 'git-pull-busy', 'Git Pull pending after its confirm: "Pulling", its arrow gliding down to a still line, Fetch and Push held', async () => {
     await openGit();
     await gitView('Branches').click();
     const head = git(box, 'rev-parse', 'HEAD').trim();
@@ -1538,6 +1539,7 @@ test('the visual tour', async () => {
     await expect(pullButton()).toBeDisabled();
     // The arrow moves and the line under it does not: no turn on the icon itself.
     await expect(pullButton().locator('svg.ow-glide .ow-glide-down')).toBeVisible();
+    await expect(pullButton()).toHaveAccessibleName('Pulling');
     await expect(pullButton().locator('.ow-spin')).toHaveCount(0);
     await expect(fetchButton()).toBeDisabled();
     await expect(gitSide().getByRole('group', { name: /^Sync / }).getByRole('button', { name: 'Push', exact: true })).toBeDisabled();

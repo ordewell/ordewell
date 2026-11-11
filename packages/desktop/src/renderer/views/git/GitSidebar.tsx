@@ -86,9 +86,9 @@ const branchTitle = (branch: BranchInfo, lead = branch.name): string => [lead, t
 
 /*
  * A branch of the person's own. Past its name sits one trailing slot
- * (sidebarKit.css .srow-trail): at rest it shows RestNote, and under the
- * pointer or keyboard focus Switch and Delete take the same box, so the name
- * gives up only the wider of the two.
+ * (sidebarKit.css .srow-trail) as wide as RestNote; under the pointer or
+ * keyboard focus Switch and Delete are laid over the row's end, so the name
+ * gives up nothing at rest for the two buttons it shows only when asked.
  */
 function LocalRow({ ctx, branch, viewing, label = branch.name, depth = 0 }: { ctx: GitContext; branch: BranchInfo; viewing: boolean; label?: string; depth?: number }): JSX.Element {
   const held = runMark(branch);
