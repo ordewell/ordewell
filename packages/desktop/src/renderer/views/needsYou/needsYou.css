@@ -7,9 +7,14 @@
 .needs-items { display: flex; flex-direction: column; gap: var(--ow-space-2); margin: 0; padding: var(--ow-space-1) var(--ow-space-2); list-style: none; }
 /* Each item is a card of its own, so its hairline does the separating a rule between them used to. */
 .needs-item { padding: var(--ow-space-1) var(--ow-space-2) var(--ow-space-2); border: 1px solid var(--ow-surface-card-border); border-radius: var(--ow-radius-lg); background: var(--ow-surface-card); box-shadow: var(--ow-elevation-card); }
-.needs-item-head { display: flex; align-items: center; gap: var(--ow-space-2); }
-.needs-item-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--ow-type-body-strong); }
-.needs-kind { flex: none; padding: 0 var(--ow-space-1); border-radius: var(--ow-radius-pill); background: var(--ow-bg-selected); color: var(--ow-status-attention); font: var(--ow-type-caption); text-transform: lowercase; }
+.needs-item-head { display: flex; align-items: flex-start; gap: var(--ow-space-2); }
+/* The title has the whole row bar the Open button; two lines hold a long task title, and the full text is its title attribute. */
+.needs-item-title { flex: 1; min-width: 0; padding-top: var(--ow-space-half); overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; font: var(--ow-type-body-strong); color: var(--ow-fg); }
+/* The kind leads the reason line as a status word: the colour follows the status tokens, the word stays in the text. */
+.needs-kind { display: inline-block; margin-right: var(--ow-space-1); padding: 0 var(--ow-space-1); border-radius: var(--ow-radius-pill); background: var(--ow-bg-selected); color: var(--ow-status-attention); font: var(--ow-type-caption); font-weight: 600; text-transform: lowercase; }
+.needs-kind[data-tone="failed"] { color: var(--ow-status-failed); }
+.needs-kind[data-tone="blocked"] { color: var(--ow-status-blocked); }
+.needs-kind[data-tone="merge"] { color: var(--ow-status-merge); }
 .needs-open { flex: none; min-width: var(--ow-hit); min-height: var(--ow-hit); border: 0; border-radius: var(--ow-radius-sm); background: transparent; color: var(--ow-fg-link); font: var(--ow-type-small); cursor: pointer; padding: 0 var(--ow-space-1); }
 .needs-open:hover { background: var(--ow-bg-hover); }
 .needs-reason { margin: var(--ow-space-1) 0; color: var(--ow-fg-secondary); font: var(--ow-type-small); }

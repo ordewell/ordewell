@@ -173,4 +173,18 @@ describe('a diff tab', () => {
     ]);
     expect(screen.getByRole('tabpanel')).toHaveTextContent('Working tree');
   });
+
+  it('says a task with no diff to show has none, and keeps a read that failed an error', async () => {
+    const { daemon } = await mount();
+    daemon.answers['plans.taskDiff'] = ok({ available: false, cause: 'read-only', reason: 'A read-only task lands no changes.' });
+    act(() => store.api.openTab({ kind: 'diff', id: fileTabId('.', 'src/sso.ts'), title: 'sso.ts', scope: { kind: 'task', sessionId: 's1', taskId: 't3' } }));
+    const panel = within(await screen.findByRole('tabpanel'));
+    expect(await panel.findByText('A read-only task lands no changes.')).toBeInTheDocument();
+    expect(panel.queryByText('The diff could not be read')).not.toBeInTheDocument();
+    expect(panel.queryByRole('alert')).not.toBeInTheDocument();
+
+    daemon.answers['plans.taskDiff'] = ok({ available: false, cause: 'error', reason: 'git diff failed.' });
+    fireEvent.click(panel.getByRole('button', { name: 'Try again' }));
+    expect(await panel.findByRole('alert')).toHaveTextContent('git diff failed.');
+  });
 });

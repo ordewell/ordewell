@@ -557,7 +557,13 @@ the child cannot reach follows it in the parent's plan.**
   after a restart, as it was before. The TUI walks a tree a plan at a time: Enter
   on a delegated task opens its subplanner beside its tasks, Esc goes back to the plan
   above, and the plans above stay held and current, each on its own socket, so Esc is
-  never a reload. Its root's run keeps its keys: an overlay the root raises shows over a
+  never a reload. A subplanner's turn has no interrupt, so what is typed while it
+  answers is held on screen and sent as the turn ends, as the planner chat's queue is;
+  Esc takes the newest held message back (into the composer only when that is empty),
+  then clears the draft, and goes up only once neither is left, and ctrl-s sends
+  everything held at once, the composer last, without interrupting the turn. A child's
+  task view keeps no queue keys: a child runner's messages have no take-back or force
+  route. Its root's run keeps its keys: an overlay the root raises shows over a
   child and answers on the root, and a Stop reaches the whole run from any depth. A
   child's branch comes in through its task, so nothing below the root offers a merge.
   The subplanner's own question shows on its conversation and is answered from there, on
@@ -803,3 +809,4 @@ the child cannot reach follows it in the parent's plan.**
 - 2026-11-02 — D20: the daemon's message route refuses a raise or a force aloud, a held message a Stop ends is told on its child's stream, a child a retry let go says no Continue reaches it, and the list reads the tree's log after a restart.
 - 2026-11-02 — from review: D7's list holds every path a branch changes, beside a folder workspace too, and nothing starts behind a report, whose branch is read again as it is published. D17: a Continue whose worktree cannot open keeps the child, and one whose restore falls back says so.
 - 2026-11-05 — D19's three limits are run settings, defaulting to the table and bounded by its caps; D21's desktop shows Subplanners in Advanced's Experimental group.
+- 2026-11-10 — D20's TUI holds what is typed while a subplanner answers: Esc takes the newest held message back before it goes up a plan, and ctrl-s sends all held without interrupting.

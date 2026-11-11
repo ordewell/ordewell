@@ -11,7 +11,7 @@ import type {
 import type { IConfig } from '../interfaces/IConfig';
 import type { IsolationRun } from '../interfaces/IWorktreeIsolation';
 import { savedPatchOf } from '../models/Handoff';
-import type { LegacyPlanState } from '../models/Task';
+import { runsAsOps, type LegacyPlanState, type Task } from '../models/Task';
 import { realPathOf } from '../utils/realPath';
 import { listSessions, loadSession } from '../utils/sessionStore';
 import { readTaskPatch } from '../utils/taskLogStore';
@@ -20,7 +20,10 @@ import { cleanEnv, defaultExecFile, MAX_BUFFER, NO_HOOKS, tryGit, type GitExecFn
 import { repoRootOf, SELF_REPO } from './isolationRecord';
 import { hasGitEntry, workspaceRepoGroup } from './repoGroup';
 import { stateRootOf } from './stateRoot';
-import { allowedPath, readOnlyGitArgs, readSavedPatch, readTaskDiff, type TaskDiffRead, type TaskDiffResult } from './taskDiffRead';
+import {
+  allowedPath, readOnlyGitArgs, readSavedPatch, readTaskDiff, TASK_DIFF_NO_RECORD, TASK_DIFF_NO_RUN, TASK_DIFF_READ_ONLY, taskDiffUnavailable,
+  type TaskDiffRead, type TaskDiffResult,
+} from './taskDiffRead';
 
 /**
  * The workspace reader (ADR-0064): what a person's own surfaces read of a
@@ -615,14 +618,15 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
   async function branches(target: ReadTarget): Promise<GitBranchesResponse> {
     const scope = await scopeOf(target);
     const cwd = scope.cwd;
-    const refs = await gitOut(cwd, ['for-each-ref', '--format=%(refname)%00%(objectname)%00%(upstream:short)%00%(upstream:track,nobracket)%00%(HEAD)', 'refs/heads', 'refs/remotes']);
+    const refs = await gitOut(cwd, ['for-each-ref', '--format=%(refname)%00%(objectname)%00%(upstream:short)%00%(upstream:track,nobracket)%00%(HEAD)%00%(committerdate:iso-strict)%00%(contents:subject)', 'refs/heads', 'refs/remotes']);
     const answer: GitBranchesResponse = { repo: scope.at.repo, current: null, detached: false, local: [], ordewell: [], remote: [], stashes: [], worktrees: [] };
     for (const line of refs.split('\n').filter(Boolean)) {
-      const [refname, sha, upstream, track, head] = line.split('\0');
+      // The subject is last and git folds it to one line; NUL cannot occur in a commit message, so no subject can split a field.
+      const [refname, sha, upstream, track, head, date, subject] = line.split('\0');
       const local = refname.startsWith('refs/heads/');
       const name = refname.replace(/^refs\/(heads|remotes)\//, '');
       if (!local && name.endsWith('/HEAD')) continue;
-      const branch: GitBranchInfo = { name, sha, upstream: upstream || null, ...trackOf(track), current: head === '*' };
+      const branch: GitBranchInfo = { name, sha, upstream: upstream || null, ...trackOf(track), current: head === '*', date: date ?? '', subject: subject ?? '' };
       if (branch.current) answer.current = name;
       (local ? (ORDEWELL_REFS.test(name) ? answer.ordewell : answer.local) : answer.remote).push(branch);
     }
@@ -733,6 +737,21 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
   }
 
   /**
+   * Why a task with no record in the saved run has no diff, by what the plan
+   * says it is: what tells a task that works in the checkout, or lands
+   * nothing, from one whose worktree is not saved yet. A task's status here
+   * cannot tell a preparing task from an ended one: loading a session fails
+   * every task that was running, so a surface judges that by the live status.
+   */
+  function withoutRecord(plan: LegacyPlanState, task: Task, run: IsolationRun | undefined): TaskDiffResult {
+    if (runsAsOps(task)) return taskDiffUnavailable('not-attributable', 'Task diff is not available for an ops task: it works in the checkout, where its changes are not told apart from anyone else\'s.');
+    if (task.readOnly) return taskDiffUnavailable('read-only', TASK_DIFF_READ_ONLY);
+    if (run) return taskDiffUnavailable('no-record', TASK_DIFF_NO_RECORD);
+    if (plan.mergedRun) return taskDiffUnavailable('not-attributable', 'Task diff is not available: this session\'s run was merged and closed, and its task records went with it.');
+    return taskDiffUnavailable('no-run', TASK_DIFF_NO_RUN);
+  }
+
+  /**
    * A task's diff as the run reads it for a verdict and VS Code, through
    * `readTaskDiff`, or the patch a read-only task saved (ADR-0050). Names are
    * those a person may be shown (ADR-0064 R3).
@@ -745,7 +764,7 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
     const saved = savedPatchOf(task.handoff);
     const read = saved
       ? readSavedPatch(readTaskPatch({ baseDir: workspace, sessionId }, taskId, saved.attempt), saved, options)
-      : run ? await readTaskDiff(invoker, run, taskId, options) : gone(`Session "${sessionId}" has no isolated run, so no task diff.`);
+      : run?.tasks[taskId] ? await readTaskDiff(invoker, run, taskId, options) : withoutRecord(plan, task, run);
     if (!options.names || !read.available) return read;
     return { available: true, text: read.text.split('\0').filter((name) => name && userPath(name)).join('\0') };
   }

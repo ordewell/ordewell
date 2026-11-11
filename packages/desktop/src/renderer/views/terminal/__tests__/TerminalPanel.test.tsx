@@ -198,7 +198,10 @@ describe('the terminal panel', () => {
     act(() => w.ptys[0]?.emit({ kind: 'exit', exitCode: 2 }));
     expect(panel()).toHaveTextContent('last words');
     expect(panel()).toHaveTextContent('Process exited with code 2.');
-    expect(screen.getByRole('tab', { name: /zsh/ })).toHaveClass('terminal-tab-ended');
+    const tab = screen.getByRole('tab', { name: /zsh/ });
+    expect(tab).toHaveClass('terminal-tab-ended');
+    // The state is a word on the tab, not a strike through its name.
+    expect(within(tab).getByText('exited')).toBeInTheDocument();
   });
 
   it('says why a shell could not start', async () => {

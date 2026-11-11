@@ -21,8 +21,14 @@ export interface SidebarSection {
   order?: number;
   /** Shown beside the section's title, such as Needs you's "(2)"; read each time the frame redraws. */
   count?(): number | undefined;
-  /** The section's header folds it away, as Needs you's does. */
+  /** The section's header folds it away, as Needs you's and Sessions' do; the user's choice outlives an activity switch. */
   collapsible?: boolean;
+  /**
+   * The section draws its own heading (Sidebar's SectionHead) and the frame
+   * draws none: Review folds its task list under it while the whole run and
+   * Merge all stay below. `title` still names the section's region.
+   */
+  ownsHeading?: boolean;
   /** Icon buttons at the right of the section's header, such as Sessions' +. */
   actions?(): ReactNode;
   render(): ReactNode;

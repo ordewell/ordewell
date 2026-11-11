@@ -1,7 +1,7 @@
 {
   "name": "ordewell",
   "displayName": "Ordewell",
-  "description": "Plan once, run it across Claude Code, Codex and OpenCode, and review one branch.",
+  "description": "Plan, run, and review across eight coding agents.",
   "version": "0.13.1",
   "private": true,
   "publisher": "ordewell",

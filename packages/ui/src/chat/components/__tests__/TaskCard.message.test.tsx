@@ -117,8 +117,8 @@ describe('messaging a running or waiting task from its card', () => {
 
     type('use Postgres');
 
-    expect(document.querySelector('.send-key-hint')?.textContent).toBe('Enter queue · Ctrl+Enter send now');
-    expect(document.querySelector('.task-message-send')?.getAttribute('title')).toBe('Queue (Enter) · Send now (Ctrl+Enter)');
+    expect(document.querySelector('.send-key-hint')?.textContent).toBe('Enter queue · Ctrl+Enter send all now');
+    expect(document.querySelector('.task-message-send')?.getAttribute('title')).toBe('Queue (Enter) · Send all now (Ctrl+Enter)');
   });
 
   it('has no key hint on a task waiting for input, which has no turn to interrupt', () => {

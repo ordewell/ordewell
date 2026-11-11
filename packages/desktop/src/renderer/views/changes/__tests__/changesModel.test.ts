@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   changeLetter, commentMessage, conflictRows, diffSides, isFinished, matchesFilter, parsePatch, parseTaskDiffList,
-  reviewableTasks, taskFilePatch,
+  NO_CHANGES_YET, reviewableTasks, taskDiffNote, taskFilePatch,
 } from '../changesModel';
 import { runTask, runView, worktree } from './fixtures';
 
@@ -115,5 +115,30 @@ describe('a line comment', () => {
   it('says when it is about the line before the change', () => {
     expect(commentMessage({ repo: '.', path: 'a.ts', side: 'original', startLine: 2, endLine: 2, quote: 'two', body: 'Why drop this?' }, 'task #3\'s change'))
       .toBe('On a.ts, line 2 (before your change) of task #3\'s change:\n> two\n\nWhy drop this?');
+  });
+});
+
+describe('taskDiffNote', () => {
+  const noRecord = { cause: 'no-record' as const, reason: 'no record yet' };
+  const task = (fields: Partial<Parameters<typeof runTask>[0]>) => runTask({ id: 't1', order: 1, title: 'T', ...fields });
+
+  it('waits on a task the run is working, or one whose live record the save has not caught up with', () => {
+    expect(taskDiffNote(noRecord, task({ status: 'in_progress', isolation: { state: 'none' } }))).toEqual({ tone: 'quiet', text: NO_CHANGES_YET, retry: true });
+    expect(taskDiffNote(noRecord, task({ status: 'completed', isolation: worktree('active') }))).toMatchObject({ tone: 'quiet', retry: true });
+  });
+
+  it('reads a task not started yet as quiet without polling it', () => {
+    expect(taskDiffNote(noRecord, task({ status: 'pending' }))).toEqual({ tone: 'quiet', text: NO_CHANGES_YET, retry: false });
+  });
+
+  it('calls a run shared only when the live task has no isolation while it runs', () => {
+    expect(taskDiffNote(noRecord, task({ status: 'in_progress' })).text).toMatch(/shares the checkout/);
+    expect(taskDiffNote({ cause: 'no-run', reason: 'no isolated run' }, task({ status: 'completed' }))).toEqual({ tone: 'unavailable', text: 'no isolated run', retry: false });
+    expect(taskDiffNote(noRecord, task({ status: 'in_progress', isolation: { state: 'none' } })).text).not.toMatch(/shar/i);
+  });
+
+  it('keeps the daemon\'s own reason for an unattributable change task, and an error an error', () => {
+    expect(taskDiffNote({ cause: 'not-attributable', reason: 'merged and closed' }, task({ status: 'completed' }))).toEqual({ tone: 'unavailable', text: 'merged and closed', retry: false });
+    expect(taskDiffNote({ cause: 'error', reason: 'git failed' }, task({ status: 'in_progress', isolation: worktree('active') }))).toEqual({ tone: 'error', text: 'git failed', retry: false });
   });
 });

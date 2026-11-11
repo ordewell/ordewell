@@ -185,9 +185,18 @@ test('a goal goes from the welcome window to a merge on the checkout\'s branch',
     await win.keyboard.press('Escape');
   });
 
-  await test.step('Git: the view lists the run\'s integration branch', async () => {
+  await test.step('Git: the view lists the run\'s integration branch, and pressing it shows its history in the sidebar', async () => {
     await views.getByRole('tab', { name: 'Git' }).click();
-    await expect(win.getByRole('navigation', { name: 'Git' }).getByRole('button', { name: /^ordewell\/.+\/integration\b/ })).toBeVisible();
+    const gitSide = win.getByRole('navigation', { name: 'Git' });
+    const integration = gitSide.getByRole('button', { name: /^ordewell\/.+\/integration\b/ });
+    await expect(integration).toBeVisible();
+    const editorTabs = editor.getByRole('tablist', { name: 'Editor tabs' }).getByRole('tab');
+    const opened = await editorTabs.count();
+    await integration.click();
+    // Browsing a branch replaces the sidebar's list and leaves the centre alone: no tab opens for it.
+    await expect(gitSide.getByRole('list', { name: /^History of ordewell\/.+\/integration$/ })).toBeVisible({ timeout: 30_000 });
+    await expect(editorTabs).toHaveCount(opened);
+    expect(git('rev-parse', '--abbrev-ref', 'HEAD').trim()).toBe('main');
   });
 
   await test.step('Review & Merge all, through the preflight', async () => {

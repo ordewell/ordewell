@@ -42,6 +42,7 @@ function ConfirmDialog<C extends string>({ request, body, answer }: DialogProps<
         role="dialog"
         aria-modal="true"
         aria-labelledby="session-confirm-message"
+        data-destructive={destructive ? 'true' : undefined}
         onKeyDown={(event) => {
           if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); answer(null); return; }
           // A modal keeps Tab inside it: the window behind cannot be acted on until it is answered.

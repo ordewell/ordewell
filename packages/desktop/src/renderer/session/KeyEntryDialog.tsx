@@ -71,8 +71,8 @@ export function KeyEntryDialog({ request, answer }: DialogProps): JSX.Element {
         <p id={titleId} className="session-confirm-message">API key for {providerName(provider)}</p>
         <p id={hintId} className="session-confirm-detail">
           {request.runnerLabel
-            ? `Ordewell hands this key to ${request.runnerLabel}. It is stored as ${meta.apiKeyEnvVar} and never shown again.`
-            : `Ordewell uses it as ${meta.apiKeyEnvVar}, and never shows it again.`}
+            ? <>Ordewell hands this key to {request.runnerLabel}. It is stored as <code>{meta.apiKeyEnvVar}</code> and never shown again.</>
+            : <>Ordewell uses it as <code>{meta.apiKeyEnvVar}</code>, and never shows it again.</>}
         </p>
         {request.provider === undefined && (
           <label className="key-entry-field">

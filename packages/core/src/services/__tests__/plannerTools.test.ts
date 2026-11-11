@@ -1728,7 +1728,7 @@ const handlerOver = (read: PlannerToolsHost['read'], tasks: Task[] = [], readHan
   lastAttempt: () => null,
   taskLogAttempts: () => [],
   taskLog: () => [],
-  taskDiff: async () => ({ available: false, reason: 'not available' }),
+  taskDiff: async () => ({ available: false, reason: 'not available', cause: 'no-record' }),
   runCommand: async () => ({ success: true, output: '', truncated: false }),
   fetchUrl: async () => ({ success: true, output: '', truncated: false }),
   webSearch: async () => undefined,
@@ -2102,7 +2102,7 @@ describe('a submission whose planner turn ends while its skill check runs', () =
       lastAttempt: () => null,
       taskLogAttempts: () => [],
       taskLog: () => [],
-      taskDiff: async () => ({ available: false, reason: 'not available' }),
+      taskDiff: async () => ({ available: false, reason: 'not available', cause: 'no-record' }),
       runCommand: async () => ({ success: true, output: '', truncated: false }),
       fetchUrl: async () => ({ success: true, output: '', truncated: false }),
       webSearch: async () => undefined,
@@ -2149,7 +2149,7 @@ describe('task references in the read tools', () => {
     lastAttempt: () => null,
     taskLogAttempts: (taskId) => (taskId === 'gone' ? [1, 2] : []),
     taskLog: (taskId, attempt) => (taskId === 'gone' && attempt === 2 ? [{ type: 'text', text: 'the race' }] : []),
-    taskDiff: async () => ({ available: false, reason: 'not available' }),
+    taskDiff: async () => ({ available: false, reason: 'not available', cause: 'no-record' }),
     runCommand: async () => ({ success: true, output: '', truncated: false }),
     fetchUrl: async () => ({ success: true, output: '', truncated: false }),
     webSearch: async () => undefined,
@@ -2297,7 +2297,7 @@ describe('saved attempt reads through MCP', () => {
       answers.push(await call(mcp, 'task_diff', { task: '#9' }));
     });
     expect(answers[0]).toEqual({ isError: true, body: { ok: false, error: 'No saved log for attempt 9.', attempts: [1, 2] } });
-    expect(answers[1]).toMatchObject({ isError: true, body: { error: expect.stringContaining('not available for this run') } });
+    expect(answers[1]).toMatchObject({ isError: true, body: { error: expect.stringContaining('this session has no isolated run') } });
     expect(answers[2]).toMatchObject({ isError: true, body: { error: expect.stringContaining('No task matches') } });
     expect(JSON.stringify(answers)).not.toContain('.ordewell/sessions');
   });
@@ -2396,7 +2396,7 @@ describe('run_command, sealed (ADR-0036)', () => {
     lastAttempt: () => null,
     taskLogAttempts: () => [],
     taskLog: () => [],
-    taskDiff: async () => ({ available: false, reason: 'not available' }),
+    taskDiff: async () => ({ available: false, reason: 'not available', cause: 'no-record' }),
     runCommand,
     fetchUrl: async () => ({ success: true, output: '', truncated: false }),
     webSearch: async () => undefined,

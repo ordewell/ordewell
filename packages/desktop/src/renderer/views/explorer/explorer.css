@@ -58,9 +58,11 @@
 .ex-result { display: flex; flex-direction: column; align-items: stretch; gap: var(--ow-space-half); width: 100%; min-height: var(--ow-row); box-sizing: border-box; border: 0; background: transparent; color: var(--ow-fg); text-align: left; padding: var(--ow-space-1) var(--ow-space-3); cursor: pointer; }
 .ex-result:hover, .ex-result-chosen { background: var(--ow-bg-hover); }
 .ex-result:focus-visible { outline: var(--ow-focus-width) solid var(--ow-focus-ring, var(--ow-accent)); outline-offset: calc(var(--ow-focus-offset) * -1); }
-.ex-result-path { display: flex; min-width: 0; font: var(--ow-type-body); white-space: nowrap; }
-.ex-result-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
+.ex-result-path { display: flex; align-items: baseline; min-width: 0; font: var(--ow-type-body); white-space: nowrap; }
+/* The file's own name leads and never shrinks before its folder; the folder is the muted, shrinking context after it. */
+.ex-result-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .ex-result-line { flex: none; color: var(--ow-fg-secondary); font-variant-numeric: tabular-nums; }
+.ex-result-dir { flex: 1 1 0; min-width: 0; margin-left: var(--ow-space-2); overflow: hidden; text-overflow: ellipsis; color: var(--ow-fg-secondary); font: var(--ow-type-small); }
 .ex-result-preview { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ow-fg-secondary); font: var(--ow-type-code-small); }
 .ex-more { padding: var(--ow-space-2) var(--ow-space-3); color: var(--ow-fg-secondary); font: var(--ow-type-small); }
 

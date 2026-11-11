@@ -805,8 +805,8 @@ describe.skipIf(!hasGit)('task diff reads', () => {
     expect(await iso.taskDiff!(run, t.id, { repo: 'outside' })).toMatchObject({ available: false, reason: expect.stringContaining('No repository') });
     expect(await iso.taskDiff!(run, t.id, { path: 'absent.txt' })).toMatchObject({ available: false, reason: expect.stringContaining('No changed file') });
     delete run.tasks[t.id].repos['.'].baseRef;
-    expect(await iso.taskDiff!(run, t.id, {})).toMatchObject({ available: false, reason: expect.stringContaining('starting commit') });
-    expect(await iso.taskDiff!(run, 'absent', {})).toMatchObject({ available: false, reason: expect.stringContaining('not available for this run') });
+    expect(await iso.taskDiff!(run, t.id, {})).toMatchObject({ available: false, cause: 'not-attributable', reason: expect.stringContaining('starting commit') });
+    expect(await iso.taskDiff!(run, 'absent', {})).toMatchObject({ available: false, cause: 'no-record' });
   });
 
   it('refuses a read-only task, running no git in a worktree whose .git a sealed run could have rewritten (ADR-0046)', async () => {

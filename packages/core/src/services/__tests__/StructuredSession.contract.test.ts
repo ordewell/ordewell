@@ -365,7 +365,7 @@ describe('starting and stopping the runner', () => {
     turn.session.kill();
   });
 
-  it('delivers queued messages oldest first, one per turn, each naming the message it was', async () => {
+  it('delivers what the person queued as the next turn, glued oldest first under the oldest one\'s id (ADR-0023, F1)', async () => {
     const { runner, adapters } = byHand();
     const turn = observe(await runner.spawn(options()));
     await until(() => adapters[0].sent.length === 1);
@@ -374,15 +374,13 @@ describe('starting and stopping the runner', () => {
 
     adapters[0].endTurn();
     await until(() => adapters[0].sent.length === 2);
-    adapters[0].endTurn();
-    await until(() => adapters[0].sent.length === 3);
 
-    expect(adapters[0].sent).toEqual(['Do the task', 'one', 'two']);
+    expect(adapters[0].sent).toEqual(['Do the task', 'one\ntwo']);
     expect(turn.events.filter((e) => e.type === 'turn_start')).toEqual([
       { type: 'turn_start', text: 'Do the task' },
-      { type: 'turn_start', text: 'one', messageId: first },
-      { type: 'turn_start', text: 'two', messageId: second },
+      { type: 'turn_start', text: 'one\ntwo', messageId: first },
     ]);
+    expect(turn.events.filter((e) => e.type === 'message_removed')).toEqual([{ type: 'message_removed', messageId: second }]);
     turn.session.kill();
   });
 

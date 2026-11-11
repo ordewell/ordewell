@@ -82,6 +82,17 @@ describe('the project switcher', () => {
     expect(within(menu).getByRole('menuitemcheckbox', { name: 'Open in new window' })).toHaveAttribute('aria-checked', 'false');
   });
 
+  it('tells two folders of one name apart by their paths, in the row and for a screen reader, without printing the path twice', async () => {
+    mount([recent(HERE), recent('/home/me/work/api'), recent('/home/me/play/api')]);
+    fireEvent.click(switcher());
+    const menu = await screen.findByRole('menu', { name: 'Switch project' });
+    const work = within(menu).getByRole('menuitem', { name: 'api — ~/work/api' });
+    expect(within(menu).getByRole('menuitem', { name: 'api — ~/play/api' })).toBeInTheDocument();
+    expect(work).toHaveAttribute('title', '/home/me/work/api');
+    expect(work.querySelector('.frame-project-entry')).toHaveTextContent(/^api$/);
+    expect(work.querySelector('.frame-menu-hint')).toHaveTextContent('~/work/api');
+  });
+
   it('switches to a recent folder in this window, closes and gives focus back', async () => {
     const { projects } = mount(RECENTS);
     fireEvent.click(switcher());

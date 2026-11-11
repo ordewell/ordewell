@@ -843,22 +843,25 @@ export class DaemonHost {
       case 'changeSettings':
         await this.changeSettings(msg.change);
         return;
-      case 'sendMessageNow':
-        await this.say(msg.text, true);
+      // Send now (ADR-0017 Q2): everything held goes with the composer's text,
+      // as one message. Only a turn in flight is stopped for it; with none, it
+      // is a plain send, as in the extension's sendChatNow.
+      case 'sendMessageNow': {
+        const text = this.view.conversation.takeAll(msg.text);
+        if (!text.trim()) return;
+        if (!this.generating) { await this.say(text, false); return; }
+        // A forced turn that is refused gives back what it took, as in the extension's sendChatNow.
+        await this.say(text, true, undefined, () => this.view.conversation.giveBack(text));
         return;
+      }
       // Typed while the chat saw a turn in flight: one that has ended since leaves nothing to wait for, as in the extension.
       case 'holdPrompt':
         if (this.generating) this.view.conversation.holdPrompt(msg.text);
         else await this.handle({ type: 'sendMessage', text: msg.text, typed: true });
         return;
       case 'unsendPrompt':
-        this.view.conversation.unsendPrompt();
+        this.view.conversation.unsendPrompt(msg.toComposer);
         return;
-      case 'sendHeldPromptNow': {
-        const text = this.view.conversation.takePrompt(msg.index);
-        if (text !== undefined) await this.say(text, true);
-        return;
-      }
       case 'stopResearch':
         this.view.conversation.stop();
         if (!this.fresh) await callDaemon('plans.stopPlanning', { sessionId: this.sessionId });
@@ -951,7 +954,7 @@ export class DaemonHost {
   }
 
   /** One planner turn: the first of a fresh session starts it, every later one is a message. */
-  private async turn(text: string, now: boolean, runners?: readonly RunnerId[]): Promise<void> {
+  private async turn(text: string, now: boolean, runners?: readonly RunnerId[], refused?: () => void): Promise<void> {
     await this.plannerTurn(async (sessionId) => {
       let response: PlanResponse;
       if (this.fresh) {
@@ -967,12 +970,16 @@ export class DaemonHost {
         if (sessionId !== this.sessionId) return;
       }
       this.showPlan(response.plan);
-    }, (error) => this.showError(error));
+    }, (error) => {
+      this.showError(error);
+      // A stop or a left session ended the turn on purpose; anything else refused it, and what it carried is not lost.
+      if (!(error instanceof DaemonError && (error.code === 'planner_turn_stopped' || error.code === 'planner_turn_discarded'))) refused?.();
+    });
   }
 
   /**
    * A call that is a planner turn: what is typed meanwhile is held, and the
-   * oldest held prompt goes once it ends, whoever asked for the turn.
+   * held prompts go once it ends, as one message, whoever asked for the turn.
    */
   private async plannerTurn(run: (sessionId: string) => Promise<void>, failed: (error: unknown) => void): Promise<void> {
     const sessionId = this.sessionId;
@@ -990,16 +997,16 @@ export class DaemonHost {
     if (this.turnsIn(sessionId) === 0) await this.sendHeldPrompt();
   }
 
-  /** The oldest prompt typed while the planner was busy, sent now that it is not. */
+  /** Every prompt typed while the planner was busy, glued and sent now that it is not. */
   private async sendHeldPrompt(): Promise<void> {
     const next = this.view.conversation.nextPrompt();
     if (next !== undefined) await this.say(next, false);
   }
 
   /** A prompt the user sent, shown as theirs and answered in a turn, as the extension's sendChat does (webviewRouter). */
-  private async say(text: string, now: boolean, runners?: readonly RunnerId[]): Promise<void> {
+  private async say(text: string, now: boolean, runners?: readonly RunnerId[], refused?: () => void): Promise<void> {
     if (text.trim()) this.view.conversation.note('user', text);
-    await this.turn(text, now, runners);
+    await this.turn(text, now, runners, refused);
   }
 
   /**

@@ -25,7 +25,7 @@ describe('queued prompt rows on a narrow pane', () => {
 
   it('names the hint on a wide pane', () => {
     const [row] = queuedPromptRows(initialState({ queuedPrompts: ['a parked thought'] }), 120);
-    expect(plain(row)).toContain('a parked thought · queued · esc to unsend · ctrl-s sends now');
+    expect(plain(row)).toContain('a parked thought · queued · esc takes back · ctrl-s sends all now');
   });
 });
 
@@ -50,13 +50,18 @@ describe('queued task message rows on a narrow pane', () => {
     });
   }
 
-  it('drops the send-now key before the state of a handed-over message', () => {
+  it('drops keys from the end, never the state of a message', () => {
+    const [wide] = taskQueuedRows(initialState({ taskView: view('a short note') }), 120);
+    const [narrow] = taskQueuedRows(initialState({ taskView: view('a short note') }), 50);
+
+    expect(plain(wide)).toBe('❯ a short note · queued · esc takes back · ctrl-s sends all now · ctrl-r removes');
+    expect(plain(narrow)).toBe('❯ a short note · queued · esc takes back');
+  });
+
+  it('names no key on a handed-over message, which only the current step can take', () => {
     const tv = view('a short note');
     const handed: TaskLogState = { ...tv, view: { ...tv.view, queued: [{ id: 'm1', text: 'a short note', forced: false, handedOver: true }] } };
-    const [wide] = taskQueuedRows(initialState({ taskView: handed }), 120);
-    const [narrow] = taskQueuedRows(initialState({ taskView: handed }), 50);
 
-    expect(plain(wide)).toBe('❯ a short note · waiting for the current step · ctrl-s sends now');
-    expect(plain(narrow)).toBe('❯ a short note · waiting for the current step');
+    expect(plain(taskQueuedRows(initialState({ taskView: handed }), 120)[0])).toBe('❯ a short note · waiting for the current step');
   });
 });

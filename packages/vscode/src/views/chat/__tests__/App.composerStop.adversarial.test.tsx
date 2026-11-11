@@ -120,6 +120,24 @@ describe('the composer button over every planner/run combination', () => {
     expect(stops()).toEqual([]);
   });
 
+  it.each([
+    ['Ctrl+Enter', { ctrlKey: true }],
+    ['Cmd+Enter', { metaKey: true }],
+  ])('sends the held prompts now on %s with an empty composer during a live turn with a run', (_key, mods) => {
+    post({ type: 'planUpdated', plan: running });
+    host.session(turnStarted());
+    type('also cover caching');
+    press('Enter');
+    host.provider.conversation.holdPrompt('also cover caching');
+    host.provider.conversation.flush();
+    expect(textarea().value).toBe('');
+
+    fireEvent.keyDown(textarea(), { key: 'Enter', ...mods });
+
+    expect(api.postMessage).toHaveBeenCalledWith({ type: 'sendMessageNow', text: '' });
+    expect(stops()).toEqual([]);
+  });
+
   it('sends a typed slash command while the run executes and the planner is idle', () => {
     post({ type: 'planUpdated', plan: running });
     type('/refresh');

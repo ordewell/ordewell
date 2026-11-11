@@ -440,7 +440,7 @@ body {
   margin-bottom: 3px;
   padding: 0 5px;
   border-radius: 3px;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -456,7 +456,7 @@ body {
 
 .chat-msg-label {
   display: block;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -692,14 +692,14 @@ body {
    result — the glyph alone was too quiet, so the status drives colour too. */
 .cmd-row-outcome {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--orange);
 }
 
 /* A sealed run is a fact about where the command ran, not an exception. */
 .cmd-row-sealed {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-muted);
 }
 
@@ -753,7 +753,7 @@ body {
 .cmd-row-more {
   display: block;
   margin-left: 27px;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-hint);
 }
 
@@ -799,7 +799,7 @@ body {
 .subagent-card-model,
 .subagent-card-status {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-muted);
 }
 
@@ -976,7 +976,7 @@ body.vscode-high-contrast-light .activity-group[data-state='failed'] .activity-g
   background: none;
   padding: 0;
   font: inherit;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-hint);
   text-align: left;
   cursor: pointer;
@@ -1223,7 +1223,7 @@ body.vscode-high-contrast-light .disclosure:hover {
 }
 
 .setup-block-empty code {
-  font-size: 10px;
+  font-size: 11px;
 }
 
 /* Capsules hang from the top edge: an item with a login reserves a failure
@@ -1619,7 +1619,7 @@ body.vscode-high-contrast-light .disclosure:hover {
      edge, so the label does not need a second inset on top of it. */
   padding: 4px 8px;
   border-radius: 0 var(--radius-full) var(--radius-full) 0;
-  font-size: 10.5px;
+  font-size: 11px;
 }
 
 /* A capsule reserves the resting label only: once the wait starts the words
@@ -1654,7 +1654,7 @@ body.vscode-high-contrast-light .disclosure:hover {
   justify-self: end;
   padding: 4px 12px;
   border-radius: var(--radius-full);
-  font-size: 11.5px;
+  font-size: 12px;
 }
 
 /* Why a login did not finish, under the capsule that asked: one line, no
@@ -3024,7 +3024,7 @@ section.isolation-notice {
 }
 
 .task-row-head .task-title-text {
-  font: var(--ow-type-label);
+  font: var(--ow-type-body-strong);
   color: var(--ow-fg);
   letter-spacing: normal;
 }
@@ -3548,7 +3548,7 @@ body.vscode-high-contrast-light .task-card.expanded {
 
 .task-assignment-effort {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
 }
 
@@ -3575,7 +3575,7 @@ body.vscode-high-contrast-light .task-card.expanded {
   display: block;
   padding: 3px 14px 6px 14px;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -3667,7 +3667,7 @@ body.vscode-high-contrast-light .task-card.expanded {
 
 .task-output-header {
   padding: 4px 10px;
-  font-size: 10px;
+  font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-muted);
@@ -3736,7 +3736,7 @@ body.vscode-high-contrast-light .task-card.expanded {
 }
 
 .user-step-guide-header {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--orange);
   margin-bottom: 8px;
@@ -3785,7 +3785,7 @@ body.vscode-high-contrast-light .task-card.expanded {
 }
 
 .model-selector label {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--text-muted);
   text-transform: uppercase;
@@ -3800,7 +3800,7 @@ body.vscode-high-contrast-light .task-card.expanded {
 }
 
 .task-assignment-readonly-label {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--text-muted);
   text-transform: uppercase;
@@ -3860,40 +3860,13 @@ body.vscode-high-contrast-light .task-card.expanded {
   border-color: var(--accent);
 }
 
+/* The picked model reads in the text colour: a hue per model family would read as a status (green, red, amber). */
 .model-picker-label {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-/* Named families */
-.model-picker-label.model-sonnet { color: var(--accent); }
-.model-picker-label.model-opus { color: var(--purple); }
-.model-picker-label.model-haiku { color: var(--orange); }
-.model-picker-label.model-fable { color: var(--accent); }
-.model-picker-label.model-deepseek { color: var(--cyan); }
-.model-picker-label.model-kimi { color: var(--green); }
-.model-picker-label.model-gpt { color: #10a37f; }
-.model-picker-label.model-gemini { color: #4285f4; }
-.model-picker-label.model-qwen { color: #ff9500; }
-.model-picker-label.model-glm { color: #af52de; }
-.model-picker-label.model-minimax { color: #ff3b30; }
-.model-picker-label.model-mimo { color: #5ac8fa; }
-/* Hash palette */
-.model-picker-label.model-hash-0 { color: var(--accent); }
-.model-picker-label.model-hash-1 { color: var(--purple); }
-.model-picker-label.model-hash-2 { color: var(--cyan); }
-.model-picker-label.model-hash-3 { color: var(--green); }
-.model-picker-label.model-hash-4 { color: var(--orange); }
-.model-picker-label.model-hash-5 { color: #10a37f; }
-.model-picker-label.model-hash-6 { color: #af52de; }
-.model-picker-label.model-hash-7 { color: #ff3b30; }
-/* Legacy */
-.model-picker-label.sonnet { color: var(--accent); }
-.model-picker-label.opus { color: var(--purple); }
-.model-picker-label.deepseek { color: var(--cyan); }
-.model-picker-label.kimi { color: var(--green); }
 
 .model-picker-arrow {
   font-size: 8px;
@@ -3983,7 +3956,7 @@ body.vscode-high-contrast-light .task-card.expanded {
 }
 
 .model-picker-group-header {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--text-muted);
   text-transform: uppercase;
@@ -4014,7 +3987,7 @@ body.vscode-high-contrast-light .task-card.expanded {
 }
 
 .model-picker-item-id {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-muted);
   font-family: var(--font-mono);
   margin-left: 8px;
@@ -4097,7 +4070,7 @@ body.vscode-high-contrast-light .task-card.expanded {
 }
 
 .subtask-order {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-hint);
   min-width: 18px;
 }
@@ -4213,7 +4186,7 @@ body.vscode-high-contrast-light .task-card.expanded {
 }
 
 .task-prompt-edit-hint {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-muted);
 }
 
@@ -4332,7 +4305,7 @@ body.vscode-high-contrast-light .task-card.expanded {
 /* The host's reply cue (#137), under the input as the send-key hint is. */
 .chat-input-hint {
   padding: 0 10px 6px;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.4;
   color: var(--text-hint);
 }
@@ -4552,7 +4525,7 @@ body.vscode-high-contrast-light .task-card.expanded {
 }
 
 .task-status-badge {
-  font-size: 10px;
+  font-size: 11px;
   padding: 1px 6px;
   border-radius: 3px;
   font-weight: 500;
@@ -4781,7 +4754,7 @@ body.vscode-high-contrast-light .task-card.expanded {
   gap: 6px;
   padding: 3px 8px;
   border-radius: 3px;
-  font-size: 10px;
+  font-size: 11px;
   flex-wrap: wrap;
 }
 
@@ -4812,13 +4785,13 @@ body.vscode-high-contrast-light .task-card.expanded {
 }
 
 .check-status {
-  font-size: 9px;
+  font-size: 11px;
   text-transform: uppercase;
   opacity: 0.8;
 }
 
 .check-detail {
-  font-size: 10px;
+  font-size: 11px;
   opacity: 0.7;
   margin-left: 20px;
   width: 100%;
@@ -4978,7 +4951,7 @@ body.vscode-high-contrast-light .task-card.expanded {
 
 .task-mark-hint {
   min-width: 0;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-muted);
 }
 
@@ -5249,7 +5222,7 @@ body.vscode-high-contrast-light .task-card.expanded {
 
 .slash-suggestions-footer {
   padding: 4px 12px;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-muted);
   border-top: 1px solid var(--border-muted);
 }
@@ -5353,7 +5326,7 @@ body.vscode-high-contrast-light .task-card.expanded {
 
 .checkpoint-elapsed {
   margin-left: auto;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-muted);
   display: flex;
   align-items: center;
@@ -5365,7 +5338,7 @@ body.vscode-high-contrast-light .task-card.expanded {
   border-radius: var(--radius-sm);
   background: var(--red);
   color: #fff;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   animation: pulse-dot 1.5s ease-in-out infinite;
@@ -5532,8 +5505,8 @@ body.vscode-high-contrast-light .task-card.expanded {
 
 /* ---- Dependency Badges (inline in header) ---- */
 .task-dep-badge {
-  font-size: 9px;
-  font-weight: 700;
+  font-size: 11px;
+  font-weight: 600;
   padding: 2px 6px;
   border-radius: 3px;
   flex-shrink: 0;
@@ -6431,7 +6404,7 @@ body.vscode-high-contrast-light .pending-message {
   .pending-message-actions { opacity: 1; }
 }
 
-.pending-message-now,
+.pending-messages-now,
 .pending-message-remove {
   display: inline-flex;
   align-items: center;
@@ -6451,7 +6424,15 @@ body.vscode-high-contrast-light .pending-message {
   font-size: 13px;
 }
 
-.pending-message-now:hover {
+/* Queued messages go as one message, so one Send all now serves them all:
+   under the last row, where the stack meets the composer whose chord does
+   the same. */
+.pending-messages-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.pending-messages-now:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
 }
@@ -6461,7 +6442,7 @@ body.vscode-high-contrast-light .pending-message {
   color: var(--red);
 }
 
-.pending-message-now:focus-visible,
+.pending-messages-now:focus-visible,
 .pending-message-remove:focus-visible {
   outline: 1px solid var(--accent);
   outline-offset: -1px;
@@ -6472,7 +6453,7 @@ body.vscode-high-contrast-light .pending-message {
 .send-key-hint {
   flex: 0 0 100%;
   text-align: right;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.4;
   color: var(--text-hint);
 }
@@ -6490,12 +6471,12 @@ body.vscode-high-contrast-light .pending-message {
 }
 
 .send-key-hint kbd,
-.pending-message-now kbd {
+.pending-messages-now kbd {
   padding: 0 3px;
   border: 1px solid var(--border-muted);
   border-radius: 3px;
   font-family: inherit;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 14px;
 }
 
@@ -6646,7 +6627,7 @@ body.vscode-high-contrast-light .pending-message {
 /* A structured task stopped on its runner's request: on the card, and in the
    task log's header. */
 .task-approval-badge {
-  font-size: 10px;
+  font-size: 11px;
   padding: 1px 6px;
   border-radius: 3px;
   margin-left: 6px;
@@ -6677,7 +6658,7 @@ body.vscode-high-contrast-light .pending-message {
   position: relative;
   white-space: nowrap;
   padding: 3px 14px;
-  font-size: 10px;
+  font-size: 11px;
   /* --text-muted falls below WCAG AA (4.5:1) at this font-size in both
      themes — this is a persistent status readout, not de-emphasized aside text. */
   color: var(--text-secondary);
@@ -6820,7 +6801,7 @@ body.vscode-high-contrast-light .pending-message {
 }
 
 .task-log-state {
-  font-size: 10px;
+  font-size: 11px;
   padding: 1px 8px;
   border-radius: var(--radius-full);
   font-weight: 500;
@@ -7441,7 +7422,7 @@ body.vscode-high-contrast-light .pending-message {
   background: var(--orange-subtle);
   color: var(--orange);
   font-family: inherit;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   line-height: 1.5;
   cursor: pointer;

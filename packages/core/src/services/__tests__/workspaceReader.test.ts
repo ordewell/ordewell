@@ -337,6 +337,32 @@ describe.skipIf(!hasGit)('workspace reader history and branches', () => {
     ]);
   });
 
+  it('gives each branch its tip\'s committer date and subject, whatever characters the subject holds', async () => {
+    const subjects = ['feat: "quoted" it\'s 100% $(x) `y` \\ ; | ✓ \u00e9\tnext', 'two\nlines\n\nthe body'];
+    write(workspace, { 'odd.txt': '1\n' });
+    git(workspace, 'add', '-A');
+    git(workspace, 'commit', '-q', '-m', subjects[0]);
+    git(workspace, 'branch', 'odd');
+    write(workspace, { 'odd.txt': '2\n' });
+    git(workspace, 'add', '-A');
+    git(workspace, 'commit', '-q', '-m', subjects[1]);
+    git(workspace, 'branch', 'folded');
+    const remote = path.join(tmp, 'remote.git');
+    git(tmp, 'clone', '-q', '--bare', workspace, remote);
+    git(workspace, 'remote', 'add', 'origin', remote);
+    git(workspace, 'fetch', '-q', 'origin');
+
+    const branches = await reader.branches({ workspace });
+    const odd = branches.local.find((b) => b.name === 'odd');
+    expect(odd?.subject).toBe(subjects[0]);
+    expect(odd?.date).toBe(git(workspace, 'log', '-1', '--format=%cI', 'odd').trim());
+    // git folds a subject of several lines into one, so a record never spans lines.
+    expect(branches.local.find((b) => b.name === 'folded')?.subject).toBe('two lines');
+    expect(branches.local.find((b) => b.name === 'feature')).toMatchObject({ subject: 'commit 2', sha: shas[1] });
+    expect(branches.remote.find((b) => b.name === 'origin/main')).toMatchObject({ subject: 'two lines', date: git(workspace, 'log', '-1', '--format=%cI', 'main').trim() });
+    expect(branches.local.every((b) => /^\d{4}-\d\d-\d\dT/.test(b.date))).toBe(true);
+  });
+
   it('names a workspace\'s repositories, each with its branch', async () => {
     const group = path.join(tmp, 'group');
     repo(path.join(group, 'api'), { 'x.txt': 'x\n' });

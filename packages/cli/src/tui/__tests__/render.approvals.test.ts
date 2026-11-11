@@ -41,20 +41,31 @@ describe('approval overlay rendering', () => {
     expect(out).toMatch(/n den(y|ies)/i);
   });
 
-  it('names the take-back instead once a prompt is queued, when the first esc unsends it', () => {
+  it('names the take-back instead once a prompt is queued, when the first esc takes it back', () => {
     const out = screenWith(SHELL, {
       planner: 'planning',
       sessionId: 's1',
       queuedPrompts: ['a parked thought'],
     });
-    expect(out).toMatch(/esc takes back the queued prompt/i);
+    expect(out).toMatch(/esc takes back the newest queued prompt/i);
     expect(out).not.toMatch(/esc twice stops planning/i);
+  });
+
+  it('says esc drops the newest queued prompt while the composer holds a draft', () => {
+    const base = initialState();
+    const out = screenWith(SHELL, {
+      planner: 'planning',
+      sessionId: 's1',
+      queuedPrompts: ['a parked thought'],
+      editor: { ...base.editor, text: 'typing', cursor: 6 },
+    });
+    expect(out.replace(/\s+/g, ' ')).toMatch(/esc drops the newest queued prompt/i);
   });
 
   it('keeps the take-back hint legible at narrow and wide widths', () => {
     for (const cols of [40, 120]) {
       const out = screenWith(SHELL, { planner: 'planning', sessionId: 's1', queuedPrompts: ['held'], cols });
-      expect(out.replace(/\s+/g, ' ')).toMatch(/esc takes back the queued prompt/i);
+      expect(out.replace(/\s+/g, ' ')).toMatch(/esc takes back the newest queued prompt/i);
     }
   });
 

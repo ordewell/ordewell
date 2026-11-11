@@ -62,7 +62,10 @@
 .welcome-unavailable { flex: 0 1 auto; color: var(--ow-fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .welcome-recent-missing { cursor: default; color: var(--ow-fg-muted); }
 .welcome-recent-missing:hover { background: var(--ow-surface-card); }
-.welcome-recent-missing .welcome-path, .welcome-recent-missing .welcome-line { color: var(--ow-fg-muted); }
+.welcome-recent-missing .welcome-path, .welcome-recent-missing .welcome-line { color: var(--ow-fg-secondary); }
+/* A folder that is gone keeps its name legible and says so in full-strength text beside the warning mark; only the card's own action is withdrawn. */
+.welcome-recent-missing .welcome-recent-name { color: var(--ow-fg-secondary); }
+.welcome-recent-missing .welcome-recent-warning { color: var(--ow-fg); }
 .welcome-recent-warning > .ow-icon { color: var(--ow-status-warning); }
 
 .welcome-empty {
@@ -199,6 +202,11 @@
 }
 .welcome-login-title { margin: 0; font: var(--ow-type-heading); color: var(--ow-fg); }
 .welcome-login-terminal { height: min(420px, 55vh); background: var(--ow-bg); border: 1px solid var(--ow-border); border-radius: var(--ow-radius-sm); padding: var(--ow-space-1); }
-.welcome-login-status { margin: 0; font: var(--ow-type-body); color: var(--ow-fg-secondary); }
-.welcome-login-hint { margin: 0; font: var(--ow-type-small); color: var(--ow-fg-muted); }
+.welcome-login-status { margin: 0; font: var(--ow-type-body); color: var(--ow-fg-secondary); overflow-wrap: anywhere; }
+/* A failed sign-in leads with its outcome in the primary colour and a failure mark, so it reads without its tint; the reason stays secondary. */
+.welcome-login-failed { display: flex; align-items: flex-start; gap: var(--ow-space-2); }
+.welcome-login-failed > .ow-icon { flex: none; margin-top: var(--ow-space-half); color: var(--ow-status-failed); }
+.welcome-login-failed > span { min-width: 0; }
+.welcome-login-failed strong { font-weight: 600; color: var(--ow-fg); }
+.welcome-login-hint { margin: 0; font: var(--ow-type-small); color: var(--ow-fg-secondary); }
 .welcome-login-actions { display: flex; justify-content: flex-end; gap: var(--ow-space-2); }

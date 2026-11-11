@@ -259,7 +259,10 @@ export function syncTarget(branches: Branches): { remote: string; branch: string
 
 export async function fetchRepo(ctx: GitContext): Promise<void> {
   const repo = repoDisplay(ctx.api.workspace, ctx.repo).name;
-  await perform(ctx, { route: 'git.fetch' }, `fetch ${repo}`, `Fetched ${repo}.`);
+  const started = await gitStoreFor(ctx.api).sync(ctx.repo, 'fetch', async () => {
+    await perform(ctx, { route: 'git.fetch' }, `fetch ${repo}`, `Fetched ${repo}.`);
+  });
+  if (!started) ctx.api.announce(`${repo} is already syncing.`);
 }
 
 async function sync(ctx: GitContext, which: 'pull' | 'push', redraw = 0): Promise<void> {
@@ -284,12 +287,17 @@ async function sync(ctx: GitContext, which: 'pull' | 'push', redraw = 0): Promis
   });
   if (!ok) return;
   const action = { remote: target.remote, branch: target.branch };
-  const outcome = await perform(
-    ctx,
-    pull ? { route: 'git.pull', ...action } : { route: 'git.push', ...action },
-    `${which} ${upstream}`,
-    pull ? `Pulled ${upstream} into ${current.name}.` : `Pushed ${current.name} to ${upstream}.`,
-  );
+  // The mark goes up after the answer, not before the question: while the dialog is open nothing is running.
+  let outcome: Outcome = { done: false };
+  const started = await gitStoreFor(ctx.api).sync(ctx.repo, which, async () => {
+    outcome = await perform(
+      ctx,
+      pull ? { route: 'git.pull', ...action } : { route: 'git.push', ...action },
+      `${which} ${upstream}`,
+      pull ? `Pulled ${upstream} into ${current.name}.` : `Pushed ${current.name} to ${upstream}.`,
+    );
+  });
+  if (!started) { ctx.api.announce(`${repoDisplay(ctx.api.workspace, ctx.repo).name} is already syncing.`); return; }
   if ('stale' in outcome) {
     // The branch or its upstream moved while the question was open: ask again about what is true now.
     await gitStoreFor(ctx.api).refresh(ctx.repo);
