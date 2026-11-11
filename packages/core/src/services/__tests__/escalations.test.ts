@@ -32,6 +32,8 @@ interface Setup {
   /** Conflicted task id → the task out to resolve it. */
   resolvers?: Record<string, string>;
   startsAlone?: string[];
+  /** Tasks whose conflict holds nothing a resolver could take (a landing git refused). */
+  unresolvable?: string[];
   /** Loops' checks between rounds that nothing will run. */
   stranded?: string[];
   /** Tasks a loop carried on with no scheduler starts. */
@@ -75,6 +77,7 @@ function listFor(tasks: Task[], setup: Setup = {}): Escalation[] {
     checkpoint: (id) => setup.checkpoints?.[id],
     waitsForApproval: (id) => (setup.added ?? []).includes(id),
     startQueued: (id) => (setup.startsAlone ?? []).includes(id),
+    resolvable: (id) => !(setup.unresolvable ?? []).includes(id),
     holdReason: (id) => onHold.get(id),
     loopRunsOn: (id) => !(setup.stranded ?? []).includes(id),
     carried: (id) => (setup.carried ?? []).includes(id),
@@ -170,6 +173,8 @@ describe('what waits on a person, task by task', () => {
       [{ id: 'input:t1:1', kind: 'input', options: ['retry', 'skip', 'complete'] }]],
     ['a landing conflict', [task('t1', 1, { status: 'awaiting_user', awaitingReason: 'conflict' })], { attempts: { t1: 1 } },
       [{ id: 'conflict:t1:1', kind: 'conflict', options: ['resolve-conflict', 'retry', 'skip', 'complete'] }]],
+    ['a landing git refused, which holds no conflict to resolve', [task('t1', 1, { status: 'awaiting_user', awaitingReason: 'conflict' })], { attempts: { t1: 1 }, unresolvable: ['t1'] },
+      [{ id: 'conflict:t1:1', kind: 'conflict', options: ['retry', 'skip', 'complete'] }]],
     ['an ops task that changed tracked files', [task('t1', 1, { status: 'awaiting_user', awaitingReason: 'files-changed', ops: true })], { attempts: { t1: 1 } },
       [{ id: 'files-changed:t1:1', kind: 'files-changed', options: ['retry', 'skip', 'complete'] }]],
     ['a usage-limit pause with no scheduled resume', [task('t1', 1, { status: 'awaiting_user', awaitingReason: 'usage-limit', ...continuable })], { attempts: { t1: 1 } },

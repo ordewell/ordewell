@@ -1036,6 +1036,11 @@ export class TaskOrchestrator {
     return null;
   }
 
+  /** Whether {@link resolverRefusal} and the record both let a resolver be added: the one test an offer of it and its acceptance share. */
+  canResolveConflict(taskId: string): boolean {
+    return this.runs.current?.tasks[taskId]?.status === 'conflict' && this.resolverRefusal(taskId) === null;
+  }
+
   /** What the conflict repair this task is owed waits for; null when no repair will start by itself. */
   repairWait(taskId: string): RepairWait | null {
     const task = this.store.get(taskId);
