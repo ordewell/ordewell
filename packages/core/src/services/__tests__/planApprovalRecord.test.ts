@@ -7,6 +7,7 @@ import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import type { IRunner } from '../../interfaces/IRunner';
 import type { ExecutionActor } from '../../models/Execution';
 import * as sessionStore from '../../utils/sessionStore';
+import { SURFACE_CONTROLS } from '../surfaceControls';
 
 /**
  * Plan approval is the user's act, kept on the plan as its own record
@@ -142,7 +143,7 @@ describe('plan approval is read from the approval record, never from the display
     await vi.waitFor(() => expect(env.session.isExecuting).toBe(false));
 
     expect((await env.session.execute({ command: 'run_plan' }, PLANNER)).message)
-      .toBe('The user has not approved this plan yet: they approve it by executing it themselves (Execute plan). Ask them to.');
+      .toBe(`The user has not approved this plan yet: they approve it themselves (${SURFACE_CONTROLS.unknown.approvePlan}). Ask them to.`);
   });
 
   it('still leaves a task added after the approval unapproved (ADR-0029)', async () => {

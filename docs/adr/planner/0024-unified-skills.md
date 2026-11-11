@@ -133,6 +133,11 @@ shadowed rather than dropped silently.
   CLI with `ordewell task-skills`; those are not locked, and an edit applies
   the next time the task spawns.
 
+**Size cap.** A skill body is limited to 2,000 words, because Ordewell puts it
+whole into a prompt and nothing else bounds it. It is never truncated: attaching
+an oversize skill is a plan-check error (and a spawn failure), `load_skill`
+refuses it, and listings mark it.
+
 **No toggles.** Settings hold no skill switch. TDD applies to a task only when
 the `tdd` skill is attached, by the planner or by `/tdd`. The read-only
 `ordewell skills` command lists what a workspace sees.
@@ -206,3 +211,4 @@ server).
 - 2026-10-11 — amended: the `tdd` built-in is model-invocable; the other built-ins stay user-only.
 - 2026-10-17 — ADR-0021 folded in (*Built-in seeds refresh*).
 - 2026-10-21 — amended: the `diagnose` and `explore` built-ins are model-invocable planner skills.
+- 2026-11-10 — amended: skill bodies are capped at 2,000 words.

@@ -197,6 +197,35 @@ status row when there is no plan pane.
 The two rows keep the glossary's line: *autonomy* names Full/Guarded only, and
 the other four are the **run settings**.
 
+### What the planner is told
+
+The planner is told where its user is and how the run is set, so it names a
+control the user has and never asks for a merge that happens by itself. A
+**SURFACE AND SETTINGS** block goes with the turn, the way the autorun facts do
+(`PlannerBriefing`): on the first turn of each live context, after a compaction
+that may have taken it out, and again in the turn after anything it states
+changes. It states the surface, automatic merging (on, off, or on but held for
+now), autorun, the supervisor level, the Parallel limit, and the user's own
+controls on that surface, `/compact` among them. With automatic merging on it
+says that merges at merge gates and at the end of a run happen by themselves.
+The system prompt stays the same for every surface and setting, and names
+actions rather than buttons; where it names a user's control it points at the
+block.
+
+The surface is read from the live session lease's host
+([ADR-0049](../isolation/0049-a-session-has-one-live-host.md)): VS Code, the
+desktop app's daemon (marked when it is forked), or a daemon that watches its
+owner's process, which is a terminal UI's. A shared daemon may serve any
+surface, so it reads as unknown, and the controls are named for every surface.
+One table (`services/surfaceControls.ts`) holds how each surface takes each
+action only the user takes; the TUI's are slash commands and keys, `/merge` for
+the merge.
+
+A refusal or answer at the command seam that tells the planner what the user
+does reads the same table for the session's surface, and a refused merge with
+automatic merging on says the merge happens by itself rather than asking for
+one. A subplanner gets no block: it has no user to suggest anything to.
+
 ### When a change applies
 
 A change in `/settings` updates **the saved file and the session it was made in,
@@ -510,3 +539,4 @@ the daemon reads it from there at generation.
 - 2026-11-02 — Subplanners is a compact on/off control: the tree budget shows only while on, is entered by the user the first time, and is kept while off and across restarts.
 - 2026-11-05 — a tree's shape limits (ADR-0055 D19) join the run settings, set in the desktop's Settings and printed by `ordewell delegation`.
 - 2026-11-08 — a start the run owes (a hold, queued start, repair, kept resume) is recorded in one ledger, and a user Stop withdraws queued starts, reopens and kept children; a restart does not.
+- 2026-11-09 — the planner is told its user's surface and the run settings in a SURFACE AND SETTINGS block of its turn, not its system prompt, and texts that tell it what the user does name the action and that surface's control rather than a button; with automatic merging on they say the merge happens by itself. A TUI user was told to press buttons the terminal does not have, and asked for merges already automatic.

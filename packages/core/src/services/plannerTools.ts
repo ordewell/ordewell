@@ -1,5 +1,5 @@
 import { flattenTasks, type RunnerId, type SkillLoad, type Task } from '../models/Task';
-import type { SkillInfo } from './SkillsService';
+import { skillTooLarge, type SkillInfo } from './SkillsService';
 import { modelInvocablePlannerSkills, snapshotSkill } from './skillInvocation';
 import { autonomyLevelLabel, readOnlyMode } from './ModeResolver';
 import type { AssignmentAdjustment } from './TaskAssignment';
@@ -10,7 +10,8 @@ import {
 } from './TaskQuery';
 import type { TaskOp } from './TaskOps';
 import type { CheckedChange, PlanChangeError } from './PlanChangeCheck';
-import type { PlanChange, ToolRead } from './PlannerConversation';
+import type { PlanChange, RecordAnswer, ToolRead } from './PlannerConversation';
+import type { DecisionRecordInput } from './decisionRecord';
 import { commandReply, type McpToolReply, type PlannerToolHandler, type PostArgs, type ReadTaskArgs } from './mcp/tools';
 import { isBoardRef } from '../models/Board';
 import type { TaskLogEvent } from '../models/TaskLog';
@@ -43,6 +44,8 @@ export interface PlannerToolsHost {
   unread?(): boolean;
   /** Check a batch against the live catalog and commit it now, whole or not at all, in the planner turn `turn` the call was made in. */
   editPlan(ops: TaskOp[], turn: string): Promise<PlanEditOutcome>;
+  /** Add to the decision record in the planner turn `turn` the call was made in (ADR-0067). */
+  record?(entries: readonly DecisionRecordInput[], turn: string): RecordAnswer;
   /** The plan's tasks as they are now. */
   tasks(): readonly Task[];
   /** Spend one read of the open turn's budget, shared with the envelope's reads, and answer it. */
@@ -156,6 +159,8 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       if (!skill) {
         return { isError: true, text: `Skill "${name}" cannot be loaded by the planner. Loadable skills: ${skills.map((s) => s.name).join(', ') || '(none)'}.` };
       }
+      const oversize = skillTooLarge(skill);
+      if (oversize) return { isError: true, text: `Skill ${oversize}.` };
       if (!host.recordSkillLoad(snapshotSkill(skill, 'planner'))) {
         return { isError: true, text: 'No planning turn is open to load a skill.' };
       }
@@ -353,6 +358,14 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
         ...(outcome.warnings?.length ? { warnings: outcome.warnings } : {}),
         next: 'The edit is applied: the plan holds it now, and the user is shown what changed. A further edit_plan call is a batch of its own, against the plan as it is now. Tell the user briefly; do not repeat it as JSON.',
       });
+    },
+
+    async record({ entries }) {
+      const turn = host.turnId();
+      if (turn === undefined || !host.record) return { isError: true, text: JSON.stringify({ ok: false, errors: ['No planning turn is open to take the entries.'] }) };
+      const outcome = host.record(entries, turn);
+      if (!outcome.ok) return { isError: true, text: JSON.stringify(outcome) };
+      return answer({ ok: true, added: outcome.added.map(({ id, kind }) => ({ id, kind })) });
     },
   };
 }

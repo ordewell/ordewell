@@ -71,6 +71,17 @@ describe('ordewell skills', () => {
     expect(logs.filter((line) => line.startsWith('shared'))).toHaveLength(1);
   });
 
+  it('marks a skill over the word cap in the table and in JSON', () => {
+    const file = writeSkill(workspace, 'bloated');
+    writeFileSync(file, `---\nname: bloated\n---\n\n${'word '.repeat(2001)}`);
+
+    handleSkills([]);
+    expect(logs.find((line) => line.startsWith('bloated'))).toContain('bloated (too large: 2001 words, cap 2000)');
+    logs.length = 0;
+    handleSkills(['--json']);
+    expect(JSON.parse(logs[0]).skills.find((s: { name: string }) => s.name === 'bloated')).toMatchObject({ words: 2001, tooLarge: true });
+  });
+
   it('uses --workspace instead of cwd and emits only catalog metadata as JSON', () => {
     const selected = join(scratch, 'selected');
     const skillPath = writeSkill(selected, 'selected-only', 'applies-to: task\n');

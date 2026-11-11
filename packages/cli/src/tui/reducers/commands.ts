@@ -3,7 +3,7 @@ import {
 } from '@ordewell/core';
 import { handoffCommand } from '../handoff';
 import { plannerSwitchOverrideNotice, taskOnlyRunnerRefusal } from '../../plannerModelSwitch';
-import { canonicalCommandName, findCommand, type ParsedCommand } from '../slash';
+import { canonicalCommandName, findCommand, renamedNotice, type ParsedCommand } from '../slash';
 import { findTask, plannerInFlight, type PickerItem, type TuiState } from '../state';
 import { modelsForRunner } from '../taskAssignment';
 import { say } from '../transcript';
@@ -25,6 +25,12 @@ export const unknownCommand = (state: TuiState, name: string): Step =>
   fail(state, `Unknown command: /${name}. Type /help to see what's available.`);
 
 export function runCommand(state: TuiState, parsed: ParsedCommand): Step {
+  const result = dispatchCommand(state, parsed);
+  const renamed = renamedNotice(parsed.name);
+  return renamed ? { ...result, state: say(result.state, 'system', renamed) } : result;
+}
+
+function dispatchCommand(state: TuiState, parsed: ParsedCommand): Step {
   // An alias runs as the command it spells, resolved once here so every case
   // below — which all read `name` — gets the canonical one and none can diverge.
   const name = canonicalCommandName(parsed.name);
@@ -34,6 +40,10 @@ export function runCommand(state: TuiState, parsed: ParsedCommand): Step {
   switch (name) {
     case 'help':
       return step({ ...state, overlay: { kind: 'help', scroll: 0 } });
+    case 'decisions':
+      return args[0] && args[0].toLowerCase() !== 'all'
+        ? fail(state, 'Usage: /decisions [all]')
+        : step({ ...state, overlay: { kind: 'record', scroll: 0, ...(args[0] ? { all: true } : {}) } });
     case 'quit':
       return step({ ...state, exiting: true }, [{ type: 'exit' }]);
     case 'refresh':
@@ -79,7 +89,7 @@ export function runCommand(state: TuiState, parsed: ParsedCommand): Step {
         { ...state, overlay: { kind: 'picker', picker: picker('Sessions', [], { kind: 'load-session' }, { filterable: true }) } },
         [{ type: 'loadSessions' }],
       );
-    case 'handoff':
+    case 'merge':
       return handoffCommand(state, args[0]);
     case 'fork':
       return withIdlePlanner(state, (sessionId) => step(state, [{ type: 'forkConversation', sessionId }]));

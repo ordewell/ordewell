@@ -442,7 +442,10 @@ nothing is held between the call and the plan.
 **Planner briefing** (`PlannerBriefing`) — what the planner is told once per
 change rather than in every turn: that autorun was switched (ADR-0030), that
 the user changed the runners or allowlist it may assign, the run updates no
-turn has carried yet (ADR-0029), and a **Level brief**. The next turn carries
+turn has carried yet (ADR-0029), a **Level brief**, and the **SURFACE AND
+SETTINGS** block: the user's surface, automatic merging, autorun, the supervisor
+level, the Parallel limit and the **Surface controls**, sent on the first turn
+of each live context and again when one of them changes (ADR-0030). The next turn carries
 it, whoever opens it, and it counts as told only when that turn lands an answer
 the planner gave: one that fails, is stopped, hits the usage limit or is
 abandoned may not have read it, so the turn after says it again. An opening —
@@ -503,6 +506,22 @@ research each deciding the next, is the `explore` skill (ADR-0037 R5).
 turn; work across turns is a task in the plan. *Avoid:* choosing between a
 research task and the planner's own agents by how long a lookup will take —
 the planner cannot know that before it starts; choose by what the result is.
+
+**Research subagent** (`spawn_research_agent`, `runResearchAgent`; ADR-0005,
+ADR-0066) — one stateless read-only agent Ordewell runs for a planner's
+orientation, confined to the workspace read tools, which returns only its
+digest within the planner's turn. An API planner starts one on its provider's
+chat wherever its service can run subagents. An OpenCode planner, whose own
+agents are denied, is served it over Ordewell's MCP server: by default on
+OpenCode 2.x as the **login research agent**, a session in a locked-down
+`opencode serve` of Ordewell's on the user's own login and the planner's
+model, checked before use and unavailable for the rest of the planner session
+once that check or its first call fails; or, where the workspace sets
+`ORDEWELL_RESEARCH_AGENT_MODEL=<provider>:<model>`, on that API provider
+instead. Claude Code and Codex use their own subagents, and an ACP planner has
+none.
+*Avoid:* "research task" — that is a task in the plan, whose handoff a later
+turn reads; "scout" — the OpenCode agent this replaced.
 
 **ResearchStep outcome** — how one research tool call ended, as data:
 `success | failure | refused | denied | not_executed`, derived once by
@@ -664,8 +683,10 @@ composer's Stop stops it, and a message typed meanwhile waits for it); CLI
 "clear", which loses what was decided.
 
 **Context checkpoint** (`ConversationMessage.checkpoint`: `{ id, keptFrom,
-trigger }`) — a `compaction` entry in `conversationHistory` that a summary
-became. `keptFrom` is the transcript index where verbatim replay resumes, at or
+trigger, record? }`) — a `compaction` entry in `conversationHistory` that a summary
+became. Where the plan holds a **Decision record**, the entry restates it whole,
+then `Where we are:` and the summary, and `record` counts the entries restated,
+so the context it starts is told only those added later (ADR-0067). `keptFrom` is the transcript index where verbatim replay resumes, at or
 before the entry itself. The summary stands for everything before that index.
 The `id` stays the same across saves, forks and the wire. A checkpoint is only
 appended, and its cut never passes an input a planner turn still holds, so
@@ -680,6 +701,20 @@ compaction replaced what it condensed. It is read as a checkpoint cutting at
 index 1, and reloads drawn first without the research older than its first kept
 message, since those turns are gone.
 *Avoid:* "snapshot": a checkpoint copies no transcript.
+
+**Decision record** (`decisionRecord` on the plan state; `decisionRecord.ts`;
+ADR-0067) — what the planner has settled, written by its `record` tool as each
+thing is said: decisions with their why (D1, …), the user's constraints in their
+own words (C1, …), rejected options with their why (R1, …) and open questions
+(Q1, …). Entries are only added, a later one superseding an earlier by id, and
+a batch lands whole or not at all. A constraint must quote a user message, and
+every text is redacted as a summary is. The planner is told the standing
+entries whole once per live context, like the plan block, then only those it
+did not record itself; a **Context checkpoint** restates the record before its
+summary, so a restart keeps it word for word. Surfaces read it on the serialized
+plan.
+*Avoid:* "notes" or "memory", which say nothing of what it holds or that a
+checkpoint carries it; "summary", which is the paraphrase it exists to avoid.
 
 **Compaction event** (`planner_compaction`, carrying a `PlannerCompaction`) —
 one phase of a planner compaction as surfaces are told it (ADR-0017 C1):
@@ -789,7 +824,7 @@ through git). On a name clash global wins and the workspace copy is reported
 as shadowed. The built-in `grilling`, `to-spec` and `improve-codebase-architecture` are user-only; the built-in `diagnose` and `explore` planner skills and the `tdd` task skill are model-invocable (ADR-0024). Ordewell never ships, reads, or
 references runner-native skill mechanisms (`.claude/skills`, OpenCode plugins,
 etc.) to deliver a skill. Research subagents (`spawn_research_agent`, ADR-0005)
-are a tool of an API planner whose service can run them, not a skill.
+are a planner's tool, not a skill.
 *Avoid:* "mode toggle", "skill toggle" — a skill is chosen per message or per
 task, never switched on in settings; "skill file", "slash command" for these —
 those are runner-side concepts.
@@ -2347,8 +2382,9 @@ review diff with one section per repo that has changes, each headed by the repo'
 path and with its paths rooted at the workspace (a repo that is the workspace
 reads as before). A resolver task merges the conflicted branch in every repo
 the task changed, since the conflict in one rolled back all of them.
-In the terminal the same four steps are the handoff overlay (`/handoff`, opened
-by `isolation_handoff` on a screen with nothing else open) and
+In the terminal the same four steps are the handoff overlay (`/merge`, which
+opens it on Merge, and which `isolation_handoff` opens on a screen with nothing
+else open) and
 `ordewell handoff [review|merge|discard|cleanup]`. Merge and discard are asked
 about first, in both — the CLI takes `--yes` as having asked. A surface that was
 not listening — a reloaded session, a reconnected webview or socket — is re-told
@@ -3024,7 +3060,9 @@ for its whole life (`IRunnerSession.secrets`). It hides what the record holds,
 exactly and in every part of eight characters or more, in everything the
 runner writes before any sink sees it. Every reader of the session's output
 redacts with the same record. A secret Ordewell never held is left to the
-name and shape rules of agent-text redaction, which are defence in depth
+name and shape rules of agent-text redaction, which are defence in depth.
+A planner summary is redacted against what the session holds as its
+checkpoint is committed, a held vendor key named by its variable in its place
 ([ADR-0061](docs/adr/platform/0061-held-secrets-are-hidden-exactly-and-agent-text-by-name-in-depth.md)).
 *Avoid:* "known secrets", "the secret list": the record is per session, and
 "held" says that Ordewell handed the value over.
@@ -3871,6 +3909,19 @@ argument prints the options the picker would have shown. There is deliberately n
 `/plan` slash command: typing the goal *is* how planning starts there, and an
 alias for it only shadowed `/planner` on tab-completion. `ordewell plan --goal`
 remains, because it is the only non-interactive way in.
+
+**Surface controls** (`SURFACE_CONTROLS`, `services/surfaceControls.ts`;
+ADR-0030) — how each surface takes each action only the user takes (merge,
+answer a checkpoint, approve or run the plan, skip, force start, mark, revert,
+interrupt, the queued-message controls, cancel a resume, approve the review,
+compact): one row each for the TUI, VS Code, the desktop app and an unknown
+surface, which names every surface's. The TUI's are slash commands and keys
+(`/merge`). The surface is read from the live **Session lease**'s host
+(`surfaceOf`). The planner hears its row in the **SURFACE AND SETTINGS** block of
+its **Planner briefing**, and a refusal that tells it what the user does names
+the action and that row's control.
+*Avoid:* "buttons" for the actions — the TUI has none; name the action, and the
+control only as the surface's row words it.
 
 **Catalog** (`catalog.ts`) — the one owner of the `/api/models` body's shape, for
 every client of it. `normalizeCatalog` is what tags each model with the runners

@@ -8,10 +8,13 @@ import type { ExecutionActor } from '../../models/Execution';
 import type { ConversationRequest, ConversationTurn } from '../AiService';
 import { ExecutionCommands, type ExecutionCommand, type ExecutionHost } from '../ExecutionCommands';
 import { rootAuthority } from '../Mandate';
+import { SURFACE_CONTROLS } from '../surfaceControls';
 import { STOPPED_BEFORE_START } from '../TaskOrchestrator';
 import { EMPTY_CONVERSATION, fromTranscript, reduceConversation } from '../../conversation';
 
 const PLANNER: ExecutionActor = { kind: 'planner-turn' };
+/** This kit's sessions hold no lease, so no host names a surface, and a refusal names the action on each (ADR-0030). */
+const ANYWHERE = SURFACE_CONTROLS.unknown;
 
 function runner() {
   const sessions: FakeRunnerSession[] = [];
@@ -131,7 +134,7 @@ describe('the command seam: run_task', () => {
     const outcome = await env.run({ command: 'run_task', task: 'o2' });
 
     expect(outcome).toMatchObject({ ok: false, outcome: 'refused' });
-    expect(outcome.message).toBe('Task #2 "Task o2" waits for Merge all: the work of task #1 "Task t1" is not merged into the user\'s branch yet. Ask the user to merge (Merge all), or to force start it.');
+    expect(outcome.message).toBe(`Task #2 "Task o2" waits at its merge gate: the work of task #1 "Task t1" is not merged into the user's branch yet. Ask the user to merge (${ANYWHERE.merge}), or to force start it (${ANYWHERE.forceStart}).`);
     expect(env.spawned('o2')).toHaveLength(0);
   });
 
@@ -149,7 +152,7 @@ describe('the command seam: run_task', () => {
     await vi.waitFor(() => expect(taskOf(env.session, 'v2')!.status).toBe('completed'));
     expect(env.session.mergeGate('o3')).toEqual(['t1']);
 
-    const reason = 'waits for Merge all: the work of task #1 "Task t1" is not merged into the user\'s branch yet. Ask the user to merge (Merge all), or to force start it.';
+    const reason = `waits at its merge gate: the work of task #1 "Task t1" is not merged into the user's branch yet. Ask the user to merge (${ANYWHERE.merge}), or to force start it (${ANYWHERE.forceStart}).`;
     expect(await env.run({ command: 'run_task', task: 'o3' })).toEqual({ ok: false, outcome: 'refused', message: `Task #3 "Task o3" ${reason}` });
     expect(await env.run({ command: 'retry_task', task: 'o3', from: 'fresh' })).toEqual({ ok: false, outcome: 'refused', message: `Task #3 "Task o3" ${reason}` });
     expect(env.spawned('o3')).toHaveLength(0);
@@ -170,7 +173,7 @@ describe('the command seam: run_task', () => {
 
     expect(await env.run({ command: 'retry_task', task: 'o2', from: 'fresh' })).toEqual({
       ok: false, outcome: 'refused',
-      message: 'Task #2 "Task o2" waits for Merge all: the work of task #1 "Task t1" is not merged into the user\'s branch yet. Ask the user to merge (Merge all), or to force start it.',
+      message: `Task #2 "Task o2" waits at its merge gate: the work of task #1 "Task t1" is not merged into the user's branch yet. Ask the user to merge (${ANYWHERE.merge}), or to force start it (${ANYWHERE.forceStart}).`,
     });
     expect(env.spawned('o2')).toHaveLength(1);
   });
@@ -219,7 +222,7 @@ describe('the command seam: an unapproved plan or task never starts', () => {
     ];
 
     for (const result of results) expect(result).toMatchObject({ ok: false, outcome: 'refused', message: expect.stringMatching(/not approved/) });
-    expect(results[0].message).toBe('The user has not approved this plan yet: they approve it by executing it themselves (Execute plan). Ask them to.');
+    expect(results[0].message).toBe(`The user has not approved this plan yet: they approve it themselves (${ANYWHERE.approvePlan}). Ask them to.`);
     expect(env.spawn).not.toHaveBeenCalled();
     expect(env.cards()).toHaveLength(0);
   });
@@ -432,7 +435,7 @@ describe('the command seam: retry_task', () => {
     env.latest('t1').reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(taskOf(env.session, 't1')!.status).toBe('completed'));
     expect((await env.run({ command: 'retry_task', task: 't1', from: 'fresh' })).message)
-      .toBe('Task #1 "Task t1" has already completed. Continue it with retry_task from "session" and a message, or ask the user to mark it not done.');
+      .toBe(`Task #1 "Task t1" has already completed. Continue it with retry_task from "session" and a message, or ask the user to mark it not done (${ANYWHERE.markNotDone}).`);
   });
 
   it('asks the user first in Guarded', async () => {
@@ -853,7 +856,7 @@ describe('the command seam: merge_all', () => {
   }
 
   it.each<[string, ExecutionActor, RegExp]>([
-    ['a planner turn the user started', PLANNER, /^Merge all is the user's: they are in this conversation/],
+    ['a planner turn the user started', PLANNER, /^Merging the run's landed work is the user's: they are in this conversation/],
     ['a supervisor at Watch', { kind: 'supervisor', level: 'watch' }, /at Watch/],
     ['a supervisor that is off', { kind: 'supervisor', level: 'off' }, /supervisor is off for this run/],
   ])('is refused to %s, and merges nothing', async (_who, actor, reason) => {
@@ -964,7 +967,7 @@ describe('the command seam: tasks started one by one with run_task', () => {
 
     const outcome = await env.run({ command: 'run_plan' });
 
-    expect(outcome).toEqual({ ok: false, outcome: 'refused', message: 'The user has not approved this plan yet: they approve it by executing it themselves (Execute plan). Ask them to. Tasks started with run_task are not a scheduled run, so their dependents start only once the user executes the plan.' });
+    expect(outcome).toEqual({ ok: false, outcome: 'refused', message: `The user has not approved this plan yet: they approve it themselves (${ANYWHERE.approvePlan}). Ask them to. Tasks started with run_task are not a scheduled run, so their dependents start only once the user executes the plan.` });
     expect(env.session.status).not.toBe('running');
   });
 });
@@ -975,7 +978,7 @@ describe('the command seam\'s extension points', () => {
   function stubHost(): ExecutionHost {
     const tasks = [task('t1', 1)];
     return {
-      tasks: () => tasks, planApproved: () => true, taskApproved: () => true, waitsForApproval: () => false, approve: vi.fn(), approvePlan: vi.fn(), autonomous: () => true, autorun: () => false, loopRunsOn: () => false,
+      tasks: () => tasks, planApproved: () => true, taskApproved: () => true, waitsForApproval: () => false, approve: vi.fn(), approvePlan: vi.fn(), autonomous: () => true, userControls: () => SURFACE_CONTROLS.tui, mergesByThemselves: () => false, autorun: () => false, loopRunsOn: () => false,
       scheduling: () => false, startsHeld: () => false, hasLiveWork: () => true, runHeld: () => false, scheduledRun: () => false, startsPending: () => false, loopCarried: () => false, awaitsResume: () => false, submittedStartWaits: () => false, advancesOnItsOwn: () => false, admitStart: admission,
       running: () => true, holdsSlot: () => true, repairOwed: () => false, maxParallel: () => 3, runBlocked: () => false, heldRefusal: () => null,
       startWaits: () => [], waitingRequests: () => [],
@@ -985,6 +988,45 @@ describe('the command seam\'s extension points', () => {
       escalations: () => [], resolveConflict: vi.fn(), continueRun: vi.fn(), checksDelegatedTask: () => false, raiseChild: async () => null, mergeHold: () => [],
     };
   }
+
+  /** A host whose task 2 waits at its merge gate for task 1's work, on the terminal UI. */
+  function gatedHost(mergesByThemselves: boolean): ExecutionHost {
+    const tasks = [task('t1', 1, { status: 'completed' }), task('t2', 2, { dependencies: ['t1'] })];
+    return { ...stubHost(), tasks: () => tasks, running: () => false, mergesByThemselves: () => mergesByThemselves, startWaits: () => [{ kind: 'merge-gate', unmerged: ['t1'] }] };
+  }
+
+  it('tells a planner a gated task waits for the user\'s merge, as their surface takes it (ADR-0030)', async () => {
+    const commands = new ExecutionCommands({ host: gatedHost(false), consent: { request: vi.fn() } });
+
+    expect(await commands.run({ command: 'run_task', task: 't2' }, PLANNER)).toMatchObject({
+      ok: false,
+      message: 'Task #2 "Task t2" waits at its merge gate: the work of task #1 "Task t1" is not merged into the user\'s branch yet. Ask the user to merge (/merge), or to force start it (/force-start <id>).',
+    });
+  });
+
+  it('never has a planner ask for the merge automatic merging makes at the gate (ADR-0030)', async () => {
+    const commands = new ExecutionCommands({ host: gatedHost(true), consent: { request: vi.fn() } });
+
+    const outcome = await commands.run({ command: 'run_task', task: 't2' }, PLANNER);
+    expect(outcome.message).toMatch(/Automatic merging merges that work at the gate by itself/);
+    expect(outcome.message).not.toMatch(/Ask the user to merge/);
+  });
+
+  it('tells a planner how the user answers a checkpoint a message cannot (ADR-0030)', async () => {
+    const commands = new ExecutionCommands({ host: { ...stubHost(), awaitsCheckpoint: () => true }, consent: { request: vi.fn() } });
+
+    const outcome = await commands.run({ command: 'message_task', task: 't1', text: 'go on' }, PLANNER);
+    expect(outcome.message).toContain('the user answers it themselves (/checkpoint <id> approve, or /checkpoint <id> reject <reason>)');
+    expect(outcome.message).not.toMatch(/card/);
+  });
+
+  it('tells a planner how the user approves the plan or a task, as their surface takes it (ADR-0030)', async () => {
+    const host = { ...stubHost(), planApproved: () => false, taskApproved: () => false, autonomous: () => false, running: () => false };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+
+    expect((await commands.run({ command: 'run_task', task: 't1' }, PLANNER)).message)
+      .toBe('The user has not approved task #1 "Task t1": they approve the plan themselves (/approve), or a task by starting it (/force-start <id>). Ask them to.');
+  });
 
   /** A host whose plan takes the script task `run_script` drafts, which then runs until its wait ends. */
   function scriptHost() {

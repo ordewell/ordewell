@@ -258,7 +258,8 @@ describe.skipIf(!hasGit)('a finished task moved to another runner', () => {
     expect(moved.prompt).toContain('## Work carried over');
     expect(moved.prompt).toContain('previous attempt on claude-code');
     expect(h.task().carriedFrom).toBeUndefined();
-    expect(h.task().runnerSessionOwner).toBeUndefined();
+    // The claude-code session is gone: what is saved is the new attempt's own, as soon as codex names it.
+    expect(h.task().runnerSessionOwner).toBe('codex');
   });
 
   it('a completed task\'s Retry after the move carries the earlier files over too', async () => {

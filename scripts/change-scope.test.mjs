@@ -418,8 +418,16 @@ describe('a path outside the workspaces that only some checks read', () => {
     ['bench/live/drive-binary.mjs', {}, {}, ['binary']],
     ['bench/live/webview-harness.mjs', {}, {}, []],
     ['bench/live/host-driver.mjs', {}, {}, []],
+    ['bench/live/opencode-research-agent-probe.mjs', {}, {}, []],
+    ['bench/live/acp-subagent-probe.mjs', {}, {}, []],
+    ['bench/live/acp-subagent-probe-lib.mjs', {}, {}, ['bench', 'harness']],
+    ['bench/live/acp-subagent-probe.test.mjs', {}, {}, ['bench', 'harness']],
     ['bench/containers/verdict.mjs', {}, {}, ['bench', 'engine', 'harness']],
     ['bench/lab/lab.mjs', {}, {}, ['bench', 'harness']],
+    ['bench/planner-eval/run.mjs', {}, {}, ['bench', 'harness']],
+    ['bench/planner-eval/goals/g4.json', {}, {}, ['bench', 'harness']],
+    ['bench/planner-eval/README.md', {}, {}, []],
+    ['bench/planner-eval/.gitignore', {}, {}, []],
     ['bench/scale/entry.ts', {}, {}, ['bench', 'harness', 'lint']],
 
     // scripts/ and packaging/: test:bench runs scripts/**/*.test.mjs, here and

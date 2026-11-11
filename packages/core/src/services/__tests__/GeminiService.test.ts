@@ -336,7 +336,7 @@ describe('Gemini planner exploration', () => {
   beforeEach(() => { generateContentStream.mockReset(); });
 
   // F6: no createSubagentChat override, so spawn_research_agent would fail on every call.
-  it('tells the planner to read itself, since this service cannot run research subagents', async () => {
+  it('sends the planner to research tasks, since this service cannot run research subagents', async () => {
     scriptStreams([streamResult([{ candidates: [{ content: { parts: [{ text: 'Which cache?' }] }, finishReason: 'STOP' }] }])]);
     await new GeminiService(geminiConfig()).startConversation({
       goal: 'add a cache', runners: ['claude-code'], modelsByRunner: {}, fs: fakeFileSystem() as IFileSystem, onProgress: () => {},
@@ -347,7 +347,7 @@ describe('Gemini planner exploration', () => {
     const at = system.indexOf('\nWHO EXPLORES:\n');
     expect(at).toBeGreaterThan(-1);
     const rule = system.slice(at + 1, system.indexOf('\n\n', at + 1));
-    expect(rule).toContain('Find it with your own reads: you have no agents of your own here.');
+    expect(rule).toContain('You have no agents of your own here: research tasks are how you delegate');
     expect(rule).not.toContain('spawn_research_agent');
     expect(system).not.toContain('spawn_research_agent');
     expect(tools.flatMap((t) => t.functionDeclarations.map((d) => d.name))).not.toContain('spawn_research_agent');
@@ -386,6 +386,6 @@ describe('Gemini turn budgets', () => {
       'add a cache\n\nCONTEXT AND BUDGETS (this turn):\n- Web reads left this turn: 40.',
       'in-process\n\nCONTEXT AND BUDGETS (this turn):\n- Web reads left this turn: 39.',
     ]);
-    expect(requests[0].contents[0].parts[0].text).not.toContain('CONTEXT AND BUDGETS');
+    expect(requests[0].contents[0].parts[0].text).not.toContain('CONTEXT AND BUDGETS (this turn):');
   });
 });

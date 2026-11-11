@@ -1,5 +1,5 @@
 import { taskPlacement } from '@ordewell/core/plan-utils';
-import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, TERMINAL_UI_SIGN_IN, describeRunnerSignIn, signInOfVerdict, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, logContinues, logResumes, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type AccountLimitSnapshot, type GlobalRunSettings, type OverrideDirection, type TaskStatus, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ChildPlanEntry, type ConversationView, type HandoffDigest, type IsolationHandoff, type IsolationLandedTask, type IsolationPreview, type PromptHold, type QueuedTaskMessage, type RunTask, type RunView, type SupervisorLevel, type TaskIsolation, type TaskLogFollow, type TaskType, type TurnGate } from '@ordewell/core';
+import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, TERMINAL_UI_SIGN_IN, describeRunnerSignIn, signInOfVerdict, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, logContinues, logResumes, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type AccountLimitSnapshot, type GlobalRunSettings, type OverrideDirection, type TaskStatus, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ChildPlanEntry, type ConversationView, type DecisionRecordEntry, type HandoffDigest, type IsolationHandoff, type IsolationLandedTask, type IsolationPreview, type PromptHold, type QueuedTaskMessage, type RunTask, type RunView, type SupervisorLevel, type TaskIsolation, type TaskLogFollow, type TaskType, type TurnGate } from '@ordewell/core';
 import { emptyEditor, type EditorState } from './editor';
 import type { RunnersResponse } from '../apiClient';
 import type { SaveSettingsEffect } from './reducers/settings';
@@ -275,6 +275,8 @@ export interface ApprovalRequestView {
 
 export type Overlay =
   | { kind: 'help'; scroll?: number; sheet?: 'commands' | 'keys' }
+  /** The planner's decision record (ADR-0067), read-only; `all` also lists what a later entry superseded. */
+  | { kind: 'record'; scroll?: number; all?: boolean }
   /** `scroll` is how far into the request's `body` the card is read, when the body does not fit. */
   | { kind: 'approval'; request: ApprovalRequestView; scroll?: number }
   | { kind: 'picker'; picker: PickerState }
@@ -476,6 +478,8 @@ export interface TuiState {
   run: RunView;
   /** Derived from `run`; the pane's own shape for a run task. */
   tasks: TaskView[];
+  /** What the planner has recorded as it went (ADR-0067), every entry, superseded ones included. */
+  decisionRecord: DecisionRecordEntry[];
   planApproved: boolean;
   focus: Focus;
   /** Index into `planRows` (top-level tasks, plus an expanded task's subtasks) for the plan pane's cursor. */
@@ -830,6 +834,7 @@ export const STATE_SCOPE = {
   // The run and everything `withRun` derives from it.
   run: 'session',
   tasks: 'session',
+  decisionRecord: 'session',
   planApproved: 'session',
   focus: 'screen',
   selectedTask: 'session',
@@ -935,6 +940,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     openingSessionId: null,
     goal: '',
     tasks: [],
+    decisionRecord: [],
     planApproved: false,
     focus: 'chat',
     selectedTask: 0,

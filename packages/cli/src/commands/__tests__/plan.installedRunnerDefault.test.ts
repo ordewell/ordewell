@@ -19,7 +19,8 @@ vi.mock('child_process', async (importOriginal) => {
   const spawn = ((command: string, args: string[], options: Parameters<SpawnFn>[2]) => {
     const agent = basename(command, '.exe');
     if (!AGENTS.includes(agent)) return actual.spawn(command, args, options);
-    boundary.spawned.push(agent);
+    // A version probe is told apart from the agent itself.
+    boundary.spawned.push(args.includes('--version') ? `${agent} --version` : agent);
     throw new Error('stopped at the process boundary');
   }) as typeof actual.spawn;
   return { ...actual, spawn, default: { ...actual, spawn } };
@@ -181,7 +182,8 @@ describe('with no saved runner choice, the installed agents are the enabled runn
 
       expect(stderr).not.toContain('None of the requested runners are enabled');
       expect(requested).toEqual([[only]]);
-      expect(boundary.spawned).toEqual([BINARY[only]]);
+      // An OpenCode planner first asks its version, to offer the login research agent on 2.x (ADR-0066).
+      expect(boundary.spawned).toEqual(only === 'opencode' ? ['opencode --version', 'opencode'] : [BINARY[only]]);
       expect(savedRunners()).toBeUndefined();
     });
   }

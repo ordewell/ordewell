@@ -11,6 +11,8 @@ export { summarizeToolCall } from './services/researchStepSummary';
 export { isFileEditTool } from './services/harness/agentTools';
 export { truncateCheckpointSummary, CHECKPOINT_TRUNCATE_LENGTH, IDLE_ACTIVITY } from './services/SessionMessage';
 export { capConflictFiles } from './services/conflictFiles';
+// What the planner's decision record still holds (ADR-0067): a surface shows it without the superseded entries.
+export { live as standingRecord } from './services/decisionRecord';
 export { describeMergeResult, mergeOutcome, blockNotice, blockNotices, repairedLanded, repairedNotice } from './services/mergeResultNotice';
 export { describeIsolationPreview } from './services/isolationPreviewText';
 export type { IsolationPreviewNotice } from './services/isolationPreviewText';

@@ -19,7 +19,10 @@ core stack:
 
 - `mock-provider.mjs` — a local OpenAI-compatible server simulating budget-model
   quirks (streamed reasoning, fenced JSON with trailing commas, prose preambles,
-  empty turns, grilling-ignoring eagerness). Deterministic and offline.
+  empty turns, grilling-ignoring eagerness). Deterministic and offline. Binds
+  127.0.0.1:3799 when started by hand; `--port 0` binds a free port and prints it
+  on the ready line, which `start-mock.mjs` parses for every script and test
+  that starts one, so concurrent runs never share a port.
 - `scenarios.mjs` — the webview harness's scripted conversation tour, and
   `GOAL_SCENARIOS`: one scenario per kind of goal the planner's strategy step
   teaches (#108), driven by the live harness below.
@@ -74,6 +77,19 @@ makes no cost or performance claim, per [AGENTS.md](../AGENTS.md). A real run
 may ask questions; one generic nudge answers, so the report shows the planner's
 own choice rather than a scripted one. `--real --goal "..." --replies "a::b"`
 still runs a single goal the old way.
+
+## Planner eval (`bench/planner-eval/`)
+
+A planning-only A/B of the planner prompt on real models, driven through the
+real `ordewell` terminal UI. Each run goes as far as `submit_plan` and stops
+there; it never approves or runs a plan. Two variants are compared: the
+baseline build with two nudges in the goal and the candidate build without them. Each submitted plan is measured,
+checked against the goal's answer key and reviewed by a citation-checked
+rubric. The report gives a verdict per backend for each comparison.
+`node bench/planner-eval/run.mjs --mock` is the offline dry run against
+`bench/live/mock-provider.mjs`; `--smoke` and `--full` run the real models.
+See [its README](planner-eval/README.md) for prerequisites, every flag and
+what each metric means.
 
 ## Execution pipeline harness (`bench/pipeline/`)
 

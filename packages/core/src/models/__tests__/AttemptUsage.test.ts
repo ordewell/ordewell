@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { addAttemptUsage, startAttemptUsage, endAttemptUsage, planUsage, usageLine, isMeasured, addPlannerUsage, taskUsageSummary } from '../Usage';
+import { addAttemptUsage, startAttemptUsage, endAttemptUsage, planUsage, modelCostTitle, usageLine, isMeasured, addPlannerUsage, taskUsageSummary } from '../Usage';
 import { createTask, keepExecutionState, type Task } from '../Task';
 import { PlanStore } from '../../services/PlanStore';
 
@@ -18,6 +18,25 @@ describe('attempt usage', () => {
     ]);
     expect(usage.wallTimeMs).toBe(5000);
     expect(usage.bySubagent?.child.inputTokens).toBe(20);
+  });
+
+  it('counts a call made outside the agent\'s turns in the totals on a row of its own, without moving the context meter', () => {
+    let usage = startAttemptUsage(1, 'opencode', start);
+    usage = addAttemptUsage(usage, { source: 'opencode', model: 'p/big', inputTokens: 500, outputTokens: 20, contextWindow: 1000, reportedCost: { amount: 0.5, currency: 'USD' } }, end);
+    usage = addAttemptUsage(usage, { source: 'opencode', aggregate: true, purpose: 'title', inputTokens: 9000, outputTokens: 12, reportedCost: { amount: 0.25, currency: 'USD' } }, end);
+    usage = addAttemptUsage(usage, { source: 'opencode', aggregate: true, purpose: 'title', inputTokens: 1000, reportedCost: { amount: 0.25, currency: 'USD' } }, end);
+    expect(usage.totals).toEqual({ inputTokens: 10_500, outputTokens: 32, reportedCost: { USD: 1 } });
+    expect(usage.byModel).toEqual([
+      { source: 'opencode', model: 'p/big', totals: { inputTokens: 500, outputTokens: 20, reportedCost: { USD: 0.5 } } },
+      { source: 'opencode', purpose: 'title', totals: { inputTokens: 10_000, outputTokens: 12, reportedCost: { USD: 0.5 } } },
+    ]);
+    expect(usageLine(usage).contextFill).toEqual({ usedTokens: 500, windowTokens: 1000 });
+    expect(modelCostTitle(usage.byModel ?? [])).toBe('opencode / p/big: $0.50\nopencode / unattributed (title): $0.50');
+
+    const other = addAttemptUsage(startAttemptUsage(2, 'opencode', start), { source: 'opencode', aggregate: true, purpose: 'title', inputTokens: 5 }, end);
+    const total = planUsage([createTask({ attemptUsage: [usage, other] })]);
+    expect(total.byModel.find((m) => m.purpose === 'title')?.totals).toEqual({ inputTokens: 10_005, outputTokens: 12, reportedCost: { USD: 0.5 } });
+    expect(total.byModel).toHaveLength(2);
   });
 
   it('clears the old context on a model switch, including switches back to a previous model', () => {

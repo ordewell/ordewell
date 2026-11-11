@@ -110,7 +110,6 @@ describe('attemptPrompt', () => {
     return {
       task,
       plan: [task],
-      planMapEnabled: false,
       skills: [{ name: 'tdd', source: 'global', path: '/g/tdd/SKILL.md', content: 'RED then GREEN.' }],
       repairPrompt: vi.fn(() => 'MERGE THE INTEGRATION BRANCH'),
       previousAttempt: vi.fn(() => 'created resource group rg-dev'),

@@ -11,19 +11,56 @@ const SUMMARY_OPEN = '<conversation_summary>';
 const SUMMARY_CLOSE = '</conversation_summary>';
 
 /**
+ * What a summary of the conversation keeps, for an API planner's summary call
+ * and a harness planner's summary turn alike: one source, so neither falls
+ * behind the other.
+ */
+export const HISTORY_KEEPS = 'Keep: the user\'s goal; every instruction, constraint and preference still standing, with any skill loaded into the conversation by name and what it requires; the decisions made and why; open questions and what the planner was waiting on; the findings; and what the planner said it did or would do.';
+
+/** What every summary keeps, of the history or of a turn. */
+export const SUMMARY_KEEPS: readonly string[] = [
+  'Keep exactly, as the conversation has them: file paths, symbols, line references, commands and their outcomes, URLs, task references and quoted requirements.',
+  'Task statuses and run state are not yours to keep: the current plan is authoritative, and what the conversation says about task state may be stale.',
+  // A summary is replayed into every later context and may be copied into a
+  // brief, so a value in it multiplies; the rule about it is what is needed
+  // (ADR-0061 P1). Ordewell redacts what it can recognise either way.
+  'Never copy a secret\'s value — an API key, token or password, pasted or read — into the summary: keep the rule about it, naming the secret without its value (the key goes only into task environments, never into a brief).',
+];
+
+export const SUMMARY_TAGS = `Put the summary between ${SUMMARY_OPEN} and ${SUMMARY_CLOSE}, and nothing outside the tags.`;
+
+export function currentPlanBlock(planLines: readonly string[] | null): string[] {
+  return planLines && planLines.length > 0 ? ['<current_plan>', ...planLines, '</current_plan>'] : [];
+}
+
+/**
  * The hidden turn that asks the planner to condense its own conversation.
  * The tags are the contract, not decoration: a harness planner reports a
  * failure as an ordinary reply, so a reply without them is how a dead agent
  * is told apart from a summary before it can replace the transcript.
  */
-export function summaryRequest(planLines: readonly string[] | null): string {
+export function summaryRequest(planLines: readonly string[] | null, record: string | null = null): string {
   return [
     'The user asked to condense this planning conversation. Write a summary that will replace everything said so far, so the conversation can carry on from it alone.',
-    'Keep: the goal, the decisions made, the constraints, the open questions, the key file and code findings, and where the plan stands now.',
-    'Reply in plain prose. Do not emit task operations, plan JSON or task reads, and do not run tools — the tasks are not changing in this turn.',
-    `Put the summary between ${SUMMARY_OPEN} and ${SUMMARY_CLOSE}, and nothing outside the tags.`,
-    ...(planLines ? ['<current_plan>', ...planLines, '</current_plan>'] : []),
+    HISTORY_KEEPS,
+    ...SUMMARY_KEEPS,
+    'Reply in plain prose or short lists. Do not emit task operations, plan JSON or task reads, and do not run tools — the tasks are not changing in this turn.',
+    SUMMARY_TAGS,
+    ...currentPlanBlock(planLines),
+    ...recordBeside(record),
   ].join('\n');
+}
+
+/**
+ * The decision record a summary is written beside (ADR-0067). The checkpoint
+ * restates it whole ahead of the summary, so the summary is told to leave it
+ * out and say where things stand: what it would paraphrase is already kept.
+ */
+export function recordBeside(record: string | null): string[] {
+  return record ? [
+    'The decision record below is restated whole beside your summary: do not repeat its entries. Say where things stand — what is in progress, what the planner was waiting on — and what else the record does not hold.',
+    record,
+  ] : [];
 }
 
 /** The last tagged block wins: a model may name the tag while introducing it. */
@@ -38,12 +75,14 @@ export function extractSummary(reply: string): string | null {
  * replayed to the model like any assistant message, so it tells the model
  * what the entry is as well as the user.
  */
-export function condensedNotice(summary: string, trigger: ContextCheckpoint['trigger'] = 'manual'): string {
+export function condensedNotice(summary: string, trigger: ContextCheckpoint['trigger'] = 'manual', record: string | null = null): string {
   return [
     trigger === 'manual'
       ? 'Conversation condensed: the summary below stands in for the earlier messages from here on, and the last two exchanges were kept as they were. The full conversation stays in the history. The task list is unchanged.'
       : 'Conversation condensed automatically to fit the model\'s context: the summary below stands in for the earlier messages from here on, and the most recent exchanges that fit were kept as they were. The full conversation stays in the history. Task and run state are the current plan\'s, not this summary\'s.',
     '',
+    // The seed of the next context (ADR-0067): the record as it was written, then the summary for the rest.
+    ...(record ? ['The decision record stands as written; the summary after it says where things are.', record, '', 'Where we are:'] : []),
     summary,
   ].join('\n');
 }
@@ -86,6 +125,13 @@ export function modelContext(transcript: readonly ConversationMessage[]): Conver
   const checkpoint = newestCheckpoint(transcript);
   const verbatim = (checkpoint ? transcript.slice(checkpoint.keptFrom) : transcript).filter((m) => m.kind !== 'compaction');
   return checkpoint ? [transcript[checkpoint.at], ...verbatim] : verbatim;
+}
+
+/** How many decision record entries the summary heading the model context restates (ADR-0067): none without a checkpoint. */
+export function seededRecord(transcript: readonly ConversationMessage[]): number {
+  const checkpoint = newestCheckpoint(transcript);
+  const record = checkpoint ? transcript[checkpoint.at].checkpoint?.record : undefined;
+  return typeof record === 'number' && Number.isInteger(record) && record > 0 ? record : 0;
 }
 
 /** Where the planner's context resumes verbatim: no new checkpoint may cut before it. */

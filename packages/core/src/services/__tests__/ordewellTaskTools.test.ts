@@ -313,7 +313,7 @@ describe('the handoff a task_complete call carries (ADR-0047)', () => {
     await complete({ status, reason: 'The schema is missing.', summary: 'Half the parser is written.', commit: { subject: 'Add the parser' } });
 
     await vi.waitFor(() => expect(get('t1').status).toBe('failed'));
-    expect(get('t1').handoff).toEqual({ summary: 'Half the parser is written.', findings: [], findingCount: 0, attempt: 1 });
+    expect(get('t1').handoff).toEqual({ summary: 'Half the parser is written.', findings: [], findingCount: 0, attempt: 1, outcome: status });
   });
 
   it.each([
@@ -418,7 +418,7 @@ describe('the handoff a task_complete call carries (ADR-0047)', () => {
     });
 
     expect(refused.isError).toBe(true);
-    expect(text(refused)).toContain('findings[0].evidence[0].task: "#3" is #3 Task t3, which this task may not read: only itself, a task it depends on, or its loop\'s other end.');
+    expect(text(refused)).toContain('findings[0].evidence[0].task: "#3" is #3 Task t3, which this task may not read: only itself, a task it depends on, or another task of its loop.');
     expect(text(refused)).toContain('findings[0].evidence[1].task: "#9" names no task in the plan');
     expect(text(refused)).toContain('findings[0].evidence[2].finding: "F3" is not a finding of #1 Task t1: its latest handoff has F1 to F2.');
     await new Promise((resolve) => setTimeout(resolve, 60));
@@ -566,7 +566,7 @@ describe('read over HTTP: a task pulls a handoff it may read (ADR-0047)', () => 
     const refused = await read({ task: 'Task d' });
 
     expect(refused.isError).toBe(true);
-    expect(text(refused)).toBe('#4 Task d is not a task this one may read. It may read itself, the tasks it depends on, directly or not, and its loop\'s other end: #1 Task a, #2 Task b and #3 Task c.');
+    expect(text(refused)).toBe('#4 Task d is not a task this one may read. It may read itself, the tasks it depends on, directly or not, and the other tasks of its loop: #1 Task a, #2 Task b and #3 Task c.');
     expect(text(refused)).not.toContain('Sibling.');
   });
 

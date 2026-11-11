@@ -383,14 +383,14 @@ export class OpenAiService extends BaseAiService implements IAiService {
   }
 
   /** A research subagent: fresh history, digest contract, cheap model, read-only tools. */
-  protected createSubagentChat(onReasoning?: (delta: string) => void, onUsage?: (record: UsageRecord) => void): ResearchChat | null {
+  protected createSubagentChat(onReasoning?: (delta: string) => void, onUsage?: (record: UsageRecord) => void, only?: ReadonlySet<string>): ResearchChat | null {
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-      { role: 'system', content: buildSubagentSystemPrompt() },
+      { role: 'system', content: buildSubagentSystemPrompt(only !== undefined) },
     ];
     return new OpenAiResearchChat(messages, {
       client: () => this.getClient(),
       model: () => this.requireModel('researchSubagentModel', this.config.researchSubagentModel),
-      tools: toOpenAiSubagentTools(),
+      tools: toOpenAiSubagentTools(only),
       onReasoning,
       source: () => this.config.aiProvider,
       onUsage,

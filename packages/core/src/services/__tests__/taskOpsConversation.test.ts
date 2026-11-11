@@ -4,8 +4,14 @@ import { FakeRunnerSession, makeSession, testWorkspace, taskOf, saves } from './
 import type { IRunner } from '../../interfaces/IRunner';
 import type { ModelResolver } from '../ModelResolver';
 import type { SessionMessage } from '../SessionMessage';
+import { SURFACE_AND_SETTINGS } from '../surfaceControls';
 
 /** A runner double that records the order tasks were spawned in. */
+/** The turn without its standing facts, whose control labels name queued messages whatever the run is doing (ADR-0030). */
+function withoutFacts(turn: string): string {
+  return turn.split('\n\n').filter((part) => !part.startsWith(SURFACE_AND_SETTINGS)).join('\n\n');
+}
+
 function recordingRunner(spawned: string[]): IRunner {
   return {
     spawn: vi.fn(async ({ taskId }: { taskId: string }) => {
@@ -458,7 +464,7 @@ describe('task_ops conversation turns', () => {
 
     await session.continueConversation('what is left?');
 
-    const outgoing = String(continueConversation.mock.calls[0][0]);
+    const outgoing = withoutFacts(String(continueConversation.mock.calls[0][0]));
     expect(outgoing).not.toMatch(/Execution is RUNNING/);
     expect(outgoing).not.toMatch(/queued/i);
   });
@@ -479,7 +485,7 @@ describe('task_ops conversation turns', () => {
 
     await session.continueConversation('what is left?');
 
-    const outgoing = String(continueConversation.mock.calls[0][0]);
+    const outgoing = withoutFacts(String(continueConversation.mock.calls[0][0]));
     expect(outgoing).toMatch(/Execution is RUNNING — these tasks are locked: #2/);
     expect(outgoing).toMatch(/No new task starts until your reply ends/);
     expect(outgoing).not.toMatch(/queued/i);

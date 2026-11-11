@@ -324,7 +324,7 @@ describe('Session phase transitions', () => {
       ['run_plan', (s: Session) => s.execute({ command: 'run_plan' }, { kind: 'user' })],
       ['run_task', (s: Session) => s.execute({ command: 'run_task', task: 't1' }, { kind: 'user' })],
       ['force_start', (s: Session) => s.execute({ command: 'force_start', task: 't1' }, { kind: 'user' })],
-    ])('%s carries the plan map, and leaves the completion contract to the runner\'s instructions', async (_name, start) => {
+    ])('%s carries no plan map, and leaves the completion contract to the runner\'s instructions', async (_name, start) => {
       const runner = spyRunner();
       const session = makeSession({ runner });
       session.loadPlan(threeTaskPlan(), 'Test', '/repo');
@@ -332,8 +332,8 @@ describe('Session phase transitions', () => {
       await start(session);
 
       const prompt = runner.spawn.mock.calls.find((c) => c[0].taskId === 't1')![0].prompt as string;
-      expect(prompt).toContain('← you are here');
-      expect(prompt).toContain('1. [NOW    ] First');
+      expect(prompt).not.toContain('Plan map');
+      expect(prompt).not.toContain('← you are here');
       expect(prompt).not.toContain('task_complete');
       expect(prompt).not.toContain('## Task skills');
     });

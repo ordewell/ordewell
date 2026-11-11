@@ -145,7 +145,7 @@ describe('Supervisor', () => {
     return {
       run: () => run, deliver: vi.fn(async () => undefined), pump: vi.fn(), saveState: vi.fn(), stoppedByUser: () => false, digestReader: () => ({ describe: describeTask, blockedBy: () => [] }),
       // Nothing left to wait for: what is held goes at the window, as the tests here want it to (WakePolicy.test.ts holds the rest).
-      wakeFacts: () => ({ nothingCanStart: true, cohortDone: new Set<string>(), blocksWork: new Set<string>(), requestAt: null }), readBudget: () => 12, retryLimit: () => 2,
+      wakeFacts: () => ({ nothingCanStart: true, cohortDone: new Set<string>(), blocksWork: new Set<string>(), blocksAny: new Set<string>(), requestAt: null }), readBudget: () => 12, retryLimit: () => 2,
       restartPlanner: vi.fn(), abandonTurn: vi.fn(), goUnsupervised: vi.fn(), wakeUpEnded: vi.fn(), dropToWatch: vi.fn(), notice: vi.fn(),
     };
   }
@@ -187,7 +187,7 @@ describe('Supervisor', () => {
     it('holds past the window what the plan does not call for, and wakes when it is due', async () => {
       vi.useFakeTimers();
       const h = host({ level: 'act' });
-      const wakeFacts = () => ({ nothingCanStart: false, cohortDone: new Set<string>(), blocksWork: new Set<string>(), ttlMs: 1000, requestAt: null });
+      const wakeFacts = () => ({ nothingCanStart: false, cohortDone: new Set<string>(), blocksWork: new Set<string>(), blocksAny: new Set<string>(), ttlMs: 1000, requestAt: null });
       const supervisor = new Supervisor({ ...h, wakeFacts }, { debounceMs: 10 });
 
       supervisor.observe({ kind: 'task_failed', taskId: 't1', detail: 'broke' });
@@ -199,11 +199,26 @@ describe('Supervisor', () => {
       vi.useRealTimers();
     });
 
+    it.each<[SupervisedRun['level'], number]>([['act', 1], ['watch', 0]])('at %s, a failure other tasks depend on wakes at the window %i time(s), while the rest runs', async (level, wakes) => {
+      vi.useFakeTimers();
+      const h = host({ level });
+      const wakeFacts = () => ({ nothingCanStart: false, cohortDone: new Set<string>(), blocksWork: new Set<string>(), blocksAny: new Set(['t1']), ttlMs: 1_000_000, requestAt: null });
+      const supervisor = new Supervisor({ ...h, wakeFacts }, { debounceMs: 10 });
+
+      supervisor.observe({ kind: 'task_failed', taskId: 't1', detail: 'broke' });
+      await vi.advanceTimersByTimeAsync(9);
+      expect(h.deliver).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(h.deliver).toHaveBeenCalledTimes(wakes);
+      vi.useRealTimers();
+    });
+
     it('wakes at once past the window when an event makes the held ones due', async () => {
       vi.useFakeTimers();
       const h = host({ level: 'act' });
       const cohortDone = new Set<string>();
-      const wakeFacts = () => ({ nothingCanStart: false, cohortDone, blocksWork: new Set<string>(), ttlMs: 1_000_000, requestAt: null });
+      const wakeFacts = () => ({ nothingCanStart: false, cohortDone, blocksWork: new Set<string>(), blocksAny: new Set<string>(), ttlMs: 1_000_000, requestAt: null });
       const supervisor = new Supervisor({ ...h, wakeFacts }, { debounceMs: 10 });
 
       supervisor.observe({ kind: 'task_failed', taskId: 't1', detail: 'broke' });
@@ -265,6 +280,46 @@ describe('Supervisor', () => {
       expect(delivered(h)).toEqual([
         [expect.stringMatching(/^Run update:\n- task #2 "Task t2" failed: broke\n- task #3 "Task t3", whose result you asked for/), 'supervisor'],
         [expect.stringMatching(/^Run update:\n- task #1 "Task t1", whose result you asked for/), 'user'],
+      ]);
+      vi.useRealTimers();
+    });
+
+    it('carries the run\'s end its task caused in its own turn, when that end is all the supervisor has to say', async () => {
+      vi.useFakeTimers();
+      const h = host({ level: 'act' });
+      const supervisor = new Supervisor(h, { debounceMs: 10 });
+
+      supervisor.observe({ kind: 'task_passed', taskId: 't2' });
+      supervisor.observe(report('user'));
+      supervisor.observe({ kind: 'run_finished', detail: '4 of 4 tasks completed' });
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(delivered(h)).toEqual([[[
+        'Run update:',
+        '- task #1 "Task t1", whose result you asked for, has ended. It passed.',
+        '  It printed nothing.',
+        '- the run finished: 4 of 4 tasks completed',
+        'Since the last update:',
+        '- task #2 "Task t2" passed',
+      ].join('\n'), 'user']]);
+      expect(supervisor.awaitsRunEnd).toBe(false);
+      expect(h.wakeUpEnded).toHaveBeenCalledTimes(1);
+      vi.useRealTimers();
+    });
+
+    it('leaves the run\'s end with the supervisor\'s other events, in their turn', async () => {
+      vi.useFakeTimers();
+      const h = host({ level: 'act' });
+      const supervisor = new Supervisor(h, { debounceMs: 10 });
+
+      supervisor.observe(report('user'));
+      supervisor.observe({ kind: 'task_failed', taskId: 't2', detail: 'broke' });
+      supervisor.observe({ kind: 'run_finished', detail: '1 of 2 tasks completed, 1 failed' });
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(delivered(h)).toEqual([
+        ['Run update:\n- task #2 "Task t2" failed: broke\n- the run finished: 1 of 2 tasks completed, 1 failed', undefined],
+        [expect.stringMatching(/^Run update:\n- task #1 "Task t1", whose result you asked for[^]*It printed nothing\.$/), 'user'],
       ]);
       vi.useRealTimers();
     });

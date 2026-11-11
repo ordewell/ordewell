@@ -23,6 +23,8 @@ export type {
   AwaitingReason,
   ContextCheckpoint,
   ConversationMessage,
+  DecisionRecordEntry,
+  DecisionRecordKind,
   DiscoveredModel,
   LegacyPlanState,
   PlanState,
@@ -209,6 +211,9 @@ export type { RewindTarget, ConversationCompaction, PlannerSubmission } from './
 export {
   SkillsService,
   createSkillsService,
+  SKILL_WORD_CAP,
+  skillTooLarge,
+  skillWords,
   BUILTIN_SKILL_NAMES,
   type SkillInfo,
   type SkillMetadata,
@@ -220,6 +225,8 @@ export {
 } from './services/SkillsService';
 export { globalDataDir, migrateOldConfigDir } from './utils/globalDataDir';
 export { writePrivateFile, ensurePrivateDir } from './utils/privateFile';
+// What a surface draws of a plan's decision record: the entries no later one supersedes (ADR-0067).
+export { live as standingRecord } from './services/decisionRecord';
 export { installMethod, isSea, seaRuntimeDir, seaVersion, upgradeCommand } from './utils/seaRuntime';
 export type { InstallMethod, SeaDeps, SeaModule } from './utils/seaRuntime';
 export type {
@@ -374,3 +381,6 @@ export { compareVersions, parseVersion } from './utils/version';
 
 export { walkPlan, taskPlacement, subtreeIds } from './services/PlanTree';
 export type { TreeTask, TaskPlacement } from './services/PlanTree';
+// The OpenCode 2.x login research agent's parts (ADR-0066), for its live probe in bench/live.
+export { confinedRead } from './services/ResearchSubagents';
+export { loginResearchAgent, startResearchServe, lazyServe, openCodeResearchAgent, researchToolNames } from './services/harness/openCodeResearchAgent';

@@ -1,0 +1,67 @@
+{
+  "id": "g5",
+  "title": "Where children inherit the whole environment",
+  "kind": "breadth question across packages, then a change",
+  "goal": "Find every place in packages/core, packages/cli, packages/desktop, packages/vscode and packages/web where Ordewell starts a child process and hands it this process's environment unfiltered: process.env passed as is or spread into a new object, or no env option at all, which inherits it. List each site with its file and line, say which of them need the whole environment and why, and route the others through one helper in core that builds a child's environment without the secrets that child does not need (API keys and tokens). Add tests for the helper, and keep every existing test passing.",
+  "groundTruth": {
+    "about": "Every non-test source file that imports a child-process API at the baseline commit: the sites an answer must account for, each of which passes or filters the environment.",
+    "command": "git grep -lE \"from '(node:)?child_process'|require\\('(node:)?child_process'\\)|from 'node-pty'|from 'cross-spawn'\" <baseline> -- packages/core/src packages/cli/src packages/desktop/src packages/vscode/src packages/web/src, less __tests__, *.test.*, /test/ and /testing/",
+    "files": [
+      "packages/cli/src/commands/web.ts",
+      "packages/cli/src/daemon.ts",
+      "packages/cli/src/selfUpdate.ts",
+      "packages/cli/src/tui/effects.ts",
+      "packages/cli/src/tui/index.ts",
+      "packages/core/src/services/GitWorktreeIsolation.ts",
+      "packages/core/src/services/ModelDiscovery.ts",
+      "packages/core/src/services/RunnerInstallation.ts",
+      "packages/core/src/services/ScriptRunner.ts",
+      "packages/core/src/services/StructuredRunner.ts",
+      "packages/core/src/services/container/dockerCli.ts",
+      "packages/core/src/services/container/egressSidecar.ts",
+      "packages/core/src/services/container/leaseRelay.ts",
+      "packages/core/src/services/escalationNotifier.ts",
+      "packages/core/src/services/gitExec.ts",
+      "packages/core/src/services/handoffReferences.ts",
+      "packages/core/src/services/harness/AgentAdapter.ts",
+      "packages/core/src/services/harness/CliAgentAiService.ts",
+      "packages/core/src/services/harness/ProcessLifecycle.ts",
+      "packages/core/src/services/harness/appServerModels.ts",
+      "packages/core/src/services/harness/claudeAccountLimits.ts",
+      "packages/core/src/services/harness/codexSandbox.ts",
+      "packages/core/src/services/harness/runnerProcess.ts",
+      "packages/core/src/services/researchShell.ts",
+      "packages/core/src/services/runnerAuth.ts",
+      "packages/core/src/services/sandbox/SandboxBackend.ts",
+      "packages/core/src/services/workspaceEnv.ts",
+      "packages/core/src/services/workspaceReader.ts",
+      "packages/core/src/services/worktreeBootstrap.ts",
+      "packages/core/src/utils/clipboard.ts",
+      "packages/core/src/utils/processTree.ts",
+      "packages/core/src/utils/shellPath.ts",
+      "packages/desktop/src/main/ipc.ts",
+      "packages/vscode/src/adapters/VsCodeFileSystem.ts",
+      "packages/vscode/src/extension.ts"
+    ]
+  },
+  "expectedSlices": { "min": 2, "max": 5, "tolerance": 1 },
+  "key": {
+    "taskCount": { "min": 3, "max": 7 },
+    "parallelAllowed": true,
+    "sharedDecisions": [],
+    "keepTogether": [],
+    "breadth": {
+      "minDelegated": 2,
+      "packages": "\\b(core|cli|desktop|vs ?code|web)\\b",
+      "maxOwnReads": 10,
+      "maxOwnReadBytes": 61440
+    },
+    "integrationRisks": [
+      "The planner grepping and reading every spawn site itself, filling its own context with what agents or research tasks should have surfaced.",
+      "One research task asked to survey all five packages, so the question is not split at all.",
+      "Call-site changes that each invent their own filter instead of waiting for the one helper in core.",
+      "A site that needs the whole environment (a login shell, a harness that reads its own keys) routed through the filter and broken."
+    ],
+    "expectedStrategy": "Two or more agents or research tasks, split by package (core alone holds most of the sites), each listing its package's spawn sites and how each passes the environment, before any change; the planner reads little itself. Then one core task for the helper and its tests, and the call-site changes per package depending on it."
+  }
+}

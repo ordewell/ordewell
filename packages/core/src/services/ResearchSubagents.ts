@@ -20,13 +20,34 @@ import type { UsageRecord, UsageTotals } from '../models/Usage';
  * the service → executeTool import chain stays acyclic.
  */
 
+/**
+ * One budget for both research agents, the API-key one and OpenCode's login
+ * one (ADR-0066). Sized from the g5-t67 re-run (3 DeepSeek + 3 GLM planners,
+ * 27 agents): 19 ran out of their 16 steps, and each of those had made exactly
+ * 16 rounds of reads (3-4 calls a round) with the next round still grepping;
+ * the 8 that finished took 5-15 rounds, median 11. The 19 are cut off, so 24
+ * is an estimate, not a measurement: it covers the finishers with room and
+ * gives a cut-off agent half again its budget. The cap bound too: 20 of the 27
+ * digests were truncated at the old 8,000 chars, 18 of them partials whose
+ * closing "Uncertainties" section was what got cut, so it is 12,000. A run
+ * that still runs out returns what it found, marked partial, naming the reads
+ * it left (`partialDigest`).
+ */
 export const SUBAGENT_LIMITS = {
   /** Max spawn calls in flight at once; extra calls in the same turn wait for a slot. */
   maxConcurrent: 3,
-  maxSteps: 10,
-  digestMaxChars: 6000,
+  maxSteps: 24,
+  digestMaxChars: 12000,
   toolOutputMaxChars: 20000,
 };
+
+/**
+ * The tools a research agent served to a harness planner over MCP may call
+ * (ADR-0066): the workspace reads alone. No shell, sealed or not, no web, and
+ * no spawn, so the agent widens the planner's envelope by nothing but the
+ * reads its own read tools already have.
+ */
+export const CONFINED_RESEARCH_TOOLS: ReadonlySet<string> = new Set(['read_file', 'read_files', 'glob', 'grep', 'find_symbol', 'list_dir']);
 
 export interface SubagentDeps {
   /**
@@ -53,6 +74,12 @@ export interface SubagentDeps {
   usage?: () => UsageTotals | undefined;
   /** Structured lifecycle/thinking/tool_call/tool_result events for the UI while the subagent works. */
   onProgress?: (progress: ResearchProgress) => void;
+  /**
+   * The tools this agent may call, which can only narrow the research set: a
+   * call to any other is refused with a synthetic result, never dispatched.
+   * Absent: every research tool.
+   */
+  tools?: ReadonlySet<string>;
 }
 
 export interface SubagentToolOutcome {
@@ -126,9 +153,37 @@ function withoutContext({ contextTokens: _context, ...record }: UsageRecord): Us
   return record;
 }
 
+/** What a research call asked for and never got, in a line the planner can hand to another agent. */
+export function describeCall(name: string, args: Record<string, unknown>): string {
+  const text = JSON.stringify(args);
+  return `${name} ${text.length > 200 ? `${text.slice(0, 200)}...` : text}`;
+}
+
+/**
+ * A digest cut short by the step budget: the findings so far under a PARTIAL
+ * header, then exactly what the cut-off step wanted to read. The unread list
+ * is built from the calls, not from the model, and survives the cap, so the
+ * planner can send another agent there instead of reading it itself.
+ */
+export function partialDigest(found: string, unread: string[], maxSteps = SUBAGENT_LIMITS.maxSteps): string {
+  const header = `[PARTIAL: the ${maxSteps}-step budget ran out before this research was finished. Treat the findings below as incomplete.]`;
+  const left = unread.length
+    ? `Left unread:\n${unread.slice(0, 10).map((u) => `- ${u}`).join('\n')}${unread.length > 10 ? `\n- (+${unread.length - 10} more)` : ''}`
+    : 'Left unread: whatever the next step would have read; the brief was not fully covered.';
+  const marker = '\n[... findings truncated ...]\n';
+  const room = Math.max(0, SUBAGENT_LIMITS.digestMaxChars - header.length - left.length - 4);
+  const text = found.trim();
+  // Keep the end: an agent closes with what it did not cover, which is what
+  // the planner needs most from a partial digest.
+  const head = Math.max(0, Math.floor((room - marker.length) * 0.6));
+  const body = text.length > room ? `${text.slice(0, head)}${marker}${text.slice(text.length - Math.max(0, room - marker.length - head))}` : text;
+  return `${header}\n\n${body}\n\n${left}`;
+}
+
 async function runLoop(prompt: string, deps: SubagentDeps): Promise<string> {
   if (deps.signal?.aborted) return '[research agent aborted before starting]';
   const fs = nonPromptingFs(deps.fs);
+  const allowed = deps.tools ? new Set([...deps.tools].filter((name) => ALLOWED_TOOL_NAMES.has(name))) : ALLOWED_TOOL_NAMES;
   const chat = deps.createChat(
     (delta) => deps.onProgress?.({ type: 'thinking', text: delta, subagentId: deps.subagentId }),
     // The record says who made the call: unstamped, the ledger would read the
@@ -145,8 +200,8 @@ async function runLoop(prompt: string, deps: SubagentDeps): Promise<string> {
       // Anything outside the read-only allowlist (recursive spawn, hallucinated
       // write tools) is refused with a synthetic result — never dispatched — so
       // the API history stays valid and nothing executes.
-      if (!ALLOWED_TOOL_NAMES.has(tc.name)) {
-        const refusal = `Tool "${tc.name}" is not available. You are a read-only research subagent: your only tools are ${[...ALLOWED_TOOL_NAMES].join(', ')}. You cannot spawn further agents or modify files. If a specific resource would have answered your question, name it in your digest so the planner can fetch it directly. Otherwise continue with the available tools, then reply with your digest.`;
+      if (!allowed.has(tc.name)) {
+        const refusal = `Tool "${tc.name}" is not available. You are a read-only research subagent: your only tools are ${[...allowed].join(', ')}. You cannot spawn further agents or modify files. If a specific resource would have answered your question, name it in your digest so the planner can fetch it directly. Otherwise continue with the available tools, then reply with your digest.`;
         results.push({ name: tc.name, output: refusal, truncated: false, totalChars: refusal.length, id: tc.id });
         continue;
       }
@@ -184,8 +239,10 @@ async function runLoop(prompt: string, deps: SubagentDeps): Promise<string> {
   // Step budget exhausted while the model still wants tools: answer the
   // pending calls synthetically (history stays valid, nothing executes) and
   // push for the digest — mirrors the parent loop's wrap-up rounds.
+  let unread: string[] | undefined;
   if (turn.hasToolCalls && !deps.signal?.aborted) {
-    const notice = `Research budget exhausted (${SUBAGENT_LIMITS.maxSteps} tool rounds) — this call was NOT executed and no further tool calls will be. Reply now with your digest of everything learned so far.`;
+    unread = turn.toolCalls.map((tc) => describeCall(tc.name, tc.args));
+    const notice = `Research budget exhausted (${SUBAGENT_LIMITS.maxSteps} tool rounds) — this call was NOT executed and no further tool calls will be. Reply now with your digest of everything learned so far, and end it with a "Not covered" section naming the files and areas you did not get to, so the planner can send another agent there.`;
     turn = await chat.sendToolResults(
       turn.toolCalls.map((tc) => ({ name: tc.name, output: notice, truncated: false, totalChars: notice.length, id: tc.id })),
       deps.signal,
@@ -193,6 +250,7 @@ async function runLoop(prompt: string, deps: SubagentDeps): Promise<string> {
   }
 
   const digest = turn.text;
+  if (unread) return partialDigest(digest, unread);
   return digest.length > SUBAGENT_LIMITS.digestMaxChars
     ? digest.slice(0, SUBAGENT_LIMITS.digestMaxChars) + `\n[... digest truncated to ${SUBAGENT_LIMITS.digestMaxChars} chars, total ${digest.length}]`
     : digest;
@@ -234,4 +292,23 @@ export async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (i
     }));
   }
   return results;
+}
+
+/**
+ * One read a research agent outside this loop asked for (ADR-0066): the
+ * OpenCode 2.x agent on the user's login, served over a research token.
+ * The same confinement and the same limits as {@link runResearchAgent}'s own
+ * calls: only {@link CONFINED_RESEARCH_TOOLS}, every path inside the
+ * workspace root, nothing that could ask anyone, read_file capped at 2000
+ * lines unless asked otherwise, and output cut to the subagent's limit.
+ */
+export async function confinedRead(name: string, args: Record<string, unknown>, fs: IFileSystem, signal?: AbortSignal): Promise<ToolOutcome> {
+  if (!CONFINED_RESEARCH_TOOLS.has(name)) return refused(`${name} is not available. You are a read-only research subagent: only ${[...CONFINED_RESEARCH_TOOLS].join(', ')}.`);
+  const call = { ...args };
+  if (name === 'read_file' && !('maxBytes' in call) && !('limit' in call)) call.limit = 2000;
+  const res = await executeTool(name, call, nonPromptingFs(fs), undefined, signal);
+  const max = SUBAGENT_LIMITS.toolOutputMaxChars;
+  return res.output.length > max
+    ? { ...res, output: res.output.slice(0, max) + `\n[... truncated to ${max} chars, total ${res.output.length}]`, truncated: true }
+    : res;
 }

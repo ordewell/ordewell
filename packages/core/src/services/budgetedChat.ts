@@ -36,6 +36,8 @@ export interface ConversationCompactionHost {
   checkpoint(content: string, keptFrom: number, id: string): void;
   /** The current plan's lines: what a summary is told outranks its own account of task state. */
   planLines(): readonly string[] | null;
+  /** The decision record a summary of the history is written beside and its checkpoint restates (ADR-0067); null when nothing in it stands. */
+  record(): string | null;
 }
 
 export interface LandedHistory {
@@ -464,7 +466,7 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
     let version = this.history.version;
     const current = (): boolean => !signal?.aborted && compaction.host.turnId() === turn.id && this.chat.model() === model && this.history.version === version;
     const summarize = (subject: SummarySubject, messages: readonly CompactableMessage[]): Promise<string> => condense(compaction.summarize, {
-      model, subject, messages, planLines: compaction.host.planLines(), limits: summaries, signal, current,
+      model, subject, messages, planLines: compaction.host.planLines(), record: subject === 'history' ? compaction.host.record() : null, limits: summaries, signal, current,
       // Spend, counted like any call's, that measures nothing of the live context.
       onUsage: (record) => this.chat.onUsage?.({ ...record, aggregate: true }),
     });
@@ -533,7 +535,7 @@ export abstract class BudgetedChat<M extends CompactableMessage> implements Rese
     plan: LandedPlan, id: string, summarize: (subject: SummarySubject, messages: readonly CompactableMessage[]) => Promise<string>, host: ConversationCompactionHost,
   ): Promise<boolean> {
     const summary = await summarize('history', plan.live);
-    const notice = condensedNotice(summary, 'auto');
+    const notice = condensedNotice(summary, 'auto', host.record());
     const view = this.history.view();
     const at = this.turn!.at;
     // The checkpoint's projection, then the turn's own messages as they are.
@@ -672,6 +674,7 @@ export async function condenseConversation(live: ResearchChat | undefined, reque
     subject: 'history',
     messages,
     planLines: request.planLines,
+    record: request.record ?? null,
     limits: summaries,
     signal: request.signal,
     current: () => summarizer().model === model,

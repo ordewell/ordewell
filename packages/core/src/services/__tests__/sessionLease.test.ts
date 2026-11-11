@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { createTask, type LegacyPlanState } from '../../models/Task';
 import * as sessionStore from '../../utils/sessionStore';
-import { LEASE_STALE_MS, LeaseHost, SessionHeldError } from '../sessionLease';
+import { LEASE_STALE_MS, LeaseHost, SessionHeldError, UNLEASED } from '../sessionLease';
 import { leasedIsolation } from '../leasedIsolation';
 import { FakeWorktreeIsolation, flushMicrotasks } from '../../testing';
 import type { IsolationRun } from '../../interfaces/IWorktreeIsolation';
@@ -542,5 +542,18 @@ describe('leasedIsolation (ADR-0049)', () => {
       await isolation.closeChanges();
       expect(isolation.changing).toBe(false);
     });
+  });
+});
+
+describe('the host a lease names (ADR-0049)', () => {
+  it('is what its host was described as, as it is described now', () => {
+    const host = new LeaseHost();
+    const lease = host.lease(() => undefined);
+    host.describe({ kind: 'vscode' });
+    expect(lease.host?.()).toEqual({ kind: 'vscode' });
+  });
+
+  it('is none for a lease no host serves', () => {
+    expect(UNLEASED.host?.()).toBeUndefined();
   });
 });

@@ -24,6 +24,7 @@ import { ChildDirectory } from './ChildDirectory';
 import { ChildPlanRunner, ownedRunner, type ChildHost, type ChildNode, type SubplannerLink } from './ChildPlanRunner';
 import { ScopeLines } from './ScopeLines';
 import { DELEGATION_OFFERED, rememberDelegationBudget } from './runSettingsText';
+import { SURFACE_CONTROLS, surfaceOf, surfaceSettingsBlock, type SurfaceSettings } from './surfaceControls';
 import { checksDelegatedTask, type DelegatedRow } from '../models/Delegation';
 import type { SlotPool } from './SlotPool';
 import type { OpenLease } from './executionLease';
@@ -49,6 +50,8 @@ import { WebReadPolicy } from './webReadPolicy';
 import { sharedWebResponseCache, type WebResponseCache } from './WebResponseCache';
 import { sharedSearchProvider } from './DuckDuckGoSearchProvider';
 import { PROVIDER_PRIORITY, providerForRunner, runnerForProvider } from './ProviderRegistry';
+import { VENDORS } from './apiProviders';
+import type { HeldValue } from '../utils/redactSecrets';
 import { ModelResolver } from './ModelResolver';
 import { plannerModesFrom } from './plannerModes';
 import { RUN_SETTINGS_DEFAULTS, runSettingsOf, type GlobalRunSettings, type UserSettings } from './SettingsService';
@@ -400,6 +403,12 @@ function childSessionDeps(deps: SessionDeps, { task, cwd, placement, authority, 
   };
 }
 
+/** Withdrawn by either: the caller's own signal, or the end of the planner turn that raised it. */
+function withTurnEnd(signal: AbortSignal | undefined, turnEnded: AbortSignal | undefined): AbortSignal | undefined {
+  if (!signal || !turnEnded) return signal ?? turnEnded;
+  return AbortSignal.any([signal, turnEnded]);
+}
+
 /**
  * The planner's own prompts. A turn's abort or a plan change settles these;
  * a task runner's request belongs to its attempt, and is denied when that
@@ -600,7 +609,10 @@ export function createSession(deps: SessionDeps): Session {
     // Read per request, so a change of autonomy level or allowlist applies to the next call.
     mode: (kind) => effectiveApprovalMode(deps.config.approvalMode, deps.config.autonomousMode, kind),
     preApproved: () => plannerAllowlistOf(deps.config),
-    ask: (req, signal) => approvals.ask(req, { signal }),
+    // A planner request raised during a turn is that turn's: once the turn is
+    // over nothing waits on the answer, and a card left open would swallow
+    // the user's next message, so it is withdrawn however the turn ends.
+    ask: (req, signal) => approvals.ask(req, { signal: withTurnEnd(signal, conversation?.liveTurnEnded) }),
     // The interactive path (`asked`) already broadcasts approval_request +
     // approval_settled; only the silent sources need a signal, or a
     // remembered/pre-approved/mode grant is invisible to every surface.
@@ -684,7 +696,9 @@ export function createSession(deps: SessionDeps): Session {
       const host = deps.leaseHost ?? (deps.saveSession ? undefined : processLeaseHost());
       return host ? host.lease(onLost, runLive) : UNLEASED;
     },
-    conversation: (host) => (conversation = new PlannerConversation(host)),
+    conversation: (host) => (conversation = new PlannerConversation(host, {
+      heldSecrets: () => [...namedConfigSecrets(deps.config), ...outboundSecrets().map((value) => ({ value }))],
+    })),
     child: deps.child,
     placement: deps.placement,
     eventLog: deps.eventLog ?? ((rootSessionId, stateRoot) => {
@@ -725,6 +739,11 @@ function configSecrets(config: IConfig): string[] {
     config.apiKey, config.openAiApiKey, config.openrouterKey, config.geminiKey, config.openaiCompatibleApiKey,
     ...PROVIDER_PRIORITY.map((provider) => config.getProviderApiKey(provider)),
   ];
+}
+
+/** The vendor keys the config holds, by the variable each is handed over as: what a summary names in a key's place. */
+function namedConfigSecrets(config: IConfig): HeldValue[] {
+  return PROVIDER_PRIORITY.map((provider) => ({ name: VENDORS[provider].apiKeyEnvVar, value: config.getProviderApiKey(provider) }));
 }
 
 /** What {@link createSession} hands a Session: every collaborator, already built and wired. */
@@ -907,6 +926,7 @@ export class Session {
     submitPlan: (tasks, turn) => this.submitPlanFromTool(tasks, turn),
     unread: () => this.subplanner !== undefined,
     editPlan: (ops, turn) => this.editPlanFromTool(ops, turn),
+    record: (entries, turn) => this.conversation.recordFromTool(entries, turn),
     tasks: () => this.store.planTasks,
     read: (signature, answer) => this.conversation.read(signature, answer),
     liveOutput: (taskId, opts) => this.orchestrator.getLiveOutput(taskId, opts),
@@ -1007,6 +1027,10 @@ export class Session {
       subplanner: () => this.subplanner !== undefined,
       assignmentScope: () => this.catalog.scope(),
       autorun: () => this.userRunSettings().autorun,
+      surfaceFacts: () => {
+        const facts = this.surfaceSettings();
+        return facts ? surfaceSettingsBlock(facts) : null;
+      },
       tasks: () => this.store.planTasks,
       // Before plan approval, only research has start rules to explain (ADR-0037 R4).
       startWaits: (task) => (this.record.planApproved || task.research ? this.orchestrator.startWaits(task) : []),
@@ -1209,6 +1233,7 @@ export class Session {
       checkpoint: (taskId) => this.orchestrator.getCheckpointQuestion(taskId),
       waitsForApproval: (taskId) => this.record.waitsForApproval(taskId),
       startQueued: (taskId) => this.orchestrator.startQueuedFor(taskId),
+      resolvable: (taskId) => this.orchestrator.canResolveConflict(taskId),
       holdReason: (taskId) => this.orchestrator.holdReason(taskId),
       loopRunsOn: (taskId) => this.orchestrator.loopRunsOn(taskId),
       carried: (taskId) => carried.has(taskId),
@@ -1303,6 +1328,8 @@ export class Session {
       approve: (taskIds) => this.record.approve(taskIds),
       approvePlan: () => this.record.approvePlan(),
       autonomous: () => this.autonomous(),
+      userControls: () => SURFACE_CONTROLS[surfaceOf(this.lease.host?.())],
+      mergesByThemselves: () => this.automaticMerging() === 'on',
       autorun: () => this.userRunSettings().autorun,
       scheduling: () => this.orchestrator.isScheduling,
       startsHeld: () => this.orchestrator.startsHeld,
@@ -1534,6 +1561,31 @@ export class Session {
   runSettings(): GlobalRunSettings {
     // The Planned-with line keeps no copy: every landing reads the user's saved setting (ADR-0030).
     return { ...this.runSettingsValue, plannedWithTrailer: this.plannedWithTrailer() };
+  }
+
+  /**
+   * Where this session's user is and how its run is set, for the planner and
+   * the refusals that tell it what the user does (ADR-0030). The surface is
+   * the live host's (ADR-0049). None for a subplanner: its asker is a planner,
+   * which presses no control.
+   */
+  private surfaceSettings(): SurfaceSettings | null {
+    if (this.subplanner !== undefined) return null;
+    return {
+      surface: surfaceOf(this.lease.host?.()),
+      automaticMerging: this.automaticMerging(),
+      autorun: this.userRunSettings().autorun,
+      supervisorLevel: this.supervision.standing().level,
+      parallelLimit: this.config.maxParallelSessions,
+    };
+  }
+
+  /** The run's automatic merging as it stands: the run's own setting while one runs, the user's otherwise (ADR-0030). */
+  private automaticMerging(): SurfaceSettings['automaticMerging'] {
+    const standing = this.supervision.standing();
+    if (!standing.mergeAtGatesAutomatically) return 'off';
+    // On, yet not merging now (a landing override, a delegated task's check): the user's merge is what lands the work.
+    return standing.running && !this.orchestrator.mergesAtGates ? 'held' : 'on';
   }
 
   /** The user's run settings as they stand for this session (ADR-0030). */

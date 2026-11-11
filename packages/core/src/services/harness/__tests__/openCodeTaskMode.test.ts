@@ -180,6 +180,14 @@ describe('OpenCodeAdapter task mode — start', () => {
     } finally { adapter.dispose(); }
   });
 
+  it('titles the session it creates, so OpenCode makes no call of its own to name it', async () => {
+    const server = fakeServer();
+    const { adapter } = await startTask(server);
+    try {
+      expect(server.requests.find((r) => r.method === 'POST' && r.path === '/session')?.body).toEqual({ title: 'Ordewell task' });
+    } finally { adapter.dispose(); }
+  });
+
   it('serves the worktree behind a per-task password, sent on every request', async () => {
     const server = fakeServer();
     const { adapter, spawned, env } = await startTask(server);
@@ -1095,7 +1103,7 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
   // One rule per tool by its exact name: a pattern would cover a repository server named `ordewell_<anything>` too.
   const taskAllow = { ordewell_task_complete: 'allow', ordewell_checkpoint: 'allow', ordewell_read: 'allow', ordewell_apply_patch: 'allow' };
   const plannerAllow = Object.fromEntries([
-    'list_runners', 'list_models', 'submit_plan', 'edit_plan', 'task_query', 'task_output', 'task_diff', 'run_command', 'fetch', 'web_search', 'load_skill',
+    'list_runners', 'list_models', 'submit_plan', 'edit_plan', 'task_query', 'task_output', 'task_diff', 'record', 'run_command', 'fetch', 'web_search', 'load_skill',
     'run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'skip_task', 'message_task', 'answer_approval', 'answer_checkpoint', 'merge_all', 'run_script',
   ].map((tool) => [`ordewell_${tool}`, 'allow']));
 

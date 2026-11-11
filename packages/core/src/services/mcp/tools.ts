@@ -5,6 +5,7 @@ import { TASK_LOG_KINDS } from '../taskLogRead';
 import type { ToolOutcome } from '../../interfaces/IFileSystem';
 import { HANDOFF_LIMITS } from '../../models/Handoff';
 import { ONE_LINE } from '../../models/lineBreaks';
+import { DECISION_RECORD_KINDS } from '../../models/Task';
 import { BOARD_LIMITS, BOARD_REF, BOARD_TYPES, TASK_ENTRY_TYPES, type BoardEntryType } from '../../models/Board';
 
 /**
@@ -34,7 +35,7 @@ const handoffReference = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('task'),
     task: z.union([z.string().min(1), z.number().int().min(0)]).transform(String).pipe(z.string().max(HANDOFF_LIMITS.reference))
-      .describe('A task you may read — this one, one it depends on, or its loop\'s other end: "#order", "#4/F3", its id or its title.'),
+      .describe('A task you may read — this one, one it depends on, or another task of its loop: "#order", "#4/F3", its id or its title.'),
     finding: z.string().max(HANDOFF_LIMITS.reference).regex(/^F[1-9][0-9]*$/, 'A finding is named as Ordewell numbered it: "F1", "F2", ….').optional()
       .describe('One of that task\'s findings, as "F3".'),
   }),
@@ -66,7 +67,7 @@ const taskCompleteInput = z.object({
   status: z.enum(['done', 'blocked', 'failed'])
     .describe("'done' only when the task is fully complete. 'blocked' or 'failed' end the attempt without passing."),
   summary: z.string().max(HANDOFF_LIMITS.summary, 'Put the long form in report.')
-    .describe(`The handoff the next task reads first, written for that reader: what changed, what is left, what to watch. At most ${HANDOFF_LIMITS.summary} characters; the long form goes in report.`),
+    .describe(`The handoff the next task reads first, written for that reader: what changed and why, the interfaces and paths a dependent relies on, the assumptions you acted on, what is left. At most ${HANDOFF_LIMITS.summary} characters; the long form goes in report.`),
   reason: z.string().optional().describe("Why the task is blocked or failed. Expected for anything but 'done'."),
   commit: handoffCommit.optional()
     .describe(`A change task's commit message, for a human reviewer: what changed and why. Only kept with status 'done'. The subject is one line of at most ${HANDOFF_LIMITS.commitSubject} characters, best 72 or fewer, the body at most ${HANDOFF_LIMITS.commitBody}.`),
@@ -131,6 +132,10 @@ const webSearchInput = z.object({
 
 const loadSkillInput = z.object({
   name: z.string().min(1).describe('The name of an Ordewell planner skill to load.'),
+});
+
+const spawnResearchAgentInput = z.object({
+  prompt: z.string().trim().min(1).describe('A self-contained research task: the area or question, the paths or symbols to start from, and exactly what the digest must report back.'),
 });
 
 const taskRef = z.union([z.string().min(1), z.number().int().min(0)]).describe('A task id, "#order" ("#2.1" for a subtask), a bare order, or a title.');
@@ -246,6 +251,16 @@ const taskDiffInput = z.object({
   since: z.number().int().min(0).optional().describe('A previous nextOffset, in characters of this diff or file list.'),
 });
 
+// ADR-0067: bounded per call and per entry, since the whole record rides every fresh context.
+const recordInput = z.object({
+  entries: z.array(z.object({
+    kind: z.enum(DECISION_RECORD_KINDS),
+    text: z.string().max(600),
+    why: z.string().max(400).optional(),
+    supersedes: z.string().optional().describe('The id of the entry this one replaces, as Q1.'),
+  })).min(1).max(20).describe('One batch, whole or not at all.'),
+});
+
 const runPlanInput = z.object({});
 
 const oneTaskInput = z.object({ task: taskRef });
@@ -299,6 +314,7 @@ export type ApplyPatchArgs = z.infer<typeof applyPatchInput>;
 export type ListRunnersArgs = z.infer<typeof listRunnersInput>;
 export type ListModelsArgs = z.infer<typeof listModelsInput>;
 export type LoadSkillArgs = z.infer<typeof loadSkillInput>;
+export type SpawnResearchAgentArgs = z.infer<typeof spawnResearchAgentInput>;
 export type RunCommandArgs = z.infer<typeof runCommandInput>;
 export type TaskRunCommandArgs = z.infer<typeof taskRunCommandInput>;
 export type FetchArgs = z.infer<typeof fetchInput>;
@@ -308,6 +324,7 @@ export type EditPlanArgs = z.infer<typeof editPlanInput>;
 export type TaskQueryArgs = z.infer<typeof taskQueryInput>;
 export type TaskOutputArgs = z.infer<typeof taskOutputInput>;
 export type TaskDiffArgs = z.infer<typeof taskDiffInput>;
+export type RecordArgs = z.infer<typeof recordInput>;
 export type RunPlanArgs = z.infer<typeof runPlanInput>;
 export type OneTaskArgs = z.infer<typeof oneTaskInput>;
 export type RetryTaskArgs = z.infer<typeof retryTaskInput>;
@@ -378,6 +395,8 @@ export interface PlannerToolHandler {
   /** An entry on this node's board (ADR-0057 R8); a planner lists it where `read` is. */
   post?: Run<PostArgs>;
   loadSkill?: Run<LoadSkillArgs>;
+  /** Ordewell's own research agent (ADR-0066); only a token with `research` lists it. */
+  spawnResearchAgent?: Run<SpawnResearchAgentArgs>;
   runCommand?: Run<RunCommandArgs>;
   fetch?: Run<FetchArgs>;
   webSearch?: Run<WebSearchArgs>;
@@ -388,6 +407,8 @@ export interface PlannerToolHandler {
   taskQuery?: Run<TaskQueryArgs>;
   taskOutput?: Run<TaskOutputArgs>;
   taskDiff?: Run<TaskDiffArgs>;
+  /** The decision record (ADR-0067): it writes only the plan, as `edit_plan` does. */
+  record?: Run<RecordArgs>;
   runPlan?: Run<RunPlanArgs>;
   runTask?: Run<OneTaskArgs>;
   stopTask?: Run<OneTaskArgs>;
@@ -621,12 +642,14 @@ export const TASK_COMPLETE_TOOL = 'task_complete';
  */
 export const TASK_COMPLETION_CONTRACT = [
   `When you have fully completed this task, call the \`${TASK_COMPLETE_TOOL}\` tool with status \`done\` and your handoff. If you cannot complete it, call \`${TASK_COMPLETE_TOOL}\` with status \`blocked\` or \`failed\` and the reason instead. Call it once, as your last action.`,
-  `Its \`summary\` is this task's handoff to the next task: the planner and the tasks that depend on this one read it first, and nothing else you write reaches them unless they ask. Write it for that reader, not as a log: what changed, what is left, what to watch. It is at most ${HANDOFF_LIMITS.summary} characters, and a call over a limit is refused: the long form goes in \`report\`.`,
+  `Its \`summary\` is this task's handoff to the next task: the planner and the tasks that depend on this one read it first, and nothing else you write reaches them unless they ask. Write it for that reader, not as a log: what changed and the decisions behind it; the interfaces and paths a dependent relies on; the assumptions you acted on; what is left or open. It is at most ${HANDOFF_LIMITS.summary} characters, and a call over a limit is refused: the long form goes in \`report\`.`,
   `Put anything the next reader must act on in \`findings\`, one item each, most important first, each with a severity, a one-line title, its detail and evidence to check it by: a file (and line), a commit, a task (and one of its findings, as "F3") or a URL. Ordewell numbers them F1, F2, … so a later task can cite one. List what you produced in \`artifacts\`.`,
-  `The long story, if there is one, goes in \`report\`: it is kept with this attempt and read only on demand. A review or other read-only task especially: its findings are its result, so state each one, and do not write the report to a file.`,
+  `Work from your brief and the prior task outputs you were given; pull more with \`read\` only when you need it, and read the code your task touches, not the whole repository.`,
+  `To wait for a command, wait on the PID of a process you started yourself, never by matching its command name (\`pgrep -f\`), which also matches the same command another task is running.`,
+  `The long story, if there is one, goes in \`report\`: it is kept with this attempt and read only on demand, so a number you measured that a later task may need (a timing, a count, a size) goes in the summary or a finding, not only in the report. A review or other read-only task especially: its findings are its result, so state each one, and do not write the report to a file.`,
 ].join('\n\n');
 
-const COMMIT_CONTRACT = `This task's work lands as a commit, so with status \`done\` also give \`commit\`: a \`subject\` of one line, at most ${HANDOFF_LIMITS.commitSubject} characters and best 72 or fewer, in the imperative mood ("Add a daily version check behind ORDEWELL_NO_VERSION_CHECK"), and a \`body\` of one to three lines on why, with no trailers. The commit tells a human reviewer what changed and why, so the summary no longer repeats that: it holds the exact specifics the next agent needs (paths, symbols, decisions) alongside \`artifacts\`, plus what is left and what to watch, and the summary may be empty when there is nothing to add.`;
+const COMMIT_CONTRACT = `This task's work lands as a commit, so with status \`done\` also give \`commit\`: a \`subject\` of one line, at most ${HANDOFF_LIMITS.commitSubject} characters and best 72 or fewer, in the imperative mood ("Add a daily version check behind ORDEWELL_NO_VERSION_CHECK"), and a \`body\` of one to three lines on why, with no trailers. The commit tells a human reviewer what changed and why, so the summary no longer repeats that: it holds the exact specifics the next agent needs (paths, symbols, decisions, interfaces, assumptions) alongside \`artifacts\`, plus what is left or open, and the summary may be empty when there is nothing to add.`;
 
 /** The completion contract for one attempt: only one whose work lands as a commit is asked for its message (ADR-0047). */
 export function taskCompletionContract(opts: { commits?: true }): string {
@@ -656,7 +679,7 @@ const SHARED_TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
     taskCompleteInput, (h) => h.taskComplete?.bind(h))),
   tool('checkpoint', "Ask the user a question and wait for the answer, which is this call's result.",
     checkpointInput, (h) => h.checkpoint?.bind(h)),
-  readTool("Read the handoff of a task you may read: this one, a task it depends on, directly or not, or its loop's other end. Returns what that task handed over, as its attempt's log keeps it: its commit, the summary, every finding with its id, the artifacts, and with include_report its report. It reads nothing else: no transcript, no diff, no output. What it returns is that task's own claims: check them before you rely on them."),
+  readTool("Read the handoff of a task you may read: this one, a task it depends on, directly or not, or another task of its loop, any round. Returns what that task handed over, as its attempt's log keeps it: its commit, the summary, every finding with its id, the artifacts, and with include_report its report. It reads nothing else: no transcript, no diff, no output. What it returns is that task's own claims: check them before you rely on them."),
 ];
 
 /** What `post` is, said once to whoever holds it (ADR-0057 R7, R8). */
@@ -728,9 +751,9 @@ const PLANNER_EXECUTES = { readOnlyHint: false };
  * one, and records it. The API planner offers the same tools as its own.
  */
 export const PLANNER_EXECUTION_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
-  tool('run_plan', 'Start the whole plan, as the user\'s Execute plan does, or make the tasks already running one scheduled run, so their dependents start. What failed stays failed, and blocks what depends on it: retry_task gives it a new attempt. Only a plan the user has approved, and in Guarded the user is asked first; with autorun on in Full nobody is asked, on a first plan too.',
+  tool('run_plan', 'Start the whole plan, as the user\'s own run of it does, or make the tasks already running one scheduled run, so their dependents start. What failed stays failed, and blocks what depends on it: retry_task gives it a new attempt. Only a plan the user has approved, and in Guarded the user is asked first; with autorun on in Full nobody is asked, on a first plan too.',
     runPlanInput, (h) => h.runPlan?.bind(h), PLANNER_EXECUTES),
-  tool('run_task', 'Start one task now. Refused, with the reason, for a task whose dependencies have not finished, one waiting for Merge all, or one the user has not approved; in Guarded the user is asked first, and with autorun on in Full nobody is. Nothing starts after it on its own: run_plan is what starts the rest. A task an edit_plan call of this reply added is in the plan already: name it by the id or handle that call answered with, or its title.',
+  tool('run_task', 'Start one task now. Refused, with the reason, for a task whose dependencies have not finished, one waiting at its merge gate, or one the user has not approved; in Guarded the user is asked first, and with autorun on in Full nobody is. Nothing starts after it on its own: run_plan is what starts the rest. A task an edit_plan call of this reply added is in the plan already: name it by the id or handle that call answered with, or its title.',
     oneTaskInput, (h) => h.runTask?.bind(h), PLANNER_EXECUTES),
   tool('stop_task', 'Stop one running task: it goes back to not started and stays held, through a run_plan too, until it is retried or force started, and its open approvals are denied.',
     oneTaskInput, (h) => h.stopTask?.bind(h), PLANNER_EXECUTES),
@@ -744,13 +767,21 @@ export const PLANNER_EXECUTION_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
     messageTaskInput, (h) => h.messageTask?.bind(h), PLANNER_EXECUTES),
   tool('answer_approval', 'Answer a request a task\'s runner is waiting on: deny it with a note, or escalate it to the user. It never allows. It does not cover a checkpoint: that is answer_checkpoint.',
     answerApprovalInput, (h) => h.answerApproval?.bind(h), PLANNER_EXECUTES),
-  tool('answer_checkpoint', 'Answer the checkpoint a task\'s runner waits at, as the user does from its card: approve it and the task goes on, or reject it with a reason the runner acts on. Only the supervisor at Act may, in a wake-up turn; in the user\'s own turn they answer it from the task\'s checkpoint card, so tell them what it asks. A checkpoint that asks for the user\'s judgement on an irreversible or outward effect is not yours to approve: leave it for the user and say why. A message does not answer a checkpoint.',
+  tool('answer_checkpoint', 'Answer the checkpoint a task\'s runner waits at, as the user does: approve it and the task goes on, or reject it with a reason the runner acts on. Only the supervisor at Act may, in a wake-up turn; in the user\'s own turn they answer it themselves, so tell them what it asks. A checkpoint that asks for the user\'s judgement on an irreversible or outward effect is not yours to approve: leave it for the user and say why. A message does not answer a checkpoint.',
     answerCheckpointInput, (h) => h.answerCheckpoint?.bind(h), PLANNER_EXECUTES),
-  tool('merge_all', 'Merge the run\'s landed work into the user\'s branch, as their Merge all does, opening the merge gates that wait on it. Only the supervisor at Act may, in a wake-up turn; otherwise the user presses Merge all.',
+  tool('merge_all', 'Merge the run\'s landed work into the user\'s branch, as their own merge does, opening the merge gates that wait on it. Only the supervisor at Act may, in a wake-up turn; otherwise the user merges, or automatic merging does.',
     runPlanInput, (h) => h.mergeAll?.bind(h), PLANNER_EXECUTES),
-  tool('run_script', 'Perform an exact effect yourself — a push, a tag, one setting on a cloud resource — as a script task: added to the plan and started at once, at the workspace root, with no model. Returns its verdict and the end of its output, or after a minute that it is still running; its result then reaches you in a run update when it ends. The user consents first: in Guarded, or in Full without autorun, they are asked on the approval card, shown the commands as written, and a denial leaves the task in the plan, not approved. For an effect that needs judgment, add an ops task instead; a change to repository files is a change task.',
+  tool('run_script', 'Perform an exact effect yourself — a push, a tag, one setting on a cloud resource — as a script task: added to the plan and started at once, at the workspace root, with no model. Returns its verdict and the end of its output, or after a minute that it is still running; its result then reaches you in a run update when it ends. The user consents first: in Guarded, or in Full without autorun, they are asked to approve it, shown the commands as written, and a denial leaves the task in the plan, not approved. For an effect that needs judgment, add an ops task instead; a change to repository files is a change task.',
     runScriptInput, (h) => h.runScript?.bind(h), PLANNER_EXECUTES),
 ];
+
+/**
+ * The planner's decision record (ADR-0067). Named, as `post` is, so an API
+ * planner lists it beside its reads: it writes only Ordewell's plan.
+ */
+export const PLANNER_RECORD = tool<PlannerToolHandler, typeof recordInput>('record',
+  'Add to the decision record, which outlives every compaction: a decision with its why, a constraint quoted verbatim from the user, a rejected option with its why, an open question. Record each as it is made; supersede an entry by its id once it no longer stands.',
+  recordInput, (h) => h.record?.bind(h), PLANNER_READ_ONLY);
 
 export const PLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
   tool('list_runners', 'List the runners enabled right now, and whether each takes a read-only task. Call it just before submit_plan.',
@@ -767,6 +798,7 @@ export const PLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
     taskOutputInput, (h) => h.taskOutput?.bind(h), PLANNER_READ_ONLY),
   tool('task_diff', 'Read what a task changed since it started: file stats with repository paths, or a single file patch with path and repo. Paged by since/nextOffset. Shared runs without recorded changes report not available.',
     taskDiffInput, (h) => h.taskDiff?.bind(h), PLANNER_READ_ONLY),
+  PLANNER_RECORD,
   tool('run_command', `Run a shell command for research: git, gh, az, kubectl, the project's own tooling, anything you need to look at. Read-only commands run at once; others ask the user, once per command family; commands that write files never change anything. ${SEALED_RUNS} Use it instead of a shell of your own.`,
     runCommandInput, (h) => h.runCommand?.bind(h), PLANNER_READ_ONLY),
   // Fallbacks (ADR-0027): a runner's own fetch or search, where it has one, is
@@ -780,6 +812,16 @@ export const PLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
     loadSkillInput, (h) => h.loadSkill?.bind(h), PLANNER_READ_ONLY),
   ...PLANNER_EXECUTION_TOOLS,
 ];
+
+/**
+ * Ordewell's research agent for a harness planner that has no agents of its
+ * own (ADR-0066): one stateless agent per call, on the model the workspace
+ * names for it, that reads the workspace and nothing else, and answers with
+ * its digest when it ends. Read-only by the hint: it changes nothing.
+ */
+export const PLANNER_RESEARCH_AGENT = tool<PlannerToolHandler, typeof spawnResearchAgentInput>('spawn_research_agent',
+  'Launch a stateless read-only research agent that explores the workspace with its own read tools (read, glob, grep, list) and returns its digest as this call\'s result, within your turn. Use it for orientation: a subsystem to map, a question that means reading across several files. To explore several independent areas, call it several times in one reply. The agent sees nothing of this conversation, so its prompt must be self-contained: the question, the paths or symbols to start from, and what the digest must report back (the conclusion and file:line references, no pasted file bodies). It has no shell and no web: run commands and read pages yourself. Do not use it to read one known file.',
+  spawnResearchAgentInput, (h) => h.spawnResearchAgent?.bind(h), PLANNER_READ_ONLY);
 
 /** A task as a planner that may delegate writes it: the same list, and `type` takes one more value (ADR-0055 D1). */
 const delegatingPlanTask = planTask.extend({
@@ -809,7 +851,9 @@ const delegatingAnswerCheckpointInput = answerCheckpointInput.extend({
  * a byte (ADR-0055 D21). A subplanner ends and asks with the tools a runner
  * does (D4), read-only by the hint since they change no file of the workspace.
  */
-export function plannerToolSet({ delegates, subplanner }: { delegates?: boolean; subplanner?: boolean } = {}): readonly McpTool<PlannerToolHandler>[] {
+export function plannerToolSet({ delegates, subplanner, research }: { delegates?: boolean; subplanner?: boolean; research?: boolean } = {}): readonly McpTool<PlannerToolHandler>[] {
+  // ADR-0066: the research agent comes last, so a list with it starts as the list without it does, byte for byte.
+  if (research) return [...plannerToolSet({ delegates, subplanner }), PLANNER_RESEARCH_AGENT];
   if (!delegates && !subplanner) return PLANNER_TOOLS;
   const tools = delegates ? PLANNER_TOOLS.map((one) => {
     if (one.name === 'submit_plan') return tool<PlannerToolHandler, typeof delegatingSubmitPlanInput>('submit_plan', one.description, delegatingSubmitPlanInput, (h) => h.submitPlan?.bind(h) as Run<z.infer<typeof delegatingSubmitPlanInput>> | undefined, PLANNER_READ_ONLY);

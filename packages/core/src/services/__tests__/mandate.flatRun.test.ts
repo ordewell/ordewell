@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { createTask, type Task } from '../../models/Task';
 import type { ExecutionActor, ExecutionCommandName, SupervisorLevel } from '../../models/Execution';
 import { ExecutionCommands, type Consent, type ExecutionHost } from '../ExecutionCommands';
+import { SURFACE_CONTROLS } from '../surfaceControls';
 
 /**
  * What "a flat run does not change" means (ADR-0056): for each level, each
@@ -17,26 +18,27 @@ const refuse = (reason: string): Consent => ({ kind: 'refuse', reason });
 
 const WATCH = refuse('You are the supervisor at Watch: you read and suggest, and cannot run, stop, retry, skip or message tasks, run scripts, answer approvals or merge. Suggest it to the user instead; their reply is an ordinary message, and you can do it then.');
 const OFF = refuse('The supervisor is off for this run, so it cannot act. Suggest it to the user instead.');
-const MERGE_IS_USERS = refuse('Merge all is the user\'s: they are in this conversation, and press Merge all themselves. Tell them the work is ready to merge.');
-const SKIP_IS_USERS = refuse('Skipping a task is the user\'s in their own turn: they are in this conversation, and skip it themselves. Suggest it, with why; only the supervisor at Act skips, in a wake-up turn.');
-const CHECKPOINT_CARD = 'The user answers it from the task\'s checkpoint card (Approve or Reject): tell them what the runner asks and what you would answer, with why.';
+// Written for a terminal UI user, whose controls are commands and keys (ADR-0030).
+const MERGE_IS_USERS = refuse('Merging the run\'s landed work is the user\'s: they are in this conversation, and merge it themselves (/merge). Tell them the work is ready to merge.');
+const SKIP_IS_USERS = refuse('Skipping a task is the user\'s in their own turn: they are in this conversation, and skip it themselves (/skip <id>). Suggest it, with why; only the supervisor at Act skips, in a wake-up turn.');
+const CHECKPOINT_CARD = 'The user answers it themselves (/checkpoint <id> approve, or /checkpoint <id> reject <reason>): tell them what the runner asks and what you would answer, with why.';
 const CHECKPOINT_IS_USERS = refuse(`A checkpoint is the user's to answer in their own turn: they are in this conversation. ${CHECKPOINT_CARD} Only the supervisor at Act answers one, in a wake-up turn.`);
 const CHECKPOINT_AT_WATCH = refuse(`You are the supervisor at Watch: you read and suggest, and cannot answer a checkpoint. ${CHECKPOINT_CARD}`);
 const CHECKPOINT_AT_OFF = refuse(`The supervisor is off for this run, so it cannot answer a checkpoint. ${CHECKPOINT_CARD}`);
 
-const usersOwn = (control: string) => refuse(`${control} is the user's own control: they are in this conversation, and press it themselves. Suggest it to them, with why.`);
+const usersOwn = (action: string, control: string) => refuse(`Only the user may ${action}: they are in this conversation, and do it themselves (${control}). Suggest it to them, with why.`);
 
 /** Refused to anyone but the user, whoever asks. */
 const USERS_CONTROLS: Partial<Record<ExecutionCommandName, Consent>> = {
-  force_start: usersOwn('Force start'),
-  mark_complete: refuse('Mark complete is the user\'s alone: it lands the work as if someone had checked it, and only they vouch for work. If you think it is done, tell them why; they can mark it complete.'),
-  mark_not_done: usersOwn('Mark not done'),
-  revert_task: usersOwn('Reverting a task'),
-  interrupt_task: usersOwn('Interrupt'),
-  force_send_queued: usersOwn('Force send'),
-  remove_queued: usersOwn('Taking back a queued message'),
-  cancel_resume: usersOwn('Cancelling a scheduled resume'),
-  approve_review: usersOwn('Approving the review'),
+  force_start: usersOwn('force start a task', '/force-start <id>'),
+  mark_complete: refuse('Marking a task complete is the user\'s alone: it lands the work as if someone had checked it, and only they vouch for work. If you think it is done, tell them why; they can mark it complete (/complete <id>).'),
+  mark_not_done: usersOwn('mark a task not done', '/uncomplete <id>'),
+  revert_task: usersOwn('revert a task', '/revert <id>'),
+  interrupt_task: usersOwn('interrupt a running task', 'ctrl-x in the task\'s view (/open <id>)'),
+  force_send_queued: usersOwn('force send a queued message', 'ctrl-s on the queued message'),
+  remove_queued: usersOwn('take back a queued message', 'ctrl-r on the queued message in the task\'s view (/open <id>)'),
+  cancel_resume: usersOwn('cancel a scheduled resume', 'the c key on the task in the plan'),
+  approve_review: usersOwn('approve the review', '/approve'),
 };
 
 const SHARED: readonly ExecutionCommandName[] = ['run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'message_task', 'answer_approval', 'merge_all', 'skip_task', 'answer_checkpoint', 'run_script'];
@@ -61,7 +63,7 @@ const TABLE: { name: string; actor: ExecutionActor; full: Record<string, Consent
 const COMMANDS: readonly ExecutionCommandName[] = [...SHARED, ...Object.keys(USERS_CONTROLS) as ExecutionCommandName[]];
 
 function seam(settings: { autonomous: boolean; autorun: boolean }, covered = false): ExecutionCommands {
-  const host = { autonomous: () => settings.autonomous, autorun: () => settings.autorun } as unknown as ExecutionHost;
+  const host = { autonomous: () => settings.autonomous, autorun: () => settings.autorun, userControls: () => SURFACE_CONTROLS.tui, mergesByThemselves: () => false } as unknown as ExecutionHost;
   return new ExecutionCommands({ host, consent: { request: vi.fn() }, effects: () => (covered ? 'git push origin *' : null) });
 }
 

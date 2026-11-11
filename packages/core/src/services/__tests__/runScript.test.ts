@@ -9,6 +9,7 @@ import { FakeWorktreeIsolation } from '../../testing';
 import type { TaskOp } from '../TaskOps';
 import { fakeConfig, makeSession, taskOf, testWorkspace } from './sessionTestKit';
 import { changeSettings, ctx, NOW, plan, prose, recordingRunner, settled, supervised, task, until, waitForInput, wokenUp, type Env, type Options } from './supervisorTestKit';
+import { SURFACE_CONTROLS } from '../surfaceControls';
 
 /**
  * `run_script` (ADR-0035): the planner's own exact effect, added to the plan
@@ -458,7 +459,7 @@ describe('run_script behind a closed merge gate', () => {
 
     expect(outcome).toEqual({
       ok: true,
-      message: 'Added script task #2 "Push main", approved to run, but it waits at its merge gate: the work of task #1 "Task t1" is not merged into the user\'s branch yet. It starts once the user merges it (Merge all), and its result reaches you in a run update when it ends. Tell the user.',
+      message: `Added script task #2 "Push main", approved to run, but it waits at its merge gate: the work of task #1 "Task t1" is not merged into the user's branch yet. It starts once the user merges it (${SURFACE_CONTROLS.unknown.merge}), and its result reaches you in a run update when it ends. Tell the user.`,
     });
     const script = flattenTasks(session.planTasks).find((t) => t.type === 'script')!;
     expect(session.isApproved(script.id)).toBe(true);

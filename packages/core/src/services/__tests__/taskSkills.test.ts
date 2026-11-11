@@ -4,7 +4,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { execFileSync } from 'child_process';
 import { createTask, keepExecutionState, skillNames } from '../../models/Task';
-import { createSkillsService } from '../SkillsService';
+import { BUILTIN_SKILL_NAMES, createSkillsService, SKILL_WORD_CAP, skillTooLarge, skillWords } from '../SkillsService';
 import { checkOpSkills, checkPlanSkills, checkTaskSkillsEdit, plannedSkillLookup, resolveTaskSkills, TaskSkillsError } from '../taskSkills';
 import { parsePlanJson } from '../PlanValidator';
 import { applyTaskOps, opRefusalText } from '../TaskOps';
@@ -454,5 +454,41 @@ describe('a name dropped as no skill\'s', () => {
     expect((await checkTaskSkillsEdit({ id: 'a', title: 'A' }, ['Pr.Review'], lookup)).warnings).toEqual([
       'Task "A": "Pr.Review" is not a valid skill name (lowercase letters, digits, "-" and "_", starting with a letter or digit), so it was not attached.',
     ]);
+  });
+});
+
+describe('the skill size cap', () => {
+  const words = (n: number) => Array.from({ length: n }, () => 'word').join(' ');
+
+  it('counts the words of the body that reaches the runner, not the frontmatter', () => {
+    writeSkill(skillsOf(workspace), 'small', 'task', 'one two\nthree\n');
+
+    expect(skillWords(createSkillsService(workspace).findSkill('small')!)).toBe(3);
+  });
+
+  it('refuses at plan check a task skill over the cap, naming its size and the cap, but not one at it', async () => {
+    writeSkill(skillsOf(workspace), 'fits', 'task', words(SKILL_WORD_CAP));
+    writeSkill(skillsOf(workspace), 'huge', 'task', words(SKILL_WORD_CAP + 1));
+    const lookup = createSkillsService(workspace);
+    const mk = (skill: string) => createTask({ title: 'T', description: 'd', skills: [skill] });
+
+    expect((await checkPlanSkills([mk('fits')], lookup)).errors).toEqual([]);
+    const { errors } = await checkPlanSkills([mk('huge')], lookup);
+    expect(errors).toHaveLength(1);
+    expect(errors[0].message).toContain(`"huge" is ${SKILL_WORD_CAP + 1} words, over the ${SKILL_WORD_CAP}-word cap`);
+  });
+
+  it('refuses it at spawn too, and never truncates', () => {
+    writeSkill(skillsOf(worktree), 'huge', 'task', words(SKILL_WORD_CAP + 1));
+
+    expect(() => resolveTaskSkills({ title: 'Ship', skills: ['huge'] }, createSkillsService(worktree))).toThrow(
+      `"huge" is ${SKILL_WORD_CAP + 1} words, over the ${SKILL_WORD_CAP}-word cap`,
+    );
+  });
+
+  it('ships every built-in under the cap', () => {
+    h.builtinDir = path.resolve(__dirname, '..', '..', '..', 'skills');
+    const skills = createSkillsService(workspace);
+    for (const name of BUILTIN_SKILL_NAMES) expect(skillTooLarge(skills.findSkill(name)!), name).toBeUndefined();
   });
 });

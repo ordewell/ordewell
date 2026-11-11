@@ -67,6 +67,8 @@ const REFUSED: Readonly<Record<string, string>> = {
   switch_mode: 'This session stays in the mode it was started in.',
 };
 
+export const DELEGATION_REFUSED = 'No other agent may be started here: its work would run outside this session\'s rules. Do the work yourself, or plan a research task for it.';
+
 /**
  * The answer to a request on a restricted start, or undefined to hold it for
  * the planner's envelope, which `CliAgentAiService` applies to every held
@@ -74,13 +76,19 @@ const REFUSED: Readonly<Record<string, string>> = {
  * everything is answered here (ADR-0046). A request may ask only for the path
  * its call needs, as a read, where the turn reported the call as a write or a
  * command: Copilot asks so for a file it would create, so the call is refused
- * for what either says it does.
+ * for what either says it does. A call of the agent's own delegation tool is
+ * refused by its name, before its kind is read: an agent may call a spawn
+ * `think` or `read` (ADR-0026).
  */
 export function decideRestricted(
   { request, report }: AcpAskedCall,
   ask: PlannerAsk,
   start: { kind: 'planner' } | Pick<TaskStartOptions, 'kind' | 'cwd' | 'workspaceRoot'>,
+  profile: Pick<AcpProfile, 'delegation'>,
 ): ApprovalDecision | undefined {
+  const delegation = profile.delegation;
+  const tool = delegation?.toolOf(report ? { request, report } : { request });
+  if (tool && delegation?.tools.includes(tool)) return deny(DELEGATION_REFUSED);
   const refused = [request.kind, report?.kind].map((kind) => (kind ? REFUSED[kind] : undefined)).find((note) => note !== undefined);
   if (refused) return deny(refused);
   if (request.kind === 'think') return { decision: 'allow' };

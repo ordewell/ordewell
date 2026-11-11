@@ -27,14 +27,21 @@
  *   exitAfterTurn end the process after answering the prompt, so a task that
  *                 never reported reads as failed verification
  *   crash         exit non-zero before completing
+ *   text          the agent's closing message, said in place of the default
+ *                 (a planner's summary, say)
+ *   turns         cues for this session's later prompts, one per prompt that
+ *                 carries no cue of its own, in order: a planner's next turns
  *
  * A `session/cancel` answers the open prompt with stopReason `cancelled`, and
  * the work it began stops with it. With FAKE_ACP_LOG set, every prompt, tool
- * call and reply is appended to that file as a line of JSON.
+ * call and reply is appended to that file as a line of JSON. With
+ * FAKE_ACP_NO_RESUME set, it offers neither session/resume nor session/load, as
+ * an agent that cannot take a saved session up again.
  *
- * The planner half is here for a driver that starts copilot-cli as the
- * planner. The pipeline plans through its API planner, so it exercises this
- * agent as a task runner only.
+ * The planner half is for a driver or test that starts copilot-cli as the
+ * planner: core's decision record restart test does (ADR-0067). The pipeline
+ * plans through its API planner, so it exercises this agent as a task runner
+ * only.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -44,6 +51,7 @@ import { randomUUID } from 'node:crypto';
 const CUE = /<fake-acp>([\s\S]*?)<\/fake-acp>/;
 const MCP_PROTOCOL_VERSION = '2025-06-18';
 const cwd = process.cwd();
+const resumable = !process.env.FAKE_ACP_NO_RESUME;
 
 const sessions = new Map();
 const agentRequests = new Map();
@@ -273,7 +281,9 @@ async function completeTask(session, cue, signal) {
 }
 
 async function runTurn(session, text, signal) {
-  const cue = readCue(text);
+  let cue = readCue(text);
+  if (Array.isArray(cue.turns)) session.turns = cue.turns;
+  else if (!CUE.test(text) && session.turns?.length) cue = session.turns.shift() ?? {};
   logged(session, { prompt: text, cue });
   // A nudge after a turn that reported nothing carries no cue of its own; the
   // task's first cue still decides whether this agent ever reports.
@@ -322,7 +332,7 @@ async function runTurn(session, text, signal) {
 
   if (!planner && !session.noComplete && !completed && !attempted) completed = await completeTask(session, cue, signal);
   if (signal.aborted) return { stopReason: 'cancelled', exitAfterTurn: false };
-  message(session, completed ? 'All done.' : 'The turn is done.');
+  message(session, typeof cue.text === 'string' ? cue.text : completed ? 'All done.' : 'The turn is done.');
   return { stopReason: 'end_turn', exitAfterTurn: session.exitAfterTurn === true };
 }
 
@@ -422,10 +432,10 @@ async function handleRequest(id, method, params) {
         protocolVersion: 1,
         agentInfo: { name: 'fake-acp', title: 'Fake ACP Agent', version: '1.0.105' },
         agentCapabilities: {
-          loadSession: true,
+          ...(resumable ? { loadSession: true } : {}),
           promptCapabilities: { image: false, audio: false, embeddedContext: false },
           mcpCapabilities: { http: true, sse: false },
-          sessionCapabilities: { resume: {}, close: {} },
+          sessionCapabilities: resumable ? { resume: {}, close: {} } : { close: {} },
         },
       });
       return;

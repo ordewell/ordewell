@@ -239,7 +239,7 @@ const ROOT_OWNERS = [
   [/^\.gitattributes$/, () => ({ windows: allFull(WINDOWS_SUITES), checks: ['harness'] })],
 
   // bench/ (offline harnesses): each path owes what reads it.
-  [/^bench\/.*\.md$|^bench\/(live|scale)\/\.gitignore$/, owes()],
+  [/^bench\/.*\.md$|^bench\/(live|scale|planner-eval)\/\.gitignore$/, owes()],
   // The fake Claude Code: core's and cli's tests spawn it, as do the VS Code
   // integration test, the desktop e2e and tour, the container suites and the
   // pipeline and scale harnesses.
@@ -252,6 +252,12 @@ const ROOT_OWNERS = [
     const suites = allFull(['packages/core']);
     return { suites, windows: onWindows(suites), checks: ['bench'] };
   }],
+  // The fake OpenCode 2.x serve: core's tests of the login research agent
+  // spawn it (ADR-0066). No container mounts it.
+  [/^bench\/pipeline\/fake-opencode\/fake-opencode-v2\.mjs$/, () => {
+    const suites = allFull(['packages/core']);
+    return { suites, windows: onWindows(suites) };
+  }],
   // Mounted into the containers by dockerLease.e2e.test.ts, which only the engine runs.
   [/^bench\/pipeline\/fake-(opencode|provider)\//, owes('engine')],
   [/^bench\/pipeline\/(drive-pipeline|pipeline\.test)\.mjs$/, owes('bench')],
@@ -262,9 +268,15 @@ const ROOT_OWNERS = [
   [/^bench\/live\/drive-binary\.mjs$/, owes('binary')],
   // Run by hand against a dev build; no check runs them.
   [/^bench\/live\/(webview-[^/]+|host-driver|load-playwright|screenshot-header-tmp)\.mjs$/, owes()],
+  // Run by hand against a real agent and a real model (ADR-0026, ADR-0060); no check runs them.
+  [/^bench\/live\/(opencode-research-agent|opencode-login-research-agent|acp-subagent)-probe\.mjs$/, owes()],
+  // Its helpers and their offline test, which runs in bench.
+  [/^bench\/live\/acp-subagent-probe(-lib|\.test)\.mjs$/, owes('bench')],
   // verdict.mjs judges the container suites' report; its test runs in bench.
   [/^bench\/containers\//, owes('engine', 'bench')],
   [/^bench\/lab\//, owes('bench')],
+  // Run by hand against real models; only its offline tests run, in bench.
+  [/^bench\/planner-eval\//, owes('bench')],
   // Its tests run in bench, and root lint reads its entry.ts.
   [/^bench\/scale\//, owes('bench', 'lint')],
 

@@ -10,9 +10,9 @@ export type CheckpointWithdrawnListener = (taskId: string) => void;
 export type IdleListener = (taskId: string, idleSince: string | null) => void;
 
 /**
- * No output for this long marks a running task idle (advisory, UI-only). Long
- * model turns and slow builds routinely go quiet for minutes, so a shorter
- * window flagged healthy tasks as Stalled. A run that ends with a build plus
+ * No output for this long, with no tool call in flight, marks a running task
+ * idle (advisory, UI-only). Long model turns and slow builds routinely go
+ * quiet for minutes, so a shorter window flagged healthy tasks as Stalled. A run that ends with a build plus
  * the full test suite can print nothing for more than 5 minutes, which flagged
  * healthy tasks quiet and woke the supervisor for nothing, hence 10.
  */
@@ -53,6 +53,19 @@ export class VerdictEngine {
    * user, so it is not idle either.
    */
   private openApprovals = new Map<string, Set<string>>();
+  /**
+   * Tool calls per structured task with no result yet. A runner waiting on a
+   * command it started (a long test suite, a bench run) prints nothing until it
+   * returns; it is waiting, not stalled, so it is not idle either. A runner with
+   * no call in flight and no output still is.
+   */
+  private openCalls = new Map<string, Set<string>>();
+  /**
+   * How often the current attempt has been flagged idle. Each flag doubles the
+   * silence the next one needs: a long review that prints a line now and then
+   * was flagged again after every line, and each flag woke the planner.
+   */
+  private idleFlags = new Map<string, number>();
 
   onVerdict(listener: VerdictListener): void {
     this.listeners.push(listener);
@@ -92,7 +105,7 @@ export class VerdictEngine {
 
   /** Restart the silence timer on fresh output; broadcasts the null transition if it was idle. */
   private touchIdle(taskId: string, gen: number): void {
-    if (this.idlePaused.has(taskId) || this.openApprovals.get(taskId)?.size) return;
+    if (this.idlePaused.has(taskId) || this.openApprovals.get(taskId)?.size || this.openCalls.get(taskId)?.size) return;
     const existing = this.idleTimers.get(taskId);
     if (existing) clearTimeout(existing);
     if (this.idleSince.get(taskId)) {
@@ -102,9 +115,10 @@ export class VerdictEngine {
     this.idleTimers.set(taskId, setTimeout(() => {
       if (this.generations.get(taskId) !== gen) return;
       const now = new Date().toISOString();
+      this.idleFlags.set(taskId, (this.idleFlags.get(taskId) ?? 0) + 1);
       this.idleSince.set(taskId, now);
       for (const l of this.idleListeners) l(taskId, now);
-    }, IDLE_TIMEOUT_MS));
+    }, IDLE_TIMEOUT_MS * 2 ** (this.idleFlags.get(taskId) ?? 0)));
   }
 
   /** Tear down idle tracking for a task; broadcasts the null transition if it was idle. */
@@ -146,6 +160,8 @@ export class VerdictEngine {
     const gen = this.bumpGeneration(taskId);
     this.idlePaused.delete(taskId);
     this.openApprovals.delete(taskId);
+    this.openCalls.delete(taskId);
+    this.idleFlags.delete(taskId);
     this.touchIdle(taskId, gen);
   }
 
@@ -166,6 +182,8 @@ export class VerdictEngine {
     // on is not this one's to wait on.
     this.idlePaused.delete(task.id);
     this.openApprovals.delete(task.id);
+    this.openCalls.delete(task.id);
+    this.idleFlags.delete(task.id);
     this.touchIdle(task.id, gen);
     session.onOutput(() => {
       if (this.generations.get(task.id) === gen) this.touchIdle(task.id, gen);
@@ -173,6 +191,8 @@ export class VerdictEngine {
     this.sessions.set(task.id, session);
     session.onTurnEnd(() => {
       if (this.generations.get(task.id) !== gen) return;
+      // A call whose result never came is not in flight past its turn.
+      if (this.openCalls.delete(task.id)) this.touchIdle(task.id, gen);
       // The call lives inside the turn that made it. A runner cut short by an
       // interrupt does not always cancel it, and left open it would refuse the next one.
       this.callWentAway(task.id, 'the turn it was asked in has ended.');
@@ -189,8 +209,10 @@ export class VerdictEngine {
       }
       // Read mid-turn, a message voids what the runner reported before it just as a new turn does (ADR-0023).
       else if (event.type === 'message_delivered') this.supersede(task.id);
-      else if (event.type === 'permission_request' && !event.decided) this.approvalOpened(task.id, event.id);
-      else if (event.type === 'permission_decided' || event.type === 'permission_withdrawn') this.approvalClosed(task.id, event.id, gen);
+      else if (event.type === 'permission_request' && !event.decided) this.waitOpened(this.openApprovals, task.id, event.id);
+      else if (event.type === 'permission_decided' || event.type === 'permission_withdrawn') this.waitClosed(this.openApprovals, task.id, event.id, gen);
+      else if (event.type === 'tool_call') this.waitOpened(this.openCalls, task.id, event.id);
+      else if (event.type === 'tool_result') this.waitClosed(this.openCalls, task.id, event.id, gen);
     });
     session.onTaskComplete((report, refuted) => this.signalComplete(task.id, gen, report, refuted));
     session.onScriptExit((exit) => this.signalScriptExit(task.id, gen, exit));
@@ -291,17 +313,18 @@ export class VerdictEngine {
     this.toolCheckpoints.get(taskId)?.({ kind: 'withdrawn', why: 'this attempt has ended.' });
   }
 
-  private approvalOpened(taskId: string, approvalId: string): void {
-    const open = this.openApprovals.get(taskId) ?? new Set<string>();
-    open.add(approvalId);
-    this.openApprovals.set(taskId, open);
+  /** Something the task waits on (an approval, a call in flight) opened: its silence is expected until the last one closes. */
+  private waitOpened(waits: Map<string, Set<string>>, taskId: string, id: string): void {
+    const open = waits.get(taskId) ?? new Set<string>();
+    open.add(id);
+    waits.set(taskId, open);
     this.clearIdle(taskId);
   }
 
-  private approvalClosed(taskId: string, approvalId: string, gen: number): void {
-    const open = this.openApprovals.get(taskId);
-    if (!open?.delete(approvalId) || open.size) return;
-    this.openApprovals.delete(taskId);
+  private waitClosed(waits: Map<string, Set<string>>, taskId: string, id: string, gen: number): void {
+    const open = waits.get(taskId);
+    if (!open?.delete(id) || open.size) return;
+    waits.delete(taskId);
     this.touchIdle(taskId, gen);
   }
 
@@ -318,6 +341,8 @@ export class VerdictEngine {
     this.checkpointQuestions.delete(taskId);
     this.idlePaused.delete(taskId);
     this.openApprovals.delete(taskId);
+    this.openCalls.delete(taskId);
+    this.idleFlags.delete(taskId);
     this.clearIdle(taskId);
   }
 
@@ -361,6 +386,8 @@ export class VerdictEngine {
     this.idleSince.clear();
     this.idlePaused.clear();
     this.openApprovals.clear();
+    this.openCalls.clear();
+    this.idleFlags.clear();
     this.generations.clear();
   }
 }

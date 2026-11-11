@@ -21,6 +21,18 @@ describe('the tasks a task may read (ADR-0047)', () => {
     expect([...readableTaskIds(plan, 'fix')].sort()).toEqual(['build', 'check', 'fix', 'setup']);
   });
 
+  it('lets the tasks of one loop read each other: a body task its fellow body tasks too, whatever rounds they ran', () => {
+    const loop = [
+      createTask({ id: 'review', order: 1, loop: { body: ['fix', 'tests'], maxRounds: 3 } }),
+      createTask({ id: 'fix', order: 2, dependencies: ['review'] }),
+      createTask({ id: 'tests', order: 3 }),
+      createTask({ id: 'other', order: 4 }),
+    ];
+    expect([...readableTaskIds(loop, 'fix')].sort()).toEqual(['fix', 'review', 'tests']);
+    expect([...readableTaskIds(loop, 'tests')].sort()).toEqual(['fix', 'review', 'tests']);
+    expect([...readableTaskIds(loop, 'review')].sort()).toEqual(['fix', 'review', 'tests']);
+  });
+
   it('leaves out a task the graph never gave it, a subtask\'s own dependencies counted', () => {
     expect([...readableTaskIds(plan, 'docs')]).toEqual(['docs']);
     expect([...readableTaskIds(plan, 'build.1')].sort()).toEqual(['build.1', 'setup']);

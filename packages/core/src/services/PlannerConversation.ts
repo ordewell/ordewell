@@ -7,8 +7,9 @@ import { readOnlyMode, readOnlyRunners } from './ModeResolver';
 import type { PlannerTurnOutcome, SessionBroadcaster, SessionNotice } from './SessionMessage';
 import { TurnStream } from './replyStream';
 import type { ForkedDialogue } from './conversationFork';
-import { compactionCut, condensedNotice, contextFloor, extractSummary, modelContext, summaryRequest } from './conversationSummary';
-import type { ContextCheckpoint, ConversationMessage, LegacyPlanState, PlannerCompactionOutcome, PlannerContextPause, ReplyRun, ResearchLogEntry, ResearchProgress, RunnerId, SkillLoad, Task } from '../models/Task';
+import { compactionCut, condensedNotice, contextFloor, extractSummary, modelContext, seededRecord, summaryRequest } from './conversationSummary';
+import { addToRecord, recordBefore, recordBlock, type DecisionRecordInput } from './decisionRecord';
+import type { ContextCheckpoint, ConversationMessage, DecisionRecordEntry, LegacyPlanState, PlannerCompactionOutcome, PlannerContextPause, ReplyRun, ResearchLogEntry, ResearchProgress, RunnerId, SkillLoad, Task } from '../models/Task';
 import { flattenTasksWithParents, isUserMessage } from '../models/Task';
 import type { ExecutionActor, ExecutionRecord } from '../models/Execution';
 import { plannerMessage, plannerTranscript, skillLoadLabel, type SkillInvocation } from './skillInvocation';
@@ -26,6 +27,7 @@ import type { StartWait, StartWaitKind } from './readiness';
 import { SubagentRuns } from './SubagentRuns';
 import type { ConversationCompactionHost, LandedHistory } from './budgetedChat';
 import { ContextSummaryError } from './contextSummary';
+import { redactSummaryText, type HeldValue } from '../utils/redactSecrets';
 import { PlannerContextExhaustedError } from './plannerContextBudget';
 import { boundedWakeUps } from './WakePolicy';
 
@@ -111,10 +113,14 @@ function spendRead(reads: ReadBudget, signature: string): 'refused' | 'answer' |
  */
 export class PlannerTurn {
   private readonly controller = new AbortController();
+  private readonly over = new AbortController();
   private dropped = false;
   private forced = false;
 
   get signal(): AbortSignal { return this.controller.signal; }
+
+  /** Aborts once the turn is over however it ended — stopped, abandoned or settled — so what it raised can be withdrawn. */
+  get ended(): AbortSignal { return this.over.signal; }
 
   /** The plan it was answering was dropped under it, so nothing it settles may land. */
   get abandoned(): boolean { return this.dropped; }
@@ -125,11 +131,17 @@ export class PlannerTurn {
   stop(by?: 'force_send'): void {
     if (by === 'force_send' && !this.controller.signal.aborted) this.forced = true;
     this.controller.abort();
+    this.over.abort();
   }
 
   abandon(): void {
     this.dropped = true;
     this.controller.abort();
+    this.over.abort();
+  }
+
+  end(): void {
+    this.over.abort();
   }
 }
 
@@ -287,6 +299,11 @@ export type ToolCommit =
   | { ok: true; passed: PassedChange; before: readonly Task[] }
   | { ok: false; errors: PlanChangeError[]; runners?: RunnerId[] };
 
+/** What a record tool call came to: the entries it added, or why none was. */
+export type RecordAnswer =
+  | { ok: true; added: DecisionRecordEntry[] }
+  | { ok: false; errors: string[] };
+
 interface SettledTurn {
   plan: LegacyPlanState;
   outcome: Exclude<PlannerTurnOutcome, 'stopped' | 'error'>;
@@ -314,6 +331,8 @@ export interface PlannerConversationHost {
   catalog(): TaskQueryCatalog;
   /** Whether autorun is on now (ADR-0030); the planner is told in the turn after it changes. */
   autorun(): boolean;
+  /** The SURFACE AND SETTINGS block as it stands now (ADR-0030); none for a planner with no user, which is told no controls. */
+  surfaceFacts?(): string | null;
   /** The enabled runners and allowlist as of now; the planner is told in the turn after either changes. */
   assignmentScope(): AssignmentScope;
   tasks(): readonly Task[];
@@ -364,6 +383,15 @@ export interface PlannerConversationHost {
   usageLimit(said: TurnFailure, answered: boolean): PlannerLimit;
   /** A turn ended with the planner paused on its context: arm the pause on the inputs it took, saved with the failure it records. */
   contextPaused(details: Pick<PlannerContextPause, 'model' | 'reason' | 'done' | 'doneTruncated'>): PlannerContextPause;
+}
+
+/** What the conversation is built with besides its host. */
+export interface PlannerConversationOptions {
+  /**
+   * The values Ordewell holds, read afresh at each checkpoint: a summary names
+   * a named one in its place and hides the rest (ADR-0061 P1).
+   */
+  heldSecrets?: () => Iterable<HeldValue>;
 }
 
 /**
@@ -604,20 +632,24 @@ export class PlannerConversation {
     landed: () => this.landedHistory(),
     checkpoint: (content, keptFrom, id) => this.commitAutoCheckpoint(content, keptFrom, id),
     planLines: () => this.planRows()?.rows.map(({ line }) => line) ?? null,
+    record: () => this.recordText(),
   };
 
-  constructor(private readonly host: PlannerConversationHost) {
+  constructor(private readonly host: PlannerConversationHost, private readonly options: PlannerConversationOptions = {}) {
     this.briefing = new PlannerBriefing({
       autorun: () => host.autorun(),
       scope: () => host.assignmentScope(),
       tasks: () => host.tasks(),
       plannerTools: () => host.aiService().plannerToolsAttached?.() ?? false,
       compactions: () => host.aiService().compactions?.() ?? 0,
+      surfaceFacts: () => host.surfaceFacts?.() ?? null,
     });
     this.blocks = new PromptBlocks({
       catalog: () => this.catalogBlock(),
       plan: () => this.planView(),
       compactions: () => host.aiService().compactions?.() ?? 0,
+      record: () => host.plan()?.decisionRecord ?? [],
+      seeded: () => seededRecord(this.transcript),
     });
   }
 
@@ -733,6 +765,7 @@ export class PlannerConversation {
       turn,
       release: () => {
         callerSignal?.removeEventListener('abort', relay);
+        turn.end();
         // An abandoned turn gave the slot up already, maybe to its successor.
         if (this.live !== turn) return;
         this.live = null;
@@ -740,6 +773,11 @@ export class PlannerConversation {
         this.host.turnReleased?.();
       },
     };
+  }
+
+  /** When the turn holding the conversation is over, for what the host raises during it: none is held when undefined. */
+  get liveTurnEnded(): AbortSignal | undefined {
+    return this.live?.ended;
   }
 
   /** The user turn being answered, for what the host raises during it — an approval the turn's research asks for. */
@@ -808,6 +846,39 @@ export class PlannerConversation {
     if (refusedAt) return { ok: false, errors: [{ field: 'tasks', message: refusedAt }] };
     if (!checked.ok) return { ok: false, errors: checked.errors, runners: checked.runners };
     return { ok: true, passed: checked, before };
+  }
+
+  /**
+   * Add to the decision record (ADR-0067) from a planner tool call in the open
+   * turn `turnId`: saved and shown now, whole or not at all, where the turn's
+   * inputs will land, so a rewind to before them drops it with them. Unlike a
+   * plan change it lands nothing of the turn: an entry is a note about the
+   * conversation, kept if the turn fails, and a constraint may quote the
+   * message the turn is answering.
+   */
+  recordFromTool(inputs: readonly DecisionRecordInput[], turnId: string | undefined): RecordAnswer {
+    const turn = this.toolTurn(turnId);
+    if (!turn) return { ok: false, errors: [PLANNER_TURN_ENDED] };
+    const transcript = this.transcript;
+    const held = turn.writes.entries.map(({ entry }) => entry);
+    const result = addToRecord(this.requirePlan().decisionRecord ?? [], inputs, {
+      at: Math.min(transcript.length, ...turn.writes.entries.map(({ at }) => at)),
+      timestamp: new Date().toISOString(),
+      userWords: [...transcript, ...held].filter(isUserMessage).map(({ content }) => content),
+      redact: (text) => this.redactSummary(text),
+    });
+    if (!result.ok) return result;
+    this.host.mutate(() => {
+      this.requirePlan().decisionRecord = result.record;
+      return true;
+    }, () => this.host.broadcastPlan());
+    this.blocks.recorded();
+    return { ok: true, added: result.added };
+  }
+
+  /** The record as a checkpoint restates it and a summary is written beside: null when nothing in it stands. */
+  private recordText(): string | null {
+    return recordBlock(this.host.plan()?.decisionRecord ?? []);
   }
 
   /** The turn a tool call made in `turnId` may still change the plan in: open, not stopped, and on the plan it answers. */
@@ -941,9 +1012,9 @@ export class PlannerConversation {
     this.host.onProgress({ type: 'compaction', compaction: { phase: 'started', ...compaction, at: new Date().toISOString() } });
     let outcome: PlannerCompactionOutcome = 'failed';
     try {
-      const summary = await this.summarize(turn.signal);
+      const summary = this.redactSummary(await this.summarize(turn.signal));
       if (this.host.plan() !== plan || compactionCut(this.transcript) !== cut) throw new ConversationEditError('The conversation changed while it was being condensed: nothing was condensed.');
-      this.commitCheckpoint(condensedNotice(summary), cut, 'manual', compaction.id);
+      this.commitCheckpoint(condensedNotice(summary, 'manual', this.recordText()), cut, 'manual', compaction.id);
       outcome = 'condensed';
       return { summary, keptMessages: modelContext(this.transcript).length - 1 };
     } catch (err) {
@@ -974,13 +1045,21 @@ export class PlannerConversation {
       throw new Error(`A compaction cannot cut the conversation at ${keptFrom}: that is behind its last summary or past an input not yet answered.`);
     }
     const timestamp = new Date().toISOString();
-    const entry: ConversationMessage = { role: 'assistant', content, timestamp, kind: 'compaction', checkpoint: { id, keptFrom, trigger } };
+    // What of the record its notice restated, which the next context is not told again (ADR-0067).
+    const record = this.host.plan()?.decisionRecord?.length ?? 0;
+    const checkpoint: ContextCheckpoint = { id, keptFrom, trigger, ...(record > 0 ? { record } : {}) };
+    const entry: ConversationMessage = { role: 'assistant', content: this.redactSummary(content), timestamp, kind: 'compaction', checkpoint };
     this.host.mutate(() => {
       this.appendEntries([entry]);
       // What the native session holds is what this condensed away.
       delete this.requirePlan().plannerSession;
       return true;
     }, () => this.host.broadcastPlan());
+  }
+
+  /** A summary as it may be kept: replayed into every later context, so no secret's value (ADR-0061 P1). */
+  private redactSummary(text: string): string {
+    return redactSummaryText(text, this.options.heldSecrets?.() ?? []);
   }
 
   /**
@@ -1023,6 +1102,7 @@ export class PlannerConversation {
   private async summarize(signal: AbortSignal): Promise<string> {
     const ai = this.host.aiService();
     const planLines = this.planRows()?.rows.map(({ line }) => line) ?? null;
+    const record = this.recordText();
     // Only liveness and spend get through: streamed prose or research steps
     // from this turn would land in the chat as if the planner had said them.
     // Its calls are counted like any turn's, but the context they measure is
@@ -1036,13 +1116,13 @@ export class PlannerConversation {
     if (ai.condenseContext) {
       const replay = this.canContinueLive() ? undefined : plannerTranscript(modelContext(this.transcript));
       try {
-        return await ai.condenseContext({ replay, planLines, onProgress, signal });
+        return await ai.condenseContext({ replay, planLines, record, onProgress, signal });
       } catch (err) {
         if (err instanceof ContextSummaryError) throw new ConversationEditError(`${err.message} The conversation is unchanged.`);
         throw err;
       }
     }
-    const request = summaryRequest(planLines);
+    const request = summaryRequest(planLines, record);
     let turn: ConversationTurn;
     if (this.canContinueLive()) {
       turn = await ai.continueConversation(request, onProgress, signal);
@@ -1069,6 +1149,7 @@ export class PlannerConversation {
     return structuredClone({
       conversationHistory: plan?.conversationHistory ?? [],
       researchLog: plan?.researchLog ?? [],
+      decisionRecord: plan?.decisionRecord ?? [],
     });
   }
 
@@ -1092,6 +1173,7 @@ export class PlannerConversation {
       dialogue: structuredClone({
         conversationHistory: this.transcript.slice(0, index),
         researchLog: (this.host.plan()?.researchLog ?? []).filter((e) => e.timestamp < cutoff),
+        decisionRecord: recordBefore(this.host.plan()?.decisionRecord ?? [], index),
       }),
       rewoundMessage,
     };
@@ -1141,12 +1223,14 @@ export class PlannerConversation {
       this.holdWrites(userTurn, this.userEntries(goal, now), [this.userPrompt(goal.text, now)]);
       this.briefing.opened(opening.autorun ?? false);
       this.blocks.restart();
+      // What no prompt states, the surface and settings among it, rides the first message: told once the turn lands.
+      userTurn.briefing = this.briefing.brief();
       const turn = await this.host.aiService().startConversation({
         ...opening,
         // The system prompt's goal is the text as typed; skill bodies ride the
         // first message alone, so the planner holds each one once.
         goal: goal.text,
-        initialMessage: plannerInput([plannerMessage(goal.text, goal.skills)]),
+        initialMessage: plannerInput([...userTurn.briefing.blocks, plannerMessage(goal.text, goal.skills)]),
         onProgress: userTurn.stream.sink(),
         signal: userTurn.signal,
         compaction: this.compaction,

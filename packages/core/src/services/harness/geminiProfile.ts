@@ -2,6 +2,7 @@ import { GEMINI_ACP_ARGS, GEMINI_CLI_MANIFEST } from '../../plugins/builtin/gemi
 import { ORDEWELL_MCP_SERVER_NAME } from '../mcp/clientConfig';
 import { plannerToolSet, taskToolSet } from '../mcp/tools';
 import type { AcpProfile } from './acpProfiles';
+import { DELEGATION_REFUSED } from './acpRoles';
 import { geminiCredentials } from './geminiCredentials';
 
 /** Gemini names an MCP tool `mcp_<server>_<tool>`, in what it shows the model and at the head of its call ids. */
@@ -9,6 +10,17 @@ const SERVER_PREFIX = `mcp_${ORDEWELL_MCP_SERVER_NAME}_`;
 
 /** Gemini's call ids are the tool's name, this, then a counter: `write_file__call_393451`. */
 const CALL_SEPARATOR = '__';
+
+/**
+ * Gemini's own ways to start another agent. In 0.67.0's source every subagent
+ * is reached through one tool, `invoke_agent` (`AGENT_TOOL_NAME`), whose kind
+ * is `agent`, which ACP reports as `think`, and the policy engine also checks
+ * its call under the `agent_name` it names. The others are the built-in
+ * subagents' names, which Gemini's policy docs say earlier versions offered as
+ * tools of their own. Whether 0.66.0, the version recorded, offers
+ * `invoke_agent` or those is unconfirmed; denying a name it lacks is harmless.
+ */
+const SUBAGENT_TOOLS = ['invoke_agent', 'codebase_investigator', 'cli_help', 'generalist', 'browser_agent'] as const;
 
 /**
  * Gemini's own tools a restricted start refuses. A deny with no `argsPattern`
@@ -21,7 +33,10 @@ const CALL_SEPARATOR = '__';
  * those words, not the `denyMessage`, which only a call Gemini's scheduler
  * checks, a subagent's, carries; it is kept for that path. A call with no
  * arguments at all would miss the pattern and ask, which the adapter refuses
- * by kind.
+ * by kind. Its subagents are denied with no pattern, so they are never offered
+ * (`getExcludedTools` in 0.67.0 drops a tool a rule denies without one); a
+ * subagent would run outside the adapter's sight, and Gemini's default policy
+ * allows `invoke_agent` unasked at a priority this one outranks (ADR-0026).
  */
 const REFUSED_NATIVE_TOOLS = `[[rule]]
 toolName = ["write_file", "replace"]
@@ -49,6 +64,12 @@ toolName = ["enter_plan_mode", "exit_plan_mode"]
 decision = "deny"
 priority = 999
 denyMessage = "This session stays in the mode it was started in."
+
+[[rule]]
+toolName = [${SUBAGENT_TOOLS.map((name) => JSON.stringify(name)).join(', ')}]
+decision = "deny"
+priority = 999
+denyMessage = ${JSON.stringify(DELEGATION_REFUSED)}
 `;
 
 /**
@@ -65,7 +86,7 @@ denyMessage = "This session stays in the mode it was started in."
 function restrictedPolicy(): string {
   const served = [
     taskToolSet({}), taskToolSet({ readOnly: true }), taskToolSet({ board: true }), taskToolSet({ readOnly: true, board: true }),
-    plannerToolSet({ delegates: true, subplanner: true }),
+    plannerToolSet({ delegates: true, subplanner: true, research: true }),
   ];
   const names = [...new Set(served.flat().map((tool) => JSON.stringify(`${SERVER_PREFIX}${tool.name}`)))];
   return `${REFUSED_NATIVE_TOOLS}
@@ -112,10 +133,8 @@ export const GEMINI_CLI_PROFILE: AcpProfile = {
   // named `ordewell` matches. The kind is not read either: Gemini guesses it
   // for an MCP tool.
   ordewellTool: ({ request }) => {
-    const end = request.toolCallId.indexOf(CALL_SEPARATOR);
-    if (end < 0) return null;
-    const name = request.toolCallId.slice(0, end);
-    return name.startsWith(SERVER_PREFIX) ? name.slice(SERVER_PREFIX.length) : null;
+    const name = calledTool(request.toolCallId);
+    return name?.startsWith(SERVER_PREFIX) ? name.slice(SERVER_PREFIX.length) : null;
   },
   toolName: (tool) => `${SERVER_PREFIX}${tool}`,
   // `--model` takes the id as `session/new` lists it; with it on the command
@@ -147,8 +166,8 @@ export const GEMINI_CLI_PROFILE: AcpProfile = {
   // names (ADR-0028): in a private directory of its own, also its temp
   // directory, a planted hook was recorded not running. Gemini's own reads are
   // held to that directory, so it reaches the workspace through Ordewell's
-  // `run_command` alone. A subagent Gemini starts is checked by the same
-  // policy.
+  // `run_command` alone. The policy offers none of Gemini's subagents, and a
+  // subagent's own calls would be checked by it too (ADR-0026).
   restricted: {
     args: ['--approval-mode', 'default'],
     privateCwd: true,
@@ -157,5 +176,14 @@ export const GEMINI_CLI_PROFILE: AcpProfile = {
       { fileName: 'ordewell-policy.toml', render: restrictedPolicy, pass: { flag: '--policy' } },
     ],
   },
+  // A subagent's call is refused by the name its call id begins with, in case
+  // a version offers one the policy does not take away.
+  delegation: { tools: SUBAGENT_TOOLS, toolOf: ({ request }) => calledTool(request.toolCallId) },
   roles: { plans: true, readOnly: true },
 };
+
+/** The tool a call id names, as Gemini looked it up: `write_file__call_393451` names `write_file`. */
+function calledTool(toolCallId: string): string | null {
+  const end = toolCallId.indexOf(CALL_SEPARATOR);
+  return end < 0 ? null : toolCallId.slice(0, end);
+}

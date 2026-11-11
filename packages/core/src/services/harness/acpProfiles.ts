@@ -148,6 +148,25 @@ export interface AcpRestriction {
   toolSearch?: string;
 }
 
+/**
+ * The agent's own tools that start another agent, hand one work or read what
+ * it did, and where a request names the tool it is for. A planner and a
+ * read-only task start none (ADR-0026): the restricted start withholds them,
+ * and a request for one is refused by name whatever kind it arrives as, so a
+ * setting that fails open is still caught.
+ */
+export interface AcpDelegation {
+  tools: readonly string[];
+  /** The agent's own name for the tool a request is for, read where the agent puts it; null where the call does not say. */
+  toolOf(call: AcpAskedCall): string | null;
+  /**
+   * Notifications the agent sends about a subagent's work, which carry no
+   * request to refuse: on a restricted start one means a subagent got past
+   * what withholds it, so the process is ended.
+   */
+  notices?: readonly string[];
+}
+
 /** What an extension request's answer may depend on: the start it came to, never a person. */
 export interface AcpExtensionContext {
   kind: 'planner' | 'task';
@@ -258,6 +277,8 @@ export interface AcpProfile {
   roles?: AcpRoles;
   /** Applied on a planner's start and a read-only task's, on top of `args` and `env`; required by any role. */
   restricted?: AcpRestriction;
+  /** Absent: the agent has no subagent or delegation tool of its own known to Ordewell. */
+  delegation?: AcpDelegation;
   /**
    * Answers to the agent's own requests by method, for an agent that holds a
    * turn until the client replies to one (Cursor's `cursor/ask_question`).

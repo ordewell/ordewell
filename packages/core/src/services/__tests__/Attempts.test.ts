@@ -13,7 +13,7 @@ import { LocalWorktreeLease } from '../LocalWorktreeLease';
 import { SlotPool } from '../SlotPool';
 import type { IRunner, IRunnerSession } from '../../interfaces/IRunner';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
-import { fakeConfig, FakeRunnerSession } from '../../testing';
+import { FakeRunnerSession } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
 import { recordedRunnerAuth, resetRunnerAuth } from '../runnerAuth';
 
@@ -81,7 +81,6 @@ function setup(opts: { tasks?: Task[]; runners?: string[]; spawn?: Spawn; repair
     return reserved.lease;
   };
   const attempts = new Attempts({
-    config: fakeConfig(),
     notifications,
     runner,
     scriptRunner: runner,

@@ -623,6 +623,60 @@ describe('VerdictEngine', () => {
       expect(engine.getIdleSince('t1')).not.toBeNull();
     });
 
+    it('does not flag a task waiting on a tool call it has in flight, and watches again once its result is in', () => {
+      const engine = new VerdictEngine();
+      const session = new FakeRunnerSession();
+      engine.watch(buildTask(), session);
+      session.emitOutput('working\n');
+
+      session.emitEvent({ type: 'tool_call', id: 'c1', name: 'Bash', args: { command: 'npm test' } });
+      vi.advanceTimersByTime(3 * IDLE_TIMEOUT_MS);
+      expect(engine.getIdleSince('t1')).toBeNull();
+
+      session.emitEvent({ type: 'tool_result', id: 'c1', name: 'Bash', output: 'ok', success: true });
+      vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
+      expect(engine.getIdleSince('t1')).not.toBeNull();
+    });
+
+    it('stops waiting on a call whose turn ended without its result', () => {
+      const engine = new VerdictEngine();
+      const session = new FakeRunnerSession();
+      engine.watch(buildTask(), session);
+
+      session.emitEvent({ type: 'tool_call', id: 'c1', name: 'Bash', args: { command: 'npm test' } });
+      session.emitTurnEnd('interrupted');
+      vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
+
+      expect(engine.getIdleSince('t1')).not.toBeNull();
+    });
+
+    it('backs off: each flag in an attempt doubles the silence the next one needs, and a new attempt starts over', () => {
+      const engine = new VerdictEngine();
+      const flags: string[] = [];
+      engine.onIdleChange((_id, idleSince) => { if (idleSince) flags.push(idleSince); });
+      const session = new FakeRunnerSession();
+      engine.watch(buildTask(), session);
+
+      vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
+      expect(flags).toHaveLength(1);
+
+      session.emitOutput('one line\n');
+      vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
+      expect(flags).toHaveLength(1);
+      vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
+      expect(flags).toHaveLength(2);
+
+      session.emitOutput('another line\n');
+      vi.advanceTimersByTime(4 * IDLE_TIMEOUT_MS - 1);
+      expect(flags).toHaveLength(2);
+      vi.advanceTimersByTime(1);
+      expect(flags).toHaveLength(3);
+
+      engine.watch(buildTask(), new FakeRunnerSession());
+      vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
+      expect(flags).toHaveLength(4);
+    });
+
     it('does not flag a task asking for approval before it printed anything', () => {
       const engine = new VerdictEngine();
       const session = new FakeRunnerSession();

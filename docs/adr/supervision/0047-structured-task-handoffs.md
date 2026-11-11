@@ -49,14 +49,16 @@ handoff:
 - **`summary`** (required, at most 1,500 characters): written for the next
   agent, not as a log. With a `commit`, it no longer repeats what changed and
   why: it holds the exact specifics the next agent needs (paths, symbols,
-  decisions) beside the artifacts, what is left and what to watch, and may be
+  decisions, interfaces, assumptions) beside the artifacts, what is left or open, and may be
   empty when there is nothing to add. Without one it says what changed too.
 - **`commit`** (`{subject, body?}`): the commit message, written for a human
   reviewer: what changed and why. The subject is one line of 1 to 100
   characters (the contract asks for 72 or fewer, in the imperative mood), the
   body at most 500 characters, one to three lines on why. It counts only with
   `done`: with `blocked` or `failed` nothing lands, so it is dropped and the
-  summary carries everything. Ordewell, not the author, decides a landed
+  summary carries everything. Such a handoff is kept like any other and
+  labelled with how the attempt ended, so a reader knows none of its work
+  landed. Ordewell, not the author, decides a landed
   commit's trailers, so trailer lines in the body are removed, not refused: an attribution line in
   git trailer form with a hyphenated token (`Co-Authored-By:`,
   `Signed-off-by:`) or a `Generated with …` line wherever it stands, and a
@@ -81,7 +83,9 @@ handoff:
   ([ADR-0050](../planner-envelope/0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md));
   it comes after the author's artifacts and outside their limit.
 - **`report`** (at most 20,000 characters): the long form, for the reader who
-  needs it all. It is stored in the attempt's log and is never put in a prompt.
+  needs it all. It is stored in the attempt's log and is never put in a prompt,
+  so the contract asks that a number a later task may need (a timing, a count,
+  a size) sit in the summary or a finding, not only here.
 
 **Evidence** is a typed reference, so a reader can check a claim rather than
 trust it:
@@ -133,9 +137,11 @@ handoff of one task, from its attempt log, and its `report` when
 `include_report` is true. It reads a handoff and nothing else: no transcript,
 no tool calls, no diff, no command output.
 
-The **readable set** of a task is itself, its transitive dependencies, and its
-loop's other end in either direction: a check reads its body tasks, and a body
-task reads its check (ADR-0045). A task outside the set is refused, so the
+The **readable set** of a task is itself, its transitive dependencies, and
+every other task of its loop (ADR-0045): a check reads its body tasks, and a
+body task reads its check and its fellow body tasks, whatever round each last
+ran, since a round's fix builds on what the last round's review and fix found.
+A task outside the set is refused, so the
 read is scoped by the graph the plan already holds and a task cannot read a
 sibling's work it was never given. Every call is recorded in the reader's task
 log, with what it asked for, like any tool call. A read-only task's token has
@@ -159,6 +165,11 @@ report stay in the log. `+N more` counts from `findingCount`. A retry or a
 loop round is a new attempt with its own handoff, and the digest is the
 latest attempt's. A restarted task clears its previous digest and output
 summary before it runs; older handoffs remain readable by explicit attempt.
+A `read` that names no attempt, of a task not running whose latest attempt
+left no handoff (cut off by a stop, or retried and then skipped), returns the
+newest attempt that did, and says so; a running task's old handoff is read only
+by explicit attempt, never as if it were current: a skipped or failed task's last words
+stay readable to its dependents and its loop.
 
 ### Script and user tasks
 
@@ -305,3 +316,5 @@ merges findings; and any new setting.
 - 2026-10-31 — a `task` reference is pinned to its attempt, and renders as `#12@2/F3` ([ADR-0057](0057-information-moves-by-reference.md) R1).
 - 2026-11-01 — the tool is `read`, `read_task` an alias at the call; a runner's stated failure reason says whose words it is; a handoff across levels is ADR-0057's ([ADR-0057](0057-information-moves-by-reference.md) R2, R3, R11).
 - 2026-11-01 — a board's sharing is ADR-0057's, as a handoff across levels is.
+- 2026-11-09 — the contract asks a summary for decisions, interfaces, assumptions and what is open, and tells a runner to keep its own context lean.
+- 2026-11-10 — the readable set is the whole loop across rounds; `read` falls back to the newest attempt that left a handoff, labelled with how it ended; measured numbers go in the summary or findings.

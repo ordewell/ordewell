@@ -1,0 +1,23 @@
+{
+  "id": "g3",
+  "title": "Small wording fix plus its test",
+  "kind": "small job",
+  "goal": "The terminal UI's run hint (`runHint` in packages/cli/src/tui/layout.ts) reads 'paused for Merge all: /handoff merge' while a merge of the whole run is paused. 'Merge all' is a VS Code button that the terminal UI does not have. Change that longest form of the hint to 'merging paused: /handoff merge', leaving the two shorter forms as they are, and update the tests that assert the old text (packages/cli/src/tui/__tests__/opsTasks.test.ts and packages/cli/src/tui/__tests__/render.test.ts, including the test title that mentions it). The cli package's tests must pass.",
+  "key": {
+    "taskCount": { "min": 1, "max": 1 },
+    "parallelAllowed": false,
+    "sharedDecisions": [],
+    "keepTogether": [
+      {
+        "id": "fix-and-test",
+        "description": "The wording change and the tests that assert it, in one task.",
+        "match": "(hint|wording|reword|merg|layout|test)"
+      }
+    ],
+    "integrationRisks": [
+      "Splitting the string change from its tests, so one task leaves the suite red.",
+      "Research tasks or a review task added to a one-line change."
+    ],
+    "expectedStrategy": "Exactly one task that edits layout.ts and both test files."
+  }
+}

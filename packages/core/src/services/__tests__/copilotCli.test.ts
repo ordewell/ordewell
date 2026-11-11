@@ -7,6 +7,7 @@ import { acpOrdewellBinding } from '../harness/acpOrdewell';
 import type { AcpProfile } from '../harness/acpProfiles';
 import { COPILOT_CLI_PROFILE } from '../harness/copilotProfile';
 import { decidePlannerPermission } from '../harness/plannerPermissions';
+import { decideRestricted } from '../harness/acpRoles';
 import type { AcpToolCall } from '../harness/acpSchema';
 import type { AgentEvent, AgentProcessDeps, PlannerStartOptions, TaskModeAgentAdapter, TaskStartOptions } from '../harness/AgentAdapter';
 import { COPILOT_CLI_MANIFEST } from '../../plugins/builtin/copilot-cli.manifest';
@@ -47,6 +48,18 @@ function note(name: string, event: string): Extract<Recorded, { dir: 'note' }> |
 /** The arguments Copilot was recorded running under. */
 function recordedArgs(name: string): string[] {
   return note(name, 'spawn')?.args ?? [];
+}
+
+/**
+ * Copilot's tools that start, list or steer another agent or session, withheld
+ * from a restricted start by a flag the recordings predate, so it is put after
+ * the last of the recorded restrictions as the adapter puts it (ADR-0026).
+ */
+const WITHHELD = ['--excluded-tools', 'task,read_agent,write_agent,list_agents,execution_subagent,search_code_subagent,create_session,send_session_message'];
+function restrictedArgs(name: string): string[] {
+  const args = recordedArgs(name);
+  const at = args.indexOf('--disable-builtin-mcps') + 1;
+  return [...args.slice(0, at), ...WITHHELD, ...args.slice(at)];
 }
 
 /** What the recorder saw live: the Ordewell tools called, and the files left in the session's real directory. */
@@ -350,7 +363,7 @@ describe('copilot-cli roles, replayed from Copilot CLI 1.0.105 (ADR-0026, ADR-00
     const dir = spawned.lastCwd() ?? '';
     const env = spawned.lastEnv();
     expect(dir.startsWith(CWD)).toBe(false);
-    expect(spawned.lastArgs()).toEqual(recordedArgs(name));
+    expect(spawned.lastArgs()).toEqual(restrictedArgs(name));
     const { hooksRan, ...launch } = launchedAs(name, dir);
     expect({
       cwd: dir, tmpdir: env.TMPDIR, startDirAtSpawn: readdirSync(dir), instructionsDirs: env.COPILOT_CUSTOM_INSTRUCTIONS_DIRS ?? null, allowAll: env.COPILOT_ALLOW_ALL,
@@ -359,6 +372,28 @@ describe('copilot-cli roles, replayed from Copilot CLI 1.0.105 (ADR-0026, ADR-00
     // The workspace's marker hook wrote nothing on the recorded start.
     expect(hooksRan).toEqual([]);
     expect(readFileSync(join(dir, 'AGENTS.md'), 'utf8')).toContain(`The workspace is \`${CWD}\`, not the directory you start in`);
+  });
+
+  it('withholds every tool that starts or steers another agent from a restricted start, and leaves a writable one its own', () => {
+    expect(COPILOT_CLI_PROFILE.restricted?.args).toEqual(['--deny-tool=write', '--deny-tool=shell', '--deny-tool=url', '--disable-builtin-mcps', ...WITHHELD]);
+    expect(recordedArgs('repo-hooks')).not.toContain('--excluded-tools');
+  });
+
+  it.each([
+    ['a subagent, by the agent type it names', { agent_type: 'explore', prompt: 'look around', description: 'Explore' }, 'think'],
+    ['a background subagent', { agent_type: 'general-purpose', prompt: 'write it', mode: 'background' }, 'other'],
+  ] as const)('refuses %s, whatever kind Copilot gives it, on a planner and a read-only start', (_label, rawInput, kind) => {
+    const request: AcpToolCall = { toolCallId: 'call_1', title: 'Explore', kind, rawInput };
+    for (const start of [{ kind: 'planner' as const }, { kind: 'task' as const, cwd: CWD, workspaceRoot: CWD }]) {
+      expect(decideRestricted({ request }, { kind: 'other' }, start, COPILOT_CLI_PROFILE)).toEqual({ decision: 'deny', note: expect.stringContaining('No other agent may be started here') });
+    }
+  });
+
+  it('does not take a read whose input names no agent type for a subagent', () => {
+    const request: AcpToolCall = { toolCallId: 'call_1', title: 'Viewing /repo/README.md', kind: 'read', rawInput: { path: '/repo/README.md' } };
+    expect(COPILOT_CLI_PROFILE.delegation?.toolOf({ request })).toBeNull();
+    expect(COPILOT_CLI_PROFILE.delegation?.toolOf({ request: { toolCallId: 'call_2', title: 'Thinking', kind: 'think' } })).toBeNull();
+    expect(decideRestricted({ request }, { kind: 'path', path: '/repo/README.md', directory: false }, { kind: 'planner' }, COPILOT_CLI_PROFILE)).toBeUndefined();
   });
 
   it('starts a writable task in its worktree, where the same workspace\'s hooks were recorded running', async () => {

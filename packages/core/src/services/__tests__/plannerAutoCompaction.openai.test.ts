@@ -191,6 +191,37 @@ describe('an API planner that cannot prune enough room condenses the history tha
     expect(fills).not.toContain(summary.promptTokens + 7);
     expect(fills.slice(-2)).toEqual([undefined, provider.requests.at(-1)!.promptTokens + 7]);
   });
+
+  it('seeds the condensed context with the decision record, the constraint in the user\'s words, then where things are (ADR-0067)', async () => {
+    const record = { entries: [{ kind: 'decision', text: 'Evict by least recent use', why: 'the cache is read-heavy' }, { kind: 'constraint', text: 'Never add a runtime dependency.' }] };
+    const provider = new FakeProvider([
+      callsTool('rec_0', 'record', record), callsTool('bash_0', 'bash', { command: 'make step0' }), says('Built.'),
+      callsTool('bash_1', 'bash', { command: 'make test' }), says('Tested.'),
+    ]);
+    const { session, catalog } = plannerSession(provider, fakeFileSystem({ bash: vi.fn(async () => out(45_000, 'b')) }));
+
+    await session.continueConversation('run the build. Never add a runtime dependency.');
+    expect(session.planState?.decisionRecord).toHaveLength(2);
+    catalog.windows['vendor/model'] = Math.ceil(provider.requests.at(-1)!.promptTokens * 1.45);
+    catalog.maxOutput = 4_096;
+    await session.continueConversation('run the tests');
+
+    expect(provider.summaries).toHaveLength(1);
+    expect(provider.summaries[0].messages[0].content).toMatch(/restated whole beside your summary/);
+    const resent = provider.requests.find((r) => toolOutputs(r).some((m) => m.tool_call_id === 'bash_1'))!;
+    expect(resent.messages[1]).toMatchObject({ role: 'assistant', content: expect.stringContaining([
+      '<decision_record>',
+      'Decisions:',
+      '- D1: Evict by least recent use. Why: the cache is read-heavy',
+      'Constraints, in the user\'s words:',
+      '- C1: "Never add a runtime dependency."',
+      '</decision_record>',
+      '',
+      'Where we are:',
+      SUMMARY,
+    ].join('\n')) });
+    expect(history(session).find((m) => m.kind === 'compaction')?.checkpoint).toMatchObject({ trigger: 'auto', record: 2 });
+  });
 });
 
 /** Workspace reads of `.ts` files only: the conversation's own opening reads project files, which stay out of it. */

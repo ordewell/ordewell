@@ -13,6 +13,7 @@ import { escalationAct, type Escalation } from './escalations';
 import { mergePastChecksConfirmation } from './mergeWording';
 import { revertStopped, type RevertScope } from './taskRevert';
 import { manualOverrideConfirmation, manualOverrideStopFirst, type OverrideDirection } from '../taskRow/texts';
+import { actionPhrase, type SurfaceControls, type UserAction } from './surfaceControls';
 import { COMMAND_GRANTS, SCRIPT_PAST_THE_RULES, allowsCommand, missingGrant, rootAuthority, type Grant, type Mandate, type NodeAuthority } from './Mandate';
 
 /** One call at the command seam, as every route words it (ADR-0029). Task references are resolved here. */
@@ -168,6 +169,10 @@ export interface ExecutionHost {
   approvePlan(): void;
   /** Full autonomy: starts follow plan approval without a question. */
   autonomous(): boolean;
+  /** How the user takes their own actions on the surface the session's live host serves (ADR-0030). */
+  userControls(): SurfaceControls;
+  /** Automatic merging is on and nothing holds it: a merge at a gate or a run's end happens without the user (ADR-0030). */
+  mergesByThemselves(): boolean;
   /** The user's autorun setting, as it is now (ADR-0030). */
   autorun(): boolean;
   /** The scheduler is driving the plan: ready tasks start as slots free. */
@@ -335,35 +340,42 @@ const REFUSED_WHILE_HELD: ReadonlySet<ExecutionCommandName> = new Set([...STARTS
  */
 const HELD_BY_LANDING_OVERRIDE: ReadonlySet<ExecutionCommandName> = new Set([...STARTS, 'skip_task', 'revert_task']);
 
-/** The user's own controls, by the names they press them by: a model asking for one is refused. */
-const USERS_ONLY: Partial<Record<ExecutionCommandName, string>> = {
-  force_start: 'Force start',
-  mark_complete: 'Mark complete',
-  mark_not_done: 'Mark not done',
+/** The user's own actions: a model asking for one is refused, and told how the user takes it on their surface. */
+const USERS_ONLY: Partial<Record<ExecutionCommandName, UserAction>> = {
+  force_start: 'forceStart',
+  mark_complete: 'markComplete',
+  mark_not_done: 'markNotDone',
   // It takes landed work off the branch: the user's own review decides that, never a model (ADR-0054).
-  revert_task: 'Reverting a task',
-  interrupt_task: 'Interrupt',
-  force_send_queued: 'Force send',
-  remove_queued: 'Taking back a queued message',
-  cancel_resume: 'Cancelling a scheduled resume',
-  approve_review: 'Approving the review',
+  revert_task: 'revertTask',
+  interrupt_task: 'interrupt',
+  force_send_queued: 'forceSend',
+  remove_queued: 'takeBackQueued',
+  cancel_resume: 'cancelResume',
+  approve_review: 'approveReview',
 };
 
-const MERGE_IS_USERS = 'Merge all is the user\'s: they are in this conversation, and press Merge all themselves. Tell them the work is ready to merge.';
-
-const NOT_APPROVED_YET = 'The user has not approved this plan yet: they approve it by executing it themselves (Execute plan). Ask them to.';
-
-const CHECKPOINT_CARD = 'The user answers it from the task\'s checkpoint card (Approve or Reject): tell them what the runner asks and what you would answer, with why.';
-
-const CHECKPOINT_IS_USERS = `A checkpoint is the user's to answer in their own turn: they are in this conversation. ${CHECKPOINT_CARD} Only the supervisor at Act answers one, in a wake-up turn.`;
-
-/** The supervisor's own refusal for a checkpoint, by the level that denies it: the general one says the user's reply applies a suggestion, which a checkpoint's cannot. */
-const CHECKPOINT_BELOW_ACT: Record<Exclude<SupervisorLevel, 'act'>, string> = {
-  watch: `You are the supervisor at Watch: you read and suggest, and cannot answer a checkpoint. ${CHECKPOINT_CARD}`,
-  off: `The supervisor is off for this run, so it cannot answer a checkpoint. ${CHECKPOINT_CARD}`,
-};
-
-const SKIP_IS_USERS = 'Skipping a task is the user\'s in their own turn: they are in this conversation, and skip it themselves. Suggest it, with why; only the supervisor at Act skips, in a wake-up turn.';
+/**
+ * The refusals that tell a model what the user does, worded with the control
+ * their surface has for it: a terminal UI has commands and keys, not buttons
+ * (ADR-0030).
+ */
+function userTurnRefusals(controls: SurfaceControls, mergesByThemselves: boolean) {
+  const checkpoint = `The user answers it themselves (${controls.answerCheckpoint}): tell them what the runner asks and what you would answer, with why.`;
+  return {
+    // Automatic merging makes the merge itself, so a planner told to have the user merge would ask for what needs no one.
+    merge: mergesByThemselves
+      ? 'Merging is the user\'s, and automatic merging is on: landed work merges by itself at its merge gate and at the end of the run. Do not ask the user to merge.'
+      : `Merging the run's landed work is the user's: they are in this conversation, and merge it themselves (${controls.merge}). Tell them the work is ready to merge.`,
+    notApprovedYet: `The user has not approved this plan yet: they approve it themselves (${controls.approvePlan}). Ask them to.`,
+    checkpointIsUsers: `A checkpoint is the user's to answer in their own turn: they are in this conversation. ${checkpoint} Only the supervisor at Act answers one, in a wake-up turn.`,
+    /** The supervisor's own refusal for a checkpoint, by the level that denies it: the general one says the user's reply applies a suggestion, which a checkpoint's cannot. */
+    checkpointBelowAct: {
+      watch: `You are the supervisor at Watch: you read and suggest, and cannot answer a checkpoint. ${checkpoint}`,
+      off: `The supervisor is off for this run, so it cannot answer a checkpoint. ${checkpoint}`,
+    } satisfies Record<Exclude<SupervisorLevel, 'act'>, string>,
+    skipIsUsers: `Skipping a task is the user's in their own turn: they are in this conversation, and skip it themselves (${controls.skipTask}). Suggest it, with why; only the supervisor at Act skips, in a wake-up turn.`,
+  };
+}
 
 const SCRIPTS_ARE_THE_PLANNERS = 'run_script is the planner\'s: a person adds a script task to the plan and starts it themselves.';
 
@@ -655,7 +667,7 @@ export class ExecutionCommands {
     if (gate.length > 0) {
       this.host.startAtGate(taskId);
       this.host.owe(taskId, to);
-      return answered('gated', `Added ${label}, approved to run, but it waits at its merge gate: the work of ${named(gate)} is not merged into the user's branch yet. It starts once the user merges it (Merge all), and its result reaches you in a run update when it ends. Tell the user.`);
+      return answered('gated', `Added ${label}, approved to run, but it waits at its merge gate: the work of ${named(gate)} is not merged into the user's branch yet. ${this.host.mergesByThemselves() ? 'It starts once automatic merging merges that work, by itself' : `It starts once the user merges it (${this.host.userControls().merge})`}, and its result reaches you in a run update when it ends. Tell the user.`);
     }
     const unready = this.scriptUnready(started.task);
     if (unready) return this.refuse(command, actor, started, `Approved ${label}, but it did not start: ${unready} It stays in the plan, approved: start it with run_task once that clears.`);
@@ -666,7 +678,7 @@ export class ExecutionCommands {
     }
     if (this.host.runBlocked()) {
       this.host.owe(taskId, to);
-      return answered('running', `${MODEL_VOICE.blockedRun} ${capitalize(label)} is approved and starts once they do; its result reaches you in a run update when it ends.`);
+      return answered('running', `${this.voiceOf({ kind: 'planner-turn' }).blockedRun} ${capitalize(label)} is approved and starts once they do; its result reaches you in a run update when it ends.`);
     }
     await this.host.awaitEnd(taskId, this.scriptWaitMs, signal);
     // Read as the wait ends, not as it was told: an end that came since is answered here, never owed as well.
@@ -813,6 +825,32 @@ export class ExecutionCommands {
     return this.authority.mandate(actor.kind === 'supervisor' ? actor.level : 'off');
   }
 
+  /** The refusals that name what the user does, for the surface and the merging that stand now. */
+  private refusals(): ReturnType<typeof userTurnRefusals> {
+    return userTurnRefusals(this.host.userControls(), this.host.mergesByThemselves());
+  }
+
+  /** How a refusal points `actor` on: the user is told their controls, a model its tools and the user's actions. */
+  private voiceOf(actor: ExecutionActor): Voice {
+    const controls = this.host.userControls();
+    const merges = this.host.mergesByThemselves();
+    switch (actor.kind) {
+      case 'user': return USER_VOICE;
+      case 'supervisor':
+      case 'subplanner': return supervisorVoice(controls, merges);
+      case 'planner-turn':
+      case 'autorun': return modelVoice(controls, merges);
+    }
+  }
+
+  /** Why a model may not take one of the user's own actions. */
+  private usersOnly(action: UserAction): string {
+    const control = this.host.userControls()[action];
+    // Verdicts come from evidence: a vouch by proxy would land work nobody checked.
+    if (action === 'markComplete') return `Marking a task complete is the user's alone: it lands the work as if someone had checked it, and only they vouch for work. If you think it is done, tell them why; they can mark it complete (${control}).`;
+    return `Only the user may ${actionPhrase(action)}: they are in this conversation, and do it themselves (${control}). Suggest it to them, with why.`;
+  }
+
   /**
    * Guarded means "ask the user first": a planner start in the user's own
    * turn asks, so tasks they have not approved go into the question rather
@@ -832,17 +870,17 @@ export class ExecutionCommands {
    * has its grants alone, allow or refuse: nobody is there to ask.
    */
   consent(actor: ExecutionActor, command: ExecutionCommandName): Consent {
-    const control = USERS_ONLY[command];
-    if (control && actor.kind !== 'user') return { kind: 'refuse', reason: usersOnly(command, control) };
+    const action = USERS_ONLY[command];
+    if (action && actor.kind !== 'user') return { kind: 'refuse', reason: this.usersOnly(action) };
     if (actor.kind === 'subplanner') return this.grantConsent(actor, command);
     if (command === 'answer_checkpoint') return this.checkpointConsent(actor);
     switch (actor.kind) {
       case 'user': return { kind: 'allow' };
       case 'autorun': return this.autorunConsent();
       // A merge by proxy would add a route to the user's branch for nothing: they are present, and can press it (ADR-0029).
-      case 'planner-turn': if (command === 'merge_all') return { kind: 'refuse', reason: MERGE_IS_USERS };
+      case 'planner-turn': if (command === 'merge_all') return { kind: 'refuse', reason: this.refusals().merge };
         // Skip decides that work will not be waited for: the user decides that, or a supervisor they let act.
-        if (command === 'skip_task') return { kind: 'refuse', reason: SKIP_IS_USERS };
+        if (command === 'skip_task') return { kind: 'refuse', reason: this.refusals().skipIsUsers };
         return !STARTS.has(command) || this.host.autonomous() ? { kind: 'allow' } : { kind: 'ask' };
       case 'supervisor': return this.supervisorConsent(actor.level, command);
     }
@@ -882,10 +920,10 @@ export class ExecutionCommands {
       case 'user': return { kind: 'allow' };
       case 'supervisor': {
         const consent = this.supervisorConsent(actor.level, 'answer_checkpoint');
-        return consent.kind === 'refuse' && actor.level !== 'act' ? { kind: 'refuse', reason: CHECKPOINT_BELOW_ACT[actor.level] } : consent;
+        return consent.kind === 'refuse' && actor.level !== 'act' ? { kind: 'refuse', reason: this.refusals().checkpointBelowAct[actor.level] } : consent;
       }
       case 'planner-turn':
-      case 'autorun': return { kind: 'refuse', reason: CHECKPOINT_IS_USERS };
+      case 'autorun': return { kind: 'refuse', reason: this.refusals().checkpointIsUsers };
     }
   }
 
@@ -943,7 +981,7 @@ export class ExecutionCommands {
             // The fresh chance is the user's to ask for: autorun's join leaves a failure as it is (ADR-0053).
             if (actor.kind === 'user') this.host.readyFailed();
             const joined = await this.host.joinRun(waiting.length, 0);
-            return { message: this.host.runBlocked() ? voiceOf(actor).blockedRun : joined };
+            return { message: this.host.runBlocked() ? this.voiceOf(actor).blockedRun : joined };
           },
         };
       }
@@ -952,12 +990,12 @@ export class ExecutionCommands {
       // under Full with autorun it approves what waits, since nobody is asked there.
       const unattended = this.startsUnattended(actor);
       if (!unattended && !this.host.planApproved()) {
-        return { refusal: `${NOT_APPROVED_YET} Tasks started with run_task are not a scheduled run, so their dependents start only once the user executes the plan.` };
+        return { refusal: `${this.refusals().notApprovedYet} Tasks started with run_task are not a scheduled run, so their dependents start only once the user executes the plan.` };
       }
       return {
         act: async () => {
           await (unattended ? this.host.joinRun(waiting.length, 0) : this.host.joinRun(0, waiting.length));
-          if (this.host.runBlocked()) return { message: voiceOf(actor).blockedRun };
+          if (this.host.runBlocked()) return { message: this.voiceOf(actor).blockedRun };
           const held = unattended || waiting.length === 0 ? '' : ` ${capitalize(named(waiting))} ${waiting.length === 1 ? 'was' : 'were'} added after the user approved the plan, so ${waiting.length === 1 ? 'it waits' : 'they wait'} until they start ${waiting.length === 1 ? 'it' : 'them'} or execute the plan.`;
           const under = live.length === 0 ? '' : `${named(live)} ${live.length === 1 ? 'is' : 'are'} already running, and `;
           const limit = this.host.runHeld() ? ' A usage limit holds the run, so nothing starts before its reset.' : '';
@@ -973,7 +1011,7 @@ export class ExecutionCommands {
     if (actor.kind !== 'user' && actor.kind !== 'autorun' && !this.startsUnattended(actor)) {
       // Executing the plan is how the user first takes it as theirs, so no card stands in for it.
       if (!this.host.planApproved()) {
-        return { refusal: NOT_APPROVED_YET };
+        return { refusal: this.refusals().notApprovedYet };
       }
       // A planner's run leaves what failed as it is, so no card asks to run it.
       approves = toRun.filter(({ task }) => !this.host.taskApproved(task.id) && !(actor.kind === 'planner-turn' && task.status === 'failed'));
@@ -986,7 +1024,7 @@ export class ExecutionCommands {
       ...(approves.length > 0 ? { approves } : {}),
       act: async () => {
         await this.host.runPlan(actor);
-        if (this.host.runBlocked()) return { message: voiceOf(actor).blockedRun };
+        if (this.host.runBlocked()) return { message: this.voiceOf(actor).blockedRun };
         const started = this.all().filter(({ task }) => this.host.running(task.id));
         if (started.length > 0) return { message: this.runningLine(actor, `The plan is running: ${named(started)} started, and the rest start as their dependencies finish.`) };
         return {
@@ -1006,7 +1044,7 @@ export class ExecutionCommands {
   private runningLine(actor: ExecutionActor, running: string): string {
     const failed = actor.kind === 'planner-turn' ? this.all().filter(({ task }) => task.status === 'failed') : [];
     if (failed.length === 0) return running;
-    const left = `${capitalize(named(failed))} failed and ${failed.length === 1 ? 'stays' : 'stay'} failed, and run_plan gives no fresh chance. ${MODEL_VOICE.retry}`;
+    const left = `${capitalize(named(failed))} failed and ${failed.length === 1 ? 'stays' : 'stay'} failed, and run_plan gives no fresh chance. ${this.voiceOf({ kind: 'planner-turn' }).retry}`;
     return this.host.scheduling() || this.host.hasLiveWork() || this.host.runHeld() ? `${running} ${left}` : `Nothing could start. ${left}`;
   }
 
@@ -1014,7 +1052,7 @@ export class ExecutionCommands {
   private prepareStart(located: Located, actor: ExecutionActor, how: 'run' | 'retry', tasks: readonly Task[]): Prepared {
     const { task } = located;
     const label = describe(located);
-    const voice = voiceOf(actor);
+    const voice = this.voiceOf(actor);
     if (task.type === 'user') return { refusal: `${capitalize(label)} is a user task: ${voice.byHand}` };
     const completing = this.completingRefusal(located);
     if (completing) return { refusal: completing };
@@ -1089,7 +1127,7 @@ export class ExecutionCommands {
     }
     // Judged whatever the task's status: a retry of a failed ops task acts on the checkout as a first start does.
     const gate = (waitOf(waits, 'merge-gate')?.unmerged ?? []).flatMap((id) => this.located(id, tasks) ?? []);
-    if (gate.length > 0) return `${capitalize(label)} waits for Merge all: the work of ${named(gate)} is not merged into the user's branch yet. ${voice.passGate}`;
+    if (gate.length > 0) return `${capitalize(label)} waits at its merge gate: the work of ${named(gate)} is not merged into the user's branch yet. ${voice.passGate}`;
     return null;
   }
 
@@ -1294,7 +1332,7 @@ export class ExecutionCommands {
   private prepareContinue(located: Located, actor: ExecutionActor, message: string | undefined): Prepared {
     const { task } = located;
     const label = describe(located);
-    const voice = voiceOf(actor);
+    const voice = this.voiceOf(actor);
     if (this.host.running(task.id) || task.status === 'in_progress') {
       return { refusal: `${capitalize(label)} is running: ${voice.stopOrSteer}` };
     }
@@ -1332,7 +1370,7 @@ export class ExecutionCommands {
   private prepareResume(located: Located, actor: ExecutionActor, message: string | undefined): Prepared {
     const { task } = located;
     const label = describe(located);
-    const voice = voiceOf(actor);
+    const voice = this.voiceOf(actor);
     const eligible = continuability(task);
     if (!eligible.ok) return { refusal: `${eligible.reason} ${voice.startOver}` };
     const approval = this.unapproved(located, actor);
@@ -1393,7 +1431,7 @@ export class ExecutionCommands {
         this.host.stopRun(actor);
         return {
           message: live.length > 0
-            ? `Stopped the run: ${named(live)} ${live.length === 1 ? 'is' : 'are'} back to not started, and the plan is kept. ${children.length > 0 ? `Continue ${named(children)} to keep what its child landed: running the plan starts its child over.` : voiceOf(actor).startAgain}`
+            ? `Stopped the run: ${named(live)} ${live.length === 1 ? 'is' : 'are'} back to not started, and the plan is kept. ${children.length > 0 ? `Continue ${named(children)} to keep what its child landed: running the plan starts its child over.` : this.voiceOf(actor).startAgain}`
             : pending
               ? 'Stopped the run before anything more started: nothing was running, and what was about to start will not. The plan is kept.'
               : carried
@@ -1407,9 +1445,9 @@ export class ExecutionCommands {
   private prepareMessage(located: Located, command: Extract<ExecutionCommand, { command: 'message_task' }>, actor: ExecutionActor): Prepared {
     const label = describe(located);
     if (located.task.type === 'script') return { refusal: scriptHasNoTurn(label, 'message') };
-    if (command.force && actor.kind !== 'user') return { refusal: usersOnly('message_task', 'Force send') };
+    if (command.force && actor.kind !== 'user') return { refusal: this.usersOnly('forceSend') };
     if (this.host.awaitsCheckpoint(located.task.id)) {
-      return { refusal: `${capitalize(label)} is at a checkpoint${actor.kind === 'user' ? ':' : ', which a message does not answer:'} ${voiceOf(actor).atCheckpoint}` };
+      return { refusal: `${capitalize(label)} is at a checkpoint${actor.kind === 'user' ? ':' : ', which a message does not answer:'} ${this.voiceOf(actor).atCheckpoint}` };
     }
     return {
       act: async () => {
@@ -1499,7 +1537,7 @@ export class ExecutionCommands {
         const result = await this.host.mergeAll();
         // Only the user's surface draws the card; a model acts on the line.
         const payload: CommandPayload | undefined = users ? { kind: 'merge', result } : undefined;
-        if (result.outcome !== 'merged') throw new Stopped(`Merge all stopped: ${mergeStopped(result)}. ${voiceOf(actor).notMerged}`, payload);
+        if (result.outcome !== 'merged') throw new Stopped(`Merge all stopped: ${mergeStopped(result)}. ${this.voiceOf(actor).notMerged}`, payload);
         return {
           message: `Merged the run's landed work into ${users ? 'your' : 'the user\'s'} branch. Tasks waiting at a merge gate for it can start.`,
           ...(payload ? { payload } : {}),
@@ -1548,7 +1586,7 @@ export class ExecutionCommands {
     const why = reason?.trim() || undefined;
     const completing = this.completingRefusal(located);
     if (completing) return { refusal: completing };
-    if (task.status === 'in_progress') return { refusal: `${capitalize(label)} is running: ${voiceOf(actor).stopOrWait}` };
+    if (task.status === 'in_progress') return { refusal: `${capitalize(label)} is running: ${this.voiceOf(actor).stopOrWait}` };
     if (task.status === 'completed') return { refusal: `${capitalize(label)} has completed: its work landed, so there is nothing to skip.` };
     if (task.status === 'skipped') return { refusal: `${capitalize(label)} is already skipped.` };
     if (actor.kind !== 'user') {
@@ -1577,7 +1615,7 @@ export class ExecutionCommands {
     if (actor.kind === 'user' || actor.kind === 'autorun' || this.startsUnattended(actor) || this.host.taskApproved(located.task.id)) return null;
     const label = describe(located);
     if (!this.host.planApproved()) {
-      return { refusal: `The user has not approved ${label}: they approve the plan by executing it themselves (Execute plan), or a task by starting it. Ask them to.` };
+      return { refusal: `The user has not approved ${label}: they approve the plan themselves (${this.host.userControls().approvePlan}), or a task by starting it (${this.host.userControls().forceStart}). Ask them to.` };
     }
     if (this.asksToApprove(actor)) return { approves: [located] };
     return { refusal: `${capitalize(label)} was added after the user approved the plan, so it is not approved to run. Ask the user to start it, or to execute the plan, which approves it.` };
@@ -1705,17 +1743,11 @@ function reportActor(to: TaskReportTo): ExecutionActor {
   }
 }
 
-/** Why a model may not use one of the user's own controls. */
-function usersOnly(command: ExecutionCommandName, control: string): string {
-  // Verdicts come from evidence: a vouch by proxy would land work nobody checked.
-  if (command === 'mark_complete') return 'Mark complete is the user\'s alone: it lands the work as if someone had checked it, and only they vouch for work. If you think it is done, tell them why; they can mark it complete.';
-  return `${control} is the user's own control: they are in this conversation, and press it themselves. Suggest it to them, with why.`;
-}
 
 /**
  * How a refusal, or a line about what follows, points the caller on: a model
  * is told the tools it calls and what to tell the user; the user is told the
- * controls they press. Chosen by who asked, in {@link voiceOf}, and nowhere
+ * controls they press. Chosen by who asked, in {@link ExecutionCommands.voiceOf}, and nowhere
  * else.
  */
 interface Voice {
@@ -1747,27 +1779,35 @@ interface Voice {
   atCheckpoint: string;
 }
 
-const MODEL_VOICE: Voice = {
-  byHand: 'the user does it by hand, and no runner starts it.',
-  stopOrSteer: 'stop it first with stop_task, or steer it with message_task.',
-  stopOrWait: 'stop it first with stop_task, or let it finish.',
-  completed: 'Continue it with retry_task from "session" and a message, or ask the user to mark it not done.',
-  answerOrRetry: 'Answer it with message_task, or start a new attempt with retry_task.',
-  resume: 'Resume it in its saved session with retry_task from "session".',
-  retry: 'Start a new attempt with retry_task.',
-  passGate: 'Ask the user to merge (Merge all), or to force start it.',
-  startOver: 'A fresh retry (from "fresh") starts it over from its prompt.',
-  startAgain: 'Start again with run_plan or run_task.',
-  notMerged: 'Nothing was merged; tell the user, who resolves it.',
-  blockedRun: 'Nothing started: the user\'s checkout has uncommitted changes, and the run waits for them to stash them or run without isolation. Tell them.',
-  atCheckpoint: 'the user answers it from the task\'s checkpoint card (Approve or Reject). Tell them what the runner asks and what you would answer, with why.',
-};
+/** A model's voice: what it calls, and the user's actions named as their surface takes them (ADR-0030). */
+function modelVoice(controls: SurfaceControls, mergesByThemselves: boolean): Voice {
+  return {
+    byHand: 'the user does it by hand, and no runner starts it.',
+    stopOrSteer: 'stop it first with stop_task, or steer it with message_task.',
+    stopOrWait: 'stop it first with stop_task, or let it finish.',
+    completed: `Continue it with retry_task from "session" and a message, or ask the user to mark it not done (${controls.markNotDone}).`,
+    answerOrRetry: 'Answer it with message_task, or start a new attempt with retry_task.',
+    resume: 'Resume it in its saved session with retry_task from "session".',
+    retry: 'Start a new attempt with retry_task.',
+    // Asking the user for a merge automatic merging makes would ask for what needs no one.
+    passGate: mergesByThemselves
+      ? `Automatic merging merges that work at the gate by itself; let it, or ask the user to force start it (${controls.forceStart}).`
+      : `Ask the user to merge (${controls.merge}), or to force start it (${controls.forceStart}).`,
+    startOver: 'A fresh retry (from "fresh") starts it over from its prompt.',
+    startAgain: 'Start again with run_plan or run_task.',
+    notMerged: 'Nothing was merged; tell the user, who resolves it.',
+    blockedRun: 'Nothing started: the user\'s checkout has uncommitted changes, and the run waits for them to stash them or run without isolation. Tell them.',
+    atCheckpoint: `the user answers it themselves (${controls.answerCheckpoint}). Tell them what the runner asks and what you would answer, with why.`,
+  };
+}
 
 /** The supervisor at Act answers checkpoints itself (ADR-0029); the planner's turn is the user's, and they answer. */
-const SUPERVISOR_VOICE: Voice = {
-  ...MODEL_VOICE,
-  atCheckpoint: 'answer it with answer_checkpoint (approve, or reject with a reason), or leave it to the user and tell them why.',
-};
+function supervisorVoice(controls: SurfaceControls, mergesByThemselves: boolean): Voice {
+  return {
+    ...modelVoice(controls, mergesByThemselves),
+    atCheckpoint: 'answer it with answer_checkpoint (approve, or reject with a reason), or leave it to the user and tell them why.',
+  };
+}
 
 const USER_VOICE: Voice = {
   byHand: 'you do it by hand, and no runner starts it.',
@@ -1785,15 +1825,6 @@ const USER_VOICE: Voice = {
   atCheckpoint: 'approve or reject it instead.',
 };
 
-function voiceOf(actor: ExecutionActor): Voice {
-  switch (actor.kind) {
-    case 'user': return USER_VOICE;
-    case 'supervisor':
-    case 'subplanner': return SUPERVISOR_VOICE;
-    case 'planner-turn':
-    case 'autorun': return MODEL_VOICE;
-  }
-}
 
 function sameIds(a: readonly string[], b: readonly string[]): boolean {
   const seen = new Set(a);

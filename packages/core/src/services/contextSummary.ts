@@ -1,6 +1,6 @@
 import type { UsageRecord } from '../models/Usage';
 import { RECOVERABLE_READ_TOOLS, type CompactableMessage } from './contextCompaction';
-import { extractSummary } from './conversationSummary';
+import { currentPlanBlock, extractSummary, HISTORY_KEEPS, recordBeside, SUMMARY_KEEPS, SUMMARY_TAGS } from './conversationSummary';
 import { PLANNER_TASK_READ_TOOLS } from './mcp/tools';
 import { CONTEXT_BUDGET, callBudget, replyTokens, type ModelLimits } from './plannerContextBudget';
 
@@ -106,6 +106,8 @@ export interface CondenseRequest {
   messages: readonly CompactableMessage[];
   /** The current plan's lines, which the summary is told outrank anything it says of task state. */
   planLines?: readonly string[] | null;
+  /** The decision record a summary of the history is written beside (ADR-0067). */
+  record?: string | null;
   limits: SummaryLimits;
   signal?: AbortSignal;
   /**
@@ -125,7 +127,7 @@ export interface CondenseRequest {
  */
 export async function condense(call: SummaryCall, request: CondenseRequest): Promise<string> {
   const { limits, signal } = request;
-  const instructions = summaryInstructions(request.subject, request.planLines ?? null);
+  const instructions = summaryInstructions(request.subject, request.planLines ?? null, request.record ?? null);
   const allowance = Math.ceil(limits.maxOutputTokens * limits.charsPerToken);
   const partChars = limits.inputChars - instructions.length - allowance - PART_FRAME_CHARS;
   if (partChars < SUMMARY_LIMITS.minPartChars) {
@@ -311,16 +313,13 @@ export function turnProgressNote(summary: string, ledger: readonly string[]): st
   ].join('\n');
 }
 
-const SUMMARY_TAGS = 'Put the summary between <conversation_summary> and </conversation_summary>, and nothing outside the tags.';
-
-function summaryInstructions(subject: SummarySubject, planLines: readonly string[] | null): string {
+function summaryInstructions(subject: SummarySubject, planLines: readonly string[] | null, record: string | null): string {
   const common = [
-    'Keep exactly, as the conversation has them: file paths, symbols, line references, commands and their outcomes, URLs, task references and quoted requirements.',
-    'Task statuses and run state are not yours to keep: the current plan is authoritative, and what the conversation says about task state may be stale.',
+    ...SUMMARY_KEEPS,
     'Write plain prose or short lists. Do not address the user, do not call tools, and do not write task operations or plan JSON: nothing you write is acted on.',
     'When a summary so far is given, fold the new part into it: the result must stand for both.',
     SUMMARY_TAGS,
-    ...(planLines && planLines.length > 0 ? ['<current_plan>', ...planLines, '</current_plan>'] : []),
+    ...currentPlanBlock(planLines),
   ];
   if (subject === 'turn') {
     return [
@@ -332,7 +331,8 @@ function summaryInstructions(subject: SummarySubject, planLines: readonly string
   }
   return [
     'You condense the earlier part of a planning conversation between a user and a planner, an assistant that researches a code repository and plans tasks for coding agents. Your summary replaces that part in the planner\'s context, so the planner must be able to carry on from it alone.',
-    'Keep: the user\'s goal; every instruction, constraint and preference still standing, with any skill loaded into the conversation by name and what it requires; the decisions made and why; open questions and what the planner was waiting on; the findings; and what the planner said it did or would do.',
+    HISTORY_KEEPS,
     ...common,
+    ...recordBeside(record),
   ].join('\n');
 }

@@ -1,4 +1,4 @@
-import { blockingFailures, DEFAULT_RUNNERS, NO_TURN, closeTurn, fromTranscript, holdPrompt, taskLogCommands, taskStartedNotice, type ChildPlanView, type RunnerId, type SerializedPlan } from '@ordewell/core';
+import { blockingFailures, DEFAULT_RUNNERS, NO_TURN, closeTurn, fromTranscript, holdPrompt, taskLogCommands, taskStartedNotice, type ChildPlanView, type DecisionRecordEntry, type RunnerId, type SerializedPlan } from '@ordewell/core';
 import { bodyMode, chatEditorRoomFor } from './geometry';
 import { SPINNER_CYCLE, chatScrollMax } from './layout';
 import { activeToken, composerCompletions, findCommand, parseRunnerCommand, parseSlash, runnerCommandFor, type ParsedCommand } from './slash';
@@ -329,7 +329,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       // the same run words the follow-up as the supervisor leaving it — then
       // fold the fresh handoff into the run view. A child's branch is not the
       // person's to land: it comes in through its task in the plan above, and
-      // `/handoff` here would act on the root.
+      // `/merge` here would act on the root.
       const announced = state.child ? state : handoffArrived(state, action.handoff);
       return step(foldRun(announced, { type: 'isolation_handoff', ...action.handoff }));
     }
@@ -690,6 +690,7 @@ function showPlan(state: TuiState, plan: unknown): TuiState {
   const next: TuiState = {
     ...folded,
     plannerResend: plannerResendOf(plan),
+    decisionRecord: recordOf(plan),
     plannerPause: plannerPauseOf(plan),
     expandedTaskId,
     taskEditor: expandedTaskId !== null ? state.taskEditor : null,
@@ -699,6 +700,12 @@ function showPlan(state: TuiState, plan: unknown): TuiState {
     selectedTask: clampSelection(state.selectedTask, planRows(next).length),
     focus: tasks.length === 0 ? 'chat' : state.focus,
   });
+}
+
+/** The record rides every plan broadcast and is left off an empty one, so a plan without it has none. */
+function recordOf(plan: unknown): DecisionRecordEntry[] {
+  const saved = (plan as { decisionRecord?: unknown } | null | undefined)?.decisionRecord;
+  return Array.isArray(saved) ? (saved as DecisionRecordEntry[]) : [];
 }
 
 /** What the plan says waits on the planner's usage limit; a hold with no time goes with the next message, so there is nothing to show. */

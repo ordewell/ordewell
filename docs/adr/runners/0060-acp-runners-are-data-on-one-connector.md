@@ -5,6 +5,8 @@ amends: ["0008", "0009", "0018", "0022", "0023", "0025", "0026", "0028", "0046"]
 
 # 0060 — ACP runners are data on one connector
 
+*Pending:* the subagent control (R3) of Copilot CLI, Gemini CLI and Cursor Agent is confirmed from the agent's source or documentation, not a recording, until `node bench/live/acp-subagent-probe.mjs` passes against it.
+
 ## Problem
 
 Ordewell drove three coding agents, each through a connector written for its
@@ -99,7 +101,18 @@ the judge.
     by the kind the request names or the kind the turn reported for the same
     call, except Ordewell's own tools, pre-allowed by exact name (R7);
   - a recorded live run shows a write attempt and a shell attempt refused,
-    with nothing left behind.
+    with nothing left behind;
+  - the agent's own subagent or delegation tool is withheld by the same
+    controls, since a subagent's tools and approvals need not be its
+    parent's (ADR-0026). The profile's `delegation` names those tools and
+    reads the tool a request is for, and `decideRestricted` refuses one by
+    name before any kind is read, since an agent may give a spawn the kind
+    `think` or `read`. A subagent still working when its call is reported
+    finished fails the turn, as one Ordewell cannot watch; a notification the
+    profile names as a subagent's (`delegation.notices`) ends a restricted
+    start, since nothing should have started one; and an update carrying a
+    parent call (`_meta.parentToolCallId`) is the subagent's, not the
+    planner's.
 
   A planner or a read-only task also runs nothing the repository's config
   names (ADR-0028). An agent that loads configuration from the directory it
@@ -1316,3 +1329,8 @@ the private directory:
   `minVersion`, so an agent below the floor is listed unavailable with "found X,
   needs Y or later" instead of failing at `initialize` after a goal was typed;
   the start check stays the last word.
+- 2026-11-10 — R3: a restricted start withholds the agent's own subagent or
+  delegation tool (Qwen's `--exclude-tools`, Cline's `disabledTools`, Gemini's
+  policy, Copilot's `--excluded-tools`, Cursor's hooks), refused by name too;
+  a background subagent, or a Cursor `cursor/task` notice, fails the start.
+- 2026-11-10 — R3: the live subagent probe passed for Qwen Code 0.27.1 and Cline 3.0.74 (OpenRouter `deepseek/deepseek-v4.1-flash`); Cline's `spawn_agent` was absent from the model's tools, so the refusal by name was not exercised live.

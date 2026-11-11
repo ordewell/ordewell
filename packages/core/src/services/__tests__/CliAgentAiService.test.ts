@@ -230,7 +230,8 @@ describe('CliAgentAiService — Claude Code', () => {
     expect(disallowed.includes('Task')).toBe(withheld);
     const prompt = args[args.indexOf('--append-system-prompt') + 1];
     expect(prompt.includes('your Agent tool')).toBe(!withheld);
-    if (withheld) expect(prompt).toContain('you have no agents of your own here');
+    if (withheld) expect(prompt).toContain('you have no agents of your own here and no research tasks');
+    expect(prompt).not.toContain('research tasks are how you delegate');
   });
 
   describe('a subplanner\'s own process (ADR-0057 R11)', () => {
@@ -669,7 +670,7 @@ describe('CliAgentAiService — Claude Code', () => {
     const sent = writes(spawned.processes[0]);
     expect(sent[0]).toContain('Add a cache layer\\n\\nCONTEXT AND BUDGETS (this turn):\\n- Task reads left for this message: 3.');
     expect(sent[1]).toContain('Redis, please.\\n\\nCONTEXT AND BUDGETS (this turn):\\n- Task reads left for this message: 2.');
-    expect(spawned.lastArgs().join(' ')).not.toContain('CONTEXT AND BUDGETS');
+    expect(spawned.lastArgs().join(' ')).not.toContain('CONTEXT AND BUDGETS (this turn):');
   });
 
   it('replays a persisted transcript instead of re-running research', async () => {
@@ -1483,10 +1484,10 @@ describe('CliAgentAiService — Codex', () => {
     };
     const withheld = await start(true);
     expect(withheld.config.features).toEqual({ multi_agent: false, multi_agent_v2: false });
-    expect(withheld.developerInstructions).not.toContain('your own subagents');
+    expect(withheld.developerInstructions).not.toContain('your spawn_agent tool');
     const planner = await start(false);
     expect(planner.config.features).toBeUndefined();
-    expect(planner.developerInstructions).toContain('your own subagents');
+    expect(planner.developerInstructions).toContain('your spawn_agent tool');
   });
 
   it('tells a planner on Windows which shell run_command runs there, and one elsewhere nothing', async () => {

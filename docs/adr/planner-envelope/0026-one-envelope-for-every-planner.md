@@ -5,6 +5,8 @@ amends: ["0008", "0009"]
 
 # 0026 — One envelope for every planner
 
+*Pending:* the subagent controls of Copilot CLI, Gemini CLI and Cursor Agent are checked against source and documentation, not a live run, until `node bench/live/acp-subagent-probe.mjs` passes against each.
+
 ## Problem
 
 ADR-0008 gave the API planner a research envelope: read-only commands run,
@@ -51,8 +53,11 @@ ops task when it needs judgment
   [ADR-0011](0011-sandboxing-the-planners-shell.md)'s sandbox. The harness
   never classifies a planner's command.
 - Harness shells are withheld: Claude's `Bash` and `Monitor`, OpenCode's
-  `bash` and `shell` (and its `task` subagents, which would run with whatever
-  permission their agent has). Codex's shell stays, inside its read-only,
+  `bash` and `shell` (and its `task` and `subagent` tools, which would run an
+  agent with whatever permission it has). An OpenCode planner's in-turn agent
+  is Ordewell's own instead, `spawn_research_agent` on its token, where its
+  workspace names a model for it
+  ([ADR-0066](0066-opencode-planners-get-ordewells-research-agent.md)). Codex's shell stays, inside its read-only,
   network-less sandbox; its instructions point it at `run_command`, as a
   task's point it at its tools. Where that sandbox cannot start, Codex's shell
   is switched off and `run_command` is its only one
@@ -145,7 +150,12 @@ How each runner raises them, checked live (Claude Code 2.1.296, codex-cli
   delete, move, command and mode switch by the kind the request or the turn's
   report names. Ordewell's own tools are allowed by exact name before any
   kind is read, and every other request, a read, a fetch or another MCP
-  tool, reaches the ledger and is decided here.
+  tool, reaches the ledger and is decided here. No ACP planner has a
+  subagent: the same controls withhold the agent's own delegation tool, a
+  call of it that still asks is refused by name before its kind is read, a
+  subagent still working when its call ends fails the turn, and a subagent's
+  updates are told apart from the planner's by their parent call (ADR-0060
+  R3).
 
 ### Standing approvals: the allowlist
 
@@ -340,3 +350,7 @@ refused from a workspace's environment files (ADR-0016). The effect allowlist
 - 2026-11-04 — a restricted start's config home may hold its own settings file; Cursor plans so (ADR-0060).
 - 2026-11-04 — Codex's own shell is off for a planner on Windows, where its sandbox cannot keep a command off the network ([ADR-0010](../platform/0010-windows-support.md)).
 - 2026-11-05 — Cline plans, made to ask before every use of its own tools (ADR-0060).
+- 2026-11-10 — an OpenCode 2.x planner's `subagent` tool admits Ordewell's read-only scout alone, behind `ORDEWELL_OPENCODE_SCOUT=1` and only when the server's resolved rules for it match Ordewell's; 1.x unchanged; the MCP research subagent rejected.
+- 2026-11-10 — every ACP planner's own subagent or delegation tool is withheld by its restricted start and refused by name; a background subagent fails the turn (ADR-0060 R3).
+- 2026-11-10 — the scout is removed after its live probe failed: an OpenCode planner's own agents are all denied, and its in-turn agent is Ordewell's research agent over MCP where its workspace names the model (ADR-0066).
+- 2026-11-10 — the live ACP subagent probe passed for Qwen Code 0.27.1 and Cline 3.0.74 (OpenRouter `deepseek/deepseek-v4.1-flash`): control read, every attempt refused or absent.

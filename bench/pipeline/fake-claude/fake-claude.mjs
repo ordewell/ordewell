@@ -24,11 +24,13 @@
  *   awaitMessage  after the file writes, wait for a message handed into the turn (a steer) before completing
  *
  * A planner's first message may carry `turnsFrom` instead: a file holding one
- * list of tool calls per turn, each `[tool, arguments]`, made on the Ordewell
- * server in order. A file, since a plan's prompts hold cues of their own. A
- * subplanner is parked between turns (ADR-0055 D18), so what is left of them is
- * kept beside the session, under FAKE_CLAUDE_STATE, for the `--resume` that
- * takes its next turn. A planner writes no file of the workspace.
+ * entry per turn, made in order. An entry is a list of tool calls, each
+ * `[tool, arguments]`, made on the Ordewell server, or `{ calls, text }` to end
+ * the turn saying `text` too (a summary, say). A file, since a plan's prompts
+ * hold cues of their own. What is left of them is kept beside the session,
+ * under FAKE_CLAUDE_STATE, for the session's next turn, in this process or in
+ * the `--resume` of a parked subplanner (ADR-0055 D18). A planner writes no
+ * file of the workspace.
  *
  * With FAKE_CLAUDE_LOG set, every prompt taken and every call's reply is
  * appended to that file as a line of JSON, for a test to read what was said.
@@ -171,14 +173,18 @@ function stateFile() {
   return path.join(process.env.FAKE_CLAUDE_STATE ?? os.tmpdir(), `${sessionId}.json`);
 }
 
-/** This turn's calls: from a first message's cue, or what a turn before it left. Null when this is no scripted planner. */
+/**
+ * This turn: from a first message's cue, or what a turn of this session left.
+ * Null when this is no scripted planner. A session's own file exists only once
+ * a turn of it wrote one, since a new session's id is fresh.
+ */
 function plannerTurn(cue) {
-  const from = cue.turnsFrom ?? (flag('--resume') !== undefined && fs.existsSync(stateFile()) ? stateFile() : null);
+  const from = cue.turnsFrom ?? (fs.existsSync(stateFile()) ? stateFile() : null);
   const left = from ? JSON.parse(fs.readFileSync(from, 'utf8')) : null;
   if (!left) return null;
-  const [calls = [], ...rest] = left;
+  const [turn = [], ...rest] = left;
   fs.writeFileSync(stateFile(), JSON.stringify(rest));
-  return calls;
+  return Array.isArray(turn) ? { calls: turn } : { calls: turn.calls ?? [], text: turn.text };
 }
 
 function logged(entry) {
@@ -196,9 +202,9 @@ async function makeCalls(calls) {
   }
 }
 
-async function runPlannerTurn(calls) {
+async function runPlannerTurn({ calls, text }) {
   await makeCalls(calls);
-  assistant([{ type: 'text', text: 'This turn is done.' }]);
+  assistant([{ type: 'text', text: text ?? 'This turn is done.' }]);
 }
 
 async function untilFile(file, signal) {
@@ -208,8 +214,8 @@ async function untilFile(file, signal) {
 async function runTurn(text, signal) {
   logged({ prompt: text });
   const cue = readCue(text);
-  const calls = plannerTurn(cue);
-  if (calls) return runPlannerTurn(calls);
+  const turn = plannerTurn(cue);
+  if (turn) return runPlannerTurn(turn);
   assistant([{ type: 'text', text: 'Starting the task.' }]);
 
   if (cue.delayMs) await sleep(cue.delayMs, signal);

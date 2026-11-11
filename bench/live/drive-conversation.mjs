@@ -149,7 +149,6 @@ const cfg = (model) => ({
   orchestratorModel: model,
   geminiModel: '',
   researchSubagentModel: '',
-  planMapEnabled: true,
   autonomousMode: true,
   worktreeIsolation: false,
   workspaceRepos: [],

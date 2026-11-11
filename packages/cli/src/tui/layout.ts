@@ -5,7 +5,7 @@ import { assignmentFlagText, checkpointCardLines, conversationLines, subplannerC
 import { bodyMode, chatEditorRoomFor, chatPaneWidth, planPaneWidth, stackRows, type BodyMode, type PaneRect } from './geometry';
 import { slashCommandTable, type SlashCategory } from './slash';
 import { checkpointsBelow, continuesTask, findTask, isTaskRunning, newestRemovable, planPaneOpen, planRows, plannerInFlight, questionAbove, queuedTarget, refFor, rootFrame, scriptTaskView, runnerSignInLine, selectedPlanRow, signedOutWithWayIn, viewOnly, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type Focus, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
-import { DELEGATION_OFFERED, SUPERVISOR_LEVEL_LABEL, type DiscoveredModel } from '@ordewell/core';
+import { DELEGATION_OFFERED, SUPERVISOR_LEVEL_LABEL, standingRecord, type DecisionRecordEntry, type DecisionRecordKind, type DiscoveredModel } from '@ordewell/core';
 import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
@@ -447,7 +447,7 @@ export function runHints(state: TuiState): string[] {
   const waiting = state.tasks.filter((t) => t.status === 'awaiting_user').length;
   if (waiting > 0) return [waiting === 1 ? '1 task waits for you' : `${waiting} tasks wait for you`, `${waiting} waiting`];
   // As plain as a task that waits on the user: the run waits on a merge (ADR-0020).
-  return state.runMerge?.paused && !state.child ? ['paused for Merge all: /handoff merge', 'paused · /handoff merge', 'merge paused'] : [];
+  return state.runMerge?.paused && !state.child ? ['paused for Merge all: /merge', 'paused · /merge', 'merge paused'] : [];
 }
 
 export const runHint = (state: TuiState): string => runHints(state)[0] ?? '';
@@ -1137,7 +1137,7 @@ export function planLayout(state: TuiState, rows: number, cols: number): PlanLay
     totalUsage ? style.grey(truncate(totalUsage, cols)) : '',
   ];
   if (unmerged > 0) {
-    const landed = style.dim(truncate(`${unmerged} landed task${unmerged === 1 ? '' : 's'} not merged: /handoff merge`, cols));
+    const landed = style.dim(truncate(`${unmerged} landed task${unmerged === 1 ? '' : 's'} not merged: /merge`, cols));
     if (totalUsage) lines.push(landed);
     else lines[1] = landed;
   }
@@ -1616,6 +1616,58 @@ export function helpLayout(rows: number, cols: number, sheet: HelpSheet = 'comma
   // One row for the frame's title, one for the sheet's own footer.
   const room = Math.max(1, rows - 2);
   return { lines, room, maxScroll: Math.max(0, lines.length - room) };
+}
+
+const RECORD_SECTIONS: ReadonlyArray<[DecisionRecordKind, string]> = [
+  ['decision', 'Decisions'],
+  ['constraint', 'Constraints, in your words'],
+  ['rejected', 'Rejected'],
+  ['question', 'Open questions'],
+];
+
+/**
+ * The planner's decision record as a read-only sheet, grouped by kind. What a
+ * later entry superseded is hidden unless asked for: it no longer stands, and
+ * the planner is not shown it either. The text is the planner's or the user's
+ * own, so it is sanitized where it is drawn.
+ */
+export function recordLayout(record: readonly DecisionRecordEntry[], all: boolean, rows: number, cols: number): HelpLayout {
+  const inner = Math.max(1, cols - 2);
+  const standing = new Set(standingRecord(record).map((entry) => entry.id));
+  const hidden = record.length - standing.size;
+  const shown = all ? record : record.filter((entry) => standing.has(entry.id));
+  const supersededBy = new Map(record.flatMap((entry) => (entry.supersedes ? [[entry.supersedes, entry.id] as const] : [])));
+  const hanging = (text: string, lead: string): string[] =>
+    wrap(sanitize(text).replace(/\s+/g, ' ').trim(), Math.max(1, inner - 2 - lead.length)).map((line, i) => `  ${i === 0 ? lead : ' '.repeat(lead.length)}${line}`);
+
+  const body: string[] = [];
+  if (record.length === 0) {
+    body.push(style.grey('Nothing recorded yet. The planner notes decisions, your constraints, what it rejected and what is still open as the conversation goes.'));
+  } else {
+    body.push(style.grey(`${standing.size} standing${hidden > 0 ? (all ? ` · ${hidden} superseded (shown)` : ` · ${hidden} superseded (/decisions all shows them)`) : ''}`));
+    for (const [kind, heading] of RECORD_SECTIONS) {
+      const entries = shown.filter((entry) => entry.kind === kind);
+      if (entries.length === 0) continue;
+      body.push('', style.bold(heading));
+      for (const entry of entries) {
+        const superseded = supersededBy.get(entry.id);
+        const text = entry.kind === 'constraint' ? `"${entry.text}"` : entry.text;
+        const tag = superseded ? style.grey(` (superseded by ${superseded})`) : '';
+        body.push(...hanging(text, `${entry.id} `).map((line, i) => (i === 0 ? line + tag : line)));
+        if (entry.why) body.push(...hanging(entry.why, 'why: ').map((line) => `    ${line.trimStart()}`));
+      }
+    }
+  }
+  const lines = body.flatMap((line) => wrap(line, inner));
+  // One row for the frame's title, one for the sheet's own footer.
+  const room = Math.max(1, rows - 2);
+  return { lines, room, maxScroll: Math.max(0, lines.length - room) };
+}
+
+/** How far the record sheet can scroll at the size it is about to be painted. */
+export function recordScrollMax(state: TuiState): number {
+  const overlay = state.overlay;
+  return overlay?.kind === 'record' ? recordLayout(state.decisionRecord, overlay.all === true, bodyRows(state), state.cols).maxScroll : 0;
 }
 
 const APPROVAL_HEADLINE: Record<ApprovalRequestView['kind'], string> = {

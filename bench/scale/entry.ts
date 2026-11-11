@@ -10,7 +10,7 @@ export { checkOf } from '../../packages/core/src/models/Loop';
 export { taskRowView } from '../../packages/core/src/taskRow';
 export { wakeUpDigest } from '../../packages/core/src/services/Supervisor';
 export { RunSupervision } from '../../packages/core/src/services/RunSupervision';
-export { composeAugmentedPrompt, renderPlanMap } from '../../packages/core/src/services/promptAugment';
+export { composeAugmentedPrompt } from '../../packages/core/src/services/promptAugment';
 export { LeaseHost } from '../../packages/core/src/services/sessionLease';
 export { openTaskLog, readTaskLog, listTaskLogAttempts } from '../../packages/core/src/utils/taskLogStore';
 export { saveSession, loadSession } from '../../packages/core/src/utils/sessionStore';

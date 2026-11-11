@@ -318,6 +318,24 @@ describe('the run\'s own waits', () => {
 
     expect(env.session.planTasks.length).toBe(3);
   });
+
+  it('offers no resolver for a landing git refused: the record holds no conflict to resolve', async () => {
+    const isolation = new FakeWorktreeIsolation();
+    isolation.outcomes.set('t1', 'failed');
+    const env = setup(isolation);
+    env.load([task('t1', 1), task('t2', 2)]);
+    await env.start();
+    env.latest('t2').reportComplete({ status: 'done', summary: 'ok' });
+    env.latest('t1').reportComplete({ status: 'done', summary: 'ok' });
+    await vi.waitFor(() => expect(taskOf(env.session, 't1')?.status).toBe('awaiting_user'));
+    await vi.waitFor(() => expect(env.ids()).toContain('conflict:t1:1'));
+
+    const [offered] = env.session.escalations().filter((e) => e.id === 'conflict:t1:1');
+    // What is offered is what the seam accepts: the option and its refusal must agree.
+    const answer = offered.options.some((o) => o.id === 'resolve-conflict') ? await env.session.answerEscalation(offered.id, 'resolve-conflict') : null;
+    expect(answer).toBeNull();
+    expect(offered.options.map((o) => o.id)).toEqual(['retry', 'skip']);
+  });
 });
 
 describe('a reload', () => {

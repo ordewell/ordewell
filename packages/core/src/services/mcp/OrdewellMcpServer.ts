@@ -4,6 +4,7 @@ import { Server as McpProtocolServer } from '@modelcontextprotocol/sdk/server/in
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, CancelledNotificationSchema, ErrorCode, ListToolsRequestSchema, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { extractPresentedToken } from '../../utils/daemonToken';
+import { RESEARCH_READ_TOOLS, type ResearchToolHandler } from './researchReadTools';
 import { PLANNER_TOOLS, READ_ONLY_TASK_TOOLS, TASK_TOOLS, plannerToolSet, taskToolSet, toolListing, type McpTool, type PlannerToolHandler, type TaskToolHandler } from './tools';
 
 /**
@@ -53,6 +54,18 @@ export interface PlannerTokenScope {
   delegates?: boolean;
   /** A subplanner's token (ADR-0055 D5): it serves `task_complete` and `checkpoint` too, which its handler sends to the parent's attempt. */
   subplanner?: boolean;
+  /** It serves Ordewell's `spawn_research_agent` (ADR-0066), for a harness planner with no agents of its own: a token without it does not change by a byte. */
+  research?: boolean;
+}
+
+/**
+ * A research agent's token: the workspace reads alone, for one planner
+ * session's agent on the user's OpenCode login. It names no task, board or
+ * planner tool, so nothing but a read can be served on it.
+ */
+export interface ResearchTokenScope {
+  /** The planner session the agent researches for. */
+  sessionId: string;
 }
 
 /** Where a runner reaches the server and what it presents there. Never put either half in a prompt. */
@@ -152,7 +165,8 @@ type InFlight = Map<string, Set<AbortController>>;
 
 type Grant =
   | { role: 'task'; scope: TaskTokenScope; handler: TaskToolHandler; revoked: AbortController; calls: InFlight; contact: ContactRecord }
-  | { role: 'planner'; scope: PlannerTokenScope; handler: PlannerToolHandler; revoked: AbortController; calls: InFlight; contact: ContactRecord };
+  | { role: 'planner'; scope: PlannerTokenScope; handler: PlannerToolHandler; revoked: AbortController; calls: InFlight; contact: ContactRecord }
+  | { role: 'research'; scope: ResearchTokenScope; handler: ResearchToolHandler; revoked: AbortController; calls: InFlight; contact: ContactRecord };
 
 export class OrdewellMcpServer {
   private readonly grants = new Map<string, Grant>();
@@ -197,6 +211,10 @@ export class OrdewellMcpServer {
       ...(hidden.length > 0 ? { hidden } : {}),
       ...(extraTools.length > 0 ? { extraTools } : {}),
     };
+  }
+
+  async issueResearchToken(scope: ResearchTokenScope, handler: ResearchToolHandler): Promise<McpCredential> {
+    return this.issue({ role: 'research', scope: { ...scope }, handler, revoked: new AbortController(), calls: new Map(), contact: new ContactRecord() });
   }
 
   /** Every token still good here: secrets the outbound check keeps out of a URL (ADR-0027). */
@@ -297,6 +315,7 @@ export class OrdewellMcpServer {
     // list and every call are fixed by the token on that very request.
     const mcp = new McpProtocolServer({ name: 'ordewell', version: '1' }, { capabilities: { tools: {} } });
     if (grant.role === 'task') serveTools(mcp, taskToolSet(grant.scope), taskInventory(grant.scope), grant.handler, grant, this.heartbeatMs);
+    else if (grant.role === 'research') serveTools(mcp, RESEARCH_READ_TOOLS, researchInventory(), grant.handler, grant, this.heartbeatMs);
     else {
       const tools = plannerToolSet(grant.scope);
       serveTools(mcp, tools.filter((tool) => !grant.scope.hidden?.includes(tool.name)), plannerInventory(grant.scope.hidden ?? [], tools), grant.handler, grant, this.heartbeatMs);
@@ -360,6 +379,13 @@ function taskInventory(scope: Pick<TaskTokenScope, 'readOnly' | 'board'>): ToolI
   const candidates = [...PLANNER_TOOLS, ...TASK_TOOLS, ...READ_ONLY_TASK_TOOLS];
   const withheld = [...new Set(candidates.map((t) => t.name))].filter((name) => !served.includes(name));
   return { served, withheld: withheld.map((name) => ({ name, reason: READ_ONLY_TASK_TOOLS.some((t) => t.name === name) ? 'read-only tasks only' : TASK_TOOLS.some((t) => t.name === name) ? 'change tasks only' : 'planner tokens only' })) };
+}
+
+/** A research token's inventory: the reads, and every planner and task tool it is refused. */
+function researchInventory(): ToolInventory {
+  const served = RESEARCH_READ_TOOLS.map((t) => t.name);
+  const others = [...new Set([...PLANNER_TOOLS, ...TASK_TOOLS, ...READ_ONLY_TASK_TOOLS].map((t) => t.name))].filter((name) => !served.includes(name));
+  return { served, withheld: others.map((name) => ({ name, reason: 'research agents read the workspace only' })) };
 }
 
 function plannerInventory(hidden: readonly string[], tools: readonly McpTool<PlannerToolHandler>[] = PLANNER_TOOLS): ToolInventory {

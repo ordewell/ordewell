@@ -1459,3 +1459,26 @@ function redact(text: string, held: Iterable<string>, agentText: boolean): strin
 
   return out;
 }
+
+/** A value Ordewell holds, with the name it holds it by when it has one. */
+export interface HeldValue {
+  value: string;
+  /** The variable the value is handed over as (`OPENROUTER_API_KEY`): what a summary says in its place. */
+  name?: string;
+}
+
+/**
+ * Redact a planner summary, which is replayed into every later context and
+ * may be copied into a brief (ADR-0061 P1). A whole value Ordewell holds by a
+ * name becomes a reference to that name, which the planner can still act on;
+ * what is left goes as agent text does — held parts, then names and shapes.
+ */
+export function redactSummaryText(text: string, held: Iterable<HeldValue> = []): string {
+  const values = [...held].map(({ value, name }) => ({ value: value.trim(), name })).filter(({ value }) => value.length >= MIN_HELD_LENGTH);
+  let out = text;
+  // Longest first, so a value that contains another is named as itself.
+  for (const { value, name } of [...values].sort((a, b) => b.value.length - a.value.length)) {
+    if (name) out = out.split(value).join(`[secret held as ${name}]`);
+  }
+  return redactAgentText(out, values.map(({ value }) => value));
+}

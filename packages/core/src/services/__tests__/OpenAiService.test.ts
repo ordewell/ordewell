@@ -208,7 +208,7 @@ describe('OpenAiService turn budgets', () => {
       'in-process\n\nCONTEXT AND BUDGETS (this turn):\n- Web reads left this turn: 39.',
     ]);
     expect(messages[0].role).toBe('system');
-    expect(messages[0].content).not.toContain('CONTEXT AND BUDGETS');
+    expect(messages[0].content).not.toContain('CONTEXT AND BUDGETS (this turn):');
   });
 });
 
@@ -486,7 +486,7 @@ describe('OpenAiService execution tools (ADR-0029)', () => {
 
     expect(toolNames(0)).toEqual(expect.arrayContaining(['run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'message_task', 'answer_approval', 'answer_checkpoint']));
     expect(systemPrompt()).toContain('RUNNING THE PLAN:');
-    expect(systemPrompt()).toMatch(/- answer_checkpoint .*Only the supervisor at Act may, in a wake-up turn; in the user's own turn they answer it from the task's checkpoint card/);
+    expect(systemPrompt()).toMatch(/- answer_checkpoint .*Only the supervisor at Act may, in a wake-up turn; in the user's own turn they answer it themselves/);
     expect(stopTask).toHaveBeenCalledWith({ task: '2' }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
     const fedBack = (createSpy.mock.calls[1][0] as { messages: Array<{ role: string; content: string }> }).messages.find((m) => m.role === 'tool');
     expect(fedBack?.content).toBe('{"ok":true,"result":"Stopped task #2."}');
@@ -510,6 +510,24 @@ describe('OpenAiService execution tools (ADR-0029)', () => {
     expect(toolNames(0)).toContain('post');
     expect(post).toHaveBeenCalledWith(postCall, expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(turn.researchLog[0]).toMatchObject({ tool: 'agent_tool', toolLabel: 'post', success: true, result: 'Posted board:root:E1.' });
+  });
+
+  it('declares `record` to every planner and answers it through the offered handler (ADR-0067)', async () => {
+    const recordCall = { entries: [{ kind: 'decision', text: 'Use v2', why: 'v1 is deprecated' }] };
+    createSpy
+      .mockReturnValueOnce(streamOf([{ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call-1', function: { name: 'record', arguments: JSON.stringify(recordCall) } }] }, finish_reason: 'tool_calls' }] }]))
+      .mockReturnValueOnce(streamOf([{ choices: [{ delta: { content: 'Recorded.' }, finish_reason: 'stop' }] }]));
+    const record = vi.fn(async () => ({ text: '{"ok":true,"added":[{"id":"D1","kind":"decision"}]}' }));
+
+    const turn = await new OpenAiService(cfg({ researchMaxSteps: 10 } as Partial<IConfig>)).startConversation({
+      goal: 'use v2', runners: ['claude-code'], modelsByRunner: {}, fs: fakeFileSystem(), onProgress: () => {},
+      plannerTools: { sessionId: 's1', handler: { record } },
+    });
+
+    expect(toolNames(0)).toContain('record');
+    expect(toolNames(0)).not.toContain('post');
+    expect(record).toHaveBeenCalledWith(recordCall, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(turn.researchLog[0]).toMatchObject({ tool: 'agent_tool', toolLabel: 'record', success: true });
   });
 
   it('declares `post` to a subplanner, and to no flat planner', async () => {

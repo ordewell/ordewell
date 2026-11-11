@@ -78,7 +78,7 @@ function readIn(args: ReadTaskArgs, scope: ReadScope): McpToolReply {
   const name = named(target.id);
   if (!readable.has(target.id)) {
     const allowed = flattenTasks(plan).filter((t) => readable.has(t.id)).map((t) => named(t.id));
-    return { isError: true, text: `${name} is not a task this one may read. It may read itself, the tasks it depends on, directly or not, and its loop's other end: ${listed(allowed)}.` };
+    return { isError: true, text: `${name} is not a task this one may read. It may read itself, the tasks it depends on, directly or not, and the other tasks of its loop: ${listed(allowed)}.` };
   }
   const attempts = log.attempts(target.id);
   const latest = attempts.at(-1);
@@ -95,10 +95,31 @@ function readIn(args: ReadTaskArgs, scope: ReadScope): McpToolReply {
   const at = `${taskName(target.id)}@${attempt}`;
   if (page) return listingPage(logged, `${name}, ${of}`, at, page.from, scope);
   if (logged) return wholeHandoff(logged, `${name}, ${of}`, at, args, scope);
+  // A running attempt's handoff is still to come, and an old one read as if it were current misleads.
+  const earlier = asked === undefined && !target.handoff && target.status !== 'in_progress' ? earlierHandoff(target, attempts, attempt, scope) : undefined;
+  if (earlier) return earlier(args);
   // What the plan keeps is one attempt's, so it stands in for no other.
   if (attempt !== latest && !digested) return { text: `${name} has no handoff from ${of}: it ended without a task_complete call, or ran before handoffs.` };
   if (target.handoff && (asked === undefined || digested)) return { text: [`${name}: no saved log of this session holds its handoff, so this is what the plan keeps of it.`, '', wordsFrom('Handoff', name), ...digestLines(target.handoff, taskName)].join('\n') };
   return { text: noHandoff(target, name, attempt === undefined ? undefined : of) };
+}
+
+/**
+ * The newest handoff an earlier attempt left, read where the latest ended with
+ * none: cut off by a stop, or retried and then skipped. A skipped or failed
+ * task's last words stay readable, said to be from that attempt (ADR-0047).
+ */
+function earlierHandoff(target: Task, attempts: readonly number[], latest: number | undefined, scope: ReadScope): ((args: ReadTaskArgs) => McpToolReply) | undefined {
+  const found = attempts.filter((a) => latest === undefined || a < latest).reverse()
+    .map((a) => ({ a, handoff: loggedHandoff(scope.log.events(target.id, a)) }))
+    .find((e) => e.handoff !== undefined);
+  if (!found?.handoff || latest === undefined) return undefined;
+  const { a, handoff } = found;
+  const name = `${scope.path}${titledTaskRefOf(scope.plan, target.id) ?? target.id}`;
+  return (args) => {
+    const read = wholeHandoff(handoff, `${name}, attempt ${a} of ${attempts.length}`, `${namesIn(scope)(target.id)}@${a}`, args, scope);
+    return { text: `Its attempt ${latest} left no handoff, so this is the newest handoff it has.\n\n${read.text}` };
+  };
 }
 
 /** A read of a removed task, reached by citation ({@link removedAttempt}); a reader with none is told what any unknown reference is told. */

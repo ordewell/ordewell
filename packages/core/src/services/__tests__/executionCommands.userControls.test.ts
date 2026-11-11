@@ -6,6 +6,7 @@ import type { IRunner } from '../../interfaces/IRunner';
 import type { SessionMessage } from '../SessionMessage';
 import type { ExecutionActor } from '../../models/Execution';
 import type { ExecutionCommand } from '../ExecutionCommands';
+import { SURFACE_CONTROLS } from '../surfaceControls';
 
 /**
  * The user's own controls at the command seam (ADR-0029): each is checked,
@@ -169,7 +170,7 @@ describe('mark_complete and mark_not_done', () => {
 
     const outcome = await env.run({ command: 'mark_complete', task: 't1' }, actor);
 
-    expect(outcome).toEqual({ ok: false, outcome: 'refused', message: expect.stringMatching(/^Mark complete is the user's alone/) });
+    expect(outcome).toEqual({ ok: false, outcome: 'refused', message: expect.stringMatching(/^Marking a task complete is the user's alone/) });
     expect(taskOf(env.session, 't1')!.status).toBe('pending');
     expect(env.timeline().at(-1)!.record).toMatchObject({ command: 'mark_complete', outcome: 'refused' });
   });
@@ -183,14 +184,14 @@ describe('interrupt_task', () => {
 
     expect(await env.run({ command: 'interrupt_task', task: 't1' })).toEqual({ ok: true, message: 'Interrupted task #1 "Task t1": it waits for your message.' });
     expect(env.latest('t1').interrupts).toBe(1);
-    expect((await env.run({ command: 'interrupt_task', task: 't1' }, PLANNER)).message).toMatch(/^Interrupt is the user's own control/);
+    expect((await env.run({ command: 'interrupt_task', task: 't1' }, PLANNER)).message).toMatch(/^Only the user may interrupt a running task: they are in this conversation/);
     expect(env.latest('t1').interrupts).toBe(1);
     env.latest('t1').state = 'working';
     await env.session.execute({ command: 'interrupt_task', task: 't1' }, { kind: 'user' });
     expect(env.timeline().map((m) => m.text)).toEqual([
       'You started the plan.',
       'You interrupted task #1 "Task t1".',
-      expect.stringMatching(/^The planner asked to interrupt task #1 "Task t1"; refused: Interrupt is the user's own control/),
+      expect.stringMatching(/^The planner asked to interrupt task #1 "Task t1"; refused: Only the user may interrupt a running task/),
       'You interrupted task #1 "Task t1".',
     ]);
   });
@@ -214,7 +215,7 @@ describe('force sending and taking back task messages', () => {
     expect(outcome).toEqual({ ok: true, message: 'Sent to task #1 "Task t1" now: its turn is interrupted, and the runner reads it next.', payload: { kind: 'message', id: 'msg-1' } });
     expect(env.latest('t1').interrupts).toBe(1);
     expect(env.timeline().at(-1)!.text).toBe('You force sent task #1 "Task t1" a message: "stop and use the cache"');
-    expect((await env.run({ command: 'message_task', task: 't1', text: 'now', force: true }, PLANNER)).message).toMatch(/^Force send is the user's own control/);
+    expect((await env.run({ command: 'message_task', task: 't1', text: 'now', force: true }, PLANNER)).message).toMatch(/^Only the user may force send a queued message/);
   });
 
   it('force sends a queued message, and takes one back, refusing one already delivered', async () => {
@@ -256,7 +257,7 @@ describe('cancel_resume', () => {
     expect(await env.run({ command: 'cancel_resume', task: 't1' })).toEqual({ ok: true, message: 'Task #1 "Task t1" no longer resumes on its own at its usage limit\'s reset: resume it when you choose.' });
     expect(taskOf(env.session, 't1')!.resumeAt).toBeUndefined();
     expect((await env.run({ command: 'cancel_resume', task: 't1' })).message).toBe('Task #1 "Task t1" has no resume scheduled.');
-    expect((await env.run({ command: 'cancel_resume', task: 't2' }, ACT)).message).toMatch(/^Cancelling a scheduled resume is the user's own control/);
+    expect((await env.run({ command: 'cancel_resume', task: 't2' }, ACT)).message).toMatch(/^Only the user may cancel a scheduled resume/);
     expect(env.timeline().map((m) => [m.record.command, m.record.outcome])).toEqual([
       ['cancel_resume', 'done'], ['cancel_resume', 'refused'], ['cancel_resume', 'refused'],
     ]);
@@ -301,10 +302,10 @@ describe('answer_checkpoint', () => {
 
   describe('by anyone but the user, and the supervisor at Act', () => {
     it.each([
-      ['a planner turn', PLANNER as ExecutionActor, /^A checkpoint is the user's to answer in their own turn.*from the task's checkpoint card \(Approve or Reject\).*Only the supervisor at Act answers one, in a wake-up turn\.$/],
-      ['autorun', { kind: 'autorun' } as ExecutionActor, /^A checkpoint is the user's to answer in their own turn.*checkpoint card/],
-      ['the supervisor at Watch', { kind: 'supervisor', level: 'watch' } as ExecutionActor, /^You are the supervisor at Watch.*cannot answer a checkpoint.*checkpoint card/],
-      ['the supervisor with the supervisor off', { kind: 'supervisor', level: 'off' } as ExecutionActor, /^The supervisor is off.*cannot answer a checkpoint.*checkpoint card/],
+      ['a planner turn', PLANNER as ExecutionActor, /^A checkpoint is the user's to answer in their own turn.*The user answers it themselves \(.*\).*Only the supervisor at Act answers one, in a wake-up turn\.$/],
+      ['autorun', { kind: 'autorun' } as ExecutionActor, /^A checkpoint is the user's to answer in their own turn.*The user answers it themselves/],
+      ['the supervisor at Watch', { kind: 'supervisor', level: 'watch' } as ExecutionActor, /^You are the supervisor at Watch.*cannot answer a checkpoint.*The user answers it themselves/],
+      ['the supervisor with the supervisor off', { kind: 'supervisor', level: 'off' } as ExecutionActor, /^The supervisor is off.*cannot answer a checkpoint.*The user answers it themselves/],
     ])('refuses %s, saying who answers instead, and leaves the runner waiting', async (_who, actor, words) => {
       const env = await atCheckpoint();
 
@@ -372,13 +373,13 @@ describe('message_task to a task at a checkpoint', () => {
     expect(await message(env, USER)).toMatchObject({ ok: false, outcome: 'refused', message: 'Task #1 "Task t1" is at a checkpoint: approve or reject it instead.' });
   });
 
-  it('tells a planner turn that the user answers it from the task\'s checkpoint card', async () => {
+  it('tells a planner turn that the user answers it themselves, and how', async () => {
     const env = await atCheckpoint();
 
     expect(await message(env, PLANNER)).toMatchObject({
       ok: false,
       outcome: 'refused',
-      message: 'Task #1 "Task t1" is at a checkpoint, which a message does not answer: the user answers it from the task\'s checkpoint card (Approve or Reject). Tell them what the runner asks and what you would answer, with why.',
+      message: `Task #1 "Task t1" is at a checkpoint, which a message does not answer: the user answers it themselves (${SURFACE_CONTROLS.unknown.answerCheckpoint}). Tell them what the runner asks and what you would answer, with why.`,
     });
   });
 
@@ -409,7 +410,7 @@ describe('approve_review', () => {
     const env = setup();
     env.load([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], { status: 'draft' });
 
-    expect((await env.run({ command: 'approve_review' }, PLANNER)).message).toMatch(/^Approving the review is the user's own control/);
+    expect((await env.run({ command: 'approve_review' }, PLANNER)).message).toMatch(/^Only the user may approve the review/);
     expect(env.spawned('t1')).toHaveLength(0);
     await env.session.execute({ command: 'approve_review' }, { kind: 'user' });
 
@@ -535,7 +536,7 @@ describe('the user\'s controls are the user\'s', () => {
 
       const outcome = await env.run(command, actor);
 
-      expect(outcome).toMatchObject({ ok: false, outcome: 'refused', message: expect.stringMatching(/is the user's (own control|alone)/) });
+      expect(outcome).toMatchObject({ ok: false, outcome: 'refused', message: expect.stringMatching(/^(Only the user may|Marking a task complete is the user's alone)/) });
       expect(env.session.planTasks.map((t) => t.status)).toEqual(before);
       expect(env.spawned('t2')).toHaveLength(0);
       expect(env.latest('t1').interrupts).toBe(0);

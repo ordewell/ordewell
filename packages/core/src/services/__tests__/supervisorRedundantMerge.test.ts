@@ -186,7 +186,7 @@ describe('controls a correction must keep', () => {
     env.run.of('t2').reportComplete({ status: 'done', summary: '' });
     await until(() => env.planner.calls.length === 3);
     expect(env.session.runMergeView()).not.toBeNull();
-    expect(runUpdate(env.planner.calls[2].message)).toMatch(/its landed work waits for Merge all/);
+    expect(runUpdate(env.planner.calls[2].message)).toMatch(/its landed work is not merged yet/);
     expect(runUpdate(env.planner.calls[2].message)).not.toMatch(/nothing to merge/);
 
     const merge = await env.planner.tools().mergeAll!({}, ctx);

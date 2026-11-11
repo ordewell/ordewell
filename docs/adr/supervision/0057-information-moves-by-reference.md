@@ -161,6 +161,11 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   - **the cohort is done**: every task that became ready with this one has ended, read as every
     task with its dependencies;
   - **a failure blocks work** that would otherwise be ready;
+  - **a supervisor at Act can retry it**: at Act, a `task_failed` for a task any other task
+    depends on, however far back and ready or not, is due at its own merge window, as an event
+    that wakes at once is. A retry then runs beside the rest instead of after it. A failure
+    nothing depends on, `task_idle`, and every event at Watch stay held, since a Watch
+    supervisor cannot retry;
   - **a maximum age**: 80% of the planner's cache TTL once anything is held, so a wake finds its
     prefix warm. Each connector states its TTL, the shortest it may be since that is the one a wake
     can count on, an unknown one reads as five minutes, and time is counted as the provider counts
@@ -347,6 +352,10 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   to bound what it holds. A rise is typed, keyed by what the plan above declared, and comes with a landing.
 - **A line that wakes the subplanner.** Rejected: R4 keeps waking in one table, and a landing that moves a
   sibling's interface does not need a model now. It would buy a turn over the whole context per landing.
+- **Holding every failure at Act until it blocks ready work.** Dropped: it traded the run's wall-clock for
+  fewer wake-up turns. A failure early in a wide run woke nobody until its dependents were otherwise ready, so
+  the retry started only after every sibling ended and added its whole duration to the critical path, while a
+  retry is what an Act supervisor is for.
 - **An author's own blob sha.** Rejected: R9's flags are computed, and a sha a model sends is a claim.
 
 - **Narrowing a subplanner's native tools alone.** Rejected, by a real run of the flags: with connectors left on
@@ -436,3 +445,4 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 - 2026-11-01 — from review: a report outlasts a repair (R2), a line break is one set everywhere and no path or title can make one (R3), and a check's command counts in a pin at any length (R10).
 - 2026-11-01 — from review: VS Code's handoff panel holds what an author wrote, every line indented on the one set of breaks, as the TUI does for every handoff (R3).
 - 2026-11-02 — from an audit of the flow: R2's counts read the tree as it stands while a report's list reads what stood on it, a listing and a board's map page on rather than stop, a board and a page spend a read through `task_output`, and a reference with no attempt reads the logs where a retry cleared the digest.
+- 2026-11-10 — R4: at Act, a failure another task depends on wakes at its merge window, so a retry runs beside the rest.

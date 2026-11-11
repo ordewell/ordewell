@@ -34,6 +34,10 @@ import { settleReply, type ReplyAttempt } from '../settleReply';
 import { ReplySplitter } from '../replyStream';
 import { redactSourceText } from '../../utils/redactSecrets';
 import { abortScope } from '../../utils/abortScope';
+import { harnessResearchAgent, withResearchAgent, type HarnessResearchAgentDeps } from './harnessResearchAgent';
+import { researchAgentSetting, type OfferedResearchAgent, type ResearchAgentSetting } from './researchAgentSetting';
+import { loginResearchAgent, openCodeVersion } from './openCodeResearchAgent';
+import type { PlannerToolHandler } from '../mcp';
 import { providerForRunner, runnerForProvider } from '../ProviderRegistry';
 import { recordRunnerAuth, signedOutFromFailure } from '../runnerAuth';
 import { describePlannerNotReady, TERMINAL_UI_COMMANDS, type PlannerNotReady } from '../plannerReadiness';
@@ -91,6 +95,20 @@ export interface CliAgentAiServiceDeps extends Partial<AgentProcessDeps> {
   turnBudgets?: TurnBudgets;
   /** Open the execution lease of the turn a process starts for (ADR-0059 L1); absent, it runs at `workspaceRoot`. */
   openLease?: (signal: AbortSignal) => Promise<OpenLease> | undefined;
+  /**
+   * The confined subagent chat on the provider and model the workspace's
+   * `ORDEWELL_RESEARCH_AGENT_MODEL` names, for a planner with no agents of its
+   * own here (ADR-0066): served as `spawn_research_agent` on its token. Absent,
+   * or a runner with agents of its own, and nothing is served.
+   */
+  researchAgent?: (offer: OfferedResearchAgent) => Pick<HarnessResearchAgentDeps, 'createChat' | 'model'>;
+  /**
+   * The OpenCode an OpenCode 2.x planner's research agent runs on when the
+   * workspace names no model for it (ADR-0066): a serve of its own, on the
+   * user's login and the planner's model. `args` come before `serve` or
+   * `--version`. Absent, there is no login agent.
+   */
+  loginResearch?: { command: string; args?: string[] };
 }
 
 interface OneShotCatalog {
@@ -194,6 +212,15 @@ class PlannerSession {
    * or a process restart after it started; surfaces get each once, in order.
    */
   readonly subagents = { started: new Set<string>(), finished: new Set<string>() };
+  /** Ordewell's research agent, where this session serves one (ADR-0066); its token lists `spawn_research_agent`. */
+  research?: NonNullable<PlannerToolHandler['spawnResearchAgent']>;
+  /** Where the research agent's progress goes: the open turn's, or nowhere between turns. */
+  turnSink?: (progress: ResearchProgress) => void;
+  /**
+   * Ends what the research agent holds: the login agent's serve and token.
+   * Only a discard calls it; a planner restart keeps the serve (ADR-0066).
+   */
+  closeResearch?: () => Promise<void>;
   private readonly discarding = new AbortController();
 
   constructor(private readonly server: OrdewellMcpServer) {}
@@ -213,6 +240,7 @@ class PlannerSession {
   discard(): void {
     this.discarding.abort();
     this.stop();
+    void this.closeResearch?.();
   }
 }
 
@@ -278,6 +306,15 @@ export class CliAgentAiService implements IAiService {
   private readonly turnBudgets: TurnBudgets | undefined;
   private readonly projectServerApprovals: ProjectServerApprovals;
   private readonly openLease: CliAgentAiServiceDeps['openLease'];
+  private readonly researchAgent: CliAgentAiServiceDeps['researchAgent'];
+  private readonly loginResearch: CliAgentAiServiceDeps['loginResearch'];
+  /**
+   * The login agent's launch: the planner's, minus the hook that records the
+   * planner process's secrets, which a serve's spawn would overwrite.
+   */
+  private readonly researchLaunch: AgentProcessDeps;
+  /** Set once `--version` reported 2.x; anything else is asked again next session, after an update. */
+  private openCodeV2 = false;
   private activeAbort: AbortController | null = null;
   /** See {@link compactions}. */
   private compacted = 0;
@@ -306,6 +343,9 @@ export class CliAgentAiService implements IAiService {
     this.turnBudgets = deps.turnBudgets;
     this.projectServerApprovals = deps.projectServerApprovals ?? fileProjectServerApprovals();
     this.openLease = deps.openLease;
+    this.researchAgent = deps.researchAgent;
+    this.loginResearch = deps.loginResearch;
+    this.researchLaunch = { ...this.processDeps, spawn };
   }
 
   hasActiveConversation(): boolean { return this.session?.start != null; }
@@ -380,6 +420,8 @@ export class CliAgentAiService implements IAiService {
     this.session = session;
     session.notice = req.notice;
 
+    // Only a runner whose own agents are withheld gets Ordewell's (ADR-0066); a session refused agents gets none.
+    if (this.runner === 'opencode' && !req.plannerTools.noSubagents) await this.offerResearchAgent(session, req, req.plannerTools.sessionId);
     const contextStr = await collectResearchContext(req.fs, req.runners);
     const researchShell = this.researchShell();
     const systemPrompt = buildConversationSystemPrompt(
@@ -388,7 +430,7 @@ export class CliAgentAiService implements IAiService {
       req.modelsByRunner,
       req.runners,
       req.runnerModes,
-      { harness: true, runner: this.runner, isolatedExecution: req.isolatedExecution, skills: req.skills, execution: req.plannerTools !== undefined, autorun: req.autorun, delegation: req.delegation, subplanner: req.subplanner, ...(req.plannerTools.noSubagents ? { subagents: false } : {}), ...(researchShell ? { researchShell } : {}) },
+      { harness: true, runner: this.runner, isolatedExecution: req.isolatedExecution, skills: req.skills, execution: req.plannerTools !== undefined, autorun: req.autorun, delegation: req.delegation, subplanner: req.subplanner, ...(req.plannerTools.noSubagents ? { subagents: false } : {}), ...(session.research ? { researchAgent: true } : {}), ...(researchShell ? { researchShell } : {}) },
     );
 
     const fetcher = req.fetcher;
@@ -714,7 +756,9 @@ export class CliAgentAiService implements IAiService {
           const mapped = mapAgentTool(event.name);
           const args = JSON.stringify(normalizeAgentArgs(mapped.tool, event.args));
           const subagentId = event.subagentId;
-          pendingCalls.set(event.id, { tool: mapped.tool, toolLabel: mapped.toolLabel, args, subagentId, at: new Date().toISOString(), slot: logSlots.push(null) - 1 });
+          pendingCalls.set(event.id, {
+            tool: mapped.tool, toolLabel: mapped.toolLabel, args, subagentId, at: new Date().toISOString(), slot: logSlots.push(null) - 1,
+          });
           onProgress({ type: 'tool_call', tool: mapped.tool, toolLabel: mapped.toolLabel, toolArgs: args, toolCallId: event.id, subagentId });
           return;
         }
@@ -822,6 +866,13 @@ export class CliAgentAiService implements IAiService {
     };
     // A turn that was the attach check is already running: this listens to it from its start.
     const check = checks.find((candidate) => candidate.adapter === adapter);
+    // The research agent's steps join this turn's log as a subagent's do; its
+    // usage and lifecycle reach the surfaces through the same progress.
+    session.turnSink = (progress) => {
+      if (progress.type === 'tool_result' && progress.step) logSlots.push({ ...progress.step, result: truncate(redactSourceText(progress.step.result)) });
+      onProgress(progress);
+    };
+    const sink = session.turnSink;
     const sent = check ? check.listen(onEvent) : adapter.send(message, onEvent, signal, () => onProgress({ type: 'liveness' }));
     try {
       await sent;
@@ -829,6 +880,7 @@ export class CliAgentAiService implements IAiService {
       session.stop();
       throw err;
     } finally {
+      if (session.turnSink === sink) session.turnSink = undefined;
       if (adapter.nativeSessionId()) session.takingUp = false;
       // A runner asks only mid-turn, so what is still open once the turn is over was dropped by whatever ended it.
       for (const asked of openAsks.values()) asked.abort();
@@ -871,6 +923,60 @@ export class CliAgentAiService implements IAiService {
    * `CODEX_HOME`/`HOME` lives there, so the reader that knows the runner's
    * "Not logged in" line is not this user's answer sees it.
    */
+  /**
+   * The research agent a session is given (ADR-0066). A workspace that names
+   * the agent's model gets the API-key agent, or a warning when it cannot run;
+   * otherwise OpenCode 2.x gets the login agent, and anything else none, so
+   * the planner delegates with research tasks. The login agent's own pre-use
+   * check runs on its first call, and its failure leaves research tasks too.
+   */
+  private async offerResearchAgent(session: PlannerSession, req: ConversationRequest, sessionId: string): Promise<void> {
+    const setting = await this.researchAgentSetting();
+    const turnSink = () => session.turnSink;
+    if (setting.kind === 'offered') {
+      if (this.researchAgent) session.research = harnessResearchAgent({ ...this.researchAgent(setting), fs: req.fs, turnSink });
+      return;
+    }
+    if (setting.kind === 'unavailable') {
+      if (this.researchAgent) req.notice?.('warn', `No research agent for this planner, which delegates with research tasks instead: ${setting.reason}`);
+      return;
+    }
+    if (!this.loginResearch || !await this.onOpenCodeV2()) return;
+    const agent = loginResearchAgent({
+      cwd: this.workspaceRoot(),
+      sessionId,
+      model: this.plannerModel(),
+      fs: req.fs,
+      turnSink,
+      mcpServer: this.mcpServer,
+      launch: this.researchLaunch,
+      command: this.loginResearch.command,
+      args: this.loginResearch.args,
+      log: (line) => (req.notice ? req.notice('warn', line) : console.error(line)),
+    });
+    session.research = agent.handler;
+    session.closeResearch = () => agent.close();
+  }
+
+  private async onOpenCodeV2(): Promise<boolean> {
+    if (!this.openCodeV2 && this.loginResearch) {
+      const version = await openCodeVersion({ cwd: this.workspaceRoot(), launch: this.researchLaunch, command: this.loginResearch.command, args: this.loginResearch.args });
+      this.openCodeV2 = version?.startsWith('2.') ?? false;
+    }
+    return this.openCodeV2;
+  }
+
+  /** Read from the merged env the planner spawns with (ADR-0016), so `.ordewell/env` can name the agent's model and hold its key. */
+  private async researchAgentSetting(): Promise<ResearchAgentSetting> {
+    let workspace: Record<string, string> = {};
+    try {
+      workspace = await (this.processDeps.workspaceEnv ?? workspaceEnvOf)(this.workspaceRoot());
+    } catch {
+      // The workspace's own variables could not be read; the daemon's still stand.
+    }
+    return researchAgentSetting({ ...process.env, ...workspace });
+  }
+
   private async explainSignedOut(failure: string): Promise<string> {
     const manifest = BUILTIN_MANIFESTS.find((candidate) => candidate.name === this.runner);
     if (!manifest) return failure;
@@ -933,7 +1039,8 @@ export class CliAgentAiService implements IAiService {
           hidden: tools.withheld ? [...hidden ?? [], ...tools.withheld] : hidden,
           ...(tools.delegates ? { delegates: true } : {}),
           ...(tools.subplanner ? { subplanner: true } : {}),
-        }, tools.handler);
+          ...(session.research ? { research: true } : {}),
+        }, session.research ? withResearchAgent(tools.handler, session.research) : tools.handler);
       },
       revoke: (token) => server.revoke(token),
       start: async (adapter, credential) => {

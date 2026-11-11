@@ -15,6 +15,8 @@ export interface BriefingSource {
   plannerTools(): boolean;
   /** The compactions the backend has counted (`IAiService.compactions`). */
   compactions(): number;
+  /** The SURFACE AND SETTINGS block as it stands now; null for a planner with no user to name controls to. */
+  surfaceFacts(): string | null;
 }
 
 /** One turn's briefing: the blocks it carries, and what makes them told. */
@@ -51,7 +53,11 @@ interface HeldBriefs {
  * says it again. An opening — the first turn, or a replay from the transcript —
  * states autorun and the runners in its own prompt, so that is what the
  * planner was told by it; its briefing is built after the opening, and says
- * neither again. All of it belongs to the plan scope, and goes with it.
+ * neither again. The SURFACE AND SETTINGS facts are in no prompt, which stays
+ * the same whatever the surface (ADR-0030): every new live context is told
+ * them in its first turn, and again in the turn after any of them changes or a
+ * compaction may have taken them out. All of it belongs to the plan scope, and
+ * goes with it.
  */
 export class PlannerBriefing {
   private toldAutorun = false;
@@ -59,6 +65,8 @@ export class PlannerBriefing {
   private toldScope: AssignmentScope | null = null;
   private untold: string[] = [];
   private briefs: HeldBriefs | null = null;
+  /** The facts block the live context holds, and the backend's count when it was told: a compaction since may have taken it out. */
+  private toldFacts: { text: string; compactions: number } | null = null;
 
   constructor(private readonly source: BriefingSource) {}
 
@@ -72,6 +80,7 @@ export class PlannerBriefing {
     this.toldAutorun = autorun;
     this.toldScope = this.source.scope();
     this.briefs = null;
+    this.toldFacts = null;
   }
 
   /**
@@ -82,12 +91,15 @@ export class PlannerBriefing {
     const autorun = this.source.autorun();
     const scope = this.source.scope();
     const updates = [...this.untold];
+    const compactions = this.source.compactions();
+    const facts = this.source.surfaceFacts();
+    const factsHeld = facts !== null && this.toldFacts?.text === facts && this.toldFacts.compactions === compactions;
     const blocks = [
+      facts === null || factsHeld ? null : facts,
       autorun === this.toldAutorun ? null : autorun ? AUTORUN_ON : AUTORUN_OFF,
       this.runnersChanged(scope),
       updates.length > 0 ? ['Run update:', ...updates.map((update) => `- ${update}`)].join('\n') : null,
     ].filter((block): block is string => block !== null);
-    const compactions = this.source.compactions();
     const held = this.briefs?.compactions === compactions ? this.briefs : null;
     const wakeBrief = !wake ? undefined : !held?.whole.has(wake.key) ? wake.whole : held.line === wake.line ? undefined : wake.line;
     return {
@@ -96,6 +108,7 @@ export class PlannerBriefing {
       heard: () => {
         this.toldAutorun = autorun;
         this.toldScope = scope;
+        if (facts !== null) this.toldFacts = { text: facts, compactions };
         // Updates only ever join at the end, and one turn lands at a time.
         this.untold = this.untold.slice(updates.length);
         if (wake) this.briefs = { whole: new Set([...(held?.whole ?? []), wake.key]), line: wake.line, compactions };
@@ -109,6 +122,7 @@ export class PlannerBriefing {
     this.toldScope = null;
     this.untold = [];
     this.briefs = null;
+    this.toldFacts = null;
   }
 
   /**

@@ -330,7 +330,7 @@ describe('runResearchAgent', () => {
   });
 
   it('stops at the step cap, nudges once for a wrap-up digest without executing further tools', async () => {
-    const turns: ResearchTurn[] = Array.from({ length: 11 }, (_, i) => toolTurn('glob', { pattern: '*' }, `t${i}`));
+    const turns: ResearchTurn[] = Array.from({ length: SUBAGENT_LIMITS.maxSteps + 1 }, (_, i) => toolTurn('glob', { pattern: '*' }, `t${i}`));
     turns.push(textTurn('late digest'));
     const chat = scriptedChat(turns);
     const { fs, touched } = fakeFs();
@@ -341,6 +341,61 @@ describe('runResearchAgent', () => {
     const wrapUp = chat.received[chat.received.length - 1];
     expect(wrapUp[0].output).toMatch(/budget.*digest/is);
     expect(result.output).toContain('late digest');
+  });
+
+  it('marks a budget-cut digest partial and names exactly what the last round left unread', async () => {
+    const turns: ResearchTurn[] = Array.from({ length: SUBAGENT_LIMITS.maxSteps }, (_, i) => toolTurn('glob', { pattern: '*' }, `t${i}`));
+    turns.push(toolTurn('read_file', { path: 'packages/core/src/unread.ts' }, 'last'));
+    turns.push(textTurn('found: a.ts holds x'));
+    const { fs } = fakeFs();
+
+    const result = await runResearchAgent('brief', { createChat: () => scriptedChat(turns), fs });
+
+    expect(result.success).toBe(true);
+    expect(result.output).toMatch(/^\[PARTIAL/);
+    expect(result.output).toContain('found: a.ts holds x');
+    expect(result.output).toMatch(/Left unread:[\s\S]*read_file[\s\S]*packages\/core\/src\/unread\.ts/);
+  });
+
+  it('still names the unread when the partial digest itself overflows the cap', async () => {
+    const turns: ResearchTurn[] = Array.from({ length: SUBAGENT_LIMITS.maxSteps }, (_, i) => toolTurn('glob', { pattern: '*' }, `t${i}`));
+    turns.push(toolTurn('read_file', { path: 'only/here.ts' }, 'last'));
+    turns.push(textTurn('y'.repeat(SUBAGENT_LIMITS.digestMaxChars * 2)));
+    const { fs } = fakeFs();
+
+    const result = await runResearchAgent('brief', { createChat: () => scriptedChat(turns), fs });
+
+    expect(result.output).toContain('only/here.ts');
+    expect(result.output.length).toBeLessThan(SUBAGENT_LIMITS.digestMaxChars + 1000);
+  });
+
+  it('shares one budget between both agents: 24 steps and a 12,000-character digest (ADR-0066)', () => {
+    expect(SUBAGENT_LIMITS.maxSteps).toBe(24);
+    expect(SUBAGENT_LIMITS.digestMaxChars).toBe(12000);
+  });
+
+  it('keeps the end of an oversized partial digest, where the agent lists what it did not cover', async () => {
+    const turns: ResearchTurn[] = Array.from({ length: SUBAGENT_LIMITS.maxSteps }, (_, i) => toolTurn('glob', { pattern: '*' }, `t${i}`));
+    turns.push(toolTurn('read_file', { path: 'only/here.ts' }, 'last'));
+    turns.push(textTurn(`HEAD-MARK ${'y'.repeat(SUBAGENT_LIMITS.digestMaxChars * 2)} ## Not covered: packages/cli/src/sea.ts`));
+    const { fs } = fakeFs();
+
+    const result = await runResearchAgent('brief', { createChat: () => scriptedChat(turns), fs });
+
+    expect(result.output).toContain('HEAD-MARK');
+    expect(result.output).toContain('Not covered: packages/cli/src/sea.ts');
+    expect(result.output.length).toBeLessThanOrEqual(SUBAGENT_LIMITS.digestMaxChars);
+  });
+
+  it('asks the cut-off agent to end its digest with the areas it did not cover', async () => {
+    const turns: ResearchTurn[] = Array.from({ length: SUBAGENT_LIMITS.maxSteps + 1 }, (_, i) => toolTurn('glob', { pattern: '*' }, `t${i}`));
+    turns.push(textTurn('late digest'));
+    const chat = scriptedChat(turns);
+    const { fs } = fakeFs();
+
+    await runResearchAgent('brief', { createChat: () => chat, fs });
+
+    expect(chat.received[chat.received.length - 1][0].output).toMatch(/not covered/i);
   });
 
   it('truncates oversized digests to the cap', async () => {

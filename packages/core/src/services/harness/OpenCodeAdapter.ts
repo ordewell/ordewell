@@ -13,7 +13,7 @@ import type { ProjectMcpServer } from './repoConfig';
 import { hunksOf, markedLines } from './fileDiff';
 import {
   PendingSteers, autoApproves, delay, interruptAcknowledged, newUserMessageId, openCodePermissions, openCodePlannerAsk, plannerSystem, openEventStream, permissionReply, raiseOnce, settleTurn, splitModelId,
-  REQUEST_TIMEOUT_MS, streamTurn, turnLatch, usageRecord, withDeadline, type EventStream, type PermissionAnswer, type StreamTurn, type TurnLatch,
+  REQUEST_TIMEOUT_MS, SESSION_TITLE, streamTurn, turnLatch, usageRecord, withDeadline, type EventStream, type PermissionAnswer, type StreamTurn, type TurnLatch,
 } from './openCodeTransport';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { AgentEvent, AgentStartOptions, PlannerStartOptions, TaskModeAgentAdapter, TaskStartOptions } from './AgentAdapter';
@@ -26,8 +26,8 @@ const RECOVERY_POLL_INTERVAL_MS = 2000;
 const RECOVERY_TIMEOUT_MS = 900000;
 /** How often a task turn reads `/session/status` itself — see {@link OpenCodeAdapter.pollStatus}. */
 const STATUS_POLL_INTERVAL_MS = 1000;
-/** The Basic-auth username `serve` defaults to. Set explicitly so a host's own `OPENCODE_SERVER_USERNAME` cannot win. */
-const SERVER_USERNAME = 'opencode';
+/** The Basic-auth username `serve` accepts: 2.x ignores `OPENCODE_SERVER_USERNAME` and takes only this one. Set explicitly so a host's own variable cannot win on 1.x. */
+export const SERVER_USERNAME = 'opencode';
 const MCP_STATUS_POLL_MS = 200;
 /**
  * How long 2.x takes, after it says a server is connected, to offer the model
@@ -452,7 +452,7 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
         throw new Error(`OpenCode could not resume session ${opts.resumeSessionId}: the server does not know it.`);
       }
     }
-    const created = await this.json<{ id?: string }>('POST', '/session', {});
+    const created = await this.json<{ id?: string }>('POST', '/session', { title: SESSION_TITLE[this.role] });
     if (!created?.id) throw new Error(`The OpenCode ${this.role} server did not return a session id.`);
     this.sessionId = created.id;
   }

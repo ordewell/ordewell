@@ -188,7 +188,6 @@ export abstract class BaseConfig implements IConfig {
   get researchMaxSteps(): number { return parseInt(process.env.ORDEWELL_RESEARCH_MAX_STEPS || '48', 10); }
   get researchMaxFileSize(): number { return parseInt(process.env.ORDEWELL_RESEARCH_MAX_FILE_SIZE || '50', 10); }
 
-  get planMapEnabled(): boolean { return process.env.ORDEWELL_PLAN_MAP_ENABLED !== 'false' && process.env.ORDEWELL_PLAN_MAP_ENABLED !== '0'; }
 
   /** The user's saved level (ADR-0030), read each time so a change from any surface reaches the next plan. */
   get autonomousMode(): boolean { return new SettingsService().autonomousMode(); }

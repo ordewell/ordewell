@@ -1,4 +1,4 @@
-import { ORDEWELL_MCP_SERVER_NAME, PLANNER_TOOLS, READ_ONLY_TASK_TOOLS, TASK_TOOLS, taskToolSet, type McpCredential } from '../mcp';
+import { ORDEWELL_MCP_SERVER_NAME, PLANNER_RESEARCH_AGENT, PLANNER_TOOLS, READ_ONLY_TASK_TOOLS, TASK_TOOLS, taskToolSet, type McpCredential } from '../mcp';
 import type { PlannerStartOptions } from './AgentAdapter';
 import { settleWithin } from './settleWithin';
 
@@ -41,6 +41,18 @@ export class RunnerStartupExit extends Error {
   constructor(lastWords: string) {
     super(lastWords);
     this.name = 'RunnerStartupExit';
+  }
+}
+
+/**
+ * A runner whose agent offers no way to take a saved session up again, found
+ * only once it has said what it can: a Continue it was started for cannot
+ * happen on it, now or later (ADR-0018 K1).
+ */
+export class SessionNotResumable extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SessionNotResumable';
   }
 }
 
@@ -92,7 +104,7 @@ export function ordewellToolNames(role: OrdewellToolRole, hidden: readonly strin
 }
 
 /** Every tool the server serves, under any role, by its name on the server. */
-export const ORDEWELL_TOOL_NAMES: readonly string[] = [...new Set([...TASK_TOOLS, ...taskToolSet({ board: true }), ...READ_ONLY_TASK_TOOLS, ...PLANNER_TOOLS].map((tool) => tool.name))];
+export const ORDEWELL_TOOL_NAMES: readonly string[] = [...new Set([...TASK_TOOLS, ...taskToolSet({ board: true }), ...READ_ONLY_TASK_TOOLS, ...PLANNER_TOOLS, PLANNER_RESEARCH_AGENT].map((tool) => tool.name))];
 
 /** The naming half of a binding for a runner that names a server's tool `<prefix><tool>`. */
 export function prefixedToolNames(prefix: string): Pick<OrdewellToolBinding, 'toolName' | 'toolNames'> & { isToolName(name: string): boolean } {

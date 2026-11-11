@@ -18,7 +18,8 @@ function routingRunner() {
     spawn: vi.fn(async (opts: RunnerSpawnOptions): Promise<IRunnerSession> => {
       requests.push(opts);
       const id = `s${sessions.length + 1}`;
-      const session = new FakeRunnerSession(id, opts.taskId, `native-${opts.taskId}`);
+      // Each spawn's runner names a session of its own, as a fresh start does.
+      const session = new FakeRunnerSession(id, opts.taskId, `native-${opts.taskId}-${id}`);
       sessions.push(session);
       return session;
     }),
@@ -62,8 +63,9 @@ describe('the structured transport, the only one', () => {
     await settle();
 
     expect(requests).toHaveLength(3);
-    expect(orchestrator.storeInstance.get('t1')!.runnerSessionId).toBe('native-t1');
-    expect(orchestrator.storeInstance.get('t2')!.runnerSessionId).toBeUndefined();
+    expect(requests[2].resumeSessionId).toBeUndefined();
+    expect(orchestrator.storeInstance.get('t1')!.runnerSessionId).toBe('native-t1-s1');
+    expect(orchestrator.storeInstance.get('t2')!.runnerSessionId).toBe('native-t2-s3');
   });
 
   it('runs a saved plan that an older build pinned to the terminal structured, and stops saving the pin', async () => {
@@ -96,7 +98,8 @@ describe('recording the runner session on the task', () => {
     await orchestrator.forceStartTask('t1');
 
     const task = orchestrator.storeInstance.get('t1')!;
-    expect(task.runnerSessionId).toBeUndefined();
+    // The fresh attempt's own session replaces it, saved as soon as its runner names it.
+    expect(task.runnerSessionId).toBe('native-t1-s1');
     expect(serializeTaskStatus(task)).not.toHaveProperty('transport');
   });
 
@@ -110,7 +113,7 @@ describe('recording the runner session on the task', () => {
     await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('completed'));
 
     const task = orchestrator.storeInstance.get('t1')!;
-    expect(task.runnerSessionId).toBe('native-t1');
+    expect(task.runnerSessionId).toBe('native-t1-s1');
     const plan = { tasks: [task], generatedAt: '', status: 'approved' as const, runners: ['claude-code'], lastUpdated: '' };
     expect(surfacePlan(plan).tasks[0]).not.toHaveProperty('runnerSessionId');
     expect(surfacePlan({ ...plan, plannerSession: { runner: 'claude-code', sessionId: 'native-planner', cwd: '/repo', heard: 2 } })).not.toHaveProperty('plannerSession');
@@ -175,7 +178,7 @@ describe('ending a structured attempt', () => {
     sessions[0].reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('completed'));
 
-    expect(orchestrator.storeInstance.get('t1')!.runnerSessionId).toBe('native-t1');
+    expect(orchestrator.storeInstance.get('t1')!.runnerSessionId).toBe('native-t1-s1');
   });
 });
 

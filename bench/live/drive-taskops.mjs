@@ -25,7 +25,7 @@ const config = {
   openAiBaseUrl: 'https://openrouter.ai/api/v1', openAiApiKey: KEY, sttModel: '',
   openaiCompatibleBaseUrl: '', openaiCompatibleApiKey: '',
   orchestratorModel: MODEL, geminiModel: '', researchSubagentModel: '',
-  planMapEnabled: true, openrouterKey: KEY, geminiKey: '',
+  openrouterKey: KEY, geminiKey: '',
   autonomousMode: true, worktreeIsolation: false,
   workspaceRepos: [], worktreeLinks: [], conflictRepairAttempts: 0,
   approvalMode: 'allow', approvalPreApproved: [],
