@@ -983,7 +983,9 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
     - *A note line* shows only for a state the person has to act on: "Not
       published: Push publishes it." (no upstream), "No remote: add one to
       fetch, pull or push." and "No branch is checked out: Pull and Push need
-      one." Being up to date, ahead or behind needs no line.
+      one." Being up to date, ahead or behind needs no line. The note's lines
+      are balanced, so at the 200px sidebar a second line never holds one
+      word alone.
     - *This sidebar's sync line has no branch line:* the repository's head
       already names the branch. The Git sidebar (W11) draws one above the
       buttons, 28px tall: the current-branch icon at 16px, the name in
@@ -1013,8 +1015,13 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
     disabled. Fetch's circling arrows turn. Pull's and Push's arrows never
     turn, since a turned arrow points the wrong way half the time: the arrow
     glides down into its line for Pull, or up out of it for Push, while the
-    line stays still (`busyMotion="glide"`). Pull and push are busy only once
-    their confirm is accepted. The icon moves only while the action is
+    line stays still (`busyMotion="glide"`). The busy one's word says what it
+    is doing, "Pulling" or "Pushing", in its count's place, so it reads as
+    working with the icon still. It has no "…": a trailing ellipsis on a
+    button means it asks first, and without one the word fits whole beside
+    its icon at the 240px sidebar. Where the line is too narrow for
+    "Pushing" whole, the busy word goes the way the words go under 203px.
+    Pull and push are busy only once their confirm is accepted. The icon moves only while the action is
     pending, and holds still under reduced motion. A second start while one
     runs is refused, and announced as "web is already syncing."; the
     palette's Fetch is disabled meanwhile.
@@ -1096,9 +1103,12 @@ left as it was:
     group. A local branch ends in one trailing slot: at rest it shows
     `↓ behind ↑ ahead`, in the sync bar's order, when it has diverged and the
     tip's age (`3d`, in code-small, tabular) otherwise, never both, so the slot
-    keeps one width; a remote branch shows its age there. On hover or keyboard
-    focus Switch (`arrow-right-left`) and Delete take the same box, so the
-    name gives up only the wider of the two and never moves. The row's tooltip
+    keeps one width; a remote branch shows its age there. The slot is only as
+    wide as that resting value, so the name keeps every other pixel. On hover
+    or keyboard focus Switch (`arrow-right-left`) and Delete are laid over the
+    row's end, on the row's own fill, with a 16px fade over the end of the
+    name: nothing reflows and the name never moves (layout rules 1 and 4).
+    Both stay in the Tab order, named, with inset focus rings. The row's tooltip
     and accessible description carry the tip's subject and age after the
     full name. The branch
     History is showing keeps the selected background on Branches. A run or
@@ -1122,7 +1132,7 @@ left as it was:
     while a branch is browsed, a ↶ "Show your checkout’s history" button and
     a line saying the checkout stays where it is ("Browsing only: your
     checkout stays on main.", or that an Ordewell or remote branch is
-    read-only here).
+    read-only here), its lines balanced like the sync note's.
   - *A commit tab* (slate marker, the `git-commit-horizontal` icon, titled
     `Commit <short sha>`): the subject as its heading, the sha, author,
     date, message and files. Each file is named by its status and path, the
@@ -2144,7 +2154,8 @@ This app, then Advanced. Every field in a card takes the `inset` surface.
   - Under `prefers-reduced-motion`, every duration is 0, the running shape
     stops turning, a busy button's icon holds still at rest, and stage snaps
     jump. The busy button still reads as working: it keeps full strength and
-    the progress cursor.
+    the progress cursor, and Pull's and Push's word says "Pulling" or
+    "Pushing".
   - Nothing moves to celebrate.
 
 ### Layout rules that prevent overlap
@@ -2153,9 +2164,13 @@ The first build drew text over icons and lost buttons off the edge of the
 title bar. These rules exist so that cannot happen. The checklist checks them.
 
 1. **Flex, not position.** Rows, headers, tabs, chips and the title bar are
-   flex rows. Nothing is absolutely positioned over text. The only absolutely
-   positioned elements are popovers, tooltips, overlay drawers, the drop
-   outline, and the graph's edge layer, which sits *under* the cards.
+   flex rows. Nothing is absolutely positioned over text at rest. The only
+   absolutely positioned elements are popovers, tooltips, overlay drawers,
+   the drop outline, the graph's edge layer, which sits *under* the cards,
+   and a sidebar row's trailing-slot actions (W11). Those are drawn only
+   while the row is hovered or holds focus, over its end on the row's own
+   opaque fill, with a short fade over the label's end, and the label's full
+   value is in its tooltip.
 2. **Icons are fixed boxes.** An icon is `flex: none` at its size, and is
    separated from its text by a `gap` (`--ow-space-2` in controls,
    `--ow-space-1` in badges), never by a margin on one side or a text indent.
@@ -2163,10 +2178,16 @@ title bar. These rules exist so that cannot happen. The checklist checks them.
    or breadcrumb is the one `flex: 1 1 auto; min-width: 0` element, with
    `overflow: hidden; text-overflow: ellipsis; white-space: nowrap`. Paths and
    branches use a middle ellipsis, and the end it keeps starts at a word or
-   path boundary (`-`, `_`, `.`, a space or `/`): whole trailing words, at
-   most about 40% of the name, or a path's whole last segment. The head keeps
-   `3em` before the tail gives way. Truncated text has its full value in a
-   tooltip. Where a row holds a name and its metadata, the name shrinks last
+   path boundary (`-`, `_`, `.`, a space or `/`). In the app the cut is
+   measured against the room the text has, and follows it as it resizes: the
+   tail is the longest run of whole trailing words (a path's segments) that
+   fits beside a head of `3em`, and that tail is never itself ellipsized, so
+   a name is never cut at both ends. When not even the last word fits there,
+   that word is the tail and the head may shrink to its ellipsis. Where
+   nothing measures text (tests), the cut is by characters: whole trailing
+   words, at most about 40% of the name, or a path's whole last segment, and
+   the head keeps `3em` before the tail gives way. Truncated text has its
+   full value in a tooltip. Where a row holds a name and its metadata, the name shrinks last
    and the metadata keeps a share: a project menu item keeps at least a third
    of its row for its folder, which is what tells two same-named projects
    apart. A model line on a graph card steps through shorter forms (effort,
@@ -2174,7 +2195,10 @@ title bar. These rules exist so that cannot happen. The checklist checks them.
    a word.
 4. **Actions reserve their space.** A row's hover actions take their width
    all the time (`visibility: hidden` until shown), so the title never
-   reflows under the pointer.
+   reflows under the pointer. The one exception is a trailing slot, whose
+   actions stand in for a short resting value (W11): the slot reserves that
+   value's width, and the actions are laid over it and the label's end
+   (rule 1), so the title still never reflows.
 5. **Heights are fixed.** Rows, tabs, headers and chips have the heights
    above. Their text is one line, or the variant's fixed number of lines.
    Nothing grows a row except the defined third line. Two kinds of text wrap
@@ -2349,7 +2373,8 @@ are permanent, so findings can cite them.
 **Overlap and truncation**
 
 - **O1.** No text overlaps an icon, and no element overlaps another, in any
-  screenshot.
+  screenshot, except a hovered or focused row's trailing-slot actions, which
+  cover its end on an opaque fill (layout rule 1).
 - **O2.** Every truncated text ends in an ellipsis (a middle one for paths
   and branches) and shows its full value in a tooltip.
 - **O3.** Every icon is the size [its context](#icon-sizes) gives, and sits
@@ -2362,7 +2387,8 @@ are permanent, so findings can cite them.
   path, project, task or model) shows at least 64 px of its text, or all of
   it, and each part of it at least half that, so a long neighbour never
   squeezes it to nothing (the middle ellipsis's `3em` head floor is what keeps
-  that half, 2em would not). Where it is cut, it has a tooltip, and it reads at
+  that half, 2em would not; only a name whose last word alone outgrows its
+  row gives the head less). Where it is cut, it has a tooltip, and it reads at
   4.5:1. The tour's check `k` (`labelChecks` in `e2e/surfaces.ts`) measures
   this on long branch, commit, path, project, task and model names, as the
   app paints them, in both themes and every size.

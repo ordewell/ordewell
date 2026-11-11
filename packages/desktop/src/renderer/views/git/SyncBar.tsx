@@ -68,7 +68,8 @@ const shown = (n: number): string => (n <= 0 ? '' : n > 99 ? '99+' : String(n));
  * `running` is the action git is doing now, whoever started it (the palette's
  * Fetch included); it moves that button's icon. Fetch's arrows turn; Pull's and
  * Push's glide along their own way, since a turned arrow points backwards half
- * the time. A press also holds all three from the click until its action ends,
+ * the time, and their word says it ("Pulling") in the count's place, so the
+ * button reads as working even where motion is reduced. A press also holds all three from the click until its action ends,
  * since Pull and Push ask first and nothing is running while the question is
  * open.
  *
@@ -108,12 +109,12 @@ export function SyncBar({ state, actions, label, running, branch }: {
       )}
       <div className="sync-actions">
         <Button className="sync-move" icon={PullIcon} busy={running === 'pull'} busyMotion="glide" disabled={busy || reading || pull !== undefined} title={pullTip} onClick={() => run('pull')}>
-          <span className="sync-word">Pull</span>
-          <span className="ow-count sync-n" aria-hidden="true">{shown(state.behind)}</span>
+          <span className="sync-word">{running === 'pull' ? 'Pulling' : 'Pull'}</span>
+          {running !== 'pull' && <span className="ow-count sync-n" aria-hidden="true">{shown(state.behind)}</span>}
         </Button>
         <Button className="sync-move" icon={PushIcon} busy={running === 'push'} busyMotion="glide" disabled={busy || reading || push !== undefined} title={pushTip} onClick={() => run('push')}>
-          <span className="sync-word">Push</span>
-          <span className="ow-count sync-n" aria-hidden="true">{shown(state.ahead)}</span>
+          <span className="sync-word">{running === 'push' ? 'Pushing' : 'Push'}</span>
+          {running !== 'push' && <span className="ow-count sync-n" aria-hidden="true">{shown(state.ahead)}</span>}
         </Button>
         <Button className="sync-fetch" icon={RefreshCw} busy={running === 'fetch'} disabled={busy || reading || fetchBlocked !== undefined} aria-label="Fetch" title={reading ? readingTip : fetchBlocked ?? 'Fetch from the remote'} onClick={() => run('fetch')}>
           {null}

@@ -1050,9 +1050,9 @@ describe('the confirms', () => {
 
     // A turned arrow points backwards half the time: Pull's and Push's glide their way instead, the line held still.
     it.each([
-      { kind: 'pull' as const, name: /^Pull/, confirm: 'Pull from origin', way: 'down' },
-      { kind: 'push' as const, name: /^Push/, confirm: 'Push to origin', way: 'up' },
-    ])('glides the $kind arrow $way, never turning it, only once the confirmed $kind is sent', async ({ kind, name, confirm, way }) => {
+      { kind: 'pull' as const, name: /^Pull/, confirm: 'Pull from origin', way: 'down', word: 'Pulling' },
+      { kind: 'push' as const, name: /^Push/, confirm: 'Push to origin', way: 'up', word: 'Pushing' },
+    ])('glides the $kind arrow $way, never turning it, and says $word, only once the confirmed $kind is sent', async ({ kind, name, confirm, way, word }) => {
       const pending = deferred();
       await mount({ [`git.${kind}`]: pending.promise });
       fireEvent.click(syncButton(name));
@@ -1068,9 +1068,13 @@ describe('the confirms', () => {
       // The line is the svg's own child, outside the group that moves.
       expect(arrow.contains(icon.querySelector(':scope > path'))).toBe(false);
       expect(fetchButton().querySelector('svg')).not.toHaveClass('ow-spin');
+      // The word takes the count's place, so the button's box does not move while it works.
+      expect(syncButton(name)).toHaveAccessibleName(word);
+      expect(syncButton(name).querySelector('.sync-n')).toBeNull();
       await act(async () => { pending.settle(ok({ repo: REPO_STATE })); });
       await waitFor(() => expect(syncButton(name)).not.toHaveAttribute('aria-busy'));
       expect(syncButton(name).querySelector('svg')).not.toHaveClass('ow-glide');
+      expect(syncButton(name)).toHaveAccessibleName(word.slice(0, 4));
     });
   });
 

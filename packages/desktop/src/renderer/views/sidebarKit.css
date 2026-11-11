@@ -1,8 +1,9 @@
 /*
  * Rows and sections for the Checkout and Git sidebars. Every row is a flex
- * line with a gap: icons and badges are `flex: none` boxes, the label is the
- * one part that shrinks, and a row's actions keep their room whether they are
- * shown or not, so nothing is ever drawn over text (design.md, Layout rules).
+ * line with a gap: icons and badges are `flex: none` boxes and the label is the
+ * one part that shrinks. A row's actions keep their room whether they are shown
+ * or not, except the ones in a trailing slot, which are laid over the row's end
+ * only while it is pointed at or focused (design.md, Layout rules).
  */
 
 .sgroup { display: flex; flex-direction: column; min-width: 0; }
@@ -19,14 +20,23 @@
 /* A text shortened in the middle: the head gives way, the tail stays. */
 .mid { display: flex; min-width: 0; overflow: hidden; white-space: nowrap; }
 /*
- * The tail gives way only once the head is down to a few characters, so a narrow box clips the end instead of spilling
- * over its neighbour. The head keeps those few (3em: design.md O7 asks each part for 32px, which 2em, about 24-26px, does not give) because a path cut to its tail
- * alone no longer tells two folders apart; a long tail (splitMiddle keeps a path's last segment, up to 40) would otherwise take the whole box.
- * The head's weight does the ordering: a tail left shrinking alone with a factor under 1 would take only that share of what overflows.
+ * Cut by characters (splitMiddle, where nothing measures text): the tail gives way only once the head is down to a few
+ * characters, so a narrow box clips the end instead of spilling over its neighbour. The head keeps those few (3em: design.md
+ * O7 asks each part for 32px, which 2em, about 24-26px, does not give) because a path cut to its tail alone no longer tells
+ * two folders apart. The head's weight does the ordering: a tail left shrinking alone with a factor under 1 would take only
+ * that share of what overflows.
  */
 .mid-head { flex: 0 1000 auto; min-width: 3em; overflow: hidden; text-overflow: ellipsis; }
 .mid-tail { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .mid-whole { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/*
+ * Cut by measuring (fitMiddle): the tail was chosen to fit whole beside the head's few characters, so it never shrinks and the
+ * head takes what is left. In .mid-tight no word fit beside that head: its floor, set inline, is the ellipsis alone, and the
+ * last word is the part that gives way.
+ */
+.mid-fit .mid-head { flex: 0 1 auto; min-width: 0; }
+.mid-fit .mid-tail { flex: none; }
+.mid-tight .mid-head { min-width: 0; }
 
 /* One row: [icon or badge] label … [hover actions]. */
 .srow { display: flex; align-items: center; gap: var(--ow-space-2); min-height: var(--ow-row); padding: 0 var(--ow-space-2) 0 var(--ow-space-3); min-width: 0; }
@@ -41,20 +51,25 @@
 /* Hidden, not removed: the label's room does not change when the pointer arrives. */
 .srow-actions { flex: none; display: flex; align-items: center; gap: var(--ow-space-half); visibility: hidden; }
 .srow:hover .srow-actions, .srow:focus-within .srow-actions { visibility: visible; }
+.srow-actions .ow-icon-button:focus-visible { outline: 1px solid var(--ow-focus-ring); outline-offset: -1px; }
 /*
- * One trailing slot, for a row whose actions stand in for what it shows at
- * rest. .srow-rest holds one short, right-aligned value (↓1 ↑2, or a tip's age); .srow-actions follows it.
- * Both fill one grid cell as wide as the wider of the two, so the label gives
- * up room for one of them, not both, and never reflows under the pointer
- * (design.md, Layout rules, 4). The rest fades rather than hides, so a screen
- * reader still reads it while a control in the row has focus; a row with no
- * actions keeps it shown.
+ * One trailing slot, for a row whose actions stand in for what it shows at rest. .srow-rest holds one short, right-aligned
+ * value (↓1 ↑2, or a tip's age) and is the slot's whole width, so the label keeps every pixel the actions would take. Under
+ * the pointer or keyboard focus the actions are laid over the row's end, on the row's own fill, with a short fade over
+ * the end of the label: nothing moves (design.md, Layout rules, 1 and 4). The name is whole in its tooltip, and the
+ * actions are only drawn while the row is the one being pointed at or used. The rest fades rather than hides, so a screen
+ * reader still reads it while a control in the row has focus; a row with no actions keeps it shown.
  */
-.srow-trail { flex: none; display: grid; grid-template-columns: minmax(0, auto); justify-items: end; align-items: center; max-width: 40%; }
-.srow-trail > * { grid-area: 1 / 1; }
+.srow:has(> .srow-trail) { position: relative; --srow-fill: var(--ow-bg-hover); }
+.srow-trail { flex: none; display: flex; justify-content: flex-end; align-items: center; min-width: 0; max-width: 40%; }
 .srow-rest { display: flex; align-items: center; gap: var(--ow-space-2); min-width: 0; max-width: 100%; font-variant-numeric: tabular-nums; }
 .srow-rest > * { flex: 0 1 auto; min-width: 0; max-width: none; }
 .srow:hover .srow-rest:not(:last-child), .srow:focus-within .srow-rest:not(:last-child) { opacity: 0; pointer-events: none; }
+/* The row's fill over the sidebar's, so the actions' box is opaque whichever translucent step the row is on. */
+.srow-trail > .srow-actions, .srow-trail > .srow-actions::before { background: linear-gradient(var(--srow-fill), var(--srow-fill)), var(--ow-bg-sidebar); }
+.srow-trail > .srow-actions { position: absolute; inset-block: 0; inset-inline-end: 0; padding-inline-end: var(--ow-space-2); }
+/* The same opaque fill, masked: a translucent fill faded in over a row that already has it would end a step darker. */
+.srow-trail > .srow-actions::before { content: ''; position: absolute; inset-block: 0; right: 100%; width: var(--ow-space-4); mask-image: linear-gradient(to right, transparent, #000); pointer-events: none; }
 
 /* A status letter (M, A, D…) in its fixed box; the colour is the status vocabulary's. */
 .sbadge { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 16px; font: var(--ow-type-code-small); color: var(--ow-fg-secondary); }
@@ -89,7 +104,8 @@
 .sync-move .sync-n { min-width: 2ch; text-align: start; color: inherit; }
 .sync-actions .sync-fetch { flex: none; width: var(--ow-hit-icon); padding: 0; }
 .sync-fetch .ow-button-label { display: none; }
-.sync-note { margin: 0; color: var(--ow-fg-secondary); font: var(--ow-type-small); overflow-wrap: anywhere; }
+/* Balanced, so a two-line note at the 200px sidebar does not leave one word alone on its second line. */
+.sync-note { margin: 0; color: var(--ow-fg-secondary); font: var(--ow-type-small); overflow-wrap: anywhere; text-wrap: balance; }
 /*
  * Under about 203px the words no longer fit beside a count: the arrows and counts stay, centred, and the words stay readable
  * to a screen reader. The line at the 240px sidebar is 216px, or 210px once the list's scrollbar takes its 6px, so the words
@@ -98,6 +114,11 @@
 @container sync (max-width: 202px) {
   .sync-actions .sync-move { justify-content: center; }
   .sync-word { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+}
+/* A busy button's word ("Pushing", in place of the count) is longer than its resting one and fits whole from a 205px line. */
+@container sync (max-width: 205px) {
+  .sync-move[aria-busy='true'] { justify-content: center; }
+  .sync-move[aria-busy='true'] .sync-word { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 }
 
 .sform { display: flex; flex-direction: column; gap: var(--ow-space-2); padding: var(--ow-space-1) var(--ow-space-3); min-width: 0; }
