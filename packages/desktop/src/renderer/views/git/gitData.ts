@@ -30,6 +30,10 @@ export interface BranchInfo {
   ahead: number;
   behind: number;
   current: boolean;
+  /** The tip's committer date (ISO 8601); absent from a daemon that predates it. */
+  date?: string;
+  /** The tip's subject line; absent likewise. */
+  subject?: string;
   owner?: Owner;
   /** Live runs that land on this branch. */
   landingFor?: Array<{ sessionId: string; runId: string }>;
@@ -141,6 +145,8 @@ function parseBranch(value: unknown): BranchInfo | undefined {
     ahead: num(value.ahead),
     behind: num(value.behind),
     current: value.current === true,
+    ...(str(value.date) ? { date: str(value.date) } : {}),
+    ...(str(value.subject) ? { subject: str(value.subject) } : {}),
     ...(owner ? { owner } : {}),
     ...(landing.length > 0 ? { landingFor: landing.map(({ sessionId, runId }) => ({ sessionId, runId })) } : {}),
   };

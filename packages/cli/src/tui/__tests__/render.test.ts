@@ -1867,7 +1867,7 @@ describe('queued prompts with the conversation', () => {
     const rows = render(state).map((r) => stripAnsi(r).trimEnd());
     const bubble = rows.findIndex((r) => r.startsWith('◇ Use SQLite'));
 
-    expect(rows[bubble]).toBe('◇ Use SQLite · queued · esc to unsend · ctrl-s sends now');
+    expect(rows[bubble]).toBe('◇ Use SQLite · queued · esc takes back · ctrl-s sends all now');
     expect(bubble).toBeGreaterThan(rows.findIndex((r) => r.startsWith('○ Bash(npm test)')));
     expect(rows[bodyRows(state) - 1]).toBe('Planner ctx 900');
     expect(bubble).toBeLessThan(bodyRows(state) - 1);

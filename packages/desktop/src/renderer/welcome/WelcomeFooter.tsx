@@ -39,10 +39,10 @@ export function WelcomeFooter({ version, status }: { version: string | undefined
   };
   return (
     <footer className="welcome-footer">
-      <span className="welcome-footer-text">{version ? `Ordewell ${version}` : 'Ordewell'}</span>
+      <span className="welcome-footer-text" title={version ? `Ordewell ${version}` : 'Ordewell'}>{version ? `Ordewell ${version}` : 'Ordewell'}</span>
       <span className={`welcome-footer-daemon welcome-footer-${tone}`} role="status">
         <span className="welcome-footer-dot" aria-hidden="true" />
-        <span className="welcome-footer-text">{daemonLine(status)}</span>
+        <span className="welcome-footer-text" title={daemonLine(status)}>{daemonLine(status)}</span>
         {tone !== 'idle' && tone !== 'passed' && (
           <Button size="sm" variant="ghost" icon={RotateCw} disabled={busy} onClick={() => { void retry(); }}>Retry</Button>
         )}

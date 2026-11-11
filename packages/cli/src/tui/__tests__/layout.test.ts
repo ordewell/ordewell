@@ -353,7 +353,7 @@ describe('the help sheet footer', () => {
     expect(footer).toContain('tab switches panes');
     expect(footer).toContain('pgup/pgdn scroll');
     expect(footer).toContain('ctrl-o toggles full detail');
-    expect(footer).toContain('esc takes back a queued prompt');
+    expect(footer).toContain('esc takes back the newest queued prompt');
   });
 
   it('keeps the newline key the chat footer no longer names', () => {

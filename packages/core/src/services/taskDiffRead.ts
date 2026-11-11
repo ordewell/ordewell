@@ -22,9 +22,35 @@ export interface TaskDiffRead {
   path?: string;
 }
 
-export type TaskDiffResult = { available: true; text: string } | { available: false; reason: string };
+/**
+ * Why a task has no diff to read, so a surface can tell what is expected from
+ * what failed without reading the prose:
+ * - `no-record`: the saved run holds no worktree record for the task. One that
+ *   has not started has none, nor one still preparing its worktree, whose
+ *   record is saved only once it has spawned, nor one whose record went as its
+ *   work was merged in.
+ * - `no-run`: the session has no isolated run saved at all.
+ * - `not-attributable`: the task's changes cannot be told apart as its own: an
+ *   ops task works in the checkout, and an older run kept no starting commit.
+ * - `read-only`: the task lands nothing, and no git runs in its worktree (ADR-0046).
+ * - `error`: a read that should have worked did not.
+ *
+ * A daemon from before this field sends none; a reader takes that as `error`.
+ */
+export type TaskDiffCause = 'no-record' | 'no-run' | 'not-attributable' | 'read-only' | 'error';
 
-export const TASK_DIFF_UNAVAILABLE = 'Task diff is not available for this run: no task-specific changes were recorded (shared runs cannot attribute workspace changes to one task).';
+export type TaskDiffResult = { available: true; text: string } | { available: false; reason: string; cause: TaskDiffCause };
+
+export const TASK_DIFF_NO_RECORD = 'Task diff is not available yet: the saved run holds no worktree record for this task. A task has one once it has started in its own worktree, and loses it when its work is merged.';
+
+export const TASK_DIFF_NO_RUN = 'Task diff is not available: this session has no isolated run, so no task has a worktree of its own to read.';
+
+/** A live run that shares the checkout among its tasks. */
+export const TASK_DIFF_SHARED = 'Task diff is not available: this run shares the checkout among its tasks, so their changes cannot be told apart by task.';
+
+export const TASK_DIFF_READ_ONLY = 'Task diff is not available for a read-only task: it lands nothing, and Ordewell runs no git in its worktree. Its report is its result.';
+
+export const taskDiffUnavailable = (cause: TaskDiffCause, reason: string): TaskDiffResult => ({ available: false, reason, cause });
 
 interface DiffFile {
   repo: string;
@@ -155,16 +181,16 @@ export function patchFiles(patch: Buffer): Array<{ path: string; section: string
  * shape a change task's diff has.
  */
 export function readSavedPatch(patch: Buffer | undefined, saved: Pick<HandoffPatch, 'attempt' | 'base' | 'bytes' | 'sha256'>, options: TaskDiffRead): TaskDiffResult {
-  if (!patch) return { available: false, reason: `Task diff is not available: the patch attempt ${saved.attempt} saved is no longer in this session's task logs.` };
+  if (!patch) return taskDiffUnavailable('error', `Task diff is not available: the patch attempt ${saved.attempt} saved is no longer in this session's task logs.`);
   // A change task's commands can write the session's directory, so the file is the task's work only while it is the bytes its artifact records, as apply_patch checks.
   if (patch.length !== saved.bytes || createHash('sha256').update(patch).digest('hex') !== saved.sha256) {
-    return { available: false, reason: `Task diff is not available: the patch file has changed since attempt ${saved.attempt} saved it: its size or hash is not the one its artifact records. It is not that task's work, and apply_patch refuses it too.` };
+    return taskDiffUnavailable('error', `Task diff is not available: the patch file has changed since attempt ${saved.attempt} saved it: its size or hash is not the one its artifact records. It is not that task's work, and apply_patch refuses it too.`);
   }
-  if (options.repo !== undefined && options.repo !== '.') return { available: false, reason: `No repository matches "${options.repo}" in this task's saved patch: it has one, ".".` };
+  if (options.repo !== undefined && options.repo !== '.') return taskDiffUnavailable('error', `No repository matches "${options.repo}" in this task's saved patch: it has one, ".".`);
   const files = patchFiles(patch);
   if (options.path !== undefined) {
     const selected = files.filter((f) => f.path === options.path);
-    if (selected.length === 0) return { available: false, reason: `No changed file matches "${options.path}" in this task's saved patch. Read the file list first.` };
+    if (selected.length === 0) return taskDiffUnavailable('error', `No changed file matches "${options.path}" in this task's saved patch. Read the file list first.`);
     return { available: true, text: selected.map((f) => `[repo .] ${f.path}\n${f.section}`).join('\n') };
   }
   const head = `The patch attempt ${saved.attempt} saved, against commit ${saved.base.slice(0, 12)}; the task's worktree is gone.\n`;
@@ -173,16 +199,16 @@ export function readSavedPatch(patch: Buffer | undefined, saved: Pick<HandoffPat
 
 export async function readTaskDiff(invoker: GitInvoker, run: IsolationRun, taskId: string, options: TaskDiffRead): Promise<TaskDiffResult> {
   const record = run.tasks[taskId];
-  if (!record) return { available: false, reason: TASK_DIFF_UNAVAILABLE };
+  if (!record) return taskDiffUnavailable('no-record', TASK_DIFF_NO_RECORD);
   // A read-only task's sealed runs may write its worktree, `.git` file
   // included: git run there could load a repository the task planted. Ordewell
   // runs no git in such a worktree (ADR-0046); the task's report is its result.
-  if (record.readOnly) return { available: false, reason: 'Task diff is not available for a read-only task: it lands nothing, and Ordewell runs no git in its worktree. Its report is its result.' };
+  if (record.readOnly) return taskDiffUnavailable('read-only', TASK_DIFF_READ_ONLY);
   if (options.path !== undefined && !allowedPath(options.path)) {
-    return { available: false, reason: 'Refused task_diff path: use a literal repo-relative file path from the file list, without traversal or Ordewell state paths.' };
+    return taskDiffUnavailable('error', 'Refused task_diff path: use a literal repo-relative file path from the file list, without traversal or Ordewell state paths.');
   }
   if (options.repo !== undefined && !run.repos.some((r) => r.path === options.repo)) {
-    return { available: false, reason: `No repository matches "${options.repo}" in this run.` };
+    return taskDiffUnavailable('error', `No repository matches "${options.repo}" in this run.`);
   }
   const reader: GitInvoker = {
     ...invoker,
@@ -195,7 +221,7 @@ export async function readTaskDiff(invoker: GitInvoker, run: IsolationRun, taskI
     for (const repo of run.repos) {
       if (options.repo !== undefined && repo.path !== options.repo) continue;
       const entry = record.repos[repo.path];
-      if (!entry?.baseRef) return { available: false, reason: `Task diff is not available for repository ${repo.path}: this older run did not record the task's starting commit.` };
+      if (!entry?.baseRef) return taskDiffUnavailable('not-attributable', `Task diff is not available for repository ${repo.path}: this older run did not record the task's starting commit.`);
       if (!/^[a-f0-9]{40,64}$/.test(entry.baseRef)) throw new Error('Invalid recorded starting commit.');
       const live = record.status !== 'merged' && fs.existsSync(entry.worktree);
       const cwd = live ? entry.worktree : repo.root;
@@ -253,7 +279,7 @@ export async function readTaskDiff(invoker: GitInvoker, run: IsolationRun, taskI
     }
     if (options.path !== undefined) {
       const selected = files.filter((f) => f.path === options.path);
-      if (selected.length === 0) return { available: false, reason: `No changed file matches "${options.path}"${options.repo ? ` in repository ${options.repo}` : ''}. Read the file list first.` };
+      if (selected.length === 0) return taskDiffUnavailable('error', `No changed file matches "${options.path}"${options.repo ? ` in repository ${options.repo}` : ''}. Read the file list first.`);
       const patches: string[] = [];
       for (const file of selected) patches.push(`[repo ${file.repo}] ${file.path}\n${await file.patch()}`);
       return { available: true, text: patches.join('\n') };
@@ -262,6 +288,6 @@ export async function readTaskDiff(invoker: GitInvoker, run: IsolationRun, taskI
     if (options.names) return { available: true, text: files.map((f) => (f.repo === '.' ? f.path : `${f.repo}/${f.path}`)).join('\0') };
     return { available: true, text: files.length ? files.map((f) => `[repo ${f.repo}] ${f.path}: ${f.added === '-' ? 'binary change' : `+${f.added} -${f.removed}`}\n`).join('') : 'No files changed since this task started.\n' };
   } catch (err: unknown) {
-    return { available: false, reason: `Task diff is not available: ${err instanceof Error ? err.message : String(err)}` };
+    return taskDiffUnavailable('error', `Task diff is not available: ${err instanceof Error ? err.message : String(err)}`);
   }
 }

@@ -392,8 +392,12 @@ describe('talking to the task', () => {
         queuedIndex: 1,
       }),
     });
-    const { effects } = reduce(queued, { type: 'key', key: key('ctrl-r') });
+    const { state, effects } = reduce(queued, { type: 'key', key: key('ctrl-r') });
     expect(effects).toEqual([{ type: 'removeTaskMessage', sessionId: 's1', taskId: 't1', messageId: 'm2' }]);
+    // Esc before the log says it is gone aims at the next one rather than asking twice.
+    expect(reduce(state, { type: 'key', key: key('escape') }).effects).toEqual([
+      { type: 'removeTaskMessage', sessionId: 's1', taskId: 't1', messageId: 'm1', filled: 'use Postgres' },
+    ]);
   });
 
   it('ctrl-n walks the queue selection, ctrl-p walks it back', () => {

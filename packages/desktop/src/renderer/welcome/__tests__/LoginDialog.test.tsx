@@ -45,6 +45,8 @@ describe('the launcher\'s login terminal', () => {
     w.open.mockResolvedValueOnce({ ok: false, message: 'Ordewell has no login to run for codex.' });
     const { unmount } = render(<LoginDialog runner="codex" label="Codex" platform="darwin" pollMs={5} onClose={vi.fn()} onSignedIn={vi.fn()} />);
     expect(await screen.findByText(/Ordewell has no login to run for codex\./)).toBeInTheDocument();
+    // A failure is an alert that leads with its outcome; the agent's reason follows.
+    expect(screen.getByRole('alert')).toHaveTextContent(/^Sign-in did not finish\. Ordewell has no login/);
     unmount();
 
     const second = world(false);

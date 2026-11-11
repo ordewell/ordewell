@@ -254,14 +254,15 @@ describe('a control from the daemon lands one execution_action line, worded by t
     expect(h.timeline().at(-1)!.text).toBe('You force sent task #1 "Task t1" a message: "stop and use the cache"');
 
     const first = await queueMessage(h, 't1', 'first');
-    const second = await queueMessage(h, 't1', 'second');
     h.forgetTimeline();
     const sent = await h.command({ command: 'force_send_queued', task: 't1', id: first });
+    // Queued after the force send: one queued before it would have gone with it (ADR-0023, F1).
+    const second = await queueMessage(h, 't1', 'second');
     const removed = await h.command({ command: 'remove_queued', task: 't1', id: second });
 
     expect(await json(sent)).toEqual({ ok: true, message: 'Sent your queued message to task #1 "Task t1" now: its turn is interrupted, and the runner reads it next.' });
     expect(await json(removed)).toEqual({ ok: true, message: 'Took back your queued message to task #1 "Task t1".' });
-    expect(h.timeline().map((m) => m.record.command)).toEqual(['force_send_queued', 'remove_queued']);
+    expect(h.timeline().map((m) => m.record.command)).toEqual(['force_send_queued', 'message_task', 'remove_queued']);
   });
 
   it('refuses a queued message already delivered, in the seam\'s words', async () => {

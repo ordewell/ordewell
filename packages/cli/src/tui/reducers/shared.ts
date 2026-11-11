@@ -85,8 +85,8 @@ export type Effect =
   | { type: 'sendTaskMessage'; sessionId: string; taskId: string; text: string }
   /** The task runner's own command (#66), never one of Ordewell's. */
   | { type: 'invokeTaskCommand'; sessionId: string; taskId: string; name: string; args: string }
-  /** Takes back one queued message before it is delivered. */
-  | { type: 'removeTaskMessage'; sessionId: string; taskId: string; messageId: string }
+  /** Takes back one queued message before it is delivered. `filled`: the text Esc put in the composer for it, which a refusal takes out again. */
+  | { type: 'removeTaskMessage'; sessionId: string; taskId: string; messageId: string; filled?: string }
   | { type: 'interruptTask'; sessionId: string; taskId: string }
   /** Force send (ADR-0023, F1): interrupt the running turn and deliver `text` next. */
   | { type: 'forceSendTaskMessage'; sessionId: string; taskId: string; text: string }
@@ -180,6 +180,8 @@ export type Action =
   /** The next events of a structured task's attempt, live (ADR-0018, P1). */
   | { type: 'accountLimits'; limits: readonly AccountLimitSnapshot[]; sessionId: string }
   | { type: 'taskLog'; position?: StreamStamp; taskId: string; attempt: number; events: TaskLogEvent[]; sessionId?: string }
+  /** The daemon refused to take a queued message back: the runner has it. `filled` is the text Esc put in the composer for it. */
+  | { type: 'taskMessageKept'; sessionId: string; taskId: string; messageId: string; filled?: string; message: string }
   /** A structured task's saved log, read when its view opens or an attempt is switched to. `attempts` is omitted when a switch already knows the list. */
   | { type: 'taskLogLoaded'; position?: StreamStamp; taskId: string; attempts?: number[]; attempt: number; events: TaskLogEvent[]; sessionId?: string }
   /** Open a task's saved log in the chat pane. */

@@ -516,8 +516,8 @@ describe('the task log tab (ADR-0018, V1)', () => {
       act(() => { fireEvent.change(input, { target: { value: 'stop, use Postgres' } }); });
 
       expect(document.querySelectorAll('.task-log-composer button')).toHaveLength(1);
-      expect(document.querySelector('.send-key-hint')?.textContent).toBe('Enter queue · Ctrl+Enter send now');
-      expect(screen.getByLabelText('Send').getAttribute('title')).toBe('Queue (Enter) · Send now (Ctrl+Enter)');
+      expect(document.querySelector('.send-key-hint')?.textContent).toBe('Enter queue · Ctrl+Enter send all now');
+      expect(screen.getByLabelText('Send').getAttribute('title')).toBe('Queue (Enter) · Send all now (Ctrl+Enter)');
 
       act(() => { fireEvent.keyDown(input, { key: 'Enter', metaKey: true }); });
       expect(api.post).toHaveBeenCalledWith({ type: 'sendTaskMessageNow', text: 'stop, use Postgres' });
@@ -548,17 +548,13 @@ describe('the task log tab (ADR-0018, V1)', () => {
       expect(screen.getByLabelText('Continue').getAttribute('title')).toBe('Continue (Enter)');
     });
 
-    it('is on each pending message the runner already has too, and each says where it stands', () => {
+    it('says where each pending message stands, with no send-now of its own', () => {
       render(<TaskLogApp />);
       init({ working: true, queued: [{ id: 'q0', text: 'stop now', forced: true }, { id: 'q1', text: 'then add tests' }, { id: 'q2', text: 'handed', handedOver: true }] });
 
       const states = [...document.querySelectorAll('.pending-message-state')].map((el) => el.textContent);
       expect(states).toEqual(['sending now…', 'queued', 'waiting for the current step']);
-      expect(screen.queryByLabelText('Send now: stop now')).toBeNull();
-      act(() => { fireEvent.click(screen.getByLabelText('Send now: then add tests')); });
-      act(() => { fireEvent.click(screen.getByLabelText('Send now: handed')); });
-      expect(api.post).toHaveBeenCalledWith({ type: 'sendQueuedTaskMessageNow', id: 'q1' });
-      expect(api.post).toHaveBeenCalledWith({ type: 'sendQueuedTaskMessageNow', id: 'q2' });
+      expect(screen.queryByLabelText(/^Send now: /)).toBeNull();
     });
 
     it('offers × only on a message still in Ordewell\'s queue', () => {
@@ -569,13 +565,6 @@ describe('the task log tab (ADR-0018, V1)', () => {
         .toEqual(['Remove pending message: then add tests']);
     });
 
-    it('sends a pending message now on Ctrl+Enter while focus is on it', () => {
-      render(<TaskLogApp />);
-      init({ working: true, queued: [{ id: 'q2', text: 'handed', handedOver: true }] });
-
-      act(() => { fireEvent.keyDown(screen.getByLabelText('Send now: handed'), { key: 'Enter', ctrlKey: true }); });
-      expect(api.post).toHaveBeenCalledWith({ type: 'sendQueuedTaskMessageNow', id: 'q2' });
-    });
   });
 
   it('is one button: disabled when idle and empty, Stop while a turn is live and empty, Send once typed', () => {
@@ -644,6 +633,192 @@ describe('the task log tab (ADR-0018, V1)', () => {
       esc(input);
       expect(screen.queryByText('Press Esc again to stop')).toBeNull();
       expect(api.post).not.toHaveBeenCalledWith({ type: 'interruptTask' });
+    });
+  });
+
+  describe('queued messages, glued by the runner (Cmd/Ctrl+Enter sends all, Esc takes back the newest)', () => {
+    const two = [{ id: 'q1', text: 'first' }, { id: 'q2', text: 'second' }];
+    const esc = (input: HTMLElement): void => { act(() => { fireEvent.keyDown(input, { key: 'Escape' }); }); };
+    const boxOf = (): HTMLTextAreaElement => screen.getByPlaceholderText(/Message the task/) as HTMLTextAreaElement;
+
+    it.each([['Meta', { metaKey: true }], ['Ctrl', { ctrlKey: true }]])('%s+Enter with an empty composer force-sends the oldest queued message, and the hint shows', (_name, chord) => {
+      render(<TaskLogApp />);
+      init({ working: true, queued: two });
+      expect(document.querySelector('.send-key-hint')?.textContent).toBe('Ctrl+Enter send all now');
+
+      act(() => { fireEvent.keyDown(boxOf(), { key: 'Enter', ...chord }); });
+      expect(api.post).toHaveBeenCalledTimes(2); // ready + one send
+      expect(api.post).toHaveBeenLastCalledWith({ type: 'sendQueuedTaskMessageNow', id: 'q1' });
+    });
+
+    it('does nothing on the chord when the empty composer has nothing removable queued', () => {
+      render(<TaskLogApp />);
+      init({ working: true, queued: [{ id: 'q0', text: 'forced', forced: true }, { id: 'q1', text: 'handed', handedOver: true }, { id: 'q2', text: 'ordewell says', from: 'ordewell' }] });
+      expect(document.querySelector('.send-key-hint')).toBeNull();
+      act(() => { fireEvent.keyDown(boxOf(), { key: 'Enter', metaKey: true }); });
+      expect(api.post).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'sendQueuedTaskMessageNow' }));
+      expect(api.post).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'sendTaskMessage' }));
+    });
+
+    it('still force-sends the composer text when something is queued', () => {
+      render(<TaskLogApp />);
+      init({ working: true, queued: two });
+      act(() => { fireEvent.change(boxOf(), { target: { value: 'last' } }); });
+      act(() => { fireEvent.keyDown(boxOf(), { key: 'Enter', ctrlKey: true }); });
+      expect(api.post).toHaveBeenCalledWith({ type: 'sendTaskMessageNow', text: 'last' });
+    });
+
+    it('one control on the group sends them all now; each row keeps only its remove', () => {
+      render(<TaskLogApp />);
+      init({ working: true, queued: two });
+      expect(screen.queryByLabelText(/^Send now: /)).toBeNull();
+      act(() => { fireEvent.click(screen.getByRole('button', { name: /Send all now/ })); });
+      expect(api.post).toHaveBeenLastCalledWith({ type: 'sendQueuedTaskMessageNow', id: 'q1' });
+      expect(document.querySelectorAll('.pending-message-remove')).toHaveLength(2);
+    });
+
+    it('the group control sends what is queued and leaves the draft where it is, as the planner chat\'s does', () => {
+      render(<TaskLogApp />);
+      init({ working: true, queued: two });
+      act(() => { fireEvent.change(boxOf(), { target: { value: 'half a thought' } }); });
+      expect(screen.getByRole('button', { name: /Send all now/ }).className).toBe('pending-messages-now');
+      act(() => { fireEvent.click(screen.getByRole('button', { name: /Send all now/ })); });
+      expect(api.post).toHaveBeenLastCalledWith({ type: 'sendQueuedTaskMessageNow', id: 'q1' });
+      expect(boxOf().value).toBe('half a thought');
+    });
+
+    it('offers no group control when nothing is removable, nor on a child', () => {
+      render(<TaskLogApp />);
+      init({ working: true, queued: [{ id: 'q0', text: 'forced', forced: true }, { id: 'q1', text: 'handed', handedOver: true }] });
+      expect(screen.queryByRole('button', { name: /Send all now/ })).toBeNull();
+      init({ child: { id: 'nested' }, working: true, queued: two });
+      expect(screen.queryByRole('button', { name: /Send all now/ })).toBeNull();
+    });
+
+    it('Esc takes back the newest into an empty composer, then discards the next newest', () => {
+      render(<TaskLogApp />);
+      init({ working: true, queued: two });
+
+      esc(boxOf());
+      expect(api.post).toHaveBeenLastCalledWith({ type: 'removeQueuedTaskMessage', id: 'q2' });
+      expect(boxOf().value).toBe('second');
+      expect(screen.queryByText('Press Esc again to stop')).toBeNull();
+
+      // q2's row has not gone yet: the second Esc must reach q1, not ask for q2 again.
+      esc(boxOf());
+      expect(api.post).toHaveBeenLastCalledWith({ type: 'removeQueuedTaskMessage', id: 'q1' });
+      expect(boxOf().value).toBe('second');
+      expect(screen.queryByText('Press Esc again to stop')).toBeNull();
+    });
+
+    it('Esc with text in the composer discards the newest and leaves the text', () => {
+      render(<TaskLogApp />);
+      init({ working: true, queued: two });
+      act(() => { fireEvent.change(boxOf(), { target: { value: 'typing' } }); });
+      esc(boxOf());
+      expect(api.post).toHaveBeenLastCalledWith({ type: 'removeQueuedTaskMessage', id: 'q2' });
+      expect(boxOf().value).toBe('typing');
+    });
+
+    it('Esc twice with text in the composer discards the newest and then the one before it, before any status arrives', () => {
+      render(<TaskLogApp />);
+      init({ working: true, queued: two });
+      act(() => { fireEvent.change(boxOf(), { target: { value: 'typing' } }); });
+      act(() => { fireEvent.keyDown(boxOf(), { key: 'Escape' }); fireEvent.keyDown(boxOf(), { key: 'Escape' }); });
+      const removals = api.post.mock.calls.map(([m]) => m).filter((m) => m.type === 'removeQueuedTaskMessage');
+      expect(removals).toEqual([{ type: 'removeQueuedTaskMessage', id: 'q2' }, { type: 'removeQueuedTaskMessage', id: 'q1' }]);
+      expect(boxOf().value).toBe('typing');
+    });
+
+    it('falls through to the stop arm once nothing removable is left', () => {
+      render(<TaskLogApp />);
+      init({ working: true, queued: two });
+      esc(boxOf());
+      esc(boxOf());
+      send({ type: 'status', status: status({ working: true, queued: [] }) });
+      esc(boxOf());
+      expect(screen.getByText('Press Esc again to stop')).toBeTruthy();
+      esc(boxOf());
+      expect(api.post).toHaveBeenLastCalledWith({ type: 'interruptTask' });
+    });
+
+    it('skips forced, handed-over and Ordewell\'s own messages, and takes the newest one a person queued', () => {
+      render(<TaskLogApp />);
+      init({ working: true, queued: [{ id: 'q1', text: 'mine' }, { id: 'q2', text: 'handed', handedOver: true }, { id: 'q3', text: 'now', forced: true }, { id: 'q4', text: 'reminder', from: 'ordewell' }] });
+      esc(boxOf());
+      expect(api.post).toHaveBeenLastCalledWith({ type: 'removeQueuedTaskMessage', id: 'q1' });
+    });
+
+    it('lets a suggestion list keep its Esc', () => {
+      const commands: RunnerCommand[] = [{ name: 'compact', description: 'Compact', kind: 'native', source: 'builtin' }];
+      render(<TaskLogApp />);
+      init({ working: true, commands, queued: two });
+      act(() => { fireEvent.change(boxOf(), { target: { value: '/com' } }); });
+      expect(screen.queryAllByRole('option').length).toBeGreaterThan(0);
+      esc(boxOf());
+      expect(api.post).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'removeQueuedTaskMessage' }));
+    });
+
+    it('undoes the fill when the message turned out to be handed over meanwhile', () => {
+      render(<TaskLogApp />);
+      init({ working: true, queued: two });
+      esc(boxOf());
+      expect(boxOf().value).toBe('second');
+      send({ type: 'status', status: status({ working: true, queued: [two[0]!, { id: 'q2', text: 'second', handedOver: true }] }) });
+      expect(boxOf().value).toBe('');
+    });
+
+    it('keeps what was typed over the fill when the removal fails', () => {
+      render(<TaskLogApp />);
+      init({ working: true, queued: two });
+      esc(boxOf());
+      act(() => { fireEvent.change(boxOf(), { target: { value: 'second, but better' } }); });
+      send({ type: 'status', status: status({ working: true, queued: [two[0]!, { id: 'q2', text: 'second', handedOver: true }] }) });
+      expect(boxOf().value).toBe('second, but better');
+    });
+
+    it('undoes the fill when the runner read the message before the removal landed, and keeps one that was taken back', () => {
+      render(<TaskLogApp />);
+      init({ working: true, queued: two });
+      esc(boxOf());
+      expect(boxOf().value).toBe('second');
+      // Delivered: the queue alone reads as a removal, so the fill waits for the host's answer.
+      send({ type: 'status', status: status({ working: true, queued: [two[0]!] }) });
+      expect(boxOf().value).toBe('second');
+      send({ type: 'showError', error: 'That message to the task was already delivered or taken back.', takeBack: 'q2' });
+      expect(boxOf().value).toBe('');
+      expect(screen.getByText(/already delivered/)).toBeTruthy();
+
+      esc(boxOf());
+      expect(boxOf().value).toBe('first');
+      send({ type: 'status', status: status({ working: true, queued: [] }) });
+      expect(boxOf().value).toBe('first');
+    });
+
+    it('keeps what was typed over the fill when a take-back the runner beat is refused', () => {
+      render(<TaskLogApp />);
+      init({ working: true, queued: two });
+      esc(boxOf());
+      act(() => { fireEvent.change(boxOf(), { target: { value: 'second, but better' } }); });
+      send({ type: 'status', status: status({ working: true, queued: [two[0]!] }) });
+      send({ type: 'showError', error: 'already delivered', takeBack: 'q2' });
+      expect(boxOf().value).toBe('second, but better');
+    });
+
+    it('marks the newest removable row with the key that takes it back', () => {
+      render(<TaskLogApp />);
+      init({ working: true, queued: two });
+      const buttons = [...document.querySelectorAll('.pending-message-remove')].map((el) => el.getAttribute('title'));
+      expect(buttons).toEqual(['Remove this message', 'Take back (Esc)']);
+    });
+
+    it('does not remove or force from a child plan\'s tab', () => {
+      render(<TaskLogApp />);
+      init({ child: { id: 'nested' }, working: true, queued: two });
+      esc(boxOf());
+      act(() => { fireEvent.keyDown(boxOf(), { key: 'Enter', metaKey: true }); });
+      expect(api.post).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'removeQueuedTaskMessage' }));
+      expect(api.post).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'sendQueuedTaskMessageNow' }));
     });
   });
 
@@ -789,14 +964,14 @@ describe('a message the runner reads mid-turn (ADR-0023)', () => {
     { type: 'message_handed_over', messageId: 'm1' },
   ] as const;
 
-  it('marks a message the runner already has, with no way to take it back but a way to send it now', () => {
+  it('marks a message the runner already has, with no way to take it back or to send it alone', () => {
     render(<TaskLogApp />);
     const view = replayTaskLog([...before]);
     init({ working: true, queued: [...view.queued] }, [...view.blocks]);
 
     expect(screen.getByText('waiting for the current step')).toBeTruthy();
-    expect(screen.getByLabelText('Send now: use Postgres')).toBeTruthy();
-    const removes = screen.getAllByTitle('Remove this message');
+    expect(screen.queryByLabelText('Send now: use Postgres')).toBeNull();
+    const removes = screen.getAllByTitle('Take back (Esc)');
     expect(removes).toHaveLength(1);
     act(() => { fireEvent.click(removes[0]); });
     expect(api.post).toHaveBeenCalledWith({ type: 'removeQueuedTaskMessage', id: 'm2' });

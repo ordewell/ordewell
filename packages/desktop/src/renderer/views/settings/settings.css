@@ -53,6 +53,8 @@
 .settings-toggle input { width: 16px; height: 16px; margin: 0; accent-color: var(--ow-accent); }
 .settings-toggle input:focus-visible { outline: 1px solid var(--ow-focus-ring); outline-offset: var(--ow-focus-offset); }
 .settings-toggle .settings-hint { grid-column: 2; }
+/* A runner's own name leads its row; its sign-in state and reason below it stay in the small secondary hint. */
+.settings-runner .settings-toggle > input + span { font: var(--ow-type-body-strong); overflow-wrap: anywhere; }
 .settings-toggle-label { display: inline-flex; align-items: center; gap: var(--ow-space-2); }
 /* Subplanners' fields and its confirmation sit under the switch's label, so they read as its, not as the group's. */
 .settings-subplanners,

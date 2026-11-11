@@ -91,6 +91,7 @@ function TabLabel({ tab, renaming, onRename, onDone }: {
       <>
         <span className="terminal-tab-name">{tabTitle(tab)}</span>
         {tab.scopeLabel !== tabTitle(tab) && <span className="terminal-tab-scope">{tab.scopeLabel}</span>}
+        {(tab.phase === 'exited' || tab.phase === 'failed') && <span className={`terminal-tab-state terminal-tab-state-${tab.phase}`}>{tab.phase === 'failed' ? 'failed' : 'exited'}</span>}
       </>
     );
   }

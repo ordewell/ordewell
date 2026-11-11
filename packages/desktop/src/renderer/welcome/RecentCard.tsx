@@ -32,7 +32,7 @@ export function RecentCard({ entry, live, now, onOpen, onForget }: {
     return (
       <li className="welcome-card welcome-recent welcome-recent-missing" data-path={entry.path} data-state="missing">
         <span className="welcome-recent-top">
-          <span className="welcome-recent-name">{entry.name}</span>
+          <span className="welcome-recent-name" title={entry.name}>{entry.name}</span>
         </span>
         <span className="welcome-line welcome-path" title={entry.path}>{middleEllipsis(entry.displayPath)}</span>
         <span className="welcome-line welcome-recent-warning">
@@ -57,7 +57,7 @@ export function RecentCard({ entry, live, now, onOpen, onForget }: {
     >
       <span className="welcome-recent-top">
         {/* The name is the card's one real control, so Tab and Enter open it as a click does. */}
-        <button type="button" className="welcome-recent-name welcome-recent-open" onClick={(event) => { event.stopPropagation(); onOpen(entry.path); }}>
+        <button type="button" className="welcome-recent-name welcome-recent-open" title={entry.name} onClick={(event) => { event.stopPropagation(); onOpen(entry.path); }}>
           {entry.name}
         </button>
         {needsYou > 0 && (

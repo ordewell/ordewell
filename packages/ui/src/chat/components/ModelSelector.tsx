@@ -45,51 +45,6 @@ export const API_PROVIDER_LABELS: Record<ApiProvider, string> = {
   novita: 'Novita',
 };
 
-// Named model-family → CSS class for explicit known families
-const KNOWN_FAMILY_CLASSES: Record<string, string> = {
-  sonnet: 'model-sonnet',
-  opus: 'model-opus',
-  haiku: 'model-haiku',
-  deepseek: 'model-deepseek',
-  kimi: 'model-kimi',
-  gpt: 'model-gpt',
-  gemini: 'model-gemini',
-  qwen: 'model-qwen',
-  glm: 'model-glm',
-  minimax: 'model-minimax',
-  mimo: 'model-mimo',
-  fable: 'model-fable',
-};
-
-function knownFamilyClass(modelId: string): string | null {
-  const lower = modelId.toLowerCase();
-  for (const [key, cls] of Object.entries(KNOWN_FAMILY_CLASSES)) {
-    if (lower.includes(key)) return cls;
-  }
-  return null;
-}
-
-function hashString(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) {
-    h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
-  }
-  return Math.abs(h);
-}
-
-const HASH_PALETTE_COUNT = 8;
-
-function hashModelClass(modelId: string): string {
-  // Hash based on the provider/family part for stability across model versions
-  const base = modelId.split('/')[0] || modelId.split('-')[0] || modelId;
-  return `model-hash-${hashString(base) % HASH_PALETTE_COUNT}`;
-}
-
-export function getModelClass(modelId: string): string {
-  if (!modelId) return '';
-  return knownFamilyClass(modelId) ?? hashModelClass(modelId);
-}
-
 /** The backend a model is served by, as its source reported it. */
 function backendOf(m: DiscoveredModel): string {
   return m.runnerProvider || (m.modelId.includes('/') ? m.modelId.split('/')[0] : 'Other');
@@ -257,12 +212,6 @@ export default function ModelSelector({
         ? `${currentModel.modelLabel} · ${providerLabel(currentModel.modelId.split('/')[0])}`
         : currentModel.modelLabel
       : 'Select model...';
-  const triggerClass = selectedModel
-    ? getModelClass(selectedModel.modelId)
-    : currentModel
-      ? getModelClass(currentModel.modelId)
-      : '';
-
   const closeDropdown = () => {
     setOpen(false);
     setFrozen(null);
@@ -285,7 +234,7 @@ export default function ModelSelector({
   const renderModelItem = (m: DiscoveredModel) => (
     <div
       key={m.modelId}
-      className={`model-picker-item ${m.modelId === currentModel?.modelId ? 'selected' : ''} ${getModelClass(m.modelId)}`}
+      className={`model-picker-item ${m.modelId === currentModel?.modelId ? 'selected' : ''}`}
       onClick={() => handleSelect(m)}
       title={`${m.modelLabel}\n${m.modelId}`}
     >
@@ -304,7 +253,7 @@ export default function ModelSelector({
             className="model-picker-trigger"
             onClick={handleToggle}
           >
-            <span className={`model-picker-label ${triggerClass}`}>
+            <span className="model-picker-label" title={triggerText}>
               {triggerText}
             </span>
             <span className={`model-picker-arrow ${open ? 'open' : ''}`}>&#9660;</span>

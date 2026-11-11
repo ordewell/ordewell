@@ -153,7 +153,7 @@ function TaskSummaryRow({ task, row, expanded, onToggle, onOpenChat, badges = tr
       </div>
       {assignment && <div className="task-row-line task-row-assignment">{assignment}</div>}
       <div className="task-row-line task-row-status">
-        <span className="task-row-status-text">{line}</span>
+        <span className="task-row-status-text" title={line}>{line}</span>
         {badges && <TaskSummaryBadges row={row} />}
         {children}
         {openChat && (

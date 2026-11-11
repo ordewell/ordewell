@@ -120,6 +120,20 @@ describe('activity switching', () => {
     expect(screen.queryByRole('navigation', { name: 'Sessions' })).not.toBeInTheDocument();
   });
 
+  it('leaves a drawer open when a control inside already used the Escape (a task chat taking back a queued message)', () => {
+    sizeWindow(900, 800);
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: 'Show the plan' }));
+    const used = (event: KeyboardEvent): void => event.preventDefault();
+    document.body.addEventListener('keydown', used);
+    try {
+      fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Escape' });
+      expect(screen.getByRole('complementary', { name: 'Plan' })).toBeInTheDocument();
+    } finally {
+      document.body.removeEventListener('keydown', used);
+    }
+  });
+
   it('moves focus into a drawer as it opens and back to its opener as Escape closes it', () => {
     sizeWindow(900, 800);
     mount();

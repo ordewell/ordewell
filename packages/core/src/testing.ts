@@ -33,6 +33,7 @@ import type { EventStore } from './services/eventStore';
 import { isWithin, type NodePath, type TreeEvent, type TreeFact } from './models/TreeEvent';
 import { handoffOf, integrationBranchFor, noRemoval, SELF_REPO } from './services/isolationRecord';
 import type { SeaModule } from './utils/seaRuntime';
+import { glued } from './conversation/promptHold';
 
 export { homeEnv, patient, pathWithFake, removeDir, setEnv, writeStandIn } from './testEnv';
 
@@ -213,12 +214,16 @@ export class FakeRunnerSession implements IRunnerSession {
     else this.messages.push({ id, text, ...(from ? { from } : {}) });
     return id;
   }
-  /** Interrupts, and the turn that replaces the interrupted one opens with the forced message. */
+  /**
+   * Interrupts, and the turn that replaces the interrupted one opens with the
+   * forced message, what the person queued glued ahead of it (ADR-0023, F1).
+   */
   forceSend(text: string): string {
     if (this.state === 'idle') return this.sendMessage(text);
     this.messageCount += 1;
     const id = `msg-${this.messageCount}`;
-    this.putForced({ id, text, forced: true });
+    const held = this.takeGluable();
+    this.putForced({ id, text: glued([...held.map((m) => m.text), text]), forced: true });
     void this.interrupt();
     return id;
   }
@@ -226,10 +231,24 @@ export class FakeRunnerSession implements IRunnerSession {
     const message = this.messages.find((m) => m.id === id);
     if (!message) return false;
     if (message.forced) return true;
-    this.messages = this.messages.filter((m) => m !== message);
-    this.putForced({ ...message, forced: true });
+    if (this.gluable(message)) {
+      this.putForced({ ...message, text: glued(this.takeGluable().map((m) => m.text)), forced: true });
+    } else {
+      this.messages = this.messages.filter((m) => m !== message);
+      this.putForced({ ...message, forced: true });
+    }
     if (this.state === 'working') void this.interrupt();
     return true;
+  }
+  private readonly commandIds = new Set<string>();
+  /** The person's own queued message, which a force send or a turn's end glues (ADR-0023, F1). */
+  private gluable(message: QueuedTaskMessage): boolean {
+    return !message.forced && !message.handedOver && !message.from && !this.commandIds.has(message.id);
+  }
+  private takeGluable(): QueuedTaskMessage[] {
+    const taken = this.messages.filter((m) => this.gluable(m));
+    this.messages = this.messages.filter((m) => !this.gluable(m));
+    return taken;
   }
   private putForced(message: QueuedTaskMessage): void {
     const at = this.messages.findIndex((m) => !m.forced);
@@ -258,7 +277,9 @@ export class FakeRunnerSession implements IRunnerSession {
   /** Runs it as a message that starts with it, which is what a runner reads. */
   invokeCommand(name: string, args = ''): string {
     this.invoked.push({ name, ...(args.trim() ? { args: args.trim() } : {}) });
-    return this.sendMessage(args.trim() ? `/${name} ${args.trim()}` : `/${name}`);
+    const id = this.sendMessage(args.trim() ? `/${name} ${args.trim()}` : `/${name}`);
+    this.commandIds.add(id);
+    return id;
   }
 
   /** Every answer this session was given, in order. */
@@ -300,11 +321,15 @@ export class FakeRunnerSession implements IRunnerSession {
     this.emitTurnEnd('completed');
     if (this.fromOrdewell.length > reminders) this.emitTurnEnd('completed');
   }
+  /** The next turn opens with the oldest message, the person's run of them glued as one (ADR-0023, F1). */
   emitTurnEnd(reason: StructuredTurnEnd): void {
-    const next = this.messages.shift();
-    if (!next) this.state = 'idle';
+    const apart = this.messages.findIndex((m) => !this.gluable(m));
+    const head = this.messages[0];
+    const turn = head && this.gluable(head) ? this.messages.slice(0, apart < 0 ? this.messages.length : apart) : this.messages.slice(0, 1);
+    this.messages = this.messages.slice(turn.length);
+    if (!head) this.state = 'idle';
     for (const cb of this.turnEndCbs) cb(reason);
-    if (next) this.deliver(next.text, next.from);
+    if (head) this.deliver(glued(turn.map((m) => m.text)), head.from);
   }
 
   private deliver(text: string, from?: TaskMessageFrom): void {

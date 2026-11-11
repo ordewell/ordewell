@@ -369,7 +369,7 @@ describe('ConversationViewHost queued prompts', () => {
     host = new ConversationViewHost(screen.post);
   });
 
-  it('holds prompts typed during a turn and, when it ends, gives up the oldest to send next', () => {
+  it('holds prompts typed during a turn and, when it ends, gives up all of them as one message', () => {
     host.receive(started);
     host.holdPrompt('also cover caching');
     host.holdPrompt('and the CLI');
@@ -378,31 +378,50 @@ describe('ConversationViewHost queued prompts', () => {
     host.receive({ type: 'planner_turn_ended', turnId: TURN, outcome: 'message' });
     const next = host.nextPrompt();
 
-    expect(next).toBe('also cover caching');
-    expect(lastHold()).toEqual({ type: 'heldPrompts', prompts: ['and the CLI'] });
+    expect(next).toBe('also cover caching\nand the CLI');
+    expect(lastHold()).toEqual({ type: 'heldPrompts', prompts: [] });
+    expect(host.nextPrompt()).toBeUndefined();
   });
 
-  it('gives the newest back to the input on unsend, and the turn keeps going', () => {
+  it('gives the newest back to an empty composer on unsend, and the turn keeps going', () => {
     host.receive(started);
     host.holdPrompt('one');
     host.holdPrompt('two');
 
-    host.unsendPrompt();
+    host.unsendPrompt(true);
 
     expect(screen.posts.filter((m) => m.type === 'promptUnsent')).toEqual([{ type: 'promptUnsent', text: 'two' }]);
     expect(lastHold()).toEqual({ type: 'heldPrompts', prompts: ['one'] });
     expect(screen.posts.some((m) => m.type === 'plannerTurn' && !m.active)).toBe(false);
   });
 
-  it('takes one held prompt out by position for a Send now, leaving the rest in order', () => {
+  it('discards the newest on unsend over a draft', () => {
     host.receive(started);
     host.holdPrompt('one');
     host.holdPrompt('two');
-    host.holdPrompt('three');
 
-    expect(host.takePrompt(1)).toBe('two');
-    expect(lastHold()).toEqual({ type: 'heldPrompts', prompts: ['one', 'three'] });
-    expect(host.takePrompt(9)).toBeUndefined();
+    host.unsendPrompt(false);
+
+    expect(screen.posts.some((m) => m.type === 'promptUnsent')).toBe(false);
+    expect(lastHold()).toEqual({ type: 'heldPrompts', prompts: ['one'] });
+  });
+
+  it('takes everything held for a Send now, glued in the order typed with the composer\'s text last', () => {
+    host.receive(started);
+    host.holdPrompt('one');
+    host.holdPrompt('two');
+
+    expect(host.takeAll('use Postgres')).toBe('one\ntwo\nuse Postgres');
+    expect(lastHold()).toEqual({ type: 'heldPrompts', prompts: [] });
+    expect(host.nextPrompt()).toBeUndefined();
+  });
+
+  it('takes only what is held for a Send now from an empty composer, and only the text with nothing held', () => {
+    host.holdPrompt('one');
+    host.holdPrompt('two');
+
+    expect(host.takeAll('')).toBe('one\ntwo');
+    expect(host.takeAll('use Postgres')).toBe('use Postgres');
   });
 
   it('gives every held prompt back when the user stops the turn, rather than sending them after it', () => {
@@ -424,7 +443,7 @@ describe('ConversationViewHost queued prompts', () => {
     host.receive({ type: 'planner_turn_ended', turnId: TURN, outcome: 'stopped', forceSent: true });
 
     expect(screen.posts.some((m) => m.type === 'promptUnsent')).toBe(false);
-    expect(host.nextPrompt()).toBe('one');
+    expect(host.nextPrompt()).toBe('one\ntwo');
   });
 
   it('drops held prompts with the conversation on a new session, without putting them in the input', () => {

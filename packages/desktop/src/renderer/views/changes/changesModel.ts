@@ -1,5 +1,5 @@
 import { walkPlan } from '@ordewell/core/plan-utils';
-import type { RunTask, RunView } from '@ordewell/core';
+import type { RunTask, RunView, TaskDiffCause } from '@ordewell/core';
 
 /*
  * What the Changes view reads, as plain data: the daemon's task diff text and
@@ -183,6 +183,62 @@ export function diffSides(patch: FilePatch, modified: string | undefined): DiffS
   });
   const join = (all: string[]): string => (all.length ? `${all.join('\n')}\n` : '');
   return { original: join(sides.original), modified: join(sides.modified), lines, partial: true };
+}
+
+/** Why the daemon had no diff for a task, as `plans.taskDiff` answers it; a cause this app does not know reads as an error. */
+export interface TaskDiffUnavailable {
+  cause: TaskDiffCause;
+  reason: string;
+}
+
+/**
+ * What the view says of a task with no diff to show. *Quiet*: nothing is
+ * wrong, the task has changed nothing yet, or its record has not reached the
+ * saved run (`retry`: a run saves a record after it broadcasts it). *Unavailable*:
+ * the task's kind or its end leaves no diff of its own. *Error*: a read
+ * failed, and the person should hear it.
+ */
+export interface TaskDiffNote {
+  tone: 'quiet' | 'unavailable' | 'error';
+  text: string;
+  retry: boolean;
+}
+
+const RUNNING = new Set(['in_progress', 'awaiting_user']);
+const UNSETTLED = new Set(['pending', 'approved', 'in_progress', 'awaiting_user']);
+
+export const NO_CHANGES_YET = 'No changes yet.';
+const OPS = 'An ops task works in the checkout, so its changes are not told apart from anyone else\'s.';
+const READ_ONLY = 'A read-only task lands no changes: its report is its result.';
+const SHARED = 'This run shares the checkout among its tasks, so their changes are not told apart by task.';
+const NO_RECORD = 'No diff to show: the saved run holds no worktree record for this task.';
+
+/**
+ * Read with the live task, since the saved run the daemon answers from trails
+ * it, and a saved status cannot tell a task that is starting from one that ended.
+ * The task's kind is the daemon's to judge: it reads the saved plan, which
+ * holds what the run view leaves out (a script's `readOnly`).
+ */
+export function taskDiffNote(answer: TaskDiffUnavailable, task: Pick<RunTask, 'status' | 'isolation' | 'type' | 'ops'>): TaskDiffNote {
+  const unavailable = (text: string): TaskDiffNote => ({ tone: 'unavailable', text, retry: false });
+  switch (answer.cause) {
+    case 'read-only':
+      return unavailable(READ_ONLY);
+    case 'not-attributable':
+      // A read-only script is answered read-only, so a script here is one that writes.
+      return unavailable(task.ops === true || task.type === 'script' ? OPS : answer.reason);
+    case 'no-record':
+    case 'no-run': {
+      // A running task with no isolation at all is one the live run gave no worktree: the run is shared.
+      if (!task.isolation && RUNNING.has(task.status)) return unavailable(SHARED);
+      const recorded = !!task.isolation && task.isolation.state !== 'none';
+      if (RUNNING.has(task.status) || recorded) return { tone: 'quiet', text: NO_CHANGES_YET, retry: true };
+      if (UNSETTLED.has(task.status)) return { tone: 'quiet', text: NO_CHANGES_YET, retry: false };
+      return unavailable(answer.cause === 'no-run' ? answer.reason : NO_RECORD);
+    }
+    default:
+      return { tone: 'error', text: answer.reason, retry: false };
+  }
 }
 
 /** A task with work of its own to review: one that has had a worktree, a branch, or a saved patch. */

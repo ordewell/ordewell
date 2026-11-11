@@ -19,6 +19,21 @@ describe('parseRepos', () => {
 describe('parseBranches', () => {
   const base = { repo: '.', current: 'main', detached: false, local: [], ordewell: [], remote: [], stashes: [], worktrees: [] };
 
+  it('reads a tip\'s date and subject, and leaves them out when the daemon sent none', () => {
+    const read = parseBranches({
+      ...base,
+      local: [
+        { name: 'main', sha: SHA, date: '2025-01-05T12:00:00+01:00', subject: 'Fix: "the" login' },
+        { name: 'old', sha: SHA, date: '', subject: 5 },
+        { name: 'older', sha: SHA },
+      ],
+    });
+    expect(read?.local[0]).toMatchObject({ date: '2025-01-05T12:00:00+01:00', subject: 'Fix: "the" login' });
+    expect(read?.local[1]).not.toHaveProperty('date');
+    expect(read?.local[1]).not.toHaveProperty('subject');
+    expect(read?.local[2]).not.toHaveProperty('subject');
+  });
+
   it('reads owners and the live runs a branch is landed on', () => {
     const read = parseBranches({
       ...base,

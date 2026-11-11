@@ -20,13 +20,24 @@ interface ChatInputProps {
   onSend: (text: string) => void;
   disabled: boolean;
   placeholder?: string;
-  /** A planner turn is in flight: with nothing typed the button stops it; with text typed, Enter queues it and Ctrl+Enter sends it now. A run is not the composer's to stop. */
+  /** A planner turn is in flight: with nothing typed the button stops it; with text typed, Enter queues it. Either way Ctrl+Enter (Cmd+Enter on macOS) sends now whatever there is. A run is not the composer's to stop. */
   isTurnRunning?: boolean;
-  /** Send now (ADR-0023, F5), on Ctrl+Enter; with no turn running the host sends it as a plain message. */
+  /**
+   * Send now (ADR-0023, F5), on Ctrl+Enter (Cmd+Enter on macOS): the host
+   * sends everything held with `text` last. `text` is empty when only what is
+   * held goes; with no turn running the host sends it as a plain message.
+   */
   onSendNow?: (text: string) => void;
+  /** How many prompts are held for the turn's end: with any, send now has something to send even with nothing typed. */
+  heldCount?: number;
   onStop?: () => void;
-  /** Esc with no suggestion list open. True when the key was spent; otherwise it clears the input. */
-  onEscape?: () => boolean;
+  /**
+   * Esc with no suggestion list open, told whether the composer is empty. True
+   * when the key was spent; otherwise it clears the input.
+   */
+  onEscape?: (composerEmpty: boolean) => boolean;
+  /** Told whenever the composer turns empty or not, for a control outside it that acts as Esc does. */
+  onEmptyChange?: (empty: boolean) => void;
   disabledReason?: string;
   prefill?: string;
   /** A state cue of the host's, drawn under the composer while it is empty (#137). */
@@ -176,8 +187,10 @@ export default function ChatInput({
   placeholder,
   isTurnRunning = false,
   onSendNow,
+  heldCount = 0,
   onStop,
   onEscape,
+  onEmptyChange,
   disabledReason,
   prefill,
   unsent,
@@ -325,6 +338,11 @@ export default function ChatInput({
     hadTextRef.current = text !== '';
   }, [text]);
 
+  const empty = text === '';
+  useEffect(() => {
+    onEmptyChange?.(empty);
+  }, [empty, onEmptyChange]);
+
   // Applies a caret position queued by a mid-prompt splice, once React has
   // committed the new text to the textarea — setSelectionRange before that
   // would be clamped against the stale (pre-splice) value.
@@ -352,12 +370,16 @@ export default function ChatInput({
 
   const canSend = !disabled && text.trim().length > 0;
   const canSubmit = isTurnRunning || canSend;
-  // A live planner turn and something typed: Enter queues it for the turn's
-  // end, Ctrl+Enter stops the turn and sends it ahead of the queue.
-  const canSendNow = !!onSendNow && isTurnRunning && canSend;
+  // A live planner turn and something to send: Enter queues what is typed for
+  // the turn's end, Ctrl+Enter stops the turn and sends everything held with
+  // the typed text last. Held prompts alone are enough, so the chord still
+  // works on an empty composer.
+  const canSendNow = !!onSendNow && isTurnRunning && !disabled && (canSend || heldCount > 0);
   // A built-in command is the host's either way, never held, so neither key
   // the hint names would apply to it.
-  const queues = canSendNow && !isBuiltinSlashCommand(text.trim());
+  const queues = canSendNow && canSend && !isBuiltinSlashCommand(text.trim());
+  // Nothing typed and something held: only the chord has anything to do.
+  const sendsHeld = canSendNow && !canSend;
   // Stop only while a turn is live and nothing is typed, so typing a message
   // always turns the button back into Send — as the task log's composer does.
   // A run alone never makes it Stop: the run has its own control.
@@ -449,7 +471,7 @@ export default function ChatInput({
 
     if (e.key === 'Escape') {
       e.preventDefault();
-      if (!onEscape?.()) setText('');
+      if (!onEscape?.(text === '')) setText('');
       return;
     }
 
@@ -534,6 +556,7 @@ export default function ChatInput({
             </button>
           </div>
           {queues && <SendKeyHint />}
+          {sendsHeld && <SendKeyHint held />}
           {shownHint && <div className="chat-input-hint">{shownHint}</div>}
         </div>
         {/* Once aria-label names the field, its placeholder is drawn only; this keeps what it says in the accessible description (#137). */}

@@ -20,6 +20,7 @@ import {
 } from './checkoutModel';
 import { checkoutDiffTabId, checkoutDiffTitle } from './checkoutTabs';
 import { fetchRepo, popStash, pullBranch, pushBranch, stashChanges, type GitContext } from '../git/gitActions';
+import { useSyncing } from '../git/gitStore';
 import { SyncBar } from '../git/SyncBar';
 import { useRepoBranches } from '../git/useRepoBranches';
 import { LONG_LIST, MiddleText, Notice, SidebarGroup } from '../sidebarKit';
@@ -123,13 +124,13 @@ function Row({ api, repo, file, staged, busy, actions }: {
       <button
         type="button"
         className="srow-main checkout-file"
-        title={name}
+        title={file.from ? `${name}\nRenamed from ${file.from}` : name}
         onClick={() => openFile(api, repo, file, staged ? 'staged' : 'unstaged', true)}
         onDoubleClick={() => openFile(api, repo, file, staged ? 'staged' : 'unstaged', false)}
       >
         <span className={`sbadge sbadge-${file.status}`} aria-label={LETTER_WORD[file.status]}>{file.status}</span>
         <span className="checkout-name">{base}</span>
-        {file.from ? <MiddleText className="checkout-dir" text={`from ${file.from}`} /> : dir && <MiddleText className="checkout-dir" text={dir} />}
+        {file.from ? <MiddleText className="checkout-dir" text={`from ${file.from}`} path /> : dir && <MiddleText className="checkout-dir" text={dir} path />}
       </button>
       <span className="srow-actions" aria-busy={busy !== undefined}>{actions}</span>
     </li>
@@ -161,6 +162,7 @@ function RepoSection({ api, host, repo, first, onRefresh }: {
   // What the sync line and the stash menu act on moves with the branch, its commit and the tree: read again when any does, and when the menu opens.
   const branches = useRepoBranches(api, repo.info.repo, `${repo.info.branch}|${repo.info.head}|${repo.info.ahead}|${repo.info.behind}|${changeCount}|${menuOpen}`);
   const git: GitContext | undefined = branches ? { api, repo: repo.info.repo, branches } : undefined;
+  const syncing = useSyncing(api, repo.info.repo);
 
   useEffect(() => {
     if (!first) return;
@@ -412,6 +414,7 @@ function RepoSection({ api, host, repo, first, onRefresh }: {
 
       <SyncBar
         label={label}
+        running={syncing}
         state={{
           upstream: repo.info.upstream,
           ahead: repo.info.ahead,

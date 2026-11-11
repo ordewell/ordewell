@@ -6,6 +6,7 @@ import { FrameStore } from '../../../frame/store';
 import { daemonHost, resetDaemonHosts } from '../../../session/DaemonHost';
 import { fakeDaemon, ok, surfacePlan } from '../../../session/__tests__/fakeDaemon';
 import { HANDOFF, runView } from '../../changes/__tests__/fixtures';
+import { gitStoreFor } from '../../git/gitStore';
 import { CheckoutChanges, register } from '../CheckoutGroup';
 
 const WORKSPACE = '/work/acme';
@@ -21,7 +22,16 @@ function repo(over: Record<string, unknown> = {}) {
   return { repo: '.', branch: 'main', detached: false, head: 'abc123', upstream: 'origin/main', ahead: 0, behind: 0, ...over };
 }
 
-type Answers = Partial<Record<RouteId, DaemonCallResult | ((params: RouteParams | undefined, body: unknown) => DaemonCallResult)>>;
+// The sync line reads the remotes from the branches; without an answer it stays "Reading the remotes…".
+const sha = 'a'.repeat(40);
+const BRANCHES = {
+  repo: '.', current: 'main', detached: false,
+  local: [{ name: 'main', sha, upstream: 'origin/main', ahead: 0, behind: 2, current: true }],
+  ordewell: [], remote: [{ name: 'origin/main', sha, upstream: null, ahead: 0, behind: 0, current: false }], stashes: [], worktrees: [],
+};
+
+type Result = DaemonCallResult | Promise<DaemonCallResult>;
+type Answers = Partial<Record<RouteId, Result | ((params: RouteParams | undefined, body: unknown) => Result)>>;
 
 async function mounted(answers: Answers = {}) {
   const daemon = fakeDaemon({
@@ -102,9 +112,9 @@ describe('the checkout group', () => {
   });
 
   it('amends with the commit it was shown when the branch is ahead of its upstream', async () => {
-    const { daemon, off } = await mounted({ 'git.repos': ok({ repos: [repo({ ahead: 2 })] }) });
+    const { daemon, off } = await mounted({ 'git.repos': ok({ repos: [repo({ ahead: 2 })] }), 'git.branches': ok(BRANCHES) });
 
-    expect(screen.getByText(/↓ 0 ↑ 2/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Push' })).toHaveAccessibleDescription('Push 2 commits to origin/main'));
     fireEvent.click(screen.getByRole('checkbox', { name: 'Amend the last commit' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Commit message for Your checkout' }), { target: { value: 'Fix setup instructions, again' } });
     fireEvent.click(screen.getByRole('button', { name: 'Amend' }));
@@ -178,12 +188,70 @@ describe('the checkout group', () => {
     const ranked = repo({ ahead: 1, behind: 3 });
     const { off } = await mounted({
       'git.repos': ok({ repos: [ranked] }),
+      'git.branches': ok(BRANCHES),
       'git.status': ok({ staged: [], unstaged: [], untracked: [], conflicted: [] }),
     });
 
     expect(await screen.findByText('No changes in your checkout.')).toBeInTheDocument();
-    expect(screen.getByText(/↓ 3 ↑ 1/)).toBeInTheDocument();
+    // Behind before ahead, as Pull comes before Push; the count is drawn in the button, its words in the description.
+    const sync = within(screen.getByRole('group', { name: /^Sync/ }));
+    expect(sync.getAllByRole('button').map((b) => b.getAttribute('aria-label') ?? b.textContent)).toEqual(['Pull3', 'Push1', 'Fetch']);
+    await waitFor(() => expect(sync.getByRole('button', { name: 'Pull' })).toHaveAccessibleDescription('Pull 3 commits from origin/main'));
+    expect(sync.getByRole('button', { name: 'Push' })).toHaveAccessibleDescription('Push 1 commit to origin/main');
     expect(screen.getByRole('textbox', { name: 'Commit message for Your checkout' })).toBeInTheDocument();
     off();
+  });
+
+  describe('the sync line while git works', () => {
+    const button = (name: RegExp) => within(screen.getByRole('group', { name: /^Sync/ })).getByRole('button', { name });
+
+    async function mountedWithRemote(answers: Answers) {
+      const result = await mounted({ 'git.repos': ok({ repos: [repo({ behind: 2 })] }), 'git.branches': ok(BRANCHES), ...answers });
+      await waitFor(() => expect(button(/^Fetch/)).toBeEnabled());
+      return result;
+    }
+
+    it('turns the Fetch icon from the first click to the answer, and restores every button', async () => {
+      let settle!: (r: DaemonCallResult) => void;
+      await mountedWithRemote({ 'git.fetch': new Promise<DaemonCallResult>((resolve) => { settle = resolve; }) });
+      fireEvent.click(button(/^Fetch/));
+      await waitFor(() => expect(button(/^Fetch/)).toHaveAttribute('aria-busy', 'true'));
+      expect(button(/^Fetch/).querySelector('svg')).toHaveClass('ow-spin');
+      expect(button(/^Pull/)).toBeDisabled();
+      expect(button(/^Pull/).querySelector('svg')).not.toHaveClass('ow-spin');
+      await act(async () => { settle(ok({ repo: repo() })); });
+      await waitFor(() => expect(button(/^Fetch/)).not.toHaveAttribute('aria-busy'));
+      expect(button(/^Fetch/)).toBeEnabled();
+      expect(button(/^Pull/)).toBeEnabled();
+    });
+
+    it('shows a sync another surface started, and is restored when it is refused', async () => {
+      const { store } = await mountedWithRemote({});
+      let fail!: () => void;
+      const started = gitStoreFor(store.api).sync('.', 'fetch', () => new Promise<void>((_, reject) => { fail = () => reject(new Error('no route to host')); }));
+      await waitFor(() => expect(button(/^Fetch/)).toHaveAttribute('aria-busy', 'true'));
+      expect(button(/^Push/)).toBeDisabled();
+      fail();
+      await expect(started).rejects.toThrow('no route to host');
+      await waitFor(() => expect(button(/^Fetch/)).not.toHaveAttribute('aria-busy'));
+      expect(button(/^Fetch/)).toBeEnabled();
+    });
+
+    // The Changes sidebar names the branch in its own head: the sync line adds no second one.
+    it('draws only the buttons here, with no branch line and no note while the branch tracks its upstream', async () => {
+      await mountedWithRemote({});
+      const group = screen.getByRole('group', { name: /^Sync/ });
+      expect(group.querySelector('.sync-head')).toBeNull();
+      expect(group.querySelector('.sync-note')).toBeNull();
+      expect(button(/^Pull/)).toHaveAccessibleDescription('Pull 2 commits from origin/main');
+      expect(button(/^Push/)).toHaveAccessibleDescription('Nothing to push: origin/main has every commit');
+    });
+
+    it('says a branch with no upstream is not published, and lets Push publish it', async () => {
+      await mounted({ 'git.repos': ok({ repos: [repo({ upstream: null })] }), 'git.branches': ok(BRANCHES) });
+      expect(await screen.findByText('Not published: Push publishes it.')).toBeInTheDocument();
+      await waitFor(() => expect(button(/^Push/)).toBeEnabled());
+      expect(button(/^Pull/)).toHaveAccessibleDescription('Nothing to pull: this branch has no upstream yet');
+    });
   });
 });

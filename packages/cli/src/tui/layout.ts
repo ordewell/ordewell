@@ -4,7 +4,7 @@ import { cursorInLines, type CursorPosition } from './editor';
 import { assignmentFlagText, checkpointCardLines, conversationLines, subplannerCardLines, tokenLine } from './blocks';
 import { bodyMode, chatEditorRoomFor, chatPaneWidth, planPaneWidth, stackRows, type BodyMode, type PaneRect } from './geometry';
 import { slashCommandTable, type SlashCategory } from './slash';
-import { checkpointsBelow, continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, questionAbove, queuedTarget, refFor, rootFrame, scriptTaskView, runnerSignInLine, selectedPlanRow, signedOutWithWayIn, viewOnly, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type Focus, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
+import { checkpointsBelow, continuesTask, findTask, isTaskRunning, newestRemovable, planPaneOpen, planRows, plannerInFlight, questionAbove, queuedTarget, refFor, rootFrame, scriptTaskView, runnerSignInLine, selectedPlanRow, signedOutWithWayIn, viewOnly, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type Focus, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
 import { DELEGATION_OFFERED, SUPERVISOR_LEVEL_LABEL, standingRecord, type DecisionRecordEntry, type DecisionRecordKind, type DiscoveredModel } from '@ordewell/core';
 import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
@@ -114,19 +114,21 @@ export function composerRows(state: TuiState): number {
 export function footerHints(state: TuiState): string[] {
   const selected = selectedPlanRow(state)?.task;
   // A planning turn in flight owns ESC ahead of whatever the pane would
-  // otherwise bind it to. What ESC does there depends on what is waiting: a
-  // queued prompt it takes back, otherwise the first press arms the stop and
-  // the second commits it — so the hint names the state the key is actually in.
+  // otherwise bind it to. What ESC does there depends on what is waiting: the
+  // newest queued prompt it takes back into an empty composer (or drops beside
+  // a draft), otherwise the first press arms the stop and the second commits
+  // it — so the hint names the state the key is actually in.
   // The arm itself is not named here: its cue is the status row's red line, and
   // a second one in the footer would say the same thing twice and change the
   // footer's height the moment the arm appeared.
   // The task view owns Esc while it is open, so the planner's turn-queue hint
   // would name a key behaviour that is not in force.
-  // A subplanner's turn has no stop or queue here at all: only a message reaches it.
+  // A subplanner's turn has no stop: what is held for it has its own hint below.
   const planning = plannerInFlight(state) && !state.taskView && !state.child;
   // Revealed subtask rows keep Esc for themselves, so the planner's hint would be untrue.
+  const held = state.queuedPrompts.length > 0;
   const escHint = !planning || planPaneOpen(state) ? null
-    : state.queuedPrompts.length > 0 ? 'esc unsend'
+    : held ? state.editor.text.trim() ? 'esc drop newest' : 'esc take back newest'
     : 'esc ×2 stop planning';
   // Send now is the composer's key, so it is named only where the composer
   // owns it: the chat pane, with a turn in flight.
@@ -135,7 +137,12 @@ export function footerHints(state: TuiState): string[] {
   const tv = state.taskView;
   const script = scriptTaskView(state);
   const taskSends = !!tv && !script && !state.child && tv.view.working && !!state.editor.text.trim() && !continuesTask(findTask(state.tasks, tv.taskId));
-  const sendNowHint = planning || taskSends ? 'ctrl-s send now' : null;
+  // The queue goes with it, so the hint says so while there is one.
+  const sendNowHint = (planning && held) || (taskSends && newestRemovable(tv) >= 0) ? 'ctrl-s send all now'
+    : planning || taskSends ? 'ctrl-s send now'
+    : null;
+  // Below the root, a held message is what Esc takes before it goes up a plan.
+  const childHolds = !!state.child && !tv && state.queuedPrompts.length > 0;
   const stopRunnerHint = runnerStoppable(state) ? 'ctrl-x stop runner' : null;
   // The same choices the card lists, kept in reach while the question scrolls
   // away. A tool request waiting ahead answers first, and its card says how.
@@ -167,7 +174,7 @@ export function footerHints(state: TuiState): string[] {
     'tab plan',
     ...detailHint,
     // A task view names its own Esc, in its header.
-    ...(state.child && !tv ? ['esc back'] : []),
+    ...(childHolds ? ['esc takes back the newest', 'ctrl-s sends all now'] : state.child && !tv ? ['esc back'] : []),
     ...(escHint ? [escHint] : []),
     ...(sendNowHint ? [sendNowHint] : []),
     'ctrl-c quit',
@@ -176,13 +183,13 @@ export function footerHints(state: TuiState): string[] {
 
 /**
  * The queue's bubbles, one bubble per prompt, in queue order. Not part of the
- * conversation view: a prompt joins it only once it is sent. Esc and ctrl-s
- * take the newest, so only its row names them; ctrl-s takes the composer's
- * text instead while there is any.
+ * conversation view: a prompt joins it only once it is sent. Esc takes the
+ * newest — back into an empty composer, or dropped beside a draft — and ctrl-s
+ * sends them all, glued, so the keys are named once, on the newest row.
  */
 export function queuedPromptRows(state: TuiState, cols: number): string[] {
   const newest = state.queuedPrompts.length - 1;
-  const keys = [' · esc to unsend', ...(state.editor.text.trim() ? [] : [' · ctrl-s sends now'])];
+  const keys = [state.editor.text.trim() ? ' · esc drops' : ' · esc takes back', ' · ctrl-s sends all now'];
   return state.queuedPrompts.flatMap((text, i) => queuedBubble(text, i === newest ? [' · queued', ...keys] : [' · queued'], cols));
 }
 
@@ -235,29 +242,37 @@ function queuedBubble(text: string, parts: string[], cols: number): string[] {
  * The task view's pending messages, one bubble each, in queue order, each
  * with its state (ADR-0023): queued — not with the runner yet, removable;
  * waiting for the current step — handed over, the runner reads it at its next
- * step; sending now — forced, until it is delivered. The message the keys act
- * on is highlighted and carries them: ctrl-s with the composer empty (it sends
- * the composer's text otherwise), ctrl-r while it can still be removed.
+ * step; sending now — forced, until it is delivered. Esc takes the newest
+ * removable one back and ctrl-s, with the composer empty, sends every queued
+ * one at once, as the planner chat's queue does, so only the newest names
+ * them. A message picked with ctrl-n/ctrl-p is highlighted and names ctrl-r.
  */
 export function taskQueuedRows(state: TuiState, cols: number): string[] {
   const tv = state.taskView;
   if (!tv) return [];
   const target = queuedTarget(tv);
-  const sends = !state.editor.text.trim();
-  return tv.view.queued.flatMap((message, i) => queuedTaskBubble(message, i === target, sends, cols));
+  const keys: QueuedTaskKeys = {
+    picked: tv.queuedIndex === null ? -1 : target,
+    newest: state.child ? -1 : newestRemovable(tv),
+    sends: !state.editor.text.trim(),
+  };
+  return tv.view.queued.flatMap((message, i) => queuedTaskBubble(message, i, i === target, keys, cols));
 }
 
-function queuedTaskParts({ handedOver, forced }: QueuedTaskMessage, target: boolean, sends: boolean): string[] {
+/** Which rows name which keys: the picked one ctrl-r, the newest removable one Esc and ctrl-s. */
+interface QueuedTaskKeys { picked: number; newest: number; sends: boolean }
+
+function queuedTaskParts({ handedOver, forced }: QueuedTaskMessage, i: number, keys: QueuedTaskKeys): string[] {
   if (forced) return [' · sending now…'];
-  const sendNow = target && sends ? [' · ctrl-s sends now'] : [];
-  if (handedOver) return [' · waiting for the current step', ...sendNow];
-  return [' · queued', ...sendNow, ...(target ? [' · ctrl-r removes'] : [])];
+  if (handedOver) return [' · waiting for the current step'];
+  const newest = i === keys.newest ? [' · esc takes back', ...(keys.sends ? [' · ctrl-s sends all now'] : [])] : [];
+  return [' · queued', ...newest, ...(i === keys.picked ? [' · ctrl-r removes'] : [])];
 }
 
-function queuedTaskBubble(message: QueuedTaskMessage, target: boolean, sends: boolean, cols: number): string[] {
+function queuedTaskBubble(message: QueuedTaskMessage, i: number, target: boolean, keys: QueuedTaskKeys, cols: number): string[] {
   const { text } = message;
   const marker = target ? style.accent('❯') : style.grey('◇');
-  const parts = queuedTaskParts(message, target, sends);
+  const parts = queuedTaskParts(message, i, keys);
   return wrap(text, queuedRoom('❯ ◇  ', parts, cols)).map((line, i) => i === 0
     ? `${marker} ${target ? style.bold(line) : line}${style.grey(hintAfter(`◇ ${line}`, parts, cols))}`
     : truncate(`  ${line}`, cols));
@@ -313,6 +328,8 @@ function taskHeaderLines(state: TuiState, tv: NonNullable<TuiState['taskView']>,
   ].filter(Boolean);
   // Nobody answers a child's tool request: its allowlist does (ADR-0056 M8).
   const approval = state.child ? undefined : waitingApproval(tv);
+  // Esc takes queued messages back before it leaves, whatever else the view waits on.
+  const takesBack = !state.child && !scriptTaskView(state) && newestRemovable(tv) >= 0;
   // A script's log is read-only output (ADR-0035): no runner, queue or send keys.
   const hint = scriptTaskView(state)
     ? ['read-only output', 'esc back']
@@ -324,11 +341,11 @@ function taskHeaderLines(state: TuiState, tv: NonNullable<TuiState['taskView']>,
         ? ['enter reply', 'ctrl-y approve', 'ctrl-g reject', 'ctrl-x stop runner']
         : header.resumes
           ? ['ctrl-x don\'t resume']
-          : [...(runnerStoppable(state) ? ['ctrl-x stop runner'] : []), 'ctrl-r remove queued', 'ctrl-s send now'];
+          : [...(runnerStoppable(state) ? ['ctrl-x stop runner'] : []), 'ctrl-r remove queued', ...(takesBack ? [] : ['ctrl-s send now'])];
   if (approval && waitingCheckpoint(task)) hint.push('then the checkpoint');
   const index = tv.attempts.indexOf(tv.attempt);
   if (tv.attempts.length > 1) hint.push(`alt←/→ attempt ${index >= 0 ? index + 1 : 1}/${tv.attempts.length}`);
-  hint.push('esc back');
+  hint.push(...(takesBack ? ['esc takes back the newest', 'ctrl-s sends all now'] : ['esc back']));
   return [
     style.accent(truncate(parts.join(' · '), cols)),
     tv.notice ? style.red(truncate(tv.notice, cols)) : style.grey(truncate(hint.join(' · '), cols)),
@@ -1563,24 +1580,27 @@ function commandSheetBody(cols: number): string[] {
     body.push('');
   }
   body.push(
-    style.grey('tab switches panes · pgup/pgdn scroll · ctrl-o toggles full detail · esc takes back a queued prompt, otherwise esc twice stops · ctrl-l clears · ctrl-c quits'),
+    style.grey('tab switches panes · pgup/pgdn scroll · ctrl-o toggles full detail · esc takes back the newest queued prompt (drops it beside a draft), otherwise esc twice stops · ctrl-l clears · ctrl-c quits'),
     style.grey('alt-enter inserts a newline · ? lists the plan pane\'s keys, once tab has put you there'),
-    style.grey('  in the planner chat, ctrl-s sends now: stops the running planner turn and sends the composer text next: or, with it empty, the newest queued prompt'),
+    style.grey('  in the planner chat, ctrl-s sends all now: stops the running planner turn and sends every queued message, then the composer text, as one message'),
   );
   // One line each: the sheet clips every line to the frame, and the task
   // view's keys run far past any width on a single one.
   body.push(
     '',
     style.bold('In a task chat (enter on a started task)'),
-    style.grey('  ctrl-s sends now: interrupts the running step, then delivers the composer text or, with it empty, the highlighted pending message'),
-    style.grey('  ctrl-n/ctrl-p pick a pending message (the newest until you do) · ctrl-r removes a queued one'),
+    style.grey('  ctrl-s sends all now: interrupts the running step, then delivers every queued message and the composer text at once, in the order typed'),
+    style.grey('  esc takes back the newest queued message, into the composer when it is empty, then clears the draft, then returns'),
+    style.grey('  ctrl-n/ctrl-p pick a pending message · ctrl-r removes the picked one'),
     style.grey('  ctrl-x stops the runner\'s running turn, and it then waits for your next message: on a task paused on a usage limit, it keeps it from resuming'),
     style.grey('  ctrl-y allows a tool request (its keys sit under it) · ctrl-t allows it for the task · ctrl-g denies it, with the composer text as the note'),
     style.grey('  at a checkpoint, enter replies with what you typed, ctrl-y approves, ctrl-g rejects (the text is its reason) · /checkpoint <id> approve|reject [reason] from anywhere'),
-    style.grey('  alt←/→ changes attempt · esc returns'),
+    style.grey('  alt←/→ changes attempt'),
     '',
     style.bold('In a subplanner (enter on a delegated task)'),
-    style.grey('  its chat and tasks replace the plan\'s · enter on a delegated task goes deeper · esc goes back one plan · l opens a delegated task\'s own log'),
+    style.grey('  its chat and tasks replace the plan\'s · enter on a delegated task goes deeper · l opens a delegated task\'s own log'),
+    style.grey('  esc takes back the newest held message, then clears the draft, then goes back one plan'),
+    style.grey('  while the subplanner answers, enter holds a message until its turn ends · ctrl-s sends everything held at once, without interrupting it'),
     style.grey('  the composer messages the subplanner, or the runner in a task chat · at a question, enter replies, ctrl-y approves, ctrl-g rejects (the text is its reason)'),
     style.grey('  a plan that ended is read-only: continue or retry its task from the plan above · /stop stops the whole run: a plan below the root has no stop of its own'),
   );
@@ -1692,11 +1712,11 @@ export function approvalLayout(state: TuiState, request: ApprovalRequestView, sc
     // ESC is not "deny" while a turn is in flight — it kills the turn and
     // takes this prompt with it. Offering it as the deny key there would
     // teach the wrong thing about the most destructive key on the sheet.
-    // With a prompt queued the first ESC unsends that instead, so the hint
-    // names the take-back rather than the twice-to-stop.
+    // With a prompt queued the first ESC takes the newest back instead, so the
+    // hint names the take-back rather than the twice-to-stop.
     style.grey(plannerInFlight(state)
       ? state.queuedPrompts.length > 0
-        ? 'y or enter allows · n denies · esc takes back the queued prompt'
+        ? `y or enter allows · n denies · esc ${state.editor.text.trim() ? 'drops' : 'takes back'} the newest queued prompt`
         : 'y or enter allows · n denies · esc twice stops planning'
       : 'y or enter allows · n or esc denies'),
   ]);

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { Workflow } from 'lucide-react';
-import { taskStatusKind, walkPlan } from '@ordewell/core/plan-utils';
+import { countsAsDone, taskStatusKind, walkPlan } from '@ordewell/core/plan-utils';
 import { statusOf, type StatusId } from '@ordewell/ui/design';
 import type { FrameApi, PlanProgress, Unregister } from '../../frame/api';
 import { daemonHost, type DaemonHost } from '../../session/DaemonHost';
@@ -30,8 +30,6 @@ export function PlanGraphTab({ host, api }: { host: DaemonHost; api: FrameApi })
   );
 }
 
-const DONE: ReadonlySet<StatusId> = new Set(['passed', 'skipped', 'waiting-for-merge']);
-
 /** The plan panel's progress and its rail's counts, from the run's live status where a task has one. */
 export function planProgress(host: DaemonHost): PlanProgress | undefined {
   const { plan, run } = host.getSnapshot().state;
@@ -42,10 +40,12 @@ export function planProgress(host: DaemonHost): PlanProgress | undefined {
   let total = 0;
   let done = 0;
   for (const { task } of walkPlan(tasks)) {
-    const status = statusOf(taskStatusKind(live.get(task.id) ?? task)).id;
+    const kind = taskStatusKind(live.get(task.id) ?? task);
+    const status = statusOf(kind).id;
     counts[status] = (counts[status] ?? 0) + 1;
     total += 1;
-    if (DONE.has(status)) done += 1;
+    // Core's own "done", so this header and another session's listed run count alike.
+    if (countsAsDone(kind)) done += 1;
   }
   return { done, total, counts };
 }

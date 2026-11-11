@@ -1,14 +1,14 @@
-import { useEffect, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { IconButton, StatusIndicator, type StatusId } from '@ordewell/ui/design';
 import type { FrameApi, Unregister } from '../../frame/api';
 import { daemonHost, type DaemonHost } from '../../session/DaemonHost';
 import { joinedShort } from '../../session/holder';
 import { useSession } from '../../session/useSession';
-import { parseSessions, type SessionRow } from '../../sessions';
+import type { SessionRow } from '../../sessions';
 import { useDaemonStatus } from '../../useDaemonStatus';
 import { all } from '../Stub';
 import { planProgress } from './PlanTab';
+import { useSessionList } from './useSessionList';
 
 /** A session's status as the Sessions sidebar says it: a shape and a word (design, The Sessions sidebar). */
 const SESSION_STATUS: Readonly<Record<string, { status: StatusId; word: string }>> = {
@@ -42,30 +42,28 @@ export function relativeTime(iso: string, now = Date.now()): string {
   return 'now';
 }
 
+/** A row's run as the daemon lists it, for a session not open here or open read-only: its pool's word, or its holder's (ADR-0049). */
+function listedRun(session: SessionRow): { status: StatusId; word: string } | undefined {
+  if (!session.run) return undefined;
+  const { done, total } = session.run;
+  return { status: 'running', word: done !== undefined && total !== undefined ? `Running ${done}/${total}` : 'Running' };
+}
+
 /** The workspace's sessions, newest first: a click opens one, taking its lease. */
 export function Sessions({ host }: { host: DaemonHost }): JSX.Element {
   const connected = useDaemonStatus()?.state === 'connected';
-  const { sessionId, goal, state, link } = useSession(host);
+  const { sessionId, goal, state, link, readOnly } = useSession(host);
   const joined = link?.kind === 'joined' ? joinedShort(link.holder) : undefined;
+  // A read-only view draws its holder's saved file and hears none of its run, so its row is the list's to say, as any other's.
+  const ownId = readOnly ? undefined : sessionId;
   const planStatus = state.plan?.status;
-  const [sessions, setSessions] = useState<SessionRow[] | string>();
   // The saved plan says Approved for as long as its run lasts, so the open session's row reads its live run instead.
   const progress = state.isExecuting || state.activity.advancesOnItsOwn ? planProgress(host) : undefined;
   const live = progress ? { status: 'running' as const, word: `Running ${progress.done}/${progress.total}` } : undefined;
-
   // Read again when the session changes, the planner names a new one's goal, or
   // the open plan moves on (approved, running, done): each is a row this list
-  // lacks or shows stale.
-  useEffect(() => {
-    if (!connected) return;
-    let live = true;
-    void window.ordewell.daemon.call('sessions.list', { workspace: host.workspace }).then((result) => {
-      if (!live) return;
-      if (!result.ok) { setSessions(result.error); return; }
-      setSessions(parseSessions(result.data) ?? 'The daemon sent a session list this app cannot read.');
-    });
-    return () => { live = false; };
-  }, [host, connected, sessionId, goal, planStatus]);
+  // lacks or shows stale. Every other row's run is the list's own word.
+  const sessions = useSessionList(host.workspace, connected, ownId, JSON.stringify([sessionId, goal, planStatus]));
 
   // The Reconnecting bar speaks for the daemon (W15): this list keeps what it last read, dimmed and inert, and claims no wait of its own.
   if (!connected && !Array.isArray(sessions)) return <p className="frame-empty">Sessions show here once the daemon is back.</p>;
@@ -75,7 +73,7 @@ export function Sessions({ host }: { host: DaemonHost }): JSX.Element {
   return (
     <ul className="sessions" aria-disabled={connected ? undefined : 'true'}>
       {sessions.map((session) => {
-        const { status, word } = (session.id === sessionId && live) || sessionStatus(session.status);
+        const { status, word } = (session.id === ownId ? live : listedRun(session)) || sessionStatus(session.status);
         const when = session.updatedAt ? relativeTime(session.updatedAt) : '';
         return (
           <li key={session.id}>
@@ -110,6 +108,7 @@ export function register(api: FrameApi): Unregister {
       id: 'sessions',
       title: 'Sessions',
       order: 10,
+      collapsible: true,
       actions: () => <IconButton icon={Plus} label="New session" onClick={() => host.newSession()} />,
       render: () => <Sessions host={host} />,
     }),

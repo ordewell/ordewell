@@ -399,7 +399,7 @@ cursor in the composer.
 
 ### Tabs
 
-Tasks, files, diffs, the commit graph and the plan graph open as tabs beside
+Tasks, files, diffs, commits and the plan graph open as tabs beside
 the planner. A single click opens a preview tab, in italics, which the next
 preview replaces; a double click, or editing in it, keeps it. A task's tab has
 **Details** (the verdict and its evidence, the prompt, assignment,
@@ -460,9 +460,11 @@ because actions there are recorded in its timeline.
 Branches (yours, Ordewell's read-only, and remote-tracking as of the last
 fetch), stashes, worktrees and remotes. A lock marks a live run's landing
 branch and names the run. Create, switch and delete a branch; stash, pop or drop
-a stash; fetch, pull and push the current branch to its tracking remote; and
-open the commit graph: commits page in by cursor, with their message, files and
-patches.
+a stash; and fetch, pull and push the current branch to its tracking remote.
+Branches and History share the sidebar: pressing a branch shows its history
+there in place of the list, leaving your checkout and the open tabs as they
+were, and a commit opens in a tab with its message and files, each file's patch
+a tab beside it.
 
 ### Terminal
 
@@ -518,6 +520,7 @@ the daemon has read.
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next or previous tab |
 | `⌘\` / `Ctrl+\` | Split the editor |
 | `⌘S` / `Ctrl+S` | Save, in your checkout |
+| `⌘⏎` / `Ctrl+Enter` | Send now, in the planner chat while a turn runs: what you queued and what you typed, as one message |
 | `⌘⏎` / `Ctrl+Enter` | Commit, in the commit box |
 | `F7` / `Shift+F7` | Next or previous change, in a diff |
 | `Esc` | Close a popover, peek, drawer or dialog |
