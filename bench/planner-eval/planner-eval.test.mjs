@@ -509,7 +509,7 @@ describe('aggregation', () => {
 describe('redaction', () => {
   it('removes every secret value from the environment, the extras and anything key-shaped', () => {
     const redact = redactor({ OPENROUTER_API_KEY: 'abcdefgh12345678', HOME: '/home/x', SHORT_TOKEN: 'abc' }, ['daemon-token-value']);
-    const text = redact('key abcdefgh12345678 home /home/x token daemon-token-value other sk-or-v1-0123456789abcdef0123 abc');
+    const text = redact('key abcdefgh12345678 home /home/x token daemon-token-value other ' + ['sk-or-v1-', '0123456789abcdef0123'].join('') + ' abc');
     assert.equal(text, `key ${REDACTED} home /home/x token ${REDACTED} other ${REDACTED} abc`);
     assert.equal(redactJson({ k: 'abcdefgh12345678' }, redact, 0), `{"k":"${REDACTED}"}`);
   });

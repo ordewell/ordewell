@@ -17,6 +17,7 @@ const PARTS = {
   slack: ['xoxb-', '123456789012-1234567890123-aBcDeFgHiJkLmNoP'],
   openai: ['sk-', 'proj-T3BlbkFJa1b2c3d4e5f6g7h8i9j0k1l2'],
   anthropic: ['sk-', 'ant-api03-9fK2mQ7xR1tV4wY6zB8cE0gJ3lN5pS7u'],
+  openrouter: ['sk-or-v1-', '0123456789abcdef'.repeat(4)],
   jwt: ['eyJhbGciOiJIUzI1NiJ9', '.eyJzdWIiOiIxMjM0NTY3ODkwIn0', '.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk'],
 } as const;
 

@@ -3,6 +3,7 @@ import type { ConversationTurn, IAiService } from '../AiService';
 import type { DecisionRecordEntry, LegacyPlanState } from '../../models/Task';
 import { PlannerConversation, type PlannerConversationHost, type PlannerConversationOptions } from '../PlannerConversation';
 import { fakePlanChanges } from './planChangesTestKit';
+import { fakeSecret } from './fakeSecret';
 import type { TurnFailure } from '../runnerExit';
 
 /** A plan three exchanges long, so a compaction has something to condense. */
@@ -133,7 +134,7 @@ describe('the planner records as it goes', () => {
   });
 
   it('keeps no secret\'s value in the record (ADR-0061 P1)', async () => {
-    const key = 'sk-or-v1-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+    const key = fakeSecret('openrouter');
     const { conversation, state, recordsDuring } = planner(longPlan(), { heldSecrets: () => [{ name: 'OPENROUTER_API_KEY', value: key }] });
     recordsDuring([{ kind: 'decision', text: `Read ${key} from the environment`, why: 'never inline it' }]);
 
