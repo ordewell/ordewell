@@ -147,8 +147,9 @@ function Files({ list, note, scope, tag, filter, open, empty }: {
       {list.note && <p className="changes-note">From the patch it saved: its worktree is gone.</p>}
       <ul className="changes-files">
         {files.map((file) => {
-          const name = file.path.slice(file.path.lastIndexOf('/') + 1);
-          const dir = file.path.slice(0, file.path.length - name.length - 1);
+          const slash = file.path.lastIndexOf('/');
+          const name = file.path.slice(slash + 1);
+          const dir = file.path.slice(0, Math.max(0, slash));
           const where = file.repo === '.' ? dir : [file.repo, dir].filter(Boolean).join('/');
           return (
             <li key={`${file.repo}\0${file.path}`}>

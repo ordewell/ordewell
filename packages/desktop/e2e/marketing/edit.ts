@@ -1,17 +1,21 @@
 /**
  * Cuts a recorded take and encodes what a page or a store listing embeds:
- * H.264 MP4 and VP9 WebM at the take's 1920x1080 and 30fps, an optimised GIF
- * and a poster frame. Every step reads the lossless RGB master or the cut made
- * from it, so text is converted to YUV once, with the BT.709 matrix the files
- * are tagged with, and stays crisp.
+ * H.264 MP4 and VP9 WebM at the cut's size and 30fps, an optimised GIF and a
+ * poster frame. Every step reads the lossless RGB master or the cut made from
+ * it, so text is converted to YUV once, with the BT.709 matrix the files are
+ * tagged with, and stays crisp.
  */
 import path from 'node:path';
 import { durationOf, ffmpeg } from './ffmpeg';
-import { pngSize, record, VIDEOS, WEB, type Entry, type Theme } from './manifest';
+import { pngSize, record, VIDEOS, type Entry, type Theme } from './manifest';
 import { CLOCK, FPS, type Size } from './studio';
 
-/** A stretch of the master, in its seconds, played at `speed` (1 when absent). */
-export interface Segment { from: number; to: number; speed?: number }
+/**
+ * A stretch of the master, in its seconds, played at `speed` (1 when absent),
+ * and only the `crop` box of each frame when one is given: a square cut frames
+ * where the action is. Every segment of a cut must come out the same size.
+ */
+export interface Segment { from: number; to: number; speed?: number; crop?: { x: number; y: number; width: number; height: number } }
 
 export interface Cut {
   segments: readonly Segment[];
@@ -26,6 +30,8 @@ const RGB_LOSSLESS = ['-c:v', 'libx264rgb', '-preset', 'veryfast', '-qp', '0'];
 /** The edited take, still lossless RGB: the segments in order, each at its speed, with its badge, faded in and out. */
 export async function cut(master: string, plan: Cut, out: string): Promise<{ file: string; duration: number }> {
   if (!plan.segments.length) throw new Error('a cut needs at least one segment');
+  const sizes = new Set(plan.segments.map((s) => (s.crop ? `${s.crop.width}x${s.crop.height}` : 'whole')));
+  if (sizes.size > 1) throw new Error(`a cut's segments come out at ${[...sizes].join(' and ')}: concat needs one size`);
   const inputs = ['-i', master];
   const badgeInput = new Map<number, number>();
   for (const segment of plan.segments) {
@@ -52,7 +58,9 @@ export async function cut(master: string, plan: Cut, out: string): Promise<{ fil
     const speed = segment.speed ?? 1;
     if (!(segment.to > segment.from)) throw new Error(`segment ${i} ends at ${segment.to}s, not after its start at ${segment.from}s`);
     const length = (segment.to - segment.from) / speed;
-    const timed = `[0:v]trim=start=${segment.from}:end=${segment.to},setpts=(PTS-STARTPTS)/${speed},fps=${FPS}`;
+    const box = segment.crop;
+    const cropped = box ? `,crop=${box.width}:${box.height}:${box.x}:${box.y}` : '';
+    const timed = `[0:v]trim=start=${segment.from}:end=${segment.to},setpts=(PTS-STARTPTS)/${speed},fps=${FPS}${cropped}`;
     if (speed === 1) {
       graph.push(`${timed}[s${i}]`);
     } else {
@@ -71,23 +79,41 @@ export async function cut(master: string, plan: Cut, out: string): Promise<{ fil
 }
 
 /** RGB to BT.709 limited-range YUV 4:2:0, with full chroma interpolation and Lanczos, tagged as such. */
-const TO_YUV = 'scale=out_color_matrix=bt709:out_range=tv:flags=lanczos+accurate_rnd+full_chroma_int,format=yuv420p';
-const TAGS = ['-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-color_range', 'tv'];
+export const TO_YUV = 'scale=out_color_matrix=bt709:out_range=tv:flags=lanczos+accurate_rnd+full_chroma_int,format=yuv420p';
+export const TAGS = ['-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-color_range', 'tv'];
 
-export interface Encoded { mp4: Entry; webm: Entry; gif: Entry; poster: Entry }
+export interface Encoded { mp4: Entry; webm: Entry; gif?: Entry; poster: Entry }
+
+export interface Shot {
+  name: string;
+  view: string;
+  theme: Theme;
+  /** The video's own size. */
+  size: Size;
+  /** Where the MP4, the WebM and the GIF go: videos/ by default. */
+  dir?: string;
+  /** The poster's PNG, `<dir>/<name>.poster.png` by default. */
+  poster?: string;
+  /** The poster's second of the cut, its middle by default. */
+  posterAt?: number;
+  /** A GIF too, this wide at 15fps. */
+  gifWidth?: number;
+  /** The instant the app read as now while it was recorded, for the manifest; MARKETING_CLOCK by default. */
+  clock?: string;
+}
 
 /**
- * Encodes a cut as `<name>.mp4` and `<name>.webm` under videos/, and
- * `<name>.gif` and `<name>.poster.png` under web/, recording each in the
- * manifest. The poster is the frame at `posterAt` seconds of the cut (the
- * middle by default); the GIF is `gifWidth` wide (960 by default) at 15fps.
+ * Encodes a cut as `<name>.mp4` and `<name>.webm`, a GIF when asked, and a
+ * poster frame, recording each in the manifest.
  */
-export async function encode(edited: string, shot: { name: string; view: string; theme: Theme; size: Size; posterAt?: number; gifWidth?: number }): Promise<Encoded> {
+export async function encode(edited: string, shot: Shot): Promise<Encoded> {
   const duration = await durationOf(edited);
-  const mp4 = path.join(VIDEOS, `${shot.name}.mp4`);
-  const webm = path.join(VIDEOS, `${shot.name}.webm`);
-  const gif = path.join(WEB, `${shot.name}.gif`);
-  const poster = path.join(WEB, `${shot.name}.poster.png`);
+  const dir = shot.dir ?? VIDEOS;
+  const clock = shot.clock ?? CLOCK;
+  const mp4 = path.join(dir, `${shot.name}.mp4`);
+  const webm = path.join(dir, `${shot.name}.webm`);
+  const gif = path.join(dir, `${shot.name}.gif`);
+  const poster = shot.poster ?? path.join(dir, `${shot.name}.poster.png`);
   await ffmpeg([
     '-i', edited, '-vf', TO_YUV, '-c:v', 'libx264', '-preset', 'slow', '-crf', '14', '-profile:v', 'high', '-tune', 'animation',
     '-r', String(FPS), '-g', String(FPS * 2), ...TAGS, '-movflags', '+faststart', '-an', mp4,
@@ -96,20 +122,22 @@ export async function encode(edited: string, shot: { name: string; view: string;
     '-i', edited, '-vf', TO_YUV, '-c:v', 'libvpx-vp9', '-crf', '24', '-b:v', '0', '-deadline', 'good', '-cpu-used', '2', '-row-mt', '1',
     '-r', String(FPS), '-g', String(FPS * 2), ...TAGS, '-an', webm,
   ]);
-  const gifWidth = shot.gifWidth ?? 960;
-  await ffmpeg([
-    '-i', edited, '-filter_complex',
-    `[0:v]fps=15,scale=${gifWidth}:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=256:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle`,
-    '-loop', '0', gif,
-  ]);
+  const gifWidth = shot.gifWidth;
+  if (gifWidth) {
+    await ffmpeg([
+      '-i', edited, '-filter_complex',
+      `[0:v]fps=15,scale=${gifWidth}:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=256:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle`,
+      '-loop', '0', gif,
+    ]);
+  }
   await ffmpeg(['-ss', String(shot.posterAt ?? duration / 2), '-i', edited, '-frames:v', '1', '-update', '1', poster]);
   const base = { view: shot.view, theme: shot.theme, size: shot.size, scale: 1 };
   const video = { width: shot.size.width, height: shot.size.height };
   return {
-    mp4: record({ ...base, path: mp4, kind: 'video', pixels: video, duration: await durationOf(mp4), fps: FPS }, CLOCK),
-    webm: record({ ...base, path: webm, kind: 'video', pixels: video, duration: await durationOf(webm), fps: FPS }, CLOCK),
-    gif: record({ ...base, path: gif, kind: 'gif', pixels: { width: gifWidth, height: Math.round((gifWidth * shot.size.height) / shot.size.width) }, duration: await durationOf(gif), fps: 15 }, CLOCK),
-    poster: record({ ...base, path: poster, kind: 'poster', pixels: pngSize(poster) }, CLOCK),
+    mp4: record({ ...base, path: mp4, kind: 'video', pixels: video, duration: await durationOf(mp4), fps: FPS }, clock),
+    webm: record({ ...base, path: webm, kind: 'video', pixels: video, duration: await durationOf(webm), fps: FPS }, clock),
+    ...(gifWidth ? { gif: record({ ...base, path: gif, kind: 'gif', pixels: { width: gifWidth, height: Math.round((gifWidth * shot.size.height) / shot.size.width) }, duration: await durationOf(gif), fps: 15 }, clock) } : {}),
+    poster: record({ ...base, path: poster, kind: 'poster', pixels: pngSize(poster) }, clock),
   };
 }
 

@@ -18,8 +18,8 @@ export default async function setup(): Promise<void> {
   const filters = execFileSync(binary, ['-hide_banner', '-filters'], { encoding: 'utf8' });
   const missing = [
     ...['x11grab'].filter((d) => !has(d, devices)),
-    ...['libx264', 'libx264rgb', 'libvpx-vp9', 'gif', 'png'].filter((e) => !has(e, encoders)),
-    ...['palettegen', 'paletteuse', 'fade', 'overlay', 'trim', 'setpts', 'concat'].filter((f) => !has(f, filters)),
+    ...['libx264', 'libx264rgb', 'libvpx-vp9', 'libwebp', 'gif', 'png'].filter((e) => !has(e, encoders)),
+    ...['palettegen', 'paletteuse', 'fade', 'overlay', 'trim', 'setpts', 'concat', 'scale', 'crop'].filter((f) => !has(f, filters)),
   ];
   if (missing.length) throw new Error(`${binary} lacks ${missing.join(', ')}, which the captures need`);
   ensureOut();

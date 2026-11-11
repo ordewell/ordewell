@@ -1,10 +1,11 @@
 /**
  * Where the captures land and the manifest that lists them. Everything is
  * under marketing-out/ (gitignored in this package): stills/ for PNGs, videos/
- * for MP4 and WebM, web/ for what a page embeds (the GIF, posters). The
- * manifest is upserted by path as each file is written, so a run that captures
- * one shot keeps every other shot's entry, and an entry whose file is gone is
- * dropped.
+ * for MP4, WebM, GIF and posters, web/ for the website's own set under the
+ * names its pages use, with the lossless masters it was encoded from in
+ * web/masters/. The manifest is upserted by path as each file is written, so a
+ * run that captures one shot keeps every other shot's entry, and an entry
+ * whose file is gone is dropped.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -14,6 +15,7 @@ export const OUT = process.env.MARKETING_OUT ? path.resolve(process.env.MARKETIN
 export const STILLS = path.join(OUT, 'stills');
 export const VIDEOS = path.join(OUT, 'videos');
 export const WEB = path.join(OUT, 'web');
+export const MASTERS = path.join(WEB, 'masters');
 const MANIFEST = path.join(OUT, 'manifest.json');
 
 export type Theme = 'dark' | 'light';
@@ -21,7 +23,8 @@ export type Theme = 'dark' | 'light';
 export interface Entry {
   /** Relative to marketing-out/, with forward slashes. */
   file: string;
-  kind: 'still' | 'video' | 'gif' | 'poster';
+  /** A still is the window as grabbed; an image is made from stills (a web size, the share card). */
+  kind: 'still' | 'image' | 'video' | 'gif' | 'poster';
   /** The view or flow it shows, as the capture file names it. */
   view: string;
   theme: Theme;
@@ -42,7 +45,7 @@ export interface Entry {
 interface Manifest { generated: string; clock: string; entries: Entry[] }
 
 export function ensureOut(): void {
-  for (const dir of [STILLS, VIDEOS, WEB]) fs.mkdirSync(dir, { recursive: true });
+  for (const dir of [STILLS, VIDEOS, WEB, MASTERS]) fs.mkdirSync(dir, { recursive: true });
 }
 
 function read(): Manifest {

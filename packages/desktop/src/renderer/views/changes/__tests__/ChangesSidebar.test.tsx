@@ -104,6 +104,9 @@ describe('the Changes sidebar', () => {
     expect(sso.getByLabelText('40 added, 0 removed')).toBeInTheDocument();
     expect(within(sso.getByRole('button', { name: /README\.md/ })).getByLabelText('Modified')).toHaveTextContent('M');
     expect(within(sso.getByRole('button', { name: /logo\.png/ })).getByText('binary')).toBeInTheDocument();
+    // A file in a folder names it beside its own name; one at the root has none to name.
+    expect(within(sso.getByRole('button', { name: /sso\.ts/ })).getByText('src')).toBeInTheDocument();
+    expect(within(sso.getByRole('button', { name: /README\.md/ })).queryByText('README.m')).not.toBeInTheDocument();
 
     // A merged task's worktree is gone: its counts stand without a letter.
     const login = within(screen.getByRole('region', { name: 'Task #1: Add the login button' }));
