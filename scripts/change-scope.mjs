@@ -265,6 +265,8 @@ const ROOT_OWNERS = [
   // e2e and tour, and the binary's drive all talk to it.
   [/^bench\/live\/(mock-provider|scenarios)\.mjs$/, owes('planner', 'desktop', 'tour', 'binary')],
   [/^bench\/live\/drive-(conversation|taskops)\.mjs$/, owes('planner')],
+  // Its offline test runs in bench.
+  [/^bench\/live\/drive-conversation\.test\.mjs$/, owes('bench')],
   [/^bench\/live\/drive-binary\.mjs$/, owes('binary')],
   // Run by hand against a dev build; no check runs them.
   [/^bench\/live\/(webview-[^/]+|host-driver|load-playwright|screenshot-header-tmp)\.mjs$/, owes()],
@@ -275,6 +277,9 @@ const ROOT_OWNERS = [
   // verdict.mjs judges the container suites' report; its test runs in bench.
   [/^bench\/containers\//, owes('engine', 'bench')],
   [/^bench\/lab\//, owes('bench')],
+  // Where the harnesses keep their run data (data-dir.mjs): the planner-eval and the
+  // live conversation harness read it, and its own test runs in bench.
+  [/^bench\/lib\//, owes('bench', 'planner')],
   // Run by hand against real models; only its offline tests run, in bench.
   [/^bench\/planner-eval\//, owes('bench')],
   // Its tests run in bench, and root lint reads its entry.ts.

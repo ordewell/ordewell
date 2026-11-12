@@ -13,6 +13,7 @@
  *     writes a behavioural report):
  *       OPENROUTER_API_KEY=sk-or-... node bench/live/drive-conversation.mjs \
  *         --real --model deepseek/deepseek-v4-flash [--out DIR]
+ *     (the report goes to <bench dir>/live/real-report, see bench/lib/data-dir.mjs)
  *     (`MODEL` in the environment works too, as in drive-taskops.mjs.)
  *
  * The mock suite includes one scenario per kind of goal the strategy step
@@ -35,11 +36,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { checkedBenchDir, outsideRepo } from '../lib/data-dir.mjs';
 import { GOAL_SCENARIOS } from './scenarios.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const core = await import(pathToFileURL(path.join(__dirname, '../../packages/core/dist/index.mjs')).href);
-const { OpenAiService, extractPrdBlock } = core;
 
 // ---------- CLI args ----------
 function arg(name, fallback) {
@@ -47,6 +47,24 @@ function arg(name, fallback) {
   return i >= 0 ? process.argv[i + 1] : fallback;
 }
 const REAL = process.argv.includes('--real');
+
+// A real run's report and transcripts are run data: outside any repository, and
+// refused before a model is called (bench/lib/data-dir.mjs).
+let REAL_OUT = null;
+let DUMP_DIR = arg('dump', null);
+if (REAL) {
+  try {
+    REAL_OUT = arg('out') ? outsideRepo(arg('out'), { what: '--out directory' }) : checkedBenchDir('live', 'real-report');
+    if (DUMP_DIR) DUMP_DIR = outsideRepo(DUMP_DIR, { what: '--dump directory' });
+  } catch (error) {
+    console.error(error.message);
+    process.exit(2);
+  }
+}
+
+const core = await import(pathToFileURL(path.join(__dirname, '../../packages/core/dist/index.mjs')).href);
+const { OpenAiService, extractPrdBlock } = core;
+
 const GRILLING = process.argv.includes('--grilling');
 const PRD = process.argv.includes('--prd');
 const MODEL = arg('model', REAL ? (process.env.MODEL || '') : 'mock/interviewer');
@@ -239,10 +257,9 @@ function printRun(run) {
   if (run.findings.length) console.log(`-- findings: ${run.findings.join(' | ')}`);
   // --dump DIR: write the untruncated transcript for offline diagnosis of
   // parse failures the 400-char console preview hides.
-  const dumpDir = arg('dump', null);
-  if (dumpDir) {
-    fs.mkdirSync(dumpDir, { recursive: true });
-    const file = path.join(dumpDir, `${run.label.replace(/[^a-z0-9-]+/gi, '_')}.txt`);
+  if (DUMP_DIR) {
+    fs.mkdirSync(DUMP_DIR, { recursive: true });
+    const file = path.join(DUMP_DIR, `${run.label.replace(/[^a-z0-9-]+/gi, '_')}.txt`);
     fs.writeFileSync(file, run.transcript.map((m) => `${m.who.toUpperCase()}:\n${m.text}\n`).join('\n----\n'));
     console.log(`-- full transcript: ${file}`);
   }
@@ -1013,7 +1030,7 @@ async function realGoalsReport() {
   }
 
   const report = realReport(runs);
-  const dir = arg('out', path.join(__dirname, '.real-report'));
+  const dir = REAL_OUT;
   fs.mkdirSync(dir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const file = path.join(dir, `real-goals-${MODEL.replace(/[^a-z0-9-]+/gi, '_')}-${stamp}.md`);

@@ -1,6 +1,7 @@
 /**
  * One build of Ordewell per commit, each in its own git worktree under the
- * gitignored `.builds/`, installed and built core first, then web, then cli (each compiles
+ * bench data directory's `planner-eval/builds` (outside the repository,
+ * bench/lib/data-dir.mjs), installed and built core first, then web, then cli (each compiles
  * against the one before's `dist/`). A build that finished leaves a marker and is reused
  * by every later run of the same commit.
  */

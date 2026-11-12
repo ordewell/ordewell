@@ -31,12 +31,14 @@ V0's nudges, each its own paragraph:
 >
 > Keep your context as clear as possible: make use of research tasks to surface to you only the relevant information to make decisions.
 
-Each ref is built once into its own git worktree under `.builds/<sha12>`
-(gitignored), in the order core, web, cli. A second run reuses that build. With
+Each ref is built once into its own git worktree under
+`<bench dir>/planner-eval/builds/<sha12>` (see [Where run data goes](#where-run-data-goes);
+a worktree may live anywhere, so it is outside this checkout), in the order core,
+web, cli. A second run reuses that build. With
 the default refs, a checkout at `0ecc6412` builds the same commit for both
 sides. To compare a prompt change, pass `--candidate-ref` with its branch or
 commit. Each build is a worktree of this checkout. To free one, run
-`git worktree remove --force bench/planner-eval/.builds/<sha12>`.
+`git worktree remove --force <bench dir>/planner-eval/builds/<sha12>`.
 
 ## Target
 
@@ -193,20 +195,20 @@ OPENROUTER_API_KEY=... node bench/planner-eval/run.mjs --full --candidate-ref <b
 
 # A slice, and a resume after an interruption.
 node bench/planner-eval/run.mjs --full --backend opencode --goal g4 --variant V0,V1
-node bench/planner-eval/run.mjs --full --resume bench/planner-eval/.results/<stamp>
+node bench/planner-eval/run.mjs --full --resume <bench dir>/planner-eval/results/<stamp>
 
 # Print the runs without starting any; re-aggregate a results directory.
 node bench/planner-eval/run.mjs --full --list
-node bench/planner-eval/run.mjs --report bench/planner-eval/.results/<stamp>
+node bench/planner-eval/run.mjs --report <bench dir>/planner-eval/results/<stamp>
 
 # Score stored runs again with today's keys and metrics, into a new directory.
-node bench/planner-eval/run.mjs --rescore bench/planner-eval/.results/<stamp> --out bench/planner-eval/.results/<stamp>-rescored
+node bench/planner-eval/run.mjs --rescore <bench dir>/planner-eval/results/<stamp> --out <bench dir>/planner-eval/results/<stamp>-rescored
 
 # The candidate with and without the planner read limit, on the OpenCode cells.
 node bench/planner-eval/run.mjs --full --backend opencode --variant V1,V2
 
 # Run only the candidate, and compare it with V0 runs stored elsewhere.
-node bench/planner-eval/run.mjs --full --variant V1 --baseline-from bench/planner-eval/.results/<stamp>-rescored
+node bench/planner-eval/run.mjs --full --variant V1 --baseline-from <bench dir>/planner-eval/results/<stamp>-rescored
 ```
 
 `--help` lists every flag. The useful ones:
@@ -225,10 +227,31 @@ node bench/planner-eval/run.mjs --full --variant V1 --baseline-from bench/planne
   for its cell and goal.
 - `--repeats N` overrides the mode's repeat count.
 
+## Where run data goes
+
+A real run writes model output, session logs and provider responses, so none
+of it goes inside a repository, ignored or not. `<bench dir>` above is, in
+order:
+
+1. `$ORDEWELL_BENCH_DIR`, when set;
+2. `$XDG_DATA_HOME/ordewell-bench`, or `~/.local/share/ordewell-bench`, on
+   Linux and macOS;
+3. `%LOCALAPPDATA%\ordewell-bench` on Windows.
+
+This harness uses `<bench dir>/planner-eval/results` and
+`<bench dir>/planner-eval/builds`. The run refuses to start, naming
+`ORDEWELL_BENCH_DIR`, when the directory it would write to (the default, or the
+one `--out`, `--resume`, `--report` or `--rescore` names) is inside the repository
+working tree, compared after resolving links. Results and builds an earlier
+version left under `bench/planner-eval/.results` and `.builds` are not moved:
+move or copy them to the new directories to resume or re-aggregate them there.
+The old `.gitignore` entries stay for such a checkout. The shared resolver is
+`bench/lib/data-dir.mjs`.
+
 ## Results
 
-Results go to `bench/planner-eval/.results/<stamp>/` (gitignored, never
-committed), or to `--out`:
+Results go to `<bench dir>/planner-eval/results/<stamp>/` (never inside the
+repository, so never committed), or to `--out`:
 
 - `<run>.json`: the run record, holding the metrics, key checks, rubric, error
   and substitution.
