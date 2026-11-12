@@ -395,6 +395,14 @@ export interface TaskModeAgentAdapter extends AgentAdapter {
    */
   interrupt(timeoutMs: number): Promise<boolean>;
   /**
+   * Resolves true once the model request the agent is streaming has ended by
+   * itself, at once when none is, and false when `timeoutMs` or the process's
+   * end comes first. A provider bills a request cut off mid-stream, so a wind
+   * down lets it end before interrupting (ADR-0018 L1). Absent on a runner
+   * that does not say when one starts and ends.
+   */
+  stepEnded?(timeoutMs: number): Promise<boolean>;
+  /**
    * Tell the process nothing more is coming, once its turn has closed, so it
    * ends by itself and keeps what it saves on the way out. The process exit
    * reports its end. Absent on a runner whose process is only ever killed.

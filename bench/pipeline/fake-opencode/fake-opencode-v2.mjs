@@ -1,21 +1,23 @@
 #!/usr/bin/env node
 /*
  * A fake OpenCode 2.x `serve`, for the login-backed research agent
- * (ADR-0066). It speaks the slice of the 2.x HTTP API Ordewell's research
- * runner uses, and models the one rule that decides what a session is offered,
+ * (ADR-0066) and a task's runner. It speaks the slice of the 2.x HTTP API
+ * those use, and models the one rule that decides what a session is offered,
  * as v2.2.7 does it: a tool is dropped when the last permission rule whose
  * action matches it denies resource "*" (tool.ts `whollyDisabled`); agent
  * (config) rules come first, session rules last (session/context.ts).
  *
  * The "model" is a cue in the brief: <fake-opencode>{...}</fake-opencode> with
  *   steps: [{ calls: [{ name, args }] }]  tool calls, one step each
- *   text: the final answer;  delayMs: wait before answering;
+ *   text: the final answer;  delayMs: how long the final step runs before answering;
  *   usage: { input, output } per step;  child: true starts a child session;
- *   fail: { type, message } ends the run with session.execution.failed.
+ *   fail: { type, message } ends the run with session.execution.failed;
+ *   interruptDelayMs: how long an interrupt takes to be acknowledged.
  *
  * An interrupt first fails the step in flight, if any, with session.step.failed
  * { type: MessageAbortedError, message: "Step interrupted" }, as v2.2.7 records an
- * interrupted step, then sends session.execution.interrupted.
+ * interrupted step, then sends session.execution.interrupted. The step stops at
+ * once; the frames and the route's answer wait out interruptDelayMs.
  *
  * A call with hang: true delegates to a child session and never returns: an
  * interrupt fails that call (session.tool.failed, MessageAbortedError), as v2.2.7
@@ -118,6 +120,7 @@ async function run(session, text) {
   const id = session.id;
   const stopped = () => session.interrupted;
   session.inFlight = undefined;
+  session.interruptDelayMs = cue.interruptDelayMs ?? 0;
   session.interruptUsage = cue.interruptUsage;
   session.running = true;
   try { await runSteps(session, cue, id, stopped); } finally { session.running = false; }
@@ -179,7 +182,10 @@ async function runSteps(session, cue, id, stopped) {
         frame('session.tool.success', { sessionID: id, id: callId, content: [{ type: 'text', text: `${call.name} ran` }] });
       }
     }
-    if (step.final && cue.delayMs) await delay(cue.delayMs);
+    if (step.final && cue.delayMs) {
+      const until = Date.now() + cue.delayMs;
+      while (!stopped() && Date.now() < until) await delay(10);
+    }
     if (stopped()) return;
     const usage = cue.usage ?? { input: 10, output: 5 };
     if (step.final) {
@@ -259,6 +265,7 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === 'POST' && m[2] === 'interrupt') {
       s.interrupted = true;
+      if (s.interruptDelayMs) await delay(s.interruptDelayMs);
       if (s.hanging) frame('session.tool.failed', { sessionID: s.id, assistantMessageID: s.inFlight, id: s.hanging, error: { type: 'MessageAbortedError', message: 'Tool execution aborted' } });
       s.hanging = undefined;
       if (s.inFlight) frame('session.step.failed', { sessionID: s.id, assistantMessageID: s.inFlight, error: { type: 'MessageAbortedError', message: 'Step interrupted' }, ...(s.interruptUsage ? { tokens: tokens(s.interruptUsage), cost: s.interruptUsage.cost } : {}) });
