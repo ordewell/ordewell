@@ -1,5 +1,5 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TerminalEvent, TerminalOpenResult, TerminalOpenSpec } from '../../../shared/bridge';
 import { fakeDaemon, ok } from '../../session/__tests__/fakeDaemon';
 import { LoginDialog } from '../LoginDialog';
@@ -26,7 +26,14 @@ function world(signedIn = false) {
   return { daemon, open, events };
 }
 
-afterEach(() => { vi.restoreAllMocks(); });
+// The dialog waits on a poll timer and on a chain of promises (dynamic import,
+// terminal, daemon call). Testing Library's own findBy*/waitFor give up after a
+// fixed 1s of wall clock, which a loaded machine overruns; vi.waitFor drives the
+// faked timer itself, so the poll fires when the test says and never early or late.
+beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }); });
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+const seen = (text: string | RegExp) => vi.waitFor(() => { expect(screen.getByText(text)).toBeInTheDocument(); });
 
 describe('the launcher\'s login terminal', () => {
   it('runs the agent\'s login in home and says so when its own status command agrees', async () => {
@@ -34,8 +41,8 @@ describe('the launcher\'s login terminal', () => {
     const onSignedIn = vi.fn();
     render(<LoginDialog runner="codex" label="Codex" platform="darwin" pollMs={5} onClose={vi.fn()} onSignedIn={onSignedIn} />);
 
-    expect(await screen.findByText('Codex is signed in.')).toBeInTheDocument();
-    await waitFor(() => expect(onSignedIn).toHaveBeenCalledTimes(1));
+    await seen('Codex is signed in.');
+    await vi.waitFor(() => expect(onSignedIn).toHaveBeenCalledTimes(1));
     expect(w.open).toHaveBeenCalledWith(expect.objectContaining({ login: { runner: 'codex' } }), expect.any(Function));
     expect(screen.getByRole('dialog', { name: 'Sign in to Codex' })).toBeInTheDocument();
   });
@@ -44,15 +51,15 @@ describe('the launcher\'s login terminal', () => {
     const w = world(false);
     w.open.mockResolvedValueOnce({ ok: false, message: 'Ordewell has no login to run for codex.' });
     const { unmount } = render(<LoginDialog runner="codex" label="Codex" platform="darwin" pollMs={5} onClose={vi.fn()} onSignedIn={vi.fn()} />);
-    expect(await screen.findByText(/Ordewell has no login to run for codex\./)).toBeInTheDocument();
+    await seen(/Ordewell has no login to run for codex\./);
     // A failure is an alert that leads with its outcome; the agent's reason follows.
     expect(screen.getByRole('alert')).toHaveTextContent(/^Sign-in did not finish\. Ordewell has no login/);
     unmount();
 
     const second = world(false);
     render(<LoginDialog runner="codex" label="Codex" platform="darwin" pollMs={5} onClose={vi.fn()} onSignedIn={vi.fn()} />);
-    await waitFor(() => expect(second.events).toHaveLength(1));
+    await vi.waitFor(() => expect(second.events).toHaveLength(1));
     act(() => second.events[0]!({ kind: 'exit', exitCode: 1 }));
-    expect(await screen.findByText(/The terminal closed before sign-in finished\./)).toBeInTheDocument();
+    await seen(/The terminal closed before sign-in finished\./);
   });
 });
