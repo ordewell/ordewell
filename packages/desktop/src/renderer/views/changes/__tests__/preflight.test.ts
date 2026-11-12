@@ -41,6 +41,13 @@ describe('Merge all\'s preflight', () => {
     ]);
   });
 
+  it('offers no Stash beside a running ops task, and says why (ADR-0020)', () => {
+    const model = preflightModel(OVERLAP, HANDOFF, true, ['#3 "Deploy"']);
+    expect(model.request.choices.map((c) => c.id)).toEqual(['commit']);
+    expect(model.request.detail).toMatch(/Stash is not offered while ops task #3 "Deploy" is running in your checkout/);
+    expect(preflightModel(CLEAN, HANDOFF, true, ['#3 "Deploy"']).request.choices.map((c) => c.id)).toEqual(['merge']);
+  });
+
   it('says other uncommitted changes stay put when they do not overlap', () => {
     const model = preflightModel({ ...CLEAN, repos: [{ ...CLEAN.repos[0]!, otherDirty: true }] }, HANDOFF, false);
     expect(model.request.detail).toMatch(/do not touch what the run changed, and stay as they are/);

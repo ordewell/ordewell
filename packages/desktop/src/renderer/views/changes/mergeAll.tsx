@@ -105,7 +105,8 @@ export async function mergeAll(api: FrameApi, host: DaemonHost, ask: Ask = confi
     const response = parsePreflight(await callDaemon('plans.mergePreflight', { sessionId: host.sessionId, workspace: api.workspace }));
     if (!response) throw new Error('The daemon sent a preflight this app cannot read.');
     const { state } = host.getSnapshot();
-    model = preflightModel(response, state.run.handoff ?? state.run.runMerge, state.isExecuting);
+    const ops = state.run.tasks.filter((t) => t.ops && t.status === 'in_progress').map((t) => `#${t.order} "${t.title}"`);
+    model = preflightModel(response, state.run.handoff ?? state.run.runMerge, state.isExecuting, ops);
     stashMessage = response.stashMessage;
     plan = stashPlan(response);
   } catch (error) {

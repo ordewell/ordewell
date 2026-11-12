@@ -61,6 +61,8 @@ export type DaemonErrorCode =
   | 'checkpoint_not_waiting'
   /** Merge all would merge work no check has passed; the message names the checks, and a surface asks before sending `pastChecks` (ADR-0055 D9). */
   | 'merge_past_check'
+  /** Merge all would go beside ops tasks running in the user's checkout; the message names them, and a surface asks before sending `besideOps` (ADR-0020). */
+  | 'merge_beside_ops'
   | 'approval_not_outstanding'
   /** Another live Ordewell host runs this session (ADR-0049); `sessionHeld` names it. */
   | 'session_held'

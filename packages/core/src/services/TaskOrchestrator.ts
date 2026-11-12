@@ -842,14 +842,22 @@ export class TaskOrchestrator {
    * "Merge all"; a settled run that merged everything is cleared up and
    * forgotten. During a run it merges what has landed and the run goes on:
    * the tasks waiting at a merge gate for that work then start (ADR-0020).
-   * Never alongside ops work, either way round ({@link mergeExcludes}).
+   * Never alongside ops work, either way round ({@link mergeExcludes}), but
+   * for `besideOps`: the user's yes to merging beside the ops tasks running
+   * now, which no automatic merge and no model can give. No ops task starts
+   * while it merges, either way.
    */
-  async mergeRun(): Promise<IsolationMergeResult> {
-    return this.mergeLanded();
+  async mergeRun(options: { besideOps?: boolean } = {}): Promise<IsolationMergeResult> {
+    return this.mergeLanded(undefined, options.besideOps === true);
   }
 
-  private async mergeLanded(trigger?: AutoMergeTrigger): Promise<IsolationMergeResult> {
-    const excluded = this.attempts.excludingMerge();
+  /** The tasks whose live attempts work in the user's checkout, which hold every Merge all but the one the user confirms (ADR-0020). */
+  get opsInCheckout(): readonly Task[] {
+    return this.attempts.excludingMergeAll().flatMap((id) => this.store.get(id) ?? []);
+  }
+
+  private async mergeLanded(trigger?: AutoMergeTrigger, besideOps = false): Promise<IsolationMergeResult> {
+    const excluded = besideOps && !trigger ? undefined : this.attempts.excludingMerge();
     if (excluded) {
       const title = this.store.get(excluded)?.title ?? excluded;
       throw new TaskControlError(`Ops task "${title}" is running in your checkout: Merge all once it has finished.`);

@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { checkoutRule, mergeTarget } from '@ordewell/core';
 import {
-  discardRunConfirmation, mergeAllConfirmation, mergePastChecksQuestion,
+  discardRunConfirmation, mergeAllConfirmation, mergeBesideOpsQuestion, mergePastChecksQuestion,
   type ConfirmationRequest, type IsolationBlockedChoice,
 } from '@ordewell/ui/host';
 import { confirm } from './confirm';
@@ -54,11 +54,20 @@ export async function handleIsolationAction(
         // other controls are. A merge git stopped is an outcome the handoff
         // card shows, not an error here; a refusal without one is thrown for
         // the catch below.
+        // Work whose check has not passed (ADR-0055 D9), and ops tasks running
+        // in the checkout (ADR-0020), are the seam's to name, one question at a
+        // time: each yes goes with the next call, beside the ones before it.
+        const yes: { pastChecks?: true; besideOps?: true } = {};
         let merged = await deps.session.execute({ command: 'merge_all' }, { kind: 'user' });
-        // Work whose check has not passed is the seam's to name, and the yes goes with the next call (ADR-0055 D9).
-        if (merged.payload?.kind === 'merge_hold') {
-          if (!(await confirm(mergePastChecksQuestion(merged.message, target)))) return;
-          merged = await deps.session.execute({ command: 'merge_all', pastChecks: true }, { kind: 'user' });
+        for (;;) {
+          if (merged.payload?.kind === 'merge_hold' && !yes.pastChecks) {
+            if (!(await confirm(mergePastChecksQuestion(merged.message, target)))) return;
+            yes.pastChecks = true;
+          } else if (merged.payload?.kind === 'merge_beside_ops' && !yes.besideOps) {
+            if (!(await confirm(mergeBesideOpsQuestion(merged.message, target)))) return;
+            yes.besideOps = true;
+          } else break;
+          merged = await deps.session.execute({ command: 'merge_all', ...yes }, { kind: 'user' });
         }
         if (merged.payload?.kind === 'merge') break;
         if (!merged.ok) throw new Error(merged.message);

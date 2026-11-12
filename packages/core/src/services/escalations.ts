@@ -1,4 +1,4 @@
-import { mergePastChecksConfirmation } from './mergeWording';
+import { mergeBesideOpsConfirmation, mergePastChecksConfirmation } from './mergeWording';
 import { createHash } from 'crypto';
 import { isRunnerApproval } from '../interfaces/IApproval';
 import { betweenRounds, loopRoundOf, outOfRounds } from '../models/Loop';
@@ -113,6 +113,8 @@ export interface EscalationRun {
   merge: RunMergeView | null;
   /** The checks that have not passed work Merge all would merge (ADR-0055 D9): the user's is not held, and its confirmation names them. */
   mergeHold: readonly string[];
+  /** The ops tasks running in the user's checkout: only the user's Merge all goes beside them, and its confirmation names them (ADR-0020). */
+  opsInCheckout: readonly string[];
   /** The isolated run's id. */
   id: string | null;
   /**
@@ -352,9 +354,13 @@ function failed(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait |
   return { kind: 'failed', ...ended(row, `Its loop stopped: ${body.map((r) => r.ref).join(', ')} did not run.`, input, rows) };
 }
 
-/** Merge all as the user is offered it: with what it would carry past its check named, when anything would (ADR-0055 D9). */
+/** Merge all as the user is offered it: with what it would carry past its check (ADR-0055 D9) and the ops tasks it would go beside (ADR-0020) named, when there are any. */
 function mergeOption({ run }: EscalationInput): EscalationOption {
-  return run.mergeHold.length === 0 ? MERGE_ALL : { ...MERGE_ALL, confirm: mergePastChecksConfirmation(run.mergeHold) };
+  const asks = [
+    ...(run.mergeHold.length > 0 ? [mergePastChecksConfirmation(run.mergeHold)] : []),
+    ...(run.opsInCheckout.length > 0 ? [mergeBesideOpsConfirmation(run.opsInCheckout)] : []),
+  ];
+  return asks.length === 0 ? MERGE_ALL : { ...MERGE_ALL, confirm: asks.join(' ') };
 }
 
 /** A task not started that only a person can start, once a run is there for it to be late for. */
@@ -515,8 +521,8 @@ export function escalationAct(escalation: Escalation, option: EscalationOptionId
     case 'force-start': return command({ command: 'force_start', task });
     case 'skip': return command({ command: 'skip_task', task, ...(said ? { reason: said } : {}) });
     case 'complete': return command({ command: 'mark_complete', task, confirmed: true });
-    // The option carries its check's confirmation, so reaching here is the yes the seam asks for (ADR-0055 D9).
-    case 'merge-all': return command({ command: 'merge_all', pastChecks: true });
+    // The option carries its checks' and its ops tasks' confirmation, so reaching here is the yes the seam asks for (ADR-0055 D9, ADR-0020).
+    case 'merge-all': return command({ command: 'merge_all', pastChecks: true, besideOps: true });
     case 'resolve-conflict': return { kind: 'resolve-conflict', task };
     case 'start-resolver': return command({ command: 'run_task', task: escalation.resolver ?? '' });
     case 'stash': return { kind: 'continue-run', how: 'stash' };

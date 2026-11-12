@@ -6,7 +6,7 @@ import { adopted } from './conversation';
 import { askYesNo, fail } from './shared';
 
 // The flag is named only where delegation is offered: a check that has not passed exists nowhere else (ADR-0055 D21).
-const USAGE = `Usage: ordewell handoff [review|merge|discard|cleanup] [--session-id <id>] [--workspace /path] [--yes]${DELEGATION_OFFERED ? ' [--past-checks]' : ''}`;
+const USAGE = `Usage: ordewell handoff [review|merge|discard|cleanup] [--session-id <id>] [--workspace /path] [--yes]${DELEGATION_OFFERED ? ' [--past-checks]' : ''} [--beside-ops]`;
 
 /**
  * Land an isolated run's branch (ADR-0013) — the terminal counterpart of the
@@ -61,20 +61,27 @@ export async function handleHandoff(
       await confirmed((group
         ? `Merge ${branch} into ${mergeTarget(handoff)}? Nothing is merged unless every repository can take it${checkoutRule(handoff) ? ' and is on that branch' : ''}; once a finished run has merged everything, its worktrees and branches are removed.`
         : `Merge ${branch} into ${mergeTarget(handoff)}?${checkoutRule(handoff)} Once a finished run has merged everything, its worktrees and branches are removed.`) + repairedNotice(handoff));
-      // Work whose check has not passed is the daemon's to name: it refuses, and the yes comes in a second request (ADR-0055 D9).
-      // --yes covers the first question only; this one is answered by --past-checks or by a person.
-      let pastChecks = hasFlag(subArgs, '--past-checks');
+      // Work whose check has not passed (ADR-0055 D9), and ops tasks running in the checkout (ADR-0020), are the
+      // daemon's to name: it refuses, one question at a time, and each yes comes in the next request.
+      // --yes covers the first question only; these are answered by --past-checks and --beside-ops, or by a person.
+      const yes = { pastChecks: hasFlag(subArgs, '--past-checks'), besideOps: hasFlag(subArgs, '--beside-ops') };
+      const flags = { pastChecks: '--past-checks to merge past a check that has not passed', besideOps: '--beside-ops to merge beside an ops task running in your checkout' };
+      let declined: keyof typeof yes = 'pastChecks';
       const merged = await attempt(async () => {
-        try {
-          return await api.mergeRun(sessionId, pastChecks ? { pastChecks: true } : {});
-        } catch (err) {
-          if (!(err instanceof DaemonError) || err.code !== 'merge_past_check') throw err;
-          if (!(await confirm(`${err.message} Merge anyway?`))) return null;
-          pastChecks = true;
-          return api.mergeRun(sessionId, { pastChecks: true });
+        for (;;) {
+          try {
+            return await api.mergeRun(sessionId, { ...(yes.pastChecks ? { pastChecks: true } : {}), ...(yes.besideOps ? { besideOps: true } : {}) });
+          } catch (err) {
+            if (!(err instanceof DaemonError)) throw err;
+            const asked = err.code === 'merge_past_check' ? 'pastChecks' : err.code === 'merge_beside_ops' ? 'besideOps' : null;
+            // A question already answered yes and asked again is not one a person can settle here.
+            if (asked === null || yes[asked]) throw err;
+            if (!(await confirm(`${err.message} Merge anyway?`))) { declined = asked; return null; }
+            yes[asked] = true;
+          }
         }
       });
-      if (merged === null) fail('Not confirmed: nothing was changed. Pass --past-checks to merge past a check that has not passed.');
+      if (merged === null) fail(`Not confirmed: nothing was changed. Pass ${flags[declined]}.`);
       const { ok, message } = mergeOutcome(merged, branch, group, repairedLanded(handoff));
       if (ok) console.log(message);
       else fail(message);

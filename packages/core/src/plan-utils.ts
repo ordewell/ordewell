@@ -16,7 +16,7 @@ export { live as standingRecord } from './services/decisionRecord';
 export { describeMergeResult, mergeOutcome, blockNotice, blockNotices, repairedLanded, repairedNotice } from './services/mergeResultNotice';
 export { describeIsolationPreview } from './services/isolationPreviewText';
 export type { IsolationPreviewNotice } from './services/isolationPreviewText';
-export { checkoutRule, handoffBaseLine, handoffBranchName, isRepoGroup, mergePastChecksConfirmation, mergeTarget, repoBaseLine, repoResultLines } from './services/mergeWording';
+export { checkoutRule, handoffBaseLine, handoffBranchName, isRepoGroup, mergeBesideOpsConfirmation, mergePastChecksConfirmation, mergeTarget, repoBaseLine, repoResultLines } from './services/mergeWording';
 export type { HandoffForkRepo } from './services/mergeWording';
 export { blockingFailures, repeatingChecks, planBlocks, type BlockingSubject, type PlanBlocks } from './services/blocking';
 // What a loop's rows say (ADR-0045) is read the way the scheduler reads it.

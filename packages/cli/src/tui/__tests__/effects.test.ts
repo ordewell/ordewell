@@ -2344,7 +2344,7 @@ describe('worktree isolation', () => {
       await runEffect({ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration' }, h.deps);
 
       expect(h.actions.filter((a) => a.type === 'failed')).toEqual([]);
-      expect(h.actions).toContainEqual({ type: 'mergeHeld', message: ASKED, sessionId: 's1' });
+      expect(h.actions).toContainEqual({ type: 'mergeHeld', message: ASKED, asked: 'pastChecks', sessionId: 's1' });
     });
 
     it('sends the yes with the request once the user gave it', async () => {
@@ -2364,6 +2364,30 @@ describe('worktree isolation', () => {
 
       expect(messageOf(h.actions, 'failed')).toContain('The run is still running');
       expect(h.actions.some((a) => a.type === 'mergeHeld')).toBe(false);
+    });
+  });
+
+  describe('a Merge all beside a running ops task (ADR-0020)', () => {
+    const ASKED = 'Ops task #3 "Deploy" is running in your checkout. Merge all rewrites files there that it may be reading, building or committing: merge beside it only if it works outside your checkout.';
+
+    it('turns the daemon\'s question into one for the user, keeping the yes already given', async () => {
+      const mergeRun = vi.fn().mockRejectedValue(new DaemonError(ASKED, 409, 'merge_beside_ops'));
+      const h = harness({ mergeRun } as Partial<OrdewellApi>);
+
+      await runEffect({ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration', pastChecks: true }, h.deps);
+
+      expect(mergeRun).toHaveBeenCalledWith('s1', { pastChecks: true });
+      expect(h.actions.filter((a) => a.type === 'failed')).toEqual([]);
+      expect(h.actions).toContainEqual({ type: 'mergeHeld', message: ASKED, asked: 'besideOps', given: { pastChecks: true }, sessionId: 's1' });
+    });
+
+    it('sends every yes the user gave', async () => {
+      const mergeRun = vi.fn().mockResolvedValue({ outcome: 'merged' });
+      const h = harness({ mergeRun } as Partial<OrdewellApi>);
+
+      await runEffect({ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration', pastChecks: true, besideOps: true }, h.deps);
+
+      expect(mergeRun).toHaveBeenCalledWith('s1', { pastChecks: true, besideOps: true });
     });
   });
 

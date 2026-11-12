@@ -10,7 +10,7 @@ import type { GuardTarget, GuardTrip } from './LoopGuards';
 import { STOPPED_BEFORE_START, type StartAdmission } from './TaskOrchestrator';
 import { waitOf, type StartWait } from './readiness';
 import { escalationAct, type Escalation } from './escalations';
-import { mergePastChecksConfirmation } from './mergeWording';
+import { mergeBesideOpsConfirmation, mergePastChecksConfirmation } from './mergeWording';
 import { revertStopped, type RevertScope } from './taskRevert';
 import { manualOverrideConfirmation, manualOverrideStopFirst, type OverrideDirection } from '../taskRow/texts';
 import { actionPhrase, type SurfaceControls, type UserAction } from './surfaceControls';
@@ -32,8 +32,12 @@ export type ExecutionCommand =
   | { command: 'message_task'; task: string; text: string; force?: boolean }
   /** `answer` is checked here rather than typed: an `allow` must reach the seam to be refused with its reason. */
   | { command: 'answer_approval'; task: string; approval?: string; answer: string; note?: string }
-  /** Merge all: the run's landed work into the user's branch (ADR-0013). */
-  | { command: 'merge_all'; pastChecks?: true }
+  /**
+   * Merge all: the run's landed work into the user's branch (ADR-0013).
+   * `pastChecks` and `besideOps` are the user's yes to the questions it asks
+   * first (ADR-0055 D9, ADR-0020); nobody else's counts.
+   */
+  | { command: 'merge_all'; pastChecks?: true; besideOps?: true }
   /** End a task as skipped: nothing it did lands, and its dependents go ahead without it once the work it waited on is done. `reason` is required of anyone but the user. */
   | { command: 'skip_task'; task: string; reason?: string }
   /** The user's force start: past a failed dependency or a merge gate, queued behind dependencies still under way (ADR-0035). */
@@ -95,7 +99,9 @@ export type CommandPayload =
   /** The user's `revert_task`, reverted or stopped: which tasks, or the task and files, or the commands that do it by hand. */
   | { kind: 'revert'; result: IsolationRevertResult }
   /** The user's `merge_all` asked first: what it would merge past are these checks, named as the plan names them, and `pastChecks` is the yes (ADR-0055 D9). */
-  | { kind: 'merge_hold'; checks: string[] };
+  | { kind: 'merge_hold'; checks: string[] }
+  /** The user's `merge_all` asked first: these ops tasks run in their checkout, named as the plan names them, and `besideOps` is the yes (ADR-0020). */
+  | { kind: 'merge_beside_ops'; tasks: string[] };
 
 /**
  * What a call came to: `message` is written for the caller, a model included,
@@ -268,14 +274,16 @@ export interface ExecutionHost {
   answerCheckpoint(taskId: string, approve: boolean, reason?: string, note?: string): void;
   /** The checks that hold every merge but the user's (ADR-0055 D9), each as its row names it. */
   mergeHold(): readonly string[];
+  /** The ops tasks running in the user's checkout, which hold every merge but the one the user confirms (ADR-0020), each as its row names it. */
+  opsInCheckout(): readonly string[];
   /** A raise for a delegated task's child, from what this node has left (ADR-0056 M5). Null when it took; otherwise why not. */
   raiseChild(taskId: string, tokens: number): Promise<string | null>;
   /** Sign off the review: the plan is the user's, and runs. */
   approveReview(): Promise<void>;
   /** Answer a runner's request, as its card does; false once it was answered or withdrawn. */
   answerRequest(requestId: string, decision: ApprovalDecision): boolean;
-  /** Merge all, through the queue it shares with landings. */
-  mergeAll(): Promise<IsolationMergeResult>;
+  /** Merge all, through the queue it shares with landings; `besideOps` past the ops tasks running in the checkout. */
+  mergeAll(besideOps: boolean): Promise<IsolationMergeResult>;
   /** The plan's last isolated run closed with everything it landed merged into the user's branch, and no run has decided since. */
   runMerged(): boolean;
   /** Keep the call in the timeline, worded as `text`. */
@@ -1532,9 +1540,14 @@ export class ExecutionCommands {
     if (held.length > 0 && !users) return { refusal: `Merge all waits on ${held.join(', ')}: work a delegated task landed merges once its check has passed, or the user has skipped it.` };
     // The user may merge past a check, and is asked first, the checks named: every surface's Merge all asks the same way, and the yes is the command's own.
     if (held.length > 0 && !command.pastChecks) return { confirm: mergePastChecksConfirmation(held), payload: { kind: 'merge_hold', checks: [...held] } };
+    // Only a person who knows where the ops task works can say a merge leaves it be: no model merges beside one, and no automatic merge does (ADR-0020).
+    const ops = this.host.opsInCheckout();
+    if (ops.length > 0 && !users) return { refusal: `Merge all waits for ops task${ops.length === 1 ? '' : 's'} ${ops.join(', ')}, which ${ops.length === 1 ? 'runs' : 'run'} in the user's checkout: only the user merges beside one. Merge once ${ops.length === 1 ? 'it has' : 'they have'} finished, or leave it to the user.` };
+    if (ops.length > 0 && !command.besideOps) return { confirm: mergeBesideOpsConfirmation(ops), payload: { kind: 'merge_beside_ops', tasks: [...ops] } };
+    const besideOps = users && command.besideOps === true;
     return {
       act: async () => {
-        const result = await this.host.mergeAll();
+        const result = await this.host.mergeAll(besideOps);
         // Only the user's surface draws the card; a model acts on the line.
         const payload: CommandPayload | undefined = users ? { kind: 'merge', result } : undefined;
         if (result.outcome !== 'merged') throw new Stopped(`Merge all stopped: ${mergeStopped(result)}. ${this.voiceOf(actor).notMerged}`, payload);

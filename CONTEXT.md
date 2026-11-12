@@ -2169,9 +2169,10 @@ that each integration branch goes only where HEAD contains it, and the plan
 forgets it; any other answer deletes nothing. During a run, Merge all is available
 whenever landed work is not in the user's branch yet, including to open a
 *merge gate*: it merges what has landed so far and the run goes on, its
-branches kept for the tasks still to land (ADR-0020). It never runs while an
-*ops task* does (`mergeExcludes`, read by both sides), and takes turns with
-landings.
+branches kept for the tasks still to land (ADR-0020). It holds while an *ops
+task* runs (`mergeExcludes`, read by both sides): only the user's own Merge all
+goes beside one, after a confirmation naming it (`merge_beside_ops`,
+`besideOps`), and it takes turns with landings.
 `RunMergeView` carries those unmerged landings to surfaces, which show their task
 count. Its `waitingAtGate` says whether a task waits on that work; `paused`
 means the running plan waits at a gate with no attempts active. The view is
@@ -2451,7 +2452,7 @@ ADR-0062 G8) — what a surface asks before Merge all: per repository, the branc
 it lands on, the user's uncommitted files that overlap the incoming work, and
 whether other uncommitted files exist. With an overlap the surface offers Commit,
 Stash (only the overlapping paths, named `ordewell: before Merge all of <run>`)
-or Cancel. Merge all's own preflight, which aborts on a dirty overlap, stays the
+or Cancel, and no Stash while an *ops task* runs in the checkout (ADR-0020). Merge all's own preflight, which aborts on a dirty overlap, stays the
 backstop.
 *Avoid:* "Merge all's preflight" for this (that one is inside `mergeRun` and
 changes nothing), "dry run".
