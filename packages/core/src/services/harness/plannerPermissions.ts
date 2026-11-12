@@ -57,7 +57,7 @@ export function readOnlyTask(opts: AgentStartOptions | null | undefined): boolea
 export function decideReadOnlyTaskPermission(ask: PlannerAsk | undefined, site: Pick<TaskStartOptions, 'cwd' | 'workspaceRoot'>): ApprovalDecision {
   if (ask?.kind === 'path') {
     const target = resolveWithin(site.cwd, ask.path).abs;
-    if ([site.cwd, site.workspaceRoot].some((root) => root !== undefined && readTarget(root, target).inside)) return ALLOW;
+    if ((ask.confined ? [site.cwd] : [site.cwd, site.workspaceRoot]).some((root) => root !== undefined && readTarget(root, target).inside)) return ALLOW;
     return deny('This read is outside the task worktree and workspace. Nobody can approve it here.');
   }
   return deny('This native tool is unavailable on a read-only task. Use Ordewell run_command for commands, and Ordewell fetch and web_search for the web; nobody can approve native tools here.');
@@ -122,7 +122,9 @@ export async function decidePlannerPermission(
 
 async function decideRead(ask: Extract<PlannerAsk, { kind: 'path' }>, gate: PlannerPermissionGate, signal?: AbortSignal): Promise<ApprovalDecision> {
   const { abs, inside } = readTarget(gate.workspaceRoot, ask.path);
-  if (inside || gate.savedOutput?.(abs)) return ALLOW;
+  if (inside) return ALLOW;
+  if (ask.confined) return deny(`Access denied: "${abs}" is outside the workspace (${gate.workspaceRoot}), and this tool reads only inside it.`);
+  if (gate.savedOutput?.(abs)) return ALLOW;
   if (!gate.approval) return deny(NOBODY_TO_ASK);
   const granted = await gate.approval.request({
     kind: 'external_path',

@@ -162,7 +162,12 @@ export type PlannerAsk =
    * `providerLabel` names that party in the approval.
    */
   | { kind: 'search'; query: string; provider: string; providerLabel?: string }
-  | { kind: 'path'; path: string; directory: boolean }
+  /**
+   * `confined` marks a tool whose answer is not bounded by `path`, a language
+   * server's from the whole project it indexed: it is allowed only inside the
+   * site's own root and never offered for approval (ADR-0008, ADR-0068).
+   */
+  | { kind: 'path'; path: string; directory: boolean; confined?: boolean }
   /** A command through the harness's own shell, allowed by the user's opt-in and held in Ordewell's sandbox (ADR-0036 N2, N3). */
   | { kind: 'native-shell'; tool: string; command?: string }
   /**

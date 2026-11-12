@@ -56,7 +56,7 @@ const PLANNER_PERMISSION_MODE = 'default';
  * at once. A user's own hook runs on the planner's tool calls and can write,
  * which no planner may (ADR-0028).
  */
-const PLANNER_ASK_RULES = ['WebFetch', 'WebFetch(domain:*)', 'WebSearch', 'mcp__*', 'Read', 'Grep', 'Glob', 'LS'];
+const PLANNER_ASK_RULES = ['WebFetch', 'WebFetch(domain:*)', 'WebSearch', 'mcp__*', 'Read', 'Grep', 'Glob', 'LS', 'LSP'];
 const PLANNER_SETTINGS = JSON.stringify({
   disableAllHooks: true,
   permissions: { ask: PLANNER_ASK_RULES },
@@ -163,12 +163,18 @@ function inSavedOutput(abs: string, configDir: string, sessionId: string): boole
   return Boolean(project) && session === sessionId && folder === 'tool-results';
 }
 
-/** Claude Code's read tools, by the input field that names their path. */
-const PATH_TOOLS: Record<string, { field: string; directory: boolean }> = {
+/**
+ * Claude Code's read tools, by the input field that names their path. Each is
+ * asked, so the planner read limit counts it (ADR-0068); `LSP` is confined,
+ * since its server answers from the whole project, so outside the workspace it
+ * stays refused rather than becoming approvable.
+ */
+const PATH_TOOLS: Record<string, { field: string; directory: boolean; confined?: true }> = {
   Read: { field: 'file_path', directory: false },
   Grep: { field: 'path', directory: true },
   Glob: { field: 'path', directory: true },
   LS: { field: 'path', directory: true },
+  LSP: { field: 'filePath', directory: false, confined: true },
 };
 
 /** What a planner's `can_use_tool` request is for (ADR-0026). Claude names an MCP tool `mcp__<server>__<tool>`. */
@@ -187,7 +193,7 @@ function plannerAsk(name: string, input: Record<string, unknown>, server: string
   const pathTool = PATH_TOOLS[name];
   // A search with no path runs in the working directory, which is the workspace.
   const target = pathTool ? input[pathTool.field] ?? (pathTool.directory ? '.' : undefined) : undefined;
-  if (pathTool && typeof target === 'string') return { kind: 'path', path: target, directory: pathTool.directory };
+  if (pathTool && typeof target === 'string') return { kind: 'path', path: target, directory: pathTool.directory, ...(pathTool.confined ? { confined: true } : {}) };
   return { kind: 'other' };
 }
 
