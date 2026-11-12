@@ -1376,6 +1376,20 @@ describe('OpenCode 2.x — shared protocol behaviour', () => {
     ]);
     adapter.dispose();
   });
+
+  it('counts a step\'s usage once when its start named no model and OpenCode also recorded it', async () => {
+    const server = fakeServer();
+    const { adapter, events, turn, stream } = await turnOf(server, plannerStart());
+    const tokens = { input: 120, output: 30, reasoning: 0, cache: { read: 0, write: 0 } };
+    stream.push(frame('session.step.started', { assistantMessageID: MSG }));
+    stream.push(frame('session.usage.recorded', { assistantMessageID: MSG, source: 'generate', tokens }));
+    stream.push(frame('session.step.ended', { assistantMessageID: MSG, tokens }));
+    stream.push(succeeded());
+    await turn;
+
+    expect(events.filter((e) => e.type === 'usage')).toHaveLength(1);
+    adapter.dispose();
+  });
 });
 
 describe('OpenCode 2.x — file edits', () => {

@@ -830,7 +830,8 @@ export class OpenCodeV2 {
     if (typeof purpose !== 'string' || !purpose) return;
     const message = data.assistantMessageID;
     if (message) {
-      if (state.stepModels.has(message) || state.seen.has(`usage:${message}`) || state.seen.has(`recorded:${message}`)) return;
+      // A start that named no model fills no `stepModels`; the open step is what marks the call as that step's.
+      if (state.openSteps.has(message) || state.stepModels.has(message) || state.seen.has(`usage:${message}`) || state.seen.has(`recorded:${message}`)) return;
       state.seen.add(`recorded:${message}`);
     }
     const record = usageRecord(data.tokens, { cost: data.cost, purpose });
@@ -840,7 +841,8 @@ export class OpenCodeV2 {
   /** One model call's usage, once, when its step ends. Zeros mean the call failed before the provider answered. */
   private countUsage(data: NonNullable<V2Frame['data']>, state: TurnState, onEvent: (e: AgentEvent) => void, subagentId?: string): void {
     const message = data.assistantMessageID;
-    if (!message || !data.tokens || state.seen.has(`usage:${message}`)) return;
+    // `recorded:` too: a call OpenCode recorded before its step was seen to start is already counted.
+    if (!message || !data.tokens || state.seen.has(`usage:${message}`) || state.seen.has(`recorded:${message}`)) return;
     state.seen.add(`usage:${message}`);
     const record = usageRecord(data.tokens, { model: state.stepModels.get(message), cost: data.cost, subagentId });
     if (record) onEvent({ type: 'usage', record });
