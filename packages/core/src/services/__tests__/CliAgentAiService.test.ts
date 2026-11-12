@@ -2965,6 +2965,25 @@ describe('CliAgentAiService — resource lifecycle', () => {
       expect(answers.get('req-g2')).toEqual({ decision: 'deny', note: expect.stringMatching(/^Read limit reached: you have made 1 read /) });
     });
 
+    it('counts a read the runner ran without asking from its result, and never a subagent\'s', async () => {
+      const unasked = (id: string, output: string, subagentId?: string): AgentEvent[] => [
+        { type: 'tool_call', id, name: 'Read', args: {}, ...(subagentId ? { subagentId } : {}) },
+        { type: 'tool_result', id, name: 'Read', output, success: true, unaskedRead: true, ...(subagentId ? { subagentId } : {}) },
+      ];
+      const reads = limitOf(10, 2048);
+      const { svc } = planners(() => ({
+        send: async (_message, onEvent) => {
+          for (const event of [...unasked('s1', 'x'.repeat(4096), 'sub-1'), ...unasked('u1', 'x'.repeat(1024))]) onEvent(event);
+          onEvent({ type: 'assistant_text', runId: 'r1', text: 'ok' });
+          onEvent({ type: 'turn_end' });
+        },
+      }));
+
+      await svc.startConversation(request({ readLimit: reads }));
+
+      expect(reads.line()).toBe('Own reads left this turn: 9 calls or 1 KB, whichever runs out first; then delegate.');
+    });
+
     it('leaves a runner\'s native reads unasked while the limit is off', async () => {
       const { svc, processes } = planners();
       const off = new PlannerReadLimit({ limit: () => undefined, turn: () => 't1' });

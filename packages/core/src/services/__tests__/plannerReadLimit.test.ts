@@ -50,6 +50,23 @@ describe('PlannerReadLimit', () => {
     expect(reads.admit().allowed).toBe(true);
   });
 
+  it('counts a read that ran without asking, so the reads after it are refused past the limit', () => {
+    const calls = limited({ calls: 2, bytes: 1_000_000 }).reads;
+    calls.record(10);
+    calls.record(10);
+    expect(calls.admit().allowed).toBe(false);
+    const bytes = limited({ calls: 10, bytes: 1024 }).reads;
+    bytes.record(4096);
+    expect(bytes.admit().allowed).toBe(false);
+    expect(bytes.line()).toBe('Own reads left this turn: 9 calls or 0 KB, whichever runs out first; then delegate.');
+  });
+
+  it('records nothing when it is off', () => {
+    const { reads } = limited(undefined);
+    reads.record(1_000_000);
+    expect(reads.admit()).toEqual({ allowed: true });
+  });
+
   it('shows what is left of the turn as a budget line', () => {
     const { reads } = limited({ calls: 10, bytes: 60 * 1024 });
     reads.admit();
