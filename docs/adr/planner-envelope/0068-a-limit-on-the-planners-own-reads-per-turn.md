@@ -1,7 +1,7 @@
 ---
 status: accepted
 implemented: partial
-note: "ACP agents' in-workspace reads, and a harness's native reads that never ask, are not counted yet."
+note: "An ACP agent's read that its own policy lets through without asking is counted but cannot be refused, and Claude Code's MCP resource tools are not counted."
 ---
 
 # 0068 — A limit on the planner's own reads per turn
@@ -46,6 +46,18 @@ session builds one and every path below asks it.
   `run_command`, and a harness's native reads and shell.
 - **True bytes (R5).** A result is charged at its full length before any
   truncation for the log or the model.
+- **Every harness's native reads are reached, by the means it allows (R6).**
+  Claude Code's `Read`, `Grep`, `Glob`, `LS` and `LSP` ask, and are counted and
+  refused at the permission request. An `LSP` read is *confined*: allowed only
+  inside the workspace and never offered for approval outside it, since a
+  language server answers from the whole project it indexed. OpenCode's reads
+  are made to ask. Codex never asks about a read of its own, so while the limit
+  is on its shell, `unified_exec` and `view_image` are turned off and every read
+  goes through `run_command`, which is counted and refused. An ACP agent's
+  asked single-path read or search is counted and refused at the request; one
+  its own policy lets through unasked is counted from its result and cannot be
+  refused, so the asked reads after it are refused once the turn is past the
+  limit.
 
 ## Where reads are counted
 
@@ -53,18 +65,24 @@ session builds one and every path below asks it.
 | --- | --- |
 | API planner's read tools and `bash` | `BaseAiService.executeToolCalls`, in call order before any runs |
 | `run_command` from a harness planner | the session's own command path (`ownCommand`) |
-| A harness's native reads and shell (Claude Code, Codex, OpenCode) | the permission request, at `CliAgentAiService`, when its ask is `path`, `native-shell` or `native-read`; bytes at its `tool_result` |
+| A harness's native reads (Claude Code, OpenCode, ACP) | the permission request, at `CliAgentAiService`, when its ask is `path`, `native-shell` or `native-read`; bytes at its `tool_result` |
+| A Codex planner's reads | `ownCommand`: with the limit on, Codex's own shell and `view_image` are off, so every read is a `run_command` |
+| An ACP read that was never asked | `PlannerReadLimit.record`, from its `tool_result` marked `unaskedRead`: counted, not refused |
 | OpenCode's `read`, `glob`, `grep`, `list`, `lsp` | made to ask (`readsAsk`) while the limit is on, both in 1.x's config and in 2.x's session rules, and asked as `native-read`, which the envelope allows |
 
 ## Out of scope
 
-- **ACP agents' in-workspace reads.** An ACP agent reads with its own tools and
-  asks only for what its own policy asks, so a read it does not ask about is
-  not seen. This is why the ADR is `implemented: partial`.
-- **A native read that never asks** on any harness, and a request with no
-  tool-call id, whose bytes cannot be matched to a result (its call still
-  counts).
-- **The one-shot planner path**, which has no conversation turn to count in.
+- **Refusing an ACP read its agent never asks about.** The tool call reaches
+  Ordewell once the read has run, and ACP has no hook like OpenCode's
+  `readsAsk`, so it is counted and not refused. This, with the next item, is why
+  the ADR is `implemented: partial`.
+- **Claude Code's MCP resource tools** (`ListMcpResourcesTool`,
+  `ReadMcpResourceTool`, `ReadMcpResourceDirTool`) read MCP servers' resources,
+  not the workspace, and have no ask rule: they are not counted.
+- **A request with no tool-call id**, whose bytes cannot be matched to a result
+  (its call still counts).
+- **The one-shot planner path**, which has no conversation turn to count in; a
+  one-shot Codex planner keeps its own shell.
 
 ## Considered options
 
@@ -90,6 +108,9 @@ session builds one and every path below asks it.
   mid-conversation counts OpenCode's native reads from the next session. A
   read outside the workspace raises both `external_directory` and its read,
   so it can count twice.
+- A Codex planner under the limit has no shell or image viewer of its own, and
+  neither do Codex's native subagents, whose reads then go through
+  `run_command` and are charged to the planner's limit.
 - A planner that hits the limit must say what it wants read, which is the
   point, and may plan with less than it would have read itself.
 
@@ -97,3 +118,4 @@ session builds one and every path below asks it.
 
 - 2026-11-11 — accepted.
 - 2026-11-12 — on by default, after the planner bench showed plans no worse.
+- 2026-11-12 — native reads of Claude Code (`LSP`), Codex and ACP counted and refused where the harness allows; two gaps remain.
