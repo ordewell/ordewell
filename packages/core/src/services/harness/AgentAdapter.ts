@@ -221,7 +221,9 @@ export interface PlannerStartOptions extends AgentStartCommon {
   /**
    * Whether the runner's own read tools must ask before they run, for a
    * runner whose policy lets them run unasked and is fixed when its session
-   * starts: the planner read limit was on then (ADR-0068). Absent means off.
+   * starts: the planner read limit was on then (ADR-0068). A runner whose
+   * reads cannot be made to ask turns them off instead, leaving Ordewell's
+   * `run_command` (Codex). Absent means off.
    */
   readsAsk?: boolean;
   /**
