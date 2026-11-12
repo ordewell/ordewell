@@ -70,6 +70,16 @@ describe('read-only runner profiles (ADR-0046)', () => {
     }
   });
 
+  it('keeps a confined read, a language server\'s, to the task worktree, as it was before it was asked', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ordewell-read-confined-'));
+    dirs.push(dir);
+    const cwd = join(dir, 'task');
+    const workspaceRoot = join(dir, 'workspace');
+    for (const root of [cwd, workspaceRoot]) { mkdirSync(root); writeFileSync(join(root, 'inside'), 'ok'); }
+    expect(decideReadOnlyTaskPermission({ kind: 'path', path: 'inside', directory: false, confined: true }, { cwd, workspaceRoot })).toEqual({ decision: 'allow' });
+    expect(decideReadOnlyTaskPermission({ kind: 'path', path: join(workspaceRoot, 'inside'), directory: false, confined: true }, { cwd, workspaceRoot })).toMatchObject({ decision: 'deny' });
+  });
+
   it('starts Claude without native writes, shell, plan mode or hooks, and decides every native request', async () => {
     const { spawned, processDeps } = deps();
     const adapter = new ClaudeCodeAdapter(processDeps);
