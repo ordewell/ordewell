@@ -64,7 +64,12 @@ export type AgentEvent =
   | { type: 'thinking_delta'; text: string; subagentId?: string }
   /** `subagentId` marks a call made inside a subagent rather than by the planner itself. */
   | { type: 'tool_call'; id: string; name: string; args: Record<string, unknown>; subagentId?: string }
-  | { type: 'tool_result'; id: string; name: string; output: string; success: boolean; subagentId?: string }
+  /**
+   * `unaskedRead` marks a read-class call the agent ran without asking: the
+   * planner's read limit counts it from its result, since there was no
+   * request to refuse (ADR-0068).
+   */
+  | { type: 'tool_result'; id: string; name: string; output: string; success: boolean; subagentId?: string; unaskedRead?: true }
   /** Usage and session billing facts as the agent reported them — never priced by Ordewell. */
   | { type: 'usage'; record: UsageRecord }
   /** The agent delegated `brief` to a subagent, whose events carry `subagentId` until it finishes. */

@@ -2752,6 +2752,72 @@ describe('AcpAdapter roles (ADR-0026, ADR-0046)', () => {
     expect(spawned.processes[0].killed).toBe(false);
   });
 
+  describe('a planner\'s reads it ran without asking (ADR-0068)', () => {
+    const ran = (toolCallId: string, title: string, kind: string, status = 'completed', fields: Record<string, unknown> = {}): FakeAcpStep[] => [
+      { notify: 'session/update', params: update('tool_call', { toolCallId, title, kind, status: 'in_progress', ...fields }) },
+      { notify: 'session/update', params: update('tool_call_update', { toolCallId, status, content: [{ type: 'content', content: text('body') }], ...fields }) },
+    ];
+    const marked = (events: AgentEvent[]) => events.filter((e) => e.type === 'tool_result' && e.unaskedRead).map((e) => (e.type === 'tool_result' ? e.id : ''));
+
+    it('marks only the planner\'s own successful read and search calls that never asked', async () => {
+      const { adapter } = setup([
+        ...handshake(),
+        { expect: 'session/prompt' },
+        ...ran('r-1', 'Read a.ts', 'read'),
+        ...ran('s-1', 'Search src', 'search'),
+        ...ran('r-failed', 'Read gone.ts', 'read', 'failed'),
+        ...ran('f-1', 'Fetch a page', 'fetch'),
+        ...ran('x-1', 'Something', 'other'),
+        { notify: 'session/update', params: update('tool_call', { toolCallId: 'r-asked', title: 'Read b.ts', kind: 'read', status: 'pending', locations: [{ path: '/repo/b.ts' }] }) },
+        ask('read', 'r-asked', { title: 'Read b.ts', locations: [{ path: '/repo/b.ts' }] }),
+        { notify: 'session/update', params: update('tool_call_update', { toolCallId: 'r-asked', status: 'completed' }) },
+        { notify: 'session/update', params: update('tool_call', { toolCallId: 'p-1', title: 'agent', status: 'in_progress' }) },
+        ...ran('c-1', 'Read c.ts', 'read', 'completed', { _meta: { parentToolCallId: 'p-1' } }),
+        { notify: 'session/update', params: update('tool_call_update', { toolCallId: 'p-1', status: 'completed' }) },
+        { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+      ], ROLES_PROFILE);
+      await adapter.start(plannerStart());
+      const events: AgentEvent[] = [];
+      await adapter.send('go', (e) => {
+        events.push(e);
+        // A planner's read is held for its envelope; this one lets it through.
+        if (e.type === 'permission_request' && !e.decided) adapter.answerPermission(e.id, { decision: 'allow' });
+      });
+      expect(events.some((e) => e.type === 'error')).toBe(false);
+      expect(events.some((e) => e.type === 'tool_result' && e.id === 'r-asked')).toBe(true);
+      expect(marked(events)).toEqual(['r-1', 's-1']);
+    });
+
+    it('never marks an Ordewell tool, even one the agent runs again without asking under the name it asked by', async () => {
+      const { adapter } = setup([
+        ...handshake(),
+        { expect: 'session/prompt' },
+        { notify: 'session/update', params: update('tool_call', { toolCallId: 'o-1', title: 'ordewell/list_runners', kind: 'read', status: 'pending' }) },
+        ask('read', 'o-1', { title: 'ordewell/list_runners' }),
+        { notify: 'session/update', params: update('tool_call_update', { toolCallId: 'o-1', status: 'completed' }) },
+        ...ran('o-2', 'ordewell/list_runners', 'read'),
+        { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+      ], ROLES_PROFILE);
+      await adapter.start(plannerStart());
+      const events = await turn(adapter, 'go');
+      expect(events.filter((e) => e.type === 'tool_result').map((e) => (e.type === 'tool_result' ? e.id : ''))).toEqual(['o-1', 'o-2']);
+      expect(marked(events)).toEqual([]);
+    });
+
+    it('marks no read of a task, whose reads no limit holds', async () => {
+      const { adapter } = setup([
+        ...handshake(),
+        { expect: 'session/prompt' },
+        ...ran('r-1', 'Read a.ts', 'read'),
+        { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+      ], ROLES_PROFILE);
+      await adapter.start(readOnlyStart());
+      const events = await turn(adapter, 'go');
+      expect(events.some((e) => e.type === 'tool_result' && e.id === 'r-1')).toBe(true);
+      expect(marked(events)).toEqual([]);
+    });
+  });
+
   // Qwen Code 0.27.1 names the call that started a subagent in each of its updates' `_meta.parentToolCallId`.
   const spawn = (status: string) => update('tool_call_update', { toolCallId: 'p-1', title: 'agent', status });
   const fromSubagent = (fields: Record<string, unknown>) => update('tool_call', { title: 'Read a.ts', status: 'in_progress', ...fields, _meta: { parentToolCallId: 'p-1' } });

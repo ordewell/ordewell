@@ -122,6 +122,20 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
    * only the full name tells Ordewell's tool from another server's.
    */
   private reports = new Map<string, AcpToolCall>();
+  /** Each call's kind as last reported this turn: an update may name it after the call was first seen. */
+  private callKinds = new Map<string, string>();
+  /**
+   * This turn's calls the agent asked about, and those of them that were
+   * Ordewell's tools. A read that asked was counted at its request (ADR-0068).
+   */
+  private askedCalls = new Set<string>();
+  private ordewellCalls = new Set<string>();
+  /**
+   * The names this agent reports Ordewell's tools under, learnt from calls it
+   * asked about: one it runs again without asking, under an `allow_always`,
+   * is still Ordewell's and never counted as a read (ADR-0068, R4).
+   */
+  private readonly ordewellNames = new Set<string>();
   /** Whether this turn's `session/cancel` went out, which makes whatever ends the turn an interrupt. */
   private cancelSent = false;
   /** Settles when the agent answers this turn's prompt: true with an answer, false when the process went first. */
@@ -622,6 +636,9 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     const started = this.requireStarted();
     this.turn = newTurn({ source: this.agentId, ...(started.model ? { model: started.model } : {}) });
     this.reports = new Map();
+    this.callKinds = new Map();
+    this.askedCalls = new Set();
+    this.ordewellCalls = new Set();
     this.cancelSent = false;
     this.noteModelCommand(message);
     this.turnAnswered = new Promise<boolean>((resolve) => { this.answerTurn = resolve; });
@@ -698,12 +715,30 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     }
     if (this.turn) {
       if (update.sessionUpdate === 'tool_call' && !this.reports.has(update.toolCallId)) this.reports.set(update.toolCallId, update);
+      if ((update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') && update.kind) this.callKinds.set(update.toolCallId, update.kind);
       const step = reduceUpdate(this.turn, update);
       this.turn = step.turn;
-      for (const event of step.events) this.announce(event);
+      for (const event of step.events) this.announce(this.markUnaskedRead(event));
       return;
     }
     console.debug(`[acp] ${this.agentId}: dropped an update (${update.sessionUpdate === 'unknown' ? update.kind ?? 'nameless' : update.sessionUpdate}) outside a turn`);
+  }
+
+  /**
+   * A planner's read or search the agent ran without asking, which its own
+   * policy let through: in the directory it was started in, or under an
+   * `allow_always` it offered in place of `allow_once`. Nothing was asked, so
+   * nothing could refuse it, and the read limit counts it from its result
+   * (ADR-0068). A subagent's call, an Ordewell tool and a failed read are not
+   * the planner's own reads.
+   */
+  private markUnaskedRead(event: AgentEvent): AgentEvent {
+    if (event.type !== 'tool_result') return event;
+    if (this.ordewellCalls.has(event.id)) this.ordewellNames.add(event.name);
+    if (this.started?.kind !== 'planner' || !event.success || event.subagentId !== undefined || this.askedCalls.has(event.id)) return event;
+    const kind = this.callKinds.get(event.id);
+    if ((kind !== 'read' && kind !== 'search') || this.ordewellNames.has(event.name)) return event;
+    return { ...event, unaskedRead: true };
   }
 
   /**
@@ -810,6 +845,9 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     if (this.cancelSent && this.turn) return Promise.resolve({ outcome: CANCELLED });
     const id = String(rpcId);
     const report = this.reports.get(toolCall.toolCallId);
+    const ordewell = this.binding.isOrdewellAsk(report ? { request: toolCall, report } : { request: toolCall });
+    this.askedCalls.add(toolCall.toolCallId);
+    if (ordewell) this.ordewellCalls.add(toolCall.toolCallId);
     // The request says what is asked; the turn's report fills in what it leaves out.
     const call: AcpToolCall = {
       ...toolCall,
@@ -832,7 +870,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
         toolUseId: toolCall.toolCallId,
         ...(this.restricted ? { ask: acpAsk(call, { profile: this.profile, cwd: this.sessionCwd(this.requireStarted()) }) } : {}),
         // By exact name only: a near miss is anyone's tool (ADR-0022, S3; ADR-0060, R7).
-        ordewell: this.binding.isOrdewellAsk(report ? { request: toolCall, report } : { request: toolCall }),
+        ordewell,
       }, { id, options }, (event) => this.announce(event));
     });
   }

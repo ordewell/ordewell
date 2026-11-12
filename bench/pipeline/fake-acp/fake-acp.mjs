@@ -16,6 +16,11 @@
  *   write         files to create under the cwd, name -> contents
  *   edit          files to ask permission for, then create if allowed; each
  *                 one is a `session/request_permission` of kind `edit`
+ *   read          files the agent reads with its own tool before its calls, each
+ *                 a path or `{ "path": ..., "ask": false }`, resolved from its
+ *                 cwd: an asked one is a `session/request_permission` of kind
+ *                 `read` and is read only if allowed; an unasked one is read at
+ *                 once and only reported, as an agent's allowed read is
  *   calls         Ordewell tool calls made before the writes, each `[tool, arguments]`
  *   role          `planner` for a planner turn: no task_complete is added, so a
  *                 `calls` list of planner tools stands alone
@@ -229,6 +234,60 @@ async function runCalls(session, calls, signal) {
   return { completed, attempted };
 }
 
+/** ACP nests the answer (`{ outcome: { outcome, optionId } }`); a flat `{ outcome, optionId }` is taken too. */
+function outcomeOf(answer) {
+  return typeof answer?.outcome === 'object' && answer.outcome !== null ? answer.outcome : answer;
+}
+
+function allowedBy(answer) {
+  const outcome = outcomeOf(answer);
+  return outcome?.outcome === 'selected' && (outcome.optionId === 'allow_once' || outcome.optionId === 'allow_always');
+}
+
+async function applyReads(session, reads, signal) {
+  for (const entry of reads) {
+    if (signal.aborted) return;
+    const { path: name, ask: asks = true } = typeof entry === 'string' ? { path: entry } : entry ?? {};
+    if (typeof name !== 'string') continue;
+    const target = path.resolve(session.cwd, name);
+    const toolCall = {
+      toolCallId: `read_${randomUUID()}`,
+      title: `Read ${name}`,
+      kind: 'read',
+      status: 'pending',
+      locations: [{ path: target }],
+      rawInput: { path: target },
+    };
+    beginTool(session, toolCall);
+    if (asks) {
+      const answer = await ask('session/request_permission', {
+        sessionId: session.id,
+        toolCall,
+        options: [
+          { optionId: 'allow_once', name: 'Allow once', kind: 'allow_once' },
+          { optionId: 'reject_once', name: 'Reject', kind: 'reject_once' },
+        ],
+      });
+      if (signal.aborted || outcomeOf(answer)?.outcome === 'cancelled') return;
+      if (!allowedBy(answer)) {
+        finishTool(session, toolCall.toolCallId, 'failed', 'The read was not allowed.');
+        logged(session, { read: name, asked: true, allowed: false });
+        continue;
+      }
+    }
+    let text;
+    try {
+      text = fs.readFileSync(target, 'utf8');
+    } catch (error) {
+      finishTool(session, toolCall.toolCallId, 'failed', error instanceof Error ? error.message : String(error));
+      logged(session, { read: name, asked: asks, allowed: true, missing: true });
+      continue;
+    }
+    finishTool(session, toolCall.toolCallId, 'completed', text);
+    logged(session, { read: name, asked: asks, allowed: true });
+  }
+}
+
 async function applyEdits(session, edits, signal) {
   for (const [name, contents] of Object.entries(edits)) {
     if (signal.aborted) return false;
@@ -250,10 +309,8 @@ async function applyEdits(session, edits, signal) {
         { optionId: 'reject_once', name: 'Reject', kind: 'reject_once' },
       ],
     });
-    if (signal.aborted || answer?.outcome === 'cancelled') return false;
-    const allowed = answer?.outcome === 'selected'
-      && (answer.optionId === 'allow_once' || answer.optionId === 'allow_always');
-    if (!allowed) {
+    if (signal.aborted || outcomeOf(answer)?.outcome === 'cancelled') return false;
+    if (!allowedBy(answer)) {
       finishTool(session, toolCall.toolCallId, 'failed', 'The edit was not allowed.');
       logged(session, { edit: name, allowed: false });
       return false;
@@ -299,6 +356,8 @@ async function runTurn(session, text, signal) {
   const planner = session.planner === true;
   let completed = false;
   let attempted = false;
+  if (Array.isArray(cue.read)) await applyReads(session, cue.read, signal);
+  if (signal.aborted) return { stopReason: 'cancelled', exitAfterTurn: false };
   if (Array.isArray(cue.calls)) {
     const result = await runCalls(session, cue.calls, signal);
     completed = result.completed;
