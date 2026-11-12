@@ -117,7 +117,8 @@ function plannerSession(provider: FakeProvider, fs: IFileSystem, opts: { auto?: 
       maxOutputTokensFor: (source) => (source === 'openrouter' ? catalog.maxOutput : undefined),
       warmPickerOptions: vi.fn(),
     },
-    settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' }, plannerAutoCompaction: opts.auto?.() ?? true }),
+    // Turns that read past the planner read limit's default on purpose, to fill the window; the limit has its own tests.
+    settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' }, plannerAutoCompaction: opts.auto?.() ?? true, plannerReadLimit: false }),
   });
   session.loadPlan({ ...createEmptyPlan(), conversationHistory: [{ role: 'user', content: GOAL, timestamp: '2026-10-25T09:00:00Z' }] }, GOAL, testWorkspace, { persist: false });
   const compactions = () => events.flatMap((m) => (m.type === 'planner_compaction' ? [{ ...m.compaction, turnId: m.turnId }] : [])) as Array<PlannerCompaction & { turnId?: string }>;
