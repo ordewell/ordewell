@@ -5,9 +5,9 @@ import net from 'node:net';
 import path from 'node:path';
 
 /** Run a command to completion; output is kept for the error message, never printed. */
-export function run(command, args, { cwd, env = process.env, timeoutMs = 30 * 60_000, input } = {}) {
+export function run(command, args, { cwd, env = process.env, timeoutMs = 30 * 60_000, input, shell = false } = {}) {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { cwd, env, stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], shell: false });
+    const child = spawn(command, args, { cwd, env, stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], shell });
     let out = '';
     const keep = (d) => { out = (out + d).slice(-40_000); };
     child.stdout.on('data', keep);
