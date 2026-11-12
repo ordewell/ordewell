@@ -12,8 +12,16 @@ import {
   autoApproves, delay, interruptAcknowledged, openCodePermissions, openCodePlannerAsk, plannerSystem, openEventStream, permissionReply, raiseOnce, settleTurn, splitModelId, streamTurn,
   SESSION_TITLE, turnLatch, usageRecord, type EventStream, type OpenCodeTokens, type StreamTurn, type TurnLatch,
 } from './openCodeTransport';
+import { settleWithin } from './settleWithin';
 /** A turn's end is also read from `/api/session/active`, behind the stream, which can drop a frame. */
 const ACTIVE_POLL_INTERVAL_MS = 1000;
+/**
+ * How long an aborted turn's step may take to be interrupted before the
+ * server is disposed of (ADR-0018 L1). A live serve fails the step and
+ * acknowledges well within it, and an abort is often a user's stop, which must
+ * stay prompt; a serve that has not answered by then is killed, as before.
+ */
+export const OPENCODE_ABORT_GRACE_MS = 1000;
 /** Polls that find the session inactive before any frame of this turn arrived, after which it is taken as already over. */
 const IDLE_POLLS_BEFORE_START = 3;
 
@@ -247,6 +255,9 @@ export class OpenCodeV2 {
   private agent: string;
   private turn: Turn | null = null;
   private interruptRequested = false;
+  /** Whether the session's own step is streaming: begun, and neither ended nor failed. */
+  private stepOpen = false;
+  private stepWaiters: (() => void)[] = [];
   /** Whether a planner's own `websearch` is on for its session (ADR-0027). */
   private ownSearch = true;
   /** Approved project servers whose tools are listed as tools of their own. */
@@ -461,8 +472,8 @@ export class OpenCodeV2 {
       }
 
       void this.pollActive(turn, poll.signal);
-      // An aborted turn is left to the owning adapter, which disposes of the server.
-      await settleTurn(turn, {
+      // An aborted turn is interrupted, then left to the owning adapter, which disposes of the server.
+      const settled = await settleTurn(turn, {
         signal,
         processEnded: this.host.processEnded,
         streamFailed: stream.failed,
@@ -476,11 +487,43 @@ export class OpenCodeV2 {
           return { type: 'turn_end' };
         },
       }, onEvent);
+      if (!settled) await this.interruptAborted(turn);
     } finally {
       this.turn = null;
+      this.stepDone();
       poll.abort();
       await stream.close();
     }
+  }
+
+  /**
+   * A step cut off mid-stream is billed and recorded as nothing, so an aborted
+   * turn's step is failed through OpenCode, which still streams its end,
+   * rather than lost with the server (ADR-0018 L1). Bounded: the process
+   * ending, or the grace running out, gives up on it.
+   */
+  private async interruptAborted(turn: Turn): Promise<void> {
+    if (turn.done || this.host.isExited()) return;
+    await settleWithin(this.interrupt(OPENCODE_ABORT_GRACE_MS), {
+      timeoutMs: OPENCODE_ABORT_GRACE_MS, onTimeout: () => false, ended: this.host.processEnded, onEnded: () => false,
+    });
+  }
+
+  /**
+   * Resolves true once the session's step in flight has ended or failed, at
+   * once when none is, and false when the timeout or the process's end comes
+   * first. What a wind-down waits on before interrupting a step that would
+   * otherwise be billed for nothing (ADR-0018 L1).
+   */
+  stepEnded(timeoutMs: number): Promise<boolean> {
+    if (!this.stepOpen) return Promise.resolve(true);
+    const ended = new Promise<boolean>((resolve) => this.stepWaiters.push(() => resolve(true)));
+    return settleWithin(ended, { timeoutMs, onTimeout: () => false, ended: this.host.processEnded, onEnded: () => false });
+  }
+
+  private stepDone(): void {
+    this.stepOpen = false;
+    for (const waiter of this.stepWaiters.splice(0)) waiter();
   }
 
   /**
@@ -614,6 +657,8 @@ export class OpenCodeV2 {
         if (record) onEvent({ type: 'usage', record });
         return;
       }
+      if (frame.type === 'session.step.started') this.stepOpen = true;
+      if (frame.type === 'session.step.ended' || frame.type === 'session.step.failed') this.stepDone();
       if (frame.type === 'session.execution.started') { turn.live = true; return; }
       if (frame.type === 'session.execution.succeeded' || frame.type === 'session.execution.failed' || frame.type === 'session.execution.interrupted') {
         if (!turn.live || turn.done) return;

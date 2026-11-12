@@ -825,6 +825,11 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
     }
   }
 
+  /** Only 2.x streams a step's start and end; 1.x has none to wait on. */
+  stepEnded(timeoutMs: number): Promise<boolean> {
+    return this.v2 && !this.exited ? this.v2.stepEnded(timeoutMs) : Promise.resolve(true);
+  }
+
   /**
    * Abort the running turn, keeping the server and its session. OpenCode
    * acknowledges by going idle, which is also what ends the turn — as

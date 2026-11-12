@@ -231,6 +231,8 @@ interface OpenTurn {
   steerRefused: boolean;
   /** The attach check this turn is, waiting for its end (ADR-0060, R5). */
   onEnd?: () => void;
+  /** The runner called `task_complete` in this turn, and no message it read since voided it. */
+  reported?: boolean;
 }
 
 /**
@@ -312,6 +314,8 @@ export class StructuredSession extends AbstractRunnerSession {
   private interrupting: Promise<void> | null = null;
   /** The wind-down once {@link stop} was asked for: the same for every caller, and nothing new is sent meanwhile. */
   private stopping: Promise<void> | null = null;
+  /** The wind-down is waiting for a reported turn's step to end by itself, which a second stop does not wait for. */
+  private lettingStepEnd = false;
   /** The process is handling its exit: nothing new may be queued, so a held report can still publish. */
   private exiting = false;
   private lastSessionId: string | null = null;
@@ -411,6 +415,7 @@ export class StructuredSession extends AbstractRunnerSession {
           // Checked as the runner sent it, kept with what Ordewell holds hidden:
           // a report that quotes the attempt's own token hands it to the planner.
           this.completionReport = this.secrets.hideIn(checked.handoff);
+          if (this.turn) this.turn.reported = true;
           // The runner ends its turn on this reply. One that keeps it open has
           // its report published at the same grace; the verdict then stops it.
           if (this.completionTimer) clearTimeout(this.completionTimer);
@@ -541,7 +546,10 @@ export class StructuredSession extends AbstractRunnerSession {
   }
 
   stop(): Promise<void> {
-    if (this.stopping) return this.stopping;
+    if (this.stopping) {
+      if (this.lettingStepEnd) this.kill();
+      return this.stopping;
+    }
     if (this.exited) return Promise.resolve();
     // Set before the wind-down starts: what it says synchronously — undelivered
     // messages, an exit — reaches listeners that may send, or stop, again.
@@ -555,25 +563,47 @@ export class StructuredSession extends AbstractRunnerSession {
   /**
    * The attempt is over (ADR-0018, L1), so what is still owed goes undelivered
    * and every tool request unanswered at once. A turn still open is
-   * interrupted, and its close — where Claude Code reports the turn's cost and
-   * its model's window — is waited for; then the runner is told nothing more
-   * is coming and left to exit by itself. All of it within the interrupt
-   * grace: a runner still there once it runs out is killed.
+   * interrupted, once a reported turn's step has had its grace to end, and
+   * its close — where Claude Code reports the turn's cost and its model's
+   * window — is waited for; then the runner is told nothing more is coming
+   * and left to exit by itself. All of it within the interrupt grace, which
+   * starts once the step's own grace is over: a runner still there once it
+   * runs out is killed.
    */
   private async windDown(): Promise<void> {
     const adapter = this.adapterAttached ? this.adapter : null;
-    const deadline = Date.now() + this.launch.interruptGraceMs;
     this.revokeTools();
     this.undeliverQueued();
     this.withdrawPermissions();
+    // Awaited only when there is a step to let end: a runner between turns has its input ended at once.
+    if (adapter?.stepEnded && this.turn?.reported && !this.turn.ended) await this.letStepEnd(adapter.stepEnded.bind(adapter));
+    const deadline = Date.now() + this.launch.interruptGraceMs;
     const open = this.turn && !this.turn.ended ? this.turn : null;
-    if (adapter && (!open || await this.turnClosed(open, adapter, deadline)) && adapter.endInput && !this.exited) {
+    if (adapter && !this.exited && (!open || await this.turnClosed(open, adapter, deadline)) && adapter.endInput && !this.exited) {
       adapter.endInput();
       await this.within(this.gone(), deadline);
     }
     // Gone by itself, its process group may still hold what it started.
     if (this.exited) adapter?.dispose();
     else this.kill();
+  }
+
+  /**
+   * A turn that already reported has a step still streaming only to wrap up,
+   * and a provider bills that request whether it ends or is cut off, so it
+   * is let end by itself within the grace before the turn is interrupted
+   * (ADR-0018 L1). The verdict does not wait on this: it was published with
+   * the report. A turn that never reported is interrupted at once, and a
+   * second stop kills meanwhile.
+   */
+  private async letStepEnd(stepEnded: (timeoutMs: number) => Promise<boolean>): Promise<void> {
+    const grace = this.launch.interruptGraceMs;
+    this.lettingStepEnd = true;
+    try {
+      await this.within(stepEnded(grace).then(() => undefined, () => undefined), Date.now() + grace);
+    } finally {
+      this.lettingStepEnd = false;
+    }
   }
 
   /** Whether `turn` closed within the deadline once interrupted. */
@@ -1064,6 +1094,7 @@ export class StructuredSession extends AbstractRunnerSession {
       this.completionTimer = null;
     }
     this.completionReport = null;
+    if (this.turn) this.turn.reported = false;
   }
 
   /**
