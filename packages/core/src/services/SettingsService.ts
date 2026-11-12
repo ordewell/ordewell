@@ -7,6 +7,7 @@ import { DEFAULT_AUTONOMOUS_MODE, RUN_SETTINGS_DEFAULTS, SHAPE_LIMITS, type Glob
 import { parseAutonomyFlag } from './ModeResolver';
 import { containersOffered, rememberDelegationBudget } from './runSettingsText';
 import type { TaskRunnerConfig } from './harness/AgentAdapter';
+import { readLimitSetting } from './plannerReadLimit';
 
 export { RUN_SETTINGS_DEFAULTS, type GlobalRunSettings };
 
@@ -94,6 +95,13 @@ export interface UserSettings {
    * no surface offers it.
    */
   plannerAutoCompaction?: boolean;
+  /**
+   * The limit on the planner's own reads in one turn (ADR-0068): `true` for
+   * the defaults, `false` for none, or either number. Absent means on
+   * with the defaults, unless `ORDEWELL_PLANNER_READ_LIMIT` says otherwise.
+   * Set in the file only: no surface offers it.
+   */
+  plannerReadLimit?: boolean | { calls?: number; kb?: number };
   /**
    * What a task runner loads of the user's own setup: all of it (`user`) or
    * what a task needs (`minimal`). Absent means `user`. Set in the file only:
@@ -470,6 +478,8 @@ export class SettingsService {
     if (typeof raw.plannerAutoCompaction === 'boolean') {
       settings.plannerAutoCompaction = raw.plannerAutoCompaction;
     }
+    const readLimit = readLimitSetting(raw.plannerReadLimit);
+    if (readLimit !== undefined) settings.plannerReadLimit = readLimit;
     if (raw.taskRunnerConfig === 'user' || raw.taskRunnerConfig === 'minimal') {
       settings.taskRunnerConfig = raw.taskRunnerConfig;
     }

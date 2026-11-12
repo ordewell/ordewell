@@ -218,6 +218,20 @@ describe('the research serve and its agent', () => {
     expect(reply.text).toMatch(/Left unread:[\s\S]*src\/left-over\.ts/);
   });
 
+  it('returns the partial digest, not a failure, when OpenCode records its own budget interrupt as a failed step ("Step interrupted")', async () => {
+    fresh();
+    const steps = [
+      ...Array.from({ length: 10 }, () => ({ calls: [{ name: 'ordewell_list_dir', args: { path: '.' } }] })),
+      { calls: [{ name: 'ordewell_read_file', args: { path: 'src/left-over.ts' } }] },
+      { calls: [{ name: 'ordewell_list_dir', args: { path: '.' } }] },
+    ];
+    const reply = await agent({ maxSteps: 10 })({ prompt: cue({ steps, text: 'never' }) }, { signal: new AbortController().signal });
+    expect(reply.text).not.toContain('Step interrupted');
+    expect(reply.isError).toBeFalsy();
+    expect(reply.text).toMatch(/^\[PARTIAL/);
+    expect(events.at(-1)).toMatchObject({ type: 'subagent_finished', outcome: 'done' });
+  });
+
   it('refuses a call while no turn is open', async () => {
     turnOpen = false;
     expect(await agent()({ prompt: 'x' }, { signal: new AbortController().signal })).toEqual({ text: NO_TURN_OPEN, isError: true });

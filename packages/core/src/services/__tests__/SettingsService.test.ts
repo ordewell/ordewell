@@ -265,6 +265,26 @@ describe('SettingsService', () => {
     expect(sessionRuntimeSettings(service.getAll()).plannerAutoCompaction).toBeUndefined();
   });
 
+  // Config-file control only, like plannerAutoCompaction (ADR-0068).
+  it('reads plannerReadLimit false from the file as off', () => {
+    fs.writeFileSync(tempFile, JSON.stringify({ plannerReadLimit: false }));
+    expect(service.getAll().plannerReadLimit).toBe(false);
+  });
+
+  it('reads plannerReadLimit from the file, keeps it through other writes, and drops a value it cannot read', () => {
+    fs.writeFileSync(tempFile, JSON.stringify({ plannerReadLimit: { calls: 4, kb: 'many' } }));
+    expect(service.getAll().plannerReadLimit).toEqual({ calls: 4 });
+    expect(sessionRuntimeSettings(service.getAll()).plannerReadLimit).toEqual({ calls: 4 });
+
+    fs.writeFileSync(tempFile, JSON.stringify({ plannerReadLimit: true }));
+    service.setEnabledRunners(['codex']);
+    expect(JSON.parse(fs.readFileSync(tempFile, 'utf-8'))).toEqual({ plannerReadLimit: true, enabledRunners: ['codex'] });
+
+    fs.writeFileSync(tempFile, JSON.stringify({ plannerReadLimit: 'yes' }));
+    expect(service.getAll()).toEqual({});
+    expect(sessionRuntimeSettings(service.getAll()).plannerReadLimit).toBeUndefined();
+  });
+
   describe('the containers setting (ADR-0059 L5)', () => {
     afterEach(() => vi.unstubAllEnvs());
 

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { classifyOutcome, summarizeToolCall } from '../researchStepSummary';
+import { PlannerReadLimit } from '../plannerReadLimit';
 import { mapAgentTool, normalizeAgentArgs } from '../harness/agentTools';
 
 describe('summarizeToolCall', () => {
@@ -81,5 +82,14 @@ describe('classifyOutcome for web reads', () => {
     expect(classifyOutcome(false, 'Fetch not approved: https://docs.example.com/*. Continue without it.')).toBe('denied');
     expect(classifyOutcome(false, 'Web search not approved. Continue without it.')).toBe('denied');
     expect(classifyOutcome(false, 'Fetch failed: HTTP 404')).toBe('failure');
+  });
+});
+
+describe('classifyOutcome for the planner read limit', () => {
+  it('shows a read the limit stopped as refused', () => {
+    const reads = new PlannerReadLimit({ limit: () => ({ calls: 0, bytes: 1 }), turn: () => 't' });
+    const refused = reads.admit();
+    expect(refused.allowed).toBe(false);
+    if (!refused.allowed) expect(classifyOutcome(false, refused.reason)).toBe('refused');
   });
 });

@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Task, DiscoveredModel, ResearchStep, ResearchLogEntry, ResearchProgress, RunnerId } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
 import { IFileSystem, type ToolOutcome } from '../interfaces/IFileSystem';
+import type { PlannerReadLimit } from './plannerReadLimit';
 import { IWebFetcher } from '../interfaces/IWebFetcher';
 import { buildPlanWithResults } from './PlanPrompts';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
@@ -30,6 +31,9 @@ import { withTurnBudgets, type TurnBudgets } from './PlannerBudgets';
  * because we cannot reason about it.
  */
 const PARALLEL_SAFE_TOOLS = new Set(['read_file', 'read_files', 'glob', 'grep', 'find_symbol', 'list_dir']);
+
+/** The planner's own workspace reads and commands, charged to its read limit (ADR-0068). */
+const OWN_READ_TOOLS = new Set([...PARALLEL_SAFE_TOOLS, 'bash']);
 
 /** Concurrency for the read-only pre-pass. Bounded so a wide round cannot exhaust file handles. */
 const TOOL_ROUND_CONCURRENCY = 8;
@@ -133,6 +137,8 @@ export interface ConversationTurnContext {
   fetcher?: IWebFetcher;
   /** The session's planner tools; the conversation offers their task reads and execution tools (ADR-0029) when set. */
   plannerTools?: PlannerToolHandler;
+  /** The planner's own reads this turn (ADR-0068); `run_command` is charged where the session runs it. */
+  readLimit?: PlannerReadLimit;
 }
 
 export abstract class BaseAiService {
@@ -298,6 +304,7 @@ export abstract class BaseAiService {
     thinking: string,
     signal?: AbortSignal,
     plannerTools?: PlannerToolHandler,
+    readLimit?: PlannerReadLimit,
   ): Promise<{ toolResults: ToolResult[]; logEntries: ResearchStep[]; resultsText: string }> {
     const toolResults: ToolResult[] = [];
     const logEntries: ResearchStep[] = [];
@@ -326,6 +333,24 @@ export abstract class BaseAiService {
       return args;
     });
 
+    // Admitted in call order before any runs, so which of a wide round's reads
+    // the limit stops does not depend on which finished first (ADR-0068).
+    const overLimit = new Map<number, string>();
+    if (readLimit) {
+      for (const [i, tc] of toolCalls.entries()) {
+        if (!OWN_READ_TOOLS.has(tc.name)) continue;
+        const admission = readLimit.admit();
+        if (!admission.allowed) overLimit.set(i, admission.reason);
+      }
+    }
+    const ownRead = async (i: number, run: () => Promise<ToolOutcome>): Promise<ToolOutcome> => {
+      const refused = overLimit.get(i);
+      if (refused !== undefined) return { success: false, output: refused, truncated: false };
+      const outcome = await run();
+      if (readLimit && OWN_READ_TOOLS.has(toolCalls[i].name)) readLimit.charge(Buffer.byteLength(outcome.output));
+      return outcome;
+    };
+
     const spawnIndexes = toolCalls.flatMap((tc, i) => (tc.name === SPAWN_RESEARCH_AGENT ? [i] : []));
     const parallelIndexes = toolCalls.flatMap((tc, i) => (PARALLEL_SAFE_TOOLS.has(tc.name) ? [i] : []));
 
@@ -343,7 +368,7 @@ export abstract class BaseAiService {
         ? mapWithConcurrency(parallelIndexes, TOOL_ROUND_CONCURRENCY, async (i) => {
           announcedAt.set(i, new Date().toISOString());
           onProgress({ type: 'tool_call', tool: toolCalls[i].name, toolArgs: JSON.stringify(toolCalls[i].args), toolCallId: toolCalls[i].id });
-          precomputed.set(i, await executeTool(toolCalls[i].name, normalizedArgs[i], fs, fetcher, signal));
+          precomputed.set(i, await ownRead(i, () => executeTool(toolCalls[i].name, normalizedArgs[i], fs, fetcher, signal)));
         })
         : Promise.resolve(),
     ]);
@@ -365,7 +390,7 @@ export abstract class BaseAiService {
       // running them, the same way the budget-exhaustion path above does.
       const toolResult = preResult
         ?? await callPlannerTool(plannerTools, tc.name, toolArgs, signal)
-        ?? await executeTool(tc.name, toolArgs, fs, fetcher, signal);
+        ?? await ownRead(index, () => executeTool(tc.name, toolArgs, fs, fetcher, signal));
 
       const MAX_RESPONSE_CHARS = 50000;
       const truncatedResponse = toolResult.success && (toolResult.truncated || toolResult.output.length > MAX_RESPONSE_CHARS);
@@ -562,7 +587,7 @@ export abstract class BaseAiService {
     signal?: AbortSignal,
   ): Promise<{ toolResults: ToolResult[]; logEntries: ResearchStep[] }> {
     const answers = calls.map((tc) => chat.answered?.(tc));
-    if (answers.every((a) => a === undefined)) return this.executeToolCalls(calls, ctx.fs, onProgress, ctx.fetcher, stepIndex, thinking, signal, ctx.plannerTools);
+    if (answers.every((a) => a === undefined)) return this.executeToolCalls(calls, ctx.fs, onProgress, ctx.fetcher, stepIndex, thinking, signal, ctx.plannerTools, ctx.readLimit);
     const answered = new Map<number, { result: ToolResult; step: ResearchStep }>();
     for (const [i, tc] of calls.entries()) {
       const output = answers[i];
@@ -585,7 +610,7 @@ export abstract class BaseAiService {
     }
     const fresh = calls.filter((_, i) => !answered.has(i));
     const ran = fresh.length > 0
-      ? await this.executeToolCalls(fresh, ctx.fs, onProgress, ctx.fetcher, stepIndex, thinking, signal, ctx.plannerTools)
+      ? await this.executeToolCalls(fresh, ctx.fs, onProgress, ctx.fetcher, stepIndex, thinking, signal, ctx.plannerTools, ctx.readLimit)
       : { toolResults: [], logEntries: [] };
     let next = 0;
     const merged = calls.map((_, i) => answered.get(i) ?? { result: ran.toolResults[next], step: ran.logEntries[next++] });

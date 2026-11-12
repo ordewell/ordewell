@@ -18,6 +18,7 @@ import type { SkillInfo } from './SkillsService';
 import type { TaskRunnerConfig, UsageLimitSignal } from './harness/AgentAdapter';
 import type { PlannerContextDeps } from './plannerContextBudget';
 import type { ConversationCompactionHost } from './budgetedChat';
+import type { PlannerReadLimit } from './plannerReadLimit';
 
 /**
  * The planner tools a session offers its conversation (ADR-0022). A backend
@@ -84,6 +85,8 @@ export interface ConversationRequest {
    */
   initialMessage?: string;
   plannerTools?: PlannerToolsOffer;
+  /** The planner's own reads, refused past the limit in a turn (ADR-0068); off when the limit is. */
+  readLimit?: PlannerReadLimit;
   /** Teaches the planner delegation, only where its mandate holds `delegate` (ADR-0055 D21). */
   delegation?: PlannerDelegation;
   /** The prompt is a subplanner's, whose parent stands where the user does (ADR-0055 D4). */

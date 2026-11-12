@@ -47,7 +47,8 @@ import { augmentedPath, withPath } from '../../utils/shellPath';
 import { BUILTIN_MANIFESTS } from '../../plugins/builtin';
 import { collectResearchContext } from '../ContextCollector';
 import { sensitiveEnvValues } from '../outboundSecrets';
-import type { AgentAdapter, AgentEvent, AgentProcessDeps, PlannerStartOptions, UsageLimitSignal } from './AgentAdapter';
+import type { AgentAdapter, AgentEvent, AgentProcessDeps, PlannerAsk, PlannerStartOptions, UsageLimitSignal } from './AgentAdapter';
+import type { PlannerReadLimit } from '../plannerReadLimit';
 import { connectorFor, createPlannerAdapter } from './connectors';
 import { mapAgentTool, normalizeAgentArgs } from './agentTools';
 import { decidePlannerPermission, type PlannerPermissionGate } from './plannerPermissions';
@@ -151,7 +152,16 @@ interface PlannerSessionStart {
   tools: PlannerToolsOffer;
   /** What the agent's own tool requests are decided against; absent, nobody can be asked, so only Ordewell's tools and the reads the envelope holds anyway are allowed (ADR-0026, ADR-0032). */
   gate?: PlannerPermissionGate;
+  /** The planner's own reads per turn (ADR-0068), charged as its runner asks for them. */
+  readLimit?: PlannerReadLimit;
 }
+
+/**
+ * The asks that are the planner's own reads (ADR-0068). A native read the
+ * runner allows itself never asks, and is not counted: what it reads is the
+ * adapter's to route through here.
+ */
+const OWN_READ_ASKS: ReadonlySet<PlannerAsk['kind']> = new Set(['path', 'native-shell', 'native-read']);
 
 /** Whether a saved session is this planner's to take up: a session opened otherwise would plan under a model or folder the settings have since left. */
 function opensUnder(saved: PlannerNativeSession, runner: string, { cwd, model, effort }: PlannerStartOptions): boolean {
@@ -443,12 +453,14 @@ export class CliAgentAiService implements IAiService {
       effort: this.config.plannerThinkingEffort,
       ...(req.plannerTools.noSubagents ? { noSubagents: true } : {}),
       ...(req.plannerTools.runnerConfig ? { runnerConfig: req.plannerTools.runnerConfig } : {}),
+      // Fixed for the conversation: a runner whose reads ask only by policy takes it at start (ADR-0068).
+      ...(req.readLimit?.enabled ? { readsAsk: true } : {}),
     };
     // Without an approval channel there is no gate, so nothing would decide a search.
     if (req.approval && fetcher?.searchesUnasked) session.searchesUnasked = (provider) => fetcher.searchesUnasked?.(provider) ?? false;
     const tools = req.plannerTools;
     const gate = req.approval ? { approval: req.approval, fetcher: req.fetcher, workspaceRoot: startOptions.cwd } : undefined;
-    const start = { startOptions, tools, gate };
+    const start = { startOptions, tools, gate, readLimit: req.readLimit };
     if (req.resume && opensUnder(req.resume.session, this.runner, startOptions)) {
       const turn = await this.takeUp(session, start, req.resume, req);
       if (turn) return turn;
@@ -686,6 +698,9 @@ export class CliAgentAiService implements IAiService {
     const deniedCalls = new Set<string>();
     // A request the planner's runner still waits on, by the id it gave it: aborting one takes its card off every surface.
     const openAsks = new Map<string, AbortController>();
+    const readLimit = session.start?.readLimit;
+    // Calls the read limit admitted, charged with what their result held.
+    const chargedCalls = new Set<string>();
     const gate: PlannerPermissionGate = {
       workspaceRoot: session.start?.startOptions.cwd ?? this.workspaceRoot(),
       ...session.start?.gate,
@@ -764,6 +779,7 @@ export class CliAgentAiService implements IAiService {
         }
 
         case 'tool_result':
+          if (chargedCalls.delete(event.id)) readLimit?.charge(Buffer.byteLength(event.output));
           settle(event.id, event.output, event.success, event.success ? 'success' : deniedCalls.has(event.id) ? 'denied' : 'failure', event.subagentId);
           return;
 
@@ -829,9 +845,20 @@ export class CliAgentAiService implements IAiService {
             const { id, toolUseId } = event;
             const asked = new AbortController();
             openAsks.set(id, asked);
-            void decidePlannerPermission(event.ask, event.input ?? {}, gate, asked.signal)
+            const ownRead = readLimit && event.ask && OWN_READ_ASKS.has(event.ask.kind)
+              && !(toolUseId && pendingCalls.get(toolUseId)?.subagentId);
+            const admission = ownRead ? readLimit.admit() : undefined;
+            const decided = admission && !admission.allowed
+              ? Promise.resolve<ApprovalDecision>({ decision: 'deny', note: admission.reason })
+              : decidePlannerPermission(event.ask, event.input ?? {}, gate, asked.signal);
+            void decided
               .catch((): ApprovalDecision => ({ decision: 'deny' }))
               .then((decision) => {
+                if (admission?.allowed) {
+                  // Nothing was read, so the call is given back; a read that ran is charged at its result.
+                  if (asked.signal.aborted || decision.decision === 'deny') readLimit?.refund();
+                  else if (toolUseId) chargedCalls.add(toolUseId);
+                }
                 // The runner took the request back, or its turn is over: nothing is left to answer.
                 if (asked.signal.aborted) return;
                 if (openAsks.get(id) === asked) openAsks.delete(id);

@@ -137,7 +137,8 @@ function plannerSession(provider: FakeGemini, fs: IFileSystem, plan?: LegacyPlan
       maxOutputTokensFor: (source) => (source === 'google' ? limits.output : undefined),
       warmPickerOptions: vi.fn(),
     },
-    settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' } }),
+    // Turns that read past the planner read limit's default on purpose, to fill the window; the limit has its own tests.
+    settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' }, plannerReadLimit: false }),
   });
   session.loadPlan(plan ?? { ...createEmptyPlan(), conversationHistory: [{ role: 'user', content: GOAL, timestamp: '2026-10-25T09:00:00Z' }] }, GOAL, testWorkspace, { persist: false });
   return { session, limits, config };

@@ -2,7 +2,7 @@ import { randomBytes } from 'crypto';
 import { partedPromptUsage, type UsageRecord } from '../../models/Usage';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import { LineBuffer, type AgentEvent, type PlannerAsk, type PlannerStartOptions, type TaskStartOptions } from './AgentAdapter';
-import { OPENCODE_ORDEWELL, OPENCODE_SEARCH_PROVIDER } from './openCodeOrdewell';
+import { OPENCODE_ORDEWELL, OPENCODE_READ_TOOLS, OPENCODE_SEARCH_PROVIDER } from './openCodeOrdewell';
 import { PermissionLedger, type LedgerStance, type RaisedRequest } from './permissionLedger';
 import { ReplyRuns } from './replyRuns';
 import { settleWithin } from './settleWithin';
@@ -63,16 +63,21 @@ const OPENCODE_BUILTINS = new Set([
  * are the MCP servers `/mcp` lists. `nativeShell` is on only where the
  * opt-in put the launcher around this server's shell (ADR-0036 N2): then a
  * `bash` or `shell` request is the user's grant being exercised, not an
- * unknown tool.
+ * unknown tool. `readsAsk` is on where the planner read limit made the read
+ * tools ask (ADR-0068): then such a request is a read to count.
  */
 export function openCodePlannerAsk(
   permission: string,
   details: { metadata?: Record<string, unknown>; patterns?: readonly string[] },
   servers: readonly string[],
   nativeShell = false,
+  readsAsk = false,
 ): PlannerAsk {
   const meta = details.metadata ?? {};
   const pattern = details.patterns?.[0];
+  if (readsAsk && OPENCODE_READ_TOOLS.includes(permission)) {
+    return { kind: 'native-read', tool: permission, ...(pattern ? { pattern } : {}) };
+  }
   if (nativeShell && (permission === 'bash' || permission === 'shell')) {
     return { kind: 'native-shell', tool: permission, ...(pattern ? { command: pattern } : {}) };
   }

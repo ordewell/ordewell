@@ -160,6 +160,12 @@ export type PlannerAsk =
   | { kind: 'path'; path: string; directory: boolean }
   /** A command through the harness's own shell, allowed by the user's opt-in and held in Ordewell's sandbox (ADR-0036 N2, N3). */
   | { kind: 'native-shell'; tool: string; command?: string }
+  /**
+   * A read through the harness's own read tool, which asks only while the
+   * planner read limit is on, so it can be counted (ADR-0068). A read outside
+   * the workspace raises its own `path` request as well.
+   */
+  | { kind: 'native-read'; tool: string; pattern?: string }
   /** `note` is why, for a tool the runner knows the planner must not use, in place of the envelope's generic refusal. */
   | { kind: 'other'; note?: string };
 
@@ -202,6 +208,12 @@ export interface PlannerStartOptions extends AgentStartCommon {
    * true, the adapter puts every command in Ordewell's sealed profile (N2).
    */
   nativeShell?: boolean;
+  /**
+   * Whether the runner's own read tools must ask before they run, for a
+   * runner whose policy lets them run unasked and is fixed when its session
+   * starts: the planner read limit was on then (ADR-0068). Absent means off.
+   */
+  readsAsk?: boolean;
   /**
    * The repository's own MCP servers this planner may start, as approved
    * (ADR-0028). The runner is launched without the repository's config, so

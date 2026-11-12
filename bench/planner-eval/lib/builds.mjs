@@ -1,6 +1,7 @@
 /**
  * One build of Ordewell per commit, each in its own git worktree under the
- * gitignored `.builds/`, installed and built core first, then web, then cli (each compiles
+ * bench data directory's `planner-eval/builds` (outside the repository,
+ * bench/lib/data-dir.mjs), installed and built core first, then web, then cli (each compiles
  * against the one before's `dist/`). A build that finished leaves a marker and is reused
  * by every later run of the same commit.
  */
@@ -9,6 +10,13 @@ import path from 'node:path';
 import { must } from './proc.mjs';
 
 const MARKER = '.planner-eval-built';
+
+// On Windows npm is npm.cmd, which Node starts only through a shell; under `npm run`
+// npm names its own CLI in npm_execpath, which node starts anywhere (as scripts/npm.mjs).
+const npmCli = /npm-cli\.[cm]?js$/.test(process.env.npm_execpath ?? '') ? process.env.npm_execpath : undefined;
+const npm = (args, opts) => (npmCli
+  ? must(process.execPath, [npmCli, ...args], opts)
+  : must('npm', args, { ...opts, shell: process.platform === 'win32' }));
 
 export async function resolveRef(repo, ref) {
   return (await must('git', ['rev-parse', '--verify', `${ref}^{commit}`], { cwd: repo })).trim();
@@ -37,10 +45,10 @@ export async function ensureBuild({ repo, buildsDir, sha, say = () => {} }) {
   // No install scripts: the build needs none, and Electron's would download a binary no run uses.
   const env = { ...process.env, ELECTRON_SKIP_BINARY_DOWNLOAD: '1', NODE_OPTIONS: '' };
   say(`installing ${sha.slice(0, 12)}`);
-  await must('npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: dir, env });
+  await npm(['ci', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: dir, env });
   for (const pkg of ['core', 'web', 'cli']) {
     say(`building ${pkg} at ${sha.slice(0, 12)}`);
-    await must('npm', ['run', 'build', '-w', `packages/${pkg}`], { cwd: dir, env });
+    await npm(['run', 'build', '-w', `packages/${pkg}`], { cwd: dir, env });
   }
   fs.writeFileSync(path.join(dir, MARKER), `${sha}\n`);
   return { dir, sha, main: cliMain(dir), reused: false };
