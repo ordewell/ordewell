@@ -971,6 +971,31 @@ describe('CodexAdapter planner boundary (ADR-0008/0009)', () => {
     adapter.dispose();
   });
 
+  // Codex asks Ordewell about none of its own reads, so under the read limit
+  // its planner reads only through run_command, which the limit counts (ADR-0068).
+  it.each(['linux', 'darwin', 'win32'])('offers a planner under the read limit no read of its own on %s', async (platform) => {
+    const mcp = mcpClientConfig({ url: 'http://127.0.0.1:4555/mcp', token: 'tok-secret' });
+    const { spawned, processDeps } = deps(plannerHandshake());
+    const adapter = new CodexAdapter({ ...processDeps, platform: platform as NodeJS.Platform });
+    await adapter.start({ kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN', mcp, readsAsk: true });
+
+    const thread = written(spawned.processes[0].written).find((msg) => msg.method === 'thread/start');
+    expect((thread?.params?.config as { features?: unknown } | undefined)?.features).toEqual({ shell_tool: false, unified_exec: false, view_image: false });
+    expect(thread?.params?.developerInstructions).toContain('run every command, reads included, with');
+    adapter.dispose();
+  });
+
+  it('keeps Codex\'s own shell under the read limit for a planner offered no run_command, its one way to read', async () => {
+    const mcp = mcpClientConfig({ url: 'http://127.0.0.1:4555/mcp', token: 'tok-secret', hidden: ['run_command'] });
+    const { spawned, processDeps } = deps(plannerHandshake());
+    const adapter = new CodexAdapter({ ...processDeps, platform: 'linux' });
+    await adapter.start({ kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN', mcp, readsAsk: true });
+
+    const thread = written(spawned.processes[0].written).find((msg) => msg.method === 'thread/start');
+    expect((thread?.params?.config as { features?: unknown } | undefined)?.features).toBeUndefined();
+    adapter.dispose();
+  });
+
   it('keeps Codex\'s own shell on Windows for a planner offered no run_command, its one way to read', async () => {
     // A one-shot plan runs no command (CliAgentAiService.oneShot), so it withholds the tool.
     const mcp = mcpClientConfig({ url: 'http://127.0.0.1:4555/mcp', token: 'tok-secret', hidden: ['run_command'] });

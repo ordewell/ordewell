@@ -22,6 +22,9 @@ const ACTIVE_POLL_INTERVAL_MS = 1000;
  * stay prompt; a serve that has not answered by then is killed, as before.
  */
 export const OPENCODE_ABORT_GRACE_MS = 1000;
+/** How long a turn that ended waits for the step still in flight to report its usage. */
+const LATE_USAGE_GRACE_MS = 1500;
+const LATE_USAGE_POLL_MS = 25;
 /** Polls that find the session inactive before any frame of this turn arrived, after which it is taken as already over. */
 const IDLE_POLLS_BEFORE_START = 3;
 
@@ -177,6 +180,8 @@ interface TurnState extends StreamTurn<V2Frame> {
   toolNames: Map<string, string>;
   /** Assistant message id → the model that ran it, from `session.step.started`. */
   stepModels: Map<string, string>;
+  /** Steps that have started and neither ended nor failed: the usage still to come when the turn's own end arrives first. */
+  openSteps: Set<string>;
   /** A delegation call's own id and its brief, remembered so `subagent_started` can name it. */
   briefs: Map<string, string>;
   /** A `read` call's id → the path it reads; its `external_directory` request names only the folder. */
@@ -197,6 +202,7 @@ function newTurnState(): TurnState {
     ...streamTurn<V2Frame>(),
     toolNames: new Map(),
     stepModels: new Map(),
+    openSteps: new Set(),
     briefs: new Map(),
     readPaths: new Map(),
     shellCalls: new Map(),
@@ -478,6 +484,7 @@ export class OpenCodeV2 {
         processEnded: this.host.processEnded,
         streamFailed: stream.failed,
         exitMessage: () => this.host.exitMessage(),
+        drain: () => this.drainSteps(state),
         readBack: () => this.readBack(state, onEvent),
         permissions: this.permissions,
         outcome: () => {
@@ -524,6 +531,17 @@ export class OpenCodeV2 {
   private stepDone(): void {
     this.stepOpen = false;
     for (const waiter of this.stepWaiters.splice(0)) waiter();
+  }
+
+  /**
+   * The session's end and its last step's end travel separately, and the poll
+   * can see the session idle first. The stream is still open here, so the step
+   * in flight gets a short grace to report what it billed; a step that never
+   * ends must not hold the turn.
+   */
+  private async drainSteps(state: TurnState): Promise<void> {
+    const deadline = Date.now() + LATE_USAGE_GRACE_MS;
+    while (state.openSteps.size > 0 && Date.now() < deadline) await delay(LATE_USAGE_POLL_MS);
   }
 
   /**
@@ -638,6 +656,13 @@ export class OpenCodeV2 {
     const isChild = session !== this.sessionId;
     if (isChild && !state.children.follows(session)) return;
 
+    // A call OpenCode bills outside any step: a title it makes when the session was never named, a compaction.
+    // A child session makes them too, and they never name a delegating call, so they are not held for one.
+    if (frame.type === 'session.usage.recorded') {
+      this.countRecorded(data, state, onEvent);
+      return;
+    }
+
     if (!isChild) {
       if (frame.type === 'session.compaction.failed' && data.reason === 'manual') {
         turn.failure = data.error?.message ?? data.error?.type ?? 'OpenCode did not compact the session.';
@@ -647,14 +672,6 @@ export class OpenCodeV2 {
         onEvent({ type: 'compaction', trigger: data.reason === 'manual' ? 'manual' : 'auto' });
         // OpenCode states no size after it: the next call's usage is the first.
         onEvent({ type: 'usage', record: { source: 'opencode', compacted: true } });
-        return;
-      }
-      // A call OpenCode bills outside any step: a title it makes when the session was never named, a compaction.
-      if (frame.type === 'session.usage.recorded') {
-        // On this frame `source` is the kind of call, a string; on a permission ask it is the tool call, an object.
-        const purpose: unknown = data.source;
-        const record = typeof purpose === 'string' && purpose ? usageRecord(data.tokens, { cost: data.cost, purpose }) : null;
-        if (record) onEvent({ type: 'usage', record });
         return;
       }
       if (frame.type === 'session.step.started') this.stepOpen = true;
@@ -714,6 +731,7 @@ export class OpenCodeV2 {
     const message = data.assistantMessageID ?? '';
     switch (frame.type) {
       case 'session.step.started':
+        if (message) state.openSteps.add(message);
         if (message && data.model?.providerID && data.model.id) state.stepModels.set(message, `${data.model.providerID}/${data.model.id}`);
         return;
       case 'session.reasoning.delta':
@@ -773,6 +791,7 @@ export class OpenCodeV2 {
       }
       case 'session.step.ended':
       case 'session.step.failed':
+        state.openSteps.delete(message);
         this.countUsage(data, state, onEvent, subagentId);
         return;
       default:
@@ -802,6 +821,20 @@ export class OpenCodeV2 {
     // 2.2.7 fails the delegating call of an interrupt Ordewell asked for; that is a stop, not the subagent's failure.
     const outcome = success ? 'done' : this.interruptRequested ? 'stopped' : 'failed';
     onEvent({ type: 'subagent_finished', subagentId: callId, outcome, digest: subagentDigest(output) });
+  }
+
+  /** A billed call outside any step. A frame that names a step is that step's usage, which `step.ended` or `step.failed` reports. */
+  private countRecorded(data: NonNullable<V2Frame['data']>, state: TurnState, onEvent: (e: AgentEvent) => void): void {
+    // On this frame `source` is the kind of call, a string; on a permission ask it is the tool call, an object.
+    const purpose: unknown = data.source;
+    if (typeof purpose !== 'string' || !purpose) return;
+    const message = data.assistantMessageID;
+    if (message) {
+      if (state.stepModels.has(message) || state.seen.has(`usage:${message}`) || state.seen.has(`recorded:${message}`)) return;
+      state.seen.add(`recorded:${message}`);
+    }
+    const record = usageRecord(data.tokens, { cost: data.cost, purpose });
+    if (record) onEvent({ type: 'usage', record });
   }
 
   /** One model call's usage, once, when its step ends. Zeros mean the call failed before the provider answered. */

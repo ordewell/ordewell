@@ -224,7 +224,7 @@ describe('the handoff overlay', () => {
     const ASKED = 'This merges work no check has passed: #2 "Check the subtree" has not.';
 
     it('asks again, naming the check, and merges past it only on the yes', () => {
-      const asked = apply(withHandoff(), { type: 'mergeHeld', message: ASKED, sessionId: 's1' });
+      const asked = apply(withHandoff(), { type: 'mergeHeld', message: ASKED, asked: 'pastChecks', sessionId: 's1' });
 
       expect(asked.effects).toEqual([]);
       expect(asked.state.overlay).toMatchObject({ kind: 'confirm', title: 'Merge past a check that has not passed?', action: { kind: 'merge-run', pastChecks: true } });
@@ -237,15 +237,34 @@ describe('the handoff overlay', () => {
     });
 
     it('merges nothing when the user declines', () => {
-      const asked = apply(withHandoff(), { type: 'mergeHeld', message: ASKED, sessionId: 's1' });
+      const asked = apply(withHandoff(), { type: 'mergeHeld', message: ASKED, asked: 'pastChecks', sessionId: 's1' });
       const declined = press(asked.state, 'escape');
       expect(declined.effects).toEqual([]);
       expect(declined.state.overlay).toBeNull();
     });
 
     it('is ignored for another session', () => {
-      const asked = apply(withHandoff(), { type: 'mergeHeld', message: ASKED, sessionId: 'other' });
+      const asked = apply(withHandoff(), { type: 'mergeHeld', message: ASKED, asked: 'pastChecks', sessionId: 'other' });
       expect(asked.state.overlay).toBeNull();
+    });
+  });
+
+  describe('a Merge all the daemon holds for a running ops task (ADR-0020)', () => {
+    const ASKED = 'Ops task #3 "Deploy" is running in your checkout. Merge all rewrites files there that it may be reading, building or committing: merge beside it only if it works outside your checkout.';
+
+    it('asks, naming the ops task, and merges beside it only on the yes, with the yes already given', () => {
+      const asked = apply(withHandoff(), { type: 'mergeHeld', message: ASKED, asked: 'besideOps', given: { pastChecks: true }, sessionId: 's1' });
+
+      expect(asked.state.overlay).toMatchObject({ kind: 'confirm', title: 'Merge beside a running ops task?', action: { kind: 'merge-run', pastChecks: true, besideOps: true } });
+      expect((asked.state.overlay as { message: string }).message).toContain(ASKED);
+
+      const confirmed = press(asked.state, 'enter');
+      expect(confirmed.effects).toEqual([{ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration', pastChecks: true, besideOps: true }]);
+    });
+
+    it('merges nothing when the user declines', () => {
+      const asked = apply(withHandoff(), { type: 'mergeHeld', message: ASKED, asked: 'besideOps', sessionId: 's1' });
+      expect(press(asked.state, 'escape').effects).toEqual([]);
     });
   });
 

@@ -4,7 +4,7 @@ import { SPINNER_CYCLE, chatScrollMax } from './layout';
 import { activeToken, composerCompletions, findCommand, parseRunnerCommand, parseSlash, runnerCommandFor, type ParsedCommand } from './slash';
 import { applyKey, commit } from './editor';
 import { endRunningCompactions, hear, say, wiped } from './transcript';
-import { askMergePastChecks, blockedPicker, handoffArrived, showDiff } from './handoff';
+import { askMergeHeld, blockedPicker, handoffArrived, showDiff } from './handoff';
 import { continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, scriptTaskView, viewOnly, waitingApproval, waitingCheckpoint, type RunStatus, type TaskView, type TuiState } from './state';
 import type { Key } from './keys';
 import { handleOverlayKey } from './reducers/overlays';
@@ -347,10 +347,10 @@ function reduceAction(state: TuiState, action: Action): Step {
       return step(withoutHandoffOverlay(foldRun(state, { type: 'isolation_merge', result: action.result })));
     }
 
-    // The daemon named the checks a Merge all would carry past: the user is asked, and the yes goes with the next request.
+    // The daemon named what holds a Merge all for the user's say: the user is asked, and the yes goes with the next request.
     case 'mergeHeld': {
       if (stale(state, action.sessionId)) return step(state);
-      return step(askMergePastChecks(state, action.message));
+      return step(askMergeHeld(state, action.message, action.asked, action.given));
     }
 
     case 'runClosed': {

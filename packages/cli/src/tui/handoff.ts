@@ -1,4 +1,4 @@
-import type { Effect, Step } from './reducers/shared';
+import type { Effect, MergeYes, Step } from './reducers/shared';
 import { say } from './transcript';
 import { sanitize } from './ansi';
 import type { Key } from './keys';
@@ -159,28 +159,34 @@ export function runHandoffAction(state: TuiState, id: HandoffActionId): Step {
   }
 }
 
+const HELD_TITLES: Record<keyof MergeYes, string> = {
+  pastChecks: 'Merge past a check that has not passed?',
+  besideOps: 'Merge beside a running ops task?',
+};
+
 /**
- * The question a Merge all raises when the daemon holds it for a check that has
- * not passed (ADR-0055 D9): the checks as it named them, and a yes that sends
- * `pastChecks` with the merge. Asked after the generic confirmation, which
- * knows nothing of the checks.
+ * The question a Merge all raises when the daemon holds it for the user's say:
+ * past a check that has not passed (ADR-0055 D9), or beside an ops task
+ * running in the checkout (ADR-0020). What it holds for, as the daemon named
+ * it, and a yes that sends `asked` with the merge beside the yes `given` to an
+ * earlier question. Asked after the generic confirmation, which knows neither.
  */
-export function askMergePastChecks(state: TuiState, named: string): TuiState {
+export function askMergeHeld(state: TuiState, named: string, asked: keyof MergeYes, given: MergeYes = {}): TuiState {
   const handoff = currentHandoff(state);
   if (!handoff) return say(state, 'system', named);
   return {
     ...state,
     overlay: {
       kind: 'confirm',
-      title: 'Merge past a check that has not passed?',
+      title: HELD_TITLES[asked],
       message: `${named} Merge ${handoffBranchName(handoff)} into ${mergeTarget(handoff)} anyway?`,
-      action: { kind: 'merge-run', pastChecks: true },
+      action: { kind: 'merge-run', ...given, [asked]: true },
     },
   };
 }
 
-/** Answers `merge-run` / `discard-run` confirmations. */
-export function confirmedHandoff(state: TuiState, kind: 'merge-run' | 'discard-run', pastChecks = false): Step {
+/** Answers `merge-run` / `discard-run` confirmations; `yes` is what a Merge all was asked past. */
+export function confirmedHandoff(state: TuiState, kind: 'merge-run' | 'discard-run', yes: MergeYes = {}): Step {
   const closed: TuiState = { ...state, overlay: null };
   const handoff = currentHandoff(state);
   if (!state.sessionId || !handoff) return { state: closed, effects: [] };
@@ -191,7 +197,8 @@ export function confirmedHandoff(state: TuiState, kind: 'merge-run' | 'discard-r
       type: 'isolationMerge', sessionId, branch: handoffBranchName(handoff),
       ...(isRepoGroup(handoff) ? { group: true } : {}),
       ...(repaired.length > 0 ? { repaired } : {}),
-      ...(pastChecks ? { pastChecks: true as const } : {}),
+      ...(yes.pastChecks ? { pastChecks: true as const } : {}),
+      ...(yes.besideOps ? { besideOps: true as const } : {}),
     }
     : { type: 'isolationDiscard', sessionId, branch: handoffBranchName(handoff) };
   return { state: closed, effects: [effect] };

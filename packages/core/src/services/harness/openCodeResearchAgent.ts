@@ -283,10 +283,12 @@ export function lazyServe(start: () => Promise<ResearchServe>): { get(): Promise
 interface Frame {
   type?: string;
   data?: {
-    sessionID?: string; parentID?: string; id?: string; name?: string; text?: string;
+    sessionID?: string; parentID?: string; assistantMessageID?: string; id?: string; name?: string; text?: string;
     input?: Record<string, unknown>; content?: { type?: string; text?: string }[];
     error?: { type?: string; message?: string }; model?: { id?: string; providerID?: string };
     tokens?: OpenCodeTokens; cost?: number;
+    /** On `session.usage.recorded`, the kind of call (a string); on a permission ask, the tool call (an object). */
+    source?: unknown;
   };
 }
 
@@ -394,6 +396,21 @@ async function runOne(deps: OpenCodeResearchAgentDeps, brief: string, subagentId
     failure ??= why;
   };
 
+  // A step reaches us as its end or its failure, never both, but a replayed stream repeats a frame.
+  const counted = new Set<string>();
+  const count = (data: NonNullable<Frame['data']>, call: { model?: string; purpose?: string }) => {
+    if (data.assistantMessageID) {
+      if (counted.has(data.assistantMessageID)) return;
+      counted.add(data.assistantMessageID);
+    }
+    const record = usageRecord(data.tokens, { ...call, cost: data.cost, subagentId });
+    if (!record) return;
+    // A purpose takes the place of the subagent on a record, but the research call is whose spend it is.
+    const attributed = { ...record, subagentId };
+    usage = addUsage(usage ?? {}, attributed);
+    emit({ type: 'usage', record: attributed });
+  };
+
   const onFrame = (frame: Frame) => {
     const data = frame.data;
     if (!data || !frame.type) return;
@@ -442,12 +459,16 @@ async function runOne(deps: OpenCodeResearchAgentDeps, brief: string, subagentId
       case 'session.text.ended':
         if (typeof data.text === 'string' && data.text.trim()) lastText = data.text;
         return;
-      case 'session.step.ended': {
-        const record = usageRecord(data.tokens, { model: stepModels.at(-1) ?? deps.model, cost: data.cost, subagentId });
-        if (record) { usage = addUsage(usage ?? {}, record); emit({ type: 'usage', record }); }
+      case 'session.step.ended':
+        count(data, { model: stepModels.at(-1) ?? deps.model });
         return;
-      }
+      // A call OpenCode bills outside any step, a compaction for one; `source` is a string only on this kind of frame.
+      case 'session.usage.recorded':
+        if (typeof data.source === 'string' && data.source) count(data, { purpose: data.source });
+        return;
       case 'session.step.failed':
+        // A finish that arrived together with the failure is a request the provider billed.
+        count(data, { model: stepModels.at(-1) ?? deps.model });
         // OpenCode 2.x records an interrupt as the in-flight step failing ("Step interrupted",
         // MessageAbortedError). After Ordewell's own interrupt (budget, violation, cancel) that is
         // its echo, not a failure: counting it would turn every overrun's partial digest into one.

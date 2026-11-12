@@ -91,3 +91,14 @@ export function repoResultLines(handoff: { repos: readonly { path: string; lande
 export function mergePastChecksConfirmation(checks: readonly string[]): string {
   return `This merges work no check has passed: ${checks.join(', ')} ${checks.length === 1 ? 'has' : 'have'} not.`;
 }
+
+/**
+ * What the user's Merge all asks to confirm while ops tasks run in their
+ * checkout (ADR-0020), the tasks named as the plan names them: the merge
+ * rewrites files those tasks may be reading or building from, which only a
+ * person who knows where they work can rule out.
+ */
+export function mergeBesideOpsConfirmation(tasks: readonly string[]): string {
+  const one = tasks.length === 1;
+  return `Ops task${one ? '' : 's'} ${tasks.join(', ')} ${one ? 'is' : 'are'} running in your checkout. Merge all rewrites files there that ${one ? 'it' : 'they'} may be reading, building or committing: merge beside ${one ? 'it' : 'them'} only if ${one ? 'it works' : 'they work'} outside your checkout.`;
+}

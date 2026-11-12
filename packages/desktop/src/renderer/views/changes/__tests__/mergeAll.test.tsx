@@ -19,7 +19,7 @@ const OVERLAP: MergePreflightResponse = { ...CLEAN, repos: [{ repo: '.', branch:
 let hosts: DaemonHost[] = [];
 afterEach(() => { for (const host of hosts) host.dispose(); hosts = []; resetDaemonHosts(); vi.restoreAllMocks(); });
 
-async function setup(preflight: MergePreflightResponse | null, choice: PreflightChoice | null, extra: Parameters<typeof fakeDaemon>[0] = {}) {
+async function setup(preflight: MergePreflightResponse | null, choice: PreflightChoice | null, extra: Parameters<typeof fakeDaemon>[0] = {}, hostAsk: ConstructorParameters<typeof DaemonHost>[1] = async () => null, tasks = [runTask({ id: 't1', order: 1, title: 'Add the login button', status: 'completed', isolation: worktree('integrated') })]) {
   const daemon = fakeDaemon({
     'sessions.load': ok({ ok: true, plan: surfacePlan([]), goal: 'Ship SSO' }),
     'plans.mergePreflight': preflight ? ok(preflight) : { ok: false, status: 409, error: 'The run has nothing to merge.' },
@@ -27,11 +27,11 @@ async function setup(preflight: MergePreflightResponse | null, choice: Preflight
     'git.stashPop': ok({ repo: { repo: '.', branch: 'main' } }),
     ...extra,
   });
-  const host = new DaemonHost(WORKSPACE, async () => null);
+  const host = new DaemonHost(WORKSPACE, hostAsk);
   hosts.push(host);
   await act(() => host.open('s1'));
   await act(async () => {
-    daemon.push('s1', { type: 'connected', sessionId: 's1' }, { type: 'run_snapshot', sessionId: 's1', view: runView([runTask({ id: 't1', order: 1, title: 'Add the login button', status: 'completed', isolation: worktree('integrated') })], HANDOFF), stream: 'd1', seq: 0 });
+    daemon.push('s1', { type: 'connected', sessionId: 's1' }, { type: 'run_snapshot', sessionId: 's1', view: runView(tasks, HANDOFF), stream: 'd1', seq: 0 });
   });
   const store = new FrameStore({ workspace: WORKSPACE, platform: 'linux' });
   const asked: Array<{ request: ConfirmationRequest<PreflightChoice>; body: JSX.Element }> = [];
@@ -105,6 +105,34 @@ describe('Merge all', () => {
     expect(runCommand).toHaveBeenCalledWith(FOCUS_COMMIT_COMMAND);
     expect(banner(store, 'changes.mergeAll')?.title).toBe('Your overlapping files could not be staged');
     expect(daemon.calls('plans.isolationMerge')).toEqual([]);
+  });
+
+  it('asks again beside a running ops task, in a dialog, and sends each yes it was given (ADR-0020)', async () => {
+    const held = (code: string, error: string) => ({ ok: false, status: 409, error, data: { ok: false, error, code } }) as const;
+    const answers = [held('merge_past_check', 'This merges work no check has passed: #2 "Check" has not.'), held('merge_beside_ops', 'Ops task #3 "Deploy" is running in your checkout.'), ok({ ok: true })];
+    const questions: string[] = [];
+    const { daemon, run } = await setup(CLEAN, 'merge', { 'plans.isolationMerge': () => answers.shift()! }, async (request) => { questions.push(request.message); return request.choices[0]!.id; });
+    await run();
+    expect(questions).toEqual([
+      'This merges work no check has passed: #2 "Check" has not. Merge main anyway?',
+      'Ops task #3 "Deploy" is running in your checkout. Merge main anyway?',
+    ]);
+    expect(daemon.calls('plans.isolationMerge').map(([, body]) => body)).toEqual([{}, { pastChecks: true }, { pastChecks: true, besideOps: true }]);
+  });
+
+  it('merges nothing beside a running ops task when the person says no', async () => {
+    const held = { ok: false, status: 409, error: 'Ops task #3 "Deploy" is running in your checkout.', data: { ok: false, error: 'Ops task #3 "Deploy" is running in your checkout.', code: 'merge_beside_ops' } } as const;
+    const { daemon, run } = await setup(CLEAN, 'merge', { 'plans.isolationMerge': held }, async () => null);
+    await run();
+    expect(daemon.calls('plans.isolationMerge').map(([, body]) => body)).toEqual([{}]);
+  });
+
+  it('offers no Stash while an ops task runs in the checkout', async () => {
+    const deploy = runTask({ id: 't3', order: 3, title: 'Deploy', status: 'in_progress', ops: true });
+    const { asked, run } = await setup(OVERLAP, null, {}, async () => null, [runTask({ id: 't1', order: 1, title: 'Add the login button', status: 'completed', isolation: worktree('integrated') }), deploy]);
+    await run();
+    expect(asked[0]!.request.choices.map((c) => c.id)).toEqual(['commit']);
+    expect(asked[0]!.request.detail).toMatch(/ops task #3 "Deploy" is running/);
   });
 
   it('shows a preflight it could not run, and merges nothing', async () => {

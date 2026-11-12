@@ -248,11 +248,16 @@ export function plansRoute(pool: OrchestratorPool) {
     try {
       // A merge git stopped is still an outcome the Merge all card shows: the seam refuses it, with the result.
       const body: unknown = await c.req.json().catch(() => ({}));
-      const pastChecks = typeof body === 'object' && body !== null && 'pastChecks' in body && body.pastChecks === true;
-      const outcome = await pool.session(c.req.param('sessionId'), callerWorkspace(c)).execute(pastChecks ? { command: 'merge_all', pastChecks: true } : { command: 'merge_all' }, { kind: 'user' });
+      const yes = (name: string) => typeof body === 'object' && body !== null && Reflect.get(body, name) === true;
+      const outcome = await pool.session(c.req.param('sessionId'), callerWorkspace(c)).execute({
+        command: 'merge_all',
+        ...(yes('pastChecks') ? { pastChecks: true } : {}),
+        ...(yes('besideOps') ? { besideOps: true } : {}),
+      }, { kind: 'user' });
       if (outcome.payload?.kind === 'merge') return c.json(outcome.payload.result satisfies IsolationMergeResponse);
-      // Not a refusal of the request: the user is asked, the checks named, and the yes comes in the body.
+      // Not a refusal of the request: the user is asked, the checks or ops tasks named, and the yes comes in the body.
       if (outcome.payload?.kind === 'merge_hold') return refuse(c, 409, outcome.message, 'merge_past_check');
+      if (outcome.payload?.kind === 'merge_beside_ops') return refuse(c, 409, outcome.message, 'merge_beside_ops');
       if (!outcome.ok) throw new TaskControlError(outcome.message);
       throw new Error('Merge all answered without its result.');
     } catch (err) {

@@ -159,6 +159,40 @@ describe('handoff actions (ADR-0013)', () => {
     });
   });
 
+  describe('beside a running ops task (ADR-0020)', () => {
+    const PAST = 'This merges work no check has passed: #2 "Check the subtree" has not.';
+    const BESIDE = 'Ops task #3 "Deploy" is running in your checkout. Merge all rewrites files there that it may be reading, building or committing: merge beside it only if it works outside your checkout.';
+    const pastHeld = { ok: false, outcome: 'refused', message: PAST, payload: { kind: 'merge_hold', checks: ['#2 "Check the subtree"'] } };
+    const opsHeld = { ok: false, outcome: 'refused', message: BESIDE, payload: { kind: 'merge_beside_ops', tasks: ['#3 "Deploy"'] } };
+    const merged = { ok: true, message: 'Merged.', payload: { kind: 'merge', result: { outcome: 'merged' } } };
+
+    it('asks each question in a modal dialog, naming the ops task, and sends every yes with the merge', async () => {
+      showWarningMessage.mockResolvedValueOnce('Merge').mockResolvedValueOnce('Merge anyway').mockResolvedValueOnce('Merge anyway');
+      const { d, session } = deps();
+      session.execute.mockResolvedValueOnce(pastHeld).mockResolvedValueOnce(opsHeld).mockResolvedValueOnce(merged);
+      await handleIsolationAction('merge', undefined, d);
+
+      const [message, options] = showWarningMessage.mock.calls[2] as unknown as [string, { modal?: boolean }];
+      expect(message).toContain(BESIDE);
+      expect(options).toMatchObject({ modal: true });
+      expect(session.execute.mock.calls).toEqual([
+        [{ command: 'merge_all' }, { kind: 'user' }],
+        [{ command: 'merge_all', pastChecks: true }, { kind: 'user' }],
+        [{ command: 'merge_all', pastChecks: true, besideOps: true }, { kind: 'user' }],
+      ]);
+    });
+
+    it('merges nothing when the question is dismissed', async () => {
+      showWarningMessage.mockResolvedValueOnce('Merge').mockResolvedValueOnce(undefined);
+      const { d, session, chatProvider } = deps();
+      session.execute.mockResolvedValueOnce(opsHeld);
+      await handleIsolationAction('merge', undefined, d);
+
+      expect(session.execute).toHaveBeenCalledTimes(1);
+      expect(chatProvider.showError).not.toHaveBeenCalled();
+    });
+  });
+
   const handoffOn = (...repos: [string, string | undefined][]) => ({
     tasks: {},
     handoff: {

@@ -9,7 +9,7 @@ import { DaemonError, RequestTimeoutError, UnreadableResponseError, WorkspaceIni
 import { normalizeCatalog } from '../catalog';
 import { plannerSwitchRecall, uninstalledPlannerRefusal } from '../plannerModelSwitch';
 import type { Action, Effect } from './reducer';
-import { answerWords, type ChatRestored } from './reducers/shared';
+import { answerWords, type ChatRestored, type MergeYes } from './reducers/shared';
 import type { SessionView } from './state';
 import { closeChildLink, openChildLink, sessionLink, shownSession } from './sessionLink';
 
@@ -813,15 +813,16 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
     // mid-run leaves the run going (ADR-0020).
     case 'isolationMerge': {
       let merged: Awaited<ReturnType<typeof api.mergeRun>>;
+      const given: MergeYes = { ...(effect.pastChecks ? { pastChecks: true } : {}), ...(effect.besideOps ? { besideOps: true } : {}) };
       try {
-        merged = await api.mergeRun(effect.sessionId, effect.pastChecks ? { pastChecks: true } : {});
+        merged = await api.mergeRun(effect.sessionId, given);
       } catch (err) {
-        // A question for the user, with the checks named: not a failure (ADR-0055 D9).
-        if (err instanceof DaemonError && err.code === 'merge_past_check') {
-          dispatch({ type: 'mergeHeld', message: err.message, sessionId: effect.sessionId });
-          return;
-        }
-        throw err;
+        // A question for the user, with the checks or the ops tasks named: not a failure (ADR-0055 D9, ADR-0020).
+        if (!(err instanceof DaemonError)) throw err;
+        const asked = err.code === 'merge_past_check' ? 'pastChecks' : err.code === 'merge_beside_ops' ? 'besideOps' : null;
+        if (!asked) throw err;
+        dispatch({ type: 'mergeHeld', message: err.message, asked, ...(Object.keys(given).length > 0 ? { given } : {}), sessionId: effect.sessionId });
+        return;
       }
       const { ok, message } = mergeOutcome(merged, effect.branch, effect.group === true, effect.repaired ?? []);
       dispatch({ type: ok ? 'notice' : 'failed', message });

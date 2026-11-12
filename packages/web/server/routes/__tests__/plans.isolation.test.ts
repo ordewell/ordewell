@@ -178,6 +178,35 @@ describe('POST /:sessionId/isolation/merge past a check that has not passed (ADR
   });
 });
 
+describe('POST /:sessionId/isolation/merge beside a running ops task (ADR-0020)', () => {
+  const ASKED = 'Ops task #3 "Deploy" is running in your checkout. Merge all rewrites files there that it may be reading, building or committing: merge beside it only if it works outside your checkout.';
+  const asked = { ok: false, outcome: 'refused', message: ASKED, payload: { kind: 'merge_beside_ops', tasks: ['#3 "Deploy"'] } };
+  const send = (execute: ReturnType<typeof vi.fn>, body: unknown) =>
+    appFor({ execute }).request('/api/plans/s1/isolation/merge', { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } });
+
+  it('is a 409 naming the ops tasks, so a surface asks first', async () => {
+    const execute = vi.fn().mockResolvedValue(asked);
+    const res = await post(appFor({ execute }), 'isolation/merge');
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: ASKED, code: 'merge_beside_ops' });
+  });
+
+  it('carries the yes to the seam, beside the yes past the checks', async () => {
+    const execute = vi.fn().mockResolvedValue(merged({ outcome: 'merged' }));
+
+    expect((await send(execute, { besideOps: true })).status).toBe(200);
+    expect((await send(execute, { pastChecks: true, besideOps: true })).status).toBe(200);
+    await send(execute, { besideOps: 'yes' });
+
+    expect(execute.mock.calls).toEqual([
+      [{ command: 'merge_all', besideOps: true }, { kind: 'user' }],
+      [{ command: 'merge_all', pastChecks: true, besideOps: true }, { kind: 'user' }],
+      [{ command: 'merge_all' }, { kind: 'user' }],
+    ]);
+  });
+});
+
 describe.each([
   ['isolation/discard', 'discardRun'],
   ['isolation/cleanup', 'cleanupRun'],

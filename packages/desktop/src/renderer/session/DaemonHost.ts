@@ -9,7 +9,7 @@ import {
 } from '@ordewell/core/plan-utils';
 import { INITIAL_HOST_STATE, reduceHost, type ChatBridge, type HostState } from '@ordewell/ui';
 import {
-  DaemonSessionStream, SessionView, discardRunConfirmation, mergeAllConfirmation, mergePastChecksQuestion,
+  DaemonSessionStream, SessionView, discardRunConfirmation, mergeAllConfirmation, mergeBesideOpsQuestion, mergePastChecksQuestion,
   overrideConfirmation, removeTaskConfirmation, revertConfirmation, runSettingRiskConfirmations, startPastGateConfirmation,
   type ConfirmationRequest, type DaemonFrame, type DaemonSessionState, type SessionCue,
 } from '@ordewell/ui/host';
@@ -1566,15 +1566,25 @@ export class DaemonHost {
 
   private async mergeAsked(target: string): Promise<boolean> {
     const sessionId = this.sessionId;
-    try {
-      await callDaemon('plans.isolationMerge', { sessionId }, {});
-    } catch (error) {
-      // Work whose check has not passed is the seam's to name; the yes goes with the next call (ADR-0055 D9).
-      if (!(error instanceof DaemonError && error.code === 'merge_past_check')) throw error;
-      if (await this.ask(mergePastChecksQuestion(error.message, target)) !== 'merge') return false;
-      await callDaemon('plans.isolationMerge', { sessionId }, { pastChecks: true });
+    /*
+     * What the seam holds the merge for is its to name, one question at a time:
+     * work no check has passed (ADR-0055 D9), then an ops task running in the
+     * checkout (ADR-0020). Each yes goes with every later call.
+     */
+    const questions = { merge_past_check: ['pastChecks', mergePastChecksQuestion], merge_beside_ops: ['besideOps', mergeBesideOpsQuestion] } as const;
+    const yes: { pastChecks?: true; besideOps?: true } = {};
+    for (;;) {
+      try {
+        await callDaemon('plans.isolationMerge', { sessionId }, { ...yes });
+        return true;
+      } catch (error) {
+        if (!(error instanceof DaemonError) || (error.code !== 'merge_past_check' && error.code !== 'merge_beside_ops')) throw error;
+        const [flag, question] = questions[error.code];
+        if (yes[flag]) throw error;
+        if (await this.ask(question(error.message, target)) !== 'merge') return false;
+        yes[flag] = true;
+      }
     }
-    return true;
   }
 
   private async execute(command: ExecutionCommand): Promise<void> {
