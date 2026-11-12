@@ -59,12 +59,13 @@ describe('PlannerReadLimit', () => {
 });
 
 describe('plannerReadLimitOf', () => {
-  it('is off unless the file or the environment turns it on', () => {
-    expect(plannerReadLimitOf(undefined, undefined)).toBeUndefined();
+  it('is on with the defaults unless the file or the environment turns it off', () => {
+    expect(plannerReadLimitOf(undefined, undefined)).toEqual({ calls: 10, bytes: 60 * 1024 });
     expect(plannerReadLimitOf(false, undefined)).toBeUndefined();
+    expect(plannerReadLimitOf(undefined, 'off')).toBeUndefined();
   });
 
-  it('takes 10 calls and 60 KB when turned on without numbers', () => {
+  it('takes 10 calls and 60 KB when on without numbers', () => {
     expect(plannerReadLimitOf(true, undefined)).toEqual({ calls: 10, bytes: 60 * 1024 });
     expect(plannerReadLimitOf(undefined, 'on')).toEqual({ calls: 10, bytes: 60 * 1024 });
   });

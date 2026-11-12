@@ -4,7 +4,7 @@ implemented: partial
 note: "ACP agents' in-workspace reads, and a harness's native reads that never ask, are not counted yet."
 ---
 
-# 0068 — A limit on the planner's own reads per turn, off by default
+# 0068 — A limit on the planner's own reads per turn
 
 ## Problem
 
@@ -20,13 +20,12 @@ following the prompt is needed for the models that do not.
 
 ## Decision
 
-**When the planner read limit is on, the planner's own read-class calls in one
-turn are counted, with the bytes their results held, and past either limit
-every further one is refused for the rest of that turn.** It is off by default
-and set in the settings file as `plannerReadLimit` (`true`, or `{ calls, kb }`)
-or by `ORDEWELL_PLANNER_READ_LIMIT` (`on`, `off`, or `<calls>,<kb>`), which
-wins; turned on without numbers it is 10 calls or 60 KB, whichever comes
-first. One module, `PlannerReadLimit`, keeps the count per planner turn; the
+**The planner's own read-class calls in one turn are counted, with the bytes
+their results held, and past either limit every further one is refused for the
+rest of that turn.** The limit is on by default, at 10 calls or 60 KB,
+whichever comes first. The settings file's `plannerReadLimit` (`true`,
+`false`, or `{ calls, kb }`) or `ORDEWELL_PLANNER_READ_LIMIT` (`on`, `off`, or
+`<calls>,<kb>`), which wins, changes the numbers or turns it off. One module, `PlannerReadLimit`, keeps the count per planner turn; the
 session builds one and every path below asks it.
 
 ## Key properties
@@ -73,10 +72,15 @@ session builds one and every path below asks it.
   kept reading.
 - **A token limit on the planner's context.** Rejected: it stops the turn
   rather than the read, and says nothing about where the reading should go.
-- **On by default.** Rejected for now: a capable planner reads well past ten
-  files on a hard goal and plans better for it. The bench's V2 variant
-  (`bench/planner-eval`) measures the limit against V1 before any default
-  changes.
+- **Off by default.** First chosen, pending the planner bench: a capable
+  planner reads well past ten files on a hard goal and might plan better for
+  it, so the default was to change only if plans did not get worse. The bench
+  (`bench/planner-eval`, V2 against V1) met that on the breadth goal G5 with
+  OpenCode planners: the planners' own reads after their first delegation fell
+  with the limit (DeepSeek V4.1 Flash 34 and 48 down to 3; GLM 5.3 Flash
+  median 10 down to 4), and rubric outcomes were no worse (GLM one problem in
+  three runs in each arm; DeepSeek one failure in two runs without the limit,
+  one passing run with it). The sample is small. Dropped for that reason.
 - **Counting a harness subagent's `run_command`.** It is counted, because the
   harness's subagents share the planner's MCP token and nothing tells them
   apart there; a native subagent's own reads are not.
@@ -94,3 +98,4 @@ session builds one and every path below asks it.
 ## History
 
 - 2026-11-11 — accepted.
+- 2026-11-12 — on by default, after the planner bench showed plans no worse.

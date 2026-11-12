@@ -266,6 +266,11 @@ describe('SettingsService', () => {
   });
 
   // Config-file control only, like plannerAutoCompaction (ADR-0068).
+  it('reads plannerReadLimit false from the file as off', () => {
+    fs.writeFileSync(tempFile, JSON.stringify({ plannerReadLimit: false }));
+    expect(service.getAll().plannerReadLimit).toBe(false);
+  });
+
   it('reads plannerReadLimit from the file, keeps it through other writes, and drops a value it cannot read', () => {
     fs.writeFileSync(tempFile, JSON.stringify({ plannerReadLimit: { calls: 4, kb: 'many' } }));
     expect(service.getAll().plannerReadLimit).toEqual({ calls: 4 });

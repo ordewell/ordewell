@@ -94,9 +94,9 @@ function limitOf(calls: number | undefined, kbs: number | undefined): ReadLimit 
   return { calls: calls ?? DEFAULT_PLANNER_READ_LIMIT.calls, bytes: (kbs ?? DEFAULT_PLANNER_READ_LIMIT.kb) * KB };
 }
 
-/** The settings file's `plannerReadLimit`, as written: `true`, or `{ calls?, kb? }`; anything else is off. */
-export function readLimitSetting(raw: unknown): true | { calls?: number; kb?: number } | undefined {
-  if (raw === true) return true;
+/** The settings file's `plannerReadLimit`, as written: `true`, `false` (off), or `{ calls?, kb? }`; anything else is unset. */
+export function readLimitSetting(raw: unknown): boolean | { calls?: number; kb?: number } | undefined {
+  if (raw === true || raw === false) return raw;
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined;
   const { calls, kb: kbs } = raw as Record<string, unknown>;
   return { ...(positiveInt(calls) ? { calls: positiveInt(calls) } : {}), ...(positiveInt(kbs) ? { kb: positiveInt(kbs) } : {}) };
@@ -116,13 +116,13 @@ function envLimit(raw: string | undefined): ReadLimit | null | undefined {
 
 /**
  * The limit in force: `ORDEWELL_PLANNER_READ_LIMIT` when it says something,
- * as the web-read budget's variable does, else the settings file. Off unless
- * one of them turns it on.
+ * as the web-read budget's variable does, else the settings file. On with
+ * the default numbers unless one of them turns it off.
  */
 export function plannerReadLimitOf(file: unknown, env: string | undefined): ReadLimit | undefined {
   const fromEnv = envLimit(env);
   if (fromEnv !== undefined) return fromEnv ?? undefined;
   const setting = readLimitSetting(file);
-  if (setting === undefined) return undefined;
-  return setting === true ? limitOf(undefined, undefined) : limitOf(setting.calls, setting.kb);
+  if (setting === false) return undefined;
+  return setting === undefined || setting === true ? limitOf(undefined, undefined) : limitOf(setting.calls, setting.kb);
 }

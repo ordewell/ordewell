@@ -612,6 +612,10 @@ describe('the run matrix', () => {
     assert.equal(selectRuns(parseArgs(['--full', '--with-optional']), { goals }).length, goals.length * CELLS.length * 2 * 3);
   });
 
+  it('keeps V1 free of the planner read limit, which is on by default', () => {
+    assert.deepEqual(VARIANTS.V1.env, { ORDEWELL_PLANNER_READ_LIMIT: 'off' });
+  });
+
   it('runs V2, the candidate with the planner read limit on, only when named', () => {
     assert.equal(VARIANTS.V2.build, 'candidate');
     assert.equal(VARIANTS.V2.nudges, false);

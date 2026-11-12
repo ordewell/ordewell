@@ -97,11 +97,11 @@ export interface UserSettings {
   plannerAutoCompaction?: boolean;
   /**
    * The limit on the planner's own reads in one turn (ADR-0068): `true` for
-   * the defaults, or either number. Absent means off, unless
-   * `ORDEWELL_PLANNER_READ_LIMIT` turns it on. Set in the file only: no
-   * surface offers it.
+   * the defaults, `false` for none, or either number. Absent means on
+   * with the defaults, unless `ORDEWELL_PLANNER_READ_LIMIT` says otherwise.
+   * Set in the file only: no surface offers it.
    */
-  plannerReadLimit?: true | { calls?: number; kb?: number };
+  plannerReadLimit?: boolean | { calls?: number; kb?: number };
   /**
    * What a task runner loads of the user's own setup: all of it (`user`) or
    * what a task needs (`minimal`). Absent means `user`. Set in the file only:
