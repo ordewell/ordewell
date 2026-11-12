@@ -21,7 +21,7 @@ import path from 'node:path';
 import { aggregate, isComplete, markdown } from './lib/aggregate.mjs';
 import { ensureBuild, repoRoot, resolveRef, cliMain } from './lib/builds.mjs';
 import {
-  CELLS, HERE, MAX_DRIVER_TURNS, VARIANTS, goalText, loadGoals, missingFor, mockCell, parseArgs, quotaOf,
+  CELLS, HERE, MAX_DRIVER_TURNS, VARIANTS, goalText, loadGoals, missingFor, mockCell, outputDirs, parseArgs, quotaOf,
   approvalPolicy, runEnv, runSettings, selectRuns, substituteFor, timeoutFor,
 } from './lib/config.mjs';
 import { guardFiles } from './lib/guard.mjs';
@@ -34,6 +34,7 @@ import { reviewPlan } from './lib/rubric.mjs';
 import { cloneTarget, ensureTemplate, workParent } from './lib/target.mjs';
 import { startTui } from './lib/tui.mjs';
 import { startMock as start } from '../live/start-mock.mjs';
+import { outsideRepo } from '../lib/data-dir.mjs';
 
 const USAGE = `usage: node bench/planner-eval/run.mjs (--smoke | --full | --mock | --report <dir> | --rescore <dir>) [options]
 
@@ -61,7 +62,9 @@ const USAGE = `usage: node bench/planner-eval/run.mjs (--smoke | --full | --mock
   --review-timeout S      seconds the reviewer may take (default 600)
   --with-optional         include the ACP cells (cline, copilot-cli, qwen-code, gemini-cli, cursor-agent)
   --mock-persona M        the mock provider's persona (default mock/interviewer)
-  --out <dir>             results directory (default bench/planner-eval/.results/<stamp>)
+  --out <dir>             results directory (default <bench dir>/planner-eval/results/<stamp>); the bench dir is
+                          $ORDEWELL_BENCH_DIR, else $XDG_DATA_HOME/ordewell-bench (~/.local/share/ordewell-bench),
+                          else %LOCALAPPDATA%\\ordewell-bench; one inside this repository is refused
   --resume <dir>          continue a results directory, skipping every run already complete
   --baseline-from <dir>   take V0's runs from <dir> (a stored or re-scored directory) where this one has none
   --keep                  keep each run's target clone
@@ -361,7 +364,7 @@ function carry(from, to, name) {
  */
 async function rescore(opts, goals) {
   const from = path.resolve(opts.rescore);
-  const to = path.resolve(opts.out ?? `${from}-rescored`);
+  const to = outsideRepo(opts.out ?? `${from}-rescored`, { what: 'results directory' });
   if (to === from) throw new Error('--rescore writes into a new directory: give --out another path');
   fs.mkdirSync(to, { recursive: true });
   const legacy = await legacyKeyHashes(await repoRoot(HERE));
@@ -446,7 +449,7 @@ async function main() {
   }
   const goals = loadGoals();
   if (opts.mode === 'report') {
-    const { records } = writeReport(path.resolve(opts.report), goals, { baselineFrom: opts.baselineFrom });
+    const { records } = writeReport(outsideRepo(opts.report, { what: 'report directory' }), goals, { baselineFrom: opts.baselineFrom });
     say(`aggregated ${records.length} record(s) into ${path.join(opts.report, 'report.md')}`);
     return 0;
   }
@@ -457,6 +460,8 @@ async function main() {
     say(`report: ${path.join(to, 'report.md')}`);
     return 0;
   }
+  // Before anything starts: a directory inside the repository is refused, whatever is listed.
+  const dirs = outputDirs(opts);
   const repo = await repoRoot(HERE);
   const mock = opts.mode === 'mock' ? await startMock() : null;
   try {
@@ -474,7 +479,7 @@ async function main() {
     if (!onPath('script')) throw new Error('script(1) is not on PATH; the TUI driver needs it for a pseudo-terminal');
     if (runnable.length === 0) throw new Error(`no run this host can make${skipped.length ? `: ${skipped.map((s) => `${s.cell} (${s.missing.join('; ')})`).join(', ')}` : ''}`);
 
-    const dir = path.resolve(opts.resume ?? opts.out ?? path.join(HERE, '.results', new Date().toISOString().replace(/[:.]/g, '-')));
+    const dir = dirs.results;
     fs.mkdirSync(dir, { recursive: true });
     const done = new Set(loadRecords(dir).filter(isComplete).map((r) => r.id));
     const todo = runnable.filter((r) => !opts.resume || !done.has(r.id));
@@ -484,7 +489,7 @@ async function main() {
       onRestore: (files) => say(`restored ${files.join(', ')}, which a run changed`),
     });
 
-    const buildsDir = path.join(HERE, '.builds');
+    const buildsDir = dirs.builds;
     const builds = {};
     if (mock) {
       if (!fs.existsSync(cliMain(repo))) throw new Error('--mock drives this checkout\'s build: run `npm run build` first');

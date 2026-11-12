@@ -6,8 +6,23 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { checkedBenchDir, outsideRepo } from '../../lib/data-dir.mjs';
 
 export const HERE = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+
+/**
+ * Where a run writes: the results directory (`--resume`, else `--out`, else a
+ * new stamped one) and the builds, which are git worktrees of this checkout and
+ * may live anywhere. Both default under the per-user bench directory
+ * (`bench/lib/data-dir.mjs`); either is refused inside this repository.
+ */
+export function outputDirs(opts, { stamp = new Date().toISOString().replace(/[:.]/g, '-'), ...where } = {}) {
+  const chosen = opts.resume ?? opts.out;
+  const results = chosen
+    ? outsideRepo(chosen, { what: 'results directory', repo: where.repo })
+    : path.join(checkedBenchDir('planner-eval', 'results', where), stamp);
+  return { results, builds: checkedBenchDir('planner-eval', 'builds', where) };
+}
 
 /** The commit every target clone and the V0 build are cut from. */
 export const BASELINE_REF = '0ecc6412';

@@ -15,7 +15,7 @@ import {
 } from './lib/aggregate.mjs';
 import {
   ANSWER, BASELINE_REF, CELLS, CONFIRM, NUDGES, QUOTA, quotaOf, TEST_COMMANDS, VARIANTS, goalText, loadGoals, missingFor, mockCell,
-  approvalPolicy, parseArgs, runEnv, runId, runSettings, selectRuns, substituteFor, timeoutFor, withModel,
+  approvalPolicy, outputDirs, parseArgs, runEnv, runId, runSettings, selectRuns, substituteFor, timeoutFor, withModel,
 } from './lib/config.mjs';
 import { guardFiles, snapshot } from './lib/guard.mjs';
 import { keyChecks, keyHash, keyViolations, plannerRanTest } from './lib/keys.mjs';
@@ -26,6 +26,7 @@ import { classifyTurn, newestSession, plannerApprovals, replyLanded } from './li
 import { REDACTED, redactJson, redactor } from './lib/redact.mjs';
 import { citedOnly, questionsFor, rubricPrompt } from './lib/rubric.mjs';
 import { applyPatches, linkTree, workParent } from './lib/target.mjs';
+import { cliMain, ensureBuild, resolveRef } from './lib/builds.mjs';
 import { ptyCommand, shellQuote, stripAnsi, typed } from './lib/tui.mjs';
 
 const goals = loadGoals();
@@ -771,6 +772,89 @@ describe("a run's clone", () => {
     assert.equal(workParent(dir, [path.join(dir, 'missing'), os.tmpdir()]), os.tmpdir());
     assert.equal(workParent(path.join(dir, 'missing'), ['a', 'b']), 'a');
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('where the run data goes', () => {
+  const home = path.join(os.tmpdir(), 'planner-eval-home');
+  const xdg = path.join(home, 'xdg');
+  const runBench = (args, env) => spawnSync(process.execPath, [path.join(import.meta.dirname, 'run.mjs'), ...args], {
+    encoding: 'utf8', env: { ...process.env, NODE_OPTIONS: '', ...env }, timeout: 60_000,
+  });
+
+  it('defaults to a per-user data directory, one subdirectory per kind', () => {
+    const dirs = outputDirs({}, { env: { XDG_DATA_HOME: xdg }, platform: 'linux', home, stamp: 's' });
+    assert.deepEqual(dirs, {
+      results: path.join(xdg, 'ordewell-bench', 'planner-eval', 'results', 's'),
+      builds: path.join(xdg, 'ordewell-bench', 'planner-eval', 'builds'),
+    });
+  });
+
+  it('follows ORDEWELL_BENCH_DIR, and keeps --out and --resume where they point', () => {
+    const base = tmp();
+    const env = { ORDEWELL_BENCH_DIR: base, XDG_DATA_HOME: xdg };
+    assert.equal(outputDirs({}, { env, stamp: 's' }).builds, path.join(base, 'planner-eval', 'builds'));
+    assert.equal(outputDirs({}, { env, stamp: 's' }).results, path.join(base, 'planner-eval', 'results', 's'));
+    const elsewhere = path.join(tmp(), 'mine');
+    assert.equal(outputDirs({ out: elsewhere }, { env, stamp: 's' }).results, elsewhere);
+    assert.equal(outputDirs({ resume: elsewhere, out: 'ignored' }, { env, stamp: 's' }).results, elsewhere);
+    fs.rmSync(base, { recursive: true, force: true });
+  });
+
+  it('refuses a directory inside this repository, naming ORDEWELL_BENCH_DIR', () => {
+    const inside = path.join(repo, 'bench', 'planner-eval', '.results');
+    assert.throws(() => outputDirs({}, { env: { ORDEWELL_BENCH_DIR: inside } }), /ORDEWELL_BENCH_DIR/);
+    assert.throws(() => outputDirs({ out: path.join(inside, 'x') }, { env: { ORDEWELL_BENCH_DIR: tmp() } }), /ORDEWELL_BENCH_DIR/);
+  });
+
+  it('refuses to start when the data directory is inside the repository', () => {
+    const out = runBench(['--mock', '--list'], { ORDEWELL_BENCH_DIR: path.join(repo, 'scratch-bench') });
+    assert.equal(out.status, 1, out.stdout + out.stderr);
+    assert.match(out.stderr, /ORDEWELL_BENCH_DIR/);
+    assert.ok(!fs.existsSync(path.join(repo, 'scratch-bench')));
+  });
+
+  it('refuses to report or re-score into the repository, and starts for a directory outside it', () => {
+    const inside = path.join(repo, 'bench', 'planner-eval', '.results', 'no-such');
+    assert.match(runBench(['--report', inside], {}).stderr, /ORDEWELL_BENCH_DIR/);
+    const base = tmp();
+    const from = path.join(base, 'from');
+    fs.mkdirSync(from);
+    const out = runBench(['--rescore', from, '--out', path.join(inside, 'x'), '--no-review'], {});
+    assert.equal(out.status, 1);
+    assert.match(out.stderr, /ORDEWELL_BENCH_DIR/);
+    assert.equal(runBench(['--mock', '--list'], { ORDEWELL_BENCH_DIR: base }).status, 0);
+    fs.rmSync(base, { recursive: true, force: true });
+  });
+});
+
+describe('a build outside the repository', () => {
+  it('is a worktree of the checkout, found again by the next run', async () => {
+    const root = tmp();
+    const source = path.join(root, 'source');
+    const git = (...args) => execFileSync('git', args, { cwd: source, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    fs.mkdirSync(source);
+    fs.writeFileSync(path.join(source, 'package.json'), JSON.stringify({ name: 'fixture', private: true, workspaces: ['packages/*'] }));
+    for (const pkg of ['core', 'web', 'cli']) {
+      const dir = path.join(source, 'packages', pkg);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: `@fixture/${pkg}`, version: '1.0.0', scripts: { build: `node -e "require('fs').mkdirSync('dist',{recursive:true});${pkg === 'cli' ? "require('fs').writeFileSync('dist/main.js','ok')" : ''}"` } }));
+    }
+    execFileSync('npm', ['install', '--package-lock-only', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: source, stdio: 'ignore', shell: process.platform === 'win32' });
+    git('init', '-q');
+    git('-c', 'user.email=t@t', '-c', 'user.name=t', 'add', '-A');
+    git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'fixture');
+    const sha = await resolveRef(source, 'HEAD');
+    const buildsDir = path.join(root, 'builds');
+    const first = await ensureBuild({ repo: source, buildsDir, sha });
+    assert.equal(first.dir, path.join(buildsDir, sha.slice(0, 12)));
+    assert.equal(first.reused, false);
+    assert.ok(fs.existsSync(first.main) && first.main === cliMain(first.dir));
+    assert.ok(git('worktree', 'list', '--porcelain').includes('builds'), 'git lists the worktree');
+    const again = await ensureBuild({ repo: source, buildsDir, sha });
+    assert.equal(again.reused, true);
+    assert.equal(again.dir, first.dir);
+    fs.rmSync(root, { recursive: true, force: true });
   });
 });
 

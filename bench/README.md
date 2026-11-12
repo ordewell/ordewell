@@ -12,6 +12,25 @@ dependencies. Pure Node (`node:test`, stdlib).
 > Nothing user-facing should quote a cost saving; there is no measurement behind
 > one. See the caution in [AGENTS.md](../AGENTS.md).
 
+## Where run data goes
+
+A harness that runs a real model, provider or account writes its output
+(reports, transcripts, session logs, builds) to a per-user directory outside any
+repository, never into the working tree, ignored or not. `<bench dir>` is
+`$ORDEWELL_BENCH_DIR` when set; otherwise `$XDG_DATA_HOME/ordewell-bench`, or
+`~/.local/share/ordewell-bench`, on Linux and macOS; otherwise
+`%LOCALAPPDATA%\ordewell-bench` on Windows. Each harness has a subdirectory
+(`planner-eval/results`, `planner-eval/builds`, `live/real-report`). A harness
+refuses to start, with a message naming `ORDEWELL_BENCH_DIR`, when the directory
+it would write to is inside the repository working tree. The one resolver is
+`bench/lib/data-dir.mjs`.
+
+Not run data, and so unchanged: the mock-driven screenshots in
+`bench/live/screenshots/`, `bench/scale/.build` (a bundle built from source) and
+the temporary directories a test makes for itself. The ignore entries for the
+old in-repo paths (`.results/`, `.builds/`, `.real-report/`) stay, for a
+checkout that still holds data from an earlier version; nothing moves it.
+
 ## Live conversation harness (`bench/live/`)
 
 End-to-end testing of the planner conversation loop (ADR-0002) with the real
@@ -60,7 +79,9 @@ adopts, approves and starts what the planner sends. They are not a judgment of
 the prompt; only a real model can show what strategy it picks.
 
 `--real` replays the same five goals against a real provider and writes a
-behavioural report to `bench/live/.real-report/` (gitignored), or `--out DIR`:
+behavioural report to `<bench dir>/live/real-report/` (see
+[Where run data goes](#where-run-data-goes)), or `--out DIR`, which `--dump DIR` also
+must keep outside the repository:
 
 ```bash
 OPENROUTER_API_KEY=sk-or-... node bench/live/drive-conversation.mjs \
@@ -89,7 +110,8 @@ rubric. The report gives a verdict per backend for each comparison.
 `node bench/planner-eval/run.mjs --mock` is the offline dry run against
 `bench/live/mock-provider.mjs`; `--smoke` and `--full` run the real models.
 See [its README](planner-eval/README.md) for prerequisites, every flag and
-what each metric means.
+what each metric means. It writes its results and its builds to
+`<bench dir>/planner-eval/`.
 
 ## Execution pipeline harness (`bench/pipeline/`)
 
