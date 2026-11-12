@@ -13,6 +13,10 @@
  *   usage: { input, output } per step;  child: true starts a child session;
  *   fail: { type, message } ends the run with session.execution.failed.
  *
+ * An interrupt first fails the step in flight, if any, with session.step.failed
+ * { type: MessageAbortedError, message: "Step interrupted" }, as v2.2.7 records an
+ * interrupted step, then sends session.execution.interrupted.
+ *
  * An untitled session's first prompt makes the hidden title call v2.2.7 makes:
  * its usage arrives only as a session.usage.recorded frame with source "title"
  * (no step carries it). A session created with a title makes no such call.
@@ -97,6 +101,7 @@ async function run(session, text) {
   const cue = (() => { const m = /<fake-opencode>([\s\S]*?)<\/fake-opencode>/.exec(text); try { return m ? JSON.parse(m[1]) : {}; } catch { return {}; } })();
   const id = session.id;
   const stopped = () => session.interrupted;
+  session.inFlight = undefined;
   frame('session.execution.started', { sessionID: id });
   if (cue.fail) {
     const message = `msg_${randomUUID()}`;
@@ -115,6 +120,7 @@ async function run(session, text) {
   for (const step of steps) {
     if (stopped()) return;
     const message = `msg_${randomUUID()}`;
+    session.inFlight = message;
     frame('session.step.started', { sessionID: id, assistantMessageID: message, model: session.model ?? { providerID: 'fake', id: 'fake-model' } });
     for (const call of step.calls ?? []) {
       if (stopped()) return;
@@ -146,6 +152,7 @@ async function run(session, text) {
       session.messages.unshift({ id: message, type: 'assistant', content: [{ type: 'text', text: answer }] });
       frame('session.text.ended', { sessionID: id, assistantMessageID: message, ordinal: 0, text: answer });
     }
+    session.inFlight = undefined;
     frame('session.step.ended', { sessionID: id, assistantMessageID: message, tokens: { input: usage.input, output: usage.output, reasoning: 0, cache: { read: 0, write: 0 } }, cost: usage.cost ?? 0.001 });
   }
   if (!stopped() && !cue.noEnd) frame('session.execution.succeeded', { sessionID: id });
@@ -201,6 +208,7 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === 'POST' && m[2] === 'interrupt') {
       s.interrupted = true;
+      if (s.inFlight) frame('session.step.failed', { sessionID: s.id, assistantMessageID: s.inFlight, error: { type: 'MessageAbortedError', message: 'Step interrupted' } });
       frame('session.execution.interrupted', { sessionID: s.id });
       return json(res, 200, { data: { interrupted: true } });
     }

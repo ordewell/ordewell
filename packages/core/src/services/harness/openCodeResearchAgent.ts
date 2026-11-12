@@ -448,6 +448,10 @@ async function runOne(deps: OpenCodeResearchAgentDeps, brief: string, subagentId
         return;
       }
       case 'session.step.failed':
+        // OpenCode 2.x records an interrupt as the in-flight step failing ("Step interrupted",
+        // MessageAbortedError). After Ordewell's own interrupt (budget, violation, cancel) that is
+        // its echo, not a failure: counting it would turn every overrun's partial digest into one.
+        if (interrupted) return;
         failed(data.error);
         return;
       case 'session.execution.succeeded': settle('succeeded'); return;
