@@ -456,7 +456,12 @@ export class Attempts {
 
   /** The task of a live attempt that no Merge all may run beside ({@link mergeExcludes}), if any. */
   excludingMerge(): string | undefined {
-    return [...this.live.values()].find((a) => mergeExcludes(a.kind))?.taskId;
+    return this.excludingMergeAll()[0];
+  }
+
+  /** Every such task, for the user to be asked about by name (ADR-0020). */
+  excludingMergeAll(): string[] {
+    return [...this.live.values()].filter((a) => mergeExcludes(a.kind)).map((a) => a.taskId);
   }
 
   snapshot(taskId: string): TaskAttemptSnapshot | undefined {

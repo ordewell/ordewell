@@ -8,6 +8,9 @@ import type {
 import { say } from '../transcript';
 
 /** Side effects the runtime performs; the reducer itself stays pure. */
+/** The yes a Merge all carries past what holds it for the user's say (ADR-0055 D9, ADR-0020), each asked on its own. */
+export type MergeYes = { pastChecks?: true; besideOps?: true };
+
 export type Effect =
   /**
    * `allowInit` is only ever set on the retry after the user confirms the "initialize this as a new workspace?" prompt — see `workspaceNeedsInit`.
@@ -51,7 +54,7 @@ export type Effect =
   | { type: 'retryPlannerCompaction'; sessionId: string }
   | { type: 'isolationReviewDiff'; sessionId: string }
   /** `branch` is only for the words the result is reported in; `repaired` likewise (ADR-0015). */
-  | { type: 'isolationMerge'; sessionId: string; branch: string; group?: boolean; repaired?: LandedTaskView[]; pastChecks?: true }
+  | ({ type: 'isolationMerge'; sessionId: string; branch: string; group?: boolean; repaired?: LandedTaskView[] } & MergeYes)
   | { type: 'isolationDiscard'; sessionId: string; branch: string }
   | { type: 'isolationCleanup'; sessionId: string; branch: string }
   /** Replays a run a dirty tree parked; `stash` puts tracked changes aside first, `shared` runs in the working tree this once. */
@@ -200,8 +203,12 @@ export type Action =
   | { type: 'handoffDiff'; diff: string; sessionId?: string }
   /** The run and its record are gone; nothing is left to hand off or to mark. */
   | { type: 'isolationMerged'; result: IsolationMergeResult; sessionId?: string }
-  /** The daemon would not merge past a check that has not passed until asked: `message` names it (ADR-0055 D9). */
-  | { type: 'mergeHeld'; message: string; sessionId?: string }
+  /**
+   * The daemon would not merge until asked: past a check that has not passed
+   * (ADR-0055 D9), or beside an ops task running in the checkout (ADR-0020).
+   * `message` names them; `given` is the yes the refused request already carried.
+   */
+  | { type: 'mergeHeld'; message: string; asked: keyof MergeYes; given?: MergeYes; sessionId?: string }
   | { type: 'runClosed'; sessionId?: string }
   /** The scheduled expiry of an armed stop; the arm simply lapses. */
   | { type: 'stopDisarmed'; arm: number }

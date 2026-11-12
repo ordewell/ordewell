@@ -198,6 +198,52 @@ describe('ordewell handoff', () => {
     });
   });
 
+  describe('beside a running ops task (ADR-0020)', () => {
+    const PAST = 'This merges work no check has passed: #2 "Check the subtree" has not.';
+    const BESIDE = 'Ops task #3 "Deploy" is running in your checkout. Merge all rewrites files there that it may be reading, building or committing: merge beside it only if it works outside your checkout.';
+    /** The daemon asks past the checks first, then beside the ops task, as the seam does. */
+    const holding = () => isolatedDaemon({
+      '/isolation/merge': (hit) => {
+        const body = JSON.parse(hit.body || '{}');
+        if (body.pastChecks !== true) return { status: 409, body: { error: PAST, code: 'merge_past_check' } };
+        if (body.besideOps !== true) return { status: 409, body: { error: BESIDE, code: 'merge_beside_ops' } };
+        return { body: { outcome: 'merged' } };
+      },
+    });
+    const merges = (srv: { hits: Hit[] }) => srv.hits.filter((h) => h.url.endsWith('/isolation/merge'));
+
+    it('asks each question in turn, naming the ops task, and sends every yes given', async () => {
+      const srv = await holding();
+      const { stdout, confirm } = await run(['merge'], srv);
+      srv.close();
+
+      expect(confirm).toHaveBeenCalledTimes(3);
+      expect(confirm).toHaveBeenLastCalledWith(`${BESIDE} Merge anyway?`);
+      expect(merges(srv).map((h) => JSON.parse(h.body || '{}'))).toEqual([{}, { pastChecks: true }, { pastChecks: true, besideOps: true }]);
+      expect(stdout).toMatch(/Merged ordewell\/r1\/integration/);
+    });
+
+    it('merges nothing when told no, and says which flag confirms it', async () => {
+      const srv = await holding();
+      const { stderr, exitCode } = await run(['merge', '--yes', '--past-checks'], srv, vi.fn().mockResolvedValue(false));
+      srv.close();
+
+      expect(exitCode).toBe(1);
+      expect(stderr).toMatch(/Not confirmed: nothing was changed. Pass --beside-ops to merge beside an ops task running in your checkout./);
+      expect(merges(srv)).toHaveLength(1);
+    });
+
+    it('is told by --beside-ops, which sends the yes with the first request', async () => {
+      const srv = await holding();
+      const { stdout, confirm } = await run(['merge', '--yes', '--past-checks', '--beside-ops'], srv);
+      srv.close();
+
+      expect(confirm).not.toHaveBeenCalled();
+      expect(merges(srv).map((h) => JSON.parse(h.body || '{}'))).toEqual([{ pastChecks: true, besideOps: true }]);
+      expect(stdout).toMatch(/Merged/);
+    });
+  });
+
   it('merge does nothing when the answer is no', async () => {
     const srv = await isolatedDaemon();
     const { stderr, exitCode } = await run(['merge'], srv, vi.fn().mockResolvedValue(false));

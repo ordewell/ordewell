@@ -9,7 +9,7 @@ import type { RunMergeView } from '../SessionMessage';
 const task = (id: string, order: number, over: Partial<Task> = {}): Task =>
   ({ ...createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, status: 'approved', ...over }), ...over });
 
-const OPEN: EscalationRun = { open: true, advancing: false, merging: false, autoMerges: false, mergesAtClose: false, merge: null, mergeHold: [], id: null, blocked: null };
+const OPEN: EscalationRun = { open: true, advancing: false, merging: false, autoMerges: false, mergesAtClose: false, merge: null, mergeHold: [], opsInCheckout: [], id: null, blocked: null };
 
 const failedVerdict = (reported: 'failed' | 'blocked'): Task['verdict'] => ({ outcome: 'fail', reason: 'it did not hold', checks: [], decidedAt: '2026-10-30T00:00:00Z', reported });
 
@@ -323,6 +323,15 @@ describe('what only a person can start', () => {
       kind: 'merge-all',
       reason: 'The run\'s landed work waits for Merge all: #1.',
       options: [{ id: 'merge-all', label: 'Merge all' }],
+    }]);
+  });
+
+  it('asks before a Merge all beside a running ops task, after what it would carry past its check (ADR-0020)', () => {
+    const [only] = listFor([task('t1', 1, { status: 'completed' })], { run: { open: false, merge, id: 'r1', mergeHold: ['#2 "Check"'], opsInCheckout: ['#3 "Deploy"'] } });
+    expect(only.options).toEqual([{
+      id: 'merge-all',
+      label: 'Merge all',
+      confirm: 'This merges work no check has passed: #2 "Check" has not. Ops task #3 "Deploy" is running in your checkout. Merge all rewrites files there that it may be reading, building or committing: merge beside it only if it works outside your checkout.',
     }]);
   });
 });

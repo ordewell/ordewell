@@ -274,7 +274,7 @@ describe('TaskOrchestrator: ops tasks and merge gates (ADR-0020)', () => {
     });
   });
 
-  describe('Merge all and ops tasks never overlap', () => {
+  describe('Merge all waits for ops tasks, unless the user says yes (ADR-0020)', () => {
     it('refuses Merge all while an ops task runs', async () => {
       const env = setup();
       const t1 = change('t1', 1);
@@ -285,6 +285,21 @@ describe('TaskOrchestrator: ops tasks and merge gates (ADR-0020)', () => {
 
       await expect(env.orchestrator.mergeRun()).rejects.toThrow(TaskControlError);
       expect(env.isolation.calls.map((c) => c.op)).not.toContain('mergeIntoCheckedOut');
+    });
+
+    it('merges beside a running ops task once the user has said yes to it, leaving the task running', async () => {
+      const env = setup();
+      const t1 = change('t1', 1);
+      env.orchestrator.loadPlan([t1, ops('o2', 2)]);
+      await env.orchestrator.approveReview();
+      env.pass(t1);
+      await vi.waitFor(() => expect(env.status('t1')).toBe('completed'));
+      await vi.waitFor(() => expect(env.status('o2')).toBe('in_progress'));
+
+      expect(env.orchestrator.opsInCheckout.map((t) => t.id)).toEqual(['o2']);
+      await expect(env.orchestrator.mergeRun({ besideOps: true })).resolves.toMatchObject({ outcome: 'merged' });
+      expect(env.isolation.calls.map((c) => c.op)).toContain('mergeIntoCheckedOut');
+      expect(env.status('o2')).toBe('in_progress');
     });
 
     it('refuses to start an ops task by hand while a merge is under way', async () => {

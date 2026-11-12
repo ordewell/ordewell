@@ -28,7 +28,7 @@ export interface ConfirmationRequest<C extends string = string> {
 
 export type ConfirmationKind =
   | 'remove_task' | 'start_past_gate' | 'manual_override' | 'revert_task'
-  | 'isolation_blocked' | 'merge_all' | 'merge_past_checks' | 'discard_run'
+  | 'isolation_blocked' | 'merge_all' | 'merge_past_checks' | 'merge_beside_ops' | 'discard_run'
   | 'run_setting_risk' | 'fork_stops_run' | 'discard_changes';
 
 function yes<C extends string>(kind: ConfirmationKind, message: string, id: C, label: string, detail?: string): ConfirmationRequest<C> {
@@ -106,6 +106,11 @@ export function mergeAllConfirmation(target: string, rule: string, midRun: boole
 /** The seam held the merge for work no check has passed (ADR-0055 D9): `held` is its own words. */
 export function mergePastChecksQuestion(held: string, target: string): ConfirmationRequest<'merge'> {
   return yes('merge_past_checks', `${held} Merge ${target} anyway?`, 'merge', 'Merge anyway');
+}
+
+/** The seam held the user's merge for ops tasks running in their checkout (ADR-0020): `held` is its own words, naming them. */
+export function mergeBesideOpsQuestion(held: string, target: string): ConfirmationRequest<'merge'> {
+  return yes('merge_beside_ops', `${held} Merge ${target} anyway?`, 'merge', 'Merge anyway');
 }
 
 export function discardRunConfirmation(): ConfirmationRequest<'discard'> {

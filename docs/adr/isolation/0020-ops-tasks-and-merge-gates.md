@@ -140,9 +140,25 @@ that depends on.**
   ops tasks whose git operations would collide (a push and a reword of the same
   branch) are ordered by the planner with a dependency — the plan is the source
   of truth, as for shared paths (ADR-0014).
-- **Merge all and ops tasks never overlap.** Merge all does not start while an
-  ops task runs, and an ops task does not start during a merge — the one
-  collision the planner cannot order, because the merge is the user's.
+- **Merge all holds for a running ops task, unless the user confirms it.** An
+  ops task does not start during a merge, and a merge does not start while an
+  ops task runs: it would rewrite files the task may be reading, building or
+  committing, the one collision the planner cannot order, because the merge is
+  the user's. Only the user can say an ops task works outside their checkout
+  (a deployment, a cloud setting), so only the user's own Merge all goes beside
+  one, and only after a confirmation that names the running ops tasks and
+  says what the hold protects against, asked as a merge past an unpassed
+  check is (ADR-0055 D9). Without the yes the merge is refused, and the
+  refusal says how to give it on that surface: a prompt in the TUI,
+  `--beside-ops` on `ordewell handoff merge`, a dialog in the desktop app and
+  VS Code, the merge-all option's own confirmation in the escalation inbox.
+  Automatic merges at gates and at the end of a run, and the supervisor's and
+  the planner's `merge_all`, keep the hold. Beside a running ops task the
+  desktop preflight offers no Stash (ADR-0062 G8): it would take the user's
+  files out of the checkout the task acts from. A merge never starts over a git
+  operation in progress either way: the preflight refuses one with a merge
+  under way, ADR-0042 one mid-rebase, and git itself one over a cherry-pick or
+  an index lock.
 - **An ops task that changed files waits on the user.** When it ends, the
   workspace's tracked files in every repo of the group are compared with a
   snapshot taken when it started; a new tracked change makes the task
@@ -183,6 +199,15 @@ it.
 - **Rejected: keep every task isolated (ADR-0014's position).** It is the
   context above: operations run on unmerged code, in the wrong order, or not at
   all.
+- **Rejected: Merge all and ops tasks never overlap, the user's merge
+  included.** The first design. Most ops tasks act outside the checkout, so the
+  hold made the user wait out a pipeline to merge work it never touches.
+- **Deferred: a planner-set "works outside the checkout" mark on an ops task.**
+  A merge, automatic ones included, could go beside a task so marked with no
+  one asked. It rests on the planner's judgement of where a task works, which
+  the tree check catches only after the fact, so it waits until unattended
+  merges beside ops tasks are needed; the user's confirmation covers the case
+  where someone is there to ask.
 - **Rejected: run ops tasks one at a time.** Most share nothing. The only
   overlap that needs code is with the user's merge; the rest is ordering the
   planner already does with dependencies.
@@ -247,3 +272,4 @@ it.
 - 2026-10-21 — a script task is an ops task Ordewell runs from a literal script with no model, whose evidence is its exit status, and the planner may add and start one; the planner no longer "never carries out an effect itself" ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)).
 - 2026-10-22: merge automatically is set in `/settings`; `ordewell automerge` stays headless.
 - 2026-11-01 — no ops task runs below the root, and a read-only script task passes no gate (ADR-0055 D2, D8).
+- 2026-11-12 — the user's own Merge all may go beside a running ops task after a confirmation naming it; every other merge keeps the hold, and the desktop preflight offers no Stash beside one (#113).

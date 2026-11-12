@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { manualOverrideConfirmation, pastGateConfirmation } from '@ordewell/core/plan-utils';
 import {
-  discardRunConfirmation, forkStopsRunConfirmation, mergeAllConfirmation, mergePastChecksQuestion, overrideConfirmation,
+  discardRunConfirmation, forkStopsRunConfirmation, mergeAllConfirmation, mergeBesideOpsQuestion, mergePastChecksQuestion, overrideConfirmation,
   runSettingRiskConfirmations, startPastGateConfirmation,
 } from '../confirmations';
 
@@ -26,6 +26,7 @@ describe('confirmations as data', () => {
     expect(mergeAllConfirmation('main', '', true).message).toMatch(/^Merge what the run has landed so far into main\. .*The run goes on/);
     expect(mergeAllConfirmation('main', '', false).message).toMatch(/^Merge the isolated run into main\./);
     expect(mergePastChecksQuestion('No check passed on #3.', 'main')).toMatchObject({ message: 'No check passed on #3. Merge main anyway?', choices: [{ label: 'Merge anyway' }] });
+    expect(mergeBesideOpsQuestion('Ops task #3 is running in your checkout.', 'main')).toEqual({ kind: 'merge_beside_ops', message: 'Ops task #3 is running in your checkout. Merge main anyway?', choices: [{ id: 'merge', label: 'Merge anyway' }] });
     expect(discardRunConfirmation().choices).toEqual([{ id: 'discard', label: 'Discard' }]);
     expect(forkStopsRunConfirmation().choices).toEqual([{ id: 'fork', label: 'Fork and stop the run' }]);
   });

@@ -858,19 +858,55 @@ describe('Session isolation actions it refuses', () => {
     expect(await session.execute({ command: 'merge_all' }, { kind: 'user' })).toMatchObject({ ok: false, outcome: 'refused', message: 'This plan has no isolated run' });
   });
 
-  it('refuses Merge all while an ops task runs in the checkout, and announces no merge', async () => {
-    const { session, isolation, messages, pass } = setup();
-    const t1 = task('t1', 1);
-    session.loadPlan(plan([t1, task('o2', 2, { ops: true })]), 'goal', '/repo');
-    await session.execute({ command: 'run_plan' }, { kind: 'user' });
-    await vi.waitFor(() => expect(taskOf(session, 'o2')!.status).toBe('in_progress'));
-    pass(t1);
-    await vi.waitFor(() => expect(taskOf(session, 't1')!.status).toBe('completed'));
+  describe('Merge all beside a running ops task (ADR-0020)', () => {
+    /** t1's change has landed while ops task o2 runs in the checkout. */
+    async function besideOps() {
+      const env = setup();
+      const t1 = task('t1', 1);
+      env.session.loadPlan(plan([t1, task('o2', 2, { ops: true })]), 'goal', '/repo');
+      await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
+      await vi.waitFor(() => expect(taskOf(env.session, 'o2')!.status).toBe('in_progress'));
+      env.pass(t1);
+      await vi.waitFor(() => expect(taskOf(env.session, 't1')!.status).toBe('completed'));
+      return env;
+    }
 
-    expect(await session.execute({ command: 'merge_all' }, { kind: 'user' })).toMatchObject({ ok: false, outcome: 'refused', message: expect.stringMatching(/^Ops task .* is running in your checkout/) });
+    it('asks the user first, naming the ops task and what a merge does to it, and merges nothing', async () => {
+      const { session, isolation, messages } = await besideOps();
 
-    expect(isolation.calls.map((c) => c.op)).not.toContain('mergeIntoCheckedOut');
-    expect(messages.map((m) => m.type)).not.toContain('isolation_merge');
+      expect(await session.execute({ command: 'merge_all' }, { kind: 'user' })).toEqual({
+        ok: false,
+        outcome: 'refused',
+        message: 'Ops task #2 "Task o2" is running in your checkout. Merge all rewrites files there that it may be reading, building or committing: merge beside it only if it works outside your checkout.',
+        payload: { kind: 'merge_beside_ops', tasks: ['#2 "Task o2"'] },
+      });
+
+      expect(isolation.calls.map((c) => c.op)).not.toContain('mergeIntoCheckedOut');
+      expect(messages.map((m) => m.type)).not.toContain('isolation_merge');
+    });
+
+    it('merges beside it once the user said yes, and leaves the ops task running', async () => {
+      const { session, isolation, messages } = await besideOps();
+
+      expect(await session.execute({ command: 'merge_all', besideOps: true }, { kind: 'user' })).toMatchObject({ ok: true, payload: { kind: 'merge', result: { outcome: 'merged' } } });
+
+      expect(isolation.calls.map((c) => c.op)).toContain('mergeIntoCheckedOut');
+      expect(messages.map((m) => m.type)).toContain('isolation_merge');
+      expect(taskOf(session, 'o2')!.status).toBe('in_progress');
+    });
+
+    it.each([
+      ['supervisor', { kind: 'supervisor', level: 'act' } as const, 'Merge all waits for ops task #2 "Task o2", which runs in the user\'s checkout: only the user merges beside one. Merge once it has finished, or leave it to the user.'],
+      // The planner never merges, an ops task running or not.
+      ['planner', { kind: 'planner-turn' } as const, expect.stringMatching(/^Merging the run's landed work is the user's/)],
+    ])('keeps the %s\'s merge_all held, a yes in the call or not', async (_who, actor, message) => {
+      const { session, isolation } = await besideOps();
+
+      for (const command of [{ command: 'merge_all' } as const, { command: 'merge_all', besideOps: true } as const]) {
+        expect(await session.execute(command, actor)).toMatchObject({ ok: false, outcome: 'refused', message });
+      }
+      expect(isolation.calls.map((c) => c.op)).not.toContain('mergeIntoCheckedOut');
+    });
   });
 
   it('refuses to clean up a run still going, as a refused request', async () => {

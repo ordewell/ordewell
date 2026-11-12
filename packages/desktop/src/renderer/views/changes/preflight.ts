@@ -52,8 +52,12 @@ type Handoff = Pick<IsolationHandoff, 'repos' | 'landed'>;
  * The dialog for a preflight's answer. The merge's own words are ui's
  * (`mergeAllConfirmation`), so every host says the same thing; what this adds
  * is the integration branch by name and the files in the way.
+ *
+ * `opsRunning` names each ops task running in the checkout. Beside one, Stash
+ * is not offered (ADR-0020): it takes the person's files out of the checkout
+ * the task acts from, and puts them back after, under its feet.
  */
-export function preflightModel(response: MergePreflightResponse, handoff: Handoff | null, midRun: boolean): PreflightModel {
+export function preflightModel(response: MergePreflightResponse, handoff: Handoff | null, midRun: boolean, opsRunning: readonly string[] = []): PreflightModel {
   const rows = response.repos.map((r) => ({
     repo: r.repo,
     branch: r.branch ?? 'the detached HEAD it started on',
@@ -65,14 +69,20 @@ export function preflightModel(response: MergePreflightResponse, handoff: Handof
   const merge = mergeAllConfirmation(target, handoff ? checkoutRule(handoff) : '', midRun);
   const detail: string[] = [];
   if (handoff && handoff.repos.length > 0) detail.push(`The integration branch ${handoffBranchName(handoff)} is merged, then the task worktrees are cleaned up.`);
-  if (overlapping) {
+  const stashing = overlapping && opsRunning.length === 0;
+  if (stashing) {
     detail.push('You have uncommitted changes to files the run also changed. Commit them, or stash them to merge now and restore them after.');
+  } else if (overlapping) {
+    const named = opsRunning.join(', ');
+    detail.push(`You have uncommitted changes to files the run also changed. Commit them first. Stash is not offered while ops task ${named} ${opsRunning.length === 1 ? 'is' : 'are'} running in your checkout: it would take your files out from under ${opsRunning.length === 1 ? 'it' : 'them'}.`);
   } else if (rows.some((r) => r.otherDirty)) {
     detail.push('Your other uncommitted changes do not touch what the run changed, and stay as they are.');
   }
-  const choices = overlapping
-    ? [{ id: 'stash' as const, label: 'Stash and merge' }, { id: 'commit' as const, label: 'Commit first' }]
-    : [{ id: 'merge' as const, label: 'Merge' }];
+  const choices = !overlapping
+    ? [{ id: 'merge' as const, label: 'Merge' }]
+    : stashing
+      ? [{ id: 'stash' as const, label: 'Stash and merge' }, { id: 'commit' as const, label: 'Commit first' }]
+      : [{ id: 'commit' as const, label: 'Commit first' }];
   return {
     rows,
     overlapping,

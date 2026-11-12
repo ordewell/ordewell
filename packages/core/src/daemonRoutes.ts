@@ -168,7 +168,7 @@ export const DAEMON_ROUTES = {
   // Reads of the saved run (ADR-0064, ADR-0062 G8): neither needs the session open here.
   'plans.taskDiff': row<TaskDiffResponse>()({ method: 'GET', path: '/api/plans/:sessionId/tasks/:taskId/diff', query: ['workspace', 'repo', 'path', 'names'], live: 'sessionId' }),
   'plans.mergePreflight': row<MergePreflightResponse>()({ method: 'GET', path: '/api/plans/:sessionId/isolation/merge-preflight', query: WS, live: 'sessionId' }),
-  'plans.isolationMerge': row<IsolationMergeResponse, { pastChecks?: true } | undefined>()({ method: 'POST', path: '/api/plans/:sessionId/isolation/merge', query: WS, live: 'sessionId' }),
+  'plans.isolationMerge': row<IsolationMergeResponse, { pastChecks?: true; besideOps?: true } | undefined>()({ method: 'POST', path: '/api/plans/:sessionId/isolation/merge', query: WS, live: 'sessionId' }),
   'plans.isolationDiscard': row<OkResponse>()({ method: 'POST', path: '/api/plans/:sessionId/isolation/discard', query: WS, live: 'sessionId' }),
   'plans.isolationCleanup': row<OkResponse>()({ method: 'POST', path: '/api/plans/:sessionId/isolation/cleanup', query: WS, live: 'sessionId' }),
   'plans.isolationStash': row<OkResponse>()({ method: 'POST', path: '/api/plans/:sessionId/isolation/stash-and-continue', query: WS, live: 'sessionId' }),

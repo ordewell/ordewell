@@ -110,11 +110,11 @@ export function writesCommit(kind: AttemptKind): boolean {
 }
 
 /**
- * Merge all and ops work never overlap (ADR-0020): the merge rewrites the
- * checkout an ops attempt acts from, and it is the one collision the planner
- * cannot order, because the merge is the user's. Both sides read this: an
- * attempt it holds does not start while a merge is under way, and a merge
- * does not start while one runs.
+ * Merge all holds for ops work (ADR-0020): the merge rewrites the checkout an
+ * ops attempt acts from, and it is the one collision the planner cannot order,
+ * because the merge is the user's. Both sides read this: an attempt it holds
+ * does not start while a merge is under way, and a merge does not start while
+ * one runs, unless the user confirms it, knowing where the task works.
  */
 export function mergeExcludes(kind: AttemptKind): boolean {
   return inCheckout(kind);
