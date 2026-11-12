@@ -82,14 +82,21 @@ const permissionMode = flag('--permission-mode') ?? 'default';
 const mcpConfigPath = flag('--mcp-config');
 const cwd = process.cwd();
 
-/** The tools the `--settings` ask rules name whole, as the real CLI reads `permissions.ask`. */
+/**
+ * The tools the `--settings` ask rules name whole, as the real CLI reads
+ * `permissions.ask`. On Windows a multi-line prompt starts this fake through
+ * `claude.ps1`, and Windows PowerShell drops every `"` on its way to `node`
+ * (ADR-0010), so the list is read from that unquoted form when it is not JSON.
+ */
 const askedTools = (() => {
+  const settings = flag('--settings') ?? '{}';
+  let rules;
   try {
-    const rules = JSON.parse(flag('--settings') ?? '{}')?.permissions?.ask;
-    return new Set(Array.isArray(rules) ? rules.filter((rule) => typeof rule === 'string' && !rule.includes('(')) : []);
+    rules = JSON.parse(settings)?.permissions?.ask;
   } catch {
-    return new Set();
+    rules = /\bask:\[([^\]]*)\]/.exec(settings)?.[1].split(',');
   }
+  return new Set(Array.isArray(rules) ? rules.filter((rule) => typeof rule === 'string' && rule !== '' && !rule.includes('(')) : []);
 })();
 const NATIVE_READS = new Set(['Read', 'Grep', 'Glob', 'LSP']);
 /** `can_use_tool` requests sent and not yet answered, by request id. */

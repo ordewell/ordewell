@@ -9,7 +9,7 @@ import { heldServersNote } from './projectServers';
 import type { ProjectMcpServer } from './repoConfig';
 import type { RaisedRequest } from './permissionLedger';
 import {
-  autoApproves, delay, interruptAcknowledged, openCodePermissions, openCodePlannerAsk, plannerSystem, openEventStream, permissionReply, raiseOnce, settleTurn, splitModelId, streamTurn,
+  autoApproves, delay, EventStreamLostError, interruptAcknowledged, openCodePermissions, openCodePlannerAsk, plannerSystem, openEventStream, permissionReply, raiseOnce, settleTurn, splitModelId, streamTurn,
   SESSION_TITLE, turnLatch, usageRecord, type EventStream, type OpenCodeTokens, type StreamTurn, type TurnLatch,
 } from './openCodeTransport';
 import { settleWithin } from './settleWithin';
@@ -499,7 +499,8 @@ export class OpenCodeV2 {
       this.turn = null;
       this.stepDone();
       poll.abort();
-      await stream.close();
+      // The owning adapter may dispose of the serve within an aborted turn's grace, and the stream goes with it.
+      await stream.close().catch((err: unknown) => { if (!(signal?.aborted && err instanceof EventStreamLostError)) throw err; });
     }
   }
 

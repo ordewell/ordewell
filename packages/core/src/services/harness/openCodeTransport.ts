@@ -542,6 +542,6 @@ async function streamEvents<F>(
   }
 }
 
-class EventStreamLostError extends Error {
+export class EventStreamLostError extends Error {
   constructor() { super("The OpenCode runner's event stream was lost."); }
 }
