@@ -3,6 +3,7 @@ import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, TERMINAL_UI_SIGN_IN, describe
 import { emptyEditor, type EditorState } from './editor';
 import type { RunnersResponse } from '../apiClient';
 import type { SaveSettingsEffect } from './reducers/settings';
+import type { MergeYes } from './reducers/shared';
 import type { StepperState } from './reducers/stepper';
 
 export type RunStatus = 'idle' | 'starting' | 'executing';
@@ -332,8 +333,8 @@ export type ConfirmAction =
   | { kind: 'save-settings'; effect: SaveSettingsEffect; menu?: StepperState }
   /** `seen` is the task ids the user was shown, which the daemon holds the revert to (ADR-0054). */
   | { kind: 'revert-task'; taskId: string; seen: string[] }
-  /** `pastChecks`: the user was asked about the checks that have not passed, and said yes (ADR-0055 D9). */
-  | { kind: 'merge-run'; pastChecks?: true }
+  /** `pastChecks` / `besideOps`: the user was asked about the checks that have not passed (ADR-0055 D9) or the ops tasks running in the checkout (ADR-0020), and said yes. */
+  | ({ kind: 'merge-run' } & MergeYes)
   | { kind: 'discard-run' }
   | { kind: 'init-workspace'; goal: string; workspace: string }
   | { kind: 'rewind'; index: number }

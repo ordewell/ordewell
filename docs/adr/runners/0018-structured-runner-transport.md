@@ -198,7 +198,14 @@ and completion evidence.
   that turn is left to close by itself within the interrupt grace. The report
   is published once it closes; if it is still open at the grace, the report is
   published then, and the stop the verdict orders gives the runner one more
-  grace to close before it is killed. In the common path the attempt lands only
+  grace to close before it is killed. A provider bills a request cut off
+  mid-stream, and OpenCode records an interrupted step as zero, so where the
+  runner says when a step starts and ends (OpenCode 2.x), a wind-down after
+  `task_complete` lets that turn's step in flight end by itself within the
+  interrupt grace before interrupting; a second stop kills at once. An aborted
+  OpenCode 2.x turn is interrupted, and the server disposed of once it has
+  acknowledged, or after one second, short because the abort is often a user's
+  stop. In the common path the attempt lands only
   after the reporting turn has closed. The call itself is acknowledged at once:
   as it is accepted on the attempt's token, the task's status says the report
   was received (`completionReceived`, read as "Completion received", or a
@@ -546,3 +553,4 @@ transport is retained for take-over.
 - 2026-11-10 — W1: a tool call in flight pauses the idle timer until its result or its turn's end; each idle flag in an attempt doubles the silence the next one needs.
 - 2026-11-10 — K1: the native session id is saved as soon as the runner reports it, so a task interrupted by Ordewell stopping can be continued; an agent that cannot resume fails the continue in plain words and points to Retry.
 - 2026-11-10 — V1: in the TUI task view Esc takes back the newest queued message before it clears the draft or returns, and send now sends the whole queue, as the planner chat's keys do.
+- 2026-11-12 — L1: a wind-down after `task_complete` lets an OpenCode 2.x step in flight end within the interrupt grace before interrupting, a second stop killing at once; an aborted OpenCode 2.x turn is interrupted, with a one-second grace, before its server is disposed of.

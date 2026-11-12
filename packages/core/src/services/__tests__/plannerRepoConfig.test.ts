@@ -154,7 +154,7 @@ describe('Claude Code planner launch (ADR-0028)', () => {
     expect(flag(args, '--setting-sources')).toBe('user');
     const settings = JSON.parse(flag(args, '--settings') ?? '{}') as { disableAllHooks?: boolean; permissions?: { ask?: string[] } };
     expect(settings.disableAllHooks).toBe(true);
-    expect(settings.permissions?.ask).toEqual(['WebFetch', 'WebFetch(domain:*)', 'WebSearch', 'mcp__*', 'Read', 'Grep', 'Glob', 'LS']);
+    expect(settings.permissions?.ask).toEqual(['WebFetch', 'WebFetch(domain:*)', 'WebSearch', 'mcp__*', 'Read', 'Grep', 'Glob', 'LS', 'LSP']);
   });
 });
 

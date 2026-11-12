@@ -153,7 +153,7 @@ describe('Claude Code with its own shell under Ordewell\'s sandbox (ADR-0036 N2)
       expect(disallowedOf(spawned)).toEqual(expect.arrayContaining(['Bash', 'Monitor']));
       expect(settingsOf(spawned)).toEqual({
         disableAllHooks: true,
-        permissions: { ask: ['WebFetch', 'WebFetch(domain:*)', 'WebSearch', 'mcp__*', 'Read', 'Grep', 'Glob', 'LS'] },
+        permissions: { ask: ['WebFetch', 'WebFetch(domain:*)', 'WebSearch', 'mcp__*', 'Read', 'Grep', 'Glob', 'LS', 'LSP'] },
       });
     } finally {
       adapter.dispose();

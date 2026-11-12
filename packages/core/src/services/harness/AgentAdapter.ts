@@ -64,7 +64,12 @@ export type AgentEvent =
   | { type: 'thinking_delta'; text: string; subagentId?: string }
   /** `subagentId` marks a call made inside a subagent rather than by the planner itself. */
   | { type: 'tool_call'; id: string; name: string; args: Record<string, unknown>; subagentId?: string }
-  | { type: 'tool_result'; id: string; name: string; output: string; success: boolean; subagentId?: string }
+  /**
+   * `unaskedRead` marks a read-class call the agent ran without asking: the
+   * planner's read limit counts it from its result, since there was no
+   * request to refuse (ADR-0068).
+   */
+  | { type: 'tool_result'; id: string; name: string; output: string; success: boolean; subagentId?: string; unaskedRead?: true }
   /** Usage and session billing facts as the agent reported them — never priced by Ordewell. */
   | { type: 'usage'; record: UsageRecord }
   /** The agent delegated `brief` to a subagent, whose events carry `subagentId` until it finishes. */
@@ -157,7 +162,12 @@ export type PlannerAsk =
    * `providerLabel` names that party in the approval.
    */
   | { kind: 'search'; query: string; provider: string; providerLabel?: string }
-  | { kind: 'path'; path: string; directory: boolean }
+  /**
+   * `confined` marks a tool whose answer is not bounded by `path`, a language
+   * server's from the whole project it indexed: it is allowed only inside the
+   * site's own root and never offered for approval (ADR-0008, ADR-0068).
+   */
+  | { kind: 'path'; path: string; directory: boolean; confined?: boolean }
   /** A command through the harness's own shell, allowed by the user's opt-in and held in Ordewell's sandbox (ADR-0036 N2, N3). */
   | { kind: 'native-shell'; tool: string; command?: string }
   /**
@@ -211,7 +221,9 @@ export interface PlannerStartOptions extends AgentStartCommon {
   /**
    * Whether the runner's own read tools must ask before they run, for a
    * runner whose policy lets them run unasked and is fixed when its session
-   * starts: the planner read limit was on then (ADR-0068). Absent means off.
+   * starts: the planner read limit was on then (ADR-0068). A runner whose
+   * reads cannot be made to ask turns them off instead, leaving Ordewell's
+   * `run_command` (Codex). Absent means off.
    */
   readsAsk?: boolean;
   /**
@@ -382,6 +394,14 @@ export interface TaskModeAgentAdapter extends AgentAdapter {
    * within `timeoutMs`, and the caller must fall back to killing it.
    */
   interrupt(timeoutMs: number): Promise<boolean>;
+  /**
+   * Resolves true once the model request the agent is streaming has ended by
+   * itself, at once when none is, and false when `timeoutMs` or the process's
+   * end comes first. A provider bills a request cut off mid-stream, so a wind
+   * down lets it end before interrupting (ADR-0018 L1). Absent on a runner
+   * that does not say when one starts and ends.
+   */
+  stepEnded?(timeoutMs: number): Promise<boolean>;
   /**
    * Tell the process nothing more is coming, once its turn has closed, so it
    * ends by itself and keeps what it saves on the way out. The process exit

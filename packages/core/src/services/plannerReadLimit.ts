@@ -69,6 +69,18 @@ export class PlannerReadLimit {
     this.current().bytes += bytes;
   }
 
+  /**
+   * One read that already ran without asking, with the bytes its result held:
+   * nothing could refuse it, so it is only counted, and the reads after it are
+   * refused once the turn is past the limit.
+   */
+  record(bytes: number): void {
+    if (!this.opts.limit()) return;
+    const spent = this.current();
+    spent.calls++;
+    spent.bytes += bytes;
+  }
+
   /** The planner's budget-block line, or nothing while the limit is off. */
   line(): string | undefined {
     const limit = this.opts.limit();

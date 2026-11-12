@@ -1260,6 +1260,7 @@ export class Session {
         mergesAtClose: this.orchestrator.mergesAtClose,
         merge: this.runMergeView(),
         mergeHold: this.mergeHold(),
+        opsInCheckout: this.opsInCheckout(),
         id: this.runs.planIsolation?.run.id ?? null,
         blocked: this.runs.blocked ? { start: this.runs.blockedStarts, repos: this.runs.blockedIn } : null,
       },
@@ -1268,7 +1269,17 @@ export class Session {
 
   /** What holds a merge nobody asked for here, as a list or a refusal names it (ADR-0055 D9). */
   private mergeHold(): string[] {
-    return this.orchestrator.mergeHold.map((check) => `${taskRefOf(this.store.planTasks, check.id) ?? `#${check.order}`} "${check.title}"`);
+    return this.orchestrator.mergeHold.map((check) => this.namedRow(check));
+  }
+
+  /** The ops tasks running in the user's checkout, named as {@link mergeHold} names its checks (ADR-0020). None to ask about without a run to merge, which Merge all refuses on its own. */
+  private opsInCheckout(): string[] {
+    if (!this.runs.planIsolation) return [];
+    return this.orchestrator.opsInCheckout.map((task) => this.namedRow(task));
+  }
+
+  private namedRow(task: Task): string {
+    return `${taskRefOf(this.store.planTasks, task.id) ?? `#${task.order}`} "${task.title}"`;
   }
 
   /** The user's answer to an escalation; see {@link ExecutionCommands.answerEscalation}. `raiseTokens` goes with an Approve of a delegated task (ADR-0056 M5). */
@@ -1416,7 +1427,8 @@ export class Session {
       raiseChild: (taskId, tokens) => this.funds.raise(taskId, tokens),
       mergeHold: () => this.mergeHold(),
       answerRequest: (requestId, decision) => this.resolveApproval(requestId, decision),
-      mergeAll: () => this.mergeAll(),
+      opsInCheckout: () => this.opsInCheckout(),
+      mergeAll: (besideOps) => this.mergeAll(besideOps),
       runMerged: () => this.runs.mergedRun !== null,
       record: (record, text) => this.recordExecution(record, text),
       guardTripped: (trip) => this.supervision.guardTripped(trip),
@@ -3173,12 +3185,13 @@ export class Session {
    * supervisor's merge_all reach it through the seam; automatic gate merging
    * shares the scheduler's half of it. During a run it merges what has landed
    * so far, which is what opens a merge gate (ADR-0020); it waits for no ops
-   * task, and refuses while one runs.
+   * task, and refuses while one runs unless the user said yes to merging
+   * beside it (`besideOps`).
    */
-  private async mergeAll(): Promise<IsolationMergeResult> {
+  private async mergeAll(besideOps = false): Promise<IsolationMergeResult> {
     // Ahead of the ops refusal: with no run there is nothing to merge once the ops task ends either.
     this.runs.requireRun();
-    const merging = this.saves.control(() => this.orchestrator.mergeRun());
+    const merging = this.saves.control(() => this.orchestrator.mergeRun({ besideOps }));
     // The merge has begun by now: another host's interlock reads it in the lease
     // record (ADR-0062 G7), and reads its end there too, not a heartbeat later.
     this.lease.publish();

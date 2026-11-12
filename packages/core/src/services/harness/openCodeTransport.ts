@@ -375,6 +375,8 @@ export interface TurnSettlement {
   /** The turn's {@link EventStream.failed}. */
   streamFailed: Promise<never>;
   exitMessage(): string;
+  /** Runs once the turn has ended on its own, before {@link readBack}, while the stream is still open to frames that trail the end. */
+  drain?(): Promise<void>;
   /** Whatever of the turn's own messages the stream missed. */
   readBack(): Promise<void>;
   permissions: PermissionLedger<OpenCodeAskHandle>;
@@ -411,6 +413,7 @@ export async function settleTurn(turn: TurnLatch, how: TurnSettlement, onEvent: 
     onEvent({ type: 'error', message: how.exitMessage() });
     return true;
   }
+  await how.drain?.();
   await how.readBack();
   how.permissions.endTurn(onEvent);
   onEvent(how.outcome());
@@ -539,6 +542,6 @@ async function streamEvents<F>(
   }
 }
 
-class EventStreamLostError extends Error {
+export class EventStreamLostError extends Error {
   constructor() { super("The OpenCode runner's event stream was lost."); }
 }

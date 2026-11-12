@@ -1,21 +1,38 @@
 #!/usr/bin/env node
 /*
  * A fake OpenCode 2.x `serve`, for the login-backed research agent
- * (ADR-0066). It speaks the slice of the 2.x HTTP API Ordewell's research
- * runner uses, and models the one rule that decides what a session is offered,
+ * (ADR-0066) and a task's runner. It speaks the slice of the 2.x HTTP API
+ * those use, and models the one rule that decides what a session is offered,
  * as v2.2.7 does it: a tool is dropped when the last permission rule whose
  * action matches it denies resource "*" (tool.ts `whollyDisabled`); agent
  * (config) rules come first, session rules last (session/context.ts).
  *
  * The "model" is a cue in the brief: <fake-opencode>{...}</fake-opencode> with
  *   steps: [{ calls: [{ name, args }] }]  tool calls, one step each
- *   text: the final answer;  delayMs: wait before answering;
+ *   text: the final answer;  delayMs: how long the final step runs before answering;
  *   usage: { input, output } per step;  child: true starts a child session;
- *   fail: { type, message } ends the run with session.execution.failed.
+ *   fail: { type, message } ends the run with session.execution.failed;
+ *   interruptDelayMs: how long an interrupt takes to be acknowledged.
  *
  * An interrupt first fails the step in flight, if any, with session.step.failed
  * { type: MessageAbortedError, message: "Step interrupted" }, as v2.2.7 records an
- * interrupted step, then sends session.execution.interrupted.
+ * interrupted step, then sends session.execution.interrupted. The step stops at
+ * once; the frames and the route's answer wait out interruptDelayMs.
+ *
+ * A call with hang: true delegates to a child session and never returns: an
+ * interrupt fails that call (session.tool.failed, MessageAbortedError), as v2.2.7
+ * does the parent's delegating call, before session.execution.interrupted.
+ *
+ * Usage OpenCode reports beyond a step's own end, as v2.2.7 does:
+ *   failUsage: { input, output, cost } rides on the session.step.failed a `fail` cue sends;
+ *   interruptUsage: the same, on the session.step.failed an interrupt sends (a finish
+ *     frame that arrived together with the failure);
+ *   recorded: [{ source, input, output, cost, child? }] session.usage.recorded frames
+ *     before the steps, each for a child session of the run when child: true;
+ *   duplicateEnd: true sends every session.step.ended twice, as a replayed stream does;
+ *   lateEndMs: the session goes idle (off /api/session/active) and sends
+ *     session.execution.succeeded while the last step is still open; that step's
+ *     session.step.ended follows lateEndMs later.
  *
  * An untitled session's first prompt makes the hidden title call v2.2.7 makes:
  * its usage arrives only as a session.usage.recorded frame with source "title"
@@ -65,6 +82,7 @@ const glob = (pattern, value) => new RegExp(`^${pattern.split('*').map((s) => s.
 const whollyDisabled = (rules, tool) => { const last = rules.findLast((r) => glob(r.action, tool)); return !!last && last.resource === '*' && last.effect === 'deny'; };
 const json = (res, status, body) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body));
 const frame = (type, data) => { for (const s of streams) s.write(`data: ${JSON.stringify({ type, data })}\n\n`); };
+const tokens = (usage) => ({ input: usage.input, output: usage.output, reasoning: 0, cache: { read: 0, write: 0 } });
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 const readBody = (req) => new Promise((resolve) => { let b = ''; req.on('data', (c) => { b += c; }); req.on('end', () => { try { resolve(b ? JSON.parse(b) : {}); } catch { resolve({}); } }); });
 
@@ -102,11 +120,18 @@ async function run(session, text) {
   const id = session.id;
   const stopped = () => session.interrupted;
   session.inFlight = undefined;
+  session.interruptDelayMs = cue.interruptDelayMs ?? 0;
+  session.interruptUsage = cue.interruptUsage;
+  session.running = true;
+  try { await runSteps(session, cue, id, stopped); } finally { session.running = false; }
+}
+
+async function runSteps(session, cue, id, stopped) {
   frame('session.execution.started', { sessionID: id });
   if (cue.fail) {
     const message = `msg_${randomUUID()}`;
     frame('session.step.started', { sessionID: id, assistantMessageID: message, model: session.model ?? { providerID: 'fake', id: 'fake-model' } });
-    frame('session.step.failed', { sessionID: id, assistantMessageID: message, error: cue.fail });
+    frame('session.step.failed', { sessionID: id, assistantMessageID: message, error: cue.fail, ...(cue.failUsage ? { tokens: tokens(cue.failUsage), cost: cue.failUsage.cost } : {}) });
     frame('session.execution.failed', { sessionID: id, error: cue.fail });
     return;
   }
@@ -114,6 +139,11 @@ async function run(session, text) {
   if (!session.title && !session.titled) {
     session.titled = true;
     frame('session.usage.recorded', { sessionID: id, source: 'title', cost: 0.0004, tokens: { input: 900, output: 12, reasoning: 0, cache: { read: 0, write: 0 } } });
+  }
+  for (const record of cue.recorded ?? []) {
+    let owner = id;
+    if (record.child) { owner = `ses_${randomUUID()}`; frame('session.created', { sessionID: owner, parentID: id }); }
+    frame('session.usage.recorded', { sessionID: owner, source: record.source, cost: record.cost, tokens: tokens(record) });
   }
   const tools = await offered(session);
   const steps = [...(cue.steps ?? []), { final: true }];
@@ -131,6 +161,14 @@ async function run(session, text) {
         continue;
       }
       frame('session.tool.called', { sessionID: id, id: callId, input: call.args ?? {} });
+      if (call.hang) {
+        const child = `ses_${randomUUID()}`;
+        frame('session.created', { sessionID: child, parentID: id });
+        frame('session.tool.progress', { sessionID: id, assistantMessageID: message, id: callId, metadata: { sessionID: child, status: 'running' } });
+        session.hanging = callId;
+        while (!stopped()) await delay(10);
+        return;
+      }
       const server = [...servers].find(([name]) => call.name.startsWith(`${name}_`));
       if (server) {
         const result = await mcp(server[1], 'tools/call', { name: call.name.slice(server[0].length + 1), arguments: call.args ?? {} })
@@ -144,7 +182,10 @@ async function run(session, text) {
         frame('session.tool.success', { sessionID: id, id: callId, content: [{ type: 'text', text: `${call.name} ran` }] });
       }
     }
-    if (step.final && cue.delayMs) await delay(cue.delayMs);
+    if (step.final && cue.delayMs) {
+      const until = Date.now() + cue.delayMs;
+      while (!stopped() && Date.now() < until) await delay(10);
+    }
     if (stopped()) return;
     const usage = cue.usage ?? { input: 10, output: 5 };
     if (step.final) {
@@ -152,8 +193,19 @@ async function run(session, text) {
       session.messages.unshift({ id: message, type: 'assistant', content: [{ type: 'text', text: answer }] });
       frame('session.text.ended', { sessionID: id, assistantMessageID: message, ordinal: 0, text: answer });
     }
+    const ended = () => {
+      for (let sent = 0; sent < (cue.duplicateEnd ? 2 : 1); sent++) frame('session.step.ended', { sessionID: id, assistantMessageID: message, tokens: tokens(usage), cost: usage.cost ?? 0.001 });
+    };
+    if (step.final && cue.lateEndMs) {
+      session.running = false;
+      frame('session.execution.succeeded', { sessionID: id });
+      await delay(cue.lateEndMs);
+      session.inFlight = undefined;
+      ended();
+      return;
+    }
     session.inFlight = undefined;
-    frame('session.step.ended', { sessionID: id, assistantMessageID: message, tokens: { input: usage.input, output: usage.output, reasoning: 0, cache: { read: 0, write: 0 } }, cost: usage.cost ?? 0.001 });
+    ended();
   }
   if (!stopped() && !cue.noEnd) frame('session.execution.succeeded', { sessionID: id });
 }
@@ -164,6 +216,8 @@ const server = createServer(async (req, res) => {
   const path = url.pathname;
   let m;
   if (req.method === 'GET' && path === '/api/info') return json(res, 200, { version: VERSION, data: { version: VERSION } });
+  // The adapter reads these at start-up; a fake with nothing to list answers an empty list.
+  if (req.method === 'GET' && ['/api/model', '/api/command', '/api/skill'].includes(path)) return json(res, 200, { data: [] });
   if (req.method === 'GET' && path === '/api/config') return json(res, 200, entries);
   if (req.method === 'GET' && path === '/api/mcp') return json(res, 200, { location: {}, data: [...servers.keys()].map((name) => ({ name, status: { status: 'connected' } })) });
   if (req.method === 'GET' && path === '/api/plugin') return json(res, 200, { location: {}, data: plugins });
@@ -174,6 +228,9 @@ const server = createServer(async (req, res) => {
     streams.add(res);
     req.on('close', () => streams.delete(res));
     return;
+  }
+  if (req.method === 'GET' && path === '/api/session/active') {
+    return json(res, 200, { data: Object.fromEntries([...sessions.values()].filter((s) => s.running).map((s) => [s.id, { type: 'busy' }])) });
   }
   if (req.method === 'GET' && path === '/api/fake/ran') return json(res, 200, { ran });
   if (req.method === 'GET' && path === '/api/fake/env') {
@@ -208,7 +265,10 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === 'POST' && m[2] === 'interrupt') {
       s.interrupted = true;
-      if (s.inFlight) frame('session.step.failed', { sessionID: s.id, assistantMessageID: s.inFlight, error: { type: 'MessageAbortedError', message: 'Step interrupted' } });
+      if (s.interruptDelayMs) await delay(s.interruptDelayMs);
+      if (s.hanging) frame('session.tool.failed', { sessionID: s.id, assistantMessageID: s.inFlight, id: s.hanging, error: { type: 'MessageAbortedError', message: 'Tool execution aborted' } });
+      s.hanging = undefined;
+      if (s.inFlight) frame('session.step.failed', { sessionID: s.id, assistantMessageID: s.inFlight, error: { type: 'MessageAbortedError', message: 'Step interrupted' }, ...(s.interruptUsage ? { tokens: tokens(s.interruptUsage), cost: s.interruptUsage.cost } : {}) });
       frame('session.execution.interrupted', { sessionID: s.id });
       return json(res, 200, { data: { interrupted: true } });
     }

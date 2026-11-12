@@ -158,8 +158,8 @@ interface PlannerSessionStart {
 
 /**
  * The asks that are the planner's own reads (ADR-0068). A native read the
- * runner allows itself never asks, and is not counted: what it reads is the
- * adapter's to route through here.
+ * runner allows itself never asks: the adapter marks its result
+ * `unaskedRead`, and it is counted there.
  */
 const OWN_READ_ASKS: ReadonlySet<PlannerAsk['kind']> = new Set(['path', 'native-shell', 'native-read']);
 
@@ -780,6 +780,7 @@ export class CliAgentAiService implements IAiService {
 
         case 'tool_result':
           if (chargedCalls.delete(event.id)) readLimit?.charge(Buffer.byteLength(event.output));
+          else if (event.unaskedRead && !event.subagentId) readLimit?.record(Buffer.byteLength(event.output));
           settle(event.id, event.output, event.success, event.success ? 'success' : deniedCalls.has(event.id) ? 'denied' : 'failure', event.subagentId);
           return;
 

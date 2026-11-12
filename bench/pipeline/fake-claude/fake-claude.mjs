@@ -26,7 +26,11 @@
  * A planner's first message may carry `turnsFrom` instead: a file holding one
  * entry per turn, made in order. An entry is a list of tool calls, each
  * `[tool, arguments]`, made on the Ordewell server, or `{ calls, text }` to end
- * the turn saying `text` too (a summary, say). A file, since a plan's prompts
+ * the turn saying `text` too (a summary, say). A call whose tool is one of
+ * Claude Code's own reads (`Read`, `Grep`, `Glob`, `LSP`) runs natively
+ * instead, as the real CLI runs it: it raises `can_use_tool` first when the
+ * `--settings` ask rules name the tool, and waits for the answer, and runs
+ * unasked when they do not. A file, since a plan's prompts
  * hold cues of their own. What is left of them is kept beside the session,
  * under FAKE_CLAUDE_STATE, for the session's next turn, in this process or in
  * the `--resume` of a parked subplanner (ADR-0055 D18). A planner writes no
@@ -77,6 +81,27 @@ const sessionId = flag('--resume') ?? `fake-claude-${randomUUID()}`;
 const permissionMode = flag('--permission-mode') ?? 'default';
 const mcpConfigPath = flag('--mcp-config');
 const cwd = process.cwd();
+
+/**
+ * The tools the `--settings` ask rules name whole, as the real CLI reads
+ * `permissions.ask`. On Windows a multi-line prompt starts this fake through
+ * `claude.ps1`, and Windows PowerShell drops every `"` on its way to `node`
+ * (ADR-0010), so the list is read from that unquoted form when it is not JSON.
+ */
+const askedTools = (() => {
+  const settings = flag('--settings') ?? '{}';
+  let rules;
+  try {
+    rules = JSON.parse(settings)?.permissions?.ask;
+  } catch {
+    rules = /\bask:\[([^\]]*)\]/.exec(settings)?.[1].split(',');
+  }
+  return new Set(Array.isArray(rules) ? rules.filter((rule) => typeof rule === 'string' && rule !== '' && !rule.includes('(')) : []);
+})();
+const NATIVE_READS = new Set(['Read', 'Grep', 'Glob', 'LSP']);
+/** `can_use_tool` requests sent and not yet answered, by request id. */
+const pendingAsks = new Map();
+let askCount = 0;
 
 let messageCount = 0;
 let turnAbort = null;
@@ -191,10 +216,67 @@ function logged(entry) {
   if (process.env.FAKE_CLAUDE_LOG) fs.appendFileSync(process.env.FAKE_CLAUDE_LOG, `${JSON.stringify({ sessionId, ...entry })}\n`);
 }
 
+function filesUnder(dir) {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    if (entry.name === '.git' || entry.name === '.ordewell') return [];
+    const full = path.join(dir, entry.name);
+    return entry.isDirectory() ? filesUnder(full) : [full];
+  });
+}
+
+function globPattern(pattern) {
+  const source = pattern.split('**/').map((part) => part.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('[^/]*')).join('(?:.*/)?');
+  return new RegExp(`^${source}$`);
+}
+
+/** What a native read returns: the file, the matching lines or names, or an LSP answer about the file. */
+function nativeRead(name, input) {
+  const at = (target) => path.resolve(cwd, typeof target === 'string' ? target : '.');
+  switch (name) {
+    case 'Read': return fs.readFileSync(at(input.file_path), 'utf8');
+    case 'Grep': {
+      const match = new RegExp(String(input.pattern ?? ''));
+      return filesUnder(at(input.path)).flatMap((file) => fs.readFileSync(file, 'utf8').split('\n')
+        .map((line, i) => (match.test(line) ? `${path.relative(cwd, file)}:${i + 1}:${line}` : null)).filter(Boolean)).join('\n');
+    }
+    case 'Glob': {
+      const match = globPattern(String(input.pattern ?? '**/*'));
+      return filesUnder(at(input.path)).map((file) => path.relative(at(input.path), file).split(path.sep).join('/')).filter((rel) => match.test(rel)).join('\n');
+    }
+    default: return `${input.operation ?? 'documentSymbol'} in ${input.filePath}: ${fs.readFileSync(at(input.filePath), 'utf8').split('\n').length} lines`;
+  }
+}
+
+/** Asks the host whether a tool may run, as `--permission-prompt-tool stdio` does, and waits for its answer. */
+function canUseTool(name, input, toolUseId) {
+  askCount += 1;
+  const requestId = `fake-ask-${askCount}`;
+  const answered = new Promise((resolve) => { pendingAsks.set(requestId, resolve); });
+  emit({ type: 'control_request', request_id: requestId, request: { subtype: 'can_use_tool', tool_name: name, input, tool_use_id: toolUseId } });
+  return answered;
+}
+
+async function nativeCall(id, name, input) {
+  const answer = askedTools.has(name) ? await canUseTool(name, input, id) : { behavior: 'allow', updatedInput: input };
+  if (answer?.behavior !== 'allow') return { text: answer?.message ?? 'denied', isError: true };
+  try {
+    return { text: nativeRead(name, answer.updatedInput ?? input), isError: false };
+  } catch (err) {
+    return { text: err instanceof Error ? err.message : String(err), isError: true };
+  }
+}
+
 async function makeCalls(calls) {
   const server = mcpServer();
   for (const [name, args] of calls) {
     const id = `toolu_fake_${randomUUID()}`;
+    if (NATIVE_READS.has(name)) {
+      assistant([{ type: 'tool_use', id, name, input: args }]);
+      const reply = await nativeCall(id, name, args);
+      logged({ tool: name, native: true, reply });
+      toolResult(id, reply.text, reply.isError);
+      continue;
+    }
     assistant([{ type: 'tool_use', id, name: `mcp__ordewell__${name}`, input: args }]);
     const reply = await callTool(server, name, args);
     logged({ tool: name, reply });
@@ -305,6 +387,11 @@ function acceptInput() {
     let msg;
     try { msg = JSON.parse(line); } catch { return; }
     if (msg.type === 'control_request') control(msg);
+    else if (msg.type === 'control_response') {
+      const requestId = msg.response?.request_id;
+      pendingAsks.get(requestId)?.(msg.response?.response);
+      pendingAsks.delete(requestId);
+    }
     else if (msg.type === 'user') {
       if (msg.uuid) emit({ type: 'user', isReplay: true, uuid: msg.uuid, message: msg.message });
       if (steerWaiter) steerWaiter(msg);

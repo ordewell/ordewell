@@ -1206,6 +1206,31 @@ describe('OpenCode 2.x — subagents', () => {
     adapter.dispose();
   });
 
+  it('reports a subagent as stopped when its call fails because Ordewell interrupted the turn', async () => {
+    const server = fakeServer({ [`POST /api/session/${SES}/interrupt`]: () => ({ interrupted: true }) });
+    const { adapter } = await start(server, plannerStart());
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('go', (e) => events.push(e));
+    const stream = await server.stream();
+    await until(() => server.requests.some((r) => r.path.endsWith('/prompt')));
+
+    stream.push(started());
+    for (const f of call('call_task', { agent: 'explore', description: 'Read README', prompt: 'read it' }, 'subagent')) stream.push(f);
+    stream.push({ type: 'session.created', data: { sessionID: CHILD, parentID: SES } });
+    stream.push(frame('session.tool.progress', { assistantMessageID: MSG, id: 'call_task', metadata: { sessionID: CHILD, status: 'running' } }));
+    const interrupted = adapter.interrupt(5000);
+    await until(() => server.requests.some((r) => r.path.endsWith('/interrupt')));
+    // v2.2.7 fails the delegating call, as it does a real failure, before it acknowledges the interrupt.
+    stream.push(frame('session.tool.failed', { assistantMessageID: MSG, id: 'call_task', error: { type: 'MessageAbortedError', message: 'Tool execution aborted' } }));
+    stream.push(frame('session.execution.interrupted', { reason: 'user' }));
+    await interrupted;
+    await turn;
+
+    expect(events.find((e) => e.type === 'subagent_finished')).toMatchObject({ subagentId: 'call_task', outcome: 'stopped' });
+    expect(events.at(-1)).toEqual({ type: 'turn_end', interrupted: true });
+    adapter.dispose();
+  });
+
   it('ignores another client\'s session on the shared stream', async () => {
     const server = fakeServer();
     const { adapter } = await start(server, taskStart());
@@ -1349,6 +1374,20 @@ describe('OpenCode 2.x — shared protocol behaviour', () => {
       { type: 'usage', record: { source: 'opencode', aggregate: true, purpose: 'title', inputTokens: 9000, cachedInputTokens: 0, outputTokens: 12, reportedCost: { amount: 0.004, currency: 'USD', kind: 'estimate' } } },
       { type: 'usage', record: { source: 'opencode', aggregate: true, purpose: 'compaction', inputTokens: 140, cachedInputTokens: 40, outputTokens: 25 } },
     ]);
+    adapter.dispose();
+  });
+
+  it('counts a step\'s usage once when its start named no model and OpenCode also recorded it', async () => {
+    const server = fakeServer();
+    const { adapter, events, turn, stream } = await turnOf(server, plannerStart());
+    const tokens = { input: 120, output: 30, reasoning: 0, cache: { read: 0, write: 0 } };
+    stream.push(frame('session.step.started', { assistantMessageID: MSG }));
+    stream.push(frame('session.usage.recorded', { assistantMessageID: MSG, source: 'generate', tokens }));
+    stream.push(frame('session.step.ended', { assistantMessageID: MSG, tokens }));
+    stream.push(succeeded());
+    await turn;
+
+    expect(events.filter((e) => e.type === 'usage')).toHaveLength(1);
     adapter.dispose();
   });
 });

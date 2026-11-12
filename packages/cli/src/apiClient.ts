@@ -707,8 +707,8 @@ export class ApiClient {
    * A conflict or a block is an outcome, not an error. Passed on whole: which
    * repos blocked the merge, or landed before it stopped, is the answer.
    */
-  mergeRun(sessionId: string, options: { pastChecks?: true } = {}): Promise<MergeRunResult> {
-    return this.call('plans.isolationMerge', 'Merge failed', { params: { sessionId }, body: options.pastChecks ? { pastChecks: true } : undefined });
+  mergeRun(sessionId: string, options: { pastChecks?: true; besideOps?: true } = {}): Promise<MergeRunResult> {
+    return this.call('plans.isolationMerge', 'Merge failed', { params: { sessionId }, body: options.pastChecks || options.besideOps ? options : undefined });
   }
 
   discardRun(sessionId: string): Promise<void> {

@@ -9,11 +9,22 @@ import { heldServersNote } from './projectServers';
 import type { ProjectMcpServer } from './repoConfig';
 import type { RaisedRequest } from './permissionLedger';
 import {
-  autoApproves, delay, interruptAcknowledged, openCodePermissions, openCodePlannerAsk, plannerSystem, openEventStream, permissionReply, raiseOnce, settleTurn, splitModelId, streamTurn,
+  autoApproves, delay, EventStreamLostError, interruptAcknowledged, openCodePermissions, openCodePlannerAsk, plannerSystem, openEventStream, permissionReply, raiseOnce, settleTurn, splitModelId, streamTurn,
   SESSION_TITLE, turnLatch, usageRecord, type EventStream, type OpenCodeTokens, type StreamTurn, type TurnLatch,
 } from './openCodeTransport';
+import { settleWithin } from './settleWithin';
 /** A turn's end is also read from `/api/session/active`, behind the stream, which can drop a frame. */
 const ACTIVE_POLL_INTERVAL_MS = 1000;
+/**
+ * How long an aborted turn's step may take to be interrupted before the
+ * server is disposed of (ADR-0018 L1). A live serve fails the step and
+ * acknowledges well within it, and an abort is often a user's stop, which must
+ * stay prompt; a serve that has not answered by then is killed, as before.
+ */
+export const OPENCODE_ABORT_GRACE_MS = 1000;
+/** How long a turn that ended waits for the step still in flight to report its usage. */
+const LATE_USAGE_GRACE_MS = 1500;
+const LATE_USAGE_POLL_MS = 25;
 /** Polls that find the session inactive before any frame of this turn arrived, after which it is taken as already over. */
 const IDLE_POLLS_BEFORE_START = 3;
 
@@ -169,6 +180,8 @@ interface TurnState extends StreamTurn<V2Frame> {
   toolNames: Map<string, string>;
   /** Assistant message id → the model that ran it, from `session.step.started`. */
   stepModels: Map<string, string>;
+  /** Steps that have started and neither ended nor failed: the usage still to come when the turn's own end arrives first. */
+  openSteps: Set<string>;
   /** A delegation call's own id and its brief, remembered so `subagent_started` can name it. */
   briefs: Map<string, string>;
   /** A `read` call's id → the path it reads; its `external_directory` request names only the folder. */
@@ -189,6 +202,7 @@ function newTurnState(): TurnState {
     ...streamTurn<V2Frame>(),
     toolNames: new Map(),
     stepModels: new Map(),
+    openSteps: new Set(),
     briefs: new Map(),
     readPaths: new Map(),
     shellCalls: new Map(),
@@ -247,6 +261,9 @@ export class OpenCodeV2 {
   private agent: string;
   private turn: Turn | null = null;
   private interruptRequested = false;
+  /** Whether the session's own step is streaming: begun, and neither ended nor failed. */
+  private stepOpen = false;
+  private stepWaiters: (() => void)[] = [];
   /** Whether a planner's own `websearch` is on for its session (ADR-0027). */
   private ownSearch = true;
   /** Approved project servers whose tools are listed as tools of their own. */
@@ -461,12 +478,13 @@ export class OpenCodeV2 {
       }
 
       void this.pollActive(turn, poll.signal);
-      // An aborted turn is left to the owning adapter, which disposes of the server.
-      await settleTurn(turn, {
+      // An aborted turn is interrupted, then left to the owning adapter, which disposes of the server.
+      const settled = await settleTurn(turn, {
         signal,
         processEnded: this.host.processEnded,
         streamFailed: stream.failed,
         exitMessage: () => this.host.exitMessage(),
+        drain: () => this.drainSteps(state),
         readBack: () => this.readBack(state, onEvent),
         permissions: this.permissions,
         outcome: () => {
@@ -476,11 +494,55 @@ export class OpenCodeV2 {
           return { type: 'turn_end' };
         },
       }, onEvent);
+      if (!settled) await this.interruptAborted(turn);
     } finally {
       this.turn = null;
+      this.stepDone();
       poll.abort();
-      await stream.close();
+      // The owning adapter may dispose of the serve within an aborted turn's grace, and the stream goes with it.
+      await stream.close().catch((err: unknown) => { if (!(signal?.aborted && err instanceof EventStreamLostError)) throw err; });
     }
+  }
+
+  /**
+   * A step cut off mid-stream is billed and recorded as nothing, so an aborted
+   * turn's step is failed through OpenCode, which still streams its end,
+   * rather than lost with the server (ADR-0018 L1). Bounded: the process
+   * ending, or the grace running out, gives up on it.
+   */
+  private async interruptAborted(turn: Turn): Promise<void> {
+    if (turn.done || this.host.isExited()) return;
+    await settleWithin(this.interrupt(OPENCODE_ABORT_GRACE_MS), {
+      timeoutMs: OPENCODE_ABORT_GRACE_MS, onTimeout: () => false, ended: this.host.processEnded, onEnded: () => false,
+    });
+  }
+
+  /**
+   * Resolves true once the session's step in flight has ended or failed, at
+   * once when none is, and false when the timeout or the process's end comes
+   * first. What a wind-down waits on before interrupting a step that would
+   * otherwise be billed for nothing (ADR-0018 L1).
+   */
+  stepEnded(timeoutMs: number): Promise<boolean> {
+    if (!this.stepOpen) return Promise.resolve(true);
+    const ended = new Promise<boolean>((resolve) => this.stepWaiters.push(() => resolve(true)));
+    return settleWithin(ended, { timeoutMs, onTimeout: () => false, ended: this.host.processEnded, onEnded: () => false });
+  }
+
+  private stepDone(): void {
+    this.stepOpen = false;
+    for (const waiter of this.stepWaiters.splice(0)) waiter();
+  }
+
+  /**
+   * The session's end and its last step's end travel separately, and the poll
+   * can see the session idle first. The stream is still open here, so the step
+   * in flight gets a short grace to report what it billed; a step that never
+   * ends must not hold the turn.
+   */
+  private async drainSteps(state: TurnState): Promise<void> {
+    const deadline = Date.now() + LATE_USAGE_GRACE_MS;
+    while (state.openSteps.size > 0 && Date.now() < deadline) await delay(LATE_USAGE_POLL_MS);
   }
 
   /**
@@ -595,6 +657,13 @@ export class OpenCodeV2 {
     const isChild = session !== this.sessionId;
     if (isChild && !state.children.follows(session)) return;
 
+    // A call OpenCode bills outside any step: a title it makes when the session was never named, a compaction.
+    // A child session makes them too, and they never name a delegating call, so they are not held for one.
+    if (frame.type === 'session.usage.recorded') {
+      this.countRecorded(data, state, onEvent);
+      return;
+    }
+
     if (!isChild) {
       if (frame.type === 'session.compaction.failed' && data.reason === 'manual') {
         turn.failure = data.error?.message ?? data.error?.type ?? 'OpenCode did not compact the session.';
@@ -606,14 +675,8 @@ export class OpenCodeV2 {
         onEvent({ type: 'usage', record: { source: 'opencode', compacted: true } });
         return;
       }
-      // A call OpenCode bills outside any step: a title it makes when the session was never named, a compaction.
-      if (frame.type === 'session.usage.recorded') {
-        // On this frame `source` is the kind of call, a string; on a permission ask it is the tool call, an object.
-        const purpose: unknown = data.source;
-        const record = typeof purpose === 'string' && purpose ? usageRecord(data.tokens, { cost: data.cost, purpose }) : null;
-        if (record) onEvent({ type: 'usage', record });
-        return;
-      }
+      if (frame.type === 'session.step.started') this.stepOpen = true;
+      if (frame.type === 'session.step.ended' || frame.type === 'session.step.failed') this.stepDone();
       if (frame.type === 'session.execution.started') { turn.live = true; return; }
       if (frame.type === 'session.execution.succeeded' || frame.type === 'session.execution.failed' || frame.type === 'session.execution.interrupted') {
         if (!turn.live || turn.done) return;
@@ -669,6 +732,7 @@ export class OpenCodeV2 {
     const message = data.assistantMessageID ?? '';
     switch (frame.type) {
       case 'session.step.started':
+        if (message) state.openSteps.add(message);
         if (message && data.model?.providerID && data.model.id) state.stepModels.set(message, `${data.model.providerID}/${data.model.id}`);
         return;
       case 'session.reasoning.delta':
@@ -728,6 +792,7 @@ export class OpenCodeV2 {
       }
       case 'session.step.ended':
       case 'session.step.failed':
+        state.openSteps.delete(message);
         this.countUsage(data, state, onEvent, subagentId);
         return;
       default:
@@ -754,13 +819,31 @@ export class OpenCodeV2 {
 
   private finishChild(callId: string, success: boolean, output: string, state: TurnState, onEvent: (e: AgentEvent) => void): void {
     if (!state.children.owns(callId)) return;
-    onEvent({ type: 'subagent_finished', subagentId: callId, outcome: success ? 'done' : 'failed', digest: subagentDigest(output) });
+    // 2.2.7 fails the delegating call of an interrupt Ordewell asked for; that is a stop, not the subagent's failure.
+    const outcome = success ? 'done' : this.interruptRequested ? 'stopped' : 'failed';
+    onEvent({ type: 'subagent_finished', subagentId: callId, outcome, digest: subagentDigest(output) });
+  }
+
+  /** A billed call outside any step. A frame that names a step is that step's usage, which `step.ended` or `step.failed` reports. */
+  private countRecorded(data: NonNullable<V2Frame['data']>, state: TurnState, onEvent: (e: AgentEvent) => void): void {
+    // On this frame `source` is the kind of call, a string; on a permission ask it is the tool call, an object.
+    const purpose: unknown = data.source;
+    if (typeof purpose !== 'string' || !purpose) return;
+    const message = data.assistantMessageID;
+    if (message) {
+      // A start that named no model fills no `stepModels`; the open step is what marks the call as that step's.
+      if (state.openSteps.has(message) || state.stepModels.has(message) || state.seen.has(`usage:${message}`) || state.seen.has(`recorded:${message}`)) return;
+      state.seen.add(`recorded:${message}`);
+    }
+    const record = usageRecord(data.tokens, { cost: data.cost, purpose });
+    if (record) onEvent({ type: 'usage', record });
   }
 
   /** One model call's usage, once, when its step ends. Zeros mean the call failed before the provider answered. */
   private countUsage(data: NonNullable<V2Frame['data']>, state: TurnState, onEvent: (e: AgentEvent) => void, subagentId?: string): void {
     const message = data.assistantMessageID;
-    if (!message || !data.tokens || state.seen.has(`usage:${message}`)) return;
+    // `recorded:` too: a call OpenCode recorded before its step was seen to start is already counted.
+    if (!message || !data.tokens || state.seen.has(`usage:${message}`) || state.seen.has(`recorded:${message}`)) return;
     state.seen.add(`usage:${message}`);
     const record = usageRecord(data.tokens, { model: state.stepModels.get(message), cost: data.cost, subagentId });
     if (record) onEvent({ type: 'usage', record });

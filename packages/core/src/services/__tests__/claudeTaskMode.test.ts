@@ -75,7 +75,7 @@ describe('ClaudeCodeAdapter start switch', () => {
       '--permission-mode', 'default',
       '--disallowedTools', 'Edit,Write,MultiEdit,NotebookEdit,KillShell,Bash,Monitor,PowerShell,EnterPlanMode,ExitPlanMode',
       '--setting-sources', 'user',
-      '--settings', '{"disableAllHooks":true,"permissions":{"ask":["WebFetch","WebFetch(domain:*)","WebSearch","mcp__*","Read","Grep","Glob","LS"]}}',
+      '--settings', '{"disableAllHooks":true,"permissions":{"ask":["WebFetch","WebFetch(domain:*)","WebSearch","mcp__*","Read","Grep","Glob","LS","LSP"]}}',
       '--append-system-prompt', 'PLAN',
       '--model', 'sonnet',
       '--effort', 'high',
@@ -103,7 +103,7 @@ describe('ClaudeCodeAdapter start switch', () => {
     expect(args[args.indexOf('--setting-sources') + 1]).toBe('user');
     expect(JSON.parse(args[args.indexOf('--settings') + 1])).toEqual({
       disableAllHooks: true,
-      permissions: { ask: ['WebFetch', 'WebFetch(domain:*)', 'WebSearch', 'mcp__*', 'Read', 'Grep', 'Glob', 'LS'] },
+      permissions: { ask: ['WebFetch', 'WebFetch(domain:*)', 'WebSearch', 'mcp__*', 'Read', 'Grep', 'Glob', 'LS', 'LSP'] },
     });
     for (const flag of ['--dangerously-skip-permissions', 'acceptEdits', 'bypassPermissions']) {
       expect(args).not.toContain(flag);
@@ -185,7 +185,7 @@ describe('ClaudeCodeAdapter task argv for every effort and mode', () => {
       '--permission-prompt-tool', 'stdio',
       '--permission-mode', permissionMode,
       '--disallowedTools', mode === 'plan' ? 'AskUserQuestion,Edit,Write,MultiEdit,NotebookEdit,KillShell,Bash,Monitor,PowerShell,EnterPlanMode,ExitPlanMode' : 'AskUserQuestion',
-      ...(mode === 'plan' ? ['--setting-sources', 'user', '--settings', '{"disableAllHooks":true,"permissions":{"ask":["WebFetch","WebFetch(domain:*)","WebSearch","mcp__*","Read","Grep","Glob","LS"]}}'] : []),
+      ...(mode === 'plan' ? ['--setting-sources', 'user', '--settings', '{"disableAllHooks":true,"permissions":{"ask":["WebFetch","WebFetch(domain:*)","WebSearch","mcp__*","Read","Grep","Glob","LS","LSP"]}}'] : []),
       ...thinkingArgs,
       ...(model ? ['--model', model] : []),
     ]);
