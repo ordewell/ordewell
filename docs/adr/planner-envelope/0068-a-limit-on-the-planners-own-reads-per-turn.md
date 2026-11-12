@@ -76,11 +76,9 @@ session builds one and every path below asks it.
   planner reads well past ten files on a hard goal and might plan better for
   it, so the default was to change only if plans did not get worse. The bench
   (`bench/planner-eval`, V2 against V1) met that on the breadth goal G5 with
-  OpenCode planners: the planners' own reads after their first delegation fell
-  with the limit (DeepSeek V4.1 Flash 34 and 48 down to 3; GLM 5.3 Flash
-  median 10 down to 4), and rubric outcomes were no worse (GLM one problem in
-  three runs in each arm; DeepSeek one failure in two runs without the limit,
-  one passing run with it). The sample is small. Dropped for that reason.
+  OpenCode planners on two models: the planners' own reads after their first
+  delegation fell with the limit, and the plans were no worse on the rubric.
+  The sample is small. Dropped for that reason.
 - **Counting a harness subagent's `run_command`.** It is counted, because the
   harness's subagents share the planner's MCP token and nothing tells them
   apart there; a native subagent's own reads are not.
