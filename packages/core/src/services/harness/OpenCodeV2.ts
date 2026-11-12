@@ -754,7 +754,9 @@ export class OpenCodeV2 {
 
   private finishChild(callId: string, success: boolean, output: string, state: TurnState, onEvent: (e: AgentEvent) => void): void {
     if (!state.children.owns(callId)) return;
-    onEvent({ type: 'subagent_finished', subagentId: callId, outcome: success ? 'done' : 'failed', digest: subagentDigest(output) });
+    // 2.2.7 fails the delegating call of an interrupt Ordewell asked for; that is a stop, not the subagent's failure.
+    const outcome = success ? 'done' : this.interruptRequested ? 'stopped' : 'failed';
+    onEvent({ type: 'subagent_finished', subagentId: callId, outcome, digest: subagentDigest(output) });
   }
 
   /** One model call's usage, once, when its step ends. Zeros mean the call failed before the provider answered. */

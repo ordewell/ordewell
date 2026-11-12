@@ -17,6 +17,10 @@
  * { type: MessageAbortedError, message: "Step interrupted" }, as v2.2.7 records an
  * interrupted step, then sends session.execution.interrupted.
  *
+ * A call with hang: true delegates to a child session and never returns: an
+ * interrupt fails that call (session.tool.failed, MessageAbortedError), as v2.2.7
+ * does the parent's delegating call, before session.execution.interrupted.
+ *
  * An untitled session's first prompt makes the hidden title call v2.2.7 makes:
  * its usage arrives only as a session.usage.recorded frame with source "title"
  * (no step carries it). A session created with a title makes no such call.
@@ -131,6 +135,14 @@ async function run(session, text) {
         continue;
       }
       frame('session.tool.called', { sessionID: id, id: callId, input: call.args ?? {} });
+      if (call.hang) {
+        const child = `ses_${randomUUID()}`;
+        frame('session.created', { sessionID: child, parentID: id });
+        frame('session.tool.progress', { sessionID: id, assistantMessageID: message, id: callId, metadata: { sessionID: child, status: 'running' } });
+        session.hanging = callId;
+        while (!stopped()) await delay(10);
+        return;
+      }
       const server = [...servers].find(([name]) => call.name.startsWith(`${name}_`));
       if (server) {
         const result = await mcp(server[1], 'tools/call', { name: call.name.slice(server[0].length + 1), arguments: call.args ?? {} })
@@ -208,6 +220,8 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === 'POST' && m[2] === 'interrupt') {
       s.interrupted = true;
+      if (s.hanging) frame('session.tool.failed', { sessionID: s.id, assistantMessageID: s.inFlight, id: s.hanging, error: { type: 'MessageAbortedError', message: 'Tool execution aborted' } });
+      s.hanging = undefined;
       if (s.inFlight) frame('session.step.failed', { sessionID: s.id, assistantMessageID: s.inFlight, error: { type: 'MessageAbortedError', message: 'Step interrupted' } });
       frame('session.execution.interrupted', { sessionID: s.id });
       return json(res, 200, { data: { interrupted: true } });
