@@ -230,10 +230,9 @@ const NOTE: Readonly<Record<string, string>> = {
 export function endTurn(turn: AcpTurn, stopReason: string | { unreadable: string }, usage: AcpTokenUsage | null | undefined, cancelSent: boolean): AgentEvent[] {
   const events: AgentEvent[] = [];
 
-  // A call still open has no result coming: the turn it belonged to is over.
+  // Let the consumer settle open calls as not executed when the turn ends.
   for (const [id, call] of Object.entries(turn.open)) {
     if (!call.announced) events.push(announce(id, call));
-    events.push(result(id, call, 'The turn ended before this call reported a result.', false));
   }
   for (const run of turn.thoughts) events.push({ type: 'thinking', text: run.text });
   for (const run of turn.messages) events.push({ type: 'assistant_text', runId: run.runId, text: run.text });

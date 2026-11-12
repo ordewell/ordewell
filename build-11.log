@@ -1,0 +1,74 @@
+
+> @ordewell/core@0.13.1 build
+> tsup src/index.ts src/parsing.ts src/testing.ts src/plan-utils.ts src/daemon-client.ts --dts --sourcemap --format cjs,esm --clean --tsconfig tsconfig.json
+
+CLI Building entry: src/daemon-client.ts, src/index.ts, src/parsing.ts, src/plan-utils.ts, src/testing.ts
+CLI Using tsconfig: tsconfig.json
+CLI tsup v8.5.1
+CLI Using tsup config: /home/alessandro/projects/ordewell3/.ordewell/worktrees/5db894ce/11-harness-shared-turn-outcome-and-subagent/packages/core/tsup.config.ts
+CLI Target: es2022
+CLI Cleaning output folder
+CJS Build start
+ESM Build start
+DTS Build start
+CJS dist/daemon-client.js     15.72 KB
+CJS dist/testing.js           31.96 KB
+CJS dist/parsing.js           64.58 KB
+CJS dist/plan-utils.js        198.54 KB
+CJS dist/daemon-client.js.map 61.88 KB
+CJS dist/testing.js.map       149.92 KB
+CJS dist/parsing.js.map       257.44 KB
+CJS dist/plan-utils.js.map    685.45 KB
+CJS dist/index.js             3.02 MB
+CJS dist/index.js.map         6.79 MB
+CJS ⚡️ Build success in 544ms
+ESM dist/daemon-client.mjs      964.00 B
+ESM dist/chunk-ND6C6SMV.mjs     23.49 KB
+ESM dist/chunk-LG3OQ6OP.mjs     56.45 KB
+ESM dist/chunk-BBEQNSO3.mjs     16.40 KB
+ESM dist/chunk-QRMSG5YY.mjs     1.55 KB
+ESM dist/chunk-RFBZZ22M.mjs     262.87 KB
+ESM dist/testing.mjs            27.87 KB
+ESM dist/plan-utils.mjs         10.27 KB
+ESM dist/chunk-M77JQEFA.mjs     648.00 B
+ESM dist/chunk-I55T5GKV.mjs     49.57 KB
+ESM dist/parsing.mjs            2.71 KB
+ESM dist/daemon-client.mjs.map  71.00 B
+ESM dist/chunk-ND6C6SMV.mjs.map 70.41 KB
+ESM dist/chunk-BBEQNSO3.mjs.map 41.21 KB
+ESM dist/plan-utils.mjs.map     4.68 KB
+ESM dist/testing.mjs.map        58.72 KB
+ESM dist/chunk-M77JQEFA.mjs.map 2.73 KB
+ESM dist/parsing.mjs.map        6.59 KB
+ESM dist/chunk-LG3OQ6OP.mjs.map 145.44 KB
+ESM dist/chunk-QRMSG5YY.mjs.map 14.41 KB
+ESM dist/chunk-I55T5GKV.mjs.map 150.03 KB
+ESM dist/chunk-RFBZZ22M.mjs.map 696.55 KB
+ESM dist/index.mjs              2.60 MB
+ESM dist/index.mjs.map          5.66 MB
+ESM ⚡️ Build success in 641ms
+DTS ⚡️ Build success in 18586ms
+DTS dist/testing.d.ts                 18.16 KB
+DTS dist/parsing.d.ts                 2.65 KB
+DTS dist/plan-utils.d.ts              9.59 KB
+DTS dist/index.d.ts                   326.99 KB
+DTS dist/daemon-client.d.ts           751.00 B
+DTS dist/leaseRecord-DP_QjQYC.d.ts    2.46 KB
+DTS dist/ModeResolver-DE_HyU2f.d.ts   2.01 KB
+DTS dist/seaRuntime-BE0PnJ5V.d.ts     2.39 KB
+DTS dist/Task-Ch0ionC6.d.ts           147.31 KB
+DTS dist/eventStore-i0lM9VeN.d.ts     187.38 KB
+DTS dist/maxParallel-CocK6Y5-.d.ts    518.73 KB
+DTS dist/daemon-client-C5kzHuO1.d.ts  11.41 KB
+DTS dist/testing.d.mts                18.16 KB
+DTS dist/parsing.d.mts                2.65 KB
+DTS dist/plan-utils.d.mts             9.60 KB
+DTS dist/index.d.mts                  327.00 KB
+DTS dist/daemon-client.d.mts          753.00 B
+DTS dist/leaseRecord-DP_QjQYC.d.mts   2.46 KB
+DTS dist/ModeResolver-DNsklro2.d.mts  2.02 KB
+DTS dist/seaRuntime-BE0PnJ5V.d.mts    2.39 KB
+DTS dist/Task-Ch0ionC6.d.mts          147.31 KB
+DTS dist/eventStore-Bg2RvOq7.d.mts    187.38 KB
+DTS dist/maxParallel-BJc6HefT.d.mts   518.73 KB
+DTS dist/daemon-client-DixmzX2w.d.mts 11.41 KB

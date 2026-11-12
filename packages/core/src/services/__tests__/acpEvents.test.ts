@@ -222,7 +222,7 @@ describe('reduceUpdate', () => {
       const turn = feed([{ sessionUpdate: 'tool_call', toolCallId: 'c-1', title: 'Search', status: 'pending', ...child }]).turn;
       expect(endTurn(turn, 'end_turn', undefined, false).slice(0, 2)).toEqual([
         { type: 'tool_call', id: 'c-1', name: 'Search', args: {}, subagentId: 'p-1' },
-        { type: 'tool_result', id: 'c-1', name: 'Search', output: 'The turn ended before this call reported a result.', success: false, subagentId: 'p-1' },
+        { type: 'turn_end' },
       ]);
     });
 
@@ -358,19 +358,19 @@ describe('endTurn', () => {
   });
 
   describe('calls still open', () => {
-    it('closes them as unsuccessful so none is left running', () => {
+    it('leaves announced calls for the consumer to settle at turn end', () => {
       const turn = turnWith([{ sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Run tests' }]);
       const events = endTurn(turn, 'cancelled', undefined, true);
-      expect(events[0]).toMatchObject({ type: 'tool_result', id: 't1', name: 'Run tests', success: false });
+      expect(events.some((event) => event.type === 'tool_result')).toBe(false);
       expect(events[events.length - 1]).toEqual({ type: 'turn_end', interrupted: true });
     });
 
     it('reports a call that never left pending before closing it', () => {
       const turn = turnWith([{ sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Run tests', status: 'pending', rawInput: { command: 'npm test' } }]);
       const events = endTurn(turn, 'cancelled', undefined, true);
-      expect(events.slice(0, 2)).toEqual([
+      expect(events).toEqual([
         { type: 'tool_call', id: 't1', name: 'Run tests', args: { command: 'npm test' } },
-        { type: 'tool_result', id: 't1', name: 'Run tests', output: 'The turn ended before this call reported a result.', success: false },
+        { type: 'turn_end', interrupted: true },
       ]);
     });
 
