@@ -338,6 +338,65 @@ describe('the run\'s own waits', () => {
   });
 });
 
+describe('a conflict escalation\'s offer and its answer', () => {
+  /** t1's landing conflicted and its escalation is raised; t2 only completes the plan around it. */
+  async function conflicted(outcome: 'conflict' | 'failed' = 'conflict') {
+    const isolation = new FakeWorktreeIsolation();
+    isolation.outcomes.set('t1', outcome);
+    const env = setup(isolation);
+    env.load([task('t1', 1), task('t2', 2)]);
+    await env.start();
+    env.latest('t2').reportComplete({ status: 'done', summary: 'ok' });
+    env.latest('t1').reportComplete({ status: 'done', summary: 'ok' });
+    await vi.waitFor(() => expect(taskOf(env.session, 't1')?.status).toBe('awaiting_user'));
+    await vi.waitFor(() => expect(env.ids()).toContain('conflict:t1:1'));
+    return { env, isolation };
+  }
+  const options = (env: ReturnType<typeof setup>) => env.session.escalations().find((e) => e.id === 'conflict:t1:1')?.options.map((o) => o.id) ?? [];
+
+  it('accepts the resolver it offers', async () => {
+    const { env } = await conflicted();
+    expect(options(env)).toContain('resolve-conflict');
+
+    expect(await env.session.answerEscalation('conflict:t1:1', 'resolve-conflict')).toMatchObject({ ok: true });
+  });
+
+  it('withdraws the offer once a resolver has the conflict, and refuses the old answer with the way on', async () => {
+    const { env } = await conflicted();
+    await env.session.answerEscalation('conflict:t1:1', 'resolve-conflict');
+    const before = env.session.planTasks.length;
+
+    expect(options(env)).not.toContain('resolve-conflict');
+    const stale = await env.session.answerEscalation('conflict:t1:1', 'resolve-conflict');
+    expect(stale).toMatchObject({ ok: false, outcome: 'refused' });
+    expect(stale.message).toMatch(/Nothing was changed/);
+    expect(env.session.planTasks).toHaveLength(before);
+  });
+
+  it('withdraws the offer when the task moved on between the offer and the answer', async () => {
+    const { env } = await conflicted();
+    const offered = options(env);
+    expect(offered).toContain('resolve-conflict');
+
+    // The operator's retry moves the task off its conflict; the offer they hold is now stale.
+    expect(await env.session.answerEscalation('conflict:t1:1', 'retry')).toMatchObject({ ok: true });
+    const stale = await env.session.answerEscalation('conflict:t1:1', 'resolve-conflict');
+
+    expect(stale).toMatchObject({ ok: false, outcome: 'refused' });
+    expect(stale.message).toBe('That is no longer waiting on you: it was answered, or the run moved on. Nothing was changed.');
+    expect(env.session.planTasks).toHaveLength(2);
+  });
+
+  it('offers and accepts agree after the task is skipped', async () => {
+    const { env } = await conflicted();
+    expect(await env.session.answerEscalation('conflict:t1:1', 'skip')).toMatchObject({ ok: true });
+
+    const stale = await env.session.answerEscalation('conflict:t1:1', 'resolve-conflict');
+    expect(stale).toMatchObject({ ok: false, outcome: 'refused' });
+    expect(env.session.planTasks).toHaveLength(2);
+  });
+});
+
 describe('a reload', () => {
   const paused: Partial<Task> = { status: 'awaiting_user', attemptUsage: [startAttemptUsage(2, 'claude-code', '2026-10-30T00:00:00Z')] };
 
