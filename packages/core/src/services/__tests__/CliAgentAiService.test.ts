@@ -1544,6 +1544,18 @@ describe('CliAgentAiService — Codex', () => {
     expect(threadStart.params.developerInstructions).toContain('not your own shell');
   });
 
+  // The recorded turn reads with Codex's own `rg`, which asks nobody: under
+  // the read limit no such read is left to it (ADR-0068).
+  it('starts a Codex planner under the read limit with no shell or image viewer of its own', async () => {
+    const limit = new PlannerReadLimit({ limit: () => ({ calls: 1, bytes: 1_000_000 }), turn: () => 't1' });
+    const { svc, spawned } = service('codex', [...codexHandshake(), fixture('codex', 'tools')]);
+    await svc.startConversation(request({ runners: ['codex'], readLimit: limit }));
+
+    const threadStart = JSON.parse(spawned.processes[0].written[1]);
+    expect(threadStart.params.config.features).toEqual({ shell_tool: false, unified_exec: false, view_image: false });
+    expect(threadStart.params.developerInstructions).toContain('You have no shell of your own on this machine: run every command, reads included');
+  });
+
   it('ends the turn on a non-retryable error rather than waiting for a completion that never comes', async () => {
     const { svc } = service('codex', [...codexHandshake(), fixture('codex', 'error-fatal')]);
     const turn = await svc.startConversation(request({ runners: ['codex'] }));

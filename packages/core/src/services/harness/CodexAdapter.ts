@@ -338,6 +338,12 @@ const NO_OWN_SHELL = { shell_tool: false, unified_exec: false };
 /** Both generations of Codex's subagents off for a thread, whichever the user's config turned on (codex-cli 0.166.0; ADR-0056 M6). */
 const NO_SUBAGENTS = { multi_agent: false, multi_agent_v2: false };
 
+/**
+ * Codex's image viewer off: like its shell, it reads a workspace file without
+ * asking Ordewell, so the planner read limit could never refuse it (codex-cli 0.167.0; ADR-0068).
+ */
+const NO_IMAGE_VIEWER = { view_image: false };
+
 /** Thread config that keeps these of the user's MCP servers from starting; Codex merges it over their own entries. */
 function withheld(servers: readonly string[]): Record<string, { enabled: false }> {
   return Object.fromEntries(servers.map((name) => [name, { enabled: false }]));
@@ -405,8 +411,10 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
   private sandbox: CodexSandboxDecision = 'default';
   /** Whether the user set up Codex's Windows sandbox, asked for a change task on a Windows host; null where nothing asked or Codex did not say. */
   private windowsSandbox: CodexWindowsSandbox | null = null;
-  /** Codex's own shell is off, and `run_command` is the only one: a read-only task's, and a planner's on a host where no sandbox starts (ADR-0033) or on Windows (ADR-0010). */
+  /** Codex's own shell is off, and `run_command` is the only one: a read-only task's, and a planner's on a host where no sandbox starts (ADR-0033), on Windows (ADR-0010) or under the read limit (ADR-0068). */
   private ownShellOff = false;
+  /** A planner under the read limit, whose every read must be Ordewell's to count (ADR-0068). */
+  private readsCounted = false;
   /** A read-only task's: every MCP server Codex would start beside Ordewell's, each switched off for its thread (ADR-0046). */
   private withheldServers: string[] = [];
   /** The Ordewell server's startup state, as Codex last reported it for this thread. */
@@ -453,7 +461,11 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     // that profile (ADR-0046); change tasks keep their planned mode (ADR-0001).
     const unsandboxedPlanner = this.sandbox === 'unavailable' && opts.kind === 'planner' && !!opts.mcp;
     const readsThroughOrdewell = !!opts.mcp && !opts.mcp.hidden?.includes('run_command');
-    this.ownShellOff = readOnly || unsandboxedPlanner || (opts.kind === 'planner' && readsThroughOrdewell && this.onWindowsHost());
+    // Codex raises no approval for a read its sandbox allows, and its hooks run
+    // only once trusted by a hash of Codex's own making, so under the read limit
+    // a planner reads through `run_command`, where the limit counts and refuses (ADR-0068).
+    this.readsCounted = opts.kind === 'planner' && readsThroughOrdewell && opts.readsAsk === true;
+    this.ownShellOff = readOnly || unsandboxedPlanner || this.readsCounted || (opts.kind === 'planner' && readsThroughOrdewell && this.onWindowsHost());
     if (this.sandbox === 'unavailable' && needsSandbox && !this.ownShellOff) throw new Error(codexSandboxUnavailableMessage(this.deps.placement ? 'container' : opts.kind));
     if (unsandboxedPlanner) this.announce({ type: 'thinking', text: codexShellOffNote() });
 
@@ -617,6 +629,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     const features = {
       ...(this.sandbox === 'legacy-landlock' ? { use_legacy_landlock: true } : {}),
       ...(this.ownShellOff ? NO_OWN_SHELL : {}),
+      ...(this.readsCounted ? NO_IMAGE_VIEWER : {}),
       ...(opts?.kind === 'planner' && opts.noSubagents ? NO_SUBAGENTS : {}),
     };
     const config = {
