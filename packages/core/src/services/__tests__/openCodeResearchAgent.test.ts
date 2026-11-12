@@ -232,6 +232,45 @@ describe('the research serve and its agent', () => {
     expect(events.at(-1)).toMatchObject({ type: 'subagent_finished', outcome: 'done' });
   });
 
+  describe('the usage OpenCode reports beyond a step\'s end', () => {
+    const usageOf = () => events.filter((e) => e.type === 'usage').map((e) => e.record);
+    const run = (spec: unknown, extra: Partial<Parameters<typeof openCodeResearchAgent>[0]> = {}) =>
+      agent({ newId: () => 'sub-1', ...extra })({ prompt: cue(spec) }, { signal: new AbortController().signal });
+
+    it('counts the usage a failed step carries, under the subagent', async () => {
+      fresh();
+      const reply = await run({ fail: { type: 'APIError', message: 'upstream said no' }, failUsage: { input: 300, output: 40, cost: 0.02 } });
+      expect(reply.isError).toBe(true);
+      expect(usageOf()).toHaveLength(1);
+      expect(usageOf()[0]).toMatchObject({ inputTokens: 300, outputTokens: 40, subagentId: 'sub-1', reportedCost: { amount: 0.02 } });
+    });
+
+    it('counts the usage on the step OpenCode fails when Ordewell\'s budget interrupt cuts it off, and still returns the partial digest', async () => {
+      fresh();
+      const steps = [
+        ...Array.from({ length: 3 }, () => ({ calls: [{ name: 'ordewell_list_dir', args: { path: '.' } }] })),
+        { calls: [{ name: 'ordewell_read_file', args: { path: 'src/left-over.ts' } }] },
+        { calls: [{ name: 'ordewell_list_dir', args: { path: '.' } }] },
+      ];
+      const reply = await run({ steps, text: 'never', interruptUsage: { input: 500, output: 7, cost: 0.03 } }, { maxSteps: 3 });
+      expect(reply.isError).toBeFalsy();
+      expect(reply.text).toMatch(/^\[PARTIAL/);
+      expect(usageOf().find((r) => r?.reportedCost?.amount === 0.03)).toMatchObject({ inputTokens: 500, subagentId: 'sub-1' });
+    });
+
+    it('counts a session.usage.recorded frame as the call it names, and not the title frame of a session it never has', async () => {
+      fresh();
+      await run({ recorded: [{ source: 'compaction', input: 700, output: 30, cost: 0.01 }], text: 'ok', usage: { input: 10, output: 5, cost: 0.001 } });
+      expect(usageOf().find((r) => r?.purpose === 'compaction')).toMatchObject({ inputTokens: 700, outputTokens: 30, aggregate: true, subagentId: 'sub-1', reportedCost: { amount: 0.01 } });
+    });
+
+    it('counts a step once, though its end frame arrives twice', async () => {
+      fresh();
+      await run({ text: 'ok', usage: { input: 10, output: 5, cost: 0.001 }, duplicateEnd: true });
+      expect(usageOf()).toHaveLength(1);
+    });
+  });
+
   it('refuses a call while no turn is open', async () => {
     turnOpen = false;
     expect(await agent()({ prompt: 'x' }, { signal: new AbortController().signal })).toEqual({ text: NO_TURN_OPEN, isError: true });
