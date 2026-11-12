@@ -17,7 +17,7 @@ judges nothing.
 | Variant | Build | Goal text | Environment |
 | --- | --- | --- | --- |
 | V0 | `--baseline-ref` (default `0ecc6412`) | the goal, then the two nudges below, verbatim | — |
-| V1 | `--candidate-ref` (default `HEAD`) | the goal alone | — |
+| V1 | `--candidate-ref` (default `HEAD`) | the goal alone | `ORDEWELL_PLANNER_READ_LIMIT=off` |
 | V2 | `--candidate-ref` (default `HEAD`) | the goal alone | `ORDEWELL_PLANNER_READ_LIMIT=on` |
 
 V2 is V1 with the planner's own reads capped per turn at the default limit

@@ -21,8 +21,8 @@ export const NUDGES = [
 /** An `optional` variant runs only when `--variant` names it (or on the mock), as an optional cell does. */
 export const VARIANTS = {
   V0: { id: 'V0', build: 'baseline', nudges: true, env: {}, about: `Ordewell at ${BASELINE_REF}, goal plus the two nudges` },
-  V1: { id: 'V1', build: 'candidate', nudges: false, env: {}, about: 'the candidate ref, goal alone' },
-  // ADR-0068: the planner's own reads per turn are capped, at the default limit.
+  V1: { id: 'V1', build: 'candidate', nudges: false, env: { ORDEWELL_PLANNER_READ_LIMIT: 'off' }, about: 'the candidate ref, goal alone, with no planner read limit' },
+  // ADR-0068: the planner's own reads per turn are capped, at the default limit; V1 names it off because the default is on.
   V2: { id: 'V2', build: 'candidate', nudges: false, optional: true, env: { ORDEWELL_PLANNER_READ_LIMIT: 'on' }, about: 'V1 plus the planner read limit' },
 };
 

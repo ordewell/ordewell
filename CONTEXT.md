@@ -1427,7 +1427,7 @@ subagents), "query budget" (that is the *Task query* read budget).
 **Planner read limit** — how much the planner may read itself in one turn:
 read-class calls (workspace reads, `run_command`, a harness's own reads and
 shell) and the bytes their results held, 10 calls or 60 KB unless set
-(`plannerReadLimit`, `ORDEWELL_PLANNER_READ_LIMIT`); off unless turned on.
+(`plannerReadLimit`, `ORDEWELL_PLANNER_READ_LIMIT`); on unless turned off.
 Past it, the planner's next read is refused with a pointer to a research
 agent or a research task. What research agents and tasks read is never
 charged to it (ADR-0068).
