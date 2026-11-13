@@ -219,7 +219,10 @@ export abstract class BaseFileSystem implements IFileSystem {
         results.push(`--- ${p} ---\n[not read] ${r.output}`);
       }
     }
-    if (results.length === 0) return { success: false, output: 'No files read.', truncated: false, ...(allRefused ? { refused: true as const } : {}) };
+    // Checked first: each denial pushed a line above, so `results` is only empty for no paths.
+    // The inline denials stay the output, and `refused` lets the read limit refund the call (ADR-0068 R1).
+    if (allRefused) return { success: false, output: results.join('\n\n'), truncated: false, refused: true };
+    if (results.length === 0) return { success: false, output: 'No files read.', truncated: false };
     return { success: true, output: results.join('\n\n'), truncated };
   }
 

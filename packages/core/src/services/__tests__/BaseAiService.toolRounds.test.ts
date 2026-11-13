@@ -4,6 +4,8 @@ import type { IFileSystem } from '../../interfaces/IFileSystem';
 import type { ResearchProgress } from '../../models/Task';
 import { fakeConfig, fakeFileSystem } from '../../testing';
 import { PlannerReadLimit, type ReadLimit } from '../plannerReadLimit';
+import { BaseFileSystem } from '../BaseFileSystem';
+import type { ToolOutcome } from '../../interfaces/IFileSystem';
 
 /**
  * These exercise one tool round through the real loop: what the loop does with
@@ -292,6 +294,16 @@ describe('API planner task reads', () => {
   });
 });
 
+/** The real policy layer over a disk that holds one readable file: only the confinement is under test. */
+class ConfinedFileSystem extends BaseFileSystem {
+  getWorkspaceRoot(): string { return process.cwd(); }
+  protected async readFileImpl(absPath: string): Promise<ToolOutcome> { return { success: true, output: `body of ${absPath}`, truncated: false }; }
+  protected async globImpl(): Promise<ToolOutcome> { throw new Error('unused'); }
+  protected async grepImpl(): Promise<ToolOutcome> { throw new Error('unused'); }
+  protected async listDirImpl(): Promise<ToolOutcome> { throw new Error('unused'); }
+  protected async execBashImpl(): Promise<ToolOutcome> { throw new Error('unused'); }
+}
+
 describe('tool rounds — the planner read limit (ADR-0068)', () => {
   const limitOf = (limit: ReadLimit) => new PlannerReadLimit({ limit: () => limit, turn: () => 'turn-1' });
 
@@ -358,5 +370,33 @@ describe('tool rounds — the planner read limit (ADR-0068)', () => {
     await new TestService(fakeConfig()).runTurn({ ...ctxFor(chat, fs), readLimit: limitOf({ calls: 2, bytes: 1_000_000 }) });
 
     expect(chat.toolResultsSent[1][0].output).toMatch(/^Read limit reached/);
+  });
+  describe('read_files over a policy layer that denies paths outside the workspace', () => {
+    const denyingFs = () => {
+      const fs = new ConfinedFileSystem();
+      fs.setApproval({ request: async () => false });
+      return fs;
+    };
+    const secondCall = (fs: IFileSystem, firstPaths: string[]) => {
+      const chat = new ScriptedChat([
+        toolTurn([{ name: 'read_files', args: { paths: firstPaths }, id: '1' }]),
+        toolTurn([{ name: 'read_files', args: { paths: ['inside.ts'] }, id: '2' }]),
+        proseTurn('done'),
+      ]);
+      return new TestService(fakeConfig()).runTurn({ ...ctxFor(chat, fs), readLimit: limitOf({ calls: 1, bytes: 1_000_000 }) }).then(() => chat);
+    };
+
+    it('gives back a call whose every path was denied, keeping the denials inline (R1)', async () => {
+      const chat = await secondCall(denyingFs(), ['/etc/a', '/etc/b']);
+
+      expect(chat.toolResultsSent[0][0].output).toContain('[not read]');
+      expect(chat.toolResultsSent[1][0].output).toContain('body of');
+    });
+
+    it('still counts a call that read one path and was denied another', async () => {
+      const chat = await secondCall(denyingFs(), ['inside.ts', '/etc/b']);
+
+      expect(chat.toolResultsSent[1][0].output).toMatch(/^Read limit reached/);
+    });
   });
 });
