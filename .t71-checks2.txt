@@ -1,0 +1,4 @@
+
+> @ordewell/core@0.13.1 typecheck
+> tsc --noEmit
+

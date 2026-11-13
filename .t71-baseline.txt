@@ -1,0 +1,3201 @@
+[33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.[39m
+
+ RUN  v2.1.9 /home/alessandro/projects/ordewell3/.ordewell/worktrees/5db894ce/71-fix-command-policy-bypasses-from-the-re/packages/core
+
+ ❯ src/services/__tests__/fakeSecretsGuard.test.ts (2 tests | 1 failed) 377ms
+   × fake secret fixtures > no tracked file other than outboundSecrets.ts holds a literal token 372ms
+     → build fake secrets with fakeSecret() instead of a literal: expected [ Array(1) ] to deeply equal []
+stdout | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > wakes on waiting_input once the debounce window has passed
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stdout | src/services/__tests__/supervisorAct.test.ts > a wake-up turn at Act > runs the execution tools without asking, recorded as the supervisor's
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > wakes on waiting_input once the debounce window has passed
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > a check between rounds that nothing will run > is listed, after a Stop leaves its fix landed and after the plan is reopened
+[TaskOrchestrator] excluded: 1 (repeating 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a check between rounds that nothing will run > is listed, after a Stop leaves its fix landed and after the plan is reopened
+[Attempts] Task #1 "Task check" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do check
+[Attempts] Output summary:
+Found it.
+
+stderr | src/services/__tests__/supervisorAct.test.ts > a wake-up turn at Act > runs the execution tools without asking, recorded as the supervisor's
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > a direct edit that makes a paused task manual > ends the pause and lets the run go on, with no resume promised
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 1 slots, maxParallel=1
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a check between rounds that nothing will run > is listed, after a Stop leaves its fix landed and after the plan is reopened
+[Attempts] Task #2 "Task fix" verdict=pass
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do fix
+[Attempts] Output summary:
+fixed
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > wakes on a checkpoint once the debounce window has passed
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stdout | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > a direct edit that makes a paused task manual > ends the pause and lets the run go on, with no resume promised
+[TaskOrchestrator] getReadyTasks: 1 candidates, 1 slots, maxParallel=1
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > wakes on a checkpoint once the debounce window has passed
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > a wake-up turn at Act > edits the plan through the recorded edit path, shown as the supervisor's
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] excluded: 1 (dependencies 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a check between rounds that nothing will run > is listed, after a Stop leaves its fix landed and after the plan is reopened
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stderr | src/services/__tests__/supervisorAct.test.ts > a wake-up turn at Act > edits the plan through the recorded edit path, shown as the supervisor's
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > wakes on waiting_approval once the debounce window has passed
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stdout | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > a direct edit that makes a paused task manual > tells the surfaces as the edit lands: what they hold says the pause is over
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] excluded: 1 (dependencies 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stdout | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > a direct edit that makes a paused task manual > tells the surfaces as the edit lands: what they hold says the pause is over
+[TaskOrchestrator] excluded: 1 (dependencies 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=2, completed=false
+  - 1. Task t1 [user/pending] prompt=true
+  - 2. Task t2 [ai/approved] prompt=true
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > wakes on waiting_approval once the debounce window has passed
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > a check between rounds, told by whether anything will run it > is left out while its carried loop runs it
+[TaskOrchestrator] excluded: 1 (repeating 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a check between rounds, told by whether anything will run it > is left out while its carried loop runs it
+[Attempts] Task #1 "Task check" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do check
+[Attempts] Output summary:
+Found it.
+
+stdout | src/services/__tests__/supervisorAct.test.ts > a wake-up turn at Act > edits the plan through the recorded edit path, shown as the supervisor's
+[TaskOrchestrator] excluded: 2 (started 1, dependencies 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stdout | src/services/__tests__/supervisorAct.test.ts > a wake-up turn at Act > refuses a whole new plan: the supervisor edits, it does not replan from scratch
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stdout | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > a direct edit that makes a paused task manual > leaves the hold of another task waiting on the same reset
+[TaskOrchestrator] Starting with 3 tasks (3 AI ready)
+[TaskOrchestrator] getReadyTasks: 3 candidates, 2 slots, maxParallel=2
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorAct.test.ts > a wake-up turn at Act > refuses a whole new plan: the supervisor edits, it does not replan from scratch
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > a check between rounds, told by whether anything will run it > says Execute goes on from a Stop with its fix not landed, and is told to the surfaces as stranded
+[TaskOrchestrator] excluded: 1 (repeating 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a check between rounds, told by whether anything will run it > says Execute goes on from a Stop with its fix not landed, and is told to the surfaces as stranded
+[Attempts] Task #1 "Task check" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do check
+[Attempts] Output summary:
+Found it.
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > wakes on usage_limit once the debounce window has passed
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > wakes on usage_limit once the debounce window has passed
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > tasks the supervisor adds at Act > are marked as the supervisor's, approved to run, and start without the user — an ops task included
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] excluded: 1 (dependencies 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > a direct edit that makes a paused task manual > owes no start when a planner's edit also moves it to another runner: a manual task never takes one
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stderr | src/services/__tests__/supervisorAct.test.ts > tasks the supervisor adds at Act > are marked as the supervisor's, approved to run, and start without the user — an ops task included
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > a check between rounds, told by whether anything will run it > offers its next round once the fix has landed, and the answer runs it with the count kept
+[TaskOrchestrator] excluded: 1 (repeating 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a check between rounds, told by whether anything will run it > offers its next round once the fix has landed, and the answer runs it with the count kept
+[Attempts] Task #1 "Task check" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do check
+[Attempts] Output summary:
+Found it.
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a check between rounds, told by whether anything will run it > offers its next round once the fix has landed, and the answer runs it with the count kept
+[Attempts] Task #2 "Task fix" verdict=pass
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do fix
+[Attempts] Output summary:
+fixed
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > a failure (ADR-0057 R4) > wakes at once when it blocks work that would otherwise be ready, with other work still running
+[TaskOrchestrator] Starting with 3 tasks (3 AI ready)
+[TaskOrchestrator] excluded: 1 (dependencies 1)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 3 (started 2, blocked 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > a failure (ADR-0057 R4) > wakes at once when it blocks work that would otherwise be ready, with other work still running
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > a failure (ADR-0057 R4) > wakes at once when it blocks work that would otherwise be ready, with other work still running
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > tasks the supervisor adds at Act > are marked as the supervisor's, approved to run, and start without the user — an ops task included
+[TaskOrchestrator] excluded: 2 (started 1, dependencies 1)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 1 active, held=0
+
+stdout | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > a direct edit that makes a paused task manual > frees a failed task the same way, in a run or not: it has nothing to retry
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] excluded: 1 (dependencies 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 2 (started 1, blocked 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=2, completed=false
+  - 1. Task t1 [ai/failed] prompt=true
+  - 2. Task t2 [ai/approved] prompt=true
+
+stderr | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > a direct edit that makes a paused task manual > frees a failed task the same way, in a run or not: it has nothing to retry
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+No.
+
+stdout | src/services/__tests__/supervisorAct.test.ts > tasks the supervisor adds at Act > may be started by the supervisor itself once the run has stopped, where a task the user's turn added may not
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > a carried loop waiting for the user > lists the body task it waits to have approved, the run it keeps open being an open run
+[TaskOrchestrator] excluded: 2 (repeating 1, unapproved 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a carried loop waiting for the user > lists the body task it waits to have approved, the run it keeps open being an open run
+[Attempts] Task #1 "Task check" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do check
+[Attempts] Output summary:
+Found it.
+
+stderr | src/services/__tests__/supervisorAct.test.ts > tasks the supervisor adds at Act > may be started by the supervisor itself once the run has stopped, where a task the user's turn added may not
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > a failure (ADR-0057 R4) > that blocks nothing is held while its cohort runs, and goes when the last of it ends, in a batch
+[TaskOrchestrator] Starting with 3 tasks (3 AI ready)
+[TaskOrchestrator] getReadyTasks: 3 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 3 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 3 (started 3)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 1 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 2 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > a failure (ADR-0057 R4) > that blocks nothing is held while its cohort runs, and goes when the last of it ends, in a batch
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > a failure (ADR-0057 R4) > that blocks nothing is held while its cohort runs, and goes when the last of it ends, in a batch
+[Attempts] Task #2 "Task t2" verdict=pass
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t2
+[Attempts] Output summary:
+(empty: no output captured)
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > a failure (ADR-0057 R4) > that blocks nothing is held while its cohort runs, and goes when the last of it ends, in a batch
+[TaskOrchestrator] excluded: 3 (started 3)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > a carried loop waiting for the user > lists it in a plan nobody approved too, and its Start lets the loop go on
+[TaskOrchestrator] excluded: 2 (repeating 1, unapproved 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a carried loop waiting for the user > lists it in a plan nobody approved too, and its Start lets the loop go on
+[Attempts] Task #1 "Task check" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do check
+[Attempts] Output summary:
+Found it.
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > a failure (ADR-0057 R4) > that blocks nothing is held while its cohort runs, and goes when the last of it ends, in a batch
+[Attempts] Task #3 "Task t3" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t3
+[Attempts] Output summary:
+(empty: no output captured)
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > a failure (ADR-0057 R4) > that blocks nothing is held while its cohort runs, and goes when the last of it ends, in a batch
+[TaskOrchestrator] excluded: 3 (started 3)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=2, completed=false
+  - 1. Task t1 [ai/failed] prompt=true
+  - 3. Task t3 [ai/failed] prompt=true
+
+stdout | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > a direct edit that makes a paused task manual > leaves a runner still at a question its wait
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stdout | src/services/__tests__/supervisorAct.test.ts > tasks the supervisor adds at Act > may be started by the supervisor itself once the run has stopped, where a task the user's turn added may not
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 1 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > a failure (ADR-0057 R4) > that blocks nothing is held while its cohort runs, and goes when the last of it ends, in a batch
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > a direct edit that makes a paused task manual > leaves a runner still at a question its wait
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stdout | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > Execute and run_plan on a scheduled run waiting on a person, with nothing live > the user's Execute joins it: the failure stays for a retry, and nothing runs again
+[TaskOrchestrator] Starting with 2 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=2, completed=false
+  - 1. Task t0 [ai/failed] prompt=true
+  - 2. Task t1 [user/pending] prompt=true
+
+stderr | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > Execute and run_plan on a scheduled run waiting on a person, with nothing live > the user's Execute joins it: the failure stays for a retry, and nothing runs again
+[Attempts] Task #1 "Task t0" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t0
+[Attempts] Output summary:
+No.
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > a failure (ADR-0057 R4) > that blocks nothing goes at its maximum age if its cohort is slow
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > a failure (ADR-0057 R4) > that blocks nothing goes at its maximum age if its cohort is slow
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > a carried loop waiting for the user > is open for its own tasks alone: the rest of the plan does not start, so it waits on no one
+[TaskOrchestrator] excluded: 2 (repeating 1, unapproved 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a carried loop waiting for the user > is open for its own tasks alone: the rest of the plan does not start, so it waits on no one
+[Attempts] Task #1 "Task check" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do check
+[Attempts] Output summary:
+Found it.
+
+stdout | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > Execute and run_plan on a scheduled run waiting on a person, with nothing live > the user's Execute joins it: the failure stays for a retry, and nothing runs again
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=2, completed=false
+  - 1. Task t0 [ai/failed] prompt=true
+  - 2. Task t1 [user/pending] prompt=true
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > a failure (ADR-0057 R4) > that blocks nothing goes at its maximum age if its cohort is slow
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a planner edit that makes a failed task manual > between runs leaves it the user's to do, its dependents free to follow
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > tasks the supervisor adds at Act > cannot be marked as the supervisor's by the planner itself
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stdout | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > Execute and run_plan on a scheduled run waiting on a person, with nothing live > a planner's run_plan joins it: the failure stays for a retry, and nothing runs again
+[TaskOrchestrator] Starting with 2 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=2, completed=false
+  - 1. Task t0 [ai/failed] prompt=true
+  - 2. Task t1 [user/pending] prompt=true
+
+stderr | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > Execute and run_plan on a scheduled run waiting on a person, with nothing live > a planner's run_plan joins it: the failure stays for a retry, and nothing runs again
+[Attempts] Task #1 "Task t0" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t0
+[Attempts] Output summary:
+No.
+
+stdout | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > Execute and run_plan on a scheduled run waiting on a person, with nothing live > a planner's run_plan joins it: the failure stays for a retry, and nothing runs again
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=2, completed=false
+  - 1. Task t0 [ai/failed] prompt=true
+  - 2. Task t1 [user/pending] prompt=true
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > a failure (ADR-0057 R4) > rides along with what needs a person, at once
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > a failure (ADR-0057 R4) > rides along with what needs a person, at once
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > a failure (ADR-0057 R4) > rides along with what needs a person, at once
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > Execute and run_plan on a scheduled run waiting on a person, with nothing live > starts what Execute approved in it
+[TaskOrchestrator] Starting with 2 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=2, completed=false
+  - 1. Task t0 [ai/failed] prompt=true
+  - 2. Task t1 [user/pending] prompt=true
+
+stderr | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > Execute and run_plan on a scheduled run waiting on a person, with nothing live > starts what Execute approved in it
+[Attempts] Task #1 "Task t0" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t0
+[Attempts] Output summary:
+No.
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > names the tasks a failure blocks, and counts them when the run finishes (ADR-0034)
+[TaskOrchestrator] Starting with 3 tasks (3 AI ready)
+[TaskOrchestrator] excluded: 2 (dependencies 2)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 3 (started 1, blocked 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=3, completed=false
+  - 1. Task t1 [ai/failed] prompt=true
+  - 2. Task t2 [ai/approved] prompt=true
+  - 3. Task t3 [ai/approved] prompt=true
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > names the tasks a failure blocks, and counts them when the run finishes (ADR-0034)
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > a planner edit that makes a failed task manual > in a run ended on the failure does the same, so the inbox offers no Retry that would refuse
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] excluded: 1 (dependencies 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 2 (started 1, blocked 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=2, completed=false
+  - 1. Task t1 [ai/failed] prompt=true
+  - 2. Task t2 [ai/approved] prompt=true
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a planner edit that makes a failed task manual > in a run ended on the failure does the same, so the inbox offers no Retry that would refuse
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+No.
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > names the tasks a failure blocks, and counts them when the run finishes (ADR-0034)
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > Execute and run_plan on a scheduled run waiting on a person, with nothing live > starts what Execute approved in it
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a planner edit that makes a failed task manual > in a run ended on the failure does the same, so the inbox offers no Retry that would refuse
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > wakes when a task goes quiet, and says since when
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorAct.test.ts > tasks the supervisor adds at Act > cannot be marked as the supervisor's by the planner itself
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > tasks the supervisor adds at Act > cannot be marked as the supervisor's by the planner itself
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+[TaskOrchestrator] excluded: 2 (started 1, unapproved 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stdout | src/services/__tests__/supervisorAct.test.ts > moving a task paused on a usage limit > keeps its scheduled resume when only its model changes on the same runner
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorAct.test.ts > moving a task paused on a usage limit > keeps its scheduled resume when only its model changes on the same runner
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > wakes when a task goes quiet, and says since when
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > wakes when a task has printed nothing since it started, and leaves it running
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stdout | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > Execute and run_plan on a scheduled run waiting on a person, with nothing live > starts what Execute approved in it
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stdout | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > Execute and run_plan under a usage-limit hold > the user's Execute on a scheduled run keeps the resume and the failure, and starts nothing
+[TaskOrchestrator] Starting with 3 tasks (3 AI ready)
+[TaskOrchestrator] getReadyTasks: 3 candidates, 2 slots, maxParallel=2
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 1 slots, maxParallel=2
+[TaskOrchestrator] tick(): 1 ready, 1 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > Execute and run_plan under a usage-limit hold > the user's Execute on a scheduled run keeps the resume and the failure, and starts nothing
+[Attempts] Task #1 "Task t0" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t0
+[Attempts] Output summary:
+No.
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > wakes when a task has printed nothing since it started, and leaves it running
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > Execute with a task started by hand at work > gives what failed the fresh chance Execute gives, as the hand-started work becomes the plan's run
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 1 active, held=0
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > Execute with a task started by hand at work > leaves it failed for the planner's run_plan: the fresh chance is the user's to ask for
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stdout | src/services/__tests__/supervisorAct.test.ts > moving a task paused on a usage limit > keeps its scheduled resume when only its model changes on the same runner
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 1 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 2 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > wakes when a task has printed nothing since it started, and leaves it running
+[Attempts] Task #1 "Task t1" verdict=pass
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+done
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > wakes at once when the run finishes, with the passes since the last wake-up
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=0, completed=true
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > wakes at once when the run finishes, with the passes since the last wake-up
+[Attempts] Task #1 "Task t1" verdict=pass
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Task #2 "Task t2" verdict=pass
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t2
+[Attempts] Output summary:
+(empty: no output captured)
+[Attempts] Output summary:
+(empty: no output captured)
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > wakes at once when the run finishes, with the passes since the last wake-up
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > Execute and run_plan under a usage-limit hold > a planner's run_plan on a scheduled run keeps the resume and the failure, and starts nothing
+[TaskOrchestrator] Starting with 3 tasks (3 AI ready)
+[TaskOrchestrator] getReadyTasks: 3 candidates, 2 slots, maxParallel=2
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 1 slots, maxParallel=2
+[TaskOrchestrator] tick(): 1 ready, 1 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > Execute and run_plan under a usage-limit hold > a planner's run_plan on a scheduled run keeps the resume and the failure, and starts nothing
+[Attempts] Task #1 "Task t0" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t0
+[Attempts] Output summary:
+No.
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > Execute with a task started by hand at work > leaves a scheduled run's failure to a retry: that run is under way, not begun
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > Execute with a task started by hand at work > leaves a scheduled run's failure to a retry: that run is under way, not begun
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+No.
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > Execute with a task started by hand at work > leaves a scheduled run's failure to a retry: that run is under way, not begun
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stdout | src/services/__tests__/supervisorAct.test.ts > moving a task paused on a usage limit > leaves the resume of every other paused task alone, with nothing else running
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorAct.test.ts > moving a task paused on a usage limit > leaves the resume of every other paused task alone, with nothing else running
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun in Full with a Stop before the reply ends > leaves the stopped run stopped: nothing starts at the reply's end
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > wakes on a landing conflict
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > wakes on a landing conflict
+[Attempts] Task #1 "Task t1" verdict=pass
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > wakes when Merge all at a merge gate stops
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] excluded: 1 (dependencies 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 2 (started 1, merge-gate 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] excluded: 2 (started 1, merge-gate 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=1, completed=false
+  - 2. Deploy [ai/approved] prompt=true
+[TaskOrchestrator] excluded: 2 (started 1, merge-gate 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=1, completed=false
+  - 2. Deploy [ai/approved] prompt=true
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > wakes when Merge all at a merge gate stops
+[Attempts] Task #1 "Task t1" verdict=pass
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+
+stdout | src/services/__tests__/supervisorAct.test.ts > moving a task paused on a usage limit > leaves the resume of every other paused task alone, with nothing else running
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stdout | src/services/__tests__/supervisorAct.test.ts > moving a task paused on a usage limit > leaves the resume of every other paused task alone, with nothing else running
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stdout | src/services/__tests__/supervisorAct.test.ts > moving a task paused on a usage limit > leaves the resume of every other paused task alone, with nothing else running
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stdout | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > Execute and run_plan under a usage-limit hold > on a task started alone makes the plan the run its reset gives back, and takes no pause back before then
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 1 active, held=0
+
+stdout | src/services/__tests__/supervisorAct.test.ts > moving a task paused on a usage limit > leaves the resume of every other paused task alone, with nothing else running
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > wakes when Merge all at a merge gate stops
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > never wakes for a pass: passes ride along as context with the next wake-up
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > never wakes for a pass: passes ride along as context with the next wake-up
+[Attempts] Task #1 "Task t1" verdict=pass
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > never wakes for a pass: passes ride along as context with the next wake-up
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the supervisor's edits after a runner is switched off that the plan once used > refuse an added task naming it, and change nothing
+[TaskOrchestrator] Starting with 3 tasks (3 AI ready)
+[TaskOrchestrator] excluded: 2 (dependencies 2)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > Execute and run_plan under a usage-limit hold > on a task started alone makes the plan the run its reset gives back, and takes no pause back before then
+[Attempts] Task #1 "Task t1" verdict=pass
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+
+stderr | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > Execute and run_plan under a usage-limit hold > gives what failed the fresh chance Execute gives, in the run the reset gives back
+[Attempts] Task #1 "Task t0" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t0
+[Attempts] Output summary:
+No.
+
+stderr | src/services/__tests__/supervisorAct.test.ts > the supervisor's edits after a runner is switched off that the plan once used > refuse an added task naming it, and change nothing
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the supervisor's edits after a runner is switched off that the plan once used > refuse an added task naming it, and change nothing
+[TaskOrchestrator] excluded: 3 (started 1, dependencies 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun in Full with a Stop before the reply ends > starts a plan submitted after the Stop: that is a new start, which the Stop came before
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun in Full with a Stop before the reply ends > starts a plan submitted after the Stop: that is a new start, which the Stop came before
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > merges events close together into one wake-up
+[TaskOrchestrator] Starting with 3 tasks (3 AI ready)
+[TaskOrchestrator] getReadyTasks: 3 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 3 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun in Full taking the fresh-run path > does not run again a script that failed earlier in the submitting reply
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > merges events close together into one wake-up
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the supervisor's edits after a runner is switched off that the plan once used > refuse a task moved onto it, and change nothing
+[TaskOrchestrator] Starting with 3 tasks (3 AI ready)
+[TaskOrchestrator] excluded: 2 (dependencies 2)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > coalesces the tasks one runner's usage limit paused into one entry
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > coalesces the tasks one runner's usage limit paused into one entry
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stderr | src/services/__tests__/supervisorAct.test.ts > the supervisor's edits after a runner is switched off that the plan once used > refuse a task moved onto it, and change nothing
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the supervisor's edits after a runner is switched off that the plan once used > refuse a task moved onto it, and change nothing
+[TaskOrchestrator] excluded: 3 (started 1, dependencies 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the supervisor's edits after a runner is switched off that the plan once used > put an added task that names no runner on an enabled one, as the supervisor's
+[TaskOrchestrator] Starting with 3 tasks (3 AI ready)
+[TaskOrchestrator] excluded: 2 (dependencies 2)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun in Full taking the fresh-run path > does not run again a script that failed earlier in the submitting reply
+[TaskOrchestrator] Starting with 2 tasks (1 AI ready)
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun in Full taking the fresh-run path > does not run again a script that failed earlier in the submitting reply
+[Attempts] Task #2 "Push main" verdict=fail
+[Attempts] Script body: {"commands":[["git","push","origin","main"]],"timeoutMs":600000}
+[Attempts] Output summary:
+(empty: no output captured)
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > does not wake when the user cancels a scheduled resume
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorAct.test.ts > the supervisor's edits after a runner is switched off that the plan once used > put an added task that names no runner on an enabled one, as the supervisor's
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the supervisor's edits after a runner is switched off that the plan once used > put an added task that names no runner on an enabled one, as the supervisor's
+[TaskOrchestrator] excluded: 3 (started 1, dependencies 2)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 1 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > does not wake when the user cancels a scheduled resume
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > does not wake when the user cancels a scheduled resume
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=1, completed=false
+  - 1. Task t1 [ai/awaiting_user] prompt=true
+
+stdout | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > a failed body task whose check is still to decide > is refused a continue as it is a retry: a body runs only if its check fails
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] excluded: 1 (loop-check 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 1 (repeating 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > a failed body task whose check is still to decide > is refused a continue as it is a retry: a body runs only if its check fails
+[Attempts] Task #1 "Task check" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do check
+[Attempts] Output summary:
+No.
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun in Full taking the fresh-run path > leaves an AI task that failed in the reply failed too, and starts the rest of the plan
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+[Attempts] Task #1 "Task a" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do a
+[Attempts] Output summary:
+No.
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the supervisor's edits after a runner is switched off that the plan once used > still edit the task left on it and move it off
+[TaskOrchestrator] Starting with 3 tasks (3 AI ready)
+[TaskOrchestrator] excluded: 2 (dependencies 2)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > stays asleep with the supervisor Off, and saves the level on the run as it starts
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=1, completed=false
+  - 1. Task t1 [ai/failed] prompt=true
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > stays asleep with the supervisor Off, and saves the level on the run as it starts
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun in Full taking the fresh-run path > leaves an AI task that failed in the reply failed too, and starts the rest of the plan
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun in Full taking the fresh-run path > leaves it failed on the join path too, with another task of the reply still at work
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > keeps the level the run started with when the setting is changed in another session
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > the supervisor at Watch: what wakes it > keeps the level the run started with when the setting is changed in another session
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stderr | src/services/__tests__/supervisorAct.test.ts > the supervisor's edits after a runner is switched off that the plan once used > still edit the task left on it and move it off
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the supervisor's edits after a runner is switched off that the plan once used > still edit the task left on it and move it off
+[TaskOrchestrator] excluded: 3 (started 1, dependencies 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > refuses a retry past the user's retry limit, and escalates the task to the user once
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=1, completed=false
+  - 1. Task t1 [ai/failed] prompt=true
+
+stderr | src/services/__tests__/supervisorAct.test.ts > the loop guards > refuses a retry past the user's retry limit, and escalates the task to the user once
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun in Full taking the fresh-run path > leaves it failed on the join path too, with another task of the reply still at work
+[Attempts] Task #1 "Task a" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do a
+[Attempts] Output summary:
+No.
+
+stderr | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > a failed body task whose check is still to decide > is refused a continue as it is a retry: a body runs only if its check fails
+[Attempts] Task #2 "Task fix" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do fix
+[Attempts] Output summary:
+No.
+
+stdout | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > a failed body task whose check is still to decide > is refused a continue as it is a retry: a body runs only if its check fails
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=2, completed=false
+  - 1. Task check [ai/failed] prompt=true
+  - 2. Task fix [ai/failed] prompt=true
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stdout | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > a carried loop a body task stopped > is not refused as running on its own: the check has no `repeating` wait while its body is failed
+[TaskOrchestrator] excluded: 1 (repeating 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > a carried loop a body task stopped > is not refused as running on its own: the check has no `repeating` wait while its body is failed
+[Attempts] Task #1 "Task check" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do check
+[Attempts] Output summary:
+No.
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun in Full taking the fresh-run path > leaves it failed on the join path too, with another task of the reply still at work
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > a carried loop a body task stopped > is not refused as running on its own: the check has no `repeating` wait while its body is failed
+[Attempts] Task #2 "Task fix" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do fix
+[Attempts] Output summary:
+No.
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > a wake-up turn > is the supervisor's: the update and its reply are kept with their own kinds, and every surface draws them apart
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun in Full taking the fresh-run path > still gives a failure from before the reply the fresh chance a run gives
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+ ❯ src/services/__tests__/reloadLoopAutorun.round5.review.test.ts (17 tests | 1 failed) 445ms
+   × a direct edit that makes a paused task manual > owes no start when a planner's edit also moves it to another runner: a manual task never takes one 39ms
+     → expected true to be falsy
+stderr | src/services/__tests__/supervisorWatch.test.ts > a wake-up turn > is the supervisor's: the update and its reply are kept with their own kinds, and every surface draws them apart
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > a wake-up turn > is the supervisor's: the update and its reply are kept with their own kinds, and every surface draws them apart
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 1 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 2 active, held=0
+
+stderr | src/services/__tests__/supervisorAct.test.ts > the loop guards > refuses a retry past the user's retry limit, and escalates the task to the user once
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > refuses a retry past the user's retry limit, and escalates the task to the user once
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=1, completed=false
+  - 1. Task t1 [ai/failed] prompt=true
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun in Full taking the fresh-run path > still gives a failure from before the reply the fresh chance a run gives
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun in Full taking the fresh-run path > still gives a failure from before the reply the fresh chance a run gives
+[Attempts] Task #1 "Task a" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do a
+[Attempts] Output summary:
+No.
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun in Full taking the fresh-run path > still gives a failure from before the reply the fresh chance a run gives
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=1, completed=false
+  - 1. Task a [ai/failed] prompt=true
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > a wake-up turn > refuses every execution tool at Watch, telling the supervisor to suggest it to the user
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun in Full taking the fresh-run path > still gives a failure from before the reply the fresh chance a run gives
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > a wake-up turn > refuses every execution tool at Watch, telling the supervisor to suggest it to the user
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > an edit adopted between runs > keeps a checkpoint wait through a real planner edit, still listed
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > takes a retry limit raised in this session at once
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=1, completed=false
+  - 1. Task t1 [ai/failed] prompt=true
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+
+stderr | src/services/__tests__/supervisorAct.test.ts > the loop guards > takes a retry limit raised in this session at once
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > counts retries across the runs the supervisor restarts itself, and starts afresh when the user starts
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=1, completed=false
+  - 1. Task t1 [ai/failed] prompt=true
+
+stderr | src/services/__tests__/supervisorAct.test.ts > the loop guards > counts retries across the runs the supervisor restarts itself, and starts afresh when the user starts
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > an edit adopted between runs > keeps a input wait through a real planner edit, still listed
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > a wake-up turn > refuses a plan edit made through the tools, and nothing is saved
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > counts retries across the runs the supervisor restarts itself, and starts afresh when the user starts
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=1, completed=false
+  - 1. Task t1 [ai/failed] prompt=true
+
+stderr | src/services/__tests__/supervisorAct.test.ts > the loop guards > counts retries across the runs the supervisor restarts itself, and starts afresh when the user starts
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > an edit adopted between runs > keeps a files-changed wait through a real planner edit, still listed
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > counts retries across the runs the supervisor restarts itself, and starts afresh when the user starts
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=1, completed=false
+  - 1. Task t1 [ai/failed] prompt=true
+
+stderr | src/services/__tests__/supervisorAct.test.ts > the loop guards > counts retries across the runs the supervisor restarts itself, and starts afresh when the user starts
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > an edit adopted between runs > keeps a usage-limit wait through a real planner edit, still listed
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a Stop of a plan the reply submitted, with nothing live yet > withdraws autorun's start in Full, and says what it stopped
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a Stop of a plan the reply submitted, with nothing live yet > withdraws autorun's start in Guarded, and says what it stopped
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > a wake-up turn > refuses a plan edit made through the tools, and nothing is saved
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > a wake-up turn > refuses a plan edit in its reply, sends the refusal back, and lands its prose instead
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > counts retries across the runs the supervisor restarts itself, and starts afresh when the user starts
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > refuses a retry after a failure with the prompt and model unchanged: change something or escalate
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=1, completed=false
+  - 1. Task t1 [ai/failed] prompt=true
+
+stderr | src/services/__tests__/supervisorAct.test.ts > the loop guards > refuses a retry after a failure with the prompt and model unchanged: change something or escalate
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > a wake-up turn > refuses a plan edit in its reply, sends the refusal back, and lands its prose instead
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > a wake-up turn > refuses a plan edit in its reply, sends the refusal back, and lands its prose instead
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 1 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 2 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a Stop of a plan the reply submitted, with nothing live yet > is recorded though it stopped nothing, so autorun turned on after it starts nothing
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a Stop of a plan the reply submitted, with nothing live yet > has nothing to stop once the reply has ended and its start has gone with it
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > a wake-up turn > applies the change once the user says yes, as an ordinary turn of theirs
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] excluded: 1 (dependencies 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > a wake-up turn > applies the change once the user says yes, as an ordinary turn of theirs
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > a wake-up turn > applies the change once the user says yes, as an ordinary turn of theirs
+[TaskOrchestrator] excluded: 2 (started 1, dependencies 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > hands a retry asked for after an edit in the same reply to the run at once, as edited
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=1, completed=false
+  - 1. Task t1 [ai/failed] prompt=true
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+
+stderr | src/services/__tests__/supervisorAct.test.ts > the loop guards > hands a retry asked for after an edit in the same reply to the run at once, as edited
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > hands a retry asked for after an edit in the same reply to the run at once, as edited
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > the user's Execute after a Stop of a submitted plan > leaves no notice that autorun did not start a plan that is running
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > the user's Execute after a Stop of a submitted plan > leaves no notice that autorun did not start a plan that is running
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > keeps an edit and the retry it ran when the user stops their turn after them
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=1, completed=false
+  - 1. Task t1 [ai/failed] prompt=true
+
+stderr | src/services/__tests__/supervisorAct.test.ts > the loop guards > keeps an edit and the retry it ran when the user stops their turn after them
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > the user's Execute after a Stop of a submitted plan > still says so when that Execute was stopped in turn
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > the user's Execute after a Stop of a submitted plan > still says so when that Execute was stopped in turn
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > Guarded with autorun and a submitted script task > leaves the script unapproved and unrun, and runs the rest
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > a wake-up turn > applies the change once the user says yes, as an ordinary turn of theirs
+[TaskOrchestrator] excluded: 2 (started 1, dependencies 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > a wake-up turn > spends the plan's read budget in place of a user message's caps
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > a wake-up turn > spends the plan's read budget in place of a user message's caps
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > Guarded with autorun and a submitted script task > leaves the script unapproved and unrun, and runs the rest
+[TaskOrchestrator] Starting with 2 tasks (1 AI ready)
+[TaskOrchestrator] excluded: 1 (unapproved 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 1 (unapproved 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > a wake-up turn > keeps a user turn's caps: three reads before it is told to land
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > a wake-up turn > keeps a user turn's caps: three reads before it is told to land
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stderr | src/services/__tests__/supervisorAct.test.ts > the loop guards > keeps an edit and the retry it ran when the user stops their turn after them
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > keeps an edit and the retry it ran when the user stops their turn after them
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > Guarded with autorun and a submitted script task > lists a plan of nothing else, and the user's Start runs it
+[TaskOrchestrator] Starting with 1 tasks (0 AI ready)
+[TaskOrchestrator] excluded: 1 (unapproved 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=1, completed=false
+  - 1. Push [script/approved] prompt=false
+[TaskOrchestrator] excluded: 1 (unapproved 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=1, completed=false
+  - 1. Push [script/approved] prompt=false
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > Guarded with autorun and a submitted script task > lists a plan of nothing else, and the user's Start runs it
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > keeps an edit a wake-up turn committed when the user stops that turn
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=1, completed=false
+  - 1. Task t1 [ai/failed] prompt=true
+
+stderr | src/services/__tests__/supervisorAct.test.ts > the loop guards > keeps an edit a wake-up turn committed when the user stops that turn
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > Guarded with autorun and a submitted script task > under Full, autorun's start still approves it
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > retries a crashed wake-up turn once with the planner restarted
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > commits nothing a wake-up turn edits after another plan was adopted under it
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=1, completed=false
+  - 1. Task t1 [ai/failed] prompt=true
+
+stderr | src/services/__tests__/supervisorAct.test.ts > the loop guards > commits nothing a wake-up turn edits after another plan was adopted under it
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > Guarded with autorun and a submitted script task > under Full, autorun's start still approves it
+[TaskOrchestrator] Starting with 1 tasks (0 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > retries a crashed wake-up turn once with the planner restarted
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > retries a crashed wake-up turn once with the planner restarted
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 1 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 2 active, held=0
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > retries a crashed wake-up turn once with the planner restarted
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 1 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 2 active, held=0
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > counts a planner that ends its turn without a reply as a crash, and shows nothing of it
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > refuses at once, not after the turn, a retry behind an edit that could never run: the task was added after the user approved the plan
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=1, completed=false
+  - 2. Task t2 [ai/failed] prompt=true
+
+stderr | src/services/__tests__/supervisorAct.test.ts > the loop guards > refuses at once, not after the turn, a retry behind an edit that could never run: the task was added after the user approved the plan
+[Attempts] Task #1 "Task t1" verdict=pass
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+[Attempts] Task #2 "Task t2" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t2
+[Attempts] Output summary:
+(empty: no output captured)
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > counts a planner that ends its turn without a reply as a crash, and shows nothing of it
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > counts a planner that ends its turn without a reply as a crash, and shows nothing of it
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 1 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 2 active, held=0
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > runs a retry after an edit as edited, on a run that had already finished
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stderr | src/services/__tests__/supervisorAct.test.ts > the loop guards > runs a retry after an edit as edited, on a run that had already finished
+[Attempts] Task #1 "Task t1" verdict=pass
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > goes unsupervised after the retry fails: the run carries on as Off, with a notice, and nothing is lost
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > goes unsupervised after the retry fails: the run carries on as Off, with a notice, and nothing is lost
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > goes unsupervised after the retry fails: the run carries on as Off, with a notice, and nothing is lost
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 1 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 2 active, held=0
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > goes unsupervised after the retry fails: the run carries on as Off, with a notice, and nothing is lost
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 1 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 2 active, held=0
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun with a run under way and nothing live > in Full leaves a run a usage limit holds as it is: the pause and what failed stay
+[TaskOrchestrator] Starting with 3 tasks (3 AI ready)
+[TaskOrchestrator] excluded: 1 (dependencies 1)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 3 (started 2, blocked 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun with a run under way and nothing live > in Full leaves a run a usage limit holds as it is: the pause and what failed stay
+[Attempts] Task #1 "Task t0" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t0
+[Attempts] Output summary:
+No.
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun with a run under way and nothing live > in Full leaves a run a usage limit holds as it is: the pause and what failed stay
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stderr | src/services/__tests__/supervisorAct.test.ts > the loop guards > runs a retry after an edit as edited, on a run that had already finished
+[Attempts] Task #2 "Task t2" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t2
+[Attempts] Output summary:
+(empty: no output captured)
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > runs a retry after an edit as edited, on a run that had already finished
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=1, completed=false
+  - 2. Task t2 [ai/failed] prompt=true
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > goes unsupervised after the retry fails: the run carries on as Off, with a notice, and nothing is lost
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 1 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 2 active, held=0
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > times a hung wake-up turn out, stops it, and retries it once
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > times a hung wake-up turn out, stops it, and retries it once
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > times a hung wake-up turn out, stops it, and retries it once
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 1 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 2 active, held=0
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > times a hung wake-up turn out, stops it, and retries it once
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 1 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 2 active, held=0
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun with a run under way and nothing live > in Guarded leaves a run a usage limit holds as it is: the pause and what failed stay
+[TaskOrchestrator] Starting with 3 tasks (3 AI ready)
+[TaskOrchestrator] excluded: 1 (dependencies 1)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 3 (started 2, blocked 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun with a run under way and nothing live > in Guarded leaves a run a usage limit holds as it is: the pause and what failed stay
+[Attempts] Task #1 "Task t0" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t0
+[Attempts] Output summary:
+No.
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > starts at once a task its own edit adds, asked for by title in the same reply, on a run that had finished
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=1, completed=false
+  - 2. Task t2 [ai/failed] prompt=true
+
+stderr | src/services/__tests__/supervisorAct.test.ts > the loop guards > starts at once a task its own edit adds, asked for by title in the same reply, on a run that had finished
+[Attempts] Task #1 "Task t1" verdict=pass
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+[Attempts] Task #2 "Task t2" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t2
+[Attempts] Output summary:
+(empty: no output captured)
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun with a run under way and nothing live > in Guarded leaves a run a usage limit holds as it is: the pause and what failed stay
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > times a hung wake-up turn out, stops it, and retries it once
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 1 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 2 active, held=0
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 1 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 2 active, held=0
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > takes the conversation back from a turn that ignores its stop
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > takes the conversation back from a turn that ignores its stop
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > takes the conversation back from a turn that ignores its stop
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > takes the conversation back from a turn that ignores its stop
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > takes the conversation back from a turn that ignores its stop
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun with a run under way and nothing live > in Full leaves a scheduled run waiting on a person its failure, and it starts what the plan added
+[TaskOrchestrator] Starting with 2 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=2, completed=false
+  - 1. Task t0 [ai/failed] prompt=true
+  - 2. Task t1 [user/pending] prompt=true
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun with a run under way and nothing live > in Full leaves a scheduled run waiting on a person its failure, and it starts what the plan added
+[Attempts] Task #1 "Task t0" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t0
+[Attempts] Output summary:
+No.
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stderr | src/services/__tests__/supervisorAct.test.ts > the loop guards > starts at once a task its own edit adds, asked for by title in the same reply, on a run that had finished
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > refuses at once a retry behind an edit that leaves the prompt and model as they failed
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=1, completed=false
+  - 1. Task t1 [ai/failed] prompt=true
+
+stderr | src/services/__tests__/supervisorAct.test.ts > the loop guards > refuses at once a retry behind an edit that leaves the prompt and model as they failed
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > hears nothing more from a turn it took the conversation back from, when that turn ends at last
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > hears nothing more from a turn it took the conversation back from, when that turn ends at last
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > hears nothing more from a turn it took the conversation back from, when that turn ends at last
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 1 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 2 active, held=0
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun with a run under way and nothing live > in Guarded leaves a scheduled run waiting on a person its failure, and it starts what the plan added
+[TaskOrchestrator] Starting with 2 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=2, completed=false
+  - 1. Task t0 [ai/failed] prompt=true
+  - 2. Task t1 [user/pending] prompt=true
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun with a run under way and nothing live > in Guarded leaves a scheduled run waiting on a person its failure, and it starts what the plan added
+[Attempts] Task #1 "Task t0" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t0
+[Attempts] Output summary:
+No.
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > hears nothing more from a turn it took the conversation back from, when that turn ends at last
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 1 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 2 active, held=0
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > hears nothing more from a turn it took the conversation back from, when that turn ends at last
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 1 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 2 active, held=0
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > runs a retry after an edit in the user's own turn as edited
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=1, completed=false
+  - 1. Task t1 [ai/failed] prompt=true
+
+stderr | src/services/__tests__/supervisorAct.test.ts > the loop guards > runs a retry after an edit in the user's own turn as edited
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun with a run under way and nothing live > in Guarded leaves a scheduled run waiting on a person its failure, and it starts what the plan added
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun with a run under way and nothing live > says why it starts nothing with a usage limit holding a task started alone, and keeps the pause
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > runs a retry after an edit in the user's own turn as edited
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > always lets the run's new starts go when a wake-up turn fails, the last one included
+[TaskOrchestrator] Starting with 4 tasks (4 AI ready)
+[TaskOrchestrator] excluded: 2 (dependencies 2)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > always lets the run's new starts go when a wake-up turn fails, the last one included
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > refuses re-adding a task it removed this run, and undoing its own edit
+[TaskOrchestrator] Starting with 3 tasks (3 AI ready)
+[TaskOrchestrator] excluded: 2 (dependencies 2)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorAct.test.ts > the loop guards > refuses re-adding a task it removed this run, and undoing its own edit
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > always lets the run's new starts go when a wake-up turn fails, the last one included
+[Attempts] Task #2 "Task t2" verdict=pass
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t2
+[Attempts] Output summary:
+(empty: no output captured)
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > always lets the run's new starts go when a wake-up turn fails, the last one included
+[TaskOrchestrator] excluded: 3 (started 2, dependencies 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 1 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > always lets the run's new starts go when a wake-up turn fails, the last one included
+[Attempts] Task #3 "Task t3" verdict=pass
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t3
+[Attempts] Output summary:
+(empty: no output captured)
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > a loop with a body task the user reverted > keeps it on hold through a round: the loop waits, and says so
+[TaskOrchestrator] Starting with 3 tasks (3 AI ready)
+[TaskOrchestrator] excluded: 2 (on-hold 1, dependencies 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 3 (repeating 1, on-hold 1, dependencies 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=3, completed=false
+  - 1. Task check [ai/failed] prompt=true
+  - 2. Task fix [ai/approved] prompt=true
+  - 3. Task ship [ai/approved] prompt=true
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a loop with a body task the user reverted > keeps it on hold through a round: the loop waits, and says so
+[Attempts] Task #1 "Task check" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do check
+[Attempts] Output summary:
+Found it.
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > refuses re-adding a task it removed this run, and undoing its own edit
+[TaskOrchestrator] excluded: 2 (started 1, dependencies 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > always lets the run's new starts go when a wake-up turn fails, the last one included
+[TaskOrchestrator] excluded: 3 (started 3)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 1 active, held=0
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > refuses re-adding a task it removed this run, and undoing its own edit
+[TaskOrchestrator] excluded: 2 (started 1, dependencies 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > a loop with a body task the user reverted > goes on once the user starts it again
+[TaskOrchestrator] Starting with 3 tasks (3 AI ready)
+[TaskOrchestrator] excluded: 2 (on-hold 1, dependencies 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 3 (repeating 1, on-hold 1, dependencies 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=3, completed=false
+  - 1. Task check [ai/failed] prompt=true
+  - 2. Task fix [ai/approved] prompt=true
+  - 3. Task ship [ai/approved] prompt=true
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a loop with a body task the user reverted > goes on once the user starts it again
+[Attempts] Task #1 "Task check" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do check
+[Attempts] Output summary:
+Found it.
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > drops the run to Watch when it keeps waking with nothing passing, with a notice
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorAct.test.ts > the loop guards > drops the run to Watch when it keeps waking with nothing passing, with a notice
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > drops the run to Watch when it keeps waking with nothing passing, with a notice
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > waits out the planner's usage limit, then delivers the wake-up
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a loop with a body task the user reverted > goes on once the user starts it again
+[Attempts] Task #2 "Task fix" verdict=pass
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do fix
+[Attempts] Output summary:
+fixed
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > a loop with a body task the user reverted > goes on once the user starts it again
+[TaskOrchestrator] excluded: 2 (started 1, dependencies 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > waits out the planner's usage limit, then delivers the wake-up
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > drops the run to Watch when it keeps waking with nothing passing, with a notice
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > drops the run to Watch when it keeps waking with nothing passing, with a notice
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > waits out the planner's usage limit, then delivers the wake-up
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 1 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 2 active, held=0
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > drops the run to Watch when it keeps waking with nothing passing, with a notice
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > drops the run to Watch when it keeps waking with nothing passing, with a notice
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stdout | src/services/__tests__/supervisorAct.test.ts > the loop guards > drops the run to Watch when it keeps waking with nothing passing, with a notice
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > an awaiting task an edit makes manual > keeps the wait of the runner that can still be answered
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > an awaiting task an edit makes manual > keeps the wait of the runner that can still be answered
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > a failure at Act (ADR-0034) > ends the run with the failed task's dependent blocked, and a retry after an edit runs the dependent once it passes
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] excluded: 1 (dependencies 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 2 (started 1, blocked 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=2, completed=false
+  - 1. Task t1 [ai/failed] prompt=true
+  - 2. Task t2 [ai/approved] prompt=true
+
+stderr | src/services/__tests__/supervisorAct.test.ts > a failure at Act (ADR-0034) > ends the run with the failed task's dependent blocked, and a retry after an edit runs the dependent once it passes
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > waits out the planner's usage limit, then delivers the wake-up
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 1 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 2 active, held=0
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > goes unsupervised when the planner's limit says no reset time
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorAct.test.ts > a failure at Act (ADR-0034) > ends the run with the failed task's dependent blocked, and a retry after an edit runs the dependent once it passes
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > an awaiting task an edit makes manual > is the manual task it now is once that runner has died, with no Retry that refuses
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > an awaiting task an edit makes manual > is the manual task it now is once that runner has died, with no Retry that refuses
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > a failure at Act (ADR-0034) > ends the run with the failed task's dependent blocked, and a retry after an edit runs the dependent once it passes
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] excluded: 1 (dependencies 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > goes unsupervised when the planner's limit says no reset time
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > goes unsupervised when the planner's limit says no reset time
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 1 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 2 active, held=0
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > retries a wake-up whose runner says in a field it failed for something other than its limit, whatever its words say
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > an awaiting task an edit makes manual > is the manual task it now is after a reload, with no Retry that refuses
+[TaskOrchestrator] Starting with 1 tasks (1 AI ready)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stdout | src/services/__tests__/supervisorAct.test.ts > a failure at Act (ADR-0034) > ends the run with the failed task's dependent blocked, and a retry after an edit runs the dependent once it passes
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorAct.test.ts > a failure at Act (ADR-0034) > ends the run with the failed task's dependent blocked, and a retry after an edit runs the dependent once it passes
+[Attempts] Task #1 "Task t1" verdict=pass
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1, importing from ./lib
+[Attempts] Output summary:
+(empty: no output captured)
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > retries a wake-up whose runner says in a field it failed for something other than its limit, whatever its words say
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > when the supervisor fails, the run does not depend on it > retries a wake-up whose runner says in a field it failed for something other than its limit, whatever its words say
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 1 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 2 active, held=0
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > undelivered wake-ups across a daemon restart > keeps an unanswered wake-up idle on adoption and delivers it with the next user message
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stdout | src/services/__tests__/supervisorAct.test.ts > merge_all as a planner tool > merges in a wake-up turn at Act, and the gate opens
+[TaskOrchestrator] Starting with 3 tasks (3 AI ready)
+[TaskOrchestrator] excluded: 1 (dependencies 1)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 3 (started 2, merge-gate 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stderr | src/services/__tests__/supervisorAct.test.ts > merge_all as a planner tool > merges in a wake-up turn at Act, and the gate opens
+[Attempts] Task #1 "Task t1" verdict=pass
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > an awaiting task an edit makes manual > is the manual task it now is after a reload, with no Retry that refuses
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > a task made manual on a usage limit > holds nothing when its live runner hits the limit: the rest of the run goes on, and no resume is promised
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 1 slots, maxParallel=1
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > undelivered wake-ups across a daemon restart > keeps an unanswered wake-up idle on adoption and delivers it with the next user message
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a task made manual on a usage limit > holds nothing when its live runner hits the limit: the rest of the run goes on, and no resume is promised
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stderr | src/services/__tests__/supervisorAct.test.ts > merge_all as a planner tool > merges in a wake-up turn at Act, and the gate opens
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > undelivered wake-ups across a daemon restart > keeps an unanswered wake-up idle on adoption and delivers it with the next user message
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > merge_all as a planner tool > is refused in the user's own turn: they merge it themselves
+[TaskOrchestrator] Starting with 3 tasks (3 AI ready)
+[TaskOrchestrator] excluded: 1 (dependencies 1)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 3 (started 2, merge-gate 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stderr | src/services/__tests__/supervisorAct.test.ts > merge_all as a planner tool > is refused in the user's own turn: they merge it themselves
+[Attempts] Task #1 "Task t1" verdict=pass
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+
+stderr | src/services/__tests__/supervisorAct.test.ts > merge_all as a planner tool > is refused in the user's own turn: they merge it themselves
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > merge_all as a planner tool > is refused in the user's own turn: they merge it themselves
+[TaskOrchestrator] excluded: 3 (started 2, merge-gate 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > a task made manual on a usage limit > leaves the hold of another task waiting on the reset, which resumes it and lets the run go on
+[TaskOrchestrator] Starting with 3 tasks (3 AI ready)
+[TaskOrchestrator] getReadyTasks: 3 candidates, 2 slots, maxParallel=2
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a task made manual on a usage limit > leaves the hold of another task waiting on the reset, which resumes it and lets the run go on
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > undelivered wake-ups across a daemon restart > keeps an unsupervised run's wake-ups for the user's next message after a restart
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > undelivered wake-ups across a daemon restart > keeps an unsupervised run's wake-ups for the user's next message after a restart
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > undelivered wake-ups across a daemon restart > keeps an unsupervised run's wake-ups for the user's next message after a restart
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 1 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 2 active, held=0
+
+stdout | src/services/__tests__/supervisorWatch.test.ts > undelivered wake-ups across a daemon restart > keeps an unsupervised run's wake-ups for the user's next message after a restart
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 1 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 2 active, held=0
+
+stdout | src/services/__tests__/supervisorAct.test.ts > changing the supervisor level mid-run > to Watch applies at once, in the wake-up turn under way too
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorWatch.test.ts > undelivered wake-ups across a daemon restart > keeps an unsupervised run's wake-ups for the user's next message after a restart
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+ ❯ src/services/__tests__/supervisorWatch.test.ts (39 tests | 1 failed) 831ms
+   × a wake-up turn > refuses a plan edit made through the tools, and nothing is saved 23ms
+     → expected 'Plan contained no tasks' to match /^Plan edits are refused in a wake-up …/
+stderr | src/services/__tests__/supervisorAct.test.ts > changing the supervisor level mid-run > to Watch applies at once, in the wake-up turn under way too
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > changing the supervisor level mid-run > off stops the wake-ups; what was gathered reaches the planner with the user's next message
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > a task made manual on a usage limit > lets the run go when another verdict releases a paused task a direct edit made manual
+[TaskOrchestrator] Starting with 3 tasks (3 AI ready)
+[TaskOrchestrator] getReadyTasks: 3 candidates, 2 slots, maxParallel=2
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 1 slots, maxParallel=2
+[TaskOrchestrator] tick(): 1 ready, 1 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a task made manual on a usage limit > lets the run go when another verdict releases a paused task a direct edit made manual
+[Attempts] Task #2 "Task t2" verdict=pass
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t2
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > a planner edit between a carried loop's body failure and its retry > leaves the loop carried: a retry that passes resumes it, and nothing else starts
+[TaskOrchestrator] excluded: 1 (repeating 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a planner edit between a carried loop's body failure and its retry > leaves the loop carried: a retry that passes resumes it, and nothing else starts
+[Attempts] Task #1 "Task check" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do check
+[Attempts] Output summary:
+Found it.
+
+stderr | src/services/__tests__/supervisorAct.test.ts > changing the supervisor level mid-run > off stops the wake-ups; what was gathered reaches the planner with the user's next message
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > changing the supervisor level mid-run > to Act applies at once: the next wake-up turn may act
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a planner edit between a carried loop's body failure and its retry > leaves the loop carried: a retry that passes resumes it, and nothing else starts
+[Attempts] Task #2 "Task fix" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do fix
+[Attempts] Output summary:
+No.
+
+stderr | src/services/__tests__/supervisorAct.test.ts > changing the supervisor level mid-run > to Act applies at once: the next wake-up turn may act
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+[Attempts] Task #2 "Task t2" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t2
+[Attempts] Output summary:
+(empty: no output captured)
+
+stdout | src/services/__tests__/supervisorAct.test.ts > changing the supervisor level mid-run > to Act applies at once: the next wake-up turn may act
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 1 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 2 active, held=0
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 2 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 1 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a planner edit between a carried loop's body failure and its retry > leaves the loop carried: a retry that passes resumes it, and nothing else starts
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > a planner edit between a carried loop's body failure and its retry > leaves the loop carried: a retry that passes resumes it, and nothing else starts
+[TaskOrchestrator] excluded: 1 (repeating 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a planner edit between a carried loop's body failure and its retry > leaves the loop carried: a retry that passes resumes it, and nothing else starts
+[Attempts] Task #2 "Task fix" verdict=pass
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do fix
+[Attempts] Output summary:
+fixed
+
+stdout | src/services/__tests__/supervisorAct.test.ts > skip_task at Act > skips the failed task with its reason: the timeline shows it, and the dependent is told it
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] excluded: 1 (dependencies 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 2 (started 1, blocked 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=2, completed=false
+  - 1. Task t1 [ai/failed] prompt=true
+  - 2. Task t2 [ai/approved] prompt=true
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorAct.test.ts > skip_task at Act > skips the failed task with its reason: the timeline shows it, and the dependent is told it
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > a failed task behind a dependency that has not finished > names what it waits on, and offers no start the seam would refuse
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] excluded: 1 (dependencies 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a failed task behind a dependency that has not finished > names what it waits on, and offers no start the seam would refuse
+[Attempts] Task #1 "Task t1" verdict=pass
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+done
+
+stdout | src/services/__tests__/supervisorAct.test.ts > skip_task at Act > counts a skip of a task it retried against the retry limit: past it, the task is the user's
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] excluded: 1 (dependencies 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 2 (started 1, blocked 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=2, completed=false
+  - 1. Task t1 [ai/failed] prompt=true
+  - 2. Task t2 [ai/approved] prompt=true
+
+stderr | src/services/__tests__/supervisorAct.test.ts > skip_task at Act > counts a skip of a task it retried against the retry limit: past it, the task is the user's
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a failed task behind a dependency that has not finished > names what it waits on, and offers no start the seam would refuse
+[Attempts] Task #2 "Task t2" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t2
+[Attempts] Output summary:
+No.
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > a failed task behind a dependency that has not finished > names what it waits on, and offers no start the seam would refuse
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=1, completed=false
+  - 2. Task t2 [ai/failed] prompt=true
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > a failed task behind a dependency that has not finished > offers them again once it has finished
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] excluded: 1 (dependencies 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 1 (started 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a failed task behind a dependency that has not finished > offers them again once it has finished
+[Attempts] Task #1 "Task t1" verdict=pass
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+done
+
+stdout | src/services/__tests__/supervisorAct.test.ts > skip_task at Act > counts a skip of a task it retried against the retry limit: past it, the task is the user's
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] excluded: 2 (started 1, blocked 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=2, completed=false
+  - 1. Task t1 [ai/failed] prompt=true
+  - 2. Task t2 [ai/approved] prompt=true
+
+stderr | src/services/__tests__/supervisorAct.test.ts > skip_task at Act > counts a skip of a task it retried against the retry limit: past it, the task is the user's
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+
+stdout | src/services/__tests__/supervisorAct.test.ts > skip_task at Act > lets a skip of a task it retried through under the limit, and then counts it
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] excluded: 1 (dependencies 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 2 (started 1, blocked 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=2, completed=false
+  - 1. Task t1 [ai/failed] prompt=true
+  - 2. Task t2 [ai/approved] prompt=true
+
+stderr | src/services/__tests__/supervisorAct.test.ts > skip_task at Act > lets a skip of a task it retried through under the limit, and then counts it
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+
+stderr | src/services/__tests__/reloadLoopAutorun.review.test.ts > a failed task behind a dependency that has not finished > offers them again once it has finished
+[Attempts] Task #2 "Task t2" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t2
+[Attempts] Output summary:
+No.
+
+stdout | src/services/__tests__/reloadLoopAutorun.review.test.ts > a failed task behind a dependency that has not finished > offers them again once it has finished
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=1, completed=false
+  - 2. Task t2 [ai/failed] prompt=true
+
+stderr | src/services/__tests__/supervisorAct.test.ts > skip_task at Act > lets a skip of a task it retried through under the limit, and then counts it
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+ ❯ src/services/__tests__/reloadLoopAutorun.review.test.ts (55 tests | 9 failed) 916ms
+   × a planner edit that makes a failed task manual > between runs leaves it the user's to do, its dependents free to follow 26ms
+     → expected true to be falsy
+   × a planner edit that makes a failed task manual > in a run ended on the failure does the same, so the inbox offers no Retry that would refuse 21ms
+     → expected true to be falsy
+   × autorun with a run under way and nothing live > in Full leaves a scheduled run waiting on a person its failure, and it starts what the plan added 16ms
+     → expected true to be falsy
+   × autorun with a run under way and nothing live > in Guarded leaves a scheduled run waiting on a person its failure, and it starts what the plan added 12ms
+     → expected true to be falsy
+   × an awaiting task an edit makes manual > keeps the wait of the runner that can still be answered 13ms
+     → expected true to be falsy
+   × an awaiting task an edit makes manual > is the manual task it now is once that runner has died, with no Retry that refuses 12ms
+     → expected true to be falsy
+   × an awaiting task an edit makes manual > is the manual task it now is after a reload, with no Retry that refuses 19ms
+     → expected true to be falsy
+   × a task made manual on a usage limit > holds nothing when its live runner hits the limit: the rest of the run goes on, and no resume is promised 16ms
+     → expected true to be falsy
+   × a task made manual on a usage limit > leaves the hold of another task waiting on the reset, which resumes it and lets the run go on 20ms
+     → expected true to be falsy
+stdout | src/services/__tests__/supervisorAct.test.ts > skip_task at Act > lets a skip of a task it retried through under the limit, and then counts it
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] excluded: 2 (started 1, blocked 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=2, completed=false
+  - 1. Task t1 [ai/failed] prompt=true
+  - 2. Task t2 [ai/approved] prompt=true
+
+stderr | src/services/__tests__/supervisorAct.test.ts > skip_task at Act > lets a skip of a task it retried through under the limit, and then counts it
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+
+stdout | src/services/__tests__/supervisorAct.test.ts > skip_task at Act > lets a skip of a task it retried through under the limit, and then counts it
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+
+stdout | src/services/__tests__/supervisorAct.test.ts > skip_task at Act > refuses a skip of a task its own edit adds in the same reply, which waits on nothing
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] excluded: 1 (dependencies 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 2 (started 1, blocked 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=2, completed=false
+  - 1. Task t1 [ai/failed] prompt=true
+  - 2. Task t2 [ai/approved] prompt=true
+
+stderr | src/services/__tests__/supervisorAct.test.ts > skip_task at Act > refuses a skip of a task its own edit adds in the same reply, which waits on nothing
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > skip_task at Act > never runs a skipped task again: that is the user's to decide
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] excluded: 1 (dependencies 1)
+[TaskOrchestrator] getReadyTasks: 1 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 1 ready, 0 active, held=0
+[TaskOrchestrator] excluded: 2 (started 1, blocked 1)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 0 active, held=0
+[TaskOrchestrator] tick(): no work. remaining=2, completed=false
+  - 1. Task t1 [ai/failed] prompt=true
+  - 2. Task t2 [ai/approved] prompt=true
+
+stderr | src/services/__tests__/supervisorAct.test.ts > skip_task at Act > never runs a skipped task again: that is the user's to decide
+[Attempts] Task #1 "Task t1" verdict=fail
+[Attempts] Runner: claude-code, Model: default
+[Attempts] Prompt preview: do t1
+[Attempts] Output summary:
+(empty: no output captured)
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > skip_task at Act > never runs a skipped task again: that is the user's to decide
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+
+stdout | src/services/__tests__/supervisorAct.test.ts > answer_checkpoint at Act > is woken by the checkpoint, approves it, and the runner goes on
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorAct.test.ts > answer_checkpoint at Act > is woken by the checkpoint, approves it, and the runner goes on
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > answer_checkpoint at Act > is woken by the checkpoint, approves it, and the runner goes on
+[TaskOrchestrator] excluded: 2 (started 2)
+[TaskOrchestrator] getReadyTasks: 0 candidates, 1 slots, maxParallel=3
+[TaskOrchestrator] tick(): 0 ready, 2 active, held=0
+
+stdout | src/services/__tests__/supervisorAct.test.ts > answer_checkpoint at Act > rejects it with a reason the runner is told
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorAct.test.ts > answer_checkpoint at Act > rejects it with a reason the runner is told
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+stdout | src/services/__tests__/supervisorAct.test.ts > answer_checkpoint at Act > leaves it waiting when the supervisor is lowered to Watch before it answers, and says the user answers
+[TaskOrchestrator] Starting with 2 tasks (2 AI ready)
+[TaskOrchestrator] getReadyTasks: 2 candidates, 3 slots, maxParallel=3
+[TaskOrchestrator] tick(): 2 ready, 0 active, held=0
+
+stderr | src/services/__tests__/supervisorAct.test.ts > answer_checkpoint at Act > leaves it waiting when the supervisor is lowered to Watch before it answers, and says the user answers
+Built-in skill not found in package: grilling
+Built-in skill not found in package: to-spec
+Built-in skill not found in package: improve-codebase-architecture
+Built-in skill not found in package: tdd
+Built-in skill not found in package: diagnose
+Built-in skill not found in package: explore
+
+ ❯ src/services/__tests__/supervisorAct.test.ts (42 tests | 1 failed) 1002ms
+   × a wake-up turn at Act > refuses a whole new plan: the supervisor edits, it does not replan from scratch 31ms
+     → expected 'Task "Something else" is missing slic…' to match /^A whole new plan is refused in a wak…/
+
+⎯⎯⎯⎯⎯⎯ Failed Tests 13 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/services/__tests__/fakeSecretsGuard.test.ts > fake secret fixtures > no tracked file other than outboundSecrets.ts holds a literal token
+AssertionError: build fake secrets with fakeSecret() instead of a literal: expected [ Array(1) ] to deeply equal []
+
+- Expected
++ Received
+
+- Array []
++ Array [
++   "packages/core/src/utils/__tests__/redactSecrets.bar84.adversarial.test.ts",
++ ]
+
+ ❯ src/services/__tests__/fakeSecretsGuard.test.ts:29:84
+     27|     }
+     28| 
+     29|     expect(offenders, 'build fake secrets with fakeSecret() instead of…
+       |                                                                                    ^
+     30|   });
+     31| 
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/13]⎯
+
+ FAIL  src/services/__tests__/reloadLoopAutorun.review.test.ts > a planner edit that makes a failed task manual > between runs leaves it the user's to do, its dependents free to follow
+AssertionError: expected true to be falsy
+
+- Expected
++ Received
+
+- false
++ true
+
+ ❯ editTurn src/services/__tests__/reloadLoopAutorun.review.test.ts:210:82
+    208|     void env.session.continueConversation('change it');
+    209|     await until(() => env.planner.calls.length === 1);
+    210|     expect((await env.planner.tools().editPlan!({ ops } as never, ctx)…
+       |                                                                                  ^
+    211|     env.planner.calls[0].finish(prose('Changed.'));
+    212|     await settled();
+ ❯ src/services/__tests__/reloadLoopAutorun.review.test.ts:217:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/13]⎯
+
+ FAIL  src/services/__tests__/reloadLoopAutorun.review.test.ts > a planner edit that makes a failed task manual > in a run ended on the failure does the same, so the inbox offers no Retry that would refuse
+AssertionError: expected true to be falsy
+
+- Expected
++ Received
+
+- false
++ true
+
+ ❯ editTurn src/services/__tests__/reloadLoopAutorun.review.test.ts:210:82
+    208|     void env.session.continueConversation('change it');
+    209|     await until(() => env.planner.calls.length === 1);
+    210|     expect((await env.planner.tools().editPlan!({ ops } as never, ctx)…
+       |                                                                                  ^
+    211|     env.planner.calls[0].finish(prose('Changed.'));
+    212|     await settled();
+ ❯ src/services/__tests__/reloadLoopAutorun.review.test.ts:229:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/13]⎯
+
+ FAIL  src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun with a run under way and nothing live > in Full leaves a scheduled run waiting on a person its failure, and it starts what the plan added
+ FAIL  src/services/__tests__/reloadLoopAutorun.review.test.ts > autorun with a run under way and nothing live > in Guarded leaves a scheduled run waiting on a person its failure, and it starts what the plan added
+AssertionError: expected true to be falsy
+
+- Expected
++ Received
+
+- false
++ true
+
+ ❯ submitted src/services/__tests__/reloadLoopAutorun.review.test.ts:602:106
+    600|     void env.session.continueConversation('change the plan');
+    601|     await until(() => env.planner.calls.length === 1);
+    602|     expect((await env.planner.tools().submitPlan!({ tasks } as unknown…
+       |                                                                                                          ^
+    603|     env.planner.calls[0].finish(prose('Changed.'));
+    604|     await settled();
+ ❯ src/services/__tests__/reloadLoopAutorun.review.test.ts:635:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/13]⎯
+
+ FAIL  src/services/__tests__/reloadLoopAutorun.review.test.ts > an awaiting task an edit makes manual > keeps the wait of the runner that can still be answered
+AssertionError: expected true to be falsy
+
+- Expected
++ Received
+
+- false
++ true
+
+ ❯ madeManual src/services/__tests__/reloadLoopAutorun.review.test.ts:716:173
+    714|     void env.session.continueConversation('change it');
+    715|     await until(() => env.planner.calls.length === 1);
+    716|     expect((await env.planner.tools().editPlan!({ ops: [{ op: 'update'…
+       |                                                                                                                                                                             ^
+    717|     env.planner.calls[0].finish(prose('Changed.'));
+    718|     await settled();
+ ❯ src/services/__tests__/reloadLoopAutorun.review.test.ts:723:17
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/13]⎯
+
+ FAIL  src/services/__tests__/reloadLoopAutorun.review.test.ts > an awaiting task an edit makes manual > is the manual task it now is once that runner has died, with no Retry that refuses
+AssertionError: expected true to be falsy
+
+- Expected
++ Received
+
+- false
++ true
+
+ ❯ madeManual src/services/__tests__/reloadLoopAutorun.review.test.ts:716:173
+    714|     void env.session.continueConversation('change it');
+    715|     await until(() => env.planner.calls.length === 1);
+    716|     expect((await env.planner.tools().editPlan!({ ops: [{ op: 'update'…
+       |                                                                                                                                                                             ^
+    717|     env.planner.calls[0].finish(prose('Changed.'));
+    718|     await settled();
+ ❯ src/services/__tests__/reloadLoopAutorun.review.test.ts:731:17
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/13]⎯
+
+ FAIL  src/services/__tests__/reloadLoopAutorun.review.test.ts > an awaiting task an edit makes manual > is the manual task it now is after a reload, with no Retry that refuses
+AssertionError: expected true to be falsy
+
+- Expected
++ Received
+
+- false
++ true
+
+ ❯ madeManual src/services/__tests__/reloadLoopAutorun.review.test.ts:716:173
+    714|     void env.session.continueConversation('change it');
+    715|     await until(() => env.planner.calls.length === 1);
+    716|     expect((await env.planner.tools().editPlan!({ ops: [{ op: 'update'…
+       |                                                                                                                                                                             ^
+    717|     env.planner.calls[0].finish(prose('Changed.'));
+    718|     await settled();
+ ❯ src/services/__tests__/reloadLoopAutorun.review.test.ts:742:17
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/13]⎯
+
+ FAIL  src/services/__tests__/reloadLoopAutorun.review.test.ts > a task made manual on a usage limit > holds nothing when its live runner hits the limit: the rest of the run goes on, and no resume is promised
+AssertionError: expected true to be falsy
+
+- Expected
++ Received
+
+- false
++ true
+
+ ❯ atInputMadeManual src/services/__tests__/reloadLoopAutorun.review.test.ts:778:173
+    776|     void env.session.continueConversation('make it manual');
+    777|     await until(() => env.planner.calls.length === 1);
+    778|     expect((await env.planner.tools().editPlan!({ ops: [{ op: 'update'…
+       |                                                                                                                                                                             ^
+    779|     env.planner.calls[0].finish(prose('Changed.'));
+    780|     await settled();
+ ❯ src/services/__tests__/reloadLoopAutorun.review.test.ts:787:17
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/13]⎯
+
+ FAIL  src/services/__tests__/reloadLoopAutorun.review.test.ts > a task made manual on a usage limit > leaves the hold of another task waiting on the reset, which resumes it and lets the run go on
+AssertionError: expected true to be falsy
+
+- Expected
++ Received
+
+- false
++ true
+
+ ❯ atInputMadeManual src/services/__tests__/reloadLoopAutorun.review.test.ts:778:173
+    776|     void env.session.continueConversation('make it manual');
+    777|     await until(() => env.planner.calls.length === 1);
+    778|     expect((await env.planner.tools().editPlan!({ ops: [{ op: 'update'…
+       |                                                                                                                                                                             ^
+    779|     env.planner.calls[0].finish(prose('Changed.'));
+    780|     await settled();
+ ❯ src/services/__tests__/reloadLoopAutorun.review.test.ts:800:17
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/13]⎯
+
+ FAIL  src/services/__tests__/reloadLoopAutorun.round5.review.test.ts > a direct edit that makes a paused task manual > owes no start when a planner's edit also moves it to another runner: a manual task never takes one
+AssertionError: expected true to be falsy
+
+- Expected
++ Received
+
+- false
++ true
+
+ ❯ src/services/__tests__/reloadLoopAutorun.round5.review.test.ts:103:198
+
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/13]⎯
+
+ FAIL  src/services/__tests__/supervisorAct.test.ts > a wake-up turn at Act > refuses a whole new plan: the supervisor edits, it does not replan from scratch
+AssertionError: expected 'Task "Something else" is missing slic…' to match /^A whole new plan is refused in a wak…/
+
+- Expected: 
+/^A whole new plan is refused in a wake-up turn/
+
++ Received: 
+"Task \"Something else\" is missing sliceType. Every task must specify sliceType (\"AFK\" or \"HITL\")."
+
+ ❯ src/services/__tests__/supervisorAct.test.ts:64:55
+     62| 
+     63|     expect(submit.isError).toBe(true);
+     64|     expect(JSON.parse(submit.text).errors[0].message).toMatch(/^A whol…
+       |                                                       ^
+     65|   });
+     66| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[11/13]⎯
+
+ FAIL  src/services/__tests__/supervisorWatch.test.ts > a wake-up turn > refuses a plan edit made through the tools, and nothing is saved
+AssertionError: expected 'Plan contained no tasks' to match /^Plan edits are refused in a wake-up …/
+
+- Expected: 
+/^Plan edits are refused in a wake-up turn/
+
++ Received: 
+"Plan contained no tasks"
+
+ ❯ src/services/__tests__/supervisorWatch.test.ts:340:55
+    338|     expect(JSON.parse(edit.text).errors[0].message).toMatch(/^Plan edi…
+    339|     expect(submit.isError).toBe(true);
+    340|     expect(JSON.parse(submit.text).errors[0].message).toMatch(/^Plan e…
+       |                                                       ^
+    341|     env.planner.calls[0].finish(prose('I would rewrite task 2; reply "…
+    342|     await settled();
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[12/13]⎯
+
+ Test Files  5 failed (5)
+      Tests  13 failed | 142 passed (155)
+   Start at  02:52:02
+   Duration  5.02s (transform 3.60s, setup 328ms, collect 13.73s, tests 3.57s, environment 1ms, prepare 830ms)
+

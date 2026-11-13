@@ -1,0 +1,358 @@
+
+> @ordewell/core@0.13.1 build
+> tsup src/index.ts src/parsing.ts src/testing.ts src/plan-utils.ts src/daemon-client.ts --dts --sourcemap --format cjs,esm --clean --tsconfig tsconfig.json
+
+CLI Building entry: src/daemon-client.ts, src/index.ts, src/parsing.ts, src/plan-utils.ts, src/testing.ts
+CLI Using tsconfig: tsconfig.json
+CLI tsup v8.5.1
+CLI Using tsup config: /home/alessandro/projects/ordewell3/.ordewell/worktrees/5db894ce/71-fix-command-policy-bypasses-from-the-re/packages/core/tsup.config.ts
+CLI Target: es2022
+CLI Cleaning output folder
+CJS Build start
+ESM Build start
+DTS Build start
+CJS dist/daemon-client.js     15.72 KB
+CJS dist/parsing.js           70.85 KB
+CJS dist/testing.js           32.83 KB
+CJS dist/plan-utils.js        203.52 KB
+CJS dist/daemon-client.js.map 61.88 KB
+CJS dist/testing.js.map       161.84 KB
+CJS dist/parsing.js.map       273.86 KB
+CJS dist/plan-utils.js.map    700.83 KB
+CJS dist/index.js             3.08 MB
+CJS dist/index.js.map         6.94 MB
+CJS ⚡️ Build success in 613ms
+ESM dist/daemon-client.mjs      964.00 B
+ESM dist/chunk-ND6C6SMV.mjs     23.49 KB
+ESM dist/parsing.mjs            2.71 KB
+ESM dist/chunk-J4ZYB6AD.mjs     64.37 KB
+ESM dist/plan-utils.mjs         10.34 KB
+ESM dist/chunk-NZVNHBPJ.mjs     16.40 KB
+ESM dist/chunk-JVEYWWDV.mjs     269.39 KB
+ESM dist/testing.mjs            27.41 KB
+ESM dist/chunk-QRMSG5YY.mjs     1.55 KB
+ESM dist/chunk-M77JQEFA.mjs     648.00 B
+ESM dist/chunk-LHH4PRZH.mjs     59.08 KB
+ESM dist/daemon-client.mjs.map  71.00 B
+ESM dist/chunk-ND6C6SMV.mjs.map 70.41 KB
+ESM dist/plan-utils.mjs.map     4.68 KB
+ESM dist/chunk-J4ZYB6AD.mjs.map 162.85 KB
+ESM dist/chunk-NZVNHBPJ.mjs.map 41.40 KB
+ESM dist/chunk-QRMSG5YY.mjs.map 14.41 KB
+ESM dist/parsing.mjs.map        6.59 KB
+ESM dist/chunk-M77JQEFA.mjs.map 2.73 KB
+ESM dist/testing.mjs.map        57.71 KB
+ESM dist/chunk-LHH4PRZH.mjs.map 177.53 KB
+ESM dist/index.mjs              2.64 MB
+ESM dist/chunk-JVEYWWDV.mjs.map 713.30 KB
+ESM dist/index.mjs.map          5.75 MB
+ESM ⚡️ Build success in 721ms
+DTS ⚡️ Build success in 18940ms
+DTS dist/testing.d.ts                 18.16 KB
+DTS dist/parsing.d.ts                 2.65 KB
+DTS dist/plan-utils.d.ts              9.68 KB
+DTS dist/index.d.ts                   342.42 KB
+DTS dist/daemon-client.d.ts           751.00 B
+DTS dist/leaseRecord-DP_QjQYC.d.ts    2.46 KB
+DTS dist/ModeResolver-DwiYAupc.d.ts   2.01 KB
+DTS dist/seaRuntime-BE0PnJ5V.d.ts     2.39 KB
+DTS dist/Task-Dak7SNc-.d.ts           149.35 KB
+DTS dist/eventStore-CkHdC638.d.ts     192.72 KB
+DTS dist/maxParallel-CtGTgCOG.d.ts    525.96 KB
+DTS dist/daemon-client-C5kzHuO1.d.ts  11.41 KB
+DTS dist/testing.d.mts                18.16 KB
+DTS dist/parsing.d.mts                2.65 KB
+DTS dist/plan-utils.d.mts             9.68 KB
+DTS dist/index.d.mts                  342.44 KB
+DTS dist/daemon-client.d.mts          753.00 B
+DTS dist/leaseRecord-DP_QjQYC.d.mts   2.46 KB
+DTS dist/ModeResolver-Cr4mytnP.d.mts  2.02 KB
+DTS dist/seaRuntime-BE0PnJ5V.d.mts    2.39 KB
+DTS dist/Task-Dak7SNc-.d.mts          149.35 KB
+DTS dist/eventStore-CkGd2rC5.d.mts    192.72 KB
+DTS dist/maxParallel-BBSegUUg.d.mts   525.96 KB
+DTS dist/daemon-client-DixmzX2w.d.mts 11.41 KB
+
+> ordewell-monorepo@0.13.1 typecheck
+> npm run typecheck --workspaces --if-present
+
+
+> @ordewell/core@0.13.1 typecheck
+> tsc --noEmit
+
+
+> @ordewell/ui@0.13.1 typecheck
+> tsc --noEmit -p tsconfig.build.json
+
+
+> ordewell@0.13.1 typecheck
+> tsc --noEmit
+
+src/ExtensionHost.ts(21,37): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/__tests__/ExtensionHost.test.ts(24,29): error TS2307: Cannot find module '@ordewell/ui/host' or its corresponding type declarations.
+src/__tests__/ExtensionHost.test.ts(32,51): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/__tests__/ExtensionHost.test.ts(1223,56): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/__tests__/ExtensionHost.test.ts(1459,36): error TS7006: Parameter 'r' implicitly has an 'any' type.
+src/__tests__/ExtensionHost.test.ts(1459,58): error TS7006: Parameter 'r' implicitly has an 'any' type.
+src/__tests__/TaskLogRegistry.test.ts(7,95): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/__tests__/TaskLogRegistry.test.ts(113,115): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/__tests__/TaskLogRegistry.test.ts(114,40): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/__tests__/TaskLogRegistry.test.ts(119,30): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/__tests__/TaskLogRegistry.test.ts(120,108): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/__tests__/TaskLogRegistry.test.ts(127,40): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/__tests__/TaskLogRegistry.test.ts(249,53): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/__tests__/TaskLogRegistry.test.ts(543,62): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/commands/SlashParser.ts(8,69): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/commands/__tests__/plannerWizard.test.ts(6,37): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/commands/__tests__/resumeAlias.test.ts(5,69): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/commands/__tests__/resumeAlias.test.ts(44,48): error TS7006: Parameter 'l' implicitly has an 'any' type.
+src/commands/plannerWizard.ts(3,37): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/commands/runSettings.ts(2,45): error TS2307: Cannot find module '@ordewell/ui/host' or its corresponding type declarations.
+src/harnessHost.ts(10,62): error TS2307: Cannot find module '@ordewell/ui/host' or its corresponding type declarations.
+src/plan/PlanManager.ts(10,57): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/plan/PlanManager.ts(16,8): error TS2307: Cannot find module '@ordewell/ui/host' or its corresponding type declarations.
+src/plan/PlanManager.ts(736,13): error TS2322: Type 'SessionCue' is not assignable to type 'never'.
+src/plan/PlannerLogin.ts(3,36): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/plan/__tests__/approvalPrompt.test.ts(6,29): error TS2307: Cannot find module '@ordewell/ui/host' or its corresponding type declarations.
+src/plan/__tests__/conversationViewRouting.test.ts(6,113): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/plan/__tests__/installedRunnerDefault.test.ts(33,36): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/plan/__tests__/isolationActions.test.ts(4,46): error TS2307: Cannot find module '@ordewell/ui/host' or its corresponding type declarations.
+src/plan/__tests__/isolationMessages.test.ts(3,47): error TS2307: Cannot find module '@ordewell/ui/host' or its corresponding type declarations.
+src/plan/__tests__/isolationMessages.test.ts(18,33): error TS7006: Parameter 'm' implicitly has an 'any' type.
+src/plan/__tests__/keylessFirstRun.test.ts(35,36): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/plan/__tests__/planApprovalAcrossRuns.test.ts(10,36): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/plan/__tests__/plannerStartWait.test.ts(12,36): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/plan/__tests__/taskEdit.test.ts(3,32): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/plan/__tests__/taskIdleRouting.test.ts(3,29): error TS2307: Cannot find module '@ordewell/ui/host' or its corresponding type declarations.
+src/plan/__tests__/taskIdleRouting.test.ts(18,33): error TS7006: Parameter 'm' implicitly has an 'any' type.
+src/plan/__tests__/taskOutputRouting.test.ts(5,29): error TS2307: Cannot find module '@ordewell/ui/host' or its corresponding type declarations.
+src/plan/__tests__/taskOutputRouting.test.ts(6,36): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/plan/__tests__/webviewRouter.test.ts(10,51): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/plan/__tests__/webviewRouter.test.ts(135,40): error TS7006: Parameter 't' implicitly has an 'any' type.
+src/plan/__tests__/webviewRouter.test.ts(154,40): error TS7006: Parameter 't' implicitly has an 'any' type.
+src/plan/confirm.ts(2,42): error TS2307: Cannot find module '@ordewell/ui/host' or its corresponding type declarations.
+src/plan/confirm.ts(14,29): error TS7006: Parameter 'choice' implicitly has an 'any' type.
+src/plan/confirm.ts(16,32): error TS7006: Parameter 'choice' implicitly has an 'any' type.
+src/plan/conversation.ts(3,42): error TS2307: Cannot find module '@ordewell/ui/host' or its corresponding type declarations.
+src/plan/isolation.ts(6,8): error TS2307: Cannot find module '@ordewell/ui/host' or its corresponding type declarations.
+src/plan/taskEdit.ts(3,32): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/plan/taskEdit.ts(13,31): error TS2307: Cannot find module '@ordewell/ui/host' or its corresponding type declarations.
+src/plan/webviewRouter.ts(4,75): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/plan/webviewRouter.ts(200,13): error TS2322: Type 'WebviewToHost' is not assignable to type 'never'.
+src/providers/ChatViewProvider.ts(3,53): error TS2307: Cannot find module '@ordewell/ui/host' or its corresponding type declarations.
+src/providers/ChatViewProvider.ts(5,119): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/providers/ChatViewProvider.ts(7,49): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/providers/ChatViewProvider.ts(23,36): error TS7006: Parameter 'msg' implicitly has an 'any' type.
+src/providers/ChildTaskLogs.ts(69,91): error TS2345: Argument of type 'Task' is not assignable to parameter of type 'Pick<TaskLogStatus, "title" | "order" | "orderLabel">'.
+  Property 'orderLabel' is missing in type 'Task' but required in type 'Pick<TaskLogStatus, "title" | "order" | "orderLabel">'.
+src/providers/ChildViewHost.ts(2,27): error TS2307: Cannot find module '@ordewell/ui/host' or its corresponding type declarations.
+src/providers/ChildViewHost.ts(3,59): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/providers/ChildViewHost.ts(79,37): error TS7006: Parameter 'message' implicitly has an 'any' type.
+src/providers/TaskLogPanel.ts(4,114): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/providers/__tests__/ChatViewProvider.runnerList.test.ts(4,36): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/providers/__tests__/ChildTaskLogs.test.ts(8,51): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/providers/__tests__/ChildViewHost.test.ts(4,36): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/providers/__tests__/TaskLogPanel.runner.test.ts(6,36): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/state/__tests__/StatePersistence.sessionLease.test.ts(10,36): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+npm error Lifecycle script `typecheck` failed with error:
+npm error code 2
+npm error path /home/alessandro/projects/ordewell3/.ordewell/worktrees/5db894ce/71-fix-command-policy-bypasses-from-the-re/packages/vscode
+npm error workspace ordewell@0.13.1
+npm error location /home/alessandro/projects/ordewell3/.ordewell/worktrees/5db894ce/71-fix-command-policy-bypasses-from-the-re/packages/vscode
+npm error command failed
+npm error command sh -c tsc --noEmit
+
+
+> @ordewell/cli@0.13.1 typecheck
+> tsc --noEmit
+
+
+> @ordewell/web@0.13.1 typecheck
+> tsc --noEmit
+
+
+> @ordewell/desktop@0.13.1 typecheck
+> tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.renderer.json && tsc --noEmit -p tsconfig.e2e.json
+
+src/renderer/Welcome.tsx(3,29): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/frame/ActivityBar.tsx(2,48): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/frame/Banners.tsx(3,50): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/frame/CommandPalette.tsx(2,21): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/frame/Frame.tsx(3,28): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/frame/PlanPanel.tsx(3,108): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/frame/ProjectSwitcher.tsx(3,22): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/frame/Sidebar.tsx(3,37): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/frame/StatusBar.tsx(1,48): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/frame/TabArea.tsx(3,34): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/frame/TabArea.tsx(140,29): error TS7006: Parameter 'event' implicitly has an 'any' type.
+src/renderer/frame/TitleBar.tsx(3,57): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/frame/api.ts(2,46): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/session/ConfirmDialog.tsx(3,24): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/session/ConfirmDialog.tsx(4,42): error TS2307: Cannot find module '@ordewell/ui/host' or its corresponding type declarations.
+src/renderer/session/ConfirmDialog.tsx(62,33): error TS7006: Parameter 'choice' implicitly has an 'any' type.
+src/renderer/session/ConfirmDialog.tsx(62,41): error TS7006: Parameter 'i' implicitly has an 'any' type.
+src/renderer/session/DaemonHost.ts(10,81): error TS2307: Cannot find module '@ordewell/ui' or its corresponding type declarations.
+src/renderer/session/DaemonHost.ts(15,8): error TS2307: Cannot find module '@ordewell/ui/host' or its corresponding type declarations.
+src/renderer/session/DaemonHost.ts(19,8): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/renderer/session/DaemonHost.ts(20,28): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/session/DaemonHost.ts(234,22): error TS4112: This member cannot have an 'override' modifier because its containing class 'SessionStream' does not extend another class.
+src/renderer/session/DaemonHost.ts(302,34): error TS7006: Parameter 'msg' implicitly has an 'any' type.
+src/renderer/session/DaemonHost.ts(444,14): error TS7006: Parameter 'msg' implicitly has an 'any' type.
+src/renderer/session/DaemonHost.ts(451,19): error TS7006: Parameter 'next' implicitly has an 'any' type.
+src/renderer/session/DaemonHost.ts(462,18): error TS7006: Parameter 'state' implicitly has an 'any' type.
+src/renderer/session/DaemonHost.ts(485,47): error TS2322: Type 'TreeTask<unknown>' is not assignable to type 'RunTask'.
+  Type 'TreeTask<unknown>' is missing the following properties from type 'Omit<SerializedTask, "subtasks">': status, type, description, dependencies, and 8 more.
+src/renderer/session/DaemonHost.ts(801,18): error TS2339: Property 'close' does not exist on type 'SessionStream'.
+src/renderer/session/DaemonHost.ts(1041,68): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/renderer/session/DaemonHost.ts(1093,63): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/renderer/session/DaemonHost.ts(1184,55): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/renderer/session/DaemonHost.ts(1186,27): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/renderer/session/DaemonHost.ts(1744,13): error TS7006: Parameter 'cue' implicitly has an 'any' type.
+src/renderer/session/DaemonHost.ts(1745,16): error TS7006: Parameter 'notice' implicitly has an 'any' type.
+src/renderer/session/DaemonHost.ts(1746,16): error TS7006: Parameter 'error' implicitly has an 'any' type.
+src/renderer/session/DaemonHost.ts(1760,14): error TS2339: Property 'receive' does not exist on type 'SessionStream'.
+src/renderer/session/KeyEntryDialog.tsx(3,24): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/session/TaskLogHost.ts(8,114): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/renderer/session/TaskLogHost.ts(9,36): error TS2307: Cannot find module '@ordewell/ui' or its corresponding type declarations.
+src/renderer/session/__tests__/DaemonHost.test.tsx(4,36): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/renderer/session/__tests__/DaemonHost.test.tsx(5,42): error TS2307: Cannot find module '@ordewell/ui/host' or its corresponding type declarations.
+src/renderer/session/__tests__/DaemonHost.test.tsx(43,40): error TS7006: Parameter 'msg' implicitly has an 'any' type.
+src/renderer/session/__tests__/DaemonHost.test.tsx(83,73): error TS7006: Parameter 't' implicitly has an 'any' type.
+src/renderer/session/__tests__/DaemonHost.test.tsx(119,53): error TS7006: Parameter 't' implicitly has an 'any' type.
+src/renderer/session/__tests__/DaemonHost.test.tsx(145,62): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/renderer/session/__tests__/DaemonHost.test.tsx(145,83): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/renderer/session/__tests__/DaemonHost.test.tsx(165,69): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/renderer/session/__tests__/DaemonHost.test.tsx(833,21): error TS7006: Parameter 'msg' implicitly has an 'any' type.
+src/renderer/session/__tests__/DaemonHost.test.tsx(1088,21): error TS7006: Parameter 'msg' implicitly has an 'any' type.
+src/renderer/session/__tests__/primaryAction.test.ts(3,52): error TS2307: Cannot find module '@ordewell/ui' or its corresponding type declarations.
+src/renderer/session/agentDetection.ts(3,48): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/renderer/session/plannerBackends.ts(5,37): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/renderer/session/primaryAction.ts(1,32): error TS2307: Cannot find module '@ordewell/ui' or its corresponding type declarations.
+src/renderer/session/selection.ts(3,36): error TS2307: Cannot find module '@ordewell/ui' or its corresponding type declarations.
+src/renderer/session/selection.ts(56,29): error TS7006: Parameter 'task' implicitly has an 'any' type.
+src/renderer/session/useSession.tsx(2,61): error TS2307: Cannot find module '@ordewell/ui' or its corresponding type declarations.
+src/renderer/signIn.ts(3,52): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/renderer/views/changes/ChangesSidebar.tsx(5,29): error TS2307: Cannot find module '@ordewell/ui' or its corresponding type declarations.
+src/renderer/views/changes/ChangesSidebar.tsx(6,86): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/views/changes/ChangesSidebar.tsx(389,69): error TS2339: Property 'mergeGate' does not exist on type 'TreeTask<unknown>'.
+src/renderer/views/changes/ChangesSidebar.tsx(391,46): error TS7006: Parameter 'r' implicitly has an 'any' type.
+src/renderer/views/changes/ChangesSidebar.tsx(427,47): error TS2322: Type 'TaskPlacement<TreeTask<unknown>>[]' is not assignable to type '{ task: RunTask; label: string; }[]'.
+  Type 'TaskPlacement<TreeTask<unknown>>' is not assignable to type '{ task: RunTask; label: string; }'.
+    Types of property 'task' are incompatible.
+      Type 'TreeTask<unknown>' is not assignable to type 'RunTask'.
+        Type 'TreeTask<unknown>' is missing the following properties from type 'Omit<SerializedTask, "subtasks">': status, type, description, dependencies, and 8 more.
+src/renderer/views/changes/DiffTab.tsx(4,61): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/views/changes/DiffTab.tsx(148,37): error TS7006: Parameter 'r' implicitly has an 'any' type.
+src/renderer/views/changes/__tests__/mergeAll.test.tsx(4,42): error TS2307: Cannot find module '@ordewell/ui/host' or its corresponding type declarations.
+src/renderer/views/changes/__tests__/mergeAll.test.tsx(60,43): error TS7006: Parameter 'c' implicitly has an 'any' type.
+src/renderer/views/changes/__tests__/mergeAll.test.tsx(69,43): error TS7006: Parameter 'c' implicitly has an 'any' type.
+src/renderer/views/changes/__tests__/mergeAll.test.tsx(134,43): error TS7006: Parameter 'c' implicitly has an 'any' type.
+src/renderer/views/changes/__tests__/preflight.test.ts(36,39): error TS7006: Parameter 'c' implicitly has an 'any' type.
+src/renderer/views/changes/__tests__/preflight.test.ts(46,39): error TS7006: Parameter 'c' implicitly has an 'any' type.
+src/renderer/views/changes/__tests__/preflight.test.ts(48,87): error TS7006: Parameter 'c' implicitly has an 'any' type.
+src/renderer/views/changes/mergeAll.tsx(2,29): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/views/changes/mergeAll.tsx(3,42): error TS2307: Cannot find module '@ordewell/ui/host' or its corresponding type declarations.
+src/renderer/views/changes/mergeAll.tsx(108,41): error TS7006: Parameter 't' implicitly has an 'any' type.
+src/renderer/views/changes/mergeAll.tsx(108,89): error TS7006: Parameter 't' implicitly has an 'any' type.
+src/renderer/views/changes/preflight.ts(3,64): error TS2307: Cannot find module '@ordewell/ui/host' or its corresponding type declarations.
+src/renderer/views/checkout/CheckoutDiff.tsx(4,36): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/views/checkout/CheckoutGroup.tsx(3,44): error TS2307: Cannot find module '@ordewell/ui/host' or its corresponding type declarations.
+src/renderer/views/checkout/CheckoutGroup.tsx(4,54): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/views/checkout/__tests__/checkoutModel.test.ts(2,36): error TS2307: Cannot find module '@ordewell/ui' or its corresponding type declarations.
+src/renderer/views/checkout/checkoutModel.ts(2,32): error TS2307: Cannot find module '@ordewell/ui' or its corresponding type declarations.
+src/renderer/views/checkout/checkoutModel.ts(111,38): error TS7006: Parameter 'candidate' implicitly has an 'any' type.
+src/renderer/views/explorer/EditorPane.tsx(3,28): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/views/explorer/ExplorerSidebar.tsx(3,61): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/views/explorer/FileTab.tsx(3,55): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/views/explorer/fileView.tsx(3,58): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/views/git/CommitDiffTab.tsx(3,36): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/views/git/CommitGraphTab.tsx(3,48): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/views/git/GitSidebar.tsx(6,42): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/views/git/HistoryList.tsx(3,36): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/views/git/SyncBar.tsx(3,50): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/views/graph/CardAssignment.tsx(3,41): error TS2307: Cannot find module '@ordewell/ui' or its corresponding type declarations.
+src/renderer/views/graph/CardAssignment.tsx(4,100): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/views/graph/PlanGraph.tsx(3,41): error TS2307: Cannot find module '@ordewell/ui' or its corresponding type declarations.
+src/renderer/views/graph/PlanGraph.tsx(4,55): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/views/graph/TaskCard.tsx(3,54): error TS2307: Cannot find module '@ordewell/ui' or its corresponding type declarations.
+src/renderer/views/graph/TaskCard.tsx(4,115): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/views/graph/__tests__/TaskCard.test.tsx(4,41): error TS2307: Cannot find module '@ordewell/ui' or its corresponding type declarations.
+src/renderer/views/graph/graphModel.ts(6,94): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/views/graph/layout.ts(1,31): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/views/needsYou/NeedsYou.tsx(3,36): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/renderer/views/needsYou/NeedsYou.tsx(123,37): error TS7006: Parameter 'e' implicitly has an 'any' type.
+src/renderer/views/needsYou/NeedsYou.tsx(171,27): error TS7006: Parameter 'escalation' implicitly has an 'any' type.
+src/renderer/views/needsYou/NeedsYou.tsx(173,67): error TS18047: 'draft' is possibly 'null'.
+src/renderer/views/needsYou/NeedsYou.tsx(181,85): error TS7053: Element implicitly has an 'any' type because expression of type 'any' can't be used to index type 'Readonly<Record<EscalationKind, string>>'.
+src/renderer/views/needsYou/NeedsYou.tsx(212,44): error TS7006: Parameter 'option' implicitly has an 'any' type.
+src/renderer/views/needsYou/attention.ts(2,32): error TS2307: Cannot find module '@ordewell/ui' or its corresponding type declarations.
+src/renderer/views/needsYou/attention.ts(57,42): error TS7006: Parameter 'e' implicitly has an 'any' type.
+src/renderer/views/needsYou/attention.ts(60,7): error TS2322: Type 'Set<unknown>' is not assignable to type 'Set<string>'.
+  Type 'unknown' is not assignable to type 'string'.
+src/renderer/views/needsYou/attention.ts(73,7): error TS2322: Type 'Set<unknown>' is not assignable to type 'Set<string>'.
+  Type 'unknown' is not assignable to type 'string'.
+src/renderer/views/needsYou/attention.ts(92,81): error TS7006: Parameter 'item' implicitly has an 'any' type.
+src/renderer/views/plan/PlanSidebar.tsx(2,60): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/views/plan/PlanTab.tsx(4,41): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/views/plan/PlanTab.tsx(43,33): error TS2345: Argument of type 'TreeTask<unknown>' is not assignable to parameter of type '{ status: string; idleSince?: string | null | undefined; }'.
+  Property 'status' is missing in type 'TreeTask<unknown>' but required in type '{ status: string; idleSince?: string | null | undefined; }'.
+src/renderer/views/project/__tests__/liveWork.test.tsx(2,52): error TS2307: Cannot find module '@ordewell/ui' or its corresponding type declarations.
+src/renderer/views/project/liveWork.ts(1,32): error TS2307: Cannot find module '@ordewell/ui' or its corresponding type declarations.
+src/renderer/views/scope/ScopeSwitcher.tsx(2,38): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/views/settings/SettingsTab.tsx(3,42): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/views/settings/SettingsTab.tsx(5,37): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/renderer/views/settings/Subplanners.tsx(2,31): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/views/settings/useSettings.ts(6,37): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/renderer/views/sidebarKit.tsx(3,22): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/views/status/StatusSlots.tsx(44,17): error TS7006: Parameter 'id' implicitly has an 'any' type.
+src/renderer/views/status/StatusSlots.tsx(45,45): error TS7006: Parameter 'runner' implicitly has an 'any' type.
+src/renderer/views/status/StatusSlots.tsx(46,51): error TS7006: Parameter 'backend' implicitly has an 'any' type.
+src/renderer/views/status/StatusSlots.tsx(47,35): error TS7053: Element implicitly has an 'any' type because expression of type 'any' can't be used to index type 'Record<"signed-in" | "signed-out" | "unknown", { mark: string; words: string; }>'.
+src/renderer/views/status/StatusSlots.tsx(48,88): error TS7053: Element implicitly has an 'any' type because expression of type 'any' can't be used to index type 'Record<"signed-in" | "signed-out" | "unknown", { mark: string; words: string; }>'.
+src/renderer/views/status/StatusSlots.tsx(57,42): error TS7006: Parameter 'snapshot' implicitly has an 'any' type.
+src/renderer/views/status/StatusSlots.tsx(57,92): error TS7006: Parameter 'text' implicitly has an 'any' type.
+src/renderer/views/task/TaskTab.tsx(5,91): error TS2307: Cannot find module '@ordewell/ui' or its corresponding type declarations.
+src/renderer/views/task/TaskTab.tsx(8,8): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/views/task/TaskTab.tsx(104,60): error TS7006: Parameter 'id' implicitly has an 'any' type.
+src/renderer/views/task/TaskTab.tsx(159,51): error TS2339: Property 'type' does not exist on type 'TreeTask<unknown>'.
+src/renderer/views/task/TaskTab.tsx(159,99): error TS2339: Property 'assignedModel' does not exist on type 'TreeTask<unknown>'.
+src/renderer/views/task/TaskTab.tsx(160,27): error TS2345: Argument of type '{ type: TaskType; assignedModel: any; id: string; order: number; title: string; subtasks?: readonly unknown[] | undefined; }' is not assignable to parameter of type 'TaskRowSubject'.
+  Type '{ type: TaskType; assignedModel: any; id: string; order: number; title: string; subtasks?: readonly unknown[] | undefined; }' is missing the following properties from type 'TaskRowSubject': status, dependencies
+src/renderer/views/task/TaskTab.tsx(162,54): error TS2339: Property 'idleSince' does not exist on type 'TreeTask<unknown>'.
+src/renderer/views/task/TaskTab.tsx(163,26): error TS2339: Property 'assignedRunner' does not exist on type 'TreeTask<unknown>'.
+src/renderer/views/task/TaskTab.tsx(163,49): error TS2339: Property 'assignedRunner' does not exist on type 'TreeTask<unknown>'.
+src/renderer/views/task/TaskTab.tsx(165,22): error TS2339: Property 'assignedModel' does not exist on type 'TreeTask<unknown>'.
+src/renderer/views/task/TaskTab.tsx(165,56): error TS2339: Property 'assignedModel' does not exist on type 'TreeTask<unknown>'.
+src/renderer/views/task/TaskTab.tsx(166,27): error TS2339: Property 'type' does not exist on type 'TreeTask<unknown>'.
+src/renderer/views/task/TaskTab.tsx(167,39): error TS2339: Property 'assignedModel' does not exist on type 'TreeTask<unknown>'.
+src/renderer/views/task/TaskTab.tsx(167,75): error TS2339: Property 'taskMode' does not exist on type 'TreeTask<unknown>'.
+src/renderer/views/task/TaskTab.tsx(168,12): error TS2339: Property 'type' does not exist on type 'TreeTask<unknown>'.
+src/renderer/views/task/TaskTab.tsx(168,48): error TS2339: Property 'type' does not exist on type 'TreeTask<unknown>'.
+src/renderer/views/task/TaskTab.tsx(170,64): error TS2339: Property 'dependencies' does not exist on type 'TreeTask<unknown>'.
+src/renderer/views/task/TaskTab.tsx(171,27): error TS2339: Property 'isolation' does not exist on type 'TreeTask<unknown>'.
+src/renderer/views/task/TaskTab.tsx(174,60): error TS2339: Property 'type' does not exist on type 'TreeTask<unknown>'.
+src/renderer/views/task/TaskTab.tsx(174,89): error TS2339: Property 'status' does not exist on type 'TreeTask<unknown>'.
+src/renderer/views/task/TaskTab.tsx(188,24): error TS7006: Parameter 'id' implicitly has an 'any' type.
+src/renderer/views/task/TaskTab.tsx(191,17): error TS2339: Property 'type' does not exist on type 'TreeTask<unknown>'.
+src/renderer/views/task/TaskTab.tsx(193,51): error TS2339: Property 'dependencies' does not exist on type 'TreeTask<unknown>'.
+src/renderer/views/task/TaskTab.tsx(201,27): error TS7006: Parameter 'event' implicitly has an 'any' type.
+src/renderer/views/task/TaskTab.tsx(218,41): error TS2322: Type 'TreeTask<unknown>' is not assignable to type 'SurfaceTask'.
+  Type 'TreeTask<unknown>' is missing the following properties from type 'Omit<Task, "subtasks" | "attemptSkills" | "runnerSessionId">': status, type, description, dependencies, assignedRunner
+src/renderer/views/task/TaskTab.tsx(229,52): error TS2322: Type 'TreeTask<unknown>' is not assignable to type 'RunTask'.
+  Type 'TreeTask<unknown>' is missing the following properties from type 'Omit<SerializedTask, "subtasks">': status, type, description, dependencies, and 8 more.
+src/renderer/views/task/taskActions.ts(2,51): error TS2307: Cannot find module '@ordewell/ui/protocol' or its corresponding type declarations.
+src/renderer/views/terminal/TerminalPanel.tsx(3,40): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/views/terminal/TerminalPanel.tsx(203,29): error TS7006: Parameter 'event' implicitly has an 'any' type.
+src/renderer/welcome/LoginDialog.tsx(3,30): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/welcome/RecentCard.tsx(3,81): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/welcome/RunnerRow.tsx(3,55): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/welcome/WelcomeFooter.tsx(3,24): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/welcome/model.ts(5,31): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+src/renderer/welcome/parts.tsx(3,24): error TS2307: Cannot find module '@ordewell/ui/design' or its corresponding type declarations.
+npm error Lifecycle script `typecheck` failed with error:
+npm error code 2
+npm error path /home/alessandro/projects/ordewell3/.ordewell/worktrees/5db894ce/71-fix-command-policy-bypasses-from-the-re/packages/desktop
+npm error workspace @ordewell/desktop@0.13.1
+npm error location /home/alessandro/projects/ordewell3/.ordewell/worktrees/5db894ce/71-fix-command-policy-bypasses-from-the-re/packages/desktop
+npm error command failed
+npm error command sh -c tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.renderer.json && tsc --noEmit -p tsconfig.e2e.json
