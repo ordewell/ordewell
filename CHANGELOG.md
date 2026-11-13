@@ -71,6 +71,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   leaves the screen at once** instead of waiting to be answered.
 - **A disk that refuses a save is now told once** while it keeps refusing,
   instead of the plan stopping on an error or failing silently.
+- **Option+Left/Right moves a word in the desktop app's terminal on macOS
+  again.** The terminal sends them as Meta+B / Meta+F, as Terminal.app does,
+  which the stock zsh and bash move a word on; before, they beeped and typed
+  `;3D` into the command line.
 
 ## [0.13.1] - 2026-11-07
 

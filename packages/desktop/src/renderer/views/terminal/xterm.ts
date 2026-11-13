@@ -1,6 +1,7 @@
 import '@xterm/xterm/css/xterm.css';
 import { clipboardChord } from './clipboard';
 import { findLinks } from './links';
+import { wordMove } from './wordKeys';
 import { buildTerminalTheme, TERMINAL_FONT, TERMINAL_FONT_SIZE, type TerminalTheme } from './terminalTheme';
 
 /**
@@ -67,6 +68,8 @@ export async function createTerm(options: TermOptions, mac: boolean): Promise<Te
     if (event.type !== 'keydown') return true;
     // Ctrl+` toggles the panel (the frame's command), so it must reach the window, not the shell.
     if (event.key === '`' && event.ctrlKey && !event.metaKey && !event.altKey) return false;
+    const word = wordMove(event, mac);
+    if (word) { event.preventDefault(); term.input(word); return false; }
     const chord = clipboardChord(event, mac);
     if (chord === 'copy' && term.hasSelection()) { event.preventDefault(); copy(); return false; }
     if (chord === 'paste') { event.preventDefault(); paste(); return false; }
