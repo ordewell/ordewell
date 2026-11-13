@@ -45,7 +45,7 @@ async function start(): Promise<FakeChild> {
 }
 
 describe('ordewell web (foreground)', () => {
-  it.each(SIGNALS)('relays %s to the server it started, so it is not orphaned', async (signal) => {
+  it.skipIf(process.platform === 'win32').each(SIGNALS)('relays %s to the server it started, so it is not orphaned (POSIX: Windows hands the child the console event itself)', async (signal) => {
     const child = await start();
     const added = process.listeners(signal).filter((l) => !baseline[signal].includes(l as never));
 
@@ -53,6 +53,20 @@ describe('ordewell web (foreground)', () => {
     added.forEach((l) => l(signal));
 
     expect(child.kill).toHaveBeenCalledWith(signal);
+  });
+
+  it('installs no signal relay on win32, where kill would terminate the server before its own shutdown ran', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    try {
+      const child = await start();
+      for (const signal of SIGNALS) {
+        expect(process.listeners(signal).filter((l) => !baseline[signal].includes(l as never))).toEqual([]);
+      }
+      expect(child.kill).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, 'platform', platform);
+    }
   });
 
   it('exits with the server’s own code', async () => {

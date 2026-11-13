@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { flag, hasFlag, flags, positionals } from '../args';
+import { flag, flagGiven, hasFlag, flags, positionals } from '../args';
 
 describe('flag', () => {
   it('returns the value after the flag', () => {
@@ -87,5 +87,18 @@ describe('positionals', () => {
 
   it('does not read the second half of --name=value as a positional', () => {
     expect(positionals(['delete', '--workspace=/tmp', '--json'])).toEqual(['delete']);
+  });
+});
+
+describe('flagGiven', () => {
+  it('tells a flag with no value from one that is absent', () => {
+    expect(flagGiven(['--title', 'x', '--type'], '--type')).toBe(true);
+    expect(flag(['--title', 'x', '--type'], '--type')).toBeUndefined();
+    expect(flagGiven(['--title', 'x'], '--type')).toBe(false);
+  });
+
+  it('counts --name=value and ignores a longer flag with the same prefix', () => {
+    expect(flagGiven(['--type=user'], '--type')).toBe(true);
+    expect(flagGiven(['--type-x=user'], '--type')).toBe(false);
   });
 });
