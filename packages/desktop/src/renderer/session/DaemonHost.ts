@@ -285,6 +285,12 @@ export class DaemonHost {
   private dock: 'draft' | null = null;
   /** The session main has joined a holder's daemon for on this window's behalf, until the window leaves it. */
   private holderSession: string | null = null;
+  /**
+   * The newest request to show a session, numbered. The plan list opens a
+   * session on every click without waiting for the last, so two loads race and
+   * the one that answers last would win; only the newest request may draw.
+   */
+  private shown = 0;
   private stopWatching: (() => void) | null = null;
   /** A refused join's holder is watched for its exit, so Continue here can be offered (W16). */
   private stopHolderWatch: (() => void) | null = null;
@@ -490,24 +496,32 @@ export class DaemonHost {
    * and the frame offers what to do about it (W16).
    */
   async open(sessionId: string): Promise<void> {
+    const request = ++this.shown;
+    // A newer open (or New session) supersedes this one. What it loaded stays
+    // with the daemon, which keeps every session it has loaded live; it is
+    // just never drawn here, nor its error shown over the newer session.
+    const superseded = (): boolean => request !== this.shown;
     // Read before the load: a session this daemon already holds is live, and a
     // load of a saved one always answers with a run. This is what tells a
     // restored session (W17) from one that was already at work.
     const wasLive = await this.savedIsLive(sessionId);
+    if (superseded()) return;
     let adopted: AdoptSessionResponse;
     try {
       adopted = await callDaemon('sessions.load', { id: sessionId, workspace: this.workspace });
     } catch (error) {
+      if (superseded()) return;
       const held = heldOf(error);
       if (held) {
-        if (held.holder.host?.kind === 'daemon') { await this.join(sessionId, held); return; }
+        if (held.holder.host?.kind === 'daemon') { await this.join(sessionId, held, superseded); return; }
         this.update({ held, link: null });
-        await this.viewHeld(sessionId);
+        await this.viewHeld(sessionId, superseded);
         return;
       }
       this.showError(error);
       return;
     }
+    if (superseded()) return;
     this.adopt(sessionId, adopted, wasLive);
   }
 
@@ -523,11 +537,16 @@ export class DaemonHost {
    * session's calls and socket there, so it stays the session's one live host
    * (ADR-0049). A join main refuses shows why, over the saved state.
    */
-  private async join(sessionId: string, held: SessionHeld): Promise<void> {
+  private async join(sessionId: string, held: SessionHeld, superseded: () => boolean): Promise<void> {
     this.cancelHolderWatch();
     const host = held.holder.host;
     if (host?.kind === 'daemon') this.update({ held, link: { kind: 'joining', port: host.port } });
     const joined = await window.ordewell.daemon.join(sessionId);
+    // A join main made for a window that has moved on is let go, so main closes the holder's connection once nothing else uses it.
+    if (superseded()) {
+      if (joined.ok && this.holderSession !== sessionId) void window.ordewell.daemon.leave(sessionId);
+      return;
+    }
     if (!joined.ok) {
       this.update({ held, link: { kind: 'refused', reason: joined.reason, message: joined.message } });
       await this.viewHeld(sessionId);
@@ -539,8 +558,13 @@ export class DaemonHost {
       saved = await this.readJoined(sessionId);
     } catch (error) {
       if (this.holderSession !== sessionId) void window.ordewell.daemon.leave(sessionId);
+      if (superseded()) return;
       this.update({ link: null });
       this.showError(error);
+      return;
+    }
+    if (superseded()) {
+      if (this.holderSession !== sessionId) void window.ordewell.daemon.leave(sessionId);
       return;
     }
     this.switchTo(sessionId, false, saved?.meta.goal ?? '', { held, link: { kind: 'joined', holder: joined.holder } });
@@ -580,13 +604,14 @@ export class DaemonHost {
    * (W16). Every write is refused while it is drawn; taking the session over
    * is the way out (ADR-0049).
    */
-  async viewHeld(sessionId: string): Promise<void> {
+  async viewHeld(sessionId: string, superseded: () => boolean = () => false): Promise<void> {
     try {
       const saved = await callDaemon('sessions.get', { id: sessionId, workspace: this.workspace });
+      if (superseded()) return;
       this.showReadOnly(sessionId, saved);
       this.watch(sessionId, JSON.stringify(saved));
     } catch (error) {
-      this.showError(error);
+      if (!superseded()) this.showError(error);
     }
   }
 
@@ -727,6 +752,7 @@ export class DaemonHost {
 
   /** A blank session: nothing is created on the daemon until the first message starts the planner. */
   newSession(): void {
+    this.shown++;
     this.switchTo(mintSessionId(), true, '');
     this.emit({ type: 'setState', state: 'empty' });
   }

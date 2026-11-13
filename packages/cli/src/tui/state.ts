@@ -479,6 +479,13 @@ export interface TuiState {
    * plan refresh therefore keeps every status-only field the stream reported.
    */
   run: RunView;
+  /**
+   * Set from the moment this pane sends a Merge all until the merge it made is
+   * heard on the stream: that result is worded by the request's own answer, and
+   * any other (an automatic merge, the supervisor's, another window's) by the
+   * reducer.
+   */
+  mergeAsked: boolean;
   /** Derived from `run`; the pane's own shape for a run task. */
   tasks: TaskView[];
   /** What the planner has recorded as it went (ADR-0067), every entry, superseded ones included. */
@@ -884,6 +891,7 @@ export const STATE_SCOPE = {
   workspace: 'workspace',
   handoff: 'session',
   runMerge: 'session',
+  mergeAsked: 'session',
   plannerResend: 'session',
   plannerPause: 'session',
   // An approval prompt is the session's, and `leaveSession` drops it; any other
@@ -1002,6 +1010,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     exiting: false,
     spinnerFrame: 0,
     now: 0,
+    mergeAsked: false,
     ...overrides,
     run: seedRun(overrides),
   };

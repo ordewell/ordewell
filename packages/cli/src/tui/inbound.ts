@@ -375,10 +375,10 @@ function dispatchLifecycle(dispatch: Dispatch, event: LifecycleMessage, sessionI
     case 'task_output':
       return;
 
-    // Its asker already has the words, from the merge request itself. Whether
-    // the merge ended the run is the Session's to say, in `run_closed`.
+    // Whether the merge ended the run is the Session's to say, in `run_closed`.
+    // The reducer words the result unless this pane asked for the merge itself.
     case 'isolation_merge':
-      dispatch({ type: 'isolationMerged', result: event.result, sessionId });
+      dispatch({ type: 'isolationMerged', result: event.result, ...(event.trigger ? { trigger: event.trigger } : {}), sessionId });
       return;
 
     case 'run_closed':

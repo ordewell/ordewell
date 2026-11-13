@@ -818,9 +818,12 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
         merged = await api.mergeRun(effect.sessionId, given);
       } catch (err) {
         // A question for the user, with the checks or the ops tasks named: not a failure (ADR-0055 D9, ADR-0020).
-        if (!(err instanceof DaemonError)) throw err;
-        const asked = err.code === 'merge_past_check' ? 'pastChecks' : err.code === 'merge_beside_ops' ? 'besideOps' : null;
-        if (!asked) throw err;
+        const asked = err instanceof DaemonError ? err.code === 'merge_past_check' ? 'pastChecks' : err.code === 'merge_beside_ops' ? 'besideOps' : null : null;
+        if (!asked || !(err instanceof DaemonError)) {
+          // Nothing was merged, so no result will come to be taken for the answer to this request.
+          dispatch({ type: 'mergeAbandoned', sessionId: effect.sessionId });
+          throw err;
+        }
         dispatch({ type: 'mergeHeld', message: err.message, asked, ...(Object.keys(given).length > 0 ? { given } : {}), sessionId: effect.sessionId });
         return;
       }
