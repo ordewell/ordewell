@@ -34,6 +34,7 @@ interface World {
   close: ReturnType<typeof vi.fn>;
   openLink: ReturnType<typeof vi.fn>;
   open: ReturnType<typeof vi.fn>;
+  clipboard: { readText: ReturnType<typeof vi.fn>; writeText: ReturnType<typeof vi.fn> };
   session: { t3: string; t4: string };
   /** What the daemon's session stream pushes. */
   stream(): void;
@@ -44,7 +45,9 @@ interface World {
 function world(): World {
   const w: World = {
     ptys: [], write: vi.fn(async () => undefined), resize: vi.fn(async () => undefined), close: vi.fn(async () => undefined),
-    openLink: vi.fn(async () => ({ ok: true })), open: vi.fn(), session: { t3: 'active', t4: 'integrated' },
+    openLink: vi.fn(async () => ({ ok: true })), open: vi.fn(),
+    clipboard: { readText: vi.fn(async () => ({ ok: true, text: 'from the clipboard' })), writeText: vi.fn(async () => ({ ok: true })) },
+    session: { t3: 'active', t4: 'integrated' },
     stream: () => undefined, openResult: undefined,
   };
   installBridge({
@@ -52,7 +55,7 @@ function world(): World {
     'sessions.list': () => [{ id: 's1', goal: 'Ship it', status: 'running', taskCount: 2, updatedAt: '2026-11-03T09:00:00.000Z' }],
     'sessions.get': () => run(w.session),
   });
-  const bridge = (window as unknown as { ordewell: { daemon: Record<string, unknown>; terminal?: unknown } }).ordewell;
+  const bridge = (window as unknown as { ordewell: { daemon: Record<string, unknown>; terminal?: unknown; clipboard?: unknown } }).ordewell;
   const listeners: Array<() => void> = [];
   bridge.daemon.subscribe = vi.fn((_session: string, cb: () => void) => { listeners.push(cb); return () => { listeners.splice(listeners.indexOf(cb), 1); }; });
   w.stream = () => { for (const cb of [...listeners]) cb(); };
@@ -63,6 +66,7 @@ function world(): World {
     return { ok: true, id, cwd: '/work/acme', shell: 'zsh' };
   });
   bridge.terminal = { open: w.open, write: w.write, resize: w.resize, close: w.close, openLink: w.openLink };
+  bridge.clipboard = w.clipboard;
   return w;
 }
 
@@ -149,6 +153,26 @@ describe('the terminal panel', () => {
     await openPanel();
     terms[0]?.link('https://example.com/docs');
     expect(w.openLink).toHaveBeenCalledWith('https://example.com/docs');
+  });
+
+  it('reaches the clipboard only through the bridge, and says when it could not', async () => {
+    const w = world();
+    await openPanel();
+    const options = terms[0]?.options;
+    if (!options) throw new Error('no terminal');
+
+    await expect(options.readClipboard()).resolves.toBe('from the clipboard');
+    await options.writeClipboard('selected');
+    expect(w.clipboard.writeText).toHaveBeenCalledWith('selected');
+
+    w.clipboard.readText.mockResolvedValueOnce({ ok: false, message: 'The clipboard could not be read: busy' });
+    await expect(options.readClipboard()).rejects.toThrow('The clipboard could not be read: busy');
+    act(() => options.onClipboardError('Could not paste', 'The clipboard could not be read: busy'));
+    const banner = await screen.findByRole('region', { name: 'Could not paste' });
+    expect(banner).toHaveTextContent('The clipboard could not be read: busy');
+    expect(document.querySelector('.frame-live')).toHaveTextContent('Could not paste: The clipboard could not be read: busy');
+    fireEvent.click(within(banner).getByRole('button', { name: 'Dismiss' }));
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Could not paste' })).not.toBeInTheDocument());
   });
 
   it('tells the shell the grid when the panel is resized', async () => {

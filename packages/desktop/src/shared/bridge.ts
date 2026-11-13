@@ -115,6 +115,10 @@ export interface ActionResult {
   message?: string;
 }
 
+export type ClipboardReadResult =
+  | { ok: true; text: string }
+  | { ok: false; message: string };
+
 export interface ConfirmSpec {
   message: string;
   detail?: string;
@@ -338,6 +342,16 @@ export interface OrdewellBridge {
     /** Opens an http(s) address in the OS browser; anything else is refused. The page has no other way out (security.ts). */
     openLink(url: string): Promise<ActionResult>;
   };
+  /**
+   * The system clipboard's plain text, through main: the session grants the
+   * page no web clipboard permission (security.ts). Each call is honoured only
+   * while the user is pressing a key or clicking in this window; any other
+   * time, and on any failure, the result says why, worded for the user.
+   */
+  clipboard: {
+    readText(): Promise<ClipboardReadResult>;
+    writeText(text: string): Promise<ActionResult>;
+  };
 }
 
 /** Invoke channels, one per bridge call; `event` channels flow main → renderer. */
@@ -375,6 +389,8 @@ export const CHANNELS = {
   terminalResize: 'ordewell:terminal.resize',
   terminalClose: 'ordewell:terminal.close',
   terminalOpenLink: 'ordewell:terminal.openLink',
+  clipboardReadText: 'ordewell:clipboard.readText',
+  clipboardWriteText: 'ordewell:clipboard.writeText',
 } as const;
 
 export const EVENTS = {

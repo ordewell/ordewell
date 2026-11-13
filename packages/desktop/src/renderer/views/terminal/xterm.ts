@@ -18,6 +18,12 @@ export interface TermOptions {
   /** A link the user activated (modifier + click). */
   onLink(url: string): void;
   screenReaderMode: boolean;
+  /** The clipboard's text; rejects with why it could not be read, for the user. */
+  readClipboard(): Promise<string>;
+  /** Rejects with why the text could not be copied, for the user. */
+  writeClipboard(text: string): Promise<void>;
+  /** A copy or paste that failed, said so rather than doing nothing: what failed, and why. */
+  onClipboardError(title: string, reason: string): void;
 }
 
 export interface TermHandle {
@@ -56,12 +62,17 @@ export async function createTerm(options: TermOptions, mac: boolean): Promise<Te
   term.loadAddon(fit);
   term.onData((data) => options.onData(data));
 
+  const failed = (title: string) => (err: unknown): void => {
+    options.onClipboardError(title, err instanceof Error ? err.message : String(err));
+  };
   const copy = (): void => {
     const text = term.getSelection();
-    if (text) void navigator.clipboard.writeText(text).catch(() => undefined);
+    if (text) void options.writeClipboard(text).catch(failed('Could not copy the selection'));
   };
+  // term.paste, not onData: it wraps the text in bracketed-paste markers when
+  // the shell asked for them, so a pasted newline does not run a command.
   const paste = (): void => {
-    void navigator.clipboard.readText().then((text) => { if (text) term.paste(text); }).catch(() => undefined);
+    void options.readClipboard().then((text) => { if (text) term.paste(text); }, failed('Could not paste'));
   };
 
   term.attachCustomKeyEventHandler((event) => {
