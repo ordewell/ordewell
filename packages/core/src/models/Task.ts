@@ -12,7 +12,8 @@ import type { DelegatedBudget, TaskScope } from './Delegation';
 import { executionStateOf } from './TaskExecution';
 import type { Grant } from '../services/Mandate';
 import { SKILL_NAME_PATTERN } from '../conversation/skillTokens';
-import { subtreeIds, walkPlan } from '../services/PlanTree';
+import { walkPlan } from '../services/PlanTree';
+import { remove } from '../services/PlanGraph';
 import { migratePlanStateIsolation } from '../services/isolationRecord';
 import { interruptedVerdict } from '../services/VerdictEngine';
 
@@ -1265,30 +1266,9 @@ export function addTaskToPlan(tasks: readonly Task[], partial: Partial<Task>): T
   return renumberTasks([...tasks, newTask]);
 }
 
-/**
- * A removed task leaves every dependency on it, and every loop's body it was
- * in (ADR-0045 L8): a loop it leaves with no body is no loop. Whether its
- * removal may go ahead at all — a loop's check may not be removed — is the
- * caller's to say.
- */
+/** A task out of the plan, with every edge into it: `PlanGraph.remove` owns the rewrite, as it does for merge and split. */
 export function removeTaskFromPlan(tasks: readonly Task[], taskId: string): Task[] {
-  const removed = subtreeIds(tasks, taskId);
-  const prune = (level: readonly Task[]): Task[] => level
-    .filter((t) => !removed.has(t.id))
-    .map((t) => {
-      const pruned: Task = {
-        ...t,
-        dependencies: t.dependencies.filter((depId) => !removed.has(depId)),
-        subtasks: prune(t.subtasks),
-      };
-      if (!t.loop?.body.some((id) => removed.has(id))) return pruned;
-      const body = t.loop.body.filter((id) => !removed.has(id));
-      if (body.length > 0) return { ...pruned, loop: { ...t.loop, body } };
-      delete pruned.loop;
-      delete pruned.loopRound;
-      return pruned;
-    });
-  return renumberTasks(prune(tasks));
+  return remove(tasks, taskId);
 }
 
 export function updateTaskInPlan(tasks: readonly Task[], taskId: string, changes: Partial<Task>): Task[] {
