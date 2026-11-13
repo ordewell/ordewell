@@ -94,6 +94,8 @@ const EMPTY_PREFS: Prefs = {
   layouts: {},
   notifications: true,
   keepRunningInTray: false,
+  reopenProjects: true,
+  openProjects: [],
   settingsAdvancedOpen: false,
   editorCommand: '',
 };

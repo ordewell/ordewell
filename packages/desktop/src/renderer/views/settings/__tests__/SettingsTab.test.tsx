@@ -341,7 +341,7 @@ describe('the Settings view', () => {
     await waitFor(() => expect(screen.queryByText(/2 of 3 models/)).not.toBeInTheDocument());
   });
 
-  it('keeps the desktop preferences in this app: theme, notifications and the tray', async () => {
+  it('keeps the desktop preferences in this app: theme, notifications, the tray and reopening projects', async () => {
     const { w } = await mount();
     await screen.findByRole('heading', { name: 'This app' });
 
@@ -353,6 +353,11 @@ describe('the Settings view', () => {
 
     fireEvent.click(screen.getByRole('checkbox', { name: /Keep running in the tray/ }));
     await waitFor(() => expect(w.prefs.set).toHaveBeenCalledWith('keepRunningInTray', true));
+
+    const reopen = screen.getByRole('checkbox', { name: /Reopen projects on launch/ });
+    expect(reopen).toBeChecked();
+    fireEvent.click(reopen);
+    await waitFor(() => expect(w.prefs.set).toHaveBeenCalledWith('reopenProjects', false));
   });
 
   it.each(['dark', 'light', 'system'] as const)('shows the theme the preference holds: %s', async (theme) => {

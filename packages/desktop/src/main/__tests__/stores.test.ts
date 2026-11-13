@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readJsonFile, writeJsonFile } from '../jsonFile';
-import { DEFAULT_PREFS, MAX_LAYOUTS, PrefsStore, validPref } from '../prefs';
+import { DEFAULT_PREFS, MAX_LAYOUTS, MAX_OPEN_PROJECTS, PrefsStore, validPref } from '../prefs';
 import { droppedFolder } from '../droppedFolder';
 import { MAX_RECENTS, RecentsStore, displayPath } from '../recents';
 
@@ -242,6 +242,34 @@ describe('prefs', () => {
     expect(store.set({ theme: 'dark' }).editorCommand).toBe('code -r');
     writeFileSync(file, JSON.stringify({ editorCommand: 7 }));
     expect(new PrefsStore(file).get().editorCommand).toBe('');
+  });
+
+  it('reopens projects on launch by default, and takes the toggle only as a boolean', () => {
+    expect(DEFAULT_PREFS.reopenProjects).toBe(true);
+    expect(validPref('reopenProjects', false)).toEqual({ reopenProjects: false });
+    expect(validPref('reopenProjects', 'no')).toBeUndefined();
+  });
+
+  it('keeps last session\'s project windows across a write of anything else, and never takes them from a page', () => {
+    const one = join(dir, 'one');
+    const two = join(dir, 'two');
+    expect(validPref('openProjects', [one])).toBeUndefined();
+    const file = join(dir, 'prefs.json');
+    const store = new PrefsStore(file);
+    expect(store.get().openProjects).toEqual([]);
+    store.set({ openProjects: [one, two] });
+    expect(store.set({ reopenProjects: false })).toMatchObject({ reopenProjects: false, openProjects: [one, two] });
+    expect(new PrefsStore(file).get()).toMatchObject({ reopenProjects: false, openProjects: [one, two] });
+  });
+
+  it('starts with no projects to reopen from a list that is not all absolute paths', () => {
+    const file = join(dir, 'prefs.json');
+    for (const openProjects of [['relative'], [join(dir, 'a'), 7], 'not a list', Array.from({ length: MAX_OPEN_PROJECTS + 1 }, (_, i) => join(dir, String(i)))]) {
+      writeFileSync(file, JSON.stringify({ openProjects }));
+      expect(new PrefsStore(file).get().openProjects).toEqual([]);
+    }
+    writeFileSync(file, JSON.stringify({ openProjects: [join(dir, 'a'), join(dir, 'a')] }));
+    expect(new PrefsStore(file).get().openProjects).toEqual([join(dir, 'a')]);
   });
 
   it('reads defaults, keeps a set value and drops unknown keys from the file', () => {

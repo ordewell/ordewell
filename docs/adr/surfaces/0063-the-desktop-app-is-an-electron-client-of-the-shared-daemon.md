@@ -103,7 +103,13 @@ holds the token.**
   quit*. The stop names each run's workspace.
 - **One window per workspace (H6).** Opening a workspace that is already open
   focuses its window. A window shows one session at a time, chosen from that
-  workspace's sessions.
+  workspace's sessions. One app runs per user, so the rule holds across
+  launches: a launch that names a folder (`ordewell-desktop <folder>`, as
+  `code <folder>`) opens it the same way, a second launch hands its folder, or
+  `--new-window` for the welcome window, to the running app, and a second
+  launch with neither brings it forward. A first launch with neither reopens
+  the project windows open when the app last quit, unless the user turned that
+  off, and otherwise opens the welcome window.
 - **One UI, two transports (H7).** `packages/ui` holds the components, the view
   state, the styles as semantic design tokens, the webview protocol and
   `HostBridge`. The view assembly that `RunViewHost` and `ConversationViewHost`
@@ -562,3 +568,4 @@ allows script only from the app's own bundle, with no inline script.
 - 2026-11-06 — H11: the `homebrew` job publishes with the `HOMEBREW_TAP_DEPLOY_KEY` deploy key over SSH when `HOMEBREW_TAP_TOKEN` is not set.
 - 2026-11-06 — H11: `scripts/publish-tap.sh` writes the tap for `homebrew` and the manual re-publish `homebrew-publish.yml`, the token by an extraheader, and `homebrew-verify` installs the formula with brew on four runners.
 - 2026-11-09 — H3, H5: a live run is read from the session list's run activity; restart is refused for runs this daemon holds or `live` work, and an owned quit stops only the runs it holds, naming another host's as going on.
+- 2026-11-13 — H6: a launch opens the folder it names or, with `--new-window`, the welcome window, and a second launch hands its arguments to the running app; a plain first launch reopens last session's project windows.
