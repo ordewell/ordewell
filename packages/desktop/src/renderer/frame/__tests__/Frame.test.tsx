@@ -61,6 +61,7 @@ describe('the frame', () => {
     expect(within(title).getByRole('button', { name: 'Run plan' })).toBeInTheDocument();
     fireEvent.click(within(title).getByRole('button', { name: 'More actions' }));
     expect(screen.getByRole('menuitem', { name: 'Reset layout' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'New window' })).toBeInTheDocument();
   });
 
   it('puts focus on the ⋯ menu\'s first drawn item, past a scope chip the bar has room for, and closes on Escape', () => {
@@ -352,6 +353,19 @@ describe('the command palette', () => {
     expect(screen.queryByRole('dialog', { name: 'Command palette' })).not.toBeInTheDocument();
   });
 
+  it('lists New window with its menu chord, runs it from the palette, and binds no key of its own', () => {
+    const { store } = mount('darwin');
+    const open = vi.spyOn(store.projects, 'newWindow');
+    fireEvent.keyDown(window, { key: 'N', code: 'KeyN', metaKey: true, shiftKey: true });
+    expect(open).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: 'k', code: 'KeyK', metaKey: true });
+    const input = screen.getByRole('combobox', { name: 'Search commands' });
+    fireEvent.change(input, { target: { value: 'new window' } });
+    expect(screen.getByRole('option', { name: /New window/ })).toHaveTextContent('⇧⌘N');
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(open).toHaveBeenCalledOnce();
+  });
+
   it('lists a command for each theme and saves the one chosen', async () => {
     const set = vi.fn(async () => ({}));
     Object.defineProperty(window, 'ordewell', { configurable: true, value: { prefs: { get: vi.fn(), set } } });
@@ -413,6 +427,18 @@ describe('panels, banners and the title bar', () => {
     expect(screen.getByRole('region', { name: 'Terminal' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Hide terminal' }));
     expect(screen.queryByRole('region', { name: 'Terminal' })).not.toBeInTheDocument();
+  });
+
+  it('opens the terminal from the activity bar button, outside the Views tablist', () => {
+    mount('darwin');
+    const toggle = screen.getByRole('button', { name: 'Toggle terminal' });
+    expect(toggle).toHaveAttribute('title', 'Toggle terminal (⌃`)');
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    expect(within(views()).queryByRole('button', { name: 'Toggle terminal' })).not.toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(screen.getByRole('region', { name: 'Terminal' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Toggle terminal' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Hide terminal' })).toHaveAttribute('title', 'Hide terminal (Ctrl+`)');
   });
 
   it('resizes a pane from the keyboard and keeps the size', () => {

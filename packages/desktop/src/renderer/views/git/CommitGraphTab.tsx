@@ -8,6 +8,7 @@ import { MiddleText, Notice } from '../sidebarKit';
 import { openRun } from './gitActions';
 import { readBranches, readCommit, readLog, type Branches, type CommitDetail, type CommitSummary } from './gitData';
 import { ago, commitDiffTabId, commitWhen, commitTabId, landedTaskOf, parseCommitTabId, parseCommitsTabId, refChips, shortSha, type LandedTask } from './gitModel';
+import { besideSubject, useCommitCard } from './CommitCard';
 import { gitStoreFor, ownersOf, type RunInfo } from './gitStore';
 import { Chip, Lanes } from './GraphParts';
 import { assignLanes } from './lanes';
@@ -78,8 +79,8 @@ function Detail({ api, repo, sha, summary, linked, close }: { api: FrameApi; rep
         <h3>{shown?.subject ?? shortSha(sha)}</h3>
         {close && <IconButton icon={X} label="Close the commit" onClick={close} />}
       </div>
-      <p className="git-detail-meta" title={shown ? `${sha}\n${shown.date}` : sha}>
-        <span className="git-detail-sha">{shortSha(sha)}</span>
+      <p className="git-detail-meta">
+        <span className="git-detail-sha" title={sha}>{shortSha(sha)}</span>
         {shown && <span>{shown.author}</span>}
         {shown && <span>{commitWhen(shown.date)}</span>}
       </p>
@@ -184,6 +185,7 @@ function Graph({ api, tab }: { api: FrameApi; tab: Tab }): JSX.Element {
 
   const layout = useMemo(() => assignLanes(commits), [commits]);
   const chosen = commits.find((c) => c.sha === selected);
+  const { rowProps, card } = useCommitCard({ api, repo, branches, place: besideSubject });
 
   return (
     <div className="git-graph">
@@ -201,9 +203,9 @@ function Graph({ api, tab }: { api: FrameApi; tab: Tab }): JSX.Element {
             const linked = landedFor(commit, links);
             return (
               <li key={commit.sha}>
-                <button type="button" className="git-commit" aria-pressed={commit.sha === selected} aria-label={`Commit ${shortSha(commit.sha)}: ${commit.subject}`} onClick={() => setSelected((was) => (was === commit.sha ? undefined : commit.sha))}>
+                <button type="button" className="git-commit" aria-pressed={commit.sha === selected} aria-label={`Commit ${shortSha(commit.sha)}: ${commit.subject}`} {...rowProps(commit, row.color)} onClick={() => setSelected((was) => (was === commit.sha ? undefined : commit.sha))}>
                   <Lanes row={row} width={layout.width} />
-                  <span className="git-refs">{refChips(commit.refs, branches).map((chip) => <Chip key={chip.text} chip={chip} />)}</span>
+                  <span className="git-refs">{refChips(commit.refs, branches).map((chip) => <Chip key={chip.text} chip={chip} lane={row.color} />)}</span>
                   <span className="git-commit-subject">{commit.subject}</span>
                   {linked && <span className="git-chip git-chip-ordewell" title={linked.task.title}>task #{linked.task.order}</span>}
                   <span className="git-commit-meta">{commit.author} · {ago(commit.date)}</span>
@@ -217,6 +219,7 @@ function Graph({ api, tab }: { api: FrameApi; tab: Tab }): JSX.Element {
             </li>
           )}
         </ul>
+        {card}
         {chosen && <Detail api={api} repo={repo} sha={chosen.sha} summary={chosen} linked={landedFor(chosen, links)} close={() => setSelected(undefined)} />}
       </div>
     </div>

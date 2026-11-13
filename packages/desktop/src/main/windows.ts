@@ -18,6 +18,8 @@ export interface WindowManagerOptions {
    * answers undefined when there is nothing to ask (ADR-0062 G11).
    */
   confirmClose?(win: BrowserWindow): Promise<boolean> | undefined;
+  /** The workspaces with a window, in the order they took it, each time that changes; with how many windows of any kind are left. */
+  onWorkspacesChanged?(open: string[], windowsLeft: number): void;
 }
 
 /** The key a workspace's window is found by: its real path, so a symlink and its target are one workspace (H6). */
@@ -70,7 +72,9 @@ export class WindowManager {
       win.on('closed', () => {
         const now = this.workspaceOf(win);
         if (now !== undefined) this.workspaces.delete(now);
+        this.changed();
       });
+      this.changed();
     }
     if ((options.closeWelcome ?? true) && this.welcome && !this.welcome.isDestroyed()) this.welcome.close();
     return key;
@@ -103,6 +107,7 @@ export class WindowManager {
     this.contexts.set(win.webContents.id, { kind: 'workspace', path: key });
     win.setTitle(titleOf(key));
     void win.loadURL(this.options.pageUrl);
+    this.changed();
     return key;
   }
 
@@ -143,6 +148,11 @@ export class WindowManager {
     const [first] = this.all();
     if (first) this.focus(first);
     else this.openWelcome();
+  }
+
+  /** A closing window is not counted: create()'s `closed` listener, which forgets it, runs before its workspace's. */
+  private changed(): void {
+    this.options.onWorkspacesChanged?.([...this.workspaces.keys()], this.contexts.size);
   }
 
   private focus(win: BrowserWindow): BrowserWindow {

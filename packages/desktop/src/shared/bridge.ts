@@ -148,6 +148,10 @@ export interface Prefs {
   notifications: boolean;
   /** Keep the app running in the tray when its last window closes and no run is live (H5). */
   keepRunningInTray: boolean;
+  /** Reopen, on a launch with no folder named, the project windows open when the app last quit. */
+  reopenProjects: boolean;
+  /** The project windows open when the app last quit. Main writes it; a page cannot. */
+  openProjects: string[];
   /** Whether Settings' Advanced section is open; it starts closed and stays as the user left it. */
   settingsAdvancedOpen: boolean;
   /**
@@ -220,7 +224,7 @@ export interface TerminalDelivery {
 export type Unsubscribe = () => void;
 
 /** The frame commands (renderer/frame/commands.ts) the application menu offers; the menu names no other. */
-export type MenuCommand = 'layout.reset';
+export type MenuCommand = 'layout.reset' | 'terminal.toggle';
 
 /**
  * What a project window has going that switching it to another folder would
@@ -250,6 +254,8 @@ export interface OrdewellBridge {
      * Undefined when nothing was opened.
      */
     openWorkspace(path?: string, options?: OpenWorkspaceOptions): Promise<string | undefined>;
+    /** The welcome window beside whatever is open, as File → New Window does. */
+    newWindow(): Promise<void>;
     recentWorkspaces(): Promise<RecentWorkspace[]>;
     /** The recents changed in another window or from the menu, so a list drawn from them is stale. */
     onRecentsChange(cb: () => void): Unsubscribe;
@@ -339,6 +345,7 @@ export const CHANNELS = {
   appInfo: 'ordewell:app.info',
   appContext: 'ordewell:app.context',
   appOpenWorkspace: 'ordewell:app.openWorkspace',
+  appNewWindow: 'ordewell:app.newWindow',
   appRecentWorkspaces: 'ordewell:app.recentWorkspaces',
   appForgetWorkspace: 'ordewell:app.forgetWorkspace',
   appUnforgetWorkspace: 'ordewell:app.unforgetWorkspace',

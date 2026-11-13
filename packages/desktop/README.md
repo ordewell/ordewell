@@ -18,6 +18,31 @@ the installers. To use the app, see the
 [desktop guide](../../docs/desktop/README.md); the design is
 [design.md](../../docs/desktop/design.md).
 
+## Opening projects from a terminal
+
+Launched with a folder, the app opens it as `code <folder>` does: in a window of
+its own, or by focusing the window it is already open in. A relative folder is
+read against the directory you launched from, and `--new-window` opens the
+welcome window instead. When the app is already running, the launch hands its
+folder over to it. A launch that names neither reopens the projects that were
+open when the app last quit (Settings → This app → *Reopen projects on
+launch*), or the welcome window.
+
+- **Linux.** The deb links `ordewell-desktop` into `/usr/bin`, and the install
+  script puts the AppImage at `~/.local/bin/ordewell-desktop`:
+  `ordewell-desktop ~/code/acme`.
+- **macOS.** `open -na Ordewell --args ~/code/acme`, or `--args --new-window`.
+  `-n` starts a launch even when the app is running, which hands its arguments
+  over and exits. Give the folder as an absolute path: `open` starts the app in
+  `/`, not in your directory.
+- **Windows.** The installer adds nothing to `PATH`; run the executable from
+  where it was installed, by default
+  `& "$env:LOCALAPPDATA\Programs\Ordewell\Ordewell.exe" C:\code\acme`.
+
+The app icon's menu offers *New Window* too: the Dock menu on macOS, the jump
+list on Windows (installed app only), and the launcher entry's right-click on
+Linux, which runs the app with `--new-window`.
+
 ## Build and run
 
 ```bash

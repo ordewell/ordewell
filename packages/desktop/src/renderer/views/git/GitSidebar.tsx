@@ -8,7 +8,7 @@ import type { FrameApi, Unregister } from '../../frame/api';
 import { useDisclosure } from '../../frame/store';
 import { all } from '../Stub';
 import { onCheckoutChange } from '../checkout/checkoutEvents';
-import { scopeStoreFor } from '../scope/scopeStore';
+import { repositoryOf, scopeStoreFor } from '../scope/scopeStore';
 import { LONG_LIST, MiddleText, Notice, SidebarGroup } from '../sidebarKit';
 import {
   createBranch, deleteBranch, dropStash, fetchRepo, openRun, popStash, pullBranch, pushBranch, stashChanges, switchBranch, syncTarget,
@@ -511,7 +511,7 @@ export function register(api: FrameApi): Unregister {
     api.registerCommand({ id: 'git.refresh', title: 'Git: Refresh branches', enabled: () => !api.readOnly, run: () => { const { repo } = store.getSnapshot(); if (repo !== undefined) void store.refresh(repo, { history: true }); } }),
     // Kept under its old id so a binding to it still works: the history it shows is the checkout's, in the sidebar, whatever was open there.
     api.registerCommand({ id: 'git.showGraph', title: 'Git: Show history', run: () => {
-      store.browse(store.getSnapshot().repo ?? scopeStoreFor(api).getSnapshot().repo, undefined);
+      store.browse(store.getSnapshot().repo ?? repositoryOf(scopeStoreFor(api).getSnapshot()), undefined);
       api.showActivity('git');
     } }),
   );

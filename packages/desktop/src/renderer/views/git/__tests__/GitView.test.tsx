@@ -356,9 +356,9 @@ describe('the Branches and History views', () => {
     fireEvent.click(views().getByRole('button', { name: 'History' }));
     const row = await screen.findByRole('button', { name: /^Commit aaaaaaa: Merge: Wire SSO/ });
     expect(row.querySelector('svg.git-lanes circle')).not.toBeNull();
-    // The row names the short sha; its tooltip has the full one, to read or compare (design W11).
-    expect(row).toHaveAttribute('title', expect.stringContaining(`${sha('a')} · Ada`));
-    expect(within(row).getByText('main')).toHaveAttribute('title', expect.stringMatching(/^main: /));
+    // One hover for the whole row: the commit card, not native tooltips competing on the row and its chip (design W11).
+    expect(row).not.toHaveAttribute('title');
+    expect(within(row).getByText('main')).not.toHaveAttribute('title');
     expect(within(row).queryByText('HEAD')).not.toBeInTheDocument();
 
     fireEvent.click(row);
@@ -423,7 +423,18 @@ describe('the Branches and History views', () => {
     expect(within(row).getByText('release/2.4')).toBeInTheDocument();
     expect(within(row).getByText('+3')).toBeInTheDocument();
     expect(row).toHaveAccessibleName(/by Ada, .+ ago, refs release\/2\.4, feature\/sso, origin\/feature\/sso, origin\/main, v2\.0$/);
-    expect(row).toHaveAttribute('title', expect.stringContaining('release/2.4, feature/sso, origin/feature/sso, origin/main, v2.0'));
+    expect(row).not.toHaveAttribute('title');
+  });
+
+  it('draws each lane in its palette colour, and the ref chip in the colour of its commit’s lane', async () => {
+    await mount();
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    const row = await screen.findByRole('button', { name: /^Commit aaaaaaa: Merge: Wire SSO/ });
+    const lane = /\bgit-lane-(\d)\b/.exec(row.querySelector('svg.git-lanes circle')!.getAttribute('class')!)?.[1];
+    expect(lane).toBeDefined();
+    const chip = within(row).getByText('main');
+    expect(chip).toHaveClass('git-chip-laned');
+    expect(chip.style.getPropertyValue('--git-chip-lane')).toBe(`var(--ow-lane-${lane})`);
   });
 
   it('marks a branch that its remote-tracking ref shares the commit with, and leads with the checked-out branch', async () => {
@@ -432,7 +443,7 @@ describe('the Branches and History views', () => {
     const row = await screen.findByRole('button', { name: /^Commit aaaaaaa: Merge: Wire SSO/ });
     const chip = within(row).getByText('main');
     expect(chip.querySelector('.git-chip-mark')).not.toBeNull();
-    expect(chip).toHaveAttribute('title', expect.stringContaining('Also on origin/main'));
+    expect(chip).not.toHaveAttribute('title');
     expect(within(row).queryByText(/^\+\d/)).toBeNull();
   });
 
@@ -628,6 +639,117 @@ describe('the Branches and History views', () => {
     fireEvent.change(picker, { target: { value: 'libs/ui' } });
     expect(await screen.findByRole('button', { name: /^Commit 9999999: Start the UI kit/ })).toBeInTheDocument();
     expect(daemon.calls('git.log').filter(([p]) => p?.repo === 'libs/ui')).toHaveLength(1);
+  });
+});
+
+describe('the commit card', () => {
+  const views = () => within(screen.getByRole('group', { name: 'Git sidebar view' }));
+  const SHOW = { 'git.show': ok({ commit: { ...LOG[0]!, body: 'Why it changed.' }, files: [{ path: 'src/sso.ts', status: 'M', added: 3, removed: 1 }, { path: 'logo.png', status: 'A', added: null, removed: null }] }) };
+  const card = () => screen.queryByRole('tooltip');
+
+  async function history(extra: Answers = SHOW) {
+    const daemon = await mount(extra);
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    const row = await screen.findByRole('button', { name: /^Commit aaaaaaa: Merge: Wire SSO/ });
+    return { daemon, row };
+  }
+
+  /** Hovers `target` and waits out the card's delay on fake timers, then hands the clock back for the daemon's answers. */
+  function hover(target: HTMLElement): void {
+    vi.useFakeTimers();
+    try {
+      fireEvent.mouseEnter(target);
+      act(() => { vi.advanceTimersByTime(450); });
+    } finally { vi.useRealTimers(); }
+  }
+
+  it('opens after the hover delay and not before, with the log’s fields at once and the message and files once read', async () => {
+    const { row } = await history();
+    vi.useFakeTimers();
+    try {
+      fireEvent.mouseEnter(row);
+      act(() => { vi.advanceTimersByTime(449); });
+      expect(card()).toBeNull();
+      act(() => { vi.advanceTimersByTime(1); });
+    } finally { vi.useRealTimers(); }
+    const shown = within(screen.getByRole('tooltip', { name: 'Commit aaaaaaa' }));
+    expect(row).toHaveAttribute('aria-describedby', screen.getByRole('tooltip').id);
+    expect(shown.getByText('Merge: Wire SSO')).toBeInTheDocument();
+    expect(shown.getByText('aaaaaaa')).toBeInTheDocument();
+    expect(shown.getByRole('button', { name: 'Copy the full sha' })).toHaveAttribute('title', sha('a'));
+    expect(shown.getByText('Ada')).toBeInTheDocument();
+    expect(shown.getByText('<a@x>')).toBeInTheDocument();
+    expect(shown.getByText(/ ago · /)).toBeInTheDocument();
+    expect(shown.queryByText(/2025-01-01T/)).toBeNull();
+    expect(shown.getByText('Parent fffffff')).toBeInTheDocument();
+    // main and origin/main are one chip, the remote noted; HEAD is left out beside the checkout's own branch.
+    const refs = within(shown.getByRole('list', { name: 'Refs' }));
+    expect(refs.getAllByRole('listitem')).toHaveLength(1);
+    expect(refs.getByText('main')).toHaveClass('git-chip-laned');
+    expect(refs.getByText('your checkout’s branch · also on origin/main')).toBeInTheDocument();
+    expect(await shown.findByText('Why it changed.')).toBeInTheDocument();
+    expect(shown.getByText('2 files, +3 −1')).toBeInTheDocument();
+  });
+
+  it('is the same card from the subject or a ref chip, and reads the message once however often it opens', async () => {
+    const { daemon, row } = await history();
+    hover(within(row).getByText('Merge: Wire SSO'));
+    expect(await within(screen.getByRole('tooltip')).findByText('Why it changed.')).toBeInTheDocument();
+    fireEvent.mouseLeave(row);
+    await waitFor(() => expect(card()).toBeNull());
+    hover(within(row).getByText('main'));
+    // Read already: the message is there on the first draw, with no loading line.
+    const again = within(screen.getByRole('tooltip', { name: 'Commit aaaaaaa' }));
+    expect(again.getByText('Why it changed.')).toBeInTheDocument();
+    expect(again.queryByText(/Reading the message/)).toBeNull();
+    expect(daemon.calls('git.show')).toHaveLength(1);
+    expect(screen.getAllByRole('tooltip')).toHaveLength(1);
+  });
+
+  it('switches at once to the next row while one is open, and Escape closes it', async () => {
+    const { row } = await history();
+    hover(row);
+    expect(card()).toHaveAccessibleName('Commit aaaaaaa');
+    fireEvent.mouseLeave(row);
+    fireEvent.mouseEnter(screen.getByRole('button', { name: /^Commit fffffff/ }));
+    expect(screen.getAllByRole('tooltip')).toHaveLength(1);
+    expect(card()).toHaveAccessibleName('Commit fffffff');
+    expect(within(card()!).getByText('Root commit')).toBeInTheDocument();
+    expect(within(card()!).getByText('Ordewell’s integration branch for run r7')).toBeInTheDocument();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    expect(card()).toBeNull();
+  });
+
+  it('opens on keyboard focus, follows the arrow keys, and stays shut for a click’s focus', async () => {
+    const { row } = await history();
+    act(() => row.focus());
+    expect(card()).toHaveAccessibleName('Commit aaaaaaa');
+    fireEvent.keyDown(row, { key: 'ArrowDown' });
+    expect(card()).toHaveAccessibleName('Commit fffffff');
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(card()).toBeNull();
+    fireEvent.mouseDown(row);
+    act(() => row.focus());
+    expect(card()).toBeNull();
+  });
+
+  it('still shows the log’s fields when the message cannot be read', async () => {
+    const { row } = await history({ 'git.show': () => ({ ok: false as const, status: 500, error: 'fatal: bad object', data: { code: 'git_failed' } }) });
+    hover(row);
+    const shown = within(screen.getByRole('tooltip'));
+    await waitFor(() => expect(shown.queryByText(/Reading the message/)).toBeNull());
+    expect(shown.getByText('Merge: Wire SSO')).toBeInTheDocument();
+    expect(shown.queryByText('fatal: bad object')).toBeNull();
+  });
+
+  it('opens from a row of the commit graph too', async () => {
+    await mount(SHOW);
+    act(() => store.api.openTab({ kind: 'commits', id: commitsTabId('.'), title: 'Commits' }));
+    const list = within(await screen.findByRole('list', { name: 'Commits' }));
+    const row = await list.findByRole('button', { name: /Commit fffffff/ });
+    hover(within(row).getByText('v1.0'));
+    expect(card()).toHaveAccessibleName('Commit fffffff');
+    expect(within(card()!).getByText('tag')).toBeInTheDocument();
   });
 });
 
@@ -1143,6 +1265,23 @@ describe('the commit graph', () => {
     const root = list.getByRole('button', { name: /Commit fffffff: Add the login button/ });
     expect(within(root).getByText('Ordewell · ordewell/r7/integration')).toBeInTheDocument();
     expect(within(root).getByText('v1.0')).toBeInTheDocument();
+  });
+
+  it('stripes every ref chip of a commit with that commit’s lane colour, keeping each kind’s own class', async () => {
+    await mount();
+    const list = within(await openGraph());
+    for (const name of [/Commit aaaaaaa/, /Commit fffffff/]) {
+      const row = await list.findByRole('button', { name });
+      const lane = /\bgit-lane-(\d)\b/.exec(row.querySelector('svg.git-lanes circle')!.getAttribute('class')!)?.[1];
+      const chips = [...row.querySelectorAll<HTMLElement>('.git-refs .git-chip')];
+      expect(chips.length).toBeGreaterThan(0);
+      for (const chip of chips) {
+        expect(chip).toHaveClass('git-chip-laned');
+        expect(chip.style.getPropertyValue('--git-chip-lane')).toBe(`var(--ow-lane-${lane})`);
+      }
+    }
+    expect(within(list.getByRole('button', { name: /Commit aaaaaaa/ })).getByText('HEAD')).toHaveClass('git-chip-head');
+    expect(within(list.getByRole('button', { name: /Commit fffffff/ })).getByText('Ordewell · ordewell/r7/integration')).toHaveClass('git-chip-ordewell');
   });
 
   it('links a commit landed from a task to that task', async () => {

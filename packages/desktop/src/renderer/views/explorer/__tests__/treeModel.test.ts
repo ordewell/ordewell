@@ -10,6 +10,11 @@ describe('sortEntries', () => {
     const sorted = sortEntries([file('b10.ts'), file('b9.ts'), dir('src'), file('a.ts'), dir('docs')]);
     expect(sorted.map((e) => e.name)).toEqual(['docs', 'src', 'a.ts', 'b9.ts', 'b10.ts']);
   });
+
+  it('lists a repository among the folders, as the workspace folder\'s view shows it', () => {
+    const repo: TreeEntry = { name: 'api', path: 'api', kind: 'repository', ignored: false };
+    expect(sortEntries([file('notes.md'), dir('web'), repo, dir('docs')]).map((e) => e.name)).toEqual(['api', 'docs', 'web', 'notes.md']);
+  });
 });
 
 describe('flatten', () => {

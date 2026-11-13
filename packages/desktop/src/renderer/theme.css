@@ -99,6 +99,16 @@
     --ow-runner-cursor-agent: #6b5a35;
     --ow-runner-cursor-agent-tint: #f0efeb;
 
+    /* The commit graph's lanes (lanes.ts LANE_COLORS). Only the desktop draws a graph, so tokens.css declares none. */
+    --ow-lane-0: #008bc7;
+    --ow-lane-1: #be6527;
+    --ow-lane-2: #aa5fac;
+    --ow-lane-3: #459342;
+    --ow-lane-4: #96505e;
+    --ow-lane-5: #0d7879;
+    --ow-lane-6: #625fa6;
+    --ow-lane-7: #7a6900;
+
     --ow-diff-inserted: #e6f4ea;
     --ow-diff-removed: #fbe9e8;
     --ow-diff-inserted-word: #b7e1c1;
@@ -199,6 +209,15 @@
     --ow-runner-gemini-cli-tint: #28383e;
     --ow-runner-cursor-agent: #d4c3a0;
     --ow-runner-cursor-agent-tint: #363635;
+
+    --ow-lane-0: #52d6ff;
+    --ow-lane-1: #ecb6a0;
+    --ow-lane-2: #e6a9fb;
+    --ow-lane-3: #9ed788;
+    --ow-lane-4: #ec86a8;
+    --ow-lane-5: #1cc5ae;
+    --ow-lane-6: #9aa9d8;
+    --ow-lane-7: #c6a843;
 
     --ow-diff-inserted: #16301f;
     --ow-diff-removed: #3a1b1a;

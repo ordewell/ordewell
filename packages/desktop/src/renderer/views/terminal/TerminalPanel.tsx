@@ -4,7 +4,7 @@ import { EmptyState, IconButton } from '@ordewell/ui/design';
 import type { FrameApi, Unregister } from '../../frame/api';
 import { Popover } from '../../frame/Popover';
 import { setLoginTerminalOpener } from '../../session/loginTerminal';
-import { optionsFor, type ScopeState } from '../scope/scopeStore';
+import { folderIsView, optionsFor, viewRepos, type ScopeState } from '../scope/scopeStore';
 import { useScope } from '../scope/useScope';
 import { bannerFor, decisionFor, tabTitle, terminalStoreFor, type TerminalStore, type TerminalTab } from './terminalStore';
 import { all } from '../Stub';
@@ -32,8 +32,9 @@ function useSessionWatch(api: FrameApi): void {
   }, [store, sessionId]);
 }
 
-function repoLabel(repo: string): string {
-  return repo === '.' ? 'Workspace' : repo;
+function repoLabel(repo: string, scopes: ScopeState): string {
+  if (repo !== '.') return repo;
+  return folderIsView(scopes) ? 'Workspace folder' : 'Workspace';
 }
 
 function NewTerminalMenu({ scopes, terminals, anchor, onClose }: {
@@ -42,13 +43,13 @@ function NewTerminalMenu({ scopes, terminals, anchor, onClose }: {
   anchor: React.RefObject<HTMLButtonElement>;
   onClose(): void;
 }): JSX.Element {
-  const multi = scopes.repos.length > 1;
-  const repos = multi ? scopes.repos.map((r) => r.repo) : [scopes.repo];
+  const repos = viewRepos(scopes);
+  const multi = repos.length > 1;
   return (
     <Popover label="Open a terminal in" anchor={anchor} role="menu" className="frame-menu terminal-menu" onClose={onClose}>
       {repos.map((repo) => (
-        <div key={repo} role="group" aria-label={multi ? repoLabel(repo) : 'Scopes'}>
-          {multi && <p className="terminal-menu-repo">{repoLabel(repo)}</p>}
+        <div key={repo} role="group" aria-label={multi ? repoLabel(repo, scopes) : 'Scopes'}>
+          {multi && <p className="terminal-menu-repo">{repoLabel(repo, scopes)}</p>}
           <ul>
             {optionsFor(scopes, repo).map((option) => {
               const decision = decisionFor(option.scope, scopes);
@@ -222,7 +223,7 @@ function TerminalPanel({ api }: { api: FrameApi }): JSX.Element {
       <div className="terminal-stage">
         <div className="terminal-host" ref={host} role="tabpanel" aria-label={active ? `${tabTitle(active)}, ${active.scopeLabel}` : 'Terminal'} hidden={!active || active.phase === 'failed'} />
         {active?.phase === 'failed' && <p className="terminal-failed" role="alert"><CircleAlert size={16} aria-hidden="true" /><span>{active.message}</span></p>}
-        {!active && <EmptyState className="terminal-empty" icon={SquareTerminal} title="No terminal is open" body="The plus button opens one in your checkout." />}
+        {!active && <EmptyState className="terminal-empty" icon={SquareTerminal} title="No terminal is open" body="The plus button opens one in your checkout. Ctrl+` shows or hides this panel." />}
       </div>
     </div>
   );

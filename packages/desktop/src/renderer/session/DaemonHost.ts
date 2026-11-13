@@ -285,6 +285,11 @@ export class DaemonHost {
   private readonly options: DaemonHostOptions;
   /** Views that re-read the catalog after a sign-in or a key: Settings draws its own copy of it. */
   private readonly catalogListeners = new Set<() => void>();
+  /** Planner picks, one after another, so the last one asked for is the one saved. */
+  private plannerPicks: Promise<void> = Promise.resolve();
+  private latestPlannerPick = '';
+  /** `/planner <id>` picks join the same queue under ids of the host's own, which no chat pick holds. */
+  private slashPlannerPicks = 0;
 
   constructor(readonly workspace: string, private readonly ask: Confirm = askInWindow, options: DaemonHostOptions = {}) {
     this.options = options;
@@ -851,7 +856,7 @@ export class DaemonHost {
         await this.loginPlanner(msg.runner);
         return;
       case 'setPlanner':
-        await this.setPlanner(msg.provider);
+        await this.setPlanner(msg.provider, msg.requestId);
         return;
       case 'setPlannerModel':
         await this.setPlannerModel(msg.modelId, msg.effort);
@@ -1092,7 +1097,8 @@ export class DaemonHost {
       this.view.conversation.note('system', chosen.reason ?? `${chosen.label} is not available.`);
       return;
     }
-    await this.setPlanner(chosen.id);
+    this.slashPlannerPicks += 1;
+    await this.setPlanner(chosen.id, `slash-${this.slashPlannerPicks}`);
   }
 
   /**
@@ -1270,10 +1276,34 @@ export class DaemonHost {
     }
   }
 
-  /** Who plans (ADR-0009): the daemon judges the pick and the next detection redraws every pill. */
-  private async setPlanner(provider: string): Promise<void> {
-    await callDaemon('settings.update', undefined, { env: { AI_PROVIDER: provider }, workspace: this.workspace, sessionId: this.sessionId });
-    await this.refreshCatalog();
+  /**
+   * Who plans (ADR-0009): the daemon judges the pick and the next detection
+   * redraws every pill. Picks are saved in order, and one a later pick overtook
+   * is left to that pick, so writes the daemon finishes out of order cannot
+   * leave an earlier pick saved. The answer goes out whatever happened, once
+   * the planner and catalog the daemon holds have been sent, since the chat
+   * keeps the picker closed until then.
+   */
+  private async setPlanner(provider: string, requestId: string): Promise<void> {
+    this.latestPlannerPick = requestId;
+    const latest = () => this.latestPlannerPick === requestId;
+    const turn = this.plannerPicks.then(async () => {
+      if (!latest()) return;
+      try {
+        await callDaemon('settings.update', undefined, { env: { AI_PROVIDER: provider }, workspace: this.workspace, sessionId: this.sessionId });
+      } catch (error) {
+        // Refused or failed: the detection below still sends the planner the
+        // daemon holds, which an earlier, overtaken pick may have changed.
+        this.showError(error);
+      }
+      if (latest()) await this.refreshCatalog();
+    });
+    this.plannerPicks = turn.catch(() => undefined);
+    try {
+      await turn;
+    } finally {
+      this.emit({ type: 'plannerChoiceSaved', requestId });
+    }
   }
 
   /** The planner's own model and effort, a pair so neither outlives the other. */

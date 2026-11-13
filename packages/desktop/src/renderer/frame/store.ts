@@ -22,6 +22,8 @@ export interface ProjectsPort {
   onRecentsChange(cb: () => void): () => void;
   /** No path shows the folder picker. */
   open(path: string | undefined, options: { newWindow: boolean }): void;
+  /** The welcome window, beside this one. */
+  newWindow(): void;
   openDropped(file: File): Promise<ActionResult>;
 }
 
@@ -30,6 +32,7 @@ const NO_PROJECTS: ProjectsPort = {
   recents: async () => [],
   onRecentsChange: () => () => {},
   open: () => {},
+  newWindow: () => {},
   openDropped: async () => ({ ok: false }),
 };
 

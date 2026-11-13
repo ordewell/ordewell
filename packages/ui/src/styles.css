@@ -3860,6 +3860,16 @@ body.vscode-high-contrast-light .task-card.expanded {
   border-color: var(--accent);
 }
 
+/* The models on hand belong to a planner being replaced (a switch is with the host). */
+.model-picker-trigger.unavailable {
+  cursor: default;
+  color: var(--text-secondary);
+}
+
+.model-picker-trigger.unavailable:hover {
+  border-color: var(--border-color);
+}
+
 /* The picked model reads in the text colour: a hue per model family would read as a status (green, red, amber). */
 .model-picker-label {
   flex: 1;

@@ -3,9 +3,9 @@ import type { FrameApi } from '../../frame/api';
 import { callDaemon, messageOf } from '../../session/daemon';
 import { parseSessions } from '../../sessions';
 import { useDaemonStatus } from '../../useDaemonStatus';
-import { deriveSession, type ScopeTask } from '../scope/scopeStore';
+import { deriveSession, repositoryOf, type ScopeTask } from '../scope/scopeStore';
 import { useScope } from '../scope/useScope';
-import { readBranches, readLog, readRepos, type Branches, type CommitSummary, type Owner, type RepoState } from './gitData';
+import { readBranches, readCommit, readLog, readRepos, type Branches, type CommitDetail, type CommitSummary, type Owner, type RepoState } from './gitData';
 
 /*
  * What the Git view's sidebar and graph share: the repositories, the branches
@@ -27,6 +27,9 @@ export type SyncKind = 'fetch' | 'pull' | 'push';
 export const HISTORY_PAGE = 50;
 /** The daemon's ceiling on one log read: a read again keeps the person's place up to here, and no further. */
 const HISTORY_MAX = 500;
+
+/** Commit cards' reads kept per store; past this, the oldest is forgotten and read again if it is hovered again. */
+const COMMIT_CACHE = 200;
 
 /** The Git sidebar's two views of a repository: its branch tree, or its history as lanes. */
 export type GitSidebarView = 'branches' | 'history';
@@ -103,6 +106,8 @@ export class GitStore {
   private historyTokens = 0;
   /** Bumped by a Refresh the person asked for, so the history is read again though no tip moved: a tag alone moves none. */
   private readonly historyRereads = new Map<string, number>();
+  /** A commit's message and files by repository and sha: a sha names the same commit for good, so it is read once. */
+  private readonly commits = new Map<string, { read: Promise<CommitDetail>; value?: CommitDetail }>();
 
   constructor(private readonly workspace: string) {}
 
@@ -112,6 +117,31 @@ export class GitStore {
   };
 
   readonly getSnapshot = (): GitState => this.state;
+
+  /** A commit's message and files, already read; undefined until a commitDetail read has answered. */
+  cachedCommit(repo: string, sha: string): CommitDetail | undefined {
+    return this.commits.get(`${repo}\0${sha}`)?.value;
+  }
+
+  /**
+   * A commit's message and files, read from the daemon once per sha however
+   * often its card opens. A failed read is forgotten, so the next opening asks
+   * again rather than keeping the failure.
+   */
+  commitDetail(repo: string, sha: string): Promise<CommitDetail> {
+    const key = `${repo}\0${sha}`;
+    const have = this.commits.get(key);
+    if (have) return have.read;
+    const entry: { read: Promise<CommitDetail>; value?: CommitDetail } = {
+      read: readCommit(this.workspace, repo, sha).then(
+        (value) => { entry.value = value; return value; },
+        (error: unknown) => { if (this.commits.get(key) === entry) this.commits.delete(key); throw error; },
+      ),
+    };
+    if (this.commits.size >= COMMIT_CACHE) this.commits.delete(this.commits.keys().next().value!);
+    this.commits.set(key, entry);
+    return entry.read;
+  }
 
   private set(patch: Partial<GitState>): void {
     this.state = { ...this.state, ...patch };
@@ -318,7 +348,8 @@ export function useGit(api: FrameApi): { git: GitStore; state: GitState; repo: s
   const state = useSyncExternalStore(git.subscribe, git.getSnapshot);
   const { store: scope, state: scoped } = useScope(api);
   const connected = useDaemonStatus()?.state === 'connected';
-  const repo = scoped.repo;
+  // The workspace folder that is no repository has no git of its own: the Git view reads one of its repositories (ADR-0064 R2).
+  const repo = repositoryOf(scoped);
   useEffect(() => { if (connected) void git.refresh(repo); }, [git, connected, repo]);
   return { git, state, repo, setRepo: (next) => scope.setRepo(next) };
 }

@@ -160,7 +160,8 @@ left, where VS Code users look for it.
   the panels' widths.
   - The breadcrumb names the workspace, the repository and the branch, with
     each as a menu: the workspace's is the project switcher (the other recent
-    folders, Open Folder… and Open in new window). Then come the scope switcher, the Needs
+    folders, Open Folder… and Open in new window; ⌘/Ctrl-click or ⌘/Ctrl+Enter on a
+    recent opens it in a new window). Then come the scope switcher, the Needs
     you button and the primary action, with the rest in a `⋯` menu.
   - On macOS the traffic lights are inset in the bar. On Windows and Linux the
     bar is a title-bar overlay, with the native window controls on the right.
@@ -1121,11 +1122,17 @@ left as it was:
     local branch and its remote-tracking ref at the commit are that one chip,
     marked with a small cloud, and the other refs are a `+N` beside it. The
     chip shows at least 64 px of its name or all of it (O7). The HEAD chip is
-    left out, since the checkout's own chip says it. The full sha and every
-    ref name are in the row's tooltip, and the row's name to a screen reader
-    is the short sha, subject, author, age and ref names. Lanes are neutral
-    (a muted stroke, the first lane a step stronger), never a status or area
-    colour; the lane step narrows from 10 to 8 px beyond six lanes, and lanes
+    left out, since the checkout's own chip says it. Hovering any part of a
+    row for about half a second, or focusing it from the keyboard, opens one
+    commit card beside the sidebar, level with the row, over the main area:
+    subject and message, short sha with a copy button, author and email, the
+    age and the local date, every ref named whole as a lane-striped chip with
+    its kind, the parents and the files changed. It replaces every native tooltip on
+    the row, stays open while the pointer is on it, and Escape closes it; the
+    graph tab's rows open the same card. The row's name to a screen reader
+    is the short sha, subject, author, age and ref names. Lanes and the chip's
+    stripe take the lane colours (Visual language, rule 7), never a status or
+    area colour; the lane step narrows from 10 to 8 px beyond six lanes, and lanes
     still cut off by their third of the row fade out and are described to a
     screen reader. The empty history is one line, "No commits yet". Its head names whose history it is: a "History of"
     picker (your checkout, or any local, Ordewell or remote branch), and,
@@ -1655,6 +1662,7 @@ colour a single job, so a colour always answers one question:
 | **Runner colours** (`--ow-runner-*`) | "Which runner is this?" | the runner badge only, always with the runner's name in it | anything that is not a runner badge |
 | **Status colours** (`--ow-status-*`) | "What state is this in?" | status shapes and words, Needs you, attention badges, banners | areas, runners |
 | **Diff colours** (`--ow-diff-*`) | "Added or removed?" | diff editors | anywhere else |
+| **Lane colours** (`--ow-lane-0` to `-7`) | "Which line of history is this?" | the commit graph's lanes and dots, and a stripe on the ref chips of the commit they sit on | rows, text, fills, anything outside the Git view |
 
 The rules:
 
@@ -1677,7 +1685,20 @@ The rules:
    means failed, and no decoration borrows them.
 6. Dark is the default theme. Light is its equal, with every pair below
    checked in both.
-7. A runner's state is a word and a shape, never a new colour. *Signed out* is
+7. A lane takes the hue of its colour index from an eight-colour palette,
+   cycling as lanes open, so a line can be followed by its colour where lines
+   cross. The first lane, the history's own first-parent line, is a step
+   heavier. A ref chip carries its commit's lane hue as a 3 px stripe on its
+   leading edge, and nothing else about it changes: HEAD keeps the accent
+   fill, Ordewell's branches the dashed accent border, tags their italics,
+   remotes their secondary text. Lane hues keep clear of the status colours
+   and of each other, which the token test measures, so no line reads as a
+   state.
+8. A file's change letter is a status word: added and untracked in passed
+   green, modified, renamed and copied in attention amber, deleted and
+   conflicted in failed red, in the commit's file list and in Changes alike.
+   It always shows the letter, so the colour is never the only sign.
+9. A runner's state is a word and a shape, never a new colour. *Signed out* is
    an attention badge and *Unavailable* or *too old* a failed one, each with the
    reason beside it: one line that ends in an ellipsis with the whole reason in
    its tooltip, or two lines on a Welcome card, where the reason is the thing
@@ -1819,6 +1840,25 @@ name.
 | `--ow-diff-removed` | `#3A1B1A` | `#FBE9E8` |
 | `--ow-diff-inserted-word` | `#1F5A33` | `#B7E1C1` |
 | `--ow-diff-removed-word` | `#6B2522` | `#F4C2BF` |
+
+**Lanes** (new; desktop only, so `tokens.css` and VS Code map none)
+
+| Token | Dark | Light |
+|---|---|---|
+| `--ow-lane-0` | `#52D6FF` sky | `#008BC7` |
+| `--ow-lane-1` | `#ECB6A0` peach | `#BE6527` |
+| `--ow-lane-2` | `#E6A9FB` orchid | `#AA5FAC` |
+| `--ow-lane-3` | `#9ED788` green | `#459342` |
+| `--ow-lane-4` | `#EC86A8` rose | `#96505E` |
+| `--ow-lane-5` | `#1CC5AE` teal | `#0D7879` |
+| `--ow-lane-6` | `#9AA9D8` periwinkle | `#625FA6` |
+| `--ow-lane-7` | `#C6A843` ochre | `#7A6900` |
+
+Neighbouring indices sit far apart on the wheel, since lanes that open one
+after another run side by side. Each is a graphic at 3:1 on every background
+of its theme, hover, selected and the chip's card fill included (lowest 5.19
+on dark, 3.24 on light); any two are at least 10 apart in OKLab and each at
+least 5 from every status colour, which the token test checks.
 
 `chrome.ts`'s `canvasColour` and title-bar overlay colours follow the new
 chrome and canvas values.
@@ -2288,7 +2328,7 @@ strokes converging on a teal dot. They are drawn on a 24 px grid, with a
 | ⌘⌥B / Ctrl+Alt+B | Toggle the plan panel (rail when collapsed) |
 | ⌘L / Ctrl+L | Go to the planner tab and focus its composer |
 | ⌘⇧G / Ctrl+Shift+G | Open the plan graph tab |
-| Ctrl+\` | Toggle the terminal panel |
+| Ctrl+\` | Toggle the terminal panel (also the activity bar's terminal button, View > Toggle Terminal, and the title bar's More actions) |
 | ⌘⇧A / Ctrl+Shift+A | Open Needs you |
 | ⌘⇧⏎ / Ctrl+Shift+Enter | The primary action, always through its confirm |
 | ⌘O / Ctrl+O | Open folder (Welcome, and the File menu) |
@@ -2388,8 +2428,10 @@ are permanent, so findings can cite them.
   it, and each part of it at least half that, so a long neighbour never
   squeezes it to nothing (the middle ellipsis's `3em` head floor is what keeps
   that half, 2em would not; only a name whose last word alone outgrows its
-  row gives the head less). Where it is cut, it has a tooltip, and it reads at
-  4.5:1. The tour's check `k` (`labelChecks` in `e2e/surfaces.ts`) measures
+  row gives the head less). Where it is cut, it has a tooltip: a native one,
+  or a description its keyboard focus opens with the name whole, as the
+  commit card does for a History row's subject. It reads at 4.5:1. The tour's
+  check `k` (`labelChecks` in `e2e/surfaces.ts`) measures
   this on long branch, commit, path, project, task and model names, as the
   app paints them, in both themes and every size.
 

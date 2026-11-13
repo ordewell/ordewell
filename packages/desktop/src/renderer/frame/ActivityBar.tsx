@@ -1,4 +1,4 @@
-import { FileDiff, Files, GitBranch, Layers, Settings } from 'lucide-react';
+import { FileDiff, Files, GitBranch, Layers, Settings, SquareTerminal } from 'lucide-react';
 import { IconButton, type IconComponent } from '@ordewell/ui/design';
 import type { ActivityBadge } from './api';
 import { activityTitle } from './commands';
@@ -56,14 +56,26 @@ export function ActivityBar(): JSX.Element {
           );
         })}
       </div>
-      <IconButton
-        icon={Settings}
-        size={22}
-        className="frame-activity-item"
-        label="Settings"
-        title={`Settings${hint('settings.open')}`}
-        onClick={() => store.api.runCommand('settings.open')}
-      />
+      <div className="frame-activity-items">
+        <IconButton
+          icon={SquareTerminal}
+          size={22}
+          className="frame-activity-item"
+          label="Toggle terminal"
+          title={`Toggle terminal${hint('terminal.toggle')}`}
+          active={layout.terminalOpen}
+          aria-pressed={layout.terminalOpen}
+          onClick={() => store.api.runCommand('terminal.toggle')}
+        />
+        <IconButton
+          icon={Settings}
+          size={22}
+          className="frame-activity-item"
+          label="Settings"
+          title={`Settings${hint('settings.open')}`}
+          onClick={() => store.api.runCommand('settings.open')}
+        />
+      </div>
     </nav>
   );
 }

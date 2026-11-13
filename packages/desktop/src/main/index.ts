@@ -26,7 +26,9 @@ import { shellName } from './terminal/shellChoice';
 import { TerminalHost, type PtySpawn } from './terminal/TerminalHost';
 import { closePrompt, onLastWindowClosed, quitPrompt, runsQuitStops } from './lifecycle';
 import { droppedFolder } from './droppedFolder';
+import { launchAction, launchDataOf, OpenProjectsMemory, parseLaunchArgs, type LaunchData } from './launch';
 import { menuTemplate } from './menu';
+import { registerNewWindowEntries } from './osEntries';
 import { ProjectOpener } from './projectOpener';
 import { AttentionNotifier } from './notifications';
 import { PrefsStore } from './prefs';
@@ -45,7 +47,10 @@ const devOrigin = devUrl ? new URL(devUrl).origin : undefined;
 quietTestApp();
 registerAppScheme();
 
-if (!app.requestSingleInstanceLock()) {
+// A second launch hands its own argv and directory over: Chromium may reorder
+// or add to the argv `second-instance` carries.
+const thisLaunch: LaunchData = { argv: [...process.argv], cwd: process.cwd() };
+if (!app.requestSingleInstanceLock(thisLaunch)) {
   // One app per user, so one window per workspace holds across launches (H6).
   app.quit();
 } else {
@@ -54,8 +59,25 @@ if (!app.requestSingleInstanceLock()) {
 
 async function main(): Promise<void> {
   // Filled in once each exists: the handlers wired before then find nothing to do.
-  const late: { windows?: WindowManager; daemon?: DaemonManager } = {};
-  app.on('second-instance', () => late.windows?.show());
+  const late: { windows?: WindowManager; daemon?: DaemonManager; launch?: (data: LaunchData) => void; open?: (path: string) => void } = {};
+  // A launch like `code <folder>`: before the app can open one, it is brought forward.
+  app.on('second-instance', (_event, argv, workingDirectory, additionalData) => {
+    const data = launchDataOf(additionalData) ?? { argv, cwd: workingDirectory };
+    if (late.launch) late.launch(data);
+    else late.windows?.show();
+  });
+  // A folder from the Dock's recents, dropped on its icon or named to `open -a`:
+  // it opens as one chosen in the menu would. Listened for at once, since a
+  // cold start delivers it before the app is ready; until then it is held for
+  // the first launch to open.
+  const heldFolders: string[] = [];
+  app.on('open-file', (event, path) => {
+    event.preventDefault();
+    const dropped = droppedFolder(path);
+    if (!dropped.ok) return;
+    if (late.open) late.open(dropped.path);
+    else heldFolders.push(dropped.path);
+  });
 
   // A GUI launch inherits launchd's or the desktop's PATH, which finds none of
   // the runners; the daemon this app forks inherits whatever is set here.
@@ -102,6 +124,7 @@ async function main(): Promise<void> {
   });
   late.daemon = daemon;
 
+  const openProjects = new OpenProjectsMemory();
   const wm = new WindowManager({
     preloadPath: join(__dirname, '..', 'preload', 'index.js'),
     pageUrl: devUrl ?? `${APP_ORIGIN}/index.html`,
@@ -123,6 +146,7 @@ async function main(): Promise<void> {
         noLink: true,
       }).then((answer) => answer.response === 0);
     },
+    onWorkspacesChanged: (open, windowsLeft) => openProjects.changed(open, windowsLeft),
   });
   late.windows = wm;
   nativeTheme.on('updated', () => wm.retheme());
@@ -206,16 +230,20 @@ async function main(): Promise<void> {
     })));
   };
   setMenu(recents.list());
+  registerNewWindowEntries({
+    app,
+    platform: process.platform,
+    packaged: app.isPackaged,
+    allowed: osSurfacesAllowed(),
+    execPath: process.execPath,
+    buildMenu: (template) => Menu.buildFromTemplate(template),
+    newWindow: () => { wm.openWelcome(); },
+  });
   recents.onChange((list) => {
     setMenu(list);
     wm.broadcast(EVENTS.recentsChanged, undefined);
   });
-  // A folder from the Dock's recents, or dropped on its icon: it opens as one chosen in the menu would.
-  app.on('open-file', (event, path) => {
-    event.preventDefault();
-    const dropped = droppedFolder(path);
-    if (dropped.ok) void projects.open(focused(), dropped.path);
-  });
+  late.open = (path) => { void projects.open(focused(), path); };
 
   registerIpc({
     appVersion: app.getVersion(),
@@ -286,6 +314,11 @@ async function main(): Promise<void> {
         if (answer.response !== 0) return;
       }
       quitting = true;
+      try {
+        prefs.set({ openProjects: openProjects.list() });
+      } catch (error) {
+        console.warn(`[quit] could not remember the open projects: ${error instanceof Error ? error.message : String(error)}`);
+      }
       // Named with its workspace: an id names a session only within one.
       for (const run of runsQuitStops(live, daemon.owned)) {
         const built = buildRequest('plans.stop', { sessionId: run.sessionId, workspace: run.workspace });
@@ -300,7 +333,29 @@ async function main(): Promise<void> {
 
   app.on('activate', () => wm.show());
 
-  wm.openWelcome();
+  /** Open what a launch asked for: its folders, the welcome window, last session's projects, or the window last used. */
+  const launch = async (data: LaunchData, first: boolean): Promise<void> => {
+    const request = parseLaunchArgs({ argv: data.argv, cwd: data.cwd, defaultApp: process.defaultApp === true });
+    if (request.ignored.length > 0) console.warn(`[launch] not a folder, so not opened: ${request.ignored.join(', ')}`);
+    if (first) request.folders.push(...heldFolders.splice(0));
+    const { reopenProjects, openProjects: remembered } = prefs.get();
+    // A hidden test run opens only what it names, never a desk left by an earlier launch.
+    const action = launchAction({ request, first, reopen: reopenProjects && osSurfacesAllowed(), remembered });
+    if (action.kind === 'show') wm.show();
+    else if (action.kind === 'welcome') wm.openWelcome();
+    else {
+      // One at a time, in order, so the last opened is the one in front.
+      for (const folder of action.folders) {
+        await projects.open(undefined, folder).catch((error: unknown) => {
+          console.warn(`[launch] could not open ${folder}: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      }
+      if (first && wm.all().length === 0) wm.openWelcome();
+    }
+  };
+  late.launch = (data) => { void launch(data, false); };
+
+  await launch(thisLaunch, true);
   void updates.start();
   await daemon.connect();
 }

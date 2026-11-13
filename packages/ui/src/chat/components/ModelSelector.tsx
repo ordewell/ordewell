@@ -14,6 +14,12 @@ interface ModelSelectorProps {
   /** Called when the dropdown opens, so a stale/degraded catalog can self-heal
    *  the way the TUI's model picker already does (it re-fetches on every open). */
   onOpen?: () => void;
+  /**
+   * Why no model can be picked right now, shown in place of one: the models
+   * and assignment on hand belong to something being replaced, so neither the
+   * list nor the effort is offered until this is cleared.
+   */
+  unavailable?: string;
 }
 
 export const API_PROVIDER_LABELS: Record<ApiProvider, string> = {
@@ -108,6 +114,7 @@ export default function ModelSelector({
   modelApiMapping = {},
   label = 'Model',
   onOpen,
+  unavailable,
 }: ModelSelectorProps) {
   const [search, setSearch] = useState('');
   const [open, setOpen] = useState(false);
@@ -163,7 +170,15 @@ export default function ModelSelector({
     };
   }, [open]);
 
+  // A list opened before the models went stale must not stay pickable.
+  useEffect(() => {
+    if (unavailable === undefined) return;
+    setOpen(false);
+    setFrozen(null);
+  }, [unavailable]);
+
   const handleToggle = () => {
+    if (unavailable !== undefined) return;
     if (!open) {
       if (triggerRef.current) {
         const rect = triggerRef.current.getBoundingClientRect();
@@ -201,11 +216,13 @@ export default function ModelSelector({
     return groupModels(visible, (m) => isUnknown(m.modelId));
   }, [viewModels, search, activeProvider, viewMapping]);
 
-  const selectedModel = models.find((m) => m.modelId === currentModel?.modelId);
+  const selectedModel = unavailable === undefined ? models.find((m) => m.modelId === currentModel?.modelId) : undefined;
   // An assignment whose model isn't in the discovered list (degraded/partial
   // discovery) is still real — the spawn will pass it. Show it rather than
   // pretending nothing is assigned.
-  const triggerText = selectedModel
+  const triggerText = unavailable !== undefined
+    ? unavailable
+    : selectedModel
     ? `${selectedModel.modelLabel} · ${providerLabel(selectedModel.runnerProvider || selectedModel.modelId.split('/')[0] || '', selectedModel.runnerProviderLabel)}`
     : currentModel
       ? currentModel.modelId.includes('/')
@@ -250,15 +267,16 @@ export default function ModelSelector({
         <div className="model-picker">
           <div
             ref={triggerRef}
-            className="model-picker-trigger"
+            className={`model-picker-trigger${unavailable !== undefined ? ' unavailable' : ''}`}
             onClick={handleToggle}
+            {...(unavailable !== undefined ? { 'aria-disabled': true } : {})}
           >
-            <span className="model-picker-label" title={triggerText}>
+            <span className="model-picker-label" title={triggerText} {...(unavailable !== undefined ? { role: 'status' } : {})}>
               {triggerText}
             </span>
             <span className={`model-picker-arrow ${open ? 'open' : ''}`}>&#9660;</span>
           </div>
-          {open && (
+          {open && unavailable === undefined && (
             <div
               ref={dropdownRef}
               className="model-picker-dropdown"

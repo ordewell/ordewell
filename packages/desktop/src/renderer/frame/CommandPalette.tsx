@@ -109,7 +109,7 @@ export function CommandPalette(): JSX.Element {
               onClick={() => run(command)}
             >
               <span>{command.title}</span>
-              {command.keys && <Kbd>{formatChord(parseChord(command.keys), mac)}</Kbd>}
+              {(command.keys ?? command.hint) && <Kbd>{formatChord(parseChord((command.keys ?? command.hint)!), mac)}</Kbd>}
             </li>
           ))}
           {shown.length === 0 && <li className="frame-empty" role="presentation">No command matches.</li>}

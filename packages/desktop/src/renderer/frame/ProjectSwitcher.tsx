@@ -54,10 +54,13 @@ export function ProjectSwitcher(): JSX.Element {
   }, [projects]);
 
   const close = (): void => store.setOverlay(undefined);
-  const choose = (path: string | undefined): void => {
+  const choose = (path: string | undefined, beside = false): void => {
     close();
-    projects.open(path, { newWindow });
+    projects.open(path, { newWindow: newWindow || beside });
   };
+  const mac = isMac(store.platform);
+  const besideKey = mac ? 'Meta' : 'Control';
+  const isBeside = (event: { metaKey: boolean; ctrlKey: boolean }): boolean => (mac ? event.metaKey : event.ctrlKey);
   const shown = destinations(recents ?? [], here);
   const keys = formatChord(parseChord(OPEN_FOLDER_KEYS), isMac(store.platform));
 
@@ -90,7 +93,16 @@ export function ProjectSwitcher(): JSX.Element {
             {shown.length === 0 && <li role="presentation" className="frame-menu-empty">No other recent folders</li>}
             {shown.map((entry) => (
               <li key={entry.path} role="none">
-                <button type="button" role="menuitem" aria-label={entry.spoken} title={entry.path} onClick={() => choose(entry.path)}>
+                <button
+                  type="button"
+                  role="menuitem"
+                  aria-label={entry.spoken}
+                  title={entry.path}
+                  aria-keyshortcuts={`${besideKey}+Enter`}
+                  onClick={(event) => choose(entry.path, isBeside(event))}
+                  // The browser's own Enter-click is skipped for the chord: the modifier is read here, once.
+                  onKeyDown={(event) => { if (event.key === 'Enter' && isBeside(event)) { event.preventDefault(); choose(entry.path, true); } }}
+                >
                   <span className="frame-project-entry">{entry.name}</span>
                   {/* A middle ellipsis keeps both ends: two same-named folders differ in the parent, the end is the name. */}
                   <span className="frame-menu-hint">{middleEllipsis(entry.displayPath)}</span>
@@ -110,6 +122,11 @@ export function ProjectSwitcher(): JSX.Element {
                 <span className="frame-project-entry">Open in new window</span>
               </button>
             </li>
+            {shown.length > 0 && (
+              <li role="presentation" className="frame-menu-empty">
+                {mac ? '⌘' : 'Ctrl'}-click to open in a new window
+              </li>
+            )}
           </ul>
         </Popover>
       )}

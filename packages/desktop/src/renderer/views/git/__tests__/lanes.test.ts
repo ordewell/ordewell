@@ -1,4 +1,6 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { laneColor } from '../GraphParts';
 import { assignLanes, LANE_COLORS, type GraphCommit, type GraphRow } from '../lanes';
 
 const c = (sha: string, ...parents: string[]): GraphCommit => ({ sha, parents });
@@ -108,5 +110,20 @@ describe('assignLanes', () => {
     const all = [c('m', 'a', 'f'), c('f', 'base'), c('a', 'base'), c('base', 'older'), c('older')];
     const first = assignLanes(all.slice(0, 3)).rows.map((r) => r.lane);
     expect(assignLanes(all).rows.slice(0, 3).map((r) => r.lane)).toEqual(first);
+  });
+});
+
+describe('the lane palette', () => {
+  const css = readFileSync(new URL('../git.css', import.meta.url), 'utf8');
+
+  // Pixels are the tour's; this keeps every index assignLanes hands out drawn in its own token, so none falls back to grey.
+  it.each(Array.from({ length: LANE_COLORS }, (_, at) => at))('draws lane colour %i in its own --ow-lane token', (at) => {
+    expect(css).toMatch(new RegExp(`\\.git-lanes \\.git-lane-${at} \\{[^}]*--git-lane: var\\(--ow-lane-${at}\\)`));
+  });
+
+  it('names the same token for a chip as its lane is drawn in, whatever index it is handed', () => {
+    expect(laneColor(3)).toBe('var(--ow-lane-3)');
+    expect(laneColor(LANE_COLORS + 1)).toBe('var(--ow-lane-1)');
+    expect(laneColor(-1)).toBe(`var(--ow-lane-${LANE_COLORS - 1})`);
   });
 });

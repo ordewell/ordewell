@@ -52,7 +52,15 @@ every answer is bounded and typed (R5) and runs git read-only (R6).**
   task (the task's worktree on disk while it exists, otherwise its task branch
   in git objects). A scope that no longer exists, such as a pruned worktree with
   a deleted branch or a discarded run, answers a typed `gone` naming why. It
-  never falls back to another scope.
+  never falls back to another scope. A workspace folder that is no repository
+  itself (a folder of repositories, or one with none) reads as `repo` `.` in
+  its `checkout` scope only: its tree, files and search come from disk with no
+  git, under the same confinement (R3), and a search walks its loose files and
+  then each repository's own. It has no status, diff, log, branches,
+  integration or task scope, and asks for one by naming a repository. A save
+  there is allowed; every other user git action is refused. The desktop
+  Explorer opens on this folder and offers each repository beside it, never
+  defaulting to the first repository it finds.
 - **Confined to its scope (R3).** A path is relative and passes `allowedPath`
   (`packages/core/src/services/taskDiffRead.ts`): not empty, not absolute, no
   drive letter, and no `..`, `.git` or `.ordewell` segment. On disk, its
@@ -160,3 +168,4 @@ The run's whole diff stays on the existing `GET /api/plans/:sessionId/isolation/
 - 2026-11-03 — the desktop app draws every read here: the Explorer and its Monaco editor, quick open, the task and run diff review, and the commit graph.
 
 - 2026-11-05 — renumbered before publication to avoid a collision with main.
+- 2026-11-13 — a workspace folder that is no repository reads as a git-less checkout (`repo` `.`), and is the desktop Explorer's default beside its repositories.

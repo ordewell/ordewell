@@ -773,10 +773,10 @@ describe('DaemonHost sign-in, keys and planner controls', () => {
     const seen = watch(host);
     await act(() => host.handle({ type: 'ready' }));
 
-    await act(() => host.handle({ type: 'setPlanner', provider: 'claude-code' }));
+    await act(() => host.handle({ type: 'setPlanner', provider: 'claude-code', requestId: 'r1' }));
     expect(seen.filter((m) => m.type === 'setPlannerBackends').at(-1)).toMatchObject({ provider: 'claude-code', runner: 'claude-code' });
 
-    await act(() => host.handle({ type: 'setPlanner', provider: 'openrouter' }));
+    await act(() => host.handle({ type: 'setPlanner', provider: 'openrouter', requestId: 'r2' }));
     const vendor = seen.filter((m) => m.type === 'setPlannerBackends').at(-1);
     expect(vendor).toMatchObject({ provider: 'openrouter' });
     expect(vendor && 'runner' in vendor ? vendor.runner : undefined).toBeUndefined();
@@ -1019,7 +1019,7 @@ describe('DaemonHost sign-in, keys and planner controls', () => {
     watch(host);
     await act(() => host.handle({ type: 'ready' }));
 
-    await act(() => host.handle({ type: 'setPlanner', provider: 'claude-code' }));
+    await act(() => host.handle({ type: 'setPlanner', provider: 'claude-code', requestId: 'r1' }));
 
     expect(daemon.calls('settings.update')).toContainEqual([undefined, expect.objectContaining({ env: { AI_PROVIDER: 'claude-code' }, workspace: WORKSPACE })]);
     expect(daemon.calls('runners.list').length).toBeGreaterThanOrEqual(2);

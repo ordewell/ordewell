@@ -324,6 +324,12 @@ function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
           hint="Keep the app and its daemon open when the last window closes and no run is live."
           onChange={(keepRunningInTray) => { void savePref('keepRunningInTray', keepRunningInTray); }}
         />
+        <Toggle
+          label="Reopen projects on launch"
+          checked={prefs?.reopenProjects ?? true}
+          hint="Open the projects that were open when the app last quit."
+          onChange={(reopenProjects) => { void savePref('reopenProjects', reopenProjects); }}
+        />
       </section>
 
       <section className="settings-section" aria-labelledby="settings-advanced">

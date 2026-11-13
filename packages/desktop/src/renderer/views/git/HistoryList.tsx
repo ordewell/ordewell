@@ -3,6 +3,7 @@ import { GitCommitHorizontal, RotateCcw } from 'lucide-react';
 import { Button, EmptyState } from '@ordewell/ui/design';
 import type { FrameApi } from '../../frame/api';
 import { Notice } from '../sidebarKit';
+import { besideSidebar, useCommitCard } from './CommitCard';
 import { openCommit } from './CommitGraphTab';
 import type { Branches } from './gitData';
 import { ago, refChips, shortSha, summarizeRefs } from './gitModel';
@@ -75,6 +76,7 @@ export function HistoryList({ api, repo, at: ref, branches }: { api: FrameApi; r
   const clippedId = useId();
   const geometry = sideLanes(layout.width);
   const clipped = useLanesClipped(list, layout);
+  const { rowProps, card } = useCommitCard({ api, repo, branches, place: besideSidebar });
   const retry = <Button size="sm" icon={RotateCcw} onClick={() => void git.loadHistory(repo, ref)}>Try again</Button>;
 
   if (!history || (history.status !== 'ready' && commits.length === 0)) {
@@ -103,7 +105,7 @@ export function HistoryList({ api, repo, at: ref, branches }: { api: FrameApi; r
           const short = shortSha(commit.sha);
           const { lead, more, names } = summarizeRefs(refChips(commit.refs, branches));
           const when = ago(commit.date);
-          // Age first: the line ends in an ellipsis, so what it cuts is the sha, which the tooltip has whole.
+          // Age first: the line ends in an ellipsis, so what it cuts is the sha, which the commit card has whole.
           const meta = [when, commit.author, short].filter(Boolean).join(' · ');
           const spoken = [commit.author && `by ${commit.author}`, when && (when === 'now' ? 'just now' : `${when} ago`), names.length > 0 && `refs ${names.join(', ')}`].filter(Boolean).join(', ');
           return (
@@ -113,7 +115,7 @@ export function HistoryList({ api, repo, at: ref, branches }: { api: FrameApi; r
                 className="git-hrow"
                 aria-current={commit.sha === history.selected ? 'true' : undefined}
                 aria-label={`Commit ${short}: ${commit.subject}${spoken ? `, ${spoken}` : ''}`}
-                title={`${commit.subject}\n${[commit.sha, commit.author, when].filter(Boolean).join(' · ')}${names.length > 0 ? `\n${names.join(', ')}` : ''}`}
+                {...rowProps(commit, layout.rows[i]!.color)}
                 onClick={() => open(commit.sha, true)}
                 onDoubleClick={() => open(commit.sha, false)}
               >
@@ -123,7 +125,7 @@ export function HistoryList({ api, repo, at: ref, branches }: { api: FrameApi; r
                   <span className="git-hrow-meta">
                     {lead && (
                       <span className="git-hrow-refs">
-                        <Chip chip={lead} tracked={lead.tracked} />
+                        <Chip chip={lead} tracked={lead.tracked} lane={layout.rows[i]!.color} />
                         {more > 0 && <span className="git-chip git-chip-more">+{more}</span>}
                       </span>
                     )}
@@ -135,6 +137,7 @@ export function HistoryList({ api, repo, at: ref, branches }: { api: FrameApi; r
           );
         })}
       </ul>
+      {card}
       {clipped && <span id={clippedId} className="visually-hidden">The graph is wider than the sidebar shows: its further lanes are cut off.</span>}
       {history.moreError && <Notice tone="error">{history.moreError}</Notice>}
       {history.cursor && (

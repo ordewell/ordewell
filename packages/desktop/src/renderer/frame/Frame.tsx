@@ -112,6 +112,7 @@ function Terminal(): JSX.Element {
         className="frame-terminal-hide"
         icon={X}
         label="Hide terminal"
+        title="Hide terminal (Ctrl+`)"
         onClick={() => store.dispatch({ type: 'toggleTerminal', open: false })}
       />
     </section>
