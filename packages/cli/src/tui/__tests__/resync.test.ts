@@ -70,7 +70,10 @@ describe('two sockets on one session during a handover', () => {
   const status = (seq: number, stream = 'd1') => ({ type: 'status_update', tasks: [{ id: 't1', status: 'in_progress' }], stream, seq }) as WsEvent;
   const view = { tasks: [], runMerge: null, handoff: null, mergeResult: null };
 
-  it('does not bring back a status the newer socket\'s snapshot already accounts for', () => {
+  /** The frame that left a gap is delivered once the gap's read has settled, not in the call that received it. */
+  const afterGapRead = () => new Promise<void>((resolve) => { setImmediate(resolve); });
+
+  it('does not bring back a status the newer socket\'s snapshot already accounts for', async () => {
     const actions: Action[] = [];
     // Both sockets feed the session's one inbound stream.
     const { receive: old } = createInbound((action) => actions.push(action), 's1');
@@ -81,6 +84,7 @@ describe('two sockets on one session during a handover', () => {
     fresh({ type: 'run_snapshot', sessionId: 's1', view, approvals: [], stream: 'd1', seq: 6 } as WsEvent);
     old(status(5));
     old(status(6));
+    await afterGapRead();
 
     expect(actions.filter((a) => a.type === 'statusUpdate').length).toBe(1);
     expect(actions.at(-1)).toMatchObject({ type: 'runSnapshot' });
@@ -106,12 +110,13 @@ describe('two sockets on one session during a handover', () => {
     expect(actions.filter((x) => x.type === 'statusUpdate')).toHaveLength(2);
   });
 
-  it('starts counting again for a restarted daemon', () => {
+  it('starts counting again for a restarted daemon', async () => {
     const actions: Action[] = [];
     const { receive } = createInbound((action) => actions.push(action), 's1');
 
     receive(status(7));
     receive(status(1, 'd2'));
+    await afterGapRead();
 
     // Shown, though numbered below 7, and the conversation read back: a new daemon's numbers say nothing of what this surface missed.
     expect(actions.map((a) => a.type)).toEqual(['statusUpdate', 'streamGap', 'statusUpdate']);

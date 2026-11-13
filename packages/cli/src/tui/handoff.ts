@@ -207,14 +207,17 @@ export function confirmedHandoff(state: TuiState, kind: 'merge-run' | 'discard-r
 
 /**
  * The words for a merge result this pane did not ask for: an automatic Merge
- * all that merged or was turned away (the only trace of why a conflict held
- * the run is here), the supervisor's, or another window's. The pane's own
- * request is answered in the words its HTTP reply brings, so its result, the
- * first heard after it was sent, says nothing; core's `mergeOutcome` words the
- * rest as /merge does.
+ * all that was turned away (the only trace of why a conflict held the run is
+ * here), the supervisor's, or another window's. The pane's own request is
+ * answered in the words its HTTP reply brings, so its result, the first heard
+ * after it was sent, says nothing; core's `mergeOutcome` words the rest as
+ * /merge does. An automatic merge that landed is already a line of the
+ * transcript, which the session writes and every surface draws, so a second
+ * one here would say it twice.
  */
-export function announceMerge(state: TuiState, result: IsolationMergeResult): TuiState {
+export function announceMerge(state: TuiState, result: IsolationMergeResult, automatic = false): TuiState {
   if (state.mergeAsked) return { ...state, mergeAsked: false };
+  if (automatic && result.outcome === 'merged') return state;
   const handoff = state.runMerge?.handoff ?? state.handoff;
   const { ok, message } = mergeOutcome(result, handoff ? handoffBranchName(handoff) : 'the run\'s branch', handoff ? isRepoGroup(handoff) : false, handoff ? repairedLanded(handoff) : []);
   return say(state, ok ? 'system' : 'error', message);

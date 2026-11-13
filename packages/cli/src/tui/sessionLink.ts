@@ -1,5 +1,6 @@
+import { ReconnectBackoff } from '@ordewell/core';
 import { DaemonError, type ApiClient, type SessionSocket, type SocketEnd } from '../apiClient';
-import { createInbound, type Dispatch, type SessionInbound } from './inbound';
+import { createInbound, type Dispatch, type SessionInbound, type TuiRead } from './inbound';
 
 /*
  * The TUI's sockets: one per session it follows, and one per child plan on
@@ -19,14 +20,14 @@ export interface LinkDeps {
 }
 
 /** What a request sent with a link open may do with the session's inbound stream. */
-export type LinkInbound = Pick<SessionInbound, 'backfill' | 'flush' | 'holdSnapshot' | 'releaseSnapshot'>;
+export type LinkInbound = Pick<SessionInbound, 'backfill' | 'flush'>;
 
 interface Links {
   sessions: Map<string, SessionLink>;
   /** The session on screen: the one link that reconnects when its socket drops. */
   shown: SessionLink | null;
-  /** Consecutive reconnects of the shown session that failed, for the backoff and its one notice per outage. */
-  failures: number;
+  /** The shown session's reconnects, for the backoff and its one notice per outage. */
+  backoff: ReconnectBackoff;
   children: Map<string, ChildLink>;
 }
 
@@ -35,18 +36,15 @@ const registries = new WeakMap<object, Links>();
 function linksOf(api: object): Links {
   let links = registries.get(api);
   if (!links) {
-    links = { sessions: new Map(), shown: null, failures: 0, children: new Map() };
+    links = { sessions: new Map(), shown: null, backoff: new ReconnectBackoff(), children: new Map() };
     registries.set(api, links);
   }
   return links;
 }
 
-const RETRY_MS = 500;
-const RETRY_MAX_MS = 8_000;
-
-/** A reconnect after `failures` failed ones, backing off while the daemon stays down. Unref'd, so it never holds the process open. */
-function retryAfter(failures: number, retry: () => void): ReturnType<typeof setTimeout> {
-  const timer = setTimeout(retry, Math.min(RETRY_MS * 2 ** Math.min(failures, 4), RETRY_MAX_MS));
+/** A reconnect at the backoff's next wait, which grows while the daemon stays down. Unref'd, so it never holds the process open. */
+function retryAfter(backoff: ReconnectBackoff, retry: () => void): ReturnType<typeof setTimeout> {
+  const timer = setTimeout(retry, backoff.next());
   timer.unref?.();
   return timer;
 }
@@ -89,6 +87,20 @@ export class SessionLink {
 
   get inbound(): LinkInbound {
     return this.receiver;
+  }
+
+  /**
+   * Opens the session on screen from `read`: the socket is followed first and
+   * every frame it sends is held behind the read (see {@link SessionInbound.openFrom}),
+   * so nothing the session does between the two is missed. Rejects with the
+   * read's failure, leaving the link as it was.
+   */
+  openFrom(read: () => Promise<TuiRead>): Promise<void> {
+    const opening = this.ensure();
+    return this.receiver.openFrom(async () => {
+      await opening;
+      return read();
+    });
   }
 
   /**
@@ -139,7 +151,7 @@ export class SessionLink {
     this.cancelRetry();
     if (this.links.shown === this) {
       this.links.shown = null;
-      this.links.failures = 0;
+      this.links.backoff.reset();
     }
     if (this.links.sessions.get(this.sessionId) === this) this.links.sessions.delete(this.sessionId);
     if (this.runs === 0) this.disconnect();
@@ -173,7 +185,7 @@ export class SessionLink {
       socket,
       ready: socket.ready.then((opened) => {
         if (opened) {
-          this.links.failures = 0;
+          this.links.backoff.reset();
           // A turn whose reply was lost has no `planner_turn_ended` to settle
           // it; a reconnect is the moment the session can be read back for its end.
           if (restored) this.deps.dispatch({ type: 'followRestored', sessionId: this.sessionId });
@@ -197,13 +209,12 @@ export class SessionLink {
     this.attempt = null;
     if (this.runEnded) this.endRun('lost');
     if (this.links.shown !== this) return;
-    const { failures } = this.links;
+    const first = this.links.backoff.failed === 0;
     // One notice per outage: a daemon that stays down would otherwise add a
     // line every backoff interval. A run waited on says so itself when it goes
     // with the daemon; two notices for one loss is noise.
-    if (failures === 0 && this.runs === 0) this.deps.dispatch({ type: 'followLost', sessionId: this.sessionId });
-    this.links.failures = failures + 1;
-    this.timer = retryAfter(failures, () => {
+    if (first && this.runs === 0) this.deps.dispatch({ type: 'followLost', sessionId: this.sessionId });
+    this.timer = retryAfter(this.links.backoff, () => {
       this.timer = null;
       // A send, a load or a new session opened one meanwhile: that follow owns the screen now.
       if (this.links.shown === this && !this.attempt) this.open(true);
@@ -254,7 +265,7 @@ class ChildLink {
   private socket: SessionSocket | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
-  private failures = 0;
+  private readonly backoff = new ReconnectBackoff();
 
   constructor(private readonly links: Links, private readonly deps: LinkDeps, private readonly rootId: string, private readonly childId: string) {
     this.inbound = createInbound(deps.dispatch, childId);
@@ -267,21 +278,23 @@ class ChildLink {
   async connect(): Promise<void> {
     const { api, dispatch } = this.deps;
     const { rootId, childId, inbound } = this;
-    inbound.holdSnapshot();
     const socket = api.followChild(rootId, childId, (event) => inbound.receive(event));
     this.socket = socket;
     void socket.ended.then((end) => this.ended(end)).catch(() => {});
-    if (!(await socket.ready)) {
-      inbound.releaseSnapshot(false);
-      return;
-    }
-    let read = false;
     try {
-      const view = await api.getChild(rootId, childId);
-      if (this.closed) return;
-      dispatch({ type: 'childOpened', sessionId: childId, view });
-      read = true;
-      this.failures = 0;
+      await inbound.openFrom(async () => {
+        // A socket that never opened has nothing to follow: its close asks again.
+        if (!(await socket.ready)) return { apply: () => {} };
+        const view = await api.getChild(rootId, childId);
+        return {
+          position: view.position,
+          apply: () => {
+            if (this.closed) return;
+            dispatch({ type: 'childOpened', sessionId: childId, view });
+            this.backoff.reset();
+          },
+        };
+      });
     } catch (err) {
       if (this.closed || this.socket !== socket) return;
       if (err instanceof DaemonError && err.code === 'child_not_found') {
@@ -295,8 +308,6 @@ class ChildLink {
       dispatch({ type: 'followLost', sessionId: childId });
       this.retry();
       throw err;
-    } finally {
-      inbound.releaseSnapshot(read);
     }
   }
 
@@ -323,7 +334,7 @@ class ChildLink {
         this.gone(NO_LONGER_LISTED);
         return;
       }
-    } else if (end.code !== 1012 && this.failures === 0) {
+    } else if (end.code !== 1012 && this.backoff.failed === 0) {
       // One notice per outage, as a session's link does. A replaced root is back at once.
       this.deps.dispatch({ type: 'followLost', sessionId: this.childId });
     }
@@ -338,10 +349,9 @@ class ChildLink {
   private retry(): void {
     // A failed read and its socket's close can both ask, and one link holds one socket.
     if (this.timer) return;
-    this.timer = retryAfter(this.failures, () => {
+    this.timer = retryAfter(this.backoff, () => {
       this.timer = null;
       if (!this.closed) void this.connect().catch(() => {});
     });
-    this.failures += 1;
   }
 }
